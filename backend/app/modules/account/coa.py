@@ -118,6 +118,17 @@ PL_SPEC = [
     # epay_fee_recon.is_fee_desc), so the books and that recon can never drift. `auto_opt` ⇒ the line
     # materializes only when it carries value, so a tenant with no ePay fees stays byte-identical.
     ("epay_fee_income","ePay service charge (fee income)",           "revenue", "auto_opt", "store"),
+    # Owner directive 2026-09-02 (mig 939): "a separate box should assigned to the p&l to account
+    # for the cash / credit epay assignment… billpay is deducted from it as it is not income and
+    # is offset by either the cash deposited… or by the commission received." The bill-pay
+    # PASS-THROUGH pair: collected (+) and its offset (−, labelled per the org's settlement
+    # convention — 'remit_separate' vs 'net_from_commission', per-org config, NEVER a carrier
+    # name in code). The pair nets to ZERO by construction (account/billpay_pl.py, proof
+    # harness_billpay_pl.py), so gross profit and net income never move; the fee the store
+    # CHARGES stays separate income on service_income/epay_fee_income above. `auto_opt` +
+    # presentation 'off' default ⇒ byte-identical for every org until it opts in.
+    ("billpay_collected", "Bill payments collected (pass-through)",  "revenue", "auto_opt", "store"),
+    ("billpay_offset",  "Bill payments offset (pass-through)",       "revenue", "auto_opt", "store"),
     ("vip_device_pay","Distributor device payments (PayGo, paid)",   "cogs",    "auto",  "store"),
     ("accessory_cost","Accessory cost",                              "cogs",    "auto",  "store"),
     ("device_cost",   "Device cost",                                 "cogs",    "auto",  "store"),
@@ -1264,6 +1275,39 @@ def build_inputs(client, org_id, period):
             L["inventory"]["by_store"][st] = round(safe_float(eff), 2)
     except Exception:
         pass
+
+    # ── bill-pay pass-through carve-out (mig 939, owner directive 2026-09-02 item 5) ────────────
+    # The reps' declared ePay/VidaPay split on the daily closing sheet (epay_on_cash +
+    # epay_on_credit; the DM's VERIFIED correction winning at store-day grain) books the matched
+    # ± pass-through pair — collected volume visible, net income untouched. presentation 'off'
+    # (house default) books nothing; classification + config are PURE in account/billpay_pl.py.
+    try:
+        from app.modules.account import billpay_pl as _billpay_pl
+        _bp_cfg = _billpay_pl.load_config(client, org_id)
+        if _bp_cfg["presentation"] == "carveout":
+            _bp_rows = _fetch_all(client, "daily_closing",
+                                  "store_code,close_date,epay_on_cash,epay_on_credit",
+                                  {"org_id": org_id, "period": period_keys})
+            _bp_vers = {}
+            try:
+                _bp_days = sorted({str(r.get("close_date") or "")[:10] for r in _bp_rows
+                                   if r.get("close_date")})
+                if _bp_days:
+                    for v in _fetch_all(client, "daily_closing_verification",
+                                        "store_code,close_date,verified,dm_epay_cash,dm_epay_cc",
+                                        {"org_id": org_id, "close_date": _bp_days}):
+                        _bp_vers[(v.get("store_code"), str(v.get("close_date"))[:10])] = v
+            except Exception as _bpe:
+                _warn("bill-pay carve-out verification overlay skipped", _bpe)
+            _bp_cells, _bp_meta = _billpay_pl.billpay_cells(_bp_rows, _bp_vers)
+            _bp_bookings, _bp_label = _billpay_pl.billpay_bookings(_bp_cells, _bp_cfg)
+            for _key, _st, _amt, _detail in _bp_bookings:
+                add(_key, resolve_store(_st) or _st, _amt, detail_label=_detail)
+            if _bp_label and (L[_billpay_pl.OFFSET_KEY]["by_store"]
+                              or L[_billpay_pl.OFFSET_KEY]["company_wide"]):
+                L[_billpay_pl.OFFSET_KEY]["label"] = _bp_label
+    except Exception as e:
+        _warn("bill-pay pass-through carve-out skipped", e)
 
     # ── per-org P&L/BS line labels (mig 314, owner spec 2026-09-02: "it should say Residual on
     # Total side and Mi on boost side") — the SAME `label` passthrough engine._assemble already

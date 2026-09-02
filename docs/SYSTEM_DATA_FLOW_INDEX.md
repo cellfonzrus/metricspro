@@ -232,6 +232,26 @@ commissions, expenses.
   pre-934 DB keeps its mig-314 seeds. LuxeLink seeded `'income'` by mig `934`. Proof:
   `harness_pl_rebate_presentation.py`.
 
+- **Bill-pay pass-through carve-out + coverage recon (owner directive 2026-09-02, mig `939`):**
+  "billpay is deducted from [revenue] as it is not income and is offset by either the cash
+  deposited… or by the commission received; different carriers do it in a different way." (a)
+  P&L: NEW matched revenue pair **`billpay_collected`** (+) / **`billpay_offset`** (−, label per
+  the org's settlement convention) — both `auto_opt`, store grain — built from the daily-closing
+  declared ePay split (`epay_on_cash`+`epay_on_credit`, DM-VERIFIED corrections winning at
+  store-day grain); the pair nets to ZERO by construction so gross profit / net income never
+  move. Config on `commission_org_config` (RULE TWO, no carrier names):
+  `pl_billpay_presentation` (`'off'` house default = byte-identical | `'carveout'`) and
+  `pl_billpay_settlement` (`'remit_separate'` = commission paid separately, payments remitted
+  separately | `'net_from_commission'` = payments netted from commission owed). Pure module
+  `account/billpay_pl.py` wired in `coa.build_inputs`; LuxeLink seed (`'carveout'` +
+  `'net_from_commission'`, Aug $38,324.39 measured) COMMENTED behind the owner gate in mig
+  `939`. (b) COVERAGE recon: `GET /billpay-coverage/{period}` — per store per DAY, Σ bill-pay ≤
+  Σ(cash + card declared at closing, DM-corrected); bill-pay side = the carrier PROCESSOR feed
+  (the same `metric_source_of_truth`/data_source resolution `/metric-recon` uses; NEW day-grain
+  sibling `_billpay_processor_by_store_day`) falling back to the declared closing split;
+  exceptions ONLY when bill-pay EXCEEDS collected ("equal to or less" passes). Pure math
+  `metric_recon.reconcile_billpay_coverage`. Proof: `harness_billpay_pl.py`.
+
 - **P&L store/market filter + company scope (fix 2026-09-02, owner: "market filter shows no data /
   company selection shows improper information"):** the aggregated-statement filter
   (`account/statement_filter.py`, read by `GET /account/pl|balance-sheet/{period}?stores=&markets=`)
@@ -942,7 +962,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview`, `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet` |
 | `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`) | `PUT /account/config`; mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933 knobs, adaptive) |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
-| `commcalc.daily_closing` | closing sweep `033` | `deposit_recon.closing_cash_raw_by_store_day:147`, MI cash gate; **BS `store_cash_on_hand` line via `_cash_position_core` → `balance_sheet.store_cash_cells`** (mig `938`, basis-gated) |
+| `commcalc.daily_closing` | closing sweep `033` | `deposit_recon.closing_cash_raw_by_store_day:147`, MI cash gate; **BS `store_cash_on_hand` line via `_cash_position_core` → `balance_sheet.store_cash_cells`** (mig `938`, basis-gated); **P&L bill-pay carve-out** (`account/billpay_pl.billpay_cells` on `epay_on_cash`/`epay_on_credit`, mig `939`, presentation-gated); **bill-pay coverage recon** (`_closing_collected_by_store_day` → `/billpay-coverage/{period}`) |
 | `commcalc.daily_closing_verification` | `POST /closing/verify` (upsert; `dm_*` = the DM's corrected store-day totals) | `verified_overlay.build_overlay_map` (summary/tender/cash-position overlays), `closing_submissions` dm fields, ops_chargebacks missed_dm_verify detection |
 | `commcalc.daily_closing_verification_audit` (mig `935`, append-only) | `POST /closing/verify` via `verification_audit.build_audit_row` (one revision per changed save; `edited_after_verify` flags a money change on an already-verified day) | audit/history readers only — no report sums these rows |
 | `commcalc.envelope_count` (mig `936`, one row per envelope = daily_closing row) | `POST /closing/envelope-count` (upsert on `org_id,closing_row_id`; links `chargeback_id`) | `GET /closing/envelope-report`, notify `closing_envelope_report` |
@@ -1014,6 +1034,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
 | `GET /closing/envelope-report`, `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`); `notify/closing_reports.py` | §12 Envelope report |
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
+| `GET /billpay-coverage/{period}` (per store/day: bill-pay ≤ cash+card, exceptions surfaced) | `commcalc/router.py` (`billpay_coverage` → `metric_recon.reconcile_billpay_coverage`) | §4 bill-pay carve-out / §15 |
 
 (Full 468-endpoint list: `grep -nE '@router\.(get|post|put|patch|delete)\(' backend/app/modules/commcalc/router.py`.)
 
@@ -1051,6 +1072,8 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | Unsold-phone inventory (BS asset, mig `933`) | `inventory_aging_device.unit_cost` where `on_hand` at the store's latest `as_of_date` (basis `'devices'`); `inventory_value.swept_value` (basis `'report'`, default); `manual_value` always wins | `balance_sheet.device_inventory_cells`/`apply_inventory_basis`; tie-out `GET /account/inventory-recon` |
 | Cash-deposit variance | `daily_closing.t_cash` − `bank_deposit.amount` | `deposit_recon` `:147/:179`; MI gate `28895` |
 | Store cash on hand (BS asset, mig `938`) | DM-verified `daily_closing` declared cash (overlay-corrected) − `cash_pickup`/`bank_deposit`/`closing_expense`/`envelope_withdrawal` outflows, as-of period end | `balance_sheet.store_cash_cells` via `statement_engine.build_inputs_full` (`account_config.cash_on_hand_basis`: off default / verified / all); CASH in the cash-flow statement (`CF_CASH_KEYS`) |
+| Bill-pay pass-through (P&L `billpay_collected`/`billpay_offset`, mig `939`) | `daily_closing.epay_on_cash`+`epay_on_credit` (DM-verified corrections win at store-day grain); pair nets to ZERO | `account/billpay_pl.billpay_cells`/`billpay_bookings` → `coa.build_inputs` (`pl_billpay_presentation='carveout'`; offset label per `pl_billpay_settlement`) |
+| Bill-pay coverage (billpay ≤ cash+card per store/day) | processor feed (`raw_epay_daily_tx` per_store_day / `raw_ma_daily_tx` by `tx_date`+merchant map) or declared closing split, vs `daily_closing` tender totals (DM-corrected) | `metric_recon.reconcile_billpay_coverage` via `GET /billpay-coverage/{period}` |
 | Days-in-stock (aging) | `inventory_aging_device.days_in_stock` (snapshot) | device-cost recon `27338`; MI aging bonus |
 | Lateness % (`late_rate` — late shifts ÷ scheduled shifts) | `storeops.timelog` punches vs `storeops.shifts` windows | `attendance_exceptions.compute_attendance_exceptions` → `accountability.aggregate`; surfaced by `/storeops/accountability` ('Lateness %' page, W2 rename) and the `storeops_lateness` scheduled report (§14 W3) |
 | Withholding estimate (gross/FICA/federal/state/net) | `storeops.timelog`+`manual_hours` hours × `employees.pay_rate` × `payroll_settings` W-4 | browser: `frontend/src/lib/payroll-tax.ts computePay`; server twin: `storeops/payroll_tax_estimate.compute_pay` (§14 W3 — keep in lockstep) |

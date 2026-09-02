@@ -215,6 +215,58 @@ def reconcile_bill_payments(report_by_store, sales_by_store, processor_by_store,
     }
 
 
+def reconcile_billpay_coverage(billpay_by_store_day, collected_by_store_day, tolerance_amt=1.0,
+                               assigned_user=None):
+    """Coverage recon (owner directive 2026-09-02, item 5a, verbatim): "the total of epay/vida pay
+    for bill payments collected in the store should be equal to or less than the total of cash and
+    card collected in the store." Join grain is (store, DAY).
+
+    billpay_by_store_day maps (store_key, 'YYYY-MM-DD') -> {'amount', optional '_name'} (the
+    processor/declared bill-pay total); collected_by_store_day maps the same key ->
+    {'cash', 'card', optional '_name'} (what the store declared at closing, DM-corrected where
+    verified). A day is an EXCEPTION when billpay > cash + card + tolerance — bill payments were
+    processed that the drawer money can't cover (mis-tagged tender, unrecorded collection, or a
+    payment run on store credit). billpay ≤ collected is FINE by design (customers also buy
+    product), so nothing flags in that direction. PURE."""
+    billpay_by_store_day = billpay_by_store_day or {}
+    collected_by_store_day = collected_by_store_day or {}
+    keys = set(billpay_by_store_day) | set(collected_by_store_day)
+    rows, covered, exceptions = [], 0, 0
+    tot_bp, tot_col = 0.0, 0.0
+    for k in keys:
+        bp = float((billpay_by_store_day.get(k) or {}).get("amount", 0.0) or 0.0)
+        c = collected_by_store_day.get(k) or {}
+        cash = float(c.get("cash", 0.0) or 0.0)
+        card = float(c.get("card", 0.0) or 0.0)
+        collected = round(cash + card, 2)
+        tot_bp = round(tot_bp + bp, 2)
+        tot_col = round(tot_col + collected, 2)
+        excess = round(bp - collected, 2)
+        if excess <= tolerance_amt:
+            covered += 1
+            continue
+        exceptions += 1
+        st, day = (k if isinstance(k, tuple) and len(k) == 2 else (k, ""))
+        name = ((billpay_by_store_day.get(k) or {}).get("_name")
+                or (collected_by_store_day.get(k) or {}).get("_name") or st)
+        rows.append({"store": name, "day": day, "billpay": round(bp, 2), "cash": round(cash, 2),
+                     "card": round(card, 2), "collected": collected, "excess": excess})
+    rows.sort(key=lambda r: -r["excess"])
+    status = ("no_data" if not keys else ("covered" if not rows else "exceptions"))
+    remediation = None
+    if rows:
+        remediation = {"action": "review", "assigned_user": assigned_user,
+                       "reason": "Bill payments exceed the cash + card the store declared on those "
+                                 "days — the pass-through money isn't covered by what was collected. "
+                                 "Check tender tagging on the closing sheet and whether every "
+                                 "bill-payment collection was actually rung in."}
+    return {"status": status, "tolerance_amt": tolerance_amt,
+            "totals": {"billpay": tot_bp, "collected": tot_col,
+                       "coverage_pct": (round(100.0 * tot_bp / tot_col, 1) if tot_col else None)},
+            "counts": {"store_days": len(keys), "covered": covered, "exceptions": exceptions},
+            "store_days": rows, "remediation": remediation}
+
+
 def reconcile_billpay_cash(actual_by_store, declared_by_store, tolerance_amt=1.0, assigned_user=None):
     """Reconcile ACTUAL bill-payment CASH (the Bill Payment Transactions report, tender = cash) against the
     cash employees DECLARED at daily closing (daily_closing.epay_on_cash), per store — the wiring the owner

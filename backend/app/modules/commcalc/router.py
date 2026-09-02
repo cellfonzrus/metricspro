@@ -24324,6 +24324,141 @@ def metric_recon(period: str, org_id: str = ORG_ID, metric: str = "activations")
     raise HTTPException(400, "unknown metric (allowed: activations, bill_payments)")
 
 
+# ── Bill-pay COVERAGE recon (owner directive 2026-09-02, item 5a) ────────────────────────────────
+def _billpay_processor_by_store_day(client, org_id, period, processor, ckey_fn):
+    """Per-(canonical store, day) bill-payment {'amount','_name'} from the carrier PROCESSOR feed —
+    the DAY-grain sibling of `_billpay_processor_by_store` (same sources, same selects: ePay =
+    raw_epay_daily_tx via epay_ingest.per_store_day; VidaPay = raw_ma_daily_tx, account_id →
+    store via storeops.merchant_ids). {} on failure/unknown processor — the caller then degrades
+    to the reps' DECLARED split."""
+    if processor not in ("epay", "vidapay"):
+        return {}
+    mo, yr = _month_year(period)
+    if not (1 <= mo <= 12 and yr):
+        return {}
+    date_from = f"{yr}-{mo:02d}-01"
+    date_to = f"{yr}-{mo:02d}-{_calendar.monthrange(yr, mo)[1]:02d}"
+    out = {}
+    try:
+        if processor == "epay":
+            from app.modules.commcalc import epay_ingest as _epi
+            for (sc, d), v in (_epi.per_store_day(client, org_id, date_from, date_to) or {}).items():
+                k = (ckey_fn(str(sc)) or str(sc) or "—", str(d)[:10])
+                slot = out.setdefault(k, {"amount": 0.0, "_name": str(sc)})
+                slot["amount"] = round(slot["amount"] + float(v.get("payment") or 0.0), 2)
+        else:  # vidapay
+            from app.modules.storeops import merchant_ids as _mids
+            amap = _mids.resolve_map(org_id, "vidapay") or {}
+            rows = (client.schema("commcalc").table("raw_ma_daily_tx")
+                    .select("account_id,retail_cost,tx_date").eq("org_id", org_id)
+                    .in_("period", _pvariants(period)).limit(200000).execute().data) or []
+            for r in rows:
+                d = str(r.get("tx_date") or "")[:10]
+                if not d:
+                    continue
+                acct = str(r.get("account_id") or "").strip()
+                sc = amap.get(acct) or acct or "—"
+                k = (ckey_fn(str(sc)) or str(sc) or "—", d)
+                slot = out.setdefault(k, {"amount": 0.0, "_name": str(sc)})
+                slot["amount"] = round(slot["amount"] + float(r.get("retail_cost") or 0.0), 2)
+    except Exception as _pe:
+        print(f"WARN bill-payment processor day read failed ({processor}): {_pe}")
+        return {}
+    return out
+
+
+def _closing_collected_by_store_day(client, org_id, period, ckey_fn):
+    """(collected, declared_billpay) per (canonical store, day) from the daily closing sheet —
+    collected = {'cash','card','_name'} (cash = t_cash falling back to legacy store_cash; card =
+    t_credit + t_ext_cc falling back to legacy store_cc+epay_cc), declared_billpay = {'amount'}
+    (the reps' epay_on_cash + epay_on_credit split). The DM's VERIFIED corrections override at
+    store-day grain (TKT-1030: dm_store_cash → cash total, dm_store_cc → card total,
+    dm_epay_cash/dm_epay_cc → the declared bill-pay split)."""
+    try:
+        rows = (client.schema("commcalc").table("daily_closing")
+                .select("store_code,close_date,t_cash,store_cash,t_credit,t_ext_cc,store_cc,"
+                        "epay_cash,epay_cc,epay_on_cash,epay_on_credit")
+                .eq("org_id", org_id).in_("period", _pvariants(period))
+                .limit(100000).execute().data) or []
+    except Exception as _ce:
+        print(f"WARN daily_closing read failed for bill-pay coverage: {_ce}")
+        return {}, {}
+    collected, declared = {}, {}
+    raw_keys = {}
+    for r in rows:
+        sc = str(r.get("store_code") or "").strip() or "—"
+        d = str(r.get("close_date") or "")[:10]
+        if not d:
+            continue
+        k = (ckey_fn(sc) or sc, d)
+        raw_keys.setdefault(k, (sc, d))
+        cash = float(r.get("t_cash") or 0.0) or float(r.get("store_cash") or 0.0)
+        card = float(r.get("t_credit") or 0.0) or float(r.get("store_cc") or 0.0)
+        card += float(r.get("t_ext_cc") or 0.0) + float(r.get("epay_cc") or 0.0)
+        cslot = collected.setdefault(k, {"cash": 0.0, "card": 0.0, "_name": sc})
+        cslot["cash"] = round(cslot["cash"] + cash, 2)
+        cslot["card"] = round(cslot["card"] + card, 2)
+        dslot = declared.setdefault(k, {"amount": 0.0, "_name": sc})
+        dslot["amount"] = round(dslot["amount"] + float(r.get("epay_on_cash") or 0.0)
+                                + float(r.get("epay_on_credit") or 0.0), 2)
+    # DM verified-correction overlay (store-day totals become the DM's corrected figures).
+    try:
+        from app.modules.closing import verified_overlay as _vo
+        ov = _vo.build_overlay_map(client, org_id, sorted({d for (_s, d) in collected}))
+        for k, (sc, d) in raw_keys.items():
+            dm = ov.get((_vo._norm(sc), d))
+            if not dm:
+                continue
+            if dm.get("dm_store_cash") is not None and k in collected:
+                collected[k]["cash"] = _vo._f(dm["dm_store_cash"])
+            if dm.get("dm_store_cc") is not None and k in collected:
+                collected[k]["card"] = _vo._f(dm["dm_store_cc"])
+            if k in declared and (dm.get("dm_epay_cash") is not None or dm.get("dm_epay_cc") is not None):
+                base = declared[k]["amount"]
+                cash_part = _vo._f(dm["dm_epay_cash"]) if dm.get("dm_epay_cash") is not None else None
+                cc_part = _vo._f(dm["dm_epay_cc"]) if dm.get("dm_epay_cc") is not None else None
+                if cash_part is not None and cc_part is not None:
+                    declared[k]["amount"] = round(cash_part + cc_part, 2)
+                elif cash_part is not None:
+                    declared[k]["amount"] = round(cash_part, 2) if base == 0 else base
+    except Exception:
+        pass
+    return collected, declared
+
+
+@router.get("/billpay-coverage/{period}")
+def billpay_coverage(period: str, org_id: str = ORG_ID, tolerance: float = 1.0):
+    """COVERAGE reconciliation (owner 2026-09-02): per store per DAY, the ePay/VidaPay bill
+    payments collected must be ≤ the cash + card the store declared at closing — an exception
+    surfaces every day where the pass-through exceeds the drawer money. Bill-pay side: the
+    carrier PROCESSOR feed when one is wired (`metric_source_of_truth.processor` /
+    data_source auto-detect — the SAME resolution `/metric-recon` uses), else the reps' DECLARED
+    ePay split (`daily_closing.epay_on_cash + epay_on_credit`). Collected side:
+    `daily_closing` tender totals, DM-verified corrections winning. Pure math:
+    `metric_recon.reconcile_billpay_coverage`. Read-only."""
+    require_org(org_id)
+    from app.modules.commcalc import metric_recon as metric_recon_mod
+    client = sb()
+    ckey = _canonical_store_key_fn(client, org_id)
+    msrc = _metric_source(client, org_id, "bill_payments")
+    processor = _billpay_processor_name(client, org_id, msrc)
+    collected, declared = _closing_collected_by_store_day(client, org_id, period, ckey)
+    proc_days = _billpay_processor_by_store_day(client, org_id, period, processor, ckey)
+    if proc_days:
+        billpay, source = proc_days, f"processor:{processor}"
+    else:
+        billpay, source = declared, "declared_closing_split"
+    result = metric_recon_mod.reconcile_billpay_coverage(
+        billpay, collected, tolerance_amt=float(tolerance or 1.0),
+        assigned_user=msrc.get("assigned_user"))
+    result.update({"period": period, "org_id": org_id, "billpay_source": source,
+                   "processor": (processor or None),
+                   "note": (None if collected else
+                            "No daily_closing rows for this period — the collected side is empty, "
+                            "so coverage cannot be assessed yet.")})
+    return result
+
+
 @router.get("/data-lineage")
 def get_data_lineage(org_id: str = ORG_ID, source_key: str = "", affected_key: str = "", kind: str = ""):
     """The system DATA-LINEAGE registry (mig 924/925) — the documented schematic of how ingested data and
