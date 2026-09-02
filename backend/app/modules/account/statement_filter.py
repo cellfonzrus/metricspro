@@ -29,62 +29,160 @@ def _r(x):
     return round(safe_float(x), 2)
 
 
-def resolve_store_set(client, org_id, stores_csv="", markets_csv="", scope="consolidated"):
-    """Resolve the active store/market selection to a set of canonical store addresses.
+def market_key_expansion(idx, markets):
+    """PURE (harness: harness_pl_filter_semantics.py): expand a market selection to every matchable
+    STORE KEY spelling, from the canonical UNION market index (core.scope.build_market_index shape).
 
-      • explicit stores  → taken as-is (they are the scope store addresses the picker offered).
-      • markets          → every store_mapping.store_address in those markets (org-scoped; the
-                           market→store authority is commcalc.store_mapping.market).
-      • scope            → when a company/store scope is ALSO selected the result is INTERSECTED with
-                           that scope's store universe, so the company selector still composes (the
-                           core set is ADDED to the existing filter, never substituted). consolidated
-                           (or empty scope) imposes no intersection.
+    OWNER BUG 2026-09-02 ("when you filter the market from the p&l it does not show any data"): the
+    old resolver read commcalc.store_mapping ALONE with a CASE-SENSITIVE market equality, while the
+    market picker (core /filter-options) offers the UNION of storeops.stores.market ∪
+    store_mapping.market — so a market that lives (or is only spelled/cased) on the storeops side
+    bound ZERO stores and the P&L rendered the all-$0 skeleton. Same defect class as the documented
+    /core/markets 'PA' bug; same cure: the ONE canonical union (core.scope.market_index), so the
+    picker can never offer a market this resolver cannot bind. A store's snapshot key is a SALES
+    spelling, so each member store expands to EVERY spelling either vocabulary knows for it
+    (by_market keys + addr_keys per member code).
+
+    Returns (upper_keys, squashed_keys, member_nums):
+      upper_keys    — UPPER codes + every UPPER address spelling of the member stores;
+      squashed_keys — the same, squashed (alphanumeric-only) for punctuation/whitespace drift;
+      member_nums   — leading street numbers that UNAMBIGUOUSLY (index-wide) identify a member
+                      store, mirroring store_resolver's documented precedence. A number claimed by
+                      two different stores never matches (fail-closed).
+    Market names match case-insensitively; an unknown market contributes nothing (fail-closed)."""
+    from app.modules.account.coa import _squash_key, _lead_num_key
+    idx = idx or {}
+    by_market = idx.get("by_market") or {}
+    addr_keys = idx.get("addr_keys") or {}
+    want = {str(m or "").strip().lower() for m in (markets or []) if str(m or "").strip()}
+    upper_keys, member_codes = set(), set()
+    for mk in want:
+        b = by_market.get(mk)
+        if not b:
+            continue
+        upper_keys |= {str(k).upper() for k in (b.get("keys") or ())}
+        member_codes |= {str(c).upper() for c in (b.get("codes") or ())}
+    for code in member_codes:
+        upper_keys |= {str(a).upper() for a in (addr_keys.get(code) or ())}
+    squashed_keys = {_squash_key(k) for k in upper_keys}
+    squashed_keys.discard("")
+    # index-wide street-number ambiguity: number → owning identity (code, else the address itself)
+    num_owner = {}
+    for code, addrs in addr_keys.items():
+        for a in addrs:
+            nk = _lead_num_key(a)
+            if nk:
+                num_owner.setdefault(nk, set()).add(str(code).upper())
+    for s in (idx.get("stores") or ()):
+        a = str((s or {}).get("address") or "")
+        nk = _lead_num_key(a)
+        if nk:
+            ident = str((s or {}).get("store_code") or "").upper() or a.upper()
+            num_owner.setdefault(nk, set()).add(ident)
+    member_idents = member_codes | upper_keys
+    member_nums = {n for n, owners in num_owner.items()
+                   if len(owners) == 1 and next(iter(owners)) in member_idents}
+    return upper_keys, squashed_keys, member_nums
+
+
+def build_store_matcher(explicit_stores, upper_keys, squashed_keys, member_nums):
+    """PURE: fn(snapshot store address) -> bool for the combined store+market selection.
+    Explicit stores (the picker offers the exact snapshot addresses) match case-insensitively —
+    byte-identical to the old behaviour; market membership matches by any known spelling (exact
+    upper → squashed → unambiguous leading street number)."""
+    from app.modules.account.coa import _squash_key, _lead_num_key
+    explicit_lower = {str(s).strip().lower() for s in (explicit_stores or ()) if str(s).strip()}
+    explicit_upper = {s.upper() for s in explicit_lower}
+
+    def match(addr):
+        a = str(addr or "").strip()
+        if not a:
+            return False
+        if a.lower() in explicit_lower or a.upper() in explicit_upper:
+            return True
+        if a.upper() in upper_keys:
+            return True
+        if _squash_key(a) in squashed_keys:
+            return True
+        nk = _lead_num_key(a)
+        return bool(nk and nk in member_nums)
+
+    return match
+
+
+def resolve_store_matcher(client, org_id, stores_csv="", markets_csv=""):
+    """Resolve the active store/market selection to a snapshot-address matcher.
+
+      • explicit stores → matched as-is, case-insensitively (they ARE the scope store addresses the
+        picker offered).
+      • markets → resolved through the org's canonical union market index
+        (core.scope.market_index: storeops.stores ∪ commcalc.store_mapping ∪ store_aliases), so any
+        market the picker offers binds — see market_key_expansion. A read failure degrades to a
+        best-effort store_mapping-only expansion (the old authority), never to silently-all.
 
     Values are PIPE-separated ('|'), not comma — a canonical store_address may itself contain a comma
-    ("123 Main St, Queens NY"). Returns (store_set, resolved_markets) — store_set is a set[str].
-    """
+    ("123 Main St, Queens NY"). Returns (matcher, explicit_stores:set, markets:list)."""
     stores = {s.strip() for s in (stores_csv or "").split("|") if s.strip()}
     markets = [m.strip() for m in (markets_csv or "").split("|") if m.strip()]
-    S = set(stores)
+    upper_keys, squashed_keys, member_nums = set(), set(), set()
     if markets:
+        idx = None
         try:
-            from app.modules.account import coa
-            for r in coa._fetch_all(client, "store_mapping", "store_address,market", {"org_id": org_id}):
-                mk = (r.get("market") or "").strip()
-                sa = (r.get("store_address") or "").strip()
-                if sa and mk in markets:
-                    S.add(sa)
+            from app.core import scope as core_scope
+            idx = core_scope.market_index(client, org_id)
         except Exception:
-            pass
-    # compose with the company/store scope selector (intersection) when one is chosen. The company
-    # universe is UPPER-cased (store_company_map keys) while store addresses keep their original case,
-    # so intersect case-insensitively (keep the original-cased address on the S side).
-    universe = _scope_store_universe(client, org_id, scope)
-    if universe is not None:
-        uni_lower = {u.lower() for u in universe}
-        S = {s for s in S if s.lower() in uni_lower}
-    return S, markets
+            idx = None
+        if idx is None:
+            # degraded fallback: the pre-2026-09 store_mapping-only vocabulary (case-insensitive now)
+            try:
+                from app.modules.account import coa
+                rows = coa._fetch_all(client, "store_mapping", "store_code,store_address,market",
+                                      {"org_id": org_id})
+                idx = {"by_market": {}, "addr_keys": {}, "stores": []}
+                for r in rows:
+                    mk = (r.get("market") or "").strip().lower()
+                    sa = (r.get("store_address") or "").strip()
+                    code = (r.get("store_code") or "").strip().upper()
+                    if not mk or not sa:
+                        continue
+                    b = idx["by_market"].setdefault(mk, {"codes": set(), "keys": set()})
+                    b["keys"].add(sa.upper())
+                    if code:
+                        b["codes"].add(code)
+                        idx["addr_keys"].setdefault(code, set()).add(sa.upper())
+            except Exception:
+                idx = {}
+        upper_keys, squashed_keys, member_nums = market_key_expansion(idx, markets)
+    return build_store_matcher(stores, upper_keys, squashed_keys, member_nums), stores, markets
 
 
-def _scope_store_universe(client, org_id, scope):
-    """The set of stores a company/store scope covers, or None for consolidated/unknown (= all)."""
-    scope = scope or "consolidated"
-    if scope == "consolidated":
-        return None
+def scope_predicate(client, org_id, scope):
+    """fn(snapshot store address) -> bool for the company/store SCOPE selector, composed (AND) with
+    the store/market filter so the company dropdown still narrows an active filter.
+
+      consolidated / blank / unknown → always True (no narrowing — unchanged).
+      store:<addr>  → that store only (case-insensitive).
+      company:<id>  → the store's attributed company == <id>, via the SAME canonical attribution
+        the compute engine books snapshots with (coa.company_assignment: exact → squashed →
+        unambiguous street number → DEFAULT company). The old implementation intersected against
+        ONLY explicitly-assigned addresses, so stores held by a company through the DEFAULT rule —
+        or assigned under a variant spelling — dropped to an empty view. Fail-CLOSED: a resolution
+        failure on a company scope matches nothing (never another company's stores)."""
+    scope = (scope or "consolidated").strip()
+    if not scope or scope == "consolidated":
+        return lambda addr: True
     if scope.startswith("store:"):
-        return {scope.split(":", 1)[1]}
+        target = scope.split(":", 1)[1].strip().lower()
+        return lambda addr: str(addr or "").strip().lower() == target
     if scope.startswith("company:"):
         cid = scope.split(":", 1)[1]
         try:
             from app.modules.account import coa
-            store_co, _default, _companies = coa.store_company_map(client, org_id)
-            # store_co keys are UPPER-cased addresses → return the original-cased scope addresses by
-            # matching case-insensitively against the store snapshots' addresses is handled by the
-            # caller (we return the upper set and the caller filters store scopes case-insensitively).
-            return {addr_upper for addr_upper, c in store_co.items() if c == cid}
+            company_of, _default, _companies = coa.company_assignment(client, org_id)
+            return lambda addr: company_of(addr) == cid
         except Exception:
-            return None
-    return None
+            return lambda addr: False
+    return lambda addr: True
 
 
 def aggregate(payloads, statement_type, structure=None):
@@ -171,17 +269,19 @@ def filtered_statement(client, org_id, period, st_type, scope, stores_csv, marke
       {statement, filtered:True, filtered_stores:[...], filtered_markets:[...], matched_stores:int}.
     Reads only stored snapshots (org-scoped) — no money recompute. `st_type` ∈ {"pl","balance_sheet"}.
     """
-    store_set, markets = resolve_store_set(client, org_id, stores_csv, markets_csv, scope)
-    # fetch this period's per-store snapshots for st_type, case-insensitively match the scope keys
+    matcher, _explicit, markets = resolve_store_matcher(client, org_id, stores_csv, markets_csv)
+    in_scope = scope_predicate(client, org_id, scope)
+    # fetch this period's per-store snapshots for st_type and match the scope keys through the
+    # canonical matcher (explicit stores case-insensitively; markets by any known spelling) AND the
+    # company/store scope predicate (composition — the scope narrows the filter, never replaces it)
     rows = (client.schema("commcalc").table("account_statements")
             .select("scope_key,scope_label,payload")
             .eq("org_id", org_id).eq("period", period).eq("statement_type", st_type)
             .like("scope_key", "store:%").execute().data) or []
-    want_lower = {s.lower() for s in store_set}
     picked, matched_addrs = [], []
     for r in rows:
         addr = (r.get("scope_key") or "")[len("store:"):]
-        if addr.lower() in want_lower or addr.upper() in store_set:
+        if matcher(addr) and in_scope(addr):
             picked.append(r.get("payload") or {})
             matched_addrs.append(addr)
     # consolidated snapshot supplies the full line skeleton (shape only; amounts seeded at 0)

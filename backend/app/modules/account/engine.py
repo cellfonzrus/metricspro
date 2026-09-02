@@ -198,16 +198,19 @@ def compute_and_store(client, org_id, period):
     inputs = coa.build_inputs(client, org_id, period)
     journal = (client.schema("commcalc").table("journal_entries").select("*")
                .eq("org_id", org_id).eq("period", period).execute().data) or []
-    store_co, default_co, companies = coa.store_company_map(client, org_id)
+    # THE shared store→company attribution (owner bug 2026-09-02 "companies … proper information is
+    # not being displayed"): exact match first (byte-identical where it used to match), then squashed
+    # spelling, then unambiguous leading street number, else the default company — so a sales-feed
+    # spelling drift ('1115 Liberty Ave Brooklyn, NY 11208' vs the assignment's '1115 Liberty Ave')
+    # no longer leaks a store's whole month into 'Default Company'. Same matcher statement_filter
+    # uses for the company-scope × store/market filter composition (coa.company_assignment).
+    company_of, default_co, companies = coa.company_assignment(client, org_id)
     co_name = {c["id"]: c["name"] for c in companies}
 
     # every store that appears in any line
     all_stores = set()
     for ln in inputs.values():
         all_stores.update(ln["by_store"].keys())
-
-    def company_of(store):
-        return store_co.get((store or "").upper(), default_co)
 
     scopes = [("consolidated", "Consolidated (all companies)", None, True)]
     for c in companies:

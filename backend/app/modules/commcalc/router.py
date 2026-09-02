@@ -8629,6 +8629,19 @@ def _accessory_config_uncached(client, org_id):
             definition_drives_pay = bool(dprows[0].get("definition_drives_pay"))
     except Exception:
         definition_drives_pay = False
+    # GP ACCESSORY-COLUMN BASIS (mig 930; owner 2026-09-02 — "Acc Gp should show the price at which
+    # the accessories were sold not the Gross profit as they are not entered correct … renamed to Acc
+    # Sales"). 'sales' = Σ ext_price of accessory lines (the portal-reconciled basis — house DEFAULT);
+    # 'gp' = the legacy Σ gp, opt-back for a tenant whose POS costs are trustworthy. Own defensive
+    # query; a missing column (pre-930) / NULL / junk value falls back to the house default 'sales'.
+    gp_acc_basis = "sales"
+    try:
+        gbrows = (client.schema("commcalc").table("accessory_config")
+                  .select("gp_acc_basis").eq("org_id", org_id).limit(1).execute().data) or []
+        if gbrows and str(gbrows[0].get("gp_acc_basis") or "").strip().lower() in ("sales", "gp"):
+            gp_acc_basis = str(gbrows[0]["gp_acc_basis"]).strip().lower()
+    except Exception:
+        gp_acc_basis = "sales"
     catalog_classifier = None
     if catalog_classify_enabled:
         try:
@@ -8659,6 +8672,7 @@ def _accessory_config_uncached(client, org_id):
             "catalog_accessory_categories_list": catalog_accessory_categories,
             "apply_to_gp": apply_to_gp,
             "definition_drives_pay": definition_drives_pay,
+            "gp_acc_basis": gp_acc_basis,
             "catalog_classifier": catalog_classifier}
 
 
@@ -16741,7 +16755,17 @@ def _compute_gp(client, org_id, period, market=""):
         print(f'WARN gp raw_mi select fell back (no mi_activation_date column?): {_mie}')
         mi_rows = sc.table('raw_mi').select('salesforce_id,actual_mi_payout,actual_atu_payout').eq('org_id', org_id).in_('period', pv).execute().data or []
     rep_comms  = sc.table('rep_commissions').select('store,total_payout,epay_salesperson,storeops_name').eq('org_id', org_id).in_('period', pv).execute().data or []
-    expenses   = sc.table('store_expenses').select('store_code,amount').eq('org_id', org_id).in_('period', pv).execute().data or []
+    # STICKY expenses (owner 2026-09-02: "the expenses column is not auto pulling from the expenses
+    # sheet … apply a systematic fix not a band aid"). The Expenses SHEET has carried a month with no
+    # saved rows forward from the latest prior month since its sticky patch (GET /expenses/{period}),
+    # but this raw read did not — so the GP "−Expenses" column read $0 for exactly the months the sheet
+    # was showing carried numbers (house org: rows end at "July 2026" → August GP exp_total was $0
+    # everywhere). Both readers now go through the ONE shared carry-forward rule
+    # (expenses_effective.effective_expense_rows — manual rows only, latest strictly-prior month,
+    # nothing when the period has its own rows), so sheet and report can never disagree again.
+    from app.modules.commcalc import expenses_effective as _expfx
+    expenses, _exp_carried_from = _expfx.effective_expense_rows(
+        client, org_id, period, pv, 'store_code,amount')
     # Wide select so the cost map can key on the TOTAL variant's UPC/SKU/desc (migs 230/231); high limit so
     # a multi-thousand-row catalog isn't truncated at the PostgREST default. Falls back to the legacy
     # product_id,cost select when the TOTAL columns don't exist yet (pre-230) → house byte-identical.
@@ -16794,9 +16818,22 @@ def _compute_gp(client, org_id, period, market=""):
     except Exception as _lge:
         print(f'WARN gp commission-leg config fell back to code defaults: {_lge}')
         _legcls = _commission_legs.default_classifier()
+    # Accessory column BASIS (owner 2026-09-02: "Acc Gp should show the price at which the accessories
+    # were sold not the Gross profit as they are not entered correct … renamed to Acc Sales").
+    # Config-resolved per org (accessory_config.gp_acc_basis, mig 930); house default 'sales'
+    # (sell price / ext_price — the basis the portal's own 'Acc. Sales' column reconciled to within
+    # 1%); 'gp' stays selectable for a tenant whose POS costs are clean.
+    try:  # memoized read — the classify block above may have failed independently
+        _acc_basis = str((_accessory_config(client, org_id) or {}).get('gp_acc_basis') or 'sales').strip().lower()
+    except Exception:
+        _acc_basis = 'sales'
+    if _acc_basis not in ('sales', 'gp'):
+        _acc_basis = 'sales'
     result = calc_gp_report(sales, pay_detail, mi_rows, rep_comms, expenses, catalog, store_map, period,
                             comp_rows=comp_rows, gp_category_map=gp_cat_map, resolve_store_code=_resolve_code,
-                            config_classify=config_classify, ma_income=ma_income, leg_classify=_legcls)
+                            config_classify=config_classify, ma_income=ma_income, leg_classify=_legcls,
+                            acc_basis=_acc_basis)
+    result['expenses_carried_from'] = _exp_carried_from
     if market:
         result['store_rows'] = [r for r in result['store_rows'] if r.get('market', '').upper() == market.upper()]
     return result
@@ -18595,7 +18632,8 @@ def get_accessory_config(org_id: str = ORG_ID):
             "catalog_classify_enabled": c["catalog_classify_enabled"],
             "catalog_accessory_categories": c["catalog_accessory_categories_list"],
             "apply_to_gp": c.get("apply_to_gp", False),
-            "definition_drives_pay": c.get("definition_drives_pay", False)}
+            "definition_drives_pay": c.get("definition_drives_pay", False),
+            "gp_acc_basis": c.get("gp_acc_basis", "sales")}
 
 
 class PutAccessoryConfigIn(LaxModel):
@@ -18613,6 +18651,7 @@ class PutAccessoryConfigIn(LaxModel):
     catalog_accessory_categories: Any = None
     apply_to_gp: Any = None
     definition_drives_pay: Any = None
+    gp_acc_basis: Any = None
 
 
 @router.put("/accessory-config")
@@ -18735,16 +18774,26 @@ def put_accessory_config(body: PutAccessoryConfigIn, org_id: str = ORG_ID, autho
     row["definition_drives_pay"] = (bool(body.definition_drives_pay)
                                     if "definition_drives_pay" in body.model_fields_set
                                     else bool(cur.get("definition_drives_pay", False)))
+    # GP accessory-column BASIS (mig 930 — owner 2026-09-02). 'sales' (house default) or 'gp' (opt-back).
+    # A junk value is rejected rather than silently stored (a typo must not flip a money column's basis).
+    if "gp_acc_basis" in body.model_fields_set:
+        _gb = str(body.gp_acc_basis or "").strip().lower()
+        if _gb not in ("sales", "gp"):
+            raise HTTPException(400, "gp_acc_basis must be 'sales' or 'gp'")
+        row["gp_acc_basis"] = _gb
+    else:
+        row["gp_acc_basis"] = str(cur.get("gp_acc_basis") or "sales")
     # Persist defensively: pre-mig-214/213/217/218/231 those columns don't exist, so a save carrying them
     # 500s — retry progressively dropping the NEWEST columns first (mig-231 columns are the newest) so
     # editing the accessory lists never breaks before the migrations run (billpay → Boost-token fallback,
     # contract-type map → empty/classifier, box → _BOX_DEPTS, set-up fee → 'Device Setup Charge', catalog →
     # disabled/legacy classification).
-    _new276 = ["definition_drives_pay"]
+    _new930 = ["gp_acc_basis"]
+    _new276 = _new930 + ["definition_drives_pay"]
     _new250 = _new276 + ["apply_to_gp"]
     _new231 = _new250 + ["box_count_buckets", "catalog_classify_enabled", "catalog_accessory_categories"]
     _drop_final = _new231 + ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords", "box_departments"]
-    for _drop in ([], _new276, _new250, _new231, _new231 + ["activation_rules"], _new231 + ["activation_rules", "billpay_products"],
+    for _drop in ([], _new930, _new276, _new250, _new231, _new231 + ["activation_rules"], _new231 + ["activation_rules", "billpay_products"],
                   _new231 + ["activation_rules", "billpay_products", "contract_type_map"],
                   _new231 + ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords"], _drop_final):
         attempt = dict(row)

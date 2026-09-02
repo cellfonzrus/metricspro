@@ -218,6 +218,48 @@ commissions, expenses.
   (luxelink: `{"mi_income": "Residual"}`; Boost untouched). LuxeLink opt-in seeded by mig `314`
   (Aug-2026 dollars itemised in the migration header).
 
+- **P&L store/market filter + company scope (fix 2026-09-02, owner: "market filter shows no data /
+  company selection shows improper information"):** the aggregated-statement filter
+  (`account/statement_filter.py`, read by `GET /account/pl|balance-sheet/{period}?stores=&markets=`)
+  now resolves **markets through the canonical UNION market index** (`core/scope.market_index`:
+  storeops.stores ∪ store_mapping ∪ store_aliases — the same authority as `/core/markets`, so the
+  picker can never offer a market the resolver cannot bind), **case-insensitively**, and matches a
+  member store's snapshot by ANY known spelling (exact → squashed → unambiguous leading street
+  number; fail-closed on ambiguity/unknown market — `market_key_expansion`/`build_store_matcher`).
+  The company **scope selector** composes with the filter via `statement_filter.scope_predicate` →
+  `coa.company_assignment` — the SAME store→company attribution `engine.compute_and_store` books
+  company snapshots with (`coa.build_company_matcher`: exact → squash → unambiguous street number →
+  DEFAULT company), so a sales-spelling drift (live house: `1115 Liberty Ave Brooklyn, NY 11208` vs
+  assignment `1115 Liberty Ave`, $3,786.27 Aug revenue leaked to "Default Company") re-attributes
+  correctly (recompute refreshes stored company snapshots). Proof:
+  `harness_pl_filter_semantics.py`.
+- **Wages estimate is salary-basis aware (fix 2026-09-02, owner: "employee salaries … not getting
+  autoloaded from the payroll"):** `coa.wages_by_store` → pure `coa.derive_wage_cells`: hourly
+  employees stay hours×`pay_rate` (byte-identical); SALARIED employees
+  (`storeops.employees.pay_basis` weekly/monthly/annual + `pay_amount`, migs 416/417 — the same
+  columns the payroll report pays from) book ONE monthly equivalent
+  (`coa.monthly_salary_equivalent`: monthly=amt, annual=amt/12, weekly=amt×52/12) allocated across
+  worked stores ∝ hours (active zero-hours → home_store, else company-wide; inactive zero-hours →
+  skipped). A salaried row's `pay_rate` holds PER-PERIOD pay, so the old hours×pay_rate booked
+  phantom wages (live LuxeLink Aug 2026: Wages $234,523.57 → $110,190.54 on recompute). Rep
+  commissions verified autoloading (Σ `rep_commissions.total_payout` = the `rep_comm` line to the
+  cent). Proof: `harness_wages_salary_basis.py`.
+- **Sticky store-expenses carry-forward (fix 2026-09-02, owner: "GP expenses column is not auto
+  pulling from the expenses sheet — systematic fix not a band aid"):** NEW shared module
+  `commcalc/expenses_effective.py` — the ONE carry-forward rule (a period with NO `store_expenses`
+  rows reads the latest strictly-prior period's MANUAL rows; system lines — `payroll_gross`,
+  `pto_accrual` etc. — never carry; a period with its own rows is byte-identical to the raw read) —
+  consumed by BOTH the GP report (`router._compute_gp`, payload field `expenses_carried_from`) and
+  the P&L (`account/coa.build_inputs` `store_opex` + the K2 payroll-name suppression), matching
+  what the sticky Expenses sheet (`GET /expenses/{period}`) has always DISPLAYED. Proof:
+  `harness_expenses_carry_forward.py`.
+- **GP accessory column basis — "Acc Sales" (owner 2026-09-02, mig `930_gp_acc_basis.sql`):**
+  `accessory_config.gp_acc_basis` (`'sales'` = Σ `ext_price` of accessory lines — HOUSE DEFAULT,
+  applied on NULL/absent; `'gp'` = legacy Σ `gp`, per-org opt-back via `PUT /accessory-config`) →
+  `calc_gp_report(acc_basis=…)`; the payload carries `acc_basis` + `acc_label`
+  ('Acc Sales'/'Acc GP') and `commcalc/gp/page.tsx` labels the column from it (no hardcoded
+  strings). The basis flows consistently into `total_rev`/`net_profit`. Proof:
+  `harness_gp_acc_basis.py`.
 
 ---
 
@@ -765,7 +807,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `commcalc.store_kpis` | KPI ingest/snapshot | tiers, exec |
 | `commcalc.carrier_kpi_metric` | `/carrier-kpi-metrics` POST `19773` | KPI/tier config resolution |
 | `commcalc.flags` | calc + flag rules | `/flags/{period}` `10299`, `_cr_resolve_flags` |
-| `commcalc.store_expenses` | `/expenses/{period}` PUT `21695` | GP report, `_cr_resolve_store_expenses` |
+| `commcalc.store_expenses` | `/expenses/{period}` PUT `21695` | GP report + P&L, BOTH via the sticky carry-forward reader `expenses_effective.effective_expense_rows` (2026-09-02, §4); `_cr_resolve_store_expenses` |
 | `commcalc.sale_installment_ledger` | `compute_sale_installments(persist=True)` `9212` (mig `308` adds `order_number`/`account_id` MA TX provenance, adaptive write) | `/plan-installments/*` previews, `installment_comm_sale` |
 | `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx` (slice-scoped replace: org × day × `account_id`, `ingest_slice.py` §2), VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store`), residual/ATU (`residual_subs`), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier), **P&L mig `309`** (`account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings`: `merchant_discount` → "Merchant discount" line (or legacy `atu_income` fold per `pl_merchant_discount_own_line`), −`retail_cost` → `mi_income` for the `'%residual%'` ∪ `pl_ma_residual_order_types` union, each row once), **P&L mig `314`** (`ma_store_pnl.ma_tx_bookings`: per-store via `account_id`→store index; MDF token rows → `mdf_income`; `'daily_tx'` month-spiff rows → `carrier_comm` `M<n>` detail) |
 | `commcalc.raw_ma_commission` | upload `/upload/ma_commission` (slice-scoped replace: org × day × `merchant_account_id`, `ingest_slice.py` §2 — 2026-09-02 two-portal wipe incident), VidaPay sweep | MA overview/recon, installment MA gate (`_read_ma_commission` spiffs), **mig `308` two-hop link** (`build_ma_link_index`: `imei|sim → activation_order`), **P&L mig `314`** (`ma_store_pnl.ma_commission_bookings`: component heads per-store via `merchant_account_id`→store index; sheet spiffs suppressed under `pl_ma_month_spiff_source='daily_tx'`; MA device COGS store slice `device_cogs._ma_sold_cost`) |
@@ -832,6 +874,9 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `GET /storeops/payroll-raw` (payroll-tax page inputs; mig-434 pay gate, FAIL-CLOSED 403 — ALL-money feed, §19.12 closed 2026-09-01; route `payroll_raw_route`, shared `payroll_raw()` stays ungated for pre-gated in-process callers) | `storeops/router.py` (`payroll_raw_route`) | §14 W3 |
 | `GET /storeops/payroll-expenses/{period}`, `GET /storeops/payroll/approvals`, `GET /storeops/timeclock/attendance-exceptions`, `GET /storeops/accountability` | `storeops/router.py:7703` / `payroll_approval.py:469` / `storeops/router.py:4294` / `:4318` | §14 W3 |
 
+| `GET /account/pl/{period}`, `GET /account/balance-sheet/{period}` (`?scope=&stores=&markets=` — stored snapshot when unfiltered; store/market-filtered view via `statement_filter.filtered_statement`: canonical-union market resolution + company-scope AND-composition, 2026-09-02) | `account/router.py` (`get_pl`/`get_bs` → `_filtered_read`) | §4 P&L filter |
+| `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 930) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
+
 (Full 468-endpoint list: `grep -nE '@router\.(get|post|put|patch|delete)\(' backend/app/modules/commcalc/router.py`.)
 
 ---
@@ -842,6 +887,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 |--------|--------------------|-----------------|
 | Activation counts (premium/byod/upgrade) | `raw_sales.contract_type` | `classify_contract_type` `calculator.py:40`; display via `_sales_cell_agg` `router.py:17842` |
 | Accessory $ ("acc_gp") | `raw_sales.ext_price` (+ device set-up fee; NOT gp, NOT Ondigo) | `_compute_feed_actuals_py` `router.py:18678` |
+| GP report accessory column ("Acc Sales" / legacy "Acc GP") | `raw_sales.ext_price` of accessory lines (`accessory_config.gp_acc_basis='sales'` — house default, mig 930) or `raw_sales.gp` (`'gp'` opt-back) | `calc_gp_report(acc_basis=…)` `gp_report.py`; label from payload `acc_label` (§4) |
 | Edge count | `raw_sales` product tokens | `_mi_classify_sales_row` via `_mi_resolve_numbers` `router.py:28843` (MI only; folded into premium in rep pay) |
 | Activation TYPE buckets (AD basis: New / Port / BYOD / Tablet / Home Internet / Edge / Upgrade / hidden `BYOD Upgrade`) | `raw_custom_import` Activation-Details sheet (`Contract Type` + SP-PO/product/category name) × `accessory_config.activation_details_rules` token config (mig 313; house defaults: contract-type-only word-boundary Edge, `byod upgrade` → hidden family) | `activation_bucketing.activation_details_bucket` via `_cr_resolve_activation_details`; consumed by `_ad_cells_full`/`_apply_activation_basis` (Exec MTD + Sales Report columns), `_ad_activation_buckets` (recon), `/activation-counts/{period}`; `total_activation` excludes `TOTAL_ACTIVATION_EXCLUDED = (Upgrade, BYOD Upgrade)` |
 | VHI/FIOS / home-internet count | `raw_sales` product tokens / `installment_category.py:82` | `_mi_resolve_numbers` `28843`; `installment_category` (plan-mode, runtime-only) |
