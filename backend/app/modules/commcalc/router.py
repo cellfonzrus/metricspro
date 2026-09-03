@@ -18846,6 +18846,94 @@ def put_accessory_config(body: PutAccessoryConfigIn, org_id: str = ORG_ID, autho
     return get_accessory_config(org_id)
 
 
+# ── Carrier-aware report column labels + report-banner terminology (owner 2026-09-02) ─────────────
+# "The column which says Edge in Boost should say ACIMA … a place to fix the column labels as per
+# the carrier … a new tenant specifying their carrier gets those labels automatically." RULE TWO:
+# carrier PRESETS are house-org DATA rows in the existing mig-068 ui_label_override table
+# (scope='report_col:<carrier>' / 'report_banner:<carrier>', seeded by mig 945); tenant OVERRIDES
+# are the org's own rows under the un-suffixed scopes. Resolution (tenant override > carrier preset
+# > built-in default) is pure in report_labels.py — proven DB-free in harness_report_labels.py.
+# Auto-assign is LAZY: the resolver keys presets off the org's commcalc.carrier rows (mig 038, the
+# onboarding "Carrier Selection" step), so a new tenant needs no setup hook and an org with no
+# carrier / no preset rows is byte-identical to today (built-in labels render).
+@router.get("/report-labels")
+def get_report_labels(org_id: str = ORG_ID):
+    """Resolved report-column labels + banner on/off per carrier for this org, plus the raw
+    override/preset layers for the settings UI. Read-only, org-scoped; degrades to defaults
+    (built-in labels, banners on) pre-068/945. Consumed by Exec MTD / Activations (headers +
+    exports render from this payload — the mig-932 gp acc_label pattern)."""
+    require_org(org_id)
+    from app.modules.commcalc import report_labels as _rl
+    return _rl.load_report_labels(sb(), org_id)
+
+
+class PutReportLabelsIn(LaxModel):
+    columns: Any = None    # {column_key: label} — '' / null label REMOVES the override
+    banners: Any = None    # {banner_key: 'on'|'off'|null} — null REMOVES the override
+
+
+@router.put("/report-labels")
+def put_report_labels(body: PutReportLabelsIn, org_id: str = ORG_ID,
+                      authorization: str = Header(default="")):
+    """Upsert/remove THIS org's report-label overrides (scope 'report_col'/'report_banner' rows in
+    ui_label_override). Column keys are pick-don't-type: only keys in the LABELABLE_COLUMNS
+    registry are accepted; banner values only 'on'/'off'. An empty/null value DELETES the override
+    row → the org reverts to its carrier preset, then the built-in default (inheritance, never
+    "blank"). House carrier PRESETS are not editable here — they are house-level data (mig 945 /
+    house-org SQL), exactly like tile_layout house rows. GATED on the 'classification' settings
+    area (the same gate as the Classification settings these reports are configured in).
+    DISPLAY-ONLY: relabeling a column never touches a DB column, a bucket rule, or any pay path."""
+    require_org(org_id)
+    if not _can_edit_classification(authorization, org_id):
+        raise HTTPException(403, "You don't have permission to edit report column labels "
+                                 "(Classification settings).")
+    from app.modules.commcalc import report_labels as _rl
+    known_cols = dict(_rl.LABELABLE_COLUMNS)
+    cols = body.columns if isinstance(body.columns, dict) else {}
+    bans = body.banners if isinstance(body.banners, dict) else {}
+    client = sb()
+    tbl = client.schema('commcalc').table('ui_label_override')
+    changed, removed = [], []
+    try:
+        for key, label in cols.items():
+            key = str(key or '').strip()
+            if key not in known_cols:
+                raise HTTPException(400, f"'{key}' is not a labelable report column — pick one of "
+                                         f"the listed columns.")
+            label = str(label or '').strip()
+            if not label or label == known_cols[key]:
+                # Reverting to the built-in default is stored as NO row (inheritance), same as ''.
+                tbl.delete().eq('org_id', org_id).eq('scope', _rl.SCOPE_COL).eq('key', key).execute()
+                removed.append(key)
+            else:
+                tbl.upsert({"org_id": org_id, "scope": _rl.SCOPE_COL, "key": key,
+                            "label": label[:80],
+                            "updated_at": _datetime.now(_timezone.utc).isoformat()},
+                           on_conflict="org_id,scope,key").execute()
+                changed.append(key)
+        for key, val in bans.items():
+            key = str(key or '').strip()
+            if key not in _rl.BANNERS:
+                raise HTTPException(400, f"'{key}' is not a known report banner.")
+            val = str(val or '').strip().lower()
+            if val not in ('on', 'off'):
+                tbl.delete().eq('org_id', org_id).eq('scope', _rl.SCOPE_BANNER).eq('key', key).execute()
+                removed.append(key)
+            else:
+                tbl.upsert({"org_id": org_id, "scope": _rl.SCOPE_BANNER, "key": key, "label": val,
+                            "updated_at": _datetime.now(_timezone.utc).isoformat()},
+                           on_conflict="org_id,scope,key").execute()
+                changed.append(key)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"Could not save report labels — run migration "
+                                 f"068_ui_label_override.sql first. [{e}]")
+    out = _rl.load_report_labels(client, org_id)
+    out["saved"] = {"changed": changed, "removed": removed}
+    return out
+
+
 @router.get("/sales-fields")
 def sales_fields(period: str = "", org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Populate the accessory-settings pickers: the distinct Department + Category values in the sales

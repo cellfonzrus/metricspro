@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { api, getActiveOrg } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { useReportLabels } from '@/lib/report-labels'
 
 // Activations report — the b2b "Activation Details" basis of truth (owner 2026-08-26). One row per distinct
 // device (Serial#); Total Activation EXCLUDES Upgrade (b2b-consistent, LuxeLink 687 / Nova 250), with a
@@ -34,6 +35,8 @@ export default function ActivationsPage() {
   const [savingSrc, setSavingSrc] = useState(false)
   const [dmap, setDmap] = useState<any>(null)       // dealer-code → store mapping status
   const [mapBusy, setMapBusy] = useState('')        // dealer_code currently being saved
+  // Carrier-aware column labels (mig 945): tenant override > carrier preset > this page's built-ins.
+  const { colLabel } = useReportLabels()
 
   const load = useCallback(() => {
     if (!period) return
@@ -87,15 +90,18 @@ export default function ActivationsPage() {
   const grand = data?.total || {}
   const onAD = !!(srcCfg && srcCfg.enabled && srcCfg.source === 'activation_details')
 
+  // Carrier-aware column labels (owner 2026-09-02, mig 945): resolved tenant override > house carrier
+  // preset > the built-in default given here — e.g. the Boost preset renders 'edge' as ACIMA (the
+  // Boost-side device-financing program) while Total keeps Edge. Same keys, same numbers.
   const COLS: { key: keyof Row; label: string }[] = [
-    { key: totalKey as keyof Row, label: inclUpg ? 'Total (incl. Upgrade)' : 'Total Activation' },
-    { key: 'activation', label: 'New Activation' },
-    { key: 'port', label: 'Port' },
-    { key: 'byod', label: 'BYOD' },
-    { key: 'tablet', label: 'Tablet' },
-    { key: 'home_internet', label: 'Home Internet' },
-    { key: 'edge', label: 'Edge' },
-    { key: 'upgrade', label: 'Upgrade' },
+    { key: totalKey as keyof Row, label: inclUpg ? 'Total (incl. Upgrade)' : colLabel('total_activation', 'Total Activation') },
+    { key: 'activation', label: colLabel('activation', 'New Activation') },
+    { key: 'port', label: colLabel('port', 'Port') },
+    { key: 'byod', label: colLabel('byod', 'BYOD') },
+    { key: 'tablet', label: colLabel('tablet', 'Tablet') },
+    { key: 'home_internet', label: colLabel('home_internet', 'Home Internet') },
+    { key: 'edge', label: colLabel('edge', 'Edge') },
+    { key: 'upgrade', label: colLabel('upgrade', 'Upgrade') },
   ]
 
   return (
