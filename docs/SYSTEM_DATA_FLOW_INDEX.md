@@ -1243,6 +1243,50 @@ Pinned PAY-ENGINE in the guard.
     `layout:null`; 403s surface as a friendly menu-layout-grant message. Page opens for super
     admins OR `canEditSettingArea('menu_layout')`; the backend gate (§14 D1) is authoritative.
   - **Backend:** NOTHING new — D2 consumes the D1 endpoints as shipped (§17 unchanged).
+- **Store lease / landlord / insurance capture (mig `946`, owner directive 2026-09-03):** store
+  setup now records landlord + site contact, rent payment links / ACH, current rent + annual
+  escalation (percentage OR an explicit monthly-rent schedule), the rent-due window, insurance +
+  premium due, and append-only lease/COI document versions.
+  - **Tables (mig `946_store_lease_insurance.sql`):** `storeops.store_lease` — ONE row per
+    (org_id, store_code): `landlord_name/email/phone`, `site_contact_name/phone`,
+    `rent_payment_links TEXT[]`, `ach_bank_name/ach_routing_number/ach_account_number/ach_notes`
+    (SENSITIVE), `current_rent`, `rent_effective_from`, `escalation_pct`,
+    `rent_schedule JSONB [{effective_from, monthly_rent}]`, `rent_due JSONB {kind:'week'|'day',
+    value}` (NULL = org default), `lease_start/lease_end`, `insurance_company/policy_number/
+    premium/premium_due/premium_frequency('annual' dflt |semiannual|quarterly|monthly)/notes`.
+    `storeops.store_document` — APPEND-ONLY versions per (org, store, `doc_kind` ∈
+    lease|insurance_coi); current = newest `uploaded_at`; files in the PRIVATE bucket
+    **`store-docs`** (envelope-photo precedent: raw `storage_path` in the row, on-demand signed
+    URL). Org config on `storeops.tenants`: `rent_due_default JSONB` (column DEFAULT
+    `{"kind":"week","value":1}` — the owner's "first week of the month", defined not hardcoded)
+    + `lease_visible_roles TEXT[]` (NULL = mig-434 `DEFAULT_VISIBLE_ROLES`).
+  - **THE READ CONTRACT for the sibling finance "rents due this week / recurring expenses due"
+    build:** rent for a month = `store_lease.rent_for_month` (schedule entry with latest
+    `effective_from` ≤ first-of-month wins; else `current_rent` × (1+`escalation_pct`/100)^whole
+    anniversary-years since `rent_effective_from`; else `current_rent`; nothing → None, never 0).
+    Due window = `resolve_rent_due` (store `rent_due` → tenant `rent_due_default` → house
+    first-week) + `rent_due_window(y, m, due)` (week N = days 7N-6..min(7N, month end), clamped;
+    day d clamped to month end). Insurance recurrence = `insurance_premium` on
+    `insurance_premium_due` repeating per `insurance_premium_frequency`. Compute from these
+    columns/helpers — do NOT re-derive.
+  - **Gate (SENSITIVE — ACH + lease docs are money-adjacent):** every route gated whole by
+    `store_lease.can_see_lease` (mig-434 posture, FAIL-CLOSED 403: allow-list
+    `tenants.lease_visible_roles`, NULL = market manager and above; scope-`'all'` and the
+    `store_lease_docs` data grant pass; open-app parity carve-out only). `GET /storeops/stores`
+    untouched (separate tables — no employee-level endpoint can echo ACH/paths). RLS deviates
+    from storeops open_all ON PURPOSE: no policy, service-role only.
+  - **Endpoints (`storeops/router.py`, beside the store CRUD):** `GET/PUT /storeops/store-lease
+    ?store_code=` (record + document versions + resolved due + current-month rent / validated
+    upsert), `PUT /storeops/store-lease/tenant-defaults` (org `rent_due_default`),
+    `POST /storeops/store-lease/doc` (base64 pdf/png/jpg/webp ≤15MB → bucket + APPEND version
+    row), `GET /storeops/store-lease/doc-url` (org-scoped by doc id → 1h signed URL; the page's
+    download path) and `GET /storeops/store-lease/doc-view` (302 twin, envelope-view pattern).
+  - **Frontend:** `/storeops/setup/stores` per-row "🏢 Lease" expandable panel
+    (`storeops/setup/stores/LeasePanel.tsx`) — renders the gate's 403 as a friendly restriction
+    note. AWAITING OWNER PREVIEW (merge policy Option B).
+  - **Proof:** `backend/harness_store_lease.py` (stdlib-only: rent math incl. anniversary
+    boundaries, due-window clamps, gate truth table end-to-end, ACH strip, upload decode caps).
+    Not an external feed → no lineage registry entry.
 
 ---
 
@@ -1321,6 +1365,9 @@ Pinned PAY-ENGINE in the guard.
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`)** |
 | `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs), store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution rule + CI guard** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
+| `storeops.store_lease` (mig `946` — one row per org×store: landlord/site contact, rent links + ACH (SENSITIVE), `current_rent`/`rent_effective_from`/`escalation_pct`/`rent_schedule`/`rent_due`, lease dates, insurance + `insurance_premium_due`/`_frequency`) | `PUT /storeops/store-lease` (gated `can_see_lease`, upsert on org+store) | `GET /storeops/store-lease`; the sibling finance rents-due/recurring-expenses reader via `store_lease.rent_for_month`/`resolve_rent_due`/`rent_due_window` (§14 read contract — compute from these, never re-derive) |
+| `storeops.store_document` (mig `946` — append-only lease/COI versions; files in PRIVATE bucket `store-docs`) | `POST /storeops/store-lease/doc` (gated; INSERT only, prior versions kept) | `GET /storeops/store-lease` version lists (path never echoed), `GET /storeops/store-lease/doc-url`/`doc-view` (org-scoped by id → signed URL) |
+| `storeops.tenants.rent_due_default` + `lease_visible_roles` (mig `946` config columns) | `PUT /storeops/store-lease/tenant-defaults` (due default); roles column set per-org via SQL/admin | `store_lease.tenant_lease_config` (adaptive — pre-946 = house first-week + market-manager-and-above), `can_see_lease` gate |
 
 ---
 
@@ -1367,6 +1414,7 @@ Pinned PAY-ENGINE in the guard.
 | `POST /notify/send`, `POST /notify/run-due` → report keys `storeops_payroll` / `storeops_hours_approval` / `storeops_payroll_tax` / `storeops_payroll_expenses` / `storeops_attendance` / `storeops_lateness` (W3 scheduled workforce reports) | `notify/router.py` `_dispatch` → `report_registry.build_payload` → `notify/workforce_reports.py` builders | §14 W3 |
 | `GET /storeops/payroll-raw` (payroll-tax page inputs; mig-434 pay gate, FAIL-CLOSED 403 — ALL-money feed, §19.12 closed 2026-09-01; route `payroll_raw_route`, shared `payroll_raw()` stays ungated for pre-gated in-process callers) | `storeops/router.py` (`payroll_raw_route`) | §14 W3 |
 | `GET /storeops/payroll-expenses/{period}`, `GET /storeops/payroll/approvals`, `GET /storeops/timeclock/attendance-exceptions`, `GET /storeops/accountability` | `storeops/router.py:7703` / `payroll_approval.py:469` / `storeops/router.py:4294` / `:4318` | §14 W3 |
+| `GET/PUT /storeops/store-lease`, `PUT /storeops/store-lease/tenant-defaults`, `POST /storeops/store-lease/doc`, `GET /storeops/store-lease/doc-url` + `/doc-view` (ALL gated fail-closed by `store_lease.can_see_lease` — mig 946 lease/landlord/ACH/insurance + document versions) | `storeops/router.py` (`get_store_lease`/`put_store_lease`/`put_lease_tenant_defaults`/`upload_store_lease_doc`/`store_lease_doc_url`/`store_lease_doc_view`) | §14 mig 946 |
 
 | `GET /account/pl/{period}`, `GET /account/balance-sheet/{period}` (`?scope=&stores=&markets=` — stored snapshot when unfiltered; store/market-filtered view via `statement_filter.filtered_statement`: canonical-union market resolution + company-scope AND-composition, 2026-09-02) | `account/router.py` (`get_pl`/`get_bs` → `_filtered_read`) | §4 P&L filter |
 | `GET /account/statement/{period}` (`?scope=&kinds=pl,balance_sheet,cash_flow` — FRESH on-demand statements, nothing persisted; the platform statement service) | `account/router.py` (`on_demand_statement` → `statement_engine.statement`) | §4 statement engine |
@@ -1435,6 +1483,8 @@ Pinned PAY-ENGINE in the guard.
 | Days-in-stock (aging) | `inventory_aging_device.days_in_stock` (snapshot) | device-cost recon `27338`; MI aging bonus |
 | Lateness % (`late_rate` — late shifts ÷ scheduled shifts) | `storeops.timelog` punches vs `storeops.shifts` windows | `attendance_exceptions.compute_attendance_exceptions` → `accountability.aggregate`; surfaced by `/storeops/accountability` ('Lateness %' page, W2 rename) and the `storeops_lateness` scheduled report (§14 W3) |
 | Withholding estimate (gross/FICA/federal/state/net) | `storeops.timelog`+`manual_hours` hours × `employees.pay_rate` × `payroll_settings` W-4 | browser: `frontend/src/lib/payroll-tax.ts computePay`; server twin: `storeops/payroll_tax_estimate.compute_pay` (§14 W3 — keep in lockstep) |
+| Rent due this month / current-month rent (per store) | `storeops.store_lease.rent_schedule`→`current_rent`×`escalation_pct` (schedule wins); due window from `rent_due` → `tenants.rent_due_default` → house first-week (mig `946`) | `store_lease.rent_for_month` + `resolve_rent_due`/`rent_due_window` (the §14 read contract for the finance rents-due/recurring-expenses build); surfaced on `GET /storeops/store-lease` |
+| Insurance premium due (per store, recurring) | `storeops.store_lease.insurance_premium` on `insurance_premium_due`, repeating per `insurance_premium_frequency` (mig `946`) | same read contract — finance recurring-expenses reader computes from these columns |
 
 ---
 

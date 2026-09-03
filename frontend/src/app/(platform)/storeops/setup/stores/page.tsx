@@ -2,10 +2,11 @@
 // Store Setup (Phase W2, owner directive 2026-09-01) — the STORES half of the old combined
 // /storeops/admin page, lifted verbatim into its own route (mechanical extraction; shared helpers
 // in ../lib.tsx). /storeops/admin keeps working for backward compat with a banner pointing here.
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import { sel, cell, STORE_EDIT_FIELDS, STORE_TZ_OPTS, isDirty, MarketField } from '../lib'
+import LeasePanel from './LeasePanel'
 
 export default function StoreSetupPage() {
   const [stores, setStores] = useState<any[]>([])
@@ -17,6 +18,9 @@ export default function StoreSetupPage() {
   const [msg, setMsg] = useState('')
   const [upBusy, setUpBusy] = useState(false)
   const [newStore, setNewStore] = useState<any>({ store_code: '', address: '', market: '', monthly_target: '', timezone: '' })
+  // Lease & Insurance (owner 2026-09-03, mig 946): per-store expandable panel — landlord, rent
+  // rails/ACH, escalation, rent-due, insurance, lease/COI docs. Server-gated (management only).
+  const [leaseOpen, setLeaseOpen] = useState<Record<string, boolean>>({})
   const [markets, setMarkets] = useState<string[]>([])   // RULE THREE dropdown options (GET /storeops/markets)
 
   async function loadAll() {
@@ -206,7 +210,8 @@ export default function StoreSetupPage() {
                   const key = `store-${s.id}`
                   const dirty = isDirty(s, origStores[s.id], STORE_EDIT_FIELDS)
                   return (
-                  <tr key={s.id} style={{ opacity: s.is_active ? 1 : 0.5 }}>
+                  <React.Fragment key={s.id}>
+                  <tr style={{ opacity: s.is_active ? 1 : 0.5 }}>
                     <td style={cell}><input style={{ ...sel, width: 110 }} value={s.store_code || ''} onChange={ev => setStore(s.id, { store_code: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 220 }} value={s.address || ''} onChange={ev => setStore(s.id, { address: ev.target.value })} /></td>
                     <td style={cell}><MarketField width={130} value={s.market} options={markets} onChange={v => setStore(s.id, { market: v })} /></td>
@@ -227,10 +232,24 @@ export default function StoreSetupPage() {
                     </td>
                     <td style={cell}>
                       <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 10px' }} disabled={!!rowBusy[key]} onClick={() => saveStore(s)}>💾</button>
+                      <button className="btn" style={{ fontSize: 12, padding: '4px 10px', marginLeft: 6 }}
+                        title="Landlord, rent, ACH, insurance & documents (management only)"
+                        aria-expanded={!!leaseOpen[key]}
+                        onClick={() => setLeaseOpen(o => ({ ...o, [key]: !o[key] }))}>
+                        🏢 Lease {leaseOpen[key] ? '▴' : '▾'}
+                      </button>
                       {dirty && !rowMsg[key] && <span style={{ fontSize: 11, color: '#b45309', marginLeft: 6 }}>● unsaved</span>}
                       {rowMsg[key] && <span style={{ fontSize: 11, marginLeft: 6, color: rowMsg[key].startsWith('✗') ? '#b91c1c' : '#166534' }}>{rowMsg[key]}</span>}
                     </td>
                   </tr>
+                  {leaseOpen[key] && (
+                    <tr>
+                      <td colSpan={7} style={{ padding: '0 8px 10px', borderBottom: '1px solid var(--border)' }}>
+                        <LeasePanel storeCode={s.store_code} />
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                   )
                 })}
               </tbody>

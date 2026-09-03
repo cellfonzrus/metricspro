@@ -2742,6 +2742,244 @@ def update_store(store_id: int, updates: dict, org_id: str = ORG_ID):
     return r.data[0]
 
 
+# ── Store lease / landlord / insurance capture (mig 946, owner directive 2026-09-03) ─────────────
+# Store-setup companion data: landlord + site contact, rent rails (payment links / ACH), current
+# rent + escalation (% OR explicit schedule), rent-due window (house default = first week of the
+# month via storeops.tenants.rent_due_default, per-store override), insurance + premium due, and
+# append-only lease/COI document versions in the PRIVATE `store-docs` bucket (envelope-photo
+# precedent: raw path in the row, on-demand signed URL, org-scoped lookup).
+#
+# SENSITIVE: ACH/banking details + lease documents are money-adjacent, so EVERY route here is
+# gated whole by store_lease.can_see_lease (mig-434 posture: market manager and above by default,
+# per-org allow-list storeops.tenants.lease_visible_roles, `store_lease_docs` grant, FAIL-CLOSED).
+# GET /storeops/stores stays untouched — separate tables, so no employee-level endpoint can echo
+# ACH or document paths. Pure logic + gate + storage helpers: app/modules/storeops/store_lease.py;
+# proof backend/harness_store_lease.py.
+from app.modules.storeops import store_lease as _lease
+
+LEASE_FIELDS = (
+    "landlord_name", "landlord_email", "landlord_phone",
+    "site_contact_name", "site_contact_phone",
+    "rent_payment_links", "ach_bank_name", "ach_routing_number", "ach_account_number", "ach_notes",
+    "current_rent", "rent_effective_from", "escalation_pct", "rent_schedule", "rent_due",
+    "lease_start", "lease_end",
+    "insurance_company", "insurance_policy_number", "insurance_premium", "insurance_premium_due",
+    "insurance_premium_frequency", "insurance_notes", "notes", "updated_by",
+)
+_LEASE_DATE_FIELDS = ("rent_effective_from", "lease_start", "lease_end", "insurance_premium_due")
+_LEASE_NUM_FIELDS = ("current_rent", "escalation_pct", "insurance_premium")
+
+
+def _require_lease_access(authorization, org_id):
+    if not _lease.can_see_lease(authorization, org_id, client=get_supabase()):
+        raise HTTPException(403, "Lease, landlord and insurance details are restricted to "
+                                 "management roles (store_lease_docs permission).")
+
+
+def _lease_store_exists(org_id, store_code):
+    rows = (sb().table("stores").select("id").eq("org_id", org_id)
+            .eq("store_code", store_code).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "store not found")
+
+
+def _lease_doc_rows(org_id, store_code):
+    """Version lists per kind, newest first. storage_path deliberately NOT echoed — downloads go
+    through the gated, org-scoped signed-URL endpoint by document id."""
+    try:
+        rows = (sb().table("store_document")
+                .select("id,doc_kind,file_name,content_type,size_bytes,uploaded_by,uploaded_at")
+                .eq("org_id", org_id).eq("store_code", store_code)
+                .order("uploaded_at", desc=True).execute().data) or []
+    except Exception:
+        rows = []          # pre-946 schema degrades to "no documents", never a 500
+    out = {k: [] for k in _lease.DOC_KINDS}
+    for r in rows:
+        out.setdefault(str(r.get("doc_kind") or ""), []).append(r)
+    return {k: out.get(k, []) for k in _lease.DOC_KINDS}
+
+
+@router.get("/store-lease")
+def get_store_lease(store_code: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """One store's lease/landlord/rent/insurance record + document versions + the resolved rent-due
+    rule and current-month rent. Gated whole (fail-closed 403) — see the section header."""
+    _require_lease_access(authorization, org_id)
+    store_code = (store_code or "").strip()
+    if not store_code:
+        raise HTTPException(400, "store_code required")
+    _lease_store_exists(org_id, store_code)
+    try:
+        rows = (sb().table("store_lease").select("*")
+                .eq("org_id", org_id).eq("store_code", store_code).limit(1).execute().data) or []
+    except Exception:
+        rows = []          # pre-946 schema degrades to an empty record
+    lease = rows[0] if rows else {}
+    _roles, tenant_due = _lease.tenant_lease_config(org_id, get_supabase())
+    resolved_due = _lease.resolve_rent_due(lease.get("rent_due"), tenant_due)
+    today = datetime.now(timezone.utc).date()
+    lo, hi = _lease.rent_due_window(today.year, today.month, resolved_due)
+    return {
+        "store_code": store_code,
+        "lease": lease,
+        "documents": _lease_doc_rows(org_id, store_code),
+        "rent_due_default": tenant_due or dict(_lease.HOUSE_RENT_DUE),
+        "rent_due_resolved": resolved_due,
+        "rent_due_window": {"month": today.strftime("%Y-%m"), "start": lo, "end": hi},
+        "current_month_rent": _lease.rent_for_month(
+            today.year, today.month, lease.get("current_rent"), lease.get("rent_effective_from"),
+            lease.get("escalation_pct"), lease.get("rent_schedule")),
+    }
+
+
+@router.put("/store-lease")
+def put_store_lease(body: dict, store_code: str = "", authorization: str = Header(default=""),
+                    org_id: str = ORG_ID):
+    """Upsert one store's lease/landlord/rent/insurance record (org_id, store_code unique). Fields
+    outside LEASE_FIELDS are ignored; dates/numbers/rent_due/rent_schedule are validated up front
+    (a garbage date raises inside the Supabase client as an uncaught 500, not a clean 400 — the
+    documented platform gotcha)."""
+    _require_lease_access(authorization, org_id)
+    store_code = (store_code or "").strip()
+    if not store_code:
+        raise HTTPException(400, "store_code required")
+    _lease_store_exists(org_id, store_code)
+    row = {k: body[k] for k in LEASE_FIELDS if k in body}
+    for k in _LEASE_DATE_FIELDS:
+        if k in row and row[k] not in (None, ""):
+            if _lease._parse_date(row[k]) is None:
+                raise HTTPException(400, f"{k} must be a YYYY-MM-DD date")
+            row[k] = str(row[k])[:10]
+        elif k in row:
+            row[k] = None
+    for k in _LEASE_NUM_FIELDS:
+        if k in row and row[k] not in (None, ""):
+            try:
+                row[k] = float(row[k])
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"{k} must be a number")
+        elif k in row:
+            row[k] = None
+    if "rent_due" in row:
+        if row["rent_due"] in (None, "", {}):
+            row["rent_due"] = None                       # per-store override cleared -> org default
+        else:
+            row["rent_due"] = _lease.normalize_rent_due(row["rent_due"])
+            if row["rent_due"] is None:
+                raise HTTPException(400, 'rent_due must be {"kind":"week"|"day","value":N} '
+                                         "(week 1-5 or day 1-31)")
+    if "rent_schedule" in row:
+        row["rent_schedule"] = _lease.normalize_rent_schedule(row["rent_schedule"]) or None
+    if "rent_payment_links" in row:
+        links = row["rent_payment_links"]
+        if isinstance(links, str):
+            links = [x.strip() for x in links.replace("\r", "\n").split("\n")]
+        row["rent_payment_links"] = [str(x).strip() for x in (links or []) if str(x or "").strip()] or None
+    freq = row.get("insurance_premium_frequency")
+    if "insurance_premium_frequency" in row:
+        freq = str(freq or "annual").strip().lower()
+        if freq not in _lease.PREMIUM_FREQUENCIES:
+            raise HTTPException(400, f"insurance_premium_frequency must be one of {_lease.PREMIUM_FREQUENCIES}")
+        row["insurance_premium_frequency"] = freq
+    if not row:
+        raise HTTPException(400, "no valid fields to save")
+    row["org_id"] = org_id
+    row["store_code"] = store_code
+    row["updated_at"] = datetime.now(timezone.utc).isoformat()
+    r = sb().table("store_lease").upsert(row, on_conflict="org_id,store_code").execute()
+    return (r.data[0] if r.data else row)
+
+
+@router.put("/store-lease/tenant-defaults")
+def put_lease_tenant_defaults(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Set the ORG-WIDE rent-due default (storeops.tenants.rent_due_default — owner 2026-09-03:
+    'by default the rents are due in the 1st week of the month ... not hard coded'). Same gate."""
+    _require_lease_access(authorization, org_id)
+    due = _lease.normalize_rent_due((body or {}).get("rent_due_default"))
+    if due is None:
+        raise HTTPException(400, 'rent_due_default must be {"kind":"week"|"day","value":N}')
+    sb().table("tenants").update({"rent_due_default": due}).eq("org_id", org_id).execute()
+    return {"ok": True, "rent_due_default": due}
+
+
+class StoreLeaseDocIn(LaxModel):
+    store_code: Any = None
+    doc_kind: Any = None
+    file_name: Any = None
+    data: Any = None            # base64 data-url (application/pdf or png/jpg/webp)
+    uploaded_by: Any = None
+
+
+@router.post("/store-lease/doc")
+def upload_store_lease_doc(body: StoreLeaseDocIn, authorization: str = Header(default=""),
+                           org_id: str = ORG_ID):
+    """Upload the current lease or insurance COI — APPENDS a new storeops.store_document version
+    (prior versions are kept and stay downloadable). Storage faults surface as the ACTUAL error
+    (502), never as a misleading 'no file provided' (the 2026-08-18 envelope-photo lesson)."""
+    _require_lease_access(authorization, org_id)
+    store_code = str(body.store_code or "").strip()
+    doc_kind = str(body.doc_kind or "").strip().lower()
+    if not store_code:
+        raise HTTPException(400, "store_code required")
+    if doc_kind not in _lease.DOC_KINDS:
+        raise HTTPException(400, f"doc_kind must be one of {_lease.DOC_KINDS}")
+    _lease_store_exists(org_id, store_code)
+    try:
+        path, size, ctype = _lease.upload_store_doc(org_id, store_code, doc_kind,
+                                                    body.file_name, body.data,
+                                                    client=get_supabase())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, "The document couldn't be saved to storage — please try again. "
+                                 f"If it keeps failing, contact support (storage error: {str(e)[:160]}).")
+    row = {"org_id": org_id, "store_code": store_code, "doc_kind": doc_kind,
+           "storage_path": path, "file_name": str(body.file_name or "")[:200] or None,
+           "content_type": ctype, "size_bytes": size,
+           "uploaded_by": str(body.uploaded_by or "")[:120] or None}
+    r = sb().table("store_document").insert(row).execute()
+    saved = (r.data[0] if r.data else row)
+    saved.pop("storage_path", None)         # path never echoed — downloads go by id via doc-url
+    return {"ok": True, "document": saved}
+
+
+@router.get("/store-lease/doc-url")
+def store_lease_doc_url(doc_id: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Sign ONE stored lease/COI document on demand -> {url, file_name}. Org-scoped DB lookup by
+    document id (a caller can never sign an arbitrary storage path) + the management gate. The
+    frontend calls this with auth headers, then opens the returned 1-hour signed URL."""
+    _require_lease_access(authorization, org_id)
+    if not doc_id:
+        raise HTTPException(400, "doc_id required")
+    rows = (sb().table("store_document").select("storage_path,file_name,content_type")
+            .eq("org_id", org_id).eq("id", doc_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "document not found")
+    url = _lease.signed_doc_url(rows[0].get("storage_path"), client=get_supabase())
+    if not url:
+        raise HTTPException(502, "The document could not be signed — try again.")
+    return {"url": url, "file_name": rows[0].get("file_name"),
+            "content_type": rows[0].get("content_type")}
+
+
+@router.get("/store-lease/doc-view")
+def store_lease_doc_view(doc_id: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """302 twin of doc-url (the closing /envelope-view export-link pattern) — same gate + the same
+    org-scoped id lookup. Under enforced login a bare <a> can't carry the auth header, so pages use
+    doc-url; this exists for exports/open-app parity."""
+    from fastapi.responses import RedirectResponse
+    _require_lease_access(authorization, org_id)
+    if not doc_id:
+        raise HTTPException(400, "doc_id required")
+    rows = (sb().table("store_document").select("storage_path")
+            .eq("org_id", org_id).eq("id", doc_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "document not found")
+    url = _lease.signed_doc_url(rows[0].get("storage_path"), client=get_supabase())
+    if not url:
+        raise HTTPException(502, "The document could not be signed — try again.")
+    return RedirectResponse(url, status_code=302)
+
+
 # ── Shift swaps (storeops.shift_swap_requests) ────────────────────────────────
 def _emp_name_map(org_id: str = ORG_ID):
     return {str(e["employee_id"]): e.get("name")
