@@ -522,13 +522,16 @@ def list_approvals(start: str = "", end: str = "", store_code: str = "", market:
     want_markets = {x.strip().lower() for x in market.split(",") if x.strip()}
     want_emps = {x.strip() for x in employee_id.split(",") if x.strip()}
 
-    # market lookup, only when a market filter is actually in play
+    # market lookup, only when a market filter is actually in play — THE canonical union map
+    # (core.scope.market_by_code: storeops.stores ∪ store_mapping ∪ store_aliases; 2026-09-03
+    # "1115 Liberty Ave"/LI class fix — was storeops.stores-only, so a market spelled only in
+    # store_mapping filtered every hours row out).
     market_of = {}
     if want_markets:
         try:
-            for st in (sb().table("stores").select("store_code,market").eq("org_id", org_id)
-                       .execute().data) or []:
-                market_of[st.get("store_code")] = (st.get("market") or "").lower()
+            from app.core import scope as _cscope
+            market_of = {code: (mk or "").lower()
+                         for code, mk in _cscope.market_by_code(sb(), org_id).items()}
         except Exception:
             market_of = {}
 
@@ -540,7 +543,7 @@ def list_approvals(start: str = "", end: str = "", store_code: str = "", market:
         st = h.get("store") or ""
         if want_stores and st not in want_stores:
             continue
-        if want_markets and market_of.get(st, "") not in want_markets:
+        if want_markets and market_of.get(str(st).strip().upper(), "") not in want_markets:
             continue
         if want_emps and eid not in want_emps:
             continue

@@ -499,13 +499,23 @@ def compute(client, org_id, months=6):
     sm_rows = (client.schema("commcalc").table("store_mapping")
                .select("store_address,market,store_code,salesforce_id,is_active")
                .eq("org_id", org_id).execute().data) or []
+    # Blank-market mapping rows inherit from THE canonical union resolver (core.scope;
+    # 2026-09-03 "1115 Liberty Ave"/LI class fix) so the market filter/group-by can't drop a store
+    # whose market is spelled only in storeops.stores. The salesforce_id ATTRIBUTION join itself
+    # stays store_mapping-based (that column only exists there).
+    try:
+        from app.core import scope as _cscope
+        _rs_resolve_market, _ = _cscope.store_market_resolver(client, org_id)
+    except Exception:
+        _rs_resolve_market = lambda s: ""
     by_sfid = {}
     for s in sm_rows:
         sf = (s.get("salesforce_id") or "").strip()
         if not sf:
             continue
         by_sfid[sf] = {"store": (s.get("store_address") or "").strip(),
-                       "market": (s.get("market") or "").strip(),
+                       "market": ((s.get("market") or "").strip()
+                                  or _rs_resolve_market(s.get("store_address") or s.get("store_code"))),
                        "store_code": (s.get("store_code") or "").strip(),
                        "num": _street_num(s.get("store_address"))}
 

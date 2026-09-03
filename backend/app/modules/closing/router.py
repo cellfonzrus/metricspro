@@ -152,6 +152,30 @@ def _resolve_store_filter(stores):
     return {x.upper() for x in s} if s else None
 
 
+def _overlay_canonical_market(client, org_id, rows):
+    """Fill each storeops.stores row's BLANK market from THE canonical union map
+    (core.scope.market_by_code: storeops.stores ∪ commcalc.store_mapping ∪ store_aliases).
+
+    2026-09-03 (owner "1115 Liberty Ave … fix once for all" directive): every closing surface used
+    to read `storeops.stores.market` ONLY (two pickup pages carried their own inline
+    stores+store_mapping fallback union — a sibling derivation of the same index), so a store whose
+    market is spelled only in commcalc.store_mapping bucketed as '(no market)' and dropped out of a
+    DM's market filter. A market already on the storeops row is NEVER overwritten (byte-identical
+    for fully-rostered orgs). Returns the same list; never raises — on index failure the rows pass
+    through untouched (the pre-existing behavior)."""
+    try:
+        from app.core import scope as _cscope
+        mkt = _cscope.market_by_code(client, org_id)
+        for s in (rows or []):
+            if not (s.get("market") or "").strip():
+                code = str(s.get("store_code") or "").strip().upper()
+                if code and mkt.get(code):
+                    s["market"] = mkt[code]
+    except Exception as e:                                          # pragma: no cover - I/O guard
+        print(f"WARN closing _overlay_canonical_market failed: {e}")
+    return rows
+
+
 def _resolve_rep_filter(reps):
     """None (no filter) or a CASEFOLDED set of employee names."""
     s = _csv_set(reps)
@@ -428,8 +452,9 @@ def closing_submissions(date_from: str = None, date_to: str = None,
 
     # Market resolution (store_code -> market), same union source as GET /closing/stores.
     try:
-        store_rows = (client.schema("storeops").table("stores").select("store_code,market")
-                      .eq("org_id", org_id).execute().data) or []
+        store_rows = _overlay_canonical_market(client, org_id,
+                      (client.schema("storeops").table("stores").select("store_code,market")
+                       .eq("org_id", org_id).execute().data) or [])
     except Exception:
         store_rows = []
     market_by_code = {s.get("store_code"): (s.get("market") or "").strip()
@@ -603,7 +628,8 @@ def closing_stores(org_id: str = ORG_ID):
     client = sb()
     sm = (client.schema("commcalc").table("store_mapping")
           .select("salesforce_id,store_code,store_address").eq("org_id", org_id).execute().data) or []
-    stores = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
+    stores = _overlay_canonical_market(client, org_id,
+             (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or [])
     mkt = {s.get("store_code"): s.get("market") for s in stores if s.get("store_code")}
     addr = {s.get("store_code"): s.get("address") for s in stores if s.get("store_code")}
     canonical = {c for c in ((s.get("store_code") or "").strip() for s in stores) if c}
@@ -708,7 +734,8 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
     # crashing, and `market_filter_skipped` (below) tells the caller a REQUESTED market filter didn't
     # actually run — rather than leaving that silent, the way NIT-4b originally left it elsewhere.
     try:
-        store_rows = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
+        store_rows = _overlay_canonical_market(client, org_id,
+                     (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or [])
         _roster_ok = True
     except Exception:
         store_rows = []
@@ -931,8 +958,9 @@ def _closing_summary_org_ctx(client, org_id) -> dict:
     # caller (closing_summary) neutralize an active market filter rather than silently mis-bucket
     # every row into "(no market)", and surface a `market_filter_skipped` flag on the response.
     try:
-        stores = (client.schema("storeops").table("stores")
-                  .select("store_code,address,market").eq("org_id", org_id).execute().data) or []
+        stores = _overlay_canonical_market(client, org_id,
+                 (client.schema("storeops").table("stores")
+                  .select("store_code,address,market").eq("org_id", org_id).execute().data) or [])
         _roster_ok = True
     except Exception:
         stores = []
@@ -3647,7 +3675,8 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, autho
     client = sb()
     closing = (client.schema("commcalc").table("daily_closing").select("*")
                .eq("org_id", org_id).eq("period", period).limit(50000).execute().data) or []
-    stores = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
+    stores = _overlay_canonical_market(client, org_id,
+             (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or [])
     store_meta = {s.get("store_code"): s for s in stores if s.get("store_code")}
     _recon_market_set = _resolve_market_filter(market, None)
     # Configurable activation-count fields (mig 501) — same fallback-to-hardcoded-3 as closing_summary.
@@ -4097,8 +4126,9 @@ def get_missed_dm_verifies(lookback_days: int = 14, date_from: str = None, date_
     market_filter_skipped = False
     if market_set is not None:
         try:
-            _store_rows = (client.schema("storeops").table("stores").select("store_code,market")
-                          .eq("org_id", org_id).execute().data) or []
+            _store_rows = _overlay_canonical_market(client, org_id,
+                          (client.schema("storeops").table("stores").select("store_code,market")
+                           .eq("org_id", org_id).execute().data) or [])
             _mkt_by_code = {s.get("store_code"): _market_bucket(s.get("market")) for s in _store_rows if s.get("store_code")}
             rows = [r for r in rows if _mkt_by_code.get(r.get("store_code"), "(no market)").casefold() in market_set]
         except Exception:
@@ -4201,8 +4231,9 @@ def envelope_report(date_from: str = None, date_to: str = None,
 
     market_by_code, market_filter_skipped = {}, False
     try:
-        _srows = (client.schema("storeops").table("stores").select("store_code,market")
-                  .eq("org_id", org_id).execute().data) or []
+        _srows = _overlay_canonical_market(client, org_id,
+                 (client.schema("storeops").table("stores").select("store_code,market")
+                  .eq("org_id", org_id).execute().data) or [])
         market_by_code = {s.get("store_code"): _market_bucket(s.get("market"))
                           for s in _srows if s.get("store_code")}
     except Exception:
@@ -4729,19 +4760,14 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     # NOTE: local named store_rows (NOT `stores`) — `stores` is the multi-select query param below;
     # this endpoint's 500 (2026-07-16 hotfix) was exactly this roster fetch shadowing that param, so
     # `stores.split(",")` a few lines down blew up with AttributeError on every call. Keep them distinct.
-    store_rows = (client.schema("storeops").table("stores").select("store_code,address,market,is_active").eq("org_id", org_id).execute().data) or []
+    store_rows = _overlay_canonical_market(client, org_id,
+                 (client.schema("storeops").table("stores").select("store_code,address,market,is_active").eq("org_id", org_id).execute().data) or [])
     smeta = {s.get("store_code"): s for s in store_rows if s.get("store_code")}
-    # storeops.stores.market is only partly populated; fall back to commcalc.store_mapping.market (much
-    # fuller) so a market-scoped DM still sees every store in their market (was: stores with a blank
-    # storeops market silently dropped out of the DM's market filter).
+    # 2026-09-03: the inline stores+store_mapping market fallback (a sibling derivation of the
+    # canonical union) is replaced by _overlay_canonical_market above — SAME effect (blank storeops
+    # market inherits store_mapping's), one shared index. sm_market kept as an empty map so the
+    # downstream `or sm_market.get(code, "")` fallbacks are inert but unchanged.
     sm_market = {}
-    try:
-        for s in (client.schema("commcalc").table("store_mapping").select("store_code,market")
-                  .eq("org_id", org_id).execute().data or []):
-            if s.get("store_code") and (s.get("market") or "").strip():
-                sm_market[s.get("store_code")] = s["market"].strip()
-    except Exception:
-        pass
     pq = client.schema("commcalc").table("cash_pickup").select("*").eq("org_id", org_id)
     pq = pq.eq("close_date", date) if date else pq.gte("close_date", start).lte("close_date", end)
     try:
@@ -4950,8 +4976,9 @@ def _cash_position_core(client, org_id, as_of, store_list, emp_list, ks):
     from app.modules.storeops.router import in_keyset   # GATE-1-class fix: this helper needs its OWN
                                                           # import — a caller's local import doesn't reach
                                                           # into a function it merely calls.
-    smeta_rows = (client.schema("storeops").table("stores").select("store_code,address,market")
-                  .eq("org_id", org_id).execute().data) or []
+    smeta_rows = _overlay_canonical_market(client, org_id,
+                 (client.schema("storeops").table("stores").select("store_code,address,market")
+                  .eq("org_id", org_id).execute().data) or [])
     smeta = {s.get("store_code"): s for s in smeta_rows if s.get("store_code")}
 
     dq = (client.schema("commcalc").table("daily_closing")
@@ -5599,8 +5626,9 @@ def _billpay_position_core(client, org_id, as_of, store_list, emp_list, ks):
     picked = billpay_pickup rows (picked_up=true)."""
     from app.modules.storeops.router import in_keyset
     from . import billpay_pickup as _bp
-    smeta_rows = (client.schema("storeops").table("stores").select("store_code,address,market")
-                  .eq("org_id", org_id).execute().data) or []
+    smeta_rows = _overlay_canonical_market(client, org_id,
+                 (client.schema("storeops").table("stores").select("store_code,address,market")
+                  .eq("org_id", org_id).execute().data) or [])
     smeta = {s.get("store_code"): s for s in smeta_rows if s.get("store_code")}
 
     dq = (client.schema("commcalc").table("daily_closing")
@@ -5670,17 +5698,12 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
     q = client.schema("commcalc").table("daily_closing").select("*").eq("org_id", org_id)
     q = q.eq("close_date", date) if date else q.gte("close_date", start).lte("close_date", end)
     rows = q.execute().data or []
-    store_rows = (client.schema("storeops").table("stores").select("store_code,address,market,is_active")
-                  .eq("org_id", org_id).execute().data) or []
+    store_rows = _overlay_canonical_market(client, org_id,
+                 (client.schema("storeops").table("stores").select("store_code,address,market,is_active")
+                  .eq("org_id", org_id).execute().data) or [])
     smeta = {s.get("store_code"): s for s in store_rows if s.get("store_code")}
+    # 2026-09-03: inline union replaced by _overlay_canonical_market (see cash pickup twin).
     sm_market = {}
-    try:
-        for s in (client.schema("commcalc").table("store_mapping").select("store_code,market")
-                  .eq("org_id", org_id).execute().data or []):
-            if s.get("store_code") and (s.get("market") or "").strip():
-                sm_market[s.get("store_code")] = s["market"].strip()
-    except Exception:
-        pass
     pq = client.schema("commcalc").table("billpay_pickup").select("*").eq("org_id", org_id)
     pq = pq.eq("close_date", date) if date else pq.gte("close_date", start).lte("close_date", end)
     try:
@@ -5946,8 +5969,9 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
 
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)
-    smeta_rows = (client.schema("storeops").table("stores").select("store_code,address,market")
-                  .eq("org_id", org_id).execute().data) or []
+    smeta_rows = _overlay_canonical_market(client, org_id,
+                 (client.schema("storeops").table("stores").select("store_code,address,market")
+                  .eq("org_id", org_id).execute().data) or [])
     smeta = {s.get("store_code"): s for s in smeta_rows if s.get("store_code")}
 
     # DECLARED side (daily_closing, DM overlay winning at store-day grain).
@@ -6157,8 +6181,9 @@ def deposit_accountability_board(date: str = "", start: str = "", end: str = "",
 
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)
-    smeta_rows = (client.schema("storeops").table("stores").select("store_code,address,market")
-                  .eq("org_id", org_id).execute().data) or []
+    smeta_rows = _overlay_canonical_market(client, org_id,
+                 (client.schema("storeops").table("stores").select("store_code,address,market")
+                  .eq("org_id", org_id).execute().data) or [])
     smeta = {s.get("store_code"): s for s in smeta_rows if s.get("store_code")}
 
     prows = _accountability_pickup_rows(client, org_id, start, end)

@@ -5351,6 +5351,13 @@ def _dm_for_store(org_id, store_code):
             unit_id, market = st[0].get("org_unit_id"), st[0].get("market")
     except Exception:
         pass
+    if not (market or "").strip():
+        # canonical union fallback (core.scope.market_by_code; 2026-09-03 LI-class fix) so the
+        # District-by-market fallback below still binds when the market lives in store_mapping.
+        try:
+            market = _cscope.market_by_code(c, org_id).get(str(store_code or "").strip().upper()) or market
+        except Exception:
+            pass
     try:
         levels = {l["id"]: (l.get("name") or "") for l in
                   (c.table("org_levels").select("id,name").eq("org_id", org_id).execute().data or [])}
@@ -5405,6 +5412,13 @@ def _managers_above_dm(org_id, store_code):
             unit_id, market = st[0].get("org_unit_id"), st[0].get("market")
     except Exception:
         pass
+    if not (market or "").strip():
+        # canonical union fallback (core.scope.market_by_code; 2026-09-03 LI-class fix) so the
+        # District-by-market fallback below still binds when the market lives in store_mapping.
+        try:
+            market = _cscope.market_by_code(c, org_id).get(str(store_code or "").strip().upper()) or market
+        except Exception:
+            pass
     try:
         levels = {l["id"]: (l.get("name") or "") for l in
                   (c.table("org_levels").select("id,name").eq("org_id", org_id).execute().data or [])}
@@ -6050,6 +6064,13 @@ def list_hours_budgets(week: str = "", authorization: str = Header(default=""), 
     budgets = {b["store_code"]: float(b.get("weekly_hours") or 0)
                for b in (sb().table("hours_budget").select("store_code,weekly_hours").eq("org_id", org_id).execute().data or [])}
     stores = (sb().table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
+    try:   # canonical union overlay (core.scope.market_by_code; 2026-09-03 LI-class fix) — blank rows only
+        _hb_mkt = _cscope.market_by_code(sb(), org_id)
+        for s in stores:
+            if not (s.get("market") or "").strip():
+                s["market"] = _hb_mkt.get(str(s.get("store_code") or "").strip().upper(), s.get("market"))
+    except Exception:
+        pass
     out = []
     for s in stores:
         sc = s.get("store_code")

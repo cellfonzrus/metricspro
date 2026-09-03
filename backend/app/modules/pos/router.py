@@ -1304,9 +1304,11 @@ def resolve_tax_code(store_code: str = "", org_id: str = ORG_ID):
     sc = (store_code or "").strip()
     if sc:
         try:
-            st = (client.schema("storeops").table("stores").select("market")
-                  .eq("org_id", org_id).eq("store_code", sc).limit(1).execute().data) or []
-            market = (st[0].get("market") or "") if st else ""
+            # THE canonical union map (core.scope.market_by_code; 2026-09-03 LI-class fix — was a
+            # storeops.stores-only read, so a market spelled only in store_mapping never matched a
+            # market-scoped tax code and the register silently fell through to the org rung).
+            from app.core import scope as _cscope
+            market = _cscope.market_by_code(client, org_id).get(sc.upper(), "")
         except Exception:
             market = ""
     hit, scope = _resolve_tax(codes, sc, market)
@@ -1325,11 +1327,17 @@ def tax_code_markets(org_id: str = ORG_ID):
                 .eq("org_id", org_id).limit(2000).execute().data) or []
     except Exception:
         rows = []
+    _mkt = {}
+    try:   # canonical union overlay (core.scope; 2026-09-03 LI-class fix) — blank rows only
+        from app.core import scope as _cscope
+        _mkt = _cscope.market_by_code(client, org_id)
+    except Exception:
+        _mkt = {}
     agg = {}
     for s in rows:
         if s.get("is_active") is False:
             continue
-        m = (s.get("market") or "").strip()
+        m = (s.get("market") or "").strip() or _mkt.get(str(s.get("store_code") or "").strip().upper(), "")
         if m:
             agg[m] = agg.get(m, 0) + 1
     codes = (client.schema("pos").table("tax_codes").select("market,rate")
@@ -1360,6 +1368,14 @@ def tax_code_store_grid(org_id: str = ORG_ID):
     except Exception:
         stores = []
     stores = [s for s in stores if s.get("is_active") is not False]
+    try:   # canonical union overlay (core.scope; 2026-09-03 LI-class fix) — blank rows only
+        from app.core import scope as _cscope
+        _mkt = _cscope.market_by_code(client, org_id)
+        for s in stores:
+            if not (s.get("market") or "").strip():
+                s["market"] = _mkt.get(str(s.get("store_code") or "").strip().upper(), s.get("market"))
+    except Exception:
+        pass
     codes = (client.schema("pos").table("tax_codes").select("*")
              .eq("org_id", org_id).limit(1000).execute().data) or []
     by_store = {(c.get("store_code") or "").strip(): c for c in codes if (c.get("store_code") or "").strip()}

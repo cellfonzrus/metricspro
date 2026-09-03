@@ -247,6 +247,17 @@ def _dm_for_stores_batch(client, org_id: str, store_codes) -> dict:
                    .eq("org_id", org_id).in_("store_code", codes).execute().data) or []
     except Exception:
         st_rows = []
+    # Blank market inherits from THE canonical union map (core.scope.market_by_code; 2026-09-03
+    # LI-class fix) so the market-manager FALLBACK in the district walk-up still resolves for a
+    # store whose market is spelled only in commcalc.store_mapping. Set markets never overwritten.
+    try:
+        from app.core import scope as _cscope
+        _mkt = _cscope.market_by_code(client, org_id)
+        for s in st_rows:
+            if not (s.get("market") or "").strip():
+                s["market"] = _mkt.get(str(s.get("store_code") or "").strip().upper(), s.get("market"))
+    except Exception:
+        pass
     st_by_code = {s.get("store_code"): s for s in st_rows if s.get("store_code")}
     try:
         levels = {l["id"]: (l.get("name") or "") for l in

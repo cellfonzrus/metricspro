@@ -335,9 +335,20 @@ def _store_mapping_market_index(client, org_id: str):
     to return first."""
     sm = client.schema("commcalc").table("store_mapping") \
         .select("store_address,market").eq("org_id", org_id).execute().data or []
+    # 2026-09-03 (canonical-resolution convergence, "1115 Liberty Ave"/LI class): storeops.stores
+    # rows join the candidate pool alongside store_mapping, so a market spelled only on the
+    # operational roster still backfills. Address-keyed candidates + the SAME NIT-2 conflict
+    # machinery below — a disagreement between the two vocabularies is EXCLUDED and reported,
+    # never arbitrary-picked (fail closed, exactly like same-table conflicts).
+    try:
+        so_rows = (client.schema("storeops").table("stores")
+                   .select("address,market").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        so_rows = []
     exact_candidates: dict = {}
     norm_candidates: dict = {}
-    for m in sm:
+    for m in list(sm) + [{"store_address": s.get("address"), "market": s.get("market")}
+                         for s in so_rows]:
         mk = m.get("market")
         if not mk:
             continue
@@ -837,6 +848,12 @@ def _registry_stores(client, org_id: str):
             .select("store_address,market,is_active").eq("org_id", org_id).execute().data or []
     except Exception:
         return []
+    # Blank markets inherit from THE canonical union resolver (core.scope; 2026-09-03 LI-class fix).
+    try:
+        from app.core import scope as _cscope
+        _reg_resolve_market, _ = _cscope.store_market_resolver(client, org_id)
+    except Exception:
+        _reg_resolve_market = lambda s: ""
     out = []
     seen = set()
     for r in rows:
@@ -846,7 +863,7 @@ def _registry_stores(client, org_id: str):
         if not addr or addr.lower() in seen:
             continue
         seen.add(addr.lower())
-        out.append({"store": addr, "market": r.get("market")})
+        out.append({"store": addr, "market": r.get("market") or _reg_resolve_market(addr) or None})
     out.sort(key=lambda s: s["store"])
     return out
 

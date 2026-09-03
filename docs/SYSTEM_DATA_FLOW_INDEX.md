@@ -113,7 +113,10 @@ email), (c) **RPC/manual entry**.
 Connector/schedule model: mig `039_connector_model.sql`, `063`, `290_report_schedule_and_grain.sql`;
 endpoints `/connectors*` `router.py:6666-6989`, `/connector-health` `23378`. Sweep store-guard
 (quarantine ambiguous store strings before ingest): `ingest_store_guard.py`, mig `280`; `/ingest-guard/*`
-`router.py:14375-14446`.
+`router.py:14375-14446`. CI-pinned since 2026-09-03 (§19.15): `harness_org_scope_guard.py`'s
+ingest-screen section fails the build on any raw_sales/daily_sales_feed write not fronted by
+`_isg.screen`, and `harness_cross_tenant_isolation.py` replays the real 2026-07-14 cross-tenant
+batch through the guard and the union/promotion paths.
 
 ### Ingest route C — RPC / manual
 - Sales "derive/promote" (feed → raw_sales grace promotion): `/sales/promote-feed` `router.py:22757`,
@@ -505,6 +508,20 @@ trade-in, acima, custom spiffs, plus KPI-tier multiplier, plus installment add-o
      installment columns and writes rows.
 - **Row filters (pay path):** `gp_report.is_voided`; `trans_type != 'Return'`; `salesperson != 'admin'`
   (`calculator.py:216-278`).
+- **Sales basis read (`_fetch_sales_unified`, inside `_run_calculation`):** under the default
+  `sales_source='legacy'` the open month reads `daily_sales_feed`, a closed month reads
+  `raw_sales`, each falling back to the other only when the primary is EMPTY — a PARTIAL
+  closed-month `raw_sales` is trusted whole. That is how the 2026-09-03 "August activations
+  wrong, Exec MTD right" defect happened (§19.16: sales auto-derive off since 2026-08-09 froze
+  `raw_sales` at Aug 1–9). Since 2026-09-03 this Boost-path read ALSO honors
+  `commission_org_config.sales_source='union'` (mig 306, previously plan-engines-only via
+  `commission_engine._read_sales`): it then reads the transaction-grain `_sales_rows_union_txn`
+  — immune to a partial month. Default 'legacy' is byte-identical; flipping the config row is the
+  deliberate money event. Proof: `harness_cross_tenant_isolation.py` §C.
+- **Cross-tenant hygiene (2026-09-03, §19.15):** the July 2026 house snapshot briefly carried a
+  Luxelink phantom rep paid from 6 mis-filed `raw_sales` rows — removed by id and recomputed;
+  the class is CI-pinned (`harness_org_scope_guard.py` ingest-screen section +
+  `harness_cross_tenant_isolation.py`).
 - **Classification:** `classify_contract_type` `calculator.py:40` (same as display).
 - **Config:** `commcalc.payout_config` (mig `002_commcalc.sql:95`) — `premium_flat`(5), `byod_flat`(3),
   `upgrade_flat`(20), `trade_in_spiff`(20), `acima_spiff`(25), `acc_rate`(0.10), `setup_fee_rate`(0.10),
@@ -963,6 +980,68 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   `router.py:14278,14305`, `/store-resolution` `14296`, `/store-unmatched` `14518`, `/stores` `14254`,
   `/markets` `14246`. **Frontend:** `commcalc/store-match/page.tsx`.
 
+### 13a. CANONICAL STORE→MARKET RESOLUTION — the once-for-all contract (owner directive 2026-09-03)
+
+**Owner (verbatim class):** "1115 liberty ave which has been assigned LI as the market does not show
+up under any filter as in the rep incentive report but shows in the daily target report, again this
+is an issue with index and using the same data everywhere, why can this not be fixed once for all."
+
+**The doctrine.** The org's market truth is the UNION index `core.scope.market_index()`
+(storeops.stores ∪ commcalc.store_mapping ∪ commcalc.store_aliases — §13 above). ANY code that
+answers "which market is this store in?" for a filter, group-by, bucket, option list, or routing
+fallback resolves through ONE of the shared helpers in `app/core/scope.py`:
+  - `store_market_resolver(client, org_id)` → `(resolve(raw store string) → canonical market, markets)`
+    (pure twin `build_store_market_lookup(idx)`): accepts store_code / any address spelling from
+    either vocabulary / POS synonym (case+punctuation-insensitive via `_squash`) / unambiguous
+    leading street number; FAIL-CLOSED '' on ambiguity — never an arbitrary winner.
+  - `market_by_code(client, org_id)` → `{UPPER store_code → canonical market}` (pure twin
+    `build_market_by_code(idx)`; folded first-non-empty across vocabularies, `code_groups`
+    inheritance for two-codes-one-store tenants) — for rows that already carry a store_code.
+Reading ONE vocabulary for market resolution is a DEFECT of the same class as: 2026-08 market
+grants binding nothing, the 2026-09-02 P&L filter bug (§ P&L above), the 2026-09-02 DM pickup bug
+(commit 79d9ef6), and this one.
+
+**The 2026-09-03 root cause (row evidence, Cellfonz R Us org `…0001`):** `storeops.stores` has
+`B-1115 / "1115 Liberty Ave" / market LI`; `commcalc.store_mapping` has NO row for it;
+`rep_commissions` rows carry `store="1115 Liberty Ave"`. The Rep Incentive report
+(`GET /commissions/{period}`, frontend `commcalc/reports/page.tsx`) stamped `market` via
+`_store_market_resolver` — then a store_mapping-ONLY lookup → `''` → invisible under every market
+filter; Daily Targets sources its roster from `storeops.stores` → visible. The same scan found a
+second silent victim: `"2778 Ephraim Ave"` (8 rows, $1,709.77 payout) market-invisible the same
+way. Both now resolve (LI / PA) — verified live against all 31 distinct rep_commissions store
+spellings for the org (every one resolves a market).
+
+**ENFORCED BY CI:** `backend/harness_market_resolution_guard.py` scans the backend for any query
+reading a market column off `stores`/`store_mapping` and FAILS the build unless the site is
+canonical or pinned there with a reviewed classification (CANONICAL / OVERLAY — blank-fill from the
+canonical map, set values never overwritten / EDITOR / AUDITOR / GRANT / ROSTER / PAY-ENGINE /
+ATTRIBUTION / STORED — asset's persisted conflict-audited backfill). The pin table in that harness
+IS the per-module inventory; changing it is a reviewed act in the same PR. Resolver truth table
+(incl. the 1115-Liberty shape, the mirror-image mapping-only shape, aliases, ambiguity fail-closed,
+code_groups inheritance): `backend/harness_store_market_resolution.py`.
+
+**Converged 2026-09-03 (all previously divergent):** commcalc `_store_market_resolver` (now
+delegates to core.scope — fixes `/tax-collected`, `/commissions/{period}` **Rep Incentive**,
+`/commission-statement`, `/sales-comparison`, `/comp/rep-pay-trend`, `/financing/{period}`,
+`/atu-opportunity` in one move), Sales-Report + Exec-MTD inline resolver copies, `_market_for_fn`
+(activation counts), `_prod_store_maps` (productivity), `_cr_market_resolver` (custom report),
+`_accrual_market_map`, `/coaching/{period}`, `/targets/{period}/summary` (roster market overlay —
+the mirror-image storeops-only gap), commission-plan roster, accessory-flags options, `_compute_gp`
++ expenses/commission/gp trends (`_trend_market_by_code`) + `_leg_store_index`; closing module
+(`_overlay_canonical_market` on rollup/summary/recon/DM-verify/envelope/pickups/positions/
+accountability — replaces the pickup pages' private stores+store_mapping inline union), closing
+DM routing (`ops_chargebacks._dm_for_stores_batch`, storeops `_dm_for_store`/`_managers_above_dm`);
+payables (`_market_by_store` + filter-options); pos tax-code resolve/markets/store-grid; storevisit
+`/stores`; storeops hours-budgets; core `/filter-options` overlay; core onboarding tax coverage;
+asset `_store_mapping_market_index` (storeops rows join the conflict-audited candidate pool),
+asset registry stores + PO recommendations; account residual-subs market stamps.
+
+**Deliberately NOT converged (documented divergence):** `commission_engine._read_store_market` —
+commission PLAN ATTACHMENT (market-scope plans) reads store_mapping ONLY. It is a MONEY path:
+widening it changes payouts, so it stays byte-identical until the owner approves (route via
+commission-agent; the plan-assignment audit `router.py` mirror deliberately matches the engine).
+Pinned PAY-ENGINE in the guard.
+
 ---
 
 ## 14. Employees & scheduling (does it feed pay?)
@@ -1239,7 +1318,8 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`); `PUT /report-labels` (scopes `report_col`/`report_banner` at the TENANT org — overrides; gated on `classification`); mig `945` seeds the HOUSE carrier-preset rows (scopes `report_col:<carrier>`/`report_banner:<carrier>`) | `GET /nav-config` (caller org only, no house inheritance — sidebar), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins), `GET /report-labels` (`report_labels.load_report_labels`: tenant ∪ HOUSE, tenant override > carrier preset > built-in — §3 carrier column labels) |
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3) |
-| `storeops.employees` / `stores` | storeops roster | calc, targets, resolution |
+| `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`)** |
+| `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs), store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution rule + CI guard** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
 
 ---
@@ -1248,8 +1328,9 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| _every endpoint filtering/grouping by MARKET_ | — | §13a canonical resolution (`core.scope.store_market_resolver`/`market_by_code`); inventory pinned in `harness_market_resolution_guard.py` |
 | `POST /calculate/{period}` | `router.py:8968` | §6 rep commission |
-| `GET /commissions/{period}` | `10222` | §6 |
+| `GET /commissions/{period}` | `10222` | §6 — the Rep Incentive Report read; market stamped per row via §13a (2026-09-03 fix) |
 | `GET /sales-report` | `15792` | §3 |
 | `GET /gp/{period}` | `14750` | §4 |
 | `GET/PUT /targets/{period}` | `19005/19071` | §5 |
@@ -1426,6 +1507,41 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 14. **Journal page has no company/store PICKER** — free-text entry is what stranded the owner's
     equity/loan rows (mig-933 matcher now resolves typed designations server-side; the picker is
     the lasting Option-B UI fix, roadmap Phase 2).
+15. **Cross-tenant Diversey leak — REMOVED (2026-09-03); the leak CLASS is now CI-pinned.** The
+    2026-07-14 incident (a Luxelink sales export ingested under the HOUSE org pre-dating the
+    2026-08-09 ambiguous-tenant fix) left 9 rows of Luxelink content in house data that the mig-280
+    guard's default `warn` mode never removed: 6 `raw_sales` line items (Espinoza, Carolina @
+    4640-A W Diversey Ave, July 2026), the 1 `rep_commissions` July row paid from them ($2.9995),
+    1 `flags` MISSING_STORE_PAYMENT row, and 1 `daily_commission_accrual` monthly true-up ($3.00,
+    id 98). All 9 deleted surgically by id (org-scoped) and July 2026 recomputed clean via
+    `_run_calculation` (49 rows, phantom rep gone). A platform-wide content audit (every org_id
+    table in commcalc/storeops/notify/pos/core, per-tenant street-token fingerprints, both
+    directions) found NO other cross-tenant content. The class the org-scope guard could not see —
+    correctly `.eq('org_id',…)`-scoped writes whose org VALUE was wrong at ingest — is now
+    enforced two ways: `harness_org_scope_guard.py` "ingest-screen guard" fails CI on any
+    raw_sales/daily_sales_feed insert not fronted by `ingest_store_guard.screen`, and
+    `harness_cross_tenant_isolation.py` replays the REAL incident batch through the guard + the
+    union/promotion paths (warn/block/off, fail-open, org-airtight promotion, the hourly
+    re-insert negative control). Guard mode is still per-org `warn` — moving established tenants
+    to `block` is the owner's call (`/ingest-guard/*`).
+16. **Closed-month `raw_sales` FREEZES while `report_definitions.sales.auto=false`.** Both live
+    tenants switched sales auto-derive OFF on 2026-08-09 (house 19:31Z, luxelink 22:20Z — the
+    Diversey incident response); the hourly feed→raw_sales promotion stopped mid-August, so
+    August `raw_sales` holds only Aug 1–9 for both orgs (house 8,355 lines vs 24,890 in the
+    31-day feed) while the daily feed stayed complete. Consequence: any LEGACY-mode closed-month
+    pay read (the Boost calc's `_fetch_sales_unified`, `commission_engine._read_sales` under
+    `sales_source='legacy'`) computes from a 9-day month — the owner's "August rep-commission
+    activations wrong while Exec MTD is right" (2026-09-03) is exactly this, because Exec MTD
+    reads the feed-backed union (§3). Luxelink is already on `sales_source='union'` (complete);
+    the house August fix — the module's own promotion + recalculation — RAN 2026-09-03T20:58Z:
+    `_promote_feed_to_raw_sales('August 2026')` wrote 24,890 lines (monthly_only 0, ingest guard
+    clean), `_run_calculation` regenerated the 42-row snapshot from the full 31-day basis
+    (premium/byod/upgrade acts 201/197/215 → 588/642/696), zero cross-tenant content re-entered.
+    Durable options remain open: re-enable `sales` auto in the registry, or move the
+    org to `sales_source='union'` (money setting, owner's call — and since 2026-09-03 the Boost
+    calc honors it too, §6). `⚠` until one of those lands — every future month will freeze the
+    same way at rollover. (A month whose raw_sales is fully EMPTY — September at the freeze — is
+    safe even in legacy: the all-or-nothing fallback then reads the feed; only PARTIAL is toxic.)
 
 ---
 

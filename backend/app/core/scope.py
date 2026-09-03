@@ -444,6 +444,134 @@ def invalidate_market_index(org_id: str = None) -> None:
         _market_cache.pop(org_id, None)
 
 
+# ── STORE → MARKET RESOLUTION — the ONE canonical answer to "which market is this store in?" ─────
+# (owner directive 2026-09-03: "1115 Liberty Ave … assigned LI … does not show up under any filter
+# in the rep incentive report but shows in the daily target report … fix once for all").
+#
+# Before this, the codebase carried AT LEAST NINE sibling store→market resolvers: seven copies of a
+# commcalc.store_mapping-ONLY lookup (`_store_market_resolver`, the Sales-Report / Exec-MTD inline
+# copies, `_market_for_fn`, `_prod_store_maps`, `_cr_market_resolver`, `_accrual_market_map`) and a
+# family of storeops.stores-ONLY joins (Daily Targets roster, coaching, closing rollup/summary/
+# envelope, payroll approvals, store visits …). The two vocabularies are KNOWN to diverge (see the
+# module header): live Cellfonz store B-1115 "1115 Liberty Ave" carries market "LI" in
+# storeops.stores and has NO store_mapping row at all — so it filtered fine on every
+# storeops-sourced report (Daily Targets) and vanished from every store_mapping-sourced one
+# (Rep Incentive). The mirror-image failure (market only in store_mapping) hits the other family.
+#
+# `build_store_market_lookup` below is the ONE resolver, over the SAME canonical union index the
+# span/grant machinery binds (`build_market_index`: storeops.stores ∪ commcalc.store_mapping ∪
+# commcalc.store_aliases). Every report that stamps or filters rows by market must resolve through
+# it (or through `market_by_code` for code-keyed rows). `harness_market_resolution_guard.py` pins
+# the call-site inventory so a new sibling resolver fails CI.
+
+def build_market_by_code(idx) -> dict:
+    """PURE: {UPPER store_code -> canonical market name} from the union index.
+
+    The market is the FOLDED per-store value (`stores[…]["market"]`: first non-empty across
+    storeops.stores → commcalc.store_mapping — the same fold `orphan_codes_from_index` and the
+    grant picker trust). A code with no market of its own inherits the market of its physical
+    store group (`code_groups`) when that group agrees on exactly ONE market — the Luxelink
+    two-codes-one-store shape — and stays '' when the group disagrees (fail closed, never guess)."""
+    stores = (idx or {}).get("stores") or []
+    groups = (idx or {}).get("code_groups") or {}
+    own = {}
+    for s in stores:
+        c = _up(s.get("store_code"))
+        if c:
+            own[c] = _norm(s.get("market"))
+    out = dict(own)
+    for c, mk in own.items():
+        if mk:
+            continue
+        group_mks = {own.get(g) for g in (groups.get(c) or ()) if own.get(g)}
+        if len(group_mks) == 1:
+            out[c] = next(iter(group_mks))
+    return out
+
+
+def build_store_market_lookup(idx) -> tuple:
+    """PURE: `(resolve, markets)` — resolve(raw store string) -> canonical market name, or ''.
+
+    THE canonical store→market resolver (see the section comment above). Accepts, in order:
+      1. any KEY spelling of a store — its store_code, ANY address spelling from EITHER vocabulary,
+         or a commcalc.store_aliases POS synonym — matched case/punctuation-insensitively via the
+         index's `key_index` (the same `_squash` identity `resolve_store_grant` uses);
+      2. a codeless store's address (storeops/mapping rows with no store_code — matched against the
+         folded `stores` list);
+      3. the LEADING STREET NUMBER of the string, when exactly ONE market owns that number across
+         every known address spelling (the legacy `_store_market_resolver` tolerance — but
+         fail-closed: the old first-row-wins tiebreak on a duplicated number is replaced by ''
+         on ambiguity, matching statement_filter.build_store_matcher).
+    A spelling that matches stores in MORE THAN ONE market resolves to '' (fail closed), never to
+    an arbitrary winner. `markets` is the canonical union list (idx['markets']) — the SAME options
+    the resolver can actually bind, so a picker built from it can never offer a dead filter.
+
+    Per-org data only ever enters through `idx` (RULE TWO: no tenant branches here)."""
+    idx = idx or {}
+    code_market = build_market_by_code(idx)
+    key_market: dict = {}          # squashed key -> market ('' = known-ambiguous, fail closed)
+
+    def _learn(sq, mk):
+        if not sq:
+            return
+        cur = key_market.get(sq)
+        if cur is None:
+            key_market[sq] = mk
+        elif cur and mk and cur.lower() != mk.lower():
+            key_market[sq] = ""    # two markets claim this spelling — never guess
+        elif not cur and mk:
+            key_market[sq] = mk
+
+    for sq, codes in (idx.get("key_index") or {}).items():
+        mks = {code_market.get(c) for c in codes if code_market.get(c)}
+        _learn(sq, next(iter(mks)) if len(mks) == 1 else ("" if len(mks) > 1 else ""))
+    for s in (idx.get("stores") or []):           # codeless rows never reach key_index
+        if not _norm(s.get("store_code")) and _norm(s.get("address")) and _norm(s.get("market")):
+            _learn(_squash(s.get("address")), _norm(s.get("market")))
+
+    num_market: dict = {}          # leading street number -> market ('' = ambiguous)
+    def _learn_num(addr, mk):
+        m = re.match(r"\s*(\d+)", str(addr or ""))
+        if m and mk:
+            n = m.group(1)
+            cur = num_market.get(n)
+            if cur is None:
+                num_market[n] = mk
+            elif cur and cur.lower() != mk.lower():
+                num_market[n] = ""
+    for code, addrs in (idx.get("addr_keys") or {}).items():
+        for a in (addrs or ()):
+            _learn_num(a, code_market.get(code))
+    for s in (idx.get("stores") or []):
+        if not _norm(s.get("store_code")):
+            _learn_num(s.get("address"), _norm(s.get("market")))
+
+    def resolve(store) -> str:
+        sq = _squash(store)
+        if not sq:
+            return ""
+        hit = key_market.get(sq)
+        if hit is not None:
+            return hit            # '' here means known-but-ambiguous: fail closed, no number fallback
+        m = re.match(r"\s*(\d+)", str(store or ""))
+        return num_market.get(m.group(1), "") if m else ""
+
+    return resolve, list(idx.get("markets") or [])
+
+
+def store_market_resolver(client, org_id: str):
+    """(resolve, markets) over the org's cached canonical union index — the I/O twin of
+    `build_store_market_lookup`. Every store/market-filtering report resolves through this
+    (or `market_by_code`); never through a single vocabulary."""
+    return build_store_market_lookup(market_index(client, org_id))
+
+
+def market_by_code(client, org_id: str) -> dict:
+    """{UPPER store_code -> canonical market} off the cached union index — for surfaces whose rows
+    already carry a store_code (closing, payroll approvals, accrual boards …)."""
+    return build_market_by_code(market_index(client, org_id))
+
+
 # ── GRANT RESOLUTION — a permission value names a REAL entity or it names nothing (ruling #5) ────
 # `RESOLVED` / `AMBIGUOUS` / `UNKNOWN` / `EMPTY` are the four honest answers. Every caller must
 # handle AMBIGUOUS and UNKNOWN explicitly; neither may be silently coerced into "keep what was

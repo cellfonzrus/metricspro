@@ -69,29 +69,25 @@ def _canon(s, alias):
 # Same class as the store-code twins and the span keyset vocabulary split — when two tables spell a
 # store differently, resolve through the one the DATA uses, never the one the admin UI shows.
 def _market_by_store(client, org_id):
-    """{store_address -> market} in the SAME spelling the report rows use. Also keyed case/space-
-    insensitively so a stray double space in a sales export still resolves. Degrades to {} — an
-    unresolved store renders "(no market)" and stays SELECTABLE, never silently dropped."""
-    out = {}
+    """A store→market RESOLVER — THE canonical union resolution (core.scope.store_market_resolver:
+    storeops.stores ∪ commcalc.store_mapping ∪ store_aliases; 2026-09-03 "1115 Liberty Ave"/LI
+    class fix — was a store_mapping-only address map). Accepts any spelling the report rows carry
+    (address/code/synonym, case+punctuation-insensitive, unambiguous leading street number).
+    Degrades to a no-op resolver — an unresolved store renders "(no market)" and stays SELECTABLE,
+    never silently dropped."""
     try:
-        rows = (client.schema("commcalc").table("store_mapping")
-                .select("store_address,market").eq("org_id", org_id).limit(5000).execute().data) or []
+        from app.core import scope as _cscope
+        resolve, _ = _cscope.store_market_resolver(client, org_id)
+        return resolve
     except Exception as e:
         print(f"WARN payables _market_by_store failed (markets will be blank): {e}")
-        return out
-    for r in rows:
-        addr, mkt = (r.get("store_address") or "").strip(), (r.get("market") or "").strip()
-        if addr and mkt:
-            out[addr] = mkt
-            out[" ".join(addr.split()).lower()] = mkt
-    return out
+        return lambda s: ""
 
 
 def _market_of(mmap, store):
     if not store:
         return None
-    s = str(store).strip()
-    return mmap.get(s) or mmap.get(" ".join(s.split()).lower())
+    return mmap(store) or None
 
 
 def _fetch_all(make_query, cap=80):
@@ -274,13 +270,17 @@ def payables_filter_options(org_id: str = ORG_ID):
     except Exception as e:
         print(f"WARN payables filter-options failed: {e}")
         return {"stores": [], "markets": [], "source": "unavailable"}
+    # Market stamped per store through THE canonical union resolver (2026-09-03 LI class fix) — the
+    # STORE option vocabulary deliberately stays store_mapping.store_address (measured 2026-08-11:
+    # that is the spelling the payables/forecast rows actually carry; see the docstring above).
+    _resolve_market = _market_by_store(client, org_id)
     seen, stores, markets = set(), [], set()
     for r in rows:
         addr = (r.get("store_address") or "").strip()
         if not addr or addr.lower() in seen:
             continue
         seen.add(addr.lower())
-        mkt = (r.get("market") or "").strip() or None
+        mkt = (r.get("market") or "").strip() or _resolve_market(addr) or None
         stores.append({"store": addr, "market": mkt})
         if mkt:
             markets.add(mkt)
