@@ -459,6 +459,31 @@ commissions, expenses.
   route-module map + `DATA_GRANTS` (`company_valuation`) in `rbac.ts` and the Reports directory
   (`reports.ts`).
 
+- **Current Monetary Liabilities (owner directive 2026-09-03, with the mig-948 dashboards):**
+  `GET /account/liabilities-due` (`account/router._liabilities_due_impl`) — "monies owed to the
+  distributor, this weeks payments due, Payroll Due this week, payroll tax due, Rents due this
+  week, any other recurring expenses due" — COMPOSED ENTIRELY of existing derivations
+  (duplicate-check gate): (a) distributor = `statement_engine._fetch_outstanding_tx` +
+  the mig-933 `balance_sheet.handset_payable_bookings` config/predicate (outstanding as of
+  today) plus its due-THIS-WEEK sibling `liabilities_due.payables_due_in_window` (predicate
+  equivalence PINNED in the harness), store grain via the mig-314 account→store index +
+  `coa.store_resolver`; Boost/invoice side = `owed_vip`/`vip_ap` read off the STORED consolidated
+  BS snapshot (computed_at surfaced, one math path); (b) payroll + payroll tax = storeops
+  `payroll_raw` + the `payroll_tax_estimate.compute_pay` twin for the pay period(s) whose PAYDAY
+  (core `pay_period_for`, the one shared resolver, walked by `liabilities_due.paydays_in_window`)
+  falls inside the week, plus the accruing current period — mig-434 `can_see_pay` gate FAIL-CLOSED
+  (denied ⇒ `allowed:false`, zero dollars in the payload); (c) rents + insurance = the mig-946
+  `storeops.store_lease` columns via the documented helpers (`rent_for_month` /
+  `resolve_rent_due` / `rent_due_window`; premium recurrence per `insurance_premium_frequency`),
+  gated whole by `store_lease.can_see_lease` (ACH columns never selected); unknown rent = null
+  amount + counted, never a fake $0. Store rows span-filtered (storeops scope_keyset), markets
+  stamped via the canonical `core.scope.market_by_code` (§13a). Window/aggregation math PURE in
+  `account/liabilities_due.py` (proof `harness_liabilities_due.py` — week windows, rent/insurance
+  recurrence, payroll tax split, gate truth table). Frontend `/accounts/liabilities-due`
+  (StandardFilterBar markets/stores; server-gated sections render restriction notes). Registered
+  in `reports.ts` (Accounts) + REPORT_DIRECTORY ('finance'); tiled on the Management Overview
+  dashboard (§14 mig 948).
+
 ---
 
 ## 5. Daily Targets & actuals
@@ -695,8 +720,22 @@ gates.
   `/carrier-kpi-metrics` GET/POST/DELETE `router.py:19757,19773,19794`.
 - **MI ATU-by-period RPC:** mig `032_mi_atu_by_period_rpc.sql`. Comp-report columns: mig `031`.
   Conversion: mig `013_conversion.sql`.
+- **Failing-KPI report (owner directive 2026-09-03, with the mig-948 dashboards):**
+  `GET /kpi-failing/{period}` — a VIEW over the EXISTING KPI machinery, never a sibling
+  derivation: defs + targets = `_kpi_defs(org_id)` + the per-period `payout_config` target
+  columns (the exact `/coaching` / action-plan resolution); STORE actuals = `get_dlar_store_kpis`
+  called IN-PROCESS (same raw_dlar_store read, storeops span filter inherited); REP actuals =
+  `rep_commissions.kpi_values` (what the pay engine tiered on), span-filtered on store;
+  store→market via §13a `_store_market_resolver`. Classification is PURE
+  (`commcalc/kpi_failing.py`: below-target fails, a missing value is `no_data` and NEVER counted
+  as failing, `STORE_KPI_COLUMNS` = the metric-key→raw_dlar_store column map; proof
+  `harness_kpi_failing.py`). Frontend `commcalc/kpi-failing/page.tsx` — StandardFilterBar
+  (month · markets · stores · reps), summary tiles + per-metric rollup, store rows expanding to
+  KPI detail + the failing reps at that store, WYSIWYG export. Registered in `reports.ts`
+  (Commissions) + REPORT_DIRECTORY ('targets') + REPORT_TREES ('commissions' area); tiled on the
+  Management Overview dashboard (§14 mig 948).
 
-**Endpoints:** `/dlar-store/{period}` `10278`; `/carrier-kpi-metrics` `19757`; `/exec-overview/{period}`
+**Endpoints:** `/dlar-store/{period}` `10278`; `/kpi-failing/{period}` (beside it); `/carrier-kpi-metrics` `19757`; `/exec-overview/{period}`
 `20103`; `/exec-mtd/{period}` `20596`; `/productivity/{period}` `21152` + `/productivity/kpi-values/{period}`
 `21218` (mig `215_productivity_registry.sql`); `/comp/residual-trend` `17339`, `/comp/rep-pay-trend` `17357`.
 **Frontend:** `commcalc/dlar/page.tsx`, `productivity/page.tsx`, `comp-trend/page.tsx`, `exec/page.tsx`.
@@ -1299,6 +1338,38 @@ Pinned PAY-ENGINE in the guard.
   - **Proof:** `backend/harness_store_lease.py` (stdlib-only: rent math incl. anniversary
     boundaries, due-window clamps, gate truth table end-to-end, ACH strip, upload decode caps).
     Not an external feed → no lineage registry entry.
+- **Management Overview + Flags & Compliance dashboards (owner directive 2026-09-03, mig `948`):**
+  two NEW top-level dashboard CATEGORIES; the tiles are D1 DATA (mig 068 `ui_label_override`
+  scope='tiles', HOUSE platform-default rows seeded `ON CONFLICT DO NOTHING` — the mig-947
+  pattern; tenants override in the Dashboard Designer), the NAV groups ship in `rbac.ts` (the D2
+  convention) with every existing page as a tileOnly DUPLICATE keeping its original
+  module + scopes (zero RBAC change — the Reports-directory duplicate precedent).
+  - **Management Overview** (`/hub/management-overview`, the generic D2 hub route; house layout
+    key `management-overview`): one tile per report — Sales Reports (`/commcalc/sales-report`),
+    Executive MTD, Sales Comparison, **"Rep Incentive"** = `/commcalc/exec` with the relabel as
+    tile-layout item-label DATA (layout label > NAV label; nothing hardcoded, tenant-editable),
+    **Failing KPIs** (NEW report, §10), **Cash at Hand** = a SECOND PLACEMENT of the existing
+    `/closing/store-cash-on-hand` report (same endpoint/component, no forked derivation), and
+    **Current Monetary Liabilities** (NEW report, §4).
+  - **Flags & Compliance** (`/compliance` — a curated page, the /storeops hub precedent): every
+    flag/exception/compliance queue under one roof. StatTile COUNTS from
+    `GET /commcalc/compliance-summary` — ONE thin count pass over the existing queues' own
+    queries/handlers (flags open · discrepancy open · ingest-guard quarantine pending ·
+    ops_chargeback pending · attendance exceptions (current pay period, in-process handler) ·
+    hours-approval pending (payroll_approval totals) · approvals inbox (`approvals.engine.summary`) ·
+    deposit-accountability non-green store-days · bill-pay coverage exceptions · statement
+    staleness (`autocompute.staleness`)); a failed probe reports count=null + `unavailable`, NEVER
+    a fake 0 (pure assembly `commcalc/compliance_summary.py`, proof
+    `harness_compliance_summary.py`). Below the counts the page renders the D1 tile layout for
+    module `flags-compliance` (house seed: Commission Flags / Pay Discrepancy / Data Quality &
+    Ingest / Workforce Compliance / Cash & Closing Compliance) with the exact /hub/[group] RBAC
+    predicates. `/commcalc/ingest-guard` gained its FIRST NAV home here (page pre-existed,
+    menu-less; scopes `['all']`).
+  - **Frontend registration:** `rbac.ts` (two groups + REPORT_TREES `/commcalc/kpi-failing` +
+    REPORT_DIRECTORY rows), `reports.ts` (Failing KPIs, Current Monetary Liabilities);
+    `prove_tile_hubs.mjs` (17 hub groups) + `prove_import_health_nav.mjs` (B6 duplicate) updated.
+    ALL THREE NEW SCREENS (kpi-failing · liabilities-due · compliance) AWAIT OWNER PREVIEW
+    (merge policy Option B). Display config, not a feed → NO lineage entry.
 
 ---
 
@@ -1347,7 +1418,7 @@ Pinned PAY-ENGINE in the guard.
 | `commcalc.flags` | calc + flag rules | `/flags/{period}` `10299`, `_cr_resolve_flags` |
 | `commcalc.store_expenses` | `/expenses/{period}` PUT `21695` | GP report + P&L, BOTH via the sticky carry-forward reader `expenses_effective.effective_expense_rows` (2026-09-02, §4); `_cr_resolve_store_expenses` |
 | `commcalc.sale_installment_ledger` | `compute_sale_installments(persist=True)` `9212` (mig `308` adds `order_number`/`account_id` MA TX provenance, adaptive write) | `/plan-installments/*` previews, `installment_comm_sale` |
-| `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx` (slice-scoped replace: org × day × `account_id`, `ingest_slice.py` §2), VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store(_day)` — since mig `944` FILTERED to bill-payment rows via `metric_recon.ma_billpay_predicate`, accounts via store_merchant_id → mig-314 index; §12 3-way Leg C), residual/ATU (`residual_subs`), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier), **P&L mig `309`** (`account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings`: `merchant_discount` → "Merchant discount" line (or legacy `atu_income` fold per `pl_merchant_discount_own_line`), −`retail_cost` → `mi_income` for the `'%residual%'` ∪ `pl_ma_residual_order_types` union, each row once), **P&L mig `314`** (`ma_store_pnl.ma_tx_bookings`: per-store via `account_id`→store index; MDF token rows → `mdf_income`; `'daily_tx'` month-spiff rows → `carrier_comm` `M<n>` detail), **BS mig `933`** (`balance_sheet.handset_payable_bookings` via `statement_engine._fetch_outstanding_tx`: configured `handset_payable_order_types` rows with `tx_date ≤ as-of < due_date` → the `handset_payable` liability; money column `retail_cost` ONLY) |
+| `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx` (slice-scoped replace: org × day × `account_id`, `ingest_slice.py` §2), VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store(_day)` — since mig `944` FILTERED to bill-payment rows via `metric_recon.ma_billpay_predicate`, accounts via store_merchant_id → mig-314 index; §12 3-way Leg C), residual/ATU (`residual_subs`), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier), **P&L mig `309`** (`account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings`: `merchant_discount` → "Merchant discount" line (or legacy `atu_income` fold per `pl_merchant_discount_own_line`), −`retail_cost` → `mi_income` for the `'%residual%'` ∪ `pl_ma_residual_order_types` union, each row once), **P&L mig `314`** (`ma_store_pnl.ma_tx_bookings`: per-store via `account_id`→store index; MDF token rows → `mdf_income`; `'daily_tx'` month-spiff rows → `carrier_comm` `M<n>` detail), **BS mig `933`** (`balance_sheet.handset_payable_bookings` via `statement_engine._fetch_outstanding_tx`: configured `handset_payable_order_types` rows with `tx_date ≤ as-of < due_date` → the `handset_payable` liability; money column `retail_cost` ONLY), **liabilities-due 2026-09-03** (`GET /account/liabilities-due`: same fetch + same family predicate — outstanding today + `liabilities_due.payables_due_in_window` for the due-this-week rows, equivalence pinned in `harness_liabilities_due.py`; §4) |
 | `commcalc.raw_ma_commission` | upload `/upload/ma_commission` (slice-scoped replace: org × day × `merchant_account_id`, `ingest_slice.py` §2 — 2026-09-02 two-portal wipe incident), VidaPay sweep | MA overview/recon, installment MA gate (`_read_ma_commission` spiffs), **mig `308` two-hop link** (`build_ma_link_index`: `imei|sim → activation_order`), **P&L mig `314`** (`ma_store_pnl.ma_commission_bookings`: component heads per-store via `merchant_account_id`→store index; sheet spiffs suppressed under `pl_ma_month_spiff_source='daily_tx'`; MA device COGS store slice `device_cogs._ma_sold_cost`) |
 | `commcalc.raw_ma_fulfillment` | upload `/upload/ma_fulfillment` (slice-scoped replace, `ingest_slice.py` §2) | `device_cogs.ma_unit_price_map` (handset price list), MA overview/recon, **mig `314` account→store map source** (`tspid`+`business_address` → `ma_store_pnl.account_store_index`) |
 | `commcalc.ma_account_store_map` (mig `314`) | owner-pinned rows (SQL seed / future admin UI) | `ma_store_pnl.load_store_index` — wins over the fulfillment-derived map; covers accounts fulfillment never names (luxelink `170405`) |
@@ -1372,13 +1443,13 @@ Pinned PAY-ENGINE in the guard.
 | `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`) | `PUT /accessory-config` (Sales Report → Classification settings) | `_accessory_config(_uncached)` (accessory/billpay/blank-ct classification for `_sales_cell_agg`); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, own defensive read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, own defensive read, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`) |
 | `commcalc.metric_source_of_truth` (per-metric basis-of-truth config, mig `923`; columns added by `944` `processor_order_types`/`processor_product_tokens` — the bill-payment row filter for the daily-TX processor feed) | `PUT /metric-source-config` | `_metric_source` (consumed by Exec MTD activation override, `/metric-recon`, `/billpay-coverage`, `_pos_billpay_for_days`/`_billpay_processor_by_store(_day)` — §12 3-way Leg C; NULL columns = `metric_recon` house defaults) |
 | `commcalc.exec_metric_config` (per-org Exec-MTD metric DEFINITIONS, mig `204`; seed fn `seed_exec_metric_config`) | `GET/PUT /exec-metric-config` `router.py:24766/24781` (upsert by `org_id,bucket`); 2026-09-02: LuxeLink `bill_payment` rules gained `product_desc_contains:["wallet funding"]` (org-scoped data fix, house default untouched) | `_exec_metric_config` (DB row REPLACES the bucket's default rules) → `_sales_cell_agg` exec metrics via `_exec_line_match` |
-| `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`); `PUT /report-labels` (scopes `report_col`/`report_banner` at the TENANT org — overrides; gated on `classification`); mig `945` seeds the HOUSE carrier-preset rows (scopes `report_col:<carrier>`/`report_banner:<carrier>`); mig `947` seeds the HOUSE Incentives tile layout (scope `tiles` key `incentives`) + HOUSE nav-label presets (NEW scopes `nav_default`/`group_default`, e.g. `/commcalc/commission-legs` → 'Commission received over M1-M12') | `GET /nav-config` (house `nav_default`/`group_default` presets first, then the caller org's `nav`/`group` nicknames overlay per key — tenant > house preset > built-in, since mig 947; caps/layout stay caller-org-only), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins), `GET /report-labels` (`report_labels.load_report_labels`: tenant ∪ HOUSE, tenant override > carrier preset > built-in — §3 carrier column labels) |
+| `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`); `PUT /report-labels` (scopes `report_col`/`report_banner` at the TENANT org — overrides; gated on `classification`); mig `945` seeds the HOUSE carrier-preset rows (scopes `report_col:<carrier>`/`report_banner:<carrier>`); mig `947` seeds the HOUSE Incentives tile layout (scope `tiles` key `incentives`) + HOUSE nav-label presets (NEW scopes `nav_default`/`group_default`, e.g. `/commcalc/commission-legs` → 'Commission received over M1-M12'); mig `948` seeds the HOUSE Management Overview (`tiles` key `management-overview` — incl. the `/commcalc/exec` item-label 'Rep Incentive') + Flags & Compliance (`tiles` key `flags-compliance`) layouts (§14 mig 948) | `GET /nav-config` (house `nav_default`/`group_default` presets first, then the caller org's `nav`/`group` nicknames overlay per key — tenant > house preset > built-in, since mig 947; caps/layout stay caller-org-only), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins), `GET /report-labels` (`report_labels.load_report_labels`: tenant ∪ HOUSE, tenant override > carrier preset > built-in — §3 carrier column labels) |
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3) |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`)** |
 | `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs), store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution rule + CI guard** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
-| `storeops.store_lease` (mig `946` — one row per org×store: landlord/site contact, rent links + ACH (SENSITIVE), `current_rent`/`rent_effective_from`/`escalation_pct`/`rent_schedule`/`rent_due`, lease dates, insurance + `insurance_premium_due`/`_frequency`) | `PUT /storeops/store-lease` (gated `can_see_lease`, upsert on org+store) | `GET /storeops/store-lease`; the sibling finance rents-due/recurring-expenses reader via `store_lease.rent_for_month`/`resolve_rent_due`/`rent_due_window` (§14 read contract — compute from these, never re-derive) |
+| `storeops.store_lease` (mig `946` — one row per org×store: landlord/site contact, rent links + ACH (SENSITIVE), `current_rent`/`rent_effective_from`/`escalation_pct`/`rent_schedule`/`rent_due`, lease dates, insurance + `insurance_premium_due`/`_frequency`) | `PUT /storeops/store-lease` (gated `can_see_lease`, upsert on org+store) | `GET /storeops/store-lease`; the finance rents-due/recurring-expenses reader `GET /account/liabilities-due` (`account/liabilities_due.rent_due_rows`/`insurance_due_rows` computing FROM `store_lease.rent_for_month`/`resolve_rent_due`/`rent_due_window` — the §14 read contract honored, never re-derived; gated `can_see_lease`, ACH columns never selected) |
 | `storeops.store_document` (mig `946` — append-only lease/COI versions; files in PRIVATE bucket `store-docs`) | `POST /storeops/store-lease/doc` (gated; INSERT only, prior versions kept) | `GET /storeops/store-lease` version lists (path never echoed), `GET /storeops/store-lease/doc-url`/`doc-view` (org-scoped by id → signed URL) |
 | `storeops.tenants.rent_due_default` + `lease_visible_roles` (mig `946` config columns) | `PUT /storeops/store-lease/tenant-defaults` (due default); roles column set per-org via SQL/admin | `store_lease.tenant_lease_config` (adaptive — pre-946 = house first-week + market-manager-and-above), `can_see_lease` gate |
 
@@ -1449,6 +1520,9 @@ Pinned PAY-ENGINE in the guard.
 | `GET /closing/cash-recon-management` (GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403; declared vs pickups vs POS on one screen, bill-pay mismatch flag; since mig `944` ALSO the 3-WAY bill-pay recon — declared vs sales-tx (tender-split) vs processor, `three_way_status` per row + `three_way` summary); W3 scheduled report key `closing_billpay_recon` | `closing/router.py` (`cash_recon_management`; POS sides via the shared `_pos_tenders_for_days`/`_pos_billpay_for_days`, sales side via `_sales_billpay_for_days` → `commcalc.router._billpay_sales_by_store_day`; pure math `metric_recon.reconcile_billpay_three_way_days`); `notify/closing_reports.py` | §12 management cash recon / §12 3-way recon |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`) | §12 deposit accountability |
 | `GET /billpay-coverage/{period}` (per store/day: bill-pay ≤ cash+card, exceptions surfaced) | `commcalc/router.py` (`billpay_coverage` → `metric_recon.reconcile_billpay_coverage`) | §4 bill-pay carve-out / §15 |
+| `GET /kpi-failing/{period}` (failing-KPI overview: /coaching target resolution + in-process `/dlar-store` store rows + `rep_commissions.kpi_values`; pure `kpi_failing.py`) | `commcalc/router.py` (`get_kpi_failing`, beside `/dlar-store`) | §10 failing-KPI report |
+| `GET /compliance-summary` (per-queue open counts over the existing flag/exception surfaces; failed probe = null, never 0; pure `compliance_summary.py`) | `commcalc/router.py` (`get_compliance_summary`, beside `/kpi-failing`) | §14 mig 948 Flags & Compliance |
+| `GET /account/liabilities-due` (owed-to-distributor + due-this-week payments/payroll/payroll-tax/rents/insurance per store; mig-434 + mig-946 gates fail closed; pure `account/liabilities_due.py`) | `account/router.py` (`liabilities_due_endpoint` → `_liabilities_due_impl`) | §4 Current Monetary Liabilities |
 
 (Full 468-endpoint list: `grep -nE '@router\.(get|post|put|patch|delete)\(' backend/app/modules/commcalc/router.py`.)
 
@@ -1465,6 +1539,7 @@ Pinned PAY-ENGINE in the guard.
 | Activation-report column DISPLAY LABELS (e.g. device financing: "Edge" Total-side / "ACIMA" Boost-side) + `unrecognized_ct_recon` banner on/off — TERMINOLOGY ONLY, never a number | `commcalc.ui_label_override` scopes `report_col[:carrier]`/`report_banner[:carrier]` (HOUSE carrier presets mig `945`; tenant overrides) × the org's `commcalc.carrier` rows (mig `038`) | `report_labels.load_report_labels` → `GET /report-labels`; frontend `lib/report-labels.ts useReportLabels` (Exec MTD + Activations headers/exports; Exec MTD ct-gap banner gate); settings `components/ReportLabelSettings.tsx`; proof `harness_report_labels.py` (§3) |
 | Activation TYPE buckets (AD basis: New / Port / BYOD / Tablet / Home Internet / Edge / Upgrade / hidden `BYOD Upgrade`) | `raw_custom_import` Activation-Details sheet (`Contract Type` + SP-PO/product/category name) × `accessory_config.activation_details_rules` token config (mig 313; house defaults: contract-type-only word-boundary Edge, `byod upgrade` → hidden family) | `activation_bucketing.activation_details_bucket` via `_cr_resolve_activation_details`; consumed by `_ad_cells_full`/`_apply_activation_basis` (Exec MTD + Sales Report columns), `_ad_activation_buckets` (recon), `/activation-counts/{period}`; `total_activation` excludes `TOTAL_ACTIVATION_EXCLUDED = (Upgrade, BYOD Upgrade)` |
 | VHI/FIOS / home-internet count | `raw_sales` product tokens / `installment_category.py:82` | `_mi_resolve_numbers` `28843`; `installment_category` (plan-mode, runtime-only) |
+| Failing-KPI classification (store/rep below target; `no_data` never fails) | `raw_dlar_store` KPI columns (store grain, `kpi_failing.STORE_KPI_COLUMNS`) + `rep_commissions.kpi_values` (rep grain) vs `payout_config.kpi_*_target` falling back to `carrier_kpi_metric.target_default` | `kpi_failing.evaluate/store_rows/rep_rows` via `GET /kpi-failing/{period}` (§10) |
 | ATU % | `raw_dlar_store.atu` / `raw_dlar_rep.atu_pct` / `store_kpis.atu_pct` | `_cr_resolve_kpi_metrics` `25656`; MI ATU RPC mig `032` |
 | Protect % | `raw_dlar_store.protect_pct` | `_cr_resolve_kpi_metrics` `25656` |
 | BYOD % | `raw_dlar_store.byod_pct` | `_cr_resolve_kpi_metrics` `25656` |

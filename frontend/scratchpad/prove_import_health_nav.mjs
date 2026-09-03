@@ -56,8 +56,11 @@ ok('B4 gate shape is byte-identical to /failures',
 const dirBlock = /export const REPORT_DIRECTORY[\s\S]*?\n\]/.exec(SRC)?.[0] || ''
 ok('B5 deliberately NOT in REPORT_DIRECTORY (it edits schedules; directory excludes config surfaces)',
   dirBlock.length > 100 && !dirBlock.includes('/admin/import-health'), dirBlock.length)
-ok('B6 NAV is otherwise untouched: exactly ONE new href added',
-  (SRC.match(/href: '\/admin\/import-health'/g) || []).length === 1)
+// 2026-09-03 (mig 948): the Flags & Compliance group carries a tileOnly DUPLICATE of this item
+// (the Reports-directory duplicate precedent — same module, no scopes, zero RBAC change), so the
+// href now appears exactly twice: the Configuration original + the compliance-dashboard copy.
+ok('B6 NAV carries the Configuration original + the Flags & Compliance tileOnly copy',
+  (SRC.match(/href: '\/admin\/import-health'/g) || []).length === 2)
 
 // ── C. persona matrix — the popup gate and the nav item must agree ──────────────────────────────────
 console.log('\nC. persona matrix (popup gate vs nav visibility)')

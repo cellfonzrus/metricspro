@@ -638,6 +638,203 @@ async def inventory_recon(org_id: str = ORG_ID):
         raise HTTPException(500, f"inventory recon failed: {type(e).__name__}: {e}")
 
 
+def _liabilities_due_impl(authorization, org_id, today_iso=""):
+    """The Current Monetary Liabilities aggregation (owner directive 2026-09-03) — COMPOSED
+    ENTIRELY of existing derivations (duplicate-check gate; window/aggregation math is pure in
+    account/liabilities_due.py, proof harness_liabilities_due.py):
+      · distributor payables  — statement_engine._fetch_outstanding_tx + the mig-933
+        balance_sheet.handset_payable_bookings config/predicate; Boost-side owed_vip/vip_ap off
+        the STORED consolidated Balance-Sheet snapshot (one math path, computed_at surfaced);
+      · payroll / payroll tax — storeops payroll_raw + the payroll_tax_estimate twin, for the pay
+        period(s) whose PAYDAY (core.router.pay_period_for — the one shared resolver) falls this
+        week, gated FAIL-CLOSED by the mig-434 can_see_pay (denied ⇒ allowed:false, no dollars);
+      · rents / insurance     — the mig-946 storeops.store_lease columns via the documented
+        helpers (rent_for_month / resolve_rent_due / rent_due_window), gated whole by
+        can_see_lease (ACH columns never selected, defense-in-depth on top of the gate).
+    Store rows are span-filtered through storeops scope_keyset and stamped with the canonical
+    market (core.scope.market_by_code, §13a)."""
+    from datetime import date as _date, timedelta as _timedelta
+    from app.modules.account import liabilities_due as _ld
+    from app.modules.account import balance_sheet as _bs
+    from app.modules.account import _period as _pd
+    from app.modules.storeops import pay_visibility as _pv
+    from app.modules.storeops import store_lease as _sl
+    from app.modules.storeops.router import scope_keyset, in_keyset
+
+    client = sb()
+    today = str(today_iso or "")[:10] or _date.today().isoformat()
+    wk_start, wk_end = _ld.week_window(today)
+    period = _date.fromisoformat(today).strftime("%B %Y")
+    ks = scope_keyset(authorization, org_id)          # None = unrestricted (admin / rbac off)
+
+    # canonical store→market stamp (§13a — never a single-vocabulary join)
+    try:
+        from app.core import scope as _cscope
+        mkt_by_code = _cscope.market_by_code(client, org_id) or {}
+    except Exception:
+        mkt_by_code = {}
+
+    def _mk(store):
+        return mkt_by_code.get(str(store or "").strip().upper(), "")
+
+    out = {"as_of": today, "week": {"start": wk_start, "end": wk_end}, "period": period}
+
+    # ── 1. distributor payables (mig-933 machinery) ─────────────────────────────────────────────
+    distributor = {"configured": False, "outstanding": None, "due_this_week": None,
+                   "snapshot": None}
+    try:
+        cfg = _bs.load_bs_config(client, org_id)
+        fams = cfg.get("handset_payable_order_types") or []
+        distributor["configured"] = bool(fams)
+        if fams:
+            # one fetch covers both questions: rows still due after the day before the week start
+            fetch_from = (_date.fromisoformat(wk_start) - _timedelta(days=1)).isoformat()
+            tx = statement_engine._fetch_outstanding_tx(client, org_id, fetch_from)
+            _bookings, out_meta = _bs.handset_payable_bookings(tx, fams, today)
+            due_rows, due_meta = _ld.payables_due_in_window(tx, fams, wk_start, wk_end)
+            # store attribution = the mig-314 account→store index (same as the P&L / BS)
+            acct_store = {}
+            try:
+                from app.modules.account import ma_store_pnl as _msp
+                if _msp.load_config(client, org_id).get("store_attribution"):
+                    acct_store = _msp.load_store_index(client, org_id) or {}
+            except Exception:
+                acct_store = {}
+            resolve = coa.store_resolver(client, org_id)
+            out_rows = [{"account_id": a, "amount": amt, "order_type": d}
+                        for (a, amt, d) in _bookings]
+            o_by, o_co = _ld.attribute_stores(out_rows, acct_store, resolve)
+            d_by, d_co = _ld.attribute_stores(due_rows, acct_store, resolve)
+            if ks is not None:                        # span scope: keep only in-span stores
+                o_by = {s: v for s, v in o_by.items() if in_keyset(ks, s)}
+                d_by = {s: v for s, v in d_by.items() if in_keyset(ks, s)}
+                due_rows = [r for r in due_rows
+                            if in_keyset(ks, (acct_store or {}).get(r.get("account_id")))]
+            distributor["outstanding"] = {
+                "total": out_meta["total"], "rows": out_meta["rows"], "as_of": today,
+                "by_store": [{"store": s, "market": _mk(s), "amount": v}
+                             for s, v in sorted(o_by.items())],
+                "company_wide": o_co}
+            distributor["due_this_week"] = {
+                "total": due_meta["total"], "rows": due_rows,
+                "by_store": [{"store": s, "market": _mk(s), "amount": v}
+                             for s, v in sorted(d_by.items())],
+                "company_wide": d_co}
+    except Exception as e:
+        distributor["note"] = f"handset payables unavailable: {type(e).__name__}"
+    # Boost-side / invoice-side distributor position off the STORED consolidated BS snapshot
+    try:
+        rows = (client.schema("commcalc").table("account_statements")
+                .select("period,computed_at,payload")
+                .eq("org_id", org_id).eq("statement_type", "balance_sheet")
+                .eq("scope_key", "consolidated")
+                .in_("period", _pd.period_keys(period)).execute().data) or []
+        rows.sort(key=lambda r: str(r.get("computed_at") or ""), reverse=True)
+        if rows:
+            snap, lines = rows[0], {}
+            for sec in (snap.get("payload") or {}).get("sections", []):
+                for ln in sec.get("lines", []):
+                    lines[ln.get("key")] = ln.get("amount")
+            distributor["snapshot"] = {
+                "period": snap.get("period"), "computed_at": snap.get("computed_at"),
+                "owed_vip": lines.get("owed_vip"), "vip_ap": lines.get("vip_ap"),
+                "handset_payable": lines.get("handset_payable")}
+    except Exception:
+        pass
+    out["distributor"] = distributor
+
+    # ── 2. payroll due / payroll tax due (mig-434 gate, FAIL CLOSED) ────────────────────────────
+    if not _pv.can_see_pay(authorization, org_id, client):
+        out["payroll"] = {"allowed": False,
+                          "note": "Pay figures are restricted for your role (org pay-visibility policy)."}
+    else:
+        payroll = {"allowed": True, "due": [], "current": None}
+        try:
+            from app.modules.core.router import pay_period_for, _pp_settings
+            from app.modules.storeops.payroll_approval import _pay_settings
+            from app.modules.storeops.router import payroll_raw as _praw
+            from app.modules.storeops.payroll_tax_estimate import compute_pay as _ctax
+            pcfg = _pay_settings(org_id) or _pp_settings({})
+
+            def _section(p):
+                data = _praw(start=p["start"], end=p["end"],
+                             authorization=authorization, org_id=org_id) or {}
+                agg = _ld.aggregate_payroll(data.get("rows") or [], _ctax)
+                agg["by_store"] = [{"store": s, "market": _mk(s), **cell}
+                                   for s, cell in sorted(agg["by_store"].items())]
+                return {**p, **agg}
+
+            for p in _ld.paydays_in_window(pcfg, pay_period_for, wk_start, wk_end):
+                payroll["due"].append(_section(p))
+            cur = pay_period_for(pcfg, _date.fromisoformat(today))
+            payroll["current"] = _section(cur)
+        except Exception as e:
+            payroll["note"] = f"payroll unavailable: {type(e).__name__}"
+        out["payroll"] = payroll
+
+    # ── 3. rents + insurance due this week (mig-946 gate, FAIL CLOSED; ACH never selected) ──────
+    if not _sl.can_see_lease(authorization, org_id, client):
+        out["rents"] = {"allowed": False,
+                        "note": "Lease/rent figures are restricted for your role."}
+        out["insurance"] = {"allowed": False}
+    else:
+        rents = {"allowed": True, "rows": [], "total": 0.0, "unknown": 0}
+        insurance = {"allowed": True, "rows": [], "total": 0.0}
+        try:
+            lease_rows = (client.schema("storeops").table("store_lease")
+                          .select("store_code,current_rent,rent_effective_from,escalation_pct,"
+                                  "rent_schedule,rent_due,lease_end,insurance_company,"
+                                  "insurance_premium,insurance_premium_due,"
+                                  "insurance_premium_frequency")
+                          .eq("org_id", org_id).limit(5000).execute().data) or []
+            if ks is not None:
+                lease_rows = [r for r in lease_rows if in_keyset(ks, r.get("store_code"))]
+            _roles, tenant_due = _sl.tenant_lease_config(org_id, client)
+            rrows = _ld.rent_due_rows(lease_rows, tenant_due, wk_start, wk_end)
+            for r in rrows:
+                r["market"] = _mk(r["store_code"])
+            rents["rows"] = rrows
+            rents["total"], rents["unknown"] = _ld.sum_known(rrows)
+            irows = _ld.insurance_due_rows(lease_rows, wk_start, wk_end)
+            for r in irows:
+                r["market"] = _mk(r["store_code"])
+            insurance["rows"] = irows
+            insurance["total"], _unk = _ld.sum_known(irows)
+        except Exception as e:
+            rents["note"] = f"lease data unavailable: {type(e).__name__} (run migration 946?)"
+        out["rents"] = rents
+        out["insurance"] = insurance
+
+    # grand total of the KNOWN due-this-week dollars (unknown rents surface as a count, never $0)
+    known = 0.0
+    try:
+        if distributor.get("due_this_week"):
+            known += float(distributor["due_this_week"]["total"] or 0)
+        if out.get("payroll", {}).get("allowed"):
+            known += sum(float(p.get("gross_total") or 0) + float((p.get("tax") or {}).get("total") or 0)
+                         for p in out["payroll"].get("due") or [])
+        if out.get("rents", {}).get("allowed"):
+            known += float(out["rents"].get("total") or 0)
+            known += float(out.get("insurance", {}).get("total") or 0)
+    except Exception:
+        pass
+    out["due_this_week_total_known"] = round(known, 2)
+    return out
+
+
+@router.get("/liabilities-due")
+async def liabilities_due_endpoint(date: str = "", authorization: str = Header(default=""),
+                                   org_id: str = ORG_ID):
+    """Current Monetary Liabilities — per store, standard filters client-side (owner directive
+    2026-09-03). See `_liabilities_due_impl` for the composition contract. `date` (YYYY-MM-DD)
+    overrides "today" for testing/backdating a week view."""
+    require_org(org_id)
+    try:
+        return await run_in_threadpool(_liabilities_due_impl, authorization, org_id, date)
+    except Exception as e:
+        raise HTTPException(500, f"liabilities-due failed: {type(e).__name__}: {e}")
+
+
 @router.get("/overview/{period}")
 def overview(period: str, org_id: str = ORG_ID):
     """Headline numbers + the list of computed scopes for the dashboard + filter dropdowns."""

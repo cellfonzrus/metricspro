@@ -17,6 +17,7 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/commcalc/integrations', label: 'Integrations', module: 'commissions', scopes: ['all'], desc: 'One page for every data connection & import — plain-English purpose, live connected/not-set-up status, and a 2-step setup wizard for each' },
     { href: '/commcalc/gp', label: 'Gross Profit', module: 'commissions' },
     { href: '/commcalc/kpi', label: 'KPI Metrics', module: 'commissions' },
+    { href: '/commcalc/kpi-failing', label: 'Failing KPIs', module: 'commissions', scopes: ['all', 'market'], desc: 'High-level overview of every KPI below target — org, market and store grain with rep drill-down' },
     { href: '/commcalc/coaching', label: 'Rep Coaching', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/sales-analyzer', label: 'Retention Analysis', module: 'commissions', scopes: ['all', 'market', 'store'], desc: '3-month retention by rep/store — cohort retained vs churned, driven by whether the month-3 residual was paid' },
     { href: '/commcalc/sales-comparison', label: 'Sales Comparison', module: 'commissions', desc: 'Month-over-month / year-over-year % change per item sold (phones, BYOD, accessories, tablets, financing) across all stores' },
@@ -59,6 +60,7 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/accounts/trends', label: 'Trends (all metrics)', module: 'accounts', scopes: ['all', 'market'] },
     { href: '/accounts/analysis', label: 'Financial Analysis (charts · projections · valuation)', module: 'accounts', scopes: ['all', 'market'] },
     { href: '/accounts/cash-flow', label: 'Cash Flow Statement', module: 'accounts', scopes: ['all', 'market'] },
+    { href: '/accounts/liabilities-due', label: 'Current Monetary Liabilities', module: 'accounts', scopes: ['all', 'market'], desc: 'Owed to distributor, payments due this week, payroll & payroll tax due, rents and recurring expenses due — per store' },
   ] },
   { category: 'StoreOps', reports: [
     { href: '/storeops/reports', label: 'Hours / Payroll Reports', module: 'storeops', scopes: ['all', 'market'] },
