@@ -113,7 +113,10 @@ email), (c) **RPC/manual entry**.
 Connector/schedule model: mig `039_connector_model.sql`, `063`, `290_report_schedule_and_grain.sql`;
 endpoints `/connectors*` `router.py:6666-6989`, `/connector-health` `23378`. Sweep store-guard
 (quarantine ambiguous store strings before ingest): `ingest_store_guard.py`, mig `280`; `/ingest-guard/*`
-`router.py:14375-14446`.
+`router.py:14375-14446`. CI-pinned since 2026-09-03 (§19.15): `harness_org_scope_guard.py`'s
+ingest-screen section fails the build on any raw_sales/daily_sales_feed write not fronted by
+`_isg.screen`, and `harness_cross_tenant_isolation.py` replays the real 2026-07-14 cross-tenant
+batch through the guard and the union/promotion paths.
 
 ### Ingest route C — RPC / manual
 - Sales "derive/promote" (feed → raw_sales grace promotion): `/sales/promote-feed` `router.py:22757`,
@@ -505,6 +508,17 @@ trade-in, acima, custom spiffs, plus KPI-tier multiplier, plus installment add-o
      installment columns and writes rows.
 - **Row filters (pay path):** `gp_report.is_voided`; `trans_type != 'Return'`; `salesperson != 'admin'`
   (`calculator.py:216-278`).
+- **Sales basis read (`_fetch_sales_unified`, inside `_run_calculation`):** open month reads
+  `daily_sales_feed`, closed month reads `raw_sales`, each falling back to the other only when the
+  primary is EMPTY — a PARTIAL closed-month `raw_sales` is trusted whole. That is how the 2026-09-03
+  "August activations wrong, Exec MTD right" defect happened (§19.16: sales auto-derive off since
+  2026-08-09 froze `raw_sales` at Aug 1–9). NOTE: this Boost-path read does NOT honor
+  `commission_org_config.sales_source='union'` (mig 306) — only `commission_engine._read_sales`
+  (plan engines) does. `⚠`
+- **Cross-tenant hygiene (2026-09-03, §19.15):** the July 2026 house snapshot briefly carried a
+  Luxelink phantom rep paid from 6 mis-filed `raw_sales` rows — removed by id and recomputed;
+  the class is CI-pinned (`harness_org_scope_guard.py` ingest-screen section +
+  `harness_cross_tenant_isolation.py`).
 - **Classification:** `classify_contract_type` `calculator.py:40` (same as display).
 - **Config:** `commcalc.payout_config` (mig `002_commcalc.sql:95`) — `premium_flat`(5), `byod_flat`(3),
   `upgrade_flat`(20), `trade_in_spiff`(20), `acima_spiff`(25), `acc_rate`(0.10), `setup_fee_rate`(0.10),
@@ -1426,6 +1440,37 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 14. **Journal page has no company/store PICKER** — free-text entry is what stranded the owner's
     equity/loan rows (mig-933 matcher now resolves typed designations server-side; the picker is
     the lasting Option-B UI fix, roadmap Phase 2).
+15. **Cross-tenant Diversey leak — REMOVED (2026-09-03); the leak CLASS is now CI-pinned.** The
+    2026-07-14 incident (a Luxelink sales export ingested under the HOUSE org pre-dating the
+    2026-08-09 ambiguous-tenant fix) left 9 rows of Luxelink content in house data that the mig-280
+    guard's default `warn` mode never removed: 6 `raw_sales` line items (Espinoza, Carolina @
+    4640-A W Diversey Ave, July 2026), the 1 `rep_commissions` July row paid from them ($2.9995),
+    1 `flags` MISSING_STORE_PAYMENT row, and 1 `daily_commission_accrual` monthly true-up ($3.00,
+    id 98). All 9 deleted surgically by id (org-scoped) and July 2026 recomputed clean via
+    `_run_calculation` (49 rows, phantom rep gone). A platform-wide content audit (every org_id
+    table in commcalc/storeops/notify/pos/core, per-tenant street-token fingerprints, both
+    directions) found NO other cross-tenant content. The class the org-scope guard could not see —
+    correctly `.eq('org_id',…)`-scoped writes whose org VALUE was wrong at ingest — is now
+    enforced two ways: `harness_org_scope_guard.py` "ingest-screen guard" fails CI on any
+    raw_sales/daily_sales_feed insert not fronted by `ingest_store_guard.screen`, and
+    `harness_cross_tenant_isolation.py` replays the REAL incident batch through the guard + the
+    union/promotion paths (warn/block/off, fail-open, org-airtight promotion, the hourly
+    re-insert negative control). Guard mode is still per-org `warn` — moving established tenants
+    to `block` is the owner's call (`/ingest-guard/*`).
+16. **Closed-month `raw_sales` FREEZES while `report_definitions.sales.auto=false`.** Both live
+    tenants switched sales auto-derive OFF on 2026-08-09 (house 19:31Z, luxelink 22:20Z — the
+    Diversey incident response); the hourly feed→raw_sales promotion stopped mid-August, so
+    August `raw_sales` holds only Aug 1–9 for both orgs (house 8,355 lines vs 24,890 in the
+    31-day feed) while the daily feed stayed complete. Consequence: any LEGACY-mode closed-month
+    pay read (the Boost calc's `_fetch_sales_unified`, `commission_engine._read_sales` under
+    `sales_source='legacy'`) computes from a 9-day month — the owner's "August rep-commission
+    activations wrong while Exec MTD is right" (2026-09-03) is exactly this, because Exec MTD
+    reads the feed-backed union (§3). Luxelink is already on `sales_source='union'` (complete);
+    the house August fix is the module's own promotion + recalculation
+    (`_promote_feed_to_raw_sales('August 2026')` previewed OK: 8,355→24,890 lines, monthly_only 0,
+    then `_run_calculation`). Durable options: re-enable `sales` auto in the registry, or move the
+    org to `sales_source='union'` (money setting, owner's call). `⚠` until one of those lands —
+    every future month will freeze the same way at rollover.
 
 ---
 

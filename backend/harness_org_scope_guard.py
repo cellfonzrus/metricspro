@@ -19,6 +19,7 @@ import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROUTER = os.path.join(_HERE, "app", "modules", "commcalc", "router.py")
+_ISG = os.path.join(_HERE, "app", "modules", "commcalc", "ingest_store_guard.py")
 
 # The tables where a missing org_id filter is a cross-tenant MONEY or SALES exposure. Deliberately a
 # curated high-value set (not every commcalc table) so the guard is precise and false-positive-free.
@@ -80,6 +81,70 @@ def _self_test():
         ok(got == want, f"classify() self-test: expected {want}, got {got} for: {chain.strip()[:70]}")
 
 
+# ── LEAK CLASS 2: WRONG-TENANT ATTRIBUTION AT INGEST (the Diversey class, 2026-09-03) ────────────
+# The scan above proves every query CARRIES an org filter — it cannot see a query whose org_id VALUE
+# is wrong when the row is written (the 2026-07-14 incident: a Luxelink sales export ingested under
+# the house org; every chain was correctly .eq('org_id', …)-scoped, this guard was green, and six
+# foreign line items still fed a phantom payout). The runtime control for that class is
+# `ingest_store_guard.screen` (migration 280): before a sales-basis batch is written, every store
+# string is resolved against the ORG'S OWN roster. Statically enforceable half: EVERY literal
+# insert/upsert into a guarded sales-basis table must be fronted by an `_isg.screen(` call inside
+# the same function — an unscreened sales ingest is a build failure, so no new code path can write
+# the pay basis without asking "does this org actually have a store called that?".
+INGEST_GUARDED = {"raw_sales", "daily_sales_feed"}   # ingest_store_guard.GUARDED_TABLES, pinned below
+
+
+def screened_ingests(src):
+    """[(pos, table, screened)] for every literal `.table('<guarded>').insert|upsert(` in src.
+    `screened` = an `_isg.screen(` call appears between the enclosing function's `def` and the
+    write — the promotion/upload shape, where the batch is screened before the loop that inserts it."""
+    out = []
+    write_re = re.compile(
+        r"""\.table\(\s*["'](?P<t>%s)["']\s*\)\s*\.\s*(?:insert|upsert)\(""" %
+        "|".join(sorted(INGEST_GUARDED)))
+    for m in write_re.finditer(src):
+        fn_start = max(src.rfind("\ndef ", 0, m.start()), src.rfind("\nasync def ", 0, m.start()), 0)
+        screened = "_isg.screen(" in src[fn_start:m.start()] or "screen_and_record(" in src[fn_start:m.start()]
+        out.append((m.start(), m.group("t"), screened))
+    return out
+
+
+def _ingest_screen_self_test():
+    yes = "\ndef promote(x):\n    g = _isg.screen(client, org_id, rows, 'raw_sales')\n" \
+          "    client.schema('commcalc').table('raw_sales').insert(g['kept']).execute()\n"
+    no = "\ndef sneak(x):\n    client.schema('commcalc').table('daily_sales_feed').insert(rows).execute()\n"
+    got_yes = screened_ingests(yes)
+    got_no = screened_ingests(no)
+    ok(len(got_yes) == 1 and got_yes[0][2] is True,
+       "ingest-screen self-test: a screened insert must classify as screened")
+    ok(len(got_no) == 1 and got_no[0][2] is False,
+       "ingest-screen self-test: an unscreened insert must classify as a violation")
+
+
+def _ingest_screen_guard(src, lineno):
+    writes = screened_ingests(src)
+    unscreened = [(lineno(p), t) for p, t, s in writes if not s]
+    for ln, t in unscreened:
+        print(f"  ✗ router.py:{ln}  .table('{t}') insert/upsert with NO ingest_store_guard screen "
+              f"in the enclosing function — the wrong-tenant-attribution class (Diversey, 2026-07-14)")
+    ok(not unscreened,
+       f"{len(unscreened)} sales-basis ingest write(s) not fronted by _isg.screen(...) — every "
+       f"raw_sales/daily_sales_feed write must pass the cross-tenant ingest guard (migration 280)")
+    ok(len(writes) >= 1,
+       f"ingest-screen guard found no guarded sales-basis writes at all ({len(writes)}) — "
+       f"detection may be broken")
+    # The guard module itself must keep covering the pay basis: shrinking GUARDED_TABLES would
+    # quietly unguard these tables while this scan still passes.
+    isg_src = open(_ISG, encoding="utf-8").read()
+    m = re.search(r"GUARDED_TABLES\s*=\s*\{(?P<body>[^}]*)\}", isg_src)
+    covered = set(re.findall(r"""["']([a-z_]+)["']\s*:""", m.group("body"))) if m else set()
+    ok(INGEST_GUARDED <= covered,
+       f"ingest_store_guard.GUARDED_TABLES no longer covers {sorted(INGEST_GUARDED - covered)} — "
+       f"the pay-basis tables must stay screened")
+    print(f"ingest-screen guard — {len(writes)} sales-basis write(s) inspected, all fronted by "
+          f"ingest_store_guard.screen; GUARDED_TABLES covers {sorted(covered)}")
+
+
 def main():
     src = open(_ROUTER, encoding="utf-8").read()
     # Precompute line numbers by character offset.
@@ -137,7 +202,10 @@ def main():
     # renames .table()/.execute() would make it silently pass on everything.
     ok(checked >= 20, f"guard inspected too few chains ({checked}) — detection may be broken")
 
+    _ingest_screen_guard(src, lineno)
+
     _self_test()
+    _ingest_screen_self_test()
 
     print()
     print(f"{PASS} passed, {FAIL} failed")
