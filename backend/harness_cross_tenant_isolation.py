@@ -340,5 +340,34 @@ for mode, expect_gone, name in (("warn", False, "B8. warn NEGATIVE CONTROL: prom
         check("B10. …with the withheld rows parked in quarantine (nothing silently discarded)",
               q and (q[0].get("withheld_rows") or []), str(q)[:120])
 
+print("\n== C. the Boost calc honors sales_source='union' (the §19.16 August partial-month shape) ==")
+# The failure being pinned: closed-month raw_sales froze at days 1-9 (auto-derive off) while the
+# feed held the full month; the legacy read trusted the partial table whole and undercounted.
+import inspect  # noqa: E402
+_calc_src = inspect.getsource(R._run_calculation)
+check("C1. _run_calculation's sales fetch consults _sales_source_mode (mig 306 reaches Boost)",
+      "_sales_source_mode(" in _calc_src and "_sales_rows_union_txn(" in _calc_src)
+
+partial = {
+    "raw_sales": [  # only the first days of the month made it before the derive stopped
+        {"id": "b-r1", "org_id": ORG_B, "period": "July 2026", "store": "103 Fulton Ave",
+         "salesperson": "Khan, Ismail", "trans_id": "9001", "trans_date": "2026-07-03", "ext_price": 55.0}],
+    "daily_sales_feed": [  # the feed has the whole month — including org A noise to keep isolation honest
+        {"id": "b-f1", "org_id": ORG_B, "period": "July 2026", "store": "103 Fulton Ave",
+         "salesperson": "Khan, Ismail", "trans_id": "9001", "trans_date": "2026-07-03", "ext_price": 55.0},
+        {"id": "b-f2", "org_id": ORG_B, "period": "July 2026", "store": "559 BROADWAY",
+         "salesperson": "Sharma, Radhika", "trans_id": "9050", "trans_date": "2026-07-28", "ext_price": 20.0},
+        {"id": "a-f9", "org_id": ORG_A, "period": "July 2026", "store": DIVERSEY,
+         "salesperson": "Espinoza, Carolina", "trans_id": "9050", "trans_date": "2026-07-28", "ext_price": 30.0}],
+    "metric_source_of_truth": [], "commission_org_config": [], "upload_trace": []}
+
+c, st = new_client({k: [dict(r) for r in v] for k, v in partial.items()})
+rows, meta = R._sales_rows_union_txn(c, ORG_B, "July 2026", cols="*")
+check("C2. union over a PARTIAL closed month returns the FULL month (9001 + late-month 9050)",
+      {r["trans_id"] for r in rows} == {"9001", "9050"} and all(r["org_id"] == ORG_B for r in rows),
+      str(meta))
+check("C3. …still org-airtight: the org-A line sharing trans_id 9050 never leaks in",
+      not any(r.get("store") == DIVERSEY for r in rows))
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

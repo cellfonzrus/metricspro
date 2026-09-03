@@ -508,13 +508,16 @@ trade-in, acima, custom spiffs, plus KPI-tier multiplier, plus installment add-o
      installment columns and writes rows.
 - **Row filters (pay path):** `gp_report.is_voided`; `trans_type != 'Return'`; `salesperson != 'admin'`
   (`calculator.py:216-278`).
-- **Sales basis read (`_fetch_sales_unified`, inside `_run_calculation`):** open month reads
-  `daily_sales_feed`, closed month reads `raw_sales`, each falling back to the other only when the
-  primary is EMPTY — a PARTIAL closed-month `raw_sales` is trusted whole. That is how the 2026-09-03
-  "August activations wrong, Exec MTD right" defect happened (§19.16: sales auto-derive off since
-  2026-08-09 froze `raw_sales` at Aug 1–9). NOTE: this Boost-path read does NOT honor
-  `commission_org_config.sales_source='union'` (mig 306) — only `commission_engine._read_sales`
-  (plan engines) does. `⚠`
+- **Sales basis read (`_fetch_sales_unified`, inside `_run_calculation`):** under the default
+  `sales_source='legacy'` the open month reads `daily_sales_feed`, a closed month reads
+  `raw_sales`, each falling back to the other only when the primary is EMPTY — a PARTIAL
+  closed-month `raw_sales` is trusted whole. That is how the 2026-09-03 "August activations
+  wrong, Exec MTD right" defect happened (§19.16: sales auto-derive off since 2026-08-09 froze
+  `raw_sales` at Aug 1–9). Since 2026-09-03 this Boost-path read ALSO honors
+  `commission_org_config.sales_source='union'` (mig 306, previously plan-engines-only via
+  `commission_engine._read_sales`): it then reads the transaction-grain `_sales_rows_union_txn`
+  — immune to a partial month. Default 'legacy' is byte-identical; flipping the config row is the
+  deliberate money event. Proof: `harness_cross_tenant_isolation.py` §C.
 - **Cross-tenant hygiene (2026-09-03, §19.15):** the July 2026 house snapshot briefly carried a
   Luxelink phantom rep paid from 6 mis-filed `raw_sales` rows — removed by id and recomputed;
   the class is CI-pinned (`harness_org_scope_guard.py` ingest-screen section +
@@ -1533,8 +1536,10 @@ Pinned PAY-ENGINE in the guard.
     the house August fix is the module's own promotion + recalculation
     (`_promote_feed_to_raw_sales('August 2026')` previewed OK: 8,355→24,890 lines, monthly_only 0,
     then `_run_calculation`). Durable options: re-enable `sales` auto in the registry, or move the
-    org to `sales_source='union'` (money setting, owner's call). `⚠` until one of those lands —
-    every future month will freeze the same way at rollover.
+    org to `sales_source='union'` (money setting, owner's call — and since 2026-09-03 the Boost
+    calc honors it too, §6). `⚠` until one of those lands — every future month will freeze the
+    same way at rollover. (A month whose raw_sales is fully EMPTY — September at the freeze — is
+    safe even in legacy: the all-or-nothing fallback then reads the feed; only PARTIAL is toxic.)
 
 ---
 

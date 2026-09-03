@@ -10750,7 +10750,20 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
         # reads the daily feed (the hourly-emailed Sales Transaction Details lands there; raw_sales lags/
         # isn't promoted), a closed month reads the authoritative raw_sales — each falling back to the
         # other, period-spelling agnostic. This is what makes CURRENT-month commissions calculate.
+        # NOTE the fallback is all-or-nothing: a PARTIAL closed-month raw_sales is trusted whole. That is
+        # the §19.16 failure shape (2026-09-03): with sales auto-derive off since 2026-08-09, August
+        # raw_sales froze at Aug 1-9 while the feed held all 31 days, so the Boost calc undercounted
+        # activations while Exec MTD (feed-backed union, §3) was right.
         def _fetch_sales_unified(_period):
+            # `commission_org_config.sales_source = 'union'` (mig 306; owner 2026-08-30 "the same source
+            # should feed into all other related modules") now reaches the BOOST calc too, not just the
+            # plan engines (commission_engine._read_sales): the transaction-grain feed∪raw_sales union,
+            # deduped by trans_id — immune to a partial raw_sales month. Default 'legacy' (or any config
+            # read failure) is the unchanged read below, byte-identical — flipping the config row is the
+            # deliberate money event. Isolation proof: harness_cross_tenant_isolation.py §B/§C.
+            if _sales_source_mode(client, org_id) == "union":
+                _rows, _umeta = _sales_rows_union_txn(client, org_id, _period, cols='*')
+                return _rows
             def _q(table):
                 try:
                     return (client.schema('commcalc').table(table).select('*')
