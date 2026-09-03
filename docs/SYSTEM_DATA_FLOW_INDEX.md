@@ -1243,6 +1243,62 @@ Pinned PAY-ENGINE in the guard.
     `layout:null`; 403s surface as a friendly menu-layout-grant message. Page opens for super
     admins OR `canEditSettingArea('menu_layout')`; the backend gate (§14 D1) is authoritative.
   - **Backend:** NOTHING new — D2 consumes the D1 endpoints as shipped (§17 unchanged).
+- **Incentives dashboard restructure (owner directive 2026-09-03, mig `947`):** the `/hub/incentives`
+  tile layout now SHIPS a HOUSE platform-default row (D1 storage as designed — `ui_label_override`
+  scope `tiles`, key `incentives`, seeded `ON CONFLICT DO NOTHING` so a Designer save is never
+  clobbered; tenants override in the Designer as always): tiles "Carrier Commission - Received" /
+  "Carrier Commission - Reconciliation" (how the TENANT is paid by the carrier), "Employee
+  Incentive" (how EMPLOYEES are paid), "Commission Discrepancy" (not-received + appeals hub, §15),
+  "Sales & Performance", "Setup & Tools". NO hardcoded frontend layout — pure D1 config. Same mig
+  adds HOUSE nav-label PRESETS: NEW scopes `nav_default`/`group_default` at the HOUSE org are
+  platform-default display labels every tenant inherits (`get_nav_config` reads them FIRST, then
+  overlays the tenant's own `nav`/`group` nicknames — tenant > house preset > built-in, the mig-945
+  preset pattern); seeded: `/commcalc/commission-legs` → 'Commission received over M1-M12' (the
+  owner's rename; rbac.ts built-in + the page/GP/MA/ledger headers carry the same default wording).
+- **Store lease / landlord / insurance capture (mig `946`, owner directive 2026-09-03):** store
+  setup now records landlord + site contact, rent payment links / ACH, current rent + annual
+  escalation (percentage OR an explicit monthly-rent schedule), the rent-due window, insurance +
+  premium due, and append-only lease/COI document versions.
+  - **Tables (mig `946_store_lease_insurance.sql`):** `storeops.store_lease` — ONE row per
+    (org_id, store_code): `landlord_name/email/phone`, `site_contact_name/phone`,
+    `rent_payment_links TEXT[]`, `ach_bank_name/ach_routing_number/ach_account_number/ach_notes`
+    (SENSITIVE), `current_rent`, `rent_effective_from`, `escalation_pct`,
+    `rent_schedule JSONB [{effective_from, monthly_rent}]`, `rent_due JSONB {kind:'week'|'day',
+    value}` (NULL = org default), `lease_start/lease_end`, `insurance_company/policy_number/
+    premium/premium_due/premium_frequency('annual' dflt |semiannual|quarterly|monthly)/notes`.
+    `storeops.store_document` — APPEND-ONLY versions per (org, store, `doc_kind` ∈
+    lease|insurance_coi); current = newest `uploaded_at`; files in the PRIVATE bucket
+    **`store-docs`** (envelope-photo precedent: raw `storage_path` in the row, on-demand signed
+    URL). Org config on `storeops.tenants`: `rent_due_default JSONB` (column DEFAULT
+    `{"kind":"week","value":1}` — the owner's "first week of the month", defined not hardcoded)
+    + `lease_visible_roles TEXT[]` (NULL = mig-434 `DEFAULT_VISIBLE_ROLES`).
+  - **THE READ CONTRACT for the sibling finance "rents due this week / recurring expenses due"
+    build:** rent for a month = `store_lease.rent_for_month` (schedule entry with latest
+    `effective_from` ≤ first-of-month wins; else `current_rent` × (1+`escalation_pct`/100)^whole
+    anniversary-years since `rent_effective_from`; else `current_rent`; nothing → None, never 0).
+    Due window = `resolve_rent_due` (store `rent_due` → tenant `rent_due_default` → house
+    first-week) + `rent_due_window(y, m, due)` (week N = days 7N-6..min(7N, month end), clamped;
+    day d clamped to month end). Insurance recurrence = `insurance_premium` on
+    `insurance_premium_due` repeating per `insurance_premium_frequency`. Compute from these
+    columns/helpers — do NOT re-derive.
+  - **Gate (SENSITIVE — ACH + lease docs are money-adjacent):** every route gated whole by
+    `store_lease.can_see_lease` (mig-434 posture, FAIL-CLOSED 403: allow-list
+    `tenants.lease_visible_roles`, NULL = market manager and above; scope-`'all'` and the
+    `store_lease_docs` data grant pass; open-app parity carve-out only). `GET /storeops/stores`
+    untouched (separate tables — no employee-level endpoint can echo ACH/paths). RLS deviates
+    from storeops open_all ON PURPOSE: no policy, service-role only.
+  - **Endpoints (`storeops/router.py`, beside the store CRUD):** `GET/PUT /storeops/store-lease
+    ?store_code=` (record + document versions + resolved due + current-month rent / validated
+    upsert), `PUT /storeops/store-lease/tenant-defaults` (org `rent_due_default`),
+    `POST /storeops/store-lease/doc` (base64 pdf/png/jpg/webp ≤15MB → bucket + APPEND version
+    row), `GET /storeops/store-lease/doc-url` (org-scoped by doc id → 1h signed URL; the page's
+    download path) and `GET /storeops/store-lease/doc-view` (302 twin, envelope-view pattern).
+  - **Frontend:** `/storeops/setup/stores` per-row "🏢 Lease" expandable panel
+    (`storeops/setup/stores/LeasePanel.tsx`) — renders the gate's 403 as a friendly restriction
+    note. AWAITING OWNER PREVIEW (merge policy Option B).
+  - **Proof:** `backend/harness_store_lease.py` (stdlib-only: rent math incl. anniversary
+    boundaries, due-window clamps, gate truth table end-to-end, ACH strip, upload decode caps).
+    Not an external feed → no lineage registry entry.
 
 ---
 
@@ -1252,6 +1308,7 @@ Pinned PAY-ENGINE in the guard.
 |-----------|---------------|-----------------------|
 | **MA (master-agent) commission** | `raw_ma_commission`, mig `254_ma_product_class`, `251_ledger_ma_sync`, `265_ma_class_money_wiring`, `268_ma_overview_recon` | `ma_product_class.py`, `ma_class_wiring.py`, `ma_upload.py`; `/ma-commission/summary` `router.py:25009`, `/ma-overview-recon*` `25224-25450`, `/ma-handset-cogs` `26851`, `/ma-product-class*` `4868-5151`. **Ingest replace is account-slice scoped** (2026-09-02 two-portal wipe incident, §2): `ingest_slice.py` `day_replace_filters` narrows `/upload/ma_commission|ma_daily_tx|ma_fulfillment` deletes to (org, day, account) — proof `harness_ma_slice_replace.py` |
 | **B2B ↔ MA activation recon (Pay Discrepancy, MA source)** | `discrepancy_results` (`source='ma'`), `ma_payment_rule` — mig `312_ma_payment_rules_and_discrepancy_attribution` | `ma_recon.py` (pure: `build_sold_index`/`build_paid_index`/`match_rules`/`reconcile_ma_activations`; reuses mig-308 `_gate_met_ma_tx` + the two-hop link); ran by `POST /discrepancy/run` `router.py:19056` for plan-mode orgs; rules CRUD `/ma-payment-rules*` `19200-19270`; proof `harness_ma_recon.py`. Sold-but-unpaid → status `open` + literal `'no business rule configured'`, or rule-attributed `info`/`lagged` |
+| **Commission Discrepancy hub + APPEALS (owner directive 2026-09-03)** | appeal columns ON `discrepancy_results` (`appeal_status/appeal_note/appealed_by/appealed_at`) — mig `947_commission_discrepancy_hub` (NO new table: rows stay the two engines' output, the hub only ANNOTATES; the mig-098 denied-appeal claw-back pipeline `/recovery/*` is a DIFFERENT lifecycle, linked not re-derived). Mig 947 also seeds the HOUSE Incentives tile layout (§14 D1) + the `nav_default` label preset | pure state machine `discrepancy_appeals.py` (`validate_transition`/`apply_appeal`/`period_range_variants`/`summarize_appeals`; states `appeal_filed→appeal_won\|appeal_denied\|written_off`, NULL = none, clear = full reset); `GET /discrepancy-appeals` (period-RANGE query, spelling-agnostic; filters source/status/appeal_status/store/activation-date; degrades `appeals_ready=false` pre-947) + `PATCH /discrepancy-appeals/{row_id}` (org-scoped read-validate-update, who/when via `_caller_uid`) beside the discrepancy block; page `commcalc/commission-discrepancy` (StandardFilterBar + appeal buttons + `/recovery/claims` chase list); proof `harness_discrepancy_appeals.py` |
 | **Carrier statement commission** | mig `065_carrier_commission.sql` → `rep_commissions.carrier_statement_comm` | `/carrier-comm-file/extract` `6216`, `/commission-received-breakout` `15488` |
 | **Commission plans (rule engine)** | mig `059_commission_plans.sql`, `066`,`067`,`232`,`260`,`262` | `commission_engine.py`; `/commission-plans*` `12557-14246` (coverage, pay-gate, exclusions, bulk-assign) |
 | **Commission ledger (income tracking)** | mig `071_commission_ledger.sql` | `/commission-ledger/*` `3997-4602` |
@@ -1310,17 +1367,20 @@ Pinned PAY-ENGINE in the guard.
 | `commcalc.ops_chargeback` (mig `504`) | detection sweeps (`ops_chargebacks.py`: missed_closing/missed_dm_verify) **+ `POST /closing/envelope-count`** (reason `envelope_short`, parent rows only, amount = actual shortage) | policy editor (reasons-in-the-wild), decide endpoints, commission settlement `_settle_ops_chargebacks`/`_ops_chargeback_deductions` (`commcalc/router.py:11265-11550`) |
 | `commcalc.name_map` | name-map UI | `calc_rep_commissions` (login→storeops name), rep-employee-map |
 | `commcalc.management_incentive_*` | `/management-incentive/plans` `28534`, `/compute` `28613` | MI engine, payouts, resolve |
-| `commcalc.discrepancy_results` | Boost engine `discrepancy_engine.run_discrepancy` (`source='boost'`/NULL) + MA recon `ma_recon.run_ma_discrepancy` (`source='ma'`, `comp_type='MA_ACTIVATION'`) — each delete-then-inserts ONLY its own `(org, period, source)` slice; canonical DDL + attribution columns (`rule_id/rule_key/rule_reason/evidence/source/order_number`) in mig `312` (table pre-dates migrations, console-created) | `GET /discrepancy/{period}` `router.py:19099` (selects `*`, optional `source` filter), Pay Discrepancy page |
+| `commcalc.discrepancy_results` | Boost engine `discrepancy_engine.run_discrepancy` (`source='boost'`/NULL) + MA recon `ma_recon.run_ma_discrepancy` (`source='ma'`, `comp_type='MA_ACTIVATION'`) — each delete-then-inserts ONLY its own `(org, period, source)` slice; canonical DDL + attribution columns (`rule_id/rule_key/rule_reason/evidence/source/order_number`) in mig `312` (table pre-dates migrations, console-created); APPEAL columns (`appeal_status/appeal_note/appealed_by/appealed_at`) mig `947` — written ONLY by `PATCH /discrepancy-appeals/{row_id}` (pure state machine `discrepancy_appeals.py`), never by the engines | `GET /discrepancy/{period}` `router.py:19099` (selects `*`, optional `source` filter), Pay Discrepancy page; `GET /discrepancy-appeals` (period-range + filters) → Commission Discrepancy hub page (§15) |
 | `commcalc.ma_payment_rule` | `/ma-payment-rules` POST/PATCH/DELETE `router.py:19214-19270` (upsert by `org_id,rule_key`; mig `312`) | `ma_recon.load_rules` → `match_rules` (first match by ascending priority; case/trim-insensitive; `effective_from/to` windows; bad regex skipped) |
 | `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`) | `PUT /accessory-config` (Sales Report → Classification settings) | `_accessory_config(_uncached)` (accessory/billpay/blank-ct classification for `_sales_cell_agg`); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, own defensive read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, own defensive read, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`) |
 | `commcalc.metric_source_of_truth` (per-metric basis-of-truth config, mig `923`; columns added by `944` `processor_order_types`/`processor_product_tokens` — the bill-payment row filter for the daily-TX processor feed) | `PUT /metric-source-config` | `_metric_source` (consumed by Exec MTD activation override, `/metric-recon`, `/billpay-coverage`, `_pos_billpay_for_days`/`_billpay_processor_by_store(_day)` — §12 3-way Leg C; NULL columns = `metric_recon` house defaults) |
 | `commcalc.exec_metric_config` (per-org Exec-MTD metric DEFINITIONS, mig `204`; seed fn `seed_exec_metric_config`) | `GET/PUT /exec-metric-config` `router.py:24766/24781` (upsert by `org_id,bucket`); 2026-09-02: LuxeLink `bill_payment` rules gained `product_desc_contains:["wallet funding"]` (org-scoped data fix, house default untouched) | `_exec_metric_config` (DB row REPLACES the bucket's default rules) → `_sales_cell_agg` exec metrics via `_exec_line_match` |
-| `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`); `PUT /report-labels` (scopes `report_col`/`report_banner` at the TENANT org — overrides; gated on `classification`); mig `945` seeds the HOUSE carrier-preset rows (scopes `report_col:<carrier>`/`report_banner:<carrier>`) | `GET /nav-config` (caller org only, no house inheritance — sidebar), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins), `GET /report-labels` (`report_labels.load_report_labels`: tenant ∪ HOUSE, tenant override > carrier preset > built-in — §3 carrier column labels) |
+| `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`); `PUT /report-labels` (scopes `report_col`/`report_banner` at the TENANT org — overrides; gated on `classification`); mig `945` seeds the HOUSE carrier-preset rows (scopes `report_col:<carrier>`/`report_banner:<carrier>`); mig `947` seeds the HOUSE Incentives tile layout (scope `tiles` key `incentives`) + HOUSE nav-label presets (NEW scopes `nav_default`/`group_default`, e.g. `/commcalc/commission-legs` → 'Commission received over M1-M12') | `GET /nav-config` (house `nav_default`/`group_default` presets first, then the caller org's `nav`/`group` nicknames overlay per key — tenant > house preset > built-in, since mig 947; caps/layout stay caller-org-only), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins), `GET /report-labels` (`report_labels.load_report_labels`: tenant ∪ HOUSE, tenant override > carrier preset > built-in — §3 carrier column labels) |
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3) |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`)** |
 | `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs), store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution rule + CI guard** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
+| `storeops.store_lease` (mig `946` — one row per org×store: landlord/site contact, rent links + ACH (SENSITIVE), `current_rent`/`rent_effective_from`/`escalation_pct`/`rent_schedule`/`rent_due`, lease dates, insurance + `insurance_premium_due`/`_frequency`) | `PUT /storeops/store-lease` (gated `can_see_lease`, upsert on org+store) | `GET /storeops/store-lease`; the sibling finance rents-due/recurring-expenses reader via `store_lease.rent_for_month`/`resolve_rent_due`/`rent_due_window` (§14 read contract — compute from these, never re-derive) |
+| `storeops.store_document` (mig `946` — append-only lease/COI versions; files in PRIVATE bucket `store-docs`) | `POST /storeops/store-lease/doc` (gated; INSERT only, prior versions kept) | `GET /storeops/store-lease` version lists (path never echoed), `GET /storeops/store-lease/doc-url`/`doc-view` (org-scoped by id → signed URL) |
+| `storeops.tenants.rent_due_default` + `lease_visible_roles` (mig `946` config columns) | `PUT /storeops/store-lease/tenant-defaults` (due default); roles column set per-org via SQL/admin | `store_lease.tenant_lease_config` (adaptive — pre-946 = house first-week + market-manager-and-above), `can_see_lease` gate |
 
 ---
 
@@ -1359,6 +1419,8 @@ Pinned PAY-ENGINE in the guard.
 | `GET /hr/employee-database` (pay-gated forward guard: pay-classified keys stripped from field registry + rows) | `hr/router.py:1384` | §14 |
 | `POST /discrepancy/run` (Boost + MA engines, best-effort each) | `19056` | §15 B2B ↔ MA recon |
 | `GET /discrepancy/{period}` (`?source=boost\|ma`) | `19099` | §15 |
+| `GET /discrepancy-appeals` (period-RANGE + source/status/appeal_status/store/date filters; distinct path so `/discrepancy/{period}` can't swallow it) | `commcalc/router.py` (`list_discrepancy_appeals`, beside the discrepancy block) | §15 Commission Discrepancy hub |
+| `PATCH /discrepancy-appeals/{row_id}` (appeal state machine — validate against CURRENT row state, who/when stamped; org-scoped read-then-update) | `commcalc/router.py` (`set_discrepancy_appeal`) | §15 Commission Discrepancy hub |
 | `GET/POST /ma-payment-rules`, `PATCH/DELETE /ma-payment-rules/{rule_id}` | `19200-19270` | §15 B2B ↔ MA recon |
 | `GET /activation-counts/{period}` (b2b Activation-Details store/market counts; buckets via `activation_bucketing`, mig 313 — `total_activation` excludes BOTH Upgrade families) | `activation_counts` (search `@router.get("/activation-counts/`) | §15 Activation-Details basis |
 | `GET /tile-layout` (`?module=` — resolved tenant>house tile layout, dashboard-builder D1) | `commcalc/router.py` (`get_tile_layout`, beside nav-config) | §14 D1 |
@@ -1367,6 +1429,7 @@ Pinned PAY-ENGINE in the guard.
 | `POST /notify/send`, `POST /notify/run-due` → report keys `storeops_payroll` / `storeops_hours_approval` / `storeops_payroll_tax` / `storeops_payroll_expenses` / `storeops_attendance` / `storeops_lateness` (W3 scheduled workforce reports) | `notify/router.py` `_dispatch` → `report_registry.build_payload` → `notify/workforce_reports.py` builders | §14 W3 |
 | `GET /storeops/payroll-raw` (payroll-tax page inputs; mig-434 pay gate, FAIL-CLOSED 403 — ALL-money feed, §19.12 closed 2026-09-01; route `payroll_raw_route`, shared `payroll_raw()` stays ungated for pre-gated in-process callers) | `storeops/router.py` (`payroll_raw_route`) | §14 W3 |
 | `GET /storeops/payroll-expenses/{period}`, `GET /storeops/payroll/approvals`, `GET /storeops/timeclock/attendance-exceptions`, `GET /storeops/accountability` | `storeops/router.py:7703` / `payroll_approval.py:469` / `storeops/router.py:4294` / `:4318` | §14 W3 |
+| `GET/PUT /storeops/store-lease`, `PUT /storeops/store-lease/tenant-defaults`, `POST /storeops/store-lease/doc`, `GET /storeops/store-lease/doc-url` + `/doc-view` (ALL gated fail-closed by `store_lease.can_see_lease` — mig 946 lease/landlord/ACH/insurance + document versions) | `storeops/router.py` (`get_store_lease`/`put_store_lease`/`put_lease_tenant_defaults`/`upload_store_lease_doc`/`store_lease_doc_url`/`store_lease_doc_view`) | §14 mig 946 |
 
 | `GET /account/pl/{period}`, `GET /account/balance-sheet/{period}` (`?scope=&stores=&markets=` — stored snapshot when unfiltered; store/market-filtered view via `statement_filter.filtered_statement`: canonical-union market resolution + company-scope AND-composition, 2026-09-02) | `account/router.py` (`get_pl`/`get_bs` → `_filtered_read`) | §4 P&L filter |
 | `GET /account/statement/{period}` (`?scope=&kinds=pl,balance_sheet,cash_flow` — FRESH on-demand statements, nothing persisted; the platform statement service) | `account/router.py` (`on_demand_statement` → `statement_engine.statement`) | §4 statement engine |
@@ -1420,6 +1483,7 @@ Pinned PAY-ENGINE in the guard.
 | MA processor account → store | `raw_ma_fulfillment.tspid` × `business_address` (derived, ambiguous dropped) ∪ `ma_account_store_map` (override wins) | `ma_store_pnl.account_store_index`/`load_store_index` → `coa.build_inputs` `_ma_store` + `device_cogs._ma_sold_cost` (mig `314`; gated by `pl_ma_store_attribution`; unmapped accounts book company-wide) |
 | Device-purchase rebate (P&L `device_rebate` contra-COGS OR `rebate_income` revenue) | `raw_ma_commission.rebate` (negative = paid to dealer) + `activation_rebate_ledger.device_rebate_amount` (positive money-in) | `ma_store_pnl.rebate_route` per `commission_org_config.pl_rebate_presentation` (mig `934`: `contra_cogs` default = K1 negative in COGS; `income` = positive revenue, luxelink) → `ma_store_pnl.ma_commission_bookings` + `coa.build_inputs` activation-ledger booking; store grain via the mig-314 account→store index |
 | B2B sold vs MA paid (activation discrepancy) | sold: `SALES_DISPLAY_SOURCES` rows with non-blank `contract_type` (no swap/void), keyed on digit-normalized `serial_1`; paid: `raw_ma_commission.spiff_m1`+`rebate`/`device_margin` ∪ `raw_ma_daily_tx` month-1 / activation-order evidence (two-hop join, +1-month lookahead) | `ma_recon.reconcile_ma_activations` via `sale_installment_engine._gate_met_ma_tx` (mig `312`); unpaid rows → `discrepancy_results` `source='ma'` with rule attribution or `'no business rule configured'` |
+| Commission not received + APPEAL pipeline (open $ / appeal filed / won / denied / written off, per range) | `discrepancy_results` rows (both engines) + mig-947 appeal columns; buckets computed by the PURE `discrepancy_appeals.summarize_appeals` (`no_rule_count` = the LITERAL `'no business rule configured'` marker only — evidence-first, never inferred) | `GET /discrepancy-appeals` → Commission Discrepancy hub cards (`commission-discrepancy/page.tsx`); chase list = mig-098 `/recovery/claims` (reused) |
 | Handset payable (BS liability, mig `933`) | `raw_ma_daily_tx.retail_cost` on the org's `handset_payable_order_types` families, `tx_date ≤ as-of < due_date` (the vendor's own terms) | `balance_sheet.handset_payable_bookings` via `statement_engine.build_inputs_full` → BS `handset_payable` line; store grain = the mig-314 account→store index |
 | Unsold-phone inventory (BS asset, mig `933`) | `inventory_aging_device.unit_cost` where `on_hand` at the store's latest `as_of_date` (basis `'devices'`); `inventory_value.swept_value` (basis `'report'`, default); `manual_value` always wins | `balance_sheet.device_inventory_cells`/`apply_inventory_basis`; tie-out `GET /account/inventory-recon` |
 | Cash-deposit variance | `daily_closing.t_cash` − `bank_deposit.amount` | `deposit_recon` `:147/:179`; MI gate `28895` |
@@ -1435,6 +1499,8 @@ Pinned PAY-ENGINE in the guard.
 | Days-in-stock (aging) | `inventory_aging_device.days_in_stock` (snapshot) | device-cost recon `27338`; MI aging bonus |
 | Lateness % (`late_rate` — late shifts ÷ scheduled shifts) | `storeops.timelog` punches vs `storeops.shifts` windows | `attendance_exceptions.compute_attendance_exceptions` → `accountability.aggregate`; surfaced by `/storeops/accountability` ('Lateness %' page, W2 rename) and the `storeops_lateness` scheduled report (§14 W3) |
 | Withholding estimate (gross/FICA/federal/state/net) | `storeops.timelog`+`manual_hours` hours × `employees.pay_rate` × `payroll_settings` W-4 | browser: `frontend/src/lib/payroll-tax.ts computePay`; server twin: `storeops/payroll_tax_estimate.compute_pay` (§14 W3 — keep in lockstep) |
+| Rent due this month / current-month rent (per store) | `storeops.store_lease.rent_schedule`→`current_rent`×`escalation_pct` (schedule wins); due window from `rent_due` → `tenants.rent_due_default` → house first-week (mig `946`) | `store_lease.rent_for_month` + `resolve_rent_due`/`rent_due_window` (the §14 read contract for the finance rents-due/recurring-expenses build); surfaced on `GET /storeops/store-lease` |
+| Insurance premium due (per store, recurring) | `storeops.store_lease.insurance_premium` on `insurance_premium_due`, repeating per `insurance_premium_frequency` (mig `946`) | same read contract — finance recurring-expenses reader computes from these columns |
 
 ---
 

@@ -94,7 +94,7 @@ export default function MaCommissionPage() {
     { name: 'Spiff by month', columns: [{ header: 'Month', get: (r: any) => r.m }, { header: 'Amount', money: true, get: (r: any) => r.v }] as ExportColumn[],
       rows: Object.entries(d.spiff_by_month || {}).map(([m, v]) => ({ m: m.toUpperCase(), v })) },
     // RULE FOUR — the leg split exports with everything else (what you see is what exports).
-    { name: 'Commission legs', columns: [
+    { name: 'Commission received M1-M12', columns: [
         { header: 'Leg', get: (r: any) => r.k },
         { header: 'Amount', money: true, get: (r: any) => r.v },
       ] as ExportColumn[],
@@ -165,7 +165,8 @@ export default function MaCommissionPage() {
             Profit report and the Commission Ledger; one shared classifier feeds all three. */}
         {d.legs && (
           <div className="card" style={{ padding: 14, marginBottom: 14 }}>
-            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>🧩 Commission legs — 1st Month vs M2–M12</div>
+            {/* Renamed per owner directive 2026-09-03: "Commission legs" -> "Commission received over M1-M12". */}
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>🧩 Commission received over M1-M12</div>
             <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 8, lineHeight: 1.5 }}>
               <b>1st Month</b> = received in the month the number activated. <b>M2–M12</b> = received later for a
               number that was already active. {d.legs.basis}

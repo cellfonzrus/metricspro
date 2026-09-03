@@ -61,7 +61,7 @@ const COLS_BASE: ColDef[] = [
   { key: 'comm_m2_12',   label: '· M2–M12',     group: 'Payments', leg: true,
     title: 'Commission received for a number that activated in an EARLIER month (the trailing legs).' },
   { key: 'comm_unsplit', label: '· Unsplit',    group: 'Payments', leg: true,
-    title: 'Commission whose source states no month-of-life, so it is honestly left unattributed. Map these labels on Commission Legs.' },
+    title: 'Commission whose source states no month-of-life, so it is honestly left unattributed. Map these labels on Commission received over M1-M12.' },
   { key: 'reimb',        label: 'Re-imb',      group: 'Payments' },
   { key: 'mdf',          label: 'MDF',         group: 'Payments' },
   { key: 'comp_comm',    label: 'Comp Comm',   group: 'Payments' },
@@ -245,7 +245,7 @@ export default function GPReportPage() {
     // always carries the full per-source leg decomposition with its identity check, because that is the
     // number the owner asked to be able to check, and it must survive an export.
     const legSheet = {
-      name: 'Commission legs',
+      name: 'Commission received M1-M12',
       rows: [...legRows, { key: '_note', label: '', m1: 0, m2: 0, un: 0, tot: 0, ok: true }],
       columns: [
         { header: 'Source', get: (r: any) => r.key === '_note' ? '1st Month = received in the month the number activated · M2–M12 = received later for an already-activated number' : r.label },
@@ -427,7 +427,8 @@ export default function GPReportPage() {
       {!loading && view === 'store' && (
         <div className="card" style={{ padding: '12px 14px', marginBottom: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-            <div style={{ fontSize: 13, fontWeight: 700 }}>🧩 Commission legs — 1st Month vs M2–M12</div>
+            {/* Renamed per owner directive 2026-09-03: "Commission legs" -> "Commission received over M1-M12". */}
+            <div style={{ fontSize: 13, fontWeight: 700 }}>🧩 Commission received over M1-M12</div>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
               <a href="/commcalc/commission-legs" style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)' }}>Map a label&apos;s leg →</a>
               <a href="/commcalc/commission-ledger" style={{ fontSize: 12, color: 'var(--text3)' }}>same split on the Commission Ledger →</a>
@@ -485,7 +486,7 @@ export default function GPReportPage() {
             <div style={{ fontSize: 11, color: '#b45309', marginTop: 8, lineHeight: 1.5 }}>
               {fmt(totals.comm_unsplit)} of Commission could not be attributed to a leg — those carrier labels never
               state a month-of-life. Nothing was guessed. Assign them on{' '}
-              <a href="/commcalc/commission-legs" style={{ fontWeight: 600, color: 'var(--accent)' }}>Commission Legs</a>{' '}
+              <a href="/commcalc/commission-legs" style={{ fontWeight: 600, color: 'var(--accent)' }}>Commission received over M1-M12</a>{' '}
               and they move into one of the two columns.
             </div>
           ))}

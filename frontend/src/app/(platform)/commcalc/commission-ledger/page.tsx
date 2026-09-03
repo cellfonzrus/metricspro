@@ -456,7 +456,8 @@ export default function CommissionLedgerPage() {
           {summ.legs && (
             <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12, marginBottom: 18 }}>
               <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 8 }}>
-                <b style={{ fontSize: 13 }}>🧩 Commission legs — 1st Month vs M2–M12</b>
+                {/* Renamed per owner directive 2026-09-03: "Commission legs" -> "Commission received over M1-M12". */}
+                <b style={{ fontSize: 13 }}>🧩 Commission received over M1-M12</b>
                 <span style={{ fontSize: 12, color: 'var(--text3)' }}>{summ.leg_basis}</span>
                 <div style={{ flex: 1 }} />
                 <a href="/commcalc/commission-category-map" style={{ fontSize: 12, color: 'var(--accent,#2563eb)' }}>Set a label&apos;s leg →</a>
