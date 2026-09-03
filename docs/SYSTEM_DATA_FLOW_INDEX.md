@@ -898,6 +898,26 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   Frontend: credit column + stat on `closing/billpay-pickup/page.tsx`; sales-tx/3-way columns
   on `closing/cash-recon-management/page.tsx`.
 
+- **Multi-market-grant market filter on the pickup pages (OWNER BUG REPORT 2026-09-02: "the cash
+  pick up and the bill pay pick up for the district managers is not showing the daily envelopes …
+  whereas admin i can see all"):** a scope-'market' login's `app_users.market` is a COMMA-JOINED
+  multi-market grant ("Chicago, NY" = both markets; `core.scope.login_grant_breakdown` comma-splits
+  it for the SPAN), and both pickup pages auto-apply that raw grant as the singular `market=` param
+  — which `GET /closing/pickups` / `GET /closing/billpay-pickups` compared as ONE exact string, so
+  every resolved-market envelope was dropped (live 2026-09-02: 12/12 dropped by the market filter
+  for DM E189, 0 by her keyset — the span was never the problem; admin scope-'all' gets no auto
+  market). PRE-EXISTING on the cash side, mirrored into billpay at birth; the DM dashboard/DM-Verify
+  never broke because they send the CSV `markets=` param, which `_resolve_market_filter` already
+  comma-splits. FIX at the shared source (duplicate-check: REUSED the working pages' mechanism):
+  both pickup endpoints + `GET /closing/recon` (same auto-apply, same exact-match class) now
+  resolve `market=` through `_resolve_market_filter`, whose singular arm admits the comma-split
+  components ALONGSIDE the whole string (a canonical market name containing a comma still matches
+  whole; pure widening, never narrows). Keyset/span gating, the pickup pages' blank-market
+  leniency, and empty-span fail-closed are all UNCHANGED. Proof
+  `harness_pickup_market_span.py` (resolver truth table + span truth table: multi-market DM /
+  single-market DM / admin / empty-span, both pickup endpoints); regressions harness_cash_pickup /
+  billpay_pickup / deposit_accountability / billpay_threeway / closing_reports_span_scope.
+
 ---
 
 ## 13. Org hierarchy & store resolution
@@ -1257,7 +1277,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
 | `GET /closing/envelope-report`, `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`); `notify/closing_reports.py` | §12 Envelope report |
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
-| `GET /closing/billpay-pickups` (envelopes carry `credit` = declared bill-pay-on-card + `total_credit`, mig `944`; POS comparison base = declared cash+credit), `POST /closing/billpay-pickup` (+`/undo`, `/deposit`), `GET/PUT /closing/billpay-pickup-config` (mig `942` — the cash-pickup machinery, parameterized, on the sibling `billpay_pickup` table) | `closing/router.py` (`billpay_pickups`/`billpay_confirm_pickup`/`billpay_undo_pickup`/`billpay_record_deposit`; core `_billpay_position_core`, pure `closing/billpay_pickup.py`) | §12 Bill Payment Pickup / §12 3-way recon |
+| `GET /closing/billpay-pickups` (envelopes carry `credit` = declared bill-pay-on-card + `total_credit`, mig `944`; POS comparison base = declared cash+credit; `market=` resolves via the shared `_resolve_market_filter` — comma-joined multi-market grants match per-component, 2026-09-02 DM-envelopes fix, same as `GET /closing/pickups`), `POST /closing/billpay-pickup` (+`/undo`, `/deposit`), `GET/PUT /closing/billpay-pickup-config` (mig `942` — the cash-pickup machinery, parameterized, on the sibling `billpay_pickup` table) | `closing/router.py` (`billpay_pickups`/`billpay_confirm_pickup`/`billpay_undo_pickup`/`billpay_record_deposit`; core `_billpay_position_core`, pure `closing/billpay_pickup.py`) | §12 Bill Payment Pickup / §12 3-way recon / §12 multi-market-grant filter |
 | `GET /closing/cash-recon-management` (GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403; declared vs pickups vs POS on one screen, bill-pay mismatch flag; since mig `944` ALSO the 3-WAY bill-pay recon — declared vs sales-tx (tender-split) vs processor, `three_way_status` per row + `three_way` summary); W3 scheduled report key `closing_billpay_recon` | `closing/router.py` (`cash_recon_management`; POS sides via the shared `_pos_tenders_for_days`/`_pos_billpay_for_days`, sales side via `_sales_billpay_for_days` → `commcalc.router._billpay_sales_by_store_day`; pure math `metric_recon.reconcile_billpay_three_way_days`); `notify/closing_reports.py` | §12 management cash recon / §12 3-way recon |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`) | §12 deposit accountability |
 | `GET /billpay-coverage/{period}` (per store/day: bill-pay ≤ cash+card, exceptions surfaced) | `commcalc/router.py` (`billpay_coverage` → `metric_recon.reconcile_billpay_coverage`) | §4 bill-pay carve-out / §15 |
