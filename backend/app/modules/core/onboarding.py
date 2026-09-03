@@ -249,6 +249,14 @@ def _cov_pos_tax_rate(org_id: str):
     stores = (client.schema("storeops").table("stores").select("store_code,market,is_active")
               .eq("org_id", org_id).limit(2000).execute().data) or []
     stores = [s for s in stores if s.get("is_active") is not False and (s.get("store_code") or "").strip()]
+    try:   # canonical union overlay (core.scope.market_by_code; 2026-09-03 LI-class fix) — blank rows only
+        from app.core import scope as _cscope
+        _mkt = _cscope.market_by_code(client, org_id)
+        for s in stores:
+            if not (s.get("market") or "").strip():
+                s["market"] = _mkt.get(str(s.get("store_code") or "").strip().upper(), s.get("market"))
+    except Exception:
+        pass
     codes = (client.schema("pos").table("tax_codes").select("*")
              .eq("org_id", org_id).limit(1000).execute().data) or []
     missing = [s["store_code"] for s in stores

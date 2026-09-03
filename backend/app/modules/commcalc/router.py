@@ -2249,37 +2249,27 @@ def whatif_put_source_config(body: WhatifPutSourceConfigIn, authorization: str =
 
 
 def _store_market_resolver(client, org_id):
-    """(resolve_market, all_markets) from store_mapping — keyed by address, store_code, or leading store
-    number (same resolver the Sales Report / commission-trend use). Never raises."""
-    import re as _re_mk
+    """(resolve_market, all_markets) — THE canonical store→market resolution, delegated to
+    `app.core.scope.store_market_resolver` (the UNION index: storeops.stores ∪
+    commcalc.store_mapping ∪ commcalc.store_aliases). Never raises.
+
+    2026-09-03 (owner: "1115 Liberty Ave … LI … does not show up under any filter in the rep
+    incentive report but shows in the daily target report"): this helper used to read ONLY
+    commcalc.store_mapping, so a store whose market lives in storeops.stores (live Cellfonz
+    B-1115 "1115 Liberty Ave" = LI, NO mapping row) stamped market '' on every rep-commission /
+    tax / statement / financing row → invisible under every market filter, while the
+    storeops-sourced Daily Targets showed it fine. Same lookup tolerance as before (address →
+    code → leading street number, case/punctuation-insensitive) but over BOTH vocabularies +
+    aliases, and the leading-number tiebreak is now fail-closed ('' on a number shared by two
+    markets, instead of first-row-wins). Markets list = the canonical union (what the picker may
+    offer IS what the resolver can bind)."""
     try:
-        sm = (client.schema('commcalc').table('store_mapping')
-              .select('store_code,store_address,market').eq('org_id', org_id).execute().data) or []
-    except Exception:
-        sm = []
-    by_code, by_addr, by_num, markets = {}, {}, {}, set()
-
-    def _lead(s):
-        m = _re_mk.match(r"\s*(\d+)", str(s or "")); return m.group(1) if m else ""
-    for s in sm:
-        mk = (s.get('market') or '').strip()
-        if not mk:
-            continue
-        markets.add(mk)
-        code = str(s.get('store_code') or '').strip()
-        addr = str(s.get('store_address') or '').strip()
-        if code:
-            by_code[code] = mk
-        if addr:
-            by_addr[addr.lower()] = mk
-        n = _lead(addr)
-        if n:
-            by_num.setdefault(n, mk)
-
-    def resolve(store):
-        st = str(store or '').strip()
-        return (by_addr.get(st.lower()) or by_code.get(st) or by_num.get(_lead(st)) or '')
-    return resolve, sorted(markets)
+        from app.core import scope as _cscope
+        resolve, markets = _cscope.store_market_resolver(client, org_id)
+        return resolve, sorted(markets, key=lambda s: str(s).lower())
+    except Exception as e:
+        print(f"WARN _store_market_resolver canonical index failed: {e}")
+        return (lambda store: ''), []
 
 
 @router.get("/tax-collected")
@@ -9311,28 +9301,33 @@ def accessory_flags(start: str = None, end: str = None, store: str = None, rep: 
         "over": sum(1 for x in out if x.get("flag_reason") != "under"),
         "under": sum(1 for x in out if x.get("flag_reason") == "under"),
     }
-    # RULE FIVE / RULE THREE filter OPTIONS (B6): universal, ORG-SCOPED store + market lists (from
-    # commcalc.store_mapping — the same universal source the rest of the module uses) so a DM/market user
-    # always has pick-don't-type options. Previously the page sourced markets/stores from the ASSET module's
-    # /asset/filter-options, which a non-asset user can't read → the market & store filters were empty.
+    # RULE FIVE / RULE THREE filter OPTIONS (B6): universal, ORG-SCOPED store + market lists from THE
+    # canonical union index (core.scope.market_index: storeops.stores ∪ store_mapping ∪ store_aliases —
+    # 2026-09-03 "1115 Liberty Ave"/LI fix; was store_mapping-only) so a DM/market user always has
+    # pick-don't-type options that the resolver can actually bind. Previously the page sourced
+    # markets/stores from the ASSET module's /asset/filter-options, which a non-asset user can't read
+    # → the market & store filters were empty.
     # Options are narrowed to the caller's span (in_keyset) so a DM only picks from their own stores.
     filt_markets, filt_stores, _seen = set(), [], set()
     try:
-        sm = (client.schema("commcalc").table("store_mapping")
-              .select("store_code,store_address,market").eq("org_id", org_id).execute().data) or []
-    except Exception:
-        sm = []
-    for m in sm:
-        addr = str(m.get("store_address") or "").strip()
+        from app.core import scope as _cscope
+        _af_resolve, _ = _cscope.store_market_resolver(client, org_id)
+        _af_stores = list(_cscope.market_index(client, org_id).get("stores") or [])
+    except Exception as e:
+        print(f"WARN accessory-flags canonical index failed: {e}")
+        _af_resolve, _af_stores = (lambda s: ""), []
+    for m in _af_stores:
+        addr = str(m.get("address") or "").strip()
         code = str(m.get("store_code") or "").strip()
-        mk = str(m.get("market") or "").strip()
         if _ks and not in_keyset(_ks, addr, code):
             continue
+        mk = _af_resolve(addr or code)
         if mk:
             filt_markets.add(mk)
-        if addr and addr.lower() not in _seen:
-            _seen.add(addr.lower())
-            filt_stores.append({"value": addr, "market": mk})
+        val = addr or code
+        if val and val.lower() not in _seen:
+            _seen.add(val.lower())
+            filt_stores.append({"value": val, "market": mk})
     # include any store string actually present in the flagged sales but not in store_mapping (unmapped),
     # so it can still be filtered — keyset already applied to `sales` above.
     for x in out:
@@ -15885,19 +15880,11 @@ def commission_plan_roster(org_id: str = ORG_ID, include_inactive: bool = True):
         emps = q.order("name").execute().data or []
     except Exception:
         emps = []
-    # 2. home_store -> market via storeops.stores (keyed by BOTH store_code and address — home_store
-    #    may hold either form).
-    mkt_by_store = {}
-    try:
-        stores = (client.schema("storeops").table("stores")
-                  .select("store_code,address,market").eq("org_id", org_id).execute().data) or []
-        for s in stores:
-            mk = (s.get("market") or "").strip()
-            for k in (s.get("store_code"), s.get("address")):
-                if k:
-                    mkt_by_store[str(k).strip()] = mk
-    except Exception:
-        pass
+    # 2. home_store -> market via THE canonical union resolver (2026-09-03 "1115 Liberty Ave"/LI
+    #    class fix; was storeops.stores-only — a home_store held as a store_mapping address or POS
+    #    synonym mapped to no market). home_store may hold a code, an address, or a synonym; the
+    #    canonical resolver accepts all three.
+    _roster_resolve_market, _ = _store_market_resolver(client, org_id)
     # 3. current EMPLOYEE-scope assignments -> plan names (org-scoped). ready=False lets the UI show
     #    the "run migration 059" hint instead of a broken page.
     plan_name, assigns_by_val, ready = {}, {}, True
@@ -15919,7 +15906,7 @@ def commission_plan_roster(org_id: str = ORG_ID, include_inactive: bool = True):
             continue
         name = (e.get("name") or "").strip() or val
         role = (e.get("role") or "").strip()
-        market = mkt_by_store.get((e.get("home_store") or "").strip(), "")
+        market = _roster_resolve_market(e.get("home_store"))
         cur_ids = assigns_by_val.get(_norm_assign(val), [])
         cur = [{"plan_id": pid, "plan_name": plan_name.get(pid, "(unknown plan)")} for pid in cur_ids]
         if role:
@@ -16811,6 +16798,18 @@ def _compute_gp(client, org_id, period, market=""):
     except Exception:
         catalog    = sc.table('raw_catalog').select('product_id,cost').eq('org_id', org_id).limit(100000).execute().data or []
     store_map  = sc.table('store_mapping').select('store_address,salesforce_id,market,store_code,is_active').eq('org_id', org_id).execute().data or []
+    # Canonical market enrichment (2026-09-03 "1115 Liberty Ave"/LI class): a mapping row with a
+    # BLANK market inherits the store's market from the canonical union resolver (storeops.stores ∪
+    # store_mapping ∪ store_aliases) so the GP market filter/grouping can't drop a store whose market
+    # is spelled only in storeops. A market already on the row is never overwritten. The
+    # street-number/salesforce ATTRIBUTION join below stays store_mapping-based (structural).
+    try:
+        _gp_resolve_market, _ = _store_market_resolver(client, org_id)
+        for _sm in store_map:
+            if not str(_sm.get('market') or '').strip():
+                _sm['market'] = _gp_resolve_market(_sm.get('store_address') or _sm.get('store_code'))
+    except Exception as e:
+        print(f"WARN _compute_gp market enrichment failed: {e}")
     pay_cats   = sc.table('payment_categories').select('description,category').eq('org_id', org_id).execute().data or []
     comp_rows  = sc.table('raw_comp_report').select('business_address,compensation_type,payment_amount').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
     cat_map    = {r['description'].strip(): r['category'] for r in pay_cats if r.get('description')}
@@ -16930,12 +16929,27 @@ def _tperiods(periods_present, months):
     return kept[-months:] if months and months > 0 else kept
 
 
+def _trend_market_by_code(org_id):
+    """{store_code -> market} for the trend endpoints — THE canonical union map
+    (core.scope.market_by_code; 2026-09-03 "1115 Liberty Ave"/LI class fix — the trends read
+    store_mapping.market only). Keys are UPPER store_codes; _trend_shape looks up case-insensitively.
+    Never raises."""
+    try:
+        from app.core import scope as _cscope
+        return _cscope.market_by_code(sb(), org_id)
+    except Exception as e:
+        print(f"WARN _trend_market_by_code canonical index failed: {e}")
+        return {}
+
+
 def _trend_shape(kept, by_store, comp, mkt, value_keys):
     """Assemble the common trend response from per-(store,period) values."""
     stores = []
     for code, per in by_store.items():
         series = [{'period': p, **{k: round((per.get(p) or {}).get(k, 0.0), 2) for k in value_keys}} for p in kept]
-        stores.append({'store': code, 'store_code': code, 'market': mkt.get(code, ''), 'series': series})
+        stores.append({'store': code, 'store_code': code,
+                       'market': mkt.get(code) or mkt.get(str(code).strip().upper()) or '',
+                       'series': series})
     sort_key = value_keys[0]
     stores.sort(key=lambda x: -sum(s[sort_key] for s in x['series']))
     company = [{'period': p, **{k: round(comp[p].get(k, 0.0), 2) for k in value_keys}} for p in kept]
@@ -16948,8 +16962,7 @@ def expenses_trend(months: int = 6, org_id: str = ORG_ID):
     require_org(org_id)
     sc = sb().schema('commcalc')
     rows = sc.table('store_expenses').select('period,store_code,amount').eq('org_id', org_id).limit(200000).execute().data or []
-    sm = sc.table('store_mapping').select('store_code,market').eq('org_id', org_id).execute().data or []
-    mkt = {str(s.get('store_code') or '').strip(): (s.get('market') or '') for s in sm}
+    mkt = _trend_market_by_code(org_id)
     kept = _tperiods({r.get('period') for r in rows}, months); ks = set(kept)
     by, comp = {}, {p: {'total': 0.0} for p in kept}
     for r in rows:
@@ -16979,14 +16992,15 @@ def commission_trend(months: int = 6, org_id: str = ORG_ID):
         m = _re.match(r'\s*(\d+)', str(a or ''))
         return m.group(1) if m else ''
 
-    code_by_num, mkt, codes = {}, {}, set()
+    code_by_num, codes = {}, set()
     for s in sm:
         code = str(s.get('store_code') or '').strip()
         if code:
-            codes.add(code); mkt[code] = s.get('market') or ''
+            codes.add(code)
         n = _num(s.get('store_address'))
         if n and code:
             code_by_num.setdefault(n, code)
+    mkt = _trend_market_by_code(org_id)   # canonical union map (2026-09-03 LI fix)
     kept = _tperiods({r.get('period') for r in comms}, months); ks = set(kept)
     by, comp = {}, {p: {'total': 0.0} for p in kept}
     for r in comms:
@@ -17031,13 +17045,16 @@ def gp_trend(months: int = 6, compute_missing: int = 3, org_id: str = ORG_ID):
             snaps[p] = _gp_snapshot_rows(res)
         except Exception as e:
             print(f"WARN gp-trend compute {p} failed: {e}")
-    mkt, by, comp = {}, {}, {p: {'total_rev': 0.0, 'net_profit': 0.0} for p in kept}
+    # Snapshot rows carry their own (store_mapping-era) market; the canonical union map fills any
+    # blank so a storeops-only market still groups/filters (2026-09-03 LI class; stamped markets win).
+    mkt, by, comp = dict(_trend_market_by_code(org_id)), {}, {p: {'total_rev': 0.0, 'net_profit': 0.0} for p in kept}
     for p in kept:
         for r in snaps.get(p, []):
             code = str(r.get('store_code') or r.get('store') or '').strip()
             if not code:
                 continue
-            mkt.setdefault(code, r.get('market') or '')
+            if (r.get('market') or '').strip():
+                mkt[code] = r.get('market')
             by.setdefault(code, {})[p] = {'total_rev': safe_float(r.get('total_rev')),
                                           'net_profit': safe_float(r.get('net_profit'))}
             comp[p]['total_rev'] += safe_float(r.get('total_rev'))
@@ -17222,12 +17239,19 @@ def _leg_store_index(client, org_id):
                 .eq('org_id', org_id).execute().data) or []
     except Exception:
         rows = []
+    # Blank-market rows inherit from THE canonical union resolver (2026-09-03 LI class) so the
+    # trend's market filter matches a store whose market is spelled only in storeops.stores.
+    try:
+        _leg_resolve_market, _ = _store_market_resolver(client, org_id)
+    except Exception:
+        _leg_resolve_market = lambda s: ''
     by_sfid = {}
     for s in rows:
         addr = str(s.get('store_address') or '').strip()
         num = addr.split(' ')[0] if addr else ''
         ent = {'store': addr, 'store_code': str(s.get('store_code') or '').strip(),
-               'market': str(s.get('market') or '').strip()}
+               'market': (str(s.get('market') or '').strip()
+                          or _leg_resolve_market(addr or s.get('store_code')))}
         if num:
             idx.setdefault(num, ent)
         sf = str(s.get('salesforce_id') or '').strip()
@@ -18030,35 +18054,11 @@ def sales_report(period: str = "", authorization: str = Header(default=""), org_
     # basis they come from AD (else the sales feed, byte-identical). No filter here → whole org.
     _sr_src = _apply_activation_basis(client, org_id, period, agg, _ck_sr)
 
-    # Resolve each store to its market (store_mapping) so the report can filter by market —
-    # keyed by address, store_code, or leading store-number, matching commission-trend's resolver.
-    import re as _re_sr
-    try:
-        sm_rows = (client.schema("commcalc").table("store_mapping")
-                   .select("store_code,store_address,market").eq("org_id", org_id).execute().data) or []
-    except Exception:
-        sm_rows = []   # market resolution is optional — never 500 the report over a store_mapping read
-    def _lead_sr(s):
-        m = _re_sr.match(r"\s*(\d+)", str(s or "")); return m.group(1) if m else ""
-    mkt_by_code, mkt_by_addr, mkt_by_num, all_markets = {}, {}, {}, set()
-    for s in sm_rows:
-        mk = (s.get("market") or "").strip()
-        if not mk:
-            continue
-        all_markets.add(mk)
-        code = str(s.get("store_code") or "").strip()
-        addr = str(s.get("store_address") or "").strip()
-        if code:
-            mkt_by_code[code] = mk
-        if addr:
-            mkt_by_addr[addr.lower()] = mk
-        n = _lead_sr(addr)
-        if n:
-            mkt_by_num.setdefault(n, mk)
-    def _market_for(store):
-        st = str(store or "").strip()
-        return (mkt_by_addr.get(st.lower()) or mkt_by_code.get(st)
-                or mkt_by_num.get(_lead_sr(st)) or "")
+    # Resolve each store to its market through THE canonical union resolver (storeops.stores ∪
+    # store_mapping ∪ store_aliases — _store_market_resolver → core.scope), so a store whose market
+    # lives in only one vocabulary still filters (2026-09-03 "1115 Liberty Ave"/LI fix; was a
+    # store_mapping-only inline copy). Never raises; failure → every market blank, report renders.
+    _market_for, all_markets = _store_market_resolver(client, org_id)
 
     # Activation columns read the shared basis fields (act_new+act_port = the Sales Report's premium sense;
     # byod/upgrades their own) — set once by _apply_activation_basis, so this report and Exec MTD agree.
@@ -22299,6 +22299,18 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
             roster.append({'store_code': str(trow.get('store_code') or cu).strip(),
                            'address': meta.get('address', ''), 'market': meta.get('market', ''),
                            'monthly_target': 0})
+    # A roster row whose storeops market is BLANK is enriched from THE canonical union map
+    # (core.scope.market_by_code — 2026-09-03 "1115 Liberty Ave"/LI class: this page read only
+    # storeops.stores.market, the exact mirror image of the Rep-Incentive store_mapping-only gap,
+    # so a market spelled only in store_mapping never filtered here). A market already set on the
+    # storeops row is NEVER overwritten (byte-identical for fully-rostered orgs).
+    try:
+        from app.core import scope as _cscope
+        _mkt_by_code = _cscope.market_by_code(client, org_id)
+        roster = [({**s, 'market': _mkt_by_code.get(str(s.get('store_code') or '').strip().upper(), '')}
+                   if not str(s.get('market') or '').strip() else s) for s in roster]
+    except Exception as e:
+        print(f"WARN targets summary market enrichment failed: {e}")
 
     # ── RULE FIVE filter OPTIONS (pick-don't-type over real data), computed from the FULL roster universe so
     #    a selection can always be changed. Store value = store_code (label = address); market = store market;
@@ -22820,12 +22832,10 @@ def rep_coaching(period: str, store: Optional[List[str]] = Query(default=None),
     except Exception:                              # before migration 287
         flags = (client.schema('commcalc').table('flags')
                  .select('epay_salesperson,severity,description,coaching_note').eq('org_id', org_id).in_('period', _pvariants(cperiod)).execute().data) or []
-    stores = (client.schema('storeops').table('stores').select('store_code,address,market').eq('org_id', org_id).execute().data) or []
-    mkt_by = {}
-    for s in stores:
-        for key in (s.get('store_code'), s.get('address')):
-            if key:
-                mkt_by[str(key).strip().upper()] = s.get('market') or ''
+    # Store→market through THE canonical union resolver (2026-09-03 "1115 Liberty Ave"/LI fix; was a
+    # storeops.stores-only join — the mirror image of the Rep-Incentive store_mapping-only gap: a
+    # rep_commissions store spelling that only exists in store_mapping/store_aliases mapped to '').
+    _coach_resolve_market, _ = _store_market_resolver(client, org_id)
 
     cb_by, fl_by = {}, {}
     for it in cb:
@@ -22861,7 +22871,7 @@ def rep_coaching(period: str, store: Optional[List[str]] = Query(default=None),
         st = (cr.get('store') or '').strip()
         if store_sel and st.upper() not in store_sel:
             continue
-        mk = mkt_by.get(st.upper(), '')
+        mk = _coach_resolve_market(st)
         if market_sel and mk not in market_sel:
             continue
         tier = safe_float(cr.get('tier'))
@@ -23459,38 +23469,12 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     acfg = _accessory_config(client, org_id)
     rows, meta = _sales_rows_union(client, org_id, period)
 
-    # ── Market resolver (store_mapping; keyed by address / code / leading store-number) — inline + optional
-    #    (never 500 the summary over a store_mapping read). Mirrors the sales-report resolver so the two
-    #    pages agree on which market a store belongs to.
-    import re as _re_em
-    try:
-        _sm_rows = (client.schema('commcalc').table('store_mapping')
-                    .select('store_code,store_address,market').eq('org_id', org_id).execute().data) or []
-    except Exception:
-        _sm_rows = []
-
-    def _lead_em(s):
-        m = _re_em.match(r'\s*(\d+)', str(s or ''))
-        return m.group(1) if m else ''
-    _mkt_code, _mkt_addr, _mkt_num, _all_markets = {}, {}, {}, set()
-    for s in _sm_rows:
-        mk = (s.get('market') or '').strip()
-        if not mk:
-            continue
-        _all_markets.add(mk)
-        code = str(s.get('store_code') or '').strip()
-        addr = str(s.get('store_address') or '').strip()
-        if code:
-            _mkt_code[code] = mk
-        if addr:
-            _mkt_addr[addr.lower()] = mk
-        n = _lead_em(addr)
-        if n:
-            _mkt_num.setdefault(n, mk)
-
-    def _market_for(store):
-        st = str(store or '').strip()
-        return (_mkt_addr.get(st.lower()) or _mkt_code.get(st) or _mkt_num.get(_lead_em(st)) or '')
+    # ── Market resolver — THE canonical union resolver (_store_market_resolver → core.scope:
+    #    storeops.stores ∪ store_mapping ∪ store_aliases), replacing a store_mapping-only inline copy
+    #    (2026-09-03 "1115 Liberty Ave"/LI fix). Same never-500 posture; the Sales Report delegates to
+    #    the SAME helper so the two pages still agree on which market a store belongs to.
+    _market_for, _canon_markets = _store_market_resolver(client, org_id)
+    _all_markets = set(_canon_markets)
 
     # ── Filter OPTIONS from the UNFILTERED union (+ storeops roster + store_mapping markets), so the
     #    pickers list every real store/market/rep present, not just what survived the current selection.
@@ -24043,39 +24027,13 @@ _ACT_BUCKET_FIELD = {"New Activation": "activation", "Port": "port", "BYOD": "by
 
 
 def _market_for_fn(client, org_id):
-    """A `market_for(store) -> market` resolver from commcalc.store_mapping (by address / store_code /
-    leading store-number), mirroring the Exec-MTD / Sales-Report market resolvers so every activation
-    surface agrees on which market a store belongs to. Empty ('') when the store has no mapping — never
-    raises (a store_mapping read failure just yields '' for every store)."""
-    import re as _re_mf
-    try:
-        rows = (client.schema("commcalc").table("store_mapping")
-                .select("store_code,store_address,market").eq("org_id", org_id).execute().data) or []
-    except Exception:
-        rows = []
-    by_code, by_addr, by_num = {}, {}, {}
-
-    def _lead(s):
-        m = _re_mf.match(r"\s*(\d+)", str(s or ""))
-        return m.group(1) if m else ""
-    for s in rows:
-        mk = (s.get("market") or "").strip()
-        if not mk:
-            continue
-        code = str(s.get("store_code") or "").strip()
-        addr = str(s.get("store_address") or "").strip()
-        if code:
-            by_code[code] = mk
-        if addr:
-            by_addr[addr.lower()] = mk
-        n = _lead(addr)
-        if n:
-            by_num.setdefault(n, mk)
-
-    def market_for(store):
-        st = str(store or "").strip()
-        return by_addr.get(st.lower()) or by_code.get(st) or by_num.get(_lead(st)) or ""
-    return market_for
+    """A `market_for(store) -> market` resolver — THE canonical union resolution
+    (_store_market_resolver → core.scope: storeops.stores ∪ store_mapping ∪ store_aliases),
+    so every activation surface agrees with the Sales Report / Exec MTD on which market a store
+    belongs to (2026-09-03 "1115 Liberty Ave"/LI fix; was a store_mapping-only copy). '' when the
+    store resolves nowhere — never raises."""
+    resolve, _ = _store_market_resolver(client, org_id)
+    return resolve
 
 
 @router.get("/activation-counts/{period}")
@@ -25294,25 +25252,19 @@ def _prod_store_maps(client, org_id):
     except Exception:
         sm = []
     addr_to_code, code_to_addr, code_set = {}, {}, set()
-    mkt_by_code, mkt_by_addr, mkt_by_num, all_markets = {}, {}, {}, set()
     for m in sm:
         code = str(m.get('store_code') or '').strip()
         addr = str(m.get('store_address') or '').strip()
-        mk = str(m.get('market') or '').strip()
         if code:
             code_set.add(code)
         if addr and code:
             addr_to_code[addr.lower()] = code
             code_to_addr.setdefault(code, addr)
-        if mk:
-            all_markets.add(mk)
-            if code:
-                mkt_by_code[code] = mk
-            if addr:
-                mkt_by_addr[addr.lower()] = mk
-            mm = re.match(r'\s*(\d+)', addr)
-            if mm:
-                mkt_by_num.setdefault(mm.group(1), mk)
+    # MARKET resolution through THE canonical union resolver (2026-09-03 "1115 Liberty Ave"/LI fix;
+    # was a store_mapping-only sibling copy). The store_code JOIN maps above stay store_mapping-based
+    # (that is what joins a sales spelling to the timelog's store_code vocabulary).
+    _resolve_market, _canon_markets = _store_market_resolver(client, org_id)
+    all_markets = set(_canon_markets)
     num_to_code = {}
     for code, addr in code_to_addr.items():
         mm = re.match(r'\s*(\d+)', addr)
@@ -25341,10 +25293,7 @@ def _prod_store_maps(client, org_id):
 
     def market_for_code(code):
         c = str(code or '').strip()
-        addr = code_to_addr.get(c, '')
-        mm = re.match(r'\s*(\d+)', addr or c)
-        return (mkt_by_code.get(c) or mkt_by_addr.get(addr.lower())
-                or (mkt_by_num.get(mm.group(1)) if mm else '') or '')
+        return _resolve_market(c) or _resolve_market(code_to_addr.get(c, '')) or ''
 
     def label_for_code(code):
         c = str(code or '').strip()
@@ -30898,41 +30847,11 @@ def ma_overview_drill(tile: str, period: str = "", accounts: str = "", limit: in
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 
 def _cr_market_resolver(client, org_id):
-    """A `(_market_for, all_markets)` pair over store_mapping — the SAME address / store_code /
-    leading-number resolution the Sales Report uses — so any dataset with a store string can carry a
-    `market` for RULE FIVE market filtering + group-by. Never raises (a store_mapping read error → every
-    market blank)."""
-    import re as _re_cr
-    try:
-        sm = (client.schema("commcalc").table("store_mapping")
-              .select("store_code,store_address,market").eq("org_id", org_id).execute().data) or []
-    except Exception:
-        sm = []
-    by_code, by_addr, by_num, markets = {}, {}, {}, set()
-
-    def _lead(s):
-        m = _re_cr.match(r"\s*(\d+)", str(s or "")); return m.group(1) if m else ""
-
-    for s in sm:
-        mk = (s.get("market") or "").strip()
-        if not mk:
-            continue
-        markets.add(mk)
-        code = str(s.get("store_code") or "").strip()
-        addr = str(s.get("store_address") or "").strip()
-        if code:
-            by_code[code] = mk
-        if addr:
-            by_addr[addr.lower()] = mk
-        n = _lead(addr)
-        if n:
-            by_num.setdefault(n, mk)
-
-    def _market_for(store):
-        st = str(store or "").strip()
-        return by_addr.get(st.lower()) or by_code.get(st) or by_num.get(_lead(st)) or ""
-
-    return _market_for, sorted(markets)
+    """A `(_market_for, all_markets)` pair — delegates to THE canonical union resolver
+    (_store_market_resolver → core.scope), the SAME resolution the Sales Report uses, so any
+    dataset with a store string carries a `market` for RULE FIVE market filtering + group-by
+    (2026-09-03 "1115 Liberty Ave"/LI fix; was a store_mapping-only copy). Never raises."""
+    return _store_market_resolver(client, org_id)
 
 
 def _cr_guarded(fn):
@@ -33791,21 +33710,17 @@ def _accrual_keyset(authorization, org_id):
 
 
 def _accrual_market_map(client, org_id):
-    """{UPPER store_code -> market} for this org. RULE FIVE: the standard filter bar's MARKET control
-    has to filter on something real, and an accrual row only carries a store_code. Resolved here (not
-    guessed in the browser) off the same store_mapping every other commcalc surface uses. Degrades to
-    an empty map — a missing mapping means "(no market)", never a hidden row."""
-    out = {}
+    """{UPPER store_code -> market} for this org — THE canonical union map (core.scope.market_by_code:
+    storeops.stores ∪ store_mapping ∪ store_aliases; 2026-09-03 "1115 Liberty Ave"/LI fix — was
+    store_mapping-only). RULE FIVE: the standard filter bar's MARKET control has to filter on
+    something real, and an accrual row only carries a store_code. Degrades to an empty map — a
+    missing mapping means "(no market)", never a hidden row."""
     try:
-        rows = (client.schema('commcalc').table('store_mapping').select('store_code,market')
-                .eq('org_id', org_id).limit(5000).execute().data) or []
-    except Exception:
-        return out
-    for r in rows:
-        code = str(r.get('store_code') or '').strip()
-        if code:
-            out[code.upper()] = (r.get('market') or '').strip()
-    return out
+        from app.core import scope as _cscope
+        return _cscope.market_by_code(client, org_id)
+    except Exception as e:
+        print(f"WARN _accrual_market_map canonical index failed: {e}")
+        return {}
 
 
 def _accrual_caller(authorization):

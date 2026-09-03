@@ -341,22 +341,20 @@ def po_recommendations(stores: str = "", market: str = "", lookback: int = 7, ho
     except Exception:
         pass
 
-    store_market = {}
+    # THE canonical union store→market resolver (core.scope; 2026-09-03 "1115 Liberty Ave"/LI
+    # class fix — was a store_mapping-only address map).
     try:
-        for r in (client.schema("commcalc").table("store_mapping").select("store_address,market")
-                  .eq("org_id", org_id).execute().data or []):
-            a = (r.get("store_address") or "").strip()
-            if a:
-                store_market[a.lower()] = r.get("market")
+        from app.core import scope as _cscope
+        _po_resolve_market, _ = _cscope.store_market_resolver(client, org_id)
     except Exception:
-        pass
+        _po_resolve_market = lambda s: ""
 
     def _canon(raw):
         base = str(raw or "").split(" - ")[0].strip()
         return alias.get(base.lower(), base) or base
 
     def _market_of(store):
-        return store_market.get((store or "").strip().lower())
+        return _po_resolve_market(store) or None
 
     cutoff = (datetime.now(timezone.utc).date() - timedelta(days=lookback)).isoformat()
     agg = {}

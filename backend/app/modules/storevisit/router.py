@@ -281,8 +281,19 @@ def delete_checklist_item(item_id: str, org_id: str = ORG_ID, authorization: str
 @router.get("/stores")
 def stores_in_market(market: str = None, org_id: str = ORG_ID):
     rows = sb().table("stores").select("store_code,address,market").eq("org_id", org_id).order("address").execute().data or []
+    # Blank storeops market inherits from THE canonical union map, and the filter compares
+    # case-insensitively (core.scope.market_by_code; 2026-09-03 "1115 Liberty Ave"/LI class fix —
+    # was storeops-only + exact-case). Set markets never overwritten.
+    try:
+        from app.core import scope as _cscope
+        _mkt = _cscope.market_by_code(sb(), org_id)
+        for s in rows:
+            if not (s.get("market") or "").strip():
+                s["market"] = _mkt.get(str(s.get("store_code") or "").strip().upper(), s.get("market"))
+    except Exception as e:
+        print(f"WARN storevisit stores_in_market canonical overlay failed: {e}")
     if market:
-        rows = [s for s in rows if (s.get("market") or "") == market]
+        rows = [s for s in rows if (s.get("market") or "").strip().lower() == market.strip().lower()]
     return rows
 
 

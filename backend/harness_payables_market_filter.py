@@ -64,6 +64,7 @@ class FakeClient:
 
 
 import app.modules.payables.router as R  # noqa: E402
+from app.core import scope as _cscope  # noqa: E402  (canonical resolver cache control, 2026-09-03)
 
 ORG, OTHER = "854f6d7b", "00000000"
 # The REAL luxelink split, measured 2026-08-11.
@@ -82,6 +83,7 @@ ok(not (set(ROSTER_SPELLING) & row_spellings),
    "ZERO storeops.stores.address spellings match a report-row store — the two vocabularies are disjoint")
 
 print("\n§2 · store_mapping resolves the market for the row spelling")
+_cscope.invalidate_market_index()   # fresh canonical index per fake-client phase
 c = FakeClient({"store_mapping": MAPPING})
 m = R._market_by_store(c, ORG)
 ok(R._market_of(m, "4640-A W Diversey Ave") == "Chicago", "Diversey -> Chicago")
@@ -89,8 +91,14 @@ ok(R._market_of(m, "218-80 Hempstead Avenue") == "NY", "Hempstead -> NY")
 ok(R._market_of(m, "957 Pennsylvania Avenue") == "NY", "957 Pennsylvania -> NY")
 ok(R._market_of(m, "  4640-A   W Diversey Ave ") == "Chicago",
    "whitespace/case-tolerant — a stray double space in an export still resolves")
-ok(R._market_of(m, "4640 Diversey Chicago") is None,
-   "the ROSTER spelling does NOT resolve — proving the fix keys on the row vocabulary, not the admin one")
+# 2026-09-03 CANONICAL-RESOLUTION UPDATE (owner "1115 Liberty Ave / fix once for all" directive):
+# _market_by_store now delegates to core.scope.store_market_resolver — the UNION resolver. A roster
+# spelling that shares an UNAMBIGUOUS leading street number with the row spelling now resolves to
+# the SAME store's market (that is the cure for the 1115-Liberty class, where one vocabulary's
+# spelling was invisible to the other's resolver). The 2026-08-11 fix's real guarantee — the ROW
+# vocabulary always resolves — is proven above and unchanged.
+ok(R._market_of(m, "4640 Diversey Chicago") == "Chicago",
+   "the ROSTER spelling now ALSO resolves (unambiguous leading street number → same store, same market)")
 
 print("\n§3 · TENANT ISOLATION (RULE ONE)")
 ok(R._market_of(m, "1 Other St") is None, "another tenant's store never resolves")
@@ -102,8 +110,12 @@ ok(R._market_of(m, "999 Unknown Rd") is None, "an unmapped store resolves to Non
 ok(R._market_of(m, "") is None and R._market_of(m, None) is None, "blank/None store is safe")
 
 print("\n§5 · DEGRADES — a missing store_mapping must not 500 the page")
-c2 = FakeClient({}, boom=("store_mapping",))
-ok(R._market_by_store(c2, ORG) == {}, "unavailable store_mapping -> empty map, no raise")
+_cscope.invalidate_market_index()   # drop the §2 cache so the degraded read is really exercised
+c2 = FakeClient({}, boom=("store_mapping", "stores", "store_aliases"))
+m2 = R._market_by_store(c2, ORG)
+ok(R._market_of(m2, "4640-A W Diversey Ave") is None and R._market_of(m2, "x") is None,
+   "unavailable vocabularies -> resolver answers None for everything, no raise")
+_cscope.invalidate_market_index()   # don't let the empty degraded index poison §6
 
 print("\n§6 · /payables/filter-options serves the ROW vocabulary + its markets")
 R.sb = lambda: FakeClient({"store_mapping": MAPPING})

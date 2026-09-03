@@ -2432,6 +2432,20 @@ def filter_options(org_id: str = ORG_ID):
     except Exception:
         pass
 
+    # Any store key still market-less after the two-source fold resolves through THE canonical union
+    # resolver (core.scope; 2026-09-03 "1115 Liberty Ave"/LI class) — e.g. an address spelling whose
+    # market rides only on the OTHER vocabulary's row for the same store. Folded markets are kept.
+    try:
+        from app.core import scope as _cscope
+        _fo_resolve, _ = _cscope.store_market_resolver(client, org_id)
+        for k in list(stores):
+            if not stores[k]:
+                mk = _fo_resolve(k)
+                if mk:
+                    stores[k] = mk
+                    markets.add(mk)
+    except Exception as e:
+        print(f"WARN core filter_options canonical overlay failed: {e}")
     store_list = sorted(({"store": k, "market": v} for k, v in stores.items()), key=lambda x: x["store"])
     rep_list = [
         ({"id": nm, "label": nm, "sublabel": em} if em else {"id": nm, "label": nm})
