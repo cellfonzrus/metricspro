@@ -282,7 +282,8 @@ for (const g of NAV) {
 // ── 6. D2 NAV conversion invariants (real rbac.ts source) ────────────────────────────────────────
 {
   const hubGroups = NAV.filter(g => g.items.some(it => it.href.startsWith('/hub/')))
-  ok('16 groups carry a /hub dashboard entry', hubGroups.length === 16)
+  // 16 D2-converted groups + Management Overview (owner directive 2026-09-03, mig 948)
+  ok('17 groups carry a /hub dashboard entry', hubGroups.length === 17)
   let slugOK = true, first = true, restTileOnly = true, hubNotTileOnly = true
   for (const g of hubGroups) {
     const hubs = g.items.filter(it => it.href.startsWith('/hub/'))

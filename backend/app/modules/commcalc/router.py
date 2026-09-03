@@ -11596,6 +11596,136 @@ def get_dlar_store_kpis(period: str, authorization: str = Header(default=""), or
     return [r for r in rows if in_keyset(ks, r.get('store_code'), r.get('address'), r.get('location'))]
 
 
+@router.get("/kpi-failing/{period}")
+def get_kpi_failing(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """FAILING-KPI overview (owner directive 2026-09-03: "a high level overview of failing KPI
+    with the option to drill down") — a VIEW over the existing KPI machinery, never a second
+    derivation (duplicate-check gate):
+      · defs + targets = the SAME `_kpi_defs` + payout_config resolution /coaching and the action
+        plan use (carrier_kpi_metric per-org registry, per-period target columns winning);
+      · STORE actuals  = `get_dlar_store_kpis` called IN-PROCESS (same raw_dlar_store read, same
+        storeops span filter — this report can never show a store the KPI Metrics page hides);
+      · REP actuals    = `rep_commissions.kpi_values` (what the pay engine tiered on — /coaching's
+        read), span-filtered on the row's store;
+      · store→market   = the canonical union resolver (§13a, `_store_market_resolver`).
+    Classification is PURE (`kpi_failing.py`, proof harness_kpi_failing.py): below target fails,
+    a missing value is `no_data` — reported, never counted as failing. Standard filters
+    (market/store/rep) apply client-side over this already-span-scoped payload, the /dlar-store
+    page's own pattern."""
+    require_org(org_id)
+    cperiod = _period_or_400(period)
+    client = sb()
+    from app.modules.commcalc import kpi_failing as _kpif
+    kpi_defs = _kpi_defs(org_id)
+    cfg_rows = (client.schema('commcalc').table('payout_config').select('*')
+                .eq('org_id', org_id).in_('period', _pvariants(cperiod)).limit(1).execute().data) or []
+    cfg = cfg_rows[0] if cfg_rows else {}
+    # Same resolution as /coaching: config column value wins, else the metric's carrier default.
+    targets = {k: (safe_float(cfg.get(col)) or (safe_float(dv) if dv is not None else 0.0))
+               for (k, _l, col, dv) in kpi_defs}
+    targets = {k: v for k, v in targets.items() if v}
+    dlar_rows = get_dlar_store_kpis(cperiod, authorization=authorization, org_id=org_id) or []
+    resolve_market, _mk = _store_market_resolver(client, org_id)
+    comms = (client.schema('commcalc').table('rep_commissions')
+             .select('storeops_name,epay_salesperson,store,tier,kpis_met,total_kpis,kpi_values')
+             .eq('org_id', org_id).in_('period', _pvariants(cperiod)).execute().data) or []
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
+    comms = [c for c in comms if in_keyset(ks, c.get('store'))]
+    stores = _kpif.store_rows(dlar_rows, kpi_defs, targets, resolve_market=resolve_market)
+    reps = _kpif.rep_rows(comms, kpi_defs, targets)
+    return {"period": cperiod, "targets": targets,
+            "defs": [{"kpi": k, "label": l} for (k, l, _c, _d) in kpi_defs],
+            "summary": _kpif.summarize(stores, reps), "stores": stores, "reps": reps,
+            "note": ("No store DLAR rows for this period — store-grain KPIs unavailable; "
+                     "rep grain shown from computed commissions.") if not dlar_rows else None}
+
+
+@router.get("/compliance-summary")
+def get_compliance_summary(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Flags & Compliance dashboard summary (owner directive 2026-09-03: "every flag and
+    compliance issue should be under that") — ONE thin count pass over the platform's EXISTING
+    flag/exception/compliance queues; every count is the same query (or the same handler called
+    in-process) as the page that owns the queue, so this can never disagree with a page. A probe
+    that fails reports count=null (listed in `unavailable`) — never a fake 0. Assembly is PURE
+    (`compliance_summary.py`, proof harness_compliance_summary.py). Org-scoped everywhere;
+    span-scoped where the underlying handler is (attendance / approvals / hours)."""
+    require_org(org_id)
+    client = sb()
+    from app.modules.commcalc import compliance_summary as _csum
+    today = _datetime.now(_timezone.utc).date()
+    period = today.strftime('%B %Y')
+    month_start = today.replace(day=1).isoformat()
+    counts = {}
+
+    def probe(key, fn):
+        try:
+            counts[key] = fn()
+        except Exception as e:
+            counts[key] = {"count": None, "note": f"unavailable: {type(e).__name__}"}
+
+    # get_flags is async — count with the SAME query/filters it runs (open-only, mig 287; the
+    # pre-287 degrade mirrors its own fallback).
+    def _flags_count():
+        q = (client.schema('commcalc').table('flags').select('id')
+             .eq('org_id', org_id).in_('period', _pvariants(period)))
+        try:
+            return len(q.eq('status', flag_persist.STATUS_OPEN).limit(100000).execute().data or [])
+        except Exception:
+            return len((client.schema('commcalc').table('flags').select('id').eq('org_id', org_id)
+                        .in_('period', _pvariants(period)).limit(100000).execute().data) or [])
+    probe("commission_flags", _flags_count)
+    probe("pay_discrepancy", lambda: len(
+        (client.schema('commcalc').table('discrepancy_results').select('id')
+         .eq('org_id', org_id).in_('period', _pvariants(period)).eq('status', 'open')
+         .limit(100000).execute().data) or []))
+    probe("ingest_quarantine", lambda: len(
+        (client.schema('commcalc').table('ingest_store_quarantine').select('id')
+         .eq('org_id', org_id).eq('status', 'pending').limit(10000).execute().data) or []))
+    probe("ops_chargebacks", lambda: len(
+        (client.schema('commcalc').table('ops_chargeback').select('id')
+         .eq('org_id', org_id).eq('status', 'pending').limit(10000).execute().data) or []))
+
+    def _attendance_count():
+        from app.modules.storeops.router import attendance_exceptions as _ae
+        from app.modules.notify.workforce_reports import _pay_period_range
+        lo, hi = _pay_period_range(org_id, {})
+        return len((_ae(start=lo, end=hi, authorization=authorization, org_id=org_id)
+                    or {}).get("rows") or [])
+    probe("attendance_exceptions", _attendance_count)
+
+    def _hours_count():
+        from app.modules.storeops.payroll_approval import list_approvals as _la
+        t = (_la(authorization=authorization, org_id=org_id) or {}).get("totals") or {}
+        return int(t.get("pending_dm") or 0) + int(t.get("pending_hr") or 0)
+    probe("hours_approval", _hours_count)
+
+    def _approvals_count():
+        from app.modules.approvals.engine import summary as _asum
+        return int((_asum(org_id, authorization=authorization) or {}).get("pending") or 0)
+    probe("approvals_pending", _approvals_count)
+
+    def _accountability_count():
+        from app.modules.closing.router import deposit_accountability_board as _dab
+        s = (_dab(start=month_start, end=today.isoformat(), authorization=authorization,
+                  org_id=org_id) or {}).get("summary") or {}
+        return int(s.get("store_days") or 0) - int(s.get("green_days") or 0)
+    probe("deposit_accountability", _accountability_count)
+
+    def _coverage_count():
+        r = billpay_coverage(period, org_id=org_id) or {}
+        return int(((r.get("counts") or {}).get("exceptions")) or 0)
+    probe("billpay_coverage", _coverage_count)
+
+    def _staleness_count():
+        from app.modules.account import autocompute as _ac
+        st = _ac.staleness(client, org_id, period)
+        return 1 if st.get("stale") else 0
+    probe("statement_staleness", _staleness_count)
+
+    return _csum.assemble(counts, period=period, as_of=today.isoformat())
+
+
 @router.get("/flags/{period}")
 async def get_flags(period: str, authorization: str = Header(default=""),
                     include_resolved: bool = False,

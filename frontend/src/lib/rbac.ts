@@ -126,6 +126,7 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/coaching', 'commissions'], ['/commcalc/sales-analyzer', 'commissions'],
   ['/commcalc/sales-comparison', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
+  ['/commcalc/kpi-failing', 'commissions'],
   ['/commcalc/discrepancy', 'commissions'], ['/commcalc/sales-recon', 'commissions'],
   ['/commcalc/epay-fee-recon', 'commissions'],
   ['/commcalc/asset', 'asset'], ['/commcalc/vip', 'vip'], ['/accounts', 'accounts'],
@@ -363,6 +364,50 @@ export const NAV: NavGroup[] = [
     { href: '/vision/activity', label: 'Floor Activity', icon: '🧍', module: 'vision', scopes: ['all', 'market'], tileOnly: true },
     { href: '/vision/behavior', label: 'Coaching', icon: '🎧', module: 'vision', scopes: ['all', 'market'], tileOnly: true },
     { href: '/vision/settings', label: 'Vision Settings', icon: '⚙️', module: 'vision', scopes: ['all'], tileOnly: true },
+  ]},
+  // ── Management Overview (owner directive 2026-09-03, mig 948) ───────────────────────────────
+  // A NEW top-level dashboard category: the management reports on one tiled hub. TILE CONTENT is
+  // D1 CONFIG (house layout seeded by mig 948, tenant-editable in the Dashboard Designer); this
+  // group only gives the hub its NAV identity + the interior pages' RBAC. Every non-new item is a
+  // tileOnly DUPLICATE of its original entry keeping module + scopes byte-identical (the Reports-
+  // directory duplicate precedent — zero RBAC change); the "Rep Incentive" relabel of Owner
+  // Overview lives in the mig-948 tile-layout DATA (layout item label > NAV label), never here.
+  { group: 'Management Overview', module: 'commissions', items: [
+    { href: '/hub/management-overview', label: 'Management Overview Dashboard', icon: '🧭', module: 'commissions' },
+    { href: '/commcalc/sales-report', label: 'Sales Report', icon: '🧾', module: 'commissions', tileOnly: true },
+    { href: '/commcalc/exec/mtd', label: 'Executive MTD', icon: '📅', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/sales-comparison', label: 'Sales Comparison', icon: '📈', module: 'commissions', tileOnly: true },
+    { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // NEW report (2026-09-03): high-level overview of every KPI below target, store → rep drill-down.
+    { href: '/commcalc/kpi-failing', label: 'Failing KPIs', icon: '🎯', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    // NEW report (2026-09-03): owed-to-distributor + payments/payroll/rents due this week per store.
+    { href: '/accounts/liabilities-due', label: 'Current Monetary Liabilities', icon: '💳', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
+  ]},
+  // ── Flags & Compliance (owner directive 2026-09-03, mig 948) ────────────────────────────────
+  // "every flag and compliance issue should be under that": a separate dashboard category whose
+  // curated page (/compliance) shows per-queue counts (GET /commcalc/compliance-summary) over the
+  // D1 tile layout (house layout seeded by mig 948). Same zero-RBAC-change duplicate rule as above.
+  { group: 'Flags & Compliance', module: 'commissions', items: [
+    { href: '/compliance', label: 'Flags & Compliance Dashboard', icon: '🛡️', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/commcalc/flags', label: 'Flags', icon: '🚩', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/accessory-flags', label: 'Accessory Flags', icon: '🔖', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/chargebacks', label: 'Chargebacks & Fraud', icon: '🔻', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/commission-discrepancy', label: 'Commission Discrepancy', icon: '⚖️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', icon: '⚠️', module: 'commissions', tileOnly: true },
+    { href: '/commcalc/recovery', label: 'Appeal Recovery', icon: '💰', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // First NAV home for the ingest-guard quarantine queue (page pre-existed, menu-less; admin tier).
+    { href: '/commcalc/ingest-guard', label: 'Ingest Guard', icon: '🛡️', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/admin/import-health', label: 'Import Health', icon: '📡', module: 'admin', tileOnly: true },
+    { href: '/failures', label: 'Failure Logs', icon: '🩺', module: 'admin', tileOnly: true },
+    { href: '/storeops/attendance', label: 'Attendance Exceptions', icon: '🚨', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/storeops/accountability', label: 'Lateness %', icon: '🎓', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/storeops/payroll/approvals', label: 'Hours Approval', icon: '✅', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/approvals', label: 'Approvals', icon: '✅', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/closing/deposit-recon', label: 'Cash Deposit Recon', icon: '💵', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/envelope-report', label: 'Envelope Report', icon: '✉️', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/tender-recon-3way', label: '3-Way Tender Recon', icon: '🧮', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/recon', label: 'Reconciliation', icon: '🔎', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
   ]},
   { group: 'Incentives', module: 'commissions', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
@@ -883,7 +928,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/targets', 'targets'], ['/commcalc/targets/action-plan', 'targets'],
   ['/commcalc/atu-opportunity', 'targets'],
   ['/commcalc/targets/accessories', 'targets'], ['/commcalc/targets/my', 'targets'],
-  ['/commcalc/kpi', 'targets'], ['/commcalc/productivity', 'targets'], ['/commcalc/coaching', 'targets'],
+  ['/commcalc/kpi', 'targets'], ['/commcalc/kpi-failing', 'targets'], ['/commcalc/productivity', 'targets'], ['/commcalc/coaching', 'targets'],
   // Assets & Inventory (incl. Distributors/VIP consignment)
   ['/commcalc/asset', 'assets'], ['/commcalc/asset/dashboard', 'assets'], ['/commcalc/asset/owed-weekly', 'assets'],
   ['/commcalc/asset/aging', 'assets'], ['/commcalc/asset/missing-phones', 'assets'],
@@ -898,6 +943,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/accounts/analysis', 'finance'], ['/accounts/cash-flow', 'finance'],
   ['/accounts/balance-sheet', 'finance'], ['/accounts/inventory', 'finance'], ['/accounts/recon', 'finance'],
   ['/accounts/residual-per-sub', 'finance'], ['/accounts/journal', 'finance'],
+  ['/accounts/liabilities-due', 'finance'],
   ['/commcalc/gp', 'finance'], ['/commcalc/expenses', 'finance'], ['/commcalc/tax-collected', 'finance'],
   // Payroll & HR
   ['/hr', 'payroll'], ['/hr/people', 'payroll'], ['/hr/onboarding', 'payroll'], ['/hr/compliance', 'payroll'],
