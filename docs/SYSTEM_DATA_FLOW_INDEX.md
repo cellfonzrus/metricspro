@@ -1533,9 +1533,11 @@ Pinned PAY-ENGINE in the guard.
     `sales_source='legacy'`) computes from a 9-day month — the owner's "August rep-commission
     activations wrong while Exec MTD is right" (2026-09-03) is exactly this, because Exec MTD
     reads the feed-backed union (§3). Luxelink is already on `sales_source='union'` (complete);
-    the house August fix is the module's own promotion + recalculation
-    (`_promote_feed_to_raw_sales('August 2026')` previewed OK: 8,355→24,890 lines, monthly_only 0,
-    then `_run_calculation`). Durable options: re-enable `sales` auto in the registry, or move the
+    the house August fix — the module's own promotion + recalculation — RAN 2026-09-03T20:58Z:
+    `_promote_feed_to_raw_sales('August 2026')` wrote 24,890 lines (monthly_only 0, ingest guard
+    clean), `_run_calculation` regenerated the 42-row snapshot from the full 31-day basis
+    (premium/byod/upgrade acts 201/197/215 → 588/642/696), zero cross-tenant content re-entered.
+    Durable options remain open: re-enable `sales` auto in the registry, or move the
     org to `sales_source='union'` (money setting, owner's call — and since 2026-09-03 the Boost
     calc honors it too, §6). `⚠` until one of those lands — every future month will freeze the
     same way at rollover. (A month whose raw_sales is fully EMPTY — September at the freeze — is
