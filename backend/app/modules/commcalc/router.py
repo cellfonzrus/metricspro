@@ -13744,6 +13744,22 @@ def get_nav_config(org_id: str = ORG_ID):
     labels = {}
     caps = {}
     layout = {}
+    # HOUSE label PRESETS first (mig 947, the mig-945 preset-at-house pattern): scope 'nav_default'
+    # / 'group_default' rows on the HOUSE org are the platform-default display labels every tenant
+    # inherits; the tenant's own scope='nav'/'group' nicknames below OVERLAY them per key. Best-
+    # effort — a failed read leaves the built-in labels (pre-947 behavior, byte-identical).
+    try:
+        hrows = (client.schema('commcalc').table('ui_label_override').select('scope,key,label')
+                 .eq('org_id', ORG_ID).in_('scope', ['nav_default', 'group_default'])
+                 .execute().data) or []
+        for r in hrows:
+            k = (r.get('key') or ''); lab = r.get('label')
+            if r.get('scope') == 'group_default':
+                k = 'group:' + k
+            if k and lab:
+                labels[k] = lab
+    except Exception:
+        pass
     try:
         rows = (client.schema('commcalc').table('ui_label_override').select('scope,key,label')
                 .eq('org_id', org_id).execute().data) or []
@@ -19487,6 +19503,100 @@ def update_discrepancy_status(discrepancy_id: int, payload: dict, org_id: str = 
     client = sb()
     client.schema("commcalc").table("discrepancy_results")        .update({"status": payload.get("status"), "notes": payload.get("notes")})        .eq("org_id", org_id)        .eq("id", discrepancy_id)        .execute()
     return {"status": "ok"}
+
+
+# ═══ COMMISSION DISCREPANCY HUB — commission not received + appeals (owner directive 2026-09-03,
+# mig 947). The hub READS the existing discrepancy_results rows (both engines' output — never a
+# second derivation) across a PERIOD RANGE and lets management annotate an appeal state per row
+# ("appeal filed / appeal won / appeal denied / written off", who/when). All decisions are PURE in
+# discrepancy_appeals.py (proof harness_discrepancy_appeals.py); these endpoints only query.
+# Distinct path (/discrepancy-appeals, not /discrepancy/…) because /discrepancy/{period} would
+# otherwise swallow the route. The denied-appeal claw-back chase list stays /recovery/* (mig 098,
+# reused not re-derived). ═════════════════════════════════════════════════════════════════════════
+
+@router.get("/discrepancy-appeals")
+def list_discrepancy_appeals(period_from: str = "", period_to: str = "", source: str = "",
+                             status: str = "", appeal_status: str = "", store: str = "",
+                             date_from: str = "", date_to: str = "", org_id: str = ORG_ID):
+    """Commission Discrepancy hub rows, org-scoped, filterable: period range (YYYY-MM, spelling-
+    agnostic via discrepancy_appeals.period_range_variants — the _pvariants doctrine), engine
+    source ('boost' includes pre-312 NULL rows / 'ma'), row status, appeal state ('none' = no
+    appeal activity), store, and an activation-date range. Returns rows + the pure summary buckets
+    + `appeals_ready` (False on a pre-947 database — rows still return, appeal filters degrade)."""
+    from app.modules.commcalc import discrepancy_appeals as _da
+    try:
+        pvars = _da.period_range_variants(period_from, period_to)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    client = sb()
+
+    def _q(with_appeal_filter):
+        q = (client.schema("commcalc").table("discrepancy_results").select("*")
+             .eq("org_id", org_id).in_("period", pvars))
+        src = (source or "").strip().lower()
+        if src == "boost":
+            q = q.or_("source.eq.boost,source.is.null")
+        elif src:
+            q = q.eq("source", src)
+        if (status or "").strip():
+            q = q.eq("status", status.strip())
+        if (store or "").strip():
+            q = q.eq("store", store.strip())
+        if (date_from or "").strip():
+            q = q.gte("activation_date", date_from.strip())
+        if (date_to or "").strip():
+            q = q.lte("activation_date", date_to.strip())
+        if with_appeal_filter:
+            ap = (appeal_status or "").strip().lower()
+            if ap == "none":
+                q = q.is_("appeal_status", "null")
+            elif ap:
+                q = q.eq("appeal_status", ap)
+        return q.order("gap", desc=True).limit(5000).execute().data or []
+
+    appeals_ready = True
+    try:
+        rows = _q(True)
+    except Exception:
+        # Pre-947 database (appeal columns absent): degrade to the unfiltered-by-appeal query so
+        # the not-received report still renders; the UI disables appeal actions on appeals_ready=False.
+        appeals_ready = False
+        try:
+            rows = _q(False)
+        except Exception as e:
+            raise HTTPException(500, f"discrepancy query failed: {e}")
+    return {"rows": rows, "summary": _da.summarize_appeals(rows),
+            "appeals_ready": appeals_ready,
+            "period_from": (period_from or period_to), "period_to": (period_to or period_from)}
+
+
+@router.patch("/discrepancy-appeals/{row_id}")
+def set_discrepancy_appeal(row_id: int, payload: dict, org_id: str = ORG_ID,
+                           authorization: str = Header(default="")):
+    """Move ONE discrepancy row through the appeal state machine. Body: {appeal_status, appeal_note?}
+    — appeal_status '' clears back to no-appeal (full NULL reset). Transition validity is decided
+    PURELY by discrepancy_appeals.validate_transition against the row's CURRENT state (read first,
+    org-scoped, 404 when the row is not this org's); who/when stamped via _caller_uid (the mig-201
+    updated_by precedent). Touches ONLY the four appeal columns — never expected/received/gap/status."""
+    from app.modules.commcalc import discrepancy_appeals as _da
+    client = sb()
+    cur_rows = (client.schema("commcalc").table("discrepancy_results").select("id,appeal_status")
+                .eq("org_id", org_id).eq("id", row_id).limit(1).execute().data) or []
+    if not cur_rows:
+        raise HTTPException(404, "discrepancy row not found for this org")
+    try:
+        patch = _da.apply_appeal(cur_rows[0].get("appeal_status"), payload.get("appeal_status"),
+                                 payload.get("appeal_note"), _caller_uid(authorization),
+                                 _datetime.now(_timezone.utc).isoformat())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        client.schema("commcalc").table("discrepancy_results").update(patch) \
+            .eq("org_id", org_id).eq("id", row_id).execute()
+    except Exception as e:
+        raise HTTPException(400, "Could not save the appeal state — run migration "
+                                 f"947_commission_discrepancy_hub.sql first. [{e}]")
+    return {"ok": True, "id": row_id, **patch}
 
 
 # ── MA PAYMENT RULES (mig 312) — the owner's uploadable "business rules" for the B2B ↔ MA recon ───

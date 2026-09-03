@@ -396,7 +396,11 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/commission-ledger', label: 'Commission Ledger', icon: '🧾', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/ma-commission', label: 'Total Processor', icon: '📡', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/ma-overview-recon', label: 'MA Overview cross-check', icon: '🧾', module: 'commissions', scopes: ['all'], tileOnly: true },
-    { href: '/commcalc/commission-legs', label: 'Commission Legs (M1 / M2–M12)', icon: '🧩', module: 'commissions', scopes: ['all'], tileOnly: true },
+    // Renamed per owner directive 2026-09-03 ("Commission legs to be renamed as Commission received
+    // over M1-M12"). Built-in default only — mig 947 also ships the same wording as a HOUSE
+    // 'nav_default' label preset (mig 068/945 machinery), and a tenant's own scope='nav' nickname
+    // still overrides both. href/report_key/routes untouched (display-only, mig-068 doctrine).
+    { href: '/commcalc/commission-legs', label: 'Commission received over M1-M12', icon: '🧩', module: 'commissions', scopes: ['all'], tileOnly: true },
     // DM GATE — OWNER DIRECTIVE 2026-08-07, verbatim: "all flags need to be fed thru the dm, so yes
     // route it thru the dm and then visible to the scoped user." Flags now carries the SAME scope gate
     // its Chargebacks & Fraud sibling below has always had (admin 'all' + DM 'market'), so a flag
@@ -414,6 +418,11 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/daily-commission', label: 'Daily Incentive', icon: '📅', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/training', label: 'Training Center', icon: '🎓', module: 'targets', tileOnly: true },
     { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', icon: '⚠️', module: 'commissions', tileOnly: true },
+    // Commission Discrepancy HUB (owner directive 2026-09-03, mig 947): one place for commission
+    // NOT received across a period range + the per-row appeal workflow (filed/won/denied/written
+    // off) + the /recovery open-claims chase list. Management scope (all/market) — it exposes the
+    // org-wide unpaid ledger and appeal actions, same tier as its recon siblings above.
+    { href: '/commcalc/commission-discrepancy', label: 'Commission Discrepancy', icon: '⚖️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/imei-rebates', label: 'IMEI Rebates', icon: '🔁', module: 'commissions', tileOnly: true },
     { href: '/commcalc/recovery', label: 'Appeal Recovery', icon: '💰', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', icon: '🔁', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
@@ -864,7 +873,8 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/ma-commission', 'comm'], ['/commcalc/ma-overview-recon', 'comm'], ['/commcalc/financing', 'comm'],
   ['/commcalc/commission-legs', 'comm'],
   ['/commcalc/device-history', 'comm'], ['/commcalc/whatif', 'comm'],
-  ['/commcalc/discrepancy', 'comm'], ['/commcalc/recovery', 'comm'], ['/commcalc/flags', 'comm'],
+  ['/commcalc/discrepancy', 'comm'], ['/commcalc/commission-discrepancy', 'comm'],
+  ['/commcalc/recovery', 'comm'], ['/commcalc/flags', 'comm'],
   ['/commcalc/epay-fee-recon', 'comm'],
   ['/commcalc/chargebacks', 'comm'], ['/commcalc/accessory-flags', 'comm'],
   ['/commcalc/accessory-cost-audit', 'comm'], ['/commcalc/accessory-definition', 'comm'],

@@ -191,7 +191,10 @@ export default function CommissionLegsPage() {
   return (
     <div style={{ padding: 24, maxWidth: 1400 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧩 Commission Legs — what we made, by month</h1>
+        {/* Renamed per owner directive 2026-09-03 ("Commission legs to be renamed as Commission
+            received over M1-M12"). The sidebar/hub label is DATA (mig 947 'nav_default' preset,
+            tenant scope='nav' nickname overrides); this h1 carries the same default wording. */}
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧩 Commission received over M1-M12</h1>
         <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: 'rgba(34,197,94,.12)', color: '#16a34a' }}>
           READ-ONLY · changes no pay
         </span>

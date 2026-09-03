@@ -125,7 +125,7 @@ export default function CommissionCategoryMapPage() {
         Set it only for labels whose source never states a month. Category and Leg are independent: adding
         a leg never moves a line out of the bucket it is already in. Same split, same rules, on{' '}
         <a href="/commcalc/gp" style={{ color: 'var(--accent,#2563eb)' }}>Gross Profit →</a> and{' '}
-        <a href="/commcalc/commission-legs" style={{ color: 'var(--accent,#2563eb)' }}>Commission Legs →</a>
+        <a href="/commcalc/commission-legs" style={{ color: 'var(--accent,#2563eb)' }}>Commission received over M1-M12 →</a>
         {legHelp ? <><br /><span style={{ fontSize: 12, color: 'var(--text3)' }}>{legHelp}</span></> : null}
       </p>
       {!ready && (
