@@ -126,10 +126,21 @@ def _csv_set(s) -> set[str]:
 def _resolve_market_filter(market, markets):
     """Combine the legacy singular `market=` param with the new multi-select `markets=` (comma list) —
     both additive/backward-compatible. Returns None (no filter, nothing dropped) or a CASEFOLDED set to
-    compare against `_market_bucket(...).casefold()`."""
+    compare against `_market_bucket(...).casefold()`.
+
+    OWNER BUG REPORT 2026-09-02 ("cash pick up ... for the district managers is not showing the daily
+    envelopes"): a scope-'market' login's `app_users.market` is a COMMA-JOINED multi-market grant
+    ("Chicago, NY" = the Chicago market AND the NY market — `core.scope.login_grant_breakdown` has
+    comma-split it since ruling #6), and several pages auto-apply that raw grant as the singular
+    `market=` param. Treating it as ONE market name matched nothing (no store's market is the joined
+    string), so a multi-market DM saw ZERO rows while scope-'all' admins saw everything. The singular
+    param now ALSO admits its comma-split components — the same decomposition the span/grant side and
+    the `markets=` CSV param already apply — while KEEPING the whole string in the set, so a market
+    whose canonical name genuinely contains a comma still matches exactly as before. Pure widening:
+    never drops a row the old exact match kept."""
     s = _csv_set(markets)
     if not s and market:
-        s = {market}
+        s = {market.strip()} | _csv_set(market)
     return {m.casefold() for m in s} if s else None
 
 
@@ -3638,6 +3649,7 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, autho
                .eq("org_id", org_id).eq("period", period).limit(50000).execute().data) or []
     stores = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
     store_meta = {s.get("store_code"): s for s in stores if s.get("store_code")}
+    _recon_market_set = _resolve_market_filter(market, None)
     # Configurable activation-count fields (mig 501) — same fallback-to-hardcoded-3 as closing_summary.
     from . import count_config
     _cdefs = count_config.load_count_config(client, org_id)
@@ -3675,7 +3687,12 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, autho
         for key, reps in store_groups.items():
             code = None if str(key).startswith("name:") else key
             meta = store_meta.get(code, {}) if code else {}
-            if market and (meta.get("market") or "") != market:
+            # Shared market resolution (owner bug report 2026-09-02, same class as /pickups): the
+            # recon page auto-applies a scope-'market' caller's raw grant, which for a multi-market
+            # DM is the comma-joined string — the old exact (and case-sensitive) match dropped every
+            # store. Set-match via _resolve_market_filter; blank-market stores keep their existing
+            # behavior (dropped under an active filter — this is a read-only recon, not a cash list).
+            if _recon_market_set and (meta.get("market") or "").casefold() not in _recon_market_set:
                 continue
             addr = meta.get("address") or (reps[0].get("store_address") if reps else None) or (reps[0].get("store_name") if reps else None)
             for r in reps:
@@ -4750,7 +4767,15 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     # metadata gap. So here, an unresolved/blank market ALWAYS bypasses the filter unconditionally
     # (never excluded, not even by an implicit "(no market) not selected"); the filter can only ever
     # exclude an envelope whose store resolved to a REAL, DIFFERENT market than the one active.
-    market_cf = market.strip().casefold() if market else None
+    #
+    # OWNER BUG REPORT 2026-09-02 (DMs saw ZERO envelopes, admin saw all): the market value is now
+    # resolved through the SHARED `_resolve_market_filter` — the same helper /closing/rollup,
+    # /closing/summary and the DM-Verify submissions endpoints use — so a scope-'market' DM whose
+    # auto-applied grant is the comma-joined multi-market string ("Chicago, NY") matches BOTH markets
+    # instead of an exact string no store's market ever equals. Evidence: live LuxeLink 2026-09-02,
+    # 12/12 envelopes dropped by the old exact match for DM E189 (grant "Chicago, NY"), 0 dropped by
+    # her keyset; the fixed set-match shows all 12. See harness_pickup_market_span.py.
+    market_set = _resolve_market_filter(market, None)
 
     # EEP (mig 506/507): net each envelope's own approved closing_expense lines + envelope_withdrawal
     # amounts out of its cash — "ready_cash" on this page is what's ACTUALLY left in the envelope to
@@ -4778,7 +4803,7 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
         if ks is not None and not in_keyset(ks, code, meta.get("address")):
             continue
         mk = (meta.get("market") or "").strip() or sm_market.get(code, "")
-        if market_cf and mk and mk.casefold() != market_cf:
+        if market_set and mk and mk.casefold() not in market_set:
             continue
         # A store filter never excludes a row whose store didn't resolve to a real storeops.stores
         # record (no store_code at all) — it has no store identity a picker could ever offer, same
@@ -4861,7 +4886,7 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             if ks is not None and not in_keyset(ks, code, s.get("address")):
                 continue
             mk = (s.get("market") or "").strip() or sm_market.get(code, "")
-            if market_cf and mk and mk.casefold() != market_cf:
+            if market_set and mk and mk.casefold() not in market_set:
                 continue
             wd = _worked_display.get(code, {"worked": [], "source": "none", "summary": "no worked-signal recorded"})
             not_closed.append({"store_code": code, "store_name": s.get("address") or code, "market": mk,
@@ -5668,7 +5693,9 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
     if store_f:
         store_set.add(store_f)
     emp_set = {e.strip().lower() for e in employees.split(",") if e.strip()}
-    market_cf = market.strip().casefold() if market else None
+    # Same shared market resolution as /pickups (owner bug report 2026-09-02: a multi-market DM's
+    # comma-joined grant matched nothing as one exact string — zero envelopes; see the /pickups note).
+    market_set = _resolve_market_filter(market, None)
 
     out = []
     for r in rows:
@@ -5690,7 +5717,7 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
         mk = (meta.get("market") or "").strip() or sm_market.get(code, "")
         # Same DELIBERATELY-lenient market rule as /pickups: an unresolved/blank market always
         # bypasses the filter — a real bill-pay envelope must never vanish over a metadata gap.
-        if market_cf and mk and mk.casefold() != market_cf:
+        if market_set and mk and mk.casefold() not in market_set:
             continue
         if store_set and code and code.upper() not in store_set:
             continue
