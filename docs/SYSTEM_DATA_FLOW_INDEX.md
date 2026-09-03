@@ -149,9 +149,32 @@ disagain (owner directive 2026-07-16, 2026-07-25).
   (`_ad_cells_full` ← `_cr_resolve_activation_details` ← `activation_bucketing.py`, mig `313` per-org
   token rules — see §15 "Activation-Details basis").
 
+- **Carrier-aware report COLUMN LABELS + banner terminology (owner 2026-09-02, mig `945`):** the
+  activation-report column headers (Exec MTD / Activations — e.g. the device-financing column: Total
+  side "Edge", Boost side "ACIMA") and the Exec-MTD unrecognized-contract-type warning (whose text
+  names the b2bsoft MTD reconciliation) are DISPLAY TERMINOLOGY resolved from config, never carrier
+  branches (RULE TWO). Storage reuses `commcalc.ui_label_override` (mig `068` scope-multiplexing, the
+  `scope='tiles'` precedent): HOUSE-org rows `scope='report_col:<carrier>'` /
+  `'report_banner:<carrier>'` are the CARRIER PRESETS (mig `945` seeds boost: `edge`→`ACIMA` +
+  `unrecognized_ct_recon`→`off`; total: `edge`→`Edge` + `on` — byte-identical for Total/LuxeLink);
+  tenant rows under the un-suffixed scopes are that org's OVERRIDES. Resolution (PURE:
+  `report_labels.py` — `parse_label_rows`/`resolve_columns`/`resolve_banners`/`banner_on`/
+  `build_payload`; proof `harness_report_labels.py`): **tenant override > carrier preset > built-in
+  default**, keyed off the org's `commcalc.carrier` rows (mig `038`, the onboarding "Carrier
+  Selection" step) → auto-assign for a NEW tenant is LAZY (pick a carrier, labels follow; no setup
+  hook; no carrier row / no preset = built-ins, byte-identical). Served by `GET /report-labels`
+  (resolved per carrier + raw layers), edited by `PUT /report-labels` (registry-validated keys,
+  ''=delete=revert-to-inheritance; gated on the `classification` settings area). Frontend:
+  `lib/report-labels.ts` (`useReportLabels`/`pickLabelMap` — payload-carries-the-label, the mig-932
+  gp `acc_label` pattern; active-carrier lens picks the map) consumed by `exec/mtd/page.tsx`
+  (headers + exports + the `unrecognized_ct_recon` banner gate) and `activations/page.tsx`;
+  settings surface `components/ReportLabelSettings.tsx` ("🏷 Column labels" on Exec MTD). Display
+  config, not a feed → NO lineage-registry entry.
+
 **Endpoints:** `/sales-report` `router.py:15792`; `/sales-report/detail` `15980`;
 `/sales-report/classification-unmatched` `15925`; `/sales-comparison` `16096`; `/sales-diagnostics` `16206`;
-`/top-sellers/{period}` `16982`. **Frontend:** `commcalc/sales-report/page.tsx`, `exec/page.tsx`,
+`/top-sellers/{period}` `16982`; `/report-labels` GET/PUT (carrier-aware column labels, beside
+`/accessory-config`). **Frontend:** `commcalc/sales-report/page.tsx`, `exec/page.tsx`,
 `exec/mtd/page.tsx`.
 
 **Gap / caution:** This shared pass is **DISPLAY ONLY** — the commission CALC path is deliberately NOT
@@ -1213,7 +1236,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`) | `PUT /accessory-config` (Sales Report → Classification settings) | `_accessory_config(_uncached)` (accessory/billpay/blank-ct classification for `_sales_cell_agg`); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, own defensive read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, own defensive read, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`) |
 | `commcalc.metric_source_of_truth` (per-metric basis-of-truth config, mig `923`; columns added by `944` `processor_order_types`/`processor_product_tokens` — the bill-payment row filter for the daily-TX processor feed) | `PUT /metric-source-config` | `_metric_source` (consumed by Exec MTD activation override, `/metric-recon`, `/billpay-coverage`, `_pos_billpay_for_days`/`_billpay_processor_by_store(_day)` — §12 3-way Leg C; NULL columns = `metric_recon` house defaults) |
 | `commcalc.exec_metric_config` (per-org Exec-MTD metric DEFINITIONS, mig `204`; seed fn `seed_exec_metric_config`) | `GET/PUT /exec-metric-config` `router.py:24766/24781` (upsert by `org_id,bucket`); 2026-09-02: LuxeLink `bill_payment` rules gained `product_desc_contains:["wallet funding"]` (org-scoped data fix, house default untouched) | `_exec_metric_config` (DB row REPLACES the bucket's default rules) → `_sales_cell_agg` exec metrics via `_exec_line_match` |
-| `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`) | `GET /nav-config` (caller org only, no house inheritance — sidebar), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins) |
+| `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`); `PUT /report-labels` (scopes `report_col`/`report_banner` at the TENANT org — overrides; gated on `classification`); mig `945` seeds the HOUSE carrier-preset rows (scopes `report_col:<carrier>`/`report_banner:<carrier>`) | `GET /nav-config` (caller org only, no house inheritance — sidebar), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins), `GET /report-labels` (`report_labels.load_report_labels`: tenant ∪ HOUSE, tenant override > carrier preset > built-in — §3 carrier column labels) |
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3) |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution |
@@ -1274,6 +1297,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `GET /account/projection` (`?months=&horizon=` — deterministic linear/seasonal-naive P&L projection + cash runway, per-org `projection_config` mig `941`; rows flagged `projected:true`; `account_trends` grant) | `account/router.py` (`financial_projection` → pure `projection_engine.project`) | §4 projection engine |
 | `GET /account/valuation` (assumption-driven ESTIMATE range: TTM multiples + asset floor + projection-fed DCF w/ sensitivity grid; per-org `valuation_config` mig `941`; own default-closed `company_valuation` grant; disclaimer always in payload) | `account/router.py` (`company_valuation` → pure `valuation.valuation`) | §4 company valuation |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
+| `GET /report-labels` (resolved carrier-aware report column labels + banner on/off per carrier: tenant override > house carrier preset (mig 945) > built-in; consumed by Exec MTD + Activations headers/exports and the `unrecognized_ct_recon` banner gate), `PUT /report-labels` (tenant overrides only, registry-validated keys, ''=revert-to-inheritance; `classification` settings gate) | `commcalc/router.py` (`get_report_labels`/`put_report_labels` → `report_labels.py`, beside `/accessory-config`) | §3 carrier column labels |
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
 | `GET /closing/envelope-report`, `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`); `notify/closing_reports.py` | §12 Envelope report |
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
@@ -1294,6 +1318,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | Accessory $ ("acc_gp") | `raw_sales.ext_price` (+ device set-up fee; NOT gp, NOT Ondigo) | `_compute_feed_actuals_py` `router.py:18678` |
 | GP report accessory column ("Acc Sales" / legacy "Acc GP") | `raw_sales.ext_price` of accessory lines (`accessory_config.gp_acc_basis='sales'` — house default, mig 932) or `raw_sales.gp` (`'gp'` opt-back) | `calc_gp_report(acc_basis=…)` `gp_report.py`; label from payload `acc_label` (§4) |
 | Edge count | `raw_sales` product tokens | `_mi_classify_sales_row` via `_mi_resolve_numbers` `router.py:28843` (MI only; folded into premium in rep pay) |
+| Activation-report column DISPLAY LABELS (e.g. device financing: "Edge" Total-side / "ACIMA" Boost-side) + `unrecognized_ct_recon` banner on/off — TERMINOLOGY ONLY, never a number | `commcalc.ui_label_override` scopes `report_col[:carrier]`/`report_banner[:carrier]` (HOUSE carrier presets mig `945`; tenant overrides) × the org's `commcalc.carrier` rows (mig `038`) | `report_labels.load_report_labels` → `GET /report-labels`; frontend `lib/report-labels.ts useReportLabels` (Exec MTD + Activations headers/exports; Exec MTD ct-gap banner gate); settings `components/ReportLabelSettings.tsx`; proof `harness_report_labels.py` (§3) |
 | Activation TYPE buckets (AD basis: New / Port / BYOD / Tablet / Home Internet / Edge / Upgrade / hidden `BYOD Upgrade`) | `raw_custom_import` Activation-Details sheet (`Contract Type` + SP-PO/product/category name) × `accessory_config.activation_details_rules` token config (mig 313; house defaults: contract-type-only word-boundary Edge, `byod upgrade` → hidden family) | `activation_bucketing.activation_details_bucket` via `_cr_resolve_activation_details`; consumed by `_ad_cells_full`/`_apply_activation_basis` (Exec MTD + Sales Report columns), `_ad_activation_buckets` (recon), `/activation-counts/{period}`; `total_activation` excludes `TOTAL_ACTIVATION_EXCLUDED = (Upgrade, BYOD Upgrade)` |
 | VHI/FIOS / home-internet count | `raw_sales` product tokens / `installment_category.py:82` | `_mi_resolve_numbers` `28843`; `installment_category` (plan-mode, runtime-only) |
 | ATU % | `raw_dlar_store.atu` / `raw_dlar_rep.atu_pct` / `store_kpis.atu_pct` | `_cr_resolve_kpi_metrics` `25656`; MI ATU RPC mig `032` |

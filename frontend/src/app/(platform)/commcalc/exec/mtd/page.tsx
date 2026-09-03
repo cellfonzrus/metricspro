@@ -11,6 +11,8 @@ import type { StoreOpt } from '@/lib/market-store-cascade'
 import DataGrid from '@/components/DataGrid'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import { useActiveCarrier } from '@/lib/auth-context'
+import { useReportLabels } from '@/lib/report-labels'
+import ReportLabelSettings from '@/components/ReportLabelSettings'
 
 // Super-admin org-resolution mitigation (same as the Sales Report page): reads carry the active tenant
 // so a super-admin (whom the tenant middleware does NOT rewrite) reads the selected tenant, not the house
@@ -38,6 +40,11 @@ export default function ExecMtdPage() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
   const [showCfg, setShowCfg] = useState(false)
+  const [showLabels, setShowLabels] = useState(false)
+  // Carrier-aware column labels + banner terminology (owner 2026-09-02, mig 945): resolved server-side
+  // as tenant override > house carrier preset > built-in default. colLabel falls back to the built-in
+  // header below, so an org with no preset/override renders byte-identical to before.
+  const { colLabel, bannerOn, reload: reloadLabels } = useReportLabels()
   const [fresh, setFresh] = useState<any>(null)   // per-feed data freshness — surfaces a stalled ingest
   // RULE FIVE standardized filters — one StandardFilterValue (store(s) / market(s) / rep(s)), applied
   // SERVER-SIDE. `period` is NOT part of it here: this page follows the global period selector in the
@@ -137,32 +144,37 @@ export default function ExecMtdPage() {
   // the set-up fee is a separate PAY item, never folded into accessory$, but it DOES count toward the
   // accessory TARGET). Both come from the one shared classifier; showing the bridge (Set-up Fee) and
   // the target basis (Acc.+Set-up) is what lets the two pages be reconciled to the cent.
+  // Headers route through colLabel (owner 2026-09-02): the second argument is the built-in default,
+  // so with no carrier preset / tenant override every header renders exactly as before. On the Boost
+  // side the mig-945 preset relabels 'edge' → 'ACIMA' (the Boost device-financing program) — same
+  // field key, same numbers, carrier-appropriate terminology. Exports share these ExportColumns, so
+  // the grid and the Excel/PDF sheets can never disagree on a header.
   const cols = (lk: string): ExportColumn[] => [
     { header: lk === 'store' ? 'Store' : 'Employee', field: lk, role: lk === 'store' ? 'store' : 'rep', get: (r) => r[lk] },
-    { header: 'Total Activation', field: 'total_activation', type: 'number', get: (r) => r.total_activation },
-    { header: 'Activation', field: 'activation', type: 'number', get: (r) => r.activation },
-    { header: 'Port', field: 'port', type: 'number', get: (r) => r.port },
-    { header: 'BYOD', field: 'byod', type: 'number', get: (r) => r.byod },
-    { header: 'Tablet', field: 'tablet', type: 'number', get: (r) => r.tablet },
-    { header: 'Home Internet', field: 'home_internet', type: 'number', get: (r) => r.home_internet },
-    { header: 'Edge', field: 'edge', type: 'number', get: (r) => r.edge },
-    { header: 'Upgrade', field: 'upgrade', type: 'number', get: (r) => r.upgrade },
-    { header: 'Total Phones', field: 'total_phones', type: 'number', get: (r) => r.total_phones },
-    { header: 'Trending Box', field: 'trending_box', type: 'number', get: (r) => r.trending_box },
-    { header: 'Bill Payment Qty', field: 'bill_payment_qty', type: 'number', get: (r) => r.bill_payment_qty },
-    { header: '$', field: 'amount', money: true, get: (r) => r.amount },
-    { header: 'Conv.', field: 'conv', type: 'number', get: (r) => r.conv },
-    { header: 'Acc. Sales', field: 'acc_sales', money: true, get: (r) => r.acc_sales },
-    { header: 'APB', field: 'apb', type: 'number', get: (r) => r.apb },
-    { header: 'Trending Acc. Sales', field: 'trending_acc_sales', money: true, get: (r) => r.trending_acc_sales },
-    { header: 'Activation Fee', field: 'activation_fee', money: true, get: (r) => r.activation_fee },
-    { header: 'Total Protect', field: 'total_protect', type: 'number', get: (r) => r.total_protect },
-    { header: 'Set-up Fee', field: 'setup_fee', money: true, get: (r) => r.setup_fee },
+    { header: colLabel('total_activation', 'Total Activation'), field: 'total_activation', type: 'number', get: (r) => r.total_activation },
+    { header: colLabel('activation', 'Activation'), field: 'activation', type: 'number', get: (r) => r.activation },
+    { header: colLabel('port', 'Port'), field: 'port', type: 'number', get: (r) => r.port },
+    { header: colLabel('byod', 'BYOD'), field: 'byod', type: 'number', get: (r) => r.byod },
+    { header: colLabel('tablet', 'Tablet'), field: 'tablet', type: 'number', get: (r) => r.tablet },
+    { header: colLabel('home_internet', 'Home Internet'), field: 'home_internet', type: 'number', get: (r) => r.home_internet },
+    { header: colLabel('edge', 'Edge'), field: 'edge', type: 'number', get: (r) => r.edge },
+    { header: colLabel('upgrade', 'Upgrade'), field: 'upgrade', type: 'number', get: (r) => r.upgrade },
+    { header: colLabel('total_phones', 'Total Phones'), field: 'total_phones', type: 'number', get: (r) => r.total_phones },
+    { header: colLabel('trending_box', 'Trending Box'), field: 'trending_box', type: 'number', get: (r) => r.trending_box },
+    { header: colLabel('bill_payment_qty', 'Bill Payment Qty'), field: 'bill_payment_qty', type: 'number', get: (r) => r.bill_payment_qty },
+    { header: colLabel('amount', '$'), field: 'amount', money: true, get: (r) => r.amount },
+    { header: colLabel('conv', 'Conv.'), field: 'conv', type: 'number', get: (r) => r.conv },
+    { header: colLabel('acc_sales', 'Acc. Sales'), field: 'acc_sales', money: true, get: (r) => r.acc_sales },
+    { header: colLabel('apb', 'APB'), field: 'apb', type: 'number', get: (r) => r.apb },
+    { header: colLabel('trending_acc_sales', 'Trending Acc. Sales'), field: 'trending_acc_sales', money: true, get: (r) => r.trending_acc_sales },
+    { header: colLabel('activation_fee', 'Activation Fee'), field: 'activation_fee', money: true, get: (r) => r.activation_fee },
+    { header: colLabel('total_protect', 'Total Protect'), field: 'total_protect', type: 'number', get: (r) => r.total_protect },
+    { header: colLabel('setup_fee', 'Set-up Fee'), field: 'setup_fee', money: true, get: (r) => r.setup_fee },
     // SET-UP FEE ECONOMICS (owner 2026-08-01, mig 263). Both are null until the tenant states the
     // percentage — rendered as an em-dash, never as a $0.00 that looks like a real answer.
-    { header: 'Dealer share', field: 'setup_fee_dealer_share', money: true, get: (r) => r.setup_fee_dealer_share },
-    { header: 'Employee pay', field: 'setup_fee_employee_pay', money: true, get: (r) => r.setup_fee_employee_pay },
-    { header: 'Acc.+Set-up (target basis)', field: 'acc_plus_setup', money: true, get: (r) => r.acc_plus_setup },
+    { header: colLabel('setup_fee_dealer_share', 'Dealer share'), field: 'setup_fee_dealer_share', money: true, get: (r) => r.setup_fee_dealer_share },
+    { header: colLabel('setup_fee_employee_pay', 'Employee pay'), field: 'setup_fee_employee_pay', money: true, get: (r) => r.setup_fee_employee_pay },
+    { header: colLabel('acc_plus_setup', 'Acc.+Set-up (target basis)'), field: 'acc_plus_setup', money: true, get: (r) => r.acc_plus_setup },
   ]
   // CLICK-A-HEADER SORT (owner 2026-08-10) — the same shared primitive <ReportShell> reports use, so a
   // hand-rolled table behaves identically. Column keys come from `cols(...)` (the export definition), so
@@ -175,15 +187,17 @@ export default function ExecMtdPage() {
     { name: 'By employee', columns: cols('employee'), rows: withTotal(data?.by_employee?.rows || [], data?.by_employee?.total || {}, 'employee') },
   ]
 
-  // Tooltips only on the two appended reconciliation columns (the b2bsoft 15 are unchanged).
+  // Tooltips only on the appended reconciliation columns (the b2bsoft 15 are unchanged). Keyed by
+  // FIELD (not header text) so a relabeled column (mig 945 carrier presets / tenant overrides)
+  // keeps its tooltip.
   const HEADER_TIPS: Record<string, string> = {
-    'Acc. Sales': 'Accessory sales revenue ONLY — the device set-up fee is excluded (it is a separate pay item). Same number as the Sales Report.',
-    'Set-up Fee': 'Device set-up fee sold. A separate pay item, so it is NOT in Acc. Sales — but it DOES count toward the accessory target.',
-    'Acc.+Set-up': 'Accessory sales + device set-up fee = the basis the Accessory Targets page measures achieved vs target on. THIS is the number to compare with that page.',
-    'Dealer share': 'What the CARRIER pays the dealer of the set-up / activation fee collected'
+    acc_sales: 'Accessory sales revenue ONLY — the device set-up fee is excluded (it is a separate pay item). Same number as the Sales Report.',
+    setup_fee: 'Device set-up fee sold. A separate pay item, so it is NOT in Acc. Sales — but it DOES count toward the accessory target.',
+    acc_plus_setup: 'Accessory sales + device set-up fee = the basis the Accessory Targets page measures achieved vs target on. THIS is the number to compare with that page.',
+    setup_fee_dealer_share: 'What the CARRIER pays the dealer of the set-up / activation fee collected'
       + (activeCarrier === 'total' ? ' (e.g. 50%)' : ' (e.g. 100%)')
       + '. Informational — no employee payout reads it. “—” means nobody has entered the percentage yet.',
-    'Employee pay': 'The employee’s share of the set-up / activation fee collected, at the percentage configured for this tenant. “—” means the fee is not part of employee commission here, or no percentage has been entered.',
+    setup_fee_employee_pay: 'The employee’s share of the set-up / activation fee collected, at the percentage configured for this tenant. “—” means the fee is not part of employee commission here, or no percentage has been entered.',
   }
 
   // A percentage nobody has entered is NOT zero dollars. Render it as an em-dash so the column
@@ -203,9 +217,9 @@ export default function ExecMtdPage() {
       if (c.money) return fmt(r[f])
       return int(r[f])
     }
-    return { ...c, render, tip: HEADER_TIPS[c.header] }
+    return { ...c, render, tip: HEADER_TIPS[f] }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [labelKey, activeCarrier])
+  }), [labelKey, activeCarrier, colLabel])
 
   return (
     <div>
@@ -316,8 +330,12 @@ export default function ExecMtdPage() {
           tenant's Home Internet / FiOS / Tablet activation labels are the usual culprits — resolves to None
           and is EXCLUDED, so this total reads lower than the b2bsoft MTD count that includes them. Naming the
           uncounted labels (and how many transactions each hides) turns a silent low number into a one-click
-          fix in Classification settings. Hidden when nothing is unmapped (note null). */}
-      {gaps.note && (
+          fix in Classification settings. Hidden when nothing is unmapped (note null).
+          TERMINOLOGY GATE (owner 2026-09-02, mig 945): the paragraph names the b2bsoft MTD reconciliation,
+          which is meaningless terminology where the carrier preset turns it off (Boost preset: off; Total
+          preset / no preset: on — today's behavior, byte-identical). bannerOn is CONFIG resolution (tenant
+          override > carrier preset > default on) — never a carrier branch in code. */}
+      {gaps.note && bannerOn('unrecognized_ct_recon') && (
         <div style={{ fontSize: 12.5, marginBottom: 10, background: '#fffbeb', border: '1px solid #fde68a',
           color: '#92400e', borderRadius: 8, padding: '9px 12px' }}>
           <div style={{ fontWeight: 700, marginBottom: 3 }}>⚠️ Some activations aren’t being counted in Total Activation</div>
@@ -378,11 +396,17 @@ export default function ExecMtdPage() {
           <button onClick={() => setShowCfg((s) => !s)} style={{ fontSize: 12, background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', color: 'var(--text2)' }}>
             ⚙︎ Metric definitions
           </button>
+          {/* "A place to fix the column labels as per the carrier" (owner 2026-09-02) — the carrier
+              preset applies automatically; this panel is where a tenant overrides any label. */}
+          <button onClick={() => setShowLabels((s) => !s)} style={{ fontSize: 12, background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', color: 'var(--text2)' }}>
+            🏷️ Column labels
+          </button>
           <ReportExportBar title={`Executive MTD ${period}`} filename={`exec_mtd_${String(period).replace(/\s+/g, '_')}`} sheets={exportSheets} />
         </div>
       </div>
 
       {showCfg && <MetricConfigPanel onClose={() => setShowCfg(false)} onSaved={load} />}
+      {showLabels && <ReportLabelSettings onClose={() => setShowLabels(false)} onSaved={reloadLabels} />}
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
