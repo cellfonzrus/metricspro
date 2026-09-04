@@ -35,6 +35,7 @@ HOUSE_ORG = "00000000-0000-0000-0000-000000000001"
 # '<base>:<carrier>' at the HOUSE org = that carrier's preset.
 SCOPE_COL = "report_col"
 SCOPE_BANNER = "report_banner"
+SCOPE_TERM = "report_term"
 
 # ── The label-able report columns (key → built-in default header). These are the Exec MTD /
 #    Activations activation-report columns; the SETTINGS UI lists exactly this registry
@@ -64,6 +65,21 @@ LABELABLE_COLUMNS = (
     ("acc_plus_setup", "Acc.+Set-up (target basis)"),
 )
 DEFAULT_COLUMN_LABELS = dict(LABELABLE_COLUMNS)
+
+# ── Carrier VOCABULARY TERMS (owner directive 2026-09-04: a tenant must only ever see its own
+#    carrier's vocabulary — no "Total Wireless"/"VidaPay"/"MA …" wording on the Boost side, no
+#    "Boost"/"VIP"/"ACIMA" wording on the Total side). Shared page copy writes the NEUTRAL noun
+#    below and resolves the carrier-specific name from the org's preset (mig 953 seeds boost/total),
+#    same precedence as columns: tenant override > house carrier preset > built-in neutral default.
+#    A carrier with no preset renders the neutral default — copy stays correct for any future carrier.
+LABELABLE_TERMS = (
+    ("processor", "payment processor"),        # boost: ePay · total: VidaPay
+    ("distributor", "distributor"),            # boost: VIP Wireless · total: VidaPay / T-CETRA
+    ("financing", "device financing"),         # boost: ACIMA · total: Edge
+    ("marketplace_feed", "carrier marketplace feed"),  # total: the VidaPay/T-CETRA "MA Handset Ordering" feed
+    ("pos_system", "POS"),                     # boost house: b2bsoft
+)
+DEFAULT_TERM_LABELS = dict(LABELABLE_TERMS)
 
 # ── The gate-able report banners (key → default 'on'|'off'). 'on' with no rows anywhere = today's
 #    behavior, so an un-migrated / preset-less org is byte-identical.
@@ -130,18 +146,20 @@ def preset_scope(base, carrier):
 def parse_label_rows(rows, org_id, carriers, house_org=HOUSE_ORG):
     """Split raw ui_label_override rows into tenant OVERRIDES and per-carrier house PRESETS.
 
-    Returns {"overrides": {"columns": {...}, "banners": {...}},
-             "presets": {carrier: {"columns": {...}, "banners": {...}}}}.
+    Returns {"overrides": {"columns": {...}, "banners": {...}, "terms": {...}},
+             "presets": {carrier: {"columns": {...}, "banners": {...}, "terms": {...}}}}.
     Only known banner keys with 'on'/'off' values are kept (a junk row can never crash a report or
     invent a banner state); column keys are kept as stored (unknown keys are inert — no column
-    renders them). Overrides are read from the org's OWN rows (the house org may hold overrides for
+    renders them); term keys are kept only when registered in LABELABLE_TERMS (pick-don't-type).
+    Overrides are read from the org's OWN rows (the house org may hold overrides for
     itself too — they never leak into other tenants' resolution, which reads only preset scopes
     from the house org)."""
     carriers = [normalize_carrier_code(c) for c in (carriers or [])]
-    overrides = {"columns": {}, "banners": {}}
-    presets = {c: {"columns": {}, "banners": {}} for c in carriers if c}
+    overrides = {"columns": {}, "banners": {}, "terms": {}}
+    presets = {c: {"columns": {}, "banners": {}, "terms": {}} for c in carriers if c}
     col_scopes = {preset_scope(SCOPE_COL, c): c for c in carriers if c}
     ban_scopes = {preset_scope(SCOPE_BANNER, c): c for c in carriers if c}
+    term_scopes = {preset_scope(SCOPE_TERM, c): c for c in carriers if c}
     for r in rows or []:
         r = r or {}
         org, scope = str(r.get("org_id") or ""), str(r.get("scope") or "")
@@ -153,11 +171,17 @@ def parse_label_rows(rows, org_id, carriers, house_org=HOUSE_ORG):
         elif org == org_id and scope == SCOPE_BANNER:
             if key in BANNERS and label.lower() in _ON_OFF:
                 overrides["banners"][key] = label.lower()
+        elif org == org_id and scope == SCOPE_TERM:
+            if key in DEFAULT_TERM_LABELS:
+                overrides["terms"][key] = label
         elif org == house_org and scope in col_scopes:
             presets[col_scopes[scope]]["columns"][key] = label
         elif org == house_org and scope in ban_scopes:
             if key in BANNERS and label.lower() in _ON_OFF:
                 presets[ban_scopes[scope]]["banners"][key] = label.lower()
+        elif org == house_org and scope in term_scopes:
+            if key in DEFAULT_TERM_LABELS:
+                presets[term_scopes[scope]]["terms"][key] = label
     return {"overrides": overrides, "presets": presets}
 
 
@@ -192,26 +216,31 @@ def build_payload(parsed, carriers, default_code):
     """The GET /report-labels response body from parse_label_rows() output: per-carrier RESOLVED
     maps (what the pages render) + the raw override/preset layers (what the settings UI edits)."""
     overrides, presets = parsed["overrides"], parsed["presets"]
-    columns, banners = {}, {}
-    # Column maps carry ONLY the keys a preset/override actually names (defaults={}) — each page
-    # keeps its OWN built-in header as the fallback (Exec MTD says 'Activation', the Activations
-    # page says 'New Activation'), so a preset-less org renders byte-identical to today.
+    columns, banners, terms = {}, {}, {}
+    # Column/term maps carry ONLY the keys a preset/override actually names (defaults={}) — each
+    # page keeps its OWN built-in wording as the fallback (Exec MTD says 'Activation', the
+    # Activations page says 'New Activation'; shared copy says the neutral term noun), so a
+    # preset-less org renders byte-identical to today.
     for c in carriers:
-        p = presets.get(c) or {"columns": {}, "banners": {}}
+        p = presets.get(c) or {"columns": {}, "banners": {}, "terms": {}}
         columns[c] = resolve_columns(overrides["columns"], p["columns"], defaults={})
         banners[c] = resolve_banners(overrides["banners"], p["banners"])
+        terms[c] = resolve_columns(overrides.get("terms") or {}, p.get("terms") or {}, defaults={})
     # '_' = the no-preset resolution (this org's overrides only). The frontend's last fallback, so
     # a tenant override still applies when the org has no carrier row yet.
     columns["_"] = resolve_columns(overrides["columns"], {}, defaults={})
     banners["_"] = resolve_banners(overrides["banners"], {})
+    terms["_"] = resolve_columns(overrides.get("terms") or {}, {}, defaults={})
     return {
         "carriers": carriers,
         "default_carrier": default_code,
         "columns": columns,                       # resolved, per carrier — render from this
         "banners": banners,                       # resolved 'on'/'off', per carrier
+        "terms": terms,                           # resolved carrier vocabulary terms, per carrier
         "overrides": overrides,                   # this org's own rows (settings UI layer 1)
         "presets": presets,                       # house carrier presets (settings UI layer 2)
         "editable_columns": [{"key": k, "default": d} for k, d in LABELABLE_COLUMNS],
+        "editable_terms": [{"key": k, "default": d} for k, d in LABELABLE_TERMS],
         "banner_keys": [{"key": k, "default": v["default"], "title": v["title"]}
                         for k, v in BANNERS.items()],
     }
@@ -231,9 +260,10 @@ def load_report_labels(client, org_id, house_org=HOUSE_ORG):
     except Exception:
         crows = []
     codes = carrier_codes(crows)
-    scopes = [SCOPE_COL, SCOPE_BANNER]
+    scopes = [SCOPE_COL, SCOPE_BANNER, SCOPE_TERM]
     for c in codes:
-        scopes += [preset_scope(SCOPE_COL, c), preset_scope(SCOPE_BANNER, c)]
+        scopes += [preset_scope(SCOPE_COL, c), preset_scope(SCOPE_BANNER, c),
+                   preset_scope(SCOPE_TERM, c)]
     try:
         rows = (client.schema("commcalc").table("ui_label_override")
                 .select("org_id,scope,key,label")

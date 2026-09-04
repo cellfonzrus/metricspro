@@ -640,8 +640,8 @@ export default function EmailImportsPage() {
         </div>
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Poll a mailbox a vendor (e.g. B2B Soft) emails reports to, and route each attachment to its upload parser.
-          Add <strong>more than one mailbox</strong> when reports arrive in different inboxes (e.g. the B2B feed at one
-          address, Total Wireless at another) — each has its own creds, patterns and schedule.
+          Add <strong>more than one mailbox</strong> when reports arrive in different inboxes (e.g. the POS feed at one
+          address, the carrier's reports at another) — each has its own creds, patterns and schedule.
           Swept a file but a page shows nothing? <strong>Where are my rows?</strong> traces every ingest (incl. which org it landed in).
         </p>
       </div>
@@ -660,7 +660,7 @@ export default function EmailImportsPage() {
           <span style={{ fontSize: 11, color: 'var(--text3)' }}>key: <code>{cfg.account || 'default'}</code></span>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12 }}>
-          <div><label style={lbl}>Label (friendly name)</label><input style={{ ...sel, width: '100%' }} placeholder="Total Wireless" value={cfg.label || ''} onChange={e => set({ label: e.target.value })} /></div>
+          <div><label style={lbl}>Label (friendly name)</label><input style={{ ...sel, width: '100%' }} placeholder="Carrier reports" value={cfg.label || ''} onChange={e => set({ label: e.target.value })} /></div>
           <div style={{ gridColumn: '1 / -1' }}>
             <label style={lbl}>Email provider</label>
             <select style={{ ...sel, width: '100%', maxWidth: 340 }} value={providerOf(cfg.imap_host)}
@@ -895,8 +895,8 @@ export default function EmailImportsPage() {
           <div style={{ fontWeight: 700, fontSize: 14 }}>📡 Payment-processor sources</div>
           <div style={{ flex: 1 }} />
           <a href="/commcalc/report-mappings" className="btn btn-secondary" style={{ fontSize: 12 }} title="Which portal report lands in which table + column mapping — configurable, not hard-coded">🗺️ Report mapping</a>
-          <a href="/commcalc/ma-upload" className="btn btn-secondary" style={{ fontSize: 12 }} title="Upload MA report files by hand, per carrier — the parallel track to the live portal pull">⬆️ Manual upload</a>
-          <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft({ processor: 'b2bsoft', portal_url: 'https://wsreports.b2bsoft.com', enabled: false })}>＋ Add b2bsoft (sales)</button>
+          <a href="/commcalc/ma-upload" className="btn btn-secondary" style={{ fontSize: 12 }} title="Upload processor report files by hand, per carrier — the parallel track to the live portal pull">⬆️ Manual upload</a>
+          <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft({ processor: 'b2bsoft', portal_url: 'https://wsreports.b2bsoft.com', enabled: false })}>＋ Add POS sales login</button>
           <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft({ processor: 'vidapay', enabled: false })}>＋ Add login</button>
         </div>
         <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 10px' }}>
@@ -904,7 +904,7 @@ export default function EmailImportsPage() {
           processors per distributor, and two logins per processor (all stores for one carrier usually sit under one
           login). Add each login here; everything pulled lands combined in one database, stamped with its source.
           Until a processor&apos;s portal scraper is wired, its reports still import automatically via the mailbox rules
-          above (MA Commission Details / MA Daily Tx / MA Fulfillment) or the Data Imports page.
+          above or the Data Imports page.
         </p>
         {!srcReady && <div style={{ padding: 10, marginBottom: 10, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 13 }}>⚠️ Run migration <b>083_total_processor_sources.sql</b> in Supabase to enable this registry.</div>}
         {srcMsg && <div style={{ fontSize: 13, marginBottom: 8 }}>{srcMsg}</div>}
@@ -930,7 +930,7 @@ export default function EmailImportsPage() {
                   </td>
                   <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                     {['vidapay', 'total_access', 'b2bsoft', 'b2b'].includes((s.processor || '').toLowerCase()) && (
-                      <><button className="btn btn-secondary" title="Watchable LIVE login: one browser stays open from login through the 2FA code — the code is sent ONCE (no re-send). Best for VidaPay / Total Access." style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626', fontWeight: 700 }} onClick={() => startLive(s)}>🔴 Live login</button>{' '}</>
+                      <><button className="btn btn-secondary" title="Watchable LIVE login: one browser stays open from login through the 2FA code — the code is sent ONCE (no re-send). Best for portals that send a single-use code." style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626', fontWeight: 700 }} onClick={() => startLive(s)}>🔴 Live login</button>{' '}</>
                     )}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} disabled={authBusy === s.id} onClick={() => startLogin(s)}>{authBusy === s.id ? '…' : (s.auth_status === 'authenticated' ? '🔁 Re-auth' : '🔐 Log in')}</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => runSource(s)}>▶ Pull now</button>{' '}
@@ -943,13 +943,13 @@ export default function EmailImportsPage() {
             </tbody>
           </table>
         )}
-        {sources.length === 0 && srcReady && <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 8 }}>No processor logins yet — add the VidaPay / Total Access login(s) for Total, one row per login.</div>}
+        {sources.length === 0 && srcReady && <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 8 }}>No processor logins yet — add your processor portal login(s), one row per login.</div>}
 
         {srcDraft && (
           <div style={{ border: '1px dashed var(--border)', borderRadius: 8, padding: 12 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10, marginBottom: 10 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Label<br />
-                <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="VidaPay — login 1 (NY stores)" value={srcDraft.label || ''} onChange={e => setSrcDraft({ ...srcDraft, label: e.target.value })} /></label>
+                <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="Processor — login 1 (NY stores)" value={srcDraft.label || ''} onChange={e => setSrcDraft({ ...srcDraft, label: e.target.value })} /></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Processor<br />
                 {/* RULE THREE §3b: pick a KNOWN processor (mis-filing a tenant/processor routes data wrong);
                     a genuinely new processor stays available via the explicit create affordance. */}
@@ -974,7 +974,7 @@ export default function EmailImportsPage() {
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Portal URL<br />
                 <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="https://…" value={srcDraft.portal_url || ''} onChange={e => setSrcDraft({ ...srcDraft, portal_url: e.target.value })} /></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Account ID<br />
-                <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="VidaPay Account ID" value={srcDraft.account_id || ''} onChange={e => setSrcDraft({ ...srcDraft, account_id: e.target.value })} /></label>
+                <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="Processor Account ID" value={srcDraft.account_id || ''} onChange={e => setSrcDraft({ ...srcDraft, account_id: e.target.value })} /></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>User ID<br />
                 <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} value={srcDraft.username || ''} onChange={e => setSrcDraft({ ...srcDraft, username: e.target.value })} /></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Password{srcDraft.id ? ' (blank = keep saved)' : ''}<br />
@@ -1014,7 +1014,7 @@ export default function EmailImportsPage() {
               {!!srcDraft.oob_enabled && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
                   <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Code mail — sender contains<br />
-                    <input style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, marginTop: 3 }} placeholder="e.g. vidapaycrm.com" value={srcDraft.oob_from_contains || ''} onChange={e => setSrcDraft({ ...srcDraft, oob_from_contains: e.target.value })} /></label>
+                    <input style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, marginTop: 3 }} placeholder="the portal's sender domain" value={srcDraft.oob_from_contains || ''} onChange={e => setSrcDraft({ ...srcDraft, oob_from_contains: e.target.value })} /></label>
                   <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Subject contains<br />
                     <input style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, marginTop: 3 }} placeholder="e.g. verification code" value={srcDraft.oob_subject_contains || ''} onChange={e => setSrcDraft({ ...srcDraft, oob_subject_contains: e.target.value })} /></label>
                   <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }} title="Only needed when the portal's code isn't a plain 4–8 digit number (group 1 wins if the pattern has one).">Code pattern (optional regex)<br />
@@ -1041,17 +1041,23 @@ export default function EmailImportsPage() {
               <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft(null)}>Cancel</button>
               <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={saveSource}>💾 Save login</button>
             </div>
+            {/* Processor-specific how-tos render only for processors this tenant actually has a login
+                row for — a tenant never sees another carrier's processor vocabulary (owner 2026-09-04). */}
             <p style={{ fontSize: 12, color: 'var(--text3)', margin: '8px 0 0' }}>
-              <b>b2bsoft (daily Sales Transaction Details):</b> processor <code>b2bsoft</code>, Portal URL
-              <code>https://wsreports.b2bsoft.com</code>, fill User ID + Password (Account ID optional), Save, then
-              click <b>🔐 Log in</b> in the table above and enter the 2-factor code when prompted. b2bsoft usually
-              blocks the server&apos;s datacenter IP, so set a <b>residential / allow-listed proxy</b> above first —
-              otherwise Log in returns an anti-bot page. The signed-in session is saved and reused (~90 days) so
-              sales stops relying on the email feed.<br /><br />
-              For VidaPay / Total Access: fill Account ID + User ID + Password, Save, then click <b>🔐 Log in</b> in the
-              table above. The portal will text/email a 2-factor code — enter it when prompted. The signed-in session
-              is saved and reused for scheduled pulls; when it expires the status shows <b>🔒 Needs 2FA</b> and you just
-              log in again. Credentials are never hard-coded — they live only in this form.
+              {sources.some((s: any) => ['b2bsoft', 'b2b'].includes((s.processor || '').toLowerCase())) && <>
+                <b>b2bsoft (daily Sales Transaction Details):</b> processor <code>b2bsoft</code>, Portal URL
+                <code>https://wsreports.b2bsoft.com</code>, fill User ID + Password (Account ID optional), Save, then
+                click <b>🔐 Log in</b> in the table above and enter the 2-factor code when prompted. b2bsoft usually
+                blocks the server&apos;s datacenter IP, so set a <b>residential / allow-listed proxy</b> above first —
+                otherwise Log in returns an anti-bot page. The signed-in session is saved and reused (~90 days) so
+                sales stops relying on the email feed.<br /><br /></>}
+              {sources.some((s: any) => ['vidapay', 'total_access'].includes((s.processor || '').toLowerCase())) && <>
+                For VidaPay / Total Access: fill Account ID + User ID + Password, Save, then click <b>🔐 Log in</b> in the
+                table above. The portal will text/email a 2-factor code — enter it when prompted. The signed-in session
+                is saved and reused for scheduled pulls; when it expires the status shows <b>🔒 Needs 2FA</b> and you just
+                log in again.<br /><br /></>}
+              Fill the login fields, Save, then click <b>🔐 Log in</b> in the table above and enter the 2-factor code
+              when prompted. Credentials are never hard-coded — they live only in this form.
             </p>
           </div>
         )}

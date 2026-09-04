@@ -183,11 +183,11 @@ export default function MarketplacePurchasesPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
-          <a href="/commcalc/asset" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Asset Ledger</a>
+          <a href="/commcalc/asset" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Assets</a>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>🛒 Marketplace Purchases</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
             VidaPay Marketplace Handset Fulfillment Orders — handset/accessory purchases with tracking,
-            per-order like the Asset Ledger landing.
+            summarized per order.
           </p>
         </div>
         {data?.available && rows.length > 0 && (

@@ -705,8 +705,8 @@ export default function DeviceCostReconPage() {
             <label style={lbl} title="Invoice-first, sale-time fallback (§9 Q1). Option B moves this into a config table with an admin UI.">
               Recognition precedence
               <select style={sel} value={prec} onChange={e => setPrec(e.target.value)}>
-                <option value="ma_fulfillment,asset_lending,pos_sale">① order → ② VIP billed → ③ at sale (§9 default)</option>
-                <option value="asset_lending,ma_fulfillment,pos_sale">② VIP billed → ① order → ③ at sale</option>
+                <option value="ma_fulfillment,asset_lending,pos_sale">① order → ② consignment billed → ③ at sale (§9 default)</option>
+                <option value="asset_lending,ma_fulfillment,pos_sale">② consignment billed → ① order → ③ at sale</option>
                 <option value="pos_sale,ma_fulfillment,asset_lending">③ at sale first (compare only)</option>
               </select>
             </label>

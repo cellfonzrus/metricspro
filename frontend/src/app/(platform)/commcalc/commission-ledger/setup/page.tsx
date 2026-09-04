@@ -112,8 +112,8 @@ export default function CommissionLedgerSetupPage() {
           <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Step 1 — Which carrier is this file from?</h2>
           <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 14 }}>
             A <b>template</b> is the set of rules that read your file and decide which payouts are Commission,
-            Spiff, etc. <b>Total Wireless</b> is ready to use. Pick the closest match — you can fine-tune the
-            rules later.
+            Spiff, etc. A template marked <b>Ready to use</b> already has its rules built in. Pick the closest
+            match — you can fine-tune the rules later.
           </p>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
             {tmpls.map(t => (
@@ -140,8 +140,8 @@ export default function CommissionLedgerSetupPage() {
         <div style={card}>
           <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Step 2 — Upload one commission file</h2>
           <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 6 }}>
-            Carrier: <b>{tmplLabel}</b>. Upload the carrier's commission / transaction export (Excel or CSV) —
-            for Total Wireless that's the <b>MA Daily Tx</b> file. We'll just <i>read</i> it to preview the
+            Carrier: <b>{tmplLabel}</b>. Upload the carrier's commission / transaction export (Excel or
+            CSV) — the processor's daily transaction file. We'll just <i>read</i> it to preview the
             result; <b>nothing is saved yet</b>.
           </p>
           <label style={{ ...primary, display: 'inline-block', marginTop: 8 }}>

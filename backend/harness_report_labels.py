@@ -49,6 +49,20 @@ MIG_945_ROWS = [
     {"org_id": HOUSE, "scope": "report_banner:total", "key": "unrecognized_ct_recon", "label": "on"},
 ]
 
+# The EXACT rows migration 953 seeds (carrier vocabulary terms — kept in lockstep with the migration).
+MIG_953_ROWS = [
+    {"org_id": HOUSE, "scope": "report_term:boost", "key": "processor", "label": "ePay"},
+    {"org_id": HOUSE, "scope": "report_term:boost", "key": "distributor", "label": "VIP Wireless"},
+    {"org_id": HOUSE, "scope": "report_term:boost", "key": "financing", "label": "ACIMA"},
+    {"org_id": HOUSE, "scope": "report_term:boost", "key": "pos_system", "label": "b2bsoft"},
+    {"org_id": HOUSE, "scope": "report_term:total", "key": "processor", "label": "VidaPay"},
+    {"org_id": HOUSE, "scope": "report_term:total", "key": "distributor", "label": "VidaPay / T-CETRA"},
+    {"org_id": HOUSE, "scope": "report_term:total", "key": "financing", "label": "Edge"},
+    {"org_id": HOUSE, "scope": "report_term:total", "key": "marketplace_feed",
+     "label": 'VidaPay/T-CETRA "MA Handset Ordering"'},
+]
+ALL_SEED_ROWS = MIG_945_ROWS + MIG_953_ROWS
+
 print("== carrier identity (mirrors frontend rbac.carrierCode) ==")
 check("code 'boost' -> boost", rl.normalize_carrier_code("boost") == "boost")
 check("live house row name 'Boost Mobile' -> boost", rl.normalize_carrier_code("Boost Mobile") == "boost")
@@ -145,6 +159,61 @@ check("banner_on on unknown key defaults True", rl.banner_on({}, "some_future_ba
 check("resolve_banners filters junk on hand-built dicts too",
       rl.resolve_banners({"unrecognized_ct_recon": "banana"}, {}) == {"unrecognized_ct_recon": "on"})
 
+print("== carrier vocabulary TERMS (owner 2026-09-04, mig 953) ==")
+import re as _re
+TOTAL_VOCAB = _re.compile(r"vidapay|t-?cetra|tettra|total\s+wireless|ma\s+handset|ma\s+commission"
+                          r"|ma\s+daily\s+tx|ma\s+tx\b|total\s+access\b", _re.I)
+BOOST_VOCAB = _re.compile(r"\bboost\b|vip\b|\bacima\b|\bpay-?go\b|\bdish\b|\bepay\b|b2bsoft"
+                          r"|asset\s+ledger", _re.I)
+
+# Boost tenant against the FULL seed set: its resolved terms are boost vocabulary, ZERO total terms.
+p_bt = rl.build_payload(rl.parse_label_rows(ALL_SEED_ROWS, T_NEW, ["boost"]), ["boost"], "boost")
+tb = p_bt["terms"]["boost"]
+check("boost terms: processor -> ePay", tb.get("processor") == "ePay")
+check("boost terms: distributor -> VIP Wireless", tb.get("distributor") == "VIP Wireless")
+check("boost terms: financing -> ACIMA", tb.get("financing") == "ACIMA")
+check("boost terms: pos_system -> b2bsoft", tb.get("pos_system") == "b2bsoft")
+check("boost terms: NO marketplace_feed seeded (neutral noun renders)", "marketplace_feed" not in tb)
+
+# Total tenant (LuxeLink) against the same rows: total vocabulary, ZERO boost terms.
+p_tt = rl.build_payload(rl.parse_label_rows(ALL_SEED_ROWS, LUXE, ["total"]), ["total"], "total")
+tt = p_tt["terms"]["total"]
+check("total terms: processor -> VidaPay", tt.get("processor") == "VidaPay")
+check("total terms: distributor -> VidaPay / T-CETRA", tt.get("distributor") == "VidaPay / T-CETRA")
+check("total terms: financing -> Edge", tt.get("financing") == "Edge")
+check("total terms: NO pos_system seeded", "pos_system" not in tt)
+
+print("== TWO-SIDED VOCABULARY TRUTH TABLE — a tenant only ever sees its own carrier's words ==")
+# Every RESOLVED display value on the Boost side must be free of Total vocabulary, and vice versa.
+boost_values = (list(p_bt["columns"]["boost"].values()) + list(p_bt["terms"]["boost"].values()))
+total_values = (list(p_tt["columns"]["total"].values()) + list(p_tt["terms"]["total"].values()))
+leak_bt = [v for v in boost_values if TOTAL_VOCAB.search(v)]
+leak_tb = [v for v in total_values if BOOST_VOCAB.search(v)]
+check("boost tenant renders ZERO total-side vocabulary", not leak_bt, str(leak_bt))
+check("total tenant renders ZERO boost-side vocabulary", not leak_tb, str(leak_tb))
+# The b2bsoft-MTD warning banner (Total-processor terminology) stays OFF on the boost side.
+check("boost tenant: ct-gap banner OFF (mig 945)",
+      not rl.banner_on(p_bt["banners"]["boost"], "unrecognized_ct_recon"))
+
+# NEUTRAL fallback: a carrier with no preset resolves to NO term rows — the pages' neutral nouns
+# render, and the registry's built-in defaults name no carrier brand in either vocabulary.
+p_vz = rl.build_payload(rl.parse_label_rows(ALL_SEED_ROWS, T_NEW, ["verizon"]), ["verizon"], "verizon")
+check("presetless carrier: empty term map (neutral nouns render)", p_vz["terms"]["verizon"] == {})
+neutral_leaks = [d for _, d in rl.LABELABLE_TERMS if TOTAL_VOCAB.search(d) or BOOST_VOCAB.search(d)]
+check("built-in term defaults are carrier-neutral", not neutral_leaks, str(neutral_leaks))
+
+# Precedence: a tenant term override beats the carrier preset.
+rows_to = ALL_SEED_ROWS + [{"org_id": LUXE, "scope": "report_term", "key": "processor", "label": "Total Access"}]
+p_to = rl.build_payload(rl.parse_label_rows(rows_to, LUXE, ["total"]), ["total"], "total")
+check("tenant term override beats preset ('Total Access' > 'VidaPay')",
+      p_to["terms"]["total"].get("processor") == "Total Access")
+# Junk safety: unknown term keys are dropped (pick-don't-type mirrors the PUT registry gate).
+junk_t = ALL_SEED_ROWS + [{"org_id": HOUSE, "scope": "report_term:boost", "key": "not_a_term", "label": "X"},
+                          {"org_id": HOUSE, "scope": "report_term", "key": "also_junk", "label": "Y"}]
+p_jt = rl.build_payload(rl.parse_label_rows(junk_t, HOUSE, ["boost"]), ["boost"], "boost")
+check("unknown term keys dropped (preset + override)",
+      "not_a_term" not in p_jt["terms"]["boost"] and "also_junk" not in p_jt["overrides"]["terms"])
+
 print("== registry sanity (settings UI contract) ==")
 check("edge is a labelable column with default 'Edge'",
       dict(rl.LABELABLE_COLUMNS).get("edge") == "Edge")
@@ -154,6 +223,9 @@ check("every banner has an on/off default",
 check("payload lists editable columns + banner keys for the settings panel",
       p_empty["editable_columns"][0]["key"] == "total_activation"
       and p_empty["banner_keys"][0]["key"] == "unrecognized_ct_recon")
+check("payload lists editable TERMS for the settings panel (registry, pick-don't-type)",
+      [t["key"] for t in p_empty["editable_terms"]] == [k for k, _ in rl.LABELABLE_TERMS])
+check("term registry keys unique", len(dict(rl.LABELABLE_TERMS)) == len(rl.LABELABLE_TERMS))
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

@@ -198,7 +198,7 @@ def reconcile_bill_payments(report_by_store, sales_by_store, processor_by_store,
         proc_missing = have_proc and any("missing_in_processor" in r["kind"] for r in rows)
         remediation = {"action": ("rerun_processor_sweep" if (not have_proc or proc_missing) else "review"),
                        "assigned_user": assigned_user,
-                       "reason": (("The processor feed (" + (processor or "ePay/VidaPay") + ") is missing or "
+                       "reason": (("The processor feed (" + (processor or "payment processor") + ") is missing or "
                                    "short — re-run the processor sweep to reconcile.") if (not have_proc or proc_missing)
                                   else "The bill-payment sources have data but disagree per store — review the "
                                        "flagged stores; the Bill Payment Transactions report is the basis of truth.")}

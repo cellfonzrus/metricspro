@@ -26,7 +26,7 @@ export default function PoNav({ active }: { active: string }) {
         )
       })}
       <div style={{ flex: 1 }} />
-      <Link href="/commcalc/asset" className="btn btn-secondary" style={{ textDecoration: 'none' }}>← Asset Ledger</Link>
+      <Link href="/commcalc/asset" className="btn btn-secondary" style={{ textDecoration: 'none' }}>← Assets</Link>
     </div>
   )
 }

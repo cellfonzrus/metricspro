@@ -85,7 +85,7 @@ export default function ConnectorsPage() {
             <input style={fin} placeholder="Label" value={nc.label} onChange={e => setNc({ ...nc, label: e.target.value })} />
             <input style={fin} placeholder="Portal URL" value={nc.portal_url} onChange={e => setNc({ ...nc, portal_url: e.target.value })} />
             <input style={fin} placeholder="Login username" value={nc.login_username || ''} onChange={e => setNc({ ...nc, login_username: e.target.value })} />
-            <input style={fin} placeholder="Account ID (e.g. Total Wireless retailer #)" value={nc.account_id || ''} onChange={e => setNc({ ...nc, account_id: e.target.value })} />
+            <input style={fin} placeholder="Account ID (your carrier retailer #)" value={nc.account_id || ''} onChange={e => setNc({ ...nc, account_id: e.target.value })} />
             <select style={fin} value={nc.twofa_method || 'none'} onChange={e => setNc({ ...nc, twofa_method: e.target.value })} title="2-factor method">
               {['none', 'sms', 'totp', 'email', 'biometric'].map(k => <option key={k} value={k}>2FA: {k}</option>)}
             </select>

@@ -19,6 +19,7 @@ export default function ReportLabelSettings({ onClose, onSaved }: { onClose: () 
   const { data, reload, activeCarrier } = useReportLabels()
   const [edits, setEdits] = useState<Record<string, string>>({})          // column key → typed label
   const [bannerEdits, setBannerEdits] = useState<Record<string, string>>({}) // banner key → 'on'|'off'|'' (auto)
+  const [termEdits, setTermEdits] = useState<Record<string, string>>({})  // term key → typed vocabulary
   const [msg, setMsg] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -34,15 +35,18 @@ export default function ReportLabelSettings({ onClose, onSaved }: { onClose: () 
       for (const [k, v] of Object.entries(edits)) columns[k] = v.trim()
       const banners: Record<string, string | null> = {}
       for (const [k, v] of Object.entries(bannerEdits)) banners[k] = v === '' ? null : v
+      const terms: Record<string, string> = {}
+      for (const [k, v] of Object.entries(termEdits)) terms[k] = v.trim()
       await api(`/api/v1/commcalc/report-labels${orgQS()}`, {
-        method: 'PUT', body: JSON.stringify({ columns, banners }),
+        method: 'PUT', body: JSON.stringify({ columns, banners, terms }),
       })
-      setEdits({}); setBannerEdits({}); setMsg('✅ Saved.')
+      setEdits({}); setBannerEdits({}); setTermEdits({}); setMsg('✅ Saved.')
       reload(); onSaved?.()
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setSaving(false) }
   }
 
   const dirty = Object.keys(edits).length > 0 || Object.keys(bannerEdits).length > 0
+    || Object.keys(termEdits).length > 0
 
   return (
     <div className="card" style={{ padding: 16, marginBottom: 12 }}>
@@ -86,6 +90,29 @@ export default function ReportLabelSettings({ onClose, onSaved }: { onClose: () 
           </tbody>
         </table>
       </div>
+      {(data.editable_terms || []).length > 0 && (
+        <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>Carrier vocabulary</div>
+          <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 6px', maxWidth: 760 }}>
+            The names shared pages use for your processor, distributor, financing program and
+            marketplace feed. Your carrier&apos;s preset applies automatically; type to override, or
+            clear to inherit the preset / the neutral wording.
+          </p>
+          {(data.editable_terms || []).map(({ key, default: dflt }) => {
+            const pre = (preset as any).terms?.[key] || ''
+            const ovr = key in termEdits ? termEdits[key] : ((overrides as any).terms?.[key] || '')
+            return (
+              <label key={key} style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 12.5, margin: '4px 0' }}>
+                <span style={{ fontFamily: 'monospace', color: 'var(--text2)', width: 130 }}>{key}</span>
+                <input value={ovr} placeholder={pre || dflt}
+                  onChange={(e) => setTermEdits((s) => ({ ...s, [key]: e.target.value }))}
+                  style={{ fontSize: 12.5, padding: '3px 8px', border: '1px solid var(--border)', borderRadius: 6, width: 220 }} />
+                <span style={{ color: 'var(--text3)' }}>preset: {pre || '—'} · neutral: {dflt}</span>
+              </label>
+            )
+          })}
+        </div>
+      )}
       {data.banner_keys.length > 0 && (
         <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
           <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>Report warnings</div>

@@ -602,7 +602,14 @@ def compute(client, org_id, months=6):
                         "per_sub": round(res / subs, 2) if subs else 0.0,
                         "commission": round(comm_company.get(p, 0.0), 2)})
 
-    markets = sorted({d["market"] for d in store_rows if d["market"]})
+    # §13c enumeration doctrine (owner 2026-09-04, B-1115/LI class): options = the org's canonical
+    # market vocabulary ∪ the stamps present in this report's rows — never data-present alone.
+    try:
+        from app.core import scope as _cscope
+        markets = _cscope.org_market_options(client, org_id,
+                                             {d["market"] for d in store_rows if d["market"]})
+    except Exception:
+        markets = sorted({d["market"] for d in store_rows if d["market"]})
     out = {
         "months": kept,
         "stores": store_rows,

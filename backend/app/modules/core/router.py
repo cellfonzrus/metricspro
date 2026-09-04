@@ -2446,12 +2446,23 @@ def filter_options(org_id: str = ORG_ID):
                     markets.add(mk)
     except Exception as e:
         print(f"WARN core filter_options canonical overlay failed: {e}")
+    # §13c enumeration doctrine (owner 2026-09-04, B-1115/LI class): the markets list is explicitly
+    # the canonical vocabulary ∪ this fold's stamps. The two-source fold above already unions the
+    # same vocabularies, so this is normally byte-identical — it exists so the invariant "every
+    # market dropdown is a superset of core.scope.canonical_markets" holds by construction here
+    # rather than by coincidence, and canonical spellings win any case drift.
+    try:
+        from app.core.scope import org_market_options as _omo
+        market_list = _omo(client, org_id, markets)
+    except Exception as e:
+        print(f"WARN core filter_options canonical vocabulary union failed: {e}")
+        market_list = sorted(markets)
     store_list = sorted(({"store": k, "market": v} for k, v in stores.items()), key=lambda x: x["store"])
     rep_list = [
         ({"id": nm, "label": nm, "sublabel": em} if em else {"id": nm, "label": nm})
         for nm, em in sorted(reps.items(), key=lambda kv: kv[0].lower())
     ]
-    return {"stores": store_list, "markets": sorted(markets), "reps": rep_list}
+    return {"stores": store_list, "markets": market_list, "reps": rep_list}
 
 
 # ── Grant universe + scope diagnostic (2026-08-03 reporting-vs-scheduling scope split) ───────────

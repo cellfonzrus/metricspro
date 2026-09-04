@@ -17,9 +17,11 @@ export type ReportLabelsData = {
   default_carrier: string
   columns: Record<string, Record<string, string>>   // per carrier (+ '_' = no-preset fallback)
   banners: Record<string, Record<string, string>>   // per carrier, 'on'|'off'
-  overrides: { columns: Record<string, string>; banners: Record<string, string> }
-  presets: Record<string, { columns: Record<string, string>; banners: Record<string, string> }>
+  terms?: Record<string, Record<string, string>>    // per carrier — vocabulary terms (mig 953)
+  overrides: { columns: Record<string, string>; banners: Record<string, string>; terms?: Record<string, string> }
+  presets: Record<string, { columns: Record<string, string>; banners: Record<string, string>; terms?: Record<string, string> }>
   editable_columns: { key: string; default: string }[]
+  editable_terms?: { key: string; default: string }[]
   banner_keys: { key: string; default: string; title: string }[]
 }
 
@@ -35,6 +37,15 @@ export function pickBannerMap(data: ReportLabelsData | null, activeCarrier: stri
   return data.banners[activeCarrier] || data.banners[data.default_carrier] || data.banners['_'] || {}
 }
 
+// The resolved carrier VOCABULARY TERM map (mig 953 — 'processor'/'distributor'/'financing'/
+// 'marketplace_feed'/'pos_system'). Shared copy writes the neutral noun as its fallback; the
+// active carrier's preset supplies the brand ('ePay' on Boost, 'VidaPay' on Total), so no page
+// ever hardcodes the other carrier's vocabulary (owner directive 2026-09-04).
+export function pickTermMap(data: ReportLabelsData | null, activeCarrier: string): Record<string, string> {
+  if (!data?.terms) return {}
+  return data.terms[activeCarrier] || data.terms[data.default_carrier] || data.terms['_'] || {}
+}
+
 const orgQS = () => { const o = getActiveOrg(); return o ? `?org_id=${encodeURIComponent(o)}` : '' }
 
 // Fetch-once hook. Degrades to built-in labels (empty maps) on any error — a label service
@@ -48,9 +59,13 @@ export function useReportLabels() {
   useEffect(() => { reload() }, [reload])
   const labels = useMemo(() => pickLabelMap(data, activeCarrier), [data, activeCarrier])
   const banners = useMemo(() => pickBannerMap(data, activeCarrier), [data, activeCarrier])
+  const terms = useMemo(() => pickTermMap(data, activeCarrier), [data, activeCarrier])
   // colLabel: the resolved header for a column key, with the page's built-in header as fallback.
   const colLabel = useCallback((key: string, fallback: string) => labels[key] || fallback, [labels])
   // bannerOn: whether a terminology-gated banner should render (default ON = today's behavior).
   const bannerOn = useCallback((key: string) => (banners[key] || 'on') !== 'off', [banners])
-  return { data, reload, colLabel, bannerOn, activeCarrier }
+  // term: the active carrier's vocabulary for a term key, with the NEUTRAL noun as fallback —
+  // shared copy never hardcodes a carrier brand (owner directive 2026-09-04, mig 953).
+  const term = useCallback((key: string, fallback: string) => terms[key] || fallback, [terms])
+  return { data, reload, colLabel, bannerOn, term, activeCarrier }
 }

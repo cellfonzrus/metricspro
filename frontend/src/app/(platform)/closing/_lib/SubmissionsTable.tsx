@@ -6,6 +6,7 @@ import { ExportColumn } from '@/lib/export'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import type { EntityOption } from '@/components/EntityPicker'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
+import { useReportLabels } from '@/lib/report-labels'
 
 // EVERY submitted daily-closing column, one row per rep-submission (OWNER DIRECTIVE 2026-07-27).
 // RULE FIVE (§3d): the standard date-range/store/market/rep filter bar drives BOTH the table and every
@@ -144,6 +145,11 @@ export default function SubmissionsTable({
     return scopedRows
   }, [scopedRows, drill])
 
+  // Carrier vocabulary (owner 2026-09-04): bill-pay processor / financing names are per-carrier
+  // preset DATA (mig 953 — boost renders 'ePay'/'ACIMA' byte-identical to today).
+  const { term } = useReportLabels()
+  const ep = term('processor', 'Bill-pay')
+  const fin = term('financing', 'Financing')
   const columns: ExportColumn[] = useMemo(() => [
     // ── Identity ──
     { header: 'Date', field: 'close_date', type: 'date', role: 'date', get: r => r.close_date },
@@ -158,13 +164,13 @@ export default function SubmissionsTable({
     { header: 'Gift Card $', field: 't_gift', money: true, get: r => r.t_gift },
     { header: 'Store Account $', field: 't_store_acct', money: true, get: r => r.t_store_acct },
     { header: 'Zelle/CashApp $', field: 't_zelle', money: true, get: r => r.t_zelle },
-    { header: 'ACIMA $', field: 't_acima', money: true, get: r => r.t_acima },
+    { header: `${fin} $`, field: 't_acima', money: true, get: r => r.t_acima },
     { header: 'Custom tenders', field: 'custom_tenders', get: r => r.custom_tenders },
     { header: 'Total collected $', field: 'total_collected', money: true, get: r => r.total_collected },
     { header: 'Accessory Sale $', field: 'acc_sale', money: true, get: r => r.acc_sale },
-    { header: 'ePay on Cash $', field: 'epay_on_cash', money: true, get: r => r.epay_on_cash },
-    { header: 'ePay on Credit $', field: 'epay_on_credit', money: true, get: r => r.epay_on_credit },
-    { header: 'ePay on ACIMA $', field: 'epay_on_acima', money: true, get: r => r.epay_on_acima },
+    { header: `${ep} on Cash $`, field: 'epay_on_cash', money: true, get: r => r.epay_on_cash },
+    { header: `${ep} on Credit $`, field: 'epay_on_credit', money: true, get: r => r.epay_on_credit },
+    { header: `${ep} on ${fin} $`, field: 'epay_on_acima', money: true, get: r => r.epay_on_acima },
     // ── Counts ──
     { header: 'Upgrades #', field: 'upgrade_count', type: 'number', align: 'right', get: r => r.upgrade_count },
     { header: 'New Lines #', field: 'new_line_count', type: 'number', align: 'right', get: r => r.new_line_count },
@@ -195,8 +201,8 @@ export default function SubmissionsTable({
     { header: 'DM corrected', field: 'dm_corrected', get: r => r.dm_corrected ? 'Yes' : 'No' },
     { header: 'DM cash $ (store-day)', field: 'dm_store_cash', money: true, get: r => r.dm_store_cash },
     { header: 'DM credit $ (store-day)', field: 'dm_store_cc', money: true, get: r => r.dm_store_cc },
-    { header: 'DM ePay cash $ (store-day)', field: 'dm_epay_cash', money: true, get: r => r.dm_epay_cash },
-    { header: 'DM ePay credit $ (store-day)', field: 'dm_epay_cc', money: true, get: r => r.dm_epay_cc },
+    { header: `DM ${ep} cash $ (store-day)`, field: 'dm_epay_cash', money: true, get: r => r.dm_epay_cash },
+    { header: `DM ${ep} credit $ (store-day)`, field: 'dm_epay_cc', money: true, get: r => r.dm_epay_cc },
     { header: 'DM accessory $ (store-day)', field: 'dm_acc_sale', money: true, get: r => r.dm_acc_sale },
     { header: 'DM other $ (store-day)', field: 'dm_other', money: true, get: r => r.dm_other },
     { header: 'DM note', field: 'dm_note', get: r => r.dm_note || '' },
@@ -208,7 +214,7 @@ export default function SubmissionsTable({
     { header: 'Envelope photo ref', field: 'envelope_picture', get: r => r.envelope_picture || '' },
     { header: 'Remarks', field: 'remarks', get: r => r.remarks },
     { header: 'Submitted at', field: 'submitted_at', type: 'date', get: r => r.submitted_at ? new Date(r.submitted_at).toLocaleString() : '' },
-  ], [])
+  ], [ep, fin])
 
   const DRILL_LABEL: Record<string, string> = { cash_short: 'Cash Short only', cash_over: 'Cash Over only' }
 

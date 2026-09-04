@@ -150,7 +150,7 @@ export default function ClosingManagementPage() {
                       </tbody>
                     </table>
                     <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
-                      Tender split (final try): cash {fmt(lastTry(g).t_cash)} · credit {fmt(lastTry(g).t_credit)} · ext CC {fmt(lastTry(g).t_ext_cc)} · gift {fmt(lastTry(g).t_gift)} · store acct {fmt(lastTry(g).t_store_acct)} · zelle {fmt(lastTry(g).t_zelle)} · ACIMA {fmt(lastTry(g).t_acima)}
+                      Tender split (final try): cash {fmt(lastTry(g).t_cash)} · credit {fmt(lastTry(g).t_credit)} · ext CC {fmt(lastTry(g).t_ext_cc)} · gift {fmt(lastTry(g).t_gift)} · store acct {fmt(lastTry(g).t_store_acct)} · zelle {fmt(lastTry(g).t_zelle)} · financing {fmt(lastTry(g).t_acima)}
                     </div>
                   </div>
                 )}

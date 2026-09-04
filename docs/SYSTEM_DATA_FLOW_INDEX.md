@@ -174,6 +174,32 @@ disagain (owner directive 2026-07-16, 2026-07-25).
   settings surface `components/ReportLabelSettings.tsx` ("🏷 Column labels" on Exec MTD). Display
   config, not a feed → NO lineage-registry entry.
 
+- **Carrier VOCABULARY TERMS + the two-sided vocabulary rule (owner 2026-09-04, mig `953`):** the
+  owner's rule — a tenant must ONLY ever see its own carrier's vocabulary (no
+  "VidaPay/T-CETRA/Total Wireless/MA …" wording on the Boost side; no "Boost/VIP/ACIMA/PayGo/ePay/
+  Asset Ledger" wording on the Total side). Mechanism EXTENDS mig `945` (same
+  `commcalc.ui_label_override` store, same resolution) with a third scope family
+  `report_term`/`report_term:<carrier>`: registered TERM keys (`report_labels.LABELABLE_TERMS`:
+  `processor`/`distributor`/`financing`/`marketplace_feed`/`pos_system`) whose built-in defaults
+  are NEUTRAL nouns; mig `953` seeds boost (`ePay`/`VIP Wireless`/`ACIMA`/`b2bsoft` — byte-identical
+  wording for Boost tenants) and total (`VidaPay`/`VidaPay / T-CETRA`/`Edge`/the marketplace-feed
+  name). Same GET/PUT `/report-labels` payload (`terms`, `editable_terms`); frontend
+  `lib/report-labels.ts` `pickTermMap` + `useReportLabels().term(key, neutralFallback)` — consumers:
+  `ClosingSubmitForm`/`DailyClosingVerify`/`closing/page`/`closing/_lib/SubmissionsTable` (bill-pay
+  processor + financing labels), settings editor `ReportLabelSettings.tsx` ("Carrier vocabulary"
+  section). Whole-feature gating rides the EXISTING `NAV_CARRIERS` registry (`lib/rbac.ts`,
+  admin-overridable `caps['carrier:<href>']`) — sweep 2026-09-04 added the asset/VIP/ePay surfaces
+  (`/commcalc/asset`, `asset/invoice-due`, `asset/inventory-recon`, `asset/oninv-3way-recon`,
+  `/commcalc/epay/sweep`, `/closing/epay-recon` → boost) and the MA/VidaPay surfaces
+  (`ma-overview-recon`, `ma-product-class`, `commission-category-map`, `report-mappings` → total);
+  the mapping hub + upload tiles/portals filter through the same gate/lens. CI GUARD:
+  `backend/harness_carrier_vocab_guard.py` — static scan of frontend display copy (string literals
+  + JSX text, comments stripped) fails on any hardcoded cross-side carrier term not covered by a
+  NAV_CARRIERS gate or its pinned REVIEWED_EXCEPTIONS table (term-is-data configs, lens-gated and
+  data-conditional copy, the CarrierPicker onboarding screen). Proof of resolution + the two-sided
+  truth table (boost payload renders zero Total vocabulary and vice versa; neutral fallback for a
+  presetless carrier): `harness_report_labels.py`. Display config, not a feed → NO lineage entry.
+
 **Endpoints:** `/sales-report` `router.py:15792`; `/sales-report/detail` `15980`;
 `/sales-report/classification-unmatched` `15925`; `/sales-comparison` `16096`; `/sales-diagnostics` `16206`;
 `/top-sellers/{period}` `16982`; `/report-labels` GET/PUT (carrier-aware column labels, beside
@@ -1184,6 +1210,74 @@ compute and filter paths inherit the canonical enumeration in one move), and
 `finance_attention` (finance_config audit). Billing's `per_entity` count stays a count (returns no
 rows) and is pinned org-scoped in the guard.
 
+### 13c. CANONICAL MARKET VOCABULARY / ENUMERATION — every market dropdown serves the union (owner directive 2026-09-04)
+
+**Owner (verbatim):** "B-1115 is under super nova and LI market under Cellfonz R us, that has been
+missing from a lot of reports when market is chosen, this needs to be fixed as a design not a band
+aid as this could happen to a new store also, first find the root cause then fix and put precaution
+in place."
+
+**Root cause (row evidence, 2026-09-04 live).** House store `B-1115` "1115 Liberty Ave" (created
+2026-06-17, company Supernova Wireless LLC) carries market `LI` **ONLY on `storeops.stores`** — NO
+`commcalc.store_mapping` row, NO `store_aliases` row (its 1,000 `raw_sales` rows carry exactly the
+storeops spelling "1115 Liberty Ave"). §13a (2026-09-03) converged store→market RESOLUTION, so
+row stamping/filtering is canonical — but market ENUMERATION was still per-surface: each dropdown
+fed from its own source. Measured divergent feeds (each drops a single-vocabulary market or its
+store): `payables_filter_options` (store_mapping-only roster → B-1115 absent from the payables/
+forecast store picker; LI survived only because 7 OTHER stores spell it in store_mapping),
+`asset _registry_stores` (store_mapping-only → B-1115 absent from the borrowed-money/full-roster
+pickers), `asset /filter-options` markets (asset_ledger stamps only → a market with no financed
+device yet is unofferable), `pos tax_code_markets` (active `storeops.stores` only → the MIRROR
+shape, a store_mapping-only market, could never get a tax rate), `commcalc _org_markets` (its own
+duplicate union fold — correct today, guaranteed to drift), and every data-present option list
+(trends, residual-subs, imei-rebates/handset-COGS/device-cost-recon `_opts`, `optionsFromRows`
+client-side). Second finding: the ORG TREE disagrees with the market column — B-1115's org_unit
+"1115 Liberty Ave" is parented under **NYC District**, not LI District (whose children are B-103 /
+B-11634 / B-1750 / B-1800 / B-2612 / B-418) — so an org-unit-subtree manager span for LI does NOT
+cover B-1115, while a `market=LI` login grant DOES (grants resolve through the union index).
+
+**The doctrine.** The org's market VOCABULARY is `core.scope.canonical_markets(client, org_id)`
+(= `market_index()['markets']`: storeops.stores ∪ store_mapping ∪ aliases, most-common-spelling
+canonicalization — the SAME index §13a resolution and the grant machinery bind, so an offered
+market always filters and a filterable market is always offered). EVERY market dropdown/enumeration
+composes through `core.scope.merge_market_options(canonical, present)` (pure) /
+`org_market_options(client, org_id, present)` (I/O twin): **canonical vocabulary ∪ the surface's
+own row stamps**, case-drift collapsing to the canonical spelling, sentinels ("(no market)")
+appended after. A NEW market typed on a NEW store is in the vocabulary the moment the row exists
+(both editors' writes call `invalidate_market_index`, incl. commcalc `PUT /stores/{id}` since
+2026-09-04) and therefore in every converged dropdown with zero extra setup.
+
+**Span/grant coherence.** Options endpoints are org-scoped, not span-scoped (documented per-surface
+exceptions narrow AFTER composition, e.g. accessory-flags) — scope-'all'/admin callers see every
+vocabulary market with no setup. A scope-'market' manager sees a new market once it is granted on
+their `app_users.market` (comma list; resolves via `login_grant_breakdown` → union index → binds
+the market's member stores INCLUDING single-vocabulary stores like B-1115). An org-unit-subtree
+span follows the TREE, not the market column — placing the store's unit under the right district
+is the tenant's setup step for tree-spanned managers; a market-column/tree divergence (B-1115
+today) is a data-quality state the scope-preview diagnostic exposes, not a code path.
+
+**Converged 2026-09-04:** `core/filter-options` (StandardFilterBar feed — explicit superset),
+`core/markets` + `storeops/markets` + `commcalc/markets` (`_org_markets` now DELEGATES to
+`canonical_markets` — the duplicate fold is gone), `payables_filter_options` (union stores
+additive + canonical markets), `asset /filter-options` (`markets` ∪ canonical; `_registry_stores`
+∪ union-index stores), `pos tax_code_markets` (canonical markets added with union store counts),
+`targets/{period}/summary`, expenses/commission/gp trends (`_trend_markets`), imei-rebates /
+ma-handset-cogs / device-cost-recon endpoints (canonical ∪ data, sentinel last), account
+residual-subs. Already-canonical (verified, pinned): sales-report, exec MTD, tax-collected,
+productivity, ATU-opportunity, custom-report, accessory-flags, closing (client-side
+`optionsFromRows` over canonically-stamped rows = DATA-PRESENT classification).
+
+**ENFORCED BY CI:** `backend/harness_market_enumeration_guard.py` — scans the backend for any
+function shipping a `markets`/`market_options` payload key; unpinned sites fail the build, and a
+CANONICAL pin is verified to actually reference a canonical composition helper. Truth table
+pinning the exact B-1115/LI shape (a market present ONLY on `storeops.stores` — and its
+store_mapping-only mirror, and a brand-new store's brand-new market — must appear in the
+vocabulary, appear in every composed option list, resolve its stores under the filter, and bind
+as a market-grant keyset member; ambiguity fails closed):
+`backend/harness_market_vocabulary_truth.py`. Sibling guards: §13a
+`harness_market_resolution_guard.py` (resolution reads), `harness_commcalc_market_dropdown.py`
+(editor options + write normalization, updated for the delegation).
+
 ---
 
 ## 14. Employees & scheduling (does it feed pay?)
@@ -1567,11 +1661,11 @@ rows) and is pinned org-scoped in the guard.
 | `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`) | `PUT /accessory-config` (Sales Report → Classification settings) | `_accessory_config(_uncached)` (accessory/billpay/blank-ct classification for `_sales_cell_agg`); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, own defensive read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, own defensive read, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`) |
 | `commcalc.metric_source_of_truth` (per-metric basis-of-truth config, mig `923`; columns added by `944` `processor_order_types`/`processor_product_tokens` — the bill-payment row filter for the daily-TX processor feed) | `PUT /metric-source-config` | `_metric_source` (consumed by Exec MTD activation override, `/metric-recon`, `/billpay-coverage`, `_pos_billpay_for_days`/`_billpay_processor_by_store(_day)` — §12 3-way Leg C; NULL columns = `metric_recon` house defaults) |
 | `commcalc.exec_metric_config` (per-org Exec-MTD metric DEFINITIONS, mig `204`; seed fn `seed_exec_metric_config`) | `GET/PUT /exec-metric-config` `router.py:24766/24781` (upsert by `org_id,bucket`); 2026-09-02: LuxeLink `bill_payment` rules gained `product_desc_contains:["wallet funding"]` (org-scoped data fix, house default untouched) | `_exec_metric_config` (DB row REPLACES the bucket's default rules) → `_sales_cell_agg` exec metrics via `_exec_line_match` |
-| `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`); `PUT /report-labels` (scopes `report_col`/`report_banner` at the TENANT org — overrides; gated on `classification`); mig `945` seeds the HOUSE carrier-preset rows (scopes `report_col:<carrier>`/`report_banner:<carrier>`); mig `947` seeds the HOUSE Incentives tile layout (scope `tiles` key `incentives`) + HOUSE nav-label presets (NEW scopes `nav_default`/`group_default`, e.g. `/commcalc/commission-legs` → 'Commission received over M1-M12'); mig `948` seeds the HOUSE Management Overview (`tiles` key `management-overview` — incl. the `/commcalc/exec` item-label 'Rep Incentive') + Flags & Compliance (`tiles` key `flags-compliance`) layouts (§14 mig 948) | `GET /nav-config` (house `nav_default`/`group_default` presets first, then the caller org's `nav`/`group` nicknames overlay per key — tenant > house preset > built-in, since mig 947; caps/layout stay caller-org-only), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins), `GET /report-labels` (`report_labels.load_report_labels`: tenant ∪ HOUSE, tenant override > carrier preset > built-in — §3 carrier column labels) |
+| `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`); `PUT /report-labels` (scopes `report_col`/`report_banner`/`report_term` at the TENANT org — overrides; gated on `classification`); mig `945` seeds the HOUSE carrier-preset rows (scopes `report_col:<carrier>`/`report_banner:<carrier>`); mig `953` seeds the HOUSE carrier VOCABULARY-TERM presets (scope `report_term:<carrier>` — boost: ePay/VIP Wireless/ACIMA/b2bsoft, total: VidaPay/T-CETRA/Edge/marketplace feed, §3); mig `947` seeds the HOUSE Incentives tile layout (scope `tiles` key `incentives`) + HOUSE nav-label presets (NEW scopes `nav_default`/`group_default`, e.g. `/commcalc/commission-legs` → 'Commission received over M1-M12'); mig `948` seeds the HOUSE Management Overview (`tiles` key `management-overview` — incl. the `/commcalc/exec` item-label 'Rep Incentive') + Flags & Compliance (`tiles` key `flags-compliance`) layouts (§14 mig 948) | `GET /nav-config` (house `nav_default`/`group_default` presets first, then the caller org's `nav`/`group` nicknames overlay per key — tenant > house preset > built-in, since mig 947; caps/layout stay caller-org-only), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins), `GET /report-labels` (`report_labels.load_report_labels`: tenant ∪ HOUSE, tenant override > carrier preset > built-in — §3 carrier column labels) |
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3) |
-| `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`)** |
-| `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs), store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution rule + CI guard** |
+| `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
+| `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs), store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
 | `storeops.store_lease` (mig `946` — one row per org×store: landlord/site contact, rent links + ACH (SENSITIVE), `current_rent`/`rent_effective_from`/`escalation_pct`/`rent_schedule`/`rent_due`, lease dates, insurance + `insurance_premium_due`/`_frequency`) | `PUT /storeops/store-lease` (gated `can_see_lease`, upsert on org+store) | `GET /storeops/store-lease`; the finance rents-due/recurring-expenses reader `GET /account/liabilities-due` (`account/liabilities_due.rent_due_rows`/`insurance_due_rows` computing FROM `store_lease.rent_for_month`/`resolve_rent_due`/`rent_due_window` — the §14 read contract honored, never re-derived; gated `can_see_lease`, ACH columns never selected) |
 | `storeops.store_document` (mig `946` — append-only lease/COI versions; files in PRIVATE bucket `store-docs`) | `POST /storeops/store-lease/doc` (gated; INSERT only, prior versions kept) | `GET /storeops/store-lease` version lists (path never echoed), `GET /storeops/store-lease/doc-url`/`doc-view` (org-scoped by id → signed URL) |
@@ -1585,6 +1679,7 @@ rows) and is pinned org-scoped in the guard.
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
 | _every endpoint filtering/grouping by MARKET_ | — | §13a canonical resolution (`core.scope.store_market_resolver`/`market_by_code`); inventory pinned in `harness_market_resolution_guard.py` |
+| _every endpoint OFFERING market options (dropdown/enumeration)_ | — | §13c canonical vocabulary (`core.scope.canonical_markets` composed via `merge_market_options`/`org_market_options`); inventory pinned in `harness_market_enumeration_guard.py`; B-1115/LI truth table `harness_market_vocabulary_truth.py` (owner 2026-09-04) |
 | `POST /calculate/{period}` | `router.py:8968` | §6 rep commission |
 | `GET /commissions/{period}` | `10222` | §6 — the Rep Incentive Report read; market stamped per row via §13a (2026-09-03 fix) |
 | `GET /sales-report` | `15792` | §3 |
@@ -1639,7 +1734,7 @@ rows) and is pinned org-scoped in the guard.
 | `GET /account/projection` (`?months=&horizon=` — deterministic linear/seasonal-naive P&L projection + cash runway, per-org `projection_config` mig `941`; rows flagged `projected:true`; `account_trends` grant) | `account/router.py` (`financial_projection` → pure `projection_engine.project`) | §4 projection engine |
 | `GET /account/valuation` (assumption-driven ESTIMATE range: TTM multiples + asset floor + projection-fed DCF w/ sensitivity grid; per-org `valuation_config` mig `941`; own default-closed `company_valuation` grant; disclaimer always in payload) | `account/router.py` (`company_valuation` → pure `valuation.valuation`) | §4 company valuation |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
-| `GET /report-labels` (resolved carrier-aware report column labels + banner on/off per carrier: tenant override > house carrier preset (mig 945) > built-in; consumed by Exec MTD + Activations headers/exports and the `unrecognized_ct_recon` banner gate), `PUT /report-labels` (tenant overrides only, registry-validated keys, ''=revert-to-inheritance; `classification` settings gate) | `commcalc/router.py` (`get_report_labels`/`put_report_labels` → `report_labels.py`, beside `/accessory-config`) | §3 carrier column labels |
+| `GET /report-labels` (resolved carrier-aware report column labels + banner on/off + VOCABULARY TERMS per carrier: tenant override > house carrier preset (migs 945/953) > built-in/neutral; consumed by Exec MTD + Activations headers/exports, the `unrecognized_ct_recon` banner gate, and the closing surfaces' processor/financing labels), `PUT /report-labels` (tenant overrides only, registry-validated keys incl. `terms`, ''=revert-to-inheritance; `classification` settings gate) | `commcalc/router.py` (`get_report_labels`/`put_report_labels` → `report_labels.py`, beside `/accessory-config`) | §3 carrier column labels + vocabulary terms |
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
 | `GET /closing/envelope-report`, `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`); `notify/closing_reports.py` | §12 Envelope report |
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
@@ -1665,7 +1760,7 @@ rows) and is pinned org-scoped in the guard.
 | Accessory $ ("acc_gp") | `raw_sales.ext_price` (+ device set-up fee; NOT gp, NOT Ondigo) | `_compute_feed_actuals_py` `router.py:18678` |
 | GP report accessory column ("Acc Sales" / legacy "Acc GP") | `raw_sales.ext_price` of accessory lines (`accessory_config.gp_acc_basis='sales'` — house default, mig 932) or `raw_sales.gp` (`'gp'` opt-back) | `calc_gp_report(acc_basis=…)` `gp_report.py`; label from payload `acc_label` (§4) |
 | Edge count | `raw_sales` product tokens | `_mi_classify_sales_row` via `_mi_resolve_numbers` `router.py:28843` (MI only; folded into premium in rep pay) |
-| Activation-report column DISPLAY LABELS (e.g. device financing: "Edge" Total-side / "ACIMA" Boost-side) + `unrecognized_ct_recon` banner on/off — TERMINOLOGY ONLY, never a number | `commcalc.ui_label_override` scopes `report_col[:carrier]`/`report_banner[:carrier]` (HOUSE carrier presets mig `945`; tenant overrides) × the org's `commcalc.carrier` rows (mig `038`) | `report_labels.load_report_labels` → `GET /report-labels`; frontend `lib/report-labels.ts useReportLabels` (Exec MTD + Activations headers/exports; Exec MTD ct-gap banner gate); settings `components/ReportLabelSettings.tsx`; proof `harness_report_labels.py` (§3) |
+| Activation-report column DISPLAY LABELS (e.g. device financing: "Edge" Total-side / "ACIMA" Boost-side) + `unrecognized_ct_recon` banner on/off + carrier VOCABULARY TERMS (processor/distributor/financing/marketplace_feed/pos_system) — TERMINOLOGY ONLY, never a number | `commcalc.ui_label_override` scopes `report_col[:carrier]`/`report_banner[:carrier]`/`report_term[:carrier]` (HOUSE carrier presets migs `945`/`953`; tenant overrides) × the org's `commcalc.carrier` rows (mig `038`) | `report_labels.load_report_labels` → `GET /report-labels`; frontend `lib/report-labels.ts useReportLabels` (Exec MTD + Activations headers/exports; ct-gap banner gate; `term()` on the closing surfaces); settings `components/ReportLabelSettings.tsx`; proofs `harness_report_labels.py` + CI guard `harness_carrier_vocab_guard.py` (§3) |
 | Activation TYPE buckets (AD basis: New / Port / BYOD / Tablet / Home Internet / Edge / Upgrade / hidden `BYOD Upgrade`) | `raw_custom_import` Activation-Details sheet (`Contract Type` + SP-PO/product/category name) × `accessory_config.activation_details_rules` token config (mig 313; house defaults: contract-type-only word-boundary Edge, `byod upgrade` → hidden family) | `activation_bucketing.activation_details_bucket` via `_cr_resolve_activation_details`; consumed by `_ad_cells_full`/`_apply_activation_basis` (Exec MTD + Sales Report columns), `_ad_activation_buckets` (recon), `/activation-counts/{period}`; `total_activation` excludes `TOTAL_ACTIVATION_EXCLUDED = (Upgrade, BYOD Upgrade)` |
 | VHI/FIOS / home-internet count | `raw_sales` product tokens / `installment_category.py:82` | `_mi_resolve_numbers` `28843`; `installment_category` (plan-mode, runtime-only) |
 | Failing-KPI classification (store/rep below target; `no_data` never fails) | `raw_dlar_store` KPI columns (store grain, `kpi_failing.STORE_KPI_COLUMNS`) + `rep_commissions.kpi_values` (rep grain) vs `payout_config.kpi_*_target` falling back to `carrier_kpi_metric.target_default` | `kpi_failing.evaluate/store_rows/rep_rows` via `GET /kpi-failing/{period}` (§10) |

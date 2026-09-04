@@ -196,7 +196,7 @@ export default function InvoiceDuePage() {
       subtitle: (filterParts.join(' · ') || 'All invoices') +
         ' — Commission Earned (M1) = 1st-Month ePay commission only (spiff/BYOD/activation bounty); ' +
         'residual and M2-M12 excluded. Net Due Estimate is INFO ONLY and unverified against any real ' +
-        'VidaPay deduction record.',
+        'distributor deduction record.',
       filename: 'upcoming-invoice-payment-due',
       sheets: [{ name: 'Invoices', rows, columns: cols }],
     }
@@ -215,9 +215,9 @@ export default function InvoiceDuePage() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>🧾 Upcoming Invoice Payment Due</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 820 }}>
             Real VIP invoices (due date + total due) with a per-IMEI sold/reimbursed breakdown and an
-            INFO-ONLY estimate of what VidaPay's own net-deduction model implies (total due minus the
-            1st-Month commission those same devices earned). Sourced from the VIP Wireless Workbook +
-            the Asset Ledger + ePay Payment Detail — see the page footer for what this does NOT cover.
+            INFO-ONLY net-due estimate (total due minus the 1st-Month commission those same devices
+            earned). Sourced from the VIP Wireless Workbook + the Asset Ledger + ePay Payment
+            Detail — see the page footer for what this does NOT cover.
           </p>
         </div>
         {data?.available && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
@@ -336,10 +336,9 @@ export default function InvoiceDuePage() {
       )}
 
       <div style={{ marginTop: 20, fontSize: 12, color: 'var(--text3)', maxWidth: 900 }}>
-        <b>What this does NOT cover:</b> the VidaPay/T-CETRA "MA Handset Ordering" marketplace feed
-        (Total Wireless handset purchases) — that source carries no invoice #/due date/total and no
-        per-device serial, so it cannot be tracked this way. This report covers VIP Wireless
-        (Boost) consignment invoices only.
+        <b>What this does NOT cover:</b> purchase/fulfillment feeds that carry no invoice #, due
+        date, total, or per-device serial (e.g. a marketplace handset-ordering feed) cannot be
+        tracked this way. This report covers VIP Wireless (Boost) consignment invoices only.
       </div>
     </div>
   )

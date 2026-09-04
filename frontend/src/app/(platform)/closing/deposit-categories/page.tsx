@@ -12,7 +12,7 @@ import { api } from '@/lib/client'
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
 const BASIS_OPTS: [string, string][] = [
-  ['bill_payment_cash', 'Bill-payment cash (ePay on-cash)'],
+  ['bill_payment_cash', 'Bill-payment cash (declared bill-pay on-cash)'],
   ['store_cash', 'Store cash (total cash minus bill-payment cash)'],
   ['total_cash', 'Total cash (the whole envelope, no split)'],
   ['manual', 'Manual / no formula yet (deposits still tracked; expected stays $0)'],

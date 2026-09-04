@@ -16426,28 +16426,18 @@ def _market_key(name: str) -> str:
 
 
 def _org_markets(client, org_id: str) -> list:
-    """The org's existing market labels: distinct, non-blank, sorted (case-insensitive).
-    Source = commcalc.store_mapping (the canon this settings page edits) UNIONed with storeops.stores
-    (a tenant may keep its roster only there; storeops writes propagate into store_mapping anyway).
-    Both reads are org-scoped (RULE ONE). Spellings that differ only by case/whitespace collapse to ONE
-    canonical option — the spelling the most rows use, ties broken alphabetically — so the dropdown can
-    never offer both "LI" and "li". Never raises: an unreadable table just contributes nothing."""
-    variants = {}
-    for schema, table in (("commcalc", "store_mapping"), ("storeops", "stores")):
-        try:
-            rows = (client.schema(schema).table(table).select("market")
-                    .eq("org_id", org_id).execute().data) or []
-        except Exception as e:
-            print(f"WARN _org_markets: {schema}.{table}.market unreadable ({e})")
-            rows = []
-        for r in rows:
-            name = " ".join((r.get("market") or "").split())
-            if not name:                      # blank/NULL market = "unassigned", never an option
-                continue
-            bucket = variants.setdefault(_market_key(name), {})
-            bucket[name] = bucket.get(name, 0) + 1
-    canon = [sorted(b.items(), key=lambda kv: (-kv[1], kv[0]))[0][0] for b in variants.values()]
-    return sorted(canon, key=lambda s: (s.casefold(), s))
+    """The org's existing market labels — DELEGATES to THE canonical vocabulary
+    (app.core.scope.canonical_markets over the union index: storeops.stores ∪ store_mapping —
+    the SAME union + most-common-spelling/alphabetical-tie canonicalization this function used to
+    re-derive locally, §13c enumeration doctrine 2026-09-04). One derivation, zero drift: the
+    Store Markets editor, the grant pickers and every report dropdown now agree by construction.
+    Never raises: an unreadable index just yields []."""
+    try:
+        from app.core import scope as _cscope
+        return _cscope.canonical_markets(client, org_id)
+    except Exception as e:
+        print(f"WARN _org_markets canonical vocabulary read failed: {e}")
+        return []
 
 
 def _canonical_market(client, org_id: str, value) -> str:
@@ -16508,6 +16498,11 @@ async def update_store(store_id: str, body: UpdateStoreIn, org_id: str = "000000
     if 'market' in allowed:
         allowed['market'] = _canonical_market(client, org_id, allowed['market'])
     r = client.schema('commcalc').table('store_mapping').update(allowed).eq('org_id', org_id).eq('id', store_id).execute()
+    try:   # a new/renamed market or store is visible in every canonical dropdown instantly
+        from app.core import scope as _cscope
+        _cscope.invalidate_market_index(org_id)
+    except Exception:
+        pass
     return r.data[0] if r.data else {}
 
 
@@ -17101,6 +17096,20 @@ def _trend_market_by_code(org_id):
         return {}
 
 
+def _trend_markets(org_id, stores):
+    """Market OPTION list for the trend endpoints — the canonical vocabulary ∪ the stamps on this
+    trend's own store rows (§13c enumeration doctrine, owner 2026-09-04 B-1115/LI class: the trends
+    offered only data-present markets, so a market with no rows in the window was unpickable).
+    Never raises; degrades to data-present alone."""
+    present = {s['market'] for s in stores if s.get('market')}
+    try:
+        from app.core import scope as _cscope
+        return _cscope.org_market_options(sb(), org_id, present)
+    except Exception as e:
+        print(f"WARN _trend_markets canonical vocabulary union failed: {e}")
+        return sorted(present)
+
+
 def _trend_shape(kept, by_store, comp, mkt, value_keys):
     """Assemble the common trend response from per-(store,period) values."""
     stores = []
@@ -17135,7 +17144,7 @@ def expenses_trend(months: int = 6, org_id: str = ORG_ID):
         comp[p]['total'] += amt
     stores, company = _trend_shape(kept, by, comp, mkt, ['total'])
     return {'months': kept, 'company': company, 'stores': stores,
-            'markets': sorted({s['market'] for s in stores if s['market']}), 'money': True}
+            'markets': _trend_markets(org_id, stores), 'money': True}
 
 
 @router.get("/commission-trend")
@@ -17175,7 +17184,7 @@ def commission_trend(months: int = 6, org_id: str = ORG_ID):
             by[code][p]['total'] += pay
     stores, company = _trend_shape(kept, by, comp, mkt, ['total'])
     return {'months': kept, 'company': company, 'stores': stores,
-            'markets': sorted({s['market'] for s in stores if s['market']}), 'money': True}
+            'markets': _trend_markets(org_id, stores), 'money': True}
 
 
 @router.get("/gp-trend")
@@ -17221,7 +17230,7 @@ def gp_trend(months: int = 6, compute_missing: int = 3, org_id: str = ORG_ID):
     stores, company = _trend_shape(kept, by, comp, mkt, ['net_profit', 'total_rev'])
     pending = [p for p in kept if p not in snaps]
     return {'months': kept, 'company': company, 'stores': stores,
-            'markets': sorted({s['market'] for s in stores if s['market']}), 'money': True,
+            'markets': _trend_markets(org_id, stores), 'money': True,
             'pending_months': pending,
             'note': (f"{len(pending)} month(s) not yet computed — open the Gross Profit report for them, or reload to compute a few more." if pending else None)}
 
@@ -19029,6 +19038,7 @@ def get_report_labels(org_id: str = ORG_ID):
 class PutReportLabelsIn(LaxModel):
     columns: Any = None    # {column_key: label} — '' / null label REMOVES the override
     banners: Any = None    # {banner_key: 'on'|'off'|null} — null REMOVES the override
+    terms: Any = None      # {term_key: label} — carrier vocabulary terms; '' / null REMOVES
 
 
 @router.put("/report-labels")
@@ -19048,8 +19058,10 @@ def put_report_labels(body: PutReportLabelsIn, org_id: str = ORG_ID,
                                  "(Classification settings).")
     from app.modules.commcalc import report_labels as _rl
     known_cols = dict(_rl.LABELABLE_COLUMNS)
+    known_terms = dict(_rl.LABELABLE_TERMS)
     cols = body.columns if isinstance(body.columns, dict) else {}
     bans = body.banners if isinstance(body.banners, dict) else {}
+    trms = body.terms if isinstance(body.terms, dict) else {}
     client = sb()
     tbl = client.schema('commcalc').table('ui_label_override')
     changed, removed = [], []
@@ -19066,6 +19078,21 @@ def put_report_labels(body: PutReportLabelsIn, org_id: str = ORG_ID,
                 removed.append(key)
             else:
                 tbl.upsert({"org_id": org_id, "scope": _rl.SCOPE_COL, "key": key,
+                            "label": label[:80],
+                            "updated_at": _datetime.now(_timezone.utc).isoformat()},
+                           on_conflict="org_id,scope,key").execute()
+                changed.append(key)
+        for key, label in trms.items():
+            key = str(key or '').strip()
+            if key not in known_terms:
+                raise HTTPException(400, f"'{key}' is not a known carrier vocabulary term — pick "
+                                         f"one of the listed terms.")
+            label = str(label or '').strip()
+            if not label or label == known_terms[key]:
+                tbl.delete().eq('org_id', org_id).eq('scope', _rl.SCOPE_TERM).eq('key', key).execute()
+                removed.append(key)
+            else:
+                tbl.upsert({"org_id": org_id, "scope": _rl.SCOPE_TERM, "key": key,
                             "label": label[:80],
                             "updated_at": _datetime.now(_timezone.utc).isoformat()},
                            on_conflict="org_id,scope,key").execute()
@@ -22571,7 +22598,15 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     store_opts = [{'value': str(s.get('store_code') or '').strip(),
                    'label': str(s.get('address') or s.get('store_code') or '').strip()}
                   for s in roster if str(s.get('store_code') or '').strip()]
-    market_opts = sorted({str(s.get('market') or '').strip() for s in roster if str(s.get('market') or '').strip()})
+    # §13c enumeration doctrine (owner 2026-09-04, B-1115/LI class): the full canonical vocabulary
+    # ∪ the roster's stamps — normally identical (every canonical market has a store), pinned so the
+    # superset invariant holds by construction rather than by roster completeness.
+    try:
+        from app.core.scope import org_market_options as _tso_omo
+        market_opts = _tso_omo(client, org_id,
+                               {str(s.get('market') or '').strip() for s in roster if str(s.get('market') or '').strip()})
+    except Exception:
+        market_opts = sorted({str(s.get('market') or '').strip() for s in roster if str(s.get('market') or '').strip()})
     rep_opts = sorted({str(a.get('rep_name') or '').strip() for a in actuals if str(a.get('rep_name') or '').strip()})
     filters = {'stores': store_opts, 'markets': market_opts, 'reps': rep_opts}
 
@@ -32681,6 +32716,15 @@ def imei_rebate_report_endpoint(period: str = "", lag_months: int = 6, basis: st
     built = _irr.build_report(activations, events)
     all_rows, orphans = built["rows"], built["orphans"]
     opts = _irr.filter_options(all_rows, orphans)
+    # §13c enumeration doctrine (owner 2026-09-04, B-1115/LI class): market options = the org's
+    # canonical vocabulary ∪ this report's own stamps; the "(no market)" sentinel stays last.
+    try:
+        from app.core import scope as _cscope
+        _mo = [m for m in (opts.get("market_options") or []) if m != _irr.NO_MARKET]
+        _tail = [m for m in (opts.get("market_options") or []) if m == _irr.NO_MARKET]
+        opts["market_options"] = _cscope.org_market_options(client, org_id, _mo) + _tail
+    except Exception as _e:
+        print(f"WARN market-options canonical union failed: {_e}")
 
     rows = _irr.apply_filters(all_rows, stores=stores, reps=reps, markets=markets, status=status,
                               activation_type=activation_type, platform=platform, financed=financed,
@@ -33173,6 +33217,15 @@ def ma_handset_cogs_endpoint(period: str = "", window_months: int = 1, group_by:
 
     all_rows = _mhc.build_rows(raw, store_of=_store_for, price_basis=basis)
     opts = _mhc.filter_options(all_rows)
+    # §13c enumeration doctrine (owner 2026-09-04, B-1115/LI class): market options = the org's
+    # canonical vocabulary ∪ this report's own stamps; the "(no market)" sentinel stays last.
+    try:
+        from app.core import scope as _cscope
+        _mo = [m for m in (opts.get("market_options") or []) if m != _mhc.NO_MARKET]
+        _tail = [m for m in (opts.get("market_options") or []) if m == _mhc.NO_MARKET]
+        opts["market_options"] = _cscope.org_market_options(client, org_id, _mo) + _tail
+    except Exception as _e:
+        print(f"WARN market-options canonical union failed: {_e}")
 
     # `stores` (the RULE FIVE core-set name) and `ship_to` (this feed's own word) are the SAME dimension
     # — unioned so either spelling of the filter works and neither is silently ignored.
@@ -33757,6 +33810,15 @@ def device_cost_recon_endpoint(period: str = "", window_months: int = 1, group_b
                      "the ②↔④ double-valuation flag would read as zero without them. None of them is "
                      "counted as a cost (an unbilled consignment device is liability + inventory only).")
     opts = _dcr.filter_options(all_events)
+    # §13c enumeration doctrine (owner 2026-09-04, B-1115/LI class): market options = the org's
+    # canonical vocabulary ∪ this report's own stamps; the "(no market)" sentinel stays last.
+    try:
+        from app.core import scope as _cscope
+        _mo = [m for m in (opts.get("market_options") or []) if m != _dcr.NO_MARKET]
+        _tail = [m for m in (opts.get("market_options") or []) if m == _dcr.NO_MARKET]
+        opts["market_options"] = _cscope.org_market_options(client, org_id, _mo) + _tail
+    except Exception as _e:
+        print(f"WARN market-options canonical union failed: {_e}")
 
     ov_keys = {o["device_key"] for o in overlaps}
     rows = _dcr.apply_filters(all_events, sources=sources, arrangements=arrangements, timings=timings,

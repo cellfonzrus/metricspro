@@ -1,0 +1,42 @@
+name: carrier-vocab-guard
+
+# Carrier vocabulary guard (owner directive 2026-09-04). A tenant must only ever see its own
+# carrier's vocabulary: no "VidaPay / T-CETRA / Total Wireless / MA …" wording on the Boost side,
+# no "Boost / VIP / ACIMA / PayGo / ePay / Asset Ledger" wording on the Total side. The durable
+# mechanism is the mig-945/953 carrier label preset system (report_col/report_banner/report_term
+# scopes resolved by report_labels.py + lib/report-labels.ts) and the NAV_CARRIERS gate in
+# lib/rbac.ts. This job FAILS the build when frontend display copy hardcodes a cross-side carrier
+# term outside a NAV-gated page or the guard's pinned, reviewed exceptions.
+#
+# Dependency-free: the guard statically scans frontend/src on bare Python — no pip install.
+
+on:
+  pull_request:
+    paths:
+      - "frontend/src/**"
+      - "backend/harness_carrier_vocab_guard.py"
+      - ".github/workflows/carrier-vocab-guard.yml"
+  push:
+    branches: [main]
+    paths:
+      - "frontend/src/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: carrier-vocab-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  carrier-vocab-guard:
+    name: No cross-side carrier vocabulary in page copy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run carrier vocabulary guard
+        working-directory: backend
+        run: python3 harness_carrier_vocab_guard.py | tee "$GITHUB_STEP_SUMMARY"

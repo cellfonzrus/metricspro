@@ -1096,7 +1096,7 @@ export default function CommissionPlansPage() {
         <p style={{ fontSize: 12, color: 'var(--text2)', margin: '0 0 8px' }}>
           Same numbers as the Sales Report and Executive MTD, so the accessory total you see there is what pays.
           Each activation type is its own option — pay BYOD / Tablet / Home Internet differently, and <b>Upgrade</b>
-          {' '}separately ($0 by default). The categories are identical for every tenant; Boost / Cricket just relabel.
+          {' '}separately ($0 by default). The categories are identical for every tenant; each carrier just relabels.
           Reads this plan's store assignments, so <b>save the plan first</b>. The rates below <b>save with the plan</b>
           {' '}(the plan’s Save button); the calculation here is a read-only preview.
         </p>
