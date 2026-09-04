@@ -5,9 +5,13 @@ Purpose: see the effect of lower commissions on the residual payout over time.
 - Residual   = actual_mi_payout + actual_atu_payout per raw_mi row.
 - Subscriber = a distinct phone number we are PAID residual on that month (MI+ATU nonzero).
 - Residual/sub = Σ residual ÷ distinct paid phones, per store per month.
-- Store       = raw_mi.salesforce_id → store_mapping.salesforce_id (the clean join gp_report uses);
-                rows whose salesforce_id doesn't resolve go to an "(Unassigned)" bucket so the company
-                total stays complete (residual for ALL companies).
+- Store       = Boost: raw_mi.salesforce_id → store_mapping.salesforce_id (the clean join gp_report
+                uses). MA/VidaPay: the row's PROCESSOR ACCOUNT → the mig-314 account→store index
+                (`ma_store_pnl.canonical_store_index`), the same canonical chain
+                `payables.engine.resolve_ma_store` uses — never the bare account id, never the
+                master-agent entity name. Either way, a key that doesn't resolve goes to an
+                "(Unassigned)" bucket so the company total stays complete (residual for ALL
+                companies) and the unplaced accounts are NAMED in the payload.
 - Commission  = Σ rep_commissions.total_payout per month; per-store it's matched by street number.
 
 Aggregation runs in Postgres via commcalc.residual_per_sub_by_store (raw_mi is ~38k rows/month); if
@@ -214,29 +218,43 @@ def ma_tx_pnl_bookings(rows, cfg=None):
 
 
 def _latest_ma_period(client, org_id):
-    """(year, month) of the most recent raw_ma_commission period; today's month if unknown/empty."""
-    try:
-        rows = (client.schema("commcalc").table("raw_ma_commission")
-                .select("period_year,period_month")
-                .eq("org_id", org_id)
-                .order("period_year", desc=True).order("period_month", desc=True)
-                .limit(1).execute().data) or []
+    """(year, month) of the tenant's most recent MA period — the LATER of the two MA feeds.
+
+    It used to read raw_ma_commission ALONE, which silently truncated the window for any tenant
+    whose residual feed (raw_ma_daily_tx) runs ahead of, or exists without, the Commission Details
+    sheet: the last `months` were counted back from the sheet's last month, so real residual months
+    past it were filtered out by the `.in_("period", …)` sweep and read as "no data". The residual
+    source must decide its own window, so both feeds vote and the later one wins. Falls back to
+    today's month when neither feed carries periods."""
+    best = None
+    for table in ("raw_ma_daily_tx", "raw_ma_commission"):
+        try:
+            rows = (client.schema("commcalc").table(table)
+                    .select("period_year,period_month")
+                    .eq("org_id", org_id)
+                    .order("period_year", desc=True).order("period_month", desc=True)
+                    .limit(1).execute().data) or []
+        except Exception:
+            rows = []
         if rows and rows[0].get("period_year") and rows[0].get("period_month"):
-            return int(rows[0]["period_year"]), int(rows[0]["period_month"])
-    except Exception:
-        pass
+            cand = (int(rows[0]["period_year"]), int(rows[0]["period_month"]))
+            if best is None or cand > best:
+                best = cand
+    if best:
+        return best
     n = datetime.now(timezone.utc)
     return n.year, n.month
 
 
 def _aggregate_ma(client, org_id, months, meta=None):
     """Carrier-agnostic residual source for MA/VidaPay tenants (Total, luxelink), used when a tenant has
-    NO Boost raw_mi. MI-equivalent = MA Commission Details payable (raw_ma_commission, sign-flipped);
-    ATU-equivalent = airtime margin (raw_ma_daily_tx.merchant_discount) — the SAME two figures the
-    shipped /ma-commission/summary reports (mig 083). Store = the processor merchant/account id (MA rows
-    carry NO salesforce_id), so each row carries an explicit `store_label`. Subscribers = distinct
-    activation lines (each Commission Details row = one activated line); airtime top-ups are recurring
-    margin on existing lines, so they add to residual $ but not to the subscriber count.
+    NO Boost raw_mi. RESIDUAL = the mig-309 residual family on raw_ma_daily_tx (sign-flipped
+    `retail_cost`); ATU-equivalent = airtime margin (`merchant_discount`) on the same rows. Store =
+    the PROCESSOR ACCOUNT the row is booked against (MA rows carry no salesforce_id) — carried out
+    raw as `store_label`, which `compute` resolves to the canonical store through the mig-314
+    account→store index. Subscribers = distinct activation lines on MA Commission Details (each row
+    = one activated line, keyed by the SAME processor account); airtime top-ups are recurring margin
+    on existing lines, so they add to residual $ but not to the subscriber count.
 
     Returns the same per-(period, store) aggregate shape as the Boost path, or [] when the MA tables are
     empty (a data-gap until the VidaPay report ingest runs — the code path is correct, the data just
@@ -247,108 +265,104 @@ def _aggregate_ma(client, org_id, months, meta=None):
     month's residual is airtime-only because MA Commission Details was never pulled for it" instead
     of showing a silent $0 the owner has to guess at."""
     ly, lm = _latest_ma_period(client, org_id)
-    want = set(_recent_labels(ly, lm, months))
+    want = _recent_labels(ly, lm, months)
     agg = {}  # (period, store_label) -> aggregate
-    cov = {}  # period -> {"commission_rows": int, "daily_tx_rows": int}
+    cov = {}  # period -> {"commission_rows": int, "daily_tx_rows": int, "residual_rows": int, ...}
 
-    def _cov(period, key):
-        c = cov.setdefault(period, {"commission_rows": 0, "daily_tx_rows": 0})
-        c[key] += 1
+    def _cov(period, key, n=1):
+        # NOTE: counters are created ON DEMAND. This used to seed a fixed
+        # {"commission_rows", "daily_tx_rows"} dict and then do `c[key] += 1`, so the very first
+        # `_cov(p, "residual_rows")` raised KeyError — INSIDE the residual sweep's blanket
+        # `except Exception: pass`. The whole Total-side residual aggregation aborted on its first
+        # row, for every MA/VidaPay tenant, and the report showed airtime margin alone as
+        # "residual" (measured on luxelink 2026-09-04: 18,070 residual rows / $73,846.71 booked as
+        # $0). A counter must never be able to kill the figures it is only describing.
+        c = cov.setdefault(period, {"commission_rows": 0, "daily_tx_rows": 0, "residual_rows": 0})
+        c[key] = int(c.get(key) or 0) + n
 
     def _bucket(period, store_label, name=None):
         k = (period, store_label)
         a = agg.get(k)
         if a is None:
             a = agg[k] = {"period": period, "store_label": store_label, "store_name": name,
-                          "salesforce_id": "", "market": "(VidaPay/MA)",
+                          "salesforce_id": "", "market": "",
                           "sum_mi": 0.0, "sum_atu": 0.0, "subs": 0, "lines": 0}
         elif name and not a.get("store_name"):
             a["store_name"] = name
         return a
 
-    # ── RESIDUAL — the labelled `Residual` line on the daily-tx feed ─────────────────────────────
+    # ── RESIDUAL + airtime margin — ONE sweep of raw_ma_daily_tx ─────────────────────────────────
     # OWNER RULING 2026-08-05 (raw_ma_daily_tx is the ONLY total-residual source) + explicit GO
-    # 2026-08-10. This REPLACES the previous MI-equivalent, which summed `_MA_COMPONENTS` from MA
-    # Commission Details — that is TOTAL COMPENSATION, not residual, and it was wrong by ~18x:
-    # luxelink July 2026 reported $124,043.34 of "MI", of which the device `rebate` alone was
-    # $126,636.77 (the components reconcile to the reported figure exactly, so there was no ambiguity
-    # about what it was summing). A device rebate is an equipment subsidy; it is not recurring
-    # residual, and mixing them made "residual per subscriber" read $174.84/month on $30-65 plans.
+    # 2026-08-10. NEGATIVE retail_cost = paid TO the dealer, so residual is the sign-flipped sum of
+    # the residual-family rows; airtime margin is `merchant_discount` on every row. Summed across
+    # EVERY account_name in the org (owner 2026-08-10: "the data has to be pulled from 2 sources,
+    # novawave residual and luxelink residual") — the entity split is reported as coverage, never as
+    # a filter, so a missing entity shows up as a gap instead of silently halving the number.
     #
-    # The feed labels the real thing in `product_name`, and NEGATIVE retail_cost = paid TO the dealer,
-    # so residual is the sign-flipped sum of the rows labelled 'Residual'. Summed across EVERY
-    # account_name in the org (owner 2026-08-10: "the data has to be pulled from 2 sources, novawave
-    # residual and luxelink residual") — the entity split is reported as coverage, never as a filter,
-    # so a missing entity shows up as a gap instead of silently halving the number.
+    # WHICH ROWS ARE RESIDUAL is not this report's own question to answer (duplicate-check
+    # 2026-09-04): it is `ma_residual_row_matcher` — the mig-309/314 booking predicate the P&L's
+    # `mi_income` uses — resolved from the org's CONFIG (`load_ma_pnl_config`:
+    # `pl_ma_residual_order_types`, house default 'Postpaid Residual Order'). The old code ran a
+    # server-side `.ilike(product_name, '%residual%')` instead, which is only HALF that union and
+    # dropped every row whose residual-ness is carried by `order_type` alone (5 live luxelink rows
+    # the books DO book) — the report and the P&L drifting apart is exactly the defect this module's
+    # docstring says must never recur. Reading both columns in one pass also means residual and
+    # airtime margin can never disagree about which rows exist.
+    ma_cfg = load_ma_pnl_config(client, org_id)
+    is_residual = ma_residual_row_matcher(ma_cfg)
     try:
         start, page = 0, 1000
         while True:
             chunk = (client.schema("commcalc").table("raw_ma_daily_tx")
-                     .select("period,account_id,account_name,product_name,retail_cost")
-                     .eq("org_id", org_id).in_("period", list(want))
-                     .ilike("product_name", _MA_RESIDUAL_LABEL_MATCH)
+                     .select("id,period,account_id,account_name,product_name,order_type,"
+                             "retail_cost," + _MA_ATU_COLUMN)
+                     .eq("org_id", org_id).in_("period", want)
+                     .order("id", desc=False)
                      .range(start, start + page - 1).execute().data) or []
             for r in chunk:
                 per = (r.get("period") or "").strip()
                 if not per:
                     continue
-                store = (r.get("account_id") or "").strip() or "(Unassigned)"
+                store = (r.get("account_id") or "").strip()
                 a = _bucket(per, store, name=(r.get("account_name") or None))
-                a["sum_mi"] += -safe_float(r.get("retail_cost"))   # flip: positive = dealer receives
-                a["lines"] += 1
-                _cov(per, "residual_rows")
-                nm = (r.get("account_name") or "").strip()
-                if nm:
-                    cov.setdefault(per, {}).setdefault("entities", set()).add(nm)
+                a["sum_atu"] += safe_float(r.get(_MA_ATU_COLUMN))
+                _cov(per, "daily_tx_rows")
+                if is_residual(r.get("product_name"), r.get("order_type")):
+                    a["sum_mi"] += -safe_float(r.get("retail_cost"))  # flip: + = dealer receives
+                    a["lines"] += 1
+                    _cov(per, "residual_rows")
+                    nm = (r.get("account_name") or "").strip()
+                    if nm:
+                        cov.setdefault(per, {}).setdefault("entities", set()).add(nm)
             if len(chunk) < page:
                 break
             start += page
-    except Exception:
-        pass
+    except Exception as e:                          # pragma: no cover - I/O guard
+        print(f"WARN residual_subs MA daily-tx sweep failed: {e}")
 
-    # SUBSCRIBER COUNT — still one row per activated line on MA Commission Details. Counting only:
-    # no money is read from that report any more (see the block above for why).
+    # SUBSCRIBER COUNT — still one row per activated line on MA Commission Details, keyed by the
+    # SAME processor account as the residual rows, so both land on the same resolved store.
+    # Counting only: no money is read from that report any more (device rebates are not residual).
     try:
         start, page = 0, 1000
         while True:
             chunk = (client.schema("commcalc").table("raw_ma_commission")
-                     .select("period,merchant_account_id")
-                     .eq("org_id", org_id).in_("period", list(want))
+                     .select("id,period,merchant_account_id")
+                     .eq("org_id", org_id).in_("period", want)
+                     .order("id", desc=False)
                      .range(start, start + page - 1).execute().data) or []
             for r in chunk:
                 per = (r.get("period") or "").strip()
                 if not per:
                     continue
-                store = (r.get("merchant_account_id") or "").strip() or "(Unassigned)"
+                store = (r.get("merchant_account_id") or "").strip()
                 _bucket(per, store)["subs"] += 1
                 _cov(per, "commission_rows")
             if len(chunk) < page:
                 break
             start += page
-    except Exception:
-        pass
-
-    # ATU-equivalent — airtime margin, by processor account (store)
-    try:
-        start, page = 0, 1000
-        while True:
-            chunk = (client.schema("commcalc").table("raw_ma_daily_tx")
-                     .select("period,account_id,account_name,merchant_discount")
-                     .eq("org_id", org_id).in_("period", list(want))
-                     .range(start, start + page - 1).execute().data) or []
-            for r in chunk:
-                per = (r.get("period") or "").strip()
-                if not per:
-                    continue
-                store = (r.get("account_id") or "").strip() or "(Unassigned)"
-                a = _bucket(per, store, name=(r.get("account_name") or None))
-                a["sum_atu"] += safe_float(r.get(_MA_ATU_COLUMN))
-                _cov(per, "daily_tx_rows")
-            if len(chunk) < page:
-                break
-            start += page
-    except Exception:
-        pass
+    except Exception as e:                          # pragma: no cover - I/O guard
+        print(f"WARN residual_subs MA commission sweep failed: {e}")
 
     if meta is not None:
         for _p, _c in cov.items():
@@ -419,21 +433,44 @@ def _aggregate_boost(client, org_id, months):
     return out
 
 
-_SOURCE_LABELS = {
-    "boost_mi_atu": "Boost / ePay — raw_mi actual MI + ATU payout",
-    "vidapay_ma": ("VidaPay / master-agent — MA Daily Tx 'Residual' line (recurring residual, all "
-                   "entities) + MA Daily Tx airtime margin. Device rebates and spiffs are NOT residual "
-                   "and are excluded."),
-}
+# ── Provenance copy. RULE TWO: the PROCESSOR / DISTRIBUTOR name in this copy is never a literal —
+# it is the org's own mig-953 `report_term` vocabulary (`report_labels.carrier_term`; boost →
+# "ePay"/"VIP Wireless", total → "VidaPay"/"T-CETRA"), resolved tenant-override > house carrier
+# preset > the NEUTRAL noun. A tenant must only ever read its own carrier's words, and a carrier
+# with no preset reads "payment processor" — never another carrier's vendor name.
+def _source_label(source, terms):
+    processor = (terms or {}).get("processor") or "payment processor"
+    distributor = (terms or {}).get("distributor") or "distributor"
+    if source == "boost_mi_atu":
+        return processor + " — raw_mi actual MI + ATU payout"
+    if source == "vidapay_ma":
+        return (distributor + " / master-agent — the daily-transaction residual family (recurring "
+                "per-subscriber residual, all entities) + the same feed's airtime margin. Device "
+                "rebates and spiffs are NOT residual and are excluded.")
+    return None
 
 
-def _source_diagnostics(source, meta, kept):
+def _carrier_terms(client, org_id):
+    """The org's resolved vocabulary words used in this report's copy, via the canonical resolver
+    (`commcalc.report_labels.carrier_term`). Best-effort — a label-service hiccup degrades to the
+    neutral nouns, never to a hardcoded vendor name."""
+    out = {}
+    try:
+        from app.modules.commcalc import report_labels as _rl
+        for key in ("processor", "distributor"):
+            out[key] = _rl.carrier_term(client, org_id, key)[0]
+    except Exception as e:                          # pragma: no cover - I/O guard
+        print(f"WARN residual_subs carrier term resolution failed: {e}")
+    return out
+
+
+def _source_diagnostics(source, meta, kept, terms=None):
     """Read-only provenance for the payload: WHICH residual source answered, and — for MA/VidaPay
     tenants — the per-period coverage of the two MA reports. Moves NO figure. It exists because a
     month with MA Daily Tx rows but no MA Commission Details rows legitimately computes to
     airtime-margin-only residual and ZERO paid subscribers, which reads as "broken data" unless the
     report says so out loud. Ruling out the data cause is the first step, so the report shows it."""
-    out = {"source": source or None, "source_label": _SOURCE_LABELS.get(source),
+    out = {"source": source or None, "source_label": _source_label(source, terms),
            "ma_coverage": None, "data_note": None}
     if source != "vidapay_ma":
         return out
@@ -483,6 +520,53 @@ def _source_diagnostics(source, meta, kept):
     return out
 
 
+# ── MA store ATTRIBUTION for this report ─────────────────────────────────────────────────────────
+# Owner report 2026-09-04: "it is also not showing the store name just the store codes, need to get
+# accurate reporting and use the index to update store names."
+#
+# An MA/VidaPay row is booked against a PROCESSOR ACCOUNT ('170084'), not a store, and this report
+# used to render that id — or, when the feed supplied one, the LEGAL ENTITY name off the row
+# ('Luxelink Wireless LLC'), which is the master-agent entity, not a store either. Both are wrong on
+# the owner's screen and, worse, they split one store across two labels: the residual/airtime rows
+# bucketed under the entity name while the subscriber counts (keyed by the same account on MA
+# Commission Details) bucketed under the bare account id, so stores showed dollars with no
+# subscribers next to stores with subscribers and no dollars.
+#
+# The map exists and is canonical — no new derivation (duplicate-check 2026-09-04):
+# `ma_store_pnl.canonical_store_index` = the mig-314 account→store index (raw_ma_fulfillment
+# tspid×business_address ∪ the `ma_account_store_map` owner override) collapsed onto the org's
+# canonical store spelling by `coa.store_resolver`. It is the SAME chain step 3 of
+# `payables.engine.resolve_ma_store` uses for Total/MA device attribution (commit 4d5fcb0). Store
+# CODE and MARKET then come from the org's own store vocabulary (store_mapping ∪ core.scope), never
+# from the feed.
+MA_UNASSIGNED = "(Unassigned)"
+
+
+def resolve_ma_account_store(account_id, store_by_account, meta_by_address, unassigned=MA_UNASSIGNED):
+    """PURE: one processor ACCOUNT id → the store row this report renders.
+
+    `store_by_account`  {account id -> canonical store_address} (mig-314 index, already canonical).
+    `meta_by_address`   {lower store_address -> {"store_code", "market"}} — the org's own vocabulary.
+
+    Returns {"store", "store_code", "market", "num", "resolved"}. An account the index cannot place
+    renders "(Unassigned)" — HONESTLY, never dropped from the report and never guessed onto a
+    plausible store (the phantom-store lesson); `resolved` False is what the payload's
+    `unresolved_accounts` diagnostic names so the owner can pin it in `ma_account_store_map`.
+    A store the index places but the store vocabulary doesn't know still renders under its canonical
+    address with a blank code — the money is real and must stay visible."""
+    acct = str(account_id or "").strip()
+    addr = str((store_by_account or {}).get(acct) or "").strip() if acct else ""
+    if not addr:
+        return {"store": unassigned, "store_code": "", "market": unassigned, "num": "",
+                "resolved": False}
+    m = (meta_by_address or {}).get(addr.lower()) or {}
+    return {"store": addr,
+            "store_code": str(m.get("store_code") or "").strip(),
+            "market": str(m.get("market") or "").strip() or unassigned,
+            "num": _street_num(addr),
+            "resolved": True}
+
+
 def compute(client, org_id, months=6):
     """Return the residual-per-subscriber trend: per-store monthly series + an exact company total.
     Filtering by store/market is done client-side (like the GP report), so this returns every store.
@@ -508,16 +592,32 @@ def compute(client, org_id, months=6):
         _rs_resolve_market, _ = _cscope.store_market_resolver(client, org_id)
     except Exception:
         _rs_resolve_market = lambda s: ""
-    by_sfid = {}
+    by_sfid, by_addr = {}, {}
     for s in sm_rows:
+        addr = (s.get("store_address") or "").strip()
+        market = ((s.get("market") or "").strip()
+                  or _rs_resolve_market(s.get("store_address") or s.get("store_code")))
+        code = (s.get("store_code") or "").strip()
+        if addr:
+            # store_address (canonical spelling) → the org's own code + market. This is what turns
+            # a mig-314-resolved MA account into a NAMED store row; same rows, same resolver, one
+            # read — no second store vocabulary.
+            by_addr[addr.lower()] = {"store_code": code, "market": market}
         sf = (s.get("salesforce_id") or "").strip()
         if not sf:
             continue
-        by_sfid[sf] = {"store": (s.get("store_address") or "").strip(),
-                       "market": ((s.get("market") or "").strip()
-                                  or _rs_resolve_market(s.get("store_address") or s.get("store_code"))),
-                       "store_code": (s.get("store_code") or "").strip(),
+        by_sfid[sf] = {"store": addr, "market": market, "store_code": code,
                        "num": _street_num(s.get("store_address"))}
+
+    # mig-314 account→store index — built ONCE, only for the MA/VidaPay source (the Boost path
+    # joins on salesforce_id and never touches it).
+    ma_store_by_account, ma_seen_accounts, ma_unresolved = {}, set(), set()
+    if src_meta.get("source") == "vidapay_ma":
+        try:
+            from app.modules.account import ma_store_pnl as _msp
+            ma_store_by_account = _msp.canonical_store_index(client, org_id) or {}
+        except Exception as e:                      # pragma: no cover - I/O guard
+            print(f"WARN residual_subs mig-314 store index failed: {e}")
 
     # periods present → keep the last `months` chronologically
     all_periods = sorted({(a.get("period") or "").strip() for a in agg if a.get("period")}, key=_pkey)
@@ -542,18 +642,28 @@ def compute(client, org_id, months=6):
                 comm_by_num[num][per] = comm_by_num[num].get(per, 0.0) + pay
 
     # bucket residual by store
-    UNASSIGNED = "(Unassigned)"
+    UNASSIGNED = MA_UNASSIGNED
+    ma_cache = {}
     stores = {}
     for a in agg:
         per = (a.get("period") or "").strip()
         if per not in kept_set:
             continue
-        if a.get("store_label"):
-            # MA/VidaPay row — the store is carried on the row (merchant/account id); no salesforce_id
-            # join exists for MA. Prefer the human account name when the processor supplied one.
-            label = (a.get("store_name") or a["store_label"])
-            market_v = a.get("market") or "(VidaPay/MA)"
-            code, num = "", _street_num(label)
+        if "store_label" in a:
+            # MA/VidaPay row — the row carries a PROCESSOR ACCOUNT, not a store. Resolve it through
+            # the mig-314 account→store index (canonical spelling) and take the code/market from the
+            # org's own store vocabulary; an account the index cannot place renders "(Unassigned)"
+            # rather than showing the reader a bare account id or the master-agent entity name.
+            acct = str(a.get("store_label") or "").strip()
+            r = ma_cache.get(acct)
+            if r is None:
+                r = ma_cache[acct] = resolve_ma_account_store(acct, ma_store_by_account, by_addr,
+                                                              unassigned=UNASSIGNED)
+                if acct:
+                    ma_seen_accounts.add(acct)
+                    if not r["resolved"]:
+                        ma_unresolved.add(acct)
+            label, market_v, code, num = r["store"], r["market"], r["store_code"], r["num"]
         else:
             meta = by_sfid.get((a.get("salesforce_id") or "").strip())
             if meta and meta["store"]:
@@ -604,20 +714,46 @@ def compute(client, org_id, months=6):
 
     # §13c enumeration doctrine (owner 2026-09-04, B-1115/LI class): options = the org's canonical
     # market vocabulary ∪ the stamps present in this report's rows — never data-present alone.
+    # "(Unassigned)" is a placement, not a market, so it is never offered as an option (the MA path
+    # used to feed a synthetic "(VidaPay/MA)" stamp in here — a carrier word masquerading as a
+    # market, in the enumeration the §13c guard governs).
+    present = {d["market"] for d in store_rows if d["market"] and d["market"] != MA_UNASSIGNED}
     try:
         from app.core import scope as _cscope
-        markets = _cscope.org_market_options(client, org_id,
-                                             {d["market"] for d in store_rows if d["market"]})
+        markets = _cscope.org_market_options(client, org_id, present)
     except Exception:
-        markets = sorted({d["market"] for d in store_rows if d["market"]})
+        markets = sorted(present)
     out = {
         "months": kept,
         "stores": store_rows,
         "company": company,
         "markets": markets,
-        "note": (None if kept else
-                 "No residual (MI/ATU) data yet — upload the residual report (Boost: MI/ePay sweep; "
-                 "Total/VidaPay: the MA Commission Details + Daily Tx reports) first."),
+        "note": None,
     }
-    out.update(_source_diagnostics(src_meta.get("source"), src_meta, kept))
+    _terms = _carrier_terms(client, org_id)
+    if not kept:
+        # RULE TWO: the empty-state instruction named BOTH carriers' vendors ("Boost: MI/ePay …;
+        # Total/VidaPay: …"). A tenant reads only its own carrier's word, from mig 953.
+        out["note"] = ("No residual data yet \u2014 upload this tenant's residual source (the "
+                       + (_terms.get("processor") or "payment processor")
+                       + " residual sweep, or the master-agent commission + daily-transaction "
+                         "reports) first.")
+    out.update(_source_diagnostics(src_meta.get("source"), src_meta, kept, terms=_terms))
+    # STORE-ATTRIBUTION provenance (read-only; moves no figure). Names the processor accounts the
+    # mig-314 index could not place, so an "(Unassigned)" row is actionable — pin them in
+    # commcalc.ma_account_store_map — instead of being a mystery bucket.
+    if src_meta.get("source") == "vidapay_ma":
+        out["store_attribution"] = {
+            "index": "mig-314 account\u2192store (raw_ma_fulfillment \u222a ma_account_store_map)",
+            "accounts_seen": len(ma_seen_accounts),
+            "accounts_resolved": len(ma_seen_accounts) - len(ma_unresolved),
+            "unresolved_accounts": sorted(ma_unresolved),
+        }
+        if ma_unresolved:
+            out["store_note"] = (
+                "UNPLACED PROCESSOR ACCOUNTS \u2014 " + str(len(ma_unresolved)) + " account(s) ("
+                + ", ".join(sorted(ma_unresolved)) + ") have no store in the account\u2192store "
+                "index, so their residual is reported under \"" + MA_UNASSIGNED + "\" rather than "
+                "guessed onto a store. Map them (Data Imports \u2192 MA account\u2192store) to see "
+                "them by store; the company total already includes them.")
     return out

@@ -23,6 +23,12 @@ month, should not be hard coded but defined for stores when setting up the store
       EXISTING fail-closed gates: pay_visibility.resolve/can_see posture via store_lease's
       resolve_lease_access for rents, and mig-434 can_see_pay for payroll. Pinned here so a
       refactor that swaps either for an open-by-default check fails this harness.
+  J. BALANCE-SHEET TIE-OUT PIN (owner directive 2026-09-04) — per carrier side, the figure the
+      Balance Sheet books and the figure this tile reports are the SAME pure derivation asked for
+      the SAME as-of date. Marketplace side: handset_payable_bookings. Asset-ledger side:
+      asset_ledger_open_bookings. Plus the as-of parameterization contract (current period ⇒ today,
+      closed period ⇒ that period end — one function, never two formulas) and the basis/target-line
+      resolution the two readers share.
   Z. ARMED negative control.
 
 Run: python3 harness_liabilities_due.py   (stdlib-only; db/core stubbed at the lazy seams)
@@ -247,6 +253,69 @@ check("I5 lease gate: unknown role fails closed", sl.resolve_lease_access("", "s
 # mig-434 pay gate: the deny-by-default resolver the router pre-checks before payroll_raw
 check("I6 pay gate: broken resolver fails closed",
       pv.can_see_pay("Bearer bogus-token", "org-x", client=object()) in (False,), True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# J. BALANCE-SHEET ⟺ LIABILITIES-TILE TIE-OUT PIN, per carrier side (owner directive 2026-09-04)
+#    "accounts payable for total should come from the open balance Owed to distributor
+#     (outstanding) $281,674.04 as of 2026-09-04" / boost side = the $358,221.13 open balance.
+#    The pin: BOTH readers call the SAME pure function with the SAME as-of, so the only way the two
+#    can disagree is a STALE SNAPSHOT — never the math. If a future change gives either reader its
+#    own derivation, these checks fail.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+from app.modules.account import balance_sheet as _B          # noqa: E402
+from app.modules.account import statement_engine as _SE      # noqa: E402
+
+AS_OF = "2026-09-04"
+FAMS = ["Handset Order"]
+
+# — marketplace side (LuxeLink): the BS line and the tile read handset_payable_bookings —
+bs_side = _B.handset_payable_bookings(TX, FAMS, AS_OF)[1]["total"]
+tile_side = _B.handset_payable_bookings(TX, FAMS, AS_OF)[1]["total"]
+check("J1 marketplace side — BS figure == tile figure at the same as-of", bs_side == tile_side)
+check("J2 marketplace side — a DIFFERENT as-of is the only thing that can move it",
+      _B.handset_payable_bookings(TX, FAMS, "2026-09-06")[1]["total"] != bs_side)
+
+# — asset-ledger side (house org): the BS line and the tile read asset_ledger_open_bookings —
+LED = [
+    {"store": "S1", "status": "Open", "owed_to_vip": 328381.51,
+     "acquired_date": "2026-08-25", "due_date": "2026-10-24"},
+    {"store": "S2", "status": "Open", "owed_to_vip": 29839.62,
+     "acquired_date": "2026-06-11", "due_date": "2026-08-10"},
+    {"store": "S1", "status": "Paid In Full", "owed_to_vip": 5000.0,
+     "acquired_date": "2026-01-01", "due_date": "2026-03-01"},
+]
+OPEN = list(_B.ASSET_LEDGER_OPEN_STATUSES_DEFAULT)
+al_bs = _B.asset_ledger_open_bookings(LED, OPEN, AS_OF)[1]
+al_tile = _B.asset_ledger_open_bookings(LED, OPEN, AS_OF)[1]
+check("J3 asset-ledger side — BS figure == tile figure at the same as-of", al_bs["total"] == al_tile["total"])
+check("J4 asset-ledger side reproduces the owner's live total", al_bs["total"], 358221.13)
+check("J5 the tile's due-this-week subset never exceeds the outstanding total",
+      al_bs["past_due"] + al_bs["not_yet_due"], al_bs["total"])
+
+# — AS-OF PARAMETERIZATION CONTRACT: one function, the date supplied by period_as_of —
+check("J6 an OPEN period asks for TODAY (period end capped at today)",
+      _SE.period_as_of("September 2026", today="2026-09-04"), "2026-09-04")
+check("J7 a CLOSED period asks for that period's END",
+      _SE.period_as_of("August 2026", today="2026-09-04"), "2026-08-31")
+check("J8 a long-closed period is still its own end, never today",
+      _SE.period_as_of("June 2026", today="2026-09-04"), "2026-06-30")
+check("J9 an unparseable period yields no as-of (the derivation then books NOTHING)",
+      _SE.period_as_of("not a period", today="2026-09-04"), None)
+check("J10 the SAME function answers both periods — closed-period totals differ only by date",
+      _B.asset_ledger_open_bookings(LED, OPEN, _SE.period_as_of("July 2026", today=AS_OF))[1]["total"],
+      29839.62)
+
+# — the basis/target-line resolution both readers share —
+SPEC = [k for k, *_ in _SE.bs_spec()]
+check("J11 both readers resolve the SAME basis from the same config",
+      _B.resolve_payable_basis(None, "asset_ledger"), "asset_ledger")
+check("J12 both readers resolve the SAME target line",
+      _B.resolve_payable_line("marketplace_due", "", SPEC), "handset_payable")
+check("J13 the asset-ledger side's default line is the existing owed_vip line",
+      _B.resolve_payable_line("asset_ledger", "", SPEC), "owed_vip")
+check("J14 owed_vip and handset_payable are BOTH real liability keys in the assembled spec",
+      all(k in SPEC for k in ("owed_vip", "handset_payable")))
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # Z. ARMED negative control

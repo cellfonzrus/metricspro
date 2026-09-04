@@ -307,6 +307,39 @@ def put_inventory_values(body: PutInventoryValuesIn, org_id: str = ORG_ID):
 
 
 # ── per-org accounting config (booking rates — mig 611) ────────────────────────────────────────
+def _distributor_payable_config(client, org_id):
+    """The resolved distributor-payable mapping for the tenant-setup / finance-config screen:
+    what the org has SET, what its carrier PRESET says, what therefore RESOLVES, and the valid
+    choices. Read-only and best-effort — a settings read never 500s on a config probe."""
+    from app.modules.account import balance_sheet as _bs
+    out = {"bases": list(_bs.DISTRIBUTOR_PAYABLE_BASES),
+           "basis_default_line": dict(_bs.PAYABLE_BASIS_DEFAULT_LINE),
+           "open_statuses_default": list(_bs.ASSET_LEDGER_OPEN_STATUSES_DEFAULT)}
+    try:
+        cfg = _bs.load_bs_config(client, org_id)
+        preset = statement_engine.carrier_payable_preset(client, org_id)
+        basis = _bs.resolve_payable_basis(cfg["distributor_payable_basis"], preset,
+                                          bool(cfg["handset_payable_order_types"]))
+        spec = statement_engine.bs_spec()
+        out.update({
+            "org_basis": cfg["distributor_payable_basis"],
+            "carrier_preset_basis": preset or "",
+            "resolved_basis": basis,
+            "org_line": cfg["distributor_payable_line"] or "",
+            "resolved_line": _bs.resolve_payable_line(basis, cfg["distributor_payable_line"],
+                                                      [k for k, *_ in spec]),
+            "asset_ledger_open_statuses": cfg["asset_ledger_open_statuses"],
+            "line_options": [{"key": k, "label": lbl}
+                             for k, lbl, sect, *_ in spec if sect == "liability"],
+            "source": ("org override" if cfg["distributor_payable_basis"]
+                       else ("carrier preset" if preset
+                             else ("declared marketplace families"
+                                   if cfg["handset_payable_order_types"] else "default (off)")))})
+    except Exception as e:
+        out["note"] = f"unavailable: {type(e).__name__}"
+    return out
+
+
 @router.get("/config")
 def get_config(org_id: str = ORG_ID):
     """This tenant's finance/accounting config (currently the accessory COGS %). Returns the resolved
@@ -365,7 +398,11 @@ def get_config(org_id: str = ORG_ID):
             "payroll_expense_name_options": payroll_options,
             "defaults": {"accessory_cogs_pct": coa.ACCESSORY_COGS_PCT, "service_fee_products": [],
                          "payroll_expense_names": [], "payroll_expense_routes": {},
-                         "device_cogs_mode": "off"}}
+                         "device_cogs_mode": "off"},
+            # mig 954 — the distributor-payable tenant mapping, RESOLVED (so the setup screen shows
+            # what a tenant that has set nothing will actually book, not a blank), with the
+            # pick-don't-type option lists for both the basis and its target line.
+            "distributor_payable": _distributor_payable_config(sb(), org_id)}
 
 
 class AccountPutConfigIn(LaxModel):
@@ -374,6 +411,11 @@ class AccountPutConfigIn(LaxModel):
     payroll_expense_names: Any = None
     payroll_expense_routes: Any = None
     device_cogs_mode: Any = None
+    # mig 954 — the TENANT-SETUP mapping (owner directive 2026-09-04 §C: "these should be mapped
+    # when setting up the new tenant for proper reporting")
+    distributor_payable_basis: Any = None
+    distributor_payable_line: Any = None
+    asset_ledger_open_statuses: Any = None
 
 
 @router.put("/config")
@@ -455,6 +497,39 @@ def put_config(body: AccountPutConfigIn, org_id: str = ORG_ID):
         if mode not in ("off", "auto", "invoice", "pos"):
             raise HTTPException(400, "device_cogs_mode must be one of: off, auto, invoice, pos")
         row["device_cogs_mode"] = mode
+    # ── TENANT-SETUP MAPPING (owner directive 2026-09-04 §C, mig 954) ───────────────────────────
+    # Which feed answers "what do we owe the distributor", and which Balance-Sheet line it books to
+    # (a per-tenant COST-CENTRE choice, §B). MONEY-TOUCHING — the caller must recompute afterwards.
+    # An absent key is untouched; an EXPLICIT null clears the column back to carrier-preset default.
+    from app.modules.account import balance_sheet as _bscfg
+    if "distributor_payable_basis" in body.model_fields_set:
+        b = str(body.distributor_payable_basis or "").strip().lower()
+        if body.distributor_payable_basis in (None, ""):
+            row["distributor_payable_basis"] = None      # ⇒ resolve from the carrier preset
+        elif b not in _bscfg.DISTRIBUTOR_PAYABLE_BASES:
+            raise HTTPException(400, "distributor_payable_basis must be one of: "
+                                     + ", ".join(_bscfg.DISTRIBUTOR_PAYABLE_BASES))
+        else:
+            row["distributor_payable_basis"] = b
+    if "distributor_payable_line" in body.model_fields_set:
+        lk = str(body.distributor_payable_line or "").strip()
+        if lk:
+            valid = {k for k, _lbl, sect, *_ in statement_engine.bs_spec() if sect == "liability"}
+            if lk not in valid:
+                raise HTTPException(400, "distributor_payable_line must be a balance-sheet "
+                                         "LIABILITY line key: " + ", ".join(sorted(valid)))
+        row["distributor_payable_line"] = lk or None
+    if "asset_ledger_open_statuses" in body.model_fields_set:
+        raw = body.asset_ledger_open_statuses or []
+        if not isinstance(raw, list):
+            raise HTTPException(400, "asset_ledger_open_statuses must be a list of ledger statuses")
+        picked, seen = [], set()
+        for n in raw:
+            t = str(n or "").strip()
+            if t and t.lower() not in seen:
+                seen.add(t.lower())
+                picked.append(t)
+        row["asset_ledger_open_statuses"] = picked or None
     try:
         sb().schema("commcalc").table("account_config").upsert(row, on_conflict="org_id").execute()
     except Exception as e:
@@ -682,8 +757,17 @@ def _liabilities_due_impl(authorization, org_id, today_iso=""):
     try:
         cfg = _bs.load_bs_config(client, org_id)
         fams = cfg.get("handset_payable_order_types") or []
-        distributor["configured"] = bool(fams)
-        if fams:
+        # mig 954 — the tile and the Balance Sheet now read the SAME resolved basis and the SAME
+        # pure derivations, differing only in the as-of date they are asked for (this tile: today).
+        basis = _bs.resolve_payable_basis(cfg.get("distributor_payable_basis"),
+                                          statement_engine.carrier_payable_preset(client, org_id),
+                                          bool(fams))
+        line_key = _bs.resolve_payable_line(basis, cfg.get("distributor_payable_line"),
+                                            [k for k, *_ in statement_engine.bs_spec()])
+        distributor["basis"] = basis
+        distributor["bs_line"] = line_key
+        distributor["configured"] = basis != "off"
+        if basis == "marketplace_due" and fams:
             # one fetch covers both questions: rows still due after the day before the week start
             fetch_from = (_date.fromisoformat(wk_start) - _timedelta(days=1)).isoformat()
             tx = statement_engine._fetch_outstanding_tx(client, org_id, fetch_from)
@@ -717,9 +801,54 @@ def _liabilities_due_impl(authorization, org_id, today_iso=""):
                 "by_store": [{"store": s, "market": _mk(s), "amount": v}
                              for s, v in sorted(d_by.items())],
                 "company_wide": d_co}
+        elif basis == "asset_ledger":
+            # The SAME open-balance derivation the Balance Sheet books (owner directive 2026-09-04:
+            # "one derivation per carrier side"), asked for TODAY. Store grain via the ledger's own
+            # store column through the canonical resolver — no second attribution path.
+            led = statement_engine._fetch_asset_ledger_open(client, org_id)
+            bookings, al_meta = _bs.asset_ledger_open_bookings(
+                led, cfg.get("asset_ledger_open_statuses"), today)
+            resolve = coa.store_resolver(client, org_id)
+            o_by, o_co = {}, 0.0
+            for st, amt, _d in bookings:
+                key = (resolve(st) if st else None) or None
+                if key:
+                    o_by[key] = round(o_by.get(key, 0.0) + amt, 2)
+                else:
+                    o_co = round(o_co + amt, 2)
+            # "due this week" on this side = rows whose OWN due date falls in the window
+            d_rows = [{"store": (resolve(r.get("store")) if r.get("store") else None),
+                       "amount": coa.safe_float(r.get("owed_to_vip")), "due_date": str(r.get("due_date") or "")[:10],
+                       "status": r.get("status")}
+                      for r in led
+                      if str(r.get("status") or "").strip().lower() in
+                      {str(t).strip().lower() for t in (cfg.get("asset_ledger_open_statuses") or [])}
+                      and wk_start <= str(r.get("due_date") or "")[:10] <= wk_end]
+            d_by = {}
+            for r in d_rows:
+                if r["store"]:
+                    d_by[r["store"]] = round(d_by.get(r["store"], 0.0) + r["amount"], 2)
+            if ks is not None:
+                o_by = {s: v for s, v in o_by.items() if in_keyset(ks, s)}
+                d_by = {s: v for s, v in d_by.items() if in_keyset(ks, s)}
+                d_rows = [r for r in d_rows if in_keyset(ks, r.get("store"))]
+            distributor["outstanding"] = {
+                "total": al_meta["total"], "rows": al_meta["rows"], "as_of": today,
+                "past_due": al_meta["past_due"], "not_yet_due": al_meta["not_yet_due"],
+                "by_store": [{"store": s, "market": _mk(s), "amount": v}
+                             for s, v in sorted(o_by.items())],
+                "company_wide": o_co}
+            distributor["due_this_week"] = {
+                "total": round(sum(r["amount"] for r in d_rows), 2), "rows": d_rows,
+                "by_store": [{"store": s, "market": _mk(s), "amount": v}
+                             for s, v in sorted(d_by.items())],
+                "company_wide": 0.0}
     except Exception as e:
-        distributor["note"] = f"handset payables unavailable: {type(e).__name__}"
-    # Boost-side / invoice-side distributor position off the STORED consolidated BS snapshot
+        distributor["note"] = f"distributor payables unavailable: {type(e).__name__}: {e}"
+    # Cross-check against the STORED consolidated BS snapshot. This is now a TIE-OUT, not a second
+    # source: `tie_delta` is (tile derivation at today) − (the target line on the last computed
+    # snapshot). Non-zero means the snapshot is stale for the basis, not that the two disagree on
+    # the math — the periods to recompute are named by `snapshot.period`/`computed_at`.
     try:
         rows = (client.schema("commcalc").table("account_statements")
                 .select("period,computed_at,payload")
@@ -736,6 +865,12 @@ def _liabilities_due_impl(authorization, org_id, today_iso=""):
                 "period": snap.get("period"), "computed_at": snap.get("computed_at"),
                 "owed_vip": lines.get("owed_vip"), "vip_ap": lines.get("vip_ap"),
                 "handset_payable": lines.get("handset_payable")}
+            if distributor.get("bs_line") and distributor.get("outstanding"):
+                booked = coa.safe_float(lines.get(distributor["bs_line"]))
+                distributor["snapshot"]["bs_line"] = distributor["bs_line"]
+                distributor["snapshot"]["bs_line_amount"] = booked
+                distributor["snapshot"]["tie_delta"] = round(
+                    coa.safe_float(distributor["outstanding"]["total"]) - booked, 2)
     except Exception:
         pass
     out["distributor"] = distributor

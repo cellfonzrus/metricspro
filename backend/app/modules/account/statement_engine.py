@@ -105,6 +105,56 @@ def _fetch_outstanding_tx(client, org_id, as_of):
     return out
 
 
+def _fetch_asset_ledger_open(client, org_id):
+    """`asset_ledger` rows for the org, paginated, ONLY the columns the open-balance derivation
+    reads (the money column is named in balance_sheet.ASSET_LEDGER_MONEY_COLUMNS so it can never be
+    silently swapped). The status filter is deliberately applied in the PURE function, not here —
+    the vocabulary is per-org config and the meta must be able to report what it saw."""
+    cols = "store,status,acquired_date,due_date," + ",".join(
+        balance_sheet.ASSET_LEDGER_MONEY_COLUMNS)
+    out, start, page = [], 0, 1000
+    while start < 500000:
+        chunk = (client.schema("commcalc").table("asset_ledger").select(cols)
+                 .eq("org_id", org_id).range(start, start + page - 1).execute().data) or []
+        out.extend(chunk)
+        if len(chunk) < page:
+            break
+        start += page
+    return out
+
+
+def carrier_payable_preset(client, org_id):
+    """The distributor-payable basis this org's CARRIER declares, or ''. REUSES the mig-945/953
+    carrier-preset machinery end to end (duplicate-check gate — no second preset store, no second
+    carrier normalizer): house-org rows in `commcalc.ui_label_override` under
+    scope 'finance_basis:<carrier code>', key 'distributor_payable', with the carrier code coming
+    from `report_labels.normalize_carrier_code` over the org's own `commcalc.carrier` rows (mig 038,
+    written by the onboarding "Carrier Selection" step). Lazy auto-assign: a NEW tenant that picks
+    its carrier at setup resolves correctly the first time a statement is built, with no setup hook.
+    Degrades to '' (⇒ 'off') on any read failure — never raises, never guesses."""
+    try:
+        from app.modules.commcalc import report_labels as _rl
+        rows = (client.schema("commcalc").table("carrier").select("code,name")
+                .eq("org_id", org_id).limit(50).execute().data) or []
+        codes = _rl.carrier_codes(rows)
+        if not codes:
+            return ""
+        scopes = [f"finance_basis:{c}" for c in codes]
+        presets = (client.schema("commcalc").table("ui_label_override")
+                   .select("scope,key,label").eq("org_id", _rl.HOUSE_ORG)
+                   .in_("scope", scopes).eq("key", "distributor_payable")
+                   .limit(50).execute().data) or []
+        by_scope = {str(r.get("scope") or ""): str(r.get("label") or "").strip()
+                    for r in presets}
+        for c in codes:                       # the org's own carrier order decides ties
+            v = by_scope.get(f"finance_basis:{c}")
+            if v:
+                return v
+    except Exception:
+        return ""
+    return ""
+
+
 def build_inputs_full(client, org_id, period):
     """coa.build_inputs + the balance-sheet truths. Returns (inputs, bs_cfg, meta). Every
     augmentation degrades gracefully (a failed read leaves the base inputs untouched)."""
@@ -114,8 +164,31 @@ def build_inputs_full(client, org_id, period):
     cfg = balance_sheet.load_bs_config(client, org_id)
     meta = {"as_of": period_as_of(period), "inventory_basis": cfg["inventory_basis"]}
 
-    # ── handset payables (config-driven; empty default books nothing) ───────────────────────────
-    if cfg["handset_payable_order_types"] and meta["as_of"]:
+    # ── DISTRIBUTOR PAYABLE (owner directive 2026-09-04, mig 954) ───────────────────────────────
+    # ONE question — "what do we still owe the distributor for devices AS OF this date" — answered
+    # by ONE derivation per tenant, chosen by the resolved basis, booked to the tenant's own target
+    # line. `meta['as_of']` is the single as-of: `period_as_of` = the period's last day capped at
+    # today, so the CURRENT period asks the derivation for today and a CLOSED period asks the SAME
+    # function for that period's end. There is no second formula anywhere (the liabilities-due tile
+    # calls these same pure functions at as_of = today).
+    payable_basis = balance_sheet.resolve_payable_basis(
+        cfg["distributor_payable_basis"], carrier_payable_preset(client, org_id),
+        bool(cfg["handset_payable_order_types"]))
+    payable_line = balance_sheet.resolve_payable_line(
+        payable_basis, cfg["distributor_payable_line"], [k for k, *_ in bs_spec()])
+    meta["distributor_payable"] = {"basis": payable_basis, "line": payable_line,
+                                   "as_of": meta["as_of"]}
+
+    def _book(line_key, store, amt, detail):
+        line = inputs.setdefault(line_key, {"by_store": {}, "company_wide": 0.0, "detail": {}})
+        if store:
+            line["by_store"][store] = _round(line["by_store"].get(store, 0.0) + amt)
+        else:
+            line["company_wide"] = _round(line["company_wide"] + amt)
+        if detail:
+            line["detail"][detail] = _round(line["detail"].get(detail, 0.0) + amt)
+
+    if payable_basis == "marketplace_due" and payable_line and meta["as_of"]:
         try:
             tx = _fetch_outstanding_tx(client, org_id, meta["as_of"])
             bookings, hp_meta = balance_sheet.handset_payable_bookings(
@@ -130,19 +203,34 @@ def build_inputs_full(client, org_id, period):
             except Exception:
                 acct_store = {}
             resolve = coa.store_resolver(client, org_id)
-            line = inputs["handset_payable"]
             for acct, amt, detail in bookings:
                 st = acct_store.get(acct)
                 st = resolve(st) if st else None
-                if st:
-                    line["by_store"][st] = _round(line["by_store"].get(st, 0.0) + amt)
-                else:
-                    line["company_wide"] = _round(line["company_wide"] + amt)
-                if detail:
-                    line["detail"][detail] = _round(line["detail"].get(detail, 0.0) + amt)
+                _book(payable_line, st, amt, detail)
             meta["handset_payable"] = {**hp_meta, "as_of": meta["as_of"]}
+            meta["distributor_payable"]["total"] = hp_meta.get("total")
         except Exception as e:
             coa._warn("handset payable booking failed — line left empty", e)
+
+    elif payable_basis == "asset_ledger" and payable_line and meta["as_of"]:
+        # The Boost-side answer: the asset ledger's OPEN balance — the same predicate the asset
+        # dashboard's "Open Balance Owed" card sums, now as-of parameterized. Booked ALONGSIDE the
+        # coa `owed_vip` components, never on top of them: coa books that line only from ledger rows
+        # whose STATUS reads 'on inventory' and from PENDING PayGo batches, and the open-status
+        # vocabulary here excludes both — disjoint sources, pinned in harness_balance_sheet_truths.
+        try:
+            led = _fetch_asset_ledger_open(client, org_id)
+            bookings, al_meta = balance_sheet.asset_ledger_open_bookings(
+                led, cfg["asset_ledger_open_statuses"], meta["as_of"])
+            today = datetime.now(timezone.utc).date().isoformat()
+            al_meta["snapshot_lag"] = bool(meta["as_of"] < today)
+            resolve = coa.store_resolver(client, org_id)
+            for store, amt, detail in bookings:
+                _book(payable_line, resolve(store) if store else None, amt, detail)
+            meta["asset_ledger_open"] = {**al_meta, "as_of": meta["as_of"]}
+            meta["distributor_payable"]["total"] = al_meta.get("total")
+        except Exception as e:
+            coa._warn("asset-ledger open balance booking failed — line left empty", e)
 
     # ── verified store cash on hand (config-driven; 'off' default books nothing — mig 938) ──────
     # Owner 2026-09-02: "all cash collected in the store must be added to the balance sheet as
@@ -326,11 +414,18 @@ def _journal_rows(client, org_id, period):
         return []
 
 
-def _scopes(inputs, companies, company_of):
+def _scopes(inputs, companies, company_of, journal=None, matcher=None):
+    """Scope list. `all_stores` is every store any LINE places money at — plus (mig 954) every
+    store a MANUAL entry is keyed to: a store whose only figure is a hand-entered cash balance had
+    no scope at all before, so "cash per store" could be entered and never render its own column."""
     all_stores = set()
     for ln in inputs.values():
         if isinstance(ln, dict):
             all_stores.update((ln.get("by_store") or {}).keys())
+    for e in (journal or []):
+        grain, store, _co = balance_sheet.entry_grain(e, matcher, company_of)
+        if grain == "store" and store:
+            all_stores.add(store)
     scopes = [("consolidated", "Consolidated (all companies)", None, True)]
     for c in companies:
         cstores = {s for s in all_stores if company_of(s) == c["id"]}
@@ -341,11 +436,16 @@ def _scopes(inputs, companies, company_of):
 
 
 def _assemble_scope(client, org_id, period, inputs, journal, matcher,
-                    scope_key, scope_label, stores_in_scope, include_cw):
+                    scope_key, scope_label, stores_in_scope, include_cw, company_of=None):
     """One scope's (pl, bs, cf) — deterministic assembly via engine._assemble with the extended
     BS spec and the FIXED journal scoping."""
     from app.modules.account import engine
-    jscope = balance_sheet.journal_scope_entries(journal, scope_key, stores_in_scope, matcher)
+    # mig 954 — the manual-entry GRAIN rule (per store / per company / one tenant total). Routing is
+    # unchanged (journal_grain_entries wraps journal_scope_entries); what it adds is netting a
+    # coarser grain by the finer entries nested inside it, so a rollup can never count a dollar
+    # twice. One grain in use ⇒ byte-identical to the plain routing.
+    jscope, jmeta = balance_sheet.journal_grain_entries(
+        journal, scope_key, stores_in_scope, matcher, company_of)
     pl = engine._assemble(inputs, jscope, coa.PL_SPEC, coa.PL_LABEL, PL_SECTIONS,
                           scope_key, stores_in_scope, include_cw)
     prior_ni = engine._prior_accum_ni(client, org_id, scope_key, period)
@@ -356,6 +456,7 @@ def _assemble_scope(client, org_id, period, inputs, journal, matcher,
         stmt["period"], stmt["scope_key"], stmt["scope_label"] = period, scope_key, scope_label
     prior_bs = _stored_bs(client, org_id, scope_key, _prior_period_label(period))
     cf = cash_flow(pl, bs, prior_bs, period, scope_key, scope_label)
+    bs["journal_grains"] = jmeta
     return pl, bs, cf
 
 
@@ -369,14 +470,14 @@ def statement(client, org_id, period, scope="consolidated", kinds=("pl", "balanc
     journal = _journal_rows(client, org_id, period)
     company_of, _default, companies = coa.company_assignment(client, org_id)
     matcher = balance_sheet.journal_company_matcher(companies)
-    scopes, _stores = _scopes(inputs, companies, company_of)
+    scopes, _stores = _scopes(inputs, companies, company_of, journal, matcher)
     match = next((s for s in scopes if s[0] == scope), None)
     if match is None:
         return {"period": period, "scope": scope, "computed": False,
                 "note": "unknown scope for this org"}
     scope_key, scope_label, stores_in_scope, include_cw = match
     pl, bs, cf = _assemble_scope(client, org_id, period, inputs, journal, matcher,
-                                 scope_key, scope_label, stores_in_scope, include_cw)
+                                 scope_key, scope_label, stores_in_scope, include_cw, company_of)
     out = {"period": period, "scope": scope_key, "scope_label": scope_label, "computed": True,
            "on_demand": True, "computed_at": datetime.now(timezone.utc).isoformat(),
            "meta": meta}
@@ -401,7 +502,7 @@ def compute_and_store(client, org_id, period):
     journal = _journal_rows(client, org_id, period)
     company_of, _default, companies = coa.company_assignment(client, org_id)
     matcher = balance_sheet.journal_company_matcher(companies)
-    scopes, all_stores = _scopes(inputs, companies, company_of)
+    scopes, all_stores = _scopes(inputs, companies, company_of, journal, matcher)
 
     # Purge ALL prior snapshots for the period first (orphan-scope rule, same as engine.py).
     client.schema("commcalc").table("account_statements").delete() \
@@ -410,7 +511,7 @@ def compute_and_store(client, org_id, period):
     written = 0
     for scope_key, scope_label, stores_in_scope, include_cw in scopes:
         pl, bs, cf = _assemble_scope(client, org_id, period, inputs, journal, matcher,
-                                     scope_key, scope_label, stores_in_scope, include_cw)
+                                     scope_key, scope_label, stores_in_scope, include_cw, company_of)
         pl["notes"] = engine._notes(scope_key, include_cw)
         bs["notes"] = engine._notes(scope_key, include_cw) + (
             [] if bs["balanced"] else ["Balance sheet is not yet balanced — enter cash / opening "

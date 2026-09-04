@@ -6,7 +6,11 @@ the string 'Boost'. Pure source inspection + one import — no DB. Run: python -
 """
 import re, pathlib, sys
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]          # backend/
+ROOT = pathlib.Path(__file__).resolve().parents[0]          # backend/ (this file LIVES in
+#                                                           backend/, so parents[1] pointed at
+#                                                           the repo root and every path below
+#                                                           missed — the guard raised instead of
+#                                                           checking. Fixed 2026-09-04.)
 APP = ROOT / "app" / "modules"
 ok = True
 def ck(label, cond):

@@ -12,6 +12,11 @@ const inp: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: 
 const PL_TYPES = ['revenue', 'cogs', 'opex', 'other']
 const BS_TYPES = ['asset', 'liability', 'equity']
 // common manual lines the cash-basis chart needs (the AUTO lines come from the data)
+// Owner directive 2026-09-04: cash at bank must be enterable PER STORE, PER COMPANY, or as ONE
+// TENANT TOTAL — "everything else is based per store, if there is cash per store then we can get a
+// close to reality figure". The three grains are simply the three ways a row can be addressed
+// (store picked / company picked / neither), so the quick-adds seed the row already addressed.
+const CASH_LINE = 'Cash / bank'
 const SUGGESTED = [
   { statement: 'balance_sheet', account_type: 'asset', account_line: 'Cash / bank' },
   { statement: 'balance_sheet', account_type: 'asset', account_line: 'Fixtures / equipment' },
@@ -76,6 +81,22 @@ export default function JournalPage() {
   }
   useEffect(() => { load() }, [period])
 
+  // The grain a row is entered at — the same classification the statements apply server-side
+  // (balance_sheet.entry_grain): a picked STORE is the finest grain and wins even when a company is
+  // also picked; a company alone is company grain; neither is one tenant-wide total.
+  const grainOf = (r: Row) => (r.store_address || '').trim() ? 'store' : (r.company_id ? 'company' : 'tenant')
+  const GRAIN_LABEL: Record<string, string> = { store: 'per store', company: 'per company', tenant: 'tenant total' }
+  // Mixed grains on the SAME account line are legal but must never be added twice: the statements
+  // book a coarser row NET of the finer rows inside it. Flag it here so the number is never a surprise.
+  const mixedLines = useMemo(() => {
+    const byLine: Record<string, Set<string>> = {}
+    rows.filter(r => r.account_line.trim() && r.amount).forEach(r => {
+      const k = r.account_line.trim().toLowerCase()
+      ;(byLine[k] = byLine[k] || new Set()).add(grainOf(r))
+    })
+    return Object.entries(byLine).filter(([, g]) => g.size > 1).map(([k]) => k)
+  }, [rows])
+
   const set = (i: number, patch: Partial<Row>) => setRows(r => r.map((x, j) => j === i ? { ...x, ...patch } : x))
   const addRow = (seed?: Partial<Row>) => setRows(r => [...r, { statement: 'balance_sheet', account_type: 'asset', account_line: '', amount: 0, store_address: '', memo: '', ...seed }])
   const del = (i: number) => setRows(r => r.filter((_, j) => j !== i))
@@ -115,6 +136,7 @@ export default function JournalPage() {
               { header: 'Account line', get: (r: any) => r.account_line },
               { header: 'Amount', get: (r: any) => r.amount, money: true },
               { header: 'Store', get: (r: any) => r.store_address || '' },
+              { header: 'Level', get: (r: any) => GRAIN_LABEL[grainOf(r)] },
               { header: 'Memo', get: (r: any) => r.memo || '' },
             ]}
             rows={namedRows.filter(r => !filterActive || matchRow(r))} />}
@@ -141,6 +163,28 @@ export default function JournalPage() {
         <button className="btn" style={{ fontSize: 12 }} onClick={() => addRow()}>＋ Blank row</button>
       </div>
 
+      {/* The three cash grains, seeded already-addressed (owner directive 2026-09-04). */}
+      <div className="card" style={{ padding: 12, marginBottom: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>💵 Cash at bank — enter it at whichever level you actually know</div>
+        <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>
+          Per store gives the closest-to-reality balance sheet, because every other figure is already
+          per store. Per company or one total for the whole tenant work too. If you use more than one
+          level on the same line, the bigger figure is treated as the <strong>total</strong> and the smaller
+          ones as where part of it sits — so nothing is ever counted twice.
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="btn" style={{ fontSize: 12 }} onClick={() => addRow({ statement: 'balance_sheet', account_type: 'asset', account_line: CASH_LINE, store_address: storeOpts[0]?.id || '' })}>＋ Cash per store</button>
+          <button className="btn" style={{ fontSize: 12 }} onClick={() => addRow({ statement: 'balance_sheet', account_type: 'asset', account_line: CASH_LINE, company_id: companies[0]?.id || '' })}>＋ Cash per company</button>
+          <button className="btn" style={{ fontSize: 12 }} onClick={() => addRow({ statement: 'balance_sheet', account_type: 'asset', account_line: CASH_LINE })}>＋ Cash — one tenant total</button>
+        </div>
+        {mixedLines.length > 0 && (
+          <div style={{ fontSize: 12.5, marginTop: 8, color: 'var(--text2)' }}>
+            ⓘ More than one level is in use on: <strong>{mixedLines.join(', ')}</strong>. The rollups net the
+            bigger figure by the smaller ones — check the totals on the Balance Sheet after recomputing.
+          </div>
+        )}
+      </div>
+
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : (
@@ -154,6 +198,7 @@ export default function JournalPage() {
                 <th style={{ textAlign: 'right', padding: '8px 12px' }}>Amount</th>
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Company (optional)</th>
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Store (optional)</th>
+                <th style={{ textAlign: 'left', padding: '8px 12px' }}>Level</th>
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Memo</th>
                 <th></th>
               </tr>
@@ -195,12 +240,16 @@ export default function JournalPage() {
                         {storeOpts.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
                       </select>
                     </td>
+                    <td style={{ padding: '5px 12px' }}>
+                      <span style={{ fontSize: 11.5, padding: '3px 8px', borderRadius: 999, whiteSpace: 'nowrap',
+                                     border: '1px solid var(--border)', color: 'var(--text2)' }}>{GRAIN_LABEL[grainOf(r)]}</span>
+                    </td>
                     <td style={{ padding: '5px 12px' }}><input style={{ ...inp, width: 160 }} value={r.memo} onChange={e => set(i, { memo: e.target.value })} /></td>
                     <td style={{ padding: '5px 12px' }}><button className="btn" style={{ fontSize: 12 }} onClick={() => del(i)}>✕</button></td>
                   </tr>
                 )
               })}
-              {rows.length === 0 && <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>No manual entries yet. Use Quick add above.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={9} style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>No manual entries yet. Use Quick add above.</td></tr>}
             </tbody>
           </table>
         </div>

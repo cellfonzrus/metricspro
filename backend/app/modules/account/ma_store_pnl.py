@@ -227,6 +227,33 @@ def load_store_index(client, org_id):
         return {}
 
 
+def canonical_store_index(client, org_id):
+    """I/O: {processor account id -> CANONICAL store_address} — `load_store_index` with every raw
+    address collapsed onto the org's canonical store spelling through coa's `store_resolver`
+    ("4640a" → "4640-A", "21880" → "218-80"), which is the normalization mig 314 itself prescribes.
+
+    ONE canonical account→store answer for the whole platform (duplicate-check 2026-09-04): this is
+    the step-3 map `payables.engine.ma_store_resolution` used to build inline and the
+    residual-per-subscriber report now resolves its processor accounts through — extracted here, in
+    the mig-314 module that owns the index, rather than copied a third time. NEVER raises: a missing
+    index or an unreadable store vocabulary degrades to {} (callers then render "(Unassigned)",
+    never a guessed store)."""
+    try:
+        raw = load_store_index(client, org_id) or {}
+    except Exception as e:                          # pragma: no cover - I/O guard
+        print(f"WARN ma_store_pnl canonical_store_index index read failed: {e}")
+        return {}
+    if not raw:
+        return {}
+    try:
+        from app.modules.account import coa as _coa
+        resolve_addr = _coa.store_resolver(client, org_id)
+    except Exception as e:                          # pragma: no cover - I/O guard
+        print(f"WARN ma_store_pnl canonical_store_index store_resolver failed: {e}")
+        return dict(raw)
+    return {a: (resolve_addr(addr) or addr) for a, addr in raw.items()}
+
+
 # ── pure booking functions ───────────────────────────────────────────────────────────────────────
 def ma_commission_bookings(rows, cfg=None):
     """PURE: raw_ma_commission rows + resolved mig-314 config → ordered bookings
