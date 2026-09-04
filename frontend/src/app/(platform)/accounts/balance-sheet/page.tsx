@@ -179,6 +179,18 @@ function BSInner() {
             </div>
           )}
           {st.notes?.length > 0 && <div style={{ fontSize: 12, color: 'var(--text3)' }}>{st.notes.map((n: string, i: number) => <div key={i}>· {n}</div>)}</div>}
+          {/* Manual-entry grain conflicts (mig 954): a hand-entered total that is SMALLER than the
+              per-store/per-company rows inside it cannot be booked as negative cash — the shortfall
+              is suppressed and surfaced here rather than silently dropped. */}
+          {(st.journal_grains?.conflicts || []).length > 0 && (
+            <div style={{ fontSize: 12.5, color: '#991b1b', marginTop: 6 }}>
+              {st.journal_grains.conflicts.map((c: any, i: number) => (
+                <div key={i}>⚠ “{c.line}”: the {c.grain === 'tenant' ? 'tenant total' : 'company total'} you
+                  entered ({fmt(c.stated)}) is less than the more detailed rows inside it ({fmt(c.finer)}).
+                  {' '}{fmt(c.suppressed)} could not be placed — fix the entries on the Journal page.</div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

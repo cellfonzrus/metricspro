@@ -157,6 +157,11 @@ function AccountConfigCard() {
   const [payQ, setPayQ] = useState('')
   // Owner ruling K3 (mig 621): device COGS recognition. 'off' keeps the legacy POS basis.
   const [devMode, setDevMode] = useState('off')
+  // Owner directive 2026-09-04 (mig 954) — the TENANT-SETUP mapping: which feed answers "what do we
+  // owe the distributor", and which balance-sheet line it books to (a per-tenant cost-centre choice).
+  // '' = not declared here → the org's CARRIER preset decides (lazy auto-assign at onboarding).
+  const [payBasis, setPayBasis] = useState('')
+  const [payLine, setPayLine] = useState('')
 
   function load() {
     api(`/api/v1/account/config?org_id=${ORG_ID}`).then((r: any) => {
@@ -165,6 +170,8 @@ function AccountConfigCard() {
       setFees(r?.config?.service_fee_products || [])
       setPayNames(r?.config?.payroll_expense_names || [])
       setDevMode(r?.config?.device_cogs_mode || 'off')
+      setPayBasis(r?.distributor_payable?.org_basis || '')
+      setPayLine(r?.distributor_payable?.org_line || '')
     }).catch(() => {})
   }
   useEffect(() => { load() }, [])
@@ -179,6 +186,7 @@ function AccountConfigCard() {
         body: JSON.stringify({
           accessory_cogs_pct: v / 100, service_fee_products: fees,
           payroll_expense_names: payNames, device_cogs_mode: devMode,
+          distributor_payable_basis: payBasis || null, distributor_payable_line: payLine || null,
         }),
       })
       setMsg('Saved. Recompute this period’s statements for it to take effect.'); load()
@@ -207,6 +215,8 @@ function AccountConfigCard() {
           {fees.length > 0 && <span style={{ marginLeft: 10 }}>· Service-fee products: <strong>{fees.length}</strong></span>}
           {payNames.length > 0 && <span style={{ marginLeft: 10 }}>· Payroll names: <strong>{payNames.length}</strong></span>}
           <span style={{ marginLeft: 10 }}>· Device COGS: <strong>{devMode}</strong></span>
+          <span style={{ marginLeft: 10 }}>· Distributor payable: <strong>{cfg.distributor_payable?.resolved_basis || 'off'}</strong>
+            {cfg.distributor_payable?.resolved_line && <> → <strong>{cfg.distributor_payable.resolved_line}</strong></>}</span>
         </span>
       </div>
       {open && (
@@ -316,6 +326,49 @@ function AccountConfigCard() {
             </select>
             <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6 }}>
               Money-touching — <strong>recompute</strong> each period after saving. Needs migration 621.
+            </div>
+          </div>
+
+          {/* Owner directive 2026-09-04 (mig 954) — the distributor-payable tenant mapping. Set at
+              TENANT SETUP so a new tenant reports correctly from day one; left blank it follows the
+              carrier picked during onboarding. RULE THREE: both fields are pickers. */}
+          <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>What do we still owe the distributor for phones?</div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>
+              Your open balance with the distributor comes from one of two places, depending on how your
+              distributor bills you. Leave this on <strong>“follow our carrier”</strong> and it is chosen from the
+              carrier picked when the tenant was set up — change it only if your books work differently.
+              The figure is worked out <strong>as of the date of the statement</strong>: today for the month in
+              progress, the month end for a closed month.
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              <label style={{ fontSize: 12.5 }}>
+                <div style={{ marginBottom: 4, color: 'var(--text2)' }}>Where the balance comes from</div>
+                <select value={payBasis} onChange={e => setPayBasis(e.target.value)}
+                  style={{ padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', minWidth: 330 }}>
+                  <option value="">Follow our carrier{cfg.distributor_payable?.carrier_preset_basis ? ` (${cfg.distributor_payable.carrier_preset_basis})` : ''}</option>
+                  <option value="asset_ledger">The consignment ledger’s open balance</option>
+                  <option value="marketplace_due">Marketplace orders still inside their due date</option>
+                  <option value="off">Do not put a distributor balance on the balance sheet</option>
+                </select>
+              </label>
+              <label style={{ fontSize: 12.5 }}>
+                <div style={{ marginBottom: 4, color: 'var(--text2)' }}>Which balance-sheet line it goes on</div>
+                <select value={payLine} onChange={e => setPayLine(e.target.value)}
+                  style={{ padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', minWidth: 330 }}>
+                  <option value="">Standard line for that source{cfg.distributor_payable?.resolved_line ? ` (${cfg.distributor_payable.resolved_line})` : ''}</option>
+                  {(cfg.distributor_payable?.line_options || []).map((o: any) => (
+                    <option key={o.key} value={o.key}>{o.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>
+              Currently in effect: <strong>{cfg.distributor_payable?.resolved_basis || 'off'}</strong>
+              {cfg.distributor_payable?.resolved_line && <> on <strong>{cfg.distributor_payable.resolved_line}</strong></>}
+              {cfg.distributor_payable?.source && <> — from {cfg.distributor_payable.source}</>}.
+              Different companies assign this to different cost centres, so the line is yours to choose.
+              Money-touching — <strong>recompute</strong> each period after saving. Needs migration 954.
             </div>
           </div>
         </div>
