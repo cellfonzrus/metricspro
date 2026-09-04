@@ -407,6 +407,7 @@ export const NAV: NavGroup[] = [
     { href: '/approvals', label: 'Approvals', icon: '✅', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
     { href: '/closing/deposit-recon', label: 'Cash Deposit Recon', icon: '💵', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/envelope-report', label: 'Envelope Report', icon: '✉️', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/external-credit-recon', label: 'Card Settlement Recon', icon: '💳', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/tender-recon-3way', label: '3-Way Tender Recon', icon: '🧮', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/recon', label: 'Reconciliation', icon: '🔎', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
   ]},
@@ -713,6 +714,13 @@ export const NAV: NavGroup[] = [
     // DM-vs-market-manager is a ROLE distinction the scope vocabulary cannot express; a gated
     // role that opens the page sees the server's restriction message, never the data.
     { href: '/closing/cash-recon-management', label: 'Cash Recon (Management)', icon: '🧮', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    // Card Settlement Recon (owner directive 2026-09-04): the declared closing card figures —
+    // including the external credit machine — tallied against each processor's scraped daily
+    // settlement totals. Server-side gate is the SAME market-manager-and-above rule as Cash Recon
+    // (Management) (closing/billpay_pickup.can_see_cash_recon, fail-closed 403), so the nav scope
+    // tiers match that sibling exactly; the page label is carrier-neutral (the tenant's own name
+    // for the terminal comes from the mig-960 label preset, rendered inside the page).
+    { href: '/closing/external-credit-recon', label: 'Card Settlement Recon', icon: '💳', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/expenses-report', label: 'Closing Expenses', icon: '📋', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/epay-recon', label: 'ePay Bank-Deposit Recon', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     // Cash Deposit Recon + Deposit Categories (mig 509) — nav entries per mod-retail-ops NEEDS CORE
@@ -967,6 +975,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/closing/pickup', 'ops'], ['/closing/billpay-pickup', 'ops'],
   ['/closing/cash-recon-management', 'ops'], ['/closing/epay-recon', 'ops'],
   ['/closing/envelope-report', 'ops'],
+  ['/closing/external-credit-recon', 'ops'],
   // Admin & System
   ['/failures', 'admin'], ['/helpdesk', 'admin'], ['/helpdesk/dashboard', 'admin'], ['/remediation', 'admin'],
   ['/admin/tenants', 'admin'],
