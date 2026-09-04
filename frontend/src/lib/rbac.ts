@@ -129,6 +129,7 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/kpi-failing', 'commissions'],
   ['/commcalc/discrepancy', 'commissions'], ['/commcalc/sales-recon', 'commissions'],
   ['/commcalc/epay-fee-recon', 'commissions'],
+  ['/commcalc/processor-ledger', 'asset'],
   ['/commcalc/asset', 'asset'], ['/commcalc/vip', 'vip'], ['/accounts', 'accounts'],
   ['/storeops/reports', 'storeops'], ['/storeops/reviews', 'storeops'],
   ['/storeops/payroll', 'storeops'], ['/storeops/payroll-tax', 'storeops'],
@@ -570,6 +571,13 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/asset/aging-rebate', label: 'Aging · Rebate Received', icon: '💵', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/asset/on-inventory', label: 'On-Inventory by Store', icon: '🏬', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/payables', label: 'Forecasting & Vendor Payables', icon: '📱', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
+    // Processor Debits & Credits (owner directive 2026-09-04): the day × transaction-type ledger of
+    // what the org's payment processor debited and credited on its account. Carrier-NEUTRAL by design
+    // (every tenant has a processor; the NAME renders from the mig-953 report_term vocabulary) →
+    // deliberately NOT in NAV_CARRIERS. NO `scopes` restriction, unlike its asset siblings: the
+    // endpoint filters cells through the caller's store-span keyset, so a store-scoped manager sees
+    // exactly their own stores' money and nothing else.
+    { href: '/commcalc/processor-ledger', label: 'Processor Debits & Credits', icon: '📒', module: 'asset', tileOnly: true },
     { href: '/commcalc/asset/borrowed', label: 'Borrowed / Lending', icon: '🔁', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/asset/lending', label: 'Asset Lending (PayGo)', icon: '📲', module: 'asset', scopes: ['all', 'market'], cap: 'asset_lending', tileOnly: true },
     { href: '/commcalc/asset/charges/rma', label: 'RMA', icon: '↩️', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
@@ -936,7 +944,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/asset/borrowed', 'assets'], ['/commcalc/asset/lending', 'assets'],
   ['/commcalc/asset/charges/rma', 'assets'], ['/commcalc/asset/inventory-recon', 'assets'],
   ['/commcalc/asset/hotsheet-recon', 'assets'], ['/commcalc/asset/marketplace-purchases', 'assets'],
-  ['/commcalc/payables', 'assets'],
+  ['/commcalc/payables', 'assets'], ['/commcalc/processor-ledger', 'assets'],
   ['/commcalc/distributors', 'assets'], ['/commcalc/vip', 'assets'], ['/commcalc/vip/paygo', 'assets'],
   // Finance & Accounting
   ['/accounts', 'finance'], ['/accounts/trends', 'finance'], ['/accounts/pl', 'finance'],
