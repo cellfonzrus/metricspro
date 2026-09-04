@@ -1400,10 +1400,29 @@ Pinned PAY-ENGINE in the guard.
     `prove_tile_hubs.mjs` (17 hub groups) + `prove_import_health_nav.mjs` (B6 duplicate) updated.
     ALL THREE NEW SCREENS (kpi-failing · liabilities-due · compliance) AWAIT OWNER PREVIEW
     (merge policy Option B). Display config, not a feed → NO lineage entry.
-
----
-
-## 15. Other commission subsystems (pointers)
+- **Google Reviews (storeops, migs `411`/`412`/`413`/`420`/`430`; lineage rows 126–128 in mig
+  `925`):** logic in `backend/app/modules/storeops/google_reviews.py` (framework-free; harness
+  `harness_people_google_reviews.py`), endpoint glue in `storeops/router.py` (`/google-reviews/*`
+  — config, sweep-config, run-now, run-due, stores, store-config, resolve-place, my, dm-dashboard,
+  store/{code}, employee/{id}, employee-summary). Data path: per-store address (+
+  `google_review_config.search_brand`) → Places API (New) Text Search → place pin cached in
+  `google_review_store` (manual pin wins, `wrong_street_number` guard refuses drifted matches) →
+  Place Details → `google_review_snapshot` (rating/count per sweep) + `google_review_item`
+  (deduped by `review_hash`, conservative employee name-matching) → below-target stores
+  materialize `action_plan` rows + edge-triggered notifications. HONEST LIMITATION: Places
+  returns Google's curated ~5 reviews per store, not all (Business Profile API is the Phase-2
+  path). **2026-09-04 incident closure ("still not able to pull google reviews"):** root cause =
+  Postgres 42501 `permission denied for sequence google_review_store_id_seq` — migs 411/412/413
+  granted the TABLES to service_role but never the BIGSERIAL SEQUENCES, so every sweep died on the
+  first DB write after a successful Google call (both orgs 20/20 errors 2026-08-17/20; all three
+  data tables at zero rows despite working keys). Fixed by mig `951` (sequence grants). Two
+  companion fixes: mig `950` — `/google-reviews/sweep/run-due` self-schedules via pg_cron job
+  `google-reviews-sweep-run-due` (every 15 min; `storeops.ensure_google_reviews_sweep_cron`,
+  re-registered on every boot by `main.py` → `router._ensure_google_reviews_sweep_cron`, mig
+  922/940 pattern — before this NO job ever invoked run-due); and
+  `_do_google_reviews_sweep` now persists a SAMPLE of distinct per-store error texts in
+  `google_review_sweep_config.last_detail` (and drops the "OK —" prefix when 0 stores succeeded)
+  so the next failure is diagnosable from the row itself.
 
 | Subsystem | Tables / migs | Key funcs / endpoints |
 |-----------|---------------|-----------------------|
@@ -1483,6 +1502,7 @@ Pinned PAY-ENGINE in the guard.
 | `storeops.store_lease` (mig `946` — one row per org×store: landlord/site contact, rent links + ACH (SENSITIVE), `current_rent`/`rent_effective_from`/`escalation_pct`/`rent_schedule`/`rent_due`, lease dates, insurance + `insurance_premium_due`/`_frequency`) | `PUT /storeops/store-lease` (gated `can_see_lease`, upsert on org+store) | `GET /storeops/store-lease`; the finance rents-due/recurring-expenses reader `GET /account/liabilities-due` (`account/liabilities_due.rent_due_rows`/`insurance_due_rows` computing FROM `store_lease.rent_for_month`/`resolve_rent_due`/`rent_due_window` — the §14 read contract honored, never re-derived; gated `can_see_lease`, ACH columns never selected) |
 | `storeops.store_document` (mig `946` — append-only lease/COI versions; files in PRIVATE bucket `store-docs`) | `POST /storeops/store-lease/doc` (gated; INSERT only, prior versions kept) | `GET /storeops/store-lease` version lists (path never echoed), `GET /storeops/store-lease/doc-url`/`doc-view` (org-scoped by id → signed URL) |
 | `storeops.tenants.rent_due_default` + `lease_visible_roles` (mig `946` config columns) | `PUT /storeops/store-lease/tenant-defaults` (due default); roles column set per-org via SQL/admin | `store_lease.tenant_lease_config` (adaptive — pre-946 = house first-week + market-manager-and-above), `can_see_lease` gate |
+| `storeops.google_review_config` / `google_review_sweep_config` / `google_review_store` / `google_review_snapshot` / `google_review_item` (migs `411`/`412`, service-role-only; sequence grants mig `951`) | config: `PUT /storeops/google-reviews/config` + `/sweep-config` + `/store-config/{code}`; data: `google_reviews.sweep_store` (place pin upsert, snapshot insert, item dedupe-insert) via run-now/run-due; sweep status: `_gr_set_sweep_status` (`last_detail` carries error samples since 2026-09-04) | `/google-reviews/my`, `/dm-dashboard`, `/store/{code}`, `/stores`, `/employee/{id}`, `/employee-summary` (§14 Google Reviews); below-target → `storeops.action_plan` rows |
 
 ---
 
@@ -1554,6 +1574,8 @@ Pinned PAY-ENGINE in the guard.
 | `GET /kpi-failing/{period}` (failing-KPI overview: /coaching target resolution + in-process `/dlar-store` store rows + `rep_commissions.kpi_values`; pure `kpi_failing.py`) | `commcalc/router.py` (`get_kpi_failing`, beside `/dlar-store`) | §10 failing-KPI report |
 | `GET /compliance-summary` (per-queue open counts over the existing flag/exception surfaces; failed probe = null, never 0; pure `compliance_summary.py`) | `commcalc/router.py` (`get_compliance_summary`, beside `/kpi-failing`) | §14 mig 948 Flags & Compliance |
 | `GET /account/liabilities-due` (owed-to-distributor + due-this-week payments/payroll/payroll-tax/rents/insurance per store; mig-434 + mig-946 gates fail closed; pure `account/liabilities_due.py`) | `account/router.py` (`liabilities_due_endpoint` → `_liabilities_due_impl`) | §4 Current Monetary Liabilities |
+
+| `POST /storeops/google-reviews/sweep/run-now` + `/sweep/run-due` → `_do_google_reviews_sweep` → `google_reviews.sweep_org/sweep_store`. run-due is SELF-SCHEDULED since mig `950`: pg_cron job `google-reviews-sweep-run-due` (every 15 min; per-org `next_run_at` gates actual sweeps) via `storeops.ensure_google_reviews_sweep_cron`, re-registered on every backend boot (`main.py` startup → `storeops/router._ensure_google_reviews_sweep_cron`) — before 950 NOTHING ever invoked run-due | `storeops/router.py` | §14 Google Reviews |
 
 (Full 468-endpoint list: `grep -nE '@router\.(get|post|put|patch|delete)\(' backend/app/modules/commcalc/router.py`.)
 
@@ -1715,6 +1737,18 @@ Pinned PAY-ENGINE in the guard.
     calc honors it too, §6). `⚠` until one of those lands — every future month will freeze the
     same way at rollover. (A month whose raw_sales is fully EMPTY — September at the freeze — is
     safe even in legacy: the all-or-nothing fallback then reads the feed; only PARTIAL is toxic.)
+17. ~~Google-reviews sweep never persisted a single row (both orgs 20/20 errors 2026-08-17/20) and
+    never ran on schedule~~ **CLOSED (migs `950`/`951`, 2026-09-04)** — root cause was Postgres
+    42501 `permission denied for sequence google_review_store_id_seq` (migs 411/412/413 granted
+    the tables to service_role, never the BIGSERIAL sequences; mig `951` grants them) and
+    run-due's pg_cron job never existed (mig `950` self-schedules it, 922/940 pattern). §14
+    Google Reviews. REMAINING DATA GAPS (verified live 2026-09-04, per-store, not code): house org
+    has 27/29 active stores with NO address on the store row (sweep skips them until addresses or
+    manual place pins land — `/storeops/reviews/config`); `B-60TH` (house) and `QV` + `Lefferts`
+    (LuxeLink) fail the `wrong_street_number`/no-result guards on their stored addresses ("1 S
+    60th St" vs Google's "11 S 60th St"; "21880 Hempstead Ave" needs the Queens-hyphenated
+    "218-80 Hempstead Ave"; "104-08 Lefferts Blvd" needs city/state) — fix the address or set the
+    Place ID manually; the guard refusing to cache a neighboring business is by design. `⚠`
 
 ---
 
