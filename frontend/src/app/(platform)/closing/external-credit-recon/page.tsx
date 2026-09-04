@@ -49,8 +49,8 @@ export default function CardSettlementReconPage() {
   const [err, setErr] = useState('')
   const reqRef = useRef(0)
 
-  // Canonical org-scoped option sources (pick-don't-type) — the same sources DM Verify and the
-  // Envelope Report use, never a second roster read.
+  // Store options: the canonical org-scoped roster (pick-don't-type) — the same source DM Verify
+  // and the Envelope Report use, never a second roster read.
   const [pStores, setPStores] = useState<any[]>([])
   useEffect(() => {
     apiCached('/api/v1/closing/stores', LOOKUP).then((s: any) => setPStores(Array.isArray(s) ? s : [])).catch(() => {})
@@ -58,10 +58,6 @@ export default function CardSettlementReconPage() {
   const storeOptions: EntityOption[] = useMemo(
     () => pStores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, sublabel: s.market || undefined })),
     [pStores])
-  const marketOptions: EntityOption[] = useMemo(() => {
-    const real = Array.from(new Set(pStores.map((s: any) => s.market).filter(Boolean))).sort()
-    return [...real.map((m: string) => ({ id: m, label: m })), { id: NO_MARKET, label: NO_MARKET }]
-  }, [pStores])
 
   const load = useCallback(() => {
     const myReq = ++reqRef.current
@@ -83,6 +79,17 @@ export default function CardSettlementReconPage() {
 
   const rows: any[] = data?.rows || []
   const t = data?.totals || {}
+  // §13c ENUMERATION doctrine: the market list comes from the SERVER's canonical composition
+  // (core.scope.org_market_options — the org's whole vocabulary ∪ this report's own stamps), NOT
+  // from the loaded store roster. A market that lives on only one vocabulary, or that belongs to a
+  // settlement-only store with no roster row, is therefore still selectable here. The "(no market)"
+  // sentinel is appended by the page, per the doctrine. Falls back to the roster only if the
+  // payload has not arrived yet, so the filter is never empty on first paint.
+  const marketOptions: EntityOption[] = useMemo(() => {
+    const canonical: string[] = data?.market_options
+      || Array.from(new Set(pStores.map((s: any) => s.market).filter(Boolean))).sort()
+    return [...canonical.map((m: string) => ({ id: m, label: m })), { id: NO_MARKET, label: NO_MARKET }]
+  }, [data, pStores])
   const titles: Record<string, string> = data?.role_titles || {}
   const roleTitle = (r: string) => titles[r] || r
   const feeds: Record<string, any> = data?.feeds || {}

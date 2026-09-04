@@ -4467,6 +4467,10 @@ def decide_envelope_chargeback(payload: DecideEnvelopeChargebackIn,
 #   • WHICH merchant id is which store — storeops.store_merchant_id (mig 902), the same resolution
 #     the ePay/VidaPay feeds use.
 #   • THE TOLERANCE — metric_source_of_truth (mig 923) metric 'card_settlement', house default 0.
+#   • STORE → MARKET, and the market OPTION LIST — core.scope.market_by_code +
+#     core.scope.org_market_options (§13a/§13c), the cached canonical union. No store-vocabulary
+#     market column is read here, so this adds no resolution site for
+#     harness_market_resolution_guard and the dropdown can never miss a one-vocabulary market.
 def _settlement_feed_spec(client, org_id):
     """The mig-207 `report_pull_map` row for the daily settlement feed: (target_table, column_map).
     Org row wins over the house row (seeded by mig 955 → `commcalc.merchant_settlement_day`).
@@ -4635,30 +4639,48 @@ def external_credit_recon(date_from: str = None, date_to: str = None,
         settled = {k: v for k, v in settled.items()
                    if k in declared or in_keyset(ks, k[0], k[0])}
 
-    # ── store meta + the canonical market resolution (§13a), then RULE FIVE filters ──────────────
-    meta_by_store, market_by_code, market_filter_skipped = {}, {}, False
+    # ── MARKET from THE canonical union index; ADDRESS from the roster (display only) ────────────
+    # §13a doctrine (owner 2026-09-03 "1115 Liberty Ave … assigned LI … does not show up under any
+    # filter … fix once for all"; 2026-09-04 "fixed as a design not a band aid"): market resolves
+    # through `core.scope.market_by_code` — the cached union of storeops.stores ∪
+    # commcalc.store_mapping ∪ commcalc.store_aliases, with the code-group fold — and NEVER by
+    # reading a market column off ONE vocabulary table.
+    #
+    # It matters MORE here than on a roster-joined report, for two reasons this report is the first
+    # to have: (a) a SETTLEMENT-ONLY store-day — the processor settled money for a store that filed
+    # no closing row — has no roster row to join a market from at all; (b) a store whose market is
+    # spelled only in `store_mapping` (the mirror of B-1115/LI, whose market is only on
+    # `storeops.stores`) would bucket '(no market)' and vanish the instant a market filter is
+    # picked, silently hiding real settled money. The roster read below therefore takes ADDRESS
+    # ONLY — it is not a market-vocabulary read (harness_market_resolution_guard).
     market_set = _resolve_market_filter(market, markets)
     store_set = _resolve_store_filter(stores)
+    market_filter_skipped = False
     try:
-        _srows = _overlay_canonical_market(client, org_id,
-                 (client.schema("storeops").table("stores").select("store_code,address,market")
-                  .eq("org_id", org_id).execute().data) or [])
-        for srow in _srows:
-            code = str(srow.get("store_code") or "").strip()
-            if not code:
-                continue
-            market_by_code[code.upper()] = _market_bucket(srow.get("market"))
-            meta_by_store[code.upper()] = {"store_address": srow.get("address") or code,
-                                           "market": _market_bucket(srow.get("market"))}
-    except Exception:
+        from app.core import scope as _cscope
+        mkt_by_code = _cscope.market_by_code(client, org_id)
+    except Exception as e:
+        print(f"WARN canonical market index unavailable for card-settlement recon: {e}")
+        mkt_by_code = {}
         if market_set is not None:
-            market_filter_skipped = True                  # NIT-4b: never mis-drop on a bad roster read
+            market_filter_skipped = True     # NIT-4b posture: never mis-drop on a degraded index read
             market_set = None
-    for r in crows:
-        code = str(r.get("store_code") or "").strip().upper()
-        if code and code not in meta_by_store:
-            meta_by_store[code] = {"store_address": r.get("store_address") or r.get("store_name") or code,
-                                   "market": market_by_code.get(code, "(no market)")}
+    addr_by_code = {}
+    try:
+        for srow in ((client.schema("storeops").table("stores").select("store_code,address")
+                      .eq("org_id", org_id).execute().data) or []):
+            _c = str(srow.get("store_code") or "").strip().upper()
+            if _c:
+                addr_by_code[_c] = srow.get("address") or _c
+    except Exception as e:
+        print(f"WARN store roster unavailable for card-settlement recon labels: {e}")
+    for r in crows:            # a closing row labels a store the roster does not carry
+        _c = str(r.get("store_code") or "").strip().upper()
+        if _c:
+            addr_by_code.setdefault(_c, r.get("store_address") or r.get("store_name") or _c)
+    meta_by_store = {code: {"store_address": addr_by_code.get(code) or code,
+                            "market": _market_bucket(mkt_by_code.get(code))}
+                     for code in ({c for (c, _d) in declared} | {c for (c, _d) in settled})}
 
     rows = _external_credit_recon.assemble_rows(
         declared, settled, tolerance=_settlement_tolerance(client, org_id), roles=roles,
@@ -4682,10 +4704,24 @@ def external_credit_recon(date_from: str = None, date_to: str = None,
             _report_labels.DEFAULT_COLUMN_LABELS.get("closing_t_ext_cc")
     except Exception as e:
         print(f"WARN report labels unavailable for card-settlement recon: {e}")
+    # §13c ENUMERATION doctrine (harness_market_enumeration_guard pins this function CANONICAL):
+    # the market dropdown is the org's canonical vocabulary ∪ the stamps THIS report's own rows
+    # carry — never "whatever markets happened to load" — so a market recorded on one vocabulary
+    # only (B-1115/LI, or its store_mapping-only mirror) can never go missing from this filter, and
+    # a market on a settlement-only store is still selectable. The "(no market)" sentinel is
+    # appended by the PAGE after composing, per the doctrine.
+    _present = {m for m in (r.get("market") for r in rows) if m and m != "(no market)"}
+    try:
+        from app.core import scope as _cscope_opts
+        market_options = _cscope_opts.org_market_options(client, org_id, _present)
+    except Exception as e:                       # pragma: no cover - I/O guard
+        print(f"WARN card-settlement recon org_market_options failed: {e}")
+        market_options = sorted(_present)
     return {"rows": rows, "totals": _external_credit_recon.totals(rows),
             "date_from": date_from, "date_to": date_to,
             "roles": list(roles), "role_titles": {**_external_credit_recon.ROLE_TITLES, **labels},
             "feeds": feeds, "unmapped": unmapped[:200], "unmapped_count": len(unmapped),
+            "market_options": market_options,
             "market_filter_skipped": market_filter_skipped}
 
 

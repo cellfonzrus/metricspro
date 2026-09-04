@@ -380,6 +380,82 @@ else:
           "merchant_settlement_batch" not in mod_src and
           "merchant_settlement_batch" not in ep)
 
+# ══ J. §13a/§13c — MARKET resolves and enumerates CANONICALLY, never off one vocabulary ══════════
+head("J. market resolution + enumeration — the B-1115/LI bug class cannot reach this report")
+
+_cs_spec = _ilu.spec_from_file_location(
+    "core_scope_pure", os.path.join(ROOT, "backend", "app", "core", "scope.py"))
+cscope = _ilu.module_from_spec(_cs_spec)
+_cs_spec.loader.exec_module(cscope)
+
+# The two KNOWN divergence shapes, live-verified in §13a, plus a store this report is the FIRST to
+# have: one that only ever appears on the settlement feed (the processor settled money for a store
+# that filed no closing row, so there is no roster row to join a market from).
+store_rows = [                                   # storeops.stores
+    {"store_code": "B-1115", "address": "1115 Liberty Ave", "market": "LI"},   # market HERE only
+    {"store_code": "B-200", "address": "200 Main St", "market": ""},           # market in mapping only
+    {"store_code": "B-300", "address": "300 Elm St", "market": "Chicago"},
+]
+mapping_rows = [                                 # commcalc.store_mapping
+    {"store_code": "B-200", "store_address": "200 Main St", "market": "NY"},   # the MIRROR shape
+    {"store_code": "B-300", "store_address": "300 Elm St", "market": "Chicago"},
+    {"store_code": "B-900", "store_address": "900 Ocean Ave", "market": "NJ"}, # NOT on the roster
+]
+idx = cscope.build_market_index(store_rows, mapping_rows, [])
+mkt_by_code = cscope.build_market_by_code(idx)
+
+check("J1 B-1115/LI (market ONLY on storeops.stores) resolves canonically",
+      mkt_by_code.get("B-1115") == "LI", mkt_by_code)
+check("J2 the MIRROR shape (market ONLY on store_mapping) resolves too — a single-vocabulary "
+      "read would have bucketed this store '(no market)' and dropped it from the filter",
+      mkt_by_code.get("B-200") == "NY", mkt_by_code)
+check("J3 a settlement-only store absent from the roster still resolves",
+      mkt_by_code.get("B-900") == "NJ", mkt_by_code)
+
+# The endpoint's meta expression, replayed exactly: address from the roster (display), market from
+# the canonical index — for the UNION of declared and settled store-days.
+def _bucket(m):
+    m = (m or "").strip()
+    return m or "(no market)"
+
+
+addr_by_code = {str(r["store_code"]).upper(): r["address"] for r in store_rows}
+declared_keys = {("B-1115", "2026-09-01"), ("B-200", "2026-09-01")}
+settled_keys = {("B-900", "2026-09-01"), ("B-1115", "2026-09-01"), ("B-404", "2026-09-01")}
+meta = {code: {"store_address": addr_by_code.get(code) or code,
+               "market": _bucket(mkt_by_code.get(code))}
+        for code in ({c for (c, _d) in declared_keys} | {c for (c, _d) in settled_keys})}
+check("J4 every declared AND settled store carries a market (none silently blank)",
+      set(meta) == {"B-1115", "B-200", "B-900", "B-404"} and
+      meta["B-1115"]["market"] == "LI" and meta["B-200"]["market"] == "NY" and
+      meta["B-900"]["market"] == "NJ", meta)
+check("J5 a store in NEITHER vocabulary buckets the EXPLICIT '(no market)' sentinel — so it can "
+      "only be excluded by deselecting that bucket, never by an '' != 'Market' mismatch",
+      meta["B-404"]["market"] == "(no market)")
+check("J6 a settlement-only store with no roster row still gets a display label",
+      meta["B-900"]["store_address"] == "B-900")
+
+# §13c enumeration: the dropdown is the canonical vocabulary ∪ this report's own stamps.
+opts = cscope.merge_market_options(cscope.build_market_index(store_rows, mapping_rows, []).get("markets"),
+                                   {meta[c]["market"] for c in meta if meta[c]["market"] != "(no market)"})
+check("J7 the option list offers every one-vocabulary market (LI and NY both selectable)",
+      "LI" in opts and "NY" in opts and "NJ" in opts, opts)
+check("J8 the '(no market)' sentinel is NOT baked into the server list (the page appends it)",
+      "(no market)" not in opts)
+
+# Static: the endpoint resolves through core.scope and reads NO market column off a vocabulary table.
+_ep_body = ep_src[ep_src.index("# ── CARD-SETTLEMENT TALLY"):]
+_ep_body = _ep_body[:_ep_body.index('\n# "Need a training walkthru')]
+check("J9 the endpoint calls the canonical resolver + the canonical option composer",
+      "market_by_code(" in _ep_body and "org_market_options(" in _ep_body)
+check("J10 the endpoint reads NO market column off a store-vocabulary table "
+      "(harness_market_resolution_guard has nothing to pin here)",
+      'select("store_code,address")' in _ep_body and
+      "store_code,address,market" not in _ep_body)
+check("J11 the enumeration site is pinned CANONICAL in the enumeration guard",
+      '"closing/router.py": {"external_credit_recon": "CANONICAL"}' in
+      open(os.path.join(ROOT, "backend", "harness_market_enumeration_guard.py")).read())
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILED: " + "; ".join(FAIL))

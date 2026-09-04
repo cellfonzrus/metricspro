@@ -1352,9 +1352,23 @@ what an employee typed at closing. This feed is the other side of that tally.
   `commcalc.merchant_settlement_day`); merchant id → store = `storeops.store_merchant_id` (mig
   `902`) via `storeops/merchant_ids.resolve_map` (applied again at READ time, so a store mapped
   after the pull is picked up without a re-scrape); tolerance = `metric_source_of_truth` (mig `923`)
-  metric `card_settlement`, house default 0.00 (commented seed in mig 960); market/store resolution
-  = `_overlay_canonical_market` + `_market_bucket` + `_resolve_market_filter`/`_resolve_store_filter`
-  (§13a, the same helpers the envelope report uses). **HONEST GAPS, never a fake zero:**
+  metric `card_settlement`, house default 0.00 (commented seed in mig 960).
+  **MARKET is FULLY CANONICAL here, not an overlay (§13a/§13c).** Unlike its closing siblings — which
+  read `storeops.stores.market` and fill blanks (classification OVERLAY) — this report resolves
+  market ONLY through **`core.scope.market_by_code`** (the cached union storeops.stores ∪
+  store_mapping ∪ store_aliases + the code-group fold) and takes ADDRESS ONLY off the roster, so it
+  registers NO site in `harness_market_resolution_guard`. Two reasons this report is the first that
+  needed it: (a) a **settlement-only store-day** — the processor settled money for a store that filed
+  no closing row — has no roster row to join a market from at all; (b) a store whose market is
+  spelled only in `store_mapping` (the MIRROR of B-1115/LI, whose market is only on `storeops.stores`)
+  would bucket `(no market)` and vanish the instant a market filter is picked, silently hiding real
+  settled money. The market DROPDOWN is likewise composed by **`core.scope.org_market_options`**
+  (canonical vocabulary ∪ this report's own stamps; `(no market)` appended by the page) — pinned
+  `external_credit_recon: CANONICAL` in `harness_market_enumeration_guard`, and the page reads
+  `market_options` from the payload rather than from the loaded roster. Truth table for both
+  divergence shapes + the settlement-only store: `harness_external_credit_recon.py` §J.
+  Store/market filter application stays on the shared `_market_bucket` +
+  `_resolve_market_filter`/`_resolve_store_filter` helpers. **HONEST GAPS, never a fake zero:**
   `no_processor_data` (feed unregistered, or the day is outside what the scrape covers),
   `no_declared_data`, `dm_merged` (3 above) — each carries `variance = None` and contributes to a
   COUNT only, never to a dollar total; a day the feed DOES cover but is silent about for a store is
@@ -2105,6 +2119,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | Device-purchase rebate (P&L `device_rebate` contra-COGS OR `rebate_income` revenue) | `raw_ma_commission.rebate` (negative = paid to dealer) + `activation_rebate_ledger.device_rebate_amount` (positive money-in) | `ma_store_pnl.rebate_route` per `commission_org_config.pl_rebate_presentation` (mig `934`: `contra_cogs` default = K1 negative in COGS; `income` = positive revenue, luxelink) → `ma_store_pnl.ma_commission_bookings` + `coa.build_inputs` activation-ledger booking; store grain via the mig-314 account→store index |
 | B2B sold vs MA paid (activation discrepancy) | sold: `SALES_DISPLAY_SOURCES` rows with non-blank `contract_type` (no swap/void), keyed on digit-normalized `serial_1`; paid: `raw_ma_commission.spiff_m1`+`rebate`/`device_margin` ∪ `raw_ma_daily_tx` month-1 / activation-order evidence (two-hop join, +1-month lookahead) | `ma_recon.reconcile_ma_activations` via `sale_installment_engine._gate_met_ma_tx` (mig `312`); unpaid rows → `discrepancy_results` `source='ma'` with rule attribution or `'no business rule configured'` |
 | Commission not received + APPEAL pipeline (open $ / appeal filed / won / denied / written off, per range) | `discrepancy_results` rows (both engines) + mig-947 appeal columns; buckets computed by the PURE `discrepancy_appeals.summarize_appeals` (`no_rule_count` = the LITERAL `'no business rule configured'` marker only — evidence-first, never inferred) | `GET /discrepancy-appeals` → Commission Discrepancy hub cards (`commission-discrepancy/page.tsx`); chase list = mig-098 `/recovery/claims` (reused) |
+| Card settlement recon — store→MARKET + the market option list | THE canonical union index ONLY (`core.scope.market_by_code` / `org_market_options`, §13a/§13c) — the roster read takes ADDRESS only, so no market-vocabulary site exists to pin. Deliberately CANONICAL rather than the closing family's OVERLAY: a settlement-only store has no roster row, and a `store_mapping`-only market would otherwise vanish from the filter | `closing/router.external_credit_recon` (pinned `CANONICAL` in `harness_market_enumeration_guard`; nothing to pin in `harness_market_resolution_guard`); truth table `harness_external_credit_recon.py` §J |
 | Distributor payable — WHICH derivation and WHICH line (mig `954`) | `account_config.distributor_payable_basis` / `.distributor_payable_line` / `.asset_ledger_open_statuses`, else the house carrier preset (`ui_label_override` scope `finance_basis:<carrier>`, key `distributor_payable`) over the org's `commcalc.carrier` rows | `balance_sheet.resolve_payable_basis`/`resolve_payable_line` (org > carrier preset > declared mig-933 family > off; target line defaults `asset_ledger`→`owed_vip`, `marketplace_due`→`handset_payable`) → `statement_engine.build_inputs_full` + `GET /account/liabilities-due`; proof `harness_balance_sheet_truths.py` §G |
 | Distributor open balance — consignment side (BS liability, mig `954`) | `asset_ledger.owed_to_vip` on rows whose `status` is in `asset_ledger_open_statuses` (default `["Open"]`) with `acquired_date ≤ as-of`; live house org 2026-09-04 = $358,221.13 (past-due $29,839.62 / not-yet-due $328,381.51) | `balance_sheet.asset_ledger_open_bookings` via `statement_engine.build_inputs_full` → the resolved target line (default `owed_vip`); store grain = the ledger's own `store` through `coa.store_resolver`; as-of = `period_as_of` (open period ⇒ today, closed ⇒ period end) |
 | Handset payable (BS liability, mig `933`) | `raw_ma_daily_tx.retail_cost` on the org's `handset_payable_order_types` families, `tx_date ≤ as-of < due_date` (the vendor's own terms) | `balance_sheet.handset_payable_bookings` via `statement_engine.build_inputs_full` → BS `handset_payable` line; store grain = the mig-314 account→store index |
