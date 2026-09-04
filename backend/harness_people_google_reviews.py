@@ -827,6 +827,81 @@ def section_router():
                status_after.get("last_status") == "ok" and status_after.get("last_run_at"), status_after)
         finally:
             router_mod._gr.text_search_place, router_mod._gr.place_details = real_ts2, real_pd2
+
+        # ── sweep ERROR DIAGNOSABILITY (incident 2026-08-17/20: both orgs failed 20/20 and
+        #    last_detail said only "OK — 0/20 store(s) · 20 error(s)" — the per-store error TEXT
+        #    was persisted NOWHERE, so root-causing required a live re-run weeks later). The fix:
+        #    a sample of distinct error messages rides in last_detail, and the "OK —" prefix only
+        #    appears when at least one store actually succeeded. ─────────────────────────────────
+        real_pd3 = router_mod._gr.place_details
+
+        def _boom(place_id, api_key, timeout=15):
+            raise RuntimeError("HTTP 403: PERMISSION_DENIED (billing disabled)")
+        router_mod._gr.place_details = _boom
+        try:
+            router_mod._do_google_reviews_sweep(ORG, None)
+            st = router_mod._gr.get_sweep_config(fake_client.schema("storeops"), ORG)
+            ok("F32 all-fail sweep records status='error'", st.get("last_status") == "error", st)
+            ok("F33 all-fail last_detail carries the actual error text",
+               "PERMISSION_DENIED" in (st.get("last_detail") or ""), st.get("last_detail"))
+            ok("F34 all-fail last_detail does NOT open with a misleading 'OK —'",
+               not (st.get("last_detail") or "").startswith("OK —"), st.get("last_detail"))
+        finally:
+            router_mod._gr.place_details = real_pd3
+
+        _calls = {"n": 0}
+
+        def _flaky(place_id, api_key, timeout=15):
+            _calls["n"] += 1
+            if _calls["n"] > 1:
+                raise RuntimeError("second-store-blew-up")
+            return {"rating": 4.9, "review_count": 10, "reviews": []}
+        router_mod._gr.place_details = _flaky
+        try:
+            router_mod._do_google_reviews_sweep(ORG, None)
+            st2 = router_mod._gr.get_sweep_config(fake_client.schema("storeops"), ORG)
+            ok("F35 mixed sweep keeps the OK prefix AND names the failing store's error",
+               (st2.get("last_detail") or "").startswith("OK — 1/2")
+               and "second-store-blew-up" in (st2.get("last_detail") or ""), st2.get("last_detail"))
+        finally:
+            router_mod._gr.place_details = real_pd3
+
+        # ── _ensure_google_reviews_sweep_cron (mig 950 boot hook): skip-clean without config;
+        #    with config it must call the mig-950 RPC with the backend's own url+secret. ────────
+        from app.core.config import settings as _settings
+        real_sb_fn = router_mod.sb
+        real_api_url = getattr(_settings, "API_PUBLIC_URL", "")
+        real_secret_v = getattr(_settings, "NOTIFY_RUN_SECRET", "")
+
+        class _RpcRecorder:
+            def __init__(self):
+                self.calls = []
+
+            def rpc(self, name, params=None):
+                self.calls.append((name, params))
+
+                class _X:
+                    def execute(self):
+                        return FakeResult("scheduled job 7")
+                return _X()
+        rec = _RpcRecorder()
+        try:
+            _settings.API_PUBLIC_URL = ""
+            _settings.NOTIFY_RUN_SECRET = ""
+            out = router_mod._ensure_google_reviews_sweep_cron()
+            ok("F36 cron ensure skips cleanly with no url/secret", str(out).startswith("skipped"), out)
+            _settings.API_PUBLIC_URL = "https://api.example.com"
+            _settings.NOTIFY_RUN_SECRET = "s3cret"
+            router_mod.sb = lambda: rec
+            out2 = router_mod._ensure_google_reviews_sweep_cron()
+            ok("F37 cron ensure calls the mig-950 RPC with url+secret",
+               rec.calls == [("ensure_google_reviews_sweep_cron",
+                              {"p_url": "https://api.example.com", "p_secret": "s3cret"})]
+               and out2 == "scheduled job 7", (rec.calls, out2))
+        finally:
+            router_mod.sb = real_sb_fn
+            _settings.API_PUBLIC_URL = real_api_url
+            _settings.NOTIFY_RUN_SECRET = real_secret_v
     finally:
         router_mod.get_supabase = real_get_supabase
         _core_db.get_supabase = real_db_get_supabase

@@ -8702,11 +8702,19 @@ def _do_google_reviews_sweep(org_id, store_codes=None):
     fatal_errs = [s.get("error") for s in stores_res if s.get("error") and not s.get("ok")]
     partials = [s for s in stores_res if s.get("status") == "partial"]
     ok_count = len([s for s in stores_res if s.get("ok")])
-    detail = f"OK — {ok_count}/{len(stores_res)} store(s)"
+    # Incident 2026-08-17/20: BOTH orgs' sweeps failed 20/20 and last_detail said only
+    # "OK — 0/20 store(s) · 20 error(s)" — the per-store error TEXT was never persisted anywhere,
+    # so root-causing (then-broken Google billing? egress? address data?) required a live re-run
+    # weeks later. Two fixes: (a) no "OK —" prefix when nothing succeeded, (b) a sample of the
+    # DISTINCT error messages rides along in last_detail. Safe to store: these strings carry the
+    # store address / place_id / HTTP status at most — the API key travels in request HEADERS and
+    # never appears in requests' exception text. _gr_set_sweep_status still caps at 500 chars.
+    detail = f"{'OK — ' if ok_count else ''}{ok_count}/{len(stores_res)} store(s)"
     if partials:
         detail += f" · {len(partials)} partial ({'; '.join(p.get('partial_detail') or '' for p in partials)[:200]})"
     if fatal_errs:
-        detail += f" · {len(fatal_errs)} error(s)"
+        uniq_errs = list(dict.fromkeys(str(e).strip() for e in fatal_errs))
+        detail += f" · {len(fatal_errs)} error(s) — e.g. {' | '.join(uniq_errs[:2])[:280]}"
     status = "ok"
     if fatal_errs and ok_count == 0:
         status = "error"
@@ -8869,11 +8877,38 @@ def post_google_reviews_run_now(background_tasks: BackgroundTasks, body: Optiona
     return {"status": "started"}
 
 
+def _ensure_google_reviews_sweep_cron():
+    """Self-register the GLOBAL google-reviews-sweep pg_cron job (mig 950) so no one runs SQL by
+    hand — called from the main.py startup hook on EVERY boot, exactly like the email-sweep (mig
+    922) and account-recompute (mig 940) crons. Found 2026-09-04 while root-causing "still not able
+    to pull google reviews": /google-reviews/sweep/run-due called itself a "pg_cron entrypoint"
+    since mig 411, but NO migration ever scheduled a job for it — the sweep only ever ran when a
+    human clicked "Refresh now". Reads the backend's own API URL + notify secret from settings and
+    calls the idempotent storeops.ensure_google_reviews_sweep_cron RPC as service_role, re-embedding
+    the CURRENT secret on every deploy (survives rotations, self-heals a lost job).
+
+    NON-FATAL by design (mig 940 posture, verbatim): a missing secret, the RPC not present (mig 950
+    not applied yet), or pg_cron/pg_net not installed just means auto-scheduling is skipped — boot
+    still succeeds, and the manual "Refresh now" button still works."""
+    try:
+        url = (getattr(settings, "API_PUBLIC_URL", "") or "").strip()
+        secret = (getattr(settings, "NOTIFY_RUN_SECRET", "") or "").strip()
+        if not url or not secret:
+            return "skipped: API_PUBLIC_URL or NOTIFY_RUN_SECRET not set"
+        res = sb().rpc("ensure_google_reviews_sweep_cron", {"p_url": url, "p_secret": secret}).execute()
+        return res.data if isinstance(res.data, str) else (res.data or None)
+    except Exception as e:
+        print(f"WARN _ensure_google_reviews_sweep_cron skipped: {e}")
+        return None
+
+
 @router.post("/google-reviews/sweep/run-due")
 def post_google_reviews_run_due(background_tasks: BackgroundTasks,
                                 x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed. Secret-gated —
-    NEVER an unauthenticated trigger. Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
+    NEVER an unauthenticated trigger. Reuses NOTIFY_RUN_SECRET so no new env var is needed.
+    The pg_cron job itself is installed by mig 950 + the main.py boot hook
+    (_ensure_google_reviews_sweep_cron) — before 2026-09-04 nothing ever invoked this endpoint."""
     if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()

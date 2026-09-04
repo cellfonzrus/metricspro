@@ -330,6 +330,26 @@ def _email_sweep_cron_startup():
 
 
 @app.on_event("startup")
+def _google_reviews_sweep_cron_startup():
+    """Self-heal the google-reviews sweep schedule on EVERY boot (mig 950).
+
+    Found 2026-09-04 root-causing the owner's "still not able to pull google reviews":
+    POST /storeops/google-reviews/sweep/run-due called itself a "pg_cron entrypoint" since mig 411,
+    but no migration ever scheduled a job for it — the daily sweep never ran unless a human clicked
+    "Refresh now" (index §19-class gap, same shape as the account-recompute one below). Same
+    idempotent replace-by-name semantics and best-effort posture as the two hooks above: a missing
+    secret / RPC / cron infra logs the reason and never blocks boot. Each tick is one indexed read;
+    per-org sweeps only fire where sweep-config is enabled AND next_run_at has passed."""
+    try:
+        from app.modules.storeops.router import _ensure_google_reviews_sweep_cron
+        print(f"[google-reviews-sweep-cron] self-register on boot: "
+              f"{_ensure_google_reviews_sweep_cron() or 'no status returned'}", flush=True)
+    except Exception as e:
+        print(f"WARN [google-reviews-sweep-cron] self-register failed (sweep stays manual): {e}",
+              flush=True)
+
+
+@app.on_event("startup")
 def _account_recompute_cron_startup():
     """Self-heal the statement auto-recompute schedule on EVERY boot (mig 940 — finance roadmap
     Phase 1). POST /account/run-due (the staleness-gated statement sweep) had NO pg_cron
