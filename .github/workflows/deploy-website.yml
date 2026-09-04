@@ -120,6 +120,27 @@ jobs:
           grep -q "$GITHUB_SHA" website/index.html
           echo "Stamped $GITHUB_SHA"
 
+      # ── Break the stylesheet cache ─────────────────────────────────────────────────────────
+      # The host serves CSS with max-age=604800 and HTML with max-age=3600, so for seven days
+      # after a deploy a returning visitor gets NEW HTML against OLD CSS. That is not theoretical:
+      # it shipped the logo as an unstyled black SVG at its default 300x150, clipped by the header,
+      # to everyone who had visited before. Stamping the commit into the href makes each build's
+      # stylesheet a different URL, so the cache cannot serve the previous one for it.
+      #
+      # Runs BEFORE the upload and only on the runner's checkout; nothing is committed.
+      - name: Version the stylesheet links
+        if: steps.cfg.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          v="${GITHUB_SHA:0:7}"
+          # Only rewrite hrefs that have no query yet, so re-running is a no-op rather than
+          # appending a second ?v=.
+          find website -name '*.html' -print0 | xargs -0 sed -i -E \
+            "s#(href=\"/assets/(home|styles)\.css)\"#\1?v=$v\"#g"
+          n=$(grep -rlc "\.css?v=$v" website --include='*.html' | wc -l)
+          echo "Stamped $v into the stylesheet links on $n pages"
+          test "$n" -gt 0
+
       # ── Publish ────────────────────────────────────────────────────────────────────────────
       # lftp rather than a marketplace action: this step holds a credential that can overwrite the
       # live site, and lftp is a distro package rather than a third party trusted afresh on every
