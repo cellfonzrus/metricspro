@@ -228,6 +228,103 @@ def _sold_imei_store_map(client, org_id, table, imei_field, imeis):
     return found
 
 
+# ── Total/MA device→store attribution (owner report 2026-09-04: "on the luxlink the store name is
+#    not showing on the forecasting of the phones") ───────────────────────────────────────────────
+#
+# WHY THE POS MATCH ALONE WENT DARK, measured live 2026-09-04 (luxelink): the sold-match source
+# (`raw_sales`) last fed 2026-08-09 and its `serial_1` is blank on the newer rows, so BOTH the
+# forecast's in-window IMEI→POS-store map and the ledger's sold-match fill resolve NOTHING —
+# 0 of 1,192 luxelink ledger rows carried a store, and every forecast row read "(unassigned)".
+# A Total/MA activation is booked against the DEALER account and carries no store of its own, so
+# when the POS feed lags, store attribution needs the platform's OTHER canonical device/account
+# sources — never a new derivation (duplicate-check 2026-09-04):
+#
+#   1. POS sale line (existing `_sold_imei_store_map` / the forecast's raw_sales serial match) —
+#      where the device was actually RUNG UP. Always wins when present.
+#   2. `commcalc.inventory_aging_device` (§11, mig 216) — the per-IMEI stock snapshot; its `store`
+#      is already in the store_mapping vocabulary (measured 20/20 exact) and resolves 880/1,120
+#      of luxelink's last-30d MA sales at DEVICE grain.
+#   3. The mig-314 account→store index (`ma_store_pnl.load_store_index`: raw_ma_fulfillment
+#      tspid×business_address ∪ ma_account_store_map override) keyed by the MA row's
+#      `merchant_account_id` — ACCOUNT grain, covers 1,120/1,120 (20 accounts, 0 ambiguous);
+#      addresses collapse onto the canonical store_mapping spelling through `coa.store_resolver`
+#      (the same normalization mig 314 itself prescribes).
+#   4. Nothing resolves → None. An unresolved device renders "(unassigned)", never an arbitrary
+#      store (the phantom-store lesson).
+def resolve_ma_store(imei, account, pos_store, inv_by_imei, store_by_account, account_by_imei):
+    """PURE precedence: POS sale line → inventory device row → mig-314 account → None.
+    `imei` must already be normalized (_norm_imei); `account` may be None — it then falls back to
+    the device's own account (`account_by_imei`). Truth table:
+    backend/harness_device_forecast_store_filter.py."""
+    if pos_store:
+        return pos_store
+    st = (inv_by_imei or {}).get(imei)
+    if st:
+        return st
+    acct = str(account or "").strip() or (account_by_imei or {}).get(imei)
+    if acct:
+        return (store_by_account or {}).get(acct)
+    return None
+
+
+def ma_store_resolution(client, org_id):
+    """I/O: build the Total/MA store-attribution maps for an org and return
+    (resolve(imei_norm, account=None) -> store_or_None, meta). Composes ONLY canonical sources —
+    inventory_aging_device (§11), ma_store_pnl.load_store_index (mig 314), coa.store_resolver —
+    each best-effort: a missing table degrades that source to {} rather than raising, and an org
+    with none of them gets a resolver that answers None (rows stay "(unassigned)", page still up)."""
+    inv_by_imei, store_by_account, account_by_imei = {}, {}, {}
+    try:                                        # 2 — inventory snapshot, device grain
+        page = 0
+        while page <= 40:
+            chunk = (client.schema("commcalc").table("inventory_aging_device")
+                     .select("imei,store").eq("org_id", org_id)
+                     .range(page * PAGE, page * PAGE + PAGE - 1).execute().data) or []
+            for r in chunk:
+                k = _norm_imei(r.get("imei"))
+                st = str(r.get("store") or "").strip()
+                if k and st and k not in inv_by_imei:
+                    inv_by_imei[k] = st
+            if len(chunk) < PAGE:
+                break
+            page += 1
+    except Exception as e:
+        print(f"WARN payables ma_store_resolution inventory read failed: {e}")
+    try:                                        # 3 — mig-314 account index, canonical spelling
+        from app.modules.account import ma_store_pnl as _msp
+        from app.modules.account import coa as _coa
+        raw_idx = _msp.load_store_index(client, org_id) or {}
+        if raw_idx:
+            _resolve_addr = _coa.store_resolver(client, org_id)
+            store_by_account = {a: (_resolve_addr(addr) or addr) for a, addr in raw_idx.items()}
+    except Exception as e:
+        print(f"WARN payables ma_store_resolution mig-314 index failed: {e}")
+    if store_by_account:
+        try:                                    # device → its own MA account (for account fallback
+            page = 0                            # on rows that don't carry the account themselves)
+            while page <= 40:
+                chunk = (client.schema("commcalc").table("raw_ma_commission")
+                         .select("imei,merchant_account_id").eq("org_id", org_id)
+                         .range(page * PAGE, page * PAGE + PAGE - 1).execute().data) or []
+                for r in chunk:
+                    k = _norm_imei(r.get("imei"))
+                    a = str(r.get("merchant_account_id") or "").strip()
+                    if k and a and k not in account_by_imei:
+                        account_by_imei[k] = a
+                if len(chunk) < PAGE:
+                    break
+                page += 1
+        except Exception as e:
+            print(f"WARN payables ma_store_resolution imei->account read failed: {e}")
+
+    def resolve(imei, account=None, pos_store=None):
+        return resolve_ma_store(imei, account, pos_store,
+                                inv_by_imei, store_by_account, account_by_imei)
+    meta = {"inventory_imeis": len(inv_by_imei), "accounts": len(store_by_account),
+            "imei_accounts": len(account_by_imei)}
+    return resolve, meta
+
+
 def _needed_cols(cfg):
     cols = set()
     for k in ("imei_field", "model_field", "store_field", "owed_field", "due_date_field",
@@ -280,6 +377,14 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types):
     client.schema("commcalc").table("device_payable_ledger").delete() \
         .eq("org_id", org_id).eq("carrier_id", cid).execute()
 
+    # Store fallback for a source with no store of its own (every Total/MA map) — the POS sold-match
+    # still wins per row; this only fills what it leaves blank (see ma_store_resolution). Built ONCE
+    # per carrier, and only for the store-less shape: a Boost-style config with a store_field never
+    # builds or consults it (byte-identical).
+    ma_resolve = None
+    if not cfg.get("store_field"):
+        ma_resolve, _ = ma_store_resolution(client, org_id)
+
     status_counts, written, page = {}, 0, 0
     while True:
         q = (client.schema("commcalc").table(src_table).select(select_str)
@@ -289,7 +394,8 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types):
         chunk = q.range(page * PAGE, page * PAGE + PAGE - 1).execute().data or []
         if not chunk:
             break
-        rows = _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, terms)
+        rows = _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, terms,
+                              ma_resolve=ma_resolve)
         for i in range(0, len(rows), 500):
             client.schema("commcalc").table("device_payable_ledger").insert(rows[i:i + 500]).execute()
         for r in rows:
@@ -303,7 +409,8 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types):
     return written, status_counts
 
 
-def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, terms):
+def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, terms,
+                   ma_resolve=None):
     cid = cfg["carrier_id"]
     imei_field = cfg["imei_field"]
     owed_field = cfg.get("owed_field")
@@ -342,6 +449,10 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
         # store_field always wins.
         if not store:
             store = sold_store.get(imei)
+        # Still blank (the POS feed lags/blank serials — the 2026-09-04 luxelink shape) -> the
+        # canonical inventory-snapshot / mig-314 account attribution. Fills blanks only.
+        if not store and ma_resolve is not None:
+            store = ma_resolve(imei, r.get("merchant_account_id"))
         owed = _f(r.get(owed_field)) if owed_field else None
         owed_source = "asset_ledger" if owed_field else "unconfigured"
         # A configured owed_field always WINS; the link only fills a map that has none.

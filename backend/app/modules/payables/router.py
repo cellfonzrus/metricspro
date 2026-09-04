@@ -190,9 +190,31 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
     except Exception:
         pass
     try:
-        for r in _fetch_all(lambda: client.schema("commcalc").table("raw_ma_commission")
-                            .select("sku,imei,tx_date").eq("org_id", org_id).gte("tx_date", cutoff)):
-            st = ma_store.get(str(r.get("imei") or "").strip())
+        # merchant_account_id feeds the mig-314 account→store fallback; a live DB whose
+        # raw_ma_commission predates that column still forecasts (defensive two-step select).
+        def _maq(cols):
+            return lambda: (client.schema("commcalc").table("raw_ma_commission")
+                            .select(cols).eq("org_id", org_id).gte("tx_date", cutoff))
+        try:
+            ma_rows = _fetch_all(_maq("sku,imei,tx_date,merchant_account_id"))
+        except Exception:
+            ma_rows = _fetch_all(_maq("sku,imei,tx_date"))
+        # 2026-09-04 (owner: "on the luxlink the store name is not showing on the forecasting of
+        # the phones"): the POS-line match above starves when the POS feed lags or carries blank
+        # serials (luxelink: raw_sales last fed 2026-08-09, serial_1 blank → 0 of 1,120 in-window
+        # MA sales resolved). Fall back to the CANONICAL device/account attribution —
+        # inventory_aging_device (§11, device grain) then the mig-314 account→store index
+        # (engine.ma_store_resolution) — built only when this org actually has MA rows.
+        ma_resolve = (lambda i, a=None, pos_store=None: None)
+        if ma_rows:
+            try:
+                ma_resolve, _ = engine.ma_store_resolution(client, org_id)
+            except Exception as ex:
+                print(f"WARN forecast ma_store_resolution failed: {ex}")
+        for r in ma_rows:
+            raw_imei = str(r.get("imei") or "").strip()
+            st = (ma_store.get(raw_imei)      # POS sale line still wins when it exists
+                  or ma_resolve(_norm_imei(raw_imei), r.get("merchant_account_id")))
             if store and st != store:      # honor an explicit ?store= the same way the Boost leg does
                 continue
             _bucket(r.get("sku"), total_id, total_name, st)["units"] += 1
@@ -244,6 +266,18 @@ def list_payables(store: str = "", carrier_id: str = "", status: str = "", limit
     if status:
         q = q.eq("status", status)
     rows = q.order("net_owed", desc=True).limit(limit).execute().data or []
+    # 2026-09-04: fill BLANK stores through the canonical Total/MA attribution (inventory snapshot →
+    # mig-314 account index; see engine.ma_store_resolution) at READ time, so the page heals before
+    # the next rebuild persists it (measured: 0 of 1,192 luxelink ledger rows carried a store once
+    # the POS feed lagged). Only ever fills a blank — a store the build attributed is never touched.
+    if any(not (r.get("store") or "").strip() for r in rows):
+        try:
+            _resolve_ma, _ = engine.ma_store_resolution(client, org_id)
+            for r in rows:
+                if not (r.get("store") or "").strip():
+                    r["store"] = _resolve_ma(_norm_imei(r.get("imei"))) or r.get("store")
+        except Exception as ex:
+            print(f"WARN payables ma_store_resolution failed: {ex}")
     # decorate with the VIP invoice #/date (join by IMEI == serial)
     vip = _vip_invoice_map(client, org_id, [r.get("imei") for r in rows])
     mmap = _market_by_store(client, org_id)
