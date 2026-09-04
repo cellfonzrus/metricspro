@@ -291,12 +291,11 @@ def ma_store_resolution(client, org_id):
     except Exception as e:
         print(f"WARN payables ma_store_resolution inventory read failed: {e}")
     try:                                        # 3 — mig-314 account index, canonical spelling
+        # `ma_store_pnl.canonical_store_index` IS this step (load_store_index ∪ coa.store_resolver),
+        # extracted into the mig-314 module 2026-09-04 so the residual-per-subscriber report resolves
+        # its processor accounts through the SAME map instead of a third copy. Behaviour unchanged.
         from app.modules.account import ma_store_pnl as _msp
-        from app.modules.account import coa as _coa
-        raw_idx = _msp.load_store_index(client, org_id) or {}
-        if raw_idx:
-            _resolve_addr = _coa.store_resolver(client, org_id)
-            store_by_account = {a: (_resolve_addr(addr) or addr) for a, addr in raw_idx.items()}
+        store_by_account = _msp.canonical_store_index(client, org_id) or {}
     except Exception as e:
         print(f"WARN payables ma_store_resolution mig-314 index failed: {e}")
     if store_by_account:

@@ -113,6 +113,7 @@ export default function ResidualPerSubPage() {
     const rows = filtered ? visibleStores : stores
     const columns = [
       { header: 'Store', get: (r: any) => r.store },
+      { header: 'Store code', get: (r: any) => r.store_code || '' },
       { header: 'Market', get: (r: any) => r.market },
       ...periods.map(p => ({ header: shortPeriod(p), money: metricDef.money, align: 'right' as const, get: (r: any) => r2(metricVal(r.series.find((x: any) => x.period === p))) })),
       { header: 'Total', money: metricDef.money, align: 'right' as const, get: (r: any) => r2(metricVal(r.totals)) },
@@ -153,6 +154,7 @@ export default function ResidualPerSubPage() {
           </p>
           {/* Provenance: which residual source actually answered for this tenant (read-only). */}
           {data?.source_label && <p style={{ color: 'var(--text3)', fontSize: 11, margin: '3px 0 0' }}>Source: {data.source_label}</p>}
+          {data?.store_attribution && <p style={{ color: 'var(--text3)', fontSize: 11, margin: '2px 0 0' }}>Stores: {data.store_attribution.index}</p>}
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {msg && <span style={{ fontSize: 12, color: 'var(--red)' }}>{msg}</span>}
@@ -183,6 +185,22 @@ export default function ResidualPerSubPage() {
           <input type="checkbox" checked={breakout} disabled={!filtered} onChange={e => setPerStore(e.target.checked)} /> Break out by store
         </label>
       </div>
+
+      {/* STORE-ATTRIBUTION provenance (owner 2026-09-04: "it is also not showing the store name just
+          the store codes"). MA/VidaPay rows are booked against a PROCESSOR ACCOUNT, resolved to a
+          store through the mig-314 account→store index. An account the index cannot place reports
+          under "(Unassigned)" rather than being guessed onto a store — name those accounts so the
+          bucket is actionable (pin them in the MA account→store map) instead of a mystery. */}
+      {!loading && data?.store_note && (
+        <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 12, color: '#334155', background: '#f1f5f9', borderLeft: '3px solid #64748b' }}>
+          {data.store_note}
+          {data?.store_attribution && (
+            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text3)' }}>
+              {data.store_attribution.accounts_resolved} of {data.store_attribution.accounts_seen} processor accounts placed · {data.store_attribution.index}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ENTITY-coverage warning (owner 2026-08-10) — one org can hold several master-agent entities
           and each month's daily-tx file is pulled per entity, so a month missing one entity's file
@@ -288,7 +306,9 @@ export default function ResidualPerSubPage() {
                 {rowsToShow.map((s, i) => (
                   <tr key={s.store} style={{ background: i % 2 ? '#fafbfc' : 'white' }}>
                     <td style={{ padding: '6px 14px', fontSize: 12, position: 'sticky', left: 0, background: i % 2 ? '#fafbfc' : 'white', borderBottom: '1px solid var(--border)' }}>
-                      {s.store} <span style={{ color: 'var(--text3)', fontSize: 10 }}>· {s.market}</span>
+                      {s.store}
+                      {s.store_code && <span style={{ color: 'var(--text3)', fontSize: 10 }}> · {s.store_code}</span>}
+                      <span style={{ color: 'var(--text3)', fontSize: 10 }}> · {s.market}</span>
                     </td>
                     {periods.map(p => {
                       const pt = s.series.find((x: any) => x.period === p)

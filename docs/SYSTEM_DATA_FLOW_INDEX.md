@@ -27,6 +27,7 @@ Primary code homes:
 | 5 | **Daily Targets & actuals** | "How are daily targets computed vs actuals? What's an 'achieved' number? Accessory $ actual?" |
 | 6 | **Rep commission (Boost)** | "How is a rep paid? premium/byod/upgrade counts, acc/setup/trade-in, tiers, KPIs. Where stored?" |
 | 7 | **Carrier residual installments** | "Multi-month carrier residual pay from raw_mi. Why do named activation_types not pay?" |
+| 7a | **Residual per Subscriber report** | "Where does the residual/subscriber trend come from per carrier? Why is a Total/MA store named, not a processor account id?" |
 | 8 | **Plan-mode sale installments** | "Sale-triggered multi-month pay (Total Wireless). Device categories, gates, ledger." |
 | 9 | **Management Incentive (DM/manager)** | "How is a district/market manager paid? Components, qualifiers, bonuses, auto-resolved numbers." |
 | 10 | **KPI system (DLAR / store_kpis / carrier_kpi_metric)** | "Where do ATU / protect / TMR3 / conversion come from? Store vs rep KPIs?" |
@@ -199,6 +200,13 @@ disagain (owner directive 2026-07-16, 2026-07-25).
   data-conditional copy, the CarrierPicker onboarding screen). Proof of resolution + the two-sided
   truth table (boost payload renders zero Total vocabulary and vice versa; neutral fallback for a
   presetless carrier): `harness_report_labels.py`. Display config, not a feed → NO lineage entry.
+  **BACKEND consumers (server-rendered copy)** resolve one term through the canonical pair
+  `report_labels.term_from_payload(payload, key)` (PURE) / `report_labels.carrier_term(client,
+  org_id, key)` (I/O wrapper) — precedence default carrier > the org's other carriers > `_`
+  (override-only) > the NEUTRAL noun, degrading to the neutral noun on any label-service failure and
+  NEVER to another carrier's word. Extracted 2026-09-04 so a report naming a processor/distributor
+  in its own payload copy has ONE resolution rule: `commcalc/processor_ledger._processor_term` (§15)
+  and `account/residual_subs._carrier_terms` (§7a provenance + empty-state copy) both bind it.
 
 **Endpoints:** `/sales-report` `router.py:15792`; `/sales-report/detail` `15980`;
 `/sales-report/classification-unmatched` `15925`; `/sales-comparison` `16096`; `/sales-diagnostics` `16206`;
@@ -646,6 +654,67 @@ resolves the `'*'` schedule (`installment_engine.py:194,267` pass `"*"`; simplif
 (STALE-CLAIM FIX 2026-09-01: this section previously said month_index was capped at `min(3, num_months)`
 — that cap was already lifted: `installment_engine.py:197` clamps at `min(12, num_months)`, honoring each
 schedule's full horizon; mig `078:31` documents the old behaviour, not the code.)
+
+---
+
+### 7a. REPORT — Residual per Subscriber (per store, month over month, vs commission)
+
+**Where.** `backend/app/modules/account/residual_subs.py` → `compute(client, org_id, months)`;
+endpoint `GET /account/residual-per-sub` (`account/router.py:~1042`, DEFAULT-CLOSED behind the
+`residual_per_sub` OR `account_trends` grant); page
+`frontend/src/app/(platform)/accounts/residual-per-sub/page.tsx` (the Trends hub reads the same
+endpoint). `commcalc`'s What-If simulator calls `compute` directly under its own carrier_residual gate.
+
+**Residual source is resolved per TENANT by which data EXISTS — never by a carrier branch**
+(`_aggregate`): Boost = `raw_mi` MI+ATU via RPC `commcalc.residual_per_sub_by_store` (mig `101`) with
+a bounded Python fallback; a tenant with NO `raw_mi` falls through to the MA/VidaPay source
+(`_aggregate_ma`).
+
+**MA/VidaPay side (Total, luxelink) — the residual rows are the P&L's residual rows.** ONE sweep of
+`raw_ma_daily_tx` over the window books both figures off the same rows: residual = −`retail_cost` on
+rows matching **`residual_subs.ma_residual_row_matcher`** (the mig `309`/`314` union — `'%residual%'`
+product family ∪ `commission_org_config.pl_ma_residual_order_types`, resolved by `load_ma_pnl_config`;
+RULE TWO, no literal), airtime margin = `merchant_discount` on every row. Subscribers = one per
+`raw_ma_commission` row. The window is `_latest_ma_period` = the LATER of the two feeds' newest month.
+Equality against `ma_tx_pnl_bookings` is pinned in `harness_residual_per_sub.py`, so this report and
+the P&L's `mi_income` cannot drift.
+
+**Store attribution (MA rows carry a PROCESSOR ACCOUNT, not a store).** `account_id` /
+`merchant_account_id` → **`ma_store_pnl.canonical_store_index`** = the mig-`314` account→store index
+(`raw_ma_fulfillment` tspid×business_address ∪ the `ma_account_store_map` override) collapsed onto the
+canonical store spelling by `coa.store_resolver`. Store CODE + MARKET then come from the org's own
+vocabulary (`store_mapping` ∪ §13a `core.scope.store_market_resolver`). Both feeds resolve through the
+SAME index, so a store's dollars and its subscriber count land on ONE row. An account the index cannot
+place renders `"(Unassigned)"` — never dropped, never guessed — and is NAMED in the payload
+(`store_attribution.unresolved_accounts` + `store_note`) so the owner can pin it. Pure truth table:
+`resolve_ma_account_store` (harness E). `canonical_store_index` is the SAME map
+`payables.engine.ma_store_resolution` (step 3, commit `4d5fcb0`) binds — extracted, not copied.
+
+**Market options** compose through §13c `core.scope.org_market_options` (pinned CANONICAL in
+`harness_market_enumeration_guard.py`). `"(Unassigned)"` is a placement, never offered as a market.
+
+**Provenance in the payload** (read-only, moves no figure): `source`, `source_label`, `ma_coverage`
+(per-period `commission_rows`/`daily_tx_rows`/`residual_rows`/`entities`), `data_note` (a month with
+daily-tx rows but no Commission Details rows is airtime-only, not a decline), `entity_note` (partial
+master-agent entity coverage), `store_attribution`/`store_note`. Processor/distributor NAMES in that
+copy come from the mig-`953` `report_term` vocabulary (`report_labels.carrier_term` /
+`term_from_payload`) — tenant override > house carrier preset > neutral noun, never a vendor literal.
+
+**FIXED 2026-09-04 (owner: "residual per subscriber is not giving any information on the luxelink
+side, it is also not showing the store name just the store codes").** Two root causes, both live-measured
+on luxelink (`854f6d7b…`): (1) the coverage counter in `_aggregate_ma` incremented a key it had not
+seeded → `KeyError` INSIDE the residual sweep's blanket `except Exception: pass`, aborting the entire
+Total-side residual aggregation after ONE row — 18,070 residual rows / $73,846.71 reported as $0, the
+report showing airtime margin alone as "residual" (Aug 2026 read $19,488.16 = $19,481.36 merchant
+discount + the single $6.80 row that got in before the raise; after the fix Aug = $54,972.03 =
+`mi_income` $35,490.67 + merchant discount $19,481.36, matching `ma_tx_pnl_bookings` to the penny).
+The residual filter was also a server-side `.ilike('%residual%')` — HALF the mig-309 union, dropping
+order-type-only rows the books DO book. (2) Store rows rendered the processor account id ("170084") or
+the master-agent ENTITY name ("Luxelink Wireless LLC"), and the two feeds bucketed under DIFFERENT
+labels, so stores showed dollars with no subscribers beside stores with subscribers and no dollars;
+20/20 accounts resolve through the mig-314 index (markets NY + Chicago). The synthetic
+`"(VidaPay/MA)"` market stamp — a carrier word masquerading as a market — is gone.
+**Proof:** `backend/harness_residual_per_sub.py`.
 
 ---
 
@@ -1638,9 +1707,9 @@ as a market-grant keyset member; ambiguity fails closed):
 | `commcalc.flags` | calc + flag rules | `/flags/{period}` `10299`, `_cr_resolve_flags` |
 | `commcalc.store_expenses` | `/expenses/{period}` PUT `21695` | GP report + P&L, BOTH via the sticky carry-forward reader `expenses_effective.effective_expense_rows` (2026-09-02, §4); `_cr_resolve_store_expenses` |
 | `commcalc.sale_installment_ledger` | `compute_sale_installments(persist=True)` `9212` (mig `308` adds `order_number`/`account_id` MA TX provenance, adaptive write) | `/plan-installments/*` previews, `installment_comm_sale` |
-| `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx` (slice-scoped replace: org × day × `account_id`, `ingest_slice.py` §2), VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store(_day)` — since mig `944` FILTERED to bill-payment rows via `metric_recon.ma_billpay_predicate`, accounts via store_merchant_id → mig-314 index; §12 3-way Leg C), residual/ATU (`residual_subs`), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier), **P&L mig `309`** (`account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings`: `merchant_discount` → "Merchant discount" line (or legacy `atu_income` fold per `pl_merchant_discount_own_line`), −`retail_cost` → `mi_income` for the `'%residual%'` ∪ `pl_ma_residual_order_types` union, each row once), **P&L mig `314`** (`ma_store_pnl.ma_tx_bookings`: per-store via `account_id`→store index; MDF token rows → `mdf_income`; `'daily_tx'` month-spiff rows → `carrier_comm` `M<n>` detail), **BS mig `933`** (`balance_sheet.handset_payable_bookings` via `statement_engine._fetch_outstanding_tx`: configured `handset_payable_order_types` rows with `tx_date ≤ as-of < due_date` → the `handset_payable` liability; money column `retail_cost` ONLY), **liabilities-due 2026-09-03** (`GET /account/liabilities-due`: same fetch + same family predicate — outstanding today + `liabilities_due.payables_due_in_window` for the due-this-week rows, equivalence pinned in `harness_liabilities_due.py`; §4), **Processor Daily Debits & Credits** (`processor_ledger.assemble` — `retail_cost` sign = debit/credit to the dealer, §15) |
-| `commcalc.raw_ma_commission` | upload `/upload/ma_commission` (slice-scoped replace: org × day × `merchant_account_id`, `ingest_slice.py` §2 — 2026-09-02 two-portal wipe incident), VidaPay sweep | MA overview/recon, installment MA gate (`_read_ma_commission` spiffs), **mig `308` two-hop link** (`build_ma_link_index`: `imei|sim → activation_order`), **P&L mig `314`** (`ma_store_pnl.ma_commission_bookings`: component heads per-store via `merchant_account_id`→store index; sheet spiffs suppressed under `pl_ma_month_spiff_source='daily_tx'`; MA device COGS store slice `device_cogs._ma_sold_cost`) |
-| `commcalc.raw_ma_fulfillment` | upload `/upload/ma_fulfillment` (slice-scoped replace, `ingest_slice.py` §2) | `device_cogs.ma_unit_price_map` (handset price list), MA overview/recon, **mig `314` account→store map source** (`tspid`+`business_address` → `ma_store_pnl.account_store_index`; also consumed by `payables/engine.ma_store_resolution` — forecast/payables Total-side store attribution, 2026-09-04 §15) |
+| `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx` (slice-scoped replace: org × day × `account_id`, `ingest_slice.py` §2), VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store(_day)` — since mig `944` FILTERED to bill-payment rows via `metric_recon.ma_billpay_predicate`, accounts via store_merchant_id → mig-314 index; §12 3-way Leg C), **residual-per-subscriber report §7a** (`residual_subs._aggregate_ma` — ONE sweep: residual = −`retail_cost` on the mig-309 `ma_residual_row_matcher` union, airtime margin = `merchant_discount`; stores via the mig-314 account index), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier), **P&L mig `309`** (`account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings`: `merchant_discount` → "Merchant discount" line (or legacy `atu_income` fold per `pl_merchant_discount_own_line`), −`retail_cost` → `mi_income` for the `'%residual%'` ∪ `pl_ma_residual_order_types` union, each row once), **P&L mig `314`** (`ma_store_pnl.ma_tx_bookings`: per-store via `account_id`→store index; MDF token rows → `mdf_income`; `'daily_tx'` month-spiff rows → `carrier_comm` `M<n>` detail), **BS mig `933`** (`balance_sheet.handset_payable_bookings` via `statement_engine._fetch_outstanding_tx`: configured `handset_payable_order_types` rows with `tx_date ≤ as-of < due_date` → the `handset_payable` liability; money column `retail_cost` ONLY), **liabilities-due 2026-09-03** (`GET /account/liabilities-due`: same fetch + same family predicate — outstanding today + `liabilities_due.payables_due_in_window` for the due-this-week rows, equivalence pinned in `harness_liabilities_due.py`; §4), **Processor Daily Debits & Credits** (`processor_ledger.assemble` — `retail_cost` sign = debit/credit to the dealer, §15) |
+| `commcalc.raw_ma_commission` | upload `/upload/ma_commission` (slice-scoped replace: org × day × `merchant_account_id`, `ingest_slice.py` §2 — 2026-09-02 two-portal wipe incident), VidaPay sweep | MA overview/recon, installment MA gate (`_read_ma_commission` spiffs), **mig `308` two-hop link** (`build_ma_link_index`: `imei|sim → activation_order`), **P&L mig `314`** (`ma_store_pnl.ma_commission_bookings`: component heads per-store via `merchant_account_id`→store index; sheet spiffs suppressed under `pl_ma_month_spiff_source='daily_tx'`; MA device COGS store slice `device_cogs._ma_sold_cost`), **residual-per-subscriber SUBSCRIBER count §7a** (`residual_subs._aggregate_ma` — one row = one activated line, keyed by `merchant_account_id` through the SAME mig-314 index the residual rows use) |
+| `commcalc.raw_ma_fulfillment` | upload `/upload/ma_fulfillment` (slice-scoped replace, `ingest_slice.py` §2) | `device_cogs.ma_unit_price_map` (handset price list), MA overview/recon, **mig `314` account→store map source** (`tspid`+`business_address` → `ma_store_pnl.account_store_index`; canonical-spelling wrapper `ma_store_pnl.canonical_store_index` = index ∪ `coa.store_resolver`, the ONE account→store answer, consumed by `payables/engine.ma_store_resolution` — forecast/payables Total-side store attribution, 2026-09-04 §15 — and by `residual_subs.compute` for the §7a report's store names) |
 | `commcalc.ma_account_store_map` (mig `314`) | owner-pinned rows (SQL seed / future admin UI) | `ma_store_pnl.load_store_index` — wins over the fulfillment-derived map; covers accounts fulfillment never names (luxelink `170405`) |
 | `commcalc.payout_schedule(+_line)` | `/payout-schedule` POST `11965` | `installment_engine.compute_installments` |
 | `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus, **BS inventory under `inventory_basis='devices'` + `GET /account/inventory-recon`** (`balance_sheet.device_inventory_cells` via `statement_engine`, mig `933`); statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`); **device-grain store source for `payables/engine.ma_store_resolution`** (forecast/payables Total-side attribution, 2026-09-04 §15 — its `store` is the store_mapping vocabulary, measured 20/20) |
@@ -1697,6 +1766,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `GET /exec-overview/{period}` | `20103` | §10 |
 | `GET /device-history` | `17015` | §11 |
 | `GET /device-cost-recon` | `27338` | §11 |
+| `GET /account/residual-per-sub` | `account/router.py:~1042` → `account/residual_subs.compute` | §7a Residual per Subscriber — per-tenant residual source (Boost `raw_mi` / MA `raw_ma_daily_tx` mig-309 union); MA stores via the mig-314 account→store index; §13c `market_options`; grant `residual_per_sub` OR `account_trends` |
 | `GET /payables/forecast` | `payables/router.py` `forecast` | §15 (module 095) |
 | `GET /payables/payables` | `payables/router.py` `list_payables` | §15 (module 095) |
 | `GET /payables/filter-options` | `payables/router.py` `payables_filter_options` (canonical §13c) | §15 (module 095) |
@@ -1787,6 +1857,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | MA-TX month-n paid evidence | `raw_ma_daily_tx.retail_cost` net of the `'MONTH n'`-worded rows (`product_name` via `commission_ledger.parse_payment_month`) | `sale_installment_engine.ma_tx_month_evidence` / `_gate_met_ma_tx` — UNION with `raw_ma_commission.spiff_m{n}` (n ≤ 6); direction `ma_payout_sign`, floor `ma_min_amount`, horizon `ma_max_month` ≤ 16 (mig `308`) |
 | MA merchant discount (P&L "Merchant discount") | `raw_ma_daily_tx.merchant_discount` (+, dealer income) | `account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings` (mig `309`); per-org toggle `commission_org_config.pl_merchant_discount_own_line` — `false` = legacy `atu_income` fold, byte-identical dollars |
 | MA residual (P&L "MI residual income") | `raw_ma_daily_tx.retail_cost` sign-flipped (negative = paid to dealer) on rows in the `'%residual%'` product family ∪ `pl_ma_residual_order_types` order types (default `Postpaid Residual Order`) | `residual_subs.ma_residual_row_matcher` → `coa.build_inputs` (mig `309`; union dedup — each row books once) |
+| Residual per subscriber (per store, per month) | Boost: `raw_mi.actual_mi_payout + actual_atu_payout` ÷ distinct paid `phone_number`. MA/VidaPay: (−`retail_cost` on the SAME mig-309 residual union as the row above + `merchant_discount` airtime margin) ÷ `raw_ma_commission` activated lines | `residual_subs.compute` → `GET /account/residual-per-sub` (§7a); store names via `ma_store_pnl.canonical_store_index`; pinned `harness_residual_per_sub.py` |
 | MA month-spiff commission M1..M12+ (P&L `carrier_comm`, cash basis) | `raw_ma_daily_tx.retail_cost` sign-flipped on `order_type ∈ pl_ma_spiff_order_types` rows (default `PostPaid Additional Spiff`); month detail `M<n>` from `product_name` via `commission_ledger.parse_payment_month` (no token → 'Spiff (other)') | `ma_store_pnl.ma_tx_bookings` → `coa.build_inputs` (mig `314`; only when `pl_ma_month_spiff_source='daily_tx'`, which also suppresses the `raw_ma_commission.spiff_m1..m6` activation-month booking — never both) |
 | MDF / market spiff (P&L `mdf_income`) | `raw_ma_daily_tx.retail_cost` sign-flipped on rows whose `product_name` contains a `pl_mdf_product_tokens` token (luxelink: `premium store spiff`, $1,000/store) | `ma_store_pnl.ma_tx_bookings` → `coa.build_inputs` (mig `314`; `auto_opt` line, per store; retail_cost precedence residual → MDF → month-spiff) |
 | MA processor account → store | `raw_ma_fulfillment.tspid` × `business_address` (derived, ambiguous dropped) ∪ `ma_account_store_map` (override wins) | `ma_store_pnl.account_store_index`/`load_store_index` → `coa.build_inputs` `_ma_store` + `device_cogs._ma_sold_cost` (mig `314`; gated by `pl_ma_store_attribution`; unmapped accounts book company-wide) |

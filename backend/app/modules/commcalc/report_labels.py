@@ -273,3 +273,38 @@ def load_report_labels(client, org_id, house_org=HOUSE_ORG):
         rows = []
     parsed = parse_label_rows(rows, org_id, codes, house_org=house_org)
     return build_payload(parsed, codes, default_carrier(crows))
+
+
+# ── PURE: pick one term out of a resolved payload (the ONE term-resolution rule) ─────────────────
+def term_from_payload(payload, key, neutral=None):
+    """PURE: a `build_payload()`/`load_report_labels()` body + a LABELABLE_TERMS key → (label, source).
+
+    Precedence, left to right: the org's DEFAULT carrier, then its other carriers, then '_' (this
+    org's own overrides with no preset), then the built-in NEUTRAL noun. That last step is what
+    keeps copy honest for a tenant whose carrier has no preset — the reader sees "payment
+    processor", never another carrier's vendor name. `neutral` defaults to the registry's own
+    default for `key`.
+
+    Extracted 2026-09-04 so every report that names a processor/distributor/financing program in
+    COPY resolves it the same way (RULE TWO — no vendor string in a branch anywhere)."""
+    neutral = DEFAULT_TERM_LABELS.get(key, "") if neutral is None else neutral
+    terms = (payload or {}).get("terms") or {}
+    seen = []
+    for k in [(payload or {}).get("default_carrier") or "", *((payload or {}).get("carriers") or []), "_"]:
+        if not k or k in seen:
+            continue
+        seen.append(k)
+        got = str(((terms.get(k) or {}) if isinstance(terms.get(k), dict) else {}).get(key) or "").strip()
+        if got:
+            return got, ("report_term:override" if k == "_" else "report_term:" + k)
+    return neutral, "neutral_default"
+
+
+def carrier_term(client, org_id, key, neutral=None):
+    """I/O wrapper: the org's resolved vocabulary word for `key` as (label, source). Best-effort —
+    a label-service hiccup degrades to the NEUTRAL noun, never to another carrier's word."""
+    try:
+        return term_from_payload(load_report_labels(client, org_id), key, neutral)
+    except Exception as e:                          # pragma: no cover - I/O guard
+        print(f"WARN report_labels carrier_term({key}) failed: {e}")
+        return (DEFAULT_TERM_LABELS.get(key, "") if neutral is None else neutral), "neutral_default"
