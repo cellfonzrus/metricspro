@@ -28751,9 +28751,19 @@ _SOURCE_FIELDS = ["distributor_id", "carrier_id", "processor", "label", "portal_
                   # scheduled pull can re-authenticate without a human. oob_enabled defaults FALSE —
                   # automating the second factor is an operator-made trade, per login.
                   "oob_enabled", "oob_from_contains", "oob_subject_contains",
-                  "oob_code_regex", "oob_code_length", "oob_max_age_seconds"]
+                  "oob_code_regex", "oob_code_length", "oob_max_age_seconds",
+                  # Merchant-processor portals (mig 955, owner 2026-09-04). A card portal IS a
+                  # data_source login — these are the only knobs it needs beyond the shared ones.
+                  # totp_secret is WRITE-ONLY: it is accepted here but lives in _SOURCE_SECRETS, so it
+                  # is stripped from every read (has_totp + an opaque mask is all the UI ever sees).
+                  "settlement_role", "portal_reports", "portal_calibration", "portal_window_days",
+                  "session_warn_hours", "totp_secret"]
 # Columns that never leave the backend (credentials + serialized browser sessions).
-_SOURCE_SECRETS = ("password", "session_state", "pending_state")
+_SOURCE_SECRETS = ("password", "session_state", "pending_state",
+                   # The optional authenticator-app (TOTP) shared secret (mig 955). Same posture as the
+                   # password: backend-only, never returned, never logged, surfaced only as has_totp +
+                   # portal_totp.mask_totp_secret's opaque mask.
+                   "totp_secret")
 
 
 async def _vidapay_scraper(org_id, src_row):
@@ -28789,11 +28799,31 @@ async def _b2bsoft_scraper(org_id, src_row):
         src_row.get("proxy_url"))
 
 
+async def _merchant_portal_scraper(org_id, src_row):
+    """_SOURCE_SCRAPERS handler for the three MERCHANT CARD PROCESSOR portals (owner 2026-09-04):
+    PayAnywhere / Payments Hub (the external credit-card terminal — the "white machine"), TransFirst
+    TransLink and ClientLine / BusinessTrack (the POS merchant providers).
+
+    Reuses the SAME durable-session posture as VidaPay/b2bsoft: a human satisfies the portal's second
+    factor ONCE on the live-login screencast, the authenticated storage_state is persisted, and this
+    scheduled pull rides it. A missing/expired session raises VidaPayAuthError, which run_data_source
+    already turns into an auth_status=needs_2fa prompt (the session-health chip then turns actionable)
+    rather than a hard error — so the ONE moment a human is needed is surfaced, not swallowed."""
+    from app.modules.commcalc import merchant_portal_sweep as mps
+    from fastapi.concurrency import run_in_threadpool
+    return await run_in_threadpool(mps.run_merchant_portal_sweep, sb(), org_id, dict(src_row or {}))
+
+
 # processor key → scraper callable (org_id, source_row) -> result dict. VidaPay + Total Access
 # share the same "Master Agent" portal family (vidapaycrm.com); both route through _vidapay_scraper.
 # b2bsoft (wsreports) reuses the identical Playwright session/2FA/proxy path via _b2bsoft_scraper.
+# The three merchant card portals register the same way — a new portal is a merchant_portals.PORTALS
+# entry plus one line here, never a branch in the calling code (RULE TWO).
 _SOURCE_SCRAPERS = {"vidapay": _vidapay_scraper, "total_access": _vidapay_scraper,
-                    "b2bsoft": _b2bsoft_scraper, "b2b": _b2bsoft_scraper}
+                    "b2bsoft": _b2bsoft_scraper, "b2b": _b2bsoft_scraper,
+                    "payanywhere": _merchant_portal_scraper,
+                    "transfirst": _merchant_portal_scraper,
+                    "businesstrack": _merchant_portal_scraper}
 
 
 def _strip_source_pw(row):
@@ -28801,6 +28831,15 @@ def _strip_source_pw(row):
     row = dict(row)
     row["has_password"] = bool(row.get("password"))
     row["has_session"] = bool(row.get("session_state"))
+    # Authenticator-app secret: presence + validity only, NEVER the secret (mig 955).
+    try:
+        from app.modules.commcalc import portal_totp as _totp
+        _d = _totp.describe(row.get("totp_secret"))
+        row["has_totp"] = _d["configured"]
+        row["totp_valid"] = _d["valid"]
+        row["totp_hint"] = _d["mask"]
+    except Exception:
+        row["has_totp"] = bool(row.get("totp_secret"))
     row["has_login_shot"] = bool(row.get("login_shot"))
     for k in _SOURCE_SECRETS:
         row.pop(k, None)
@@ -28814,6 +28853,14 @@ def _strip_source_pw(row):
     if isinstance(diag, dict):
         row["last_pull_delivered"] = diag.get("delivered")
         row["last_pull_reason"] = diag.get("reason")
+    # Durable-session health (mig 955) — computed, so a session that quietly died is visible on the
+    # page BEFORE the overnight pull silently returns nothing. Runs on the ALREADY-STRIPPED row, so it
+    # reads has_session/expiry/status only and can never surface session material.
+    try:
+        from app.modules.commcalc import portal_session_health as _psh
+        row["session_health"] = _psh.evaluate(row)
+    except Exception:
+        pass
     # Portal cooldown (mig 244) — computed, so the page never has to reason about clock skew. Absent
     # columns ⇒ blocked False and the chip simply never renders.
     try:
@@ -30295,6 +30342,12 @@ def _live_pull(client, org_id, src_row):
         # successful login pulls on its own.
         if proc in ("b2bsoft", "b2b"):
             return vp.pull_b2bsoft_on_page(page)
+        # Merchant card portals (mig 955): pull their OWN report set on this live authenticated page,
+        # which is the whole point of the live session — these portals re-challenge a cold restore.
+        from app.modules.commcalc import merchant_portals as _mp
+        if _mp.is_portal(proc):
+            from app.modules.commcalc import merchant_portal_sweep as _mps
+            return _mps.pull_reports_on_page(client, org_id, dict(src_row or {}), page, should_stop)
         return vp._pull_all_reports_on_page(page, client, org_id, sid, carrier_id, mb,
                                             dict(src_row or {}), should_stop=should_stop)
     return _p
@@ -30408,6 +30461,116 @@ def live_login_start(sid: str, org_id: str = ORG_ID, confirm: bool = False):
                            "suppressed until the cooldown ends." if blocked_now else
                            (" As soon as you're signed in, this login's reports are pulled automatically."
                             if auto else "")))}
+
+
+@router.post("/data-sources/{sid}/live-login/submit-totp")
+def live_login_submit_totp(sid: str, org_id: str = ORG_ID):
+    """Submit the AUTHENTICATOR-APP code for this source into the LIVE session (mig 955).
+
+    THIS IS NOT A 2FA BYPASS. It applies ONLY when the owner has enrolled this portal account in an
+    authenticator app and given us the same shared secret their own app holds — we then compute the
+    very code that app would show. The portal still demands a second factor and still receives a
+    correct one. It is the exact flow the portal designed authenticator enrollment for.
+
+    It is deliberately a SEPARATE endpoint from /live-login/submit rather than an automatic behaviour:
+    an SMS or email code must still be read by a human off their phone and typed into the live page
+    (that is what /live-login/submit is for), and nothing here can be pointed at one. There is no code
+    path in this platform that reads an SMS/email OTP for these portals, or that answers a captcha.
+
+    Reuses the existing live-session submit queue verbatim — the worker fills the code into the SAME
+    open page that requested it, exactly as it does for a human-typed code."""
+    require_org(org_id)
+    from app.modules.commcalc import live_login, portal_totp
+    client = sb()
+    row = _live_source_row(client, sid, org_id)
+    secret = row.get("totp_secret")
+    if not secret:
+        raise HTTPException(400, "No authenticator secret is configured for this login. Either add one "
+                                 "(only if this portal account is enrolled in an authenticator app), or "
+                                 "type the code the portal sent you into the box above.")
+    sess = live_login.get_session(sid, org_id)
+    if sess is None:
+        raise HTTPException(404, "No live session is open for this login — start the live login first.")
+    try:
+        cur = portal_totp.current_code(secret)
+    except portal_totp.TotpError as e:
+        # The message never quotes the secret (proven by harness_portal_totp).
+        raise HTTPException(400, str(e))
+    sess.submit(cur["code"])
+    # The CODE ITSELF IS NEVER RETURNED OR LOGGED — only that one was submitted and how long it lives.
+    return {"ok": True, "submitted": True, "valid_for": cur["valid_for"],
+            "message": "Authenticator code submitted to the live page. Watch the view above for the result."}
+
+
+@router.get("/merchant-portals/catalog")
+def merchant_portal_catalog(org_id: str = ORG_ID):
+    """The merchant-portal descriptors the connector settings page renders (owner 2026-09-04): which
+    portals exist, what each asks for at login, what it does about 2FA, and which reports it pulls.
+
+    Descriptors only — this is static per-PORTAL config (merchant_portals.PORTALS), never tenant data
+    and never a credential (harness_merchant_portals proves the catalog carries no secret-bearing key)."""
+    require_org(org_id)
+    from app.modules.commcalc import merchant_portals as mp
+    return {"ok": True, "portals": mp.public_catalog(),
+            "roles": [{"key": mp.ROLE_EXTERNAL,
+                       "label": "External credit card — standalone terminal, not in the POS"},
+                      {"key": mp.ROLE_POS,
+                       "label": "POS merchant provider — behind the POS's own card tender"}]}
+
+
+@router.get("/merchant-portals/health")
+def merchant_portal_health(org_id: str = ORG_ID):
+    """Durable-session health for this org's merchant-portal logins — the banner + per-source chip.
+
+    The whole 2FA approach is "a human signs in ONCE, the saved session drives the daily pull", so the
+    thing that must never be silent is a session that has died. This endpoint is that visibility: the
+    worst state across the org's portal sources, how many need a human, and why.
+
+    Reads the SECRET-STRIPPED public rows, so nothing here can leak a credential or a session."""
+    require_org(org_id)
+    from app.modules.commcalc import merchant_portals as mp
+    from app.modules.commcalc import portal_session_health as psh
+    client = sb()
+    try:
+        rows = (client.schema("commcalc").table("data_source").select("*")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception as e:
+        return {"ok": False, "error": f"data_source not ready: {e}", "items": []}
+    public = [_strip_source_pw(r) for r in rows
+              if mp.is_portal((r.get("processor") or "").strip().lower())]
+    return {"ok": True, **psh.summarize(public)}
+
+
+def _ensure_data_sources_cron():
+    """Self-register the GLOBAL data-sources portal-pull pg_cron job (mig 956) so nobody has to run SQL
+    by hand — called from the main.py startup hook on EVERY boot, exactly like the email-sweep (mig
+    922), account-recompute (mig 940) and google-reviews (mig 950) crons.
+
+    WHY IT WAS NEEDED (2026-09-04): mig 241 shipped this job as a COMMENTED-OUT block telling an
+    operator to "run this ONCE in the Supabase SQL editor, replacing <NOTIFY_RUN_SECRET>". Nothing in
+    the repo proves anyone did, and nothing re-registered it after a secret rotation — the same defect
+    mig 950 had just fixed for the reviews sweep. Three new daily merchant-portal scrapes ride this
+    scheduler, so it had to become self-registering before they could be trusted to run.
+
+    URL: portal pulls launch Chromium, so the endpoint calls require_browser_service() and the API
+    service refuses it on a split deploy. BROWSER_SERVICE_URL (the sweeps worker) is therefore
+    preferred, falling back to API_PUBLIC_URL for the default single-service deploy.
+
+    NON-FATAL by design (mig 940/950 posture, verbatim): a missing secret, the RPC not present (mig 956
+    not applied yet), or pg_cron/pg_net absent just means auto-scheduling is skipped — boot still
+    succeeds and the manual "Pull now" button still works."""
+    try:
+        import os as _os
+        url = ((_os.environ.get("BROWSER_SERVICE_URL", "") or "").strip().rstrip("/")
+               or (getattr(settings, "API_PUBLIC_URL", "") or "").strip())
+        secret = (getattr(settings, "NOTIFY_RUN_SECRET", "") or "").strip()
+        if not url or not secret:
+            return "skipped: BROWSER_SERVICE_URL/API_PUBLIC_URL or NOTIFY_RUN_SECRET not set"
+        res = sb().rpc("ensure_data_sources_cron", {"p_url": url, "p_secret": secret}).execute()
+        return res.data if isinstance(res.data, str) else (res.data or None)
+    except Exception as e:
+        print(f"WARN _ensure_data_sources_cron skipped: {e}")
+        return None
 
 
 @router.post("/data-sources/{sid}/clear-block")

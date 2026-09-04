@@ -33,6 +33,7 @@ Primary code homes:
 | 10 | **KPI system (DLAR / store_kpis / carrier_kpi_metric)** | "Where do ATU / protect / TMR3 / conversion come from? Store vs rep KPIs?" |
 | 11 | **Inventory & aging** | "Per-device cost / days-in-stock. Is it live or a snapshot? Device history lookup." |
 | 12 | **Cash / deposit reconciliation** | "Collected cash vs bank deposits. Expected deposit, variance, basis." |
+| 12a | **Merchant-processor portals** | "Where do the card processors' own daily figures come from, and how are they tallied against what employees declared?" |
 | 13 | **Org hierarchy & store resolution** | "Which stores does a manager see? How is a raw store string canonicalized to a store_code?" |
 | 14 | **Employees & scheduling** | "Do shifts feed pay? Rep→employee name mapping. Hours in targets." |
 | 15 | **Other commission subsystems** | MA (master-agent) commission, VIP, epay, chargebacks, expenses, agency, financing, accrual/payout ledger. |
@@ -55,6 +56,8 @@ email), (c) **RPC/manual entry**.
 | `raw_sales` | `002_commcalc.sql:19` | `store, salesperson, user_login, department, category, product_desc, product_id, gp, ext_price, trans_id, trans_date, contract_type, mdn, serial_1, register, tender_type, voided, trans_type, sku` | Rep commission, GP, sales report, installments |
 | `daily_sales_feed` | `047_sales_feed_recon.sql:19` | superset of raw_sales + `customer, email, customer_no` | The **processed** daily sales source; falls back to raw_sales |
 | `raw_payment_detail` | `002_commcalc.sql:34` | `business_address, payment_type, amount, mdn, imei, payment_date, rep_username, sequence` | GP (payment categorization), commission reimbursement |
+| `merchant_settlement_day` | `955_merchant_portal_settlement.sql` | `org_id, source_id, portal_key, settlement_role, business_date, merchant_id, terminal_id, store_code, card_brand, gross_amount, refund_amount, net_amount, fee_amount, txn_count, batch_ref, raw` | **Merchant-processor card settlement** — the PROCESSOR side of the daily-closing card tally (§12a). Grain = org × source × merchant × business_date × card_brand |
+| `merchant_settlement_batch` | `955_merchant_portal_settlement.sql` | `org_id, source_id, portal_key, settlement_role, deposit_date, batch_date, merchant_id, store_code, batch_ref, deposit_amount, fee_amount, raw` | Processor **funding** events (money to the bank) — cash/deposit recon (§12). A DIFFERENT grain from settlement; never sum the two |
 | `raw_mi` | `002_commcalc.sql:46` | `salesforce_id, actual_mi_payout, actual_atu_payout, phone_number, subscriber_status` | Carrier residual gate (paid-proof), MI/ATU |
 | `raw_dlar_rep` | `002_commcalc.sql:56` (+`012`,`031`) | `rep_name, store, atu_pct, protect_pct, byod_pct, family_plan_pct, tmr3, aal_conversion, bounty, split, ga_prepaid` | Rep KPI, comp trend |
 | `raw_dlar_store` | `002_commcalc.sql:67` (+`012`,`031`) | `store_code, salesforce_id, address, total_acts, port_pct, psa_projected` **plus** later `atu, protect_pct, byod_pct, family_plan_pct, tmr3, aal_conversion, conversion_rate, gross_adds, total_upgrades, location` | Store KPIs, MI TMR3 gate |
@@ -1236,6 +1239,138 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 
 ---
 
+### 12a. Merchant-processor portals — the external credit-card / POS-merchant scrape
+
+**Owner directive 2026-09-04, verbatim:** *"a lot of tenants will be using 3rd party credit card
+processor which is not integrated to the pos, which is recorded as external credit card … need to pull
+in data from the merchants from both pos merchant provider and the external credit card provider …
+need to scrape the reports on a daily basis and tally with our platform as entered by the employees."*
+
+**Purpose.** The standalone card terminal's money never reaches the POS, so the only record of it is
+what an employee typed at closing. This feed is the other side of that tally.
+
+- **Adapters (PURE):** `commcalc/merchant_portals.py` — the portal registry + normalizers.
+  `PORTALS` keys: `payanywhere` (paymentshub.com — PayAnywhere/NAB, the EXTERNAL card terminal both
+  current tenants run), `transfirst` (translink.transfirst.com — TSYS, POS merchant),
+  `businesstrack` (cl.businesstrack.com — Fiserv ClientLine, POS merchant). Key functions:
+  `card_brand`, `money`, `iso_date`, `map_headers`, `normalize_settlement`, `normalize_batches`,
+  `dedupe_settlement`, `totals_by_store_day`, `settlement_role`, `public_catalog`.
+- **Runtime:** `commcalc/merchant_portal_sweep.py` — `run_merchant_portal_sweep` (scheduled, cold
+  session restore), `pull_reports_on_page` (the ONE pull implementation, also used live),
+  `make_pull_fn` (the `pull_fn` `live_login.start_session` already accepts), `ingest_report`,
+  `resolve_stores`, `store_settlement`, `store_batches`, `date_range`, `read_table`.
+- **Login + 2FA:** REUSES `commcalc/live_login.py` verbatim — one live browser from login through code
+  entry, CDP screencast to the operator, the human types the code into the very page that requested
+  it. No second login engine. The durable `data_source.session_state` then drives every daily pull.
+- **Session health:** `commcalc/portal_session_health.py` (PURE) — `evaluate`, `should_notify`,
+  `summarize`, `worse_of`. States, worst-last: `healthy < expiring_soon < error < expired <
+  needs_login < never_linked`. Surfaced as a chip on the data-source row and by
+  `GET /commcalc/merchant-portals/health`.
+- **Authenticator (TOTP):** `commcalc/portal_totp.py` (PURE, RFC 6238) — used ONLY where the owner has
+  enrolled the portal account in an authenticator app and supplied the secret. Never for SMS/email OTP
+  and never for a captcha. Secret lives in `data_source.totp_secret`, inside `router._SOURCE_SECRETS`.
+- **Config (RULE TWO):** per-source on `commcalc.data_source` — `processor` (which portal),
+  `settlement_role`, `portal_reports`, `portal_calibration`, `portal_window_days`,
+  `session_warn_hours`, plus the shared `enabled/frequency/hour/next_run_at/proxy_url`.
+- **Store attribution:** `storeops.store_merchant_id` (mig `902`) via `storeops/merchant_ids.resolve_map`
+  — the SAME map the ePay/VidaPay feeds use. No new mapping table. An unmapped merchant id is
+  REPORTED, never counted as $0 for a store.
+- **Scheduling:** the EXISTING `POST /commcalc/data-sources/sweep/run-due`, dispatching on
+  `router._SOURCE_SCRAPERS[processor]`. Mig `956` makes that cron self-registering on boot
+  (`main.py:_data_sources_cron_startup` → `router._ensure_data_sources_cron` →
+  `commcalc.ensure_data_sources_cron`) — mig `241` had only left commented-out SQL for a human to run.
+- **Consumed by:** the daily-closing card tally, `closing/external_credit_recon.py` (sibling work, migs
+  `960`/`961`), which resolves this feed through `commcalc.report_pull_map` (`report_key`
+  `merchant_settlement` / `merchant_funding`, seeded by mig 955) and filters on `settlement_role`
+  (`external_cc` | `pos_merchant` — slugs shared verbatim between the two modules).
+- **Harnesses:** `harness_merchant_portals.py` (73), `harness_portal_session_health.py` (41),
+  `harness_portal_totp.py` (35 — RFC 6238 vectors + secret hygiene).
+
+- **External credit machine + CARD SETTLEMENT RECON (owner directive 2026-09-04, migs `960`/`961`):**
+  "a lot of tenants will be using 3rd party credit card processor which is not integrated to the
+  pos, which is recorded as external credit card … need to scrape the reports on a daily basis and
+  tally with our platform as entered by the employees … need to add another field on daily closing
+  as external credit machine — (label should be changed to be renamed as White machine for these
+  tenants but remain as external credit card for other tenants)". THREE pieces, and the FIRST
+  finding is that most of it already existed.
+  (1) **THE FIELD ALREADY EXISTED — no new column.** `commcalc.daily_closing.t_ext_cc` ("External
+  Credit Card (separate terminal)") has been a physical column since mig `103`, written by
+  `ClosingSubmitForm` / `POST /closing/row` / `/closing/attempt`, read by
+  `closing/router._row_display_tenders`, summed into `/closing/summary` `totals.t_ext_cc` and
+  `/closing/submissions`, and **already inside the CARD base of the mig-939 coverage recon**
+  (`commcalc.router._closing_collected_by_store_day`: card = `t_credit|store_cc` + `t_ext_cc` +
+  `epay_cc`) **and the mig-944 3-way recon** (`cash_recon_management`, same expression). Live
+  2026-09-04: **$62,107.78 over 315 house-org rows + $1,577.24 over 9 LuxeLink rows**. Excluding it
+  would MOVE a booked comparison base, so it is deliberately left exactly as it is — no knob, no
+  seed, nothing to approve.
+  (2) **THE LABEL is the mig-945/953 preset machinery, reused** — NOT a second mechanism: one NEW
+  key `closing_t_ext_cc` in `report_labels.LABELABLE_COLUMNS` (built-in default "External Credit
+  Card") + mig `960` house carrier presets on the EXISTING `commcalc.ui_label_override`
+  (`report_col:boost` / `report_col:total` → "White machine"). Resolution and lazy carrier
+  auto-assign are unchanged: tenant override > house carrier preset > built-in, keyed off the org's
+  `commcalc.carrier` rows; an org with no carrier/preset renders the built-in wording,
+  byte-identical. Rendered through the existing `useReportLabels().colLabel` on
+  `ClosingSubmitForm.tsx`, `closing/_lib/SubmissionsTable.tsx` and `DailyClosingVerify.tsx`
+  (grid + export headers from ONE resolution, mig-932 pattern). "White machine" is carrier-neutral
+  wording — `harness_carrier_vocab_guard.py` stays green.
+  (3) **DM SPLIT (mig `961`) — the defect the tally would otherwise have fabricated.**
+  `verified_overlay.apply_overlay` maps the DM's ONE corrected card figure `dm_store_cc` onto both
+  column families and ZEROED the folded siblings (`epay_cc`, `t_ext_cc`) — correct arithmetic for a
+  COMBINED total, but it destroys the external split on every corrected store-day. Live evidence
+  2026-09-04: **124 of the 320 store-days carrying external-credit money ($26,880.45) are
+  DM-card-corrected**, so a naive tally would have called that entire amount SHORT. Mig 961 adds
+  `dm_ext_cc` to `commcalc.daily_closing_verification` **and its append-only mig-935 audit twin**
+  (`dm_ext_cc` + `prior_dm_ext_cc`), joined to `verification_audit.DM_FIELDS` so `changed_fields` /
+  `build_audit_row` / `edited_after_verify` / `submission_dm_fields` and the Original-vs-DM exports
+  cover it with NO new logic. **MONEY INVARIANT, proven:** `dm_ext_cc` NULL ⇒ pre-961 behavior
+  byte-for-byte; `dm_ext_cc` set ⇒ `t_ext_cc = dm_ext_cc` and `t_credit = dm_store_cc − dm_ext_cc`,
+  so `t_credit + t_ext_cc == dm_store_cc` in BOTH branches — the card TOTAL every consumer books
+  never moves, only the split becomes known. `build_overlay_map` retries the legacy six-column
+  select, and `POST /closing/verify` sends/upserts `dm_ext_cc` only when stated (with a strip-and-
+  retry on both the audit insert and the upsert), so a pre-961 database keeps working.
+  (4) **THE TALLY.** `GET /closing/external-credit-recon` — per (store, day, processor ROLE):
+  DECLARED at closing vs SETTLED by the processor, variance, verdict. **The verdict IS
+  `envelope_report.count_fields`** (the mig-936 truth table, the same one `pickup_actual.py` reuses
+  — expected = declared, counted = settled, so a negative variance is SHORT); there is no second
+  classifier. Pure logic `closing/external_credit_recon.py`
+  (`tender_processor_map`/`role_columns`/`declared_cells`/`apply_dm_split`/
+  `normalize_settlement_rows`/`settlement_cells`/`recon_row`/`assemble_rows`/`status_filter`/
+  `totals`), which also OWNS the one `TENDER_COLUMN` map (`closing/router._TCOL` is re-pointed at
+  it, not copied). ROLES are neutral slugs shared verbatim with the scrape side —
+  `external_cc` (standalone terminal, not POS-integrated) / `pos_merchant` (the POS card tender's
+  provider); the BRAND behind a role is data (`data_source.processor/settlement_role`,
+  `store_merchant_id.processor`, `report_pull_map`), never a code branch (RULE TWO).
+  **NOTHING HARDCODED — every resolution is an EXISTING one, reused:** declared-tender → role =
+  `commcalc.closing_tender_def.processor_key` (mig 960) over the house map
+  `DEFAULT_TENDER_PROCESSOR`; the feed's TABLE + COLUMN SPELLING = `commcalc.report_pull_map`
+  (mig `207`, report_key `merchant_settlement`, org row over house — seeded by mig `955` pointing at
+  `commcalc.merchant_settlement_day`); merchant id → store = `storeops.store_merchant_id` (mig
+  `902`) via `storeops/merchant_ids.resolve_map` (applied again at READ time, so a store mapped
+  after the pull is picked up without a re-scrape); tolerance = `metric_source_of_truth` (mig `923`)
+  metric `card_settlement`, house default 0.00 (commented seed in mig 960); market/store resolution
+  = `_overlay_canonical_market` + `_market_bucket` + `_resolve_market_filter`/`_resolve_store_filter`
+  (§13a, the same helpers the envelope report uses). **HONEST GAPS, never a fake zero:**
+  `no_processor_data` (feed unregistered, or the day is outside what the scrape covers),
+  `no_declared_data`, `dm_merged` (3 above) — each carries `variance = None` and contributes to a
+  COUNT only, never to a dollar total; a day the feed DOES cover but is silent about for a store is
+  an honest 0.00 settled (the mig-944 present-but-silent vs absent distinction). An unmapped
+  merchant id is surfaced in `unmapped`, never counted as $0 for a store. **GATE:**
+  `billpay_pickup.can_see_cash_recon` (market manager and above, mig-434 posture, fail-closed 403 —
+  the SAME gate and the same per-org `storeops.tenants.cash_recon_visible_roles` allow-list as the
+  management cash recon, reused rather than a second gate), plus the manager keyset at admission.
+  W3 scheduled/emailed report key **`closing_external_credit_recon`** (`notify/closing_reports.py`,
+  the live endpoint in-process — gate inherited). Frontend `/closing/external-credit-recon`
+  (`closing/external-credit-recon/page.tsx`; NAV Daily Closing group beside Cash Recon (Management)
+  + REPORT_DIRECTORY `'ops'`; carrier-neutral page copy — the terminal's tenant name arrives in the
+  payload's `role_titles`). Proof `harness_external_credit_recon.py` (§A config, §B declared leg,
+  §C the mig-961 total-preservation invariant + audit trail, §D the adapter, §E the truth table AND
+  its byte-identity with `count_fields`, §F honest gaps, §G totals/filters, §H RULE TWO + migration
+  hygiene, §I the cross-agent contract with mig 955); regressions harness_verified_overlay /
+  dm_verification_audit / envelope_report / report_labels / billpay_threeway / billpay_pickup /
+  billpay_pl / cash_pickup / deposit_accountability / carrier_vocab_guard / org_scope_guard.
+
+---
+
 ## 13. Org hierarchy & store resolution
 
 **Purpose.** Determine which stores a manager may see, and canonicalize a raw store string to a
@@ -1782,6 +1917,8 @@ as a market-grant keyset member; ambiguity fails closed):
 |-------|-----------|---------|
 | `commcalc.raw_sales` | upload `/upload-mapped` `3637`, sweeps, `sales/promote-feed` `22757` | `calc_rep_commissions`, `calc_gp_report`, `_compute_feed_actuals_py` `18678`, `_sales_cell_agg`, `_mi_resolve_numbers` edge/vhi `28843`, installment engines |
 | `commcalc.daily_sales_feed` | B2B/email sweeps, upload | `_compute_feed_actuals_py` (primary source), sales report, fallback in calc |
+| `commcalc.merchant_settlement_day` | `merchant_portal_sweep.store_settlement` (daily portal scrape) | `closing/external_credit_recon` (declared-vs-settled card tally, §12a), resolved via `report_pull_map.merchant_settlement` |
+| `commcalc.merchant_settlement_batch` | `merchant_portal_sweep.store_batches` | cash/deposit recon (§12); NEVER summed into the closing card tally (different grain) |
 | `commcalc.raw_payment_detail` | epay sweep, upload | `calc_gp_report`, reimbursement categorization, **Processor Daily Debits & Credits** (`processor_ledger.assemble` — `amount` sign = credit/debit to the dealer, §15) |
 | `commcalc.raw_mi` | upload / MI sweep | carrier residual gate `installment_engine.compute_installments`, sale-installment gate, MI/ATU |
 | `commcalc.raw_dlar_store` | `dlar_sweep.run_dlar_sweep:209` (replace), upload | `get_dlar_store_kpis` `10279`, `_cr_resolve_kpi_metrics` `25656`, MI tmr3 `28884` |
@@ -1841,6 +1978,10 @@ as a market-grant keyset member; ambiguity fails closed):
 |----------|-------------|---------|
 | _every endpoint filtering/grouping by MARKET_ | — | §13a canonical resolution (`core.scope.store_market_resolver`/`market_by_code`); inventory pinned in `harness_market_resolution_guard.py` |
 | _every endpoint OFFERING market options (dropdown/enumeration)_ | — | §13c canonical vocabulary (`core.scope.canonical_markets` composed via `merge_market_options`/`org_market_options`); inventory pinned in `harness_market_enumeration_guard.py`; B-1115/LI truth table `harness_market_vocabulary_truth.py` (owner 2026-09-04) |
+| `POST /commcalc/data-sources/sweep/run-due` | `router.py:data_sources_run_due` | §12a — the ONE portal-pull scheduler (VidaPay, b2bsoft, and the three merchant portals); cron self-registered by mig `956` |
+| `GET /commcalc/merchant-portals/catalog` | `router.py:merchant_portal_catalog` | §12a portal descriptors for the connector settings page |
+| `GET /commcalc/merchant-portals/health` | `router.py:merchant_portal_health` | §12a durable-session health roll-up |
+| `POST /commcalc/data-sources/{sid}/live-login/submit-totp` | `router.py:live_login_submit_totp` | §12a authenticator-app code into the live session (never SMS/email OTP) |
 | `POST /calculate/{period}` | `router.py:8968` | §6 rep commission |
 | `GET /commissions/{period}` | `10222` | §6 — the Rep Incentive Report read; market stamped per row via §13a (2026-09-03 fix) |
 | `GET /commcalc/processor-ledger` | `commcalc/processor_ledger_api.py` | §15 Processor Daily Debits & Credits — day × transaction type, DEBITS/CREDITS/NET; store-span gated; serves the canonical §13c `market_options` |
@@ -1924,6 +2065,8 @@ as a market-grant keyset member; ambiguity fails closed):
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| External credit-card settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='external_cc'` | `merchant_portals.totals_by_store_day`; tallied against `daily_closing.t_ext_cc` by `closing/external_credit_recon` (§12a) |
+| POS-merchant settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='pos_merchant'` | same reader, `pos_merchant` role (§12a) |
 | Activation counts (premium/byod/upgrade) | `raw_sales.contract_type` | `classify_contract_type` `calculator.py:40`; display via `_sales_cell_agg` `router.py:17842` |
 | Accessory $ ("acc_gp") | `raw_sales.ext_price` (+ device set-up fee; NOT gp, NOT Ondigo) | `_compute_feed_actuals_py` `router.py:18678` |
 | GP report accessory column ("Acc Sales" / legacy "Acc GP") | `raw_sales.ext_price` of accessory lines (`accessory_config.gp_acc_basis='sales'` — house default, mig 932) or `raw_sales.gp` (`'gp'` opt-back) | `calc_gp_report(acc_basis=…)` `gp_report.py`; label from payload `acc_label` (§4) |

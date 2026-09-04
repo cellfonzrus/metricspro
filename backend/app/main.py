@@ -369,6 +369,29 @@ def _account_recompute_cron_startup():
               f"clicks only): {e}", flush=True)
 
 
+@app.on_event("startup")
+def _data_sources_cron_startup():
+    """Self-heal the PORTAL-PULL schedule on EVERY boot (mig 956).
+
+    POST /commcalc/data-sources/sweep/run-due is the scheduled entrypoint for every portal login in
+    the platform — VidaPay / T-CETRA, b2bsoft, and (owner directive 2026-09-04) the three merchant
+    card processors whose reports are tallied against the daily-closing external-credit-card field.
+    Mig 241 shipped its pg_cron job as a COMMENTED-OUT "run this ONCE in the Supabase SQL editor"
+    note, so whether it was ever scheduled depended on a human remembering, and a secret rotation
+    silently killed it. Exactly the gap the google-reviews hook above closed four days earlier.
+
+    Same idempotent replace-by-name semantics and best-effort posture as the hooks above: a missing
+    secret / RPC / cron infra logs the reason and never blocks boot. Prefers BROWSER_SERVICE_URL
+    (portal pulls launch Chromium, which SERVICE_ROLE=api refuses) and falls back to API_PUBLIC_URL."""
+    try:
+        from app.modules.commcalc.router import _ensure_data_sources_cron
+        print(f"[data-sources-cron] self-register on boot: "
+              f"{_ensure_data_sources_cron() or 'no status returned'}", flush=True)
+    except Exception as e:
+        print(f"WARN [data-sources-cron] self-register failed (portal pulls stay on manual clicks): "
+              f"{e}", flush=True)
+
+
 # ── /health: report what this image ACTUALLY has, not what someone remembered ────────────────────
 # The modules list here used to be a hardcoded literal, and it went stale the moment a module was
 # added without someone editing it — by 2026-08 it was missing pos, crm, referral, payables, billing,

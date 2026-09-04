@@ -74,6 +74,14 @@ INGEST_TABLES_BY_MODULE = {
         "raw_comp_report", "raw_ma_commission", "raw_ma_daily_tx", "raw_ma_fulfillment",
         "pos_tender_summary", "inventory_value", "ma_overview_upload",
         "raw_custom_import", "raw_epay_daily_tx",
+        # Merchant-processor portal scrape (owner 2026-09-04, migs 955/956). The daily pull from the
+        # three card-processor portals — PayAnywhere/Payments Hub (the EXTERNAL credit-card terminal
+        # both current tenants run, the "white machine"), TransFirst TransLink and ClientLine/
+        # BusinessTrack (the POS merchant providers). Settlement is the day-grain feed the closing
+        # recon tallies against what employees declared; the batch table is the funding grain the
+        # cash/deposit recon reads. Two tables because they are two GRAINS — summing them
+        # double-counts, which is exactly the confusion a lineage edge exists to prevent.
+        "merchant_settlement_day", "merchant_settlement_batch",
     ),
     # pos — the in-house POS. Its builtin stream (commcalc.pos_builtin_daily_sales /
     # commcalc.pos_builtin_sales) promotes into the sales feed; receipt OCR and the carrier vendor-rebate
