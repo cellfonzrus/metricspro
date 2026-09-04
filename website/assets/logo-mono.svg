@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="512" height="512" role="img" aria-label="MetricsPro">
+  <title>MetricsPro</title>
+  <!-- One-colour cut, for print, embroidery, and anywhere the two-tone mark cannot go.
+       Uses currentColor so it inherits whatever it sits in. -->
+  <rect fill="currentColor" x="3"  y="3"  width="19" height="19" rx="4" opacity=".55"/>
+  <rect fill="currentColor" x="10" y="10" width="19" height="19" rx="4"/>
+</svg>

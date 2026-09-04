@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="512" height="512" role="img" aria-label="MetricsPro">
+  <title>MetricsPro</title>
+  <!-- THE FOLD — two sources laid over one another. Where they agree the overlap reads as one
+       shape; where they do not, amber shows through. Geometry is on a 32-unit grid so every edge
+       lands on a whole pixel at 16px, which is the size this file exists for. -->
+  <style>
+    .p{fill:#c9770f} .s{fill:#217a5e}
+    @media (prefers-color-scheme:dark){ .p{fill:#f0a339} .s{fill:#57bf99} }
+  </style>
+  <rect class="p" x="3"  y="3"  width="19" height="19" rx="4"/>
+  <rect class="s" x="10" y="10" width="19" height="19" rx="4"/>
+  <rect class="p" x="10" y="10" width="12" height="12" rx="3" opacity=".55"/>
+</svg>

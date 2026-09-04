@@ -53,7 +53,17 @@ body{margin:0;background:var(--ground);color:var(--ink);
   backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 .mpw-header-in{display:flex;align-items:center;gap:26px;height:66px}
 .mpw-logo{font-family:Archivo,system-ui,sans-serif;font-weight:800;font-size:20.5px;
-  text-decoration:none;color:var(--ink);letter-spacing:-.018em}
+  text-decoration:none;color:var(--ink);letter-spacing:-.018em;
+  display:inline-flex;align-items:center;gap:10px}
+/* ── The mark ───────────────────────────────────────────────────────────────
+   Inlined in the page rather than loaded as an image file, so it takes its two
+   colours from the theme tokens and follows the page into dark mode. A linked
+   <img> could not do that. favicon.svg carries its own copy of the colours,
+   because a file loaded by the browser chrome has no CSS context to inherit. */
+.mark{width:26px;height:26px;flex:none;display:block}
+.mpw-logo span{display:inline}
+.mk-a{fill:var(--amber)} .mk-b{fill:var(--green)}
+
 .mpw-logo em{font-style:normal;color:var(--amber)}
 .mpw-header-nav{margin-left:auto;display:flex;align-items:center;gap:24px}
 .mpw-header-nav a{color:var(--ink-2);text-decoration:none;font-size:14.5px;font-weight:500}
