@@ -29,7 +29,7 @@ const BUCKET_LABEL: Record<string, string> = {
 }
 const BASIS_LABEL: Record<string, string> = {
   category: 'exact (Commission category)',
-  any_payment_fallback: 'any ePay payment (category unconfigured)',
+  any_payment_fallback: 'any processor payment (category unconfigured)',
   unknown_no_serial: 'unknown — no serial captured',
 }
 

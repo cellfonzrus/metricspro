@@ -129,8 +129,8 @@ export default function CommissionImportWizard() {
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Upload <b>any</b> carrier&apos;s commission file and map each column to a category. Missing a category
           (a 7th-month spiff, a new bounty)? Create it here — the system adds the column automatically and
-          remembers your mapping for next time. Loads into <code>carrier_commission</code>; the live Boost calc is
-          never touched. Need to eyeball the raw file first? <Link href="/commcalc/carrier-comm-file">Carrier Comm File → Table</Link>.
+          remembers your mapping for next time. Loads into <code>carrier_commission</code>; the live commission
+          calc is never touched. Need to eyeball the raw file first? <Link href="/commcalc/carrier-comm-file">Carrier Comm File → Table</Link>.
         </p>
       </div>
 

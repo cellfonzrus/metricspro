@@ -6,6 +6,7 @@ import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_li
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 import { LastUploadLine, useLastUploads } from '../_lib/lastUpload'
 import { useActiveCarrier } from '@/lib/auth-context'
+import { carrierCode } from '@/lib/rbac'
 
 // ── WHAT AN UPLOAD ACTUALLY DOES, per file type (owner 2026-07-29) ──────────────────────────────
 // The tiles used to say "Replace File" on EVERY report, which is wrong for more than half of them: the
@@ -72,13 +73,13 @@ const AUTO_SOURCES = [
     cfg: 'dlar/sweep/config', run: 'dlar/sweep/run-now', configure: '/commcalc/dlar/sweep',
     scopes: [{ v: 'mtd', l: 'Month-to-date' }, { v: 'full', l: 'Full month' }] },
   { id: 'epay', name: 'Payment Processor Portal', icon: '💰', desc: 'MI · ATU · Commission · Comprehensive · Reconciliation',
-    cfg: 'epay/sweep/config', run: 'epay/sweep/run-now', configure: '/commcalc/epay/sweep',
+    cfg: 'epay/sweep/config', run: 'epay/sweep/run-now', configure: '/commcalc/epay/sweep', carrier: 'boost' as const,
     scopes: [{ v: 'daily', l: 'Daily' }, { v: 'mtd', l: 'Month-to-date' }, { v: 'full', l: 'Full month' }] },
   { id: 'b2b', name: 'POS (b2bsoft / RTPOS / RQ)', icon: '📦', desc: 'Sales Transaction · Inventory Aging — configure the portal login (2FA) under Data Sources',
     cfg: 'b2b/sweep/config', run: 'b2b/sweep/run-now', configure: '/commcalc/email-imports#portal-logins',
     scopes: [{ v: 'day', l: 'Single day' }, { v: 'month', l: 'Month' }, { v: 'custom', l: 'Custom range' }] },
   { id: 'vip', name: 'VIP Wireless portal', icon: '🧾', desc: 'Invoices · PayGo · Credit memos',
-    cfg: 'vip/sweep/config', run: 'vip/sweep/run-now', configure: '/commcalc/vip/sweep',
+    cfg: 'vip/sweep/config', run: 'vip/sweep/run-now', configure: '/commcalc/vip/sweep', carrier: 'boost' as const,
     scopes: [{ v: 'recent', l: 'Recent (lookback)' }, { v: 'full', l: 'Full history' }] },
 ]
 
@@ -89,23 +90,26 @@ const AUTO_SOURCES = [
 // journal at all (asset + closing are other modules' routers), so the tile shows NO last-upload line
 // rather than a false "no data uploaded yet".
 const MODULE_UPLOADS: { id: string; label: string; icon: string; endpoint: string; needsDate: boolean;
-                        desc: string; mode: UploadMode; traceKeys?: string[]; tracked?: boolean }[] = [
+                        desc: string; mode: UploadMode; traceKeys?: string[]; tracked?: boolean;
+                        carrier?: 'boost' | 'total' }[] = [
   { id: 'hotsheet',      label: 'Pricing Hotsheet',     icon: '🏷️', endpoint: 'commcalc/hotsheet/upload', needsDate: true,
     mode: 'additive_keyed', traceKeys: ['hotsheet'],
     desc: 'Carrier promo pricing by device — powers the Hotsheet expected-vs-paid recon. Pick the effective date.' },
   { id: 'vip_workbook',  label: 'VIP Wireless Workbook', icon: '🧾', endpoint: 'commcalc/vip/upload', needsDate: false,
-    mode: 'replace_all', traceKeys: ['vip_workbook', 'vip_invoices'],
+    mode: 'replace_all', traceKeys: ['vip_workbook', 'vip_invoices'], carrier: 'boost',
     desc: 'Distributor scraper workbook (Invoices / Lines / Devices sheets). Full-replace of Distributor history.' },
   { id: 'asset_ledger',  label: 'Asset Ledger',         icon: '📒', endpoint: 'asset/upload', needsDate: false,
-    mode: 'replace_all', tracked: false,
+    mode: 'replace_all', tracked: false, carrier: 'boost',
     desc: 'Asset_Lending.xlsx — wipes & re-inserts all asset rows, then backfills market + flags.' },
   { id: 'daily_closing', label: 'Daily Closing Sheet',  icon: '🧮', endpoint: 'closing/upload', needsDate: false,
     mode: 'additive_daily', tracked: false,
     desc: 'Google "Envelopes Data" export — one row per rep per day; idempotent per day.' },
 ]
 // Structured (non-file) uploads that live on their own page — linked, not inlined here.
-const MODULE_LINKS = [
+const MODULE_LINKS: { id: string; label: string; icon: string; href: string; desc: string;
+                      carrier?: 'boost' | 'total' }[] = [
   { id: 'b2b_inventory', label: 'b2bsoft Inventory', icon: '📦', href: '/commcalc/asset/inventory-recon',
+    carrier: 'boost',
     desc: 'On-hand inventory by store & category — structured entry/recon, not a single file. Opens its page.' },
 ]
 
@@ -126,8 +130,14 @@ function fmtWhen(iso: string) {
 
 export default function UploadPage() {
   const { period, setPeriod } = usePeriod()
-  // Active-carrier lens: a dual-carrier tenant sees only the active carrier's upload tiles.
-  const { activeCarrier, multi } = useActiveCarrier()
+  // Active-carrier lens: a dual-carrier tenant sees only the active carrier's upload tiles, and a
+  // SINGLE-carrier tenant never sees another carrier's tiles at all (owner 2026-09-04: no Total/MA
+  // vocabulary on the Boost side and vice versa). No carrier chosen yet → hide nothing (unchanged).
+  const { activeCarrier, multi, carrierList } = useActiveCarrier()
+  const haveCarriers = (carrierList || []).map(c => carrierCode(c)).filter(Boolean)
+  const tileVisible = (tag?: 'boost' | 'total') => !tag
+    || haveCarriers.length === 0
+    || (haveCarriers.includes(tag) && (!multi || tag === activeCarrier))
   const [uploading, setUploading] = useState<string | null>(null)
   const [statuses, setStatuses] = useState<Record<string, 'idle'|'uploading'|'done'|'error'|'warn'>>({})
   const [messages, setMessages] = useState<Record<string, string>>({})
@@ -294,7 +304,7 @@ export default function UploadPage() {
         </div>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <tbody>
-            {AUTO_SOURCES.map(s => {
+            {AUTO_SOURCES.filter(s => tileVisible((s as any).carrier)).map(s => {
               const c = cfgs[s.id] || {}
               const stColor = c.last_status === 'ok' ? '#15803d' : c.last_status === 'error' ? '#b91c1c' : c.last_status === 'running' ? '#b45309' : 'var(--text3)'
               const needsDate = (scope[s.id] || s.scopes[0].v).match(/day|custom/)
@@ -374,7 +384,7 @@ export default function UploadPage() {
         </div>
       )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
-        {FILE_TYPES.filter(t => !multi || !t.carrier || t.carrier === activeCarrier).map(({ id, label, icon, required, desc, mode }) => {
+        {FILE_TYPES.filter(t => tileVisible(t.carrier)).map(({ id, label, icon, required, desc, mode }) => {
           const status = statuses[id] || 'idle'; const msg = messages[id] || ''; const prior = lastUpload(id)
           // "has data already" for the BUTTON wording = anything this report ever ingested (not just the
           // selected period) — a day-grain feed has no period badge at all.
@@ -418,7 +428,7 @@ export default function UploadPage() {
         📦 Module uploads <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>— files that feed the asset, Distributor, hotsheet &amp; daily-closing modules</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
-        {MODULE_UPLOADS.map(entry => {
+        {MODULE_UPLOADS.filter(entry => tileVisible(entry.carrier)).map(entry => {
           const status = statuses[entry.id] || 'idle'; const msg = messages[entry.id] || ''
           return (
             <div key={entry.id} className="card" style={{ border: status === 'done' ? '1px solid #86efac' : status === 'error' ? '1px solid #fca5a5' : undefined, background: status === 'done' ? '#f0fdf4' : status === 'error' ? '#fef2f2' : undefined }}>
@@ -449,7 +459,7 @@ export default function UploadPage() {
             </div>
           )
         })}
-        {MODULE_LINKS.map(link => (
+        {MODULE_LINKS.filter(link => tileVisible(link.carrier)).map(link => (
           <a key={link.id} href={link.href} className="card" style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
               <span style={{ fontSize: 28 }}>{link.icon}</span>

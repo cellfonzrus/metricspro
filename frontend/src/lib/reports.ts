@@ -31,7 +31,7 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/commcalc/flags', label: 'Flags', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/chargebacks', label: 'Chargebacks & Fraud', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/accessory-flags', label: 'Accessory Flags', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', module: 'commissions', desc: 'Underpaid / unpaid activations per month — the Boost bounty gap engine, plus (MA/VidaPay tenants) B2B activations verified against MA Commission & MA TX: sold-but-unpaid rows attributed via uploadable business rules, or flagged "no business rule configured"' },
+    { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', module: 'commissions', desc: 'Underpaid / unpaid activations per month — the carrier bounty gap engine, plus B2B activations verified against the payment processor\'s commission feeds: sold-but-unpaid rows attributed via uploadable business rules, or flagged "no business rule configured"' },
     { href: '/commcalc/imei-rebates', label: 'IMEI Rebate Reconciliation', module: 'commissions', scopes: ['all', 'market', 'store'] },
     { href: '/commcalc/ma-handsets', label: 'Marketplace Handset COGS', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/device-cost-recon', label: 'Device Cost Reconciliation', module: 'commissions', scopes: ['all', 'market'] },
@@ -46,7 +46,9 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/storeops/team', label: 'My Team', module: 'storeops', scopes: ['all', 'market', 'store'] },
   ] },
   { category: 'Asset', reports: [
-    { href: '/commcalc/asset', label: 'Asset Ledger', module: 'asset' },
+    // Neutral label (owner 2026-09-04): "Asset Ledger" is Boost-side vocabulary; the page itself is
+    // carrier-gated in NAV_CARRIERS, and this catalog label stays carrier-neutral.
+    { href: '/commcalc/asset', label: 'Assets', module: 'asset' },
   ] },
   { category: 'Distributor', reports: [
     { href: '/commcalc/vip', label: 'Distributor Invoices', module: 'vip' },

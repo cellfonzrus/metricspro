@@ -350,8 +350,9 @@ def _invoice_rollup(inv, devices, asset_by_serial, commission_by_imei):
                                   "bounty; residual and M2-M12 excluded). vip_invoices carries no "
                                   "'amount actually deducted' field to check this against — unlike "
                                   "the Friday billing trigger, this number is NOT verified to the "
-                                  "penny against a real VidaPay deduction. Treat as a working "
-                                  "estimate of the owner's stated netting model, not a ledger figure."),
+                                  "penny against a real distributor deduction record. Treat as a "
+                                  "working estimate of the owner's stated netting model, not a "
+                                  "ledger figure."),
     }
 
 

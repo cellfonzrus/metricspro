@@ -8,6 +8,7 @@ import type { EntityOption } from '@/components/EntityPicker'
 import type { StandardFilterValue } from '@/lib/standard-filters'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import EnvelopeViewLink from '@/components/EnvelopeViewLink'
+import { useReportLabels } from '@/lib/report-labels'
 
 // DM evening verification view — per-store totals, missing-rep check, B2B reconciliation, and
 // the DM's confirm/adjust+sign-off. Shared by /closing/verify (Daily Closing module) and the
@@ -189,6 +190,11 @@ function MissedChargebacksPanel({ filt }: { filt: StandardFilterValue }) {
 
 export default function DailyClosingVerify() {
   const { user, permissions } = useAuth()
+  // Carrier vocabulary (owner 2026-09-04): the bill-pay processor / financing-program names are
+  // per-carrier preset DATA (mig 953 — boost renders 'ePay'/'ACIMA' byte-identical to today).
+  const { term } = useReportLabels()
+  const ep = term('processor', 'Bill-pay')
+  const fin = term('financing', 'Financing')
   const today = localToday()
   // RULE FIVE (§3d): the standard core filter bar — period as a date-RANGE (default From===To, i.e.
   // today, so the DM's evening single-day workflow is unchanged) + store(s)/market(s)/rep(s) multi.
@@ -411,9 +417,9 @@ export default function DailyClosingVerify() {
     { header: 'Missing reps', field: 'missing_reps', get: (r: any) => (r.missing_reps || []).join('; ') },
     { header: 'Store cash $', field: 'store_cash', money: true, get: (r: any) => r.totals?.store_cash },
     { header: 'Store CC $', field: 'store_cc', money: true, get: (r: any) => r.totals?.store_cc },
-    { header: 'ePay cash $', field: 'epay_cash', money: true, get: (r: any) => r.totals?.epay_on_cash },
-    { header: 'ePay CC $', field: 'epay_cc', money: true, get: (r: any) => r.totals?.epay_on_cc },
-    { header: 'ACIMA $', field: 't_acima', money: true, get: (r: any) => r.totals?.t_acima },
+    { header: `${ep} cash $`, field: 'epay_cash', money: true, get: (r: any) => r.totals?.epay_on_cash },
+    { header: `${ep} CC $`, field: 'epay_cc', money: true, get: (r: any) => r.totals?.epay_on_cc },
+    { header: `${fin} $`, field: 't_acima', money: true, get: (r: any) => r.totals?.t_acima },
     { header: 'Accessory sale $', field: 'acc_sale', money: true, get: (r: any) => r.totals?.acc_sale },
     { header: 'Other (Zelle/CashApp/Gift/Store Acct) $', field: 'other_account', money: true, get: (r: any) => r.totals?.other_account },
     { header: 'Total collected $', field: 'total_collected', money: true, get: (r: any) => r.totals?.total_collected },
@@ -435,18 +441,18 @@ export default function DailyClosingVerify() {
     { header: 'DM corrected', field: 'dm_corrected', get: (r: any) => r.dm_corrected ? 'Yes' : 'No' },
     { header: 'Original store cash $', field: 'orig_store_cash', money: true, get: (r: any) => r.totals_original ? r.totals_original.store_cash : r.totals?.store_cash },
     { header: 'Original store CC $', field: 'orig_store_cc', money: true, get: (r: any) => r.totals_original ? r.totals_original.store_cc : r.totals?.store_cc },
-    { header: 'Original ePay cash $', field: 'orig_epay_cash', money: true, get: (r: any) => r.totals_original ? r.totals_original.epay_on_cash : r.totals?.epay_on_cash },
-    { header: 'Original ePay CC $', field: 'orig_epay_cc', money: true, get: (r: any) => r.totals_original ? r.totals_original.epay_on_cc : r.totals?.epay_on_cc },
+    { header: `Original ${ep} cash $`, field: 'orig_epay_cash', money: true, get: (r: any) => r.totals_original ? r.totals_original.epay_on_cash : r.totals?.epay_on_cash },
+    { header: `Original ${ep} CC $`, field: 'orig_epay_cc', money: true, get: (r: any) => r.totals_original ? r.totals_original.epay_on_cc : r.totals?.epay_on_cc },
     { header: 'Original accessory $', field: 'orig_acc_sale', money: true, get: (r: any) => r.totals_original ? r.totals_original.acc_sale : r.totals?.acc_sale },
     { header: 'Original other $', field: 'orig_other', money: true, get: (r: any) => r.totals_original ? r.totals_original.other_account : r.totals?.other_account },
     { header: 'DM cash $', field: 'dm_store_cash', money: true, get: (r: any) => r.verification?.dm_store_cash },
     { header: 'DM credit $', field: 'dm_store_cc', money: true, get: (r: any) => r.verification?.dm_store_cc },
-    { header: 'DM ePay cash $', field: 'dm_epay_cash', money: true, get: (r: any) => r.verification?.dm_epay_cash },
-    { header: 'DM ePay CC $', field: 'dm_epay_cc', money: true, get: (r: any) => r.verification?.dm_epay_cc },
+    { header: `DM ${ep} cash $`, field: 'dm_epay_cash', money: true, get: (r: any) => r.verification?.dm_epay_cash },
+    { header: `DM ${ep} CC $`, field: 'dm_epay_cc', money: true, get: (r: any) => r.verification?.dm_epay_cc },
     { header: 'DM accessory $', field: 'dm_acc_sale', money: true, get: (r: any) => r.verification?.dm_acc_sale },
     { header: 'DM other $', field: 'dm_other', money: true, get: (r: any) => r.verification?.dm_other },
     { header: 'DM note', field: 'dm_note', get: (r: any) => r.verification?.note || '' },
-  ], [])
+  ], [ep, fin])
 
   const repColumns: ExportColumn[] = useMemo(() => [
     { header: 'Date', field: 'close_date', type: 'date', role: 'date', get: (r: any) => r._store_close_date },
@@ -455,9 +461,9 @@ export default function DailyClosingVerify() {
     { header: 'Employee', field: 'employee_name', role: 'rep', get: (r: any) => r.employee_name },
     { header: 'Store cash $', field: 'store_cash', money: true, get: (r: any) => r.store_cash },
     { header: 'Store CC $', field: 'store_cc', money: true, get: (r: any) => r.store_cc },
-    { header: 'ePay cash $', field: 'epay_cash', money: true, get: (r: any) => r._epay_display?.cash },
-    { header: 'ePay CC $', field: 'epay_cc', money: true, get: (r: any) => r._epay_display?.cc },
-    { header: 'ACIMA $', field: 'acima', money: true, get: (r: any) => r._tenders?.acima },
+    { header: `${ep} cash $`, field: 'epay_cash', money: true, get: (r: any) => r._epay_display?.cash },
+    { header: `${ep} CC $`, field: 'epay_cc', money: true, get: (r: any) => r._epay_display?.cc },
+    { header: `${fin} $`, field: 'acima', money: true, get: (r: any) => r._tenders?.acima },
     { header: 'Gift $', field: 'gift', money: true, get: (r: any) => r._tenders?.gift },
     { header: 'Store Account $', field: 'store_acct', money: true, get: (r: any) => r._tenders?.store_acct },
     { header: 'Custom tenders', field: 'custom_tenders', get: (r: any) => r._custom_tenders_display },
@@ -473,7 +479,7 @@ export default function DailyClosingVerify() {
     // Owner 2026-09-02: the envelope PICTURE rides the export — each rep row's photo is already
     // signed by /closing/summary (envelope_url), so the link works straight out of the file.
     { header: 'Envelope photo', field: 'envelope_url', get: (r: any) => r.envelope_url || '' },
-  ], [])
+  ], [ep, fin])
 
   const storeExportRows = stores
   const repExportRows = useMemo(() => stores.flatMap((s: any) =>
@@ -645,11 +651,11 @@ export default function DailyClosingVerify() {
                   epay_on_cc are new, display-only totals fields (see _row_epay_display, closing/
                   router.py) — money_recon's own cash/credit math is untouched (still reads
                   totals.epay_cash/epay_cc, byte-identical). */}
-              <Stat label="ePay cash" value={fmt(t.epay_on_cash)} />
-              <Stat label="ePay CC" value={fmt(t.epay_on_cc)} />
+              <Stat label={`${ep} cash`} value={fmt(t.epay_on_cash)} />
+              <Stat label={`${ep} CC`} value={fmt(t.epay_on_cc)} />
               <Stat label="Acc sale" value={fmt(t.acc_sale)} />
               <Stat label="Other" value={fmt(t.other_account)} />
-              {!!t.t_acima && <Stat label="ACIMA" value={fmt(t.t_acima)} />}
+              {!!t.t_acima && <Stat label={fin} value={fmt(t.t_acima)} />}
               {customTenderCols.map(c => <Stat key={c.key} label={c.label} value={fmt((t.custom_tenders || []).find((x: any) => x.key === c.key)?.value)} />)}
               {typeof t.total_collected === 'number' && <Stat label="Total collected" value={fmt(t.total_collected)} />}
               {expTotal > 0 && <Stat label="Rep expenses" value={fmt(expTotal)} />}
@@ -707,7 +713,7 @@ export default function DailyClosingVerify() {
                       fee-recon report, not here. */}
                   {s.money_recon.epay && (
                     <div style={{ fontSize: 12 }}>
-                      <span style={{ fontWeight: 600 }}>ePay</span>{': '}
+                      <span style={{ fontWeight: 600 }}>{ep}</span>{': '}
                       declared {fmt(s.money_recon.epay.declared)}
                       {s.money_recon.epay.portal_pending
                         ? <span style={{ color: 'var(--text3)' }}> · portal pending</span>
@@ -730,7 +736,7 @@ export default function DailyClosingVerify() {
               <div className="table-wrapper" style={{ marginTop: 8 }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead><tr style={{ background: 'var(--surface2)' }}>
-                    {['Employee', 'Store cash', 'Store CC', 'ePay cash', 'ePay CC', 'ACIMA', 'Acc', 'Other', 'Custom tenders',
+                    {['Employee', 'Store cash', 'Store CC', `${ep} cash`, `${ep} CC`, fin, 'Acc', 'Other', 'Custom tenders',
                       ...(countCols.length > 0 ? countCols.map(c => c.label) : ['Upg', 'New', 'Post']),
                       'Gate', 'Env', 'Expense', 'Approve exp.', 'Categorized expenses'].map((h, i) =>
                       <th key={i} style={{ textAlign: 'left', padding: '6px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
@@ -808,8 +814,8 @@ export default function DailyClosingVerify() {
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                   <Lbl t="Store cash"><input style={tin} value={f.dm_store_cash || ''} onChange={e => setForm(k, { dm_store_cash: e.target.value })} /></Lbl>
                   <Lbl t="Store CC"><input style={tin} value={f.dm_store_cc || ''} onChange={e => setForm(k, { dm_store_cc: e.target.value })} /></Lbl>
-                  <Lbl t="ePay cash"><input style={tin} value={f.dm_epay_cash || ''} onChange={e => setForm(k, { dm_epay_cash: e.target.value })} /></Lbl>
-                  <Lbl t="ePay CC"><input style={tin} value={f.dm_epay_cc || ''} onChange={e => setForm(k, { dm_epay_cc: e.target.value })} /></Lbl>
+                  <Lbl t={`${ep} cash`}><input style={tin} value={f.dm_epay_cash || ''} onChange={e => setForm(k, { dm_epay_cash: e.target.value })} /></Lbl>
+                  <Lbl t={`${ep} CC`}><input style={tin} value={f.dm_epay_cc || ''} onChange={e => setForm(k, { dm_epay_cc: e.target.value })} /></Lbl>
                   <Lbl t="Acc sale"><input style={tin} value={f.dm_acc_sale || ''} onChange={e => setForm(k, { dm_acc_sale: e.target.value })} /></Lbl>
                   <Lbl t="Other"><input style={tin} value={f.dm_other || ''} onChange={e => setForm(k, { dm_other: e.target.value })} /></Lbl>
                 </div>

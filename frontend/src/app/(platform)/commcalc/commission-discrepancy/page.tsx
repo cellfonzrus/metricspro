@@ -198,7 +198,7 @@ export default function CommissionDiscrepancyHub() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>⚖️ Commission Discrepancy</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13.5, margin: '4px 0 0', maxWidth: 860, lineHeight: 1.55 }}>
             Commission <b>not received</b> from the carrier, and the <b>appeals</b> that need to be done.
-            Rows come from the existing discrepancy engines (Boost + B2B↔MA) — run detection on{' '}
+            Rows come from the existing discrepancy engines (carrier bounty + B2B↔processor) — run detection on{' '}
             <a href="/commcalc/discrepancy" style={{ color: 'var(--accent)' }}>Pay Discrepancy</a>; mark each
             row&apos;s appeal here (who/when is recorded).
           </p>

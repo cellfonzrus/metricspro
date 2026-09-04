@@ -19029,6 +19029,7 @@ def get_report_labels(org_id: str = ORG_ID):
 class PutReportLabelsIn(LaxModel):
     columns: Any = None    # {column_key: label} — '' / null label REMOVES the override
     banners: Any = None    # {banner_key: 'on'|'off'|null} — null REMOVES the override
+    terms: Any = None      # {term_key: label} — carrier vocabulary terms; '' / null REMOVES
 
 
 @router.put("/report-labels")
@@ -19048,8 +19049,10 @@ def put_report_labels(body: PutReportLabelsIn, org_id: str = ORG_ID,
                                  "(Classification settings).")
     from app.modules.commcalc import report_labels as _rl
     known_cols = dict(_rl.LABELABLE_COLUMNS)
+    known_terms = dict(_rl.LABELABLE_TERMS)
     cols = body.columns if isinstance(body.columns, dict) else {}
     bans = body.banners if isinstance(body.banners, dict) else {}
+    trms = body.terms if isinstance(body.terms, dict) else {}
     client = sb()
     tbl = client.schema('commcalc').table('ui_label_override')
     changed, removed = [], []
@@ -19066,6 +19069,21 @@ def put_report_labels(body: PutReportLabelsIn, org_id: str = ORG_ID,
                 removed.append(key)
             else:
                 tbl.upsert({"org_id": org_id, "scope": _rl.SCOPE_COL, "key": key,
+                            "label": label[:80],
+                            "updated_at": _datetime.now(_timezone.utc).isoformat()},
+                           on_conflict="org_id,scope,key").execute()
+                changed.append(key)
+        for key, label in trms.items():
+            key = str(key or '').strip()
+            if key not in known_terms:
+                raise HTTPException(400, f"'{key}' is not a known carrier vocabulary term — pick "
+                                         f"one of the listed terms.")
+            label = str(label or '').strip()
+            if not label or label == known_terms[key]:
+                tbl.delete().eq('org_id', org_id).eq('scope', _rl.SCOPE_TERM).eq('key', key).execute()
+                removed.append(key)
+            else:
+                tbl.upsert({"org_id": org_id, "scope": _rl.SCOPE_TERM, "key": key,
                             "label": label[:80],
                             "updated_at": _datetime.now(_timezone.utc).isoformat()},
                            on_conflict="org_id,scope,key").execute()

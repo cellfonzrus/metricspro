@@ -185,7 +185,7 @@ export default function RecoveryPage() {
                   )}
                 </Fragment>
               ))}
-              {!(data?.rows?.length) && <tr><td colSpan={7} style={{ ...cell, color: 'var(--text3)' }}>Nothing here. Run ↻ Rebuild after loading ePay payment/MI data.</td></tr>}
+              {!(data?.rows?.length) && <tr><td colSpan={7} style={{ ...cell, color: 'var(--text3)' }}>Nothing here. Run ↻ Rebuild after loading processor payment/MI data.</td></tr>}
             </tbody>
           </table>
         </div>

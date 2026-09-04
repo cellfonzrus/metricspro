@@ -387,6 +387,57 @@ def canonical_markets(client, org_id: str) -> list:
     return list(market_index(client, org_id).get("markets") or [])
 
 
+# ── CANONICAL MARKET ENUMERATION — the ONE option-list composition (owner directive 2026-09-04:
+# "B-1115 is under super nova and LI market under Cellfonz R us, that has been missing from a lot
+# of reports when market is chosen, this needs to be fixed as a design not a band aid as this could
+# happen to a new store also").
+#
+# `canonical_markets` above IS the org's market VOCABULARY (the same union index the resolver and
+# the grant machinery bind — a dropdown built from it can never offer a dead filter, and a filter
+# built from it can never miss an offered market). What kept breaking was the OPTION LISTS: each
+# report enumerated markets from its own source — the rows it happened to load, one vocabulary
+# table, a module-local ledger aggregate — so a market recorded on only ONE side (B-1115/LI's exact
+# shape: storeops.stores.market only, no store_mapping row, no aliases) appeared in some dropdowns
+# and silently vanished from others. The design rule, mirroring §13a resolution:
+#
+#     EVERY market dropdown/enumeration = the canonical vocabulary UNION whatever market spellings
+#     the surface's own rows actually carry (so an orphan stamp is still selectable), composed by
+#     merge_market_options / org_market_options below. Sentinels ("(no market)") are appended by
+#     the caller AFTER composing. A new market typed on a new store is in the vocabulary the moment
+#     the row exists, so it appears in every converged dropdown with zero extra setup.
+#
+# ENFORCED BY CI: backend/harness_market_enumeration_guard.py pins every market-enumeration site;
+# truth table for the B-1115/LI shape: backend/harness_market_vocabulary_truth.py.
+def merge_market_options(canonical, present=()) -> list:
+    """PURE: THE market option-list composition — canonical vocabulary ∪ markets present in the
+    surface's data. Case/whitespace-insensitive dedupe with the CANONICAL spelling winning (so a
+    dropdown can never offer both "LI" and "li"); a present-only spelling (a stamp the vocabulary
+    does not know) is kept verbatim rather than dropped — it labels real rows. Blanks are never
+    options. Sorted case-insensitively. Never raises."""
+    out: dict[str, str] = {}
+    for m in (canonical or []):
+        s = _norm(m)
+        if s:
+            out.setdefault(" ".join(s.split()).casefold(), s)
+    for m in (present or []):
+        s = _norm(m)
+        if s:
+            out.setdefault(" ".join(s.split()).casefold(), s)
+    return sorted(out.values(), key=lambda s: (s.casefold(), s))
+
+
+def org_market_options(client, org_id: str, present=()) -> list:
+    """I/O twin of `merge_market_options` off the cached canonical index: the option list every
+    market dropdown must serve — the org's full vocabulary plus this surface's own stamps. Degrades
+    to the present-list alone if the index is unreadable (options never blank a working page)."""
+    try:
+        canon = canonical_markets(client, org_id)
+    except Exception as e:                                          # pragma: no cover - I/O guard
+        print(f"WARN core.scope org_market_options canonical read failed: {e}")
+        canon = []
+    return merge_market_options(canon, present)
+
+
 def market_store_codes(client, org_id: str, market) -> set:
     """store_codes in a market (case-insensitive market match), from the canonical union.
 

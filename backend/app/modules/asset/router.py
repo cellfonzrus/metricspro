@@ -847,12 +847,13 @@ def _registry_stores(client, org_id: str):
         rows = client.schema("commcalc").table("store_mapping") \
             .select("store_address,market,is_active").eq("org_id", org_id).execute().data or []
     except Exception:
-        return []
+        rows = []
     # Blank markets inherit from THE canonical union resolver (core.scope; 2026-09-03 LI-class fix).
     try:
         from app.core import scope as _cscope
         _reg_resolve_market, _ = _cscope.store_market_resolver(client, org_id)
     except Exception:
+        _cscope = None
         _reg_resolve_market = lambda s: ""
     out = []
     seen = set()
@@ -864,6 +865,22 @@ def _registry_stores(client, org_id: str):
             continue
         seen.add(addr.lower())
         out.append({"store": addr, "market": r.get("market") or _reg_resolve_market(addr) or None})
+    # ADDITIVE (2026-09-04 owner "B-1115/LI — fixed as a design", same class as the 2026-08-04
+    # "cellular services" report that created this function): a store registered ONLY in
+    # storeops.stores (live house B-1115 "1115 Liberty Ave" — no store_mapping row) was still
+    # missing from this FULL-roster list. The registry is now the canonical UNION index
+    # (store_mapping spelling preferred, storeops address for mapping-less stores).
+    if _cscope is not None:
+        try:
+            for s in (_cscope.market_index(client, org_id).get("stores") or []):
+                addr = (s.get("address") or s.get("store_code") or "").strip()
+                if not addr or addr.lower() in seen:
+                    continue
+                seen.add(addr.lower())
+                out.append({"store": addr,
+                            "market": (s.get("market") or "").strip() or _reg_resolve_market(addr) or None})
+        except Exception as e:
+            print(f"WARN asset _registry_stores union overlay failed: {e}")
     out.sort(key=lambda s: s["store"])
     return out
 
@@ -913,7 +930,17 @@ async def get_filter_options(org_id: str = ORG_ID):
     # ledger-derived and unchanged for every existing consumer; a picker that needs a brand-new,
     # not-yet-financing store (Borrowed Money's borrower/lender pickers) unions the two client-side.
     registry_stores = _registry_stores(client, org_id)
-    return {"markets": sorted(markets), "stores": stores, "store_groups": store_groups,
+    # §13c enumeration doctrine (owner 2026-09-04, B-1115/LI class): the market dropdown serves the
+    # org's FULL canonical vocabulary ∪ the ledger's own stamps — a market typed on a brand-new store
+    # is offered before its first device ever books here (an empty pick is honest; a missing option
+    # is the defect). Ledger-only stamps are preserved verbatim, so nothing existing disappears.
+    try:
+        from app.core import scope as _cscope
+        markets = _cscope.org_market_options(client, org_id, markets)
+    except Exception as e:
+        print(f"WARN asset filter-options canonical vocabulary union failed: {e}")
+        markets = sorted(markets)
+    return {"markets": markets, "stores": stores, "store_groups": store_groups,
             "no_market_count": no_market_count, "no_market_value": NO_MARKET_SENTINEL,
             "registry_stores": registry_stores}
 

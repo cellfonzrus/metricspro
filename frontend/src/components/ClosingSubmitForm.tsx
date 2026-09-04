@@ -4,6 +4,7 @@ import { api, fmt, localToday } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 import { startTour } from '@/lib/tours'
+import { useReportLabels } from '@/lib/report-labels'
 
 // Rep-facing in-app closing form — one row per rep per day. Posts to /closing/row (source='manual').
 // Money is captured by the 6 tender types that mirror the POS X-report (cash / credit / external CC /
@@ -81,6 +82,12 @@ function clearDraft() { try { window.localStorage.removeItem(DRAFT_KEY) } catch 
 
 export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitted }:
   { defaultEmployeeName?: string; onSubmitted?: () => void }) {
+  // Carrier vocabulary (owner 2026-09-04): the bill-pay processor and financing-program names are
+  // preset DATA per carrier (mig 953 — boost: ePay/ACIMA = byte-identical to today; total:
+  // VidaPay/Edge), never hardcoded to one carrier's brand on this shared form.
+  const { term } = useReportLabels()
+  const procName = term('processor', 'Bill-pay')
+  const finName = term('financing', 'Financing')
   const [f, setF] = useState<State>(blank())
   const [stores, setStores] = useState<any[]>([])
   const [recent, setRecent] = useState<any[]>([])
@@ -436,12 +443,12 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           <>
             <Row>
               {TENDERS.slice(0, 3).map(t => (
-                <Field key={t.key} label={t.label}><input style={inp} inputMode="decimal" value={f[t.key]} onChange={e => set({ [t.key]: e.target.value } as Partial<State>)} placeholder="0.00" /></Field>
+                <Field key={t.key} label={t.key === 't_acima' ? `${finName} (lease) $` : t.label}><input style={inp} inputMode="decimal" value={f[t.key]} onChange={e => set({ [t.key]: e.target.value } as Partial<State>)} placeholder="0.00" /></Field>
               ))}
             </Row>
             <Row>
               {TENDERS.slice(3).map(t => (
-                <Field key={t.key} label={t.label}><input style={inp} inputMode="decimal" value={f[t.key]} onChange={e => set({ [t.key]: e.target.value } as Partial<State>)} placeholder="0.00" /></Field>
+                <Field key={t.key} label={t.key === 't_acima' ? `${finName} (lease) $` : t.label}><input style={inp} inputMode="decimal" value={f[t.key]} onChange={e => set({ [t.key]: e.target.value } as Partial<State>)} placeholder="0.00" /></Field>
               ))}
             </Row>
           </>
@@ -455,9 +462,9 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
             say Bill Payments, already included above." */}
         <SectionLabel>Bill Payments, already included above (NOT added to the total)</SectionLabel>
         <Row>
-          <Field label="ePay on Cash $"><input style={inp} inputMode="decimal" value={f.epay_on_cash} onChange={e => set({ epay_on_cash: e.target.value })} placeholder="0.00" /></Field>
-          <Field label="ePay on Credit $"><input style={inp} inputMode="decimal" value={f.epay_on_credit} onChange={e => set({ epay_on_credit: e.target.value })} placeholder="0.00" /></Field>
-          <Field label="ePay on Financing / ACIMA $"><input style={inp} inputMode="decimal" value={f.epay_on_acima} onChange={e => set({ epay_on_acima: e.target.value })} placeholder="0.00" /></Field>
+          <Field label={`${procName} on Cash $`}><input style={inp} inputMode="decimal" value={f.epay_on_cash} onChange={e => set({ epay_on_cash: e.target.value })} placeholder="0.00" /></Field>
+          <Field label={`${procName} on Credit $`}><input style={inp} inputMode="decimal" value={f.epay_on_credit} onChange={e => set({ epay_on_credit: e.target.value })} placeholder="0.00" /></Field>
+          <Field label={`${procName} on Financing / ${finName} $`}><input style={inp} inputMode="decimal" value={f.epay_on_acima} onChange={e => set({ epay_on_acima: e.target.value })} placeholder="0.00" /></Field>
         </Row>
 
         <SectionLabel>Transaction counts</SectionLabel>

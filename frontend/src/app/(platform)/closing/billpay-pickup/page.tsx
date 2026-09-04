@@ -203,7 +203,7 @@ export default function BillPayPickupPage() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧾 Bill Payment Pickup</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            Check off each store&rsquo;s BILL-PAY cash (the declared ePay-on-cash dollars — already inside the total cash
+            Check off each store&rsquo;s BILL-PAY cash (the declared bill-pay-on-cash dollars — already inside the total cash
             the Cash Pickup envelope carries), add a note, and confirm. Same flow as Cash Pickup; the assigned recipient
             is notified by email + WhatsApp.</p>
         </div>

@@ -1,8 +1,13 @@
 'use client'
 import Link from 'next/link'
+import { carrierOKActive } from '@/lib/rbac'
+import { useActiveCarrier } from '@/lib/auth-context'
 
 // One landing page for every mapping/alias screen (mirrors the Configurations & Uploads hubs).
 // Each card links to the page that owns that mapping; those pages keep their own routes + nav entries.
+// Cards ride the SAME carrier gate as the sidebar (NAV_CARRIERS via carrierOKActive) so a
+// carrier-scoped mapping screen (e.g. the MA product classification, a Total-processor page) never
+// shows its vocabulary to the other carrier's tenant (owner directive 2026-09-04).
 type Item = { href: string; icon: string; label: string; desc: string }
 
 const ITEMS: Item[] = [
@@ -17,6 +22,8 @@ const ITEMS: Item[] = [
 ]
 
 export default function MappingHubPage() {
+  const { activeCarrier } = useActiveCarrier()
+  const items = ITEMS.filter(it => carrierOKActive(it.href, activeCarrier, {}))
   return (
     <div>
       <div style={{ marginBottom: 20 }}>
@@ -26,7 +33,7 @@ export default function MappingHubPage() {
         </p>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
-        {ITEMS.map(it => (
+        {items.map(it => (
           <Link key={it.href} href={it.href} className="card" style={{
             padding: 14, display: 'flex', gap: 12, alignItems: 'flex-start',
             textDecoration: 'none', color: 'inherit', border: '1px solid var(--border)' }}>

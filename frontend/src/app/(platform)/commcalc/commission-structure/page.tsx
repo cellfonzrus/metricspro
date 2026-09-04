@@ -547,8 +547,8 @@ export default function CommissionStructurePage() {
           stores. Set a <b>$ rate per activation category</b> below (each type is its own option — pay BYOD,
           Tablet or Home Internet differently, and <b>Upgrade</b> separately, $0 by default) plus the
           accessory %. Same data source as the Sales Report and Exec MTD, so the accessory number you see on
-          that report is the one that pays. The categories are the same for every tenant — Boost / Cricket
-          just relabel. Read-only; nothing pays until you Run below.
+          that report is the one that pays. The categories are the same for every tenant — each carrier
+          just relabels. Read-only; nothing pays until you Run below.
         </p>
         {/* PER-CATEGORY RATE EDITOR — one $ input per Exec MTD activation column + the accessory %. */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>

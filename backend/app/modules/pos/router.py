@@ -1340,6 +1340,19 @@ def tax_code_markets(org_id: str = ORG_ID):
         m = (s.get("market") or "").strip() or _mkt.get(str(s.get("store_code") or "").strip().upper(), "")
         if m:
             agg[m] = agg.get(m, 0) + 1
+    # §13c enumeration doctrine (owner 2026-09-04, B-1115/LI class): a market whose stores live only
+    # in commcalc.store_mapping (no storeops roster row — the mirror of the B-1115 shape) never made
+    # this dropdown, so its tax rate could not be configured. Add every canonical-vocabulary market
+    # missing above, counting its union-index member stores. Existing counts are byte-identical.
+    try:
+        from app.core import scope as _cscope
+        _idx = _cscope.market_index(client, org_id)
+        _have = {k.strip().casefold() for k in agg}
+        for mk in (_idx.get("markets") or []):
+            if mk.strip().casefold() not in _have:
+                agg[mk] = len(((_idx.get("by_market") or {}).get(mk.lower()) or {}).get("codes") or ())
+    except Exception as e:
+        print(f"WARN pos tax-code markets canonical vocabulary union failed: {e}")
     codes = (client.schema("pos").table("tax_codes").select("market,rate")
              .eq("org_id", org_id).limit(1000).execute().data) or []
     rate_by_market = {(c.get("market") or "").strip(): c.get("rate")

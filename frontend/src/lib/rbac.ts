@@ -1162,10 +1162,16 @@ export const NAV_CARRIERS: Record<string, string[]> = {
   '/commcalc/asset/dashboard': ['boost'], '/commcalc/asset/aging': ['boost'],
   '/commcalc/asset/missing-phones': ['boost'], '/commcalc/asset/aging-rebate': ['boost'],
   '/commcalc/asset/on-inventory': ['boost'], '/commcalc/asset/charges/rma': ['boost'],
+  // Vocabulary sweep (owner 2026-09-04): the remaining VIP/Boost-fed asset surfaces — the Asset
+  // Ledger landing itself, the VIP invoice-due report, and the b2bsoft/VIP inventory recons — are
+  // whole-feature Boost-side pages; a Total tenant must never see their vocabulary at all.
+  '/commcalc/asset': ['boost'], '/commcalc/asset/invoice-due': ['boost'],
+  '/commcalc/asset/inventory-recon': ['boost'], '/commcalc/asset/oninv-3way-recon': ['boost'],
   // ePay (Boost processor) reconciliation reports — their body copy names the "Boost portal" and a
   // "Boost" column, and they read Boost/ePay data that is empty for a non-Boost tenant. Gate to boost so
   // a Total-only tenant never sees Boost language here (admin can re-enable per tenant at /admin/labels).
   '/commcalc/epay-fee-recon': ['boost'], '/commcalc/carrier-recon': ['boost'],
+  '/commcalc/epay/sweep': ['boost'], '/closing/epay-recon': ['boost'],
   '/commcalc/kpi': ['boost'], '/commcalc/coaching': ['boost'],
   // MA / VidaPay (T-CETRA) pages — the mirror gate of Boost's ePay pages. Total-processor only.
   // Marketplace Purchases reads commcalc.raw_ma_marketplace_orders (VidaPay MA orders), so it is
@@ -1175,6 +1181,11 @@ export const NAV_CARRIERS: Record<string, string[]> = {
   // goal) and any admin can widen it per tenant at /admin/labels if a non-Total tenant ever needs it.
   '/commcalc/ma-commission': ['total'],
   '/commcalc/asset/marketplace-purchases': ['total'],
+  // Vocabulary sweep (owner 2026-09-04): the rest of the MA/VidaPay (Total-processor) report and
+  // config surfaces — their body copy correctly names MA Commission Details / MA Daily Tx /
+  // VidaPay, which must never render for a Boost tenant.
+  '/commcalc/ma-overview-recon': ['total'], '/commcalc/ma-product-class': ['total'],
+  '/commcalc/commission-category-map': ['total'], '/commcalc/report-mappings': ['total'],
   // Boost Rates page = the hardcoded Boost KPI-tier config; only meaningful for Boost tenants. A
   // Total-only tenant (e.g. luxelink) never sees it — they configure pay via Commission Plans instead.
   '/commcalc/settings': ['boost'],

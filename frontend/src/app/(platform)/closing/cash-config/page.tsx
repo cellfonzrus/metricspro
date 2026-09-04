@@ -16,9 +16,9 @@ const SCOPES = [
 ]
 
 const MATCH_TARGETS = [
-  { key: 'total_cash', label: 'Total cash (whole envelope — declared cash + ePay cash combined)' },
-  { key: 'store_cash', label: 'Store cash only (excludes the ePay/bill-payment portion)' },
-  { key: 'bill_payment_cash', label: 'ePay bill-payment cash only' },
+  { key: 'total_cash', label: 'Total cash (whole envelope — declared cash + bill-pay cash combined)' },
+  { key: 'store_cash', label: 'Store cash only (excludes the bill-payment portion)' },
+  { key: 'bill_payment_cash', label: 'Bill-payment cash only' },
 ]
 
 export default function CashConfigPage() {
@@ -193,7 +193,7 @@ export default function CashConfigPage() {
       <div className="card" style={card}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>🏦 Bank deposit slip — OCR verification</div>
         <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 10px' }}>
-          When a deposit slip photo is attached (Cash Pickup or the ePay Bank-Deposit Recon page), the amount is
+          When a deposit slip photo is attached (Cash Pickup or the Bank-Deposit Recon page), the amount is
           read automatically and compared against your chosen basis below. A mismatch never blocks anything — it
           just flags loudly for management review (the &quot;Deposit mismatch&quot; alert scope above).
         </p>

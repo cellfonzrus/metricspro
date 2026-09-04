@@ -49,7 +49,7 @@ const card: React.CSSProperties = { padding: 16, marginBottom: 14 }
 const SOURCE_LABEL: Record<string, string> = {
   rules: 'Its own detection rules (below)',
   plan_rule: 'Inherit from a commission-plan rule — the report can then never disagree with what pays',
-  acima_config: 'Inherit this tenant’s existing ACIMA tender mapping',
+  acima_config: 'Inherit this tenant’s existing lease-to-own tender mapping',
 }
 const BASIS_LABEL: Record<string, string> = {
   unit_line: 'The financed device line’s Ext Price',

@@ -78,6 +78,11 @@ export default function PayablesPage() {
   // The ledger rows carry a store but NO market, so the cascade's market vocabulary comes from the
   // org roster (the same org-scoped pick-don't-type source /core/filter-options serves every other bar).
   const [roster, setRoster] = useState<StoreOpt[]>([])
+  // The org's canonical market OPTION list, served by the same endpoint (core.scope.org_market_options
+  // §13c — the canonical vocabulary ∪ this surface's own stamps). Used as the market options whenever
+  // the bar renders its plain pickers (roster still loading / failed); in cascade mode the roster's
+  // per-store stamps — resolved through the same canonical union resolver server-side — drive it.
+  const [rosterMarkets, setRosterMarkets] = useState<string[]>([])
   useEffect(() => { api(`/api/v1/payables/settings`).then(setSettings).catch(() => {}) }, [])
   // ⚠️ NOT /core/filter-options. That one keys stores on `storeops.stores.address` ("4640 Diversey
   // Chicago"), while every row on this page carries the store_mapping spelling ("4640-A W Diversey
@@ -86,8 +91,11 @@ export default function PayablesPage() {
   // serves the vocabulary the DATA uses, with the market attached.
   useEffect(() => {
     apiCached(`/api/v1/payables/filter-options`, LOOKUP)
-      .then((d: any) => setRoster((d?.stores || []).map((x: any) => ({ id: x.store, label: x.store, market: x.market || null }))))
-      .catch(() => setRoster([]))
+      .then((d: any) => {
+        setRoster((d?.stores || []).map((x: any) => ({ id: x.store, label: x.store, market: x.market || null })))
+        setRosterMarkets((d?.markets || []).map((m: any) => String(m)).filter(Boolean))
+      })
+      .catch(() => { setRoster([]); setRosterMarkets([]) })
   }, [])
   useEffect(() => { const t = new URLSearchParams(window.location.search).get('tab'); if (t && ['payables', 'forecast', 'owed', 'map'].includes(t)) setTab(t as Tab) }, [])
   useEffect(() => { if (tab === 'forecast') loadForecast() }, [tab, lookback, horizon])
@@ -96,7 +104,7 @@ export default function PayablesPage() {
   useEffect(() => { if (tab === 'map') loadMap() }, [tab])
 
   async function rebuild() {
-    setBusy(true); setMsg('Rebuilding ledger… (may take a minute for a full Boost rebuild)')
+    setBusy(true); setMsg('Rebuilding ledger… (may take a minute for a full rebuild)')
     try {
       const r = await api(`/api/v1/payables/rebuild`, { method: 'POST' })
       const sc = r.status_counts || {}
@@ -370,7 +378,7 @@ export default function PayablesPage() {
             <tr key={i} onClick={() => openDrill(r.imei)} style={{ cursor: 'pointer' }}>
               <td style={td}>{r.imei}</td><td style={td}>{r.store}</td><td style={td}>{r.device_model}</td>
               <td style={td}>{r.owed == null ? '—' : fmt(r.owed)}</td>
-              <td style={td}>{r.rebate_amount ? fmt(r.rebate_amount) : '—'}{r.rebate_mismatch && <span title="ePay cross-check mismatch" style={{ color: '#dc2626' }}> ⚠︎</span>}</td>
+              <td style={td}>{r.rebate_amount ? fmt(r.rebate_amount) : '—'}{r.rebate_mismatch && <span title="Processor cross-check mismatch" style={{ color: '#dc2626' }}> ⚠︎</span>}</td>
               <td style={{ ...td, fontWeight: 600 }}>{r.net_owed == null ? '—' : fmt(r.net_owed)}</td>
               <td style={td}>{r.due_date || '—'}</td>
               <td style={td}><span style={{ padding: '2px 8px', borderRadius: 20, fontSize: 11, color: '#fff', background: STATUS_COLORS[r.status] || '#6b7280' }}>{r.status}</span>{r.priority && <span title="Priority sell (final 25% of window)"> 🔥</span>}</td>
@@ -461,9 +469,9 @@ export default function PayablesPage() {
                 <tr><td style={td}>Owed to vendor</td><td style={{ ...td, textAlign: 'right' }}>{drill.owed == null ? `— (${drill.owed_source})` : fmt(drill.owed)}</td></tr>
                 <tr><td style={td}>Primary rebate ({drill.primary_rebate?.source})</td><td style={{ ...td, textAlign: 'right', color: '#16a34a' }}>{drill.primary_rebate?.amount ? '− ' + fmt(drill.primary_rebate.amount) : '—'}</td></tr>
                 {(drill.epay_crosscheck?.lines || []).map((l: any, i: number) => (
-                  <tr key={i}><td style={td}>ePay: {l.type} ({l.date})</td><td style={{ ...td, textAlign: 'right', color: 'var(--muted)' }}>{fmt(l.amount)}</td></tr>
+                  <tr key={i}><td style={td}>Processor: {l.type} ({l.date})</td><td style={{ ...td, textAlign: 'right', color: 'var(--muted)' }}>{fmt(l.amount)}</td></tr>
                 ))}
-                {drill.epay_crosscheck?.mismatch && <tr><td style={td} colSpan={2}><span style={{ color: '#dc2626' }}>⚠︎ ePay cross-check ({fmt(drill.epay_crosscheck.amount || 0)}) disagrees with the primary rebate</span></td></tr>}
+                {drill.epay_crosscheck?.mismatch && <tr><td style={td} colSpan={2}><span style={{ color: '#dc2626' }}>⚠︎ Processor cross-check ({fmt(drill.epay_crosscheck.amount || 0)}) disagrees with the primary rebate</span></td></tr>}
                 <tr><td style={{ ...td, fontWeight: 700 }}>Net owed</td><td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{drill.net_owed == null ? '—' : fmt(drill.net_owed)}</td></tr>
               </tbody>
             </table>

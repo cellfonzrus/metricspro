@@ -262,16 +262,24 @@ def payables_filter_options(org_id: str = ORG_ID):
     Deliberately NOT `/core/filter-options`: that one keys on `storeops.stores.address`, and MEASURED
     2026-08-11 **0 of luxelink's 20 stores** match what the payables/forecast rows carry — so every
     option it offered was unselectable here. `commcalc.store_mapping.store_address` is the spelling the
-    data uses. Pick-don't-type (RULE THREE): every value is a real org row."""
+    data uses. Pick-don't-type (RULE THREE): every value is a real org row.
+
+    2026-09-04 (owner "B-1115/LI — fixed as a design"): store_mapping is PREFERRED for spelling but is
+    no longer the ONLY roster — a store that exists only in storeops.stores (live house B-1115 "1115
+    Liberty Ave", market LI: NO store_mapping row, yet 1,000 raw_sales rows carry exactly its storeops
+    spelling) was absent from this dropdown entirely. Stores are now the canonical UNION index
+    (core.scope.market_index: store_mapping spelling first, storeops address for mapping-less stores),
+    and `markets` is the canonical vocabulary ∪ the roster's stamps (core.scope §13c enumeration
+    doctrine) so a market typed on a brand-new store appears here with zero extra setup."""
     client = sb()
     try:
         rows = (client.schema("commcalc").table("store_mapping")
                 .select("store_address,market").eq("org_id", org_id).limit(5000).execute().data) or []
     except Exception as e:
         print(f"WARN payables filter-options failed: {e}")
-        return {"stores": [], "markets": [], "source": "unavailable"}
+        rows = []
     # Market stamped per store through THE canonical union resolver (2026-09-03 LI class fix) — the
-    # STORE option vocabulary deliberately stays store_mapping.store_address (measured 2026-08-11:
+    # STORE option vocabulary stays store_mapping.store_address FIRST (measured 2026-08-11:
     # that is the spelling the payables/forecast rows actually carry; see the docstring above).
     _resolve_market = _market_by_store(client, org_id)
     seen, stores, markets = set(), [], set()
@@ -284,8 +292,30 @@ def payables_filter_options(org_id: str = ORG_ID):
         stores.append({"store": addr, "market": mkt})
         if mkt:
             markets.add(mkt)
+    # ADDITIVE: union-index stores with NO store_mapping row (the B-1115 shape) — offered under their
+    # storeops address (which is what the sales feeds carry for such stores; the row filter resolves
+    # any spelling through the same union anyway). Existing options above are byte-identical.
+    source = "store_mapping"
+    try:
+        from app.core import scope as _cscope
+        for s in (_cscope.market_index(client, org_id).get("stores") or []):
+            addr = (s.get("address") or s.get("store_code") or "").strip()
+            if not addr or addr.lower() in seen:
+                continue
+            seen.add(addr.lower())
+            mkt = (s.get("market") or "").strip() or _resolve_market(addr) or None
+            stores.append({"store": addr, "market": mkt})
+            if mkt:
+                markets.add(mkt)
+        market_list = _cscope.org_market_options(client, org_id, markets)
+        source = "store_mapping+union"
+    except Exception as e:
+        print(f"WARN payables filter-options union overlay failed: {e}")
+        market_list = sorted(markets)
+    if not stores and not market_list:
+        return {"stores": [], "markets": [], "source": "unavailable"}
     stores.sort(key=lambda s: s["store"])
-    return {"stores": stores, "markets": sorted(markets), "source": "store_mapping"}
+    return {"stores": stores, "markets": market_list, "source": source}
 
 
 @router.get("/offsets/{imei}")

@@ -61,8 +61,8 @@ export default function CashReconManagementPage() {
           { header: 'Market', get: (r: any) => r.market || '' },
           { header: 'Cash declared', get: (r: any) => r.cash_declared, money: true },
           { header: 'Credit declared', get: (r: any) => r.credit_declared, money: true },
-          { header: 'ePay on cash (declared)', get: (r: any) => r.epay_cash_declared, money: true },
-          { header: 'ePay on credit (declared)', get: (r: any) => r.epay_credit_declared, money: true },
+          { header: 'Bill-pay on cash (declared)', get: (r: any) => r.epay_cash_declared, money: true },
+          { header: 'Bill-pay on credit (declared)', get: (r: any) => r.epay_credit_declared, money: true },
           { header: 'Cash pickup recorded', get: (r: any) => r.cash_pickup, money: true },
           { header: 'Bill-pay pickup recorded', get: (r: any) => r.billpay_pickup, money: true },
           { header: 'POS cash', get: (r: any) => r.pos_cash ?? '', money: true },
@@ -86,7 +86,7 @@ export default function CashReconManagementPage() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧮 Cash Recon (Management)</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            One screen per store/day: declared cash, credit and the ePay split (DM-verified corrections winning),
+            One screen per store/day: declared cash, credit and the bill-pay split (DM-verified corrections winning),
             the cash + bill-pay pickups actually recorded, and what the POS reports show — with a declared-vs-POS
             bill-payment mismatch flag. Market manager and above only.</p>
         </div>
@@ -131,7 +131,7 @@ export default function CashReconManagementPage() {
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
               <Stat label="Cash declared" value={fmt(t.cash_declared || 0)} accent />
               <Stat label="Credit declared" value={fmt(t.credit_declared || 0)} />
-              <Stat label="ePay declared" value={fmt(t.epay_declared || 0)} />
+              <Stat label="Bill-pay declared" value={fmt(t.epay_declared || 0)} />
               <Stat label="Cash pickups" value={fmt(t.cash_pickup || 0)} />
               <Stat label="Bill-pay pickups" value={fmt(t.billpay_pickup || 0)} />
               <Stat label="Sales-tx bill pay" value={t.sales_billpay == null ? '—' : fmt(t.sales_billpay)} sub={t.sales_billpay_card == null ? 'no sales-tx data' : `${fmt(t.sales_billpay_card)} on card`} />
@@ -156,8 +156,8 @@ export default function CashReconManagementPage() {
                   <th style={{ ...th, textAlign: 'left' }}>Store</th>
                   <th style={th}>Cash declared</th>
                   <th style={th}>Credit declared</th>
-                  <th style={th}>ePay on cash</th>
-                  <th style={th}>ePay on credit</th>
+                  <th style={th}>Bill-pay on cash</th>
+                  <th style={th}>Bill-pay on credit</th>
                   <th style={th}>Cash pickup</th>
                   <th style={th}>Bill-pay pickup</th>
                   <th style={th}>POS cash</th>

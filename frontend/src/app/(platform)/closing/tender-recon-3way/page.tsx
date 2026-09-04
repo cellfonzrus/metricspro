@@ -166,7 +166,7 @@ export default function TenderRecon3WayPage() {
   const note = useMemo(() => {
     let n = 'X-report tender amounts include tax; sales-transaction figures are merchandise (ext price), so small deltas between those two are expected.'
     if (depositBasis) n += ` Bank Deposit is compared against the tenant's configured basis (${depositBasis.replace(/_/g, ' ')}).`
-    if (!xReportEver) n += ' This tenant has NEVER had a POS X-report imported — check (1) the mailbox has an *X-Report* -> x_report rule and (2) b2bsoft is actually scheduled to email an X-Report for this tenant.'
+    if (!xReportEver) n += ' This tenant has NEVER had a POS X-report imported — check (1) the mailbox has an *X-Report* -> x_report rule and (2) the POS back office is actually scheduled to email an X-Report for this tenant.'
     if (summary.unmappedX) n += ` ⚠ ${fmt(summary.unmappedX)} of X-report tenders (selected range/selection) used a raw label this tenant's mapping doesn't recognize — map it on /closing/tender-config.`
     if (summary.unmappedS) n += ` ⚠ ${fmt(summary.unmappedS)} of sales-transaction tenders (selected range/selection) used a raw label this tenant's mapping doesn't recognize.`
     return n
@@ -253,7 +253,7 @@ export default function TenderRecon3WayPage() {
             <li>
               <strong>Set up automatic daily import:</strong> under <a href="/commcalc/email-imports" style={{ color: '#92400e', fontWeight: 600 }}>Email Imports</a>,
               confirm the mailbox has a <code>*X-Report*</code> → <code>x_report</code> rule (this is a default rule on a freshly configured mailbox,
-              so if it's missing it may have been edited out), AND confirm with b2bsoft that the X-Report is actually
+              so if it's missing it may have been edited out), AND confirm with the POS vendor that the X-Report is actually
               <em> scheduled</em> to be emailed to that inbox daily — that's a separate step from the mailbox rule itself.
             </li>
           </ol>

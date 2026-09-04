@@ -9,6 +9,7 @@ import type { EntityOption } from '@/components/EntityPicker'
 import type { StandardFilterValue } from '@/lib/standard-filters'
 import ReportShell from '@/components/ReportShell'
 import type { ExportColumn } from '@/lib/export'
+import { useReportLabels } from '@/lib/report-labels'
 import SubmissionsTable, { monthStart } from './_lib/SubmissionsTable'
 import { MarketStorePicker, type StoreOpt } from './_lib/MarketStorePicker'
 
@@ -120,21 +121,25 @@ export default function ClosingDashboard() {
 
   const cov = data ? `${data.verified_keys}/${data.submitted_keys}` : '—'
 
+  // Carrier vocabulary (owner 2026-09-04): the bill-pay processor name is per-carrier preset DATA
+  // (mig 953 — boost renders 'ePay' byte-identical to today).
+  const { term } = useReportLabels()
+  const ep = term('processor', 'Bill-pay')
   const storeColumns: ExportColumn[] = useMemo(() => [
     { header: 'Store', field: 'store_address', role: 'store', get: (r: any) => r.store_address || r.store_name || '—' },
     { header: 'Market', field: 'market', get: (r: any) => r.market },
     { header: 'Days', field: 'days', type: 'number', get: (r: any) => r.days },
     { header: 'Cash $', field: 'cash', money: true, get: (r: any) => cashTotal(r) },
     { header: 'Credit $', field: 'credit', money: true, get: (r: any) => cardTotal(r) },
-    { header: 'ePay Cash $', field: 'epay_cash', money: true, get: (r: any) => epayCash(r) },
-    { header: 'ePay Credit $', field: 'epay_credit', money: true, get: (r: any) => epayCard(r) },
+    { header: `${ep} Cash $`, field: 'epay_cash', money: true, get: (r: any) => epayCash(r) },
+    { header: `${ep} Credit $`, field: 'epay_credit', money: true, get: (r: any) => epayCard(r) },
     { header: 'Accessory $', field: 'acc_sale', money: true, get: (r: any) => r.acc_sale },
     { header: 'Other $', field: 'other_account', money: true, get: (r: any) => r.other_account },
     { header: 'Upgrades #', field: 'upgrade_count', type: 'number', get: (r: any) => r.upgrade_count },
     { header: 'New Lines #', field: 'new_line_count', type: 'number', get: (r: any) => r.new_line_count },
     { header: 'Postpaid #', field: 'postpaid_count', type: 'number', get: (r: any) => r.postpaid_count },
     { header: 'Submissions #', field: 'rows', type: 'number', get: (r: any) => r.rows },
-  ], [])
+  ], [ep])
 
   const repColumns: ExportColumn[] = useMemo(() => [
     { header: 'Rep', field: 'employee_name', role: 'rep', get: (r: any) => r.employee_name || '—' },
@@ -143,15 +148,15 @@ export default function ClosingDashboard() {
     { header: 'Days', field: 'days', type: 'number', get: (r: any) => r.days },
     { header: 'Cash $', field: 'cash', money: true, get: (r: any) => cashTotal(r) },
     { header: 'Credit $', field: 'credit', money: true, get: (r: any) => cardTotal(r) },
-    { header: 'ePay Cash $', field: 'epay_cash', money: true, get: (r: any) => epayCash(r) },
-    { header: 'ePay Credit $', field: 'epay_credit', money: true, get: (r: any) => epayCard(r) },
+    { header: `${ep} Cash $`, field: 'epay_cash', money: true, get: (r: any) => epayCash(r) },
+    { header: `${ep} Credit $`, field: 'epay_credit', money: true, get: (r: any) => epayCard(r) },
     { header: 'Accessory $', field: 'acc_sale', money: true, get: (r: any) => r.acc_sale },
     { header: 'Other $', field: 'other_account', money: true, get: (r: any) => r.other_account },
     { header: 'Upgrades #', field: 'upgrade_count', type: 'number', get: (r: any) => r.upgrade_count },
     { header: 'New Lines #', field: 'new_line_count', type: 'number', get: (r: any) => r.new_line_count },
     { header: 'Postpaid #', field: 'postpaid_count', type: 'number', get: (r: any) => r.postpaid_count },
     { header: 'Submissions #', field: 'rows', type: 'number', get: (r: any) => r.rows },
-  ], [])
+  ], [ep])
 
   return (
     <div>
@@ -219,8 +224,8 @@ export default function ClosingDashboard() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12, marginBottom: 18 }}>
             <Tile label="Cash collected" value={fmt(cashTotal(t))} onClick={() => drillTo('all')} />
             <Tile label="Credit collected" value={fmt(cardTotal(t))} onClick={() => drillTo('all')} />
-            <Tile label="ePay cash" value={fmt(epayCash(t))} sub="already inside Cash collected" onClick={() => drillTo('all')} />
-            <Tile label="ePay credit" value={fmt(epayCard(t))} sub="already inside Credit collected" onClick={() => drillTo('all')} />
+            <Tile label={`${ep} cash`} value={fmt(epayCash(t))} sub="already inside Cash collected" onClick={() => drillTo('all')} />
+            <Tile label={`${ep} credit`} value={fmt(epayCard(t))} sub="already inside Credit collected" onClick={() => drillTo('all')} />
             <Tile label="Accessory sales" value={fmt(t.acc_sale)} onClick={() => drillTo('all')} />
             <Tile label="Other (Zelle/CashApp)" value={fmt(t.other_account)} onClick={() => drillTo('all')} />
             <Tile label="Activations" value={`${(t.new_line_count || 0) + (t.postpaid_count || 0)}`} sub={`${t.new_line_count || 0} new · ${t.postpaid_count || 0} postpaid`} onClick={() => drillTo('all')} />
