@@ -121,7 +121,9 @@ print("\n§6 · /payables/filter-options serves the ROW vocabulary + its markets
 R.sb = lambda: FakeClient({"store_mapping": MAPPING})
 res = R.payables_filter_options(org_id=ORG)
 stores = [s["store"] for s in res["stores"]]
-ok(res["source"] == "store_mapping", "source is named in the response")
+# 2026-09-04: filter-options now overlays the canonical union index (core.scope §13c) on top of the
+# store_mapping vocabulary, and says so — either source name is a valid self-description.
+ok(res["source"] in ("store_mapping", "store_mapping+union"), "source is named in the response")
 ok(len(stores) == 4, f"4 luxelink stores offered (got {len(stores)})")
 ok("1 Other St" not in stores, "the other tenant's store is absent")
 ok(stores == sorted(stores), "options are sorted (stable pick-don't-type list)")

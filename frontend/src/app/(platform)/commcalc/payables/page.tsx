@@ -313,10 +313,20 @@ export default function PayablesPage() {
         )}
       </div>
 
-      {tab !== 'map' && (filterOpts.stores.length > 0 || filterOpts.markets.length > 0) && (
+      {/* PLATFORM-WIDE (owner directive 2026-09-04: "the cellfonz r us has the market and store filter
+          but luxelink does not, need to be platform wide"): the bar is gated on the CANONICAL org
+          roster ∪ the loaded rows — never on the rows alone. The old gate keyed on optionsFromRows,
+          so a tenant whose rows carried no store (every Total/MA device before the store-attribution
+          fix) lost the whole filter bar; the roster (/payables/filter-options → core.scope §13c
+          canonical enumeration) exists for every tenant, so the bar now renders for every tenant.
+          marketOptions rides the same endpoint's canonical org_market_options list (∪ row stamps)
+          for the non-cascade fallback; in cascade mode the roster's per-store market stamps —
+          resolved server-side through the same canonical union resolver — drive the picker. */}
+      {tab !== 'map' && (cascade.length > 0 || rosterMarkets.length > 0 || filterOpts.stores.length > 0 || filterOpts.markets.length > 0) && (
         <StandardFilterBar value={filt} onChange={setFilt} show={{ period: false, reps: false }}
           cascadeStores={cascade}
-          storeOptions={filterOpts.stores} marketOptions={filterOpts.markets} />
+          storeOptions={filterOpts.stores}
+          marketOptions={[...new Set([...rosterMarkets, ...filterOpts.markets])].sort()} />
       )}
 
       {loading && <div style={{ color: 'var(--muted)', fontSize: 13 }}>Loading…</div>}
