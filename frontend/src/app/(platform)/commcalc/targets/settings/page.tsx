@@ -2,7 +2,6 @@
 import { useState, useEffect } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
-import { useActiveCarrier } from '@/lib/auth-context'
 
 interface TargetRow {
   store_code: string
@@ -29,7 +28,6 @@ interface TargetRow {
 export default function TargetSettingsPage() {
   const { period } = usePeriod()
   // Active-carrier lens: name financing vendors generically for a dual-carrier tenant.
-  const { multi } = useActiveCarrier()
   const [rows, setRows] = useState<TargetRow[]>([])
   const [byodDefault, setByodDefault] = useState(35)
   const [loading, setLoading] = useState(true)
@@ -193,7 +191,7 @@ export default function TargetSettingsPage() {
         💡 <strong>Activations</strong> = premium + BYOD acts (count). <strong>Upgrades</strong> = upgrade acts (count).
         <strong> Accessories</strong> = monthly GP ($, seeded from the store's StoreOps monthly target).
         <strong> BYOD %</strong> = share of activations expected to be BYOD (blank = KPI default {byodDefault}%).
-        <strong> Financing</strong> = financed units per month ({multi ? 'any vendor you map' : 'Edge / ACIMA / any vendor you map'}) — this is
+        <strong> Financing</strong> = financed units per month (any vendor you map) — this is
         what the <a href="/commcalc/financing" style={{ textDecoration: 'underline' }}>Financing report</a>
         {' '}measures attainment against, monthly.
       </div>
