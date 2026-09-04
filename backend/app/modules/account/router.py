@@ -39,8 +39,7 @@ def require_org(org_id: str):
 @router.get("/companies")
 def list_companies(org_id: str = ORG_ID):
     require_org(org_id)
-    rows = (sb().schema("commcalc").table("companies").select("*")
-            .eq("org_id", org_id).order("name").execute().data) or []
+    rows = coa.org_companies(sb(), org_id, cols="*")   # canonical entity enumeration (fail closed)
     return {"companies": rows}
 
 
@@ -97,8 +96,7 @@ def list_stores(org_id: str = ORG_ID):
     mapping = coa._fetch_all(client, "store_mapping", "store_address,market", {"org_id": org_id})
     assigns = {(_a := (r.get("store_address") or "").strip()): r.get("company_id")
                for r in coa._fetch_all(client, "store_companies", "store_address,company_id", {"org_id": org_id})}
-    companies = (client.schema("commcalc").table("companies").select("id,name")
-                 .eq("org_id", org_id).execute().data) or []
+    companies = coa.org_companies(client, org_id)   # canonical entity enumeration (fail closed)
     co_name = {c["id"]: c["name"] for c in companies}
     seen, out = set(), []
 
@@ -212,8 +210,7 @@ def put_journal(period: str, body: PutJournalIn, org_id: str = ORG_ID):
     resolved = []
     try:
         from app.modules.account import balance_sheet as _bs
-        companies = (client.schema("commcalc").table("companies").select("id,name")
-                     .eq("org_id", org_id).execute().data) or []
+        companies = coa.org_companies(client, org_id)   # canonical entity enumeration
         co_name = {c["id"]: c["name"] for c in companies}
         matcher = _bs.journal_company_matcher(companies)
         for e in ins:
@@ -837,13 +834,22 @@ async def liabilities_due_endpoint(date: str = "", authorization: str = Header(d
 
 @router.get("/overview/{period}")
 def overview(period: str, org_id: str = ORG_ID):
-    """Headline numbers + the list of computed scopes for the dashboard + filter dropdowns."""
+    """Headline numbers + the list of computed scopes for the dashboard + filter dropdowns.
+
+    FAIL-CLOSED SCOPE INVENTORY (owner directive 2026-09-04 — "cash flow analysis in cellfonz r us
+    has … nova wave, and luxelink in the drop down menu … fix this as a system not a band aid"):
+    every `company:<id>` scope offered here is cross-checked against the org's OWN canonical company
+    inventory (`coa.org_companies`). A stored snapshot whose company id is not one of this tenant's
+    entities — a foreign entity mis-filed under the org, or a stale snapshot for a since-deleted
+    company — is DROPPED from the dropdown (`coa.filter_org_scopes`), never rendered. This is the
+    single scope-picker source for the Account dashboard, P&L, Balance Sheet and Cash Flow pages."""
     require_org(org_id)
     rows = (sb().schema("commcalc").table("account_statements")
             .select("statement_type,scope_key,scope_label,payload,crosscheck_ok,computed_at,model")
             .eq("org_id", org_id).eq("period", period).execute().data) or []
-    companies = (sb().schema("commcalc").table("companies").select("id,name")
-                 .eq("org_id", org_id).order("name").execute().data) or []
+    companies = coa.org_companies(sb(), org_id)   # canonical entity enumeration (fail closed)
+    own_ids = {str(c["id"]) for c in companies}
+    rows = coa.filter_org_scopes(rows, own_ids)   # foreign/stale company scopes never render
     scopes = {}
     for r in rows:
         sk = r["scope_key"]
@@ -1072,7 +1078,10 @@ async def financial_analysis(months: int = 12, authorization: str = Header(defau
 
     try:
         rows = await run_in_threadpool(_rows)   # bulk Supabase read off the event loop (SEV-1 rule)
-        return {"org_id": org_id, **analysis.assemble(rows, months=months)}
+        own_ids = await run_in_threadpool(
+            lambda: {str(c["id"]) for c in coa.org_companies(sb(), org_id)})
+        return {"org_id": org_id, **analysis.assemble(rows, months=months,
+                                                      own_company_ids=own_ids)}
     except Exception as e:
         raise HTTPException(500, f"analysis failed: {type(e).__name__}: {e}")
 

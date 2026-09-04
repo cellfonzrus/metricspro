@@ -145,6 +145,101 @@ def _ingest_screen_guard(src, lineno):
           f"ingest_store_guard.screen; GUARDED_TABLES covers {sorted(covered)}")
 
 
+# ── LEAK CLASS 3: ENTITY ENUMERATION OUTSIDE THE CANONICAL HELPER (Nova Wave/Luxlink, 2026-09-04) ─
+# The owner's cellfonz Cash Flow scope dropdown offered ANOTHER TENANT'S companies. The data half was
+# poisoned `commcalc.companies` rows (LuxeLink entities created under the house org, mig 952); the
+# SYSTEMIC half is here: `coa.org_companies` is THE one read of `commcalc.companies` for the whole
+# backend — org-scoped, fail-closed, double-filtered by the pure `own_entities`
+# (harness_finance_entity_enumeration.py). This scan fails the build on any OTHER select against the
+# table, so no future page/endpoint can grow its own sibling enumeration that forgets the org scope
+# or the fail-closed cross-check. Allowed outside the helper: writes (org_id in payload/chain, the
+# CRUD endpoints) and org-scoped `count=` probes (billing's quantity driver counts rows, returns none).
+_APP_DIR = os.path.join(_HERE, "app")
+_CANON_ENUM_FILE = os.path.join("modules", "account", "coa.py")
+
+
+def classify_company_chain(chain, relpath):
+    """One `.table('companies') … .execute(` chain →
+      'canonical' — the org-scoped select inside account/coa.py (org_companies itself)
+      'write'     — insert/upsert (org_id in payload) or org-scoped update/delete
+      'count'     — an org-scoped count-only probe (returns a number, never rows)
+      'violation' — any other select: a sibling enumeration; must call coa.org_companies."""
+    if _OPT_OUT in chain:
+        return "write"          # explicit opt-out, same escape hatch as the sensitive-table scan
+    has_ins = (".insert(" in chain) or (".upsert(" in chain)
+    has_mut = (".update(" in chain) or (".delete(" in chain)
+    if has_ins or has_mut:
+        return "write" if (has_ins and not has_mut) or ("org_id" in chain) else "violation"
+    if "count=" in chain:
+        return "count" if "org_id" in chain else "violation"
+    if relpath.endswith(_CANON_ENUM_FILE):
+        return "canonical" if "org_id" in chain else "violation"
+    return "violation"
+
+
+def _entity_enum_self_test():
+    cases = [
+        (".table('companies').select(sel).eq('org_id', org_id).order('name').execute(",
+         "modules/account/coa.py", "canonical"),
+        (".table('companies').select('id,name').eq('org_id', org_id).execute(",
+         "modules/account/router.py", "violation"),      # sibling enumeration — the leak class
+        (".table('companies').select('id,name').execute(",
+         "modules/account/coa.py", "violation"),          # canonical file but scope dropped
+        (".table('companies').insert(row).execute(", "modules/account/router.py", "write"),
+        (".table('companies').update(upd).eq('org_id', org_id).eq('id', cid).execute(",
+         "modules/account/router.py", "write"),
+        (".table('companies').update(upd).eq('id', cid).execute(",
+         "modules/account/router.py", "violation"),       # unscoped mutate
+        (".table('companies').select('id', count='exact').eq('org_id', org_id).execute(",
+         "modules/billing/router.py", "count"),
+        (".table('companies').select('id', count='exact').execute(",
+         "modules/billing/router.py", "violation"),       # unscoped count
+    ]
+    for chain, rel, want in cases:
+        got = classify_company_chain(chain, rel)
+        ok(got == want, f"entity-enum self-test: expected {want}, got {got} for: {chain[:70]}")
+
+
+def _entity_enum_guard():
+    comp_re = re.compile(r"""\.table\(\s*["']companies["']\s*\)""")
+    counts = {"canonical": 0, "write": 0, "count": 0}
+    violations = []
+    for root, _dirs, files in os.walk(_APP_DIR):
+        for fn in files:
+            if not fn.endswith(".py"):
+                continue
+            path = os.path.join(root, fn)
+            rel = os.path.relpath(path, _APP_DIR)
+            src = open(path, encoding="utf-8").read()
+            for m in comp_re.finditer(src):
+                seg = src[m.start(): m.start() + _WINDOW]
+                exec_at = seg.find(".execute(")
+                chain = seg if exec_at == -1 else seg[: exec_at + len(".execute(")]
+                kind = classify_company_chain(chain, rel)
+                if kind == "violation":
+                    ln = src.count("\n", 0, m.start()) + 1
+                    violations.append((rel, ln, " ".join(chain.split())[:110]))
+                else:
+                    counts[kind] += 1
+    for rel, ln, snippet in violations:
+        print(f"  ✗ {rel}:{ln}  .table('companies') outside the canonical enumeration:  {snippet} …")
+    ok(not violations,
+       f"{len(violations)} commcalc.companies quer(ies) outside coa.org_companies — every entity "
+       f"enumeration must go through the canonical fail-closed helper (owner 2026-09-04: foreign "
+       f"companies in the cellfonz Cash Flow dropdown)")
+    ok(counts["canonical"] == 1,
+       f"expected exactly ONE canonical companies read (coa.org_companies), found "
+       f"{counts['canonical']} — the helper was moved/duplicated; update _CANON_ENUM_FILE with care")
+    # the fail-closed double filter must stay wired inside the helper
+    coa_src = open(os.path.join(_APP_DIR, _CANON_ENUM_FILE), encoding="utf-8").read()
+    body = coa_src.split("def org_companies", 1)[-1].split("\ndef ", 1)[0]
+    ok("own_entities(" in body and 'eq("org_id"' in body.replace("'", '"'),
+       "coa.org_companies must keep BOTH the .eq('org_id', …) scope and the pure own_entities "
+       "double filter (fail-closed defense in depth)")
+    print(f"entity-enumeration guard — 1 canonical read, {counts['write']} write(s), "
+          f"{counts['count']} org-scoped count probe(s); no sibling enumerations")
+
+
 def main():
     src = open(_ROUTER, encoding="utf-8").read()
     # Precompute line numbers by character offset.
@@ -203,9 +298,11 @@ def main():
     ok(checked >= 20, f"guard inspected too few chains ({checked}) — detection may be broken")
 
     _ingest_screen_guard(src, lineno)
+    _entity_enum_guard()
 
     _self_test()
     _ingest_screen_self_test()
+    _entity_enum_self_test()
 
     print()
     print(f"{PASS} passed, {FAIL} failed")

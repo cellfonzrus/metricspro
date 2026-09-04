@@ -121,8 +121,8 @@ def _p_finance_config(client, org_id, ctx):
     # (b) companies (multi-company books) + (c) store → company assignment
     companies = None
     try:
-        companies = (client.schema("commcalc").table("companies").select("id,name")
-                     .eq("org_id", org_id).limit(500).execute().data) or []
+        from app.modules.account import coa as _coa
+        companies = _coa.org_companies(client, org_id)   # canonical entity enumeration (fail closed)
     except Exception:
         companies = None
 

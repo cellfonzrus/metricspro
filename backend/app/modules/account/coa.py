@@ -257,10 +257,64 @@ def _sales_union_rows(client, org_id, period_keys):
     return merged
 
 
+# ── CANONICAL COMPANY/ENTITY ENUMERATION (owner directive 2026-09-04: "fix this as a system,
+# not a band aid" — LuxeLink's Nova Wave / Luxlink companies surfaced in the cellfonz Cash Flow
+# scope dropdown). A tenant's entity list may contain ITS OWN companies and nothing else, ever.
+# `org_companies` is the ONE read of `commcalc.companies` for the whole finance module (CI-pinned:
+# harness_org_scope_guard.py entity-enumeration section fails the build on any other select against
+# the table), and `own_entities`/`filter_org_scopes` are its PURE fail-closed cores
+# (harness_finance_entity_enumeration.py). House-org semantics: house-default inheritance applies to
+# CONFIG only — tenant ENTITIES are never inherited, so the house org gets ONLY its own companies
+# through the exact same predicate as every other org. ─────────────────────────────────────────────
+def own_entities(rows, org_id):
+    """PURE fail-closed core of org_companies: keep ONLY rows whose org_id == org_id.
+
+    • blank/None org_id → ValueError (a scope-less enumeration must never silently return rows);
+    • a row with a missing or foreign org_id is DROPPED (defense-in-depth over the query's own
+      .eq('org_id', …) — a poisoned client, view, or cache can still never hand a tenant another
+      tenant's entities);
+    • no house fallback of any kind: entities are per-org data, not config."""
+    if not org_id:
+        raise ValueError("org_id required for entity enumeration (fail closed)")
+    want = str(org_id)
+    return [r for r in (rows or [])
+            if isinstance(r, dict) and str(r.get("org_id") or "") == want]
+
+
+def org_companies(client, org_id, cols="id,name"):
+    """THE canonical org-scoped enumeration of a tenant's companies (legal entities), ordered by
+    name for stable dropdowns. Always selects org_id alongside `cols` so the pure `own_entities`
+    double-filter can verify every returned row. Raises on a blank org_id (fail closed)."""
+    if not org_id:
+        raise ValueError("org_id required for entity enumeration (fail closed)")
+    want = {c.strip() for c in str(cols).split(",") if c.strip()}
+    sel = "*" if "*" in want else ",".join(sorted(want | {"org_id"}))
+    rows = (client.schema("commcalc").table("companies").select(sel)
+            .eq("org_id", org_id).order("name").execute().data) or []
+    return own_entities(rows, org_id)
+
+
+def filter_org_scopes(scopes, own_company_ids, key="scope_key"):
+    """PURE: drop any `company:<id>` scope whose id is NOT in the org's own canonical company
+    inventory (`own_company_ids` — ids from org_companies). Non-company scopes (consolidated,
+    store:, market:) pass through untouched. This makes every scope DROPDOWN fail closed even
+    against a stale or poisoned snapshot: a foreign entity's scope row can exist in storage and
+    still never render in another tenant's picker. A malformed 'company:' scope (empty id) is
+    dropped too — it can never be a real entity of this org."""
+    own = {str(i) for i in (own_company_ids or set())}
+    out = []
+    for s in (scopes or []):
+        sk = str((s.get(key) if isinstance(s, dict) else s) or "")
+        if sk.startswith("company:"):
+            if sk[len("company:"):] not in own or not sk[len("company:"):]:
+                continue
+        out.append(s)
+    return out
+
+
 def store_company_map(client, org_id):
     """store_address (normalized) -> company_id, plus a default-company id."""
-    companies = (client.schema("commcalc").table("companies").select("id,name")
-                 .eq("org_id", org_id).execute().data) or []
+    companies = org_companies(client, org_id)   # the canonical entity enumeration (fail closed)
     default_id = next((c["id"] for c in companies if c["name"] == "Default Company"),
                       (companies[0]["id"] if companies else None))
     mp = {}
