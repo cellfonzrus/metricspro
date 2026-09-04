@@ -178,6 +178,50 @@ ok("activation" not in emd.bucket_coverage(HOUSE_ROWS, fixed)["matched"],
    "the contract-type bucket is excluded (its zero is a legitimate answer)")
 ok(emd.bucket_coverage([None, None], fixed)["scanned"] == 0, "None rows are skipped, never fatal")
 
+# ── D2. applicability: the answer to "activation fee ... is accounted for" (mig 963) ──────────────
+print("\n§D2  not-applicable buckets (mig 963)")
+NA = emd.resolve([{"org_id": HOUSE, "bucket": "activation_fee",
+                   "rules": {"product_desc_contains": ["access charge"]},
+                   "basis": "ext_price", "carrier": None, "applicable": False}], HOUSE, boost)
+ok(NA["activation_fee"]["applicable"] is False, "applicable=false survives resolution")
+cov_na = emd.bucket_coverage(HOUSE_ROWS, NA)
+ok(not any(g["bucket"] == "activation_fee" for g in cov_na["gaps"]),
+   "a not-applicable bucket is NOT reported as a gap (no monthly false alarm)")
+eq(cov_na["not_applicable"], ["activation_fee"], "…it is reported under not_applicable instead")
+ok(all(g["bucket"] != "activation_fee" for g in cov_na["gaps"]), "and never both")
+
+# the flag silences the banner, it must NEVER suppress counting
+ok("applicable" not in emd.strip_sources(NA)["activation_fee"],
+   "the aggregation shape carries no applicable flag — counting is unaffected")
+FEE_ROW = line("dev. charges or fees", "access", "monthly access charge")
+ok(emd.line_match(NA["activation_fee"]["rules"], "dev. charges or fees", "access", "monthly access charge"),
+   "a matching line is STILL classified for a not-applicable bucket (money is never hidden)")
+eq(emd.bucket_coverage(HOUSE_ROWS + [FEE_ROW], NA)["matched"]["activation_fee"], 1,
+   "…and still counted")
+
+# default and missing-column behavior
+ok(emd.resolve([{"org_id": HOUSE, "bucket": "phones", "rules": {"department": ["x"]},
+                 "basis": "count", "carrier": None}], HOUSE, boost)["phones"]["applicable"] is True,
+   "a row with no `applicable` key (pre-963) resolves to applicable=true")
+ok(emd.resolve([], HOUSE, boost)["phones"]["applicable"] is True, "built-in defaults are applicable")
+eq(emd.bucket_coverage([], NA)["not_applicable"], ["activation_fee"],
+   "not_applicable is reported even for an empty period")
+
+# ── D3. the phones fix: tablet is not a phone ─────────────────────────────────────────────────────
+print("\n§D3  phones bucket (owner: 'tablet is not a phone')")
+PHONES = {"department": ["iphone - xp", "android - xp"]}
+HANDSETS = ([line("iphone - xp", "apple", "iphone 15")] * 3
+            + [line("android - xp", "samsung", "galaxy a15")] * 2
+            + [line("tablet - xp", "quality one", "tab")] * 2
+            + [line("byod", "accessories", "case")] * 2)
+eq(sum(1 for r in HANDSETS if match(PHONES, r)), 5, "handset departments count")
+ok(not any(match(PHONES, r) for r in HANDSETS if r["department"] == "tablet - xp"),
+   "a tablet is NOT counted as a phone")
+ok(not any(match(PHONES, r) for r in HANDSETS if r["department"] == "byod"),
+   "the BYOD department (mostly accessories) is not counted as a phone")
+eq(sum(1 for r in HANDSETS if match(emd.CODE_DEFAULTS["phones"]["rules"], r)), 0,
+   "THE BUG: the built-in category tokens matched none of these handset lines")
+
 # ── E. hygiene ────────────────────────────────────────────────────────────────────────────────────
 print("\n§E  RULE TWO + migration hygiene")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -188,6 +232,14 @@ for brand in ("boost", "total wireless", "luxelink", "cellfonz", "vidapay", "ver
     ok(brand not in body.lower(), f"RULE TWO: no {brand!r} in the module's executable body")
 
 mig = open(os.path.join(HERE, "../database/migrations/962_exec_metric_carrier_presets.sql"), encoding="utf-8").read()
+mig963 = open(os.path.join(HERE, "../database/migrations/963_exec_metric_phones_and_applicability.sql"), encoding="utf-8").read()
+ok("-- REVERT" in mig963, "mig 963 carries a REVERT note")
+ok("IF NOT EXISTS" in mig963 and "ON CONFLICT" in mig963, "mig 963 is idempotent/additive")
+ok("CREATE TABLE" not in mig963.upper(), "mig 963 EXTENDS the existing table")
+# the double-count trap the owner's answer avoids: activation_fee must NOT be pointed at setup-fee lines
+ok("device setup charge" not in re.sub(r"^--.*$", "", mig963, flags=re.M).lower(),
+   "mig 963 never maps activation_fee onto the device set-up fee lines (would double-count)")
+ok("applicable = false" in mig963.lower(), "mig 963 marks the bucket not-applicable instead")
 ok("-- REVERT" in mig, "migration carries a REVERT note")
 ok("IF NOT EXISTS" in mig, "migration is idempotent/additive")
 ok("ON CONFLICT" in mig, "seeds are re-runnable")

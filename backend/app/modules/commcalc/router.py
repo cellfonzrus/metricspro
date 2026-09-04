@@ -23466,16 +23466,25 @@ def _exec_metric_config(client, org_id, with_sources=False):
 
     Byte-identical to pre-962 for any org that has its own row or no carrier preset. Never raises: a
     missing table/column (pre-962 database) degrades to the org's own rows, then the code defaults."""
+    # Column ladder, widest first: mig 963 (applicable) → mig 962 (carrier) → the pre-962 legacy shape.
+    # Each step degrades to strictly less capability, never to an error: a missing `applicable`
+    # resolves to true and a missing `carrier` makes every row an org-own definition — which is
+    # exactly the pre-962 behavior. A database part-way through the sequence still serves the report.
+    rows = None
     try:
-        try:
-            rows = (client.schema('commcalc').table('exec_metric_config')
-                    .select('org_id,bucket,rules,basis,carrier')
-                    .in_('org_id', [org_id, _emd.HOUSE_ORG]).execute().data) or []
-        except Exception:
-            # pre-962 database: no `carrier` column. Read the legacy shape; with no carrier on any
-            # row, split_rows classifies them all as org-own definitions — exactly today's behavior.
-            rows = (client.schema('commcalc').table('exec_metric_config')
-                    .select('org_id,bucket,rules,basis').eq('org_id', org_id).execute().data) or []
+        for _sel, _scope in (('org_id,bucket,rules,basis,carrier,applicable', 'both'),
+                             ('org_id,bucket,rules,basis,carrier', 'both'),
+                             ('org_id,bucket,rules,basis', 'own')):
+            try:
+                q = client.schema('commcalc').table('exec_metric_config').select(_sel)
+                q = (q.in_('org_id', [org_id, _emd.HOUSE_ORG]) if _scope == 'both'
+                     else q.eq('org_id', org_id))
+                rows = q.execute().data or []
+                break
+            except Exception:
+                continue
+        if rows is None:
+            rows = []
         try:
             carriers = (client.schema('commcalc').table('carrier')
                         .select('code,name,is_default').eq('org_id', org_id).execute().data) or []

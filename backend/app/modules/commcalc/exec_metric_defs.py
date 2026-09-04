@@ -46,6 +46,12 @@ WHAT THIS MODULE IS (pure; no DB, no I/O; stdlib only — proof: harness_exec_me
      display-only, never-raises posture) as the existing `_classification_gaps` banner that names
      uncounted contract types. A silently-zero metric is the failure this makes impossible.
 
+     A bucket a tenant genuinely does not have (mig 963 `applicable=false` — e.g. a carrier that
+     charges no separate activation fee because the equivalent is booked in its own column) is
+     EXCLUDED from the gaps and reported under `not_applicable` instead. A warning that fires every
+     month for a correct 0 is a warning nobody reads. It silences the banner only: the bucket is
+     still counted, so a line that does appear is never hidden.
+
 RULE TWO: no carrier or tenant name appears in this module. The presets are DATA (mig 962 rows);
 this file only knows how to resolve and how to notice a bucket that matches nothing.
 """
@@ -143,7 +149,12 @@ def split_rows(rows, org_id, house_org=HOUSE_ORG):
         bucket = r.get('bucket')
         if bucket not in CODE_DEFAULTS:
             continue          # unknown bucket = ignored, never crashes the report
-        entry = {'rules': r.get('rules') or {}, 'basis': r.get('basis') or CODE_DEFAULTS[bucket]['basis']}
+        # `applicable` (mig 963): False = this bucket has no counterpart in this tenant's business, so
+        # its 0 is the correct answer and the coverage detector must NOT flag it. A missing column /
+        # NULL means True — every pre-963 row keeps behaving exactly as before.
+        _app = r.get('applicable')
+        entry = {'rules': r.get('rules') or {}, 'basis': r.get('basis') or CODE_DEFAULTS[bucket]['basis'],
+                 'applicable': True if _app is None else bool(_app)}
         carrier = _norm_carrier(r.get('carrier'))
         row_org = r.get('org_id')
         if carrier and row_org == house_org:
@@ -177,13 +188,18 @@ def resolve(rows, org_id, carrier_rows=None, house_org=HOUSE_ORG):
             entry, src = {'rules': dict(dflt['rules']), 'basis': dflt['basis']}, 'default'
         out[bucket] = {'rules': dict(entry['rules'] or {}),
                        'basis': entry.get('basis') or dflt['basis'],
+                       'applicable': bool(entry.get('applicable', True)),
                        'source': src}
     return out
 
 
 def strip_sources(resolved):
     """`resolve` output reduced to the {bucket: {'rules','basis'}} shape the aggregation consumes,
-    so adding provenance cannot change a single computed number."""
+    so adding provenance (or the mig-963 `applicable` flag) cannot change a single computed number.
+
+    NOTE `applicable` is deliberately NOT honored here: marking a bucket not-applicable silences the
+    coverage banner, it does not suppress counting. If such a line ever DOES appear it must still be
+    counted and visible — a flag that hid real money would be worse than the banner it silences."""
     return {b: {'rules': dict(v['rules']), 'basis': v['basis']} for b, v in (resolved or {}).items()}
 
 
@@ -225,9 +241,15 @@ def bucket_coverage(sale_rows, resolved, buckets=LINE_BUCKETS, top_n=5):
         for b in buckets:
             if line_match((resolved.get(b) or {}).get('rules'), d, c, p):
                 matched[b] += 1
+    # Buckets the tenant has marked NOT APPLICABLE (mig 963): this business has no such line, so 0 is
+    # the right answer and flagging it would make the banner cry wolf every month. A warning that is
+    # always on is a warning nobody reads — so these are reported separately, never as a gap.
+    not_applicable = [b for b in buckets if not (resolved.get(b) or {}).get('applicable', True)]
     gaps = []
     if scanned:
         for b in buckets:
+            if b in not_applicable:
+                continue
             if matched[b] == 0:
                 gaps.append({
                     'bucket': b,
@@ -242,4 +264,5 @@ def bucket_coverage(sale_rows, resolved, buckets=LINE_BUCKETS, top_n=5):
         note = (f"{len(gaps)} metric definition(s) matched no sales lines this period ({names}). "
                 f"The stored department/category tokens do not appear in this tenant's data, so the "
                 f"column reads 0 — set them under Metric definitions.")
-    return {'scanned': scanned, 'gaps': gaps, 'matched': matched, 'note': note}
+    return {'scanned': scanned, 'gaps': gaps, 'matched': matched,
+            'not_applicable': not_applicable, 'note': note}
