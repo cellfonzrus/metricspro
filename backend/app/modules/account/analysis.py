@@ -122,12 +122,21 @@ def _dedupe_latest(rows):
     return out
 
 
-def assemble(rows, months=12):
+def assemble(rows, months=12, own_company_ids=None):
     """The chart-ready analysis payload. `rows` = account_statements rows (dicts with period,
     statement_type, scope_key, scope_label, payload, computed_at) for ONE org — every statement
     type/scope welcome; unknown ones are ignored. `months` = trailing window (by computed months,
-    chronological). Nothing here re-derives money: it reads what the snapshots say."""
+    chronological). Nothing here re-derives money: it reads what the snapshots say.
+
+    `own_company_ids` (canonical inventory from coa.org_companies, owner directive 2026-09-04):
+    when given, `company:<id>` scopes NOT in the org's own entity inventory are dropped
+    (coa.filter_org_scopes — the same fail-closed rule as the statement scope dropdowns), so a
+    stale or foreign-entity snapshot can never chart in the per-company comparison. None (the
+    pure/legacy shape) skips the check."""
     months = max(1, min(int(months or 12), 36))
+    if own_company_ids is not None:
+        from app.modules.account.coa import filter_org_scopes
+        rows = filter_org_scopes(rows, own_company_ids)
     idx = _dedupe_latest(rows)
 
     # the month axis = months with a computed CONSOLIDATED P&L, chronological, trailing window

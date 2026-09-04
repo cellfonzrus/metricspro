@@ -459,6 +459,29 @@ commissions, expenses.
   route-module map + `DATA_GRANTS` (`company_valuation`) in `rbac.ts` and the Reports directory
   (`reports.ts`).
 
+- **Canonical entity/scope enumeration — fail-closed (owner directive 2026-09-04, mig `952`):**
+  "cash flow analysis in cellfonz r us has other companies like nova wave, and luxelink in the drop
+  down menu along with the T stores, need to fix this as a system not a band aid." The dropdown on
+  the Cash Flow / P&L / BS / dashboard pages is `GET /account/overview/{period}` `scopes` (stored
+  `account_statements` scope rows). The foreign names came from POISONED DATA, not an unscoped
+  query: two LuxeLink entities ("Novawave Communications LLC" `9b22c0d8…`, "Luxelink Wireless LLC"
+  `b5993b9d…`) were created under the HOUSE org on 2026-06-27 (zero store assignments, zero journal
+  refs, all-zero snapshots), and `statement_engine._scopes` faithfully built a `company:` scope per
+  row. Systemic fix (doctrine §13b): `coa.org_companies(client, org_id, cols)` is THE one read of
+  `commcalc.companies` (pure fail-closed core `coa.own_entities` — blank org raises, foreign/
+  orphan rows drop; house org gets ONLY its own entities, config-only inheritance never applies to
+  entities), and pure `coa.filter_org_scopes` drops any `company:<id>` scope not in the org's own
+  inventory from `overview` and `analysis.assemble(own_company_ids=…)` — a stale or foreign
+  snapshot can exist in storage and still never render. Converged callers: `router.list_companies`
+  / `list_stores` / `put_journal` echo / `overview`, `coa.store_company_map` (⇒ `company_assignment`
+  ⇒ engine + statement_engine + statement_filter), `finance_attention`. CI: entity-enumeration
+  section of `harness_org_scope_guard.py` fails the build on any OTHER `.table('companies')` select
+  backend-wide (writes + billing's org-scoped count probe classified, exactly ONE canonical read
+  pinned); isolation truth table `harness_finance_entity_enumeration.py`. Data cleanup mig `952`
+  (by-id deletes of the 2 phantom companies + their 16 all-zero scope snapshots + the 2 stale
+  §19.15 Diversey scope rows whose source raw_sales were removed 2026-09-03 — recompute July 2026
+  after applying to purge the $29.99 Diversey remnant from the stored consolidated P&L).
+
 - **Current Monetary Liabilities (owner directive 2026-09-03, with the mig-948 dashboards):**
   `GET /account/liabilities-due` (`account/router._liabilities_due_impl`) — "monies owed to the
   distributor, this weeks payments due, Payroll Due this week, payroll tax due, Rents due this
@@ -1111,6 +1134,56 @@ widening it changes payouts, so it stays byte-identical until the owner approves
 commission-agent; the plan-assignment audit `router.py` mirror deliberately matches the engine).
 Pinned PAY-ENGINE in the guard.
 
+### 13b. CANONICAL ENTITY (COMPANY) ENUMERATION — tenant entities never cross orgs (owner directive 2026-09-04)
+
+**Owner (verbatim):** "cash flow analysis in cellfonz r us has other companies like nova wave, and
+luxelink in the drop down menu along with the T stores, need to fix this as a system not a band aid."
+
+**The doctrine.** A tenant's COMPANY/ENTITY list (`commcalc.companies`) is per-org DATA, never
+config: house-default inheritance applies to CONFIG rows only and NEVER unions or falls back
+another org's entities into a tenant's enumeration — the house org gets ONLY its own companies
+through the exact same predicate as every other org. ANY code that answers "which companies does
+this org have?" — a dropdown, a scope inventory, a picker, an attribution map, an attention audit —
+resolves through the ONE canonical helper:
+  - `account/coa.org_companies(client, org_id, cols)` — org-scoped, ordered, FAIL-CLOSED: blank
+    org raises; every returned row is double-filtered by the pure core `coa.own_entities(rows,
+    org_id)` (rows with a missing/foreign org_id DROP even if a poisoned client/view hands them
+    back).
+  - `coa.filter_org_scopes(scopes, own_company_ids)` (pure) — the DROPDOWN cross-check: a
+    `company:<id>` scope renders ONLY when `<id>` is in the org's own current inventory, so a
+    stale snapshot (deleted company) or a poisoned snapshot (foreign entity) can sit in
+    `account_statements` and still never reach a picker. Wired into `GET /account/overview/{period}`
+    (the single scope-picker source for the Account dashboard / P&L / Balance Sheet / Cash Flow
+    pages) and `analysis.assemble(own_company_ids=…)` (per-company comparison series).
+
+**The 2026-09-04 root cause (row evidence, mig `952`):** not an unscoped query — every read was
+`.eq('org_id', …)`-scoped — but POISONED ROWS: LuxeLink's entities "Novawave Communications LLC"
+(`9b22c0d8…`) and "Luxelink Wireless LLC" (`b5993b9d…`) were created UNDER the house org as a
+batch on 2026-06-27 (the LuxeLink tenant `854f6d7b…` got its own proper rows 06-28/07-01), so
+`statement_engine._scopes` dutifully computed all-zero `company:` snapshots for them and the
+cellfonz dropdowns listed them for July–September 2026. Zero store assignments, zero journal
+references, all-zero payloads → removed by id in mig `952` together with their 16 snapshot rows
+and the 2 stale §19.15 Diversey store-scope rows (source rows removed 2026-09-03; July 2026 needs
+one recompute after applying to purge the $29.99 remnant from the stored consolidated P&L).
+
+**ENFORCED BY CI:** the entity-enumeration section of `backend/harness_org_scope_guard.py` scans
+the WHOLE backend for `.table('companies')` and fails the build on any select outside
+`coa.org_companies` (writes must be org-scoped/payload-scoped; count-only probes — billing's
+quantity driver — must be org-scoped; exactly ONE canonical read is pinned, and the helper must
+keep both its `.eq('org_id', …)` and its `own_entities` double filter). Isolation truth table
+(org A never in org B's list either direction, house gets only its own, blank org raises, orphan
+rows drop, foreign/stale/malformed `company:` scopes never render):
+`backend/harness_finance_entity_enumeration.py`.
+
+**Converged 2026-09-04:** `account/router.list_companies` (`GET /account/companies` — the journal
++ companies-page picker), `list_stores` (assignment page), `put_journal` company echo,
+`overview` (scope dropdowns, + `filter_org_scopes`), `financial_analysis` (passes
+`own_company_ids`), `coa.store_company_map` (⇒ `company_assignment` ⇒ `engine.compute_and_store`,
+`statement_engine.statement`/`compute_and_store`, `statement_filter.filtered_statement` — the
+compute and filter paths inherit the canonical enumeration in one move), and
+`finance_attention` (finance_config audit). Billing's `per_entity` count stays a count (returns no
+rows) and is pinned org-scoped in the guard.
+
 ---
 
 ## 14. Employees & scheduling (does it feed pay?)
@@ -1474,7 +1547,8 @@ Pinned PAY-ENGINE in the guard.
 | `commcalc.payout_schedule(+_line)` | `/payout-schedule` POST `11965` | `installment_engine.compute_installments` |
 | `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus, **BS inventory under `inventory_basis='devices'` + `GET /account/inventory-recon`** (`balance_sheet.device_inventory_cells` via `statement_engine`, mig `933`); statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`) |
 | `commcalc.journal_entries` | `PUT /account/journal/{period}` (`account/router.py` — delete+insert per period; echoes `rejected`/`resolved`) | `statement_engine._journal_rows` (BOTH period spellings) → `balance_sheet.journal_scope_entries` (fixed company scoping, mig `933`); legacy `engine.compute_and_store` exact-period read; staleness probe |
-| `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview`, `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet` |
+| `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview` (company scopes cross-checked against `coa.org_companies` via `coa.filter_org_scopes` — §13b), `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet` |
+| `commcalc.companies` | `POST/PATCH /account/companies` (org_id in payload/filter; mig `952` removed the two 2026-06-27 wrong-org LuxeLink rows) | ONLY `coa.org_companies` (§13b canonical fail-closed enumeration; CI-pinned by `harness_org_scope_guard.py`) → `list_companies`/`list_stores`/journal echo/`overview`/`analysis`/`finance_attention`/`store_company_map`⇒`company_assignment`; billing `per_entity` org-scoped count probe |
 | `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`/`938`/`941`) | `PUT /account/config`; mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate; mig-941 columns (`projection_config`, `valuation_config` JSONB — display-only assumptions, org seeds gated) | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933/938 knobs, adaptive), `projection_engine.load_projection_config`, `valuation.load_valuation_config` (mig-941, adaptive) |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
 | `commcalc.daily_closing` | closing sweep `033` | `deposit_recon.closing_cash_raw_by_store_day:147`, MI cash gate; **BS `store_cash_on_hand` line via `_cash_position_core` → `balance_sheet.store_cash_cells`** (mig `938`, basis-gated); **P&L bill-pay carve-out** (`account/billpay_pl.billpay_cells` on `epay_on_cash`/`epay_on_credit`, mig `939`, presentation-gated); **bill-pay coverage recon** (`_closing_collected_by_store_day` → `/billpay-coverage/{period}`) |
@@ -1559,7 +1633,9 @@ Pinned PAY-ENGINE in the guard.
 | `GET /account/inventory-recon` (per-store emailed-report ↔ unsold-phone-ledger ↔ manual ↔ effective tie-out + ghost counts) | `account/router.py` (`inventory_recon` → `statement_engine.inventory_reconciliation`) | §4 balance-sheet truths |
 | `POST /account/compute/{period}`, `POST /account/run-due` → `statement_engine.compute_and_store` (P&L + BS + Cash Flow snapshots; supersedes `engine.compute_and_store`, 2026-09-02). run-due is SELF-SCHEDULED since mig `940`: pg_cron job `account-recompute-run-due` (every 2h) via `commcalc.ensure_account_recompute_cron`, re-registered on every backend boot (`main.py` startup → `router._ensure_account_recompute_cron`) | `account/router.py` (`compute`), `account/autocompute.py` (`recompute_due`) | §4 statement engine |
 | `POST /notify/send` / `run-due` → report key `financial_statement` (fresh P&L+BS+CF at send time, any period/scope) | `notify/finance_reports.py` (`_financial_statement` → `statement_engine.statement`) | §4 statement engine |
-| `GET /account/analysis` (`?months=N` — chart-ready monthly trend/margins/OPEX composition/per-company+store comparison from STORED snapshots; `account_trends` grant) | `account/router.py` (`financial_analysis` → pure `analysis.assemble`) | §4 financial-analysis series |
+| `GET /account/analysis` (`?months=N` — chart-ready monthly trend/margins/OPEX composition/per-company+store comparison from STORED snapshots; `account_trends` grant; company series fail-closed via `own_company_ids`) | `account/router.py` (`financial_analysis` → pure `analysis.assemble`) | §4 financial-analysis series |
+| `GET /account/overview/{period}` (headline scopes + THE company/scope dropdown source for dashboard/P&L/BS/Cash-Flow; company scopes fail-closed against `coa.org_companies` per §13b) | `account/router.py` (`overview`) | §4, §13b |
+| `GET /account/companies` (canonical company picker — journal + companies pages) | `account/router.py` (`list_companies` → `coa.org_companies`) | §13b |
 | `GET /account/projection` (`?months=&horizon=` — deterministic linear/seasonal-naive P&L projection + cash runway, per-org `projection_config` mig `941`; rows flagged `projected:true`; `account_trends` grant) | `account/router.py` (`financial_projection` → pure `projection_engine.project`) | §4 projection engine |
 | `GET /account/valuation` (assumption-driven ESTIMATE range: TTM multiples + asset floor + projection-fed DCF w/ sensitivity grid; per-org `valuation_config` mig `941`; own default-closed `company_valuation` grant; disclaimer always in payload) | `account/router.py` (`company_valuation` → pure `valuation.valuation`) | §4 company valuation |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
