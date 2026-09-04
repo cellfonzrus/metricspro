@@ -605,8 +605,54 @@ async def _account_balance_sheet(org_id, f):
             "sheets": [{"name": "Balance Sheet", "rows": rows, "columns": _ACCT_COLS}]}
 
 
+async def _processor_ledger(org_id, f):
+    """Processor Daily Debits & Credits (owner 2026-09-04) — the org's carrier-processor money
+    movements day × transaction type (per-feed shapes in processor_ledger.FEED_SHAPES; the
+    processor's NAME resolves from the mig-953 report_term vocabulary, so each tenant's scheduled
+    copy carries its OWN processor's name). Defaults to business-today when unscheduled dates are
+    absent. `store`/`type`/`market` accept comma-separated lists (endpoint semantics)."""
+    from app.core.database import get_supabase
+    from app.modules.commcalc import processor_ledger as PL
+    date_from = str(f.get("date_from") or "").strip() or _business_today().isoformat()
+    date_to = str(f.get("date_to") or "").strip() or date_from
+    out = PL.assemble(get_supabase(), org_id, date_from, date_to)
+    cells = PL.filter_cells(
+        out["cells"],
+        stores=[s for s in str(f.get("store") or "").split(",") if s.strip()],
+        types=[t for t in str(f.get("type") or "").split(",") if t.strip()],
+        markets=[m for m in str(f.get("market") or "").split(",") if m.strip()])
+    roll = PL.day_type_rollup(cells)
+    # The processor's name comes from the org's resolved vocabulary — never a literal here.
+    label = (out.get("processor") or {}).get("label") or "payment processor"
+    total = roll["total"]
+    cols = [
+        {"header": "Date", "key": "date"},
+        {"header": "Transaction type", "key": "tx_type"},
+        {"header": "Debits", "key": "debits", "money": True},
+        {"header": "Credits", "key": "credits", "money": True},
+        {"header": "Net", "key": "net", "money": True},
+        {"header": "Rows", "key": "rows", "align": "right"},
+    ]
+    return {"title": f"{label} Daily Debits & Credits",
+            "subtitle": f"{date_from} → {date_to} · debits ${total['debits']:,.2f} · "
+                        f"credits ${total['credits']:,.2f} · net ${total['net']:,.2f}",
+            "filename": "processor-ledger",
+            "sheets": [{"name": "Daily ledger", "rows": roll["rows"], "columns": cols},
+                       {"name": "By day", "rows": roll["days"], "columns": [
+                           {"header": "Date", "key": "date"},
+                           {"header": "Debits", "key": "debits", "money": True},
+                           {"header": "Credits", "key": "credits", "money": True},
+                           {"header": "Net", "key": "net", "money": True},
+                           {"header": "Rows", "key": "rows", "align": "right"}]}]}
+
+
 # ── registry ──────────────────────────────────────────────────────────────────
 REPORTS = {
+    "processor_ledger": {
+        "label": "Processor Daily Debits & Credits",
+        "filters": ["date_from", "date_to", "store", "type", "market"],
+        "live_path": lambda f: "/commcalc/processor-ledger" + _qs(f, ["date_from", "date_to"]),
+        "build": _processor_ledger},
     "asset_ledger": {
         "label": "Asset Ledger", "filters": [],
         "live_path": lambda f: "/commcalc/asset", "build": _asset_ledger},

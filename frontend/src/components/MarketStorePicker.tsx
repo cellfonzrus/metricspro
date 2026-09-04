@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useMemo, useRef } from 'react'
 import { CheckboxDropdown } from '@/components/CheckboxDropdown'
-import { cascadeStores, marketsFromStores, pruneSelectedStores, type StoreOpt } from '@/lib/market-store-cascade'
+import { cascadeStores, marketsFromStores, pruneSelectedStores, NO_MARKET_ID, type StoreOpt } from '@/lib/market-store-cascade'
 
 export type { StoreOpt } from '@/lib/market-store-cascade'
 
@@ -19,11 +19,18 @@ export type { StoreOpt } from '@/lib/market-store-cascade'
  *
  * Store options need a `market` field to cascade against — pass the store roster shape (`market-store-
  * cascade.ts`'s `StoreOpt[]`) rather than a plain string/EntityOption list.
+ *
+ * `marketOptions` (§13c ENUMERATION doctrine, owner 2026-09-04 B-1115/LI): a caller whose endpoint
+ * composes the CANONICAL market vocabulary (core.scope.org_market_options — the org's full market
+ * universe ∪ the surface's own row stamps) passes it here, and the market dropdown offers that list
+ * UNIONED with the roster's own stamps. Without it the dropdown can only offer the markets the
+ * loaded roster happens to carry, which is exactly how a market recorded on one vocabulary only
+ * goes missing from some reports' filters. Omitted → today's behavior, byte-identical.
  */
 export function MarketStorePicker({
   stores, selectedMarkets, onMarketsChange, selectedStores, onStoresChange,
   showMarket = true, marketPlaceholder = 'Markets…', storePlaceholder = 'Stores…',
-  marketWidth = 170, storeWidth = 200,
+  marketWidth = 170, storeWidth = 200, marketOptions,
 }: {
   stores: StoreOpt[]
   selectedMarkets: string[]
@@ -37,8 +44,30 @@ export function MarketStorePicker({
   storePlaceholder?: string
   marketWidth?: number
   storeWidth?: number
+  /** Canonical market vocabulary from the caller's endpoint (see the note above). Unioned with the
+   *  roster's stamps, canonical spelling winning; the "(no market)" sentinel keeps its place last. */
+  marketOptions?: string[]
 }) {
-  const marketOpts = useMemo(() => marketsFromStores(stores), [stores])
+  // Canonical options first (a market the org HAS is offered even with no roster store loaded yet),
+  // then any roster stamp the vocabulary did not name — a spelling that labels real rows is never
+  // dropped. Case/whitespace-insensitive dedupe; the sentinel is re-appended last.
+  const marketOpts = useMemo(() => {
+    const fromStores = marketsFromStores(stores)
+    if (!marketOptions?.length) return fromStores
+    const seen = new Map<string, { id: string; label: string }>()
+    let sentinel: { id: string; label: string } | null = null
+    for (const m of marketOptions) {
+      const v = String(m || '').trim()
+      if (v) seen.set(v.replace(/\s+/g, ' ').toLowerCase(), { id: v, label: v })
+    }
+    for (const o of fromStores) {
+      if (o.id === NO_MARKET_ID) { sentinel = o; continue }
+      const k = o.id.replace(/\s+/g, ' ').toLowerCase()
+      if (!seen.has(k)) seen.set(k, o)
+    }
+    const out = [...seen.values()].sort((a, b) => a.label.localeCompare(b.label))
+    return sentinel ? [...out, sentinel] : out
+  }, [stores, marketOptions])
   const storeOpts = useMemo(() => {
     const cascaded = cascadeStores(stores, selectedMarkets)
     // Sublabel shows the market only while it's NOT already the narrowing dimension (once a market is

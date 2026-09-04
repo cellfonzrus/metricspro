@@ -77,6 +77,11 @@ PINNED = {
     "commcalc/device_cost_recon.py": {"filter_options": "FEEDER"},
     "commcalc/imei_rebate_report.py": {"filter_options": "FEEDER"},
     "commcalc/ma_handset_cogs.py": {"filter_options": "FEEDER"},
+    # Processor Daily Debits & Credits (owner 2026-09-04): the day × transaction-type ledger
+    # composes its market dropdown as canonical vocabulary ∪ the markets its own cells
+    # carry (stamped from core.scope.market_by_code), so a one-vocabulary market (B-1115/LI)
+    # is always offered AND always selectable.
+    "commcalc/processor_ledger.py": {"assemble": "CANONICAL"},
     "commcalc/router.py": {
         "_commission_mtd_result": "ECHO",          # scope echo of the applied market selection
         "_dcr_empty": "ECHO",                      # empty error payload
