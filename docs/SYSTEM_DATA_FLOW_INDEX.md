@@ -179,6 +179,41 @@ disagain (owner directive 2026-07-16, 2026-07-25).
   settings surface `components/ReportLabelSettings.tsx` ("🏷 Column labels" on Exec MTD). Display
   config, not a feed → NO lineage-registry entry.
 
+- **Exec-MTD METRIC DEFINITIONS: carrier presets + the silent-zero detector (owner 2026-09-04, mig `962`):**
+  owner report — *"executive mtd in cellfonz r us does not have bill payment qty, but luxelink has it"*.
+  ROOT CAUSE: the `bill_payment` bucket matches lines by EXACT `department`/`category` membership against
+  tokens that `router._EXEC_METRIC_DEFAULTS` derived from ONE tenant's export (`rtr` / `rtr product` /
+  `other carr. payments`). The other tenant spells the SAME concept `bill payments` / `boost rtr` /
+  `xfinity refill`, so it matched NOTHING and the column read ~0 in silence — **2 lines / $74.77 vs
+  6,869 lines / $359,873.05** for August 2026. Same defect CLASS as LI/1115 (a vocabulary pinned to one
+  tenant's spelling, with no signal when it matches nobody).
+  MECHANISM (mirrors mig `945`/`953`, reusing THEIR carrier identity primitives —
+  `report_labels.normalize_carrier_code` / `default_carrier`, never a second carrier resolver):
+  `commcalc.exec_metric_config` gains a nullable **`carrier`** column — NULL = that org's own definition
+  (every pre-962 row), NOT NULL at the HOUSE org = that carrier's PRESET. Resolution is PURE
+  (`commcalc/exec_metric_defs.py`: `CODE_DEFAULTS`/`line_match`/`split_rows`/`resolve`/`strip_sources`):
+  **tenant row > house carrier preset > built-in default**, LAZY auto-assign (a new tenant that picks a
+  carrier inherits the preset the moment the resolver runs; no setup hook; no carrier / no preset =
+  built-ins, byte-identical). `router._EXEC_METRIC_DEFAULTS` and `router._exec_line_match` are now
+  ALIASES of this module — one vocabulary, one predicate, no sibling copy.
+  THE PRECAUTION: `exec_metric_defs.bucket_coverage` → `GET /exec-mtd/*` response key **`metric_coverage`**
+  → the red banner on `exec/mtd/page.tsx` (sibling of the `classification_gaps` banner). Any LINE bucket
+  matching ZERO rows over a period that HAS rows is reported with the department/category values that DID
+  occur, so a definition describing nobody's data becomes visible instead of printing a quiet 0. An empty
+  period reports no gap (an empty month is not a broken definition). `activation` is excluded (its rules
+  are contract-type tokens, and a zero there is a legitimate answer).
+  WHY NOT the substring token `boost rtr` (which `_BILLPAY_DEFAULT_TOKENS` uses for the Daily-Targets
+  conversion): it OVER-MATCHES 1,339 August PROTECTION lines reading *"… included in your boost rtr
+  payment"*. The seeded rule is an EXACT department match with `exclude_category ['other charge']` (that
+  category inside the department is the processor SERVICE-CHARGE fee — 4,303 lines / $17,088.00 — a fee,
+  not a payment). ⚠ The `_BILLPAY_DEFAULT_TOKENS` over-match is UNFIXED and pre-existing — see §19.
+  MONEY: none. No P&L line, payout, accrual or commission figure reads this bucket; it feeds Exec MTD's
+  display columns, `/metric-recon`'s SECONDARY basis and Leg B of the mig-`944` 3-way bill-pay recon. The
+  mig-`939` P&L carve-out books from the PROCESSOR feed (`_billpay_processor_by_store_day`), untouched.
+  Other-tenant output verified byte-identical on live August rows (1,731 lines / $73,914.79 before and
+  after). Proof: `backend/harness_exec_metric_defs.py` (62 checks). Display/definition config → NO
+  lineage entry.
+
 - **Carrier VOCABULARY TERMS + the two-sided vocabulary rule (owner 2026-09-04, mig `953`):** the
   owner's rule — a tenant must ONLY ever see its own carrier's vocabulary (no
   "VidaPay/T-CETRA/Total Wireless/MA …" wording on the Boost side; no "Boost/VIP/ACIMA/PayGo/ePay/
@@ -1980,7 +2015,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`) | `PUT /accessory-config` (Sales Report → Classification settings) | `_accessory_config(_uncached)` (accessory/billpay/blank-ct classification for `_sales_cell_agg`); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, own defensive read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, own defensive read, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`) |
 | `commcalc.report_pull_map` (mig `207` — report_key → `target_table` + `column_map` + `param_spec`, org row over the house row) | `POST /commcalc/report-mappings` (`/commcalc/report-mappings`); mig `955` seeds `merchant_settlement` / `merchant_funding` | `report_pull` portal ingest; **card-settlement recon feed resolution** (`closing/router._settlement_feed_spec` → `external_credit_recon.SETTLEMENT_REPORT_KEY`, §12 — this is HOW the tally finds the scraped table without hardcoding it) |
 | `commcalc.metric_source_of_truth` (per-metric basis-of-truth config, mig `923`; columns added by `944` `processor_order_types`/`processor_product_tokens` — the bill-payment row filter for the daily-TX processor feed) | `PUT /metric-source-config` | `_metric_source` (consumed by Exec MTD activation override, `/metric-recon`, `/billpay-coverage`, `_pos_billpay_for_days`/`_billpay_processor_by_store(_day)` — §12 3-way Leg C; NULL columns = `metric_recon` house defaults) |
-| `commcalc.exec_metric_config` (per-org Exec-MTD metric DEFINITIONS, mig `204`; seed fn `seed_exec_metric_config`) | `GET/PUT /exec-metric-config` `router.py:24766/24781` (upsert by `org_id,bucket`); 2026-09-02: LuxeLink `bill_payment` rules gained `product_desc_contains:["wallet funding"]` (org-scoped data fix, house default untouched) | `_exec_metric_config` (DB row REPLACES the bucket's default rules) → `_sales_cell_agg` exec metrics via `_exec_line_match` |
+| `commcalc.exec_metric_config` (per-org Exec-MTD metric DEFINITIONS, mig `204`; **`carrier` preset column mig `962`**; seed fn `seed_exec_metric_config`) | `GET/PUT /exec-metric-config` `router.py` (upsert by `org_id,bucket`); 2026-09-02: LuxeLink `bill_payment` rules gained `product_desc_contains:["wallet funding"]`; **mig `962`** corrects the HOUSE `bill_payment` rules + seeds the boost carrier PRESET | `_exec_metric_config` → **`exec_metric_defs.resolve`** (tenant row > house carrier preset > built-in default) → `_sales_cell_agg` exec metrics via `exec_metric_defs.line_match` |
 | `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`); `PUT /report-labels` (scopes `report_col`/`report_banner`/`report_term` at the TENANT org — overrides; gated on `classification`); mig `945` seeds the HOUSE carrier-preset rows (scopes `report_col:<carrier>`/`report_banner:<carrier>`); mig `953` seeds the HOUSE carrier VOCABULARY-TERM presets (scope `report_term:<carrier>` — boost: ePay/VIP Wireless/ACIMA/b2bsoft, total: VidaPay/T-CETRA/Edge/marketplace feed, §3); mig `954` seeds the HOUSE distributor-payable BASIS presets (NEW scope `finance_basis:<carrier>`, key `distributor_payable` — boost: `asset_ledger`, total: `marketplace_due`; read by `statement_engine.carrier_payable_preset`, §4); mig `947` seeds the HOUSE Incentives tile layout (scope `tiles` key `incentives`) + HOUSE nav-label presets (NEW scopes `nav_default`/`group_default`, e.g. `/commcalc/commission-legs` → 'Commission received over M1-M12'); mig `948` seeds the HOUSE Management Overview (`tiles` key `management-overview` — incl. the `/commcalc/exec` item-label 'Rep Incentive') + Flags & Compliance (`tiles` key `flags-compliance`) layouts (§14 mig 948) | `GET /nav-config` (house `nav_default`/`group_default` presets first, then the caller org's `nav`/`group` nicknames overlay per key — tenant > house preset > built-in, since mig 947; caps/layout stay caller-org-only), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins), `GET /report-labels` (`report_labels.load_report_labels`: tenant ∪ HOUSE, tenant override > carrier preset > built-in — §3 carrier column labels) |
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3) |
@@ -2000,6 +2035,7 @@ as a market-grant keyset member; ambiguity fails closed):
 |----------|-------------|---------|
 | _every endpoint filtering/grouping by MARKET_ | — | §13a canonical resolution (`core.scope.store_market_resolver`/`market_by_code`); inventory pinned in `harness_market_resolution_guard.py` |
 | _every endpoint OFFERING market options (dropdown/enumeration)_ | — | §13c canonical vocabulary (`core.scope.canonical_markets` composed via `merge_market_options`/`org_market_options`); inventory pinned in `harness_market_enumeration_guard.py`; B-1115/LI truth table `harness_market_vocabulary_truth.py` (owner 2026-09-04) |
+| `GET /commcalc/exec-mtd/{period}` (returns `metric_coverage` — the silent-zero detector) · `GET/PUT /commcalc/exec-metric-config` | `router.py` `exec_mtd` / `get_exec_metric_config` / `put_exec_metric_config` | §3 Exec-MTD metric definitions (carrier presets + detector, mig `962`) |
 | `POST /commcalc/data-sources/sweep/run-due` | `router.py:data_sources_run_due` | §12a — the ONE portal-pull scheduler (VidaPay, b2bsoft, and the three merchant portals); cron self-registered by mig `956` |
 | `GET /commcalc/merchant-portals/catalog` | `router.py:merchant_portal_catalog` | §12a portal descriptors for the connector settings page |
 | `GET /commcalc/merchant-portals/health` | `router.py:merchant_portal_health` | §12a durable-session health roll-up |
@@ -2090,6 +2126,7 @@ as a market-grant keyset member; ambiguity fails closed):
 |--------|--------------------|-----------------|
 | External credit-card settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='external_cc'` | `merchant_portals.totals_by_store_day`; tallied against `daily_closing.t_ext_cc` by `closing/external_credit_recon` (§12a) |
 | POS-merchant settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='pos_merchant'` | same reader, `pos_merchant` role (§12a) |
+| Exec-MTD LINE metrics (Bill Payment Qty/$ · Total Phones · Activation Fee · Total Protect) | `raw_sales.department` / `.category` / `.product_desc` matched against `commcalc.exec_metric_config.rules` (EXACT membership for dept/cat, substring for `product_desc_contains`) | `exec_metric_defs.resolve` (tenant row > house `carrier` PRESET > `CODE_DEFAULTS`, mig `962`) → `exec_metric_defs.line_match` inside `_sales_cell_agg`; silent-zero detector `bucket_coverage` → `GET /exec-mtd/*` key `metric_coverage` → Exec-MTD banner. Also the SECONDARY basis for `/metric-recon` and Leg B of the mig-`944` 3-way bill-pay recon; the mig-`939` P&L carve-out does NOT read it. Proof `harness_exec_metric_defs.py` (§3) |
 | Activation counts (premium/byod/upgrade) | `raw_sales.contract_type` | `classify_contract_type` `calculator.py:40`; display via `_sales_cell_agg` `router.py:17842` |
 | Accessory $ ("acc_gp") | `raw_sales.ext_price` (+ device set-up fee; NOT gp, NOT Ondigo) | `_compute_feed_actuals_py` `router.py:18678` |
 | GP report accessory column ("Acc Sales" / legacy "Acc GP") | `raw_sales.ext_price` of accessory lines (`accessory_config.gp_acc_basis='sales'` — house default, mig 932) or `raw_sales.gp` (`'gp'` opt-back) | `calc_gp_report(acc_basis=…)` `gp_report.py`; label from payload `acc_label` (§4) |
