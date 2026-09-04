@@ -46,6 +46,10 @@ export default function CashPickupPage() {
   const [loading, setLoading] = useState(true)
   const [sel_, setSel] = useState<Record<string, boolean>>({})
   const [notes, setNotes] = useState<Record<string, string>>({})
+  // OWNER 2026-09-04 ("one more column is needed actual cash picked from envelope"): the ACTUAL
+  // cash the DM physically takes out, typed per envelope at confirm time. Optional — blank sends
+  // nothing (the server stores NULL "not recorded", never a fake 0).
+  const [actuals, setActuals] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [cfg, setCfg] = useState<any>(null)
@@ -117,6 +121,8 @@ export default function CashPickupPage() {
           { header: 'Store', get: (r: any) => r.store_name || r.store_code },
           { header: 'Rep', get: (r: any) => r.employee_name },
           { header: 'Cash', get: (r: any) => r.cash, money: true },
+          { header: 'Actual picked', get: (r: any) => r.actual_picked_amount ?? '', money: true },
+          { header: 'Pickup variance', get: (r: any) => r.pickup_variance_status ? `${r.pickup_variance} (${r.pickup_variance_status})` : '' },
           { header: 'POS cash (store-day)', get: (r: any) => r.pos_cash ?? 'no POS data', money: true },
           { header: 'POS status', get: (r: any) => r.pos_status || '' },
           { header: 'Picked up', get: (r: any) => (r.picked_up ? 'Yes' : 'No') },
@@ -155,7 +161,7 @@ export default function CashPickupPage() {
 
   const load = useCallback(() => {
     if (rangeMode ? !(rangeStart && rangeEnd) : !date) return
-    setLoading(true); setSel({}); setNotes({})
+    setLoading(true); setSel({}); setNotes({}); setActuals({})
     const qs = [
       rangeMode ? `start=${rangeStart}&end=${rangeEnd}` : `date=${date}`,
       market && `market=${encodeURIComponent(market)}`,
@@ -207,12 +213,18 @@ export default function CashPickupPage() {
         date: rangeMode ? undefined : date, picked_up_by: user?.full_name || 'DM',
         // close_date PER ITEM (mig-502-era backend, retail-ops-7 item 2) so a range-mode multi-day
         // selection is never mis-stamped with one shared date.
-        items: selectedKeys.map(e => ({ store_code: e.store_code, store_name: e.store_name, employee_name: e.employee_name, close_date: e.close_date, amount: e.cash, note: notes[key(e)] || '' })),
+        // `actual_amount` (mig 949) is sent ONLY when the DM typed one — an untouched input adds
+        // no key at all, so the server stores nothing (NULL = not recorded, never a fake 0).
+        items: selectedKeys.map(e => {
+          const a = (actuals[key(e)] || '').trim()
+          return { store_code: e.store_code, store_name: e.store_name, employee_name: e.employee_name, close_date: e.close_date, amount: e.cash, note: notes[key(e)] || '', ...(a !== '' ? { actual_amount: Number(a) } : {}) }
+        }),
       }) })
       const n = (r.notify || []) as any[]
       const sent = n.filter(x => x.ok).map(x => x.channel)
       const failed = n.filter(x => !x.ok)
-      setMsg(`✅ ${r.count} envelope(s) picked up (${fmt(r.total)}).` +
+      setMsg(`✅ ${r.count} envelope(s) picked up (${fmt(r.total)}${r.actual_total != null ? ` · actual ${fmt(r.actual_total)}` : ''}).` +
+        (r.variance_short ? ` ⚠ ${r.variance_short} short.` : '') + (r.variance_over ? ` ${r.variance_over} over.` : '') +
         (sent.length ? ` Notified: ${sent.join(', ')}.` : '') +
         (failed.length ? ` ⚠️ ${failed.map(f => `${f.channel}: ${f.detail}`).join('; ')}` : ''))
       load()
@@ -368,7 +380,7 @@ export default function CashPickupPage() {
           <div className="card table-wrapper" style={{ padding: 0 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {[...(rangeMode ? ['Date'] : []), '', 'Store', 'Rep', 'Cash', 'POS cash', 'Envelope', 'Note / status', 'Deposit'].map((h, i) =>
+                {[...(rangeMode ? ['Date'] : []), '', 'Store', 'Rep', 'Cash', 'Actual picked', 'POS cash', 'Envelope', 'Note / status', 'Deposit'].map((h, i) =>
                   <th key={i} style={{ textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -381,6 +393,41 @@ export default function CashPickupPage() {
                       <td style={cell}>{e.store_name || e.store_code || '—'}</td>
                       <td style={cell}>{e.employee_name || '—'}</td>
                       <td style={{ ...cell, fontWeight: 600 }}>{fmt(e.cash)}</td>
+                      {/* Actual cash picked from the envelope (owner 2026-09-04, mig 949): the DM's
+                          physical count at pickup time, recorded BESIDE the declared figure.
+                          Optional — blank stores nothing ("not recorded", never a fake 0). Variance
+                          uses the envelope report's short/over language; display + flag only (the
+                          declared figure keeps relieving cash on hand unless the owner-gated
+                          pickup_actual_relieves_cash knob is flipped). */}
+                      <td style={cell}>
+                        {done ? (
+                          e.actual_picked_amount == null
+                            ? <span style={{ color: 'var(--text3)', fontStyle: 'italic', fontSize: 12 }}>not recorded</span>
+                            : <span style={{ fontWeight: 600 }}>
+                                {fmt(e.actual_picked_amount)}
+                                {e.pickup_variance_status === 'short' && <span style={{ color: '#dc2626', fontWeight: 700 }}> ⚠ {fmt(e.pickup_variance)} short</span>}
+                                {e.pickup_variance_status === 'over' && <span style={{ color: '#b45309', fontWeight: 700 }}> +{fmt(e.pickup_variance)} over</span>}
+                                {e.pickup_variance_status === 'match' && <span style={{ color: '#166534' }}> ✓</span>}
+                              </span>
+                        ) : (() => {
+                          const a = (actuals[k] || '').trim()
+                          const v = a === '' || isNaN(Number(a)) ? null : round2(Number(a) - (e.cash || 0))
+                          return (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                              <input type="number" inputMode="decimal" step="0.01" style={{ ...sel, width: 96 }}
+                                placeholder={String(e.cash ?? '')} value={actuals[k] || ''}
+                                onChange={ev => setActuals(m => ({ ...m, [k]: ev.target.value }))}
+                                title="Actual cash physically taken from this envelope (optional)" />
+                              {v != null && v !== 0 && (
+                                <span style={{ fontSize: 11, fontWeight: 700, color: v < 0 ? '#dc2626' : '#b45309' }}>
+                                  {v < 0 ? `${fmt(v)} short` : `+${fmt(v)} over`}
+                                </span>
+                              )}
+                              {v === 0 && <span style={{ fontSize: 11, color: '#166534' }}>✓</span>}
+                            </span>
+                          )
+                        })()}
+                      </td>
                       {/* The SYSTEM'S number right next to the store-entered one (owner 2026-09-02):
                           POS X-report cash for this store-day — same resolution as Cash Recon
                           (Management), compared at store-day grain against the declared cash total.

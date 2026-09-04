@@ -122,6 +122,7 @@ def day_accountability(pickup_rows):
             continue
         by_sd.setdefault((code, dday), []).append(r)
 
+    from .pickup_actual import row_variance as _row_variance
     rows = []
     for (code, dday), rs in sorted(by_sd.items(), key=lambda kv: (kv[0][1], kv[0][0])):
         agg = {"deposited": 0.0, "missing_slip": 0.0, "handed_confirmed": 0.0,
@@ -129,9 +130,20 @@ def day_accountability(pickup_rows):
         counts = {k: 0 for k in agg}
         picked_total, picked_n, flagged, envs = 0.0, 0, 0, []
         confirmed_by, confirmed_at = None, None
+        # mig 949 (owner 2026-09-04): actual-vs-declared visibility on the day view — a SHORT
+        # pickup must be visible on the accountability board. Display + flag only: variance never
+        # affects the GREEN rule (green is about disposition/confirmation, not the count), and
+        # `picked_total` stays the declared movement figure (the money posture lives solely in
+        # _cash_position_core's knob — one gate, not two).
+        pickup_short_rows, pickup_over_rows, pickup_variance_total = 0, 0, 0.0
         for r in rs:
             st = envelope_state(r)
             amt = _f(r.get("amount"))
+            vf = _row_variance(r) if st != "unpicked" else None
+            if vf:
+                pickup_variance_total = round(pickup_variance_total + vf["variance"], 2)
+                pickup_short_rows += 1 if vf["status"] == "short" else 0
+                pickup_over_rows += 1 if vf["status"] == "over" else 0
             if st != "unpicked":
                 picked_total += amt
                 picked_n += 1
@@ -148,6 +160,10 @@ def day_accountability(pickup_rows):
             envs.append({
                 "kind": r.get("kind") or "cash", "employee_name": r.get("employee_name"),
                 "amount": round(amt, 2), "state": st,
+                # mig 949 — the DM's actual count at pickup (None = not recorded, never fake 0)
+                "actual_picked_amount": vf["actual"] if vf else None,
+                "pickup_variance": vf["variance"] if vf else None,
+                "pickup_variance_status": vf["status"] if vf else None,
                 "disposition": r.get("disposition"), "handed_to": r.get("handed_to"),
                 "deposit_amount": r.get("deposit_amount"),
                 "deposit_flagged": bool(r.get("deposit_flagged")),
@@ -177,6 +193,10 @@ def day_accountability(pickup_rows):
             "undisposed_total": round(agg["undisposed"], 2),
             "undisposed_rows": counts["undisposed"],
             "flagged_rows": flagged,
+            # mig 949 — actual-vs-declared day chips (display/flag only; never touches `green`)
+            "pickup_short_rows": pickup_short_rows,
+            "pickup_over_rows": pickup_over_rows,
+            "pickup_variance_total": round(pickup_variance_total, 2),
             "green": green,
             "envelopes": envs,
         })
@@ -189,6 +209,8 @@ def day_accountability(pickup_rows):
         "picked_total": round(sum(r["picked_total"] for r in rows), 2),
         "deposited_total": round(sum(r["deposited_total"] for r in rows), 2),
         "handed_total": round(sum(r["handed_total"] for r in rows), 2),
+        # mig 949 — days with at least one short pickup (actual < declared at pickup time)
+        "short_pickup_days": sum(1 for r in rows if r["pickup_short_rows"]),
     }
     return rows, summary
 

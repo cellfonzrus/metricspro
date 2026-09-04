@@ -27,6 +27,7 @@ from . import verified_overlay as _verified_overlay
 from . import verification_audit as _verification_audit
 from . import envelope_report as envelope_report_mod
 from . import entry_quality
+from . import pickup_actual as _pickup_actual
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -4862,6 +4863,13 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             "deposit_flagged": bool(p.get("deposit_flagged")) if p else False,
             "deposit_url": _signed_envelope(p.get("deposit_slip_path")) if p and p.get("deposit_slip_path") else None,
             "pickup_id": p.get("id") if p else None,
+            # mig 949 (owner 2026-09-04): the ACTUAL cash the DM took from the envelope, beside
+            # the declared figure, + variance/short-over-match (envelope-report truth table via
+            # pickup_actual.row_variance). All None when no actual was recorded — honest absence.
+            "actual_picked_amount": (_pickup_actual._f(p.get("actual_picked_amount"))
+                                     if p and _pickup_actual.has_actual(p) else None),
+            "pickup_variance": (_pickup_actual.row_variance(p) or {}).get("variance") if p else None,
+            "pickup_variance_status": (_pickup_actual.row_variance(p) or {}).get("status") if p else None,
         })
     # OWNER 2026-09-02 ("the cash pick up ... only show what the stores have entered but not what
     # is in the system, from the pos report, those numbers should be right next to these numbers"):
@@ -4990,8 +4998,19 @@ def _cash_position_core(client, org_id, as_of, store_list, emp_list, ks):
     if emp_list:
         drows = [r for r in drows if (r.get("employee_name") or "").strip().lower() in emp_list]
 
+    # OWNER 2026-09-04 (mig 949): which figure RELIEVES the movement — the declared snapshot
+    # (`amount`, the default, byte-identical to always) or the DM's recorded ACTUAL where present
+    # (`actual_picked_amount`, only under the org's pickup_actual_relieves_cash knob — flipping it
+    # moves the mig-938 BS store-cash line, owner-gated seed). The extra column is selected ONLY
+    # when the knob is on (knob true ⇒ mig 949 applied ⇒ the column exists; knob off/pre-949 keeps
+    # the exact pre-949 select, so the try/except below can never turn a missing column into
+    # "zero pickups" — that would silently inflate cash on hand).
+    _actual_wins = _pickup_actual.actual_relieves_cash(client, org_id)
+    _pu_cols = "store_code,employee_name,close_date,amount,picked_up,picked_up_at,deposited_at"
+    if _actual_wins:
+        _pu_cols += ",actual_picked_amount"
     pq = (client.schema("commcalc").table("cash_pickup")
-          .select("store_code,employee_name,close_date,amount,picked_up,picked_up_at,deposited_at")
+          .select(_pu_cols)
           .eq("org_id", org_id).lte("close_date", as_of))
     if store_list:
         pq = pq.in_("store_code", store_list)
@@ -5034,7 +5053,9 @@ def _cash_position_core(client, org_id, as_of, store_list, emp_list, ks):
         code = r.get("store_code") or "?"
         dday = str(r.get("close_date") or "")
         if r.get("picked_up"):
-            amt = _f(r.get("amount"))
+            # mig 949: outflow_amount is the IDENTITY (declared `amount`) when _actual_wins is
+            # False — the house default, byte-identical; actual-where-present only under the knob.
+            amt = _pickup_actual.outflow_amount(r, _actual_wins)
             pick_by_store_day.setdefault(code, {}).setdefault(dday, 0.0)
             pick_by_store_day[code][dday] += amt
             pickup_by_store_day.setdefault(code, {}).setdefault(dday, 0.0)
@@ -5101,8 +5122,11 @@ def _cash_position_core(client, org_id, as_of, store_list, emp_list, ks):
     try:
         from . import billpay_pickup as _bp
         if _bp.billpay_relieves_cash(client, org_id):
+            _bpu_cols = "store_code,employee_name,close_date,amount,picked_up"
+            if _actual_wins:   # mig 949 — same knob, same guarded-select rule as cash_pickup above
+                _bpu_cols += ",actual_picked_amount"
             bq = (client.schema("commcalc").table("billpay_pickup")
-                  .select("store_code,employee_name,close_date,amount,picked_up")
+                  .select(_bpu_cols)
                   .eq("org_id", org_id).lte("close_date", as_of))
             if store_list:
                 bq = bq.in_("store_code", store_list)
@@ -5110,7 +5134,8 @@ def _cash_position_core(client, org_id, as_of, store_list, emp_list, ks):
             if emp_list:
                 bprows = [r for r in bprows
                           if (r.get("employee_name") or "").strip().lower() in emp_list]
-            _bp_picked, _bp_lp, _bp_ld = _bp.pickup_totals_by_store_day(bprows)
+            _bp_picked, _bp_lp, _bp_ld = _bp.pickup_totals_by_store_day(
+                bprows, actual_wins=_actual_wins)
             _bp.fold_billpay_outflows(pick_by_store_day, pickup_by_store_day, _bp_picked, True)
     except Exception:
         pass
@@ -5462,6 +5487,7 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
         raise HTTPException(400, "Select at least one envelope.")
     dm = (payload.picked_up_by or "DM").strip()
     total = 0.0
+    actual_total, variance_short, variance_over = None, 0, 0
     for it in items:
         item_date = _date(it.get("close_date")) or top_date
         if not item_date:
@@ -5472,6 +5498,20 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
                "store_name": it.get("store_name"), "employee_name": (it.get("employee_name") or ""),
                "amount": amt, "picked_up": True, "picked_up_by": dm, "picked_up_at": _now(),
                "note": (it.get("note") or "").strip() or None}
+        # OWNER 2026-09-04 ("one more column is needed actual cash picked from envelope"):
+        # `actual_amount` per item = the ACTUAL cash the DM physically took, stored in mig-949
+        # actual_picked_amount beside the declared snapshot (`amount`). The key is written ONLY
+        # when the client sends it (blank/None clears to NULL — "not recorded", never a fake 0),
+        # so an old frontend / pre-949 database stays byte-identical. Variance semantics =
+        # pickup_actual.variance_fields (reusing the envelope report's count_fields truth table).
+        if "actual_amount" in it or "actual_picked_amount" in it:
+            _act = it.get("actual_amount", it.get("actual_picked_amount"))
+            _vf = _pickup_actual.variance_fields(amt, _act)
+            row["actual_picked_amount"] = _vf["actual"] if _vf else None
+            if _vf:
+                actual_total = round((actual_total or 0.0) + _vf["actual"], 2)
+                variance_short += 1 if _vf["status"] == "short" else 0
+                variance_over += 1 if _vf["status"] == "over" else 0
         client.schema("commcalc").table(table).upsert(
             row, on_conflict="org_id,close_date,store_code,employee_name").execute()
     item_dates = sorted({_date(it.get("close_date")) or top_date for it in items} - {None})
@@ -5480,7 +5520,10 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
     notify = await _notify_pickup(client, org_id, dm, notify_label, items, round(total, 2),
                                   cfg_table=cfg_table, kind_label=kind_label,
                                   fallback_cfg_table=fallback_cfg_table)
-    return {"ok": True, "count": len(items), "total": round(total, 2), "notify": notify}
+    return {"ok": True, "count": len(items), "total": round(total, 2), "notify": notify,
+            # mig 949 — actual-picked summary (None when no item carried an actual figure)
+            "actual_total": actual_total,
+            "variance_short": variance_short, "variance_over": variance_over}
 
 
 @router.post("/pickup")
@@ -5768,6 +5811,13 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
             "deposit_flagged": bool(p.get("deposit_flagged")) if p else False,
             "deposit_url": _signed_envelope(p.get("deposit_slip_path")) if p and p.get("deposit_slip_path") else None,
             "pickup_id": p.get("id") if p else None,
+            # mig 949 (owner 2026-09-04): the ACTUAL cash the DM took from the envelope, beside
+            # the declared figure, + variance/short-over-match (envelope-report truth table via
+            # pickup_actual.row_variance). All None when no actual was recorded — honest absence.
+            "actual_picked_amount": (_pickup_actual._f(p.get("actual_picked_amount"))
+                                     if p and _pickup_actual.has_actual(p) else None),
+            "pickup_variance": (_pickup_actual.row_variance(p) or {}).get("variance") if p else None,
+            "pickup_variance_status": (_pickup_actual.row_variance(p) or {}).get("status") if p else None,
         })
     # OWNER 2026-09-02 ("bill pick up only show what the stores have entered but not what is in
     # the system, from the pos report"): attach the POS-report bill payments for each envelope's
@@ -6210,6 +6260,8 @@ def deposit_accountability_board(date: str = "", start: str = "", end: str = "",
         "picked_total": round(sum(r["picked_total"] for r in out), 2),
         "deposited_total": round(sum(r["deposited_total"] for r in out), 2),
         "handed_total": round(sum(r["handed_total"] for r in out), 2),
+        # mig 949 — short-pickup visibility (actual < declared at pickup time), visible rows only
+        "short_pickup_days": sum(1 for r in out if r.get("pickup_short_rows")),
     }
     return {"start": start, "end": end, "rows": out, "summary": summary,
             "can_confirm": _bp.can_see_cash_recon(authorization or "", org_id, client)}

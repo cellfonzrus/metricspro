@@ -396,6 +396,19 @@ function AccountabilityBoard({ dateFrom, dateTo }: { dateFrom: string; dateTo: s
     return <span style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>{bits}</span>
   }
 
+  // Actual-vs-declared at pickup time (owner 2026-09-04, mig 949): a SHORT pickup is visible on
+  // the day — display + flag only, it never gates green (the money posture is the owner-gated
+  // pickup_actual_relieves_cash knob, not this board).
+  function pickupVarianceChip(r: any) {
+    if (!r.pickup_short_rows && !r.pickup_over_rows) return null
+    return (
+      <span title={`DM-recorded actual vs declared at pickup: net ${fmt(r.pickup_variance_total)}`}>
+        {r.pickup_short_rows ? <span style={{ color: '#dc2626', fontWeight: 700 }}> · ⚠ {r.pickup_short_rows} short pickup{r.pickup_short_rows === 1 ? '' : 's'} ({fmt(r.pickup_variance_total)})</span> : null}
+        {!r.pickup_short_rows && r.pickup_over_rows ? <span style={{ color: '#b45309', fontWeight: 600 }}> · +{fmt(r.pickup_variance_total)} over</span> : null}
+      </span>
+    )
+  }
+
   const bcell: React.CSSProperties = { padding: '7px 10px', borderTop: '1px solid var(--border)', fontSize: 12.5, verticalAlign: 'middle' }
   return (
     <div className="card" style={{ padding: 14, marginTop: 16 }}>
@@ -413,6 +426,7 @@ function AccountabilityBoard({ dateFrom, dateTo }: { dateFrom: string; dateTo: s
             <b style={{ color: '#059669' }}>{s.green_days || 0}</b>/{s.store_days || 0} days green
             {s.missing_slip_days ? <span style={{ color: '#dc2626' }}> · {s.missing_slip_days} missing slips</span> : null}
             {s.awaiting_confirm_days ? <span style={{ color: '#b45309' }}> · {s.awaiting_confirm_days} awaiting confirm</span> : null}
+            {s.short_pickup_days ? <span style={{ color: '#dc2626' }}> · {s.short_pickup_days} short-pickup day{s.short_pickup_days === 1 ? '' : 's'}</span> : null}
           </div>
         )}
       </div>
@@ -436,7 +450,7 @@ function AccountabilityBoard({ dateFrom, dateTo }: { dateFrom: string; dateTo: s
                   <tr key={k} style={{ background: r.green ? 'rgba(5,150,105,0.10)' : undefined }}>
                     <td style={{ ...bcell, color: 'var(--text3)', whiteSpace: 'nowrap' }}>{r.green ? '🟢 ' : ''}{r.day}</td>
                     <td style={bcell}>{r.store_name || r.store_code}{r.market ? <span style={{ color: 'var(--text3)' }}> · {r.market}</span> : null}</td>
-                    <td style={{ ...bcell, fontWeight: 600 }}>{fmt(r.picked_total)} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>({r.picked_envelopes})</span></td>
+                    <td style={{ ...bcell, fontWeight: 600 }}>{fmt(r.picked_total)} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>({r.picked_envelopes})</span>{pickupVarianceChip(r)}</td>
                     <td style={bcell}>
                       {r.deposited_rows
                         ? <span>{fmt(r.deposited_total)}{r.missing_slip_rows

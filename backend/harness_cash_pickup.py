@@ -214,6 +214,99 @@ resp_after = cr.closing_pickups(date="2026-01-05", org_id=HOUSE)
 check("5c. after saving, the envelope shows picked_up=True for that SAME non-today date",
       resp_after["envelopes"][0]["picked_up"] is True, str(resp_after["envelopes"]))
 
+# ═══ 6. ACTUAL CASH PICKED FROM ENVELOPE (owner 2026-09-04; mig 949) — the truth table ═══════════
+# The DM confirming a pickup records the ACTUAL cash physically taken beside the declared snapshot.
+# Storage: cash_pickup.actual_picked_amount (never envelope_count.counted_amount — that's
+# MANAGEMENT's later count). Money posture: declared relieves the cash movement UNLESS the org's
+# pickup_actual_relieves_cash knob (default false) is flipped.
+from app.modules.closing import pickup_actual as _pa   # noqa: E402
+
+st6 = fresh_store(); wire(st6)
+st6["stores"] = [{"org_id": HOUSE, "store_code": "S1", "address": "1 Main St", "market": "Texas", "is_active": True}]
+st6["daily_closing"] = [dc_row(id="d6", store_code="S1", close_date="2026-09-01", store_cash=100.0)]
+cr._notify_pickup = _notify_stub
+r6 = asyncio.new_event_loop().run_until_complete(cr.confirm_pickup(
+    {"date": "2026-09-01", "picked_up_by": "DM Six",
+     "items": [{"store_code": "S1", "store_name": "1 Main St", "employee_name": "Jane Rep",
+                "close_date": "2026-09-01", "amount": 100.0, "actual_amount": 90.0}]},
+    org_id=HOUSE))
+row6 = st6["cash_pickup"][0]
+check("6a. confirm with actual: actual_picked_amount saved BESIDE the declared snapshot "
+      "(amount unchanged = 100, actual = 90)",
+      row6.get("amount") == 100.0 and row6.get("actual_picked_amount") == 90.0, str(row6))
+check("6b. confirm response summarizes: actual_total 90, one SHORT variance",
+      r6.get("actual_total") == 90.0 and r6.get("variance_short") == 1 and r6.get("variance_over") == 0,
+      str(r6))
+
+lp6 = cr.closing_pickups(date="2026-09-01", org_id=HOUSE)
+e6 = lp6["envelopes"][0]
+check("6c. GET /pickups exposes the new column + variance (envelope-report short/over language: "
+      "variance = actual - declared = -10, status 'short')",
+      e6.get("actual_picked_amount") == 90.0 and e6.get("pickup_variance") == -10.0
+      and e6.get("pickup_variance_status") == "short", str(e6))
+check("6d. KNOB OFF (house default): the DECLARED figure still relieves cash on hand — by_store "
+      "= 100 declared - 100 declared-outflow = 0, BYTE-IDENTICAL to pre-949",
+      lp6["by_store"][0]["cash_on_hand"] == 0.0, str(lp6["by_store"]))
+
+st6["cash_pickup_config"] = [{"org_id": HOUSE, "pickup_actual_relieves_cash": True}]
+lp6on = cr.closing_pickups(date="2026-09-01", org_id=HOUSE)
+check("6e. KNOB ON (pickup_actual_relieves_cash, owner-gated seed): the ACTUAL relieves the "
+      "movement — cash on hand = 100 - 90 = 10 (the short 10 is still sitting in the store)",
+      lp6on["by_store"][0]["cash_on_hand"] == 10.0, str(lp6on["by_store"]))
+
+# no-actual fallback: a second envelope confirmed WITHOUT the input keeps declared semantics even
+# with the knob on (absence of a count is not evidence of zero cash)
+st6["daily_closing"].append(dc_row(id="d7", store_code="S1", close_date="2026-09-02", store_cash=50.0))
+asyncio.new_event_loop().run_until_complete(cr.confirm_pickup(
+    {"date": "2026-09-02", "picked_up_by": "DM Six",
+     "items": [{"store_code": "S1", "store_name": "1 Main St", "employee_name": "Jane Rep",
+                "close_date": "2026-09-02", "amount": 50.0}]},
+    org_id=HOUSE))
+row7 = [r for r in st6["cash_pickup"] if str(r.get("close_date")) == "2026-09-02"][0]
+lp7 = cr.closing_pickups(date="2026-09-02", org_id=HOUSE)
+check("6f. confirm WITHOUT actual: nothing stored (no fake 0), variance honestly None, and — knob "
+      "still ON — the declared 50 relieves that envelope (fallback), total = 150 - 90 - 50 = 10",
+      "actual_picked_amount" not in row7
+      and lp7["envelopes"][0].get("pickup_variance_status") is None
+      and lp7["by_store"][0]["cash_on_hand"] == 10.0,
+      f"{row7} / {lp7['by_store']}")
+
+# blank actual clears to None (edit-safe re-confirm), never coerces to 0
+asyncio.new_event_loop().run_until_complete(cr.confirm_pickup(
+    {"date": "2026-09-01", "picked_up_by": "DM Six",
+     "items": [{"store_code": "S1", "store_name": "1 Main St", "employee_name": "Jane Rep",
+                "close_date": "2026-09-01", "amount": 100.0, "actual_amount": ""}]},
+    org_id=HOUSE))
+row6b = [r for r in st6["cash_pickup"] if str(r.get("close_date")) == "2026-09-01"][0]
+check("6g. re-confirm with a BLANK actual clears it to None (not recorded ≠ picked zero dollars)",
+      row6b.get("actual_picked_amount") is None, str(row6b))
+
+# billpay mirror (mig 942 shared machinery — the sibling gets the column for free)
+r6bp = asyncio.new_event_loop().run_until_complete(cr.billpay_confirm_pickup(
+    {"date": "2026-09-01", "picked_up_by": "DM Six",
+     "items": [{"store_code": "S1", "store_name": "1 Main St", "employee_name": "Jane Rep",
+                "close_date": "2026-09-01", "amount": 40.0, "actual_amount": 42.0}]},
+    org_id=HOUSE))
+bprow = st6["billpay_pickup"][0]
+check("6h. BILLPAY MIRROR: same parameterized confirm stores the actual on billpay_pickup "
+      "(actual 42 vs declared 40 -> one OVER variance)",
+      bprow.get("actual_picked_amount") == 42.0 and r6bp.get("variance_over") == 1, str(bprow))
+
+# pure gates directly: outflow_amount + pickup_totals_by_store_day(actual_wins)
+check("6i. pickup_actual.outflow_amount: knob off -> declared ALWAYS (identity); knob on -> "
+      "actual where present, declared where not",
+      _pa.outflow_amount({"amount": 100.0, "actual_picked_amount": 90.0}, False) == 100.0
+      and _pa.outflow_amount({"amount": 100.0, "actual_picked_amount": 90.0}, True) == 90.0
+      and _pa.outflow_amount({"amount": 50.0}, True) == 50.0
+      and _pa.outflow_amount({"amount": 50.0, "actual_picked_amount": None}, True) == 50.0)
+from app.modules.closing.billpay_pickup import pickup_totals_by_store_day as _bptot   # noqa: E402
+_bp_rows = [{"store_code": "S1", "close_date": "2026-09-01", "amount": 40.0,
+             "actual_picked_amount": 42.0, "picked_up": True}]
+check("6j. billpay pickup_totals_by_store_day: default byte-identical (40), actual_wins=True "
+      "folds the actual (42)",
+      _bptot(_bp_rows)[0] == {"S1": {"2026-09-01": 40.0}}
+      and _bptot(_bp_rows, actual_wins=True)[0] == {"S1": {"2026-09-01": 42.0}})
+
 # ── Summary ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:
