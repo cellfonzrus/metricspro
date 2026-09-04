@@ -70,17 +70,22 @@ def apply_billpay_overlay(decl_by_store_day, dm_epay_cash_by_store_day):
     return decl_by_store_day
 
 
-def pickup_totals_by_store_day(pickup_rows):
+def pickup_totals_by_store_day(pickup_rows, actual_wins=False):
     """PURE: billpay_pickup rows → ({store: {day: picked amount}}, last_pickup_at {store: ts},
     last_deposited_at {store: ts}). Only picked_up=true rows count as movement (mirror of
-    _cash_position_core's cash_pickup read); deposited_at is tracked on every row."""
+    _cash_position_core's cash_pickup read); deposited_at is tracked on every row.
+    `actual_wins` (mig 949, default False = byte-identical): when True, a row's recorded
+    actual_picked_amount replaces its declared `amount` in the movement (declared where none
+    recorded) — pickup_actual.outflow_amount, the same rule _cash_position_core applies to
+    cash_pickup rows under the pickup_actual_relieves_cash knob."""
+    from .pickup_actual import outflow_amount as _outflow
     picked, last_pu, last_dep = {}, {}, {}
     for r in pickup_rows or []:
         r = r or {}
         code = (str(r.get("store_code") or "").strip()) or "?"
         dday = str(r.get("close_date") or "")[:10]
         if r.get("picked_up"):
-            amt = _f(r.get("amount"))
+            amt = _outflow(r, actual_wins)
             picked.setdefault(code, {}).setdefault(dday, 0.0)
             picked[code][dday] = round(picked[code][dday] + amt, 2)
             pu = r.get("picked_up_at")

@@ -206,6 +206,41 @@ check("F8 tenant allow-list overrides the default (RULE TWO — config, never co
       resolve_recon_access("district_manager", "market", visible_roles=["district_manager"])
       and not resolve_recon_access("market_manager", "market", visible_roles=["district_manager"]))
 
+# ── G. actual-vs-declared visibility on the day view (owner 2026-09-04; mig 949) ────────────────
+print("\n== G. actual cash picked from envelope — board visibility ==")
+gshort = day([{**base, "disposition": "deposited", "deposit_slip_path": "p.jpg",
+               "actual_picked_amount": 80}])
+check("G1 short pickup surfaces on the day: per-envelope actual/variance/status + day chips",
+      gshort["envelopes"][0]["actual_picked_amount"] == 80.0
+      and gshort["envelopes"][0]["pickup_variance"] == -20.0
+      and gshort["envelopes"][0]["pickup_variance_status"] == "short"
+      and gshort["pickup_short_rows"] == 1 and gshort["pickup_variance_total"] == -20.0)
+check("G2 variance is DISPLAY + FLAG only: a short pickup never blocks green, and picked_total "
+      "stays the declared movement figure (the money posture lives in _cash_position_core's knob)",
+      gshort["green"] and gshort["picked_total"] == 100.0)
+gnone = day([{**base, "disposition": "deposited", "deposit_slip_path": "p.jpg"}])
+check("G3 no actual recorded -> honest None everywhere, zero variance chips (never a fake 100% short)",
+      gnone["envelopes"][0]["actual_picked_amount"] is None
+      and gnone["envelopes"][0]["pickup_variance_status"] is None
+      and gnone["pickup_short_rows"] == 0 and gnone["pickup_variance_total"] == 0.0)
+gover = day([{**base, "actual_picked_amount": 105},
+             {**base, "employee_name": "B", "amount": 50, "actual_picked_amount": 40}])
+check("G4 mixed day: one over + one short aggregate independently (variance_total = +5 - 10 = -5)",
+      gover["pickup_over_rows"] == 1 and gover["pickup_short_rows"] == 1
+      and gover["pickup_variance_total"] == -5.0)
+_grows, _gsum = day_accountability([
+    {"store_code": "S1", "close_date": "2026-09-01", "picked_up": True, "amount": 100,
+     "actual_picked_amount": 90},
+    {"store_code": "S2", "close_date": "2026-09-01", "picked_up": True, "amount": 100,
+     "actual_picked_amount": 100},
+])
+check("G5 summary.short_pickup_days counts only days with a short pickup (match day excluded)",
+      _gsum["short_pickup_days"] == 1)
+check("G6 unpicked envelope's actual (if any) never counted — cash still in the store",
+      day([{**base, "picked_up": False, "actual_picked_amount": 10},
+           {**base, "employee_name": "B", "disposition": "deposited",
+            "deposit_slip_path": "p.jpg"}])["pickup_variance_total"] == 0.0)
+
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:
     print("FAILED:")
