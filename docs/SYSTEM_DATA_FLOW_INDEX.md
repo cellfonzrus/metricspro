@@ -1284,6 +1284,10 @@ what an employee typed at closing. This feed is the other side of that tally.
   `960`/`961`), which resolves this feed through `commcalc.report_pull_map` (`report_key`
   `merchant_settlement` / `merchant_funding`, seeded by mig 955) and filters on `settlement_role`
   (`external_cc` | `pos_merchant` — slugs shared verbatim between the two modules).
+- **Admin attention:** `commcalc/import_audit.p_portal_sessions` (provider `commcalc_portal_sessions`)
+  raises a portal login whose session needs a human into `GET /core/attention` (the admin login popup),
+  so a dead session is not merely a chip on a page nobody is looking at. Fires only on
+  `never_linked`/`expired`/`needs_login`; `expiring_soon` stays a chip.
 - **Harnesses:** `harness_merchant_portals.py` (73), `harness_portal_session_health.py` (41),
   `harness_portal_totp.py` (35 — RFC 6238 vectors + secret hygiene).
 
