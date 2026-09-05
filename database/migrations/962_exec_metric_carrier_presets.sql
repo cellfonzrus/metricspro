@@ -90,10 +90,12 @@ BEGIN
     JOIN pg_namespace ns ON ns.oid = rel.relnamespace
     WHERE ns.nspname = 'commcalc' AND rel.relname = 'exec_metric_config'
       AND con.contype IN ('u', 'p')
-      AND (SELECT array_agg(att.attname ORDER BY att.attname)
+      -- att.attname is `name`, so it must be cast to text before comparing with a text[] literal:
+      -- `name[] = text[]` has no operator and raises 42883 (owner hit this running the file, 2026-09-05).
+      AND (SELECT array_agg(att.attname::text ORDER BY att.attname::text)
            FROM unnest(con.conkey) k
            JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k)
-          = ARRAY['bucket', 'org_id']
+          = ARRAY['bucket', 'org_id']::text[]
   LOOP
     EXECUTE format('ALTER TABLE commcalc.exec_metric_config DROP CONSTRAINT %I', c.conname);
   END LOOP;
