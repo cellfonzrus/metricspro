@@ -42,6 +42,7 @@ Primary code homes:
 | 17 | **Cross-reference: by ENDPOINT** | endpoint → handler/section. |
 | 18 | **Cross-reference: by METRIC/KPI** | metric → source table → reader function. |
 | 19 | **Known gaps & inert config** | stored-but-unwired, snapshot-only, surfaces that can disagree. |
+| 20 | **Super-admin control box** | "Is the platform working? What is red right now, what is NOT being watched at all, did the daily check actually run, and how do I hand this failure to Claude Code safely?" |
 
 ---
 
@@ -2015,6 +2016,10 @@ as a market-grant keyset member; ambiguity fails closed):
 | `commcalc.companies` | `POST/PATCH /account/companies` (org_id in payload/filter; mig `952` removed the two 2026-06-27 wrong-org LuxeLink rows) | ONLY `coa.org_companies` (§13b canonical fail-closed enumeration; CI-pinned by `harness_org_scope_guard.py`) → `list_companies`/`list_stores`/journal echo/`overview`/`analysis`/`finance_attention`/`store_company_map`⇒`company_assignment`; billing `per_entity` org-scoped count probe |
 | `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`/`938`/`941`/`954`) | `PUT /account/config` (incl. the mig-954 tenant mapping `distributor_payable_basis`/`distributor_payable_line`/`asset_ledger_open_statuses`); mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate; mig-941 columns (`projection_config`, `valuation_config` JSONB — display-only assumptions, org seeds gated) | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933/938 knobs, adaptive), `projection_engine.load_projection_config`, `valuation.load_valuation_config` (mig-941, adaptive); **mig-954 distributor-payable mapping** via `balance_sheet.load_bs_config` → `resolve_payable_basis`/`resolve_payable_line` (org column > carrier preset > declared mig-933 family > off) |
 | `commcalc.asset_ledger` (consignment / asset-lending ledger; wipe-and-reinsert CURRENT snapshot) | mod-asset upload `process_asset_ledger_bytes`, `vip_sweep.run_asset_ledger_sweep` | asset dashboard `GET /asset/summary` ("Open Balance Owed" = Σ `owed_to_vip` where `status='Open'`), `account/device_cogs` (consignment COGS), `coa.build_inputs` (`vip_reimb`/`vip_fees`, and the legacy `owed_vip`/`inventory` `status='on inventory'` predicate that matches NOTHING on the live feed), **BS distributor payable under `distributor_payable_basis='asset_ledger'`** (`balance_sheet.asset_ledger_open_bookings` via `statement_engine._fetch_asset_ledger_open`, mig `954`; money column `owed_to_vip` ONLY; as-of = `period_as_of`) and the SAME derivation behind `GET /account/liabilities-due`; statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`) |
+| `core.system_check` (mig `970`; per-tenant OVERRIDES over the code-derived check registry — retune / disable / DECLARE a check) | `PUT`-less by design today: rows are written by SQL/console; the board never writes them | `control_box_api.effective_registry` (code defaults < HOUSE rows < org rows) → `GET /core/control-box` |
+| `core.system_check_run` (mig `970`; daily-run history — the PROOF the check ran + the baseline escalation compares against) | `control_box_api._persist_run` (from `POST /core/control-box/run` and `/run-due`) | `GET /core/control-box/history`; `_previous_results` → `control_box.escalations` (notify-once) |
+| `core.system_check_state` (mig `970`; per-org `enabled`/`cadence_hours`/`last_run_at`/`next_run_at`) | `control_box_api._persist_run` upsert | `control_box.due_orgs` (which tenants are due) + `control_box.selfcheck_row` (the board's row about ITSELF) |
+| `core.ai_budget_config` / `core.ai_call_audit` (mig `972`; SHARED per-`(org,purpose)` AI ceiling + per-call meter/audit — tokens only, $ joins `core.token_rates`) | `control_box_api._audit` (every attempt, allowed AND refused) | `control_box.rollup_usage` → `control_box.ai_guard_decision`; refusal scan = the "someone is probing us" signal |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
 | `commcalc.daily_closing` | closing sweep `033` | `deposit_recon.closing_cash_raw_by_store_day:147`, MI cash gate; **BS `store_cash_on_hand` line via `_cash_position_core` → `balance_sheet.store_cash_cells`** (mig `938`, basis-gated); **P&L bill-pay carve-out** (`account/billpay_pl.billpay_cells` on `epay_on_cash`/`epay_on_credit`, mig `939`, presentation-gated); **bill-pay coverage recon** (`_closing_collected_by_store_day` → `/billpay-coverage/{period}`); **CARD SETTLEMENT RECON** (`external_credit_recon.declared_cells` on the tender columns the org's `closing_tender_def.processor_key` routes — house map `t_ext_cc`→external_cc, `t_credit`→pos_merchant — → `GET /closing/external-credit-recon`, mig `960`/`961`, §12) |
 | `commcalc.billpay_pickup` (mig `942`, sibling of `cash_pickup`) | `POST /closing/billpay-pickup` (+`/undo`, `/deposit` — the parameterized cash-pickup machinery pointed at this table) | `GET /closing/billpay-pickups` (`_billpay_position_core`: declared `epay_on_cash` − picked = pending remittance), `GET /closing/cash-recon-management`; folds into `_cash_position_core` general outflows ONLY under `cash_pickup_config.billpay_relieves_cash` (default false — no double-count; §12) |
@@ -2058,6 +2063,9 @@ as a market-grant keyset member; ambiguity fails closed):
 | `POST /commcalc/data-sources/sweep/run-due` | `router.py:data_sources_run_due` | §12a — the ONE portal-pull scheduler (VidaPay, b2bsoft, and the three merchant portals); cron self-registered by mig `956` |
 | `GET /commcalc/merchant-portals/catalog` | `router.py:merchant_portal_catalog` | §12a portal descriptors for the connector settings page |
 | `GET /commcalc/merchant-portals/health` | `router.py:merchant_portal_health` | §12a durable-session health roll-up |
+| `GET /core/control-box` (the red/green board; `deep=1` runs heavy providers) · `GET /core/control-box/checks` (effective registry) · `GET /core/control-box/history` · `GET /core/control-box/platform` (the ONE cross-org surface — lamps + counts ONLY, no tenant figures) | `core/control_box_api.py` | §20 super-admin control box |
+| `POST /core/control-box/run` (manual, deep) · `POST /core/control-box/run-due` (pg_cron entrypoint, `x-notify-secret`, self-scheduled by mig `971`; enumerates TENANTS so a never-checked org is never invisible) | `core/control_box_api.py` (`run_now` / `run_due`) | §20 daily check |
+| `GET /core/control-box/fix-task/{check_key}` (deterministic, NO AI — the copy-into-Claude-Code bundle) · `POST /core/control-box/ai-triage` (super-admin only, purpose-locked, no prompt passthrough, rate + budget capped, fully audited) | `core/control_box_api.py` (`get_fix_task` / `ai_triage`); pure guard `core/control_box.ai_guard_decision` | §20 AI path (mig `972`) |
 | `POST /commcalc/data-sources/{sid}/live-login/submit-totp` | `router.py:live_login_submit_totp` | §12a authenticator-app code into the live session (never SMS/email OTP) |
 | `POST /calculate/{period}` | `router.py:8968` | §6 rep commission |
 | `GET /commissions/{period}` | `10222` | §6 — the Rep Incentive Report read; market stamped per row via §13a (2026-09-03 fix) |
@@ -2143,6 +2151,7 @@ as a market-grant keyset member; ambiguity fails closed):
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| Platform health lamp (per subsystem, per tenant, and the roll-up) | `control_box.evaluate_check` → `roll_up`; composed from `import_health.collect_attention` + `portal_session_health.summarize` + scheduler heartbeats. Ladder `green < unmonitored < amber < unknown < red`; `unmonitored` is NEVER counted as green and the coverage fraction is stated out loud | `GET /core/control-box`, `core.system_check_run.lamp`; §20 |
 | External credit-card settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='external_cc'` | `merchant_portals.totals_by_store_day`; tallied against `daily_closing.t_ext_cc` by `closing/external_credit_recon` (§12a) |
 | POS-merchant settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='pos_merchant'` | same reader, `pos_merchant` role (§12a) |
 | Exec-MTD LINE metrics (Bill Payment Qty/$ · Total Phones · Activation Fee · Total Protect) | `raw_sales.department` / `.category` / `.product_desc` matched against `commcalc.exec_metric_config.rules` (EXACT membership for dept/cat, substring for `product_desc_contains`) | `exec_metric_defs.resolve` (tenant row > house `carrier` PRESET > `CODE_DEFAULTS`, mig `962`) → `exec_metric_defs.line_match` inside `_sales_cell_agg`; silent-zero detector `bucket_coverage` → `GET /exec-mtd/*` key `metric_coverage` → Exec-MTD banner. Also the SECONDARY basis for `/metric-recon` and Leg B of the mig-`944` 3-way bill-pay recon; the mig-`939` P&L carve-out does NOT read it. Proof `harness_exec_metric_defs.py` (§3) |
@@ -2332,3 +2341,113 @@ as a market-grant keyset member; ambiguity fails closed):
   metric_key→payout_config column mapping was not dumped.
 - Exact **rep-commission tier math** (how `kpis_met`→`tier` maps through `tier_100/75_min_kpis`) lives
   inside `calc_rep_commissions` body (`calculator.py:104-520`) and was not line-quoted here.
+
+---
+
+## 20. Super-admin CONTROL BOX — platform red/green board + the daily check
+
+**Owner directive 2026-09-05 (sanjot@):** *"a separate agent is needed to work on the super admin side
+control box to monitor the functions of all aspects of the platform, showing red light or green light
+of the system and a daily check required to make sure the system is working, the control box will have
+a link to those module and a way to fix that problem connected with Claude code so that can be fixed,
+must protected from third party misuse of the ai api and only restricted to this module"*.
+
+**IT COMPOSES; IT DOES NOT RE-DERIVE.** The board holds NO second opinion about any subsystem's
+health. Everything it shows comes from mechanisms that already existed (duplicate-check build gate):
+
+| Reused mechanism | Where | What the board does with it |
+|---|---|---|
+| `core.import_health.collect_attention` + `PROVIDERS` (44 live providers across 12 modules) | `core/import_health.py:781` | ONE lamp per provider, derived from the LIVE registry at call time — a module registering a new provider gains a lamp with **no code change and no migration here** |
+| `commcalc.portal_session_health.summarize` / `STATES` (§12a) | `commcalc/portal_session_health.py` | Its ladder stays THE ladder for sessions; the board only MAPS it (`control_box.LAMP_FROM_PORTAL_STATE`), and `harness_control_box.py` §B fails if a state is ever added there and left unmapped |
+| `core.import_health.feed_health` (mig 717) | `core/import_health.py:745` | Consumed through the `imports` provider above; freshness is never recomputed |
+| `GET /health` deployed-commit reporting | `main.py:_deployed_commit` | The `deploy_identity` lamp |
+| `core.token_rates` (mig 718) | mig `718` | The ONLY $/MTok source; `core.ai_call_audit` therefore stores TOKENS only and has no cost column |
+
+**WHAT IS GENUINELY NEW** (nothing else answered these):
+- **Scheduler LIVENESS.** The four self-registering pg_cron jobs (migs `922`/`940`/`950`/`956`) each
+  self-heal their REGISTRATION on boot, but nothing ever noticed a registered job that had stopped
+  PRODUCING — the exact failure mig 950 found by accident. `heartbeat_lamp` measures each one from
+  the table that job itself stamps (`commcalc.email_sweep_config.last_run_at`,
+  `commcalc.data_source.last_run_at`, `storeops.google_review_sweep_config.last_run_at`,
+  `commcalc.account_statements.computed_at`) — the SOURCE is config, not a branch per subsystem.
+- **The watchman is watched.** `control_box.selfcheck_row` puts the board's own daily-run freshness on
+  the board. If the daily check stops, that row goes RED instead of leaving yesterday's green lamps up.
+- **A COVERAGE FIX found while building this:** `merchant_portals.is_portal` recognises only the three
+  CARD processors (businesstrack / payanywhere / transfirst), so filtering portal-session health by it
+  — as `GET /commcalc/merchant-portals/health` correctly does for its own purpose — would have left
+  the **VidaPay/T-CETRA and b2bsoft session logins silently unwatched**. The board's lamp covers a
+  source when it is a known portal OR the row actually carries session/auth state (§12a, mig 956).
+
+**HONESTY RULES (enforced in the pure layer, so no caller can bypass them).** *"A control box that
+shows green for a subsystem it does not actually check is worse than one that says 'not monitored'."*
+1. An unrecognised probe kind, a probe that raised, a heavy provider deferred this pass, or missing
+   evidence ⇒ `unknown`. **Never green.** Being blind is a state you can see.
+2. A disabled check, an automation the tenant does not use, or a declared-but-unprobed subsystem ⇒
+   `unmonitored`, reported in `coverage`, never folded into a green headline.
+3. `roll_up` over ZERO monitored checks ⇒ `unknown`, never green. An empty board is not a healthy one.
+4. The daily check enumerates **tenants** (`storeops.tenants`), not state rows, so a tenant nobody has
+   ever checked is `unknown` on the platform view rather than invisible.
+
+**LAMP LADDER** (worst last, `control_box.LAMPS`): `green < unmonitored < amber < unknown < red`.
+Deliberately NOT the portal ladder — that alphabet describes one session and prescribes a remedy;
+this one describes any subsystem to an operator. `unknown` outranks `amber` (not knowing is more
+urgent than one late feed); the headline EXCLUDES `unmonitored` and reports it as coverage instead.
+
+**FILES**
+- `backend/app/modules/core/control_box.py` — **PURE** (stdlib only): `LAMPS`/`worst_lamp`/`is_worse`,
+  `LAMP_FROM_PORTAL_STATE`, `evaluate_check` (+ per-kind evaluators), `roll_up`, `sort_board`,
+  `heartbeat_lamp`, `is_due`/`due_orgs`/`next_run_at`, `selfcheck_row`, `escalations`, `redact`,
+  `ai_guard_decision`, `validate_check_key`, `ai_audit_row`, `rollup_usage`, `build_fix_task`,
+  `fix_task_bundle`. Check kinds: `attention_provider · portal_sessions · heartbeat · counter ·
+  boolean · unmonitored`.
+- `backend/app/modules/core/control_box_api.py` — I/O only: `default_specs` (44 provider specs + 7
+  platform specs), `effective_registry` (code defaults < HOUSE rows < org rows), `gather_evidence`,
+  `build_board`, the endpoints, `_ensure_system_check_cron`.
+- `frontend/src/app/(platform)/admin/control-box/page.tsx` — the board (nav: `rbac.ts`, module
+  `admin`, super-admin-gated server-side on every endpoint).
+- **Harnesses:** `harness_control_box.py` (134 checks — ladder, honesty, portal-adapter drift, daily
+  scheduling, AI guard, redaction, fix bundle) and `harness_control_box_board.py` (41 checks — board
+  assembly over a fake client: composition, config overrides, honesty under I/O failure, coverage).
+
+**AI PATH — the "protected from third party misuse" half.** `POST /core/control-box/ai-triage` is
+OPTIONAL COMMENTARY on a lamp that is ALREADY red. Six protections, in order (pure + proven,
+`harness_control_box.py` §D): (1) fail-closed platform-super-admin gate, checked server-side BEFORE
+any other state is consulted, so an unauthorized probe learns nothing about budget/usage/key
+presence; (2) purpose-locked to `control_box_triage`; (3) **no prompt passthrough** — the only
+caller input is a check key re-validated against the server-side registry, and the prompt is
+assembled from server-side diagnostics; (4) per-org rate limit then daily call + token budget
+(mig `972`, RULE TWO config with house defaults); (5) every attempt audited, allowed AND refused,
+org-scoped; (6) ASYNC Anthropic client, awaited, with explicit timeout + `max_retries` — the SEV-1
+2026-07-30 event-loop freeze (`account/ai_limits.py`) cannot recur. **Every lamp is deterministic
+and computed before any of this runs**, so a refused, throttled, absent or failed AI call can never
+change whether a light is red; with `ANTHROPIC_API_KEY` unset the whole board still works and the
+`ai_triage_key` lamp reads amber.
+
+**THE FIX PATH IS NOT AN AUTO-APPLY LOOP.** `GET /core/control-box/fix-task/{key}` assembles,
+server-side and with NO AI call, a scoped ready-to-run task (which check failed, redacted evidence,
+the module link, the index anchor, the files, and the owning CLAUDE.md agent) that a HUMAN copies
+into Claude Code and reviews. No web request can apply an AI-authored change to production.
+
+**MIGRATIONS**
+- `970_system_control_box.sql` — `core.system_check` (per-tenant registry OVERRIDES over the
+  code-derived defaults; a row can retune, disable, or DECLARE a check), `core.system_check_run`
+  (run history = the proof the daily check ran + the baseline `escalations` compares against),
+  `core.system_check_state` (per-org cadence + `last_run_at`/`next_run_at`). Seeds the house
+  daily-check row and three honest `unmonitored` declarations (`db_backup_restore`,
+  `frontend_uptime`, `outbound_delivery`).
+- `971_system_check_cron.sql` — `core.ensure_system_check_cron(url, secret)`, the 922/940/950/956
+  self-registering pattern: hourly tick (`17 * * * *`, off the busy top-of-hour so the check does not
+  measure its own contention), per-org `next_run_at` gates the actual DAILY run; re-registered on
+  EVERY boot by `main.py:_system_check_cron_startup`; `service_role` EXECUTE only; no literal secret
+  in the file; fail-soft when pg_cron/pg_net is absent.
+- `972_ai_call_guard.sql` — the **SHARED** AI guard: `core.ai_budget_config` (per `org × purpose`
+  ceiling) + `core.ai_call_audit` (per-call meter AND audit trail, tokens only — $ joins
+  `core.token_rates`). Generic on purpose: the platform already makes outbound AI calls from
+  `account/engine`, `account/recon`, `commcalc/agency`, helpdesk `/ai-assist` and
+  `remediation/propose`, each re-solving "who may spend the key"; this is one meter for all of them.
+
+**KNOWN, DECLARED GAPS** (visible as grey lamps, not silently green): Supabase backup/restore drills,
+frontend (Vercel) availability, and provider-side email/WhatsApp delivery confirmation — none is
+observable from the backend today. Also note `remediation/propose`'s AI diagnosis (mig 097) is
+currently org-param-gated only; it is a candidate to adopt this guard.
+

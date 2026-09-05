@@ -34,6 +34,7 @@ from app.modules.crm.router import router as crm_router
 from app.modules.referral.router import router as referral_router
 from app.modules.vision.router import router as vision_router
 from app.modules.commcalc.processor_ledger_api import router as processor_ledger_router
+from app.modules.core.control_box_api import router as control_box_router
 
 app = FastAPI(
     title="MetricsPro Platform API",
@@ -253,6 +254,7 @@ app.include_router(approvals_router, prefix="/api/v1")    # Unified Approvals En
 app.include_router(chat_router, prefix="/api/v1")         # Internal Chat — Phase 1 (mig 868)
 app.include_router(vision_router, prefix="/api/v1")       # Vision — Nest live view + heat map + behavior (mig 900)
 app.include_router(processor_ledger_router, prefix="/api/v1")  # Processor daily debit/credit ledger (owner 2026-09-04)
+app.include_router(control_box_router, prefix="/api/v1")  # Super-admin control box (owner 2026-09-05; carries its own /core prefix)
 
 # Security posture check (Spec §2/§5): log the enforcement posture and warn on missing secrets /
 # break-glass states at boot. Best-effort; STARTUP_STRICT=1 makes prod findings fail the boot.
@@ -389,6 +391,26 @@ def _data_sources_cron_startup():
               f"{_ensure_data_sources_cron() or 'no status returned'}", flush=True)
     except Exception as e:
         print(f"WARN [data-sources-cron] self-register failed (portal pulls stay on manual clicks): "
+              f"{e}", flush=True)
+
+
+@app.on_event("startup")
+def _system_check_cron_startup():
+    """Self-heal the DAILY system-check schedule on EVERY boot (mig 971 — super-admin control box,
+    owner directive 2026-09-05: "a daily check required to make sure the system is working").
+
+    A health check is the LAST automation that may depend on a human remembering to schedule it: its
+    entire job is to notice what nobody is looking at. Mig 241 (portal pulls) shipped its cron as a
+    commented-out block for someone to paste, and mig 411's "daily 6am" review sweep had no job at
+    all — both were discovered only when data was already missing. Same idempotent replace-by-name
+    semantics and the same best-effort posture as the four hooks above: a missing secret / RPC / cron
+    infra logs the reason and never blocks boot, and the manual "Run check now" button still works."""
+    try:
+        from app.modules.core.control_box_api import _ensure_system_check_cron
+        print(f"[system-check-cron] self-register on boot: "
+              f"{_ensure_system_check_cron() or 'no status returned'}", flush=True)
+    except Exception as e:
+        print(f"WARN [system-check-cron] self-register failed (the daily health check stays manual): "
               f"{e}", flush=True)
 
 

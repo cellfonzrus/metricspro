@@ -399,6 +399,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/recovery', label: 'Appeal Recovery', icon: '💰', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // First NAV home for the ingest-guard quarantine queue (page pre-existed, menu-less; admin tier).
     { href: '/commcalc/ingest-guard', label: 'Ingest Guard', icon: '🛡️', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/admin/control-box', label: 'System Control Box', icon: '🛎️', module: 'admin', tileOnly: true },
     { href: '/admin/import-health', label: 'Import Health', icon: '📡', module: 'admin', tileOnly: true },
     { href: '/failures', label: 'Failure Logs', icon: '🩺', module: 'admin', tileOnly: true },
     { href: '/storeops/attendance', label: 'Attendance Exceptions', icon: '🚨', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
@@ -869,6 +870,13 @@ export const NAV: NavGroup[] = [
     // 403s a non-super-admin independently), so this nav line adds no new permission surface and needs
     // no SEED_VERSION bump for roles. Deliberately NOT a new module key: it is a platform surface, not
     // a billable tenant module.
+    // System Control Box (owner directive 2026-09-05, migs 970-972) — the red/green board over every
+    // subsystem the platform can actually check, plus the scheduled daily run. Tagged module 'admin'
+    // with NO `scopes`, byte-identical in shape to its Auto-Fix Pipeline sibling below: the PAGE is
+    // super-admin-only (every backend endpoint calls core.router._require_super_admin and 403s a
+    // non-super-admin independently), so this nav line adds no new permission surface and needs no
+    // SEED_VERSION bump. Not a new module key: it is a platform surface, not a billable tenant module.
+    { href: '/admin/control-box', label: 'System Control Box', icon: '🛎️', module: 'admin' },
     { href: '/admin/fix-requests', label: 'Auto-Fix Pipeline', icon: '🛠️', module: 'admin' },
   ]},
   // Reports LAST (owner directive 2026-08-10) — the Report Center directory sits at the foot of the
