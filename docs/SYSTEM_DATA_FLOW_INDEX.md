@@ -1902,6 +1902,108 @@ as a market-grant keyset member; ambiguity fails closed):
   - **Proof:** `backend/harness_store_lease.py` (stdlib-only: rent math incl. anniversary
     boundaries, due-window clamps, gate truth table end-to-end, ACH strip, upload decode caps).
     Not an external feed → no lineage registry entry.
+- **Insurance POLICIES (one policy, many stores) + AI document reading + expiry notices (migs
+  `964`-`967`, owner directive 2026-09-05):** "there should be a link to upload the insurance policy
+  and assign that policy to multiple stores as one insurance policy can cover multiple stores, the
+  uploaded policy should then be interpreted by the system using ai and the fields filled ... Please
+  to upload the certificate of insurance of respective stores. Similarly for the lease ... All with
+  the help of ai tools ... a notification when a coi is expir[ing] or th[e] lease is getting over at
+  least 60 days in advance or as per lease requirement."
+  - **WHAT WAS EXTENDED, NOT REBUILT (build-gate check):** `storeops.store_document` (the SAME
+    append-only table, private `store-docs` bucket and signed-URL-by-id download — a policy document
+    is one more row with `policy_id` set and `store_code` NULL); `store_lease.can_see_lease` (the
+    SAME fail-closed gate on every new route); `store_lease.rent_for_month` /
+    `normalize_rent_schedule` / `normalize_rent_due` (an ACCEPTED rent schedule is written in exactly
+    the shape the §14 mig-946 read contract already reads — no second derivation);
+    `storeops.alert_log` (mig `433` — the SAME dedupe the lateness alerts use, scopes
+    `doc_expiry_lease`/`doc_expiry_insurance`); `storeops.tenants` (the SAME per-org config table);
+    `PUT /storeops/store-lease/tenant-defaults` (extended, not forked, for the two new config keys);
+    `core.import_health.register_provider` (the attention feed, not a second notifier); and the mig
+    `922`/`940`/`950`/`956` self-scheduling pg_cron pattern.
+  - **Tables:** `storeops.insurance_policy` (mig `964` — one row per CONTRACT: `policy_number`,
+    `insurer`, `coverage_type` (free text; vocabulary is CONFIG), `coverage_start/coverage_end`,
+    `premium`/`premium_frequency`/`premium_due`, `inclusions_summary`, `extra_items JSONB`,
+    `notice_days`, `is_active`). `storeops.insurance_policy_store` (the multi-store assignment,
+    UNIQUE org+policy+store). `storeops.document_extraction` (mig `965` — the AI DRAFT:
+    `fields`/`clauses`/`extra_items`/`contacts`/`applied` JSONB, `status`
+    draft|accepted|partially_accepted|rejected|failed|not_extracted). `storeops.document_contact`
+    (mig `966` — MULTIPLE expiry contacts per subject; `subject_kind` 'lease' with
+    `subject_ref` = store_code covers BOTH that store's lease and its certificate, 'insurance_policy'
+    with `subject_ref` = policy id). New `store_lease` columns (mig `966`): `lease_notice_days`,
+    `notice_address`, `lease_exit_clause`, `lease_termination_liabilities`,
+    `lease_critical_clauses JSONB`, `coi_expires`. New `store_document` column (mig `964`):
+    `policy_id`, plus doc_kind `insurance_policy` and a nullable `store_code`.
+  - **THE MONEY RULE (this is the point of mig 965):** `account/liabilities_due.py` books rent and
+    insurance premiums FROM `store_lease`, and `account/engine.py` states the house posture — the AI
+    "never originates a dollar amount that ships". So an extracted premium/rent/escalation NEVER
+    writes to `store_lease`. It lands in `document_extraction` with per-field confidence and the
+    VERBATIM source snippet + page, and **`doc_intel.apply_plan` is the only door to a live column**:
+    it refuses an unknown key, a key absent from the extraction, a field with no target, an
+    ACH/identity column ALWAYS (no override flag exists), and every `doc_intel.MONEY_GUARDED` field
+    (`current_rent`, `rent_effective_from`, `escalation_pct`, `rent_schedule`, `rent_due`,
+    `insurance_premium`, `insurance_premium_due`, `premium`, `premium_due`) unless a human ticks the
+    money confirmation. `insurance_policy.premium` is INFORMATIONAL — no money reader reads that
+    table at all.
+  - **CONFIG, NEVER CODE (RULE TWO):** coverage types are `storeops.tenants.insurance_coverage_types`
+    ([{key,label}], house default seeded as the mig-964 column DEFAULT — the owner's BOP and workers
+    comp are two rows of it, alongside GL/property/umbrella/cyber/EPLI/auto). No DB CHECK, no Python
+    enum, no tenant/insurer branch anywhere. The notice floor is
+    `storeops.tenants.doc_expiry_notice_days` `{"lease":60,"insurance":60}`.
+  - **THE NOTICE WINDOW:** `doc_intel.resolve_notice_days` = **MAX(the document's own requirement,
+    the org floor)**, house fallback `HOUSE_NOTICE_DAYS = 60`. MAX, not override: a lease demanding
+    90 or 180 days beats the 60-day floor, and one demanding 30 never drops below it. Reminder ladder
+    `milestones_for` = the window, then every house nudge strictly below it (60/30/14/7/1), then 0 =
+    expired — ASCENDING, so the milestone that fires is the TIGHTEST one crossed (descending would
+    re-pick the widest one daily and, once logged, silence every later nudge). A contact's own
+    `notice_days` can only make their notice EARLIER, never later than the floor.
+  - **AI call (`doc_intel_ai.extract_document`):** SEV-1 2026-07-30 discipline in both layers — the
+    route is `async def` and hops via `run_in_threadpool`, and the sync Anthropic client carries
+    explicit `DOC_INTEL_TIMEOUT_S` (120s) x (1 + `DOC_INTEL_MAX_RETRIES`). Model is env config
+    (`DOC_INTEL_MODEL`, default `claude-opus-5`), structured outputs (json_schema) so the model
+    cannot answer in prose, adaptive thinking. NOTHING from `store_lease` is ever put in the prompt —
+    above all the ACH columns; returning snippets are additionally masked for bank-ish digit runs
+    (`doc_intel.scrub_snippet`). No key ⇒ status `not_extracted` (a clean empty draft), never an
+    exception. NOT yet routed through the sibling's shared AI-call guard (`core/control_box`,
+    mig `972`): that guard's authorization is super-admin + no-prompt-passthrough, whereas this call
+    is lease-gated and passes a tenant document — converging needs one purpose there whose auth check
+    is `can_see_lease`.
+  - **Endpoints (`storeops/router.py`, beside the mig-946 lease block; ALL gated `can_see_lease`,
+    fail-closed 403, every query org-scoped):** `GET/POST/PUT/DELETE /storeops/insurance-policies`,
+    `PUT /storeops/insurance-policies/stores` (the multi-store assignment; every code validated
+    against this org's `storeops.stores`), `POST /storeops/insurance-policies/doc` (master policy
+    upload — same bucket/caps/append-only contract), `POST /storeops/document-extract`
+    (run_in_threadpool), `GET /storeops/document-extraction`,
+    `POST /storeops/document-extraction/accept` (THE money gate),
+    `GET/PUT /storeops/document-contacts`, `GET /storeops/doc-expiry`,
+    `POST /storeops/doc-expiry/run-now` (dry-run default), `POST /storeops/doc-expiry/run-due`
+    (NOTIFY_RUN_SECRET-gated pg_cron entrypoint, mig `967`, daily 13:00 UTC). `GET
+    /storeops/store-lease` additionally returns `policies` (covering this store), `contacts` and
+    `notice_days_resolved`.
+  - **Cron registration:** mig `967` installs the idempotent
+    `storeops.ensure_doc_expiry_alert_cron(url, secret)` RPC (service_role only, no literal secret in
+    the file). The four existing crons register from a `main.py` boot hook; this build does NOT touch
+    `main.py` (a sibling agent was editing it concurrently), so `_maybe_register_doc_expiry_cron()`
+    arms the job on the first policy/expiry request of the process instead. **Open follow-up: add the
+    12-line `_doc_expiry_cron_startup` hook to `main.py` calling
+    `storeops.router._ensure_doc_expiry_alert_cron`, matching the mig-950 block.**
+  - **Attention (safety net, not the channel):** `storeops/attention.py` providers
+    `storeops_doc_expiry` (documents inside their notice window) and `storeops_doc_expiry_no_contact`
+    (inside the window with NO mailable contact — the failure mode that makes the whole feature
+    silent). Both REUSE `router._expiry_subjects` + `doc_intel` window math via a lazy import; the
+    attention feed must never become a second derivation of "what is expiring".
+  - **Frontend:** NEW page `/storeops/setup/insurance` (`storeops/setup/insurance/page.tsx`) —
+    policies, store assignment, upload + "Read the policy with AI", contacts, the expiry table and
+    preview/send buttons; shared review component `storeops/setup/insurance/ExtractionReview.tsx`
+    (nothing pre-ticked; every value shows its quoted source; money fields behind their own
+    confirmation) reused by `storeops/setup/stores/LeasePanel.tsx`, which also gained the mig-966
+    lease fields, the covering policies, and the store's notification contacts. `rbac.ts` nav row
+    (module `storeops`, scopes all/market, tileOnly). AWAITING OWNER PREVIEW (merge policy Option B).
+  - **Proof:** `backend/harness_doc_intel.py` (stdlib-only, 127 checks: coercion, config-driven
+    coverage types, extraction mapping + provenance, THE MONEY GATE's five refusals, the MAX notice
+    window, the alert ladder/dedupe/recipient windows, catalogue↔prompt coherence, interop with the
+    shipped `store_lease` money path, and a multi-tenant static scan of the four new tables — that
+    last one because `harness_org_scope_guard.py` only reads commcalc's router). Not an external feed
+    → no lineage registry entry.
 - **Management Overview + Flags & Compliance dashboards (owner directive 2026-09-03, mig `948`):**
   two NEW top-level dashboard CATEGORIES; the tiles are D1 DATA (mig 068 `ui_label_override`
   scope='tiles', HOUSE platform-default rows seeded `ON CONFLICT DO NOTHING` — the mig-947
@@ -2048,6 +2150,9 @@ as a market-grant keyset member; ambiguity fails closed):
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
 | `storeops.store_lease` (mig `946` — one row per org×store: landlord/site contact, rent links + ACH (SENSITIVE), `current_rent`/`rent_effective_from`/`escalation_pct`/`rent_schedule`/`rent_due`, lease dates, insurance + `insurance_premium_due`/`_frequency`) | `PUT /storeops/store-lease` (gated `can_see_lease`, upsert on org+store) | `GET /storeops/store-lease`; the finance rents-due/recurring-expenses reader `GET /account/liabilities-due` (`account/liabilities_due.rent_due_rows`/`insurance_due_rows` computing FROM `store_lease.rent_for_month`/`resolve_rent_due`/`rent_due_window` — the §14 read contract honored, never re-derived; gated `can_see_lease`, ACH columns never selected) |
 | `storeops.store_document` (mig `946` — append-only lease/COI versions; files in PRIVATE bucket `store-docs`) | `POST /storeops/store-lease/doc` (gated; INSERT only, prior versions kept) | `GET /storeops/store-lease` version lists (path never echoed), `GET /storeops/store-lease/doc-url`/`doc-view` (org-scoped by id → signed URL) |
+| `storeops.insurance_policy` + `insurance_policy_store` (mig `964` — ONE policy covering MANY stores; `premium` here is INFORMATIONAL, no money reader reads this table) | `POST/PUT/DELETE /storeops/insurance-policies`, `PUT /storeops/insurance-policies/stores` (all gated `can_see_lease`, store codes validated against this org's `storeops.stores`) | `GET /storeops/insurance-policies`; `GET /storeops/store-lease` (`policies` covering that store); `router._expiry_subjects` → expiry notices + the `storeops_doc_expiry` attention providers |
+| `storeops.document_extraction` (mig `965` — the AI DRAFT: per-field value + confidence + VERBATIM source snippet/page, clauses with clause number + plain English, extra items, contacts, `applied` audit) | `POST /storeops/document-extract` (gated; `run_in_threadpool`, INSERT only — re-reading appends), `POST /storeops/document-extraction/accept` (stamps `applied`/`status`) | `GET /storeops/document-extraction`; **`doc_intel.apply_plan` is the ONLY door from here to a live column** — refuses ACH targets always and every `MONEY_GUARDED` field without an explicit human money confirmation, so `account/liabilities_due.py` only ever books human-accepted dollars |
+| `storeops.document_contact` (mig `966` — MULTIPLE expiry contacts; `subject_kind` 'lease' + store_code covers that store's lease AND certificate, 'insurance_policy' + policy id) | `PUT /storeops/document-contacts` (gated; replace-set per subject) | `GET /storeops/document-contacts`, `GET /storeops/store-lease` (`contacts`), `GET /storeops/insurance-policies`, and the expiry sweep's recipient list (`doc_intel.expiry_alerts`) |
 | `storeops.tenants.rent_due_default` + `lease_visible_roles` (mig `946` config columns) | `PUT /storeops/store-lease/tenant-defaults` (due default); roles column set per-org via SQL/admin | `store_lease.tenant_lease_config` (adaptive — pre-946 = house first-week + market-manager-and-above), `can_see_lease` gate |
 | `storeops.google_review_config` / `google_review_sweep_config` / `google_review_store` / `google_review_snapshot` / `google_review_item` (migs `411`/`412`, service-role-only; sequence grants mig `951`) | config: `PUT /storeops/google-reviews/config` + `/sweep-config` + `/store-config/{code}`; data: `google_reviews.sweep_store` (place pin upsert, snapshot insert, item dedupe-insert) via run-now/run-due; sweep status: `_gr_set_sweep_status` (`last_detail` carries error samples since 2026-09-04) | `/google-reviews/my`, `/dm-dashboard`, `/store/{code}`, `/stores`, `/employee/{id}`, `/employee-summary` (§14 Google Reviews); below-target → `storeops.action_plan` rows |
 
@@ -2114,6 +2219,10 @@ as a market-grant keyset member; ambiguity fails closed):
 | `GET /storeops/payroll-raw` (payroll-tax page inputs; mig-434 pay gate, FAIL-CLOSED 403 — ALL-money feed, §19.12 closed 2026-09-01; route `payroll_raw_route`, shared `payroll_raw()` stays ungated for pre-gated in-process callers) | `storeops/router.py` (`payroll_raw_route`) | §14 W3 |
 | `GET /storeops/payroll-expenses/{period}`, `GET /storeops/payroll/approvals`, `GET /storeops/timeclock/attendance-exceptions`, `GET /storeops/accountability` | `storeops/router.py:7703` / `payroll_approval.py:469` / `storeops/router.py:4294` / `:4318` | §14 W3 |
 | `GET/PUT /storeops/store-lease`, `PUT /storeops/store-lease/tenant-defaults`, `POST /storeops/store-lease/doc`, `GET /storeops/store-lease/doc-url` + `/doc-view` (ALL gated fail-closed by `store_lease.can_see_lease` — mig 946 lease/landlord/ACH/insurance + document versions) | `storeops/router.py` (`get_store_lease`/`put_store_lease`/`put_lease_tenant_defaults`/`upload_store_lease_doc`/`store_lease_doc_url`/`store_lease_doc_view`) | §14 mig 946 |
+| `GET/POST/PUT/DELETE /storeops/insurance-policies`, `PUT /storeops/insurance-policies/stores`, `POST /storeops/insurance-policies/doc` (one policy, many stores — ALL gated `can_see_lease`) | `storeops/router.py` (`list_insurance_policies`/`create_insurance_policy`/`update_insurance_policy`/`delete_insurance_policy`/`set_insurance_policy_stores`/`upload_insurance_policy_doc`) | §14 migs 964-967 |
+| `POST /storeops/document-extract` (AI reads an uploaded lease/policy/COI → a DRAFT; `async def` + `run_in_threadpool`, SEV-1 2026-07-30 rule), `GET /storeops/document-extraction`, `POST /storeops/document-extraction/accept` (THE money gate — `doc_intel.apply_plan`) | `storeops/router.py` (`post_document_extract`/`get_document_extraction`/`accept_document_extraction`) | §14 mig 965 |
+| `GET/PUT /storeops/document-contacts` (multiple expiry-notification contacts per lease/store or policy) | `storeops/router.py` (`get_document_contacts`/`put_document_contacts`) | §14 mig 966 |
+| `GET /storeops/doc-expiry` (what expires, its resolved notice window, who would be told), `POST /storeops/doc-expiry/run-now` (DRY RUN by default), `POST /storeops/doc-expiry/run-due` (NOTIFY_RUN_SECRET pg_cron entrypoint, daily) | `storeops/router.py` (`get_doc_expiry`/`doc_expiry_run_now`/`doc_expiry_run_due` → `_run_doc_expiry`; cron RPC `_ensure_doc_expiry_alert_cron`) | §14 mig 967 |
 
 | `GET /account/pl/{period}`, `GET /account/balance-sheet/{period}` (`?scope=&stores=&markets=` — stored snapshot when unfiltered; store/market-filtered view via `statement_filter.filtered_statement`: canonical-union market resolution + company-scope AND-composition, 2026-09-02) | `account/router.py` (`get_pl`/`get_bs` → `_filtered_read`) | §4 P&L filter |
 | `GET /account/statement/{period}` (`?scope=&kinds=pl,balance_sheet,cash_flow` — FRESH on-demand statements, nothing persisted; the platform statement service) | `account/router.py` (`on_demand_statement` → `statement_engine.statement`) | §4 statement engine |
@@ -2207,6 +2316,8 @@ as a market-grant keyset member; ambiguity fails closed):
 | Withholding estimate (gross/FICA/federal/state/net) | `storeops.timelog`+`manual_hours` hours × `employees.pay_rate` × `payroll_settings` W-4 | browser: `frontend/src/lib/payroll-tax.ts computePay`; server twin: `storeops/payroll_tax_estimate.compute_pay` (§14 W3 — keep in lockstep) |
 | Rent due this month / current-month rent (per store) | `storeops.store_lease.rent_schedule`→`current_rent`×`escalation_pct` (schedule wins); due window from `rent_due` → `tenants.rent_due_default` → house first-week (mig `946`) | `store_lease.rent_for_month` + `resolve_rent_due`/`rent_due_window` (the §14 read contract for the finance rents-due/recurring-expenses build); surfaced on `GET /storeops/store-lease` |
 | Insurance premium due (per store, recurring) | `storeops.store_lease.insurance_premium` on `insurance_premium_due`, repeating per `insurance_premium_frequency` (mig `946`) | same read contract — finance recurring-expenses reader computes from these columns |
+| Expiry notice window (per lease / policy / COI) | **MAX**(the document's own requirement — `store_lease.lease_notice_days` / `insurance_policy.notice_days` — and the org floor `tenants.doc_expiry_notice_days`, house 60; migs `964`/`966`). MAX, not override: 90/180 beats the floor, 30 never drops below it | `doc_intel.resolve_notice_days` → `doc_intel.expiry_alerts` (ladder `milestones_for`, ASCENDING = the tightest milestone crossed fires) → `GET /storeops/doc-expiry`, the daily sweep `_run_doc_expiry`, and the `storeops_doc_expiry` attention providers; dedupe in `storeops.alert_log` |
+| Whether an AI-extracted value may become a booked number | `doc_intel.MONEY_GUARDED` (rent, rent effective-from, escalation, rent schedule, rent due, insurance premium + premium due, policy premium + premium due) + `doc_intel.FORBIDDEN_TARGETS` (every ACH/banking + identity column, no override) | `doc_intel.apply_plan` — the ONLY writer from `document_extraction` to `store_lease`/`insurance_policy`; refusals returned to the UI with a reason. Proof `harness_doc_intel.py` §D |
 
 ---
 

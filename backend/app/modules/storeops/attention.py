@@ -289,3 +289,80 @@ def register(register_provider):
                       f"in the last 7 days (e.g. {eg}) — review the Payroll Report's over-limit "
                       f"highlighting and the Payroll Change Log for manual corrections.",
                       len(over), "/storeops/payroll", "Review Payroll Report")]
+
+    # ── Lease / insurance expiry (migs 964-967, owner directive 2026-09-05) ──────────────────────
+    # "send a notification when a coi is expir[ing] or th[e] lease is getting over at least 60 days
+    # in advance or as per lease requirement". Email is the primary channel (the daily mig-967
+    # sweep); these two items are the SAFETY NET for the ways email silently fails to be the answer:
+    # nobody was ever listed as a contact, or the expiry is inside the window and someone should see
+    # it on the way in regardless. Both REUSE the router's own subject assembly and the pure
+    # doc_intel window math — the attention feed must never become a second, drifting derivation of
+    # "what is expiring" (CLAUDE.md build gate).
+    def _expiry_rows(client, org_id, ctx):
+        """(rows_in_window, rows_in_window_with_no_mailable_contact) or ([], []) on any fault."""
+        try:
+            from app.modules.storeops.router import _expiry_subjects, _tenant_doc_config
+            from app.modules.storeops import doc_intel as _di
+        except Exception:
+            return [], []                      # router/doc_intel unavailable -> contribute nothing
+        try:
+            scoped = client.schema("storeops")
+            subjects = _expiry_subjects(org_id, scoped)
+            _types, notice_cfg = _tenant_doc_config(org_id, scoped)
+        except Exception:
+            return [], []
+        now = ctx.get("now") or datetime.now(timezone.utc)
+        today = now.date()
+        inside, silent = [], []
+        for s in subjects:
+            exp = _di.coerce_date(s.get("expires_on"))
+            if not exp:
+                continue
+            days = (datetime.fromisoformat(exp).date() - today).days
+            window = _di.resolve_notice_days(s.get("own_notice_days"), notice_cfg, s.get("kind"))
+            if days > window:
+                continue
+            inside.append((s.get("label"), exp, days))
+            if not [c for c in (s.get("contacts") or [])
+                    if c.get("email") and c.get("notify_expiry") is not False]:
+                silent.append((s.get("label"), exp, days))
+        inside.sort(key=lambda r: r[2])
+        silent.sort(key=lambda r: r[2])
+        return inside, silent
+
+    @register_provider("storeops_doc_expiry", label="Leases / insurance expiring inside the notice window",
+                       group="other", cost="cheap")
+    def _p_doc_expiry(client, org_id, ctx):
+        """A lease, policy or certificate is inside its own notice window — the point at which a
+        renewal, extension or notice has to be actioned. Cheap: two bounded config-shaped reads
+        (store_lease, insurance_policy) plus contacts; no timelog, no ledger."""
+        inside, _silent = _expiry_rows(client, org_id, ctx)
+        if not inside:
+            return []
+        eg = ", ".join(f"{lbl} ({exp}, {d}d)" if d >= 0 else f"{lbl} ({exp}, EXPIRED)"
+                       for lbl, exp, d in inside[:3])
+        worst = inside[0][2]
+        return [_item("other", "doc_expiry_window", "error" if worst <= 0 else "warning",
+                      "Leases / insurance expiring inside the notice window",
+                      f"{len(inside)} document(s) are inside their notice window "
+                      f"(e.g. {eg}). The window is the longer of the document's own notice "
+                      f"requirement and the company minimum — renew, extend or serve notice.",
+                      len(inside), "/storeops/setup/insurance", "Open Insurance & Leases")]
+
+    @register_provider("storeops_doc_expiry_no_contact",
+                       label="Expiring documents with nobody to notify",
+                       group="other", cost="cheap")
+    def _p_doc_expiry_no_contact(client, org_id, ctx):
+        """PENDING SETUP, and the failure mode that makes the whole notification feature silent: the
+        document is inside its notice window and NOT ONE contact with an email is attached, so the
+        daily sweep sends nothing and nobody is told. Clears the moment a contact is added."""
+        _inside, silent = _expiry_rows(client, org_id, ctx)
+        if not silent:
+            return []
+        eg = ", ".join(f"{lbl} ({exp})" for lbl, exp, _d in silent[:3])
+        return [_item("other", "doc_expiry_no_contact", "error",
+                      "Expiring documents with nobody to notify",
+                      f"{len(silent)} document(s) are inside their notice window but have no "
+                      f"notification contact with an email address (e.g. {eg}) — the expiry "
+                      f"reminders for them are going nowhere. Add contacts on the lease or policy.",
+                      len(silent), "/storeops/setup/insurance", "Add notification contacts")]

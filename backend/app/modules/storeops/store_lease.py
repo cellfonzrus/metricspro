@@ -51,7 +51,14 @@ HOUSE_RENT_DUE = {"kind": "week", "value": 1}
 ACH_FIELDS = ("ach_bank_name", "ach_routing_number", "ach_account_number", "ach_notes")
 
 # ── document kinds + private bucket ───────────────────────────────────────────────────────────────
+# DOC_KINDS stays the PER-STORE list: these are the only kinds POST /store-lease/doc accepts and the
+# only keys GET /store-lease echoes. The master insurance POLICY document (mig 964) is a third kind
+# on the SAME storeops.store_document table — one document covering many stores, so it hangs off
+# policy_id with store_code NULL and is uploaded through the policy endpoint instead. Keeping it out
+# of DOC_KINDS is what stops a policy ever being filed against a single store by accident.
 DOC_KINDS = ("lease", "insurance_coi")
+POLICY_DOC_KIND = "insurance_policy"
+ALL_DOC_KINDS = DOC_KINDS + (POLICY_DOC_KIND,)
 STORE_DOC_BUCKET = "store-docs"
 PREMIUM_FREQUENCIES = ("annual", "semiannual", "quarterly", "monthly")
 
@@ -332,6 +339,25 @@ def upload_store_doc(org_id, store_code, doc_kind, file_name, data_url, client=N
     c = _ensure_doc_bucket(client)
     c.storage.from_(STORE_DOC_BUCKET).upload(path, raw, {"content-type": ctype, "upsert": "false"})
     return path, len(raw), ctype
+
+
+def download_store_doc(path, client=None):
+    """Read one store-docs object back as raw bytes, or None on any failure.
+
+    ONLY caller today: the AI document reader (doc_intel_ai.extract_document), which needs the file
+    itself, not a URL. Deliberately goes through the SAME private bucket + raw-path pattern as
+    signed_doc_url — the path always comes from an org-scoped row lookup by document id, never from
+    a caller — so this adds no new way to reach a file. Returns None rather than raising: a storage
+    fault must degrade to "couldn't read it automatically", never a 500."""
+    p = str(path or "")
+    if not p or "/" not in p:
+        return None
+    try:
+        c = client or _payvis._default_client()
+        raw = c.storage.from_(STORE_DOC_BUCKET).download(p)
+        return bytes(raw) if raw else None
+    except Exception:
+        return None
 
 
 def signed_doc_url(path, client=None, expires=3600):

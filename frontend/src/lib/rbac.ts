@@ -653,6 +653,11 @@ export const NAV: NavGroup[] = [
     // at the two. Same module + scopes on all three, so no role re-seeding.
     { href: '/storeops/setup/stores', label: 'Store Setup', icon: '🏬', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     { href: '/storeops/setup/employees', label: 'Employee Setup', icon: '🧑‍🔧', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
+    // Insurance & Leases (owner directive 2026-09-05, migs 964-967): ONE insurance policy covering
+    // MANY stores, its document + AI reading, and the lease/COI expiry notices. Same module +
+    // scopes as Store Setup so no role re-seeding; the SERVER gate (store_lease.can_see_lease,
+    // fail-closed) is the real protection — this row only decides who sees the tile.
+    { href: '/storeops/setup/insurance', label: 'Insurance & Leases', icon: '🛡️', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     // tileOnly WITHOUT a tile of its own — deliberate (W2.1): this page is a backward-compat alias
     // whose two surfaces ARE the Store Setup + Employee Setup tiles, and its own banner points there.
     // Bookmarks, ⌘K search and direct links still reach it; a sidebar row would undo the cleanup.

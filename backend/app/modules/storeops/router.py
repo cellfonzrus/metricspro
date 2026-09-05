@@ -6,6 +6,7 @@ import time
 from typing import Any, Optional
 from datetime import datetime, timezone, timedelta, date as _date
 from fastapi import APIRouter, HTTPException, Header, BackgroundTasks, Response
+from fastapi.concurrency import run_in_threadpool   # SEV-1 2026-07-30: slow sync work (the AI document reader) MUST hop off the event loop
 from app.core.database import get_supabase
 from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
@@ -2765,8 +2766,13 @@ LEASE_FIELDS = (
     "lease_start", "lease_end",
     "insurance_company", "insurance_policy_number", "insurance_premium", "insurance_premium_due",
     "insurance_premium_frequency", "insurance_notes", "notes", "updated_by",
+    # mig 966 (owner 2026-09-05): the lease's own notice requirement + the narrative fields the AI
+    # reader fills as a draft. Typeable by hand here too — the reader is an aid, never the only way.
+    "lease_notice_days", "notice_address", "lease_exit_clause", "lease_termination_liabilities",
+    "coi_expires",
 )
-_LEASE_DATE_FIELDS = ("rent_effective_from", "lease_start", "lease_end", "insurance_premium_due")
+_LEASE_DATE_FIELDS = ("rent_effective_from", "lease_start", "lease_end", "insurance_premium_due",
+                      "coi_expires")
 _LEASE_NUM_FIELDS = ("current_rent", "escalation_pct", "insurance_premium")
 
 
@@ -2818,6 +2824,19 @@ def get_store_lease(store_code: str = "", authorization: str = Header(default=""
     resolved_due = _lease.resolve_rent_due(lease.get("rent_due"), tenant_due)
     today = datetime.now(timezone.utc).date()
     lo, hi = _lease.rent_due_window(today.year, today.month, resolved_due)
+    # mig 964-966 additions, all degrading to empty on a pre-964 schema:
+    #  • `policies` — the master insurance policies COVERING this store (one policy can cover many,
+    #    so it is never copied onto the store's own row).
+    #  • `contacts` — the store's expiry-notification contacts (they cover BOTH this store's lease
+    #    and its certificate of insurance).
+    #  • `notice_days_resolved` — max(this lease's own requirement, the org floor).
+    _types, notice_cfg = _tenant_doc_config(org_id)
+    try:
+        pol = list_insurance_policies(store_code=store_code, authorization=authorization, org_id=org_id)
+        policies = pol.get("policies") or []
+        coverage_types = pol.get("coverage_types") or []
+    except Exception:
+        policies, coverage_types = [], []
     return {
         "store_code": store_code,
         "lease": lease,
@@ -2828,6 +2847,11 @@ def get_store_lease(store_code: str = "", authorization: str = Header(default=""
         "current_month_rent": _lease.rent_for_month(
             today.year, today.month, lease.get("current_rent"), lease.get("rent_effective_from"),
             lease.get("escalation_pct"), lease.get("rent_schedule")),
+        "policies": policies,
+        "coverage_types": coverage_types,
+        "contacts": _contacts_by_ref(org_id, "lease", [store_code]).get(store_code, []),
+        "notice_days_resolved": _di.resolve_notice_days(
+            lease.get("lease_notice_days"), notice_cfg, _di.SUBJECT_LEASE),
     }
 
 
@@ -2867,6 +2891,9 @@ def put_store_lease(body: dict, store_code: str = "", authorization: str = Heade
             if row["rent_due"] is None:
                 raise HTTPException(400, 'rent_due must be {"kind":"week"|"day","value":N} '
                                          "(week 1-5 or day 1-31)")
+    if "lease_notice_days" in row:
+        n = _di.coerce_int(row["lease_notice_days"])
+        row["lease_notice_days"] = None if not n or n < 1 else min(n, _di.MAX_NOTICE_DAYS)
     if "rent_schedule" in row:
         row["rent_schedule"] = _lease.normalize_rent_schedule(row["rent_schedule"]) or None
     if "rent_payment_links" in row:
@@ -2891,14 +2918,45 @@ def put_store_lease(body: dict, store_code: str = "", authorization: str = Heade
 
 @router.put("/store-lease/tenant-defaults")
 def put_lease_tenant_defaults(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Set the ORG-WIDE rent-due default (storeops.tenants.rent_due_default — owner 2026-09-03:
-    'by default the rents are due in the 1st week of the month ... not hard coded'). Same gate."""
+    """The ONE per-org config write for this subsystem (RULE TWO — config, never code). Extended for
+    migs 964/966 rather than forked into a second settings endpoint; send any subset:
+
+      rent_due_default        {"kind":"week"|"day","value":N}   (owner 2026-09-03: 'by default the
+                              rents are due in the 1st week of the month ... not hard coded')
+      insurance_coverage_types [{key,label}, ...]  — the coverage vocabulary. The owner's BOP and
+                              workers comp are two rows of THIS list; nothing in code branches on
+                              any key, so a tenant with Garagekeepers cover just adds it.
+      doc_expiry_notice_days  {"lease":N,"insurance":N} — the FLOOR for expiry notices (house 60).
+                              A document demanding longer notice always wins over the floor.
+    Same fail-closed gate as every other lease route."""
+    upd = {}
     _require_lease_access(authorization, org_id)
-    due = _lease.normalize_rent_due((body or {}).get("rent_due_default"))
-    if due is None:
-        raise HTTPException(400, 'rent_due_default must be {"kind":"week"|"day","value":N}')
-    sb().table("tenants").update({"rent_due_default": due}).eq("org_id", org_id).execute()
-    return {"ok": True, "rent_due_default": due}
+    body = body or {}
+    if "rent_due_default" in body:
+        due = _lease.normalize_rent_due(body.get("rent_due_default"))
+        if due is None:
+            raise HTTPException(400, 'rent_due_default must be {"kind":"week"|"day","value":N}')
+        upd["rent_due_default"] = due
+    if "insurance_coverage_types" in body:
+        types = [dict(t) for t in _di.normalize_coverage_types(body.get("insurance_coverage_types"))]
+        if not types:
+            raise HTTPException(400, "insurance_coverage_types must be a non-empty list of {key,label}")
+        upd["insurance_coverage_types"] = types
+    if "doc_expiry_notice_days" in body:
+        raw = body.get("doc_expiry_notice_days")
+        if not isinstance(raw, dict):
+            raise HTTPException(400, 'doc_expiry_notice_days must be {"lease":N,"insurance":N}')
+        upd["doc_expiry_notice_days"] = {
+            "lease": _di.org_notice_floor(raw, _di.SUBJECT_LEASE),
+            "insurance": _di.org_notice_floor(raw, _di.SUBJECT_POLICY)}
+    if not upd:
+        raise HTTPException(400, "nothing to update — send rent_due_default, "
+                                 "insurance_coverage_types and/or doc_expiry_notice_days")
+    try:
+        sb().table("tenants").update(upd).eq("org_id", org_id).execute()
+    except Exception:
+        raise HTTPException(400, "Couldn't save — are migrations 946 and 964 applied?")
+    return dict({"ok": True}, **upd)
 
 
 class StoreLeaseDocIn(LaxModel):
@@ -2978,6 +3036,730 @@ def store_lease_doc_view(doc_id: str = "", authorization: str = Header(default="
     if not url:
         raise HTTPException(502, "The document could not be signed — try again.")
     return RedirectResponse(url, status_code=302)
+
+
+
+# ── Insurance POLICIES (one policy, many stores) + AI document reading + expiry notices ───────────
+# (migs 964-967, owner directive 2026-09-05): "there should be a link to upload the insurance policy
+# and assign that policy to multiple stores as one insurance policy can cover multiple stores, the
+# uploaded policy should then be interpreted by the system using ai and the fields filled ... Please
+# to upload the certificate of insurance of respective stores. Similarly for the lease ... All with
+# the help of ai tools ... a notification when a coi is expir[ing] or th[e] lease is getting over at
+# least 60 days in advance or as per lease requirement."
+#
+# WHAT IS EXTENDED RATHER THAN REBUILT (CLAUDE.md build gate):
+#   • storeops.store_document — the SAME append-only table + private `store-docs` bucket + signed
+#     URL-by-id download path (mig 946). A master policy document is one more row on it, with
+#     policy_id set and store_code NULL. No second documents table, no second download path.
+#   • store_lease.can_see_lease — the SAME fail-closed management gate on every route below.
+#   • store_lease.rent_for_month / normalize_rent_schedule / normalize_rent_due — an ACCEPTED rent
+#     schedule is written in exactly the shape those helpers already read (§14 read contract).
+#   • storeops.alert_log (mig 433) — the SAME dedupe the lateness alerts use.
+#   • storeops.tenants — the SAME per-org config table (coverage vocabulary, notice floor).
+#
+# MONEY SAFETY: account/liabilities_due.py books rent and insurance premiums from store_lease. An AI
+# extraction NEVER writes there. It lands in storeops.document_extraction as a draft with per-field
+# provenance, and doc_intel.apply_plan is the only door to a live column — refusing ACH targets
+# outright and money-guarded fields unless a human ticks the money confirmation. Proof:
+# backend/harness_doc_intel.py.
+from app.modules.storeops import doc_intel as _di
+
+POLICY_FIELDS = ("policy_number", "insurer", "coverage_type", "coverage_start", "coverage_end",
+                 "premium", "premium_frequency", "premium_due", "inclusions_summary", "extra_items",
+                 "notice_days", "notes", "is_active", "updated_by")
+_POLICY_DATE_FIELDS = ("coverage_start", "coverage_end", "premium_due")
+_CONTACT_FIELDS = ("name", "email", "phone", "role", "notify_expiry", "notice_days", "notes", "updated_by")
+_CONTACT_SUBJECTS = ("lease", "insurance_policy")
+
+
+_DOC_EXPIRY_CRON_ARMED = [False]
+
+
+def _maybe_register_doc_expiry_cron():
+    """Arm the daily expiry sweep (mig 967) the first time anyone touches this subsystem.
+
+    The four existing self-scheduling crons (migs 922/940/950/956) register from a main.py boot hook.
+    main.py is a SHARED file being edited concurrently by another agent in this same worktree, so
+    this build does NOT touch it; instead the first policy/expiry request of the process arms the
+    job, once, and it then runs on pg_cron's schedule forever. The one-line boot hook remains the
+    better home and is called out in the handoff — but the sweep is not left waiting on it. Never
+    raises, never blocks a request more than the one RPC, and is a no-op after the first call."""
+    if _DOC_EXPIRY_CRON_ARMED[0]:
+        return
+    _DOC_EXPIRY_CRON_ARMED[0] = True        # set FIRST: a failing RPC must not retry on every request
+    try:
+        _ensure_doc_expiry_alert_cron()
+    except Exception:
+        pass
+
+
+def _tenant_doc_config(org_id, client=None):
+    """(coverage_types, notice_floor_cfg) from storeops.tenants — ADAPTIVE like tenant_lease_config:
+    a pre-964 database, a missing tenant row, or any read failure resolve to the house coverage
+    vocabulary + the house 60-day floor. A config fault can never remove the owner's floor."""
+    try:
+        rows = ((client or sb()).table("tenants")
+                .select("insurance_coverage_types,doc_expiry_notice_days")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    r = rows[0] if rows else {}
+    return (_di.normalize_coverage_types(r.get("insurance_coverage_types")),
+            r.get("doc_expiry_notice_days") if isinstance(r.get("doc_expiry_notice_days"), dict) else None)
+
+
+def _policy_doc_rows(org_id, policy_ids):
+    """Document versions per policy, newest first. storage_path never echoed (mig 946 rule) —
+    downloads go through the existing gated /store-lease/doc-url by document id."""
+    out = {}
+    if not policy_ids:
+        return out
+    try:
+        rows = (sb().table("store_document")
+                .select("id,policy_id,doc_kind,file_name,content_type,size_bytes,uploaded_by,uploaded_at")
+                .eq("org_id", org_id).in_("policy_id", list(policy_ids))
+                .order("uploaded_at", desc=True).execute().data) or []
+    except Exception:
+        rows = []          # pre-964 schema degrades to "no documents", never a 500
+    for r in rows:
+        out.setdefault(str(r.get("policy_id")), []).append(r)
+    return out
+
+
+def _policy_store_map(org_id, policy_ids=None):
+    """{policy_id: [store_code, ...]} — the multi-store assignment."""
+    out = {}
+    try:
+        q = sb().table("insurance_policy_store").select("policy_id,store_code").eq("org_id", org_id)
+        if policy_ids:
+            q = q.in_("policy_id", list(policy_ids))
+        rows = q.execute().data or []
+    except Exception:
+        rows = []
+    for r in rows:
+        out.setdefault(str(r.get("policy_id")), []).append(str(r.get("store_code")))
+    for k in out:
+        out[k].sort()
+    return out
+
+
+def _validate_policy_body(body, coverage_types):
+    """Whitelist + validate a policy payload. A garbage date raises INSIDE the Supabase client as an
+    uncaught 500 rather than a clean 400 (the documented platform gotcha), so every date/number is
+    checked here first — same posture as put_store_lease."""
+    row = {k: body[k] for k in POLICY_FIELDS if k in body}
+    for k in _POLICY_DATE_FIELDS:
+        if k in row and row[k] not in (None, ""):
+            if _lease._parse_date(row[k]) is None:
+                raise HTTPException(400, f"{k} must be a YYYY-MM-DD date")
+            row[k] = str(row[k])[:10]
+        elif k in row:
+            row[k] = None
+    if "premium" in row:
+        if row["premium"] in (None, ""):
+            row["premium"] = None
+        else:
+            try:
+                row["premium"] = float(row["premium"])
+            except (TypeError, ValueError):
+                raise HTTPException(400, "premium must be a number")
+    if "notice_days" in row:
+        n = _di.coerce_int(row["notice_days"])
+        row["notice_days"] = None if not n or n < 1 else min(n, _di.MAX_NOTICE_DAYS)
+    if "coverage_type" in row and row["coverage_type"] not in (None, ""):
+        # RULE TWO: validated against the ORG'S OWN vocabulary, never a code enum. An unknown value
+        # is a 400 that names the configured list rather than a silent re-bucket.
+        key = _di.normalize_coverage_type(row["coverage_type"], coverage_types)
+        if not key:
+            raise HTTPException(400, "coverage_type must be one of this company's configured types: "
+                                     + ", ".join(t["key"] for t in coverage_types))
+        row["coverage_type"] = key
+    if "extra_items" in row and not isinstance(row["extra_items"], list):
+        row["extra_items"] = None
+    if "is_active" in row:
+        row["is_active"] = bool(row["is_active"])
+    return row
+
+
+@router.get("/insurance-policies")
+def list_insurance_policies(store_code: str = "", authorization: str = Header(default=""),
+                            org_id: str = ORG_ID):
+    """Every insurance policy for the org — each with the STORES it covers, its document versions,
+    its resolved expiry-notice window and its notification contacts. `store_code` filters to the
+    policies covering one store. Gated whole (fail-closed 403), org-scoped on every read."""
+    _require_lease_access(authorization, org_id)
+    _maybe_register_doc_expiry_cron()
+    coverage_types, notice_cfg = _tenant_doc_config(org_id)
+    try:
+        rows = (sb().table("insurance_policy").select("*").eq("org_id", org_id)
+                .order("coverage_end", desc=True).limit(1000).execute().data) or []
+    except Exception:
+        rows = []          # pre-964 schema degrades to an empty list, never a 500
+    ids = [str(r.get("id")) for r in rows if r.get("id")]
+    stores_by_policy = _policy_store_map(org_id, ids)
+    docs_by_policy = _policy_doc_rows(org_id, ids)
+    contacts_by_ref = _contacts_by_ref(org_id, "insurance_policy", ids)
+    out = []
+    for r in rows:
+        pid = str(r.get("id"))
+        codes = stores_by_policy.get(pid, [])
+        if store_code and store_code not in codes:
+            continue
+        out.append(dict(r, store_codes=codes, documents=docs_by_policy.get(pid, []),
+                        contacts=contacts_by_ref.get(pid, []),
+                        notice_days_resolved=_di.resolve_notice_days(
+                            r.get("notice_days"), notice_cfg, _di.SUBJECT_POLICY)))
+    return {"policies": out, "coverage_types": list(coverage_types),
+            "notice_days_default": {
+                "lease": _di.org_notice_floor(notice_cfg, _di.SUBJECT_LEASE),
+                "insurance": _di.org_notice_floor(notice_cfg, _di.SUBJECT_POLICY)}}
+
+
+@router.post("/insurance-policies")
+def create_insurance_policy(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Create one policy. Store assignment is a separate call (PUT /insurance-policies/stores) so a
+    policy can be created straight from an upload and assigned once its stores are known."""
+    _require_lease_access(authorization, org_id)
+    coverage_types, _ = _tenant_doc_config(org_id)
+    row = _validate_policy_body(body or {}, coverage_types)
+    row["org_id"] = org_id
+    r = sb().table("insurance_policy").insert(row).execute()
+    return (r.data[0] if r.data else row)
+
+
+@router.put("/insurance-policies")
+def update_insurance_policy(body: dict, policy_id: str = "", authorization: str = Header(default=""),
+                            org_id: str = ORG_ID):
+    """Update one policy (org-scoped by id — a caller can never reach another tenant's row)."""
+    _require_lease_access(authorization, org_id)
+    if not policy_id:
+        raise HTTPException(400, "policy_id required")
+    coverage_types, _ = _tenant_doc_config(org_id)
+    row = _validate_policy_body(body or {}, coverage_types)
+    if not row:
+        raise HTTPException(400, "no valid fields to save")
+    row["updated_at"] = datetime.now(timezone.utc).isoformat()
+    r = (sb().table("insurance_policy").update(row)
+         .eq("org_id", org_id).eq("id", policy_id).execute())
+    if not r.data:
+        raise HTTPException(404, "policy not found")
+    return r.data[0]
+
+
+@router.delete("/insurance-policies")
+def delete_insurance_policy(policy_id: str = "", authorization: str = Header(default=""),
+                            org_id: str = ORG_ID):
+    """Remove a policy and its store assignments (ON DELETE CASCADE). The uploaded DOCUMENT rows
+    survive with policy_id NULLed (ON DELETE SET NULL) so an audit trail is never destroyed by a
+    tidy-up; the files stay in the private bucket."""
+    _require_lease_access(authorization, org_id)
+    if not policy_id:
+        raise HTTPException(400, "policy_id required")
+    r = sb().table("insurance_policy").delete().eq("org_id", org_id).eq("id", policy_id).execute()
+    if not r.data:
+        raise HTTPException(404, "policy not found")
+    return {"ok": True, "deleted": policy_id}
+
+
+@router.put("/insurance-policies/stores")
+def set_insurance_policy_stores(body: dict, policy_id: str = "", authorization: str = Header(default=""),
+                                org_id: str = ORG_ID):
+    """THE OWNER'S ASK: "assign that policy to multiple stores as one insurance policy can cover
+    multiple stores." Replaces the whole assignment set for one policy with `store_codes`. Every
+    code is checked against storeops.stores for THIS org first, so a policy can never be attached to
+    another tenant's store or a typo."""
+    _require_lease_access(authorization, org_id)
+    if not policy_id:
+        raise HTTPException(400, "policy_id required")
+    rows = (sb().table("insurance_policy").select("id").eq("org_id", org_id)
+            .eq("id", policy_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "policy not found")
+    raw = (body or {}).get("store_codes")
+    codes, seen = [], set()
+    for c in (raw if isinstance(raw, (list, tuple)) else []):
+        s = str(c or "").strip()
+        if s and s not in seen:
+            seen.add(s)
+            codes.append(s)
+    for s in codes:
+        _lease_store_exists(org_id, s)
+    sb().table("insurance_policy_store").delete().eq("org_id", org_id).eq("policy_id", policy_id).execute()
+    if codes:
+        who = str((body or {}).get("updated_by") or "")[:120] or None
+        sb().table("insurance_policy_store").insert(
+            [{"org_id": org_id, "policy_id": policy_id, "store_code": s, "created_by": who}
+             for s in codes]).execute()
+    return {"ok": True, "policy_id": policy_id, "store_codes": codes}
+
+
+class PolicyDocIn(LaxModel):
+    policy_id: Any = None
+    file_name: Any = None
+    data: Any = None            # base64 data-url (application/pdf or png/jpg/webp)
+    uploaded_by: Any = None
+
+
+@router.post("/insurance-policies/doc")
+def upload_insurance_policy_doc(body: PolicyDocIn, authorization: str = Header(default=""),
+                                org_id: str = ORG_ID):
+    """Upload the MASTER policy document — the owner's "link to upload the insurance policy".
+    APPENDS a storeops.store_document version (policy_id set, store_code NULL) using the SAME
+    private bucket, the same size/type caps and the same signed-URL-by-id download path as the
+    per-store lease/COI uploads. Storage faults surface as the ACTUAL error (502), never as a
+    misleading 'no file provided' (the 2026-08-18 envelope-photo lesson)."""
+    _require_lease_access(authorization, org_id)
+    policy_id = str(body.policy_id or "").strip()
+    if not policy_id:
+        raise HTTPException(400, "policy_id required")
+    rows = (sb().table("insurance_policy").select("id").eq("org_id", org_id)
+            .eq("id", policy_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "policy not found")
+    try:
+        path, size, ctype = _lease.upload_store_doc(org_id, f"policy/{policy_id}",
+                                                    _lease.POLICY_DOC_KIND, body.file_name,
+                                                    body.data, client=get_supabase())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, "The document couldn't be saved to storage — please try again. "
+                                 f"If it keeps failing, contact support (storage error: {str(e)[:160]}).")
+    row = {"org_id": org_id, "policy_id": policy_id, "doc_kind": _lease.POLICY_DOC_KIND,
+           "storage_path": path, "file_name": str(body.file_name or "")[:200] or None,
+           "content_type": ctype, "size_bytes": size,
+           "uploaded_by": str(body.uploaded_by or "")[:120] or None}
+    r = sb().table("store_document").insert(row).execute()
+    saved = (r.data[0] if r.data else row)
+    saved.pop("storage_path", None)         # path never echoed — downloads go by id via doc-url
+    return {"ok": True, "document": saved}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# AI document reading — DRAFT ONLY (mig 965). See doc_intel.py for the money rule this enforces.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+def _document_row(org_id, document_id):
+    rows = (sb().table("store_document")
+            .select("id,doc_kind,store_code,policy_id,storage_path,file_name,content_type")
+            .eq("org_id", org_id).eq("id", document_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "document not found")
+    return rows[0]
+
+
+def _extract_and_store(org_id, doc, created_by):
+    """Download -> read -> persist ONE draft. SYNCHRONOUS and slow (it calls the model): only ever
+    invoked through run_in_threadpool — see doc_intel_ai's header, SEV-1 2026-07-30."""
+    subject_kind = str(doc.get("doc_kind") or "")
+    subject_ref = str(doc.get("store_code") or doc.get("policy_id") or "")
+    coverage_types, _ = _tenant_doc_config(org_id)
+    raw = _lease.download_store_doc(doc.get("storage_path"), client=get_supabase())
+    if not raw:
+        result = {"status": "failed", "model": "none", "fields": [], "clauses": [],
+                  "extra_items": [], "contacts": [],
+                  "error": "The stored file couldn't be opened — re-upload it and try again."}
+    else:
+        from app.modules.storeops import doc_intel_ai as _dia
+        result = _dia.extract_document(raw, doc.get("content_type"), subject_kind, coverage_types)
+    row = {"org_id": org_id, "document_id": doc.get("id"), "subject_kind": subject_kind,
+           "subject_ref": subject_ref, "status": result.get("status") or "failed",
+           "model": result.get("model"), "fields": result.get("fields") or [],
+           "clauses": result.get("clauses") or [], "extra_items": result.get("extra_items") or [],
+           "contacts": result.get("contacts") or [], "error": result.get("error"),
+           "created_by": str(created_by or "")[:120] or None}
+    try:
+        r = sb().table("document_extraction").insert(row).execute()
+        return (r.data[0] if r.data else row)
+    except Exception:
+        return row      # pre-965 schema: still hand the draft back rather than 500
+
+
+@router.post("/document-extract")
+async def post_document_extract(body: dict, authorization: str = Header(default=""),
+                                org_id: str = ORG_ID):
+    """Read an uploaded lease / policy / COI with AI and save the result as a REVIEWABLE DRAFT.
+
+    EVENT-LOOP SAFETY (SEV-1 2026-07-30): the whole synchronous body — the storage download and the
+    Anthropic call — hops to a worker thread via run_in_threadpool. This must never become a direct
+    call from this `async def`: the sync HTTP request would run ON the uvicorn event loop and stall
+    every other endpoint, including /health, for as long as it takes.
+
+    Nothing here changes a booked number: the draft is quarantined in storeops.document_extraction
+    until a human accepts it through /document-extraction/accept."""
+    _require_lease_access(authorization, org_id)
+    document_id = str((body or {}).get("document_id") or "").strip()
+    if not document_id:
+        raise HTTPException(400, "document_id required")
+    doc = _document_row(org_id, document_id)
+    saved = await run_in_threadpool(_extract_and_store, org_id, doc, (body or {}).get("requested_by"))
+    return {"ok": True, "extraction": saved}
+
+
+@router.get("/document-extraction")
+def get_document_extraction(document_id: str = "", subject_kind: str = "", subject_ref: str = "",
+                            authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The CURRENT (newest) draft for one document, or for one subject. Every value carries its own
+    confidence and the verbatim source snippet + page, so a reviewer can verify without reopening
+    the file."""
+    _require_lease_access(authorization, org_id)
+    try:
+        q = sb().table("document_extraction").select("*").eq("org_id", org_id)
+        if document_id:
+            q = q.eq("document_id", document_id)
+        elif subject_kind and subject_ref:
+            q = q.eq("subject_kind", subject_kind).eq("subject_ref", subject_ref)
+        else:
+            raise HTTPException(400, "document_id, or subject_kind + subject_ref, required")
+        rows = q.order("created_at", desc=True).limit(1).execute().data or []
+    except HTTPException:
+        raise
+    except Exception:
+        rows = []          # pre-965 schema degrades to "nothing read yet"
+    return {"extraction": (rows[0] if rows else None)}
+
+
+@router.post("/document-extraction/accept")
+def accept_document_extraction(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """THE ONLY DOOR from an AI draft to a live record.
+
+    Body: {extraction_id, accept:[field keys], confirm_money:bool, accept_clauses:bool,
+           accept_contacts:[contact indexes], reviewed_by}
+
+    doc_intel.apply_plan decides what may land: it refuses unknown keys, keys absent from this
+    extraction, fields with no column, ACH/identity columns (ALWAYS — no flag overrides that), and
+    every money-guarded field unless `confirm_money` is true. Refusals come back so the UI can say
+    exactly why. account/liabilities_due.py therefore only ever books dollars a human accepted."""
+    _require_lease_access(authorization, org_id)
+    ex_id = str((body or {}).get("extraction_id") or "").strip()
+    if not ex_id:
+        raise HTTPException(400, "extraction_id required")
+    rows = (sb().table("document_extraction").select("*")
+            .eq("org_id", org_id).eq("id", ex_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "extraction not found")
+    ex = rows[0]
+    kind = str(ex.get("subject_kind") or "")
+    ref = str(ex.get("subject_ref") or "")
+    who = str((body or {}).get("reviewed_by") or "")[:120] or None
+    confirm_money = bool((body or {}).get("confirm_money"))
+    plan = _di.apply_plan(kind, ex.get("fields") or [], (body or {}).get("accept") or [], confirm_money)
+
+    patch_lease = dict(plan["patch"].get("store_lease") or {})
+    patch_policy = dict(plan["patch"].get("insurance_policy") or {})
+    # Belt and braces: re-run the two JSONB shapes through the SHIPPED mig-946 normalizers, so what
+    # lands is byte-identical to what store_lease.rent_for_month / resolve_rent_due already read.
+    if "rent_schedule" in patch_lease:
+        patch_lease["rent_schedule"] = _lease.normalize_rent_schedule(patch_lease["rent_schedule"]) or None
+    if "rent_due" in patch_lease:
+        patch_lease["rent_due"] = _lease.normalize_rent_due(patch_lease["rent_due"])
+
+    if bool((body or {}).get("accept_clauses")) and kind == _di.SUBJECT_LEASE and (ex.get("clauses") or []):
+        patch_lease["lease_critical_clauses"] = ex.get("clauses")
+
+    if patch_lease:
+        if not ref:
+            raise HTTPException(400, "this extraction has no store to save against")
+        _lease_store_exists(org_id, ref)
+        patch_lease.update({"org_id": org_id, "store_code": ref, "updated_by": who,
+                            "updated_at": datetime.now(timezone.utc).isoformat()})
+        sb().table("store_lease").upsert(patch_lease, on_conflict="org_id,store_code").execute()
+    if patch_policy:
+        patch_policy["updated_at"] = datetime.now(timezone.utc).isoformat()
+        patch_policy["updated_by"] = who
+        sb().table("insurance_policy").update(patch_policy).eq("org_id", org_id).eq("id", ref).execute()
+
+    # Contacts the reader found — saved only for the ones a human ticked, and only ever as NEW
+    # notification contacts (they never overwrite the landlord/site contact on the lease row).
+    want_contacts = [int(i) for i in ((body or {}).get("accept_contacts") or [])
+                     if str(i).lstrip("-").isdigit()]
+    saved_contacts = 0
+    if want_contacts:
+        c_kind = "insurance_policy" if kind == _di.SUBJECT_POLICY else "lease"
+        src = ex.get("contacts") or []
+        new = [{"org_id": org_id, "subject_kind": c_kind, "subject_ref": ref,
+                "name": src[i].get("name"), "email": src[i].get("email"),
+                "phone": src[i].get("phone"), "role": src[i].get("role"), "updated_by": who}
+               for i in want_contacts if 0 <= i < len(src)]
+        if new:
+            try:
+                sb().table("document_contact").insert(new).execute()
+                saved_contacts = len(new)
+            except Exception:
+                saved_contacts = 0
+
+    stamp = datetime.now(timezone.utc).isoformat()
+    applied = [dict(a, accepted_by=who, accepted_at=stamp, money_confirmed=confirm_money)
+               for a in plan["applied"]]
+    status = ("accepted" if plan["applied"] and not plan["refused"]
+              else "partially_accepted" if plan["applied"] else ex.get("status") or "draft")
+    try:
+        sb().table("document_extraction").update(
+            {"applied": (ex.get("applied") or []) + applied, "status": status,
+             "reviewed_by": who, "reviewed_at": stamp}).eq("org_id", org_id).eq("id", ex_id).execute()
+    except Exception:
+        pass
+    return {"ok": True, "applied": applied, "refused": plan["refused"],
+            "contacts_saved": saved_contacts, "status": status}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# Notification contacts (mig 966) — MULTIPLE per lease/store or per policy
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+def _contacts_by_ref(org_id, subject_kind, refs):
+    out = {}
+    if not refs:
+        return out
+    try:
+        rows = (sb().table("document_contact").select("*").eq("org_id", org_id)
+                .eq("subject_kind", subject_kind).in_("subject_ref", [str(r) for r in refs])
+                .limit(2000).execute().data) or []
+    except Exception:
+        rows = []          # pre-966 schema degrades to "no contacts"
+    for r in rows:
+        out.setdefault(str(r.get("subject_ref")), []).append(r)
+    return out
+
+
+@router.get("/document-contacts")
+def get_document_contacts(subject_kind: str = "", subject_ref: str = "",
+                          authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Expiry-notification contacts for one lease (subject_kind 'lease', subject_ref = store_code —
+    these people are notified about that store's LEASE and its CERTIFICATE) or one policy
+    (subject_kind 'insurance_policy', subject_ref = policy id)."""
+    _require_lease_access(authorization, org_id)
+    if subject_kind not in _CONTACT_SUBJECTS or not subject_ref:
+        raise HTTPException(400, f"subject_kind must be one of {_CONTACT_SUBJECTS}, with subject_ref")
+    return {"contacts": _contacts_by_ref(org_id, subject_kind, [subject_ref]).get(subject_ref, [])}
+
+
+@router.put("/document-contacts")
+def put_document_contacts(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Replace the contact list for one subject: {subject_kind, subject_ref, contacts:[{...}]}.
+    A contact with no email is stored but can never be mailed (doc_intel.expiry_alerts skips it) —
+    the attention feed flags a subject whose only contacts are unmailable."""
+    _require_lease_access(authorization, org_id)
+    kind = str((body or {}).get("subject_kind") or "").strip()
+    ref = str((body or {}).get("subject_ref") or "").strip()
+    if kind not in _CONTACT_SUBJECTS or not ref:
+        raise HTTPException(400, f"subject_kind must be one of {_CONTACT_SUBJECTS}, with subject_ref")
+    rows = []
+    for c in ((body or {}).get("contacts") or []):
+        if not isinstance(c, dict):
+            continue
+        row = {k: c[k] for k in _CONTACT_FIELDS if k in c}
+        if not any(str(row.get(k) or "").strip() for k in ("name", "email", "phone")):
+            continue
+        if "notice_days" in row:
+            n = _di.coerce_int(row["notice_days"])
+            row["notice_days"] = None if not n or n < 1 else min(n, _di.MAX_NOTICE_DAYS)
+        if "notify_expiry" in row:
+            row["notify_expiry"] = bool(row["notify_expiry"])
+        row.update({"org_id": org_id, "subject_kind": kind, "subject_ref": ref})
+        rows.append(row)
+    sb().table("document_contact").delete().eq("org_id", org_id) \
+        .eq("subject_kind", kind).eq("subject_ref", ref).execute()
+    if rows:
+        sb().table("document_contact").insert(rows).execute()
+    return {"ok": True, "contacts": _contacts_by_ref(org_id, kind, [ref]).get(ref, [])}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# Expiry notices (migs 966/967) — "at least 60 days in advance or as per lease requirement"
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+def _expiry_subjects(org_id, client=None):
+    """Every thing that can expire, with its own notice requirement and its contacts.
+
+    THREE kinds, all org-scoped:
+      lease          — store_lease.lease_end,   own requirement store_lease.lease_notice_days
+      insurance_coi  — store_lease.coi_expires, the store's certificate
+      insurance_policy — insurance_policy.coverage_end, own requirement insurance_policy.notice_days
+    A store's contacts (subject_kind 'lease', subject_ref = store_code) cover BOTH that store's lease
+    and its certificate — a COI has no separate address book, and asking a tenant to enter the same
+    people twice would guarantee one of the two lists rots. ACH columns are never selected."""
+    c = client or sb()
+    try:
+        leases = (c.table("store_lease")
+                  .select("store_code,lease_end,lease_notice_days,coi_expires")
+                  .eq("org_id", org_id).limit(5000).execute().data) or []
+    except Exception:
+        leases = []
+    try:
+        policies = (c.table("insurance_policy")
+                    .select("id,policy_number,insurer,coverage_type,coverage_end,notice_days,is_active")
+                    .eq("org_id", org_id).limit(2000).execute().data) or []
+    except Exception:
+        policies = []
+    store_contacts = _contacts_by_ref(org_id, "lease", [r.get("store_code") for r in leases])
+    policy_contacts = _contacts_by_ref(org_id, "insurance_policy", [r.get("id") for r in policies])
+    subjects = []
+    for r in leases:
+        code = str(r.get("store_code") or "")
+        cts = store_contacts.get(code, [])
+        if r.get("lease_end"):
+            subjects.append({"kind": _di.SUBJECT_LEASE, "ref": code, "label": f"Store {code} lease",
+                             "expires_on": r.get("lease_end"),
+                             "own_notice_days": r.get("lease_notice_days"), "contacts": cts})
+        if r.get("coi_expires"):
+            subjects.append({"kind": _di.SUBJECT_COI, "ref": code, "label": f"Store {code} certificate of insurance",
+                             "expires_on": r.get("coi_expires"), "own_notice_days": None, "contacts": cts})
+    for p in policies:
+        if p.get("is_active") is False or not p.get("coverage_end"):
+            continue
+        pid = str(p.get("id"))
+        name = str(p.get("policy_number") or p.get("insurer") or "policy")
+        subjects.append({"kind": _di.SUBJECT_POLICY, "ref": pid,
+                         "label": f"Insurance policy {name}", "expires_on": p.get("coverage_end"),
+                         "own_notice_days": p.get("notice_days"),
+                         "contacts": policy_contacts.get(pid, [])})
+    return subjects
+
+
+def _expiry_already_sent(client, org_id, keys):
+    """Which dedupe keys the EXISTING storeops.alert_log (mig 433) has already recorded. Reused, not
+    reinvented — the lateness alerts use the same table the same way."""
+    if not keys:
+        return set()
+    try:
+        rows = (client.table("alert_log").select("ref_key").eq("org_id", org_id)
+                .in_("scope", ["doc_expiry_lease", "doc_expiry_insurance"])
+                .in_("ref_key", list(keys)).limit(2000).execute().data) or []
+    except Exception:
+        return set()
+    return {str(r.get("ref_key")) for r in rows}
+
+
+def _due_expiry_alerts(org_id, client=None, today=None):
+    """The alerts due for one org right now (pure math in doc_intel; this only fetches)."""
+    c = client or sb()
+    subjects = _expiry_subjects(org_id, c)
+    if not subjects:
+        return []
+    _types, notice_cfg = _tenant_doc_config(org_id, c)
+    day = today or datetime.now(timezone.utc).date().isoformat()
+    candidates = _di.expiry_alerts(day, subjects, notice_cfg)
+    sent = _expiry_already_sent(c, org_id, [a["dedupe_key"] for a in candidates])
+    return [a for a in candidates if a["dedupe_key"] not in sent]
+
+
+@router.get("/doc-expiry")
+def get_doc_expiry(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """What is expiring, and what would be notified today. Read-only — sends nothing. Every row
+    shows the resolved notice window so it is obvious WHY a document is (or is not) in the list."""
+    _require_lease_access(authorization, org_id)
+    _maybe_register_doc_expiry_cron()
+    client = sb()
+    subjects = _expiry_subjects(org_id, client)
+    _types, notice_cfg = _tenant_doc_config(org_id, client)
+    today = datetime.now(timezone.utc).date()
+    upcoming = []
+    for s in subjects:
+        exp = _di.coerce_date(s.get("expires_on"))
+        if not exp:
+            continue
+        days = (_date.fromisoformat(exp) - today).days
+        resolved = _di.resolve_notice_days(s.get("own_notice_days"), notice_cfg, s["kind"])
+        mailable = [c for c in (s.get("contacts") or [])
+                    if c.get("email") and c.get("notify_expiry") is not False]
+        upcoming.append({"kind": s["kind"], "ref": s["ref"], "label": s["label"],
+                         "expires_on": exp, "days_out": days, "notice_days": resolved,
+                         "in_window": days <= resolved, "contacts": len(mailable)})
+    upcoming.sort(key=lambda r: r["days_out"])
+    return {"today": today.isoformat(), "upcoming": upcoming,
+            "due_now": _due_expiry_alerts(org_id, client, today.isoformat())}
+
+
+async def _run_doc_expiry(org_id_filter=None, dry_run=False):
+    """The expiry sweep: walk every tenant, send each due milestone once, log it. NEVER raises."""
+    from app.modules.notify.channels import email_resend
+    client = sb()
+    try:
+        tenants = (client.table("tenants").select("org_id").execute().data) or []
+    except Exception:
+        tenants = []
+    if org_id_filter:
+        tenants = [t for t in tenants if str(t.get("org_id")) == str(org_id_filter)]
+    email_ok = email_resend.is_configured()
+    results = []
+    for t in tenants:
+        oid = t.get("org_id")
+        if not oid:
+            continue
+        try:
+            due = _due_expiry_alerts(oid, client)
+        except Exception:
+            due = []
+        sent = 0
+        planned = []
+        for a in due:
+            subject, html = _di.alert_email(a)
+            planned.append({"label": a["label"], "expires_on": a["expires_on"],
+                            "days_out": a["days_out"], "milestone": a["milestone"],
+                            "to": [r["email"] for r in a["recipients"]], "subject": subject})
+            if dry_run or not email_ok:
+                continue
+            ok = False
+            for r in a["recipients"]:
+                try:
+                    await email_resend.send_email(to=r["email"], subject=subject, html=html)
+                    ok = True
+                except Exception:
+                    pass
+            if ok:
+                # Log AFTER a successful send: a failed send must be retried tomorrow, not swallowed.
+                try:
+                    client.table("alert_log").insert(
+                        {"org_id": oid, "scope": a["alert_scope"], "ref_key": a["dedupe_key"],
+                         "recipients": ", ".join(r["email"] for r in a["recipients"]),
+                         "detail": {"kind": a["subject_kind"], "expires_on": a["expires_on"],
+                                    "milestone": a["milestone"]}}).execute()
+                except Exception:
+                    pass
+                sent += 1
+        results.append({"org_id": oid, "due": len(due), "sent": sent,
+                        "email_configured": email_ok, "planned": planned if dry_run else None})
+    return {"ran": len(results), "dry_run": dry_run, "results": results}
+
+
+def _ensure_doc_expiry_alert_cron():
+    """Self-register the GLOBAL doc-expiry pg_cron job (mig 967) so no one runs SQL by hand — the
+    mig 922/940/950 pattern, called from the main.py boot hook. Reads the backend's own API URL +
+    notify secret from settings and calls the idempotent RPC as service_role, re-embedding the
+    CURRENT secret on every deploy (survives rotations, self-heals a lost job).
+
+    NON-FATAL by design: a missing secret, the RPC not present (mig 967 not applied yet), or pg_cron
+    not installed just means auto-scheduling is skipped — boot still succeeds and the manual
+    "Send due notices now" button still works."""
+    try:
+        url = (getattr(settings, "API_PUBLIC_URL", "") or "").strip()
+        secret = (getattr(settings, "NOTIFY_RUN_SECRET", "") or "").strip()
+        if not url or not secret:
+            return "skipped: API_PUBLIC_URL or NOTIFY_RUN_SECRET not set"
+        res = sb().rpc("ensure_doc_expiry_alert_cron", {"p_url": url, "p_secret": secret}).execute()
+        return res.data if isinstance(res.data, str) else (res.data or None)
+    except Exception as e:
+        print(f"WARN _ensure_doc_expiry_alert_cron skipped: {e}")
+        return None
+
+
+@router.post("/doc-expiry/run-due")
+async def doc_expiry_run_due(x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint (daily, mig 967). Secret-gated — NEVER an unauthenticated trigger. Reuses
+    NOTIFY_RUN_SECRET so no new env var is needed."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+    return await _run_doc_expiry(dry_run=False)
+
+
+@router.post("/doc-expiry/run-now")
+async def doc_expiry_run_now(send: bool = False, authorization: str = Header(default=""),
+                             org_id: str = ORG_ID):
+    """Manual trigger for THIS tenant. Defaults to a DRY RUN (returns exactly who WOULD be emailed
+    and about what, sending nothing) — pass ?send=true to actually send. Dedupe is always honored,
+    so a real send can't duplicate the scheduled run. Also (re)registers the pg_cron job, so a
+    tenant that opens this page is never left with an unscheduled sweep."""
+    _require_lease_access(authorization, org_id)
+    _ensure_doc_expiry_alert_cron()
+    return await _run_doc_expiry(org_id_filter=org_id, dry_run=(not send))
 
 
 # ── Shift swaps (storeops.shift_swap_requests) ────────────────────────────────
