@@ -44,6 +44,7 @@ Primary code homes:
 | 19 | **Known gaps & inert config** | stored-but-unwired, snapshot-only, surfaces that can disagree. |
 | 20 | **Super-admin control box** | "Is the platform working? What is red right now, what is NOT being watched at all, did the daily check actually run, and how do I hand this failure to Claude Code safely?" |
 | 21 | **Billing — usage & pricing** | "What did this tenant use, what did it cost us, what do we bill them, which modules are still unpriced, and what does their itemized statement say?" |
+| 22 | **Platform OPERATOR console** | "Who operates the platform rather than a company in it, how does an operator enter a tenant without it being a secret, what is on the record afterwards, and how do we stop platform power from riding on somebody's employee row?" |
 
 ---
 
@@ -2165,6 +2166,12 @@ as a market-grant keyset member; ambiguity fails closed):
 | `storeops.google_review_config` / `google_review_sweep_config` / `google_review_store` / `google_review_snapshot` / `google_review_item` (migs `411`/`412`, service-role-only; sequence grants mig `951`) | config: `PUT /storeops/google-reviews/config` + `/sweep-config` + `/store-config/{code}`; data: `google_reviews.sweep_store` (place pin upsert, snapshot insert, item dedupe-insert) via run-now/run-due; sweep status: `_gr_set_sweep_status` (`last_detail` carries error samples since 2026-09-04) | `/google-reviews/my`, `/dm-dashboard`, `/store/{code}`, `/stores`, `/employee/{id}`, `/employee-summary` (§14 Google Reviews); below-target → `storeops.action_plan` rows |
 
 ---
+| `core.platform_operator` (mig `980` — the SEPARATED identity: keyed by auth_id, **no org_id column at all**; scoped `operator_role` + optional per-row capability overrides + `expires_at` for just-in-time elevation) | `POST/DELETE /core/operator/roster` (never creates a login, never touches `app_users.super_admin`); SEEDED by mig 980 from the existing `super_admin` flag | `operator_api._authority` → `operator.resolve_authority` (unioned with the legacy flag), `GET /core/operator/roster` |
+| `core.platform_operator_policy` (mig `980`, singleton — RULE TWO config; `legacy_membership_flag_honored` IS THE CUTOVER, `require_entry_session` is the access-cutting proposal, both default to today's behaviour) | `POST /core/operator/policy` (refuses the cutover while zero active operators exist) | `operator.effective_policy` (an absent/garbage row ⇒ POLICY_DEFAULTS ⇒ today) |
+| `core.operator_action` (mig `980` — append-only AND hash-chained; UPDATE/DELETE revoked. Records the OPERATOR's own auth id + email, never the tenant's) | `operator_api._write_action` (FAIL-CLOSED on every mutating action: a 503 rather than an unrecorded operator act) | `GET /core/operator/audit` (+ `operator.verify_chain` over the WHOLE chain), `GET /core/operator/anomalies` |
+| `core.operator_entry_session` (mig `980` — the record the cross-tenant switcher never had: who entered which company, why, from what IP, hard `expires_at`) | `POST /core/operator/enter` / `/exit` | the in-tenant banner (`GET /core/operator/entry`), `GET /core/operator/entry-log`, and the TENANT's own read `GET /core/tenant-operator-access` |
+| `core.platform_notice` (mig `981` — operator→tenants status broadcast; audience by org_id, never by tenant name) | `POST /core/operator/notices`, `/notices/withdraw` | `GET /core/platform-notice` (tenant-facing; org resolved from the VERIFIED membership, `org_ids` stripped from the response) |
+| `core.restore_drill` (mig `981` — backup/restore ATTESTATION; `verified_at` is the heartbeat column) | `POST /core/operator/restore-drill` (refuses a record that is not evidence) | `GET /core/operator/restore-drill` → `operator.drill_lamp`; and the control box with NO code change via a `core.system_check` heartbeat row (COMMENTED OUT in mig 981) |
 
 ## 17. Cross-reference: by ENDPOINT (high-value)
 
@@ -2266,6 +2273,10 @@ as a market-grant keyset member; ambiguity fails closed):
 (Full 468-endpoint list: `grep -nE '@router\.(get|post|put|patch|delete)\(' backend/app/modules/commcalc/router.py`.)
 
 ---
+
+| `GET /core/operator/me` (the operator persona: capabilities, scoped role, **why** they are authorized, effective policy, console nav) · `/roster` `GET/POST/DELETE` · `/policy` `GET/POST` (the CUTOVER) · `/audit` · `/anomalies` · `/entry-log` · `/notices` · `/restore-drill` | `core/operator_api.py`; pure decisions `core/operator.py` | §22 platform operator console |
+| `POST /core/operator/enter` / `POST /core/operator/exit` (the AUDITED, time-boxed tenant entry — wraps the EXISTING cross-tenant switcher, adds no second bypass) · `GET /core/operator/entry` (drives the in-tenant banner) | `core/operator_api.py` (`enter_tenant`/`exit_tenant`); pure `operator.entry_decision`/`banner_payload` | §22 tenant entry |
+| `GET /core/platform-notice` (tenant-facing status banner — any signed-in user; org from the VERIFIED membership) · `GET /core/tenant-operator-access` (a TENANT admin's "who from the platform was in my company", gated by the existing `_require_setting(..., 'security')`) | `core/operator_api.py` `public_router` (mounted WITHOUT the /operator prefix) | §22 tenant-facing transparency |
 
 ## 18. Cross-reference: by METRIC / KPI
 
@@ -2687,3 +2698,144 @@ and retried.
   (frozen itemized documents). Ships with NO prices and NO plan assignments: every module reads
   UNPRICED until the owner prices it, and all money-touching seeds are COMMENTED OUT.
 
+
+---
+
+## 22. PLATFORM OPERATOR CONSOLE — separating the operator persona from the tenant persona
+
+**Owner directive 2026-09-05 (sanjot@):** *"Need to separate the super admin access of
+Sanjot@cellfonzrus.com from Cellfonz r us tenant, make a separate view for the super admin but the
+option for the super admin to log in to any tenant from it is list of tenants dashboard an option to
+log in from there, Tennat billing dashboard will be another module on the super admin side, what
+other industry wide super admin controls are missing yet very import do a thorough research and add
+those also."*
+
+### The problem, in one line
+
+Platform authority was `storeops.app_users.super_admin` — a boolean on the row that ALSO says *"this
+login is an employee of tenant T"*. The owner's power over the whole platform was literally a column
+on their own employment record.
+
+### IT REUSES; IT DOES NOT RE-DERIVE (duplicate-check build gate)
+
+| Reused mechanism | Where | What §22 does with it |
+|---|---|---|
+| `core.router._require_super_admin` — **THE one gate** | `core/router.py:553` | `operator_api._authority` CALLS it, then unions the registry on top. Still exactly one gate; no second, weaker door. |
+| `GET /core/tenants` (list + per-tenant user/login counts) | `core/router.py:807` | **IS** the console's tenant directory. No second tenant list exists. |
+| the cross-tenant switcher (`x-active-org` + the middleware's super-admin no-rewrite bypass) | `client.ts`, `tenant_middleware.py:928` | **IS** the entry mechanism. §22 adds the reason/expiry/banner/audit it never had — not a new bypass. |
+| `core.impersonation*` "view as employee" (mig `730`) | `app/core/impersonation.py` | **UNTOUCHED.** `impersonate` stays DEFAULT-DENY with no super-admin bypass; an entry session grants `("acting_org",)` and nothing else. |
+| `core.access_log` (mig `856`) | `app/core/access_log.py` | Stays the per-request trail. `core.operator_action` records INTENT, which a request log cannot express. |
+| `core.control_box` `LAMPS`/`redact`/`heartbeat` (§20) | `core/control_box.py` | IMPORTED, not re-implemented. The restore-drill lamp plugs into §20's config-driven heartbeat with **zero** control-box code change. |
+| `revoke_super_admin`'s "cannot remove the LAST super-admin" | `core/router.py:944` | The same idea, applied to the cutover (`policy_change_decision`). |
+
+### THE SEPARATION MODEL — an identity, not a flag
+
+`core.platform_operator` is keyed by **auth id** and has **no `org_id` column at all**. A row says
+"this human operates the platform" and says nothing about who employs them. It carries a SCOPED role
+(`owner` / `support` / `billing` / `engineering` / `readonly` → `operator.OPERATOR_ROLES`) and an
+optional `expires_at` (just-in-time, time-boxed elevation).
+
+    authority = (legacy membership flag, while policy honors it)  ∪  (active registry row)
+
+**The union is the whole safety argument.** Shipping can only ADD authority to a login that has it
+today, never subtract — so no existing endpoint's answer changes on the day this lands.
+
+### ★ NO LOCKOUT — the property that governed every design choice ★
+
+This is the owner's own account on a live platform, so the change is additive with **no flag day**.
+`harness_operator_console.py` §A proves the existing super-admin is authorized in EVERY state:
+pre-migration (no tables) · half-applied (tables empty) · garbage/partial policy row · applied+seeded
+· registry row expired or deactivated · post-cutover. The only losing state is *post-cutover with no
+registry row* — which is exactly the state `policy_change_decision` **refuses to create** (and mig
+980 pre-empts by seeding an `owner` row per existing `super_admin`, derived from DATA, no email
+literal). The cutover ships **COMMENTED OUT** in mig 980, is refused by the API at zero operators,
+warns loudly at one, and is reversible with the same control.
+
+### TENANT ENTRY — what was actually missing
+
+A super-admin could ALWAYS act as any tenant (pick a company in the header switcher → `x-active-org`
+→ the middleware honours it without rewriting). What was missing was any record that it happened.
+`POST /core/operator/enter` reuses that mechanism and adds the four properties impersonation has had
+since mig 730: **audited** (hash-chained, under the operator's OWN identity), **attributable** (the
+tenant's own admins read it at `GET /core/tenant-operator-access`), **time-boxed** (server-clamped
+hard expiry), **visible** (a persistent banner in the tenant app). It is **not an escalation**:
+`ENTRY_GRANTS == ("acting_org",)`, and the harness fails if `impersonate` ever appears there.
+
+### TAMPER-EVIDENT AUDIT
+
+`core.operator_action` is append-only AND hash-chained (`hash = sha256(prev_hash ‖ canonical(sealed
+fields))`). An edited row, a deleted row and a duplicated `seq` are each detected at the right
+position. The honest limit is stated rather than claimed away: **tail truncation still verifies as a
+chain** — closed instead by the dense `seq UNIQUE` column plus the UPDATE/DELETE revoke. Every write
+is FAIL-CLOSED: an operator action that cannot be recorded does not happen (503).
+
+### FILES
+
+- `backend/app/modules/core/operator.py` — **PURE** (stdlib only): `resolve_authority`,
+  `effective_policy`, `policy_change_decision`, `operator_row_active`, `role_capabilities`,
+  `has_capability`, `entry_decision`, `session_state`, `banner_payload`, `chain_hash`/`audit_row`/
+  `verify_chain`, `anomalies`, `notice_visible`/`notice_lamp`, `drill_record_valid`/`drill_lamp`,
+  `console_sections`. Capability vocabulary + `OPERATOR_ROLES` + `POLICY_DEFAULTS` live here.
+- `backend/app/modules/core/operator_api.py` — I/O only. `router` (`/core/operator/*`) +
+  `public_router` (the two tenant-facing reads). Mounted at the tail of `core/router.py`.
+- `frontend/src/app/(operator)/operator/*` — the console in its **own route group**: a separate shell
+  (no tenant sidebar, switcher, period picker or Ask bar), `page` (home + separation status),
+  `tenants` (directory + Enter + restore drill), `operators` (roster + the CUTOVER), `audit`,
+  `notices`, `billing` (PLACEMENT only — see below).
+- `frontend/src/lib/operator.ts` · `operator-ui.tsx` · `operator-context.tsx`;
+  `frontend/src/components/PlatformBanners.tsx` (entry banner + status banner, mounted in
+  `(platform)/layout.tsx` beside the impersonation banner).
+- **Harness:** `backend/harness_operator_console.py` — 149 checks (no-lockout, escalation chain,
+  audit tamper-evidence, fail-closed gates, the researched controls). DB-free, stdlib only.
+
+### BILLING IS PLACED, NOT BUILT
+
+`/operator/billing` owns **no** billing logic. Plans/invoices remain `/admin/billing`, pricing/trial
+remains `/admin/pricing`, and per-tenant AI + per-module usage remains §21 (`backend/app/modules/
+billing/`, migs `973`–`975`). Two surfaces answering "what does this tenant owe" would drift, so the
+console contributes navigation only. **Assumption recorded:** §21 keeps its surfaces at
+`/admin/billing` and `/admin/pricing`; new operator-facing billing pages belong in
+`operator.CONSOLE_SECTIONS` as a nav entry, never as a reimplementation.
+
+### MIGRATIONS
+
+- `980_platform_operator_console.sql` — `core.platform_operator` (the separated identity),
+  `core.platform_operator_policy` (singleton config; **the cutover switch**), `core.operator_action`
+  (hash-chained, UPDATE/DELETE revoked), `core.operator_entry_session`. Seeds the policy row and one
+  `owner` row per existing `super_admin`. Touches `storeops.app_users` **not at all**. The cutover
+  and the `require_entry_session` proposal are COMMENTED OUT.
+- `981_platform_notice_and_restore_drill.sql` — `core.platform_notice` (operator→tenant status
+  broadcast) + `core.restore_drill` (attestation for §20's declared-UNMONITORED backup gap). The
+  `core.system_check` row that turns that grey lamp into a real heartbeat is COMMENTED OUT, because
+  switching it on makes the board honestly RED until the first drill is recorded.
+
+### RESEARCHED CONTROLS — what already existed, what was built, what is PROPOSED
+
+**Already present (verified in-repo, NOT rebuilt):** session revocation (`POST /core/sessions/revoke`)
+· IP blocking (`/core/ip-block`, mig 860) · MFA policy (`tenants.twofa_policy`, mig 711) · password
+policy (mig 709) · audit-log retention sweep (`/core/audit/prune/run-due`, mig 857) · export
+governance with watermark + row cap (`core.export_event`, mig 862) · per-tenant module entitlements
+(`core.module_catalog` + `sync_tenant`) · trial/plan state (mig 908) · AI budget + per-call audit
+(mig 972) · the control box (§20) · impersonation audit + policy (mig 730).
+
+**BUILT here:** the separated operator identity + scoped roles · tamper-evident operator audit ·
+audited/time-boxed/visible tenant entry · tenant-side transparency (`/core/tenant-operator-access`) ·
+just-in-time expiring elevation · anomaly detection over operator actions · platform status/incident
+broadcast · backup restore-drill attestation (closing §20's declared gap).
+
+**PROPOSED, deliberately NOT shipped** (each changes authorization semantics, weakens a guarantee, or
+is large — ranked in the PR comment): enforcing scoped operator roles on the EXISTING super-admin
+endpoints · mandatory entry sessions (`require_entry_session`) · tenant lifecycle (suspend / offboard
+/ export / retention-bounded delete) · break-glass dual control / second approver · per-tenant quotas
+and rate limits · SSO + domain claim · data residency · DSAR export/delete · API-key and
+webhook-secret lifecycle · automatic notification to a tenant's admins when an operator enters.
+
+### KNOWN LIMITS (declared, not hidden)
+
+1. **Entry sessions are RECORDED, not yet REQUIRED.** `require_entry_session` defaults FALSE and is
+   not wired into `tenant_middleware`, so the bare switcher still works exactly as before. Making it
+   mandatory is access-cutting and is the owner's call (mig 980, commented out).
+2. **Scoped roles are not enforced on existing endpoints.** Only the NEW console endpoints gate on
+   capabilities; every pre-existing super-admin endpoint still answers as it always did.
+3. **The hash chain cannot stop a service-role rewrite** — nothing can, on a database the operator
+   administers. It makes one undeniable. Tail truncation is covered by `seq`, not by the hash.

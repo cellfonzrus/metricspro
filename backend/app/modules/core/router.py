@@ -4800,3 +4800,25 @@ from app.modules.core import platform_attention as _platform_attention   # noqa:
 from app.modules.core import onboarding as _onboarding   # noqa: E402  (bottom-of-file mount)
 
 router.include_router(_onboarding.router)
+
+# ── Platform Operator Console (migs 980/981, owner directive 2026-09-05) ─────────────────────────
+# "Need to separate the super admin access … from Cellfonz r us tenant, make a separate view for the
+# super admin but the option for the super admin to log in to any tenant from it".
+#
+# Mounted ONTO this router for the same reason as the six above: main.py (SHARED) needs no change and
+# the sub-router's own "/operator" prefix resolves its paths to /api/v1/core/operator/*. It imports
+# core.router only LAZILY (inside functions), so there is no cycle.
+#
+# IT ADDS NO SECOND GATE. `operator_api._authority` CALLS `_require_super_admin` (above, line ~553)
+# and then unions the `core.platform_operator` registry on top; the union can only ever be a superset
+# of today's answer, which is the no-lockout property `harness_operator_console.py` §A proves. With
+# migrations 980/981 un-run every table read fails soft to None and the console resolves to exactly
+# today's all-capability super-admin.
+#
+# `public_router` carries the TWO endpoints a non-operator may call — the tenant-facing platform
+# status banner and a tenant admin's "who from the platform was in my company" — mounted WITHOUT the
+# /operator prefix so they read as /api/v1/core/platform-notice and /api/v1/core/tenant-operator-access.
+from app.modules.core import operator_api as _operator_api   # noqa: E402  (bottom-of-file mount)
+
+router.include_router(_operator_api.router)
+router.include_router(_operator_api.public_router)

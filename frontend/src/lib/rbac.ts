@@ -889,6 +889,20 @@ export const NAV: NavGroup[] = [
     // _require_super_admin and 403s independently, so this adds no permission surface.
     { href: '/admin/billing-usage', label: 'Billing Usage & Pricing', icon: '💳', module: 'admin' },
     { href: '/admin/fix-requests', label: 'Auto-Fix Pipeline', icon: '🛠️', module: 'admin' },
+    // Platform Operator Console (owner directive 2026-09-05, migs 980/981) — "make a separate view
+    // for the super admin". APPENDED, never restructured: this single line is the only change this
+    // work makes to the NAV registry, so it cannot collide with concurrent edits elsewhere in this
+    // file. Tagged module 'admin' with NO `scopes`, byte-identical in shape to its System Control Box
+    // and Auto-Fix Pipeline siblings above: an existing admin role already carries modules.admin, so
+    // this adds NO new permission surface and needs no SEED_VERSION bump.
+    //
+    // The CONSOLE ITSELF is not gated by this line. /operator lives in its own route group with its
+    // own shell, and asks the SERVER who it is talking to (`GET /core/operator/me` →
+    // core.router._require_super_admin, unioned with the core.platform_operator registry). A tenant
+    // admin who reaches it by URL gets a plain explanation and a way back, never a half-console; every
+    // endpoint behind it 403s independently. This line only puts the door where an operator will
+    // find it while the two personas still share one menu.
+    { href: '/operator', label: 'Operator Console', icon: '🛰️', module: 'admin' },
   ]},
   // Reports LAST (owner directive 2026-08-10) — the Report Center directory sits at the foot of the
   // sidebar, immediately above the per-category report groups applyNavLayout() appends after it.
