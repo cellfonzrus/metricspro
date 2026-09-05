@@ -414,6 +414,27 @@ def _system_check_cron_startup():
               f"{e}", flush=True)
 
 
+@app.on_event("startup")
+def _doc_expiry_cron_startup():
+    """Self-heal the lease/COI expiry-alert schedule on EVERY boot (mig 967 — owner directive
+    2026-09-05: notify "at least 60 days in advance or as per lease requirement").
+
+    Mig 967 shipped while `main.py` was being edited by a concurrent build, so its registrar was
+    wired LAZILY — the job registered on the first policy/expiry request. That is the weaker home
+    for exactly the reason this hook exists: an expiry sweep whose scheduling waits for someone to
+    open a page is not a safety net, and the pages it depends on are ones nobody visits between
+    renewals. Same idempotent replace-by-name semantics and best-effort posture as the five hooks
+    above: a missing secret / RPC / cron infra logs the reason and never blocks boot. The lazy
+    registration stays in place as a belt-and-braces second chance."""
+    try:
+        from app.modules.storeops.router import _ensure_doc_expiry_alert_cron
+        print(f"[doc-expiry-cron] self-register on boot: "
+              f"{_ensure_doc_expiry_alert_cron() or 'no status returned'}", flush=True)
+    except Exception as e:
+        print(f"WARN [doc-expiry-cron] self-register failed (expiry alerts stay manual): {e}",
+              flush=True)
+
+
 # ── /health: report what this image ACTUALLY has, not what someone remembered ────────────────────
 # The modules list here used to be a hardcoded literal, and it went stale the moment a module was
 # added without someone editing it — by 2026-08 it was missing pos, crm, referral, payables, billing,
