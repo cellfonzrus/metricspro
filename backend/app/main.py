@@ -35,6 +35,7 @@ from app.modules.referral.router import router as referral_router
 from app.modules.vision.router import router as vision_router
 from app.modules.commcalc.processor_ledger_api import router as processor_ledger_router
 from app.modules.core.control_box_api import router as control_box_router
+from app.modules.billing.usage_api import router as billing_usage_router
 
 app = FastAPI(
     title="MetricsPro Platform API",
@@ -255,6 +256,7 @@ app.include_router(chat_router, prefix="/api/v1")         # Internal Chat — Ph
 app.include_router(vision_router, prefix="/api/v1")       # Vision — Nest live view + heat map + behavior (mig 900)
 app.include_router(processor_ledger_router, prefix="/api/v1")  # Processor daily debit/credit ledger (owner 2026-09-04)
 app.include_router(control_box_router, prefix="/api/v1")  # Super-admin control box (owner 2026-09-05; carries its own /core prefix)
+app.include_router(billing_usage_router, prefix="/api/v1")  # Billing: AI + per-module usage, pricing grid, itemized statement (owner 2026-09-05)
 
 # Security posture check (Spec §2/§5): log the enforcement posture and warn on missing secrets /
 # break-glass states at boot. Best-effort; STARTUP_STRICT=1 makes prod findings fail the boot.
@@ -433,6 +435,30 @@ def _doc_expiry_cron_startup():
     except Exception as e:
         print(f"WARN [doc-expiry-cron] self-register failed (expiry alerts stay manual): {e}",
               flush=True)
+
+
+@app.on_event("startup")
+async def _usage_flusher_startup():
+    """Start the per-module usage flusher (owner 2026-09-05, migs 974/975).
+
+    Counting happens on the request path as a dict increment; THIS drains those counters into
+    core.module_usage_daily every 30s in ONE additive RPC, on a worker thread. Best-effort: if it
+    cannot start, requests are unaffected and the counters simply accumulate in memory."""
+    try:
+        from app.modules.billing.usage_flush import start
+        print(f"[usage-flush] {start()}", flush=True)
+    except Exception as e:
+        print(f"WARN [usage-flush] not started (module usage will not be recorded): {e}", flush=True)
+
+
+@app.on_event("shutdown")
+async def _usage_flusher_shutdown():
+    """Flush pending usage counters on a graceful shutdown so a deploy loses no billable calls."""
+    try:
+        from app.modules.billing.usage_flush import stop
+        await stop()
+    except Exception:
+        pass
 
 
 # ── /health: report what this image ACTUALLY has, not what someone remembered ────────────────────

@@ -400,6 +400,7 @@ export const NAV: NavGroup[] = [
     // First NAV home for the ingest-guard quarantine queue (page pre-existed, menu-less; admin tier).
     { href: '/commcalc/ingest-guard', label: 'Ingest Guard', icon: '🛡️', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/admin/control-box', label: 'System Control Box', icon: '🛎️', module: 'admin', tileOnly: true },
+    { href: '/admin/billing-usage', label: 'Billing Usage & Pricing', icon: '💳', module: 'admin', tileOnly: true },
     { href: '/admin/import-health', label: 'Import Health', icon: '📡', module: 'admin', tileOnly: true },
     { href: '/failures', label: 'Failure Logs', icon: '🩺', module: 'admin', tileOnly: true },
     { href: '/storeops/attendance', label: 'Attendance Exceptions', icon: '🚨', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
@@ -882,6 +883,11 @@ export const NAV: NavGroup[] = [
     // non-super-admin independently), so this nav line adds no new permission surface and needs no
     // SEED_VERSION bump. Not a new module key: it is a platform surface, not a billable tenant module.
     { href: '/admin/control-box', label: 'System Control Box', icon: '🛎️', module: 'admin' },
+    // Billing usage & pricing (owner directives 2026-09-05, migs 972-975) — per-tenant AI and
+    // per-module usage, the plan x module pricing grid, and the itemized statement. module 'admin'
+    // with NO `scopes`, same shape as its siblings: every backend endpoint calls
+    // _require_super_admin and 403s independently, so this adds no permission surface.
+    { href: '/admin/billing-usage', label: 'Billing Usage & Pricing', icon: '💳', module: 'admin' },
     { href: '/admin/fix-requests', label: 'Auto-Fix Pipeline', icon: '🛠️', module: 'admin' },
   ]},
   // Reports LAST (owner directive 2026-08-10) — the Report Center directory sits at the foot of the

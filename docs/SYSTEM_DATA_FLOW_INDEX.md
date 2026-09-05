@@ -43,6 +43,7 @@ Primary code homes:
 | 18 | **Cross-reference: by METRIC/KPI** | metric → source table → reader function. |
 | 19 | **Known gaps & inert config** | stored-but-unwired, snapshot-only, surfaces that can disagree. |
 | 20 | **Super-admin control box** | "Is the platform working? What is red right now, what is NOT being watched at all, did the daily check actually run, and how do I hand this failure to Claude Code safely?" |
+| 21 | **Billing — usage & pricing** | "What did this tenant use, what did it cost us, what do we bill them, which modules are still unpriced, and what does their itemized statement say?" |
 
 ---
 
@@ -2122,6 +2123,13 @@ as a market-grant keyset member; ambiguity fails closed):
 | `core.system_check_run` (mig `970`; daily-run history — the PROOF the check ran + the baseline escalation compares against) | `control_box_api._persist_run` (from `POST /core/control-box/run` and `/run-due`) | `GET /core/control-box/history`; `_previous_results` → `control_box.escalations` (notify-once) |
 | `core.system_check_state` (mig `970`; per-org `enabled`/`cadence_hours`/`last_run_at`/`next_run_at`) | `control_box_api._persist_run` upsert | `control_box.due_orgs` (which tenants are due) + `control_box.selfcheck_row` (the board's row about ITSELF) |
 | `core.ai_budget_config` / `core.ai_call_audit` (mig `972`; SHARED per-`(org,purpose)` AI ceiling + per-call meter/audit — tokens only, $ joins `core.token_rates`) | `control_box_api._audit` (every attempt, allowed AND refused) | `control_box.rollup_usage` → `control_box.ai_guard_decision`; refusal scan = the "someone is probing us" signal |
+| `core.ai_margin_config` (mig `973`; per-tenant AI margin, effective-dated + APPEND-ONLY so history IS the audit) | `PUT /billing/ai-margin` (super-admin, records `changed_by`) | `ai_usage.margin_for` → `price_period` → the statement's AI line |
+| `core.ai_usage_period` (mig `973`; FROZEN AI period snapshots — rate + margin + figures at close) | `POST /billing/ai-usage/close` | `ai_usage.price_period(frozen=)` — read, NEVER recomputed |
+| `core.module_usage_daily` (mig `974`; per (org, module, day) counters — `billable_calls` vs `system_calls` vs `anonymous_calls`) | `core.bump_module_usage` RPC from `billing/usage_flush` (batched every 30s; the request path only increments a dict) | `module_usage.rollup_by_module` → `statement.build_statement` → `GET /billing/statement` |
+| `core.module_route_map` (mig `974`; route prefix → billable module overrides, RULE TWO) | operator SQL | `module_usage.classify` (unmapped is SHOWN, never guessed) |
+| `core.module_price` (mig `975`; price per plan x module, effective-dated; UNPRICED = the ABSENCE of a row) | `PUT /billing/module-pricing` (super-admin, `changed_by`) | `statement.price_for` → `module_line` / `pricing_grid` |
+| `core.billing_statement` (mig `975`; FROZEN itemized statements incl. the `complete` flag) | `POST /billing/statement/close` | `statement.build_statement(frozen=)` — read, NEVER recomputed |
+| `storeops.pricing_package` / `storeops.tenants.package_key` (mig `908`, REUSED) | existing `/billing/*` pricing endpoints | the PLAN TIERS (free/starter/premium are ROWS, not an enum) + the monthly-fee line on every statement |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
 | `commcalc.daily_closing` | closing sweep `033` | `deposit_recon.closing_cash_raw_by_store_day:147`, MI cash gate; **BS `store_cash_on_hand` line via `_cash_position_core` → `balance_sheet.store_cash_cells`** (mig `938`, basis-gated); **P&L bill-pay carve-out** (`account/billpay_pl.billpay_cells` on `epay_on_cash`/`epay_on_credit`, mig `939`, presentation-gated); **bill-pay coverage recon** (`_closing_collected_by_store_day` → `/billpay-coverage/{period}`); **CARD SETTLEMENT RECON** (`external_credit_recon.declared_cells` on the tender columns the org's `closing_tender_def.processor_key` routes — house map `t_ext_cc`→external_cc, `t_credit`→pos_merchant — → `GET /closing/external-credit-recon`, mig `960`/`961`, §12) |
 | `commcalc.billpay_pickup` (mig `942`, sibling of `cash_pickup`) | `POST /closing/billpay-pickup` (+`/undo`, `/deposit` — the parameterized cash-pickup machinery pointed at this table) | `GET /closing/billpay-pickups` (`_billpay_position_core`: declared `epay_on_cash` − picked = pending remittance), `GET /closing/cash-recon-management`; folds into `_cash_position_core` general outflows ONLY under `cash_pickup_config.billpay_relieves_cash` (default false — no double-count; §12) |
@@ -2169,6 +2177,9 @@ as a market-grant keyset member; ambiguity fails closed):
 | `GET /commcalc/merchant-portals/catalog` | `router.py:merchant_portal_catalog` | §12a portal descriptors for the connector settings page |
 | `GET /commcalc/merchant-portals/health` | `router.py:merchant_portal_health` | §12a durable-session health roll-up |
 | `GET /core/control-box` (the red/green board; `deep=1` runs heavy providers) · `GET /core/control-box/checks` (effective registry) · `GET /core/control-box/history` · `GET /core/control-box/platform` (the ONE cross-org surface — lamps + counts ONLY, no tenant figures) | `core/control_box_api.py` | §20 super-admin control box |
+| `GET /billing/ai-usage` · `GET/PUT /billing/ai-margin` (append-only, effective-dated = its own audit) · `POST /billing/ai-usage/close` (freeze) | `billing/usage_api.py`; pure `billing/ai_usage.py` | §21 AI usage + margin (migs `972`/`973`) |
+| `GET/PUT /billing/module-pricing` (the plan x module grid, DERIVED from the entitlement catalog) · `GET /billing/module-usage` | `billing/usage_api.py`; pure `billing/statement.pricing_grid` / `billing/module_usage.py` | §21 module pricing (migs `974`/`975`) |
+| `GET /billing/statement` (itemized: monthly fee + per-module + AI usage) · `POST /billing/statement/close` (freeze) · `GET /billing/usage-overview` (cross-org — MONEY AND COUNTS ONLY, no tenant business data) | `billing/usage_api.py`; pure `billing/statement.py` | §21 itemized statement |
 | `POST /core/control-box/run` (manual, deep) · `POST /core/control-box/run-due` (pg_cron entrypoint, `x-notify-secret`, self-scheduled by mig `971`; enumerates TENANTS so a never-checked org is never invisible) | `core/control_box_api.py` (`run_now` / `run_due`) | §20 daily check |
 | `GET /core/control-box/fix-task/{check_key}` (deterministic, NO AI — the copy-into-Claude-Code bundle) · `POST /core/control-box/ai-triage` (super-admin only, purpose-locked, no prompt passthrough, rate + budget capped, fully audited) | `core/control_box_api.py` (`get_fix_task` / `ai_triage`); pure guard `core/control_box.ai_guard_decision` | §20 AI path (mig `972`) |
 | `POST /commcalc/data-sources/{sid}/live-login/submit-totp` | `router.py:live_login_submit_totp` | §12a authenticator-app code into the live session (never SMS/email OTP) |
@@ -2260,6 +2271,8 @@ as a market-grant keyset member; ambiguity fails closed):
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| Tenant AI cost / billable price | `ai_usage.exact_cost` (in x rate_in + out x rate_out from `core.token_rates` — EXACT split, not mig 718's blend) + `apply_margin`; unpriceable models are stated, never $0 | `GET /billing/ai-usage`, `core.ai_usage_period`; §21 |
+| Tenant billable total (itemized) | `statement.build_statement` = monthly fee + per-module (billable calls x price) + AI usage; lines quantised once and summed so the document adds up | `GET /billing/statement`, `core.billing_statement`; §21 |
 | Platform health lamp (per subsystem, per tenant, and the roll-up) | `control_box.evaluate_check` → `roll_up`; composed from `import_health.collect_attention` + `portal_session_health.summarize` + scheduler heartbeats. Ladder `green < unmonitored < amber < unknown < red`; `unmonitored` is NEVER counted as green and the coverage fraction is stated out loud | `GET /core/control-box`, `core.system_check_run.lamp`; §20 |
 | External credit-card settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='external_cc'` | `merchant_portals.totals_by_store_day`; tallied against `daily_closing.t_ext_cc` by `closing/external_credit_recon` (§12a) |
 | POS-merchant settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='pos_merchant'` | same reader, `pos_merchant` role (§12a) |
@@ -2561,4 +2574,116 @@ into Claude Code and reviews. No web request can apply an AI-authored change to 
 frontend (Vercel) availability, and provider-side email/WhatsApp delivery confirmation — none is
 observable from the backend today. Also note `remediation/propose`'s AI diagnosis (mig 097) is
 currently org-param-gated only; it is a candidate to adopt this guard.
+
+---
+
+## 21. Billing — per-tenant AI usage, per-module usage, and the itemized statement
+
+**Owner directives 2026-09-05 (sanjot@):** *"For every tenant ai usage counter needs to be built and a
+cost assigned at the super admin level, the cost for the tenant will be cost of the super admin /
+platform per token paid plus % or flat margin assigned by the super admin"* and *"it should bill each
+call on all modules, nothing is for free, and have an itemized statement for the tenant for a clear
+visibility including their monthly fee… the billing engine should list all the modules and an option to
+assign price against them, a drop down menu to assign what kind of plan could belong to like free,
+starter, premium etc"*.
+
+**REUSED, NOT REBUILT** (duplicate-check build gate — most of this already existed):
+
+| Reused | Role here |
+|---|---|
+| `core.token_rates` (mig `718`) | THE only $/MTok source. No fallback rate anywhere: an unpriceable model reports "no active rate", never $0 |
+| `fix_pipeline.rate_for` | Resolves WHICH rate applies (tenant>house, newest `effective_date <= date`). Imported and called — the same resolver idea is used by `ai_usage.margin_for` and `statement.price_for`, three uses, ONE implementation |
+| `core.ai_call_audit` (mig `972`) | The per-call AI meter, already carrying in/out tokens separately per org |
+| `core.entitlements.MODULE_CATALOG` / `load_module_catalog` | THE module registry. The pricing grid is DERIVED from it, so a new module appears automatically as an UNPRICED cell |
+| `storeops.pricing_package` + `storeops.tenants.package_key` (mig `908`) | The plan/tier table and the tenant→plan assignment. "free / starter / premium" are ROWS (RULE TWO), NOT a code enum; no parallel plan table was created, and mig 908's "nothing public by default" posture is untouched (the anonymous `GET /billing/public-pricing` still serves only its published display fields, never `notes`) |
+| `core.access_log`'s middleware | The hook point for module counters — it already has the resolved actor + validated acting org and is already off the response path |
+| `billing/` module (pricing.py, platform_costs.py, trial.py) | The existing home for tenant billing; the new code lives there, not in a new module |
+
+**WHY THE AI COST FUNCTION IS NOT `fix_pipeline.compute_cost`** (a documented divergence, not a fork):
+`compute_cost` prices ONE total token count with a BLENDED rate because agent metadata has no in/out
+split. `core.ai_call_audit` DOES carry the split, and output costs ~5x input, so blending would
+systematically over-bill input-heavy tenants and under-bill output-heavy ones. `ai_usage.exact_cost`
+prices `in x rate_in + out x rate_out`. Harness shows the same 2M-token call as **$30 exact vs $18
+blended**.
+
+**METERING COVERAGE — the counter must not lie.** A usage counter fed only by wired call sites
+under-reports real spend and UNDER-BILLS while looking authoritative. `ai_usage.AI_CALL_SITES`
+declares every outbound Anthropic call site and whether it records usage; `coverage()` turns that into
+a stated fraction carried on every usage figure. **All 10 sites are metered** (control box, P&L
+narrative, VIP recon, agency OCR, remediation triage, 2x closing OCR, helpdesk assist, POS receipt
+OCR, lease/insurance doc extraction). **METERING IS NOT AUTHORIZATION**: `ai_meter.record()` performs
+no permission check and grants none — `control_box.ai_guard_decision` still governs who may SPEND, and
+was not relaxed to meter anything.
+
+**WHAT IS BILLED vs COUNTED** (owner-overridable, and both numbers are stored so it is reversible):
+`billable_calls` = tenant-initiated only. `system_calls` = pg_cron ticks, `*/run-due` sweeps, webhooks,
+internal service calls — **counted and shown on the statement, never charged**. Billing a tenant for
+our own retry storm is wrong and destroys trust in an invoice. `anonymous_calls` are attributable to no
+tenant. Infrastructure prefixes (`core`, `billing`, `vendor-api`) are excluded BY NAME, so their
+absence is a decision on the record.
+
+**HONESTY — three states kept distinct, never collapsed:** `included` (plan fee covers it, $0 and
+labelled) · `priced` ($0.00 is legitimate **if the operator typed 0**) · **UNPRICED** (nobody set a
+price — shown with its usage, EXCLUDED from the total, statement badged INCOMPLETE and unsendable). A
+route with no module mapping counts under `unmapped` and is shown, never guessed onto a neighbour —
+`main.py:_mounted_modules` exists because a hardcoded module literal went stale and "CONFIDENTLY
+MISREPRESENTS the deployment"; the same bug here means a module silently billing nothing.
+
+**MONEY CORRECTNESS**
+- **No retroactive change, two mechanisms.** (a) EFFECTIVE DATING — every call/line is priced with the
+  rate, margin and price in force ON ITS OWN DAY (live proof in the seeded data: `claude-sonnet-5` is
+  $2/$10 from 2026-01-01 and $3/$15 from 2026-09-01). (b) SNAPSHOT ON CLOSE — because
+  `token_rates` and `pricing_package.price` can be EDITED IN PLACE, closing freezes the applied rate,
+  margin, prices and figures; a closed period/statement is READ, never recomputed. Proven by closing,
+  then editing a rate row in place AND changing both the margin and the monthly fee, and re-reading:
+  byte-identical.
+- **Rounding — deliberately two different rules, each stated.** AI usage produces ONE figure: per-call
+  costs are kept at full `Decimal` precision and the TOTAL is quantised once (6 dp cost, 2 dp billed,
+  ROUND_HALF_UP; rounding per call would lose ~$5 per 1,000 sub-cent calls). A STATEMENT is a document
+  a human checks with a calculator, so each LINE is quantised once and the total is the SUM OF THE
+  QUANTISED LINES — the invoice always adds up. Inside a line, `calls x unit_price` is full precision:
+  100,000 x $0.000015 = **$1.50 exact vs $0.00** if rounded per call (a 100% billing error).
+- **Margin** is per-tenant, effective-dated, append-only (so the row history IS the who/when/old→new
+  audit). Modes `percent` · `flat` · `percent_plus_flat`. **"Flat" is defined explicitly for the owner
+  to correct**: `flat_basis='period'` (DEFAULT — one fixed amount per tenant per period) or `'call'`.
+  A per-TOKEN flat is deliberately NOT offered — that is a rate, and rates live in `core.token_rates`.
+  A negative margin is clamped to zero (never sell below cost); no config = pass-through at cost.
+
+**THROUGHPUT — the shape of per-call metering.** A row per API call was REJECTED: it puts a write on
+every request path and grows unbounded (the platform took a SEV-1 on 2026-07-30 from inline work, and
+`core.access_log` only survives by detaching its write; per-call forensic detail already lives there).
+CHOSEN: in-memory counters per (org, module, day) — the request path pays a **dict increment, no I/O**
+— drained every `USAGE_FLUSH_SECONDS` (30s) into ONE additive `core.bump_module_usage` RPC on a worker
+thread. Growth ≈ 20 modules x 365 days ≈ 7k rows/tenant/year. Honest cost: a hard crash loses at most
+one interval, i.e. it UNDER-counts — the right direction for a usage bill. A FAILED flush is restored
+and retried.
+
+**FILES**
+- `backend/app/modules/billing/ai_usage.py` — PURE: `AI_CALL_SITES`/`coverage`, `exact_cost`,
+  `margin_for`/`normalize_margin`/`apply_margin`, `price_period` (+`frozen=`), `snapshot_for_close`,
+  `period_bounds`/`in_period`, `summarize_tenants`.
+- `backend/app/modules/billing/module_usage.py` — PURE: `DEFAULT_ROUTE_MODULE`/`INFRA_PREFIXES`,
+  `module_for_path`, `classify`, `validate_route_map`, `unmapped_prefixes`, `UsageAccumulator`
+  (thread-safe add/drain/restore), `rollup_by_module`.
+- `backend/app/modules/billing/statement.py` — PURE: `price_for`, `module_line`, `build_statement`
+  (+`frozen=`), `freeze_statement`, `pricing_grid`.
+- `backend/app/modules/billing/ai_meter.py` — the metering seam (`record()`, never raises, reads
+  `tenant_middleware.acting_org()` so no call-site signature changes).
+- `backend/app/modules/billing/usage_flush.py` — the accumulator singleton + background flusher
+  (`start`/`stop`/`flush_now`), started by `main.py:_usage_flusher_startup`.
+- `backend/app/modules/billing/usage_api.py` — the endpoints (all `_require_super_admin`).
+- `frontend/src/app/(platform)/admin/billing-usage/page.tsx` — operator screen (nav in `rbac.ts`).
+- **Harnesses:** `harness_ai_usage.py` (66) + `harness_module_billing.py` (62).
+
+**MIGRATIONS**
+- `973_ai_usage_billing.sql` — `core.ai_margin_config` (per-tenant, effective-dated, append-only =
+  its own audit) + `core.ai_usage_period` (frozen close snapshots). Seeds a HOUSE row at ZERO margin
+  (pass-through), so applying it cannot charge anyone; the real-tenant margin seed is COMMENTED OUT.
+- `974_module_usage_metering.sql` — `core.module_usage_daily` counters + `core.bump_module_usage`
+  (SECURITY DEFINER, service_role only, ADDITIVE `calls = calls + excluded.calls` so concurrent
+  backends never overwrite) + `core.module_route_map` overrides.
+- `975_module_pricing_and_statements.sql` — `core.module_price` (per plan x module, effective-dated;
+  `unpriced` is the ABSENCE of a row, so there is exactly one representation) + `core.billing_statement`
+  (frozen itemized documents). Ships with NO prices and NO plan assignments: every module reads
+  UNPRICED until the owner prices it, and all money-touching seeds are COMMENTED OUT.
 

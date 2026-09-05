@@ -150,6 +150,8 @@ async def _ai_diagnose(catalog, issue):
         resp = await cli.messages.create(model=settings.ACCOUNT_ENGINE_MODEL, max_tokens=700,
                                          system=_DIAGNOSE_SYSTEM,
                                          messages=[{"role": "user", "content": user}])
+        from app.modules.billing import ai_meter as _ai_meter
+        _ai_meter.record("remediation_diagnose", settings.ACCOUNT_ENGINE_MODEL, resp)  # usage metering only (mig 972/973) — no auth implication
         text = "".join(getattr(b, "text", "") for b in resp.content
                        if getattr(b, "type", None) == "text").strip()
         # tolerate stray fences/prose around the JSON

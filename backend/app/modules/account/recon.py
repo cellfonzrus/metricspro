@@ -97,6 +97,8 @@ def _missed_days(flagged):
             model=settings.ACCOUNT_ENGINE_MODEL, max_tokens=2000,
             thinking={"type": "adaptive"}, output_config={"effort": "medium"},
             messages=[{"role": "user", "content": prompt}])
+        from app.modules.billing import ai_meter as _ai_meter
+        _ai_meter.record("account_recon_missed_days", settings.ACCOUNT_ENGINE_MODEL, msg)  # usage metering only (mig 972/973) — no auth implication
         text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
         a, b = text.find("{"), text.rfind("}")
         return json.loads(text[a:b + 1]) if a >= 0 and b > a else {}

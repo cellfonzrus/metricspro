@@ -284,6 +284,8 @@ def extract_document(raw_bytes, content_type, subject_kind, coverage_types=None)
                                                    {"type": "text",
                                                     "text": build_prompt(kind, coverage_types)}]}],
         )
+        from app.modules.billing import ai_meter as _ai_meter
+        _ai_meter.record("doc_intel_extraction", DOC_INTEL_MODEL, msg)  # usage metering only (mig 972/973) — no auth implication
         if getattr(msg, "stop_reason", None) == "refusal":
             return dict(empty, status="failed", model=DOC_INTEL_MODEL,
                         error="The reader declined this document. Enter the fields by hand.")

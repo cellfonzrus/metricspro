@@ -2994,6 +2994,8 @@ async def _ocr_bank_deposit_slip(raw: bytes, ext: str, model: str):
                 {"type": "text", "text": "This is a bank DEPOSIT SLIP. Return ONLY compact JSON: "
                  '{"amount": <number|null>, "date": "<YYYY-MM-DD|null>", "bank_name": "<string|null>"}. '
                  "amount is the TOTAL amount deposited (no $ or commas). If any field is unreadable, use null."}]}])
+        from app.modules.billing import ai_meter as _ai_meter
+        _ai_meter.record("closing_deposit_slip_ocr", model, msg)  # usage metering only (mig 972/973) — no auth implication
         text = "".join(getattr(b, "text", "") for b in msg.content) if msg.content else ""
         text = text.strip()
         if text.startswith("```"):
@@ -5657,6 +5659,8 @@ def _ocr_deposit_amount(raw: bytes, ext: str):
                 {"type": "text", "text": "This is a bank deposit slip. Return ONLY compact JSON: "
                  '{"total_deposit": <number>, "cash": <number|null>, "date": "<YYYY-MM-DD|null>"}. '
                  "total_deposit is the total amount deposited (no $ or commas). If unreadable, use null."}]}])
+        from app.modules.billing import ai_meter as _ai_meter
+        _ai_meter.record("closing_deposit_amount_ocr", settings.ACCOUNT_ENGINE_MODEL, msg)  # usage metering only (mig 972/973) — no auth implication
         text = "".join(getattr(b, "text", "") for b in msg.content) if msg.content else ""
         text = text.strip()
         if text.startswith("```"):

@@ -78,5 +78,22 @@ class AccessLogMiddleware:
                 task = asyncio.ensure_future(asyncio.to_thread(_insert, row))
                 _BG_WRITES.add(task)
                 task.add_done_callback(_BG_WRITES.discard)
+                # ── per-MODULE usage counter (owner 2026-09-05, migs 974/975) ────────────────
+                # Hooked HERE because this is the one place that already has the resolved actor and
+                # the validated acting org for every request, and it is already off the response
+                # path. The call below is a DICT INCREMENT ONLY — no I/O, no await, nothing that can
+                # stall a request; a background flusher (billing/usage_flush) writes batches every
+                # 30s. Wrapped separately from the access-log write so a billing-counter bug can
+                # never cost us an audit row.
+                try:
+                    from app.modules.billing import module_usage as _mu
+                    from app.modules.billing.usage_flush import ACCUMULATOR as _ACC
+                    _org = _tm._ACTING_ORG.get()
+                    _c = _mu.classify(path, org_id=_org, has_actor=bool(actor.get("uid")))
+                    if _org and _c["bucket"] not in ("infra",):
+                        _ACC.add(_org, _c["bucket"], _mu.today_utc(),
+                                 call_class=_c["call_class"], billable=_c["billable"])
+                except Exception:
+                    pass
             except Exception:
                 pass

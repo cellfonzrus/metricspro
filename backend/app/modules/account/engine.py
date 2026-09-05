@@ -190,6 +190,8 @@ def _narrate(pl, bs, scope_label, period):
             output_config={"effort": "medium"},
             messages=[{"role": "user", "content": prompt}],
         )
+        from app.modules.billing import ai_meter as _ai_meter
+        _ai_meter.record("account_narrative", settings.ACCOUNT_ENGINE_MODEL, msg)  # usage metering only (mig 972/973) — no auth implication
         text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
         return (text or "(no narrative)", settings.ACCOUNT_ENGINE_MODEL)
     except Exception as e:

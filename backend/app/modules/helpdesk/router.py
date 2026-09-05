@@ -760,6 +760,8 @@ async def ai_assist(body: AiAssistIn, org_id: str = ORG_ID):
             model=settings.ACCOUNT_ENGINE_MODEL, max_tokens=1024,
             system=system, messages=msgs,
         )
+        from app.modules.billing import ai_meter as _ai_meter
+        _ai_meter.record("helpdesk_ai_assist", settings.ACCOUNT_ENGINE_MODEL, resp)  # usage metering only (mig 972/973) — no auth implication
         reply = "".join(getattr(b, "text", "") for b in resp.content
                         if getattr(b, "type", None) == "text").strip()
         return {"reply": reply or "I couldn't produce an answer — try rephrasing, or raise a ticket.",
