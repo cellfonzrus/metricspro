@@ -21,18 +21,31 @@ env value falls back to the default rather than breaking module import. 120s def
 lease with adaptive thinking legitimately runs longer than a P&L narrative, and this is a background
 "interpret this document" action, not an interactive one.
 
-NOTE for whoever converges the AI-call guards: this file deliberately declares its OWN limits rather
-than importing account/ai_limits.py — that module's constants are documented as bounding the finance
-NARRATIVE calls, and a document extraction needs a different (longer) budget. A SHARED outbound
-AI-call guard is landing in the same branch from the super-admin control-box work
-(core/control_box.ai_guard_decision + core.ai_call_budget / ai_call_audit, mig 972), and it names
-this extraction as an intended adopter. It is NOT wired in here yet, deliberately: its decision path
-is scoped to super-admin, no-prompt-passthrough diagnostic calls, whereas this call is
-management-gated (store_lease.can_see_lease) and by definition passes a tenant document to the
-model. Converging the two needs the guard to grow a purpose whose authorization check is the lease
-gate rather than super-admin — a small, deliberate change to ONE shared decision function, which is
-exactly the point of having one. Until then the two limits below are what a shared guard should
-absorb, and the per-call spend here is already bounded by them plus the gate.
+CONVERGED 2026-09-06 (migs 972 + 983) — this call now runs on the SHARED AI guard. The note that
+used to sit here asked for exactly one thing: "the guard [needs] to grow a purpose whose
+authorization check is the lease gate rather than super-admin — a small, deliberate change to ONE
+shared decision function". That is what happened, and it was done as a GENERALISATION, not a hole:
+
+  · `core/control_box.AI_PURPOSES` is now a registry, and each purpose NAMES the predicate that
+    authorizes it. `control_box_triage` still means platform super-admin and nothing else;
+    `lease_extraction` means `store_lease.can_see_lease` — the SAME management gate every route in
+    this subsystem already applies, restated inside the ONE decision function so it is provable.
+    The lease predicate does NOT fall back to super-admin: a purpose is satisfied on its own
+    predicate or not at all.
+  · A wider predicate on one purpose widens NOTHING ELSE. The rate limit, the per-org daily call and
+    token budget, the bounded server-validated subject (this org's own document id, never free
+    text), and the audit of EVERY attempt including refusals apply to this purpose exactly as they
+    apply to the control box's. An unregistered purpose is refused, fail-closed.
+  · `POST /storeops/document-extract` is the enforcement point (storeops/router.py): the lease gate
+    still 403s first, the guard then decides, and every attempt lands in `core.ai_call_audit`
+    org-scoped with tokens only (mig 718's `core.token_rates` remains the only $/MTok source).
+  · DEGRADES AS BEFORE: no API key, or a tenant that switched AI off, still yields a clean empty
+    `not_extracted` draft — never an exception. Rate limit / budget / authorization refusals are a
+    403 with the reason and nothing else.
+
+The two limits below stay declared HERE rather than imported from account/ai_limits.py: that
+module's constants are documented as bounding the finance NARRATIVE calls, and a document extraction
+legitimately needs a longer budget.
 
 ═══════════════════════════════════════════════════════════════════════════════════════════════════
 WHAT IS AND IS NOT SENT TO THE MODEL
@@ -76,6 +89,20 @@ DOC_INTEL_MODEL = (os.getenv("DOC_INTEL_MODEL") or "claude-opus-5").strip()
 
 MAX_OUTPUT_TOKENS = 16000
 _IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp")
+
+# The ONE shape of "nothing was read, and that is fine" — a clean, empty, reviewable draft rather
+# than an error. Used by every not-extracted branch below AND by the route when the shared guard
+# refuses softly (no key configured, or the tenant switched AI off), so those two paths cannot drift
+# into two different-looking answers for the same user-visible situation.
+NO_KEY_MESSAGE = ("Automatic reading is switched off (no AI key configured). "
+                  "The document is saved — enter the fields by hand.")
+
+
+def not_extracted_draft(error=None, model="none"):
+    """An empty draft with a human-readable reason. NEVER raises, never partially fills anything."""
+    return {"fields": [], "clauses": [], "extra_items": [], "contacts": [],
+            "status": "not_extracted", "model": model, "error": error or NO_KEY_MESSAGE,
+            "usage": {}}
 
 
 # ── the response contract (structured outputs — the model cannot answer in free prose) ───────────
@@ -252,25 +279,22 @@ def extract_document(raw_bytes, content_type, subject_kind, coverage_types=None)
 
     ⚠ SYNCHRONOUS AND SLOW — call it from a worker thread (`run_in_threadpool`), never from an
     `async def`. See this module's header (SEV-1 2026-07-30). Never raises."""
-    empty = {"fields": [], "clauses": [], "extra_items": [], "contacts": []}
+    empty = {"fields": [], "clauses": [], "extra_items": [], "contacts": [], "usage": {}}
     kind = str(subject_kind or "")
     if kind not in _di.SUBJECT_KINDS:
-        return dict(empty, status="not_extracted", model="none",
-                    error="This document kind isn't one the reader understands.")
+        return not_extracted_draft("This document kind isn't one the reader understands.")
     block = _doc_block(raw_bytes or b"", content_type)
     if block is None:
-        return dict(empty, status="not_extracted", model="none",
-                    error="Automatic reading needs a PDF or an image (PNG/JPG/WebP). "
-                          "The document is stored and downloadable either way — fill the fields in by hand.")
+        return not_extracted_draft(
+            "Automatic reading needs a PDF or an image (PNG/JPG/WebP). "
+            "The document is stored and downloadable either way — fill the fields in by hand.")
     try:
         from app.core.config import settings
         api_key = (getattr(settings, "ANTHROPIC_API_KEY", "") or "").strip()
     except Exception:
         api_key = ""
     if not api_key:
-        return dict(empty, status="not_extracted", model="none",
-                    error="Automatic reading is switched off (no AI key configured). "
-                          "The document is saved — enter the fields by hand.")
+        return not_extracted_draft(NO_KEY_MESSAGE)
     try:
         from anthropic import Anthropic
         client = Anthropic(api_key=api_key, timeout=DOC_INTEL_TIMEOUT_S,
@@ -285,16 +309,23 @@ def extract_document(raw_bytes, content_type, subject_kind, coverage_types=None)
                                                     "text": build_prompt(kind, coverage_types)}]}],
         )
         from app.modules.billing import ai_meter as _ai_meter
-        _ai_meter.record("doc_intel_extraction", DOC_INTEL_MODEL, msg)  # usage metering only (mig 972/973) — no auth implication
+        _ai_meter.record("doc_intel_extraction", DOC_INTEL_MODEL, msg)  # usage metering only (mig 973/974) — no auth implication
+        # Tokens for the GUARD's audit row (mig 972/983) — tokens only, never a cost: mig 718's
+        # `core.token_rates` is the single $/MTok source. Metering and authorization stay separate
+        # mechanisms that happen to read the same response object.
+        _u = getattr(msg, "usage", None)
+        used = {"input_tokens": int(getattr(_u, "input_tokens", 0) or 0),
+                "output_tokens": int(getattr(_u, "output_tokens", 0) or 0)}
         if getattr(msg, "stop_reason", None) == "refusal":
-            return dict(empty, status="failed", model=DOC_INTEL_MODEL,
+            return dict(empty, status="failed", model=DOC_INTEL_MODEL, usage=used,
                         error="The reader declined this document. Enter the fields by hand.")
         text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
         raw = json.loads(text) if text else {}
     except Exception as e:
-        # Type only — never echo a payload or a key into a stored row.
-        return dict(empty, status="failed", model=DOC_INTEL_MODEL,
+        # Type only — never echo a payload or a key into a stored row (or into the audit row: the
+        # route passes this same type-only string to `ai_audit_row`, which redacts it again).
+        return dict(empty, status="failed", model=DOC_INTEL_MODEL, usage={},
                     error=f"The document couldn't be read automatically ({type(e).__name__}). "
                           f"It is saved — enter the fields by hand or try again.")
     out = _di.normalize_extraction(raw, kind, coverage_types)
-    return dict(out, status="draft", model=DOC_INTEL_MODEL, error=None)
+    return dict(out, status="draft", model=DOC_INTEL_MODEL, error=None, usage=used)

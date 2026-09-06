@@ -21,10 +21,11 @@ METERING IS NOT AUTHORIZATION. This is the distinction the owner's guard depends
   · `record()` only observes that a call HAPPENED, so the tenant can be billed for it.
 
 Adding `record()` to a call site therefore cannot widen anyone's access — it cannot say yes to
-anything. That separation is what lets every call site be metered TODAY while the question of
-widening the guard's authorization surface stays open for the owner to decide. (The insurance/lease
-extraction is the live example: its authorization is `can_see_lease`, not super-admin; it is metered
-here and its auth is untouched.)
+anything. That separation is what let every call site be metered TODAY while the question of the
+guard's authorization surface was still open. (The insurance/lease extraction was the live example:
+its authorization is `can_see_lease`, not super-admin. Since mig 983 it is guarded too — by a purpose
+whose PREDICATE is `can_see_lease` — so its authorization is still exactly what it was, and metering
+still had nothing to do with granting it.)
 
 THREE PROPERTIES THIS MUST HAVE, because it is called from inside other people's code:
 

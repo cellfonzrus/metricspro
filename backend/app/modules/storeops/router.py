@@ -8,6 +8,11 @@ from datetime import datetime, timezone, timedelta, date as _date
 from fastapi import APIRouter, HTTPException, Header, BackgroundTasks, Response
 from fastapi.concurrency import run_in_threadpool   # SEV-1 2026-07-30: slow sync work (the AI document reader) MUST hop off the event loop
 from app.core.database import get_supabase
+# The SHARED outbound-AI guard (migs 972/983): the ONE decision function + its ONE I/O seam.
+# Imported, never re-implemented — a private copy of "who may spend the key" is the defect
+# the CLAUDE.md build gate exists to stop.
+from app.modules.core import ai_gate as _ai_gate
+from app.modules.core import control_box as _cbx
 from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
 from app.core.schemas import LaxModel
@@ -3347,22 +3352,14 @@ def _document_row(org_id, document_id):
     return rows[0]
 
 
-def _extract_and_store(org_id, doc, created_by):
-    """Download -> read -> persist ONE draft. SYNCHRONOUS and slow (it calls the model): only ever
-    invoked through run_in_threadpool — see doc_intel_ai's header, SEV-1 2026-07-30."""
-    subject_kind = str(doc.get("doc_kind") or "")
-    subject_ref = str(doc.get("store_code") or doc.get("policy_id") or "")
-    coverage_types, _ = _tenant_doc_config(org_id)
-    raw = _lease.download_store_doc(doc.get("storage_path"), client=get_supabase())
-    if not raw:
-        result = {"status": "failed", "model": "none", "fields": [], "clauses": [],
-                  "extra_items": [], "contacts": [],
-                  "error": "The stored file couldn't be opened — re-upload it and try again."}
-    else:
-        from app.modules.storeops import doc_intel_ai as _dia
-        result = _dia.extract_document(raw, doc.get("content_type"), subject_kind, coverage_types)
-    row = {"org_id": org_id, "document_id": doc.get("id"), "subject_kind": subject_kind,
-           "subject_ref": subject_ref, "status": result.get("status") or "failed",
+def _persist_extraction(org_id, doc, created_by, result):
+    """Persist ONE draft row. Org-scoped. The ONLY writer of storeops.document_extraction, shared by
+    the real extraction below and by the guard's soft refusals (no key / AI switched off), so the two
+    cannot drift into different-looking answers for the same user-visible situation."""
+    row = {"org_id": org_id, "document_id": doc.get("id"),
+           "subject_kind": str(doc.get("doc_kind") or ""),
+           "subject_ref": str(doc.get("store_code") or doc.get("policy_id") or ""),
+           "status": result.get("status") or "failed",
            "model": result.get("model"), "fields": result.get("fields") or [],
            "clauses": result.get("clauses") or [], "extra_items": result.get("extra_items") or [],
            "contacts": result.get("contacts") or [], "error": result.get("error"),
@@ -3374,10 +3371,52 @@ def _extract_and_store(org_id, doc, created_by):
         return row      # pre-965 schema: still hand the draft back rather than 500
 
 
+def _extract_and_store(org_id, doc, created_by):
+    """Download -> read -> persist ONE draft. SYNCHRONOUS and slow (it calls the model): only ever
+    invoked through run_in_threadpool — see doc_intel_ai's header, SEV-1 2026-07-30.
+
+    Returns (saved_row, meta) where meta carries the tokens/model/error the AI guard's audit row
+    needs (mig 972/983). Tokens ONLY — mig 718's `core.token_rates` is the single $/MTok source."""
+    subject_kind = str(doc.get("doc_kind") or "")
+    coverage_types, _ = _tenant_doc_config(org_id)
+    raw = _lease.download_store_doc(doc.get("storage_path"), client=get_supabase())
+    if not raw:
+        result = {"status": "failed", "model": "none", "fields": [], "clauses": [],
+                  "extra_items": [], "contacts": [], "usage": {},
+                  "error": "The stored file couldn't be opened — re-upload it and try again."}
+    else:
+        from app.modules.storeops import doc_intel_ai as _dia
+        result = _dia.extract_document(raw, doc.get("content_type"), subject_kind, coverage_types)
+    meta = {"usage": result.get("usage") or {}, "model": result.get("model"),
+            "error": result.get("error") if result.get("status") == "failed" else None}
+    return _persist_extraction(org_id, doc, created_by, result), meta
+
+
+# The shared AI guard's purpose for this call site (registry row in `control_box.AI_PURPOSES`,
+# ceiling seeded by mig 983). Its authorizing predicate is the LEASE gate, not super-admin.
+AI_LEASE_PURPOSE = "lease_extraction"
+# Refusals the user should see as a clean empty draft rather than an error — the pre-guard behaviour
+# for "no AI key configured", extended to "this tenant switched AI off". Everything else (not
+# authorized, rate limited, budget exhausted) is a 403 with the reason.
+_SOFT_AI_DENIALS = ("no_key", "disabled")
+
+
 @router.post("/document-extract")
 async def post_document_extract(body: dict, authorization: str = Header(default=""),
                                 org_id: str = ORG_ID):
     """Read an uploaded lease / policy / COI with AI and save the result as a REVIEWABLE DRAFT.
+
+    THE AI GUARD (migs 972 + 983) — one door, not a private one. This call was management-gated but
+    otherwise unbounded: no rate limit, no budget, no per-call audit. It now runs through the SAME
+    `core/control_box.ai_guard_decision` the super-admin control box uses, on purpose
+    `lease_extraction`, whose authorizing predicate is `store_lease.can_see_lease` — the same gate
+    enforced below, restated inside the ONE decision function so it is provable. Adopting the guard
+    NARROWS nothing here and WIDENS nothing there: the predicate differs, and every other protection
+    (bounded subject, rate limit, daily call + token budget, an audit row for every attempt
+    including refusals, org-scoped) applies exactly as it does to the control box.
+
+    The subject handed to the guard is this org's OWN document id, re-validated against the row
+    resolved by the org-scoped lookup above it — never free text, never another tenant's document.
 
     EVENT-LOOP SAFETY (SEV-1 2026-07-30): the whole synchronous body — the storage download and the
     Anthropic call — hops to a worker thread via run_in_threadpool. This must never become a direct
@@ -3386,13 +3425,49 @@ async def post_document_extract(body: dict, authorization: str = Header(default=
 
     Nothing here changes a booked number: the draft is quarantined in storeops.document_extraction
     until a human accepts it through /document-extraction/accept."""
-    _require_lease_access(authorization, org_id)
+    _require_lease_access(authorization, org_id)          # fail-closed 403, unchanged
     document_id = str((body or {}).get("document_id") or "").strip()
     if not document_id:
         raise HTTPException(400, "document_id required")
-    doc = _document_row(org_id, document_id)
-    saved = await run_in_threadpool(_extract_and_store, org_id, doc, (body or {}).get("requested_by"))
+    doc = _document_row(org_id, document_id)              # org-scoped: another tenant's id 404s here
+    requested_by = (body or {}).get("requested_by")
+
+    client = get_supabase()          # the `core` schema is selected inside ai_gate
+    caller = dict(_ai_gate.resolve_caller(client, authorization, org_id) or {})
+    # `_require_lease_access` did not raise, so this caller holds the lease capability. The guard's
+    # predicate reads the FLAG — the gate itself is still the one definition, computed above.
+    caller["can_see_lease"] = True
+    # Lower-cased so the guard's identifier grammar accepts a UUID whatever case the driver
+    # hands back; it is compared against ITSELF (the row we just resolved), never re-queried.
+    subject = str(doc.get("id") or "").strip().lower()
+    decision, _cfg = _ai_gate.decide(client, org_id=org_id, purpose=AI_LEASE_PURPOSE, caller=caller,
+                                     subject=subject, known_keys=[subject])
+    if not decision.get("allow"):
+        _ai_gate.audit(client, _cbx.ai_audit_row(org_id, caller, subject, decision,
+                                                 purpose=AI_LEASE_PURPOSE), label="doc-intel")
+        if decision.get("code") in _SOFT_AI_DENIALS:
+            # PRESERVED: "no key configured" has always been a clean empty draft, never an error.
+            saved = await run_in_threadpool(
+                _persist_extraction, org_id, doc, requested_by,
+                _dia_mod().not_extracted_draft(
+                    "%s The document is saved — enter the fields by hand."
+                    % (decision.get("reason") or "Automatic reading is unavailable.")))
+            return {"ok": True, "extraction": saved}
+        raise HTTPException(403, decision.get("reason") or "Refused.")
+
+    saved, meta = await run_in_threadpool(_extract_and_store, org_id, doc, requested_by)
+    # Every attempt is audited, allowed or not — tokens only; `ai_audit_row` redacts the error text.
+    _ai_gate.audit(client, _cbx.ai_audit_row(org_id, caller, decision["subject_key"], decision,
+                                             usage=meta.get("usage"), model=meta.get("model"),
+                                             error=meta.get("error"), purpose=AI_LEASE_PURPOSE),
+                   label="doc-intel")
     return {"ok": True, "extraction": saved}
+
+
+def _dia_mod():
+    """Lazy import of the extraction module (keeps this router's import graph unchanged)."""
+    from app.modules.storeops import doc_intel_ai as _dia
+    return _dia
 
 
 @router.get("/document-extraction")

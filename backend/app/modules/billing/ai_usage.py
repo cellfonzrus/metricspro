@@ -121,8 +121,10 @@ AI_CALL_SITES = (
     {"key": "doc_intel_extraction", "purpose": "doc_intel_extraction", "metered": True,
      "module": "storeops", "label": "Lease / insurance document extraction",
      "file": "app/modules/storeops/doc_intel_ai.py",
-     "note": "Owned by the insurance/lease agent. Metered only — its authorization stays "
-             "can_see_lease; adopting the meter grants it no new permission."},
+     "note": "Metered here, and AUTHORIZED (since mig 983) by the shared guard on purpose "
+             "'lease_extraction' — whose predicate IS can_see_lease, so its authorization is "
+             "unchanged; the guard added the rate limit, the budget and the audit. Metering still "
+             "grants no permission: the two mechanisms stay separate."},
 )
 
 # Sites the platform has but this build does NOT meter. Kept as a first-class list (not an omission)

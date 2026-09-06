@@ -1965,10 +1965,14 @@ as a market-grant keyset member; ambiguity fails closed):
     cannot answer in prose, adaptive thinking. NOTHING from `store_lease` is ever put in the prompt —
     above all the ACH columns; returning snippets are additionally masked for bank-ish digit runs
     (`doc_intel.scrub_snippet`). No key ⇒ status `not_extracted` (a clean empty draft), never an
-    exception. NOT yet routed through the sibling's shared AI-call guard (`core/control_box`,
-    mig `972`): that guard's authorization is super-admin + no-prompt-passthrough, whereas this call
-    is lease-gated and passes a tenant document — converging needs one purpose there whose auth check
-    is `can_see_lease`.
+    exception. **ROUTED THROUGH THE SHARED AI GUARD since mig `983`** (the convergence this file's
+    header asked for): purpose `lease_extraction`, whose authorizing predicate IS `can_see_lease` —
+    so authorization is unchanged — plus the guard's per-org rate limit, daily call + token budget,
+    bounded subject (this org's own document id, re-validated against the org-scoped row lookup) and
+    an audit row for every attempt including refusals (`core.ai_call_audit`, tokens only). The
+    enforcement point is `POST /storeops/document-extract`; no key or a tenant with AI switched off
+    still degrades to the clean empty draft, every other refusal is a 403 with the reason only.
+    §20 carries the registry; `harness_doc_intel.py` §K pins the wiring.
   - **Endpoints (`storeops/router.py`, beside the mig-946 lease block; ALL gated `can_see_lease`,
     fail-closed 403, every query org-scoped):** `GET/POST/PUT/DELETE /storeops/insurance-policies`,
     `PUT /storeops/insurance-policies/stores` (the multi-store assignment; every code validated
@@ -2123,7 +2127,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `core.system_check` (mig `970`; per-tenant OVERRIDES over the code-derived check registry — retune / disable / DECLARE a check) | `PUT`-less by design today: rows are written by SQL/console; the board never writes them | `control_box_api.effective_registry` (code defaults < HOUSE rows < org rows) → `GET /core/control-box` |
 | `core.system_check_run` (mig `970`; daily-run history — the PROOF the check ran + the baseline escalation compares against) | `control_box_api._persist_run` (from `POST /core/control-box/run` and `/run-due`) | `GET /core/control-box/history`; `_previous_results` → `control_box.escalations` (notify-once) |
 | `core.system_check_state` (mig `970`; per-org `enabled`/`cadence_hours`/`last_run_at`/`next_run_at`) | `control_box_api._persist_run` upsert | `control_box.due_orgs` (which tenants are due) + `control_box.selfcheck_row` (the board's row about ITSELF) |
-| `core.ai_budget_config` / `core.ai_call_audit` (mig `972`; SHARED per-`(org,purpose)` AI ceiling + per-call meter/audit — tokens only, $ joins `core.token_rates`. Purposes seeded: `control_box_triage` mig `972`, `remediation_diagnose` mig `982`) | `core/ai_gate.audit` — the ONE writer (every attempt, allowed AND refused, org-scoped); `control_box_api._audit` and `remediation/router._ai_diagnose` both go through it | `core/ai_gate.budget_config` / `recent_rows` → `control_box.rollup_usage` → `control_box.ai_guard_decision`; refusal scan = the "someone is probing us" signal |
+| `core.ai_budget_config` / `core.ai_call_audit` (mig `972`; SHARED per-`(org,purpose)` AI ceiling + per-call meter/audit — tokens only, $ joins `core.token_rates`. Purposes seeded: `control_box_triage` mig `972`, `remediation_diagnose` mig `982`, `lease_extraction` mig `983`) | `core/ai_gate.audit` — the ONE writer (every attempt, allowed AND refused, org-scoped); `control_box_api._audit`, `remediation/router._ai_diagnose` and `storeops/router.post_document_extract` all go through it | `core/ai_gate.budget_config` / `recent_rows` → `control_box.rollup_usage` → `control_box.ai_guard_decision`; refusal scan = the "someone is probing us" signal |
 | `core.ai_margin_config` (mig `973`; per-tenant AI margin, effective-dated + APPEND-ONLY so history IS the audit) | `PUT /billing/ai-margin` (super-admin, records `changed_by`) | `ai_usage.margin_for` → `price_period` → the statement's AI line |
 | `core.ai_usage_period` (mig `973`; FROZEN AI period snapshots — rate + margin + figures at close) | `POST /billing/ai-usage/close` | `ai_usage.price_period(frozen=)` — read, NEVER recomputed |
 | `core.module_usage_daily` (mig `974`; per (org, module, day) counters — `billable_calls` vs `system_calls` vs `anonymous_calls`) | `core.bump_module_usage` RPC from `billing/usage_flush` (batched every 30s; the request path only increments a dict) | `module_usage.rollup_by_module` → `statement.build_statement` → `GET /billing/statement` |
@@ -2190,6 +2194,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `POST /core/control-box/run` (manual, deep) · `POST /core/control-box/run-due` (pg_cron entrypoint, `x-notify-secret`, self-scheduled by mig `971`; enumerates TENANTS so a never-checked org is never invisible) | `core/control_box_api.py` (`run_now` / `run_due`) | §20 daily check |
 | `GET /core/control-box/fix-task/{check_key}` (deterministic, NO AI — the copy-into-Claude-Code bundle) · `POST /core/control-box/ai-triage` (super-admin only, purpose-locked, no prompt passthrough, rate + budget capped, fully audited) | `core/control_box_api.py` (`get_fix_task` / `ai_triage`); pure guard `core/control_box.ai_guard_decision` | §20 AI path (mig `972`) |
 | `POST /remediation/propose` (the auto-remediation console: describe an issue → AI triage picks a WHITELISTED playbook → human approval). Its AI diagnosis is GUARDED (purpose `remediation_diagnose`, mig `982`): authorized by the helpdesk module + market/company scope — **not** super-admin — then bounded input, rate limit, daily budget, and every attempt audited. A refusal ESCALATES to a human, never a 500 | `remediation/router.py` (`propose` / `_ai_diagnose`); shared guard `core/control_box.ai_guard_decision` via `core/ai_gate.py` | §20 AI guard (migs `972`/`982`) |
+| `POST /storeops/document-extract` (read an uploaded lease / policy / COI with AI into a REVIEWABLE draft). Gated `can_see_lease` (fail-closed 403), then GUARDED (purpose `lease_extraction`, mig `983`): same predicate, plus bounded subject (this org's own document id), rate limit, daily call + token budget and a full audit. No key / AI off ⇒ clean empty `not_extracted` draft; every other refusal ⇒ 403. `run_in_threadpool` (SEV-1 2026-07-30) | `storeops/router.py` (`post_document_extract` / `_extract_and_store` / `_persist_extraction`); `storeops/doc_intel_ai.extract_document` | §14 doc intel (mig `965`) + §20 AI guard (migs `972`/`983`) |
 | `POST /commcalc/data-sources/{sid}/live-login/submit-totp` | `router.py:live_login_submit_totp` | §12a authenticator-app code into the live session (never SMS/email OTP) |
 | `POST /calculate/{period}` | `router.py:8968` | §6 rep commission |
 | `GET /commissions/{period}` | `10222` | §6 — the Rep Incentive Report read; market stamped per row via §13a (2026-09-03 fix) |
@@ -2550,7 +2555,7 @@ urgent than one late feed); the headline EXCLUDES `unmonitored` and reports it a
 - **Harnesses:** `harness_control_box.py` (134 checks — ladder, honesty, portal-adapter drift, daily
   scheduling, AI guard, redaction, fix bundle), `harness_control_box_board.py` (41 checks — board
   assembly over a fake client: composition, config overrides, honesty under I/O failure, coverage)
-  and `harness_ai_guard_purposes.py` (78 checks — the PURPOSE REGISTRY matrix: every purpose's
+  and `harness_ai_guard_purposes.py` (111 checks — the PURPOSE REGISTRY matrix: every purpose's
   predicate, unknown purpose / unknown predicate / raising predicate all REFUSED, one purpose's
   widening not leaking into another, and rate + budget + audit + input bounding applying to EVERY
   purpose).
@@ -2561,8 +2566,12 @@ urgent than one late feed); the headline EXCLUDES `unmonitored` and reports it a
 deny code) and WHAT THE CALLER MAY SUPPLY (`subject_rule`); **everything else applies identically to
 every purpose** — bounded server-validated input, per-org rate limit, per-org daily call + token
 budget, and an audit row for every attempt including refusals. Registered today:
-`control_box_triage` (predicate `super_admin`, subject = a key from the server-side check registry)
-and `remediation_diagnose` (predicate `module_scope`: helpdesk module + scope all/market, mig `982`).
+`control_box_triage` (predicate `super_admin`, subject = a key from the server-side check registry),
+`remediation_diagnose` (predicate `module_scope`: helpdesk module + scope all/market, mig `982`) and
+`lease_extraction` (predicate `lease_access` = `store_lease.can_see_lease`, subject = this org's own
+document id, mig `983`). A predicate is never a fallback chain: `lease_access` reads the lease
+capability ONLY, so a platform super-admin who does not hold it is refused on that purpose — a
+purpose is satisfied on its own predicate or not at all.
 **Fail-closed by construction:** an unknown/unregistered/missing purpose is REFUSED, a purpose naming
 a predicate that does not exist authorizes NOBODY (`unknown_authorizer`), and a predicate that raises
 denies. There is no "no check" fallback, so forgetting to register a purpose is a closed door.
@@ -2617,6 +2626,14 @@ into Claude Code and reviews. No web request can apply an AI-authored change to 
   could legitimately use the console lost it; a store manager or sales rep now gets the ordinary
   "escalated to a human" answer instead of spending the key. The narrowing is in application code —
   reverting the seeded row lowers the CEILING to the house default, it does not reopen the door.
+- `983_ai_guard_lease_extraction.sql` — the house ceiling for purpose `lease_extraction`, the mig-965
+  lease/insurance document reader adopting the guard (the convergence `doc_intel_ai.py`'s own header
+  asked for). That call was already AUTHORIZED (`can_see_lease`, fail-closed) but otherwise
+  unbounded: no rate limit, no daily budget, no per-call audit. Adopting the guard **narrows nothing
+  and widens nothing** — the predicate is the same lease gate, restated inside the ONE decision
+  function so it is provable, and every other protection now applies to it. Token cap is
+  deliberately far larger than the control box's (a 40-page lease with adaptive thinking), the call
+  cap far smaller.
 
 **KNOWN, DECLARED GAPS** (visible as grey lamps, not silently green): Supabase backup/restore drills,
 frontend (Vercel) availability, and provider-side email/WhatsApp delivery confirmation — none is
@@ -2662,8 +2679,9 @@ a stated fraction carried on every usage figure. **All 10 sites are metered** (c
 narrative, VIP recon, agency OCR, remediation triage, 2x closing OCR, helpdesk assist, POS receipt
 OCR, lease/insurance doc extraction). **METERING IS NOT AUTHORIZATION**: `ai_meter.record()` performs
 no permission check and grants none — `control_box.ai_guard_decision` still governs who may SPEND, and
-was not relaxed to meter anything. (Two of these sites are now AUTHORIZED as well as metered:
-control-box triage since mig `972`, remediation triage since mig `982` — see §20's purpose registry.)
+was not relaxed to meter anything. (Three of these sites are now AUTHORIZED as well as metered:
+control-box triage since mig `972`, remediation triage since mig `982`, lease/insurance extraction
+since mig `983` — see §20's purpose registry. The other seven remain metered-only.)
 
 **WHAT IS BILLED vs COUNTED** (owner-overridable, and both numbers are stored so it is reversible):
 `billable_calls` = tenant-initiated only. `system_calls` = pg_cron ticks, `*/run-due` sweeps, webhooks,

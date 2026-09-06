@@ -95,6 +95,11 @@ check("a MARKET-scoped helpdesk operator is allowed too (nav parity: scopes all/
       decide(MARKET_MGR, "remediation_diagnose")["allow"] is True)
 check("a super-admin is allowed on remediation_diagnose (platform operator acts for a tenant)",
       decide(SUPER, "remediation_diagnose")["allow"] is True)
+check("a can_see_lease holder is allowed on lease_extraction",
+      decide(LEASE_HOLDER, "lease_extraction")["allow"] is True,
+      decide(LEASE_HOLDER, "lease_extraction"))
+check("...and in production a super-admin holds that capability too, so nobody lost access",
+      decide({**SUPER, "can_see_lease": True}, "lease_extraction")["allow"] is True)
 
 print("\nC. widening ONE purpose widened only that purpose")
 check("the helpdesk operator is REFUSED on control_box_triage",
@@ -107,6 +112,18 @@ check("a sales rep is refused on remediation_diagnose",
       decide(REP, "remediation_diagnose")["code"] == "not_remediation_operator")
 check("company-wide scope WITHOUT the module is refused (both halves are required)",
       decide(NO_MODULE, "remediation_diagnose")["code"] == "not_remediation_operator")
+check("the lease holder is REFUSED on control_box_triage (a capability is not a platform role)",
+      decide(LEASE_HOLDER, "control_box_triage")["code"] == "not_super_admin")
+check("the lease holder is REFUSED on remediation_diagnose",
+      decide(LEASE_HOLDER, "remediation_diagnose")["code"] == "not_remediation_operator")
+check("a platform SUPER-ADMIN without the lease capability is REFUSED on lease_extraction",
+      decide(SUPER, "lease_extraction")["code"] == "not_lease_access",
+      decide(SUPER, "lease_extraction"))
+check("...and so is the helpdesk operator",
+      decide(OPERATOR, "lease_extraction")["code"] == "not_lease_access")
+check("a document id that is NOT this org's resolved row is refused (no cross-tenant subject)",
+      decide(LEASE_HOLDER, "lease_extraction", subject="another-tenants-doc-id")["code"]
+      == "unknown_check")
 check("an anonymous caller is refused on EVERY purpose",
       all(decide(None, p)["allow"] is False for p in cb.AI_PURPOSES))
 
@@ -142,7 +159,12 @@ check("an EMPTY authorizer map authorizes nobody",
       == "unknown_authorizer")
 
 print("\nE. every OTHER gate applies to EVERY purpose, whatever its predicate")
-HOLDERS = {"control_box_triage": SUPER, "remediation_diagnose": OPERATOR}
+HOLDERS = {"control_box_triage": SUPER, "remediation_diagnose": OPERATOR,
+           "lease_extraction": LEASE_HOLDER}
+# For each purpose, somebody who is NOT authorized for it — used to prove the authorization gate is
+# decided BEFORE any other state is revealed. `lease_extraction`'s entry is a platform SUPER-ADMIN
+# without the lease capability: a purpose is satisfied on its OWN predicate or not at all.
+DENIED = {"control_box_triage": REP, "remediation_diagnose": STORE_MGR, "lease_extraction": SUPER}
 for name in sorted(cb.AI_PURPOSES):
     who = HOLDERS[name]
     check("[%s] the per-hour RATE LIMIT bites" % name,
@@ -162,7 +184,7 @@ for name in sorted(cb.AI_PURPOSES):
     check("[%s] no API key refuses cleanly (the feature works without AI)" % name,
           decide(who, name, has_key=False)["code"] == "no_key")
     check("[%s] AUTHORIZATION is decided BEFORE any of that is revealed" % name,
-          decide(REP if name == "control_box_triage" else STORE_MGR, name, has_key=False,
+          decide(DENIED[name], name, has_key=False,
                  config={"enabled": False}, usage={"calls_today": 9999})["code"]
           == cb.AI_PURPOSES[name]["deny_code"])
     d = decide(who, name)

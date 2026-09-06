@@ -532,9 +532,9 @@ def redact(text):
 # GENERALISED 2026-09-06 (owner-approved, "one AI door"): the first cut hard-coded a single purpose
 # (`control_box_triage`) and a single authorization predicate (platform super-admin). Two other
 # outbound calls needed to adopt it and CANNOT be super-admin-gated without deleting a working
-# tenant feature — `remediation/propose`'s triage (a tenant helpdesk console), and next the lease /
-# insurance document extraction (management-gated on `store_lease.can_see_lease`, the convergence
-# `storeops/doc_intel_ai.py`'s header asked for). The answer is a PURPOSE REGISTRY, not a bypass:
+# tenant feature — `remediation/propose`'s triage (a tenant helpdesk console) and the lease /
+# insurance document extraction (management-gated on `store_lease.can_see_lease` — the convergence
+# `storeops/doc_intel_ai.py`'s own header asked for). The answer is a PURPOSE REGISTRY, not a bypass:
 #
 #   · Each purpose NAMES the predicate that authorizes it. `control_box_triage` still means
 #     super-admin and nothing else. Widening one purpose's predicate widens ONLY that purpose.
@@ -595,6 +595,19 @@ def _auth_super_admin(caller, spec=None):
     return bool((caller or {}).get("super_admin"))
 
 
+def _auth_lease_access(caller, spec=None):
+    """`store_lease.can_see_lease` — the management gate that already guards every lease, landlord,
+    ACH and insurance surface (mig 946/964). It is computed at the I/O boundary and handed in as a
+    capability flag, so this function stays pure and provable.
+
+    DELIBERATELY DOES NOT FALL BACK TO super_admin. A purpose must be satisfied on its OWN predicate:
+    a platform super-admin who does not hold the lease capability is refused here exactly like
+    anyone else (proven in harness_ai_guard_purposes.py). In production `can_see_lease` grants a
+    super-admin the capability itself, so this changes nobody's access — it just means the guard has
+    no second, quieter way in."""
+    return bool((caller or {}).get("can_see_lease"))
+
+
 def _auth_module_scope(caller, spec=None):
     """A tenant operator who holds the purpose's MODULE and a broad enough SCOPE — the same rule the
     product's own navigation applies to the surface, restated server-side where it is enforceable.
@@ -615,6 +628,7 @@ def _auth_module_scope(caller, spec=None):
 # The ONLY way a purpose becomes authorizable. Injectable for the harness; unknown name = refused.
 AI_AUTHORIZERS = {
     "super_admin": _auth_super_admin,
+    "lease_access": _auth_lease_access,
     "module_scope": _auth_module_scope,
 }
 
@@ -643,6 +657,18 @@ AI_PURPOSES = {
         "require_actionable": False,
         "call_site": "remediation/router.py (_ai_diagnose)",
     },
+    "lease_extraction": {
+        "label": "Lease / insurance document extraction",
+        "authorizer": "lease_access",
+        "deny_code": "not_lease_access",
+        # The subject is the tenant's OWN document id, re-validated by the call site against an
+        # org-scoped lookup — never free text, and never another tenant's document. What reaches the
+        # model is the stored file plus a server-built prompt; NOTHING from `store_lease` (above all
+        # the ACH columns) is ever in it.
+        "subject_rule": SUBJECT_REGISTRY_KEY,
+        "require_actionable": False,
+        "call_site": "storeops/doc_intel_ai.py (extract_document)",
+    },
 }
 
 DEFAULT_AI_CONFIG = {
@@ -657,13 +683,14 @@ _DENY = {
     "not_super_admin": "The control box AI is restricted to platform super-admins.",
     "not_remediation_operator": "AI triage is restricted to helpdesk operators with market-wide or "
                                 "company-wide scope.",
+    "not_lease_access": "Lease and insurance documents are restricted to management roles.",
     "unknown_authorizer": "This AI purpose declares no authorization rule, so it is refused.",
     "wrong_purpose": "This key is restricted to registered purposes and refuses any other.",
     "unknown_check": "That check is not in the registry, so there is nothing to triage.",
     "no_subject": "There is nothing to send — describe the issue first.",
-    "disabled": "AI triage is switched off for this tenant.",
-    "no_key": "No AI key is configured on this backend — the board works without it.",
-    "rate_limited": "Too many triage calls in the last hour; try again shortly.",
+    "disabled": "AI is switched off for this tenant.",
+    "no_key": "No AI key is configured on this backend — the feature works without it.",
+    "rate_limited": "Too many AI calls in the last hour; try again shortly.",
     "budget_exhausted": "The daily AI budget for this tenant is used up.",
     "not_actionable": "That check is green — triage is only offered for a failing check.",
 }

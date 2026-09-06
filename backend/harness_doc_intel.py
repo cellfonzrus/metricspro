@@ -64,6 +64,7 @@ sys.modules["app.core.database"] = _db
 from app.modules.storeops import doc_intel as di            # noqa: E402
 from app.modules.storeops import doc_intel_ai as dia        # noqa: E402
 from app.modules.storeops import store_lease as sl          # noqa: E402
+from app.modules.core.control_box import AI_PURPOSES as cb_purposes   # noqa: E402
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -460,6 +461,59 @@ check("J2b the scan actually found the queries (guard is not vacuous)",
 check("J3 no endpoint echoes a private storage path for a policy document",
       'select("id,policy_id,doc_kind,file_name,content_type,size_bytes,uploaded_by,uploaded_at")'
       in _router_src, True)
+
+print("K. the AI door — the extraction runs on the SHARED guard (migs 972/983), not a private one")
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# The guard's per-purpose gate matrix is proven DB-free in harness_ai_guard_purposes.py. What this
+# section proves is that THIS call site actually goes through it, keeps the SEV-1 threadpool hop, and
+# keeps its two document-safety guarantees (nothing from store_lease in the prompt; bank-ish digit
+# runs masked on the way back).
+import ast as _ast
+
+_rt = _ast.parse(_router_src)
+_route = next((n for n in _ast.walk(_rt)
+               if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+               and n.name == "post_document_extract"), None)
+_route_src = _ast.get_source_segment(_router_src, _route) or ""
+check("K1 the extract route exists and is still an `async def`",
+      isinstance(_route, _ast.AsyncFunctionDef))
+check("K2 the lease gate still runs FIRST, before anything else is consulted",
+      _route_src.index("_require_lease_access(") < _route_src.index("_ai_gate.decide("), True)
+check("K3 the SHARED guard decides (no private authorization here)",
+      "_ai_gate.decide(" in _route_src and "purpose=AI_LEASE_PURPOSE" in _route_src, True)
+check("K4 the purpose is the registered `lease_extraction` row",
+      'AI_LEASE_PURPOSE = "lease_extraction"' in _router_src and "lease_extraction" in cb_purposes)
+check("K5 its authorizing predicate is the LEASE gate, not super-admin",
+      cb_purposes["lease_extraction"]["authorizer"], "lease_access")
+check("K6 the subject is this org's OWN document id, re-validated against the resolved row",
+      "known_keys=[subject]" in _route_src and 'subject = str(doc.get("id") or "")' in _route_src, True)
+check("K7 the org-scoped document lookup happens BEFORE the guard sees the subject",
+      _route_src.index("_document_row(org_id, document_id)") < _route_src.index("_ai_gate.decide("), True)
+check("K8 EVERY attempt is audited — the refusal path and the spend path both write a row",
+      _route_src.count("_ai_gate.audit("), 2)
+check("K9 the audit row is org-scoped and carries the purpose",
+      _route_src.count("ai_audit_row(org_id, caller,") == 2
+      and _route_src.count("purpose=AI_LEASE_PURPOSE") == 3, True)
+check("K10 no key / AI switched off still degrades to a clean empty draft, never an exception",
+      "_SOFT_AI_DENIALS" in _route_src and "not_extracted_draft(" in _route_src, True)
+check("K11 ...and every other refusal is a 403 that reveals only the reason",
+      'raise HTTPException(403, decision.get("reason")' in _route_src, True)
+check("K12 SEV-1 2026-07-30: the slow synchronous work still hops to a worker thread",
+      _route_src.count("await run_in_threadpool("), 2)
+check("K13 the guard's tokens come from the model response, and no COST is stored (mig 718 owns $)",
+      "usage=meta.get(\"usage\")" in _route_src
+      and "cost" not in _ast.get_source_segment(_router_src, _route).lower().replace("cost of", ""),
+      True)
+_dia_src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "app", "modules", "storeops", "doc_intel_ai.py")).read()
+check("K14 the document-safety guarantees are untouched: NOTHING from store_lease is read here",
+      "store_lease" not in _dia_src.split('"""', 2)[2], True)
+check("K15 ...and returning snippets are still masked for bank-ish digit runs",
+      di.scrub_snippet("account 123456789012 on file") != "account 123456789012 on file", True)
+check("K16 the ACH columns can still never be written by an accepted extraction",
+      all(di.apply_plan(di.SUBJECT_LEASE, [{"key": k, "value": "x"}], [k], True)["patch"] == {}
+          or k not in str(di.apply_plan(di.SUBJECT_LEASE, [{"key": k, "value": "x"}], [k], True)["patch"])
+          for k in sl.ACH_FIELDS), True)
 
 print()
 print(f"PASS {len(PASS)}   FAIL {len(FAIL)}")
