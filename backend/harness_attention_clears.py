@@ -14,17 +14,20 @@ No database, no network: a recording fake Supabase client feeds the REAL provide
 
 Run:  cd backend && python3 harness_attention_clears.py
 """
+import ast
+import os
 import re
 import sys
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 
-sys.path.insert(0, ".")
+# Anchored to THIS FILE's directory, not the shell's cwd, so the harness runs identically from
+# `backend/` and from the repo root (commit 564c171f). Every source read below goes through
+# `_src()`/`_func_src()`, so a run from the wrong directory can no longer half-die.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_REPO = os.path.dirname(_HERE)
+sys.path.insert(0, _HERE)
 
-from app.modules.core import import_health as IH                      # noqa: E402
-from app.modules.core import platform_attention as PA                  # noqa: E402
-from app.modules.notify import attention as NA                        # noqa: E402
-from app.modules.helpdesk import attention as HA                      # noqa: E402
 
 PASS, FAIL = 0, 0
 
@@ -38,6 +41,47 @@ def ok(name, cond, extra=""):
         FAIL += 1
         print(f"  FAIL {name} {extra}")
 
+
+def _src(rel):
+    """Read a repo file, anchored. `rel` is relative to backend/ (use ../ for the repo root)."""
+    return open(os.path.join(_HERE, rel), encoding="utf-8").read()
+
+
+def _func_src(rel, name):
+    """The SOURCE TEXT of one top-level function, located by parsing rather than by string-splitting.
+
+    WHY THIS EXISTS. This file used to do:
+
+        ins = RSRC.split("async def add_store_alias", 1)[1].split("@router.delete", 1)[0]
+
+    `add_store_alias` is a plain `def` now (it drives the synchronous supabase client and awaits
+    nothing, so `async` was wrong — see the SEV-1 of 2026-07-30). The literal `"async def
+    add_store_alias"` therefore matched nothing, `split(...)[1]` raised IndexError, and the harness
+    DIED at line 185 of 800. That is the worst failure mode in the whole suite: a dead harness reads
+    as "not run", not as "failed", so every assertion after it silently stopped guarding anything
+    while nobody was looking.
+
+    Two properties make that impossible here: the anchor is a PARSED function definition (immune to
+    `async`, decorators, whitespace and argument-list reflow), and a missing anchor raises with an
+    explicit message naming the function and file instead of an opaque IndexError.
+    """
+    tree = ast.parse(_src(rel))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return ast.get_source_segment(_src(rel), node) or ""
+    # LOUD, but NOT fatal. Raising here would abort the file and take ~95 unrelated assertions with
+    # it — which is the exact "reads as not-run rather than failed" failure this repair exists to
+    # end. Record a real FAIL, then return "" so the assertions fed by this anchor also go red
+    # rather than passing vacuously on an empty string.
+    ok(f"ANCHOR {rel}::{name} still exists (source-parity assertions below depend on it)", False,
+       f"HARNESS ANCHOR GONE: {rel} no longer defines `{name}` — renamed, moved or deleted. "
+       f"Repoint this harness at its replacement; do NOT delete the assertions it feeds.")
+    return ""
+
+from app.modules.core import import_health as IH                      # noqa: E402
+from app.modules.core import platform_attention as PA                  # noqa: E402
+from app.modules.notify import attention as NA                        # noqa: E402
+from app.modules.helpdesk import attention as HA                      # noqa: E402
 
 NOW = datetime.now(timezone.utc)
 HOUSE = "00000000-0000-0000-0000-000000000001"
@@ -181,8 +225,7 @@ ok("B2b …and the unrelated market item is untouched",
    "stores_no_market" in {i["key"] for i in items2})
 
 # source parity: the row we simulated is the row the real endpoint inserts
-RSRC = open("app/modules/commcalc/router.py", encoding="utf-8").read()
-ins = RSRC.split("async def add_store_alias", 1)[1].split("@router.delete", 1)[0]
+ins = _func_src("app/modules/commcalc/router.py", "add_store_alias")
 ok("B2c source parity — the real POST /store-aliases inserts exactly {org_id, alias, store_code, note}"
    " (+ optional source/confidence)",
    "row = {'org_id': org_id, 'alias': alias, 'store_code': code," in ins
@@ -194,11 +237,11 @@ ok("B2d source parity — that endpoint does NOT write commcalc.store_mapping (w
 # ── item B: perform EXACTLY what PUT /commcalc/stores/{id} writes (Settings → Stores & Markets) ──────
 ok("B3 the market item deep-links to a page that HAS a market editor",
    by["stores_no_market"]["deep_link"] == "/commcalc/settings", by["stores_no_market"])
-SSRC = open("../frontend/src/app/(platform)/commcalc/settings/page.tsx", encoding="utf-8").read()
+SSRC = _src("../frontend/src/app/(platform)/commcalc/settings/page.tsx")
 ok("B3b source parity — /commcalc/settings really saves a store market (PUT /commcalc/stores/{id})",
    "async function saveStoreMarket" in SSRC and "/api/v1/commcalc/stores/${storeId}" in SSRC
    and "'🏪 Stores & Markets'" in SSRC.replace('"', "'"))
-MSRC = open("../frontend/src/app/(platform)/commcalc/mapping/page.tsx", encoding="utf-8").read()
+MSRC = _src("../frontend/src/app/(platform)/commcalc/mapping/page.tsx")
 ok("B3c the OLD target /commcalc/mapping is a link hub with no market editor (dead end — why it moved)",
    "saveStoreMarket" not in MSRC and "/api/v1/commcalc/stores/" not in MSRC)
 next(m for m in store["commcalc.store_mapping"] if m["id"] == "m2")["market"] = "NJ"
@@ -428,7 +471,7 @@ ok("F4 EVERY item carries a fix deep link + a button label (the provider contrac
 
 # every deep link must be a REAL page, and must be a page where the fix is possible
 import os                                                              # noqa: E402
-FRONT = "../frontend/src/app/(platform)"
+FRONT = os.path.join(_HERE, "../frontend/src/app/(platform)")   # anchored: F5 silently found ZERO pages when run from the repo root
 
 
 def page_exists(link):
@@ -440,11 +483,15 @@ bad = [i["deep_link"] for i in agg["items"] if not page_exists(i["deep_link"])]
 ok("F5 every deep link resolves to an existing page (no 404 'Fix' button)", not bad, bad)
 ok("F5b no item points at /commcalc/mapping (the hub that cannot fix either mapping item)",
    not any((i["deep_link"] or "").startswith("/commcalc/mapping") for i in agg["items"]))
-PROV_SRC = "".join(open(f, encoding="utf-8").read() for f in
+PROV_SRC = "".join(_src(f) for f in
                    ("app/modules/core/import_health.py", "app/modules/core/platform_attention.py",
                     "app/modules/notify/attention.py", "app/modules/helpdesk/attention.py"))
 groups = set(re.findall(r'_item\(\s*"([a-z_]+)"', PROV_SRC))
-AD = open("../frontend/src/components/AdminAttention.tsx", encoding="utf-8").read()
+AD = _src("../frontend/src/components/AdminAttention.tsx")
+# Same anchor discipline as _func_src: assert the anchor is THERE before splitting on it, so a
+# renamed constant fails with a sentence instead of an IndexError three frames deep.
+assert "GROUP_ORDER = [" in AD, ("HARNESS ANCHOR GONE: AdminAttention.tsx no longer declares "
+                                "`GROUP_ORDER = [` — repoint this assertion, do not drop it.")
 ui_groups = set(re.findall(r"'([a-z_]+)'", AD.split("GROUP_ORDER = [", 1)[1].split("]", 1)[0]))
 ok("F6 every group the backend can emit is renderable by the popup (no silently-dropped item)",
    groups <= ui_groups, sorted(groups - ui_groups))

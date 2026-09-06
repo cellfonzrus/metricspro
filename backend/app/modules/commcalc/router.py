@@ -11728,9 +11728,16 @@ def get_compliance_summary(authorization: str = Header(default=""), org_id: str 
 
 
 @router.get("/flags/{period}")
-async def get_flags(period: str, authorization: str = Header(default=""),
-                    include_resolved: bool = False,
-                    org_id: str = "00000000-0000-0000-0000-000000000001"):
+# PLAIN `def`, NOT `async def` (2026-09-06). `sb()` is the SYNCHRONOUS supabase client, and this
+# handler awaits nothing: as `async def` it ran the blocking round-trip ON the event loop, so every
+# Flags page load stalled every other in-flight request for its duration — verbatim the SEV-1 of
+# 2026-07-30 (account/ai_limits.py). A plain `def` handler is dispatched to an anyio worker thread
+# by FastAPI, which is the correct shape for blocking I/O. Pinned by
+# harness_chargeback_flags_span_store.py section 7. Its one internal caller
+# (notify/report_registry.py::_flags) dropped its `await` in the same change.
+def get_flags(period: str, authorization: str = Header(default=""),
+              include_resolved: bool = False,
+              org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     q = client.schema('commcalc').table('flags').select('*').eq('org_id', org_id).in_('period', _pvariants(period))
     # THE ACTIVE QUEUE (mig 287). A flag whose condition has cleared is RETIRED, not deleted — status

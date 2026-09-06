@@ -19,12 +19,73 @@ Run: python3 harness_payout_structure.py     (no DB, no network — pure fixture
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Anchored to THIS FILE's directory so the harness runs identically from `backend/` and
+# from the repo root (commit 564c171f).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
 
 from app.modules.commcalc import payout_structure as ps   # noqa: E402
 from app.modules.commcalc import plan_pay_gate as gate    # noqa: E402
 
 PASS, FAIL = [], []
+
+# ── reportlab: SKIP (loudly) vs PRODUCT DEFECT ───────────────────────────────────────────────────
+# This file used to die on `ModuleNotFoundError: No module named 'reportlab'`. Before making it
+# tolerate that, the question that actually matters was answered: does the PRODUCT need reportlab at
+# runtime, and is the deployment missing it?
+#
+#   It needs it   — app/modules/notify/render.py::build_pdf and three other shipped modules import
+#                   reportlab lazily inside the render call. Those are live code paths, not tests.
+#   It declares it — backend/requirements.txt line 13, `reportlab>=4.2.0`, uncommented.
+#   It installs it — backend/Dockerfile: `RUN pip install --no-cache-dir -r requirements.txt`.
+#
+# So the deployed image HAS reportlab and there is no production defect here. What is missing is
+# this HARNESS CONTAINER's copy (it is short 7 declared deps: uvicorn, reportlab, pdfplumber, segno,
+# anthropic, playwright, pywebpush). That is an environment gap, and a skip is the honest answer.
+#
+# But a blanket `try: import reportlab / except: pass` would ALSO stay quiet on the day someone adds
+# a shipped import of a package nobody declared — the real, dangerous version of this failure. So
+# the gate below distinguishes the two, and only ONE of them is a skip:
+#   installed              -> RUN the PDF assertions for real.
+#   missing but DECLARED   -> SKIP, counted and printed in the summary. Never a silent pass.
+#   missing and UNDECLARED -> FAIL loudly: shipped code importing a package the deployment does not
+#                             install is a production defect, and this harness will say so.
+SKIPPED = []
+
+
+def _pdf_backend():
+    """('run' | 'skip' | 'defect', message) for the reportlab PDF backend."""
+    import importlib.util
+    installed = importlib.util.find_spec("reportlab") is not None
+    req = os.path.join(_HERE, "requirements.txt")
+    declared = False
+    try:
+        for line in open(req, encoding="utf-8"):
+            line = line.strip()
+            if line and not line.startswith("#") and line.split("[")[0].split("=")[0] \
+                    .split(">")[0].split("<")[0].strip().lower() == "reportlab":
+                declared = True
+                break
+    except OSError:
+        pass
+    if installed:
+        return "run", "reportlab present"
+    if declared:
+        return "skip", ("reportlab is DECLARED in backend/requirements.txt and installed by the "
+                        "Dockerfile, but is absent from THIS container — environment gap, not a "
+                        "product defect. Install it to run these assertions: pip install reportlab")
+    return "defect", ("PRODUCT DEFECT: shipped code imports reportlab but backend/requirements.txt "
+                      "does not declare it — the deployed image would 500 on every PDF export")
+
+
+PDF_MODE, PDF_WHY = _pdf_backend()
+
+
+def skip(name, why):
+    SKIPPED.append(name)
+    print(f"  SKIP {name}\n       {why}")
+
+
 
 
 def check(label, got, want):
@@ -280,18 +341,45 @@ check("G6 a downgrade tier is worded as less",
 
 section("H. The PDF renders, and hostile text cannot break it")
 
-pdf = ps.render_pdf(doc)
-check("H1 output is a real PDF", pdf[:5], b"%PDF-")
-check("H2 ... of a plausible size", len(pdf) > 3000, True)
-check("H3 ... and is terminated", pdf.rstrip()[-5:], b"%%EOF")
-
 hostile = dict(R_DM_VHI, label="Tom & Jerry <b>bonus</b>",
                match_value="A&B <script>alert(1)</script> Ω")
 h_doc = ps.build_doc([dict(plan_chi, rules=[hostile], notes="Notes with <tags> & ampersands")],
                      tenant_name="Ampersand & Co <Ltd>", exclusions=[rtr])
-h_pdf = ps.render_pdf(h_doc)
-check("H4 markup in tenant/product/label text renders instead of crashing", h_pdf[:5], b"%PDF-")
-check("H5 an empty document still renders", ps.render_pdf(ps.build_doc([]))[:5], b"%PDF-")
+
+if PDF_MODE == "defect":
+    FAIL.append("H0 reportlab is imported by shipped code but NOT declared in requirements.txt "
+                f"— {PDF_WHY}")
+elif PDF_MODE == "skip":
+    for _n in ("H1 output is a real PDF", "H2 ... of a plausible size", "H3 ... and is terminated",
+               "H4 markup in tenant/product/label text renders instead of crashing",
+               "H5 an empty document still renders"):
+        skip(_n, PDF_WHY)
+else:
+    pdf = ps.render_pdf(doc)
+    check("H1 output is a real PDF", pdf[:5], b"%PDF-")
+    check("H2 ... of a plausible size", len(pdf) > 3000, True)
+    check("H3 ... and is terminated", pdf.rstrip()[-5:], b"%%EOF")
+    h_pdf = ps.render_pdf(h_doc)
+    check("H4 markup in tenant/product/label text renders instead of crashing", h_pdf[:5], b"%PDF-")
+    check("H5 an empty document still renders", ps.render_pdf(ps.build_doc([]))[:5], b"%PDF-")
+
+# Reportlab-INDEPENDENT half of the same guarantee, so a missing PDF backend can never take the
+# whole hostile-text proof down with it. Note what is NOT claimed here: `build_doc` is PURE by
+# design (module docstring: "everything above render_pdf is pure"), so hostile text SURVIVES it
+# verbatim — escaping is `render_pdf`'s job, applied as the text reaches reportlab's Paragraph.
+check("H4b (backend-independent) the hostile document builds at all — the pure layer does not choke "
+      "on markup, it carries it",
+      "<script>" in repr(h_doc) and bool(h_doc["plans"]), True)
+_ps_src = open(os.path.join(_HERE, "app/modules/commcalc/payout_structure.py"),
+               encoding="utf-8").read()
+_render_body = _ps_src.split("def render_pdf")[1]
+check("H4c (backend-independent) render_pdf escapes all three Paragraph metacharacters before any "
+      "tenant text reaches reportlab",
+      all(pat in _render_body for pat in ('.replace("&", "&amp;")',
+                                          '.replace("<", "&lt;")',
+                                          '.replace(">", "&gt;")')), True)
+check("H4d (backend-independent) …and the tenant name specifically goes through it",
+      "Paragraph(esc(tenant)" in _render_body, True)
 
 check("H6 filename is slugged and dated", ps.filename_for(doc),
       "luxelink-wireless-llc-payout-structure-august-11-2026.pdf")
@@ -320,5 +408,8 @@ print(f"\n{'=' * 78}")
 for f in FAIL:
     print(f"  ✗ {f}")
 print(f"  PASS {len(PASS)} / {len(PASS) + len(FAIL)}")
+if SKIPPED:
+    print(f"  SKIPPED {len(SKIPPED)} (NOT passed): {', '.join(SKIPPED)}")
+    print(f"  reason: {PDF_WHY}")
 print(f"{'=' * 78}")
 sys.exit(1 if FAIL else 0)
