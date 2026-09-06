@@ -3194,3 +3194,101 @@ what makes the module appear in the tenant-entitlement gate and the mig-`975` bi
 module missing from it bills nothing forever. `SEED_VERSION` bumped to **14** so existing tenants
 self-provision the entitlement on next login. Router gated by `require_module("marketing")`; nav in
 `frontend/src/lib/rbac.ts` under group **Marketing**.
+
+---
+
+## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
+
+**Read this before writing a new harness, and before trusting an old one.** Owner directive
+2026-09-06: *"fix all the failing harnesses and scope it properly and make a log of the affected
+areas and how they are not producing the desired results and also update the same in [the index] as
+a future reference so we know why so many failed for any other root cause analysis."*
+
+Per-file verdicts, evidence and measured numbers live in `docs/harness_audit/`:
+`family_A_model_vs_dict.md` · `family_B_live_db.md` · `family_CDEF_drift.md` ·
+`family_H_real_disagreements.md`. This section is the ROOT-CAUSE summary and the rules that follow
+from it.
+
+### The headline number, and why it was invisible
+
+272 harnesses, **58 failing**. Only **14 of those 58 ever reached an assertion** — the other 44
+crashed partway and reported nothing at all. That asymmetry is the whole story: a crashed harness
+reads as *"did not run"*, not *"found a problem"*, so it drops out of attention silently. **Nothing
+in CI runs these**, so nothing noticed. Several had been dead for months while the code they guarded
+kept changing. Final state: **270/272 green**, 2 deliberately red on a named open defect (below).
+
+### The eight root causes, most to least common
+
+| # | Root cause | Count | Why it happened |
+|---|---|---:|---|
+| A | **Dict passed where a Pydantic model is expected** | 18 | Handlers were retyped `dict`→Pydantic (e.g. commit `021827c3`); harnesses kept passing dicts. The handler raises `AttributeError` **at the gate**, before the logic under test. Worst when swallowed by a bare `except Exception: pass` — the assertion then scores the crash as a pass. |
+| B | **"Offline" harnesses reaching the LIVE database** | 15 | A harness patched `some_router.get_supabase`, binding **one name in one module**. `tenant_middleware.caller_app_user` imports the factory *inside the function body* (re-resolves per call) and `storeops.router._rbac_enabled` uses its own unpatched name **and swallows every exception** — so the live call was silent. ~90 production SELECTs per run with the service key. |
+| C | **Async/sync shape drift** | 4 | The harness coupled to whether a handler was `async def` — which is not behaviour. The product being *improved* broke the test. |
+| D | **Framework internals moved** | 2 | Harnesses walked FastAPI's private `_IncludedRouter`; it no longer flattens included routers. `len(app.routes)` now reads 31 for a **1,285-path** app, so the old count was misleading, not merely broken. |
+| E | **Environment gap, not a defect** | 2 | `reportlab` is declared in `requirements.txt` and installed by the Dockerfile; this container lacked 7 declared deps. A plain try/except would have been *worse* than the crash — `ModuleNotFoundError` was already making a negative control pass. |
+| F | **Source-string drift** | 3 | Harnesses `.split()` router source on a function name; a rename returns nothing and raises an opaque `IndexError`. No anchor check, so the death looked like an infrastructure hiccup. |
+| G | **External/one-off coupling** | 4 | A harness read a live tenant's workbook from a path outside the repo (`/root/.claude/…`), so it could not run anywhere else. |
+| H | **Ran and genuinely disagreed** | 14 | 11 of these pinned *the state of the day a PR landed* ("only these files differ from `origin/main`", "1042 routes", "exactly these three reports"). Such a claim fails **precisely when the work is fully landed**. |
+
+### The four failure MODES behind those causes
+
+1. **Pinned to a moment, not to a property.** Per-PR baselines and literal counts rot by design.
+   `harness_sweep_honesty` — the harness guarding honest sweep reporting — was anchored to
+   `origin/main`, a *moving* ref that absorbed the very change it diffed against, and skipped 5
+   assertions behind a parenthetical note. It reported a green lie about itself.
+2. **Coupled to shape, not behaviour** (`async def`, private framework structures, source text).
+3. **Failure swallowed.** A bare `except Exception: pass` around a probe converts a crash into a
+   pass. This is how a *privilege-escalation* control and an *SSRF* gate both spent months asserting
+   nothing over an empty list.
+4. **Ambient environment mistaken for isolation.** "OFFLINE — no database, no keys" was true only
+   because credentials happened to be absent; where they are exported, the same code writes.
+
+### RULES FOR EVERY HARNESS FROM NOW ON
+
+- **Assert a PROPERTY, never a moment.** No per-PR baselines, no `origin/main` diffs, no literal
+  route/report counts. If you must pin a number, pin the invariant that produces it.
+- **Be DB-free by construction, not by luck.** Use `backend/_harness_dbfree.py` (`install()`), which
+  patches the chokepoint, sweeps `sys.modules` and tripwires the client builder. A harness must pass
+  with credentials removed and sockets blocked.
+- **Never swallow a probe's exception.** A signature mismatch must be re-raised, never scored as
+  "the gate let me through". A negative control that passes because of an import error is worse than
+  no control.
+- **Self-test it.** Break the thing it guards *in the product*, confirm the harness goes red, restore.
+  An un-self-tested harness is an unverified claim.
+- **Anchor source reads to the file's own directory** and confirm it runs from `backend/` AND the
+  repo root. Reference repair: commit `564c171f`.
+- **Locate code by AST, not by `.split()` on source text**, and fail loudly and by name when an
+  anchor disappears.
+- **A missing dependency SKIPS visibly and is counted** — never a silent pass; missing-and-undeclared
+  fails loudly (that would be a real defect).
+- **Never weaken, skip, disable or delete an assertion to reach green.** If a real defect is too
+  large to fix safely, leave the assertion FAILING with a message naming the defect. A red harness
+  that names a bug is doing its job; a green one hiding it is worse than none.
+
+### Real product defects this audit surfaced
+
+| Defect | Status |
+|---|---|
+| `POST /crm/leads/dedupe-check` 500'd **whenever a duplicate existed** (typed body passed to a FastAPI-free helper calling `.get()`); healthy only when it found nothing | **FIXED** (`adf6910f`) |
+| `GET /commcalc/flags/{period}` — `async def` over blocking `sb()` I/O, running a DB round-trip on the event loop | **FIXED** (`497757ce`) |
+| `connect_tenant` (`core/router.py`) — same shape, added *after* the sweep that converted 124 handlers away from it | **FIXED** (`c120ac89`) |
+| **44 more `async def` route handlers call sync `sb()` and never `await`** — 23 `commcalc/router.py`, 10 `asset/router.py`, 7 `billing/pricing.py`, 3 `account/router.py` (P&L, BS, CF), 1 `asset/oninv_recon.py`. Each blocks the single event loop for its whole duration. Independently re-counted. | **OPEN — owner decision** |
+| `ai_meter.record()` (migs 972/973) — synchronous PostgREST insert called bare from 4 `async def` handlers; postgrest timeout is 120s and POSTs are not retried ⇒ worst case a ~2-minute platform-wide freeze from one OCR | **OPEN — deliberately left RED** in `harness_agency_ocr_async` H1 + `harness_closing_ocr_async` H1 |
+| A harness documented "OFFLINE — no database" wrote **one real row** to `core.import_batches` (sentinel org `…0dead1`, `a.csv`, 8 bytes, 2026-09-03) | Write path **CLOSED**; the row still exists, left for the owner |
+| Privilege-escalation RBAC control and the SSRF import gate had both been **asserting nothing** | Gates verified **intact**; alarms restored |
+
+### Two near-misses worth remembering
+
+Both looked like "just fix the stale key", and fixing them naively would have **re-opened a closed
+compliance defect**: the SSN assertions (SSN capture was removed by owner directive, commit
+`1a6038bd`) and `fin:acima` (commit `f4ce76c5` collapsed per-vendor financing rows to close a
+dual-affiliation brand leak). Both were rewritten *stronger* instead. **Before "fixing" an assertion
+to match current behaviour, find out why the behaviour changed.**
+
+### Follow-up not yet done
+
+- **No CI job runs the harness suite**, which is why 58 failures accumulated unseen. A job that runs
+  all of them and fails on any regression is the durable fix; without it this section describes a
+  problem that will recur.
+- The family-B leak pattern (`some_router.get_supabase = fake` on a gated endpoint) may exist in
+  harnesses that currently pass — `_harness_dbfree.install()` is the one-line inoculation.
