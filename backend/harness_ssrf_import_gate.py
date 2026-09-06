@@ -38,7 +38,17 @@ H  MONEY-PATH: this package moves no payout number — asserted structurally.
 import os
 import sys
 
-sys.path.insert(0, ".")
+# Anchor to THIS FILE's directory, not the caller's cwd. Run from the repo root, the old `"."`
+# made every `open("app/…")` below raise FileNotFoundError partway through — the harness died
+# mid-run and reported nothing, which reads as "not run" rather than "failed". A proof harness that
+# only works from one directory is a proof harness that silently stops being run.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+
+
+def _src(rel):
+    """Read a backend source file regardless of the caller's working directory."""
+    return open(os.path.join(_HERE, rel), encoding="utf-8").read()
 os.environ.setdefault("SUPABASE_URL", "https://example-harness.supabase.co")
 os.environ.setdefault("SUPABASE_SERVICE_KEY", "harness-dummy-service-key")
 os.environ.setdefault("SUPABASE_KEY", "harness-dummy-anon-key")
@@ -240,7 +250,7 @@ check("_proxy_arg still returns None for no proxy", vp._proxy_arg("") is None)
 # portal refused us" — the difference decides whether the mig-244 portal-block COOLDOWN is armed.
 check("the egress-IP diagnostic ignores a poisoned stored proxy instead of probing through it",
       vp._egress_ip.__doc__ and "is_proxy_safe" in
-      open("app/modules/commcalc/vidapay_sweep.py", encoding="utf-8").read()
+      _src("app/modules/commcalc/vidapay_sweep.py")
       .split("def _egress_ip(")[1].split("def ")[0])
 check("is_proxy_safe agrees with assert_safe_proxy_url",
       ug.is_proxy_safe("http://gate.decodo.com:7000") and not ug.is_proxy_safe("http://127.0.0.1:6379"))
@@ -252,13 +262,34 @@ except vp.UnsafePortalUrlError:
     check("_norm_url raises the DISTINCT config-error class, not a bare login error", True)
 except Exception as e:
     check("_norm_url raises the DISTINCT config-error class, not a bare login error", False, type(e).__name__)
-_router_txt = open("app/modules/commcalc/router.py", encoding="utf-8").read()
+_router_txt = _src("app/modules/commcalc/router.py")
+# These two used to compare FIRST TEXTUAL OCCURRENCES across the whole router, which is not the
+# invariant and gave a false FAIL from 2026-09 onward: `except VidaPayAuthError` also appears as an
+# INNER handler nested in run_data_source's retry loop, physically earlier in the file than the OUTER
+# `except UnsafePortalUrlError`. The real property is about the OUTER chain — the config error must
+# be caught before the generic `except Exception` that arms the mig-244 cooldown — so scope to
+# run_data_source's own body and compare against that generic handler specifically.
+def _fn_body(txt, name):
+    """Source of one top-level `def`/`async def`, up to the next same-indent def/decorator."""
+    import re as _re
+    m = _re.search(rf"^(?:async )?def {_re.escape(name)}\(", txt, _re.M)
+    assert m, f"{name} not found in router"
+    rest = txt[m.start():]
+    nxt = _re.search(r"^(?:@router\.|(?:async )?def )", rest[1:], _re.M)
+    return rest[:nxt.start() + 1] if nxt else rest
+
+
+_rds = _fn_body(_router_txt, "run_data_source")
+_i_unsafe = _rds.find("except UnsafePortalUrlError as e:")
+_i_generic = _rds.find("except Exception as e:\n        # A rate-limit raised out of the driver")
+if _i_generic < 0:                      # comment reworded — fall back to the cooldown call itself
+    _i_generic = _rds.find("_pb().record_outcome")
 check("run_data_source handles the config error BEFORE the generic handler that arms the cooldown",
-      _router_txt.index("except UnsafePortalUrlError as e:") < _router_txt.index("except VidaPayAuthError as e:"))
+      _i_unsafe >= 0 and _i_generic > _i_unsafe,
+      f"unsafe@{_i_unsafe} generic@{_i_generic}")
 check("the config-error path does NOT call the portal-backoff recorder (no cooldown for our own bad "
       "config)",
-      "_pb().record_outcome" not in _router_txt.split("except UnsafePortalUrlError as e:")[1]
-      .split("except VidaPayAuthError")[0])
+      _i_unsafe >= 0 and "_pb().record_outcome" not in _rds[_i_unsafe:_i_generic])
 check("the interactive 2FA verify surfaces a 400, not a 500, on a poisoned stored URL",
       "except vp.UnsafePortalUrlError as e:" in _router_txt
       and "raise HTTPException(400, str(e))" in _router_txt)
@@ -406,27 +437,44 @@ def expect_400(name, fn):
         check(name, False, f"{type(e).__name__} (a 500, not a 400): {e}")
 
 
+# THE ENDPOINT BODIES MUST BE REAL PYDANTIC MODELS, NOT DICTS.
+# Until 2026-09-06 every probe below passed a plain dict. FastAPI hands these handlers a validated
+# model, and `save_data_source` reads `body.model_fields_set` (the "only persist what the caller
+# actually sent" pattern) — so a dict raised AttributeError, the handler 500'd before reaching the
+# SSRF check, and `expect_400` recorded a FAIL. The effect was worse than a red harness: none of the
+# assertions below were EXERCISING the SSRF gate at all, so this file has not actually been proving
+# the thing it exists to prove. Building the declared model reproduces the real call shape (and
+# `model_fields_set` then reflects exactly the fields each probe set, which is what the handler
+# branches on).
+def _mk(model, **kw):
+    """Construct a router request model the way FastAPI would, so model_fields_set is meaningful."""
+    return model(**kw)
+
+
 for label, payload, _ in ATTACKS[:8]:
     expect_400(f"PUT /data-sources rejects {label}",
-               lambda p=payload: rt.save_data_source({"processor": "vidapay", "portal_url": p}, org_id=ORG))
+               lambda p=payload: rt.save_data_source(
+                   _mk(rt.SaveDataSourceIn, processor="vidapay", portal_url=p), org_id=ORG))
 expect_400("PUT /data-sources rejects an internal proxy_url",
-           lambda: rt.save_data_source({"processor": "vidapay", "proxy_url": "http://127.0.0.1:6379"}, org_id=ORG))
+           lambda: rt.save_data_source(
+               _mk(rt.SaveDataSourceIn, processor="vidapay", proxy_url="http://127.0.0.1:6379"), org_id=ORG))
 expect_400("POST /data-source/test-proxy rejects a loopback proxy (unauth port-scan primitive)",
-           lambda: rt.test_proxy({"proxy_url": "http://127.0.0.1:22"}, org_id=ORG))
+           lambda: rt.test_proxy(_mk(rt.TestProxyIn, proxy_url="http://127.0.0.1:22"), org_id=ORG))
 expect_400("POST /data-source/test-proxy rejects IMDS as a proxy",
-           lambda: rt.test_proxy({"proxy_url": "http://169.254.169.254:80"}, org_id=ORG))
+           lambda: rt.test_proxy(_mk(rt.TestProxyIn, proxy_url="http://169.254.169.254:80"), org_id=ORG))
 expect_400("POST /connectors rejects a javascript: portal_url (also the H6 XSS sink)",
-           lambda: rt.create_connector({"vendor_name": "x", "portal_url": "javascript:alert(1)"}, org_id=ORG))
+           lambda: rt.create_connector(
+               _mk(rt.ConnectorIn, vendor_name="x", portal_url="javascript:alert(1)"), org_id=ORG))
 expect_400("PATCH /connectors/{id} rejects file://",
-           lambda: rt.update_connector("cid", {"portal_url": "file:///app/.env"}, org_id=ORG))
+           lambda: rt.update_connector("cid", _mk(rt.ConnectorIn, portal_url="file:///app/.env"), org_id=ORG))
 
 import asyncio                                                       # noqa: E402
 expect_400("PUT /epay/sweep/config rejects IMDS",
            lambda: asyncio.get_event_loop().run_until_complete(
-               rt.epay_sweep_put_config({"portal_url": "http://169.254.169.254/"}, org_id=ORG)))
+               rt.epay_sweep_put_config(_mk(rt.EpaySweepPutConfigIn, portal_url="http://169.254.169.254/"), org_id=ORG)))
 
 WRITES.clear()
-rt.save_data_source({"processor": "vidapay", "portal_url": "vidapaycrm.com"}, org_id=ORG)
+rt.save_data_source(_mk(rt.SaveDataSourceIn, processor="vidapay", portal_url="vidapaycrm.com"), org_id=ORG)
 check("a LEGITIMATE save still works and still scheme-completes the bare host",
       any(w[0] == "insert" and w[2].get("portal_url") == "https://vidapaycrm.com" for w in WRITES),
       str(WRITES)[:160])
@@ -508,7 +556,7 @@ check("break-glass does NOT weaken a RESOLVED rejection (a rep is still 403)",
 os.environ.pop("IMPORT_ADMIN_STRICT")
 check("default (env unset) is STRICT", gate(uid=None) == 401)
 
-_router_src = open("app/modules/commcalc/router.py", encoding="utf-8").read()
+_router_src = _src("app/modules/commcalc/router.py")
 check("the gate is still wired to all TEN import-channel endpoints (portal creds, mailbox rules, "
       "FTP creds, schedules, data sources, cooldown clear) — none dropped",
       sum(1 for l in _router_src.splitlines()
@@ -517,7 +565,7 @@ check("the gate is still wired to all TEN import-channel endpoints (portal creds
 
 # ═══ H. MONEY PATH ═══════════════════════════════════════════════════════════════════════════════
 print("\nH. MONEY PATH — this package moves no payout number")
-guard_src = open("app/modules/commcalc/url_guard.py", encoding="utf-8").read()
+guard_src = _src("app/modules/commcalc/url_guard.py")
 for token in ("rep_commissions", "payout", "supabase", "get_supabase", "schema(",
               "insert(", "update(", "upsert(", "calculator", "commission_engine"):
     check(f"url_guard.py contains no '{token}'", token not in guard_src)
