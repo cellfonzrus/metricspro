@@ -45,6 +45,7 @@ from app.core.database import get_supabase_admin
 from app.core.run_secret import verify_notify_secret
 from app.core.schemas import LaxModel
 from app.modules.core import control_box as cbx
+from app.modules.core import ai_gate as _gate
 
 router = APIRouter(prefix="/core", tags=["Core / Control Box"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -569,41 +570,21 @@ async def _call_model(prompt):
 
 
 def _ai_config(client, org_id):
-    """This org's row > the HOUSE row > DEFAULT_AI_CONFIG. RULE TWO: a tenant's AI ceiling is config."""
-    cfg = dict(cbx.DEFAULT_AI_CONFIG)
-    for scope in ([ORG_ID, org_id] if org_id != ORG_ID else [ORG_ID]):
-        try:
-            rows = (client.schema("core").table("ai_budget_config").select("*")
-                    .eq("org_id", scope).eq("purpose", cbx.AI_PURPOSE).limit(1).execute().data) or []
-        except Exception:
-            rows = []
-        for r in rows:
-            for k in ("enabled", "max_calls_per_hour", "daily_call_cap", "daily_token_cap",
-                      "max_input_chars"):
-                if r.get(k) is not None:
-                    cfg[k] = r[k]
-    return cfg
+    """This org's row > the HOUSE row > DEFAULT_AI_CONFIG. RULE TWO: a tenant's AI ceiling is config.
+    DELEGATES to `core/ai_gate` — the ONE reader of `core.ai_budget_config`, shared with every other
+    adopter of the guard (a second copy is where a budget silently stops being enforced)."""
+    return _gate.budget_config(client, org_id, cbx.AI_PURPOSE)
 
 
 def _recent_ai_rows(client, org_id, limit=500):
-    """This org's audit rows for the meter. Org-scoped; a read failure returns [] so the guard falls
-    back to its house ceiling rather than failing open on the AUTH gate (auth already passed)."""
-    try:
-        return (client.schema("core").table("ai_call_audit")
-                .select("allowed,created_at,input_tokens,output_tokens")
-                .eq("org_id", org_id).eq("purpose", cbx.AI_PURPOSE)
-                .order("created_at", desc=True).limit(limit).execute().data) or []
-    except Exception:
-        return []
+    """This org's audit rows for THIS purpose — the meter. Org-scoped; delegates to `core/ai_gate`."""
+    return _gate.recent_rows(client, org_id, cbx.AI_PURPOSE, limit=limit)
 
 
 def _audit(client, row):
-    """Best-effort audit write. A failed audit must not swallow the caller's answer, but it is
-    printed so a silently unauditable AI path is visible in the logs."""
-    try:
-        client.schema("core").table("ai_call_audit").insert(row).execute()
-    except Exception as e:
-        print("WARN [control-box] AI audit write failed: %s" % cbx.redact(e), flush=True)
+    """Best-effort audit write (allowed AND refused). Delegates to `core/ai_gate` — the ONE writer of
+    `core.ai_call_audit`."""
+    _gate.audit(client, row, label="control-box")
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════

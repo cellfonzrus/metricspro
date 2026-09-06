@@ -15,6 +15,11 @@ This is not a grep. It:
   E.   Proves the degrade path is byte-for-byte what it was: a timeout/error/absent key still yields
        None -> /propose ESCALATES rather than auto-fixing, and manual mode never calls the model.
   F.   Blast radius: route surface identical to origin/main, no SHARED file touched.
+  G.   The mig-982 AI GUARD is really wired into the live route: the REAL, pure
+       `control_box.ai_guard_decision` runs against the REAL `propose`/`_ai_diagnose` source, so an
+       unauthorized caller reaches NO model, a refusal still ESCALATES (never a 500), the audit row
+       is written for allowed AND refused attempts, and the tenant's issue TEXT is never the audit
+       subject — only a digest of it.
 
 Run:            cd backend && python3 harness_remediation_ai_async.py
 Negative ctrl:  python3 harness_remediation_ai_async.py --router <(git show origin/main:backend/app/modules/remediation/router.py)
@@ -31,6 +36,9 @@ import time
 import types
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+# The REAL pure guard (stdlib-only module — no FastAPI, no database, no settings).
+from app.modules.core import control_box as cb          # noqa: E402
 ap = argparse.ArgumentParser()
 ap.add_argument("--router", default=os.path.join(HERE, "app", "modules", "remediation", "router.py"))
 ap.add_argument("--expect-fail", action="store_true",
@@ -286,6 +294,34 @@ class _Client:
         return _Schema()
 
 
+# Guard fixtures for section G. `decide` runs the REAL pure decision so this harness proves the
+# WIRING (route -> guard -> model/escalation/audit); the per-purpose gate matrix itself is proven
+# DB-free in backend/harness_ai_guard_purposes.py.
+OPERATOR = {"super_admin": False, "id": "u-ops", "email": "ops@example.com",
+            "org_id": "00000000-0000-0000-0000-000000000001",
+            "perms": {"modules": {"helpdesk": True}, "scope": "all"}}
+STORE_MANAGER = {"super_admin": False, "id": "u-sm", "email": "sm@example.com",
+                 "org_id": "00000000-0000-0000-0000-000000000001",
+                 "perms": {"modules": {"helpdesk": True}, "scope": "store"}}
+GATE = {"caller": OPERATOR, "config": {}, "usage": {}, "audits": []}
+
+
+def _fake_gate(ns):
+    def decide(client, *, org_id, purpose, caller, subject=None, known_keys=(), lamp=None,
+               has_api_key=None):
+        cfg = {**cb.DEFAULT_AI_CONFIG, **GATE["config"]}
+        d = cb.ai_guard_decision(caller, purpose=purpose, subject=subject, known_keys=known_keys,
+                                 lamp=lamp, config=cfg, usage=GATE["usage"],
+                                 has_key=bool(ns["settings"].ANTHROPIC_API_KEY))
+        return d, cfg
+    return types.SimpleNamespace(
+        resolve_caller=lambda client, authorization, org_id=None: GATE["caller"],
+        decide=decide,
+        audit=lambda client, row, label=None: GATE["audits"].append(row),
+        usage_from_response=lambda resp: {"input_tokens": 11, "output_tokens": 22},
+    )
+
+
 def _mk_ns():
     ns = {
         "os": os, "json": __import__("json"), "secrets": __import__("secrets"),
@@ -311,6 +347,18 @@ def _mk_ns():
         ns.setdefault("REMEDIATION_AI_TIMEOUT_S", 30.0)
         ns.setdefault("REMEDIATION_AI_MAX_RETRIES", 1)
     ns["_DIAGNOSE_SYSTEM"] = "diagnose-system-prompt"
+    # REPAIR 2026-09-06: `propose`'s signature annotates `body: ProposeIn`, and Python evaluates
+    # annotations at def time — so exec'ing the extracted route raised NameError and sections D-F
+    # never ran at all (the harness reported a traceback, not a result). A dict-backed stand-in with
+    # attribute access is both the annotation AND the body the route reads.
+    class _Body(dict):
+        def __getattr__(self, k):
+            return self.get(k)
+    ns["ProposeIn"] = _Body
+    ns["Header"] = lambda default="", **k: default      # FastAPI's Header, evaluated in the signature
+    ns["cbx"] = cb                                       # the REAL pure guard module
+    ns["_gate"] = _fake_gate(ns)                         # the I/O seam, decisions still made by cb
+    ns["AI_PURPOSE"] = "remediation_diagnose"
 
     async def _send_approval(req, url):
         return {"channels": ["email"], "email": "sent", "whatsapp": None}
@@ -357,7 +405,9 @@ def run_propose(mode, body, payload=GOOD_JSON):
     box = _install_fake_anthropic(mode, payload)
     CALLS["preview"] = 0
     CALLS["insert"] = []
-    out, ticks, dt, err = asyncio.run(_drive(lambda: NS["propose"](body, org_id=NS["ORG_ID"])))
+    GATE["audits"] = []
+    out, ticks, dt, err = asyncio.run(
+        _drive(lambda: NS["propose"](NS["ProposeIn"](body), org_id=NS["ORG_ID"])))
     return out, ticks, dt, err, box
 
 
@@ -431,7 +481,7 @@ NS["settings"].ANTHROPIC_API_KEY = "sk-test"
 
 async def _empty():
     try:
-        await NS["propose"]({}, org_id=NS["ORG_ID"])
+        await NS["propose"](NS["ProposeIn"]({}), org_id=NS["ORG_ID"])
         return None
     except Exception as e:
         return type(e).__name__
@@ -478,10 +528,85 @@ if base_src:
           f"diff={set(base_fns) ^ set(now_fns)}")
 else:
     check("F2 origin/main copy readable for comparison", False, "git show failed")
-check("F4 no SHARED file referenced by this change",
-      "tenant_middleware" not in SRC and "rbac.ts" not in SRC)
+# F4 was written for a concurrent-agent build and string-matched any MENTION of a shared file. It
+# now asserts what it actually meant — this router imports no middleware/shared-mutable module — and
+# NOT that the shared guard is untouchable: adopting `core/ai_gate` + `core/control_box` (mig 982) is
+# the whole point, one AI door instead of a sixth private copy of "who may spend the key".
+check("F4 the router imports no middleware / shared-mutable module",
+      "tenant_middleware" not in SRC and "from app.core.tenant" not in SRC
+      and "rbac" not in SRC.replace("`frontend/src/lib/rbac.ts`", ""))
+check("F6 the AI diagnosis is wired to the SHARED guard, not a private copy",
+      "from app.modules.core import ai_gate as _gate" in SRC
+      and "_gate.decide(" in SRC and "cbx.ai_audit_row(" in SRC
+      and 'AI_PURPOSE = "remediation_diagnose"' in SRC)
 check("F5 whitelist safety intact: pb.is_implemented still gates execution",
       "pb.is_implemented(playbook_key)" in SRC)
+
+print()
+print("=" * 78)
+print("G. mig-982 AI guard, wired into the LIVE route (real pure decision, fake SDK)")
+print("=" * 78)
+
+# G1 — the authorized tenant operator (helpdesk module + company-wide scope) is unchanged.
+GATE["caller"] = OPERATOR
+out, ticks, dt, err, box = run_propose("ok", ISSUE)
+check("G1 an authorized helpdesk operator still reaches the model",
+      box["client_kwargs"] is not None
+      and (out or {}).get("request", {}).get("playbook_key") == "remap_store", str(out)[:160])
+allowed_rows = [r for r in GATE["audits"] if r["allowed"]]
+check("G2 the ALLOWED call is audited with org, purpose, actor and tokens",
+      len(GATE["audits"]) == 1 and allowed_rows
+      and allowed_rows[0]["org_id"] == NS["ORG_ID"]
+      and allowed_rows[0]["purpose"] == "remediation_diagnose"
+      and allowed_rows[0]["actor_uid"] == "u-ops"
+      and allowed_rows[0]["input_tokens"] == 11 and allowed_rows[0]["output_tokens"] == 22,
+      str(GATE["audits"])[:200])
+check("G3 the audit subject is a DIGEST — the tenant's issue text is never stored in the audit",
+      allowed_rows and allowed_rows[0]["subject_key"].startswith("sha256:")
+      and "store code" not in allowed_rows[0]["subject_key"],
+      str(allowed_rows and allowed_rows[0].get("subject_key")))
+
+# G4 — a store manager holds the module but not the scope: refused, and NO model is built.
+GATE["caller"] = STORE_MANAGER
+out, ticks, dt, err, box = run_propose("ok", ISSUE)
+check("G4 a store-scoped user is REFUSED and never reaches the model",
+      box["client_kwargs"] is None and err is None and (out or {}).get("escalated") is True,
+      f"{err!r} {str(out)[:160]}")
+check("G5 ...the refusal is audited with its deny code (the probe signal)",
+      len(GATE["audits"]) == 1 and GATE["audits"][0]["allowed"] is False
+      and GATE["audits"][0]["deny_code"] == "not_remediation_operator", str(GATE["audits"])[:200])
+check("G6 ...and an AUTHORIZATION refusal reveals nothing to the caller",
+      (out or {}).get("ai_note") is None, str(out)[:160])
+
+# G5 — no resolvable identity at all (unverifiable token / unprovisioned login): fail closed.
+GATE["caller"] = None
+out, ticks, dt, err, box = run_propose("ok", ISSUE)
+check("G7 an unresolvable caller is refused (fail closed), still no 500",
+      box["client_kwargs"] is None and err is None and (out or {}).get("escalated") is True)
+
+# G8 — an AUTHORIZED caller who is out of budget IS told why (that leaks nothing).
+GATE["caller"] = OPERATOR
+GATE["usage"] = {"calls_today": 9999}
+out, ticks, dt, err, box = run_propose("ok", ISSUE)
+check("G8 an exhausted daily budget stops the spend and still escalates, never a 500",
+      box["client_kwargs"] is None and err is None and (out or {}).get("escalated") is True)
+check("G9 ...and an AUTHORIZED caller is told why the AI did not run",
+      "budget" in str((out or {}).get("ai_note") or "").lower(), str((out or {}).get("ai_note")))
+GATE["usage"] = {}
+
+# G10 — the rate limit bites before the budget, on the live path.
+GATE["config"] = {"max_calls_per_hour": 1}
+GATE["usage"] = {"calls_last_hour": 1, "calls_today": 9999}
+out, ticks, dt, err, box = run_propose("ok", ISSUE)
+check("G10 the per-hour rate limit is what bites first (a burst is throttled, not spent)",
+      box["client_kwargs"] is None
+      and "last hour" in str((out or {}).get("ai_note") or ""), str((out or {}).get("ai_note")))
+GATE["config"], GATE["usage"] = {}, {}
+
+# G11 — an empty/whitespace issue never reaches the model even for an authorized operator.
+out, ticks, dt, err, box = run_propose("ok", {"issue": "   \n\t  "})
+check("G11 a blank issue is refused by the guard before any spend",
+      box["client_kwargs"] is None and err is not None, f"{err!r}")
 
 print()
 print("=" * 78)

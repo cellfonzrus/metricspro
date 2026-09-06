@@ -14,7 +14,10 @@ METERING IS NOT AUTHORIZATION. This is the distinction the owner's guard depends
 `record()` deliberately performs NO permission check and grants NO permission:
 
   · `core/control_box.ai_guard_decision` decides WHO MAY SPEND the key. It is fail-closed,
-    super-admin-only, purpose-locked, rate- and budget-limited, and this module does not touch it.
+    purpose-locked, rate- and budget-limited, and this module does not touch it. Since 2026-09-06
+    each PURPOSE names its own authorizing predicate (super-admin for the control box; the helpdesk
+    module + market/company scope for remediation triage, mig 982) — a wider predicate on one
+    purpose widens nothing else, and an unregistered purpose is refused.
   · `record()` only observes that a call HAPPENED, so the tenant can be billed for it.
 
 Adding `record()` to a call site therefore cannot widen anyone's access — it cannot say yes to
