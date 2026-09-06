@@ -45,6 +45,7 @@ Primary code homes:
 | 20 | **Super-admin control box** | "Is the platform working? What is red right now, what is NOT being watched at all, did the daily check actually run, and how do I hand this failure to Claude Code safely?" |
 | 21 | **Billing — usage & pricing** | "What did this tenant use, what did it cost us, what do we bill them, which modules are still unpriced, and what does their itemized statement say?" |
 | 22 | **Platform OPERATOR console** | "Who operates the platform rather than a company in it, how does an operator enter a tenant without it being a secret, what is on the record afterwards, and how do we stop platform power from riding on somebody's employee row?" |
+| 23 | **Marketing & Events** | "What outside-store events are planned, who is working one and who backs them up if they don't show, how is everyone getting there, what has to be packed, what was given away and what came back — and how did the stores do over the event window?" |
 
 ---
 
@@ -2097,6 +2098,18 @@ as a market-grant keyset member; ambiguity fails closed):
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `core.marketing_option` (mig `986`) | `POST /marketing/options` (the owner's "+"), `DELETE /marketing/options` (deactivate, never delete) | `event_logic.resolve_options` — HOUSE seed rows (mig `987`) ∪ TENANT rows, tenant wins per (list_key,key); every picker in the module (§23). NO code branches on a value here |
+| `core.marketing_config` (mig `986`) | `PUT /marketing/config` | `event_logic.resolve_config` → `approval_decision` (switch DEFAULT OFF), geofence radius/accuracy, GPS retention days, staffing lead hours (§23) |
+| `core.marketing_event` (mig `986`) | `POST/PATCH /marketing/events`, `/status`, `/approval` | `GET /marketing/events`, `GET /marketing/events/{id}`, `GET /marketing/summary`, `marketing/attention_providers`, `actuals.event_actuals` (§23). **Stores goals, NEVER actuals** |
+| `core.marketing_event_store` (mig `986`) | `PUT` via the event body (`store_codes`) | `actuals.event_actuals` — which stores' performance the event window is read against (§23) |
+| `core.marketing_event_goal` (mig `986`) | `POST/DELETE /marketing/events/{id}/goals` | `actuals.build_goal_lines`; target only — the actual is DERIVED from `_compute_feed_actuals_py` (§3), never stored (§23) |
+| `core.marketing_event_staff` (mig `986`) | `POST/PATCH/DELETE /marketing/events/{id}/staff` | `event_logic.resolve_staffing` (backup cover), `resolve_transport` (pickup graph), `call_time_for`; the attention providers (§23) |
+| `core.marketing_event_checkin` (mig `986`) | `POST /marketing/events/{id}/checkin` (ONE fix, judged by `core/geo.evaluate_checkin`), `/checkout` (timestamp only) | `GET /marketing/events/{id}` (arrival), `GET /marketing/my-checkins` (the subject's OWN rows only), `GET /marketing/checkin-retention` (§23). **SENSITIVE personal data** — see §23's privacy note |
+| `core.marketing_event_vendor` (mig `986`) | `POST/PATCH/DELETE /marketing/events/{id}/vendors` | event workspace, readiness (§23). `cost` is INFORMATIONAL — no P&L/payable/payout reader consumes it |
+| `core.marketing_event_checklist_item` · `core.marketing_checklist_template` · `_template_item` (mig `986`) | `POST/PATCH/DELETE .../checklist`, `POST .../apply-checklist-template` (COPIES; editing a template never rewrites a past event) | `event_logic.checklist_readiness` (packed / outstanding returns), the attention providers (§23) |
+| `core.marketing_event_link` (mig `986`) | `POST/DELETE /marketing/events/{id}/links` | event workspace (§23). `asset_ref`/`asset_source` are the PHASE-2 SEAM — reserved, unread, always NULL today |
+| `core.marketing_event_giveaway` (mig `986`) | `POST/PATCH/DELETE .../giveaways` | `event_logic.giveaway_reconciliation` — out − returned − given = unaccounted, with un-counted items stated rather than assumed reconciled (§23) |
+| `storeops.store_document` **(EXTENDED, not forked — mig `986` adds `event_id` + doc kinds `event_vendor_contract`/`event_photo`/`event_permit`)** | `POST /marketing/events/{id}/doc` (reuses `store_lease.upload_store_doc` + the private `store-docs` bucket) | `GET /marketing/events/{id}/docs`, `GET /marketing/doc-url` (org-scoped id lookup + must be an EVENT doc; path never echoed). Per-store lease/COI readers filter `store_code` and are unaffected (§23) |
 | `commcalc.raw_sales` | upload `/upload-mapped` `3637`, sweeps, `sales/promote-feed` `22757` | `calc_rep_commissions`, `calc_gp_report`, `_compute_feed_actuals_py` `18678`, `_sales_cell_agg`, `_mi_resolve_numbers` edge/vhi `28843`, installment engines |
 | `commcalc.daily_sales_feed` | B2B/email sweeps, upload | `_compute_feed_actuals_py` (primary source), sales report, fallback in calc |
 | `commcalc.merchant_settlement_day` | `merchant_portal_sweep.store_settlement` (daily portal scrape) | `closing/external_credit_recon` (declared-vs-settled card tally, §12a), resolved via `report_pull_map.merchant_settlement` |
@@ -2191,6 +2204,12 @@ as a market-grant keyset member; ambiguity fails closed):
 | `POST /commcalc/data-sources/sweep/run-due` | `router.py:data_sources_run_due` | §12a — the ONE portal-pull scheduler (VidaPay, b2bsoft, and the three merchant portals); cron self-registered by mig `956` |
 | `GET /commcalc/merchant-portals/catalog` | `router.py:merchant_portal_catalog` | §12a portal descriptors for the connector settings page |
 | `GET /commcalc/merchant-portals/health` | `router.py:merchant_portal_health` | §12a durable-session health roll-up |
+| `GET/POST/DELETE /marketing/options` · `GET/PUT /marketing/config` | `marketing/router.py` | §23 — RULE TWO option registry (the owner's "+") and the module switches (approval DEFAULT OFF) |
+| `GET/POST /marketing/events` · `GET/PATCH/DELETE /marketing/events/{id}` · `POST .../status` · `POST .../approval` | `marketing/router.py` | §23 lifecycle draft→approved→live→closed; `event_logic.gate_go_live` is the ONE approval gate |
+| `POST/PATCH/DELETE /marketing/events/{id}/{staff\|vendors\|checklist\|links\|giveaways\|goals}` | `marketing/router.py` (`_CHILD` — ONE generic CRUD layer, so org+parent scoping is enforced in one place) | §23 |
+| `POST /marketing/events/{id}/checkin` · `POST .../checkout` · `GET /marketing/my-checkins` · `GET /marketing/checkin-retention` | `marketing/router.py`; pure decision `core/geo.evaluate_checkin` | §23 GPS attendance. Check-out stores a TIMESTAMP only; `my-checkins` is filtered to the caller's own employee id and cannot be pointed at anyone else |
+| `GET /marketing/events/{id}/actuals` | `marketing/actuals.event_actuals` → `commcalc.router._compute_feed_actuals_py` → `_sales_cell_agg` | §23 planned-vs-actual, DERIVED from the §3 shared pass. Carries a mandatory `attribution` block: store performance over the window, NOT sales caused by the event |
+| `GET /marketing/summary` | `marketing/router.py` | §23 dashboard — uses the SAME `event_logic.event_readiness` as the event page and the attention providers, so the three cannot disagree |
 | `GET /core/control-box` (the red/green board; `deep=1` runs heavy providers) · `GET /core/control-box/checks` (effective registry) · `GET /core/control-box/history` · `GET /core/control-box/platform` (the ONE cross-org surface — lamps + counts ONLY, no tenant figures) | `core/control_box_api.py` | §20 super-admin control box |
 | `GET /billing/ai-usage` · `GET/PUT /billing/ai-margin` (append-only, effective-dated = its own audit) · `POST /billing/ai-usage/close` (freeze) | `billing/usage_api.py`; pure `billing/ai_usage.py` | §21 AI usage + margin (migs `972`/`973`) |
 | `GET/PUT /billing/module-pricing` (the plan x module grid, DERIVED from the entitlement catalog) · `GET /billing/module-usage` | `billing/usage_api.py`; pure `billing/statement.pricing_grid` / `billing/module_usage.py` | §21 module pricing (migs `974`/`975`) |
@@ -2293,6 +2312,10 @@ as a market-grant keyset member; ambiguity fails closed):
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| Event goal ATTAINMENT (activations / accessory $ / boxes / upgrades / BYOD over an event window) | `raw_sales`/`daily_sales_feed` → `_sales_cell_agg` → `_compute_feed_actuals_py` output fields (`prem_count`, `acc_gp`, `box_count`, `upg_count`, `byod_count`) — **read, never re-derived and never stored** | `marketing/actuals.aggregate_actual_rows` (filters the shared pass's rows to the event's stores × calendar days) → `compare_windows` (per-DAY vs the same weekday in the preceding 4 weeks) → `build_goal_lines`; `GET /marketing/events/{id}/actuals`; §23. A goal metric with no automatic source reports "no automatic actual", NEVER 0; a zero baseline yields `pct_change: null`, never an infinite lift |
+| Event staffing cover (is a slot actually filled?) | `marketing_event_staff.confirm_state` + `is_backup`/`backup_for_staff_id` | `event_logic.resolve_staffing` — a backup that has itself declined is NOT cover; `uncovered` is the list a manager acts on. The platform never infers `no_show` from a missing check-in (§23) |
+| Event GPS attendance verdict | `marketing_event_checkin.check_in_lat/lng/accuracy` (the storevisit mig-`027` capture contract) vs `marketing_event.geo_lat/lng` + radius | `core/geo.evaluate_checkin` — THE one geofence decision in the platform; judges the interval [distance−accuracy, distance+accuracy], so a coarse fix returns `unverified_accuracy` with `within_geofence = null` rather than being counted against anyone (§23) |
+| Event giveaway shrinkage | `marketing_event_giveaway.qty_out/qty_returned/qty_given` | `event_logic.giveaway_reconciliation`; items never counted back report `null`, not 0, and the headline says how many are uncounted (§23) |
 | Tenant AI cost / billable price | `ai_usage.exact_cost` (in x rate_in + out x rate_out from `core.token_rates` — EXACT split, not mig 718's blend) + `apply_margin`; unpriceable models are stated, never $0 | `GET /billing/ai-usage`, `core.ai_usage_period`; §21 |
 | Tenant billable total (itemized) | `statement.build_statement` = monthly fee + per-module (billable calls x price) + AI usage; lines quantised once and summed so the document adds up | `GET /billing/statement`, `core.billing_statement`; §21 |
 | Platform authority REACH (how many operators hold full reach; how many surfaces a scoped role would lose at the mig-`984` cutover) | `core.platform_operator.operator_role` + per-row `capabilities` overrides, resolved against `operator.ROUTE_CAPABILITIES` ∪ `core.operator_route_capability` | `operator.enforcement_preview` → `GET /core/operator/enforcement`; §22 |
@@ -3018,3 +3041,156 @@ in-process by enter/exit/policy so a freshly-opened session is never swallowed b
    default; see the section above for how it is opted into and reversed.
 3. **The hash chain cannot stop a service-role rewrite** — nothing can, on a database the operator
    administers. It makes one undeniable. Tail truncation is covered by `seq`, not by the hash.
+
+---
+
+## 23. MARKETING & EVENTS — outside-store event management (Phase 1)
+
+**Owner directive 2026-09-06 (verbatim):** *"Under market we will Need an event management module for
+outside store events, give me the framework of what should be involved including not limited to the
+following with gps enabled: Theme of the event - back to school etc or byod plan / Location / Venue /
+Goal for the event - how many activations or accessories / What items are needed, a user created
+checklist / Social media and other marketing planned links for the creatives / Time / What time do the
+employees have to get there / Who is the outside party if there is one e.g DJ/ food truck / table event
+/ Employees planned for the event / Back up employee if they don't show up / How are employees getting
+there / Who is picking up who if needed / Giveaways. Again none of the options I mentioned above are
+hard coded but options pre added with plus sign to add more as per user discretion."*
+
+Migrations `986` (schema) + `987` (house vocabulary, module registration, control-box coverage).
+Module `backend/app/modules/marketing/`. Proof `backend/harness_marketing_event.py` (232 checks).
+
+### 23.1 What was checked before building, and what is REUSED rather than rebuilt
+
+The CLAUDE.md duplicate-check build gate, applied and recorded:
+
+| Searched for | Found | What this module does |
+|---|---|---|
+| event, campaign, promotion | **nothing** — no event or campaign concept existed anywhere | creates the entity (it forks nothing) |
+| geofence, check-in, GPS | storevisit (mig `027`) **CAPTURES** `check_in_lat`/`check_in_lng`/`check_in_accuracy`; **no distance or geofence DECISION existed anywhere in `backend/`** | adopts the capture contract verbatim (same three column names) and puts the missing decision in ONE shared pure module, `app/modules/core/geo.py`, which storevisit can adopt unchanged |
+| activations / accessory $ per store per day | `commcalc.router._sales_cell_agg` via `_compute_feed_actuals_py` — THE shared pass behind the Sales Report, Exec MTD and Daily Targets (§3) | **calls it** (`marketing/actuals.py`). No marketing table has a sales column; nothing here classifies a contract type, an accessory, a void or a return |
+| document storage | `storeops.store_document` + private `store-docs` bucket + signed-URL-by-id (migs `946`/`964`) | **extends** it with `event_id` + 3 doc kinds (the mig-`964` precedent) and reuses `store_lease.upload_store_doc`/`signed_doc_url`. No second table, no second bucket |
+| notification / attention / alerting | `core.import_health` providers + `storeops.alert_log` dedupe (mig `433`) | registers 4 providers. No second notifier, no second sweep, no alert table |
+| health lamps | `core.system_check` derives one lamp per LIVE provider (mig `970`) | providers light up automatically; mig `987` additionally declares 3 **`unmonitored`** gaps so they are visible rather than silently green |
+
+### 23.2 RULE TWO — every option the owner named is a row, not code
+
+`core.marketing_option` is ONE registry keyed by `list_key`, holding all eight lists: `theme`,
+`venue_type`, `party_type`, `transport_mode`, `giveaway_type`, `event_role`, `link_channel`,
+`goal_metric`. Resolution is **HOUSE rows (mig `987`) ∪ TENANT rows, tenant wins per key** — the same
+tenant-over-house model nav labels and report labels already use.
+
+- Adding a value is an INSERT (`POST /marketing/options`), never a deploy. Deactivating a house option
+  writes a tenant row with `is_active false`; the house seed is untouched for every other org.
+- Nothing is ever deleted, so an event booked last season still renders the label it was booked with.
+- **No CHECK constraint and no Python enum guards any of these values.** `harness_marketing_event.py`
+  §A15 statically fails the build if an owner-named value (`back_to_school`, `food_truck`, `carpool`…)
+  appears as a literal in the module's *executable* code — that check caught one real regression during
+  the build (a user-facing message that hard-coded the word "carpooling"; it now reads the tenant's own
+  label for the mode).
+- `goal_metric.extra` carries `{unit, derivable, field}` — a tenant may point a metric at a shared-pass
+  field, and a metric with no automatic source is reported as **"no automatic actual"**, never as 0.
+
+What is deliberately NOT config: the status **lifecycle** (`draft → approved → live → closed |
+cancelled`) and `confirm_state`, because code acts on them — a tenant must not be able to rename its
+way out of the go-live gate.
+
+### 23.3 Planned vs actual — derived, and honestly labelled
+
+```
+raw_sales / daily_sales_feed
+   └─ _sales_cell_agg  ────────────── THE one classification pass (§3)
+        └─ _compute_feed_actuals_py   per (store_code, rep, DAY)
+             └─ marketing/actuals.aggregate_actual_rows   ← filters to the event's stores × days
+                  └─ compare_windows  ← event per-day vs the SAME WEEKDAY, 4 preceding weeks
+                       └─ build_goal_lines → GET /marketing/events/{id}/actuals
+```
+
+**The attribution rule.** Sales rung at a store on an event day are *not* all caused by the event, and
+nothing in the data marks a line as event-sourced. So the endpoint reports one thing and says so in a
+mandatory `attribution` block that the UI renders as a visible caption (never a tooltip):
+
+> *Store performance over the event window — not sales attributed to the event.*
+
+Enforced, not merely intended: `harness_marketing_event.py` §G statically fails the build if any field
+or variable in the module is named `event_activations`, `incremental_*`, `caused_by`, `attributed_*`…
+The day-grain limitation is stated too (the shared pass has no time of day, so a four-hour event is
+compared against the whole day it fell on), and a zero baseline yields `pct_change: null` rather than
+an infinite improvement.
+
+### 23.4 People — the backup roster and the pickup graph
+
+`marketing_event_staff` answers four of the owner's questions in one row: the role, whether this is the
+**named backup** for a primary (`is_backup` + `backup_for_staff_id`, a self-reference), how they are
+getting there (`transport_mode_key`) and **who is picking them up** (`pickup_by_staff_id`, also a
+self-reference). Both graphs are data; no role, mode or driver is named in code.
+
+`event_logic.resolve_staffing` — a backup that has itself declined is **not cover**; a confirmed backup
+beats a merely planned one; backups pointing at a departed primary surface as `unassigned_backups`.
+`resolve_transport` catches a driver who is not on the event, a driver who declined, someone whose mode
+is flagged `needs_pickup` with nobody assigned, and **pickup cycles** (A drives B drives A — nobody's
+car ever starts).
+
+`staff_call_at` is a **first-class column, separate from `event_start`** (the owner asked the two as
+distinct questions), with per-person `call_time_override`; `call_time_for` resolves personal → event →
+event-start-fallback and labels which one it used, so a screen never shows a blank.
+
+### 23.5 Employee GPS — sensitive personal data
+
+**One coordinate pair, per person, per event, captured at the instant they press check-in.** There is
+no schema here that could hold a track: no repeated-position table, no interval column, no background
+report shape — and **check-OUT stores a timestamp and no second coordinate**, on purpose.
+
+- The verdict comes from `core/geo.evaluate_checkin`, which takes the reported **accuracy seriously**:
+  it judges the interval `[distance − accuracy, distance + accuracy]`. A phone saying "90 m away, ±200 m"
+  has not said the person is outside a 150 m fence — it has said it does not know, so the decision is
+  `unverified_accuracy` with `within_geofence = null`. "We could not tell" is never "they were not there".
+- An out-of-fence check-in is **recorded and flagged, not refused** — a real person with a bad phone must
+  still be able to say they are there. Only an org that explicitly sets `block_checkin_outside_fence`
+  refuses, and even then never for `unverified_no_target` (nobody pinned the venue is the planner's
+  omission, not the employee's).
+- **Retention is explicit**: `purge_after_date` is stamped on every row from
+  `marketing_config.checkin_geo_retention_days` (house default 180), so the commitment lives in the row.
+- **A rep can read back everything recorded about them** — `GET /marketing/my-checkins`, filtered
+  server-side to the caller's own employee id; it cannot be pointed at anyone else, by anyone.
+- The frontend uses `getCurrentPosition`, never `watchPosition`.
+- **Known gap, declared not implied:** nothing deletes expired rows automatically in this phase.
+  `GET /marketing/checkin-retention` reports what is due, and mig `987` registers the control-box check
+  `marketing_checkin_gps_retention` as **`unmonitored`** saying so in as many words.
+
+### 23.6 Approval — a switch, DEFAULT OFF
+
+`marketing_config.approval_required` defaults to **FALSE** and mig `987` writes the house row explicitly
+so the posture is visible in data, not only in DDL. `approval_spend_threshold` only ever *narrows* an
+already-enabled requirement — a stale threshold left behind by an org that switched approval off can
+never gate anything (proved: harness §D5). When approval is off, `approval_state` is written as the
+explicit `not_required` with a `approval_reason`, so an event that went live without a signature records
+*why* rather than leaving an ambiguous NULL. Editing planned spend upward on an approved event returns it
+to pending — an approval is for a plan, not for a row id.
+
+### 23.7 Attention, lamps, and what is NOT watched
+
+Four `core.import_health` providers (`marketing_event_staffing`, `_backup`, `_checklist`, `_approval`),
+all computed by the SAME `event_logic.event_readiness` the event page and `/marketing/summary` call — so
+the notification, the dashboard count and the banner on the event cannot disagree. The approval provider
+returns empty without reading a row when the org never turned approval on.
+
+Three honest `unmonitored` declarations (mig `987`): `marketing_event_actuals_source` (this module
+silently depends on sales-feed freshness), `marketing_checkin_gps_retention` (no purge job runs), and
+`marketing_creative_assets` (nothing to monitor yet — see below).
+
+### 23.8 Phase-1 seams (deliberately not built)
+
+- **Creative gallery on bring-your-own cloud storage** and **marketing-portal asset pull**:
+  `marketing_event_link.asset_ref` + `asset_source` are reserved, **unread by any phase-1 code** and
+  always NULL. The later phases attach there instead of adding a competing link table.
+- **Campaign analytics** across events: nothing aggregates across events yet; `/marketing/summary` is a
+  window over individual ones.
+- Event documents reuse `store_document` and are per-event only — no gallery, no browse-by-asset.
+
+### 23.9 Registration
+
+`marketing` is in `entitlements.MODULE_CATALOG` **and** `core.module_catalog` (mig `987`) — that pair is
+what makes the module appear in the tenant-entitlement gate and the mig-`975` billing pricing grid; a
+module missing from it bills nothing forever. `SEED_VERSION` bumped to **14** so existing tenants
+self-provision the entitlement on next login. Router gated by `require_module("marketing")`; nav in
+`frontend/src/lib/rbac.ts` under group **Marketing**.

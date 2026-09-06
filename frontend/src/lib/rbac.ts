@@ -311,6 +311,26 @@ export const NAV: NavGroup[] = [
     { href: '/crm/reports', label: 'CRM Reports', icon: '📈', module: 'crm', scopes: ['all', 'market'], tileOnly: true },
     { href: '/crm/settings', label: 'CRM Settings', icon: '⚙️', module: 'crm', scopes: ['all'], tileOnly: true },
   ]},
+  // Marketing & Events (migs 986/987, owner directive 2026-09-06) — outside-store event management:
+  // theme/venue/goals, a user-created checklist, planned creative links, the outside party, planned
+  // staff with a NAMED BACKUP, transport + pickups, giveaways, and GPS check-in. Placed after CRM
+  // because it is the other top-of-funnel surface: an event is where a lead is met before any sale
+  // exists. Same block shape as the CRM/Referral groups, so regrouping is a ZERO-RBAC-CHANGE move as
+  // long as each item keeps its `module: 'marketing'` + scopes.
+  //
+  // 'My check-ins' carries NO scope restriction on purpose: it shows a person only their OWN location
+  // records (the backend filters to the caller's employee id and cannot be pointed at anyone else), so
+  // every employee must be able to reach it. Restricting it would mean the people the data is about
+  // are the only ones who cannot see it.
+  //
+  // Settings is 'all' only, like every other module's config surface; planning and approving are
+  // ['all','market'] with the backend (_require_manager / _require_approver) as the real gate.
+  { group: 'Marketing', module: 'marketing', items: [
+    { href: '/marketing', label: 'Events Dashboard', icon: '🎪', module: 'marketing', scopes: ['all', 'market', 'store'] },
+    { href: '/marketing/events/new', label: 'Plan an Event', icon: '➕', module: 'marketing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/marketing/my-checkins', label: 'My Check-ins', icon: '📍', module: 'marketing', tileOnly: true },
+    { href: '/marketing/settings', label: 'Marketing Settings', icon: '⚙️', module: 'marketing', scopes: ['all'], tileOnly: true },
+  ]},
   // Referral (mig 850, owner directive 2026-08-13) — QR-code customer referrals + activation-gated,
   // approval-gated commission. Placed after CRM: it is a sibling top-of-funnel surface (a rep hands a
   // referrer a QR before any sale exists). Same shape as the CRM block, so regrouping/relabeling is a
@@ -1121,6 +1141,7 @@ export function moduleForPath(path: string): string {
   if (path.startsWith('/notify')) return 'notify'
   if (path.startsWith('/helpdesk')) return 'helpdesk'
   if (path.startsWith('/crm')) return 'crm'
+  if (path.startsWith('/marketing')) return 'marketing'
   if (path.startsWith('/remediation')) return 'helpdesk'
   if (path.startsWith('/commcalc/targets')) return 'targets'
   if (path.startsWith('/commcalc/asset')) return 'asset'

@@ -142,6 +142,14 @@ MODULES_WITHOUT_EXTERNAL_FEEDS = (
     # pure in-app feature modules (user-created data, no external file/API feed):
     "approvals", "chat", "crm", "helpdesk", "hr", "notify",
     "recovery", "referral", "remediation", "storevisit", "vision",
+    # marketing (migs 986/987) — outside-store event management. Feed-LESS on purpose: every row it
+    # owns is typed by a human (the event, its staff, the checklist, the giveaway counts) or captured
+    # from the device at check-in. Its one derived number, event planned-vs-actual, is READ from
+    # commcalc's shared sales pass (_sales_cell_agg via _compute_feed_actuals_py, §3/§23) rather than
+    # ingested, so it introduces no external feed and owns no ingest table. The later creative-gallery
+    # / marketing-portal-pull phase WILL bring an external feed; when it does it moves to
+    # INGEST_TABLES_BY_MODULE above and seeds database/migrations/925_data_lineage_seed.sql.
+    "marketing",
 )
 
 
