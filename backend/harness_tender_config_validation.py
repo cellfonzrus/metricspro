@@ -95,6 +95,18 @@ import app.modules.closing.router as cr   # noqa: E402
 AUTH_NONE = ""
 
 
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
+
+
 def wire(store):
     fake = FakeClient(store)
     cr.sb = lambda: fake
@@ -119,7 +131,7 @@ payload_a = {
              {"tender_key": "custom1", "label": "House Credit", "is_active": True}],
     "maps": [{"tender_key": "custom1", "source_labels": ["House Credit Line"], "report": "both"}],
 }
-resp_a = cr.put_tender_config(payload_a, org_id=HOUSE, authorization=AUTH_NONE)
+resp_a = cr.put_tender_config(_body(cr.PutTenderConfigIn, payload_a), org_id=HOUSE, authorization=AUTH_NONE)
 check("A. on-axis custom map_row (custom1, active in the SAME payload) saves cleanly",
       resp_a.get("ok") is True and resp_a.get("defs") == 2 and resp_a.get("maps") == 1, str(resp_a))
 
@@ -131,7 +143,7 @@ payload_b = {
     "maps": [{"tender_key": "custom_dead", "source_labels": ["Old Label"], "report": "both"}],
 }
 try:
-    cr.put_tender_config(payload_b, org_id=HOUSE, authorization=AUTH_NONE)
+    cr.put_tender_config(_body(cr.PutTenderConfigIn, payload_b), org_id=HOUSE, authorization=AUTH_NONE)
     check("B. map row referencing a DEACTIVATED def in the same payload is REJECTED", False, "did not raise")
 except HTTPException as e:
     check("B. map row referencing a DEACTIVATED def in the same payload is REJECTED",
@@ -144,7 +156,7 @@ payload_c = {
     "maps": [{"tender_key": "totally_unknown", "source_labels": ["???"], "report": "both"}],
 }
 try:
-    cr.put_tender_config(payload_c, org_id=HOUSE, authorization=AUTH_NONE)
+    cr.put_tender_config(_body(cr.PutTenderConfigIn, payload_c), org_id=HOUSE, authorization=AUTH_NONE)
     check("C. map row referencing a tender_key absent from defs entirely is REJECTED", False, "did not raise")
 except HTTPException as e:
     check("C. map row referencing a tender_key absent from defs entirely is REJECTED",
@@ -154,7 +166,7 @@ except HTTPException as e:
 #      fallback, the exact "empty config == today's behaviour" doctrine, extended to validation) ═════
 st = fresh_store(); wire(st)
 payload_d = {"defs": [], "maps": [{"tender_key": "cash", "source_labels": ["CASH"], "report": "sales"}]}
-resp_d = cr.put_tender_config(payload_d, org_id=HOUSE, authorization=AUTH_NONE)
+resp_d = cr.put_tender_config(_body(cr.PutTenderConfigIn, payload_d), org_id=HOUSE, authorization=AUTH_NONE)
 check("D. empty defs + a STANDARD tender_key ('cash') map row saves cleanly (CANON_TENDERS fallback)",
       resp_d.get("ok") is True and resp_d.get("defs") == 0 and resp_d.get("maps") == 1, str(resp_d))
 
@@ -162,7 +174,7 @@ check("D. empty defs + a STANDARD tender_key ('cash') map row saves cleanly (CAN
 st = fresh_store(); wire(st)
 payload_e = {"defs": [], "maps": [{"tender_key": "not_a_real_tender", "source_labels": ["???"], "report": "both"}]}
 try:
-    cr.put_tender_config(payload_e, org_id=HOUSE, authorization=AUTH_NONE)
+    cr.put_tender_config(_body(cr.PutTenderConfigIn, payload_e), org_id=HOUSE, authorization=AUTH_NONE)
     check("E. empty defs + a bogus non-standard tender_key map row is REJECTED", False, "did not raise")
 except HTTPException as e:
     check("E. empty defs + a bogus non-standard tender_key map row is REJECTED",
@@ -175,7 +187,7 @@ good_payload = {
     "defs": [{"tender_key": "cash", "label": "Cash", "is_active": True}],
     "maps": [{"tender_key": "cash", "source_labels": ["CASH", "Cash Tender"], "report": "both"}],
 }
-cr.put_tender_config(good_payload, org_id=HOUSE, authorization=AUTH_NONE)
+cr.put_tender_config(_body(cr.PutTenderConfigIn, good_payload), org_id=HOUSE, authorization=AUTH_NONE)
 before_defs = [dict(r) for r in st["closing_tender_def"]]
 before_maps = [dict(r) for r in st["closing_tender_map"]]
 bad_payload = {
@@ -184,7 +196,7 @@ bad_payload = {
              {"tender_key": "nonexistent", "source_labels": ["???"], "report": "both"}],
 }
 try:
-    cr.put_tender_config(bad_payload, org_id=HOUSE, authorization=AUTH_NONE)
+    cr.put_tender_config(_body(cr.PutTenderConfigIn, bad_payload), org_id=HOUSE, authorization=AUTH_NONE)
     check("F. a rejected save leaves the PREVIOUS config untouched (no partial delete)", False, "did not raise")
 except HTTPException as e:
     after_defs = [dict(r) for r in st["closing_tender_def"]]
@@ -198,7 +210,7 @@ st = fresh_store(); wire(st)
 payload_g = {"defs": [{"tender_key": "cash", "label": "Cash", "is_active": True},
                       {"tender_key": "custom_unused", "label": "Unused", "is_active": True}],
              "maps": []}
-resp_g = cr.put_tender_config(payload_g, org_id=HOUSE, authorization=AUTH_NONE)
+resp_g = cr.put_tender_config(_body(cr.PutTenderConfigIn, payload_g), org_id=HOUSE, authorization=AUTH_NONE)
 check("G. defs with no maps at all always succeeds (nothing to validate)",
       resp_g.get("ok") is True and resp_g.get("defs") == 2 and resp_g.get("maps") == 0, str(resp_g))
 
@@ -209,7 +221,7 @@ from app.modules.closing.tender_config import STANDARD_DEFS
 std_defs = [{"tender_key": k, "label": lbl, "recon_class": rc, "include_in_total": intot, "is_active": True}
             for (k, lbl, rc, intot) in STANDARD_DEFS]
 std_maps = [{"tender_key": k, "source_labels": [lbl.upper()], "report": "both"} for (k, lbl, rc, intot) in STANDARD_DEFS]
-resp_h = cr.put_tender_config({"defs": std_defs, "maps": std_maps}, org_id=HOUSE, authorization=AUTH_NONE)
+resp_h = cr.put_tender_config(_body(cr.PutTenderConfigIn, {"defs": std_defs, "maps": std_maps}), org_id=HOUSE, authorization=AUTH_NONE)
 check("H. the standard 7-tender payload (wizard's seed-standard shape) saves cleanly, all on-axis",
       resp_h.get("ok") is True and resp_h.get("defs") == 7 and resp_h.get("maps") == 7, str(resp_h))
 

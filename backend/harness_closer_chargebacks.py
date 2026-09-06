@@ -136,6 +136,18 @@ class FakeClient:
 # ── wire the fake client into the real router module ─────────────────────────────────────────────
 import app.modules.storeops.router as R
 
+
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
+
 fake = FakeClient()
 R.get_supabase = lambda: fake
 R.sb = lambda: fake.schema("storeops")
@@ -431,7 +443,9 @@ old_require_manager = R._require_manager
 R._require_manager = fake_require_manager_reject
 raised = False
 try:
-    R.decide_payroll_chargeback("cb1", {"decision": "post", "period": "2026-07"}, authorization="", org_id=ORG)
+    R.decide_payroll_chargeback(
+        "cb1", _body(R.ChargebackDecisionIn, {"decision": "post", "period": "2026-07"}),
+        authorization="", org_id=ORG)
 except Exception as e:
     raised = getattr(e, "status_code", None) == 403
 check("4c non-manager rejected with 403", raised)
@@ -440,7 +454,9 @@ check("4c row untouched by the rejected attempt", row["status"] == "pending", ro
 
 # 4d. A real manager POSTS cb1 -> status='posted', posted_ref=period, decided_by=email, decided_at set.
 R._require_manager = lambda *_a, **_k: {"org_id": ORG, "email": "manager@example.com"}
-out = R.decide_payroll_chargeback("cb1", {"decision": "post", "period": "2026-07"}, authorization="", org_id=ORG)
+out = R.decide_payroll_chargeback(
+    "cb1", _body(R.ChargebackDecisionIn, {"decision": "post", "period": "2026-07"}),
+    authorization="", org_id=ORG)
 row = next(r for r in fake.store[("commcalc", "ops_chargeback")] if r["id"] == "cb1")
 check("4d posted correctly", row["status"] == "posted" and row["posted_ref"] == "2026-07"
       and row["decided_by"] == "manager@example.com" and row.get("decided_at"), row)
@@ -451,7 +467,9 @@ check("4d response echoes the new status", out["status"] == "posted", out)
 check("4e no new row was inserted by post/waive", len(fake.store[("commcalc", "ops_chargeback")]) == 3)
 
 # 4f. WAIVE on a different row -> status='waived', never touches posted_ref.
-out = R.decide_payroll_chargeback("cb3", {"decision": "waive"}, authorization="", org_id=ORG)
+out = R.decide_payroll_chargeback(
+    "cb3", _body(R.ChargebackDecisionIn, {"decision": "waive"}),
+    authorization="", org_id=ORG)
 row3 = next(r for r in fake.store[("commcalc", "ops_chargeback")] if r["id"] == "cb3")
 check("4f waived correctly, no posted_ref stamped", row3["status"] == "waived" and row3.get("posted_ref") is None, row3)
 
@@ -461,7 +479,9 @@ check("4f waived correctly, no posted_ref stamped", row3["status"] == "waived" a
 R._require_manager = lambda *_a, **_k: {"org_id": ORG2, "email": "other-tenant-manager@example.com"}
 raised404 = False
 try:
-    R.decide_payroll_chargeback("cb1", {"decision": "waive"}, authorization="", org_id=ORG2)
+    R.decide_payroll_chargeback(
+        "cb1", _body(R.ChargebackDecisionIn, {"decision": "waive"}),
+        authorization="", org_id=ORG2)
 except Exception as e:
     raised404 = getattr(e, "status_code", None) == 404
 check("4g cross-tenant decision id 404s, no leak", raised404)
@@ -474,7 +494,9 @@ check("4g cb1 (org ORG) untouched by the ORG2 attempt", row1_again["status"] == 
 R._require_manager = lambda *_a, **_k: {"org_id": ORG, "email": "manager2@example.com"}
 raised409 = False
 try:
-    R.decide_payroll_chargeback("cb1", {"decision": "post", "period": "2026-08"}, authorization="", org_id=ORG)
+    R.decide_payroll_chargeback(
+        "cb1", _body(R.ChargebackDecisionIn, {"decision": "post", "period": "2026-08"}),
+        authorization="", org_id=ORG)
 except Exception as e:
     raised409 = getattr(e, "status_code", None) == 409
 check("5a POST rejected on an already-posted row", raised409)
@@ -500,19 +522,27 @@ fake.seed("commcalc", "ops_chargeback", [
 R._require_manager = lambda *_a, **_k: {"org_id": ORG, "email": "manager3@example.com"}
 raised_child_post = False
 try:
-    R.decide_payroll_chargeback("child-pending-defensive", {"decision": "post", "period": "2026-07"}, authorization="", org_id=ORG)
+    R.decide_payroll_chargeback(
+        "child-pending-defensive", _body(R.ChargebackDecisionIn, {"decision": "post", "period": "2026-07"}),
+        authorization="", org_id=ORG)
 except Exception as e:
     raised_child_post = getattr(e, "status_code", None) == 409
 check("5b POST rejected on a parent_id-set row even if (defensively) 'pending'", raised_child_post)
 
-out = R.decide_payroll_chargeback("child-posted", {"decision": "waive"}, authorization="", org_id=ORG)
+out = R.decide_payroll_chargeback(
+
+    "child-posted", _body(R.ChargebackDecisionIn, {"decision": "waive"}),
+
+    authorization="", org_id=ORG)
 child_row = next(r for r in fake.store[("commcalc", "ops_chargeback")] if r["id"] == "child-posted")
 check("5c WAIVE succeeds on an already-posted settlement overflow child",
       child_row["status"] == "waived" and child_row["decided_by"] == "manager3@example.com", child_row)
 check("5c response echoes 'waived'", out["status"] == "waived", out)
 
 # 5d. Normal WAIVE-on-pending still works after all the above (no regression from the new rule).
-out = R.decide_payroll_chargeback("child-pending-defensive", {"decision": "waive"}, authorization="", org_id=ORG)
+out = R.decide_payroll_chargeback(
+    "child-pending-defensive", _body(R.ChargebackDecisionIn, {"decision": "waive"}),
+    authorization="", org_id=ORG)
 check("5d WAIVE still works on an ordinary pending row", out["status"] == "waived", out)
 
 R._require_manager = old_require_manager

@@ -108,7 +108,18 @@ import re
 import sys
 from types import SimpleNamespace
 
-sys.path.insert(0, ".")
+# Anchor to THIS FILE's directory, not the caller's cwd. Run from the repo root, the old `"."` plus
+# the relative `open()` calls below died with FileNotFoundError partway through — which reads as
+# "not run" rather than "failed". A proof harness that only works from one directory is a proof
+# harness that quietly stops being run.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+
+
+def _src(rel):
+    """Read a repo file (backend-relative, or ../ for the migrations) regardless of the cwd."""
+    return open(os.path.join(_HERE, rel), encoding="utf-8").read()
+
 os.environ.setdefault("SUPABASE_URL", "https://example-harness.supabase.co")
 os.environ.setdefault("SUPABASE_SERVICE_KEY", "harness-dummy-service-key")
 os.environ.setdefault("SUPABASE_ANON_KEY", "harness-dummy-anon-key")
@@ -120,6 +131,18 @@ os.environ["FIX_PIPELINE_SECRET"] = "harness-fix-secret-1234567890"
 import app.modules.core.router as core          # noqa: E402
 import app.modules.core.fix_pipeline as fp      # noqa: E402
 import app.core.tenant_middleware as tmw        # noqa: E402
+
+
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
 from fastapi import HTTPException               # noqa: E402
 
 SECRET = os.environ["FIX_PIPELINE_SECRET"]
@@ -450,11 +473,11 @@ check("D1b the feed reports which door it served", feed["actor_kind"] == "secret
 
 wire(st)                          # writes allowed again
 created = run(fp.create_pipeline_request(
-    {"signature": "GET /api/v1/x/{id}|KeyError", "sample_path": "/api/v1/x/1", "exc_type": "KeyError",
+    _body(fp.CreatePipelineRequestIn, {"signature": "GET /api/v1/x/{id}|KeyError", "sample_path": "/api/v1/x/1", "exc_type": "KeyError",
      "first_ref": "r1", "failure_ids": [st["failure_log"][0]["id"]], "occurrence_count": 2,
      "classification": "code_bug", "module_agent": "mod-commission", "model": "claude-opus-5",
      "status": "pushed",                                    # ← must be clamped
-     "affected_orgs": [{"org_id": TEN_A, "count": 2}]},
+     "affected_orgs": [{"org_id": TEN_A, "count": 2}]}),
     org_id=HOUSE, authorization="", x_active_org="", x_fix_pipeline_secret=SECRET))
 row = st["fix_requests"][0]
 check("D2a POST /requests STAMPS org_id on the INSERT (RULE ONE write side)", row["org_id"] == HOUSE, row)
@@ -464,8 +487,8 @@ check("D2c creation writes the first audit entry",
       len(row["audit"]) == 1 and row["audit"][0]["actor_kind"] == "secret"
       and row["audit"][0]["to"] == "reported", row["audit"])
 dup = run(fp.create_pipeline_request(
-    {"signature": "GET /api/v1/x/{id}|KeyError", "failure_ids": [st["failure_log"][1]["id"]],
-     "affected_orgs": [{"org_id": TEN_B, "count": 1}]},
+    _body(fp.CreatePipelineRequestIn, {"signature": "GET /api/v1/x/{id}|KeyError", "failure_ids": [st["failure_log"][1]["id"]],
+     "affected_orgs": [{"org_id": TEN_B, "count": 1}]}),
     org_id=HOUSE, authorization="", x_active_org="", x_fix_pipeline_secret=SECRET))
 check("D3a a repeat POST for the SAME signature does NOT create a second row",
       len(st["fix_requests"]) == 1 and dup["deduped"] is True, len(st["fix_requests"]))
@@ -477,8 +500,8 @@ check("D3c …and appends a fold entry to the audit trail (history is never rewr
       len(st["fix_requests"][0]["audit"]) == 2 and "folded" in st["fix_requests"][0]["audit"][1]["note"])
 
 rid = row["id"]
-run(fp.patch_pipeline_request(rid, {"status": "triaged", "triage_summary": "period spelling",
-                                    "tokens_triage": 133466, "note": "auto-triage"},
+run(fp.patch_pipeline_request(rid, _body(fp.PatchPipelineRequestIn, {"status": "triaged", "triage_summary": "period spelling",
+                                    "tokens_triage": 133466, "note": "auto-triage"}),
                               org_id=HOUSE, authorization="", x_active_org="",
                               x_fix_pipeline_secret=SECRET))
 after = st["fix_requests"][0]
@@ -488,11 +511,11 @@ check("D4b …re-prices from core.token_rates (133,466 @ blended $9 = $1.201194)
       abs(float(after["cost_usd"]) - 1.201194) < 1e-6, after.get("cost_usd"))
 check("D4c …and appends an audit entry on EVERY patch",
       len(after["audit"]) == 3 and after["audit"][-1]["note"] == "auto-triage", after["audit"])
-run(fp.patch_pipeline_request(rid, {"status": "building"}, org_id=HOUSE, authorization="",
+run(fp.patch_pipeline_request(rid, _body(fp.PatchPipelineRequestIn, {"status": "building"}), org_id=HOUSE, authorization="",
                               x_active_org="", x_fix_pipeline_secret=SECRET))
-run(fp.patch_pipeline_request(rid, {"status": "gate1_parked", "branch": "agent/commission/x",
+run(fp.patch_pipeline_request(rid, _body(fp.PatchPipelineRequestIn, {"status": "gate1_parked", "branch": "agent/commission/x",
                                     "commit_sha": "abc1234", "worktree": "/workspaces/wt-x",
-                                    "proofs_summary": "harness 41/41 · tsc 0", "tokens_build": 250000},
+                                    "proofs_summary": "harness 41/41 · tsc 0", "tokens_build": 250000}),
                               org_id=HOUSE, authorization="", x_active_org="",
                               x_fix_pipeline_secret=SECRET))
 parked = st["fix_requests"][0]
@@ -502,7 +525,7 @@ check("D4d the parked evidence (branch/commit/worktree/proofs) is recorded",
 
 err = None
 try:
-    run(fp.patch_pipeline_request(rid, {"status": "approved"}, org_id=HOUSE, authorization="",
+    run(fp.patch_pipeline_request(rid, _body(fp.PatchPipelineRequestIn, {"status": "approved"}), org_id=HOUSE, authorization="",
                                   x_active_org="", x_fix_pipeline_secret=SECRET))
 except HTTPException as e:
     err = e
@@ -511,21 +534,21 @@ check("D5a the SECRET door cannot set 'approved' (403)",
 check("D5b …and the row is untouched", st["fix_requests"][0]["status"] == "gate1_parked")
 err = None
 try:
-    run(fp.patch_pipeline_request(rid, {"status": "pushed", "pushed_commit": "dead111"}, org_id=HOUSE,
+    run(fp.patch_pipeline_request(rid, _body(fp.PatchPipelineRequestIn, {"status": "pushed", "pushed_commit": "dead111"}), org_id=HOUSE,
                                   authorization="Bearer super", x_active_org="",
                                   x_fix_pipeline_secret=""))
 except HTTPException as e:
     err = e
 check("D6 'pushed' straight from gate1_parked is refused end-to-end, even for a super-admin",
       err is not None and st["fix_requests"][0]["status"] == "gate1_parked", err)
-run(fp.patch_pipeline_request(rid, {"status": "approved", "note": "owner said push it in chat"},
+run(fp.patch_pipeline_request(rid, _body(fp.PatchPipelineRequestIn, {"status": "approved", "note": "owner said push it in chat"}),
                               org_id=HOUSE, authorization="Bearer super", x_active_org="",
                               x_fix_pipeline_secret=""))
 appr = st["fix_requests"][0]
 check("D5c a super-admin CAN record the owner's chat approval, stamping approved_by/at",
       appr["status"] == "approved" and appr["approved_by"] == "owner@metricspro.tech"
       and appr["approved_at"], appr)
-run(fp.patch_pipeline_request(rid, {"status": "pushed", "pushed_commit": "feed999"}, org_id=HOUSE,
+run(fp.patch_pipeline_request(rid, _body(fp.PatchPipelineRequestIn, {"status": "pushed", "pushed_commit": "feed999"}), org_id=HOUSE,
                               authorization="Bearer super", x_active_org="",
                               x_fix_pipeline_secret=""))
 pushed = st["fix_requests"][0]
@@ -533,7 +556,7 @@ check("D6b …and only THEN can it be recorded as pushed, with the commit + time
       pushed["status"] == "pushed" and pushed["pushed_commit"] == "feed999" and pushed["pushed_at"])
 err = None
 try:
-    run(fp.patch_pipeline_request(rid, {"status": "building"}, org_id=HOUSE,
+    run(fp.patch_pipeline_request(rid, _body(fp.PatchPipelineRequestIn, {"status": "building"}), org_id=HOUSE,
                                   authorization="Bearer super", x_active_org="",
                                   x_fix_pipeline_secret=""))
 except HTTPException as e:
@@ -544,9 +567,9 @@ check("D6c a pushed row is frozen (terminal) even for a super-admin",
 # D7 org scoping
 st2 = fresh_store()
 wire(st2)
-run(fp.create_pipeline_request({"signature": "sig-A|KeyError"}, org_id=TEN_A, authorization="",
+run(fp.create_pipeline_request(_body(fp.CreatePipelineRequestIn, {"signature": "sig-A|KeyError"}), org_id=TEN_A, authorization="",
                                x_active_org="", x_fix_pipeline_secret=SECRET))
-run(fp.create_pipeline_request({"signature": "sig-B|KeyError"}, org_id=TEN_B, authorization="",
+run(fp.create_pipeline_request(_body(fp.CreatePipelineRequestIn, {"signature": "sig-B|KeyError"}), org_id=TEN_B, authorization="",
                                x_active_org="", x_fix_pipeline_secret=SECRET))
 only_a = run(fp.list_pipeline_requests(org_id=TEN_A, authorization="", x_active_org="",
                                        x_fix_pipeline_secret=SECRET))
@@ -567,7 +590,7 @@ check("D7c tenant A's request is a 404 when scoped to tenant B (no cross-tenant 
       err is not None and err.status_code == 404)
 err = None
 try:
-    run(fp.patch_pipeline_request(a_id, {"status": "triaged"}, org_id=TEN_B, authorization="",
+    run(fp.patch_pipeline_request(a_id, _body(fp.PatchPipelineRequestIn, {"status": "triaged"}), org_id=TEN_B, authorization="",
                                   x_active_org="", x_fix_pipeline_secret=SECRET))
 except HTTPException as e:
     err = e
@@ -581,8 +604,8 @@ f1 = flog(TEN_A, "system_error", path="/api/v1/x/1", exc="KeyError", ref="3bf51b
           tb="Traceback (most recent call last):\n  KeyError: 'July 2026'")
 st3["failure_log"] = [f1]
 wire(st3)
-run(fp.create_pipeline_request({"signature": "GET /api/v1/x/{id}|KeyError", "failure_ids": [f1["id"]],
-                                "model": "claude-opus-5", "title": "team_snapshot period crash"},
+run(fp.create_pipeline_request(_body(fp.CreatePipelineRequestIn, {"signature": "GET /api/v1/x/{id}|KeyError", "failure_ids": [f1["id"]],
+                                "model": "claude-opus-5", "title": "team_snapshot period crash"}),
                                org_id=TEN_A, authorization="", x_active_org="",
                                x_fix_pipeline_secret=SECRET))
 det = run(fp.get_pipeline_request(st3["fix_requests"][0]["id"], org_id=TEN_A, authorization="",
@@ -672,8 +695,46 @@ check("F1c no sloppy over-match: a lookalike sibling path is still protected",
       tmw._is_public("/api/v1/core/fix-pipelines") is False
       and tmw._is_public("/api/v1/core/failures") is False)
 
-from starlette.routing import Match           # noqa: E402
+import re as _re                              # noqa: E402
 from app.main import app as APP               # noqa: E402
+
+
+# FastAPI no longer flattens `include_router` into `app.routes`: it stores an `_IncludedRouter` node
+# that holds the child router plus its prefix and resolves the real routes lazily. The old check
+# walked `APP.routes` directly, and every one of those nodes matched EVERY scope while carrying no
+# `.name` and no `.path` — so F2a compared a 4KB router repr against the expected handler name and
+# F2b counted ZERO pipeline routes. Both failed on a FastAPI upgrade while the routing was correct.
+# Descend into the included routers instead and check the flattened, fully-prefixed surface.
+def _concrete_routes(routes, prefix=""):
+    """(full_path, name, methods) for every real endpoint, following included routers."""
+    out = []
+    for r in routes:
+        child = getattr(r, "original_router", None)
+        if child is not None:
+            ctx = getattr(r, "include_context", None)
+            out += _concrete_routes(child.routes, prefix + (getattr(ctx, "prefix", "") or ""))
+            continue
+        p = getattr(r, "path", None)
+        if p is not None:
+            out.append((prefix + p, getattr(r, "name", ""), set(getattr(r, "methods", ()) or ())))
+    return out
+
+
+_ROUTES = _concrete_routes(APP.routes)
+
+
+def _path_rx(full):
+    """`/a/{id}/b` -> a regex matching a concrete request path, the way Starlette resolves it."""
+    return _re.compile("^" + "".join("[^/]+" if s.startswith("{") else _re.escape(s)
+                                     for s in _re.split(r"(\{[^}]+\})", full)) + "$")
+
+
+def _resolve_route(method, path):
+    """The handler NAME that would serve `method path` — first match wins, as in real resolution."""
+    for full, name, methods in _ROUTES:
+        if method in methods and _path_rx(full).match(path):
+            return name
+    return "NO MATCH"
 
 want = [("GET", "/api/v1/core/fix-pipeline/feed", "pipeline_feed"),
         ("GET", "/api/v1/core/fix-pipeline/requests", "list_pipeline_requests"),
@@ -684,18 +745,13 @@ want = [("GET", "/api/v1/core/fix-pipeline/feed", "pipeline_feed"),
          "patch_pipeline_request_action"),
         ("GET", "/api/v1/core/fix-pipeline/token-rates", "list_token_rates"),
         ("PUT", "/api/v1/core/fix-pipeline/token-rates", "upsert_token_rate")]
-resolved = {}
-for method, path, _ in want:
-    scope = {"type": "http", "method": method, "path": path, "headers": [], "query_string": b"",
-             "root_path": ""}
-    resolved[(method, path)] = next((getattr(r, "name", str(r)) for r in APP.routes
-                                     if r.matches(scope)[0] == Match.FULL), "NO MATCH")
+resolved = {(method, path): _resolve_route(method, path) for method, path, _ in want}
 mismatched = [(k, resolved[k], n) for (m, p, n) in want for k in [(m, p)] if resolved[k] != n]
 check("F2a all 8 endpoints resolve under /api/v1 to THEIR OWN handlers (the /api/v1 last mile)",
       not mismatched, mismatched)
-pipeline_routes = [r for r in APP.routes if "fix-pipeline" in getattr(r, "path", "")]
+pipeline_routes = [t for t in _ROUTES if "fix-pipeline" in t[0]]
 check("F2b exactly 8 pipeline routes are registered (7 from mig 718 + the mig-719 mark-done)",
-      len(pipeline_routes) == 8, [getattr(r, "path", "") for r in pipeline_routes])
+      len(pipeline_routes) == 8, [f"{sorted(m)} {p}" for p, _n, m in pipeline_routes])
 
 from starlette.testclient import TestClient   # noqa: E402
 
@@ -755,7 +811,7 @@ with TestClient(APP, raise_server_exceptions=False) as c:
           r.status_code == 403, (r.status_code, r.text[:200]))
 
 print("\n══ G. MIGRATION SQL SANITY ══")
-SQL = open("../database/migrations/718_core_fix_pipeline.sql").read()
+SQL = _src("../database/migrations/718_core_fix_pipeline.sql")
 check("G1a the push-gate trigger exists on core.fix_requests",
       "CREATE TRIGGER fix_requests_guard_trg" in SQL and "core.fix_requests_guard()" in SQL)
 check("G1b …it requires the previous status to be approved",
@@ -825,7 +881,7 @@ check("G4c the seed is idempotent (never clobbers an owner-edited rate)",
       "ON CONFLICT (org_id, model, effective_date) DO NOTHING" in SQL)
 check("G4d the seed carries the owner-confirm warning (rates are a seed, not a source of truth)",
       "OWNER MUST CONFLICT" not in SQL and "OWNER MUST CONFIRM AT SHIP TIME" in SQL)
-ENT = open("app/modules/core/entitlements.py").read()
+ENT = _src("app/modules/core/entitlements.py")
 # Version-RELATIVE, not pinned: mig 718 required a bump to 7, and a LATER package may legitimately
 # bump further (mig 720 took it to 8). Pinning the literal made an unrelated bump look like a
 # regression here. What must hold is that the bump happened and never went backwards.
@@ -836,10 +892,10 @@ check("G5b the rate seed is called from the entitlement sync path (house org)",
       'rpc("seed_token_rates"' in ENT)
 check("G5c …best-effort, so an un-run mig 718 is a silent no-op",
       re.search(r'rpc\("seed_token_rates".*?\n\s*except Exception:\n\s*pass', ENT, re.S) is not None)
-CFG = open("app/core/config.py").read()
+CFG = _src("app/core/config.py")
 check("G5d FIX_PIPELINE_SECRET is declared and DEFAULTS EMPTY (agent door closed until set)",
       re.search(r'FIX_PIPELINE_SECRET: str = ""', CFG) is not None)
-MW = open("app/core/tenant_middleware.py").read()
+MW = _src("app/core/tenant_middleware.py")
 check("G5e the middleware allowlist entry is the ONLY change to that file's behaviour "
       "(one prefix added, boundary-matched)",
       MW.count('"/api/v1/core/fix-pipeline"') == 1
@@ -1058,7 +1114,7 @@ check("I5d the detail GET decorates the same way",
 # I6 — mark done / undo
 rid_i = st_i["fix_requests"][0]["id"]
 audit_before = len(st_i["fix_requests"][0]["audit"])
-res = run(fp.patch_pipeline_request_action(rid_i, "a1", {"status": "done"}, org_id=TEN_A,
+res = run(fp.patch_pipeline_request_action(rid_i, "a1", _body(fp.PatchPipelineActionIn, {"status": "done"}), org_id=TEN_A,
                                            authorization="Bearer super"))
 stored = st_i["fix_requests"][0]
 a1 = next(a for a in stored["user_actions"] if a["id"] == "a1")
@@ -1075,7 +1131,7 @@ check("I6c …exactly ONE audit entry is appended, naming what was done",
 check("I6d …and the STATUS of the fix itself is untouched by a tick (pushed stays pushed)",
       stored["status"] == "pushed" and stored["audit"][-1]["from"] == "pushed"
       and stored["audit"][-1]["to"] == "pushed")
-res_undo = run(fp.patch_pipeline_request_action(rid_i, "a1", {"status": "pending"}, org_id=TEN_A,
+res_undo = run(fp.patch_pipeline_request_action(rid_i, "a1", _body(fp.PatchPipelineActionIn, {"status": "pending"}), org_id=TEN_A,
                                                 authorization="Bearer super"))
 a1 = next(a for a in st_i["fix_requests"][0]["user_actions"] if a["id"] == "a1")
 check("I6e un-ticking reopens the step and CLEARS the stamps (no stale 'done by')",
@@ -1087,7 +1143,7 @@ check("I6f the other item is untouched by a single-item tick",
 # I7 — the secret can WRITE a checklist but can NEVER tick one
 err = None
 try:
-    run(fp.patch_pipeline_request_action(rid_i, "a1", {"status": "done"}, org_id=TEN_A,
+    run(fp.patch_pipeline_request_action(rid_i, "a1", _body(fp.PatchPipelineActionIn, {"status": "done"}), org_id=TEN_A,
                                          x_fix_pipeline_secret=SECRET))
 except HTTPException as e:
     err = e
@@ -1100,9 +1156,9 @@ except HTTPException as e:
     err = e
 check("I7b …at the capability gate itself, not just in the handler",
       err is not None and err.status_code == 403)
-wrote = run(fp.patch_pipeline_request(rid_i, {"user_actions": [
+wrote = run(fp.patch_pipeline_request(rid_i, _body(fp.PatchPipelineRequestIn, {"user_actions": [
     {"id": "a1", "kind": "sql", "instruction": "-- 719\nALTER TABLE ...;"},
-    {"kind": "config", "instruction": "map the Luxelink mailbox to its own org"}]},
+    {"kind": "config", "instruction": "map the Luxelink mailbox to its own org"}]}),
     org_id=TEN_A, x_fix_pipeline_secret=SECRET))
 check("I7c …but the secret CAN write the checklist itself (that is the triage agent's job)",
       len(wrote["user_actions"]) == 2
@@ -1112,7 +1168,7 @@ check("I7d …and writing a checklist did NOT un-tick the done item (merge, not 
       and wrote["action_required"] is True)
 err = None
 try:
-    run(fp.patch_pipeline_request(rid_i, {"user_actions": [{"kind": "nope", "instruction": "x"}]},
+    run(fp.patch_pipeline_request(rid_i, _body(fp.PatchPipelineRequestIn, {"user_actions": [{"kind": "nope", "instruction": "x"}]}),
                                   org_id=TEN_A, x_fix_pipeline_secret=SECRET))
 except HTTPException as e:
     err = e
@@ -1121,7 +1177,7 @@ check("I7e a bad kind through the PATCH door is a 422, and nothing is written",
       and len(st_i["fix_requests"][0]["user_actions"]) == 2, err)
 err = None
 try:
-    run(fp.patch_pipeline_request(rid_i, {"status": "approved"}, org_id=TEN_A,
+    run(fp.patch_pipeline_request(rid_i, _body(fp.PatchPipelineRequestIn, {"status": "approved"}), org_id=TEN_A,
                                   x_fix_pipeline_secret=SECRET))
 except HTTPException as e:
     err = e
@@ -1135,14 +1191,14 @@ wire(st_o)
 rid_o = st_o["fix_requests"][0]["id"]
 err = None
 try:
-    run(fp.patch_pipeline_request_action(rid_o, "a1", {"status": "done"}, org_id=TEN_B,
+    run(fp.patch_pipeline_request_action(rid_o, "a1", _body(fp.PatchPipelineActionIn, {"status": "done"}), org_id=TEN_B,
                                          authorization="Bearer super"))
 except HTTPException as e:
     err = e
 check("I8a tenant B cannot tick tenant A's checklist (404, not a silent cross-tenant write)",
       err is not None and err.status_code == 404
       and st_o["fix_requests"][0]["user_actions"][0]["status"] == "pending", err)
-run(fp.patch_pipeline_request_action(rid_o, "a1", {"status": "done"}, org_id=TEN_A,
+run(fp.patch_pipeline_request_action(rid_o, "a1", _body(fp.PatchPipelineActionIn, {"status": "done"}), org_id=TEN_A,
                                      authorization="Bearer super"))
 check("I8b …and the correct org DOES land the write (org_id is a query param, stamped on the update)",
       st_o["fix_requests"][0]["user_actions"][0]["status"] == "done")
@@ -1152,7 +1208,7 @@ st_x = fresh_store()
 st_x["fix_requests"] = [fixrow(org=TEN_A, status="pushed", actions=[act("a1")]),
                         fixrow(org=TEN_B, status="pushed", actions=[act("a1")])]
 wire(st_x)
-run(fp.patch_pipeline_request_action(st_x["fix_requests"][0]["id"], "a1", {"status": "done"},
+run(fp.patch_pipeline_request_action(st_x["fix_requests"][0]["id"], "a1", _body(fp.PatchPipelineActionIn, {"status": "done"}),
                                      org_id=TEN_B, all_orgs=1, authorization="Bearer super"))
 check("I8c all_orgs=1 (the board's own scope) finds a row in ANOTHER tenant…",
       st_x["fix_requests"][0]["user_actions"][0]["status"] == "done")
@@ -1167,14 +1223,14 @@ for label, aid, body_i, want_code in [("unknown action id", "nope", {"status": "
                                       ("invalid status", "a1", {"status": "sorta"}, 422)]:
     err = None
     try:
-        run(fp.patch_pipeline_request_action(rid_o, aid, body_i, org_id=TEN_A,
+        run(fp.patch_pipeline_request_action(rid_o, aid, _body(fp.PatchPipelineActionIn, body_i), org_id=TEN_A,
                                              authorization="Bearer super"))
     except HTTPException as e:
         err = e
     check(f"I9 {label} → {want_code}", err is not None and err.status_code == want_code, err)
 err = None
 try:
-    run(fp.patch_pipeline_request_action("no-such-row", "a1", {"status": "done"}, org_id=TEN_A,
+    run(fp.patch_pipeline_request_action("no-such-row", "a1", _body(fp.PatchPipelineActionIn, {"status": "done"}), org_id=TEN_A,
                                          authorization="Bearer super"))
 except HTTPException as e:
     err = e
@@ -1188,9 +1244,9 @@ pre = Pre719Client(st_p)
 fp.sb = lambda: pre
 core.get_supabase = lambda: pre
 rid_p = st_p["fix_requests"][0]["id"]
-out = run(fp.patch_pipeline_request(rid_p, {"status": "building", "branch": "agent/x/y",
+out = run(fp.patch_pipeline_request(rid_p, _body(fp.PatchPipelineRequestIn, {"status": "building", "branch": "agent/x/y",
                                             "resolved_note": "shipped",
-                                            "user_actions": [{"kind": "sql", "instruction": "RUN 719"}]},
+                                            "user_actions": [{"kind": "sql", "instruction": "RUN 719"}]}),
                                     org_id=TEN_A, authorization="Bearer super"))
 check("I10a pre-719: the status transition + evidence STILL land (the fix pipeline keeps working)",
       st_p["fix_requests"][0]["status"] == "building"
@@ -1204,8 +1260,8 @@ st_p2 = fresh_store()
 pre2 = Pre719Client(st_p2)
 fp.sb = lambda: pre2
 core.get_supabase = lambda: pre2
-out2 = run(fp.create_pipeline_request({"signature": "GET /api/v1/z/{id}|ValueError",
-                                       "user_actions": [{"kind": "env", "instruction": "SET X"}]},
+out2 = run(fp.create_pipeline_request(_body(fp.CreatePipelineRequestIn, {"signature": "GET /api/v1/z/{id}|ValueError",
+                                       "user_actions": [{"kind": "env", "instruction": "SET X"}]}),
                                       org_id=TEN_A, authorization="Bearer super"))
 check("I10d pre-719: a POST carrying a checklist still REGISTERS the row (triage is never blocked)",
       out2["ok"] and len(st_p2["fix_requests"]) == 1
@@ -1218,8 +1274,8 @@ check("I10e pre-719: reads of that row are safe and simply show no checklist",
 st_c = fresh_store()
 wire(st_c)
 created = run(fp.create_pipeline_request(
-    {"signature": "GET /api/v1/q/{id}|KeyError", "classification": "config",
-     "user_actions": [{"kind": "config", "instruction": "point the mailbox at the right org"}]},
+    _body(fp.CreatePipelineRequestIn, {"signature": "GET /api/v1/q/{id}|KeyError", "classification": "config",
+     "user_actions": [{"kind": "config", "instruction": "point the mailbox at the right org"}]}),
     org_id=TEN_A, x_fix_pipeline_secret=SECRET))
 check("I10f a triage POST may file the checklist with the row (config/data findings), org-stamped",
       created["ok"] and st_c["fix_requests"][0]["org_id"] == TEN_A
@@ -1227,8 +1283,8 @@ check("I10f a triage POST may file the checklist with the row (config/data findi
       and st_c["fix_requests"][0]["user_actions"][0]["status"] == "pending")
 st_c["fix_requests"][0]["user_actions"][0]["status"] = "done"
 run(fp.create_pipeline_request(
-    {"signature": "GET /api/v1/q/{id}|KeyError",
-     "user_actions": [{"kind": "config", "instruction": "point the mailbox at the right org"}]},
+    _body(fp.CreatePipelineRequestIn, {"signature": "GET /api/v1/q/{id}|KeyError",
+     "user_actions": [{"kind": "config", "instruction": "point the mailbox at the right org"}]}),
     org_id=TEN_A, x_fix_pipeline_secret=SECRET))
 check("I10g a RE-FILE of the same signature never resets a checklist the operator ticked off",
       len(st_c["fix_requests"]) == 1
@@ -1262,7 +1318,7 @@ with TestClient(APP, raise_server_exceptions=False) as c:
           r.status_code == 401, (r.status_code, r.text[:160]))
 
 # I12 — mig 719 SQL sanity
-SQL719 = open("../database/migrations/719_core_fix_request_user_actions.sql").read()
+SQL719 = _src("../database/migrations/719_core_fix_request_user_actions.sql")
 sql719_code = "\n".join(ln for ln in SQL719.splitlines() if not ln.strip().startswith("--"))
 check("I12a 719 adds exactly the two columns, idempotently (ADD COLUMN IF NOT EXISTS)",
       sql719_code.count("ADD COLUMN IF NOT EXISTS") == 2

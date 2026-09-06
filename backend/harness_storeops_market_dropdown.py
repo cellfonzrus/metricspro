@@ -121,6 +121,18 @@ R.get_supabase = lambda: fake
 R.sb = lambda: fake.schema("storeops")
 
 ORG = "org-mkt-1"
+
+
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
 ORG2 = "org-mkt-2"
 
 
@@ -201,10 +213,10 @@ check("6d update_store allows explicitly clearing to Unassigned", upd2["market"]
 # 6e: bulk_create_stores normalizes every row against ONE canonical snapshot (not per-row queries)
 reset()
 before_calls = len(fake.store.get(("storeops", "stores"), []))
-res = R.bulk_create_stores({"stores": [
+res = R.bulk_create_stores(_body(R.BulkCreateStoresIn, {"stores": [
     {"store_code": "B-1", "address": "B1 addr", "market": "li"},
     {"store_code": "B-2", "address": "B2 addr", "market": "NEW-MARKET"},
-]}, org_id=ORG)
+]}), org_id=ORG)
 check("6e bulk insert reports 2 inserted", res["inserted"] == 2, res)
 b1 = next(r for r in fake.store[("storeops", "stores")] if r["store_code"] == "B-1")
 b2 = next(r for r in fake.store[("storeops", "stores")] if r["store_code"] == "B-2")
