@@ -2174,6 +2174,8 @@ as a market-grant keyset member; ambiguity fails closed):
 | `core.platform_operator_policy` (mig `980`, singleton — RULE TWO config; `legacy_membership_flag_honored` IS THE CUTOVER, `require_entry_session` is the access-cutting proposal, both default to today's behaviour) | `POST /core/operator/policy` (refuses the cutover while zero active operators exist) | `operator.effective_policy` (an absent/garbage row ⇒ POLICY_DEFAULTS ⇒ today) |
 | `core.operator_action` (mig `980` — append-only AND hash-chained; UPDATE/DELETE revoked. Records the OPERATOR's own auth id + email, never the tenant's) | `operator_api._write_action` (FAIL-CLOSED on every mutating action: a 503 rather than an unrecorded operator act) | `GET /core/operator/audit` (+ `operator.verify_chain` over the WHOLE chain), `GET /core/operator/anomalies` |
 | `core.operator_entry_session` (mig `980` — the record the cross-tenant switcher never had: who entered which company, why, from what IP, hard `expires_at`) | `POST /core/operator/enter` / `/exit` | the in-tenant banner (`GET /core/operator/entry`), `GET /core/operator/entry-log`, and the TENANT's own read `GET /core/tenant-operator-access` |
+| `core.platform_operator_policy.require_entry_session` (mig `980` column, **ENFORCED by mig `985`** — TRUE makes an open `core.operator_entry_session` a PRECONDITION for a super-admin to act as a company they are not a member of. Seeded COMMENTED OUT) | `POST /core/operator/policy` (refuses the flip when no active operator holds `tenant.enter`) | `tenant_middleware._entry_verdict` → pure `operator.entry_requirement_decision`, in the super-admin branch BEFORE `_set_acting` |
+| `core.operator_entry_session` READ PATH (mig `985` index `operator_entry_current_idx` on `(actor_auth_id, org_id, started_at DESC)`) | `POST /core/operator/enter` / `/exit` (unchanged) | the per-request precondition lookup, 30s-cached when OPEN and 2s when not, busted in-process by enter/exit/policy |
 | `core.platform_operator_policy.enforce_scoped_roles` (mig `984` — THE SCOPE SWITCH; FALSE = today, a scoped role gates the console only. TRUE = `_require_super_admin` also consults `operator.endpoint_decision`, so a narrow role stops being all-powerful on the pre-existing super-admin endpoints. Seeded COMMENTED OUT) | `POST /core/operator/policy` (refuses the flip when nobody would still hold `policy.write`) | `operator_api.scoped_role_verdict` → `core.router._require_super_admin`; previewed by `GET /core/operator/enforcement` |
 | `core.operator_route_capability` (mig `984` — route prefix → required capability, the per-platform OVERRIDE of the house map `operator.ROUTE_CAPABILITIES`. RULE TWO, same shape as `core.module_route_map` (974). NO org_id column, deliberately. Ships EMPTY) | operator SQL | `operator.endpoint_capability` (longest prefix wins; a verb-specific row beats `*`; an unknown capability name is IGNORED, never invented) |
 | `core.platform_notice` (mig `981` — operator→tenants status broadcast; audience by org_id, never by tenant name) | `POST /core/operator/notices`, `/notices/withdraw` | `GET /core/platform-notice` (tenant-facing; org resolved from the VERIFIED membership, `org_ids` stripped from the response) |
@@ -2283,7 +2285,7 @@ as a market-grant keyset member; ambiguity fails closed):
 ---
 
 | `GET /core/operator/me` (the operator persona: capabilities, scoped role, **why** they are authorized, effective policy, console nav) · `/roster` `GET/POST/DELETE` · `/policy` `GET/POST` (the CUTOVER) · `/audit` · `/anomalies` · `/entry-log` · `/notices` · `/restore-drill` | `core/operator_api.py`; pure decisions `core/operator.py` | §22 platform operator console |
-| `POST /core/operator/enter` / `POST /core/operator/exit` (the AUDITED, time-boxed tenant entry — wraps the EXISTING cross-tenant switcher, adds no second bypass) · `GET /core/operator/entry` (drives the in-tenant banner) | `core/operator_api.py` (`enter_tenant`/`exit_tenant`); pure `operator.entry_decision`/`banner_payload` | §22 tenant entry |
+| `POST /core/operator/enter` / `POST /core/operator/exit` (the AUDITED, time-boxed tenant entry — wraps the EXISTING cross-tenant switcher, adds no second bypass; **mig `985` can make it MANDATORY**, at which point every other cross-tenant request is refused 403 `operator_entry_session_required` until one is open) · `GET /core/operator/entry` (drives the in-tenant banner) | `core/operator_api.py` (`enter_tenant`/`exit_tenant`); pure `operator.entry_decision`/`banner_payload` | §22 tenant entry |
 | `GET /core/operator/enforcement` (the OWNER PREVIEW for the mig-`984` scope cutover: per operator, the mapped route prefixes they would LOSE, who holds `policy.write`, and the exempt list) · `POST /core/operator/policy` also carries `enforce_scoped_roles` | `core/operator_api.py`; pure `operator.enforcement_preview` / `endpoint_decision` / `policy_change_decision` | §22 scoped-role enforcement |
 | `GET /core/platform-notice` (tenant-facing status banner — any signed-in user; org from the VERIFIED membership) · `GET /core/tenant-operator-access` (a TENANT admin's "who from the platform was in my company", gated by the existing `_require_setting(..., 'security')`) | `core/operator_api.py` `public_router` (mounted WITHOUT the /operator prefix) | §22 tenant-facing transparency |
 
@@ -2838,10 +2840,14 @@ is FAIL-CLOSED: an operator action that cannot be recorded does not happen (503)
   `verify_chain`, `anomalies`, `notice_visible`/`notice_lamp`, `drill_record_valid`/`drill_lamp`,
   `console_sections`; and (mig 984) `ROUTE_CAPABILITIES` / `ENFORCEMENT_EXEMPT_PREFIXES` /
   `is_enforcement_exempt` / `endpoint_capability` / `endpoint_decision` / `capability_holders` /
-  `enforcement_preview`. Capability vocabulary + `OPERATOR_ROLES` + `POLICY_DEFAULTS` live here.
+  `enforcement_preview`; and (mig 985) `ENTRY_EXEMPT_PREFIXES` / `is_entry_exempt` /
+  `entry_requirement_decision` / `ENTRY_REFUSAL_CODE`. Capability vocabulary + `OPERATOR_ROLES` +
+  `POLICY_DEFAULTS` live here.
 - `backend/app/core/tenant_middleware.py` — publishes the request route (`_set_request_route` /
   `current_route`) so a handler's own gate can vary by surface without threading a `Request` through
-  66 call sites. Set for every http request, before any early return.
+  66 call sites (set for every http request, before any early return); and holds the mig-985 entry
+  precondition (`_entry_enforce` / `_entry_policy` / `_entry_session_row` / `_entry_verdict` /
+  `_reject_entry_session`) inside the super-admin branch.
 - `backend/app/modules/core/operator_api.py` — I/O only. `router` (`/core/operator/*`) +
   `public_router` (the two tenant-facing reads). Mounted at the tail of `core/router.py`.
 - `frontend/src/app/(operator)/operator/*` — the console in its **own route group**: a separate shell
@@ -2854,8 +2860,10 @@ is FAIL-CLOSED: an operator action that cannot be recorded does not happen (503)
 - **Harnesses:** `backend/harness_operator_console.py` — 149 checks (no-lockout, escalation chain,
   audit tamper-evidence, fail-closed gates, the researched controls) · `backend/
   harness_operator_scope_enforcement.py` — 122 checks (mig 984: the enforcement-off byte-identity
-  sweep, the rollout states, the escape hatches, route resolution, and the gate wiring itself).
-  Both DB-free, stdlib only.
+  sweep, the rollout states, the escape hatches, route resolution, and the gate wiring itself) ·
+  `backend/harness_operator_entry_enforcement.py` — 81 checks (mig 985: the requirement-off sweep,
+  the home-tenant escape hatch under a broken ledger, the exempt prefixes, and both enforcements
+  applied together). All DB-free, stdlib only.
 
 ### BILLING IS PLACED, NOT BUILT
 
@@ -2873,6 +2881,10 @@ console contributes navigation only. **Assumption recorded:** §21 keeps its sur
   (hash-chained, UPDATE/DELETE revoked), `core.operator_entry_session`. Seeds the policy row and one
   `owner` row per existing `super_admin`. Touches `storeops.app_users` **not at all**. The cutover
   and the `require_entry_session` proposal are COMMENTED OUT.
+- `985_mandatory_entry_sessions.sql` — the `operator_entry_current_idx` the per-request precondition
+  lookup needs, and the `-- UPDATE … require_entry_session = TRUE` that turns it on, **commented
+  out**. Creates no table; supersedes 980's now-stale note that enforcement is "not wired into
+  tenant_middleware".
 - `984_operator_scope_enforcement.sql` — `core.platform_operator_policy.enforce_scoped_roles` (THE
   SCOPE SWITCH, default FALSE, the enabling UPDATE **commented out**) + `core.operator_route_capability`
   (route→capability overrides; ships EMPTY, no `org_id` column). Additive, idempotent, `-- REVERT:`,
@@ -2951,6 +2963,45 @@ refuses the flip when zero active operators would hold `policy.write`, and warns
 in the map points at `/api/v1/impersonation`, that prefix is exempt, and `ENTRY_GRANTS` is still
 exactly `("acting_org",)` — asserted in both harnesses.
 
+### ENTRY SESSIONS CAN NOW BE **REQUIRED**, NOT MERELY RECORDED (mig `985`, owner-approved)
+
+Proposal #2 above, built. 980 added the audited, time-boxed, banner'd way into a tenant and left the
+bare switcher working beside it (its declared limit #1), so an operator could always take the quiet
+door. `require_entry_session` — the policy key 980 already shipped and left FALSE — is now wired into
+`tenant_middleware`'s **super-admin branch**, at the exact point `x-active-org` is honored without a
+rewrite, and **before** `_set_acting` publishes the acting org.
+
+**REUSED, NOT RE-DERIVED:** the mechanism is still the cross-tenant switcher (a PRECONDITION on it,
+not a second door) · the session is `core.operator_entry_session` read through `session_state` (no
+second notion of "is a session open") · the switch is 980's own `require_entry_session` · the refusal
+shape is `_reject_tenant_choice`'s (a code the client keys on, a session that is never torn down).
+
+**A refusal, never a rewrite.** A foreign tenant with no open session gets `403` +
+`operator_entry_session_required`. Quietly serving a different company's data than the caller asked
+for is the shape of §19.15, so the middleware says no out loud instead.
+
+### ★ NO STRANDING — the escape hatches, and why they hold ★
+
+`harness_operator_entry_enforcement.py` (81 checks):
+
+| State | Result |
+|---|---|
+| Requirement OFF (10 policy shapes × 8 paths × 6 orgs × 3 sessions × 2 ledger states = 2,880 combinations) | ✅ **zero** refusals |
+| The operator's OWN company — no session, expired, ended, wrong company, **ledger unreadable** | ✅ never gated |
+| A request naming no `x-active-org` at all | ✅ never gated |
+| `/core/operator/*`, `/core/me`, `/core/my-tenants`, `/core/bootstrap`, `/core/tenants`, `/core/platform-notice` | ✅ exempt |
+| Foreign company, no / expired / ended / other-company / un-time-boxed session | ❌ refused — as intended |
+| Entry ledger unreadable, foreign company | ❌ refused (an unrecorded entry is the thing this prevents) |
+| **Both switches on + the cutover done + a broken entry ledger** | ✅ the console, the identity reads and the owner's own company all still answer |
+
+`policy_change_decision` refuses to turn the requirement on while no active operator holds
+`tenant.enter`; `OPERATOR_ENTRY_ENFORCE=0` kills it with no database access at all; and the switch
+lives on Console → Operators, which is itself exempt.
+
+**Cost:** the policy is read once per 30s per worker; the session row is read ONLY when a foreign
+tenant is genuinely claimed, cached 30s while a session is open and 2s otherwise, and busted
+in-process by enter/exit/policy so a freshly-opened session is never swallowed by a TTL.
+
 ### KNOWN LIMITS (declared, not hidden)
 
 0. **Enforcement needs the request route, which comes from `tenant_middleware`.** The middleware
@@ -2959,9 +3010,10 @@ exactly `("acting_org",)` — asserted in both harnesses.
    NOT gated — the fail-open direction, chosen because a narrowing change must never be the reason a
    surface becomes unreachable. Those paths are not HTTP requests and do not carry a bearer token, so
    nothing reaches `_require_super_admin` through them today.
-1. **Entry sessions are RECORDED, not yet REQUIRED.** `require_entry_session` defaults FALSE and is
-   not wired into `tenant_middleware`, so the bare switcher still works exactly as before. Making it
-   mandatory is access-cutting and is the owner's call (mig 980, commented out).
+1. ~~**Entry sessions are RECORDED, not yet REQUIRED.**~~ **CLOSED by mig `985`** — wired into
+   `tenant_middleware`, still FALSE by default; see the section above. What remains open: an
+   impersonated request is handled by its own branch far earlier and is governed by the mig-730 gate,
+   not by this requirement — deliberately, since `impersonate` is the stricter door of the two.
 2. ~~**Scoped roles are not enforced on existing endpoints.**~~ **CLOSED by mig `984`** — off by
    default; see the section above for how it is opted into and reversed.
 3. **The hash chain cannot stop a service-role rewrite** — nothing can, on a database the operator

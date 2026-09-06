@@ -86,6 +86,32 @@ export default function OperatorsPage() {
     } catch (e: any) { setErr(e?.message || 'Could not change the policy') }
   }
 
+  // ── MANDATORY TENANT-ENTRY SESSIONS (migration 985) ─────────────────────────────────────────
+  // The third access-cutting control. Off, the audited entry path sits BESIDE the bare switcher and
+  // an operator can take the quiet door. On, acting as a company you are not a member of requires an
+  // open, time-boxed, recorded session. It never touches your own company (that is the escape hatch,
+  // and it holds even if the entry log itself is unreadable), never touches a normal login, and the
+  // console is exempt so this switch can always be reached to turn it back off.
+  async function setRequireEntry(on: boolean) {
+    const warn = on
+      ? 'Require an entry session before acting as another company?\n\n'
+        + 'After this, the header switcher alone is not enough for a company you are not a member '
+        + 'of — you open a session from Companies → Enter, with a reason and a time limit, and that '
+        + 'company\u2019s own admins can see the record.\n\nYour own company is never affected. '
+        + 'This is reversible from this same control.'
+      : 'Stop requiring an entry session?\n\nThe bare cross-tenant switcher works again, with '
+        + 'nothing written down.'
+    if (!confirm(warn)) return
+    setErr(''); setMsg('')
+    try {
+      const r: any = await api('/api/v1/core/operator/policy', {
+        method: 'POST', body: JSON.stringify({ require_entry_session: on }),
+      })
+      setMsg(r.message || (on ? 'Entry sessions are now required.' : 'Entry sessions are optional again.'))
+      load()
+    } catch (e: any) { setErr(e?.message || 'Could not change the policy') }
+  }
+
   async function setLegacy(honored: boolean) {
     const warn = honored
       ? 'Re-enable the legacy tenant super-admin flag as a source of platform authority?'
@@ -283,6 +309,31 @@ export default function OperatorsPage() {
             <Note>OPERATOR_ENFORCE=0 is set in the environment, so enforcement is off regardless of
               this switch.</Note>
           )}
+        </Panel>
+      )}
+
+      {/* ── MANDATORY ENTRY SESSIONS (mig 985) ───────────────────────────────────────────────── */}
+      {enf && can(me, 'policy.write') && (
+        <Panel title="Entry sessions into other companies">
+          <Note>
+            {enf.policy?.require_entry_session
+              ? 'REQUIRED — acting as a company you are not a member of needs an open, time-boxed '
+                + 'entry session, and that company’s own admins can see the record.'
+              : 'OPTIONAL — the audited entry path exists, but the bare company switcher still works '
+                + 'without a reason, a time limit or a record.'}
+            {' '}Your own company is never affected either way, and this page is exempt, so the
+            switch can always be reached to turn it back off.
+          </Note>
+          <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', marginTop: 12 }}>
+            <Btn onClick={() => setRequireEntry(!enf.policy?.require_entry_session)}
+              disabled={!enf.policy?.require_entry_session && !enf.require_entry_allowed}>
+              {enf.policy?.require_entry_session ? 'Make entry sessions optional' : 'Require an entry session'}
+            </Btn>
+            <span style={{ color: enf.require_entry_allowed ? OPS.text3 : OPS.warn, fontSize: 12 }}>
+              {enf.require_entry_note
+                || `${enf.preview?.tenant_enter_holders ?? 0} operator(s) can enter a company`}
+            </span>
+          </div>
         </Panel>
       )}
     </div>

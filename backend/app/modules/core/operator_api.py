@@ -397,6 +397,7 @@ def enter_tenant(body: EnterIn, request: Request = None, authorization: str = He
     except Exception as e:
         raise HTTPException(503, "entry session could not be opened (is migration 980 applied?) — %s" % e)
 
+    _bust_entry_cache()
     _write_action(caller, "tenant.enter", target_org_id=org,
                   target_ref=(names or {}).get(org, ""),
                   detail={"reason": d["reason"], "minutes": d["minutes"],
@@ -407,6 +408,17 @@ def enter_tenant(body: EnterIn, request: Request = None, authorization: str = He
             # The client sets this as x-active-org — the SAME header the switcher has always used.
             "active_org": org,
             "banner": OP.banner_payload(session, tenant_name=(names or {}).get(org, ""))}
+
+
+def _bust_entry_cache():
+    """Drop the middleware's short-lived entry-session cache in THIS process, so opening or closing a
+    session takes effect on the very next request rather than at the end of a TTL. Best-effort: other
+    workers pick it up within seconds anyway (a miss is cached for two seconds, never longer)."""
+    try:
+        from app.core import tenant_middleware as _tm
+        _tm._entry_cache.clear()
+    except Exception:
+        pass
 
 
 def _end_session(session, reason):
@@ -432,6 +444,7 @@ def exit_tenant(body: ExitIn, authorization: str = Header(default=""),
     if not s:
         return {"ok": True, "ended": False}
     _end_session(s, "operator_exit")
+    _bust_entry_cache()
     _write_action(caller, "tenant.exit", target_org_id=str(s.get("org_id") or "") or None,
                   detail={"session_id": str(s.get("id") or "")}, required=False)
     return {"ok": True, "ended": True, "org_id": s.get("org_id")}
@@ -684,6 +697,7 @@ def set_policy(body: PolicyIn, authorization: str = Header(default=""),
     except Exception as e:
         raise HTTPException(503, "could not write the policy (is migration 980 applied?) — %s" % e)
     _enf_cache.pop("policy", None)      # the switch takes effect on the next request, not in 30s
+    _bust_entry_cache()                 # …and so does `require_entry_session`
     return {"ok": True, "policy": d["policy"], "code": d["code"], "message": d["message"]}
 
 

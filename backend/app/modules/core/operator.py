@@ -997,3 +997,100 @@ def enforcement_preview(rows, *, policy=None, now=None):
         "mapped_surfaces": [{"method": m, "prefix": p, "capability": c} for m, p, c in surfaces],
         "exempt_prefixes": list(ENFORCEMENT_EXEMPT_PREFIXES),
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# MANDATORY TENANT-ENTRY SESSIONS  (mig 985)
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# Proposal #2 from the mig 980/981 write-up, now built. 980 added an AUDITED, time-boxed, banner'd
+# way into a tenant and left it ALONGSIDE the pre-existing switcher — its declared limit #1: "Entry
+# sessions are RECORDED, not yet REQUIRED. `require_entry_session` defaults FALSE and is not wired
+# into tenant_middleware, so the bare switcher still works exactly as before."
+#
+# This makes the record REQUIRED, so cross-tenant access cannot happen without the audit trail.
+#
+# DUPLICATE CHECK (CLAUDE.md build gate). Nothing new is derived:
+#   · the MECHANISM is still the cross-tenant switcher (`x-active-org` honored for a super-admin
+#     without a rewrite, `tenant_middleware`). This adds a PRECONDITION to it, not a second door;
+#   · the SESSION is `core.operator_entry_session` from 980 and `session_state` reads it — there is
+#     no second notion of "is an entry session open";
+#   · the SWITCH is `require_entry_session`, the policy key 980 already shipped (and left FALSE);
+#   · the exemption shape is `ENFORCEMENT_EXEMPT_PREFIXES`' — same idea, a separate list because the
+#     two enforcements answer different questions and must be readable independently.
+#
+# ★ WHY THIS CANNOT STRAND THE OWNER ★
+#   1. OFF BY DEFAULT, seeded COMMENTED OUT, and the first branch returns "not required".
+#   2. YOUR OWN HOME TENANT IS NEVER GATED. A requested org that is one of the login's OWN
+#      memberships needs no entry session, ever — including when the entry ledger is unreadable.
+#      That is A's escape hatch preserved: if the entry mechanism itself is broken, the owner still
+#      reaches the tenant they are a member of.
+#   3. THE WAY TO OPEN A SESSION IS EXEMPT. `/core/operator/*` (enter, exit, policy) and the
+#      identity/bootstrap/tenant-directory reads can never be blocked by this, so the requirement can
+#      always be satisfied — or switched back off — from inside it.
+#   4. NO TARGET, NO GATE. A request that names no `x-active-org` claims no other tenant and is
+#      untouched; a super-admin acting as themselves never sees this.
+#   5. IT IS A REFUSAL, NEVER A SILENT REWRITE. Quietly serving a different tenant's data than the
+#      caller asked for is how cross-tenant leaks happen (§19.15). This says no, out loud, with a
+#      code the client can act on.
+ENTRY_EXEMPT_PREFIXES = (
+    "/api/v1/core/operator",     # open/close an entry session; and turn this requirement back off
+    "/api/v1/core/me",
+    "/api/v1/core/my-tenants",
+    "/api/v1/core/bootstrap",
+    "/api/v1/core/tenants",      # the directory a tenant is CHOSEN from
+    "/api/v1/core/platform-notice",
+)
+
+# What the middleware is told to do when the requirement is not met. A refusal, never a rewrite.
+ENTRY_REFUSAL_CODE = "operator_entry_session_required"
+
+
+def is_entry_exempt(path) -> bool:
+    p = _norm_path(path)
+    return any(_prefix_hit(p, x) for x in ENTRY_EXEMPT_PREFIXES)
+
+
+def entry_requirement_decision(*, policy=None, path=None, requested_org=None, member_orgs=(),
+                               session=None, session_lookup_failed=False, now=None):
+    """MAY this super-admin request act as `requested_org` without an open entry session? PURE.
+
+    Returns {"required", "allowed", "code", "message", "org_id"}. `required` False means this
+    function contributed nothing and the middleware behaves exactly as it did before mig 985.
+
+    `session` is the caller's most recent `core.operator_entry_session` row for that org (or None);
+    `session_lookup_failed` says the ledger could not be read at all, which is refused for a FOREIGN
+    tenant and irrelevant for the caller's own."""
+    pol = effective_policy(policy)
+    org = str(requested_org or "").strip()
+    mine = {str(o).strip() for o in (member_orgs or ()) if str(o or "").strip()}
+
+    def ok(code):
+        return {"required": False, "allowed": True, "code": code, "message": "", "org_id": org}
+
+    if not pol["require_entry_session"]:
+        return ok("not_required")
+    if not org:
+        # No cross-tenant claim at all — the caller is acting as themselves.
+        return ok("no_target")
+    if org in mine:
+        # ★ THE ESCAPE HATCH ★ Your own company is yours whether or not the entry ledger works.
+        return ok("home_tenant")
+    if is_entry_exempt(path):
+        return ok("exempt")
+    if session_lookup_failed:
+        return {"required": True, "allowed": False, "code": "entry_ledger_unreadable",
+                "message": ("The tenant-entry log could not be read, so entering another company "
+                            "cannot be recorded — and an unrecorded entry is exactly what this "
+                            "setting exists to prevent. Your own company is unaffected."),
+                "org_id": org}
+    state = session_state(session, now=now)
+    if state == "active" and str((session or {}).get("org_id") or "").strip() == org:
+        return {"required": True, "allowed": True, "code": "ok", "message": "", "org_id": org}
+    why = {"expired": "Your entry session for that company has expired.",
+           "ended": "You have left that company's session.",
+           "none": "You do not have an open entry session for that company."}.get(
+        state, "You do not have an open entry session for that company.")
+    return {"required": True, "allowed": False, "code": "entry_session_required",
+            "message": (why + " Open one from the operator console (Companies → Enter): it records "
+                        "who entered, why, and for how long."),
+            "org_id": org}
