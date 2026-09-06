@@ -27,10 +27,14 @@ legacy Python path).
 
 Run: `python3 harness_timeclock_multisession.py` from backend/.
 """
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 
-sys.path.insert(0, ".")
+# Anchor imports AND every source read below to THIS file's own directory, so the
+# harness runs identically from backend/ and from the repo root (cf. 564c171f).
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 
 PASS, FAIL = [], []
 
@@ -157,10 +161,26 @@ class FakeClient:
 
 fake = FakeClient()
 
+import _harness_dbfree  # noqa: E402
 import app.modules.storeops.router as R  # noqa: E402
 import app.modules.core.router as core_router  # noqa: E402
 
 R.get_supabase = lambda: fake
+# DB-FREE GUARD: the line(s) above bind only THIS module's name. Shipped code also
+# reaches the factory directly (tenant_middleware.caller_app_user) and through other
+# routers' sb() (storeops.router._rbac_enabled), both of which used to land on the
+# REAL production client. Route every acquisition in the process at the fake.
+_harness_dbfree.install(fake)
+
+
+def _body(model, payload):
+    """Build the endpoint's REAL Pydantic body model, exactly as FastAPI builds it from the JSON
+    request. These handlers accepted a plain dict until they were migrated to typed bodies; passing
+    a bare dict now dies on `body.<field>`, so the harness has to call them the way the shipped app
+    does or it proves nothing about the real contract. LaxModel ignores unknown keys, so this is
+    byte-for-byte what a real request produces."""
+    return model(**payload)
+
 R.sb = lambda: fake.schema("storeops")
 core_router._uid_from_token = lambda auth: "uid-1"   # every call in this harness is signed in as one user
 
@@ -216,37 +236,37 @@ AUTH = "Bearer x"
 # ══ 1: THE REPORTED BUG, END TO END — morning clock-in, lunch clock-out, afternoon clock-in ═══════
 # Pure-kiosk (no shift schedule at all — the luxelink case), closing gate ON, closing not submitted.
 reset(closing_gate_enabled=True)
-r1 = R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)
+r1 = R.clock_in(_body(R.ClockInIn, {"store_code": "S1"}), authorization=AUTH, org_id=ORG)
 check("1a morning clock-in succeeds", r1.get("success") is True, r1)
 advance_clock(4.0)   # lunchtime — 4 real hours into the morning session
 
-r2 = R.clock_out({}, authorization=AUTH, org_id=ORG)
+r2 = R.clock_out(_body(R.ClockOutIn, {}), authorization=AUTH, org_id=ORG)
 check("1b lunch clock-out succeeds (THE FIX — previously blocked by the closing gate as a false "
       "'last one out' inference)", r2.get("success") is True and not r2.get("needs_closing"), r2)
 check("1b2 lunch session hours are real and positive (exactly 4h)", (r2.get("data", {}).get("hours")) == 4.0, r2)
 
-r3 = R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)
+r3 = R.clock_in(_body(R.ClockInIn, {"store_code": "S1"}), authorization=AUTH, org_id=ORG)
 check("1c afternoon clock-in succeeds — NOT a 409 'already clocked in' (the reported symptom)",
       r3.get("success") is True, r3)
 advance_clock(3.0)   # end of the afternoon session — 3 more real hours pass
 
 # ══ 2: their SECOND clock-out of the day IS still gated (protection preserved, not just disabled) ══
-r4 = R.clock_out({}, authorization=AUTH, org_id=ORG)
+r4 = R.clock_out(_body(R.ClockOutIn, {}), authorization=AUTH, org_id=ORG)
 check("2a evening clock-out (2nd session-close today) IS gated — the closer is still held accountable",
       r4.get("success") is False and r4.get("needs_closing") is True, r4)
 
 # Submit the closing -> now the gate clears and the SAME open punch can close normally.
 fake.seed("commcalc", "daily_closing", [{"org_id": ORG, "close_date": TODAY, "store_code": "S1"}])
-r5 = R.clock_out({}, authorization=AUTH, org_id=ORG)
+r5 = R.clock_out(_body(R.ClockOutIn, {}), authorization=AUTH, org_id=ORG)
 check("2b after the closing is submitted, the SAME punch closes normally (not re-opened, not lost)",
       r5.get("success") is True, r5)
 check("2c evening session hours are real and positive (exactly 3h)", (r5.get("data", {}).get("hours")) == 3.0, r5)
 
 # ══ 3: a GENUINELY open punch still blocks a concurrent clock-in (the rule the owner wants KEPT) ═══
 reset(closing_gate_enabled=True)
-R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)
+R.clock_in(_body(R.ClockInIn, {"store_code": "S1"}), authorization=AUTH, org_id=ORG)
 try:
-    R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)
+    R.clock_in(_body(R.ClockInIn, {"store_code": "S1"}), authorization=AUTH, org_id=ORG)
     check("3a concurrent clock-in on a truly-open punch is rejected", False, "no exception raised")
 except Exception as e:
     code = getattr(e, "status_code", None)
@@ -254,12 +274,12 @@ except Exception as e:
 
 # ══ 4: gate disabled entirely -> both clock-outs succeed with zero gating, same session shape ══════
 reset(closing_gate_enabled=False)
-R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)
+R.clock_in(_body(R.ClockInIn, {"store_code": "S1"}), authorization=AUTH, org_id=ORG)
 advance_clock(1.0)
-r6 = R.clock_out({}, authorization=AUTH, org_id=ORG)
-R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)
+r6 = R.clock_out(_body(R.ClockOutIn, {}), authorization=AUTH, org_id=ORG)
+R.clock_in(_body(R.ClockInIn, {"store_code": "S1"}), authorization=AUTH, org_id=ORG)
 advance_clock(0.5)
-r7 = R.clock_out({}, authorization=AUTH, org_id=ORG)
+r7 = R.clock_out(_body(R.ClockOutIn, {}), authorization=AUTH, org_id=ORG)
 check("4a gate disabled: lunch clock-out succeeds", r6.get("success") is True, r6)
 check("4b gate disabled: evening clock-out ALSO succeeds (no gating at all when the tenant opted out)",
       r7.get("success") is True, r7)
@@ -324,9 +344,9 @@ check("6b legacy per-row summation path ALSO sums both sessions identically",
 fake.seed("storeops", "manual_hours", [{"org_id": ORG, "employee_id": "E1", "work_date": TODAY,
                                         "hours": 1.5, "reason": "DM adjustment for a prior stuck punch"}])
 mh_rows_before = list(fake.store[("storeops", "manual_hours")])
-R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)
+R.clock_in(_body(R.ClockInIn, {"store_code": "S1"}), authorization=AUTH, org_id=ORG)
 advance_clock(1.0)
-R.clock_out({}, authorization=AUTH, org_id=ORG)
+R.clock_out(_body(R.ClockOutIn, {}), authorization=AUTH, org_id=ORG)
 check("7a a pre-existing manual_hours adjustment is neither duplicated nor removed by clock-in/out",
       fake.store[("storeops", "manual_hours")] == mh_rows_before, fake.store[("storeops", "manual_hours")])
 

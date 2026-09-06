@@ -71,10 +71,20 @@ import importlib.metadata as _md  # noqa: E402
 
 VERS = {p: _md.version(p) for p in ("supabase", "postgrest", "httpx", "httpcore", "h2")}
 print("   " + "  ".join(f"{k}={v}" for k, v in VERS.items()))
+# The pin is a CANARY: if the stack moves, re-read the sources before trusting the root cause.
+# 2026-09-06 — `h2` moved 4.3.0 -> 4.4.1 and this fired, exactly as designed. The sources were
+# re-read: every source-level assertion the diagnosis rests on (A2-A5 on postgrest, A6-A10 on
+# httpcore's HTTP/2 connection, A11 on postgrest's pool construction) still holds verbatim on the
+# installed stack, and no assertion anywhere in this harness inspects the `h2` package's own source
+# — h2's behaviour is asserted through httpcore, which is unmoved at 1.0.9. So the pin is advanced,
+# not the assertion relaxed: it still demands an EXACT match on all five.
+PINNED_STACK = {"supabase": "2.31.0", "postgrest": "2.31.0", "httpx": "0.28.1",
+                "httpcore": "1.0.9", "h2": "4.4.1"}
 check("A1. pinned stack is the one the diagnosis was read from",
-      VERS == {"supabase": "2.31.0", "postgrest": "2.31.0", "httpx": "0.28.1",
-               "httpcore": "1.0.9", "h2": "4.3.0"},
-      f"got {VERS} — RE-READ the sources before trusting this package's root cause")
+      VERS == PINNED_STACK,
+      f"got {VERS}, pinned {PINNED_STACK}, drifted="
+      f"{ {k: (PINNED_STACK.get(k), v) for k, v in VERS.items() if PINNED_STACK.get(k) != v} } "
+      f"— RE-READ the sources before trusting this package's root cause")
 
 # A2/A3: postgrest's send_with_retry cannot save a transport exception.
 swr_src = inspect.getsource(pg_rb.send_with_retry)
@@ -787,15 +797,51 @@ from fastapi import FastAPI                        # noqa: E402
 from fastapi.testclient import TestClient          # noqa: E402
 from app.main import app as real_app, HardeningMiddleware  # noqa: E402
 
-# This package registers ZERO routes (it touches no router file). 906 is the count at this
-# branch's base, b54a3f3. Merging onto a newer main legitimately changes it — pass the expected
-# number via EXPECT_ROUTES rather than editing this file.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "906"))
-print(f"   (app.main route count = {len(real_app.routes)}, expecting {_expect_routes})")
+# COUNTING FIX (2026-09-06): `len(real_app.routes)` is no longer the number of routes the app
+# serves. The installed FastAPI represents `include_router()` as ONE lazy `_IncludedRouter` entry
+# per included router instead of copying the sub-routes up, so this read 31 (4 built-ins + 26
+# included routers + /health) while the app was in fact serving well over a thousand endpoints. The
+# old assertion was measuring the wrong thing, not catching a regression — nothing had been lost.
+def _flatten_routes(routes):
+    """Every LEAF route the app serves, through however many levels of router inclusion. Handles
+    both the historical flattened shape and the current lazy `_IncludedRouter` wrapper."""
+    out = []
+    for r in routes:
+        inner = getattr(r, "original_router", None)
+        if inner is not None:
+            out.extend(_flatten_routes(inner.routes))
+            continue
+        sub = getattr(r, "routes", None)
+        if sub:
+            out.extend(_flatten_routes(sub))
+            continue
+        out.append(r)
+    return out
+
+
+_all_routes = _flatten_routes(real_app.routes)
+# 1573 is the true leaf count on this branch. It legitimately moves whenever ANY module adds an
+# endpoint, so it is a tripwire for "the app still assembles", not a spec — pass EXPECT_ROUTES
+# rather than editing this file when a merge changes it.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1573"))
+print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
+      f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
-      len(real_app.routes) == _expect_routes,
-      f"got {len(real_app.routes)}; if this tree merged newer main, re-run with "
-      f"EXPECT_ROUTES={len(real_app.routes)}")
+      len(_all_routes) == _expect_routes,
+      f"got {len(_all_routes)}; if this tree merged newer main, re-run with "
+      f"EXPECT_ROUTES={len(_all_routes)}")
+# The DRIFT-PROOF form of the same intent: whatever the total is, none of it comes from this
+# package. This one never needs re-pinning, and it is the claim that actually matters.
+_dbr_routes = [r for r in _all_routes
+               if "db_resilience" in getattr(getattr(r, "endpoint", None), "__module__", "")]
+check("I0b. db_resilience contributes ZERO routes (drift-proof form of the same claim)",
+      _dbr_routes == [], _dbr_routes)
+# And prove the app did not silently LOSE a module: every included router still carries routes.
+_empty = [getattr(r, "original_router", None) for r in real_app.routes
+          if getattr(r, "original_router", None) is not None
+          and not _flatten_routes(r.original_router.routes)]
+check("I0c. every router mounted by app.main is non-empty (no module silently failed to load)",
+      _empty == [], _empty)
 
 srv = TinyServer()
 probe = FastAPI()

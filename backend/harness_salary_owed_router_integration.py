@@ -23,9 +23,13 @@ Proves (mapping directly to the dispatch's verification requirements):
       / the payroll basis.
 """
 import json
+import os
 import sys
 
-sys.path.insert(0, ".")
+# Anchor imports AND every source read below to THIS file's own directory, so the
+# harness runs identically from backend/ and from the repo root (cf. 564c171f).
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 
 PASS, FAIL = [], []
 
@@ -158,10 +162,26 @@ def fake_get_supabase():
     return FAKE_CLIENT
 
 
+import _harness_dbfree  # noqa: E402
 import app.modules.storeops.router as router_mod          # noqa: E402
 import app.modules.core.router as core_router_mod         # noqa: E402
 
 router_mod.get_supabase = fake_get_supabase
+# DB-FREE GUARD: the line(s) above bind only THIS module's name. Shipped code also
+# reaches the factory directly (tenant_middleware.caller_app_user) and through other
+# routers' sb() (storeops.router._rbac_enabled), both of which used to land on the
+# REAL production client. Route every acquisition in the process at the fake.
+_harness_dbfree.install(FAKE_CLIENT)
+
+
+def _body(model, payload):
+    """Build the endpoint's REAL Pydantic body model, exactly as FastAPI builds it from the JSON
+    request. These handlers accepted a plain dict until they were migrated to typed bodies; passing
+    a bare dict now dies on `body.<field>`, so the harness has to call them the way the shipped app
+    does or it proves nothing about the real contract. LaxModel ignores unknown keys, so this is
+    byte-for-byte what a real request produces."""
+    return model(**payload)
+
 core_router_mod._uid_from_token = lambda auth: ("mgr-uid" if auth == "Bearer manager" else
                                                  ("mgr2-uid" if auth == "Bearer manager2" else None))
 
@@ -256,9 +276,9 @@ check("a10 Σ day.owed foots exactly to owed_total (Sally, salaried)",
 payroll_before_json = json.dumps(payroll, sort_keys=True)
 
 # ── (b) org-stamped write + idempotent recompute ────────────────────────────────────────────────────
-r1 = router_mod.record_salary_advance(
+r1 = router_mod.record_salary_advance(_body(router_mod.SalaryAdvanceIn, 
     {"employee_id": "HRL1", "amount": 50.0, "paid_date": "2026-03-02", "store_code": "Store1",
-     "withdrawal_ref": "env-1", "recorded_by": "dm1"},
+     "withdrawal_ref": "env-1", "recorded_by": "dm1"}),
     authorization="Bearer manager", org_id=ORG)
 check("b1 record returns ok + a ledger id", r1["ok"] is True and r1["id"])
 check("b2 ledger row org-stamped to the CALLER's org, not a constant",
@@ -266,9 +286,9 @@ check("b2 ledger row org-stamped to the CALLER's org, not a constant",
 check("b3 small advance (< earned) -> zero excess, no push cells", r1["additional_payroll"]["cells"] == [])
 
 # a SECOND org records an advance for an employee_id that COLLIDES with ORG's HRL1 string.
-router_mod.record_salary_advance(
+router_mod.record_salary_advance(_body(router_mod.SalaryAdvanceIn, 
     {"employee_id": "HRL1", "amount": 10000.0, "paid_date": "2026-03-02", "store_code": "StoreX",
-     "withdrawal_ref": "env-x", "recorded_by": "dm2"},
+     "withdrawal_ref": "env-x", "recorded_by": "dm2"}),
     authorization="Bearer manager2", org_id=ORG2)
 owed_org2 = router_mod.get_salary_owed(start=WEEK_START, end=WEEK_END, authorization="Bearer manager2", org_id=ORG2)
 check("b4 org isolation: ORG2's read never sees ORG's advance/employee data",
@@ -278,9 +298,9 @@ check("b5 org isolation: ORG's own read is unaffected by ORG2's advance",
       next(e for e in owed_org1_after["employees"] if e["employee_id"] == "HRL1")["cash_paid_total"] == 50.0)
 
 # push Harry's cumulative cash well past his earned total this period -> excess appears.
-router_mod.record_salary_advance(
+router_mod.record_salary_advance(_body(router_mod.SalaryAdvanceIn, 
     {"employee_id": "HRL1", "amount": 500.0, "paid_date": "2026-03-05", "store_code": "Store1",
-     "withdrawal_ref": "env-2", "recorded_by": "dm1"},
+     "withdrawal_ref": "env-2", "recorded_by": "dm1"}),
     authorization="Bearer manager", org_id=ORG)
 period = "2026-03"
 run1 = router_mod.run_additional_payroll(period, authorization="Bearer manager", org_id=ORG)
@@ -307,9 +327,9 @@ STORE["employees"].append({"id": "4", "employee_id": "EXACT1", "org_id": ORG, "n
                             "pay_amount": None, "hire_date": None, "termination_date": None, "is_active": True})
 STORE["shifts"].append({"id": 104, "org_id": ORG, "employee_id": "EXACT1", "store_code": "Store1",
                          "shift_date": "2026-03-02", "scheduled_hours": 5, "actual_hours": 5, "is_deleted": False})
-router_mod.record_salary_advance(
+router_mod.record_salary_advance(_body(router_mod.SalaryAdvanceIn, 
     {"employee_id": "EXACT1", "amount": 100.0, "paid_date": "2026-03-02", "store_code": "Store1",
-     "withdrawal_ref": "env-3", "recorded_by": "dm1"},
+     "withdrawal_ref": "env-3", "recorded_by": "dm1"}),
     authorization="Bearer manager", org_id=ORG)
 run3 = router_mod.run_additional_payroll(period, authorization="Bearer manager", org_id=ORG)
 xavier_row = next(e for e in run3["employees"] if e["employee_id"] == "EXACT1")
@@ -334,14 +354,14 @@ check("preview matches the last run's cells (read-only, no double-push)",
 # ── validation ───────────────────────────────────────────────────────────────────────────────────
 from fastapi import HTTPException  # noqa: E402
 try:
-    router_mod.record_salary_advance({"employee_id": "GHOST-NOT-REAL", "amount": 10, "paid_date": "2026-03-02"},
+    router_mod.record_salary_advance(_body(router_mod.SalaryAdvanceIn, {"employee_id": "GHOST-NOT-REAL", "amount": 10, "paid_date": "2026-03-02"}),
                                       authorization="Bearer manager", org_id=ORG)
     check("unknown employee_id rejected", False, "did not raise")
 except HTTPException as e:
     check("unknown employee_id rejected (400, pick-don't-type)", e.status_code == 400)
 
 try:
-    router_mod.record_salary_advance({"employee_id": "HRL1", "amount": -5, "paid_date": "2026-03-02"},
+    router_mod.record_salary_advance(_body(router_mod.SalaryAdvanceIn, {"employee_id": "HRL1", "amount": -5, "paid_date": "2026-03-02"}),
                                       authorization="Bearer manager", org_id=ORG)
     check("non-positive amount rejected", False, "did not raise")
 except HTTPException as e:
