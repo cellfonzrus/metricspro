@@ -78,6 +78,7 @@ class OperatorIn(LaxModel):
 class PolicyIn(LaxModel):
     legacy_membership_flag_honored: Any = None
     require_entry_session: Any = None
+    enforce_scoped_roles: Any = None
     entry_reason_required: Any = None
     entry_min_minutes: Any = None
     entry_max_minutes: Any = None
@@ -132,6 +133,83 @@ def _active_operator_count():
     except Exception:
         return 0
     return sum(1 for r in rows if OP.operator_row_active(r))
+
+
+def _active_operator_rows():
+    """Every registry row, for the decisions that must count CAPABILITY HOLDERS rather than bodies.
+    An error reads as an EMPTY registry — the conservative direction, which refuses an access-cutting
+    flip rather than permitting one."""
+    try:
+        return (adm().schema(_SCHEMA).table(_T_OPERATOR).select("*").execute().data) or []
+    except Exception:
+        return []
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# SCOPED-ROLE ENFORCEMENT ON THE PRE-EXISTING SUPER-ADMIN ENDPOINTS  (mig 984)
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# `core.router._require_super_admin` — still THE one gate — calls `scoped_role_verdict` as a LAYER.
+# Everything about this is designed so the answer is TODAY's answer until somebody deliberately
+# turns it on, and so it can always be turned back off:
+#   · OPERATOR_ENFORCE=0 in the environment kills both halves outright (the break-glass shape this
+#     codebase already uses for TWOFA_ENFORCE / STRICT_MEMBERSHIP / REQUIRE_AUTH);
+#   · a missing migration 984 column, an unreadable policy row, an unreadable registry, or an
+#     unknown route each read as NOT ENFORCED;
+#   · the reads are TTL-cached, so switching this on does not add a per-request round trip.
+_ENFORCE_TTL = 30.0
+_enf_cache: dict = {}
+
+
+def _enforce_env_on() -> bool:
+    import os
+    return (os.getenv("OPERATOR_ENFORCE", "1") or "1").strip().lower() not in ("0", "false", "no")
+
+
+def _cached(key, ttl, producer):
+    import time
+    now = time.time()
+    hit = _enf_cache.get(key)
+    if hit and hit[1] > now:
+        return hit[0]
+    val = producer()
+    _enf_cache[key] = (val, now + ttl)
+    return val
+
+
+def _route_overrides():
+    """`core.operator_route_capability` rows (mig 984) — the per-platform override of the code
+    default map (RULE TWO). Absent table ⇒ () ⇒ the house map alone."""
+    def _read():
+        try:
+            return (adm().schema(_SCHEMA).table("operator_route_capability").select("*")
+                    .eq("is_active", True).order("route_prefix").execute().data) or []
+        except Exception:
+            return []
+    return _cached("routes", 300.0, _read)
+
+
+def scoped_role_verdict(uid, *, legacy_super_admin, house_admin, path=None, method=None):
+    """None when enforcement is OFF (the caller then keeps its own, unchanged verdict); otherwise the
+    `operator.endpoint_decision` dict. NEVER raises — any failure returns None, i.e. today."""
+    try:
+        if not _enforce_env_on():
+            return None
+        pol = _cached("policy", _ENFORCE_TTL, _policy_row)
+        if not OP.effective_policy(pol)["enforce_scoped_roles"]:
+            return None
+        if path is None:
+            from app.core.tenant_middleware import current_route
+            path, method = current_route()
+        if not path:
+            # The middleware never saw this request (a test client, a worker, a CLI). An unknown
+            # route cannot be gated, so enforcement stands down rather than guessing.
+            return None
+        row = _cached("op:%s" % uid, _ENFORCE_TTL, lambda: _operator_row(uid))
+        return OP.endpoint_decision(path=path, method=method, legacy_super_admin=bool(legacy_super_admin),
+                                    operator_row=row, policy=pol, house_admin=bool(house_admin),
+                                    route_map=_route_overrides())
+    except Exception:
+        return None
 
 
 def _authority(authorization: str, active_org: str = ""):
@@ -585,28 +663,75 @@ def set_policy(body: PolicyIn, authorization: str = Header(default=""),
     requested = {k: v for k, v in {
         "legacy_membership_flag_honored": body.legacy_membership_flag_honored,
         "require_entry_session": body.require_entry_session,
+        "enforce_scoped_roles": body.enforce_scoped_roles,
         "entry_reason_required": body.entry_reason_required,
         "entry_min_minutes": body.entry_min_minutes,
         "entry_max_minutes": body.entry_max_minutes,
         "entry_default_minutes": body.entry_default_minutes,
     }.items() if v is not None}
     cur = OP.effective_policy(_policy_row())
+    rows = _active_operator_rows()
     d = OP.policy_change_decision(current_policy=cur, requested=requested,
-                                  active_registry_operators=_active_operator_count())
+                                  active_registry_operators=_active_operator_count(),
+                                  active_rows=rows)
     if not d["allowed"]:
         _write_action(caller, "policy.change.denied", detail={"code": d["code"],
                                                               "requested": requested}, required=False)
         raise HTTPException(400, d["message"])
     _write_action(caller, "policy.change", detail={"from": cur, "to": d["policy"]})
     try:
-        rows = (adm().schema(_SCHEMA).table(_T_POLICY).select("id").limit(1).execute().data) or []
-        if rows:
-            adm().schema(_SCHEMA).table(_T_POLICY).update(d["policy"]).eq("id", rows[0]["id"]).execute()
-        else:
-            adm().schema(_SCHEMA).table(_T_POLICY).insert(d["policy"]).execute()
+        _persist_policy(d["policy"])
     except Exception as e:
         raise HTTPException(503, "could not write the policy (is migration 980 applied?) — %s" % e)
+    _enf_cache.pop("policy", None)      # the switch takes effect on the next request, not in 30s
     return {"ok": True, "policy": d["policy"], "code": d["code"], "message": d["message"]}
+
+
+# Columns migration 984 adds. A platform on 980 but not yet 984 must still be able to change its
+# policy, so the write retries WITHOUT them rather than failing the whole call (half-applied state).
+_POLICY_COLUMNS_984 = ("enforce_scoped_roles",)
+
+
+def _persist_policy(policy):
+    for drop in ((), _POLICY_COLUMNS_984):
+        payload = {k: v for k, v in policy.items() if k not in drop}
+        try:
+            rows = (adm().schema(_SCHEMA).table(_T_POLICY).select("id").limit(1).execute().data) or []
+            if rows:
+                adm().schema(_SCHEMA).table(_T_POLICY).update(payload).eq("id", rows[0]["id"]).execute()
+            else:
+                adm().schema(_SCHEMA).table(_T_POLICY).insert(payload).execute()
+            return
+        except Exception:
+            if drop:
+                raise
+
+
+@router.get("/enforcement")
+def enforcement_state(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """OWNER PREVIEW for the scoped-role cutover (mig 984): what enforcement would change, per
+    operator, BEFORE anything is switched on.
+
+    Read-only. `would_lose` lists the mapped route prefixes each active operator would stop being
+    able to reach; `full_reach` marks the operators enforcement cannot bite. `exempt_prefixes` is the
+    escape hatch — the console (and therefore the way back off) is in it by construction."""
+    _caller, auth = _authority(authorization, x_active_org)
+    _need(auth, OP.CAP_OPERATOR_READ)
+    pol = OP.effective_policy(_policy_row())
+    rows = _active_operator_rows()
+    preview = OP.enforcement_preview(rows, policy=pol)
+    probe = OP.policy_change_decision(current_policy=pol, requested={"enforce_scoped_roles": True},
+                                      active_registry_operators=_active_operator_count(),
+                                      active_rows=rows)
+    entry_probe = OP.policy_change_decision(current_policy=pol,
+                                            requested={"require_entry_session": True},
+                                            active_registry_operators=_active_operator_count(),
+                                            active_rows=rows)
+    return {"preview": preview, "policy": pol,
+            "enforcement_allowed": probe["allowed"], "enforcement_note": probe["message"],
+            "require_entry_allowed": entry_probe["allowed"],
+            "require_entry_note": entry_probe["message"],
+            "route_overrides": _route_overrides(), "env_kill_switch_on": not _enforce_env_on()}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════

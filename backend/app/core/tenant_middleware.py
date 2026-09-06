@@ -645,6 +645,24 @@ def _set_acting(org, super_admin=False):
     _ACTING_SUPER_ADMIN.set(bool(super_admin))
 
 
+# The ROUTE this request is for — (path, method). Published for gates that must vary by surface:
+# `core.router._require_super_admin` consults `operator.endpoint_decision` with it (mig 984), which
+# is how a SCOPED operator role can gate the pre-existing super-admin endpoints without editing
+# every one of their call sites. Unset (None, "") ⇒ "unknown route" ⇒ those gates fall back to
+# today's answer, so a code path that never runs this middleware is never narrowed by it.
+_REQUEST_ROUTE: contextvars.ContextVar = contextvars.ContextVar("mp_request_route", default=None)
+
+
+def _set_request_route(path, method=None):
+    _REQUEST_ROUTE.set((str(path or ""), str(method or "").upper()))
+
+
+def current_route():
+    """(path, method) for THIS request, or (None, "") outside a request the middleware saw."""
+    v = _REQUEST_ROUTE.get()
+    return v if v else (None, "")
+
+
 def acting_org():
     """The tenant THIS request acts as, as already validated by the middleware (None when unknown —
     an unauthenticated/public/enforcement-off request)."""
@@ -874,7 +892,14 @@ class TenantScopeMiddleware:
                     pass
 
     async def __call__(self, scope, receive, send):
-        if scope.get("type") != "http" or not _enabled():
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+        # The ROUTE of this request, published before anything else can return early, so a handler's
+        # own gate can ask "which surface am I?" without threading a Request through 66 call sites.
+        # Set for EVERY http request including public/allowlisted ones; consumers treat an unset
+        # value as "unknown route" and fall back to today's behaviour (see operator.endpoint_*).
+        _set_request_route(scope.get("path", ""), scope.get("method"))
+        if not _enabled():
             return await self.app(scope, receive, send)
         path = scope.get("path", "")
         method = (scope.get("method") or "GET").upper()

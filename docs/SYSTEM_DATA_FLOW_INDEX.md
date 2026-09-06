@@ -2174,6 +2174,8 @@ as a market-grant keyset member; ambiguity fails closed):
 | `core.platform_operator_policy` (mig `980`, singleton — RULE TWO config; `legacy_membership_flag_honored` IS THE CUTOVER, `require_entry_session` is the access-cutting proposal, both default to today's behaviour) | `POST /core/operator/policy` (refuses the cutover while zero active operators exist) | `operator.effective_policy` (an absent/garbage row ⇒ POLICY_DEFAULTS ⇒ today) |
 | `core.operator_action` (mig `980` — append-only AND hash-chained; UPDATE/DELETE revoked. Records the OPERATOR's own auth id + email, never the tenant's) | `operator_api._write_action` (FAIL-CLOSED on every mutating action: a 503 rather than an unrecorded operator act) | `GET /core/operator/audit` (+ `operator.verify_chain` over the WHOLE chain), `GET /core/operator/anomalies` |
 | `core.operator_entry_session` (mig `980` — the record the cross-tenant switcher never had: who entered which company, why, from what IP, hard `expires_at`) | `POST /core/operator/enter` / `/exit` | the in-tenant banner (`GET /core/operator/entry`), `GET /core/operator/entry-log`, and the TENANT's own read `GET /core/tenant-operator-access` |
+| `core.platform_operator_policy.enforce_scoped_roles` (mig `984` — THE SCOPE SWITCH; FALSE = today, a scoped role gates the console only. TRUE = `_require_super_admin` also consults `operator.endpoint_decision`, so a narrow role stops being all-powerful on the pre-existing super-admin endpoints. Seeded COMMENTED OUT) | `POST /core/operator/policy` (refuses the flip when nobody would still hold `policy.write`) | `operator_api.scoped_role_verdict` → `core.router._require_super_admin`; previewed by `GET /core/operator/enforcement` |
+| `core.operator_route_capability` (mig `984` — route prefix → required capability, the per-platform OVERRIDE of the house map `operator.ROUTE_CAPABILITIES`. RULE TWO, same shape as `core.module_route_map` (974). NO org_id column, deliberately. Ships EMPTY) | operator SQL | `operator.endpoint_capability` (longest prefix wins; a verb-specific row beats `*`; an unknown capability name is IGNORED, never invented) |
 | `core.platform_notice` (mig `981` — operator→tenants status broadcast; audience by org_id, never by tenant name) | `POST /core/operator/notices`, `/notices/withdraw` | `GET /core/platform-notice` (tenant-facing; org resolved from the VERIFIED membership, `org_ids` stripped from the response) |
 | `core.restore_drill` (mig `981` — backup/restore ATTESTATION; `verified_at` is the heartbeat column) | `POST /core/operator/restore-drill` (refuses a record that is not evidence) | `GET /core/operator/restore-drill` → `operator.drill_lamp`; and the control box with NO code change via a `core.system_check` heartbeat row (COMMENTED OUT in mig 981) |
 
@@ -2282,6 +2284,7 @@ as a market-grant keyset member; ambiguity fails closed):
 
 | `GET /core/operator/me` (the operator persona: capabilities, scoped role, **why** they are authorized, effective policy, console nav) · `/roster` `GET/POST/DELETE` · `/policy` `GET/POST` (the CUTOVER) · `/audit` · `/anomalies` · `/entry-log` · `/notices` · `/restore-drill` | `core/operator_api.py`; pure decisions `core/operator.py` | §22 platform operator console |
 | `POST /core/operator/enter` / `POST /core/operator/exit` (the AUDITED, time-boxed tenant entry — wraps the EXISTING cross-tenant switcher, adds no second bypass) · `GET /core/operator/entry` (drives the in-tenant banner) | `core/operator_api.py` (`enter_tenant`/`exit_tenant`); pure `operator.entry_decision`/`banner_payload` | §22 tenant entry |
+| `GET /core/operator/enforcement` (the OWNER PREVIEW for the mig-`984` scope cutover: per operator, the mapped route prefixes they would LOSE, who holds `policy.write`, and the exempt list) · `POST /core/operator/policy` also carries `enforce_scoped_roles` | `core/operator_api.py`; pure `operator.enforcement_preview` / `endpoint_decision` / `policy_change_decision` | §22 scoped-role enforcement |
 | `GET /core/platform-notice` (tenant-facing status banner — any signed-in user; org from the VERIFIED membership) · `GET /core/tenant-operator-access` (a TENANT admin's "who from the platform was in my company", gated by the existing `_require_setting(..., 'security')`) | `core/operator_api.py` `public_router` (mounted WITHOUT the /operator prefix) | §22 tenant-facing transparency |
 
 ## 18. Cross-reference: by METRIC / KPI
@@ -2290,6 +2293,7 @@ as a market-grant keyset member; ambiguity fails closed):
 |--------|--------------------|-----------------|
 | Tenant AI cost / billable price | `ai_usage.exact_cost` (in x rate_in + out x rate_out from `core.token_rates` — EXACT split, not mig 718's blend) + `apply_margin`; unpriceable models are stated, never $0 | `GET /billing/ai-usage`, `core.ai_usage_period`; §21 |
 | Tenant billable total (itemized) | `statement.build_statement` = monthly fee + per-module (billable calls x price) + AI usage; lines quantised once and summed so the document adds up | `GET /billing/statement`, `core.billing_statement`; §21 |
+| Platform authority REACH (how many operators hold full reach; how many surfaces a scoped role would lose at the mig-`984` cutover) | `core.platform_operator.operator_role` + per-row `capabilities` overrides, resolved against `operator.ROUTE_CAPABILITIES` ∪ `core.operator_route_capability` | `operator.enforcement_preview` → `GET /core/operator/enforcement`; §22 |
 | Platform health lamp (per subsystem, per tenant, and the roll-up) | `control_box.evaluate_check` → `roll_up`; composed from `import_health.collect_attention` + `portal_session_health.summarize` + scheduler heartbeats. Ladder `green < unmonitored < amber < unknown < red`; `unmonitored` is NEVER counted as green and the coverage fraction is stated out loud | `GET /core/control-box`, `core.system_check_run.lamp`; §20 |
 | External credit-card settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='external_cc'` | `merchant_portals.totals_by_store_day`; tallied against `daily_closing.t_ext_cc` by `closing/external_credit_recon` (§12a) |
 | POS-merchant settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='pos_merchant'` | same reader, `pos_merchant` role (§12a) |
@@ -2832,7 +2836,12 @@ is FAIL-CLOSED: an operator action that cannot be recorded does not happen (503)
   `effective_policy`, `policy_change_decision`, `operator_row_active`, `role_capabilities`,
   `has_capability`, `entry_decision`, `session_state`, `banner_payload`, `chain_hash`/`audit_row`/
   `verify_chain`, `anomalies`, `notice_visible`/`notice_lamp`, `drill_record_valid`/`drill_lamp`,
-  `console_sections`. Capability vocabulary + `OPERATOR_ROLES` + `POLICY_DEFAULTS` live here.
+  `console_sections`; and (mig 984) `ROUTE_CAPABILITIES` / `ENFORCEMENT_EXEMPT_PREFIXES` /
+  `is_enforcement_exempt` / `endpoint_capability` / `endpoint_decision` / `capability_holders` /
+  `enforcement_preview`. Capability vocabulary + `OPERATOR_ROLES` + `POLICY_DEFAULTS` live here.
+- `backend/app/core/tenant_middleware.py` — publishes the request route (`_set_request_route` /
+  `current_route`) so a handler's own gate can vary by surface without threading a `Request` through
+  66 call sites. Set for every http request, before any early return.
 - `backend/app/modules/core/operator_api.py` — I/O only. `router` (`/core/operator/*`) +
   `public_router` (the two tenant-facing reads). Mounted at the tail of `core/router.py`.
 - `frontend/src/app/(operator)/operator/*` — the console in its **own route group**: a separate shell
@@ -2842,8 +2851,11 @@ is FAIL-CLOSED: an operator action that cannot be recorded does not happen (503)
 - `frontend/src/lib/operator.ts` · `operator-ui.tsx` · `operator-context.tsx`;
   `frontend/src/components/PlatformBanners.tsx` (entry banner + status banner, mounted in
   `(platform)/layout.tsx` beside the impersonation banner).
-- **Harness:** `backend/harness_operator_console.py` — 149 checks (no-lockout, escalation chain,
-  audit tamper-evidence, fail-closed gates, the researched controls). DB-free, stdlib only.
+- **Harnesses:** `backend/harness_operator_console.py` — 149 checks (no-lockout, escalation chain,
+  audit tamper-evidence, fail-closed gates, the researched controls) · `backend/
+  harness_operator_scope_enforcement.py` — 122 checks (mig 984: the enforcement-off byte-identity
+  sweep, the rollout states, the escape hatches, route resolution, and the gate wiring itself).
+  Both DB-free, stdlib only.
 
 ### BILLING IS PLACED, NOT BUILT
 
@@ -2861,6 +2873,10 @@ console contributes navigation only. **Assumption recorded:** §21 keeps its sur
   (hash-chained, UPDATE/DELETE revoked), `core.operator_entry_session`. Seeds the policy row and one
   `owner` row per existing `super_admin`. Touches `storeops.app_users` **not at all**. The cutover
   and the `require_entry_session` proposal are COMMENTED OUT.
+- `984_operator_scope_enforcement.sql` — `core.platform_operator_policy.enforce_scoped_roles` (THE
+  SCOPE SWITCH, default FALSE, the enabling UPDATE **commented out**) + `core.operator_route_capability`
+  (route→capability overrides; ships EMPTY, no `org_id` column). Additive, idempotent, `-- REVERT:`,
+  touches `storeops.app_users` not at all.
 - `981_platform_notice_and_restore_drill.sql` — `core.platform_notice` (operator→tenant status
   broadcast) + `core.restore_drill` (attestation for §20's declared-UNMONITORED backup gap). The
   `core.system_check` row that turns that grey lamp into a real heartbeat is COMMENTED OUT, because
@@ -2887,12 +2903,66 @@ endpoints · mandatory entry sessions (`require_entry_session`) · tenant lifecy
 and rate limits · SSO + domain claim · data residency · DSAR export/delete · API-key and
 webhook-secret lifecycle · automatic notification to a tenant's admins when an operator enters.
 
+### SCOPED ROLES ARE NOW ENFORCED ON THE **EXISTING** ENDPOINTS (mig `984`, owner-approved)
+
+Proposal #1 above, built. Until 984 a scoped role was a LABEL: only the new console endpoints gated
+on capabilities, so a `support` operator could still call `/core/ip-block`, `/core/super-admins` and
+`/billing/pricing`. `core.router._require_super_admin` — still **THE one gate** — now consults ONE
+layer, `operator.endpoint_decision`, and behaves exactly as it always did whenever that layer stands
+down.
+
+**REUSED, NOT RE-DERIVED (duplicate gate):** the gate is `_require_super_admin` (extended in place,
+not replaced, and still the only definition) · authority is `operator.resolve_authority` (the same
+legacy ∪ registry union) · the capability vocabulary is `operator.ALL_CAPABILITIES` (one new member,
+`platform.repair`, for the control-box run / fix-pipeline surfaces) · the route-prefix map reuses the
+shape `billing/module_usage.module_for_path` already uses for `core.module_route_map` (974): a code
+DEFAULT plus config-row overrides, longest prefix wins, **unmapped is never guessed** · the "refuse a
+change that leaves nobody" rule is `policy_change_decision`'s, which is `revoke_super_admin`'s.
+
+**How it is turned on, and off.** `enforce_scoped_roles` (mig 984, default FALSE, seed COMMENTED
+OUT). On: Console → Operators, which first shows `GET /core/operator/enforcement` — per operator, the
+exact route prefixes they would lose. Off again: the same button · `UPDATE
+core.platform_operator_policy SET enforce_scoped_roles = FALSE` · or `OPERATOR_ENFORCE=0` in the
+environment, which needs no database at all.
+
+### ★ NO LOCKOUT, REBUILT DELIBERATELY FOR A NARROWING CHANGE ★
+
+980 was safe by construction (a union can only ADD). 984 subtracts, so the property is re-proved in
+`harness_operator_scope_enforcement.py` (122 checks) across the rollout states:
+
+| State | Result |
+|---|---|
+| Enforcement OFF (11 policy shapes × 7 caller shapes × 24 real surfaces = 1,848 combinations) | ✅ **zero** denials, and the layer never reports itself as enforcing |
+| ON, correctly-seeded `owner` | ✅ every surface, via the row alone even after the cutover |
+| ON, operator row expired / deactivated / malformed, legacy honored | ✅ in via legacy |
+| ON, registry EMPTY, legacy honored | ✅ in via legacy |
+| ON + house-admin bootstrap only, post-cutover | ✅ in — the floor under the floor survives |
+| Half-applied 984 (a 980 policy row with no `enforce_scoped_roles` column) | ✅ reads FALSE ⇒ today |
+| ON + post-cutover + registry empty | ❌ lockout — **and the flip into it is REFUSED** |
+
+Structural, not incidental: `owner` **is** `ALL_CAPABILITIES`; a still-honored legacy flag and the
+house-admin rung each carry `ALL_CAPABILITIES`; an unmapped route is ungated; and
+`ENFORCEMENT_EXEMPT_PREFIXES` (`/core/operator`, `/core/me`, `/core/my-tenants`, `/core/bootstrap`,
+and the whole `/impersonation` prefix) can never be gated — **not even by a config row** — so the
+control that switches enforcement off can never be closed by enforcement. `policy_change_decision`
+refuses the flip when zero active operators would hold `policy.write`, and warns at exactly one.
+
+**Impersonation is untouched and must stay that way.** No capability is named `impersonate`, no route
+in the map points at `/api/v1/impersonation`, that prefix is exempt, and `ENTRY_GRANTS` is still
+exactly `("acting_org",)` — asserted in both harnesses.
+
 ### KNOWN LIMITS (declared, not hidden)
 
+0. **Enforcement needs the request route, which comes from `tenant_middleware`.** The middleware
+   publishes `(path, method)` in a contextvar before any early return. A code path that never runs
+   the middleware (a worker, a CLI, a test client) yields an unknown route, and an unknown route is
+   NOT gated — the fail-open direction, chosen because a narrowing change must never be the reason a
+   surface becomes unreachable. Those paths are not HTTP requests and do not carry a bearer token, so
+   nothing reaches `_require_super_admin` through them today.
 1. **Entry sessions are RECORDED, not yet REQUIRED.** `require_entry_session` defaults FALSE and is
    not wired into `tenant_middleware`, so the bare switcher still works exactly as before. Making it
    mandatory is access-cutting and is the owner's call (mig 980, commented out).
-2. **Scoped roles are not enforced on existing endpoints.** Only the NEW console endpoints gate on
-   capabilities; every pre-existing super-admin endpoint still answers as it always did.
+2. ~~**Scoped roles are not enforced on existing endpoints.**~~ **CLOSED by mig `984`** — off by
+   default; see the section above for how it is opted into and reversed.
 3. **The hash chain cannot stop a service-role rewrite** — nothing can, on a database the operator
    administers. It makes one undeniable. Tail truncation is covered by `seq`, not by the hash.

@@ -115,11 +115,12 @@ CAP_NOTICE_WRITE = "notice.write"         # publish a platform status notice
 CAP_CONTROL_BOX = "control_box.read"
 CAP_SECURITY = "security.write"           # IP blocks, session revocation, MFA policy
 CAP_POLICY_WRITE = "policy.write"         # change the operator policy itself (incl. the cutover)
+CAP_PLATFORM_REPAIR = "platform.repair"   # run a system check / drive the fix pipeline (mig 984)
 
 ALL_CAPABILITIES = frozenset({
     CAP_TENANT_READ, CAP_TENANT_ENTER, CAP_TENANT_LIFECYCLE, CAP_BILLING_READ, CAP_BILLING_WRITE,
     CAP_OPERATOR_READ, CAP_OPERATOR_WRITE, CAP_AUDIT_READ, CAP_NOTICE_WRITE, CAP_CONTROL_BOX,
-    CAP_SECURITY, CAP_POLICY_WRITE,
+    CAP_SECURITY, CAP_POLICY_WRITE, CAP_PLATFORM_REPAIR,
 })
 
 # ── Scoped operator roles (industry standard: support ≠ billing ≠ engineering ≠ owner) ───────────
@@ -130,7 +131,8 @@ OPERATOR_ROLES = {
     "owner": ALL_CAPABILITIES,
     "support": frozenset({CAP_TENANT_READ, CAP_TENANT_ENTER, CAP_AUDIT_READ, CAP_CONTROL_BOX}),
     "billing": frozenset({CAP_TENANT_READ, CAP_BILLING_READ, CAP_BILLING_WRITE, CAP_AUDIT_READ}),
-    "engineering": frozenset({CAP_TENANT_READ, CAP_CONTROL_BOX, CAP_AUDIT_READ, CAP_NOTICE_WRITE}),
+    "engineering": frozenset({CAP_TENANT_READ, CAP_CONTROL_BOX, CAP_AUDIT_READ, CAP_NOTICE_WRITE,
+                              CAP_PLATFORM_REPAIR}),
     "readonly": frozenset({CAP_TENANT_READ, CAP_AUDIT_READ, CAP_CONTROL_BOX}),
 }
 DEFAULT_OPERATOR_ROLE = "owner"
@@ -145,8 +147,13 @@ POLICY_DEFAULTS = {
     # registry is populated — and `policy_change_decision` refuses the flip if it would leave nobody.
     "legacy_membership_flag_honored": True,
     # False (default) = the cross-tenant switcher keeps working untouched. True = a super-admin must
-    # open an entry session before acting as another tenant. ACCESS-CUTTING ⇒ default OFF, PROPOSED.
+    # open an entry session before acting as another tenant. ACCESS-CUTTING ⇒ default OFF.
     "require_entry_session": False,
+    # THE SCOPE SWITCH (mig 984). False (default) = every pre-existing super-admin endpoint answers
+    # exactly as it does today and a scoped role is a LABEL. True = `_require_super_admin` also asks
+    # `endpoint_decision`, so a `support` operator stops being all-powerful outside the console.
+    # ACCESS-CUTTING ⇒ default OFF, seeded COMMENTED OUT, reversible from the same control.
+    "enforce_scoped_roles": False,
     "entry_reason_required": True,
     "entry_min_minutes": 5,
     "entry_max_minutes": 60,
@@ -157,7 +164,8 @@ POLICY_DEFAULTS = {
     "anomaly_fanout_tenants": 5,      # distinct tenants entered in a rolling day
     "anomaly_denied_streak": 5,       # consecutive refused attempts
 }
-_BOOL_KEYS = ("legacy_membership_flag_honored", "require_entry_session", "entry_reason_required")
+_BOOL_KEYS = ("legacy_membership_flag_honored", "require_entry_session", "entry_reason_required",
+              "enforce_scoped_roles")
 
 
 def effective_policy(row):
@@ -343,7 +351,8 @@ def has_capability(authority, capability) -> bool:
     return capability in (authority.get("capabilities") or frozenset())
 
 
-def policy_change_decision(*, current_policy, requested, active_registry_operators, now=None):
+def policy_change_decision(*, current_policy, requested, active_registry_operators,
+                           active_rows=None, now=None):
     """May this policy change be applied? PURE. The ONE refusal that matters:
 
         turning OFF `legacy_membership_flag_honored` while ZERO active registry operators exist
@@ -364,6 +373,33 @@ def policy_change_decision(*, current_policy, requested, active_registry_operato
                 "message": ("Refused: no active platform-operator record exists yet, so switching off "
                             "the legacy tenant super-admin flag would lock every operator out. Add at "
                             "least one operator on the Operators page first — then flip this.")}
+
+    # ── mig 984: the two ACCESS-CUTTING switches get the same discipline ─────────────────────────
+    # Each may only be turned ON while somebody would still be able to turn it back OFF (or to do
+    # the thing it gates at all). `active_rows` is the registry, so the answer comes from data;
+    # when it is not supplied the caller's plain count is used as the proxy and the refusal is the
+    # conservative direction either way.
+    honored_after = bool(req["legacy_membership_flag_honored"])
+    if active_rows is None:
+        policy_holders = entry_holders = n
+    else:
+        policy_holders = capability_holders(active_rows, CAP_POLICY_WRITE, now=now)
+        entry_holders = capability_holders(active_rows, CAP_TENANT_ENTER, now=now)
+
+    if (not cur["enforce_scoped_roles"]) and req["enforce_scoped_roles"] \
+            and not honored_after and policy_holders < 1:
+        return {"allowed": False, "policy": cur, "code": "would_lock_out_policy",
+                "message": ("Refused: with the legacy super-admin flag no longer honored, no active "
+                            "platform operator holds 'policy.write' — switching enforcement on would "
+                            "leave nobody able to switch it back off. Give an operator the `owner` "
+                            "role first.")}
+    if (not cur["require_entry_session"]) and req["require_entry_session"] \
+            and not honored_after and entry_holders < 1:
+        return {"allowed": False, "policy": cur, "code": "would_block_entry",
+                "message": ("Refused: no active platform operator holds 'tenant.enter', so requiring "
+                            "an entry session would mean nobody could ever enter a tenant. (Your own "
+                            "home tenant is never affected either way.)")}
+
     if turning_off and n == 1:
         # Allowed, but say it out loud: one row is now the only thing standing between the owner and
         # a support call. The API surfaces this verbatim.
@@ -371,6 +407,12 @@ def policy_change_decision(*, current_policy, requested, active_registry_operato
                 "message": ("Applied. NOTE: exactly ONE active platform operator remains. If that "
                             "record is deactivated or expires, nobody can administer the platform. "
                             "Add a second operator before relying on this.")}
+    if (not cur["enforce_scoped_roles"]) and req["enforce_scoped_roles"] \
+            and not honored_after and policy_holders == 1:
+        return {"allowed": True, "policy": req, "code": "single_point_of_failure",
+                "message": ("Applied. NOTE: exactly ONE active operator holds 'policy.write'. If that "
+                            "record expires or is deactivated, enforcement can no longer be switched "
+                            "off from the console — keep the migration 984 rollback SQL to hand.")}
     return {"allowed": True, "policy": req, "code": "ok", "message": ""}
 
 
@@ -724,3 +766,234 @@ def console_sections(authority):
             out.append({"href": href, "label": label, "icon": icon, "capability": cap,
                         "description": desc})
     return out
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# SCOPED-ROLE ENFORCEMENT ON THE **EXISTING** SUPER-ADMIN ENDPOINTS  (mig 984)
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# Proposal #1 from the mig 980/981 write-up, now built. Until this, a scoped role was a LABEL: only
+# the new console endpoints gated on capabilities, so a `support` operator remained all-powerful on
+# every pre-existing super-admin surface. This section makes the scope actually gate.
+#
+# DUPLICATE CHECK (CLAUDE.md build gate). Nothing new is derived here:
+#   · the GATE is still `core.router._require_super_admin` — the ONE gate. `endpoint_decision` is a
+#     LAYER it consults; there is no second door and no second definition of "super-admin";
+#   · the AUTHORITY is still `resolve_authority` — the same union of legacy flag + registry row;
+#   · the CAPABILITY vocabulary is the one above — no parallel permission names are invented;
+#   · the ROUTE-PREFIX → thing map reuses the shape `billing/module_usage.module_for_path` already
+#     uses for `core.module_route_map` (mig 974): a code DEFAULT overridden per platform by config
+#     rows, longest prefix wins, and an UNMAPPED prefix is never guessed onto a neighbour;
+#   · the "refuse a change that would leave nobody" discipline is `policy_change_decision`'s, which is
+#     itself `revoke_super_admin`'s.
+#
+# ★ WHY THIS CANNOT LOCK THE OWNER OUT ★
+#   1. OFF BY DEFAULT. `enforce_scoped_roles` is False in POLICY_DEFAULTS, is seeded COMMENTED OUT,
+#      and `endpoint_decision` returns ALLOWED before reading anything else when it is off. Deploying
+#      this code changes who can do what by exactly nothing.
+#   2. FULL REACH IS PRESERVED FOR THE ROLES THAT MATTER. `owner` is ALL_CAPABILITIES by definition;
+#      a legacy super-admin (while the flag is honored) and the house-admin bootstrap rung each carry
+#      ALL_CAPABILITIES through `resolve_authority`. Enforcement can therefore only ever bite an
+#      operator whose role is DELIBERATELY narrower than owner.
+#   3. UNMAPPED IS UNGATED. A path no entry claims yields capability None ⇒ allowed. Narrowing is
+#      only ever explicit; a route added tomorrow does not silently become unreachable.
+#   4. THE ESCAPE HATCHES ARE STRUCTURAL. `ENFORCEMENT_EXEMPT_PREFIXES` can never be gated — the
+#      operator console (where enforcement is turned back OFF), the identity/bootstrap routes a
+#      session needs, and impersonation (whose own default-deny gate must stay the only one).
+#   5. TURNING IT ON IS REFUSED AT ZERO. `policy_change_decision` will not enable enforcement if no
+#      one would still hold `policy.write` to turn it off again, and says so out loud at exactly one.
+
+# Route prefix → the capability that surface requires. FULL ASGI paths (`/api/v1/...`).
+# `method` is an HTTP verb or "*"; a verb-specific entry outranks "*" at the same prefix, and a
+# longer prefix outranks a shorter one. RULE TWO: these name ROUTES and CAPABILITIES — never a
+# tenant, a person, a carrier or an org id. Rows in `core.operator_route_capability` (mig 984)
+# override or extend this per platform without a deploy.
+ROUTE_CAPABILITIES = (
+    # ── platform security controls ──────────────────────────────────────────────────────────────
+    ("PUT", "/api/v1/core/auth-config", CAP_SECURITY),
+    ("*", "/api/v1/core/ip-block", CAP_SECURITY),
+    ("*", "/api/v1/core/sessions/revoke", CAP_SECURITY),
+    ("*", "/api/v1/core/reinstate-login", CAP_SECURITY),
+    ("*", "/api/v1/core/users/reset-password", CAP_SECURITY),
+    # ── the platform's own audit reads ──────────────────────────────────────────────────────────
+    ("*", "/api/v1/core/access-log", CAP_AUDIT_READ),
+    ("*", "/api/v1/core/export-event", CAP_AUDIT_READ),
+    # ── tenants: reading the directory is not the same act as changing a tenant ─────────────────
+    ("GET", "/api/v1/core/tenants", CAP_TENANT_READ),
+    ("*", "/api/v1/core/tenants", CAP_TENANT_LIFECYCLE),
+    # ── who holds platform authority ────────────────────────────────────────────────────────────
+    ("GET", "/api/v1/core/super-admins", CAP_OPERATOR_READ),
+    ("*", "/api/v1/core/super-admins", CAP_OPERATOR_WRITE),
+    # ── the control box (§20): looking is a read, running one is a repair ───────────────────────
+    ("GET", "/api/v1/core/control-box", CAP_CONTROL_BOX),
+    ("*", "/api/v1/core/control-box", CAP_PLATFORM_REPAIR),
+    # ── the fix pipeline: engineering repair, not a billing or support act ──────────────────────
+    ("GET", "/api/v1/fix-pipeline", CAP_CONTROL_BOX),
+    ("*", "/api/v1/fix-pipeline", CAP_PLATFORM_REPAIR),
+    # ── tenant billing (§21 + the plans/invoices/pricing surfaces) ──────────────────────────────
+    ("GET", "/api/v1/billing", CAP_BILLING_READ),
+    ("*", "/api/v1/billing", CAP_BILLING_WRITE),
+)
+
+# Prefixes enforcement MUST NEVER gate, whatever the map or the config says. This tuple is the
+# escape hatch that makes turning enforcement on a reversible act rather than a one-way door.
+ENFORCEMENT_EXEMPT_PREFIXES = (
+    # THE WAY BACK OUT. The console gates itself on capabilities already (`operator_api._need`), and
+    # `POST /core/operator/policy` is where enforcement is switched off again. Gating it here could
+    # make enforcement self-sealing.
+    "/api/v1/core/operator",
+    # Identity / session bootstrap: a login must always be able to learn who it is and what tenants
+    # it may act as, or no console can render at all.
+    "/api/v1/core/me",
+    "/api/v1/core/my-tenants",
+    "/api/v1/core/bootstrap",
+    # IMPERSONATION IS NOT AN OPERATOR CAPABILITY AND MUST NEVER BECOME ONE. `impersonate` is
+    # default-deny under its own gate (mig 730) — not implied by scope:'all', not by the `admin`
+    # module, and NOT by super-admin. Mapping this prefix to any capability here would create a
+    # second, weaker way to reason about it, so the prefix is exempt and the harness asserts it.
+    "/api/v1/impersonation",
+)
+
+
+def _norm_method(m):
+    m = str(m or "").strip().upper()
+    return m if m else "*"
+
+
+def _norm_path(p):
+    p = str(p or "").strip()
+    if not p.startswith("/"):
+        return ""
+    return p.split("?", 1)[0].rstrip("/") or "/"
+
+
+def _prefix_hit(path, prefix):
+    """True when `path` is `prefix` itself or a child of it. Segment-aware, so `/api/v1/billing`
+    never matches `/api/v1/billing-export`."""
+    if not path or not prefix:
+        return False
+    return path == prefix or path.startswith(prefix.rstrip("/") + "/")
+
+
+def is_enforcement_exempt(path) -> bool:
+    """Is this path structurally outside enforcement? FAIL-OPEN by design (see escape hatch #4)."""
+    p = _norm_path(path)
+    return any(_prefix_hit(p, x) for x in ENFORCEMENT_EXEMPT_PREFIXES)
+
+
+def endpoint_capability(path, method="*", route_map=None):
+    """Which capability does this route require? PURE.
+
+    Returns None for an exempt prefix and for an UNMAPPED path — and None means NOT GATED. Guessing a
+    capability for an unrecognised route is how a narrowing change locks someone out of a surface
+    nobody remembered; `module_usage.classify` makes the same call ("unmapped is SHOWN, never
+    guessed"). `route_map` is a list/tuple of (method, prefix, capability) config rows which is
+    appended AFTER the house defaults, so a later row of equal specificity wins."""
+    p = _norm_path(path)
+    if not p or is_enforcement_exempt(p):
+        return None
+    m = _norm_method(method)
+    entries = list(ROUTE_CAPABILITIES)
+    for row in (route_map or ()):
+        try:
+            if isinstance(row, dict):
+                entries.append((row.get("method"), row.get("route_prefix") or row.get("prefix"),
+                                row.get("capability")))
+            else:
+                entries.append((row[0], row[1], row[2]))
+        except Exception:
+            continue          # a malformed config row is IGNORED, never a source of authority
+    best = None
+    for i, (em, ep, cap) in enumerate(entries):
+        ep = _norm_path(ep)
+        if not ep or cap not in ALL_CAPABILITIES:
+            continue
+        em = _norm_method(em)
+        if em != "*" and em != m:
+            continue
+        if not _prefix_hit(p, ep):
+            continue
+        # rank: longer prefix wins; at equal length a verb-specific entry wins; then later config row.
+        rank = (len(ep), 1 if em != "*" else 0, i)
+        if best is None or rank > best[0]:
+            best = (rank, cap)
+    return best[1] if best else None
+
+
+def endpoint_decision(*, path, method="*", legacy_super_admin=False, operator_row=None,
+                      policy=None, house_admin=False, route_map=None, now=None):
+    """MAY this caller reach this pre-existing super-admin endpoint? PURE. Never raises.
+
+    Returns {"enforced", "allowed", "code", "message", "capability", "authority"}.
+
+    `enforced` False means the answer is TODAY's answer and this function contributed nothing — the
+    first branch below is the byte-identical guarantee, and the harness asserts that with enforcement
+    off NO input combination can produce allowed=False.
+    """
+    pol = effective_policy(policy)
+    auth = resolve_authority(legacy_super_admin=legacy_super_admin, operator_row=operator_row,
+                             policy=pol, house_admin=house_admin, now=now)
+    if not pol["enforce_scoped_roles"]:
+        # OFF. `_require_super_admin` keeps its own verdict; nothing here can deny.
+        return {"enforced": False, "allowed": True, "code": "not_enforced", "message": "",
+                "capability": None, "authority": auth}
+    if not auth["is_operator"]:
+        return {"enforced": True, "allowed": False, "code": "not_operator",
+                "message": auth["denied_reason"] or "super-admin only",
+                "capability": None, "authority": auth}
+    cap = endpoint_capability(path, method, route_map=route_map)
+    if cap is None:
+        return {"enforced": True, "allowed": True, "code": "unmapped", "message": "",
+                "capability": None, "authority": auth}
+    if has_capability(auth, cap):
+        return {"enforced": True, "allowed": True, "code": "ok", "message": "",
+                "capability": cap, "authority": auth}
+    return {"enforced": True, "allowed": False, "code": "missing_capability",
+            "message": ("Your platform-operator role (%s) does not include '%s'."
+                        % (auth["operator_role"] or "unscoped", cap)),
+            "capability": cap, "authority": auth}
+
+
+def capability_holders(rows, capability, *, policy=None, now=None):
+    """How many ACTIVE registry rows would still hold `capability`. PURE; a malformed row counts as
+    zero, never as one. Used by the refusals below so 'would this leave nobody?' is answered from
+    data instead of from optimism."""
+    n = 0
+    for r in (rows or ()):
+        if not operator_row_active(r, now=now):
+            continue
+        caps = role_capabilities((r or {}).get("operator_role"), (r or {}).get("capabilities"))
+        if capability in caps:
+            n += 1
+    return n
+
+
+def enforcement_preview(rows, *, policy=None, now=None):
+    """WHAT WOULD CHANGE if enforcement were turned on right now — the owner-preview payload.
+
+    For every active registry row: the capabilities it keeps, and the mapped route prefixes it would
+    LOSE. Plus the two counts the refusals key on. PURE, so the console and the harness see the same
+    answer."""
+    pol = effective_policy(policy)
+    surfaces = sorted({(m, p, c) for m, p, c in ROUTE_CAPABILITIES}, key=lambda t: (t[1], t[0]))
+    out = []
+    for r in (rows or ()):
+        if not isinstance(r, dict):
+            continue
+        active = operator_row_active(r, now=now)
+        caps = role_capabilities(r.get("operator_role"), r.get("capabilities")) if active else frozenset()
+        lost = sorted({p for m, p, c in surfaces if c not in caps})
+        kept = sorted({p for m, p, c in surfaces if c in caps})
+        out.append({"auth_id": r.get("auth_id"), "email": r.get("email"),
+                    "operator_role": r.get("operator_role"), "active": active,
+                    "capabilities": sorted(caps), "would_lose": lost, "would_keep": kept,
+                    "full_reach": caps == ALL_CAPABILITIES})
+    return {
+        "enforced": bool(pol["enforce_scoped_roles"]),
+        "legacy_honored": bool(pol["legacy_membership_flag_honored"]),
+        "operators": out,
+        "policy_write_holders": capability_holders(rows, CAP_POLICY_WRITE, now=now),
+        "tenant_enter_holders": capability_holders(rows, CAP_TENANT_ENTER, now=now),
+        "full_reach_operators": sum(1 for o in out if o["full_reach"]),
+        "mapped_surfaces": [{"method": m, "prefix": p, "capability": c} for m, p, c in surfaces],
+        "exempt_prefixes": list(ENFORCEMENT_EXEMPT_PREFIXES),
+    }

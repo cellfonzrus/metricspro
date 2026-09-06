@@ -33,10 +33,12 @@ export default function OperatorsPage() {
   const [msg, setMsg] = useState('')
   const [f, setF] = useState({ email: '', operator_role: 'support', expires_at: '', notes: '' })
   const [busy, setBusy] = useState(false)
+  const [enf, setEnf] = useState<any>(null)
 
   const load = useCallback(() => {
     api('/api/v1/core/operator/roster').then(setData).catch(e => setErr(e?.message || 'Could not load'))
     if (can(me, 'policy.write')) api('/api/v1/core/operator/policy').then(setPolicy).catch(() => {})
+    if (can(me, 'operator.read')) api('/api/v1/core/operator/enforcement').then(setEnf).catch(() => {})
   }, [me])
   useEffect(() => { if (me) load() }, [me, load])
 
@@ -56,6 +58,32 @@ export default function OperatorsPage() {
       await api(`/api/v1/core/operator/roster?email=${encodeURIComponent(email)}`, { method: 'DELETE' })
       setMsg(`${email} is no longer a platform operator.`); load()
     } catch (e: any) { setErr(e?.message || 'Could not revoke') }
+  }
+
+  // ── THE SCOPE SWITCH (migration 984) ────────────────────────────────────────────────────────
+  // The second access-cutting control on this page. Until it is on, a scoped role is a LABEL: it
+  // gates this console and nothing else, so a `support` operator can still call every pre-existing
+  // super-admin endpoint. Turning it on makes the scope real — and the preview below says, per
+  // person, exactly which surfaces they would stop being able to reach BEFORE anything is pressed.
+  // It cannot lock the owner out: `owner` is every capability, a still-honoured legacy flag also
+  // carries every capability, the console prefix is exempt so this control never gates itself, and
+  // the server refuses the flip when nobody would be left holding `policy.write`.
+  async function setEnforce(on: boolean) {
+    const warn = on
+      ? 'Make scoped operator roles gate the EXISTING super-admin endpoints?\n\n'
+        + 'Operators with a narrower role than `owner` will lose the surfaces listed under '
+        + '“would lose” below. Your own access is unaffected while you are an owner or the legacy '
+        + 'flag is still honoured.\n\nThis is reversible from this same control.'
+      : 'Stop enforcing scoped operator roles on the existing super-admin endpoints?\n\n'
+        + 'Every operator goes back to being able to call every super-admin endpoint.'
+    if (!confirm(warn)) return
+    setErr(''); setMsg('')
+    try {
+      const r: any = await api('/api/v1/core/operator/policy', {
+        method: 'POST', body: JSON.stringify({ enforce_scoped_roles: on }),
+      })
+      setMsg(r.message || (on ? 'Scoped roles are now enforced.' : 'Enforcement is off.')); load()
+    } catch (e: any) { setErr(e?.message || 'Could not change the policy') }
   }
 
   async function setLegacy(honored: boolean) {
@@ -206,6 +234,57 @@ export default function OperatorsPage() {
         </Table>
         {legacy.length === 0 && <Empty>None.</Empty>}
       </Panel>
+
+      {/* ── THE SCOPE SWITCH + ITS PREVIEW (mig 984) ─────────────────────────────────────────── */}
+      {enf && (
+        <Panel title="Scoped roles on the existing super-admin endpoints">
+          <Note>
+            {enf.preview?.enforced
+              ? 'ON — a scoped role now gates every mapped super-admin surface, not just this console.'
+              : 'OFF — a scoped role currently gates this console only. Every operator below can still '
+                + 'call every pre-existing super-admin endpoint, whatever their role says.'}
+            {' '}The console itself, the identity/bootstrap routes and the whole impersonation prefix
+            are never gated, so this control can always be switched back off from here.
+          </Note>
+          <Table head={['Operator', 'Role', 'Active', 'Keeps', 'Would lose']}>
+            {(enf.preview?.operators || []).map((o: any) => (
+              <tr key={o.auth_id}>
+                <td style={td}>{o.email}</td>
+                <td style={{ ...td, color: OPS.text2 }}>{o.operator_role}</td>
+                <td style={td}>
+                  <Lamp lamp={o.active ? 'green' : 'unmonitored'} /> {o.active ? 'yes' : 'no'}
+                </td>
+                <td style={{ ...td, color: OPS.text3, fontSize: 11.4 }}>
+                  {o.full_reach ? 'everything (full reach)' : (o.would_keep || []).length + ' surfaces'}
+                </td>
+                <td style={{ ...td, color: (o.would_lose || []).length ? OPS.warn : OPS.text3, fontSize: 11.4 }}>
+                  {(o.would_lose || []).length ? (o.would_lose || []).join(', ') : 'nothing'}
+                </td>
+              </tr>
+            ))}
+          </Table>
+          {(enf.preview?.operators || []).length === 0 && (
+            <Empty>No operator records yet — nothing to preview.</Empty>
+          )}
+          {can(me, 'policy.write') && (
+            <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap',
+              marginTop: 12 }}>
+              <Btn onClick={() => setEnforce(!enf.preview?.enforced)}
+                disabled={!enf.preview?.enforced && !enf.enforcement_allowed}>
+                {enf.preview?.enforced ? 'Stop enforcing scoped roles' : 'Enforce scoped roles'}
+              </Btn>
+              <span style={{ color: enf.enforcement_allowed ? OPS.text3 : OPS.warn, fontSize: 12 }}>
+                {enf.enforcement_note
+                  || `${enf.preview?.policy_write_holders ?? 0} operator(s) hold policy.write`}
+              </span>
+            </div>
+          )}
+          {enf.env_kill_switch_on && (
+            <Note>OPERATOR_ENFORCE=0 is set in the environment, so enforcement is off regardless of
+              this switch.</Note>
+          )}
+        </Panel>
+      )}
     </div>
   )
 }

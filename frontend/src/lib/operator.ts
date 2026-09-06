@@ -23,7 +23,7 @@ export type OperatorCapability =
   | 'billing.read' | 'billing.write'
   | 'operator.read' | 'operator.write'
   | 'audit.read' | 'notice.write' | 'control_box.read'
-  | 'security.write' | 'policy.write'
+  | 'security.write' | 'policy.write' | 'platform.repair'
 
 export type OperatorSection = {
   href: string; label: string; icon: string

@@ -553,15 +553,48 @@ def _app_user_from_token(authorization: str, active_org: str = ""):
 def _require_super_admin(authorization: str, active_org: str = ""):
     """Super-admin = the super_admin flag on ANY of the login's memberships (super_admin is a
     login-level bypass, not a per-tenant grant), OR (bootstrap) a house-org admin — so the very
-    first operator is never locked out before the flag is seeded."""
+    first operator is never locked out before the flag is seeded.
+
+    THE ONE GATE, with ONE optional layer on top (mig 984). `scoped_role_verdict` returns None —
+    and this function then behaves EXACTLY as the four lines below always have — unless the platform
+    has deliberately switched `enforce_scoped_roles` on. When it is on, authority is the operator
+    registry's union decision (`operator.resolve_authority`) and the surface being called must be
+    within the caller's SCOPED role. `owner`, a still-honored legacy flag and the house-admin
+    bootstrap rung each carry every capability, so enforcement can only ever bite a role that was
+    deliberately made narrower. See operator.py §SCOPED-ROLE ENFORCEMENT for the no-lockout argument.
+    """
     uid = _uid_from_token(authorization)
     rows = _memberships(sb(), uid) if uid else []
-    if any(r.get("super_admin") for r in rows):
-        return _pick_membership(rows, (active_org or "").strip() or None)
+    legacy = any(r.get("super_admin") for r in rows)
     u = _pick_membership(rows, (active_org or "").strip() or None)
-    if u and u.get("org_id") == ORG_ID and u.get("role") == "admin":
+    house = bool(u and u.get("org_id") == ORG_ID and u.get("role") == "admin")
+
+    verdict = None
+    if uid:
+        try:
+            from app.modules.core.operator_api import scoped_role_verdict
+            verdict = scoped_role_verdict(uid, legacy_super_admin=legacy, house_admin=house)
+        except Exception:
+            verdict = None          # the layer can never be the reason a gate breaks
+    if verdict is None:
+        # ── UNCHANGED PATH — byte-identical to the gate before mig 984 ──────────────────────────
+        if legacy:
+            return u
+        if house:
+            return u
+        raise HTTPException(403, "super-admin only")
+
+    # ── ENFORCEMENT ON ──────────────────────────────────────────────────────────────────────────
+    if not verdict["allowed"]:
+        raise HTTPException(403, verdict["message"] or "super-admin only")
+    if u:
         return u
-    raise HTTPException(403, "super-admin only")
+    # A registry operator with no tenant membership at all (the fully separated persona the console
+    # exists to create). They are authorized; they simply have no employment row to return, so the
+    # shape callers expect is synthesized with NO org — an operator is not an employee of anyone.
+    a = verdict.get("authority") or {}
+    return {"auth_id": uid, "org_id": None, "email": None, "role": "operator",
+            "super_admin": False, "operator_role": a.get("operator_role")}
 
 
 @router.get("/access-log")
