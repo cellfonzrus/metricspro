@@ -231,9 +231,25 @@ check("H3 default minute is unchanged for every existing caller",
       _vip_next_run("daily", None, None, 6, "America/New_York")
       == _vip_next_run("daily", None, None, 6, "America/New_York", minute=0))
 check("H4 the two slots are different times", n2330 != n0600)
-check("H5 registry key map covers all three reports",
-      _EPAY_REGISTRY_KEYS == {"mi": "mi_report", "comp_report": "comp_report",
-                              "payment_detail": "payment_detail"})
+# Registry drift, not a defect. This pinned the map to exactly three reports; commit 8a5b419b
+# (migs 935-939, daily closing cash lifecycle / billpay carve-out) registered a fourth,
+# `epay_daily_tx`, which the product deliberately treats differently: its upsert is idempotent and
+# the recon wants the freshest portal data, so it is due on EVERY run-due tick rather than on a
+# daily slot. A hardcoded literal that silently stops matching the registry is the same drift class
+# as the /health module list and the Exec MTD bucket vocabulary (see 564c171f), so this is expressed
+# as a PROPERTY over the registry — registering a fifth report cannot break it.
+#
+# Reports due on every tick, as opposed to on their own daily slot. Kept as an explicit set so the
+# scheduling assertions below can subtract it; H5c proves it is not merely asserted but true.
+EVERY_TICK = {"epay_daily_tx"}
+SLOT_SCHEDULED = {"mi": "mi_report", "comp_report": "comp_report", "payment_detail": "payment_detail"}
+check("H5a the slot-scheduled reports are all still registered",
+      all(_EPAY_REGISTRY_KEYS.get(k) == v for k, v in SLOT_SCHEDULED.items()),
+      str(_EPAY_REGISTRY_KEYS))
+check("H5b every registry key is either slot-scheduled or explicitly every-tick "
+      "(a NEW report must be classified here, not silently ignored)",
+      set(_EPAY_REGISTRY_KEYS) <= set(SLOT_SCHEDULED) | EVERY_TICK,
+      f"unclassified={sorted(set(_EPAY_REGISTRY_KEYS) - set(SLOT_SCHEDULED) - EVERY_TICK)}")
 
 # _epay_sub_schedule decides WHICH reports run on THIS tick. This is the part that actually
 # reaches production: pg_cron has no epay/sweep/run-due job, it calls connectors/run-due hourly.
@@ -267,7 +283,16 @@ base_rows = [
 ]
 db = sched_db([dict(r) for r in base_rows])
 due, shared = _epay_sub_schedule(db, ORG, NOW)
-check("H6 comp is due on its OWN 23:30 slot", due == ["comp_report"], str(due))
+
+
+def slot_due(d):
+    """`due` with the every-tick reports removed — what the SLOT schedule decided."""
+    return [k for k in d if k not in EVERY_TICK]
+
+
+check("H5c the every-tick reports really are due on an ordinary tick (guard is non-vacuous)",
+      all(k in due for k in EVERY_TICK if k in _EPAY_REGISTRY_KEYS), str(due))
+check("H6 comp is due on its OWN 23:30 slot", slot_due(due) == ["comp_report"], str(due))
 check("H7 MI + payment detail ride the connector slot",
       sorted(shared) == ["mi", "payment_detail"], str(shared))
 row = [r for r in db.tables["report_definitions"].rows if r["report_key"] == "comp_report"][0]
@@ -275,12 +300,12 @@ check("H8 comp's slot is advanced so an hourly tick does not re-run it",
       row["sweep_next_run_at"] != PAST and row["sweep_next_run_at"] > NOW,
       str(row["sweep_next_run_at"]))
 due2, _ = _epay_sub_schedule(db, ORG, NOW)
-check("H9 a second tick in the same hour does NOT re-run comp", due2 == [], str(due2))
+check("H9 a second tick in the same hour does NOT re-run comp", slot_due(due2) == [], str(due2))
 
 db = sched_db([dict(r) for r in base_rows[:2]]
               + [{**base_rows[2], "sweep_next_run_at": FUTURE}])
 due3, shared3 = _epay_sub_schedule(db, ORG, NOW)
-check("H10 a slot in the future is not due", due3 == [], str(due3))
+check("H10 a slot in the future is not due", slot_due(due3) == [], str(due3))
 check("H11 and comp is NOT handed to the connector slot either",
       "comp_report" not in shared3, str(shared3))
 
@@ -288,14 +313,17 @@ db = sched_db([dict(r) for r in base_rows[:2]]
               + [{**base_rows[2], "auto": False}])
 due4, shared4 = _epay_sub_schedule(db, ORG, NOW)
 check("H12 auto=false means the report is skipped entirely",
-      due4 == [] and "comp_report" not in shared4, f"{due4} {shared4}")
+      slot_due(due4) == [] and "comp_report" not in shared4, f"{due4} {shared4}")
 
 # pre-290 database: the schedule columns don't exist -> today's behaviour, nothing breaks
 db = sched_db([{"org_id": ORG, "report_key": k, "auto": True}
                for k in ("mi_report", "payment_detail", "comp_report")], with_cols=False)
 due5, shared5 = _epay_sub_schedule(db, ORG, NOW)
+# pre-290 the schedule columns are absent, so _epay_sub_schedule returns ([], all registry keys) —
+# every registered report rides the connector slot. Expressed over the registry rather than the
+# three-name literal, for the same reason as H5.
 check("H13 pre-290 degrades to the old behaviour (all reports on the connector slot)",
-      due5 == [] and sorted(shared5) == ["comp_report", "mi", "payment_detail"],
+      due5 == [] and sorted(shared5) == sorted(_EPAY_REGISTRY_KEYS),
       f"{due5} {shared5}")
 
 

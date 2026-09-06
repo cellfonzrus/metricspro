@@ -74,18 +74,32 @@ def sql(stmt, sbsql):
 def part1():
     print("\nPART 1 — offline (no database)")
 
-    # 1. Degrade-open. With no SUPABASE_KEY in the environment the client cannot be built at all,
-    #    which is the harshest version of "the guard is unreachable".
-    res = ib.claim(org_id=ORG1, source="sales", content=b"anything", file_name="a.csv")
-    check("1a. unreachable database → 'unavailable', not an exception",
-          res.get("state") == ib.UNAVAILABLE, res)
-    check("1b. …and it still reports the hash it would have used", len(res.get("sha256", "")) == 64, res)
-    for fn, arg in ((ib.complete, {"row_count": 5}), (ib.fail, {"error": "x"})):
-        try:
-            fn("11111111-1111-1111-1111-111111111111", **arg)
-            check(f"1c. {fn.__name__}() never raises", True)
-        except Exception as e:
-            check(f"1c. {fn.__name__}() never raises", False, e)
+    # 1. Degrade-open. This used to rely on there being no SUPABASE_KEY in the environment. That is
+    #    an assumption about the SHELL, not a property of the test, and it is false whenever the
+    #    harness runs somewhere credentials happen to be exported — this container, for one. In that
+    #    case `claim()` built a real client and ran a real INSERT into import_batches against
+    #    whatever database SUPABASE_URL pointed at, then reported `duplicate` (the row it had written
+    #    on an earlier run), and the assertion failed for the one reason that is not a product
+    #    defect. A part documented as "OFFLINE — no database, no keys; runs anywhere, including CI"
+    #    must not depend on ambient environment to stay offline, and must never write anywhere.
+    #    The database is now made unreachable BY CONSTRUCTION, which is also the harsher test.
+    _real_get_supabase = ib.get_supabase
+    ib.get_supabase = lambda *a, **k: (_ for _ in ()).throw(
+        RuntimeError("no database (PART 1 is offline by construction)"))
+    try:
+        res = ib.claim(org_id=ORG1, source="sales", content=b"anything", file_name="a.csv")
+        check("1a. unreachable database → 'unavailable', not an exception",
+              res.get("state") == ib.UNAVAILABLE, res)
+        check("1b. …and it still reports the hash it would have used",
+              len(res.get("sha256", "")) == 64, res)
+        for fn, arg in ((ib.complete, {"row_count": 5}), (ib.fail, {"error": "x"})):
+            try:
+                fn("11111111-1111-1111-1111-111111111111", **arg)
+                check(f"1c. {fn.__name__}() never raises", True)
+            except Exception as e:
+                check(f"1c. {fn.__name__}() never raises", False, e)
+    finally:
+        ib.get_supabase = _real_get_supabase
 
     # 2. Hash identity.
     check("2a. sha256 is stable for identical bytes",
@@ -128,7 +142,13 @@ def part1():
         check("5. sweep classifies a duplicate as terminal", False, f"could not import router: {e}")
         return
     out = _sweep_ingest_outcome(resp, upload_type="sales")
-    check("5a. sweep status is 'skipped'", out["status"] == "skipped", out)
+    # Was: status == 'skipped'. Commit c5a5cc93 ("Email sweep: stop duplicate-file retry spam")
+    # deliberately gave a duplicate its OWN terminal status, because 'skipped' is the RETRYABLE
+    # bucket — recording a duplicate there made b2b's hourly re-send of the same attachment re-fetch
+    # and re-refuse for ever. Asserting the new status AND that it is not the retryable one keeps
+    # what 5a was for (and is stronger than the original, which could not have caught that bug).
+    check("5a. sweep gives a duplicate its own status, NOT the retryable 'skipped' bucket",
+          out["status"] == "duplicate" and out["status"] != "skipped", out)
     check("5b. sweep marks it TERMINAL (no infinite retry of identical bytes)", out["terminal"] is True, out)
     check("5c. sweep records 0 rows saved", out["rows_saved"] == 0, out)
     other = _sweep_ingest_outcome({"status": "skipped", "skipped": "price_guard", "rows": 0},

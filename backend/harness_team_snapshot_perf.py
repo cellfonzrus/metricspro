@@ -65,6 +65,41 @@ def j(x):
     return json.dumps(x, sort_keys=True, default=str)
 
 
+def value_drift(old, new, path=""):
+    """Every value present in `old` must be IDENTICAL in `new`. Keys that exist only in `new` are
+    reported separately, not as drift.
+
+    These comparisons were byte-identity (`j(old) == j(new)`) to prove the pushdown moves WHERE a
+    span filter is applied and never changes a number. That property still holds exactly — but the
+    NEW path has since gained ADDITIVE fields the frozen OLD reference never produced
+    (`acc_sales_ex_setup`, `setup_fee_mtd_exec`, `trending_acc_target`, `is_active`), so whole-payload
+    byte-identity now fails for fields that did not exist rather than for a value that moved. This
+    keeps the money guarantee intact — no pre-existing value may differ by a single cent — while
+    letting the payload grow. Returns (drift, added): drift MUST be empty.
+    """
+    drift, added = [], []
+    if isinstance(old, dict) and isinstance(new, dict):
+        for k in old:
+            if k not in new:
+                drift.append(f"{path}.{k} REMOVED")
+            else:
+                d, a = value_drift(old[k], new[k], f"{path}.{k}")
+                drift += d
+                added += a
+        added += [f"{path}.{k}" for k in new if k not in old]
+    elif isinstance(old, list) and isinstance(new, list):
+        if len(old) != len(new):
+            drift.append(f"{path} length {len(old)} -> {len(new)}")
+        else:
+            for i, (a_, b_) in enumerate(zip(old, new)):
+                d, a = value_drift(a_, b_, f"{path}[{i}]")
+                drift += d
+                added += a
+    elif j(old) != j(new):
+        drift.append(f"{path}: {j(old)[:80]} -> {j(new)[:80]}")
+    return drift, added
+
+
 # ══ the fake Supabase client ══════════════════════════════════════════════════════════════════════
 class WriteAttempted(Exception):
     pass
@@ -428,10 +463,10 @@ r_old = snap(OLD, period=PERIOD)
 st_n = fixture(); f_n = wire(st_n, span=SPAN_CODES)
 NEW._team_snap_invalidate()
 r_new = snap(NEW, period=PERIOD)
-check("1.1 manager-scoped snapshot payload is BYTE-IDENTICAL to the reference (sort_keys JSON): the "
-      "pushdown changes WHERE the span filter is applied, never the result",
-      j(r_old) == j(r_new),
-      f"old={j(r_old)[:500]}\n         new={j(r_new)[:500]}")
+_d11, _a11 = value_drift(r_old, r_new)
+check("1.1 manager-scoped snapshot: NO value the reference produced differs (the pushdown changes "
+      f"WHERE the span filter is applied, never the result); additive new fields: {sorted(set(_a11))[:6]}",
+      not _d11, f"DRIFT: {_d11[:8]}")
 check("1.2 the payload really is the manager's span only (2 of 6 stores, both in span)",
       sorted(s["store_code"] for s in r_new["stores"]) == SPAN_CODES, j(r_new["stores"])[:300])
 check("1.3 and it still carries the per-rep coaching rollup + money_on_table",
@@ -553,9 +588,10 @@ full_old = snap(OLD, period=PERIOD)
 st_n = fixture(); f_n = wire(st_n, span=None); NEW._team_snap_invalidate()
 full_new_1 = snap(NEW, period=PERIOD)
 reads_miss = dict(f_n.reads)
-check("4.1 FULL-ORG (owner) snapshot: first (uncached) NEW call is BYTE-IDENTICAL to the reference",
-      j(full_old) == j(full_new_1),
-      f"old={j(full_old)[:400]}\n         new={j(full_new_1)[:400]}")
+_d41, _a41 = value_drift(full_old, full_new_1)
+check("4.1 FULL-ORG (owner) snapshot: first (uncached) NEW call changes NO value the reference "
+      f"produced; additive new fields: {sorted(set(_a41))[:6]}",
+      not _d41, f"DRIFT: {_d41[:8]}")
 f_n.reads.clear()
 full_new_2 = snap(NEW, period=PERIOD)
 reads_hit = dict(f_n.reads)
@@ -813,8 +849,30 @@ except WriteAttempted as e:
 check("6.1 the whole /team/{period}/snapshot chain performs ZERO writes (every write verb on the "
       "fake client raises; the call completed)", wrote is None and snapshot_scoped is not None,
       repr(wrote))
-unscoped = [(t, f) for (t, f) in sc.seen if not any(k == "eq" and c == "org_id" for k, c, _v in f)]
-check("6.2 EVERY read in the chain is org-scoped (.eq('org_id', …))", unscoped == [],
+# A read is org-scoped if it pins org_id with `.eq`, OR with `.in_` over a set containing nothing
+# but the caller's own org and the HOUSE DEFAULT org. The `in_` form arrived with mig 962 (carrier
+# presets for metric definitions): `exec_metric_config` is read for the tenant AND for the house
+# default row it inherits from, which is config inheritance, not a cross-tenant read. Recognising
+# only `.eq` reported that legitimate pattern as unscoped. Checking the VALUES rather than just the
+# operator keeps the assertion strict — an `in_` naming any third org still fails, which a plain
+# "does an .eq exist" test would not have caught either.
+HOUSE_DEFAULT = "00000000-0000-0000-0000-000000000001"
+
+
+def _org_scoped(filters):
+    for k, c, v in filters:
+        if c != "org_id":
+            continue
+        if k == "eq":
+            return True
+        if k == "in" and v and all(str(x) in (str(HOUSE), HOUSE_DEFAULT) for x in v):
+            return True
+    return False
+
+
+unscoped = [(t, f) for (t, f) in sc.seen if not _org_scoped(f)]
+check("6.2 EVERY read in the chain is org-scoped (.eq('org_id', …), or .in_ over only this org "
+      "plus the house-default config row)", unscoped == [],
       str(unscoped)[:500])
 leaked = [s for s in (snapshot_scoped or {}).get("stores", [])
           if s["store_code"] not in ALL_CODES]
@@ -932,9 +990,11 @@ FAMILY = [
 for fn, route, kw in FAMILY:
     o_name, e_o_name = call(OLD, fn, PERIOD, **kw)
     n_name, e_n_name = call(NEW, fn, PERIOD, **kw)
-    check(f"9.x {route} with 'July 2026' is BYTE-IDENTICAL old vs new",
-          e_o_name is None and e_n_name is None and j(o_name) == j(n_name),
-          f"old_err={e_o_name} new_err={e_n_name}\n         old={j(o_name)[:300]}\n         new={j(n_name)[:300]}")
+    _d9, _a9 = value_drift(o_name, n_name)
+    check(f"9.x {route} with 'July 2026': no value drifts old vs new"
+          + (f" (additive: {sorted(set(_a9))[:4]})" if _a9 else ""),
+          e_o_name is None and e_n_name is None and not _d9,
+          f"old_err={e_o_name} new_err={e_n_name} DRIFT={_d9[:6]}")
     n_ym, e_n_ym = call(NEW, fn, YM, **kw)
     check(f"9.x {route} with '2026-07' now returns the SAME payload (bar the echoed `period`)",
           e_n_ym is None
@@ -1030,11 +1090,36 @@ for label, (nreads, npasses, _detail) in rows:
     print(f"    {label:46s} {nreads:6d} {npasses:13d}")
 mgr_old, mgr_new, mgr_hit = rows[0][1][0], rows[1][1][0], rows[2][1][0]
 own_old, own_new, own_hit = rows[3][1][0], rows[4][1][0], rows[5][1][0]
-check(f"8.1 manager load: reads {mgr_old} -> {mgr_new} (pushdown) -> {mgr_hit} (memo hit)",
-      mgr_new < mgr_old and mgr_hit < mgr_new, f"{mgr_old}/{mgr_new}/{mgr_hit}")
-check(f"8.2 owner load: reads {own_old} -> {own_new} (pushdown is a no-op for the whole org, the "
-      f"_kpi_defs N+1 is not) -> {own_hit} (memo hit)",
-      own_new < own_old and own_hit < own_new, f"{own_old}/{own_new}/{own_hit}")
+# ── WHY 8.1/8.2 NO LONGER COMPARE OLD-VS-NEW TOTAL READS ─────────────────────────────────────────
+# They asserted `new_total < old_total`. Measured today: manager 69 (OLD) -> 70 (NEW) -> 1 (memo hit);
+# owner 69 -> 70 -> 1. The +1 is NOT the snapshot getting slower. OLD is a frozen reference path and
+# the two are no longer feature-equivalent: per-table, NEW collapses carrier_kpi_metric from 13 reads
+# to 1 (exactly the N+1 the pushdown removed) and trims nothing else, while ADDING tables OLD has
+# never read at all — metric_source_of_truth (2), carrier (2), payout_exclusion_map (1),
+# raw_custom_import (1), store_merchant_id (1), commission_org_config (1). Those are later features
+# doing real work, not this package regressing. A total-vs-total comparison across two paths with
+# different feature sets measures drift, and would keep failing as more features land.
+#
+# So the budgets below measure what this package actually promised, and each is still a hard number
+# that a genuine regression breaks:
+#   · the memo hit collapses the whole chain to a constant (measured 1 read);
+#   · the per-store N+1 the pushdown removed stays removed — the KPI-definition table must be read
+#     O(1) times, NOT once per store (measured 1 read across 6 stores; OLD did 13).
+# 8.3 (per-store passes) is unchanged below and still carries the span-narrowing property.
+mgr_detail, own_detail = rows[1][1][2], rows[4][1][2]
+STORES = 6
+check(f"8.1 manager load: the memo hit collapses the chain to a constant "
+      f"({mgr_old} OLD / {mgr_new} NEW cache-miss -> {mgr_hit} on the memo hit)",
+      mgr_hit <= 2 and mgr_hit < mgr_new, f"{mgr_old}/{mgr_new}/{mgr_hit}")
+check(f"8.2 owner load: the memo hit collapses the chain to a constant "
+      f"({own_old} OLD / {own_new} NEW cache-miss -> {own_hit} on the memo hit)",
+      own_hit <= 2 and own_hit < own_new, f"{own_old}/{own_new}/{own_hit}")
+check(f"8.2b the _kpi_defs N+1 stays collapsed: carrier_kpi_metric is read O(1) times, not once per "
+      f"store (measured {own_detail.get('carrier_kpi_metric', 0)} reads across {STORES} stores; the "
+      f"OLD path did {rows[3][1][2].get('carrier_kpi_metric', 0)})",
+      own_detail.get("carrier_kpi_metric", 0) <= 2
+      and own_detail.get("carrier_kpi_metric", 0) < STORES,
+      f"owner={own_detail.get('carrier_kpi_metric')} manager={mgr_detail.get('carrier_kpi_metric')}")
 check("8.3 the per-store x rep pass shrinks with the span for a manager and is unchanged for the "
       "owner (nothing to narrow) — and is skipped entirely on a memo hit",
       rows[1][1][1] < rows[0][1][1] and rows[4][1][1] == rows[3][1][1]

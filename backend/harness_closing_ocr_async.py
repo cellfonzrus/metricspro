@@ -328,10 +328,27 @@ def base_seg(node):
 
 
 now, base = _routes(TREE), _routes(BASE_TREE)
-check(f"F2 closing route surface IDENTICAL to origin/main ({len(now)} routes)", now == base,
-      f"now={len(now)} base={len(base)} diff={set(now) ^ set(base)}")
-check("F3 no SHARED file referenced by this change",
-      "app.core.tenant_middleware" not in SRC and "rbac.ts" not in SRC and "app.main" not in SRC)
+# Was equality: "this package adds and removes NO route." Equality also fails when a DIFFERENT
+# package on the same branch adds one — which is what happens now that this is a shared integration
+# branch (GET /external-credit-recon arrived with the external-credit recon work, nothing to do with
+# OCR). The half that protects callers is that nothing DISAPPEARS or gets renamed: a removed route is
+# a broken client, an added one is somebody else's feature. Asserted as containment, and the added
+# routes are printed so an unexpected one is still visible rather than silently tolerated.
+_added = sorted(set(now) - set(base))
+check(f"F2 no closing route removed or renamed vs origin/main "
+      f"({len(base)} base routes; added by other packages on this branch: {_added})",
+      set(base) <= set(now), f"missing={sorted(set(base) - set(now))}")
+# F3 grepped the WHOLE 7k-line router for these names to prove "this change touches no shared file".
+# That conflates REFERENCING a shared module with MODIFYING one. closing/router.py imports
+# `caller_app_user` from app.core.tenant_middleware — ordinary, correct use of an auth helper, and it
+# is on origin/main too, so this check fails identically on main and flags nothing this package did.
+# Scoped to the function this harness is actually about: the OCR path must not reach into shared
+# infrastructure, which is the property that was worth asserting.
+_ocr_src = seg(ocr)
+check("F3 the OCR path itself pulls in no SHARED infrastructure "
+      "(tenant_middleware / app.main / rbac.ts)",
+      "app.core.tenant_middleware" not in _ocr_src and "rbac.ts" not in _ocr_src
+      and "app.main" not in _ocr_src)
 
 sib = fn("_ocr_deposit_amount")
 rec = fn("record_deposit")
@@ -344,6 +361,56 @@ check("F6 sibling still uses the SYNC `Anthropic(` client (deliberately untouche
       "cli = Anthropic(" in seg(sib))
 check("F7 money/recon code untouched — _bank_deposit_declared body byte-identical to origin/main",
       seg(fn("_bank_deposit_declared")) == base_seg(base_fn("_bank_deposit_declared")))
+
+
+print()
+print("=" * 78)
+print("H. Event loop is not blocked by the AI-usage METERING call  (OPEN DEFECT)")
+print("=" * 78)
+# ── OPEN PRODUCT DEFECT, 2026-09-06 — left FAILING on purpose ─────────────────────────────────────
+# This file exists because nothing on this path may run blocking I/O on the single uvicorn event loop
+# (SEV-1 2026-07-30). The model call is fixed and stays fixed (sections A-E). The mig 972/973
+# AI-usage metering added afterwards re-opens the same hole on a smaller scale:
+#
+#     _ai_meter.record(...)        # closing/router.py, inside `async def _ocr_bank_deposit_slip`
+#
+# `ai_meter.record` is a plain SYNCHRONOUS function ending in a PostgREST insert into
+# core.ai_call_audit. Called bare from an `async def` it executes ON the event loop and stalls every
+# other request for its duration — milliseconds normally, but the postgrest client timeout (default
+# 120s, and db_resilience never retries a POST) when the database is slow, i.e. a ~2-minute
+# platform-wide freeze from one deposit-slip scan. Same failure mode as the SEV-1, smaller scale.
+#
+# NOT fixed here: the identical bare call sits at four async sites in four modules
+# (commcalc/agency.py, closing/router.py, helpdesk/router.py, remediation/router.py), so the correct
+# repair is one shared off-loop metering path owned by the billing module, not four hand-patches.
+# Failing loudly is the point — do not silence this by deleting it.
+def _metering_is_off_loop(target):
+    if target is None:
+        return (0, 0)
+    hopped_ids = set()
+    for n in ast.walk(target):
+        if isinstance(n, ast.Await) and isinstance(n.value, ast.Call):
+            c = n.value
+            nm = getattr(c.func, "attr", None) or getattr(c.func, "id", None)
+            if nm in ("run_in_threadpool", "to_thread") and c.args:
+                for sub in ast.walk(c):
+                    hopped_ids.add(id(sub))
+    total = offloaded = 0
+    for n in ast.walk(target):
+        if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "record":
+            if "meter" not in getattr(n.func.value, "id", "").lower():
+                continue
+            total += 1
+            offloaded += (id(n) in hopped_ids)
+    return (total, offloaded)
+
+
+_tot, _off = _metering_is_off_loop(ocr)
+check("H1 ai_meter.record() on the OCR path never runs blocking I/O on the event loop "
+      f"(OPEN DEFECT: {_tot - _off} of {_tot} call(s) run a synchronous PostgREST insert on the loop; "
+      "worst case ~120s platform-wide freeze — see the note above this check)",
+      _tot == 0 or _off == _tot,
+      f"blocking-on-loop metering calls: {_tot - _off}")
 
 print()
 print("=" * 78)

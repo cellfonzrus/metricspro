@@ -3176,7 +3176,12 @@ class ConnectTenantIn(LaxModel):
 
 
 @router.post("/connect-tenant")
-async def connect_tenant(body: ConnectTenantIn, authorization: str = Header(default="")):
+# PLAIN `def`, NOT `async def` (nav-perf discipline). This handler awaits nothing and its body is
+# blocking Supabase I/O; declared `async` it ran on the single uvicorn event loop and stalled every
+# other in-flight request for its full duration — the shape harness_nav_perf.py exists to prevent.
+# FastAPI dispatches a plain `def` handler to a worker thread instead. Added after the original sweep,
+# so it was missed by it; pinned now by harness_nav_perf.py B2.
+def connect_tenant(body: ConnectTenantIn, authorization: str = Header(default="")):
     """The authenticated user ACCEPTS a pending invite: attach the inviting tenant as a membership on
     their EXISTING login (mig 706 shared model → the top-bar tenant switcher then applies). Requires
     the access code the admin gave them (consent). Idempotent. org_id comes from the BODY (the invite

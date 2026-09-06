@@ -407,11 +407,37 @@ try:
         "/api/v1/core/onboarding/pos": "/api/v1/core/onboarding/{module_key}",
         "/api/v1/core/onboarding/pos/status": "/api/v1/core/onboarding/{module_key}/status",
     }
+    def _resolve(app, probe):
+        """The FIRST route, in DECLARATION ORDER, that would match `probe` for GET — returning its
+        full path pattern.
+
+        This used to scan `_app.routes` for a `path_regex` directly. FastAPI 0.141 no longer flattens
+        an included router into that list: `include_router` contributes ONE `_IncludedRouter` object
+        that holds its children and carries the prefix in `include_context`, and that object has no
+        `path_regex`. So nothing matched, every probe resolved to None, and the check reported the
+        catch-all as shadowing everything when routing was in fact correct. Walking into the included
+        routers restores the real resolution — and crucially still walks them IN ORDER, because
+        declaration order is the entire property being tested here. Falls back to the flat layout on
+        older FastAPI versions."""
+        def walk(routes, prefix):
+            for r in routes:
+                ctx = getattr(r, "include_context", None)
+                inner = getattr(r, "original_router", None)
+                if inner is not None:                      # FastAPI >= 0.141 nested include
+                    yield from walk(inner.routes, prefix + (getattr(ctx, "prefix", "") or ""))
+                    continue
+                rx = getattr(r, "path_regex", None)
+                if rx is None:
+                    continue
+                if not probe.startswith(prefix):
+                    continue
+                if rx.match(probe[len(prefix):]) and "GET" in (getattr(r, "methods", set()) or set()):
+                    yield prefix + r.path
+        return next(walk(app.routes, ""), None)
+
     wrong = []
     for probe, want in EXPECT.items():
-        got = next((r.path for r in _app.routes
-                    if hasattr(r, "path_regex") and r.path_regex.match(probe)
-                    and "GET" in getattr(r, "methods", set())), None)
+        got = _resolve(_app, probe)
         if got != want:
             wrong.append(f"{probe} -> {got} (want {want})")
     check("P11 every URL resolves to its intended route (catch-all does not shadow the "

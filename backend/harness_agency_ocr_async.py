@@ -375,10 +375,49 @@ def _stmts(node):
     return b
 
 
-base_fn = fn(BASE_TREE, "_ocr_parse_transfer")
-norm_new = [ast.dump(ast.fix_missing_locations(_Norm().visit(copy.deepcopy(s)))) for s in _stmts(aio)]
-norm_base = [ast.dump(s) for s in _stmts(base_fn)]
-check("F1 async body == origin/main body once the client swap is normalised away",
+# BASELINE NOTE. These comparisons were written while this package was UNMERGED: origin/main held
+# only the old SYNC `_ocr_parse_transfer`, so the async body was normalised back into sync shape and
+# diffed against it. main has since taken the package (it now defines `_ocr_parse_transfer_async`
+# itself), so that normalisation compares the async function against a function that is already
+# async — the client-swap rewrite then has nothing to swap and reports a divergence that does not
+# exist. Diff the async function against MAIN'S OWN async function, which is the same question
+# ("did the extraction logic drift?") asked against the baseline that actually exists now.
+base_fn = fn(BASE_TREE, "_ocr_parse_transfer_async") or fn(BASE_TREE, "_ocr_parse_transfer")
+_base_is_async = fn(BASE_TREE, "_ocr_parse_transfer_async") is not None
+
+
+class _DropMetering(ast.NodeTransformer):
+    """Strip the mig 972/973 AI-usage metering statements (the `_ai_meter` import and its record()
+    call) wherever they appear — they sit inside the try: block, not at the function's top level.
+    They are additive bookkeeping, not extraction logic; section H asserts separately that they must
+    not run blocking I/O on the event loop."""
+
+    def visit_Import(self, node):
+        return None if any("ai_meter" in (a.name or "") for a in node.names) else node
+
+    def visit_ImportFrom(self, node):
+        names = [a.name for a in node.names] + [node.module or ""]
+        return None if any("ai_meter" in (n or "") for n in names) else node
+
+    def visit_Expr(self, node):
+        return None if "ai_meter" in ast.dump(node) else node
+
+
+def _drop_metering(stmts):
+    out = []
+    for st in stmts:
+        st = _DropMetering().visit(copy.deepcopy(st))
+        if st is not None:
+            out.append(st)
+    return out
+
+
+norm_new = [ast.dump(ast.fix_missing_locations(_Norm().visit(copy.deepcopy(s))))
+            for s in _drop_metering(_stmts(aio))]
+norm_base = [ast.dump(ast.fix_missing_locations(_Norm().visit(copy.deepcopy(s))))
+             for s in _drop_metering(_stmts(base_fn))] if _base_is_async else \
+            [ast.dump(s) for s in _stmts(base_fn)]
+check("F1 async extraction body == origin/main (metering aside; no OCR logic drift)",
       norm_new == norm_base,
       "first divergence: " + next((f"{a[:150]} != {b[:150]}"
                                    for a, b in zip(norm_new, norm_base) if a != b), "length differs"))
@@ -405,46 +444,34 @@ print("G. Blast radius")
 print("=" * 78)
 names_now = sorted(n.name for n in ast.walk(TREE) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
 names_base = sorted(n.name for n in ast.walk(BASE_TREE) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
-check("G1 exactly ONE new function (_ocr_parse_transfer_async), none removed/renamed",
-      set(names_now) - set(names_base) == {"_ocr_parse_transfer_async"}
-      and set(names_base) - set(names_now) == set(),
-      f"+{set(names_now) - set(names_base)} -{set(names_base) - set(names_now)}")
+# G1 used to require `_ocr_parse_transfer_async` to be NEW relative to main. It is not new any more —
+# main took this package — so "is it newly added?" now answers No precisely because the fix shipped.
+# The durable properties are that the async implementation EXISTS and that nothing was removed or
+# renamed out from under a caller; both are asserted directly, and section A/B prove it is really async.
+check("G1a the async implementation exists in agency.py",
+      "_ocr_parse_transfer_async" in names_now)
+check("G1b no function removed or renamed vs origin/main",
+      set(names_base) - set(names_now) == set(),
+      f"-{sorted(set(names_base) - set(names_now))}")
+# ── RETIRED: G2 / G3a-d / G5 / G7 (branch-coordination, not product behaviour) ──────────────────
+# These four asserted that THIS WORKING BRANCH's diff against origin/main contained nothing but this
+# package: only agency.py + router.py modified, the router.py diff exactly one line in one hunk near
+# line 19620, no shared file touched, no migration added. They existed to keep the package merging
+# cleanly beside a carrier-income package being written in parallel at the time.
+#
+# Both premises are gone. The package MERGED into main (main defines `_ocr_parse_transfer_async`
+# itself, so the router.py one-liner is not a diff any more), and this is now a long-lived shared
+# branch carrying many unrelated packages — the marketing module, migs 984/985 and more. A whole-branch
+# file-list assertion therefore reports "blast radius exceeded" for other people's work, every run,
+# for ever. That is not an alarm anyone can act on; left red it only teaches readers to ignore this
+# file. They are retired deliberately rather than rewritten, because a one-time merge-hygiene
+# condition has no durable form. What they were protecting is still covered: G1b (nothing removed),
+# G4, G6a (import surface), G6b (not money-touching) and sections A/B (nothing sync survives) all
+# assert against agency.py itself rather than against the branch.
 changed = subprocess.run(["git", "diff", "--name-only", "origin/main", "--"], cwd=REPO,
                          capture_output=True, text=True).stdout.split()
-check("G2 only agency.py + router.py + this package's two proof files are modified vs origin/main",
-      set(changed) <= {"backend/app/modules/commcalc/agency.py",
-                       "backend/app/modules/commcalc/router.py",
-                       "backend/harness_agency_ocr_async.py",
-                       "backend/scratchpad/agency_ocr_async_asgi_smoke.py"},
-      str(changed))
-# Gate-1 lifted the router.py restriction for EXACTLY one hunk. The parallel carrier-income agent may
-# edit router.py in a different region, so this asserts the hunk stays confined and both merge cleanly.
-rdiff = subprocess.run(["git", "diff", "--unified=0", "origin/main", "--",
-                        "backend/app/modules/commcalc/router.py"],
-                       cwd=REPO, capture_output=True, text=True).stdout.splitlines()
-radd = [l for l in rdiff if l.startswith("+") and not l.startswith("+++")]
-rdel = [l for l in rdiff if l.startswith("-") and not l.startswith("---")]
-rhunks = [l for l in rdiff if l.startswith("@@")]
-check("G3a router.py diff is EXACTLY one line changed (1 added, 1 removed)",
-      len(radd) == 1 and len(rdel) == 1, f"+{len(radd)} -{len(rdel)}")
-check("G3b router.py diff is a SINGLE hunk (confined — merges cleanly beside carrier-income)",
-      len(rhunks) == 1, str(rhunks))
-check("G3c that one line is the awaited OCR call",
-      bool(radd) and radd[0][1:].strip() ==
-      "rows, model, conf = await _agency._ocr_parse_transfer_async(data, file.filename, file.content_type)"
-      and bool(rdel) and rdel[0][1:].strip() ==
-      "rows, model, conf = _agency._ocr_parse_transfer(data, file.filename, file.content_type)",
-      f"+{radd[0] if radd else 'n/a'} / -{rdel[0] if rdel else 'n/a'}")
-check("G3d the hunk sits in the agency upload-ocr region (~19620), far from the carrier-income "
-      "endpoints the parallel package edits",
-      rhunks and 19500 < int(rhunks[0].split("+")[1].split(",")[0].split(" ")[0]) < 19800,
-      str(rhunks))
 check("G4 whatif.py / custom_report.py untouched",
       not any(f.endswith(("whatif.py", "custom_report.py")) for f in changed))
-check("G5 no SHARED file touched (core/**, main.py, client.ts, rbac.ts, layout.tsx)",
-      not any(f.startswith("backend/app/core/") or f.endswith(("app/main.py", "lib/client.ts",
-                                                               "lib/rbac.ts", "(platform)/layout.tsx"))
-              for f in changed), str(changed))
 def _imports(tree):
     out = set()
     for n in ast.walk(tree):
@@ -457,8 +484,12 @@ def _imports(tree):
 
 
 imported = _imports(TREE)
+# `app.modules.billing[.ai_meter]` is the mig 972/973 AI-usage metering import, a registered feature
+# addition — ALLOWED here as an import. Whether it is CALLED safely is a different question, and a
+# failing one: see section H.
 want = (_imports(BASE_TREE) - {"anthropic.Anthropic"}
-        | {"anthropic.AsyncAnthropic", "os", "asyncio", "concurrent.futures"})
+        | {"anthropic.AsyncAnthropic", "os", "asyncio", "concurrent.futures"}
+        | {"app.modules.billing", "app.modules.billing.ai_meter"})
 tbls = {getattr(c.args[0], "value", "") for c in ast.walk(TREE)
         if isinstance(c, ast.Call) and getattr(c.func, "attr", "") == "table" and c.args}
 check("G6a import surface == origin/main + {os, asyncio, concurrent.futures}, minus the sync client",
@@ -467,11 +498,68 @@ check("G6b NOT money-touching: no calculator / commission_engine import, no rep_
       f"(tables touched: {sorted(t for t in tbls if t)})",
       not any("calculator" in m or "commission_engine" in m for m in imported)
       and "rep_commissions" not in tbls)
-check("G7 no migration / SQL added by this package",
-      not any("migrations" in f or f.endswith(".sql") for f in changed), str(changed))
 check("G8 `os` / `asyncio` / `concurrent.futures` imported once each at module top",
       SRC.count("\nimport os\n") == 1 and SRC.count("\nimport asyncio\n") == 1
       and SRC.count("\nimport concurrent.futures\n") == 1)
+
+
+print()
+print("=" * 78)
+print("H. Event loop is not blocked by the AI-usage METERING call  (OPEN DEFECT)")
+print("=" * 78)
+# ── OPEN PRODUCT DEFECT, 2026-09-06 — left FAILING on purpose ─────────────────────────────────────
+# The whole point of this file is that nothing on the OCR path may run blocking I/O on the single
+# uvicorn event loop (SEV-1 2026-07-30). The model call was fixed and stays fixed (sections A-E).
+# The mig 972/973 AI-usage metering added AFTERWARDS re-opens the same hole on a smaller scale:
+#
+#     _ai_meter.record("agency_ocr", ..., msg)      # agency.py, inside `async def`
+#
+# `ai_meter.record` is an ORDINARY SYNCHRONOUS FUNCTION that ends in
+# `get_supabase_admin().schema("core").table("ai_call_audit").insert(row).execute()` — a real
+# PostgREST HTTP round trip. Called bare from an `async def`, it runs ON the event loop, so for its
+# whole duration every other request on the process is stalled, /health included. Normally that is
+# tens of milliseconds. When PostgREST is slow or hanging — the exact scenario
+# harness_identity_backend_503 exists for — it is the postgrest client timeout, DEFAULT 120s, and
+# db_resilience never retries a POST, so the worst case is a ~2-minute platform-wide freeze from one
+# invoice OCR. Same failure mode as the SEV-1, two orders of magnitude smaller, still a freeze.
+#
+# NOT fixed here because it is not local to this package: the identical bare call appears at four
+# async sites in four modules (commcalc/agency.py, closing/router.py, helpdesk/router.py,
+# remediation/router.py), so the right repair is one shared off-loop path for metering rather than
+# four hand-patched call sites, and it belongs to whoever owns the billing module. Failing loudly is
+# the point — do not silence this by deleting it.
+def _metering_is_off_loop(tree, fname):
+    """Every ai_meter.record() reached from async `fname` must be handed to an awaited
+    run_in_threadpool / asyncio.to_thread. Returns (total_calls, offloaded_calls)."""
+    target = fn(tree, fname)
+    if target is None:
+        return (0, 0)
+    total = offloaded = 0
+    hopped_ids = set()
+    for n in ast.walk(target):
+        if isinstance(n, ast.Await) and isinstance(n.value, ast.Call):
+            c = n.value
+            nm = getattr(c.func, "attr", None) or getattr(c.func, "id", None)
+            if nm in ("run_in_threadpool", "to_thread") and c.args:
+                for sub in ast.walk(c):
+                    hopped_ids.add(id(sub))
+    for n in ast.walk(target):
+        if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "record":
+            base = getattr(n.func.value, "id", "")
+            if "meter" not in base.lower():
+                continue
+            total += 1
+            if id(n) in hopped_ids:
+                offloaded += 1
+    return (total, offloaded)
+
+
+_tot, _off = _metering_is_off_loop(TREE, "_ocr_parse_transfer_async")
+check("H1 ai_meter.record() on the OCR path never runs blocking I/O on the event loop "
+      f"(OPEN DEFECT: {_tot - _off} of {_tot} call(s) run a synchronous PostgREST insert on the loop; "
+      "worst case ~120s platform-wide freeze — see the note above this check)",
+      _tot == 0 or _off == _tot,
+      f"blocking-on-loop metering calls: {_tot - _off}")
 
 print()
 print("=" * 78)
