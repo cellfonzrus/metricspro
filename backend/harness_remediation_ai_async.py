@@ -314,9 +314,18 @@ def _fake_gate(ns):
                                  lamp=lamp, config=cfg, usage=GATE["usage"],
                                  has_key=bool(ns["settings"].ANTHROPIC_API_KEY))
         return d, cfg
+
+    async def decide_async(client, **kw):
+        # The route awaits the guard on a worker thread (2026-09-06: two PostgREST reads inside a
+        # coroutine stalled the single event loop). The DECISION is identical either way, which is
+        # what this stub preserves — the hop is placement, not policy.
+        import asyncio as _a
+        return await _a.to_thread(lambda: decide(client, **kw))
+
     return types.SimpleNamespace(
         resolve_caller=lambda client, authorization, org_id=None: GATE["caller"],
         decide=decide,
+        decide_async=decide_async,
         audit=lambda client, row, label=None: GATE["audits"].append(row),
         usage_from_response=lambda resp: {"input_tokens": 11, "output_tokens": 22},
     )
@@ -537,8 +546,12 @@ check("F4 the router imports no middleware / shared-mutable module",
       and "rbac" not in SRC.replace("`frontend/src/lib/rbac.ts`", ""))
 check("F6 the AI diagnosis is wired to the SHARED guard, not a private copy",
       "from app.modules.core import ai_gate as _gate" in SRC
-      and "_gate.decide(" in SRC and "cbx.ai_audit_row(" in SRC
+      # `_gate.decide_async(` since 2026-09-06 — same shared decision, awaited off the event loop
+      # because its two PostgREST reads would otherwise stall every request on the process.
+      and "_gate.decide" in SRC and "cbx.ai_audit_row(" in SRC
       and 'AI_PURPOSE = "remediation_diagnose"' in SRC)
+check("F6b the guard's reads are awaited off the loop, not run inline in the coroutine",
+      "await _gate.decide_async(" in SRC)
 check("F5 whitelist safety intact: pb.is_implemented still gates execution",
       "pb.is_implemented(playbook_key)" in SRC)
 

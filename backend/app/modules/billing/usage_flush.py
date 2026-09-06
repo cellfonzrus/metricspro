@@ -67,18 +67,48 @@ def flush_now():
         return 0
 
 
+def flush_ai_now():
+    """Drain the AI usage/audit buffer (`billing/ai_meter`). BLOCKING — worker thread only.
+    Returns rows written. Never raises.
+
+    The meter normally drains itself the instant a call is recorded, detached to a worker thread.
+    This tick is the BACKSTOP for the cases that detach cannot cover: a write that failed and was
+    restored, a row recorded while the loop was too busy to schedule the hop, a process where
+    nothing has called `dispatch()` recently. It shares this loop rather than starting a second
+    one — one background writer for billing, which is why the flusher lives here."""
+    try:
+        from app.modules.billing import ai_meter
+        return ai_meter.flush_now()
+    except Exception as e:
+        try:
+            print("WARN [usage-flush] AI usage backstop failed: %s" % str(e)[:200], flush=True)
+        except Exception:
+            pass
+        return 0
+
+
 async def _loop():
     while True:
         try:
             await asyncio.sleep(FLUSH_SECONDS)
             if ACCUMULATOR.size():
                 await asyncio.to_thread(flush_now)
+            if _ai_pending():
+                await asyncio.to_thread(flush_ai_now)
         except asyncio.CancelledError:
             break
         except Exception:
             # The flusher must outlive any single failure — a billing counter that stops counting
             # because of one bad tick is worse than a late one.
             pass
+
+
+def _ai_pending():
+    try:
+        from app.modules.billing import ai_meter
+        return ai_meter.size()
+    except Exception:
+        return 0
 
 
 def start():
@@ -94,12 +124,14 @@ def start():
 
 
 async def stop():
-    """Cancel the loop and flush what is pending, so a graceful shutdown loses nothing."""
+    """Cancel the loop and flush what is pending — module counters AND buffered AI usage rows — so a
+    graceful shutdown loses nothing."""
     global _TASK
     if _TASK is not None:
         _TASK.cancel()
         _TASK = None
-    try:
-        await asyncio.to_thread(flush_now)
-    except Exception:
-        pass
+    for fn in (flush_now, flush_ai_now):
+        try:
+            await asyncio.to_thread(fn)
+        except Exception:
+            pass

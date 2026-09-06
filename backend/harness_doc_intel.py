@@ -477,10 +477,16 @@ _route = next((n for n in _ast.walk(_rt)
 _route_src = _ast.get_source_segment(_router_src, _route) or ""
 check("K1 the extract route exists and is still an `async def`",
       isinstance(_route, _ast.AsyncFunctionDef))
+# `_ai_gate.decide_async(...)` since 2026-09-06 — the same decision, awaited on a worker thread so
+# two PostgREST reads inside this coroutine cannot stall the single event loop. Matching on the
+# `decide` PREFIX keeps this check about ORDER and about which guard decides, not about placement.
+_GATE_CALL = "_ai_gate.decide"
 check("K2 the lease gate still runs FIRST, before anything else is consulted",
-      _route_src.index("_require_lease_access(") < _route_src.index("_ai_gate.decide("), True)
+      _route_src.index("_require_lease_access(") < _route_src.index(_GATE_CALL), True)
 check("K3 the SHARED guard decides (no private authorization here)",
-      "_ai_gate.decide(" in _route_src and "purpose=AI_LEASE_PURPOSE" in _route_src, True)
+      _GATE_CALL in _route_src and "purpose=AI_LEASE_PURPOSE" in _route_src, True)
+check("K3b the guard is awaited OFF the event loop (its reads are blocking PostgREST calls)",
+      "await _ai_gate.decide_async(" in _route_src, True)
 check("K4 the purpose is the registered `lease_extraction` row",
       'AI_LEASE_PURPOSE = "lease_extraction"' in _router_src and "lease_extraction" in cb_purposes)
 check("K5 its authorizing predicate is the LEASE gate, not super-admin",
@@ -488,7 +494,7 @@ check("K5 its authorizing predicate is the LEASE gate, not super-admin",
 check("K6 the subject is this org's OWN document id, re-validated against the resolved row",
       "known_keys=[subject]" in _route_src and 'subject = str(doc.get("id") or "")' in _route_src, True)
 check("K7 the org-scoped document lookup happens BEFORE the guard sees the subject",
-      _route_src.index("_document_row(org_id, document_id)") < _route_src.index("_ai_gate.decide("), True)
+      _route_src.index("_document_row(org_id, document_id)") < _route_src.index(_GATE_CALL), True)
 check("K8 EVERY attempt is audited — the refusal path and the spend path both write a row",
       _route_src.count("_ai_gate.audit("), 2)
 check("K9 the audit row is org-scoped and carries the purpose",

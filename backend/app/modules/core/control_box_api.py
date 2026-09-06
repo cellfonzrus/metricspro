@@ -516,8 +516,12 @@ async def ai_triage(body: TriageIn, org_id: str = "", authorization: str = Heade
     keys = [c.get("key") for c in board["checks"]]
     row = next((c for c in board["checks"] if c.get("key") == (body.check_key or "").strip()), None)
 
-    cfg = _ai_config(client, org)
-    usage = cbx.rollup_usage(_recent_ai_rows(client, org))
+    # OFF THE LOOP: the ceiling read and the meter read are blocking PostgREST calls and this is a
+    # coroutine — bare, they stall every other request on the process (2026-07-30 SEV-1 class). One
+    # hop covers both, so the guard still sees a single consistent snapshot.
+    import asyncio as _asyncio
+    cfg, usage = await _asyncio.to_thread(
+        lambda: (_ai_config(client, org), cbx.rollup_usage(_recent_ai_rows(client, org))))
     decision = cbx.ai_guard_decision(
         caller, purpose=cbx.AI_PURPOSE, check_key=body.check_key, known_keys=keys,
         lamp=(row or {}).get("lamp"), config=cfg, usage=usage,

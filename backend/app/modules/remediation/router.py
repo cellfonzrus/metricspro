@@ -166,8 +166,10 @@ async def _ai_diagnose(client, org_id, caller, catalog, issue):
     ASYNC ON PURPOSE — see the comment on the client below. Do NOT make this a plain `def` again."""
     # The guard decides BEFORE anything is assembled: authorization (this purpose's predicate),
     # then bounded input, then rate limit, then budget. Every outcome is audited, org-scoped.
-    decision, cfg = _gate.decide(client, org_id=org_id, purpose=AI_PURPOSE, caller=caller,
-                                 subject=issue)
+    # OFF THE LOOP: `decide` is two PostgREST reads and this is a coroutine — run bare they stall
+    # every other request on the process (the 2026-07-30 SEV-1 defect class).
+    decision, cfg = await _gate.decide_async(client, org_id=org_id, purpose=AI_PURPOSE, caller=caller,
+                                             subject=issue)
     if not decision.get("allow"):
         _gate.audit(client, cbx.ai_audit_row(org_id, caller, cbx.subject_digest(issue), decision,
                                              purpose=AI_PURPOSE), label="remediation")

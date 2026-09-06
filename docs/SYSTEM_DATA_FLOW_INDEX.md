@@ -2140,7 +2140,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `core.system_check` (mig `970`; per-tenant OVERRIDES over the code-derived check registry — retune / disable / DECLARE a check) | `PUT`-less by design today: rows are written by SQL/console; the board never writes them | `control_box_api.effective_registry` (code defaults < HOUSE rows < org rows) → `GET /core/control-box` |
 | `core.system_check_run` (mig `970`; daily-run history — the PROOF the check ran + the baseline escalation compares against) | `control_box_api._persist_run` (from `POST /core/control-box/run` and `/run-due`) | `GET /core/control-box/history`; `_previous_results` → `control_box.escalations` (notify-once) |
 | `core.system_check_state` (mig `970`; per-org `enabled`/`cadence_hours`/`last_run_at`/`next_run_at`) | `control_box_api._persist_run` upsert | `control_box.due_orgs` (which tenants are due) + `control_box.selfcheck_row` (the board's row about ITSELF) |
-| `core.ai_budget_config` / `core.ai_call_audit` (mig `972`; SHARED per-`(org,purpose)` AI ceiling + per-call meter/audit — tokens only, $ joins `core.token_rates`. Purposes seeded: `control_box_triage` mig `972`, `remediation_diagnose` mig `982`, `lease_extraction` mig `983`) | `core/ai_gate.audit` — the ONE writer (every attempt, allowed AND refused, org-scoped); `control_box_api._audit`, `remediation/router._ai_diagnose` and `storeops/router.post_document_extract` all go through it | `core/ai_gate.budget_config` / `recent_rows` → `control_box.rollup_usage` → `control_box.ai_guard_decision`; refusal scan = the "someone is probing us" signal |
+| `core.ai_budget_config` / `core.ai_call_audit` (mig `972`; SHARED per-`(org,purpose)` AI ceiling + per-call meter/audit — tokens only, $ joins `core.token_rates`. Purposes seeded: `control_box_triage` mig `972`, `remediation_diagnose` mig `982`, `lease_extraction` mig `983`) | `billing/ai_meter` — the ONE writer since 2026-09-06, buffered and drained off the event loop. `core/ai_gate.audit` (used by `control_box_api._audit`, `remediation/router._ai_diagnose`, `storeops/router.post_document_extract`) and `ai_meter.record()` both feed that single sink; `usage_flush.flush_ai_now` is the backstop | `core/ai_gate.budget_config` (30s TTL cache) / `recent_rows` (24h floor + in-flight buffered rows) → `control_box.rollup_usage` → `control_box.ai_guard_decision`; refusal scan = the "someone is probing us" signal |
 | `core.ai_margin_config` (mig `973`; per-tenant AI margin, effective-dated + APPEND-ONLY so history IS the audit) | `PUT /billing/ai-margin` (super-admin, records `changed_by`) | `ai_usage.margin_for` → `price_period` → the statement's AI line |
 | `core.ai_usage_period` (mig `973`; FROZEN AI period snapshots — rate + margin + figures at close) | `POST /billing/ai-usage/close` | `ai_usage.price_period(frozen=)` — read, NEVER recomputed |
 | `core.module_usage_daily` (mig `974`; per (org, module, day) counters — `billable_calls` vs `system_calls` vs `anonymous_calls`) | `core.bump_module_usage` RPC from `billing/usage_flush` (batched every 30s; the request path only increments a dict) | `module_usage.rollup_by_module` → `statement.build_statement` → `GET /billing/statement` |
@@ -2581,6 +2581,12 @@ urgent than one late feed); the headline EXCLUDES `unmonitored` and reports it a
   `_resolve_caller`), and hands it all to the PURE decision. It never decides anything. The control
   box's `_ai_config`/`_recent_ai_rows`/`_audit` DELEGATE here — three private copies of "resolve the
   ceiling, count 24h, write the audit" is where a budget silently stops being enforced.
+  Since 2026-09-06 none of that runs on the event loop (§21 *AI BILLING LATENCY*): `decide_async()`
+  awaits the same decision on a worker thread, `budget_config` caches the ceiling for
+  `AI_BUDGET_CACHE_SECONDS` (30s default, `0` disables, `invalidate_budget_cache()` on write),
+  `recent_rows` bounds the meter read to 24h **and folds in `billing/ai_meter.pending_rows()`** so a
+  buffered row still counts against the cap, and `audit()` hands the row to the meter's off-loop sink
+  instead of inserting inline.
 - **Harnesses:** `harness_control_box.py` (134 checks — ladder, honesty, portal-adapter drift, daily
   scheduling, AI guard, redaction, fix bundle), `harness_control_box_board.py` (41 checks — board
   assembly over a fake client: composition, config overrides, honesty under I/O failure, coverage)
@@ -2712,6 +2718,40 @@ was not relaxed to meter anything. (Three of these sites are now AUTHORIZED as w
 control-box triage since mig `972`, remediation triage since mig `982`, lease/insurance extraction
 since mig `983` — see §20's purpose registry. The other seven remain metered-only.)
 
+**AI BILLING LATENCY — why the write is buffered (owner 2026-09-06: *"fix the slowness for to ai
+billing"*).** The slowness was structural, not a slow query. `ai_meter.record()` ended in a
+synchronous PostgREST insert and is called bare from `async def` handlers in seven modules; on
+single-worker uvicorn a synchronous insert inside a coroutine holds the ONE event loop for its whole
+duration, so every other request — `/health` included — queues behind an invoice OCR's billing write.
+Worst case is the postgrest client timeout (**120s**, and `db_resilience` never retries a POST): a
+~2-minute platform-wide freeze. Same defect class as the SEV-1 of 2026-07-30, two orders of magnitude
+smaller. The repair is ONE shared off-loop path owned by billing, **not** nine call-site patches — a
+tenth site wired tomorrow would otherwise reintroduce it:
+
+| | before | after |
+|---|---|---|
+| `record()` | build row → **blocking insert on the caller's thread** | build row → append to buffer → drain **detached to a worker thread** (`run_in_executor`, not awaited) |
+| `ai_gate.audit()` | its own blocking insert | the same buffer — so exactly ONE function writes `core.ai_call_audit` |
+| `ai_gate.decide()` | 2 blocking reads, bare inside 3 coroutines | `decide_async()` — same pure decision, awaited off the loop |
+| ceiling read | 2 PostgREST round trips per guarded call | `AI_BUDGET_CACHE_SECONDS` TTL cache (default 30s, `0` disables, `invalidate_budget_cache()` on write) |
+| meter read | up to 500 rows, unbounded age | server-side `created_at >= now-24h` — `rollup_usage` only counts 1h/24h windows anyway |
+
+Two properties the buffer must not cost us, both proved by `harness_ai_meter_offloop.py`:
+
+- **Spend is never lost silently.** A failed write is restored and retried on the next tick; only a
+  sustained failure past `AI_METER_MAX_PENDING` (5000) drops rows, and drops are **counted**
+  (`ai_meter.dropped()`). A hard crash can under-count by whatever is in flight — the correct
+  direction to be wrong for a usage bill, and the detached drain keeps that to milliseconds rather
+  than the 30s a tick-only design would carry. `usage_flush.stop()` drains on graceful shutdown.
+- **The mig-972 cap still sees in-flight rows.** `core.ai_call_audit` is not only the invoice source;
+  the guard counts rows in it to enforce the per-hour and per-day ceilings. `ai_gate.recent_rows`
+  folds `ai_meter.pending_rows()` into what the guard is given, so a burst inside one drain interval
+  cannot slip past the ceiling. The guard decides on exactly the facts it always did.
+
+Rows of two shapes share the table (the guard's carries `actor_email`/`created_at`, the meter's does
+not), so the drain groups by key-set before inserting — PostgREST rejects a batch whose objects do not
+share keys, and grouping keeps one round trip per shape instead of one per row.
+
 **WHAT IS BILLED vs COUNTED** (owner-overridable, and both numbers are stored so it is reversible):
 `billable_calls` = tenant-initiated only. `system_calls` = pg_cron ticks, `*/run-due` sweeps, webhooks,
 internal service calls — **counted and shown on the statement, never charged**. Billing a tenant for
@@ -2764,13 +2804,16 @@ and retried.
   (thread-safe add/drain/restore), `rollup_by_module`.
 - `backend/app/modules/billing/statement.py` — PURE: `price_for`, `module_line`, `build_statement`
   (+`frozen=`), `freeze_statement`, `pricing_grid`.
-- `backend/app/modules/billing/ai_meter.py` — the metering seam (`record()`, never raises, reads
-  `tenant_middleware.acting_org()` so no call-site signature changes).
+- `backend/app/modules/billing/ai_meter.py` — the metering seam AND the platform's one writer of
+  `core.ai_call_audit`: `build_row` (pure), `record()` (never raises, never blocks the loop, reads
+  `tenant_middleware.acting_org()` so no call-site signature changes), `enqueue`/`pending_rows`/
+  `size`/`dropped`/`drain`/`restore`/`flush_now`/`dispatch`.
 - `backend/app/modules/billing/usage_flush.py` — the accumulator singleton + background flusher
-  (`start`/`stop`/`flush_now`), started by `main.py:_usage_flusher_startup`.
+  (`start`/`stop`/`flush_now`/`flush_ai_now`), started by `main.py:_usage_flusher_startup`. ONE
+  background writer for billing: it drains the module counters and, as a backstop, the AI buffer.
 - `backend/app/modules/billing/usage_api.py` — the endpoints (all `_require_super_admin`).
 - `frontend/src/app/(platform)/admin/billing-usage/page.tsx` — operator screen (nav in `rbac.ts`).
-- **Harnesses:** `harness_ai_usage.py` (66) + `harness_module_billing.py` (62).
+- **Harnesses:** `harness_ai_usage.py` (66) + `harness_module_billing.py` (62) + `harness_ai_meter_offloop.py` (20 — the off-loop / no-lost-spend / cap-still-counts contract).
 
 **MIGRATIONS**
 - `973_ai_usage_billing.sql` — `core.ai_margin_config` (per-tenant, effective-dated, append-only =
@@ -3273,7 +3316,8 @@ kept changing. Final state: **270/272 green**, 2 deliberately red on a named ope
 | `GET /commcalc/flags/{period}` — `async def` over blocking `sb()` I/O, running a DB round-trip on the event loop | **FIXED** (`497757ce`) |
 | `connect_tenant` (`core/router.py`) — same shape, added *after* the sweep that converted 124 handlers away from it | **FIXED** (`c120ac89`) |
 | **44 more `async def` route handlers call sync `sb()` and never `await`** — 23 `commcalc/router.py`, 10 `asset/router.py`, 7 `billing/pricing.py`, 3 `account/router.py` (P&L, BS, CF), 1 `asset/oninv_recon.py`. Each blocks the single event loop for its whole duration. Independently re-counted. | **OPEN — owner decision** |
-| `ai_meter.record()` (migs 972/973) — synchronous PostgREST insert called bare from 4 `async def` handlers; postgrest timeout is 120s and POSTs are not retried ⇒ worst case a ~2-minute platform-wide freeze from one OCR | **OPEN — deliberately left RED** in `harness_agency_ocr_async` H1 + `harness_closing_ocr_async` H1 |
+| `ai_meter.record()` (migs 972/973) — synchronous PostgREST insert called bare from 4 `async def` handlers; postgrest timeout is 120s and POSTs are not retried ⇒ worst case a ~2-minute platform-wide freeze from one OCR | **FIXED** — one buffered off-loop sink in `billing/ai_meter`, not four call-site patches (see §21 *AI BILLING LATENCY*). Both harnesses green; `harness_ai_meter_offloop.py` (20) now owns the contract |
+| The same shape in the AI **guard**, found while fixing the above: `ai_gate.decide` (2 PostgREST reads) and `ai_gate.audit` (1 insert) ran bare inside 3 `async def` endpoints — remediation `_ai_diagnose`, storeops `post_document_extract`, control-box `ai_triage` | **FIXED** — `decide_async` + the shared buffered audit sink |
 | A harness documented "OFFLINE — no database" wrote **one real row** to `core.import_batches` (sentinel org `…0dead1`, `a.csv`, 8 bytes, 2026-09-03) | Write path **CLOSED**; the row still exists, left for the owner |
 | Privilege-escalation RBAC control and the SSRF import gate had both been **asserting nothing** | Gates verified **intact**; alarms restored |
 

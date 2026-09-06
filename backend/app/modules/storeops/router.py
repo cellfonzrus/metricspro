@@ -3440,7 +3440,9 @@ async def post_document_extract(body: dict, authorization: str = Header(default=
     # Lower-cased so the guard's identifier grammar accepts a UUID whatever case the driver
     # hands back; it is compared against ITSELF (the row we just resolved), never re-queried.
     subject = str(doc.get("id") or "").strip().lower()
-    decision, _cfg = _ai_gate.decide(client, org_id=org_id, purpose=AI_LEASE_PURPOSE, caller=caller,
+    # OFF THE LOOP (see ai_gate.decide_async): two PostgREST reads inside a coroutine stall the
+    # single event loop for every other request on the process.
+    decision, _cfg = await _ai_gate.decide_async(client, org_id=org_id, purpose=AI_LEASE_PURPOSE, caller=caller,
                                      subject=subject, known_keys=[subject])
     if not decision.get("allow"):
         _ai_gate.audit(client, _cbx.ai_audit_row(org_id, caller, subject, decision,

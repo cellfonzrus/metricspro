@@ -35,6 +35,11 @@ half: who may SPEND. Both may be present at one call site — they answer differ
 ORG SCOPING: every read and write here is `.eq("org_id", …)`, and the org handed in is the acting
 org the caller's token resolved to, never a value from a request body.
 """
+import asyncio
+import os
+import threading
+from datetime import datetime, timedelta, timezone
+
 from app.core.config import settings
 from app.modules.core import control_box as cbx
 
@@ -44,10 +49,49 @@ _CONFIG_KEYS = ("enabled", "max_calls_per_hour", "daily_call_cap", "daily_token_
                 "max_input_chars")
 
 
-def budget_config(client, org_id, purpose):
+# ── the ceiling cache ────────────────────────────────────────────────────────────────────────────
+# Every guarded AI call read the ceiling from the database: TWO PostgREST round trips for a tenant
+# org (house row, then the tenant's), on top of the usage read and the audit write, all before the
+# model was even called. Owner 2026-09-06: *"fix the slowness for to ai billing"*. A ceiling is
+# configuration that changes by hand, perhaps monthly, so it is cached for a few seconds per
+# (org, purpose).
+#
+# WHAT THE CACHE CAN AND CANNOT DO: it can delay a ceiling CHANGE by up to the TTL. It cannot fail
+# open — a miss reads the database, a read failure still falls back to the house/code ceiling, and
+# nothing here decides authorization (that is `ai_guard_decision`, always evaluated fresh). Set
+# `AI_BUDGET_CACHE_SECONDS=0` to disable it entirely.
+try:
+    CONFIG_TTL_S = max(0.0, float(os.getenv("AI_BUDGET_CACHE_SECONDS") or 30))
+except Exception:
+    CONFIG_TTL_S = 30.0
+
+_CFG_LOCK = threading.Lock()
+_CFG_CACHE = {}          # (org_id, purpose) -> (expires_at_monotonic, cfg)
+
+
+def invalidate_budget_cache(org_id=None, purpose=None):
+    """Forget cached ceilings. Called when a ceiling is written so an operator's change is live at
+    once rather than after the TTL."""
+    with _CFG_LOCK:
+        if org_id is None and purpose is None:
+            _CFG_CACHE.clear()
+            return
+        for k in [k for k in _CFG_CACHE
+                  if (org_id is None or k[0] == org_id) and (purpose is None or k[1] == purpose)]:
+            _CFG_CACHE.pop(k, None)
+
+
+def budget_config(client, org_id, purpose, *, use_cache=True):
     """This org's row > the HOUSE row > `control_box.DEFAULT_AI_CONFIG`, for ONE purpose.
     RULE TWO: a tenant's AI ceiling is a config row, not a constant. A read failure falls back to
     the house/code ceiling — it can only ever make the ceiling the DEFAULT one, never unlimited."""
+    key = (org_id or HOUSE_ORG, purpose)
+    if use_cache and CONFIG_TTL_S > 0:
+        now = _monotonic()
+        with _CFG_LOCK:
+            hit = _CFG_CACHE.get(key)
+        if hit and hit[0] > now:
+            return dict(hit[1])
     cfg = dict(cbx.DEFAULT_AI_CONFIG)
     scopes = [HOUSE_ORG] if (org_id or HOUSE_ORG) == HOUSE_ORG else [HOUSE_ORG, org_id]
     for scope in scopes:
@@ -60,29 +104,84 @@ def budget_config(client, org_id, purpose):
             for k in _CONFIG_KEYS:
                 if r.get(k) is not None:
                     cfg[k] = r[k]
+    if use_cache and CONFIG_TTL_S > 0:
+        with _CFG_LOCK:
+            _CFG_CACHE[key] = (_monotonic() + CONFIG_TTL_S, dict(cfg))
     return cfg
+
+
+def _monotonic():
+    try:
+        import time
+        return time.monotonic()
+    except Exception:
+        return 0.0
 
 
 def recent_rows(client, org_id, purpose, limit=500):
     """This org's audit rows for ONE purpose — what the meter counts. Org-scoped. A read failure
     returns [] so the guard falls back to its house ceiling rather than failing open on the AUTH
-    gate (authorization was already decided, and it is never decided here)."""
+    gate (authorization was already decided, and it is never decided here).
+
+    Two things this does beyond the obvious select:
+
+      · A 24-HOUR FLOOR. `rollup_usage` counts a 1h window and a 24h window; a row older than that
+        contributes nothing, so fetching it is pure latency. Bounding the read server-side keeps the
+        payload small for a busy org instead of shipping 500 rows to discard most of them (owner
+        2026-09-06, "fix the slowness for to ai billing"). `limit` remains the hard ceiling.
+      · THE IN-FLIGHT ROWS. Since the audit write is buffered off the event loop
+        (`billing/ai_meter`), a call made moments ago may not be in the table yet. Those rows are
+        SPENT and must count against the cap, or a burst inside one drain interval would slip past
+        the per-hour limit. Folding them in here keeps the guard deciding on the same facts it
+        always did."""
+    out = []
     try:
-        return (client.schema("core").table("ai_call_audit")
-                .select("allowed,created_at,input_tokens,output_tokens")
-                .eq("org_id", org_id).eq("purpose", purpose)
-                .order("created_at", desc=True).limit(limit).execute().data) or []
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        out = (client.schema("core").table("ai_call_audit")
+               .select("allowed,created_at,input_tokens,output_tokens")
+               .eq("org_id", org_id).eq("purpose", purpose)
+               .gte("created_at", cutoff)
+               .order("created_at", desc=True).limit(limit).execute().data) or []
     except Exception:
-        return []
+        out = []
+    try:
+        from app.modules.billing import ai_meter as _meter
+        now = datetime.now(timezone.utc).isoformat()
+        for r in _meter.pending_rows(org_id=org_id, purpose=purpose):
+            out.append({"allowed": r.get("allowed"),
+                        "created_at": r.get("created_at") or now,
+                        "input_tokens": r.get("input_tokens") or 0,
+                        "output_tokens": r.get("output_tokens") or 0})
+    except Exception:
+        # A meter that cannot be read costs the guard the in-flight rows only — never the stored
+        # ones, and never the decision.
+        pass
+    return out
 
 
 def audit(client, row, label="ai-gate"):
-    """Best-effort audit write — allowed AND refused attempts. A failed audit must not swallow the
-    caller's answer, but it is printed (redacted) so a silently unauditable AI path is visible."""
+    """Record ONE attempted AI call — allowed AND refused. Never raises, never blocks the event loop.
+
+    The row is handed to `billing/ai_meter`'s buffer, which drains on a worker thread. That is the
+    same sink `ai_meter.record()` uses, so this module's docstring claim — one place reads
+    `core.ai_budget_config`, one place writes `core.ai_call_audit` — is now literally true, and the
+    guard's audit stopped being a synchronous PostgREST insert inside three `async def` endpoints
+    (remediation `_ai_diagnose`, storeops `post_document_extract`, control-box `ai_triage`), which is
+    the freeze `harness_agency_ocr_async` was left red for.
+
+    `client` is accepted and unused: the sink resolves its own admin client on the worker thread, and
+    removing the parameter would touch six call sites in three other modules for no behaviour."""
     try:
-        client.schema("core").table("ai_call_audit").insert(row).execute()
+        from app.modules.billing import ai_meter as _meter
+        ok = _meter.enqueue(row)
+        _meter.dispatch()
+        if not ok:
+            print("WARN [%s] AI audit row not buffered (no org_id, or the meter is full)"
+                  % label, flush=True)
+        return ok
     except Exception as e:
         print("WARN [%s] AI audit write failed: %s" % (label, cbx.redact(e)), flush=True)
+        return False
 
 
 def has_key():
@@ -105,6 +204,19 @@ def decide(client, *, org_id, purpose, caller, subject=None, known_keys=(), lamp
         config=cfg, usage=usage,
         has_key=has_key() if has_api_key is None else bool(has_api_key))
     return decision, cfg
+
+
+async def decide_async(client, **kw):
+    """`decide()` for an `async def` caller. Awaits the same function on a worker thread.
+
+    `decide` is two PostgREST reads. Called bare from a coroutine those reads occupy the single
+    uvicorn event loop and stall every other request on the process — the SEV-1 defect class of
+    2026-07-30. There is no async PostgREST client here, so the hop is the fix; the decision itself
+    is unchanged, still made by the pure function, still fail-closed.
+
+    A failure inside the hop is NOT swallowed: a guard that cannot decide must refuse, and `decide`
+    already degrades to the house ceiling on a read failure rather than raising."""
+    return await asyncio.to_thread(lambda: decide(client, **kw))
 
 
 def usage_from_response(resp):
