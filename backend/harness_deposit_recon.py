@@ -149,6 +149,18 @@ import app.modules.closing.router as cr                # noqa: E402
 from app.modules.closing import deposit_recon as dr    # noqa: E402
 
 
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
+
+
 def wire(store, poison_tables=None, unrestricted_span=True, manager=True):
     fake = FakeClient(store, poison_tables=poison_tables)
     cr.sb = lambda: fake
@@ -267,8 +279,8 @@ async def _spy_send_alert(client, org_id, scope, subject, text, ref_key, store_c
 cr._send_alert = _spy_send_alert
 
 # a SHORT deposit against Store Cash Deposit (expected 380, deposit only 300)
-r = run(cr.bank_deposit({"close_date": "2026-08-01", "store_code": "S1", "amount": 300.0,
-                          "category_id": store_cat["id"], "employee_name": "Sam"}, org_id=HOUSE))
+r = run(cr.bank_deposit(_body(cr.BankDepositIn, {"close_date": "2026-08-01", "store_code": "S1", "amount": 300.0,
+                          "category_id": store_cat["id"], "employee_name": "Sam"}), org_id=HOUSE))
 check("C1 recon block returned", r.get("recon") is not None)
 check("C2 expected_deposit == store_cash basis (380, no adjustments by default)", r["recon"]["expected_deposit"] == 380.0, str(r["recon"]))
 check("C3 is_short True (300 < 380)", r["recon"]["is_short"] is True)
@@ -277,14 +289,14 @@ check("C5 deposit_short alert fired", any(a.get("scope") == "deposit_short" for 
 orig_id = r["row"]["id"]
 
 # an ON-TARGET deposit against Bill Payment Cash Deposit (expected 120, deposit 120) -> no short alert
-r2 = run(cr.bank_deposit({"close_date": "2026-08-01", "store_code": "S1", "amount": 120.0,
-                           "category_id": bill_cat["id"], "employee_name": "Sam"}, org_id=HOUSE))
+r2 = run(cr.bank_deposit(_body(cr.BankDepositIn, {"close_date": "2026-08-01", "store_code": "S1", "amount": 120.0,
+                           "category_id": bill_cat["id"], "employee_name": "Sam"}), org_id=HOUSE))
 check("C6 on-target deposit is NOT short", r2["recon"]["is_short"] is False and r2["recon"]["status"] == "ok", str(r2["recon"]))
 check("C7 no SECOND deposit_short alert for the on-target category",
       len([a for a in alert_calls if a.get("scope") == "deposit_short"]) == 1, str(alert_calls))
 
 # an uncategorized deposit (category_id omitted) -> no recon block, byte-identical to pre-509 behaviour
-r3 = run(cr.bank_deposit({"close_date": "2026-08-01", "store_code": "S1", "amount": 999.0}, org_id=HOUSE))
+r3 = run(cr.bank_deposit(_body(cr.BankDepositIn, {"close_date": "2026-08-01", "store_code": "S1", "amount": 999.0}), org_id=HOUSE))
 check("C8 uncategorized deposit gets NO recon block (pre-509 behaviour preserved)", r3.get("recon") is None)
 check("C9 uncategorized deposit still saves (category_id NULL)", store["bank_deposit"][-1]["category_id"] is None)
 
@@ -292,9 +304,9 @@ check("C9 uncategorized deposit still saves (category_id NULL)", store["bank_dep
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 print("== D. Append-only supplemental deposit (short -> 'will deposit more') ==")
 # submit the supplemental AGAINST the same (store, day, category) as the C1 short deposit above.
-r4 = run(cr.bank_deposit({"close_date": "2026-08-01", "store_code": "S1", "amount": 80.0,
+r4 = run(cr.bank_deposit(_body(cr.BankDepositIn, {"close_date": "2026-08-01", "store_code": "S1", "amount": 80.0,
                            "category_id": store_cat["id"], "employee_name": "Sam",
-                           "parent_deposit_id": orig_id, "will_deposit_more": True}, org_id=HOUSE))
+                           "parent_deposit_id": orig_id, "will_deposit_more": True}), org_id=HOUSE))
 check("D1 supplemental is_supplemental=True, linked to the original via parent_deposit_id",
       store["bank_deposit"][-1]["is_supplemental"] is True and store["bank_deposit"][-1]["parent_deposit_id"] == orig_id)
 check("D2 the ORIGINAL row's amount is UNTOUCHED (still 300, never overwritten)",
@@ -308,18 +320,18 @@ check("D5 remaining_short is now 0", r4["recon"]["remaining_short"] == 0.0)
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 print("== E. PUT /closing/bank-deposit/{id} — narrow metadata-only edit ==")
-resp = cr.update_bank_deposit_meta(orig_id, {"short_reason": "register drawer miscount, corrected next day"}, org_id=HOUSE)
+resp = cr.update_bank_deposit_meta(orig_id, _body(cr.UpdateBankDepositMetaIn, {"short_reason": "register drawer miscount, corrected next day"}), org_id=HOUSE)
 check("E1 short_reason update succeeds", resp["ok"] is True)
 check("E2 short_reason persisted on the ORIGINAL row (not the supplemental)",
       next(x for x in store["bank_deposit"] if x["id"] == orig_id)["short_reason"] == "register drawer miscount, corrected next day")
 check("E3 the row's amount is STILL untouched by this metadata edit", next(x for x in store["bank_deposit"] if x["id"] == orig_id)["amount"] == 300.0)
 try:
-    cr.update_bank_deposit_meta(orig_id, {"amount": 9999.0}, org_id=HOUSE)
+    cr.update_bank_deposit_meta(orig_id, _body(cr.UpdateBankDepositMetaIn, {"amount": 9999.0}), org_id=HOUSE)
     check("E4 amount edit is REJECTED", False)
 except Exception as e:
     check("E4 amount edit is REJECTED (400)", getattr(e, "status_code", None) == 400, str(e))
 try:
-    cr.update_bank_deposit_meta(orig_id, {"category_id": "whatever"}, org_id=HOUSE)
+    cr.update_bank_deposit_meta(orig_id, _body(cr.UpdateBankDepositMetaIn, {"category_id": "whatever"}), org_id=HOUSE)
     check("E5 category_id edit is REJECTED", False)
 except Exception as e:
     check("E5 category_id edit is REJECTED (400)", getattr(e, "status_code", None) == 400, str(e))
@@ -340,10 +352,10 @@ store["pos_tender_summary"].append({"org_id": HOUSE, "store": "1 Main St", "clos
                                      "tender_class": "cash", "amount": 505.0})   # X-Report cross-check (slightly off from closing on purpose)
 store["closing_expense"].append({"org_id": HOUSE, "store_code": "S1", "close_date": "2026-08-01",
                                   "amount": 40.0, "status": "approved", "paid": False})
-run(cr.bank_deposit({"close_date": "2026-08-01", "store_code": "S1", "amount": 380.0,
-                      "category_id": store_cat["id"], "employee_name": "Sam"}, org_id=HOUSE))
-run(cr.bank_deposit({"close_date": "2026-08-01", "store_code": "S1", "amount": 120.0,
-                      "category_id": bill_cat["id"], "employee_name": "Sam"}, org_id=HOUSE))
+run(cr.bank_deposit(_body(cr.BankDepositIn, {"close_date": "2026-08-01", "store_code": "S1", "amount": 380.0,
+                      "category_id": store_cat["id"], "employee_name": "Sam"}), org_id=HOUSE))
+run(cr.bank_deposit(_body(cr.BankDepositIn, {"close_date": "2026-08-01", "store_code": "S1", "amount": 120.0,
+                      "category_id": bill_cat["id"], "employee_name": "Sam"}), org_id=HOUSE))
 
 rep = cr.deposit_recon_report(date="2026-08-01", org_id=HOUSE, authorization="")
 check("F1 exactly one (store, day) block", len(rep["days"]) == 1, str(len(rep["days"])))
@@ -369,7 +381,7 @@ check("F10 Bill Payment Cash Deposit is UNAFFECTED by include_expenses (expenses
       next(c for c in rep2["days"][0]["categories"] if c["category_name"] == "Bill Payment Cash Deposit")["expected_deposit"] == 120.0)
 
 # an uncategorized deposit shows up in its own bucket, not silently dropped
-run(cr.bank_deposit({"close_date": "2026-08-01", "store_code": "S1", "amount": 25.0}, org_id=HOUSE))
+run(cr.bank_deposit(_body(cr.BankDepositIn, {"close_date": "2026-08-01", "store_code": "S1", "amount": 25.0}), org_id=HOUSE))
 rep3 = cr.deposit_recon_report(date="2026-08-01", org_id=HOUSE, authorization="")
 check("F11 uncategorized deposit surfaces in its own bucket", rep3["days"][0]["uncategorized"] is not None
       and rep3["days"][0]["uncategorized"]["total_deposited"] == 25.0, str(rep3["days"][0].get("uncategorized")))
@@ -390,8 +402,8 @@ cat_o = next(c for c in cats_o if c["basis"] == "store_cash")
 for org, cat, code, addr in ((HOUSE, cat_h, "S1", "1 Main St"), (OTHER_ORG, cat_o, "S1", "1 Main St")):
     store["daily_closing"].append({"org_id": org, "store_code": code, "close_date": "2026-08-02", "t_cash": 200.0, "epay_on_cash": 0.0})
     store["store_mapping"].append({"org_id": org, "store_code": code, "store_address": addr})
-run(cr.bank_deposit({"close_date": "2026-08-02", "store_code": "S1", "amount": 200.0, "category_id": cat_h["id"]}, org_id=HOUSE))
-run(cr.bank_deposit({"close_date": "2026-08-02", "store_code": "S1", "amount": 50.0, "category_id": cat_o["id"]}, org_id=OTHER_ORG))
+run(cr.bank_deposit(_body(cr.BankDepositIn, {"close_date": "2026-08-02", "store_code": "S1", "amount": 200.0, "category_id": cat_h["id"]}), org_id=HOUSE))
+run(cr.bank_deposit(_body(cr.BankDepositIn, {"close_date": "2026-08-02", "store_code": "S1", "amount": 50.0, "category_id": cat_o["id"]}), org_id=OTHER_ORG))
 storeops.scope_keyset = lambda auth, org: None
 rep_h = cr.deposit_recon_report(date="2026-08-02", org_id=HOUSE, authorization="")
 check("G1 org isolation: HOUSE's report sees only its own $200 deposit (never the other org's $50)",
@@ -424,7 +436,7 @@ check("H2 adjustment types degrade to [] (not a raise)", types == [])
 # instead exercise the router's OWN try/except degrade path directly (mirrors the existing 502 test
 # convention: this endpoint already degrades one step further when the newer columns don't exist).
 store["daily_closing"].append({"org_id": HOUSE, "store_code": "S9", "close_date": "2026-08-03", "t_cash": 100.0, "epay_on_cash": 0.0})
-r = run(cr.bank_deposit({"close_date": "2026-08-03", "store_code": "S9", "amount": 100.0}, org_id=HOUSE))
+r = run(cr.bank_deposit(_body(cr.BankDepositIn, {"close_date": "2026-08-03", "store_code": "S9", "amount": 100.0}), org_id=HOUSE))
 check("H3 POST /bank-deposit still saves when category tables are unmigrated (recon=None, no 500)",
       r["ok"] is True and r.get("recon") is None, str(r))
 rep = cr.deposit_recon_report(date="2026-08-03", org_id=HOUSE, authorization="")

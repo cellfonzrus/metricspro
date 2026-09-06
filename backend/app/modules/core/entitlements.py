@@ -27,7 +27,16 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"   # house org (middleware rewrit
 # tenant re-syncs on its next /core/me. (1 = initial tenant-provisioning engine, mig 076; 2 = mig 077
 # folded the configurable HR intake-capture form into seed_tenant_defaults(); 3 = mig 079 expanded
 # seed_intake_fields() into the comprehensive HR packet — work eligibility, W-4, policies.)
-SEED_VERSION = 13  # bumped: 13 = the 2026-08-15 Management Incentive default (mig 852) — seeds the
+SEED_VERSION = 14  # bumped: 14 = migs 986/987 registered the 'marketing' module (outside-store event
+                   #              management), so every EXISTING tenant self-provisions a marketing
+                   #              tenant_modules entitlement row on its next login instead of waiting
+                   #              for a manual grant. The module's own default CONTENT (the eight
+                   #              option lists + the standard checklist template) is seeded on the
+                   #              HOUSE org by mig 987 and READ by every tenant through the
+                   #              tenant-UNION-house resolution in event_logic.resolve_options — so
+                   #              there is no per-tenant content seed to run and nothing to clobber.
+                   #              No money code, no payout column: an event is not money.
+                   # 13 = the 2026-08-15 Management Incentive default (mig 852) — seeds the
                    #              house-org Total Wireless district-manager plan so every tenant reads a
                    #              working default to clone/edit. Never-clobber; un-run mig 852 = no-op.
                    # 12 = the 2026-08-14 training pack (v3 of app/data/training_tours_seed.json)
@@ -105,6 +114,13 @@ MODULE_CATALOG = {
     "support": "Tech Support",
     "training": "Training Center",
     "crm": "CRM / Sales Pipeline",
+    # Marketing & Events (migs 986/987, owner directive 2026-09-06) — outside-store event
+    # management. Registering here is LOAD-BEARING: this dict is what puts a module in the
+    # tenant-entitlement gate AND the mig-975 billing pricing grid. A module that ships without a
+    # catalogue entry bills nothing, forever, silently — the same class of miss as the hardcoded
+    # /health module list. Mirrored in core.module_catalog by migration 987; this dict is the
+    # fallback, so the app behaves identically whether or not that migration has run.
+    "marketing": "Marketing & Events",
 }
 ALL_MODULES = list(MODULE_CATALOG.keys())
 

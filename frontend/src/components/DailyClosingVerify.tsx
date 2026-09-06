@@ -61,7 +61,7 @@ function GateBadge({ status, resolved }: { status?: string | null; resolved?: bo
   </span>
 }
 
-type Form = { dm_store_cash: string; dm_store_cc: string; dm_epay_cash: string; dm_epay_cc: string; dm_acc_sale: string; dm_other: string; note: string }
+type Form = { dm_store_cash: string; dm_store_cc: string; dm_epay_cash: string; dm_epay_cc: string; dm_acc_sale: string; dm_other: string; dm_ext_cc: string; note: string }
 
 // A rep row's value for one activation-count field_key (mig 501): a standard field_key is a physical
 // column on the row, a custom one lives in the `counts` jsonb.
@@ -192,9 +192,12 @@ export default function DailyClosingVerify() {
   const { user, permissions } = useAuth()
   // Carrier vocabulary (owner 2026-09-04): the bill-pay processor / financing-program names are
   // per-carrier preset DATA (mig 953 — boost renders 'ePay'/'ACIMA' byte-identical to today).
-  const { term } = useReportLabels()
+  const { term, colLabel } = useReportLabels()
   const ep = term('processor', 'Bill-pay')
   const fin = term('financing', 'Financing')
+  // The external credit machine's tenant-facing name — mig-960 carrier label preset (owner
+  // 2026-09-04), tenant-overridable; no preset ⇒ the built-in wording.
+  const extCc = colLabel('closing_t_ext_cc', 'External Credit Card')
   const today = localToday()
   // RULE FIVE (§3d): the standard core filter bar — period as a date-RANGE (default From===To, i.e.
   // today, so the DM's evening single-day workflow is unchanged) + store(s)/market(s)/rep(s) multi.
@@ -279,6 +282,11 @@ export default function DailyClosingVerify() {
       dm_epay_cc: String(v.dm_epay_cc ?? t.epay_on_cc ?? ''),
       dm_acc_sale: String(v.dm_acc_sale ?? t.acc_sale ?? ''),
       dm_other: String(v.dm_other ?? t.other_account ?? ''),
+      // mig 961 — the EXTERNAL-CREDIT portion OF the corrected card total. Prefilled from the reps'
+      // own external figure so the DM confirms rather than re-types; leaving it blank keeps the
+      // pre-961 behavior (the corrected card total stays merged). Either way the card TOTAL the
+      // platform books is `Store CC` — this box only says how much of it ran on that terminal.
+      dm_ext_cc: String(v.dm_ext_cc ?? t.t_ext_cc ?? ''),
       note: v.note || '',
     }
   }
@@ -356,7 +364,8 @@ export default function DailyClosingVerify() {
         verified: true, verified_by: user?.full_name || 'DM',
         dm_store_cash: num(f.dm_store_cash), dm_store_cc: num(f.dm_store_cc),
         dm_epay_cash: num(f.dm_epay_cash), dm_epay_cc: num(f.dm_epay_cc),
-        dm_acc_sale: num(f.dm_acc_sale), dm_other: num(f.dm_other), note: f.note,
+        dm_acc_sale: num(f.dm_acc_sale), dm_other: num(f.dm_other),
+        dm_ext_cc: num(f.dm_ext_cc), note: f.note,
       }) })
       // Optimistic local update so the card flips to "Verified" instantly, then a narrow
       // single-store/single-day background refresh (see refreshStore) — never the full load().
@@ -445,14 +454,16 @@ export default function DailyClosingVerify() {
     { header: `Original ${ep} CC $`, field: 'orig_epay_cc', money: true, get: (r: any) => r.totals_original ? r.totals_original.epay_on_cc : r.totals?.epay_on_cc },
     { header: 'Original accessory $', field: 'orig_acc_sale', money: true, get: (r: any) => r.totals_original ? r.totals_original.acc_sale : r.totals?.acc_sale },
     { header: 'Original other $', field: 'orig_other', money: true, get: (r: any) => r.totals_original ? r.totals_original.other_account : r.totals?.other_account },
+    { header: `Original ${extCc} $`, field: 'orig_ext_cc', money: true, get: (r: any) => r.totals_original ? r.totals_original.t_ext_cc : r.totals?.t_ext_cc },
     { header: 'DM cash $', field: 'dm_store_cash', money: true, get: (r: any) => r.verification?.dm_store_cash },
     { header: 'DM credit $', field: 'dm_store_cc', money: true, get: (r: any) => r.verification?.dm_store_cc },
     { header: `DM ${ep} cash $`, field: 'dm_epay_cash', money: true, get: (r: any) => r.verification?.dm_epay_cash },
     { header: `DM ${ep} CC $`, field: 'dm_epay_cc', money: true, get: (r: any) => r.verification?.dm_epay_cc },
     { header: 'DM accessory $', field: 'dm_acc_sale', money: true, get: (r: any) => r.verification?.dm_acc_sale },
     { header: 'DM other $', field: 'dm_other', money: true, get: (r: any) => r.verification?.dm_other },
+    { header: `DM ${extCc} $`, field: 'dm_ext_cc', money: true, get: (r: any) => r.verification?.dm_ext_cc },
     { header: 'DM note', field: 'dm_note', get: (r: any) => r.verification?.note || '' },
-  ], [ep, fin])
+  ], [ep, fin, extCc])
 
   const repColumns: ExportColumn[] = useMemo(() => [
     { header: 'Date', field: 'close_date', type: 'date', role: 'date', get: (r: any) => r._store_close_date },
@@ -818,6 +829,8 @@ export default function DailyClosingVerify() {
                   <Lbl t={`${ep} CC`}><input style={tin} value={f.dm_epay_cc || ''} onChange={e => setForm(k, { dm_epay_cc: e.target.value })} /></Lbl>
                   <Lbl t="Acc sale"><input style={tin} value={f.dm_acc_sale || ''} onChange={e => setForm(k, { dm_acc_sale: e.target.value })} /></Lbl>
                   <Lbl t="Other"><input style={tin} value={f.dm_other || ''} onChange={e => setForm(k, { dm_other: e.target.value })} /></Lbl>
+                  {/* mig 961: part OF Store CC above, never additional money. Blank = don't split. */}
+                  <Lbl t={`${extCc} (of Store CC)`}><input style={tin} value={f.dm_ext_cc || ''} onChange={e => setForm(k, { dm_ext_cc: e.target.value })} /></Lbl>
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                   <input style={{ ...sel, flex: '1 1 280px' }} placeholder="Note (optional)" value={f.note || ''} onChange={e => setForm(k, { note: e.target.value })} />

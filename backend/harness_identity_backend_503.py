@@ -238,9 +238,24 @@ else:
         j = src.index(stop, i)
         return src[i:j]
 
-    old = fn_src(MAIN, "async def _reject_401(send):", "\nclass TenantScopeMiddleware")
-    new = fn_src(NOW, "async def _reject_401(send):", "\n\nasync def _reject_503(send):")
-    ck("_reject_401 source is byte-identical to origin/main", old.strip() == new.strip())
+    def block_src(src, header):
+        """The text of ONE top-level definition, from `header` to whatever top-level thing follows.
+
+        The earlier version of this comparison passed a DIFFERENT stop-marker for main than for the
+        working tree. That only lined up while the marker it stopped at on the working tree
+        (`_reject_503`, the METHOD SCOPING block) did not yet exist on main. Once this package
+        merged, main grew those markers too, the main-side slice silently widened to cover the
+        following function as well, and the comparison started reporting drift where the bytes are
+        in fact identical. Slicing BOTH sides by the same rule — up to the next top-level
+        def/async def/class/section-comment — compares like with like whatever main contains."""
+        i = src.index(header)
+        rest = src[i + len(header):]
+        ends = [rest.index(m) for m in ("\ndef ", "\nasync def ", "\nclass ", "\n# ──") if m in rest]
+        return header + (rest[:min(ends)] if ends else rest)
+
+    ck("_reject_401 source is byte-identical to origin/main",
+       block_src(MAIN, "async def _reject_401(send):").strip()
+       == block_src(NOW, "async def _reject_401(send):").strip())
     ck("the 401 literal appears exactly once (no second copy to drift)",
        NOW.count('b\'{"detail":"authentication required"}\'') == 1)
     # The public allowlist must not silently open routes. 2026-08-05 (whatsapp-delivery-truth) makes ONE
@@ -257,13 +272,19 @@ else:
     WH = "/api/v1/remediation/whatsapp-webhook"
     ck("no public path ADDED vs main (the union is unchanged)",
        (now_exact | now_pre) == (main_exact | main_pre))
-    ck("the ONLY exact-list delta is the webhook (moved in)", now_exact - main_exact == {WH})
-    ck("the ONLY prefix-list delta is the webhook (moved out)", main_pre - now_pre == {WH})
+    # These two used to assert the webhook move was still PENDING vs main (delta == {WH}). That
+    # package has since merged — main and the working tree now agree — so a delta-shaped assertion
+    # reads as failure precisely when the change is fully landed. The durable security property is
+    # the END STATE, which is what the move existed to achieve: the webhook is matched EXACTLY (so
+    # no sub-path rides in on a prefix) and is method-scoped. Asserted directly, on both sides.
+    for who, exact, pre in (("main", main_exact, main_pre), ("working tree", now_exact, now_pre)):
+        ck("webhook is on the EXACT public list, not the PREFIX list (%s)" % who,
+           WH in exact and WH not in pre)
     ck("nothing else left the exact list", main_exact - now_exact == set())
     ck("nothing else joined the prefix list", now_pre - main_pre == set())
-    ck("_is_public body byte-identical to main (only the trailing marker differs)",
-       fn_src(MAIN, "def _is_public(path: str) -> bool:", "\ndef _fetch_memberships").strip()
-       == fn_src(NOW, "def _is_public(path: str) -> bool:", "\n\n# METHOD SCOPING").strip())
+    ck("_is_public body byte-identical to main",
+       block_src(MAIN, "def _is_public(path: str) -> bool:").strip()
+       == block_src(NOW, "def _is_public(path: str) -> bool:").strip())
 
     # ── method scoping (the auth-config lesson, applied to the webhook) ──
     ck("auth-config is public for GET only",

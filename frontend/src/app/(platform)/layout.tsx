@@ -13,6 +13,7 @@ import { NAV, canSeeItem, canAccessPath, carrierOKActive, safeHomeFor, applyNavL
 import { carrierDisplayName } from '@/lib/carrier-scope'
 import HelpPanel from '@/components/HelpPanel'
 import AdminAttention from '@/components/AdminAttention'
+import PlatformBanners from '@/components/PlatformBanners'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -318,6 +319,12 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)', flexDirection: 'column' }}>
     <ImpersonationBanner />
+    {/* PLATFORM BANNERS (owner directive 2026-09-05) — the operator-entry indicator and the platform
+        status notice. Rendered directly under the impersonation banner so the same rule applies to
+        both: anything that changes WHOSE data you are looking at, or whether the platform is healthy,
+        is stated at the top of every page and cannot be navigated away from. Renders nothing for an
+        ordinary employee with no live notice, and never polls an endpoint that would 403 them. */}
+    <PlatformBanners />
     <div style={{ display: 'flex', flex: 1, minHeight: 0, background: 'var(--bg)' }}>
       <aside className="mp-sidebar" style={{ width: collapsed ? 60 : 248, flexShrink: 0,
         display: 'flex', flexDirection: 'column', transition: 'width 0.18s ease', overflow: 'hidden' }}>

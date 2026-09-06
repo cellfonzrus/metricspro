@@ -34,10 +34,14 @@ Proves:
   G. /closing/ops-chargebacks/dm-verify gains date_from/date_to/stores/reps/markets post-filtering
      over whatever `detect_missed_dm_verifies` returns (mocked — that function has its own harness).
 """
+import os
 import sys
 from types import SimpleNamespace
 
-sys.path.insert(0, ".")
+# Anchor imports AND every source read below to THIS file's own directory, so the
+# harness runs identically from backend/ and from the repo root (cf. 564c171f).
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 
 PASS, FAIL = [], []
 
@@ -125,6 +129,7 @@ def fresh_store():
             "store_closer": [], "pos_tender_summary": [], "app_users": [], "roles": []}
 
 
+import _harness_dbfree  # noqa: E402
 import app.modules.core.router as core            # noqa: E402
 import app.modules.closing.router as cr            # noqa: E402
 import app.modules.closing.ops_chargebacks as oc   # noqa: E402
@@ -135,6 +140,11 @@ AUTH_GOOD = "Bearer good-token"
 
 def wire(store):
     fake = FakeClient(store)
+    # DB-FREE GUARD: the cr/core bindings below cover only those two modules. The
+    # closing endpoints also call storeops.router._rbac_enabled(), whose sb() used
+    # its OWN unpatched get_supabase and silently hit the REAL database (its
+    # `except Exception: return False` swallowed the evidence). Cover the process.
+    _harness_dbfree.install(fake)
     cr.sb = lambda: fake
     cr.get_supabase = lambda: fake
     core.get_supabase = lambda: fake

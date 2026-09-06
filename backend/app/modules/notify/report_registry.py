@@ -280,7 +280,7 @@ async def _vip_invoices(org_id, f):
 
 async def _flags(org_id, f, authorization=""):
     period = _resolve_period(f)
-    rows = await C.get_flags(period=period, org_id=org_id, authorization=authorization)
+    rows = C.get_flags(period=period, org_id=org_id, authorization=authorization)  # sync `def` handler (see commcalc/router.py::get_flags)
     return {"title": "Flags", "subtitle": period, "filename": f"flags-{period.replace(' ', '-')}",
             "sheets": [{"name": "Flags", "rows": rows or [], "columns": [
                 {"header": "Flag Type", "key": "flag_type"},

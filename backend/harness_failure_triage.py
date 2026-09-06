@@ -47,6 +47,18 @@ os.environ.setdefault("SUPABASE_ANON_KEY", "harness-dummy-anon-key")
 
 import app.modules.helpdesk.router as hd   # noqa: E402
 import app.modules.core.router as core     # noqa: E402
+
+
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
 from fastapi import HTTPException           # noqa: E402
 
 PASS, FAIL = [], []
@@ -268,7 +280,7 @@ check("8d. /failures list org-scoped", all(r["org_id"] == TEN_A for r in lst["fa
 # bulk-review: only selected ids + only within caller org
 ids_A = [r["id"] for r in st["failure_log"] if r["org_id"] == TEN_A]
 id_B = next(r["id"] for r in st["failure_log"] if r["org_id"] == TEN_B)
-run(core.failures_bulk_review({"ids": [ids_A[0], id_B], "reviewed": True}, authorization="Bearer good", x_active_org=""))
+run(core.failures_bulk_review(_body(core.FailuresBulkReviewIn, {"ids": [ids_A[0], id_B], "reviewed": True}), authorization="Bearer good", x_active_org=""))
 by_id = {r["id"]: r for r in st["failure_log"]}
 check("9a. bulk-review marks the selected in-org id reviewed", by_id[ids_A[0]]["reviewed"] is True and by_id[ids_A[0]].get("reviewed_by"))
 check("9b. an UNSELECTED in-org id is untouched", by_id[ids_A[1]].get("reviewed") in (False, None))
@@ -322,7 +334,7 @@ check("11c. group affected_orgs carry tenant names", fm_g and all(o.get("org_nam
 
 # cross-tenant bulk review by id
 some = [st["failure_log"][0]["id"], st["failure_log"][1]["id"]]  # one A, one B
-run(hd.support_failures_bulk_review({"ids": some, "reviewed": True}, authorization="Bearer good", x_active_org=""))
+run(hd.support_failures_bulk_review(_body(hd.SupportFailuresBulkReviewIn, {"ids": some, "reviewed": True}), authorization="Bearer good", x_active_org=""))
 by = {r["id"]: r for r in st["failure_log"]}
 check("12. support bulk-review clears across tenants by id", by[some[0]]["reviewed"] is True and by[some[1]]["reviewed"] is True)
 
@@ -340,7 +352,7 @@ check("13a. support create → HOUSE-owned, pending_approval, affected_orgs kept
 lst = run(hd.support_list_fix_requests(authorization="Bearer good", x_active_org=""))
 check("13b. list can_approve=false for non-super support", lst["can_approve"] is False)
 try:
-    run(hd.support_fix_request_status(frid, {"status": "approved"}, authorization="Bearer good", x_active_org=""))
+    run(hd.support_fix_request_status(frid, _body(hd.SupportFixRequestStatusIn, {"status": "approved"}), authorization="Bearer good", x_active_org=""))
     check("13c. non-super approve → 403 (approval gate)", False)
 except HTTPException as e:
     check("13c. non-super approve → 403 (approval gate)", e.status_code == 403)
@@ -350,7 +362,7 @@ st["app_users"] = [membership(HOUSE, "admin", super_admin=True, email="owner@hou
 wire(st)
 core._uid_from_token = lambda auth: ("uid-1" if auth == "Bearer good" else None)
 lst = run(hd.support_list_fix_requests(authorization="Bearer good", x_active_org=""))
-run(hd.support_fix_request_status(frid, {"status": "approved"}, authorization="Bearer good", x_active_org=""))
+run(hd.support_fix_request_status(frid, _body(hd.SupportFixRequestStatusIn, {"status": "approved"}), authorization="Bearer good", x_active_org=""))
 frrow = next(r for r in st["support_fix_request"] if r["id"] == frid)
 check("13d. super_admin approve OK (can_approve + approved_by stamped)",
       lst["can_approve"] is True and frrow["status"] == "approved" and frrow["approved_by"] == "owner@house.com")
@@ -360,8 +372,8 @@ queue = run(hd.support_list_fix_requests(authorization="Bearer good", x_active_o
 check("13e. approved fix requests form the queue", any(x["id"] == frid for x in queue["fix_requests"]))
 
 # resolve + mark_reviewed clears the clubbed failures
-run(hd.support_fix_request_status(frid, {"status": "in_progress"}, authorization="Bearer good", x_active_org=""))
-run(hd.support_fix_request_status(frid, {"status": "resolved", "resolution": "fixed the enrollment", "mark_reviewed": True},
+run(hd.support_fix_request_status(frid, _body(hd.SupportFixRequestStatusIn, {"status": "in_progress"}), authorization="Bearer good", x_active_org=""))
+run(hd.support_fix_request_status(frid, _body(hd.SupportFixRequestStatusIn, {"status": "resolved", "resolution": "fixed the enrollment", "mark_reviewed": True}),
                                   authorization="Bearer good", x_active_org=""))
 frrow = next(r for r in st["support_fix_request"] if r["id"] == frid)
 clubbed = frrow["sample_failure_ids"]
@@ -371,7 +383,7 @@ check("13g. resolve+mark_reviewed clears the clubbed failure rows", all(by[i]["r
 
 # reject path (fresh request, super_admin)
 cr2 = run(hd.support_create_fix_request({"kind": "system_error", "title": "noise"}, authorization="Bearer good", x_active_org=""))
-run(hd.support_fix_request_status(cr2["id"], {"status": "rejected"}, authorization="Bearer good", x_active_org=""))
+run(hd.support_fix_request_status(cr2["id"], _body(hd.SupportFixRequestStatusIn, {"status": "rejected"}), authorization="Bearer good", x_active_org=""))
 rej = next(r for r in st["support_fix_request"] if r["id"] == cr2["id"])
 check("13h. reject path → rejected + approved_by stamped", rej["status"] == "rejected" and rej["approved_by"] == "owner@house.com")
 

@@ -25,6 +25,7 @@ from . import envelope as _envelope
 from . import deposit_recon
 from . import verified_overlay as _verified_overlay
 from . import verification_audit as _verification_audit
+from . import external_credit_recon as _external_credit_recon
 from . import envelope_report as envelope_report_mod
 from . import entry_quality
 from . import pickup_actual as _pickup_actual
@@ -1516,6 +1517,9 @@ class VerifyStoreIn(LaxModel):
     dm_epay_cc: Any = None
     dm_acc_sale: Any = None
     dm_other: Any = None
+    # mig 961 — the EXTERNAL-CREDIT-MACHINE portion OF dm_store_cc. Optional; NULL keeps the exact
+    # pre-961 overlay behavior. Setting it SPLITS the corrected card total without moving it.
+    dm_ext_cc: Any = None
     note: Any = None
 
 
@@ -1537,6 +1541,10 @@ def verify_store(payload: VerifyStoreIn, org_id: str = ORG_ID):
         "dm_acc_sale": payload.dm_acc_sale, "dm_other": payload.dm_other,
         "note": payload.note, "updated_at": _now(),
     }
+    # mig 961: only send dm_ext_cc when the DM actually stated a split — a pre-961 database has no
+    # such column, and an always-present key would 400 every verify on an un-migrated org.
+    if payload.dm_ext_cc not in (None, ""):
+        body["dm_ext_cc"] = payload.dm_ext_cc
     # AUDIT TRAIL (owner 2026-09-02, mig 935): the verification row is an UPSERT — before this,
     # a DM's second save OVERWROTE the previous dm_* corrections with no record. Read the prior
     # row and append one revision row per save that changed anything (verification_audit.py is
@@ -1549,13 +1557,34 @@ def verify_store(payload: VerifyStoreIn, org_id: str = ORG_ID):
                       .limit(1).execute().data) or []
         arow = _verification_audit.build_audit_row(org_id, body, prior_rows[0] if prior_rows else None)
         if arow:
-            client.schema("commcalc").table("daily_closing_verification_audit").insert(arow).execute()
+            try:
+                client.schema("commcalc").table("daily_closing_verification_audit").insert(arow).execute()
+            except Exception:
+                # Pre-961 audit table (no dm_ext_cc / prior_dm_ext_cc columns): keep the mig-935
+                # trail alive by re-inserting without the two new keys, rather than losing the
+                # whole revision row.
+                arow.pop("dm_ext_cc", None)
+                arow.pop("prior_dm_ext_cc", None)
+                client.schema("commcalc").table("daily_closing_verification_audit").insert(arow).execute()
             audit_written = True
     except Exception as e:
         print(f"WARN dm-verification audit write failed (run migration 935?): {e}")
-    (client.schema("commcalc").table("daily_closing_verification")
-     .upsert(body, on_conflict="org_id,close_date,store_code").execute())
-    return {"ok": True, "store_code": code, "close_date": date, "audit_written": audit_written}
+    try:
+        (client.schema("commcalc").table("daily_closing_verification")
+         .upsert(body, on_conflict="org_id,close_date,store_code").execute())
+        ext_saved = "dm_ext_cc" in body
+    except Exception as e:
+        # Pre-961 schema (no dm_ext_cc column): save everything else rather than losing the whole
+        # verification, and tell the caller the split was not stored.
+        if "dm_ext_cc" not in body:
+            raise
+        print(f"WARN dm_ext_cc not stored (run migration 961?): {e}")
+        body.pop("dm_ext_cc", None)
+        (client.schema("commcalc").table("daily_closing_verification")
+         .upsert(body, on_conflict="org_id,close_date,store_code").execute())
+        ext_saved = False
+    return {"ok": True, "store_code": code, "close_date": date, "audit_written": audit_written,
+            "ext_split_saved": ext_saved}
 
 
 class ApproveExpenseIn(LaxModel):
@@ -2965,6 +2994,8 @@ async def _ocr_bank_deposit_slip(raw: bytes, ext: str, model: str):
                 {"type": "text", "text": "This is a bank DEPOSIT SLIP. Return ONLY compact JSON: "
                  '{"amount": <number|null>, "date": "<YYYY-MM-DD|null>", "bank_name": "<string|null>"}. '
                  "amount is the TOTAL amount deposited (no $ or commas). If any field is unreadable, use null."}]}])
+        from app.modules.billing import ai_meter as _ai_meter
+        _ai_meter.record("closing_deposit_slip_ocr", model, msg)  # usage metering only (mig 972/973) — no auth implication
         text = "".join(getattr(b, "text", "") for b in msg.content) if msg.content else ""
         text = text.strip()
         if text.startswith("```"):
@@ -4423,6 +4454,279 @@ def decide_envelope_chargeback(payload: DecideEnvelopeChargebackIn,
 
 
 # ── Closing entry-quality coaching (owner directive 2026-09-02, mig 937) ────────────────────────
+# ── CARD-SETTLEMENT TALLY: declared closing figures vs the processors' scraped totals ────────────
+# Owner directive 2026-09-04: "need to scrape the reports on a daily basis and tally with our
+# platform as entered by the employees". Pure math + config resolution in
+# closing/external_credit_recon.py (proof harness_external_credit_recon.py); the short/over/match
+# verdict IS envelope_report.count_fields (mig 936), reused — never a second classifier.
+#
+# NOTHING IS HARDCODED HERE (owner 2026-09-04):
+#   • WHICH declared column feeds which processor role — closing_tender_def.processor_key (mig 960)
+#     over the house default map in external_credit_recon.DEFAULT_TENDER_PROCESSOR.
+#   • WHERE the scraped settlement rows live — commcalc.report_pull_map (mig 207: report_key →
+#     target_table + column_map, org row overriding the house row), written by the portal-scrape
+#     side. No table name, no column name and no processor BRAND appears in this code.
+#   • WHICH merchant id is which store — storeops.store_merchant_id (mig 902), the same resolution
+#     the ePay/VidaPay feeds use.
+#   • THE TOLERANCE — metric_source_of_truth (mig 923) metric 'card_settlement', house default 0.
+#   • STORE → MARKET, and the market OPTION LIST — core.scope.market_by_code +
+#     core.scope.org_market_options (§13a/§13c), the cached canonical union. No store-vocabulary
+#     market column is read here, so this adds no resolution site for
+#     harness_market_resolution_guard and the dropdown can never miss a one-vocabulary market.
+def _settlement_feed_spec(client, org_id):
+    """The mig-207 `report_pull_map` row for the daily settlement feed: (target_table, column_map).
+    Org row wins over the house row (seeded by mig 955 → `commcalc.merchant_settlement_day`).
+    None ⇒ the feed is not registered yet and every cell reports the honest gap
+    `no_processor_data` — never a fake zero."""
+    try:
+        rows = (client.schema("commcalc").table("report_pull_map")
+                .select("org_id,report_key,target_table,column_map,processor,enabled")
+                .in_("org_id", sorted({org_id, ORG_ID}))
+                .eq("report_key", _external_credit_recon.SETTLEMENT_REPORT_KEY)
+                .execute().data) or []
+    except Exception as e:
+        print(f"WARN report_pull_map read failed for the settlement feed: {e}")
+        return None
+    rows = [r for r in rows if r.get("enabled") is not False and r.get("target_table")]
+    if not rows:
+        return None
+    row = next((r for r in rows if str(r.get("org_id")) == str(org_id)), rows[0])
+    return {"table": str(row.get("target_table") or "").split(".")[-1],
+            "column_map": row.get("column_map") if isinstance(row.get("column_map"), dict) else {},
+            "processor": str(row.get("processor") or "").strip()}
+
+
+def _settlement_rows_for_days(client, org_id, date_from, date_to):
+    """(normalized settlement rows, {role: days covered}, spec) for the whole window, BOTH roles.
+
+    THE ADAPTER SEAM (owner 2026-09-04 split of work): the portal-scrape side owns the table
+    (mig 955 `merchant_settlement_day`) and REGISTERS it in the mig-207 registry; this reads it by
+    NAME FROM CONFIG, maps its columns through the SAME registry row onto external_credit_recon's
+    documented canonical shape, and degrades to 'no feed' on anything unexpected. Adding a processor,
+    or renaming one of its columns, is a config row on either side — never a code change on this one.
+
+    Each row states its OWN role (the registry's column_map names the column), so one feed serves
+    both legs of the tally and a tenant that runs a portal in the other role edits config only."""
+    spec = _settlement_feed_spec(client, org_id)
+    if not spec:
+        return [], {}, None
+    cm = spec["column_map"]
+    day_cols = ([cm["day"]] if isinstance(cm.get("day"), str) else
+                list(_external_credit_recon.DEFAULT_SETTLEMENT_FIELDS["day"]))
+    raw = []
+    for col in day_cols:
+        try:
+            raw = (client.schema("commcalc").table(spec["table"]).select("*")
+                   .eq("org_id", org_id).gte(col, date_from).lte(col, date_to)
+                   .limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
+            break
+        except Exception:
+            continue
+    rows = _external_credit_recon.normalize_settlement_rows(raw, cm)
+    days = {}
+    for r in rows:
+        if r.get("day") and r.get("role") in _external_credit_recon.ROLES:
+            days.setdefault(r["role"], set()).add(r["day"])
+    return rows, days, spec
+
+
+def _settlement_tolerance(client, org_id):
+    """Per-org tolerance for the tally — the EXISTING mig-923 metric_source_of_truth row
+    (metric 'card_settlement'). No row / no table ⇒ 0.00 = exact match, the house default."""
+    try:
+        rows = (client.schema("commcalc").table("metric_source_of_truth")
+                .select("tolerance,enabled").eq("org_id", org_id)
+                .eq("metric", "card_settlement").limit(1).execute().data) or []
+    except Exception:
+        return 0.0
+    if not rows or rows[0].get("enabled") is False:
+        return 0.0
+    try:
+        return abs(round(float(rows[0].get("tolerance") or 0), 2))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+@router.get("/external-credit-recon")
+def external_credit_recon(date_from: str = None, date_to: str = None,
+                          market: str = None, markets: str = None, stores: str = None,
+                          role: str = "", status: str = "",
+                          authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Per (store, day, processor role): DECLARED at closing vs SETTLED by the processor, with the
+    variance and a short/over/match verdict from the mig-936 truth table.
+
+    RULE FIVE standard filters (date range + markets/stores, bucket-aware markets) + `role`
+    (external_cc|pos_merchant) + `status` (short|over|match|variance|gap|no_processor_data|
+    no_declared_data|dm_merged). Manager-span keyset enforced at admission, exactly as
+    /closing/envelope-report and /closing/submissions do.
+
+    GATE: `billpay_pickup.can_see_cash_recon` — market manager and above, the mig-434 pay-visibility
+    posture, fail-closed; the SAME gate (and the same per-org `storeops.tenants
+    .cash_recon_visible_roles` allow-list) as the management cash recon, reused rather than a second
+    gate invented. A tenant widens it by config, never by code."""
+    require_org(org_id)
+    client = sb()
+    from . import billpay_pickup as _bp_gate
+    if not _bp_gate.can_see_cash_recon(authorization, org_id, client):
+        raise HTTPException(403, "Card-settlement recon is restricted to market managers and above")
+    today = _biz_today_iso()
+    if not date_from and not date_to:
+        date_from, date_to = today[:8] + "01", today
+    else:
+        date_to = date_to or today
+        date_from = date_from or (date_to[:8] + "01")
+    try:
+        date_from = dateparser.parse(str(date_from)).date().isoformat()
+        date_to = dateparser.parse(str(date_to)).date().isoformat()
+    except Exception:
+        raise HTTPException(400, "date_from/date_to must be valid dates (YYYY-MM-DD)")
+    if date_from > date_to:
+        date_from, date_to = date_to, date_from
+
+    roles = tuple(r for r in _external_credit_recon.ROLES
+                  if not str(role or "").strip() or r == str(role).strip())
+    if not roles:
+        raise HTTPException(400, f"role must be one of {', '.join(_external_credit_recon.ROLES)}")
+
+    # ── config: which declared column feeds which role (mig 960 over the house default map) ──────
+    tender_defs = []
+    try:
+        tender_defs = (client.schema("commcalc").table("closing_tender_def")
+                       .select("tender_key,processor_key,is_active")
+                       .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        tender_defs = []                                  # pre-111/pre-960 ⇒ house default map
+    cols_by_role = _external_credit_recon.role_columns(tender_defs)
+
+    # ── DECLARED leg: the employees' closing rows, DM split applied (mig 961) ────────────────────
+    crows = (client.schema("commcalc").table("daily_closing")
+             .select("store_code,store_address,store_name,close_date,t_credit,t_ext_cc,tenders")
+             .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+             .limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
+
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        crows = [r for r in crows if in_keyset(ks, r.get("store_code"), r.get("store_address"))]
+
+    declared = _external_credit_recon.declared_cells(crows, cols_by_role)
+    try:
+        ov = _verified_overlay.build_overlay_map(client, org_id,
+                                                 sorted({d for (_c, d) in declared}))
+        _external_credit_recon.apply_dm_split(declared, ov)
+    except Exception as e:
+        print(f"WARN dm overlay unavailable for card-settlement recon: {e}")
+
+    # ── SETTLED leg: the scraped processor totals, per role, via the mig-207 registry ────────────
+    srows, feed_days, spec = _settlement_rows_for_days(client, org_id, date_from, date_to)
+    feeds = {r: {"registered": spec is not None, "days_covered": len(feed_days.get(r) or set())}
+             for r in roles}
+    # A scraped row whose merchant id was not mapped at ingest resolves here through the SAME
+    # mig-902 map (a store mapped since the pull is picked up without a re-scrape); whatever still
+    # will not resolve is SURFACED as unmapped, never counted as $0 for a store.
+    by_merchant = {}
+    if spec is not None:
+        try:
+            from app.modules.storeops import merchant_ids as _merchant_ids
+            for _proc in {spec.get("processor") or "", *_external_credit_recon.ROLES}:
+                if _proc:
+                    by_merchant.update(_merchant_ids.resolve_map(org_id, _proc) or {})
+        except Exception:
+            by_merchant = {}
+    settled, unmapped = _external_credit_recon.settlement_cells(srows, by_merchant)
+    settled = {k: {r: v for r, v in slot.items() if r in roles}
+               for k, slot in settled.items()}
+    settled = {k: v for k, v in settled.items() if v}
+    if ks is not None:
+        settled = {k: v for k, v in settled.items()
+                   if k in declared or in_keyset(ks, k[0], k[0])}
+
+    # ── MARKET from THE canonical union index; ADDRESS from the roster (display only) ────────────
+    # §13a doctrine (owner 2026-09-03 "1115 Liberty Ave … assigned LI … does not show up under any
+    # filter … fix once for all"; 2026-09-04 "fixed as a design not a band aid"): market resolves
+    # through `core.scope.market_by_code` — the cached union of storeops.stores ∪
+    # commcalc.store_mapping ∪ commcalc.store_aliases, with the code-group fold — and NEVER by
+    # reading a market column off ONE vocabulary table.
+    #
+    # It matters MORE here than on a roster-joined report, for two reasons this report is the first
+    # to have: (a) a SETTLEMENT-ONLY store-day — the processor settled money for a store that filed
+    # no closing row — has no roster row to join a market from at all; (b) a store whose market is
+    # spelled only in `store_mapping` (the mirror of B-1115/LI, whose market is only on
+    # `storeops.stores`) would bucket '(no market)' and vanish the instant a market filter is
+    # picked, silently hiding real settled money. The roster read below therefore takes ADDRESS
+    # ONLY — it is not a market-vocabulary read (harness_market_resolution_guard).
+    market_set = _resolve_market_filter(market, markets)
+    store_set = _resolve_store_filter(stores)
+    market_filter_skipped = False
+    try:
+        from app.core import scope as _cscope
+        mkt_by_code = _cscope.market_by_code(client, org_id)
+    except Exception as e:
+        print(f"WARN canonical market index unavailable for card-settlement recon: {e}")
+        mkt_by_code = {}
+        if market_set is not None:
+            market_filter_skipped = True     # NIT-4b posture: never mis-drop on a degraded index read
+            market_set = None
+    addr_by_code = {}
+    try:
+        for srow in ((client.schema("storeops").table("stores").select("store_code,address")
+                      .eq("org_id", org_id).execute().data) or []):
+            _c = str(srow.get("store_code") or "").strip().upper()
+            if _c:
+                addr_by_code[_c] = srow.get("address") or _c
+    except Exception as e:
+        print(f"WARN store roster unavailable for card-settlement recon labels: {e}")
+    for r in crows:            # a closing row labels a store the roster does not carry
+        _c = str(r.get("store_code") or "").strip().upper()
+        if _c:
+            addr_by_code.setdefault(_c, r.get("store_address") or r.get("store_name") or _c)
+    meta_by_store = {code: {"store_address": addr_by_code.get(code) or code,
+                            "market": _market_bucket(mkt_by_code.get(code))}
+                     for code in ({c for (c, _d) in declared} | {c for (c, _d) in settled})}
+
+    rows = _external_credit_recon.assemble_rows(
+        declared, settled, tolerance=_settlement_tolerance(client, org_id), roles=roles,
+        meta_by_store=meta_by_store, feed_days=feed_days or None)
+    if store_set is not None:
+        rows = [r for r in rows if (r.get("store_code") or "") in store_set]
+    if market_set is not None:
+        rows = [r for r in rows
+                if str(r.get("market") or "(no market)").casefold() in market_set]
+    rows = _external_credit_recon.status_filter(rows, status)
+
+    # The tenant's own name for the external field — the mig-945/953/960 preset machinery, resolved
+    # server-side so the screen, the export and the emailed copy can never disagree (RULE TWO).
+    labels = {}
+    try:
+        from app.modules.commcalc import report_labels as _report_labels
+        _pl = _report_labels.load_report_labels(client, org_id)
+        _cols = ((_pl.get("columns") or {}).get(_pl.get("default_carrier") or "")
+                 or (_pl.get("columns") or {}).get("_") or {})
+        labels[_external_credit_recon.EXTERNAL_CC] = _cols.get("closing_t_ext_cc") or \
+            _report_labels.DEFAULT_COLUMN_LABELS.get("closing_t_ext_cc")
+    except Exception as e:
+        print(f"WARN report labels unavailable for card-settlement recon: {e}")
+    # §13c ENUMERATION doctrine (harness_market_enumeration_guard pins this function CANONICAL):
+    # the market dropdown is the org's canonical vocabulary ∪ the stamps THIS report's own rows
+    # carry — never "whatever markets happened to load" — so a market recorded on one vocabulary
+    # only (B-1115/LI, or its store_mapping-only mirror) can never go missing from this filter, and
+    # a market on a settlement-only store is still selectable. The "(no market)" sentinel is
+    # appended by the PAGE after composing, per the doctrine.
+    _present = {m for m in (r.get("market") for r in rows) if m and m != "(no market)"}
+    try:
+        from app.core import scope as _cscope_opts
+        market_options = _cscope_opts.org_market_options(client, org_id, _present)
+    except Exception as e:                       # pragma: no cover - I/O guard
+        print(f"WARN card-settlement recon org_market_options failed: {e}")
+        market_options = sorted(_present)
+    return {"rows": rows, "totals": _external_credit_recon.totals(rows),
+            "date_from": date_from, "date_to": date_to,
+            "roles": list(roles), "role_titles": {**_external_credit_recon.ROLE_TITLES, **labels},
+            "feeds": feeds, "unmapped": unmapped[:200], "unmapped_count": len(unmapped),
+            "market_options": market_options,
+            "market_filter_skipped": market_filter_skipped}
+
+
 # "Need a training walkthru for an employee if their data is not entered correctly for a second
 # day in a row… guiding them how to correct it." Pure detection in closing/entry_quality.py
 # (proof harness_closing_entry_quality.py); thresholds/signals/message/tour are per-org config
@@ -5355,6 +5659,8 @@ def _ocr_deposit_amount(raw: bytes, ext: str):
                 {"type": "text", "text": "This is a bank deposit slip. Return ONLY compact JSON: "
                  '{"total_deposit": <number>, "cash": <number|null>, "date": "<YYYY-MM-DD|null>"}. '
                  "total_deposit is the total amount deposited (no $ or commas). If unreadable, use null."}]}])
+        from app.modules.billing import ai_meter as _ai_meter
+        _ai_meter.record("closing_deposit_amount_ocr", settings.ACCOUNT_ENGINE_MODEL, msg)  # usage metering only (mig 972/973) — no auth implication
         text = "".join(getattr(b, "text", "") for b in msg.content) if msg.content else ""
         text = text.strip()
         if text.startswith("```"):
@@ -6686,8 +6992,9 @@ def _canon_tender(raw: str):
 
 # Standard tender_key → physical daily_closing column. A standard tender reads its t_* column; a custom
 # tender (mig 111 config) reads the `tenders` JSONB instead — so the two never double-count.
-_TCOL = {"cash": "t_cash", "credit": "t_credit", "ext_cc": "t_ext_cc", "gift": "t_gift",
-         "store_acct": "t_store_acct", "zelle": "t_zelle", "acima": "t_acima"}
+# ONE map: it lives in the pure `external_credit_recon` module (which needs it DB-free for the
+# settlement tally) and is re-pointed here rather than copied (owner 2026-09-04, no duplicate paths).
+_TCOL = _external_credit_recon.TENDER_COLUMN
 
 
 def _closing_amt(row: dict, key: str) -> float:

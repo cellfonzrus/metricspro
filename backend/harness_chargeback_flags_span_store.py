@@ -24,10 +24,21 @@ this harness pins is the production arithmetic, not an invented one.
 
 Run: `cd backend && python3 harness_chargeback_flags_span_store.py`
 """
+import ast
+import inspect
+import os
 import sys
 from types import SimpleNamespace
 
-sys.path.insert(0, ".")
+# Anchored to THIS FILE's directory, not the shell's cwd, so the harness runs identically from
+# `backend/` and from the repo root (same repair as commit 564c171f). A relative sys.path/open()
+# makes the run die with an import/FileNotFoundError, which reads as "not run" rather than "failed".
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+
+
+def _src(rel):
+    return open(os.path.join(_HERE, rel), encoding="utf-8").read()
 
 PASS, FAIL = [], []
 
@@ -102,9 +113,24 @@ def flag(store_address, sev="warning", status="open"):
             "severity": sev, "flag_type": "missing_1st_mrc", "amount": 5.0, "status": status}
 
 
-def run(coro):
+async def _drain(aw):
+    return await aw
+
+
+def run(result):
+    """Call a handler WITHOUT caring whether it is `async def` today.
+
+    `get_chargebacks` used to be `async def` and is now a plain `def`; this harness hard-coded
+    `run_until_complete()` and so blew up with `TypeError: An asyncio.Future, a coroutine or an
+    awaitable is required` the moment the shape changed — every assertion below stopped running
+    while the page itself was fine. The async/sync SHAPE of a handler is not part of its
+    behavioural contract, so the behavioural assertions must not be coupled to it. The SHAPE is
+    asserted separately and deliberately in section 7 below, where it IS the contract.
+    """
     import asyncio
-    return asyncio.get_event_loop().run_until_complete(coro)
+    if inspect.isawaitable(result):
+        return asyncio.run(_drain(result))
+    return result
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
@@ -218,6 +244,47 @@ wire(store)
 scoped(["117 E BURNSIDE AVE"])
 got = run(cc.get_chargebacks(PERIOD, authorization=AUTH_DM, org_id=HOUSE))
 check("the other tenant's identically-addressed row is NOT returned", len(got) == 1, f"got {len(got)}")
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# 7. ASYNC SHAPE — the SEV-1 2026-07-30 class (sync client called from an async endpoint)
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# WHY THIS IS HERE. Sections 1-6 were dead for months because this file hard-coded
+# `run_until_complete()` and `get_chargebacks` became a plain `def`. Reviewing that drift raised the
+# question the crash was hiding: which shape SHOULD these two handlers have?
+#
+# The answer is not cosmetic. `sb()` is the SYNCHRONOUS supabase client (app/core/database.py —
+# `create_client`, blocking httpx). FastAPI runs a plain `def` handler in an anyio worker THREAD, so
+# its blocking call costs one thread. It runs an `async def` handler ON THE EVENT LOOP, so the same
+# blocking call stalls EVERY other in-flight request for its whole duration. That is verbatim the
+# SEV-1 of 2026-07-30 (account/ai_limits.py: a sync client called from an async endpoint froze the
+# backend). `async def` around blocking I/O buys nothing and costs availability.
+#
+# So the correct shape for a handler that touches sb() and awaits nothing is `def`. The rule pinned
+# below: a route handler in this file's scope may be `async def` only if it actually awaits.
+def _handler_shape(module_rel, name):
+    """(is_async, awaits_something) for a top-level handler, read from source (no import needed)."""
+    tree = ast.parse(_src(module_rel))
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name:
+            awaits = any(isinstance(k, (ast.Await, ast.AsyncFor, ast.AsyncWith)) for k in ast.walk(n))
+            return isinstance(n, ast.AsyncFunctionDef), awaits
+    raise AssertionError(f"{name} not found in {module_rel} — the harness anchor moved")
+
+
+_CC = "app/modules/commcalc/router.py"
+
+# Non-vacuity: if either name is ever renamed, _handler_shape raises with a clear message rather
+# than quietly asserting nothing.
+_cb_async, _cb_awaits = _handler_shape(_CC, "get_chargebacks")
+check("get_chargebacks does blocking sb() work, so it is a plain `def` (threadpool, not the loop)",
+      not _cb_async, "it is `async def`")
+
+_fl_async, _fl_awaits = _handler_shape(_CC, "get_flags")
+check("get_flags likewise — it was `async def` with NO await over the blocking client (found by "
+      "this section on 2026-09-06 and fixed: every Flags page load was stalling the event loop for "
+      "a whole supabase round-trip). Re-introducing `async` here re-introduces the SEV-1",
+      not (_fl_async and not _fl_awaits),
+      "async def with no await, over a blocking sync client")
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

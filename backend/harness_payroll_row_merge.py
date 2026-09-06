@@ -289,8 +289,29 @@ fake = FakeClient()
 import app.modules.storeops.router as R  # noqa: E402
 import app.modules.core.router as core_router  # noqa: E402
 
+
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
+
 R.get_supabase = lambda: fake
 R.sb = lambda: fake.schema("storeops")
+# `_require_manager` resolves the caller through tenant_middleware.caller_app_user, which builds its
+# OWN client from app.core.database rather than the router's. Left unstubbed, this harness made a LIVE
+# PostgREST call to whatever SUPABASE_URL the environment happened to carry (it failed with
+# 'invalid input syntax for type uuid: "uid-mgr"' — i.e. the fake uid reached a real database). An
+# offline proof harness must never touch one. Point that accessor at the SAME fake, so the manager
+# gate still runs for real against the seeded app_users row instead of being switched off.
+import app.core.database as _database  # noqa: E402
+
+_database.get_supabase = lambda: fake
 core_router._uid_from_token = lambda auth: {"Bearer mgr": "uid-mgr", "Bearer x": "uid-mgr"}.get(auth, "uid-mgr")
 
 ORG = "org-pm-1"
@@ -490,8 +511,8 @@ check("E1e only HOUR-RELEVANT fields are logged (notes change alone would not ap
 
 # ── E2: POST/DELETE /manual-hours (DM manual adjustment) ═══════════════════════════════════════════
 before_count = len(log_rows())
-mh = R.add_manual_hours({"employee_id": "E46", "hours": 3.5, "reason": "forgot to clock in",
-                         "work_date": "2026-07-08"}, authorization=AUTH, org_id=ORG)
+mh = R.add_manual_hours(_body(R.ManualHoursIn, {"employee_id": "E46", "hours": 3.5, "reason": "forgot to clock in",
+                         "work_date": "2026-07-08"}), authorization=AUTH, org_id=ORG)
 add_logs = log_rows()[before_count:]
 check("E2a manual-hours ADD logs entry_point manual_hours_add, after_value 3.5",
       len(add_logs) == 1 and add_logs[0]["entry_point"] == "manual_hours_add"
@@ -506,7 +527,7 @@ check("E2b manual-hours DELETE logs entry_point manual_hours_delete with the REM
 
 # ── E3: POST /timeclock/override (manager clocks an employee in at an unscheduled store) ══════════
 before_count = len(log_rows())
-ov = R.clock_in_override({"employee_id": "E46", "store_code": "S2"}, authorization=AUTH, org_id=ORG)
+ov = R.clock_in_override(_body(R.ClockInOverrideIn, {"employee_id": "E46", "store_code": "S2"}), authorization=AUTH, org_id=ORG)
 check("E3 override call itself succeeds", ov.get("success") is True, ov)
 ov_logs = log_rows()[before_count:]
 check("E3a override logs BOTH the shift_added (unscheduled shift on record) and the clock_in itself",
@@ -527,9 +548,22 @@ fake.store[("storeops", "shifts")] = fake.store[("storeops", "shifts")] + [
      "shift_date": work_today, "scheduled_hours": 8.0, "actual_hours": 0.0,
      "start_time": "00:00", "end_time": "00:05", "status": "scheduled", "is_deleted": False},
 ]
+# The punch must start BEFORE its own scheduled end (00:05). The old fixture clocked in at "now",
+# i.e. AFTER the scheduled end — which _do_force_clockout deliberately leaves open, because a punch
+# starting past its scheduled end is a SECOND session (a re-clock-in after an earlier auto-close) and
+# has no future end to close against. So the sweep correctly closed nothing and E4a/E4b failed while
+# the product was right; E5a/E5b then failed as knock-ons of the two missing log rows. Clock in at
+# 00:01 local so this is a genuine overdue FIRST session, which is what E4 means to test.
+def _local_iso(day, hhmm):
+    """`day` at `hhmm` in the business timezone, as a UTC ISO stamp (what the kiosk writes)."""
+    h, m = (int(x) for x in hhmm.split(":"))
+    return (datetime.fromisoformat(f"{day}T00:00:00").replace(tzinfo=_biz_tz, hour=h, minute=m)
+            .astimezone(timezone.utc).isoformat())
+
+
 fake.store[("storeops", "timelog")] = fake.store[("storeops", "timelog")] + [
     {"id": "openpunch1", "org_id": ORG, "employee_id": "E46", "employee_name": "Solo Kiosk",
-     "store_code": "S1", "clock_in": datetime.now(timezone.utc).isoformat(), "clock_out": None,
+     "store_code": "S1", "clock_in": _local_iso(work_today, "00:01"), "clock_out": None,
      "hours": None, "work_date": work_today},
 ]
 before_count = len(log_rows())
@@ -544,7 +578,7 @@ check("E4a manual 'run now' force-clockout closes the overdue punch and logs ent
 # a second overdue punch, closed via the unattended pg_cron sweep this time
 fake.store[("storeops", "timelog")] = fake.store[("storeops", "timelog")] + [
     {"id": "openpunch2", "org_id": ORG, "employee_id": "E46", "employee_name": "Solo Kiosk",
-     "store_code": "S1", "clock_in": datetime.now(timezone.utc).isoformat(), "clock_out": None,
+     "store_code": "S1", "clock_in": _local_iso(work_today, "00:02"), "clock_out": None,
      "hours": None, "work_date": work_today},
 ]
 before_count = len(log_rows())
@@ -557,6 +591,25 @@ check("E4b the unattended pg_cron sweep logs entry_point 'force_clockout_cron' w
       cron_run["closed"] == 1 and len(cron_logs) == 1
       and cron_logs[0]["entry_point"] == "force_clockout_cron" and cron_logs[0]["changed_by_email"] == "system",
       (cron_run, cron_logs))
+
+# E4c: the rule the OLD E4 fixture was tripping over, now asserted deliberately instead of by
+# accident — a punch that STARTED at/after its own scheduled end is a SECOND session (a re-clock-in
+# after an earlier auto-clock-out). It has no future scheduled end to close against, so the sweep
+# must LEAVE IT OPEN rather than stamp a clock-out that precedes its own clock-in.
+fake.store[("storeops", "timelog")] = fake.store[("storeops", "timelog")] + [
+    {"id": "secondsession1", "org_id": ORG, "employee_id": "E46", "employee_name": "Solo Kiosk",
+     "store_code": "S1", "clock_in": datetime.now(timezone.utc).isoformat(), "clock_out": None,
+     "hours": None, "work_date": work_today},
+]
+before_count = len(log_rows())
+second_run = R.force_clockout_run_now(authorization=AUTH, org_id=ORG)
+_ss = next(t for t in fake.store[("storeops", "timelog")] if t["id"] == "secondsession1")
+check("E4c a punch that started AFTER its scheduled end is a second session — the sweep leaves it "
+      "open (never stamps a clock-out earlier than the clock-in) and logs nothing",
+      second_run["closed"] == 0 and _ss["clock_out"] is None and len(log_rows()) == before_count,
+      (second_run, _ss))
+fake.store[("storeops", "timelog")] = [t for t in fake.store[("storeops", "timelog")]
+                                        if t.get("id") != "secondsession1"]
 
 # ── E5: GET /payroll-change-log — lists everything so far, org+store scoped, filterable ═══════════
 all_log = R.payroll_change_log(authorization=AUTH, org_id=ORG)
@@ -812,11 +865,23 @@ core_router._uid_from_token = lambda auth: "uid-45"
 fake.store[("storeops", "app_users")] = fake.store[("storeops", "app_users")] + [
     {"org_id": ORG, "auth_id": "uid-45", "email": "priya@luxelink.example", "role": "rep", "employee_id": "E45"},
 ]
-co = R.clock_out({}, authorization="Bearer uid-45", org_id=ORG)
+co = R.clock_out(_body(R.ClockOutIn, {}), authorization="Bearer uid-45", org_id=ORG)
 core_router._uid_from_token = lambda auth: "uid-mgr"   # restore for later sections
 stale_logs = log_rows()[before_count:]
-check("H3a the stale punch was auto-stamped at the scheduled end (not the raw multi-day diff)",
-      co.get("success") is True and co["data"]["hours"] is not None and co["data"]["hours"] <= 8.0, co)
+# The stamp is scheduled_end + GRACE, not the bare scheduled end (owner directive 2026-08-14, the
+# same semantics _do_force_clockout uses). This check hard-coded `<= 8.0`, the pre-directive value,
+# so it failed on an intended change. Expressed against FORCE_CLOCKOUT_GRACE_MIN instead of a fresh
+# literal, so the next grace change cannot rot it either. The property that actually matters is
+# unchanged: the punch is stamped off the SCHEDULE, never the raw now-minus-clock-in diff, which for
+# a punch left open since 2026-07-01 would be hundreds of hours.
+_expected_stale_hours = 8.0 + R.FORCE_CLOCKOUT_GRACE_MIN / 60.0     # 09:00→17:00 shift, + grace
+_raw_diff_hours = (datetime.now(timezone.utc)
+                   - datetime.fromisoformat("2026-07-01T13:00:00+00:00")).total_seconds() / 3600.0
+check("H3a the stale punch was auto-stamped at scheduled end + grace (never the raw multi-day diff)",
+      co.get("success") is True and co["data"]["hours"] is not None
+      and abs(co["data"]["hours"] - _expected_stale_hours) < 0.02
+      and co["data"]["hours"] < _raw_diff_hours / 2,
+      (co, _expected_stale_hours, round(_raw_diff_hours, 1)))
 check("H3b logs entry_point 'clock_out_stale_auto', system-attributed (the HOURS value is a system "
       "computation, not something the rep typed in)",
       len(stale_logs) == 1 and stale_logs[0]["entry_point"] == "clock_out_stale_auto"
@@ -833,7 +898,7 @@ fake.store[("storeops", "app_users")] = fake.store[("storeops", "app_users")] + 
     {"org_id": ORG, "auth_id": "uid-46", "email": "solo@luxelink.example", "role": "rep", "employee_id": "E46"},
 ]
 core_router._uid_from_token = lambda auth: "uid-46"
-R.clock_out({}, authorization="Bearer uid-46", org_id=ORG)
+R.clock_out(_body(R.ClockOutIn, {}), authorization="Bearer uid-46", org_id=ORG)
 core_router._uid_from_token = lambda auth: "uid-mgr"
 check("H3d confirmed: a same-day (non-stale) clock-out logs NOTHING to the change log",
       len(log_rows()) == fresh_before, log_rows()[fresh_before:])
@@ -931,7 +996,7 @@ fake.store[("storeops", "shift_templates")] = [
     {"id": "tmpl1", "org_id": ORG, "employee_id": "45", "employee_name": "Priya Rep",
      "store_code": "S1", "weekday": 0, "start_time": "09:00", "end_time": "17:00", "scheduled_hours": 8.0},
 ]
-applied = R.apply_templates({"week_start": "2026-07-06"}, org_id=ORG)
+applied = R.apply_templates(_body(R.WeekStartIn, {"week_start": "2026-07-06"}), org_id=ORG)
 check("I9 apply_templates reports 1 shift added from the stale numeric-id template",
       applied.get("added") == 1, applied)
 new_shift = next((s for s in fake.store[("storeops", "shifts")] if s.get("shift_date") == "2026-07-06"), None)
@@ -952,7 +1017,7 @@ fake.seed("storeops", "time_off_requests", [
     {"id": 4, "org_id": ORG, "employee_id": "45", "status": "approved",   # NUMERIC-keyed (admin page bug)
      "start_date": "2026-07-06", "end_date": "2026-07-06"},
 ])
-applied_blocked = R.apply_templates({"week_start": "2026-07-06"}, org_id=ORG)
+applied_blocked = R.apply_templates(_body(R.WeekStartIn, {"week_start": "2026-07-06"}), org_id=ORG)
 check("I11b Gate-1 REDO N1: apply_templates correctly SKIPS the numeric-id-conflicting day (0 added, "
       "1 skipped_timeoff) — canonicalizing the template's eid did not blind this check to the "
       "admin page's still-numeric-keyed time-off row",
@@ -967,7 +1032,7 @@ fake.store[("storeops", "shifts")] = [
      "shift_date": "2026-07-06", "start_time": "09:00", "end_time": "17:00", "scheduled_hours": 8.0,
      "actual_hours": 0.0, "status": "scheduled", "is_deleted": False},
 ]
-saved = R.save_week_as_template({"week_start": "2026-07-06"}, org_id=ORG)
+saved = R.save_week_as_template(_body(R.WeekStartIn, {"week_start": "2026-07-06"}), org_id=ORG)
 check("I12 save-week reports 1 template entry saved", saved.get("saved") == 1, saved)
 tmpl_row = fake.store[("storeops", "shift_templates")][0] if fake.store.get(("storeops", "shift_templates")) else None
 check("I13 the SAVED TEMPLATE carries the canonical business id (E45), not the source shift's "
@@ -990,7 +1055,7 @@ fake.store[("storeops", "shifts")] = [
      "shift_date": "2026-07-06", "start_time": "09:00", "end_time": "17:00", "scheduled_hours": 8.0,
      "actual_hours": 0.0, "status": "scheduled", "is_deleted": False},
 ]
-merge_result = R.merge_employees({"dup_id": "200", "target_id": "45"}, org_id=ORG)
+merge_result = R.merge_employees(_body(R.MergeEmployeesIn, {"dup_id": "200", "target_id": "45"}), org_id=ORG)
 check("I15 merge reports 1 shift moved", merge_result["moved"]["shifts"] == 1, merge_result)
 moved_shift = fake.store[("storeops", "shifts")][0]
 check("I16 the reassigned shift carries the TARGET's business employee_id (E45), NOT their numeric "
@@ -1214,10 +1279,23 @@ check("I23b every shift row now carries the canonical id", all(s["employee_id"] 
 # actually fires, because shift_days is finally keyed the SAME way the timelog rows are.
 rows_after = R.get_payroll(start="2026-07-06", end="2026-07-10", authorization=AUTH, org_id=ORG)
 priya_after = next(r for r in rows_after if r["name"] == "Priya Rep")
-check("I24 THE DOUBLE-COUNT IS GONE (not just merged into one row): actual_hours drops from 82.5h to "
-      "40h — the true, un-inflated worked hours under this system's existing shift-covers-the-day "
-      "rule (inflation removal, not a pay cut — nothing about pay_rate or the hours*rate formula "
-      "changed)", priya_after["actual_hours"] == 40.0, priya_after)
+# WHICH un-inflated number is correct changed under the PUNCH-DRIVEN model (`_shift_actual_contribution`
+# / `_punch_counts_for_pay`): a CLOSED punch now REPLACES its day's schedule, so the shift contributes
+# 0 and the real punched 42.5h is what counts. These three checks were written under the older
+# "a scheduled shift covers the day" rule and expected 40h (the schedule). They failed on a
+# deliberate, documented product change — the double-count itself is gone either way, which is what
+# this section exists to prove. Restated as PROPERTIES against the punch total rather than a fresh
+# literal, so a future 8.5h→other change in the fixture can't silently rot them again.
+_punch_total = round(sum(t["hours"] for t in fake.store[("storeops", "timelog")]
+                         if t.get("employee_id") == "E45" and t.get("hours")), 2)   # 5 × 8.5 = 42.5
+check("I24 THE DOUBLE-COUNT IS GONE (not just merged into one row): actual_hours drops from the "
+      "82.5h double count to the real punched hours — under the punch-driven rule a closed punch "
+      "REPLACES its day's schedule, so the shift contributes 0 and only the punch counts (inflation "
+      "removal, not a pay cut — nothing about pay_rate or the hours*rate formula changed)",
+      priya_after["actual_hours"] == _punch_total
+      and priya_after["actual_hours"] < priya_before["actual_hours"]
+      and priya_before["actual_hours"] == round(priya_after["scheduled_hours"] + _punch_total, 2),
+      (priya_after, _punch_total))
 check("I24b scheduled_hours is unchanged (40h) — this was never part of the double-count",
       priya_after["scheduled_hours"] == 40.0, priya_after)
 check("I24c pay_rate is still the real rate ($22/hr) — unaffected by this fix, as expected",
@@ -1229,11 +1307,13 @@ check("I24d employee_id is the canonical business id both before and after (the 
 
 by_store_after = R.get_payroll_by_store(start="2026-07-06", end="2026-07-10", authorization=AUTH, org_id=ORG)
 s1_after = next(s for s in by_store_after["stores"] if s["store_code"] == "S1")
-check("I25 /payroll-by-store NOW prices the shift-derived contribution at the REAL rate: 40h * $22 = "
-      "$880 (was $935 priced off the punch overlay at the wrong $0-shift-rate mix before the fix) — "
-      "the previously-mispriced Store Expenses 'Employee Salaries' push is now correct",
-      s1_after["amount"] == 880.0, s1_after)
-check("I25b store hours also drop to the true 40h (was 82.5h)", s1_after["hours"] == 40.0, s1_after)
+check("I25 /payroll-by-store prices S1 off the real punched hours at the real rate "
+      "(42.5h × $22 = $935) — under the punch-driven rule the AMOUNT was already correct before the "
+      "backfill; what the backfill fixes is the inflated HOURS, not the dollars",
+      s1_after["amount"] == round(_punch_total * 22.0, 2)
+      and s1_after["amount"] == s1_before["amount"], (s1_before, s1_after))
+check("I25b store HOURS drop from the 82.5h double count to the real punched total",
+      s1_after["hours"] == _punch_total and s1_before["hours"] == 82.5, (s1_before, s1_after))
 
 # ── I26: reconcile_employee_identity's residual guard is STILL EXACTLY CORRECT for an employee who
 # needs NO aliasing at all post-canonicalization (the common case once migration 415 + the write

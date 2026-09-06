@@ -35,10 +35,22 @@ Proves:
 
 Run:  cd backend && python3 harness_people_attention.py
 """
+import os
 import sys
 from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, ".")
+
+# FACE ID IS OFF BY DEFAULT, PLATFORM-WIDE. `storeops.face_recognition` reads a global kill switch
+# (FACE_ID_ENABLED, owner directive 2026-08-14) and migration 420 added a PER-TENANT master switch on
+# storeops.tenants (owner directive 2026-08-09). With face recognition off there is nothing to
+# enroll, so `storeops_kiosk_no_face_template` correctly returns NOTHING — it must not nag an admin
+# about a feature the owner deliberately switched off, and it fails CLOSED when the config cannot be
+# read. Section C exercises that provider's detection logic, so it has to turn the feature ON; before
+# this the fixture predated both switches and section C was asserting against a provider that could
+# never fire. The gate itself is now asserted too (C-gate below), which is the behaviour that
+# actually shipped.
+os.environ.setdefault("FACE_ID_ENABLED", "1")
 
 PASS, FAIL = 0, 0
 
@@ -202,8 +214,10 @@ def build_store():
         #    invited 30d ago but 'active' -> never flagged (already through). P4 has no invited_at at
         #    all -> never crashes, never counted.
         "storeops.tenants": [
-            {"org_id": ORG_A, "onboarding_stuck_days": 5},
-            # org B: no row -> code default (7) applies.
+            # `face_recognition_enabled` must be PRESENT on the row: face_recognition treats a missing
+            # column as "migration 420 has not run here" and fails closed (available=False).
+            {"org_id": ORG_A, "onboarding_stuck_days": 5, "face_recognition_enabled": True},
+            # org B: no row -> code default (7) applies, and face recognition unavailable -> off.
         ],
         "storeops.employee_onboarding_profile": [
             {"org_id": ORG_A, "employee_id": "P1", "workflow_status": "invited", "invited_at": iso(NOW - timedelta(days=10)),
@@ -308,6 +322,22 @@ def main():
     ok("C never flags Thirteen (not device=kiosk)", "Thirteen" not in detail, detail)
     items_b = after["storeops_kiosk_no_face_template"]["fn"](client, ORG_B, ctx)
     ok("C org isolation: org B's own E10 IS enrolled there -> no finding", items_b == [], items_b)
+
+    # ── C-gate. Face recognition OFF ⇒ nothing to enroll ⇒ NO finding (mig 420, owner 2026-08-09;
+    # global kill switch, owner 2026-08-14). Fail-closed: an unreadable/absent config counts as off.
+    # Without this, section C above could pass while the provider nagged tenants who switched the
+    # feature off — and the gate is exactly what made the old fixture stop firing.
+    import copy as _copy
+    _store_off = _copy.deepcopy(store)
+    _store_off["storeops.tenants"][0]["face_recognition_enabled"] = False
+    _off_items = after["storeops_kiosk_no_face_template"]["fn"](FakeClient(_store_off), ORG_A, ctx)
+    ok("C-gate tenant switch OFF -> no kiosk-enrollment nag (mig 420)", _off_items == [], _off_items)
+
+    _store_unmig = _copy.deepcopy(store)
+    _store_unmig["storeops.tenants"][0].pop("face_recognition_enabled", None)
+    _unmig_items = after["storeops_kiosk_no_face_template"]["fn"](FakeClient(_store_unmig), ORG_A, ctx)
+    ok("C-gate migration 420 not run (column absent) -> fails CLOSED, no finding",
+       _unmig_items == [], _unmig_items)
 
     # ── D. onboarding stuck (+ configured threshold) ───────────────────────────────────────────────
     ok("D threshold reads the configured 5 for org A", HA.onboarding_stuck_days(client, ORG_A) == 5)

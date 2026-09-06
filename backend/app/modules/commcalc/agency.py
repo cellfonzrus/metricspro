@@ -668,6 +668,8 @@ async def _ocr_parse_transfer_async(data, filename, mimetype):
         msg = await cli.messages.create(model=getattr(settings, "ACCOUNT_ENGINE_MODEL", "claude-3-5-sonnet-latest"),
                                         max_tokens=1500,
                                         messages=[{"role": "user", "content": [block, {"type": "text", "text": prompt}]}])
+        from app.modules.billing import ai_meter as _ai_meter
+        _ai_meter.record("agency_ocr", getattr(settings, "ACCOUNT_ENGINE_MODEL", None), msg)  # usage metering only (mig 972/973) — no auth implication
         text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
         import json as _json
         text = text[text.find("{"): text.rfind("}") + 1]

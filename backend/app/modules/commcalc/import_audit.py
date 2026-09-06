@@ -694,3 +694,54 @@ def p_sales_derive_gap(client, org_id, ctx):
                    f"rolled over. Until the basis is re-derived they are missing from every {prior} "
                    f"report and would not be paid. " + tail),
                   missing, f"/commcalc/sales-derive?period={prior}", f"Re-derive {prior}")]
+
+
+@register_provider("commcalc_portal_sessions",
+                   label="Merchant portal logins that need a human (2FA session)",
+                   group="import", cost="cheap")
+def p_portal_sessions(client, org_id, ctx):
+    """Merchant-processor portal logins whose DURABLE SESSION can no longer pull (mig 955).
+
+    WHY THIS IS AN ATTENTION ITEM, not just a chip. The whole 2FA approach for these portals is: a human
+    satisfies the challenge ONCE on the live-login screencast, and the saved session drives every daily
+    pull. The failure that makes it worthless is a session dying quietly — the connector still looks
+    configured, the nightly scrape returns nothing, and the gap is found weeks later as a hole in the
+    daily-closing card recon. The status chip on the data-source row only helps someone already looking
+    at that page; this provider puts it in front of an admin at login, which is the platform's existing
+    answer for "a connector cannot deliver" (p_connectors above, same group and shape).
+
+    Deliberately narrow: it fires ONLY on the states a human can fix by signing in (never_linked,
+    expired, needs_login) — `expiring_soon` is a chip, not a popup, and a non-auth pull failure is
+    already p_connectors' job. Pre-migration (no portal sources, or no session columns) it is inert.
+    """
+    try:
+        from app.modules.commcalc import merchant_portals as _mp
+        from app.modules.commcalc import portal_session_health as _psh
+    except Exception:
+        return []
+    now = ctx.get("now") or _now()
+    try:
+        rows = (client.schema("commcalc").table("data_source")
+                .select("id,label,username,processor,enabled,auth_status,auth_message,last_status,"
+                        "session_expires_at,session_linked_at,session_warn_hours,session_state")
+                .eq("org_id", org_id).eq("enabled", True).limit(500).execute().data) or []
+    except Exception:
+        return []                       # table/columns not there yet — nothing to report, never a 500
+    out = []
+    for r in rows:
+        if not _mp.is_portal((r.get("processor") or "").strip().lower()):
+            continue
+        # Never let session material reach the item: swap the blob for the boolean the evaluator wants.
+        probe = {k: v for k, v in r.items() if k != "session_state"}
+        probe["has_session"] = bool(r.get("session_state"))
+        h = _psh.evaluate(probe, now=now)
+        if not h.get("needs_human"):
+            continue
+        name = r.get("label") or r.get("username") or r.get("processor") or "portal login"
+        out.append(_item(
+            "import", f"commcalc:portal_session:{r.get('id')}", "error",
+            f"{name}: {h['headline']}",
+            (f"{h['detail']} Until this is done, nothing is pulled from this processor and the daily "
+             f"closing card tally has no figure to check the declared amount against."),
+            1, "/commcalc/email-imports", "Open the live login"))
+    return out

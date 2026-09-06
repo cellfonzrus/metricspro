@@ -20,9 +20,14 @@ Proves:
      literal expression in onboarding_compliance_export.
 """
 import asyncio
+import os
 import sys
 
-sys.path.insert(0, ".")
+# Anchored to THIS FILE's directory, not the shell's cwd, so the harness runs identically from
+# `backend/` and from the repo root (commit 564c171f). Run from the root, the old cwd-relative
+# sys.path + open() died with FileNotFoundError, which reads as "not run" rather than "failed".
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
 
 PASS = []
 FAIL = []
@@ -210,6 +215,30 @@ import app.modules.hr.router as hr   # noqa: E402
 
 fake = FakeClient()
 hr.get_supabase = lambda: fake
+
+async def _drain(aw):
+    return await aw
+
+
+def _call(fn):
+    """Call a helper WITHOUT caring whether it is `async def` today.
+
+    `hr._do_onboard_delete_document` was `async def` when this harness was written and is now a
+    plain `def` — the correct shape: unlike `_do_onboard_upload` (which MUST stay async, because it
+    awaits `UploadFile.read()`), the delete path awaits nothing and only drives the synchronous
+    supabase/storage clients. The hard-coded `await` here therefore blew up with `TypeError: object
+    dict can't be used in 'await' expression` on the first SUCCESSFUL delete, killing t3e/t3f/t3g
+    and everything after them. Note the two REJECTION probes (t3b/t3d) kept passing throughout —
+    the HTTPException is raised before the bad `await` is ever evaluated — so this file reported
+    "some passed" while its positive path had not run for months.
+    """
+    def _inner(*a, **k):
+        import inspect
+        r = fn(*a, **k)
+        return asyncio.run(_drain(r)) if inspect.isawaitable(r) else r
+    return _inner
+
+
 ORG = "org-1"
 EMP = "emp-1"
 TASK = "ss_card"
@@ -267,7 +296,7 @@ async def t3():
     # status is 'submitted' right now (real, unchanged mechanic) -> employee delete of THEIR OWN file
     # must be rejected per the literal spec (submitted/returned/verified/na all lock employee-delete).
     try:
-        await hr._do_onboard_delete_document(ORG, EMP, TASK, emp_file_id, "employee", "employee")
+        _call(hr._do_onboard_delete_document)(ORG, EMP, TASK, emp_file_id, "employee", "employee")
         check("t3b: employee delete rejected while status=submitted", False, "did not raise")
     except Exception as e:
         check("t3b: employee delete rejected while status=submitted", getattr(e, "status_code", None) == 403, e)
@@ -282,14 +311,14 @@ async def t3():
 
     # Employee still cannot delete the ADMIN-uploaded file, even while pending.
     try:
-        await hr._do_onboard_delete_document(ORG, EMP, TASK, adm_file_id, "employee", "employee")
+        _call(hr._do_onboard_delete_document)(ORG, EMP, TASK, adm_file_id, "employee", "employee")
         check("t3d: employee cannot delete an admin-uploaded file", False, "did not raise")
     except Exception as e:
         check("t3d: employee cannot delete an admin-uploaded file", getattr(e, "status_code", None) == 403, e)
 
     # Employee CAN delete their own file now that the task is back to 'pending'.
     path_emp = next(f["path"] for f in hr._doc_row(ORG, EMP, TASK)["documents"] if f["id"] == emp_file_id)
-    res = await hr._do_onboard_delete_document(ORG, EMP, TASK, emp_file_id, "employee", "employee")
+    res = _call(hr._do_onboard_delete_document)(ORG, EMP, TASK, emp_file_id, "employee", "employee")
     check("t3e: employee CAN delete their own file while pending", res.get("documents_count") == 1, res)
     check("t3f: storage object actually removed on a successful delete", path_emp not in fake.objects)
     row = hr._doc_row(ORG, EMP, TASK)
@@ -300,7 +329,7 @@ async def t3():
         {"org_id": ORG, "employee_id": EMP, "task_id": TASK, "status": "verified"},
         on_conflict="org_id,employee_id,task_id").execute()
     path_adm = next(f["path"] for f in hr._doc_row(ORG, EMP, TASK)["documents"] if f["id"] == adm_file_id)
-    res2 = await hr._do_onboard_delete_document(ORG, EMP, TASK, adm_file_id, "HR Team", "admin")
+    res2 = _call(hr._do_onboard_delete_document)(ORG, EMP, TASK, adm_file_id, "HR Team", "admin")
     check("t3h: admin CAN delete even while status=verified", res2.get("documents_count") == 0, res2)
     check("t3i: admin delete also removes the storage object", path_adm not in fake.objects)
 
@@ -344,7 +373,7 @@ check("t5d: a task with nothing uploaded is untouched (documents stays empty)", 
 # ── 6. ZIP export naming rule (mirrors onboarding_compliance_export's literal expression) ────────
 import re as _re  # noqa: E402
 
-with open("app/modules/hr/router.py") as fh:
+with open(os.path.join(_HERE, "app/modules/hr/router.py"), encoding="utf-8") as fh:
     src = fh.read()
 check("t6a: export's suffix expression is present verbatim (kept in sync with this proof)",
       'suffix = f"-{i + 1}" if n > 1 else ""' in src)

@@ -564,6 +564,18 @@ TABLES = {
 
 import app.modules.crm.router as crm_router  # noqa: E402
 
+
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
+
 _fake = FakeClient(TABLES)
 crm_router.get_supabase = lambda: _fake                      # patch the module's own accessor
 crm_router.sb = lambda: _fake.schema("core")
@@ -582,23 +594,23 @@ check("K3 phone search matches across formatting", len(res["rows"]) == 1)
 res = crm_router.list_leads(org_id=ORG_A, q="nobody")
 check("K4 a non-matching search returns nothing (not everything)", res["rows"] == [])
 
-dupes = crm_router.dedupe_check({"phone": "(516) 555-0134"}, org_id=ORG_A)
+dupes = crm_router.dedupe_check(_body(crm_router.DedupeCheckIn, {"phone": "(516) 555-0134"}), org_id=ORG_A)
 check("K5 dedupe-check is org-scoped too",
       [d["id"] for d in dupes["duplicates"]] == ["LA"], dupes)
 
 before = len(TABLES["crm_lead"])
-created = crm_router.create_lead({"phone": "5165559999", "first_name": "New"}, org_id=ORG_A)
+created = crm_router.create_lead(_body(crm_router.CreateLeadIn, {"phone": "5165559999", "first_name": "New"}), org_id=ORG_A)
 check("K6 a new lead is created", len(TABLES["crm_lead"]) == before + 1)
 check("K7 the INSERT stamps org_id (write-side scoping, not just reads)",
       TABLES["crm_lead"][-1]["org_id"] == ORG_A, TABLES["crm_lead"][-1].get("org_id"))
 check("K8 org_id is never taken from the request body",
-      crm_router.create_lead({"phone": "5165558888", "org_id": ORG_B}, org_id=ORG_A)
+      crm_router.create_lead(_body(crm_router.CreateLeadIn, {"phone": "5165558888", "org_id": ORG_B}), org_id=ORG_A)
       and TABLES["crm_lead"][-1]["org_id"] == ORG_A)
 
 from fastapi import HTTPException  # noqa: E402
 
 try:
-    crm_router.create_lead({"first_name": "No contact details"}, org_id=ORG_A)
+    crm_router.create_lead(_body(crm_router.CreateLeadIn, {"first_name": "No contact details"}), org_id=ORG_A)
     check("K9 a lead with no phone AND no email is refused", False, "it was accepted")
 except HTTPException as e:
     check("K9 a lead with no phone AND no email is refused", e.status_code == 400)

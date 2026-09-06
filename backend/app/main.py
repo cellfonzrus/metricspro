@@ -31,9 +31,12 @@ from app.modules.pos.vendor_api import router as pos_vendor_api_router
 from app.modules.approvals.router import router as approvals_router
 from app.modules.chat.router import router as chat_router
 from app.modules.crm.router import router as crm_router
+from app.modules.marketing.router import router as marketing_router
 from app.modules.referral.router import router as referral_router
 from app.modules.vision.router import router as vision_router
 from app.modules.commcalc.processor_ledger_api import router as processor_ledger_router
+from app.modules.core.control_box_api import router as control_box_router
+from app.modules.billing.usage_api import router as billing_usage_router
 
 app = FastAPI(
     title="MetricsPro Platform API",
@@ -248,11 +251,14 @@ app.include_router(recovery_router, prefix="/api/v1")     # Denied-Appeal Commis
 app.include_router(pos_router, prefix="/api/v1")          # POS module — Phase 0 product catalog (mig 724)
 app.include_router(pos_vendor_api_router, prefix="/api/v1")  # POS special-order vendor-facing API (token-authed, mig 866)
 app.include_router(crm_router, prefix="/api/v1")          # CRM — sales pipeline + Customer 360 (mig 800)
+app.include_router(marketing_router, prefix="/api/v1")    # Marketing & Events — outside-store event management (migs 986/987)
 app.include_router(referral_router, prefix="/api/v1")     # Referral — QR referrals + gated commission (mig 850)
 app.include_router(approvals_router, prefix="/api/v1")    # Unified Approvals Engine (mig 867)
 app.include_router(chat_router, prefix="/api/v1")         # Internal Chat — Phase 1 (mig 868)
 app.include_router(vision_router, prefix="/api/v1")       # Vision — Nest live view + heat map + behavior (mig 900)
 app.include_router(processor_ledger_router, prefix="/api/v1")  # Processor daily debit/credit ledger (owner 2026-09-04)
+app.include_router(control_box_router, prefix="/api/v1")  # Super-admin control box (owner 2026-09-05; carries its own /core prefix)
+app.include_router(billing_usage_router, prefix="/api/v1")  # Billing: AI + per-module usage, pricing grid, itemized statement (owner 2026-09-05)
 
 # Security posture check (Spec §2/§5): log the enforcement posture and warn on missing secrets /
 # break-glass states at boot. Best-effort; STARTUP_STRICT=1 makes prod findings fail the boot.
@@ -367,6 +373,94 @@ def _account_recompute_cron_startup():
     except Exception as e:
         print(f"WARN [account-recompute-cron] self-register failed (statements recompute on manual "
               f"clicks only): {e}", flush=True)
+
+
+@app.on_event("startup")
+def _data_sources_cron_startup():
+    """Self-heal the PORTAL-PULL schedule on EVERY boot (mig 956).
+
+    POST /commcalc/data-sources/sweep/run-due is the scheduled entrypoint for every portal login in
+    the platform — VidaPay / T-CETRA, b2bsoft, and (owner directive 2026-09-04) the three merchant
+    card processors whose reports are tallied against the daily-closing external-credit-card field.
+    Mig 241 shipped its pg_cron job as a COMMENTED-OUT "run this ONCE in the Supabase SQL editor"
+    note, so whether it was ever scheduled depended on a human remembering, and a secret rotation
+    silently killed it. Exactly the gap the google-reviews hook above closed four days earlier.
+
+    Same idempotent replace-by-name semantics and best-effort posture as the hooks above: a missing
+    secret / RPC / cron infra logs the reason and never blocks boot. Prefers BROWSER_SERVICE_URL
+    (portal pulls launch Chromium, which SERVICE_ROLE=api refuses) and falls back to API_PUBLIC_URL."""
+    try:
+        from app.modules.commcalc.router import _ensure_data_sources_cron
+        print(f"[data-sources-cron] self-register on boot: "
+              f"{_ensure_data_sources_cron() or 'no status returned'}", flush=True)
+    except Exception as e:
+        print(f"WARN [data-sources-cron] self-register failed (portal pulls stay on manual clicks): "
+              f"{e}", flush=True)
+
+
+@app.on_event("startup")
+def _system_check_cron_startup():
+    """Self-heal the DAILY system-check schedule on EVERY boot (mig 971 — super-admin control box,
+    owner directive 2026-09-05: "a daily check required to make sure the system is working").
+
+    A health check is the LAST automation that may depend on a human remembering to schedule it: its
+    entire job is to notice what nobody is looking at. Mig 241 (portal pulls) shipped its cron as a
+    commented-out block for someone to paste, and mig 411's "daily 6am" review sweep had no job at
+    all — both were discovered only when data was already missing. Same idempotent replace-by-name
+    semantics and the same best-effort posture as the four hooks above: a missing secret / RPC / cron
+    infra logs the reason and never blocks boot, and the manual "Run check now" button still works."""
+    try:
+        from app.modules.core.control_box_api import _ensure_system_check_cron
+        print(f"[system-check-cron] self-register on boot: "
+              f"{_ensure_system_check_cron() or 'no status returned'}", flush=True)
+    except Exception as e:
+        print(f"WARN [system-check-cron] self-register failed (the daily health check stays manual): "
+              f"{e}", flush=True)
+
+
+@app.on_event("startup")
+def _doc_expiry_cron_startup():
+    """Self-heal the lease/COI expiry-alert schedule on EVERY boot (mig 967 — owner directive
+    2026-09-05: notify "at least 60 days in advance or as per lease requirement").
+
+    Mig 967 shipped while `main.py` was being edited by a concurrent build, so its registrar was
+    wired LAZILY — the job registered on the first policy/expiry request. That is the weaker home
+    for exactly the reason this hook exists: an expiry sweep whose scheduling waits for someone to
+    open a page is not a safety net, and the pages it depends on are ones nobody visits between
+    renewals. Same idempotent replace-by-name semantics and best-effort posture as the five hooks
+    above: a missing secret / RPC / cron infra logs the reason and never blocks boot. The lazy
+    registration stays in place as a belt-and-braces second chance."""
+    try:
+        from app.modules.storeops.router import _ensure_doc_expiry_alert_cron
+        print(f"[doc-expiry-cron] self-register on boot: "
+              f"{_ensure_doc_expiry_alert_cron() or 'no status returned'}", flush=True)
+    except Exception as e:
+        print(f"WARN [doc-expiry-cron] self-register failed (expiry alerts stay manual): {e}",
+              flush=True)
+
+
+@app.on_event("startup")
+async def _usage_flusher_startup():
+    """Start the per-module usage flusher (owner 2026-09-05, migs 974/975).
+
+    Counting happens on the request path as a dict increment; THIS drains those counters into
+    core.module_usage_daily every 30s in ONE additive RPC, on a worker thread. Best-effort: if it
+    cannot start, requests are unaffected and the counters simply accumulate in memory."""
+    try:
+        from app.modules.billing.usage_flush import start
+        print(f"[usage-flush] {start()}", flush=True)
+    except Exception as e:
+        print(f"WARN [usage-flush] not started (module usage will not be recorded): {e}", flush=True)
+
+
+@app.on_event("shutdown")
+async def _usage_flusher_shutdown():
+    """Flush pending usage counters on a graceful shutdown so a deploy loses no billable calls."""
+    try:
+        from app.modules.billing.usage_flush import stop
+        await stop()
+    except Exception:
+        pass
 
 
 # ── /health: report what this image ACTUALLY has, not what someone remembered ────────────────────

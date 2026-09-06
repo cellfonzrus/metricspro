@@ -135,6 +135,16 @@ export default function ExecMtdPage() {
   const gaps = data?.classification_gaps || {}
   const unrecCts: { contract_type: string; transactions: number; lines: number }[] = gaps.unrecognized_contract_types || []
 
+  // METRIC-DEFINITION COVERAGE (mig 962) — the per-LINE sibling of the banner above. A bucket whose
+  // stored department/category tokens match NOTHING in this tenant's own data renders a column of
+  // zeros with no error today; that is how "Bill Payment Qty" read ~0 on one tenant for months while
+  // reading correctly on another (owner 2026-09-04). The backend names the department/category values
+  // that DID occur, so the fix is one settings edit. A backend that predates this omits the key -> {}
+  // -> the banner never renders; a normally-configured tenant returns no gaps -> hidden.
+  const cov = data?.metric_coverage || {}
+  const covGaps: { bucket: string; source: string; unmatched_departments: [string, number][];
+    unmatched_categories: [string, number][] }[] = cov.gaps || []
+
   // 16-column layout, in the exact order of the owner's spreadsheet, THEN two appended reconciliation
   // columns (the spreadsheet's own order is preserved). Conv. exported as the raw ratio (as the file
   // stores it); money columns flagged so Excel/PDF format + subtotal correctly.
@@ -362,6 +372,51 @@ export default function ExecMtdPage() {
               Sales Report → ⚙ Classification settings
             </Link>{' '}
             and this total will reconcile to b2bsoft. This changes reporting only — no commission pay is affected.
+          </div>
+        </div>
+      )}
+
+      {/* METRIC-DEFINITION COVERAGE (mig 962). A column reading 0 because its definition describes some
+          other tenant's POS vocabulary is indistinguishable from a genuine 0 — that is the whole defect.
+          This says which bucket matched nothing and what the data actually contains. No carrier or
+          tenant name appears here: the values shown are read from the tenant's own rows (RULE TWO). */}
+      {covGaps.length > 0 && (
+        <div style={{ fontSize: 12.5, marginBottom: 10, background: '#fef2f2', border: '1px solid #fecaca',
+          color: '#991b1b', borderRadius: 8, padding: '9px 12px' }}>
+          <div style={{ fontWeight: 700, marginBottom: 3 }}>
+            ⚠️ {covGaps.length === 1 ? 'A metric definition matches' : `${covGaps.length} metric definitions match`} none of this period’s sales lines
+          </div>
+          <div style={{ marginBottom: 6 }}>
+            These columns are showing <b>0</b> because their stored department/category tokens don’t appear
+            in this tenant’s data — not because there were no sales. The values below are what the data
+            actually contains.
+          </div>
+          {covGaps.slice(0, 4).map((g) => (
+            <div key={g.bucket} style={{ marginBottom: 5 }}>
+              <b>{g.bucket}</b>{' '}
+              <span style={{ color: '#b91c1c' }}>({g.source === 'tenant' ? 'your saved definition'
+                : g.source === 'carrier_preset' ? 'inherited carrier preset' : 'built-in default'})</span>
+              {(g.unmatched_departments || []).length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 3 }}>
+                  {(g.unmatched_departments || []).slice(0, 5).map(([v, n]) => (
+                    <span key={`d-${v}`} style={{ background: '#fee2e2', border: '1px solid #fca5a5',
+                      borderRadius: 6, padding: '2px 8px', whiteSpace: 'nowrap' }}>
+                      dept: {v} <b>×{n}</b>
+                    </span>
+                  ))}
+                  {(g.unmatched_categories || []).slice(0, 5).map(([v, n]) => (
+                    <span key={`c-${v}`} style={{ background: '#fee2e2', border: '1px solid #fca5a5',
+                      borderRadius: 6, padding: '2px 8px', whiteSpace: 'nowrap' }}>
+                      cat: {v} <b>×{n}</b>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+          <div style={{ marginTop: 4 }}>
+            Fix the tokens under <b>⚙ Metric definitions</b> on this page. Reporting only — no commission
+            pay is affected.
           </div>
         </div>
       )}

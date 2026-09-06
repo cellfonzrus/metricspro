@@ -148,6 +148,18 @@ import app.modules.closing.router as cr                # noqa: E402
 from app.modules.closing import expense_config         # noqa: E402
 
 
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
+
+
 def wire(store, poison_writes=False, unrestricted_span=True, manager=True):
     fake = FakeClient(store, poison_writes=poison_writes)
     cr.sb = lambda: fake
@@ -191,12 +203,18 @@ class FakeRequests:
                 return resp
         return FakeResp(404)
 
-    def get(self, url, params=None, timeout=None):
-        self.calls.append(("GET", url, params, None))
+    # **kw, not a fixed signature. The real caller now sends `headers=_sib_headers(authorization)`
+    # on the internal system-line push; a double that only accepted (url, params, json, timeout)
+    # raised TypeError inside the push's own try/except, which swallowed it as
+    # {"pushed": False, "note": "push failed (TypeError: ...)"}. The P&L-push assertions then failed
+    # while the product was fine — and worse, they would have kept "failing correctly" if the push
+    # ever genuinely broke, so the signal was useless in both directions.
+    def get(self, url, params=None, timeout=None, **kw):
+        self.calls.append(("GET", url, params, None, kw))
         return self._resolve(url)
 
-    def post(self, url, params=None, json=None, timeout=None):
-        self.calls.append(("POST", url, params, json))
+    def post(self, url, params=None, json=None, timeout=None, **kw):
+        self.calls.append(("POST", url, params, json, kw))
         return self._resolve(url)
 
 
@@ -393,7 +411,7 @@ exp_row = fake.table("closing_expense").insert({
     "org_id": HOUSE, "store_code": "S1", "close_date": "2026-08-01", "closing_row_id": "row-1",
     "category_id": petty["id"], "category_kind": "expense", "category_name": "Petty Expenses",
     "amount": 33.0, "description": "batteries", "status": "pending"}).execute().data[0]
-resp = cr.decide_expense_line(exp_row["id"], {"status": "approved"}, org_id=HOUSE, authorization="")
+resp = cr.decide_expense_line(exp_row["id"], _body(cr.DecideExpenseLineIn, {"status": "approved"}), org_id=HOUSE, authorization="")
 check("expense-kind approval succeeds", resp["status"] == "approved")
 check("expense-kind approval triggers a P&L system-line push",
       resp["pl_push"] is not None and resp["pl_push"].get("pushed") is True)
@@ -408,7 +426,7 @@ sal_row = fake.table("closing_expense").insert({
     "org_id": HOUSE, "store_code": "S1", "close_date": "2026-08-01", "closing_row_id": "row-1",
     "category_id": salary["id"], "category_kind": "payroll", "category_name": "Salary",
     "amount": 100.0, "description": "advance", "employee_id": "emp-1", "status": "pending"}).execute().data[0]
-resp2 = cr.decide_expense_line(sal_row["id"], {"status": "approved"}, org_id=HOUSE, authorization="")
+resp2 = cr.decide_expense_line(sal_row["id"], _body(cr.DecideExpenseLineIn, {"status": "approved"}), org_id=HOUSE, authorization="")
 check("payroll-kind approval succeeds", resp2["status"] == "approved")
 check("payroll-kind approval NEVER triggers a P&L push (money doctrine)", resp2["pl_push"] is None)
 check("no system-line HTTP call made for a payroll-kind approval",
@@ -438,9 +456,9 @@ check("total_cash_required sums all 3 legs", r["total_cash_required"] == 330.0, 
 check("no error notes when both siblings answer", r["notes"] == [], str(r["notes"]))
 
 # Weekly cadence gating: only due on the anchor weekday.
-cr.put_envelope_config({"take_commission": True, "take_salary": True, "take_expenses": True,
+cr.put_envelope_config(_body(cr.PutEnvelopeConfigIn, {"take_commission": True, "take_salary": True, "take_expenses": True,
                         "commission_cadence": "weekly", "commission_anchor": 0,   # Monday
-                        "salary_cadence": "weekly", "salary_anchor": 0},
+                        "salary_cadence": "weekly", "salary_anchor": 0}),
                        org_id=HOUSE, authorization="")
 r2 = cr.payout_due(store_code="S1", as_of="2026-08-04", org_id=HOUSE, authorization="")  # Tuesday
 check("weekly cadence NOT due off the anchor weekday -> commission_due 0", r2["commission_due"] == 0.0)
@@ -540,9 +558,9 @@ cr.requests = fr
 exp_row = fake.table("closing_expense").insert({
     "org_id": HOUSE, "store_code": "S1", "close_date": "2026-08-01", "closing_row_id": "row-1",
     "amount": 40.0, "status": "approved", "paid": False}).execute().data[0]
-resp = cr.record_envelope_withdrawal({
+resp = cr.record_envelope_withdrawal(_body(cr.RecordEnvelopeWithdrawalIn, {
     "store_code": "S1", "close_date": "2026-08-01", "closing_row_id": "row-1", "amount": 40.0,
-    "purpose": "expense", "expense_id": exp_row["id"], "remaining_after": 460.0},
+    "purpose": "expense", "expense_id": exp_row["id"], "remaining_after": 460.0}),
     org_id=HOUSE, authorization="")
 check("withdrawal row written", resp["ok"] is True and resp["withdrawal"]["amount"] == 40.0)
 linked = fake.table("closing_expense").select("*").eq("id", exp_row["id"]).execute().data[0]
@@ -550,18 +568,18 @@ check("linked expense line marked paid", linked["paid"] is True and linked.get("
 
 # H2: purpose='commission_payout' calls the sibling; a 404 is captured, never raised.
 fr.route("/commcalc/payout/record", FakeResp(404))
-resp2 = cr.record_envelope_withdrawal({
+resp2 = cr.record_envelope_withdrawal(_body(cr.RecordEnvelopeWithdrawalIn, {
     "store_code": "S1", "close_date": "2026-08-01", "closing_row_id": "row-1", "amount": 100.0,
-    "purpose": "commission_payout", "employee_id": "e1", "employee_name": "Jane Rep"},
+    "purpose": "commission_payout", "employee_id": "e1", "employee_name": "Jane Rep"}),
     org_id=HOUSE, authorization="")
 check("commission_payout withdrawal persists despite a 404 sibling", resp2["ok"] is True)
 check("sibling_call reports the 404, not posted", resp2["sibling_call"]["posted"] is False)
 
 # H3: purpose='salary_payout' with a sibling that succeeds -> payout_ref backfilled.
 fr.route("/storeops/salary-advance/record", FakeResp(200, {"id": "ledger-row-1"}))
-resp3 = cr.record_envelope_withdrawal({
+resp3 = cr.record_envelope_withdrawal(_body(cr.RecordEnvelopeWithdrawalIn, {
     "store_code": "S1", "close_date": "2026-08-01", "closing_row_id": "row-1", "amount": 60.0,
-    "purpose": "salary_payout", "employee_id": "emp-1", "employee_name": "Jane Rep"},
+    "purpose": "salary_payout", "employee_id": "emp-1", "employee_name": "Jane Rep"}),
     org_id=HOUSE, authorization="")
 check("salary_payout sibling call succeeds", resp3["sibling_call"]["posted"] is True)
 saved = fake.table("envelope_withdrawal").select("*").eq("id", resp3["withdrawal"]["id"]).execute().data[0]
@@ -617,9 +635,9 @@ check("J1: approved-unpaid expense nets once (460, not less)", amt == 460.0, str
 # The DM pays that SAME line out via the withdrawal flow (H1's exact path) — this used to ALSO
 # subtract another 40 (net 420 = wrong; correct is still 460, since the same $40 is now represented
 # by amount=40+paid=True on ONE side and excluded on the withdrawal side).
-resp = cr.record_envelope_withdrawal({
+resp = cr.record_envelope_withdrawal(_body(cr.RecordEnvelopeWithdrawalIn, {
     "store_code": "SJ", "close_date": "2026-08-01", "closing_row_id": "row-j1", "amount": 40.0,
-    "purpose": "expense", "expense_id": exp_row["id"], "remaining_after": 460.0},
+    "purpose": "expense", "expense_id": exp_row["id"], "remaining_after": 460.0}),
     org_id=HOUSE, authorization="")
 check("J2: withdrawal recorded + linked expense marked paid", resp["ok"] is True)
 linked = fake.table("closing_expense").select("*").eq("id", exp_row["id"]).execute().data[0]
@@ -639,9 +657,9 @@ check("J5: GET /closing/cash-position nets ONCE after payout (460)", row["cash_o
 
 # J6: a commission/salary/other withdrawal (no expense_id) is UNAFFECTED by the fix — still nets in
 # full, on top of the (unrelated) expense line above: 460 - 25 = 435.
-cr.record_envelope_withdrawal({
+cr.record_envelope_withdrawal(_body(cr.RecordEnvelopeWithdrawalIn, {
     "store_code": "SJ", "close_date": "2026-08-01", "closing_row_id": "row-j1", "amount": 25.0,
-    "purpose": "other"}, org_id=HOUSE, authorization="")
+    "purpose": "other"}), org_id=HOUSE, authorization="")
 amt, _ = cr._bank_deposit_declared(fake, HOUSE, "SJ", "2026-08-01", "total_cash")
 check("J6: a non-expense-linked withdrawal (purpose='other') still nets normally (435)", amt == 435.0, str(amt))
 

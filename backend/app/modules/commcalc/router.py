@@ -12,6 +12,7 @@ from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_contract_type
 from app.modules.commcalc import whatif
+from app.modules.commcalc import exec_metric_defs as _emd   # mig 962 — ONE bucket vocabulary + presets
 from app.modules.commcalc import whatif_gates
 from app.modules.commcalc import pay_simulator
 from app.modules.commcalc.gp_report import (calc_gp_report, VOID_TOKENS as _GP_VOID_TOKENS,
@@ -11727,9 +11728,16 @@ def get_compliance_summary(authorization: str = Header(default=""), org_id: str 
 
 
 @router.get("/flags/{period}")
-async def get_flags(period: str, authorization: str = Header(default=""),
-                    include_resolved: bool = False,
-                    org_id: str = "00000000-0000-0000-0000-000000000001"):
+# PLAIN `def`, NOT `async def` (2026-09-06). `sb()` is the SYNCHRONOUS supabase client, and this
+# handler awaits nothing: as `async def` it ran the blocking round-trip ON the event loop, so every
+# Flags page load stalled every other in-flight request for its duration — verbatim the SEV-1 of
+# 2026-07-30 (account/ai_limits.py). A plain `def` handler is dispatched to an anyio worker thread
+# by FastAPI, which is the correct shape for blocking I/O. Pinned by
+# harness_chargeback_flags_span_store.py section 7. Its one internal caller
+# (notify/report_registry.py::_flags) dropped its `await` in the same change.
+def get_flags(period: str, authorization: str = Header(default=""),
+              include_resolved: bool = False,
+              org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     q = client.schema('commcalc').table('flags').select('*').eq('org_id', org_id).in_('period', _pvariants(period))
     # THE ACTIVE QUEUE (mig 287). A flag whose condition has cleared is RETIRED, not deleted — status
@@ -23443,36 +23451,56 @@ def exec_overview(period: str, org_id: str = ORG_ID):
 # stores category = Category-column OR System-Category-column (router.py ~694), so each token list carries
 # BOTH variants (System Category CellPhone/RTR Product/Accessory + Category KittedBranded/HandsetBranded/
 # Other Carr. payments). Tokens are lowercase; the engine lowercases each sale line before matching.
-_EXEC_METRIC_DEFAULTS = {
-    'activation':     {'rules': {'byod': ['byod'], 'upgrade': ['upgrade'], 'port': ['port']}, 'basis': 'count'},
-    'phones':         {'rules': {'category': ['cellphone', 'kittedbranded']}, 'basis': 'count'},
-    'bill_payment':   {'rules': {'department': ['rtr'], 'category': ['rtr product', 'other carr. payments']}, 'basis': 'count'},
-    'accessory':      {'rules': {'category': ['accessory', 'handsetbranded', 'accessories']}, 'basis': 'ext_price'},
-    'activation_fee': {'rules': {'product_desc_contains': ['access charge']}, 'basis': 'ext_price'},
-    'protect':        {'rules': {'product_desc_contains': ['protect'],
-                                 'exclude_product_desc_contains': ['screen protect'],
-                                 'exclude_department': ['rtr'],
-                                 'exclude_category': ['rtr product', 'other carr. payments']}, 'basis': 'count'},
-}
-_EXEC_BUCKETS = tuple(_EXEC_METRIC_DEFAULTS.keys())
+# ONE definition of the built-in vocabulary + the line predicate: `exec_metric_defs` (mig 962). These
+# names stay as aliases so every existing reader keeps working, but there is no second copy to drift.
+# NOTE the history above is exactly the defect the owner reported on 2026-09-04 ("executive mtd in
+# cellfonz r us does not have bill payment qty, but luxelink has it"): these defaults were derived from
+# ONE tenant's export, so a tenant whose POS spells a department differently matched NOTHING and the
+# column read 0 in silence. Carrier PRESETS (layer 2 below) + the silent-zero detector are the fix.
+_EXEC_METRIC_DEFAULTS = _emd.CODE_DEFAULTS
+_EXEC_BUCKETS = _emd.BUCKETS
 
 
-def _exec_metric_config(client, org_id):
-    """Per-tenant Executive-MTD metric DEFINITIONS (exec_metric_config, mig 204), falling back to the
-    DERIVED code defaults so the report works before the migration runs / for an un-seeded tenant. Returns
-    {bucket: {'rules': {...}, 'basis': 'count'|'ext_price'}}. SAP-configurable: definitions are config, not
-    a hard-coded classifier."""
-    cfg = {k: {'rules': dict(v['rules']), 'basis': v['basis']} for k, v in _EXEC_METRIC_DEFAULTS.items()}
+def _exec_metric_config(client, org_id, with_sources=False):
+    """Per-tenant Executive-MTD metric DEFINITIONS, resolved
+    `tenant row > house carrier preset > built-in default` (mig 962; the mig-945/953 label-preset
+    precedence, same carrier identity primitives).
+
+    Returns {bucket: {'rules': {...}, 'basis': 'count'|'ext_price'}} — the shape every caller already
+    consumes. `with_sources=True` additionally keeps a 'source' key ('tenant'|'carrier_preset'|
+    'default') for the settings surface + the coverage banner; it is stripped otherwise so provenance
+    can never change a computed number.
+
+    Byte-identical to pre-962 for any org that has its own row or no carrier preset. Never raises: a
+    missing table/column (pre-962 database) degrades to the org's own rows, then the code defaults."""
+    # Column ladder, widest first: mig 963 (applicable) → mig 962 (carrier) → the pre-962 legacy shape.
+    # Each step degrades to strictly less capability, never to an error: a missing `applicable`
+    # resolves to true and a missing `carrier` makes every row an org-own definition — which is
+    # exactly the pre-962 behavior. A database part-way through the sequence still serves the report.
+    rows = None
     try:
-        rows = (client.schema('commcalc').table('exec_metric_config')
-                .select('bucket,rules,basis').eq('org_id', org_id).execute().data) or []
-        for r in rows:
-            b = r.get('bucket')
-            if b in cfg:
-                cfg[b] = {'rules': r.get('rules') or {}, 'basis': r.get('basis') or cfg[b]['basis']}
+        for _sel, _scope in (('org_id,bucket,rules,basis,carrier,applicable', 'both'),
+                             ('org_id,bucket,rules,basis,carrier', 'both'),
+                             ('org_id,bucket,rules,basis', 'own')):
+            try:
+                q = client.schema('commcalc').table('exec_metric_config').select(_sel)
+                q = (q.in_('org_id', [org_id, _emd.HOUSE_ORG]) if _scope == 'both'
+                     else q.eq('org_id', org_id))
+                rows = q.execute().data or []
+                break
+            except Exception:
+                continue
+        if rows is None:
+            rows = []
+        try:
+            carriers = (client.schema('commcalc').table('carrier')
+                        .select('code,name,is_default').eq('org_id', org_id).execute().data) or []
+        except Exception:
+            carriers = []
+        resolved = _emd.resolve(rows, org_id, carriers)
     except Exception:
-        pass
-    return cfg
+        resolved = _emd.resolve([], org_id, [])
+    return resolved if with_sources else _emd.strip_sources(resolved)
 
 
 # ── PER-METRIC SOURCE OF TRUTH (mig 923) ─────────────────────────────────────────────────────────
@@ -23663,23 +23691,9 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
     return {"active": True, "basis": "activation_details", "ad_rows": ad_n}
 
 
-def _exec_line_match(rule, dept, cat, pdesc):
-    """True if a sale line matches a bucket rule (all case-insensitive; inputs already lowercased).
-    category/department = exact membership in a token list; product_desc_contains = substring; exclude_*
-    negate first. Match = ANY positive predicate true AND no exclusion true."""
-    if rule.get('exclude_department') and dept in rule['exclude_department']:
-        return False
-    if rule.get('exclude_category') and cat in rule['exclude_category']:
-        return False
-    if rule.get('exclude_product_desc_contains') and any(t in pdesc for t in rule['exclude_product_desc_contains']):
-        return False
-    if rule.get('category') and cat in rule['category']:
-        return True
-    if rule.get('department') and dept in rule['department']:
-        return True
-    if rule.get('product_desc_contains') and any(t in pdesc for t in rule['product_desc_contains']):
-        return True
-    return False
+# THE line predicate lives in exec_metric_defs (mig 962) so the report, the coverage detector and the
+# harness can never classify a line three different ways. Alias kept for every existing call site.
+_exec_line_match = _emd.line_match
 
 
 def _exec_act_class(ct, rules):
@@ -24057,8 +24071,21 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     except Exception:
         _cls_gaps_ex = {'note': None}
 
+    # ── METRIC-DEFINITION COVERAGE (mig 962) — the sibling of the classification banner above, for the
+    #    per-LINE buckets. A bucket whose stored department/category tokens match NOTHING in this
+    #    tenant's own data produces a column of zeros with no error today; that is exactly how
+    #    CellfonzRUs's "Bill Payment Qty" read ~0 for months while LuxeLink's read correctly (owner
+    #    2026-09-04). Reported over the SAME filter-applied `rows` the numbers come from, naming the
+    #    department/category values that DID occur so the fix is one settings edit. DISPLAY-ONLY, pure,
+    #    never raises; no gap (a normally-configured tenant) → note None → the UI banner stays hidden.
+    try:
+        _metric_cov_ex = _emd.bucket_coverage(rows, _exec_metric_config(client, org_id, with_sources=True))
+    except Exception:
+        _metric_cov_ex = {'scanned': 0, 'gaps': [], 'matched': {}, 'note': None}
+
     return {'period': period, 'source': meta,
             'classification_gaps': _cls_gaps_ex,
+            'metric_coverage': _metric_cov_ex,
             # SOURCE OF TRUTH (mig 923): tells the UI which basis drove Total Activation and whether Upgrade
             # is excluded from it, so the number is never silently redefined. Sales basis (the default) →
             # active:false, byte-identical response otherwise.
@@ -28751,9 +28778,19 @@ _SOURCE_FIELDS = ["distributor_id", "carrier_id", "processor", "label", "portal_
                   # scheduled pull can re-authenticate without a human. oob_enabled defaults FALSE —
                   # automating the second factor is an operator-made trade, per login.
                   "oob_enabled", "oob_from_contains", "oob_subject_contains",
-                  "oob_code_regex", "oob_code_length", "oob_max_age_seconds"]
+                  "oob_code_regex", "oob_code_length", "oob_max_age_seconds",
+                  # Merchant-processor portals (mig 955, owner 2026-09-04). A card portal IS a
+                  # data_source login — these are the only knobs it needs beyond the shared ones.
+                  # totp_secret is WRITE-ONLY: it is accepted here but lives in _SOURCE_SECRETS, so it
+                  # is stripped from every read (has_totp + an opaque mask is all the UI ever sees).
+                  "settlement_role", "portal_reports", "portal_calibration", "portal_window_days",
+                  "session_warn_hours", "totp_secret"]
 # Columns that never leave the backend (credentials + serialized browser sessions).
-_SOURCE_SECRETS = ("password", "session_state", "pending_state")
+_SOURCE_SECRETS = ("password", "session_state", "pending_state",
+                   # The optional authenticator-app (TOTP) shared secret (mig 955). Same posture as the
+                   # password: backend-only, never returned, never logged, surfaced only as has_totp +
+                   # portal_totp.mask_totp_secret's opaque mask.
+                   "totp_secret")
 
 
 async def _vidapay_scraper(org_id, src_row):
@@ -28789,11 +28826,31 @@ async def _b2bsoft_scraper(org_id, src_row):
         src_row.get("proxy_url"))
 
 
+async def _merchant_portal_scraper(org_id, src_row):
+    """_SOURCE_SCRAPERS handler for the three MERCHANT CARD PROCESSOR portals (owner 2026-09-04):
+    PayAnywhere / Payments Hub (the external credit-card terminal — the "white machine"), TransFirst
+    TransLink and ClientLine / BusinessTrack (the POS merchant providers).
+
+    Reuses the SAME durable-session posture as VidaPay/b2bsoft: a human satisfies the portal's second
+    factor ONCE on the live-login screencast, the authenticated storage_state is persisted, and this
+    scheduled pull rides it. A missing/expired session raises VidaPayAuthError, which run_data_source
+    already turns into an auth_status=needs_2fa prompt (the session-health chip then turns actionable)
+    rather than a hard error — so the ONE moment a human is needed is surfaced, not swallowed."""
+    from app.modules.commcalc import merchant_portal_sweep as mps
+    from fastapi.concurrency import run_in_threadpool
+    return await run_in_threadpool(mps.run_merchant_portal_sweep, sb(), org_id, dict(src_row or {}))
+
+
 # processor key → scraper callable (org_id, source_row) -> result dict. VidaPay + Total Access
 # share the same "Master Agent" portal family (vidapaycrm.com); both route through _vidapay_scraper.
 # b2bsoft (wsreports) reuses the identical Playwright session/2FA/proxy path via _b2bsoft_scraper.
+# The three merchant card portals register the same way — a new portal is a merchant_portals.PORTALS
+# entry plus one line here, never a branch in the calling code (RULE TWO).
 _SOURCE_SCRAPERS = {"vidapay": _vidapay_scraper, "total_access": _vidapay_scraper,
-                    "b2bsoft": _b2bsoft_scraper, "b2b": _b2bsoft_scraper}
+                    "b2bsoft": _b2bsoft_scraper, "b2b": _b2bsoft_scraper,
+                    "payanywhere": _merchant_portal_scraper,
+                    "transfirst": _merchant_portal_scraper,
+                    "businesstrack": _merchant_portal_scraper}
 
 
 def _strip_source_pw(row):
@@ -28801,6 +28858,15 @@ def _strip_source_pw(row):
     row = dict(row)
     row["has_password"] = bool(row.get("password"))
     row["has_session"] = bool(row.get("session_state"))
+    # Authenticator-app secret: presence + validity only, NEVER the secret (mig 955).
+    try:
+        from app.modules.commcalc import portal_totp as _totp
+        _d = _totp.describe(row.get("totp_secret"))
+        row["has_totp"] = _d["configured"]
+        row["totp_valid"] = _d["valid"]
+        row["totp_hint"] = _d["mask"]
+    except Exception:
+        row["has_totp"] = bool(row.get("totp_secret"))
     row["has_login_shot"] = bool(row.get("login_shot"))
     for k in _SOURCE_SECRETS:
         row.pop(k, None)
@@ -28814,6 +28880,14 @@ def _strip_source_pw(row):
     if isinstance(diag, dict):
         row["last_pull_delivered"] = diag.get("delivered")
         row["last_pull_reason"] = diag.get("reason")
+    # Durable-session health (mig 955) — computed, so a session that quietly died is visible on the
+    # page BEFORE the overnight pull silently returns nothing. Runs on the ALREADY-STRIPPED row, so it
+    # reads has_session/expiry/status only and can never surface session material.
+    try:
+        from app.modules.commcalc import portal_session_health as _psh
+        row["session_health"] = _psh.evaluate(row)
+    except Exception:
+        pass
     # Portal cooldown (mig 244) — computed, so the page never has to reason about clock skew. Absent
     # columns ⇒ blocked False and the chip simply never renders.
     try:
@@ -30295,6 +30369,12 @@ def _live_pull(client, org_id, src_row):
         # successful login pulls on its own.
         if proc in ("b2bsoft", "b2b"):
             return vp.pull_b2bsoft_on_page(page)
+        # Merchant card portals (mig 955): pull their OWN report set on this live authenticated page,
+        # which is the whole point of the live session — these portals re-challenge a cold restore.
+        from app.modules.commcalc import merchant_portals as _mp
+        if _mp.is_portal(proc):
+            from app.modules.commcalc import merchant_portal_sweep as _mps
+            return _mps.pull_reports_on_page(client, org_id, dict(src_row or {}), page, should_stop)
         return vp._pull_all_reports_on_page(page, client, org_id, sid, carrier_id, mb,
                                             dict(src_row or {}), should_stop=should_stop)
     return _p
@@ -30408,6 +30488,116 @@ def live_login_start(sid: str, org_id: str = ORG_ID, confirm: bool = False):
                            "suppressed until the cooldown ends." if blocked_now else
                            (" As soon as you're signed in, this login's reports are pulled automatically."
                             if auto else "")))}
+
+
+@router.post("/data-sources/{sid}/live-login/submit-totp")
+def live_login_submit_totp(sid: str, org_id: str = ORG_ID):
+    """Submit the AUTHENTICATOR-APP code for this source into the LIVE session (mig 955).
+
+    THIS IS NOT A 2FA BYPASS. It applies ONLY when the owner has enrolled this portal account in an
+    authenticator app and given us the same shared secret their own app holds — we then compute the
+    very code that app would show. The portal still demands a second factor and still receives a
+    correct one. It is the exact flow the portal designed authenticator enrollment for.
+
+    It is deliberately a SEPARATE endpoint from /live-login/submit rather than an automatic behaviour:
+    an SMS or email code must still be read by a human off their phone and typed into the live page
+    (that is what /live-login/submit is for), and nothing here can be pointed at one. There is no code
+    path in this platform that reads an SMS/email OTP for these portals, or that answers a captcha.
+
+    Reuses the existing live-session submit queue verbatim — the worker fills the code into the SAME
+    open page that requested it, exactly as it does for a human-typed code."""
+    require_org(org_id)
+    from app.modules.commcalc import live_login, portal_totp
+    client = sb()
+    row = _live_source_row(client, sid, org_id)
+    secret = row.get("totp_secret")
+    if not secret:
+        raise HTTPException(400, "No authenticator secret is configured for this login. Either add one "
+                                 "(only if this portal account is enrolled in an authenticator app), or "
+                                 "type the code the portal sent you into the box above.")
+    sess = live_login.get_session(sid, org_id)
+    if sess is None:
+        raise HTTPException(404, "No live session is open for this login — start the live login first.")
+    try:
+        cur = portal_totp.current_code(secret)
+    except portal_totp.TotpError as e:
+        # The message never quotes the secret (proven by harness_portal_totp).
+        raise HTTPException(400, str(e))
+    sess.submit(cur["code"])
+    # The CODE ITSELF IS NEVER RETURNED OR LOGGED — only that one was submitted and how long it lives.
+    return {"ok": True, "submitted": True, "valid_for": cur["valid_for"],
+            "message": "Authenticator code submitted to the live page. Watch the view above for the result."}
+
+
+@router.get("/merchant-portals/catalog")
+def merchant_portal_catalog(org_id: str = ORG_ID):
+    """The merchant-portal descriptors the connector settings page renders (owner 2026-09-04): which
+    portals exist, what each asks for at login, what it does about 2FA, and which reports it pulls.
+
+    Descriptors only — this is static per-PORTAL config (merchant_portals.PORTALS), never tenant data
+    and never a credential (harness_merchant_portals proves the catalog carries no secret-bearing key)."""
+    require_org(org_id)
+    from app.modules.commcalc import merchant_portals as mp
+    return {"ok": True, "portals": mp.public_catalog(),
+            "roles": [{"key": mp.ROLE_EXTERNAL,
+                       "label": "External credit card — standalone terminal, not in the POS"},
+                      {"key": mp.ROLE_POS,
+                       "label": "POS merchant provider — behind the POS's own card tender"}]}
+
+
+@router.get("/merchant-portals/health")
+def merchant_portal_health(org_id: str = ORG_ID):
+    """Durable-session health for this org's merchant-portal logins — the banner + per-source chip.
+
+    The whole 2FA approach is "a human signs in ONCE, the saved session drives the daily pull", so the
+    thing that must never be silent is a session that has died. This endpoint is that visibility: the
+    worst state across the org's portal sources, how many need a human, and why.
+
+    Reads the SECRET-STRIPPED public rows, so nothing here can leak a credential or a session."""
+    require_org(org_id)
+    from app.modules.commcalc import merchant_portals as mp
+    from app.modules.commcalc import portal_session_health as psh
+    client = sb()
+    try:
+        rows = (client.schema("commcalc").table("data_source").select("*")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception as e:
+        return {"ok": False, "error": f"data_source not ready: {e}", "items": []}
+    public = [_strip_source_pw(r) for r in rows
+              if mp.is_portal((r.get("processor") or "").strip().lower())]
+    return {"ok": True, **psh.summarize(public)}
+
+
+def _ensure_data_sources_cron():
+    """Self-register the GLOBAL data-sources portal-pull pg_cron job (mig 956) so nobody has to run SQL
+    by hand — called from the main.py startup hook on EVERY boot, exactly like the email-sweep (mig
+    922), account-recompute (mig 940) and google-reviews (mig 950) crons.
+
+    WHY IT WAS NEEDED (2026-09-04): mig 241 shipped this job as a COMMENTED-OUT block telling an
+    operator to "run this ONCE in the Supabase SQL editor, replacing <NOTIFY_RUN_SECRET>". Nothing in
+    the repo proves anyone did, and nothing re-registered it after a secret rotation — the same defect
+    mig 950 had just fixed for the reviews sweep. Three new daily merchant-portal scrapes ride this
+    scheduler, so it had to become self-registering before they could be trusted to run.
+
+    URL: portal pulls launch Chromium, so the endpoint calls require_browser_service() and the API
+    service refuses it on a split deploy. BROWSER_SERVICE_URL (the sweeps worker) is therefore
+    preferred, falling back to API_PUBLIC_URL for the default single-service deploy.
+
+    NON-FATAL by design (mig 940/950 posture, verbatim): a missing secret, the RPC not present (mig 956
+    not applied yet), or pg_cron/pg_net absent just means auto-scheduling is skipped — boot still
+    succeeds and the manual "Pull now" button still works."""
+    try:
+        import os as _os
+        url = ((_os.environ.get("BROWSER_SERVICE_URL", "") or "").strip().rstrip("/")
+               or (getattr(settings, "API_PUBLIC_URL", "") or "").strip())
+        secret = (getattr(settings, "NOTIFY_RUN_SECRET", "") or "").strip()
+        if not url or not secret:
+            return "skipped: BROWSER_SERVICE_URL/API_PUBLIC_URL or NOTIFY_RUN_SECRET not set"
+        res = sb().rpc("ensure_data_sources_cron", {"p_url": url, "p_secret": secret}).execute()
+        return res.data if isinstance(res.data, str) else (res.data or None)
+    except Exception as e:
+        print(f"WARN _ensure_data_sources_cron skipped: {e}")
+        return None
 
 
 @router.post("/data-sources/{sid}/clear-block")

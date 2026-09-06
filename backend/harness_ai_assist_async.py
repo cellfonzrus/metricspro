@@ -9,10 +9,12 @@ Run:  cd backend && python3 harness_ai_assist_async.py
 """
 import ast
 import asyncio
+import copy
 import os
 import sys
 import time
 import types
+import typing
 
 ROUTER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                       "app", "modules", "helpdesk", "router.py")
@@ -180,7 +182,49 @@ G = {
     "ORG_ID": "00000000-0000-0000-0000-000000000001",
     "AI_ASSIST_TIMEOUT_S": 30.0, "AI_ASSIST_MAX_RETRIES": 1,
 }
-import copy
+# The handler's REQUEST MODEL, extracted the same way the handler is.
+#
+# WHY. `ai_assist` used to take a plain dict; it now takes a declared `AiAssistIn` and reads
+# `body.message` / `body.question` / `body.history` as ATTRIBUTES. Two things broke as a result and
+# both were invisible: exec'ing the function raised `NameError: name 'AiAssistIn' is not defined`
+# (the annotation is evaluated at def time and the stub globals had never heard of it), which killed
+# the file at section D — so the LIVE event-loop proof, the entire point of this harness for a SEV-1,
+# had silently stopped running. And even past that, a dict body would have raised AttributeError.
+#
+# Rather than hand-rolling a stand-in that can drift from the real model in its own turn, the model
+# CLASS is lifted out of the same source tree by AST and exec'd against a minimal base. That keeps
+# this harness's deliberate "no app-package import, no DB, no settings" property, while the field
+# names and defaults stay the product's own — a field added to AiAssistIn arrives here for free.
+class _LaxModelStub:
+    """Stands in for app.core.schemas.LaxModel: declared fields, class defaults, extra ignored."""
+
+    def __init__(self, **kw):
+        for k, v in type(self).__dict__.items():
+            if not k.startswith("_") and not callable(v):
+                setattr(self, k, v)
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+
+_model_node = next((n for n in ast.walk(TREE)
+                    if isinstance(n, ast.ClassDef) and n.name == "AiAssistIn"), None)
+check("D0 the handler's declared request model AiAssistIn is still present in the router",
+      _model_node is not None,
+      "renamed or removed — repoint this harness at the new model; do not fall back to a dict, "
+      "which is what silently disabled section D in the first place")
+G["LaxModel"] = _LaxModelStub
+G["Any"] = typing.Any
+if _model_node is not None:
+    _mc = copy.deepcopy(_model_node)
+    _mc.bases = [ast.Name(id="LaxModel", ctx=ast.Load())]
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[_mc], type_ignores=[])),
+                 "<AiAssistIn>", "exec"), G)
+AiAssistIn = G.get("AiAssistIn")
+# Non-vacuity: the stand-in is only worth anything if it carries the fields the handler reads.
+check("D0b …and it declares every field ai_assist reads off the body",
+      AiAssistIn is not None
+      and all(hasattr(AiAssistIn(), f) for f in ("message", "question", "history")))
+
 _ai_bare = copy.deepcopy(ai)
 _ai_bare.decorator_list = []          # drop @router.post so we can exec it standalone
 exec(compile(ast.fix_missing_locations(ast.Module(body=[_ai_bare], type_ignores=[])),
@@ -202,7 +246,7 @@ async def _scenario(mode):
 
     hb = asyncio.create_task(heartbeat())
     t0 = time.monotonic()
-    out = await ai_fn({"message": "how do I upload sales?"}, org_id=G["ORG_ID"])
+    out = await ai_fn(AiAssistIn(message="how do I upload sales?"), org_id=G["ORG_ID"])
     dt = time.monotonic() - t0
     hb.cancel()
     return out, ticks, dt, Cli
@@ -239,7 +283,7 @@ print("=" * 78)
 async def _no_key():
     G["settings"].ANTHROPIC_API_KEY = ""
     try:
-        return await ai_fn({"message": "hi"}, org_id=G["ORG_ID"])
+        return await ai_fn(AiAssistIn(message="hi"), org_id=G["ORG_ID"])
     finally:
         G["settings"].ANTHROPIC_API_KEY = "sk-test"
 
@@ -250,7 +294,7 @@ check("E1 unconfigured key still short-circuits with configured=False", out.get(
 
 async def _empty():
     try:
-        await ai_fn({"message": "   "}, org_id=G["ORG_ID"])
+        await ai_fn(AiAssistIn(message="   "), org_id=G["ORG_ID"])
         return None
     except Exception as e:
         return type(e).__name__

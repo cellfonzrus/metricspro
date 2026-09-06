@@ -14,6 +14,21 @@ const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: 
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
 const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 2 }
 
+// Merchant-processor portals (owner 2026-09-04, mig 955). Display labels + default portal URLs only —
+// WHICH portal a tenant runs is a data_source row, never a branch in code (RULE TWO). b2bsoft keeps its
+// existing default here so the picker has ONE table instead of a special case.
+const PROCESSOR_LABELS: Record<string, string> = {
+  payanywhere: 'payanywhere — PayAnywhere / Payments Hub (external credit card)',
+  transfirst: 'transfirst — TransFirst TransLink (POS merchant)',
+  businesstrack: 'businesstrack — ClientLine / BusinessTrack (POS merchant)',
+}
+const PROCESSOR_URLS: Record<string, string> = {
+  b2bsoft: 'https://wsreports.b2bsoft.com',
+  payanywhere: 'https://www.paymentshub.com/',
+  transfirst: 'https://translink.transfirst.com/login.aspx',
+  businesstrack: 'https://cl.businesstrack.com/',
+}
+
 // One-click IMAP presets so a user can add a Gmail/Yahoo/Outlook/etc. mailbox without knowing servers.
 const PROVIDERS: Record<string, { label: string; imap_host: string; imap_port: number; use_ssl: boolean; hint?: string }> = {
   custom:  { label: 'Custom / other (enter manually)', imap_host: '', imap_port: 993, use_ssl: true },
@@ -532,6 +547,20 @@ export default function EmailImportsPage() {
     catch (e: any) { setLiveState((p: any) => ({ ...(p || {}), message: '❌ ' + (e?.message || e) })) }
     finally { setLiveBusy(false) }
   }
+  // AUTHENTICATOR-APP CODE (mig 955). Shown ONLY when this login has a TOTP secret configured — i.e.
+  // the owner enrolled this portal account in an authenticator app and gave us the same shared secret.
+  // The backend computes the code that app would show and submits it into the SAME live page. An
+  // SMS/email code has no such button and never will: those are read off a phone and typed above.
+  async function submitTotp() {
+    if (!live?.source?.id) return
+    setLiveBusy(true)
+    try {
+      const r: any = await api(`/api/v1/commcalc/data-sources/${live.source.id}/live-login/submit-totp`, { method: 'POST', body: '{}' })
+      setLiveState((p: any) => ({ ...(p || {}), message: `🔑 Authenticator code submitted (valid ${r?.valid_for ?? '?'}s).` }))
+    }
+    catch (e: any) { setLiveState((p: any) => ({ ...(p || {}), message: '❌ ' + (e?.message || e) })) }
+    finally { setLiveBusy(false) }
+  }
   async function resendLive() {
     if (!live?.source?.id) return
     try { await api(`/api/v1/commcalc/data-sources/${live.source.id}/live-login/resend`, { method: 'POST', body: '{}' }) } catch { /* the state poll shows the outcome */ }
@@ -619,6 +648,19 @@ export default function EmailImportsPage() {
       <span>
         <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: m.c, background: m.b }}>{m.t}</span>
         {st === 'authenticated' && exp && !s.blocked && <span style={{ color: 'var(--text3)', fontSize: 11, marginLeft: 6 }}>until {exp.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>}
+        {/* DURABLE-SESSION HEALTH (mig 955). The 2FA "workaround" is: a human signs in ONCE and the saved
+            session drives the daily pull — so a session that quietly died must be visible HERE, before the
+            overnight pull returns nothing. Computed server-side (portal_session_health) so the page never
+            reasons about clock skew; absent pre-migration and nothing renders. */}
+        {s.session_health && ['expiring_soon', 'expired', 'needs_login', 'never_linked'].includes(s.session_health.state) && (
+          <div style={{ marginTop: 4, padding: '4px 7px', borderRadius: 6, maxWidth: 260, whiteSpace: 'normal',
+            background: s.session_health.needs_human ? '#fef3c7' : 'var(--surface2)',
+            border: `1px solid ${s.session_health.needs_human ? '#fcd34d' : 'var(--border)'}`,
+            color: s.session_health.needs_human ? '#92400e' : 'var(--text2)' }}>
+            <div style={{ fontWeight: 700, fontSize: 11 }}>{s.session_health.needs_human ? '🔑 ' : '⏳ '}{s.session_health.headline}</div>
+            <div style={{ fontSize: 10, marginTop: 2, fontWeight: 400 }}>{s.session_health.detail}</div>
+          </div>
+        )}
         {s.blocked && (
           <div style={{ marginTop: 4, padding: '4px 7px', borderRadius: 6, background: '#fee2e2', border: '1px solid #fecaca', color: '#991b1b', maxWidth: 260, whiteSpace: 'normal' }}>
             <div style={{ fontWeight: 700, fontSize: 11 }}>⛔ Portal temporarily blocked us — next automatic attempt {blockTime(s.blocked_until)}</div>
@@ -929,7 +971,7 @@ export default function EmailImportsPage() {
                     {s.has_pull_diag && <button className="btn btn-secondary" style={{ fontSize: 11, padding: '1px 7px', marginTop: 4 }} onClick={() => openPullDiag(s)}>🔧 What the pull saw</button>}
                   </td>
                   <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {['vidapay', 'total_access', 'b2bsoft', 'b2b'].includes((s.processor || '').toLowerCase()) && (
+                    {['vidapay', 'total_access', 'b2bsoft', 'b2b', 'payanywhere', 'transfirst', 'businesstrack'].includes((s.processor || '').toLowerCase()) && (
                       <><button className="btn btn-secondary" title="Watchable LIVE login: one browser stays open from login through the 2FA code — the code is sent ONCE (no re-send). Best for portals that send a single-use code." style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626', fontWeight: 700 }} onClick={() => startLive(s)}>🔴 Live login</button>{' '}</>
                     )}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} disabled={authBusy === s.id} onClick={() => startLogin(s)}>{authBusy === s.id ? '…' : (s.auth_status === 'authenticated' ? '🔁 Re-auth' : '🔐 Log in')}</button>{' '}
@@ -955,10 +997,10 @@ export default function EmailImportsPage() {
                     a genuinely new processor stays available via the explicit create affordance. */}
                 <div style={{ marginTop: 4 }}>
                   <EntityPicker
-                    options={(() => { const o = ['vidapay', 'total_access', 'b2bsoft', 'epay', 'other'].map(p => ({ id: p, label: p })); if (srcDraft.processor && !o.some(x => x.id === srcDraft.processor)) o.unshift({ id: srcDraft.processor, label: srcDraft.processor }); return o })()}
+                    options={(() => { const o = ['vidapay', 'total_access', 'b2bsoft', 'epay', 'payanywhere', 'transfirst', 'businesstrack', 'other'].map(p => ({ id: p, label: PROCESSOR_LABELS[p] || p })); if (srcDraft.processor && !o.some(x => x.id === srcDraft.processor)) o.unshift({ id: srcDraft.processor, label: srcDraft.processor }); return o })()}
                     value={srcDraft.processor || null} allowCreate width="100%"
-                    onChange={proc => { const patch: any = { processor: proc || '' }; if (proc === 'b2bsoft' && !srcDraft.portal_url) patch.portal_url = 'https://wsreports.b2bsoft.com'; setSrcDraft({ ...srcDraft, ...patch }) }}
-                    onCreate={proc => { const patch: any = { processor: proc }; if (proc === 'b2bsoft' && !srcDraft.portal_url) patch.portal_url = 'https://wsreports.b2bsoft.com'; setSrcDraft({ ...srcDraft, ...patch }) }}
+                    onChange={proc => { const patch: any = { processor: proc || '' }; const d = PROCESSOR_URLS[proc || '']; if (d && !srcDraft.portal_url) patch.portal_url = d; setSrcDraft({ ...srcDraft, ...patch }) }}
+                    onCreate={proc => { const patch: any = { processor: proc }; const d = PROCESSOR_URLS[proc]; if (d && !srcDraft.portal_url) patch.portal_url = d; setSrcDraft({ ...srcDraft, ...patch }) }}
                     placeholder="pick or type a processor…" ariaLabel="Processor" />
                 </div></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Distributor<br />
@@ -1319,6 +1361,10 @@ export default function EmailImportsPage() {
                     style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 18, letterSpacing: 3, textAlign: 'center', marginBottom: 10 }} />
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={liveBusy} onClick={resendLive}>↻ Resend</button>
+                    {live?.source?.has_totp && (
+                      <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={liveBusy} onClick={submitTotp}
+                        title="This login has an authenticator-app secret configured — submit the code your authenticator would show right now.">🔑 Use authenticator code</button>
+                    )}
                     <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>The code is sent ONCE to this same live browser — enter the latest code; Resend voids the previous one.</span>
                     <div style={{ flex: 1 }} />
                     <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={liveBusy || !liveCode.trim() || ph === 'verifying'} onClick={submitLive}>{ph === 'verifying' ? 'Verifying…' : 'Submit code'}</button>

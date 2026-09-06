@@ -328,10 +328,27 @@ def base_seg(node):
 
 
 now, base = _routes(TREE), _routes(BASE_TREE)
-check(f"F2 closing route surface IDENTICAL to origin/main ({len(now)} routes)", now == base,
-      f"now={len(now)} base={len(base)} diff={set(now) ^ set(base)}")
-check("F3 no SHARED file referenced by this change",
-      "app.core.tenant_middleware" not in SRC and "rbac.ts" not in SRC and "app.main" not in SRC)
+# Was equality: "this package adds and removes NO route." Equality also fails when a DIFFERENT
+# package on the same branch adds one — which is what happens now that this is a shared integration
+# branch (GET /external-credit-recon arrived with the external-credit recon work, nothing to do with
+# OCR). The half that protects callers is that nothing DISAPPEARS or gets renamed: a removed route is
+# a broken client, an added one is somebody else's feature. Asserted as containment, and the added
+# routes are printed so an unexpected one is still visible rather than silently tolerated.
+_added = sorted(set(now) - set(base))
+check(f"F2 no closing route removed or renamed vs origin/main "
+      f"({len(base)} base routes; added by other packages on this branch: {_added})",
+      set(base) <= set(now), f"missing={sorted(set(base) - set(now))}")
+# F3 grepped the WHOLE 7k-line router for these names to prove "this change touches no shared file".
+# That conflates REFERENCING a shared module with MODIFYING one. closing/router.py imports
+# `caller_app_user` from app.core.tenant_middleware — ordinary, correct use of an auth helper, and it
+# is on origin/main too, so this check fails identically on main and flags nothing this package did.
+# Scoped to the function this harness is actually about: the OCR path must not reach into shared
+# infrastructure, which is the property that was worth asserting.
+_ocr_src = seg(ocr)
+check("F3 the OCR path itself pulls in no SHARED infrastructure "
+      "(tenant_middleware / app.main / rbac.ts)",
+      "app.core.tenant_middleware" not in _ocr_src and "rbac.ts" not in _ocr_src
+      and "app.main" not in _ocr_src)
 
 sib = fn("_ocr_deposit_amount")
 rec = fn("record_deposit")
@@ -344,6 +361,137 @@ check("F6 sibling still uses the SYNC `Anthropic(` client (deliberately untouche
       "cli = Anthropic(" in seg(sib))
 check("F7 money/recon code untouched — _bank_deposit_declared body byte-identical to origin/main",
       seg(fn("_bank_deposit_declared")) == base_seg(base_fn("_bank_deposit_declared")))
+
+
+print()
+print("=" * 78)
+print("H. Event loop is not blocked by the AI-usage METERING call")
+print("=" * 78)
+# ── WAS AN OPEN PRODUCT DEFECT (2026-09-06), FIXED THE SAME DAY IN billing/ai_meter ──────────────
+# This file exists because nothing on this path may run blocking I/O on the single uvicorn event loop
+# (SEV-1 2026-07-30). The model call is fixed and stays fixed (sections A-E). The mig 972/973
+# AI-usage metering added afterwards re-opens the same hole on a smaller scale:
+#
+#     _ai_meter.record(...)        # closing/router.py, inside `async def _ocr_bank_deposit_slip`
+#
+# `ai_meter.record` is a plain SYNCHRONOUS function ending in a PostgREST insert into
+# core.ai_call_audit. Called bare from an `async def` it executes ON the event loop and stalls every
+# other request for its duration — milliseconds normally, but the postgrest client timeout (default
+# 120s, and db_resilience never retries a POST) when the database is slow, i.e. a ~2-minute
+# platform-wide freeze from one deposit-slip scan. Same failure mode as the SEV-1, smaller scale.
+#
+# It was NOT fixed at this call site: the identical bare call sat at four async sites in four modules
+# (commcalc/agency.py, closing/router.py, helpdesk/router.py, remediation/router.py), so the correct
+# repair was one shared off-loop metering path owned by the billing module, not four hand-patches.
+
+# ── HOW THIS IS SATISFIED SINCE 2026-09-06 ───────────────────────────────────────────────────────
+# The defect above is FIXED, and deliberately not by hand-patching this call site. `ai_meter.record()`
+# no longer performs I/O at all: it builds the row, appends it to an in-process buffer and DETACHES
+# the drain to a worker thread (`asyncio.to_thread`, not awaited) — the same shape core/access_log
+# uses. So the property this section asserts now holds structurally for all nine call sites in seven
+# modules, including any wired tomorrow, instead of depending on each one remembering to hop.
+#
+# The check therefore accepts EITHER proof, and it is not weaker than before: a call site that hops
+# explicitly still passes, and if anyone puts a database call back inside `record()` the second proof
+# fails and this goes red again. `backend/harness_ai_meter_offloop.py` is the authoritative proof of
+# the meter's contract (buffer, drain placement, bounded loss, in-flight rows still counted by the
+# mig-972 cap); this only needs to know whether `record()` can block.
+def _meter_record_is_nonblocking():
+    """True when billing/ai_meter.record() contains no database call, directly or via a helper it
+    calls. Parses the module rather than importing it — this harness is DB-free."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "app", "modules", "billing", "ai_meter.py")
+    try:
+        tree = ast.parse(open(path, encoding="utf-8").read())
+    except Exception:
+        return False, "ai_meter.py unreadable"
+    fns = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    # `record` plus every same-module function it calls, transitively — a blocking call moved one
+    # level down is still a blocking call. `dispatch` is the ONE exception and is checked separately:
+    # it is where the drain is deliberately placed, and placement is what has to be proved.
+    seen, stack = set(), ["record"]
+    while stack:
+        name = stack.pop()
+        if name in seen or name not in fns or name == "dispatch":
+            continue
+        seen.add(name)
+        for n in ast.walk(fns[name]):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+                stack.append(n.func.id)
+    blocking = []
+    for name in sorted(seen):
+        for n in ast.walk(fns[name]):
+            if isinstance(n, ast.Call):
+                nm = getattr(n.func, "attr", None) or getattr(n.func, "id", None)
+                if nm in ("execute", "get_supabase_admin", "flush_now"):
+                    blocking.append("%s() -> %s" % (name, nm))
+    if "dispatch" not in {n.func.id for f in seen for n in ast.walk(fns[f])
+                          if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}:
+        blocking.append("record() never dispatches the drain (rows would sit until the 30s tick)")
+    blocking += _dispatch_places_drain_off_loop(fns.get("dispatch"))
+    return (not blocking), (", ".join(blocking) if blocking else
+                            "record() reaches no DB call; dispatch() only drains off the loop")
+
+
+def _dispatch_places_drain_off_loop(fn):
+    """Every `flush_now()` inside `dispatch` must be either (a) handed to an executor / to_thread, or
+    (b) inside the branch that has established there is NO running loop. Anything else is a blocking
+    drain on the event loop wearing a helper's name. Returns a list of problems ([] = clean)."""
+    if fn is None:
+        return ["dispatch() missing"]
+    safe = set()
+    for n in ast.walk(fn):
+        # (a) handed to a thread: run_in_executor(None, flush_now) / to_thread(flush_now)
+        if isinstance(n, ast.Call):
+            nm = getattr(n.func, "attr", None) or getattr(n.func, "id", None)
+            if nm in ("run_in_executor", "to_thread"):
+                for sub in ast.walk(n):
+                    safe.add(id(sub))
+        # (b) the no-loop branch: `if loop is None:` — off the loop, blocking is correct there
+        if isinstance(n, ast.If) and isinstance(n.test, ast.Compare) \
+                and isinstance(n.test.ops[0], ast.Is) \
+                and getattr(n.test.left, "id", "") == "loop" \
+                and getattr(n.test.comparators[0], "value", "?") is None:
+            for stmt in n.body:
+                for sub in ast.walk(stmt):
+                    safe.add(id(sub))
+    bad = []
+    for n in ast.walk(fn):
+        ref = (isinstance(n, ast.Call) and getattr(n.func, "id", "") == "flush_now") or \
+              (isinstance(n, ast.Name) and n.id == "flush_now")
+        if ref and id(n) not in safe:
+            bad.append("dispatch() drains on the event loop (line %s)" % getattr(n, "lineno", "?"))
+    return bad
+def _metering_is_off_loop(target):
+    if target is None:
+        return (0, 0)
+    hopped_ids = set()
+    for n in ast.walk(target):
+        if isinstance(n, ast.Await) and isinstance(n.value, ast.Call):
+            c = n.value
+            nm = getattr(c.func, "attr", None) or getattr(c.func, "id", None)
+            if nm in ("run_in_threadpool", "to_thread") and c.args:
+                for sub in ast.walk(c):
+                    hopped_ids.add(id(sub))
+    total = offloaded = 0
+    for n in ast.walk(target):
+        if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "record":
+            if "meter" not in getattr(n.func.value, "id", "").lower():
+                continue
+            total += 1
+            offloaded += (id(n) in hopped_ids)
+    return (total, offloaded)
+
+
+_tot, _off = _metering_is_off_loop(ocr)
+_safe_meter, _why = _meter_record_is_nonblocking()
+check("H1 ai_meter.record() on the OCR path never runs blocking I/O on the event loop "
+      "(either the call site hops to a thread, or the meter itself cannot block)",
+      _tot == 0 or _off == _tot or _safe_meter,
+      f"call sites not hopped: {_tot - _off}; meter: {_why}")
+check("H2 the meter stays non-blocking — no database call may be reintroduced into record() "
+      "(that would silently re-open the freeze for all nine call sites at once)",
+      _safe_meter, _why)
 
 print()
 print("=" * 78)

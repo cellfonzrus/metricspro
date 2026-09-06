@@ -48,22 +48,35 @@ def build_overlay_map(client, org_id, close_dates):
     dates = [str(d)[:10] for d in (close_dates or []) if d]
     if not dates:
         return {}
-    try:
-        q = (client.schema("commcalc").table("daily_closing_verification")
-             .select("store_code,close_date,verified,dm_store_cash,dm_store_cc,dm_epay_cash,"
-                     "dm_epay_cc,dm_acc_sale,dm_other")
+    # Two select lists: mig-961 (with dm_ext_cc) and the legacy mig-935 six. A pre-961 database
+    # answers the first with "column does not exist", so every attempt retries on the legacy list —
+    # an un-migrated org keeps its overlay instead of silently losing every DM correction.
+    _SEL_961 = ("store_code,close_date,verified,dm_store_cash,dm_store_cc,dm_epay_cash,"
+                "dm_epay_cc,dm_acc_sale,dm_other,dm_ext_cc")
+    _SEL_935 = ("store_code,close_date,verified,dm_store_cash,dm_store_cc,dm_epay_cash,"
+                "dm_epay_cc,dm_acc_sale,dm_other")
+
+    def _read(sel, narrow):
+        q = (client.schema("commcalc").table("daily_closing_verification").select(sel)
              .eq("org_id", org_id).eq("verified", True))
-        # in_() on the (usually small) date set; fall back to a broad read filtered in Python on error.
-        rows = (q.in_("close_date", dates).execute().data) or []
-    except Exception:
-        try:
-            rows = [r for r in ((client.schema("commcalc").table("daily_closing_verification")
-                                 .select("store_code,close_date,verified,dm_store_cash,dm_store_cc,"
-                                         "dm_epay_cash,dm_epay_cc,dm_acc_sale,dm_other")
-                                 .eq("org_id", org_id).eq("verified", True).execute().data) or [])
-                    if str(r.get("close_date"))[:10] in set(dates)]
-        except Exception:
-            return {}
+        if narrow:
+            return (q.in_("close_date", dates).execute().data) or []
+        return [r for r in ((q.execute().data) or []) if str(r.get("close_date"))[:10] in set(dates)]
+
+    rows = None
+    # narrow in_() read first (usually a small date set), then the broad read filtered in Python;
+    # each shape tried on the mig-961 select list, then the legacy one.
+    for narrow in (True, False):
+        for sel in (_SEL_961, _SEL_935):
+            try:
+                rows = _read(sel, narrow)
+                break
+            except Exception:
+                continue
+        if rows is not None:
+            break
+    if rows is None:
+        return {}
     out = {}
     for r in rows:
         if r.get("verified"):
@@ -77,7 +90,8 @@ def has_correction(dm_row):
     if not dm_row:
         return False
     return any(dm_row.get(k) is not None for k in
-               ("dm_store_cash", "dm_store_cc", "dm_epay_cash", "dm_epay_cc", "dm_acc_sale", "dm_other"))
+               ("dm_store_cash", "dm_store_cc", "dm_epay_cash", "dm_epay_cc", "dm_acc_sale",
+                "dm_other", "dm_ext_cc"))
 
 
 def apply_overlay(agg, dm_row):
@@ -89,6 +103,10 @@ def apply_overlay(agg, dm_row):
     Field mapping (dm_* = the DM's corrected TOTAL for that bucket):
       dm_store_cash → store_cash, t_cash          ; zero epay_cash               (cash total)
       dm_store_cc   → store_cc,   t_credit        ; zero epay_cc, t_ext_cc       (credit total)
+                      …unless dm_ext_cc is also set (mig 961), in which case the SAME corrected
+                      total is SPLIT: t_credit = dm_store_cc − dm_ext_cc, t_ext_cc = dm_ext_cc
+                      (store_cc keeps the full corrected total; epay_cc still zeroed). The card
+                      total never moves — only the split becomes known.
       dm_other      → other_account, t_zelle      ; zero t_store_acct, t_gift    (Zelle/CashApp/other)
       dm_acc_sale   → acc_sale                                                    (accessory gross)
       dm_epay_cash  → epay_on_cash                 (informational ePay-on-cash split; not the cash total)
@@ -110,7 +128,21 @@ def apply_overlay(agg, dm_row):
     if dm_row.get("dm_store_cash") is not None:
         _set(("store_cash", "t_cash"), _f(dm_row["dm_store_cash"])); _zero(("epay_cash",))
     if dm_row.get("dm_store_cc") is not None:
-        _set(("store_cc", "t_credit"), _f(dm_row["dm_store_cc"])); _zero(("epay_cc", "t_ext_cc"))
+        # EXTERNAL-CREDIT SPLIT (mig 961). `dm_store_cc` is the DM's corrected COMBINED card total.
+        # Historically the folded siblings were zeroed, which destroyed the external-credit-machine
+        # split on every corrected day. When the DM also states `dm_ext_cc` (how much of that total
+        # ran through the external machine) the split becomes KNOWN, and the TOTAL is preserved to
+        # the cent in both branches — t_credit + t_ext_cc == dm_store_cc either way — so no
+        # consumer of the card total moves. `dm_ext_cc` NULL ⇒ byte-identical to pre-961.
+        _cc_total = _f(dm_row["dm_store_cc"])
+        _ext = _f(dm_row["dm_ext_cc"]) if dm_row.get("dm_ext_cc") is not None else None
+        if _ext is None:
+            _set(("store_cc", "t_credit"), _cc_total); _zero(("epay_cc", "t_ext_cc"))
+        else:
+            _set(("store_cc",), _cc_total)
+            _set(("t_credit",), round(_cc_total - _ext, 2))
+            _set(("t_ext_cc",), _ext)
+            _zero(("epay_cc",))
     if dm_row.get("dm_other") is not None:
         _set(("other_account", "t_zelle"), _f(dm_row["dm_other"])); _zero(("t_store_acct", "t_gift"))
     if dm_row.get("dm_acc_sale") is not None:
