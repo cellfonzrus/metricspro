@@ -3392,8 +3392,25 @@ quietly. A best-effort `except` cannot catch this class; a static check can.
 **A CAVEAT ON `core.system_check_run` AS A DEPLOY SIGNAL.** Through 2026-09-06/07 that table being
 empty was repeatedly read as "the backend was never redeployed". That inference is WRONG: the boot
 hooks REGISTER cron jobs, they do not write a `system_check_run` row. A row appears only when the
-daily check actually RUNS (on its schedule, or via the control box's "Run check now"). Verify a
-deploy by whether the cron job exists or by running the check once — never by that table alone.
+daily check actually RUNS (on its schedule, or via the control box's "Run check now").
+
+**THE DEPLOY SIGNAL IS `GET /health`, AND NOTHING ELSE. Both hosts auto-deploy — there is no manual
+redeploy step.** Owner, 2026-09-07: *"why do I have to redeploy railway, I never had to do it
+before."* They never did. `docs/ARCHITECTURE.md` has said since it was written that Railway and Vercel
+both **auto-deploy on push to `main`**, and `app/main.py`'s `/health` exists precisely so
+*"is my change live?"* is one request with an unambiguous answer — it returns the built commit from
+`RAILWAY_GIT_COMMIT_SHA` plus the module prefixes actually mounted on the running image. Checked
+minutes after PR #204 merged:
+
+```
+$ curl -s https://metricspro-production.up.railway.app/health
+{"status":"ok","commit":"376fd69","modules":[…,"marketing",…]}
+```
+
+`376fd69` **is** the #204 merge commit, and the production Vercel bundle already carried the new Tax
+Collected UI. The deploy had happened on its own, before anyone was asked to do anything. Never ask
+the owner to redeploy, and never infer deploy state from a cron table, a report's contents, or a
+screenshot — read `/health` and compare its `commit` to `main`.
 
 ## 23e. ENVELOPE CASH NOW RAISES ITS HAND (owner directive 2026-09-07)
 
