@@ -3381,6 +3381,58 @@ hooks REGISTER cron jobs, they do not write a `system_check_run` row. A row appe
 daily check actually RUNS (on its schedule, or via the control box's "Run check now"). Verify a
 deploy by whether the cron job exists or by running the check once — never by that table alone.
 
+## 23e. ENVELOPE CASH NOW RAISES ITS HAND (owner directive 2026-09-07)
+
+**Owner:** *"We need to spend more time to fix the envelope checking issues. This the forth month I
+have no control on envelopes."*
+
+**Live evidence, house org, since 2026-05-01:** 1,666 envelopes declared worth **$595,470.29**;
+**1,474 of them ($540,344.38) had no pickup record at all**; 183 of the 192 that were collected
+carried no disposition; **9 reached "deposited" in four months**; zero counted amounts (the
+`envelope_count` flow only shipped 2026-09-02, so its emptiness is expected — the four-month gap is
+the PICKUP step).
+
+**The diagnosis was not a missing report.** `/closing/envelope-report`, `/closing/pickup` and the
+deposit-accountability board all show this ON DEMAND. What did not exist, among the **49** registered
+attention providers, was anything that says it **without being asked**. Every other blind spot on this
+platform — overdue imports, unmapped stores, stale closings, expiring documents — pushes itself into
+the login popup. Outstanding cash did not.
+
+**New provider `closing_envelope_outstanding`** (`closing/attention_providers.py`), returning two
+disjoint findings over a 60-day bounded lookback:
+
+| finding | what it means |
+|---|---|
+| `closing_envelope_uncollected` | declared at closing, past the grace period, **no pickup recorded** — the cash is still in the store as far as the system knows |
+| `closing_envelope_undisposed` | marked picked up, past the grace period, **no disposition** — no deposit, no hand-off, no record of where the money went |
+
+First live run: **866 envelopes / $372,478.36 uncollected** across 20 stores (oldest 2026-07-09), and
+**29 / $17,497.00 collected-but-unaccounted** across 4 stores.
+
+**Two decisions worth keeping:**
+
+1. **`cost="cheap"`, so it runs on the ordinary login popup.** Its neighbour `closing_stale_stores` is
+   correct, enabled and has named the right nine stores all along — and was never seen, because
+   `cost="heavy"` providers run ONLY under `deep=True`, and the sole automatic deep run is the daily
+   control-box check, which had never run (§23d). **A check that is right and never runs is worth
+   nothing.** §A of the harness asserts the registration and the cost, not just the logic.
+2. **EEP netting comes from `closing/envelope.py`** (`approved_expense_totals` / `withdrawal_totals` /
+   `net_row`) — the same helpers `/closing/pickups` uses. An envelope emptied by an approved expense
+   is not outstanding. Re-deriving "what is left in the envelope" here would be a second answer to a
+   question that screen already answers, and the two would drift (the build gate's whole point).
+   If EEP cannot be read it falls back to GROSS: over-reporting outstanding money is tolerable,
+   under-reporting it is not.
+
+**Config (RULE TWO):** `storeops.tenants.envelope_uncollected_alert_days` /
+`envelope_undisposed_alert_days`, mig `988`, house default **2** days each, `0` disables that half.
+Two columns rather than one because "nobody collected it" and "a DM took it and never said where"
+are different failures with different owners. **The provider works without mig 988** — the config read
+is wrapped and a missing column falls back to the default. A config read FAILURE resolves to the
+DEFAULT, never to 0: an unreadable config table must not silently switch off a money alarm.
+
+- Proof: `backend/harness_envelope_outstanding.py` (25 — registration+cost, both findings, grace
+  period, disjointness, EEP netting incl. partial/pending, config incl. read-failure, org scoping).
+
 ## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
 
 **Read this before writing a new harness, and before trusting an old one.** Owner directive

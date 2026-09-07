@@ -180,3 +180,175 @@ def _p_closing_stale_stores(client, org_id, ctx):
         "count": len(stale), "deep_link": "/closing/management",
         "deep_link_label": "Open Management Review",
     }]
+
+
+# ── Envelope cash that nobody has closed the loop on (owner 2026-09-07) ──────────────────────────
+# Owner, verbatim: *"We need to spend more time to fix the envelope checking issues. This the forth
+# month I have no control on envelopes."* The evidence behind this provider, live at the time it was
+# written: since 2026-05-01 the org declared 1,666 envelopes worth $595,470.29; 1,474 of them
+# ($540,344.38) had NO pickup record at all, and 183 of the 192 that WERE collected had no
+# disposition — 9 envelopes reached "deposited" in four months.
+#
+# None of that was a missing report. `/closing/envelope-report`, `/closing/pickup` and the
+# deposit-accountability board all show it on demand. What did not exist, in any of the 49 registered
+# attention providers, was anything that TELLS YOU without being asked. Every other blind spot in
+# this platform — overdue imports, unmapped stores, stale closings, expiring documents — pushes
+# itself into the login popup; outstanding cash did not.
+#
+# TWO DELIBERATE CHOICES, both learned from the check that should have caught the sibling problem:
+#
+#   1. cost="cheap", so it runs on EVERY attention call — the login popup included.
+#      `closing_stale_stores` next door is correct, enabled and has named the right nine stores all
+#      along, but it is cost="heavy", and heavy providers only run under deep=True. The only
+#      automatic deep run is the daily control-box check, which had never run. A check that is right
+#      and never runs is worth nothing. This one stays cheap on purpose: three date-bounded reads,
+#      no per-day loop, no sales scan.
+#   2. It nets EEP the same way the pickup screen does (`envelope.approved_expense_totals` /
+#      `withdrawal_totals` / `net_row`), so an envelope whose cash was legitimately spent on an
+#      approved expense is NOT reported as outstanding. Re-deriving "what is left in the envelope"
+#      here would be a second answer to a question `/closing/pickups` already answers, and the two
+#      would drift — the exact defect CLAUDE.md's duplicate-check gate exists to stop.
+#
+# Thresholds are per-org config with a house default (RULE TWO), read from the same
+# `storeops.tenants` row as `closing_stale_alert_days`. The columns are OPTIONAL: a deployment that
+# has not run the migration adding them falls back to the code defaults and this check still works.
+ENVELOPE_UNCOLLECTED_DEFAULT_DAYS = 2      # cash sitting in a store, nobody has collected it
+ENVELOPE_UNDISPOSED_DEFAULT_DAYS = 2       # a DM took it; no record of where it went
+ENVELOPE_LOOKBACK_DAYS = 60                # how far back to look at all — bounds the scan, always
+
+
+def _envelope_alert_days(client, org_id):
+    """(uncollected_days, undisposed_days). Per-org config > house default. 0 disables that half.
+
+    A read failure returns the DEFAULTS, never "disabled" — a config table that cannot be read must
+    not silently switch off a money alarm."""
+    unc, und = ENVELOPE_UNCOLLECTED_DEFAULT_DAYS, ENVELOPE_UNDISPOSED_DEFAULT_DAYS
+    try:
+        rows = (client.schema("storeops").table("tenants")
+                .select("envelope_uncollected_alert_days,envelope_undisposed_alert_days")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+    except Exception:
+        return unc, und            # column/table absent (migration not run) → house defaults
+    if rows:
+        r = rows[0] or {}
+        if r.get("envelope_uncollected_alert_days") is not None:
+            try:
+                unc = int(r["envelope_uncollected_alert_days"])
+            except Exception:
+                pass
+        if r.get("envelope_undisposed_alert_days") is not None:
+            try:
+                und = int(r["envelope_undisposed_alert_days"])
+            except Exception:
+                pass
+    return unc, und
+
+
+@register_provider("closing_envelope_outstanding",
+                   label="Envelope cash not collected / not accounted for",
+                   group="other", cost="cheap")
+def _p_closing_envelope_outstanding(client, org_id, ctx):
+    """Envelope cash that has gone unclosed: declared but never collected, or collected and never
+    dispositioned. Read-only; nets EEP exactly as `/closing/pickups` does."""
+    now = ctx.get("now") or _now()
+    unc_days, und_days = _envelope_alert_days(client, org_id)
+    if unc_days <= 0 and und_days <= 0:
+        return []                                       # tenant disabled both halves
+    since = (now - timedelta(days=ENVELOPE_LOOKBACK_DAYS)).date().isoformat()
+    try:
+        rows = (client.schema("commcalc").table("daily_closing")
+                .select("id,close_date,store_code,employee_name,store_cash,epay_cash")
+                .eq("org_id", org_id).gte("close_date", since).limit(20000).execute().data) or []
+    except Exception:
+        return []
+    if not rows:
+        return []
+    try:
+        picks = (client.schema("commcalc").table("cash_pickup")
+                 .select("close_date,store_code,employee_name,picked_up,disposition")
+                 .eq("org_id", org_id).gte("close_date", since).limit(20000).execute().data) or []
+    except Exception:
+        picks = []
+    pick_by = {((p.get("store_code") or ""), (p.get("employee_name") or ""),
+                str(p.get("close_date"))): p for p in picks}
+
+    # SAME netting as the pickup screen — an envelope emptied by an approved expense or a recorded
+    # withdrawal is not outstanding and must not be reported as if it were. If the EEP module cannot
+    # be reached the check still runs on GROSS cash: over-reporting outstanding money is a tolerable
+    # failure here, silently under-reporting it is not.
+    try:
+        from . import envelope as _env
+    except Exception:
+        _env = None
+    exp_by_row, wd_by_row = {}, {}
+    if _env is not None:
+        days = sorted({str(r.get("close_date")) for r in rows if r.get("close_date")})
+        lo, hi = (days[0], days[-1]) if days else (None, None)
+        try:
+            exp_by_row, _ = _env.approved_expense_totals(client, org_id, date_from=lo, date_to=hi)
+            wd_by_row, _ = _env.withdrawal_totals(client, org_id, date_from=lo, date_to=hi)
+        except Exception:
+            exp_by_row, wd_by_row = {}, {}
+
+    def _num(v):
+        try:
+            return float(v or 0)
+        except Exception:
+            return 0.0
+
+    def _net(r):
+        gross = _num(r.get("store_cash")) + _num(r.get("epay_cash"))
+        return _env.net_row(gross, r.get("id"), exp_by_row, wd_by_row) if _env is not None else gross
+
+    unc_cut = (now - timedelta(days=max(unc_days, 0))).date().isoformat()
+    und_cut = (now - timedelta(days=max(und_days, 0))).date().isoformat()
+    uncollected, undisposed = [], []
+    for r in rows:
+        day = str(r.get("close_date") or "")
+        if not day:
+            continue
+        cash = _net(r)
+        if cash <= 0:
+            continue                                    # nothing left in it — not outstanding
+        p = pick_by.get(((r.get("store_code") or ""), (r.get("employee_name") or ""), day))
+        if not (p and p.get("picked_up")):
+            if unc_days > 0 and day <= unc_cut:
+                uncollected.append((day, r.get("store_code") or "?", cash))
+        elif not (p.get("disposition") or "").strip():
+            if und_days > 0 and day <= und_cut:
+                undisposed.append((day, r.get("store_code") or "?", cash))
+
+    out = []
+    if uncollected:
+        total = round(sum(c for _d, _s, c in uncollected), 2)
+        oldest = min(d for d, _s, _c in uncollected)
+        stores = sorted({s for _d, s, _c in uncollected})
+        eg = ", ".join(stores[:5]) + (f" +{len(stores) - 5} more" if len(stores) > 5 else "")
+        out.append({
+            "group": "other", "key": "closing_envelope_uncollected", "severity": "warning",
+            "label": "Envelope cash declared but never collected",
+            "detail": (f"{len(uncollected)} envelope(s) worth ${total:,.2f} across {len(stores)} "
+                       f"store(s) were declared at closing more than {unc_days} day(s) ago and have "
+                       f"no pickup recorded — the cash is still sitting in the store as far as this "
+                       f"system knows. Oldest: {oldest}. Stores: {eg}. Amounts are net of approved "
+                       f"expenses and withdrawals, the same figure the Cash Pickup screen shows."),
+            "count": len(uncollected), "deep_link": "/closing/pickup",
+            "deep_link_label": "Open Cash Pickup",
+        })
+    if undisposed:
+        total = round(sum(c for _d, _s, c in undisposed), 2)
+        oldest = min(d for d, _s, _c in undisposed)
+        stores = sorted({s for _d, s, _c in undisposed})
+        eg = ", ".join(stores[:5]) + (f" +{len(stores) - 5} more" if len(stores) > 5 else "")
+        out.append({
+            "group": "other", "key": "closing_envelope_undisposed", "severity": "warning",
+            "label": "Envelope cash collected but not accounted for",
+            "detail": (f"{len(undisposed)} envelope(s) worth ${total:,.2f} across {len(stores)} "
+                       f"store(s) were marked picked up more than {und_days} day(s) ago but carry no "
+                       f"disposition — no deposit, no hand-off, no record of where the money went. "
+                       f"Oldest: {oldest}. Stores: {eg}. Record the deposit or the hand-off on the "
+                       f"Cash Pickup screen."),
+            "count": len(undisposed), "deep_link": "/closing/pickup",
+            "deep_link_label": "Open Cash Pickup",
+        })
+    return out
