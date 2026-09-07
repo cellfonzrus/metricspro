@@ -129,6 +129,18 @@ R._collect_markets = lambda org_id: []          # no-op RULE THREE canonicalizer
 R._cscope.invalidate_market_index = lambda *a, **k: None
 
 ORG = "org-lux-dedupe-1"
+
+
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
 OTHER_ORG = "org-house-dedupe-2"
 
 
@@ -209,8 +221,10 @@ check("G3 org isolation: org A's fetch never returns org B's row and vice versa"
 
 # ══ H: end-to-end through the REAL POST /stores/bulk handler ═══════════════════════════════════════
 reset()
-R.bulk_create_stores({"stores": [{"store_code": "LUX-NYC-UTICA", "address": "123 Utica Ave"}]}, org_id=ORG)
-R.bulk_create_stores({"stores": [{"store_code": "Utica2", "address": "123 Utica Ave"}]}, org_id=ORG)
+R.bulk_create_stores(
+    _body(R.BulkCreateStoresIn, {"stores": [{"store_code": "LUX-NYC-UTICA", "address": "123 Utica Ave"}]}), org_id=ORG)
+R.bulk_create_stores(
+    _body(R.BulkCreateStoresIn, {"stores": [{"store_code": "Utica2", "address": "123 Utica Ave"}]}), org_id=ORG)
 rows = mapping_rows()
 check("H1 end-to-end via POST /stores/bulk: a re-upload under a 2nd naming scheme still yields 1 mapping row",
       len(rows) == 1, rows)

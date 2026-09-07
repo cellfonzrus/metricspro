@@ -147,9 +147,13 @@ export default function SubmissionsTable({
 
   // Carrier vocabulary (owner 2026-09-04): bill-pay processor / financing names are per-carrier
   // preset DATA (mig 953 — boost renders 'ePay'/'ACIMA' byte-identical to today).
-  const { term } = useReportLabels()
+  const { term, colLabel } = useReportLabels()
   const ep = term('processor', 'Bill-pay')
   const fin = term('financing', 'Financing')
+  // The external credit machine's tenant-facing name — mig-960 carrier label preset on the
+  // existing mig-945/953 machinery, tenant-overridable (owner 2026-09-04). One resolution, so the
+  // grid header and the export header can never disagree.
+  const extCc = colLabel('closing_t_ext_cc', 'External Credit Card')
   const columns: ExportColumn[] = useMemo(() => [
     // ── Identity ──
     { header: 'Date', field: 'close_date', type: 'date', role: 'date', get: r => r.close_date },
@@ -160,7 +164,7 @@ export default function SubmissionsTable({
     // ── Money — per-tender declared amounts (mirrors the POS X-report vocabulary) ──
     { header: 'Cash $', field: 't_cash', money: true, get: r => r.t_cash },
     { header: 'Credit $', field: 't_credit', money: true, get: r => r.t_credit },
-    { header: 'External CC $', field: 't_ext_cc', money: true, get: r => r.t_ext_cc },
+    { header: `${extCc} $`, field: 't_ext_cc', money: true, get: r => r.t_ext_cc },
     { header: 'Gift Card $', field: 't_gift', money: true, get: r => r.t_gift },
     { header: 'Store Account $', field: 't_store_acct', money: true, get: r => r.t_store_acct },
     { header: 'Zelle/CashApp $', field: 't_zelle', money: true, get: r => r.t_zelle },
@@ -205,6 +209,9 @@ export default function SubmissionsTable({
     { header: `DM ${ep} credit $ (store-day)`, field: 'dm_epay_cc', money: true, get: r => r.dm_epay_cc },
     { header: 'DM accessory $ (store-day)', field: 'dm_acc_sale', money: true, get: r => r.dm_acc_sale },
     { header: 'DM other $ (store-day)', field: 'dm_other', money: true, get: r => r.dm_other },
+    // mig 961 — the DM's stated EXTERNAL portion of the corrected card total (blank = the DM did
+    // not split it; the corrected card TOTAL is unchanged either way).
+    { header: `DM ${extCc} $ (store-day)`, field: 'dm_ext_cc', money: true, get: r => r.dm_ext_cc },
     { header: 'DM note', field: 'dm_note', get: r => r.dm_note || '' },
     // ── Meta ──
     // The raw storage path stays a reference; `Envelope photo` is the CLICKABLE org-scoped API
@@ -214,7 +221,7 @@ export default function SubmissionsTable({
     { header: 'Envelope photo ref', field: 'envelope_picture', get: r => r.envelope_picture || '' },
     { header: 'Remarks', field: 'remarks', get: r => r.remarks },
     { header: 'Submitted at', field: 'submitted_at', type: 'date', get: r => r.submitted_at ? new Date(r.submitted_at).toLocaleString() : '' },
-  ], [ep, fin])
+  ], [ep, fin, extCc])
 
   const DRILL_LABEL: Record<string, string> = { cash_short: 'Cash Short only', cash_over: 'Cash Over only' }
 

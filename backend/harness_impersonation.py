@@ -44,6 +44,18 @@ import app.core.tenant_middleware as mw                 # noqa: E402
 import app.modules.core.router as rt                    # noqa: E402
 import app.modules.core.impersonation_api as api        # noqa: E402
 
+
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
+
 PASS, FAIL = [], []
 
 
@@ -472,7 +484,7 @@ c = wire()
 rt._uid_cache.clear()
 rt.get_supabase_admin = lambda: _Auth()
 req = SimpleNamespace(headers={"user-agent": "harness"}, client=SimpleNamespace(host="203.0.113.7"))
-res = api.start({"target": EMP, "reason": "repro clock issue"}, req, org_id=ORG_A, authorization="Bearer t")
+res = api.start(_body(api.ImpersonationStartIn, {"target": EMP, "reason": "repro clock issue"}), req, org_id=ORG_A, authorization="Bearer t")
 check("F1. an authorized admin can start a session and receives a grant", bool(res.get("grant")))
 check("F2. the audit row is written with actor, target, org and expiry",
       any(o[0] == "insert" and o[1] == "impersonation_session"
@@ -488,12 +500,12 @@ check("F4. no token leaks into the session summary shown to the UI",
 # CROSS-TENANT: a permission holder in ORG_A may not reach ORG_B
 c = wire()
 check("F5. CROSS-TENANT: a non-super-admin cannot start a session in another tenant",
-      raises(lambda: api.start({"target": OTHER}, req, org_id=ORG_B, authorization="Bearer t"), 403))
+      raises(lambda: api.start(_body(api.ImpersonationStartIn, {"target": OTHER}), req, org_id=ORG_B, authorization="Bearer t"), 403))
 # a target that is not in the acting org
 check("F6. a target who is not a member of the acting org is refused (404)",
-      raises(lambda: api.start({"target": OTHER}, req, org_id=ORG_A, authorization="Bearer t"), 404))
+      raises(lambda: api.start(_body(api.ImpersonationStartIn, {"target": OTHER}), req, org_id=ORG_A, authorization="Bearer t"), 404))
 check("F7. impersonating YOURSELF is refused",
-      raises(lambda: api.start({"target": ADMIN}, req, org_id=ORG_A, authorization="Bearer t"), 400))
+      raises(lambda: api.start(_body(api.ImpersonationStartIn, {"target": ADMIN}), req, org_id=ORG_A, authorization="Bearer t"), 400))
 # super-admin target
 t = base_tables()
 for r in t["app_users"]:
@@ -501,7 +513,7 @@ for r in t["app_users"]:
         r["super_admin"] = True
 c = wire(t)
 check("F8. a SUPER-ADMIN can never be impersonated",
-      raises(lambda: api.start({"target": EMP}, req, org_id=ORG_A, authorization="Bearer t"), 403))
+      raises(lambda: api.start(_body(api.ImpersonationStartIn, {"target": EMP}), req, org_id=ORG_A, authorization="Bearer t"), 403))
 # another impersonator as target
 t = base_tables()
 t["roles"] = t["roles"] + []
@@ -510,7 +522,7 @@ for r in t["roles"]:
         r["permissions"] = {"scope": "self", "impersonate": True}
 c = wire(t)
 check("F9. a role that can itself sign in as others cannot be borrowed (no escalation chain)",
-      raises(lambda: api.start({"target": EMP}, req, org_id=ORG_A, authorization="Bearer t"), 403))
+      raises(lambda: api.start(_body(api.ImpersonationStartIn, {"target": EMP}), req, org_id=ORG_A, authorization="Bearer t"), 403))
 # deactivated target
 t = base_tables()
 for r in t["app_users"]:
@@ -518,24 +530,24 @@ for r in t["app_users"]:
         r["is_active"] = False
 c = wire(t)
 check("F10. a deactivated employee cannot be impersonated",
-      raises(lambda: api.start({"target": EMP}, req, org_id=ORG_A, authorization="Bearer t"), 403))
+      raises(lambda: api.start(_body(api.ImpersonationStartIn, {"target": EMP}), req, org_id=ORG_A, authorization="Bearer t"), 403))
 # no permission at all
 c = wire(base_tables(roles=[{"org_id": ORG_A, "name": "admin",
                              "permissions": {"scope": "all", "modules": {"admin": True}}},
                             {"org_id": ORG_A, "name": "sales_rep", "permissions": {"scope": "self"}}]))
 check("F11. WITHOUT the permission, start is refused (403) even for a full-scope admin",
-      raises(lambda: api.start({"target": EMP}, req, org_id=ORG_A, authorization="Bearer t"), 403))
+      raises(lambda: api.start(_body(api.ImpersonationStartIn, {"target": EMP}), req, org_id=ORG_A, authorization="Bearer t"), 403))
 check("F12. …and the roster endpoint is refused too (no enumeration without the permission)",
       raises(lambda: api.list_targets(org_id=ORG_A, authorization="Bearer t"), 403))
 # audit store down at start → fail closed, no grant
 c = wire(base_tables(), fail=("impersonation_session",))
 check("F13. FAIL CLOSED: audit write impossible ⇒ start refuses (503), NO grant is minted",
-      raises(lambda: api.start({"target": EMP}, req, org_id=ORG_A, authorization="Bearer t"), 503))
+      raises(lambda: api.start(_body(api.ImpersonationStartIn, {"target": EMP}), req, org_id=ORG_A, authorization="Bearer t"), 503))
 # nesting
 c = wire()
 tok = imp.set_current({"session_id": SID, "actor_uid": ADMIN, "target_uid": EMP, "org_id": ORG_A})
 check("F14. NESTING refused: cannot start an impersonation from inside one",
-      raises(lambda: api.start({"target": EMP}, req, org_id=ORG_A, authorization="Bearer t"), 403))
+      raises(lambda: api.start(_body(api.ImpersonationStartIn, {"target": EMP}), req, org_id=ORG_A, authorization="Bearer t"), 403))
 check("F15. …and the policy cannot be edited from inside one",
       raises(lambda: api.put_policy({"policy": {"enabled": True}}, org_id=ORG_A,
                                     authorization="Bearer t"), 403))
@@ -550,12 +562,12 @@ check("F17. roster rows are EntityPicker-shaped ('First Last' + email sublabel)"
       tg["targets"][0]["label"] == "Ann Employee" and tg["targets"][0]["sublabel"] == "emp@x.com")
 # stop
 c = wire()
-res = api.stop({"session_id": SID}, req, org_id=ORG_A, authorization="Bearer t")
+res = api.stop(_body(api.ImpersonationStopIn, {"session_id": SID}), req, org_id=ORG_A, authorization="Bearer t")
 check("F18. stop closes the session and stamps ended_at",
       res["ok"] and any(o[0] == "update" and o[1] == "impersonation_session"
                         and o[2].get("ended_at") for o in c.ops))
 check("F19. stop is idempotent (a second call is not an error)",
-      api.stop({"session_id": SID}, req, org_id=ORG_A, authorization="Bearer t")["ok"])
+      api.stop(_body(api.ImpersonationStopIn, {"session_id": SID}), req, org_id=ORG_A, authorization="Bearer t")["ok"])
 c = wire()
 rt._uid_cache.clear()
 
@@ -570,7 +582,7 @@ class _AuthOther:
 rt.get_supabase_admin = lambda: _AuthOther()
 rt._uid_cache.clear()
 check("F20. a DIFFERENT admin cannot stop someone else's session",
-      raises(lambda: api.stop({"session_id": SID}, req, org_id=ORG_A, authorization="Bearer t"), 403))
+      raises(lambda: api.stop(_body(api.ImpersonationStopIn, {"session_id": SID}), req, org_id=ORG_A, authorization="Bearer t"), 403))
 rt.get_supabase_admin = lambda: _Auth()
 rt._uid_cache.clear()
 
@@ -622,7 +634,7 @@ class _AuthEmp:
 
 
 api.get_supabase_admin = lambda: _AuthEmp()
-out = api.reauth({"session_id": SID, "token": emp_token()}, req, org_id=ORG_A, authorization="Bearer t")
+out = api.reauth(_body(api.ImpersonationReauthIn, {"session_id": SID, "token": emp_token()}), req, org_id=ORG_A, authorization="Bearer t")
 check("G8. the employee's fresh token mints a single-use unlock", bool(out.get("reauth")) and out["single_use"])
 marker = out["reauth"]
 tok = imp.set_current({**ctx, "reauth": marker})
@@ -634,27 +646,27 @@ imp.reset_current(tok)
 check("G11. the consumed unlock is recorded (who/what it was spent on)",
       any(o[0] == "update" and o[1] == "impersonation_reauth" and o[2].get("consumed_at") for o in c.ops))
 check("G12. REPLAY: the SAME Supabase sign-in session cannot mint a second unlock",
-      raises(lambda: api.reauth({"session_id": SID, "token": emp_token()}, req, org_id=ORG_A,
+      raises(lambda: api.reauth(_body(api.ImpersonationReauthIn, {"session_id": SID, "token": emp_token()}), req, org_id=ORG_A,
                                 authorization="Bearer t"), 409))
 check("G13. a NEW password entry (new Supabase session) CAN mint another unlock",
-      bool(api.reauth({"session_id": SID, "token": emp_token(sid="supa-session-2")}, req,
+      bool(api.reauth(_body(api.ImpersonationReauthIn, {"session_id": SID, "token": emp_token(sid="supa-session-2")}), req,
                       org_id=ORG_A, authorization="Bearer t").get("reauth")))
 check("G14. a STALE employee token (older than the freshness window) is refused",
-      raises(lambda: api.reauth({"session_id": SID, "token": emp_token(iat_offset=-9999, sid="s3")},
+      raises(lambda: api.reauth(_body(api.ImpersonationReauthIn, {"session_id": SID, "token": emp_token(iat_offset=-9999, sid="s3")}),
                                 req, org_id=ORG_A, authorization="Bearer t"), 403))
 api.get_supabase_admin = lambda: _Auth()      # resolves to ADMIN, i.e. the WRONG person
 check("G15. the ADMIN's own password cannot unlock a punch (token must resolve to the EMPLOYEE)",
-      raises(lambda: api.reauth({"session_id": SID, "token": emp_token(sid="s4")}, req,
+      raises(lambda: api.reauth(_body(api.ImpersonationReauthIn, {"session_id": SID, "token": emp_token(sid="s4")}), req,
                                 org_id=ORG_A, authorization="Bearer t"), 403))
 api.get_supabase_admin = lambda: _AuthEmp()
 c = wire(base_tables(impersonation_session=[session_row(ended_at="2026-08-06T01:00:00+00:00")]))
 check("G16. an ENDED session cannot mint an unlock",
-      raises(lambda: api.reauth({"session_id": SID, "token": emp_token(sid="s5")}, req,
+      raises(lambda: api.reauth(_body(api.ImpersonationReauthIn, {"session_id": SID, "token": emp_token(sid="s5")}), req,
                                 org_id=ORG_A, authorization="Bearer t"), 403))
 c = wire()
 tok = imp.set_current(ctx)
 check("G17. the unlock endpoint itself is refused from INSIDE an impersonated session",
-      raises(lambda: api.reauth({"session_id": SID, "token": emp_token(sid="s6")}, req,
+      raises(lambda: api.reauth(_body(api.ImpersonationReauthIn, {"session_id": SID, "token": emp_token(sid="s6")}), req,
                                 org_id=ORG_A, authorization="Bearer t"), 403))
 imp.reset_current(tok)
 # the primitive fails closed when the marker store is unreadable
@@ -751,7 +763,7 @@ check("K2. the REAL clock-in shape: gate REFUSES the punch without an unlock",
       _seen.get("gate") == "refused-403" and _seen.get("target") == EMP, f"seen={_seen}")
 c = wire()
 api.get_supabase_admin = lambda: _AuthEmp()
-mk = api.reauth({"session_id": SID, "token": emp_token(sid="supa-k")}, req, org_id=ORG_A,
+mk = api.reauth(_body(api.ImpersonationReauthIn, {"session_id": SID, "token": emp_token(sid="supa-k")}), req, org_id=ORG_A,
                 authorization="Bearer t")["reauth"]
 _seen.clear()
 _, st, _b = run([("authorization", "Bearer t"), ("x-impersonate", fresh_grant()),
@@ -773,7 +785,30 @@ check("K5. a NORMAL punch (no impersonation) sails straight through the gate",
 
 print("\n─── J. route surface ───────────────────────────────────────────────────────────────────────")
 from app.main import app as fastapi_app    # noqa: E402
-paths = {r.path for r in fastapi_app.routes}
+
+
+def _mounted_paths(routes, prefix=""):
+    """Every path mounted under `routes`, descending into included routers.
+
+    FastAPI no longer flattens `include_router` into `app.routes`: it stores an `_IncludedRouter`
+    node that carries the child router and its prefix, and resolves the real routes lazily. The old
+    one-line `{r.path for r in app.routes}` therefore raised AttributeError on those nodes — and had
+    it not raised, it would have silently reported the impersonation routes as MISSING, which is the
+    dangerous direction for a route-surface check to fail in.
+    """
+    out = set()
+    for r in routes:
+        p = getattr(r, "path", None)
+        if p is not None:
+            out.add(prefix + p)
+        child = getattr(r, "original_router", None)
+        if child is not None:
+            ctx = getattr(r, "include_context", None)
+            out |= _mounted_paths(child.routes, prefix + (getattr(ctx, "prefix", "") or ""))
+    return out
+
+
+paths = _mounted_paths(fastapi_app.routes)
 for p in ("/api/v1/core/impersonation/start", "/api/v1/core/impersonation/stop",
           "/api/v1/core/impersonation/status", "/api/v1/core/impersonation/reauth",
           "/api/v1/core/impersonation/targets", "/api/v1/core/impersonation/log",

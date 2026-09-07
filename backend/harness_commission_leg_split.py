@@ -57,6 +57,43 @@ from app.modules.commcalc import commission_ledger as CLED
 from app.modules.commcalc.gp_report import calc_gp_report
 
 _pass = _fail = 0
+
+async def _drain(aw):
+    return await aw
+
+
+def call(result):
+    """Call a handler WITHOUT caring whether it is `async def` today.
+
+    `commission_leg_trend` / `commission_leg_labels` / `set_commission_leg_label` were `async def`
+    when this harness was written and are now plain `def`s — the CORRECT shape, since all three
+    drive the SYNCHRONOUS supabase client and await nothing (FastAPI dispatches a plain `def` to a
+    worker thread; an `async def` would run that blocking round-trip on the event loop, which is the
+    SEV-1 of 2026-07-30). The 16 hard-coded `run_until_complete()` calls here turned that correct
+    product change into `TypeError: An asyncio.Future, a coroutine or an awaitable is required` on
+    the FIRST one, so every assertion in this 800-line file stopped running. A handler's async/sync
+    shape is not part of its behavioural contract; these assertions no longer depend on it.
+    """
+    import inspect
+    if inspect.isawaitable(result):
+        return asyncio.run(_drain(result))
+    return result
+
+
+
+def _label_in(**kw):
+    """Build the handler's DECLARED request model, not a bare dict.
+
+    FastAPI hands a POST handler a validated pydantic model; this harness was passing raw dicts, so
+    once `set_commission_leg_label` grew `SetCommissionLegLabelIn` every probe died on
+    `AttributeError: 'dict' object has no attribute 'label'` BEFORE reaching the logic under test.
+    Same drift (and same repair) as commit 564c171f in harness_ssrf_import_gate. Building the real
+    model also makes `model_fields_set` reflect exactly what each probe sent, which is what
+    LaxModel-based handlers branch on.
+    """
+    return R.SetCommissionLegLabelIn(**kw)
+
+
 HOUSE = "00000000-0000-0000-0000-000000000001"
 TENANT = "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
 
@@ -632,7 +669,7 @@ fc = FakeClient(store, rpc_data={"commission_leg_label_rollup": ROLLUP,
                                  "commission_leg_ma_rollup": []})
 R.sb = lambda: fc
 QUERY_LOG.clear()
-out = asyncio.get_event_loop().run_until_complete(
+out = call(
     R.commission_leg_trend(period="June 2026", months=2, org_id=HOUSE))
 jun = next(c for c in out["company"] if c["period"] == "June 2026")
 may = next(c for c in out["company"] if c["period"] == "May 2026")
@@ -679,16 +716,16 @@ check("the retention note is HONEST that there is no stored 6MR KPI",
       "no stored 6MR" in out["retention_note"])
 
 section("⑦c RULE FIVE filters drive the trend")
-out_mkt = asyncio.get_event_loop().run_until_complete(
+out_mkt = call(
     R.commission_leg_trend(period="June 2026", months=1, market="NY", org_id=HOUSE))
 check("a market filter narrows the trend to that market's stores",
       eq2(out_mkt["company"][0]["total"], 45.0), out_mkt["company"][0])
-out_store = asyncio.get_event_loop().run_until_complete(
+out_store = call(
     R.commission_leg_trend(period="June 2026", months=1, store=STORE_A, org_id=HOUSE))
 check("a store filter narrows the trend to that store", eq2(out_store["company"][0]["total"], 185.0),
       out_store["company"][0])
 check("an unmatched market yields an honest zero, not everything",
-      eq2(asyncio.get_event_loop().run_until_complete(
+      eq2(call(
           R.commission_leg_trend(period="June 2026", months=1, market="ATLANTIS",
                                  org_id=HOUSE))["company"][0]["total"], 0.0))
 
@@ -700,7 +737,7 @@ store_t["store_mapping"] = STORE_ROWS + [
 fc_t = FakeClient(store_t, rpc_data={"commission_leg_label_rollup": [], "commission_leg_ma_rollup": []})
 R.sb = lambda: fc_t
 QUERY_LOG.clear()
-out_t = asyncio.get_event_loop().run_until_complete(
+out_t = call(
     R.commission_leg_trend(period="June 2026", months=1, org_id=TENANT))
 check("a second tenant's request is scoped to ITS org on every read",
       all(scoped(q, TENANT) for q in QUERY_LOG) and bool(QUERY_LOG),
@@ -718,7 +755,7 @@ MA_ROLLUP = [dict(ma_sums, period="June 2026", n=3), dict(ma_sums, period="May 2
 fc_ma = FakeClient(store, rpc_data={"commission_leg_label_rollup": ROLLUP,
                                     "commission_leg_ma_rollup": MA_ROLLUP})
 R.sb = lambda: fc_ma
-out_ma = asyncio.get_event_loop().run_until_complete(
+out_ma = call(
     R.commission_leg_trend(period="June 2026", months=2, org_id=HOUSE))
 jun_ma = next(c for c in out_ma["company"] if c["period"] == "June 2026")
 may_ma = next(c for c in out_ma["company"] if c["period"] == "May 2026")
@@ -731,7 +768,7 @@ check("...and May (which also has ePay money) is likewise not double-counted",
 fc_ma2 = FakeClient(store, rpc_data={"commission_leg_label_rollup": [],
                                      "commission_leg_ma_rollup": MA_ROLLUP})
 R.sb = lambda: fc_ma2
-out_ma2 = asyncio.get_event_loop().run_until_complete(
+out_ma2 = call(
     R.commission_leg_trend(period="June 2026", months=1, org_id=HOUSE))
 jm = out_ma2["company"][0]
 # mig 277: M1 is spiff_m1 ALONE (5.0 x 1 rollup row); the 560.5 of margins moved to unsplit and the
@@ -743,10 +780,10 @@ check("an ePay-less month DOES book MA commission, split by leg column",
 check("IDENTITY: the MA month's parts add back to its total",
       eq2(jm["m1"] + jm["m2_12"] + jm["unsplit"], jm["total"]))
 check("company-wide MA money is EXCLUDED (and said so) while a store filter is active",
-      eq2(asyncio.get_event_loop().run_until_complete(
+      eq2(call(
           R.commission_leg_trend(period="June 2026", months=1, store=STORE_A,
                                  org_id=HOUSE))["company"][0]["total"], 0.0)
-      and any("company-wide" in n for n in asyncio.get_event_loop().run_until_complete(
+      and any("company-wide" in n for n in call(
           R.commission_leg_trend(period="June 2026", months=1, store=STORE_A,
                                  org_id=HOUSE))["notes"]))
 
@@ -763,7 +800,7 @@ fc_deg = FakeClient({**store, "raw_payment_detail": [
     missing=("commission_leg_config", "commission_leg_label_map"),
     missing_rpc=("commission_leg_label_rollup", "commission_leg_ma_rollup"))
 R.sb = lambda: fc_deg
-out_deg = asyncio.get_event_loop().run_until_complete(
+out_deg = call(
     R.commission_leg_trend(period="June 2026", months=12, org_id=HOUSE))
 check("with NO migration 274 the trend still returns real numbers (per-month fallback)",
       eq2(out_deg["company"][-1]["m1"], 100.0) and eq2(out_deg["company"][-1]["m2_12"], 20.0),
@@ -781,7 +818,7 @@ fc_lab = FakeClient({**store,
                     rpc_data={"commission_leg_label_rollup": ROLLUP})
 R.sb = lambda: fc_lab
 QUERY_LOG.clear()
-labs = asyncio.get_event_loop().run_until_complete(
+labs = call(
     R.commission_leg_labels(period="June 2026", months=1, org_id=HOUSE))
 by = {x["label"]: x for x in labs["labels"]}
 check("every read on the label surface is org-scoped",
@@ -800,27 +837,27 @@ check("unsplit labels sort to the top — they are the ones needing a decision",
 check("the surface reports the $ still awaiting a decision", "unsplit_total" in labs)
 
 QUERY_LOG.clear()
-posted = asyncio.get_event_loop().run_until_complete(
-    R.set_commission_leg_label({"label": "Ramp Up Subsidy", "bucket": "m1"}, org_id=TENANT))
+posted = call(
+    R.set_commission_leg_label(_label_in(label="Ramp Up Subsidy", bucket="m1"), org_id=TENANT))
 w = next(q for q in QUERY_LOG if q["write"] == "upsert")
 check("saving an override writes the label mapping", posted["ok"] is True)
 check("the WRITE stamps org_id (RULE ONE write side — scoping a read without stamping loses rows)",
       w["row"].get("org_id") == TENANT and w["row"].get("bucket") == "m1", w["row"])
 QUERY_LOG.clear()
-asyncio.get_event_loop().run_until_complete(
-    R.set_commission_leg_label({"label": "Ramp Up Subsidy", "bucket": ""}, org_id=TENANT))
+call(
+    R.set_commission_leg_label(_label_in(label="Ramp Up Subsidy", bucket=""), org_id=TENANT))
 d = next(q for q in QUERY_LOG if q["write"] == "delete")
 check("clearing an override deletes only THIS org's row", d["eq"].get("org_id") == TENANT
       and d["eq"].get("label") == "Ramp Up Subsidy", d["eq"])
 try:
-    asyncio.get_event_loop().run_until_complete(
-        R.set_commission_leg_label({"label": "x", "bucket": "nonsense"}, org_id=HOUSE))
+    call(
+        R.set_commission_leg_label(_label_in(label="x", bucket="nonsense"), org_id=HOUSE))
     bad_bucket_rejected = False
 except Exception:
     bad_bucket_rejected = True
 check("an invalid bucket is rejected (400), never silently stored", bad_bucket_rejected)
 try:
-    asyncio.get_event_loop().run_until_complete(R.set_commission_leg_label({"bucket": "m1"}, org_id=HOUSE))
+    call(R.set_commission_leg_label(_label_in(bucket="m1"), org_id=HOUSE))
     blank_rejected = False
 except Exception:
     blank_rejected = True

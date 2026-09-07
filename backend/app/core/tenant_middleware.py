@@ -645,6 +645,24 @@ def _set_acting(org, super_admin=False):
     _ACTING_SUPER_ADMIN.set(bool(super_admin))
 
 
+# The ROUTE this request is for — (path, method). Published for gates that must vary by surface:
+# `core.router._require_super_admin` consults `operator.endpoint_decision` with it (mig 984), which
+# is how a SCOPED operator role can gate the pre-existing super-admin endpoints without editing
+# every one of their call sites. Unset (None, "") ⇒ "unknown route" ⇒ those gates fall back to
+# today's answer, so a code path that never runs this middleware is never narrowed by it.
+_REQUEST_ROUTE: contextvars.ContextVar = contextvars.ContextVar("mp_request_route", default=None)
+
+
+def _set_request_route(path, method=None):
+    _REQUEST_ROUTE.set((str(path or ""), str(method or "").upper()))
+
+
+def current_route():
+    """(path, method) for THIS request, or (None, "") outside a request the middleware saw."""
+    v = _REQUEST_ROUTE.get()
+    return v if v else (None, "")
+
+
 def acting_org():
     """The tenant THIS request acts as, as already validated by the middleware (None when unknown —
     an unauthenticated/public/enforcement-off request)."""
@@ -725,6 +743,113 @@ def _tenant_is_ambiguous(member_orgs, requested, default_org) -> bool:
     if requested and requested in member_orgs:
         return False
     return default_org is None
+
+
+# ── MANDATORY TENANT-ENTRY SESSIONS (mig 985) ───────────────────────────────────────────────────
+# A super-admin has always been able to act as ANY tenant by naming it in `x-active-org` (the branch
+# below honors it without rewriting). Migration 980 added an audited, time-boxed, banner'd way to do
+# that and left the bare switcher working alongside it. With `require_entry_session` ON, the record
+# becomes a PRECONDITION: a FOREIGN tenant needs an open entry session, and without one the request
+# is refused rather than quietly served or silently redirected.
+#
+# NEVER a lockout. The decision (`operator.entry_requirement_decision`) returns "allowed" before any
+# database work for: the switch being off (the default), a request naming no tenant, a tenant the
+# login is ITSELF a member of (the escape hatch — your own company is yours even if the entry ledger
+# is down), and the exempt prefixes (which include /core/operator, i.e. where an entry session is
+# opened and where this requirement is switched back off). OPERATOR_ENTRY_ENFORCE=0 kills it outright
+# with no database access at all.
+_ENTRY_TTL = 30.0
+_entry_cache: dict = {}
+
+
+def _entry_enforce() -> bool:
+    return os.environ.get("OPERATOR_ENTRY_ENFORCE", "1").lower() not in ("0", "false", "no", "off")
+
+
+def _entry_policy():
+    """The operator policy row, cached. None on any error ⇒ POLICY_DEFAULTS ⇒ requirement OFF."""
+    now = time.time()
+    hit = _entry_cache.get("policy")
+    if hit and hit[1] > now:
+        return hit[0]
+    row = None
+    try:
+        from app.core.database import get_supabase_admin
+        rows = (get_supabase_admin().schema("core").table("platform_operator_policy")
+                .select("*").limit(1).execute().data) or []
+        row = rows[0] if rows else None
+    except Exception:
+        row = None
+    _entry_cache["policy"] = (row, now + _ENTRY_TTL)
+    return row
+
+
+def _entry_session_row(uid, org):
+    """(row, lookup_failed) — the caller's most recent entry session for THIS org. Read only when a
+    foreign tenant is genuinely being claimed, so the common path costs nothing."""
+    key = "s:%s:%s" % (uid, org)
+    now = time.time()
+    hit = _entry_cache.get(key)
+    if hit and hit[1] > now:
+        return hit[0]
+    out = (None, True)
+    try:
+        from app.core.database import get_supabase_admin
+        rows = (get_supabase_admin().schema("core").table("operator_entry_session").select("*")
+                .eq("actor_auth_id", uid).eq("org_id", org)
+                .order("started_at", desc=True).limit(1).execute().data) or []
+        out = ((rows[0] if rows else None), False)
+    except Exception:
+        out = (None, True)
+    # Only a row that is actually OPEN is worth caching for long. A miss is cached for a couple of
+    # seconds only, so an operator who has just opened (or just closed) a session is not made to wait
+    # out a TTL — the answer to "may I be here" must track the ledger closely, in both directions.
+    from app.modules.core import operator as _OP
+    fresh = _ENTRY_TTL if (not out[1] and _OP.session_state(out[0]) == "active") else 2.0
+    _entry_cache[key] = (out, now + fresh)
+    return out
+
+
+def _entry_verdict(uid, requested, member_orgs, path):
+    """None ⇒ nothing to enforce (the caller keeps today's behaviour). Never raises."""
+    try:
+        if not _entry_enforce():
+            return None
+        from app.modules.core import operator as OP
+        pol = OP.effective_policy(_entry_policy())
+        if not pol["require_entry_session"]:
+            return None
+        # Cheap decision first: no target / own membership / exempt path never touch the database.
+        d = OP.entry_requirement_decision(policy=pol, path=path, requested_org=requested,
+                                          member_orgs=member_orgs, session=None,
+                                          session_lookup_failed=False)
+        if not d["required"]:
+            return None
+        row, failed = _entry_session_row(uid, d["org_id"])
+        return OP.entry_requirement_decision(policy=pol, path=path, requested_org=requested,
+                                             member_orgs=member_orgs, session=row,
+                                             session_lookup_failed=failed)
+    except Exception:
+        return None          # the requirement can never be the reason the middleware breaks
+
+
+_ENTRY_CODE = "operator_entry_session_required"
+
+
+async def _reject_entry_session(send, verdict):
+    """403 — the caller is a valid super-admin, and is being told to open an entry session first.
+
+    Deliberately NOT a rewrite to some other tenant: serving a different company's data than the one
+    the caller asked for is precisely the shape of the §19.15 cross-tenant incident. And deliberately
+    not a 401: the session is fine and must not be torn down."""
+    import json as _json
+    body = _json.dumps({"detail": (verdict or {}).get("message") or "An entry session is required.",
+                        "code": _ENTRY_CODE,
+                        "org_id": (verdict or {}).get("org_id")}).encode()
+    await send({"type": "http.response.start", "status": 403,
+                "headers": [(b"content-type", b"application/json"),
+                            (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
 
 
 async def _reject_tenant_choice(send):
@@ -874,7 +999,14 @@ class TenantScopeMiddleware:
                     pass
 
     async def __call__(self, scope, receive, send):
-        if scope.get("type") != "http" or not _enabled():
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+        # The ROUTE of this request, published before anything else can return early, so a handler's
+        # own gate can ask "which surface am I?" without threading a Request through 66 call sites.
+        # Set for EVERY http request including public/allowlisted ones; consumers treat an unset
+        # value as "unknown route" and fall back to today's behaviour (see operator.endpoint_*).
+        _set_request_route(scope.get("path", ""), scope.get("method"))
+        if not _enabled():
             return await self.app(scope, receive, send)
         path = scope.get("path", "")
         method = (scope.get("method") or "GET").upper()
@@ -929,7 +1061,15 @@ class TenantScopeMiddleware:
             # Super-admin ⇒ no rewrite; the client-supplied org_id is honored (cross-tenant admin).
             # Publish the tenant they declared so a token-gated handler administers THAT tenant
             # instead of silently falling back to whichever membership row sorted first.
-            _set_acting((headers.get(_ACTIVE_ORG_HEADER, "") or "").strip() or None, super_admin=True)
+            _sa_requested = (headers.get(_ACTIVE_ORG_HEADER, "") or "").strip() or None
+            # MANDATORY TENANT-ENTRY SESSIONS (mig 985). Default OFF ⇒ `_entry_verdict` returns None
+            # with no database work and the two lines below run exactly as they always have. When the
+            # requirement is on, acting as a FOREIGN tenant needs an open, unexpired entry session;
+            # the caller's OWN memberships, the operator console and the identity routes never do.
+            _ev = await asyncio.to_thread(_entry_verdict, uid, _sa_requested, member_orgs, path)
+            if _ev is not None and not _ev["allowed"]:
+                return await _reject_entry_session(send, _ev)
+            _set_acting(_sa_requested, super_admin=True)
             _set_actor({"uid": uid, "super_admin": True, "role": "super_admin"})
             # ADMIN 2FA (item 10): a standing super-admin no longer bypasses 2FA when the operator turns
             # this on. The marker's expiry time-boxes the elevated access. Enroll/verify are allowlisted,

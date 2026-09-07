@@ -553,15 +553,48 @@ def _app_user_from_token(authorization: str, active_org: str = ""):
 def _require_super_admin(authorization: str, active_org: str = ""):
     """Super-admin = the super_admin flag on ANY of the login's memberships (super_admin is a
     login-level bypass, not a per-tenant grant), OR (bootstrap) a house-org admin — so the very
-    first operator is never locked out before the flag is seeded."""
+    first operator is never locked out before the flag is seeded.
+
+    THE ONE GATE, with ONE optional layer on top (mig 984). `scoped_role_verdict` returns None —
+    and this function then behaves EXACTLY as the four lines below always have — unless the platform
+    has deliberately switched `enforce_scoped_roles` on. When it is on, authority is the operator
+    registry's union decision (`operator.resolve_authority`) and the surface being called must be
+    within the caller's SCOPED role. `owner`, a still-honored legacy flag and the house-admin
+    bootstrap rung each carry every capability, so enforcement can only ever bite a role that was
+    deliberately made narrower. See operator.py §SCOPED-ROLE ENFORCEMENT for the no-lockout argument.
+    """
     uid = _uid_from_token(authorization)
     rows = _memberships(sb(), uid) if uid else []
-    if any(r.get("super_admin") for r in rows):
-        return _pick_membership(rows, (active_org or "").strip() or None)
+    legacy = any(r.get("super_admin") for r in rows)
     u = _pick_membership(rows, (active_org or "").strip() or None)
-    if u and u.get("org_id") == ORG_ID and u.get("role") == "admin":
+    house = bool(u and u.get("org_id") == ORG_ID and u.get("role") == "admin")
+
+    verdict = None
+    if uid:
+        try:
+            from app.modules.core.operator_api import scoped_role_verdict
+            verdict = scoped_role_verdict(uid, legacy_super_admin=legacy, house_admin=house)
+        except Exception:
+            verdict = None          # the layer can never be the reason a gate breaks
+    if verdict is None:
+        # ── UNCHANGED PATH — byte-identical to the gate before mig 984 ──────────────────────────
+        if legacy:
+            return u
+        if house:
+            return u
+        raise HTTPException(403, "super-admin only")
+
+    # ── ENFORCEMENT ON ──────────────────────────────────────────────────────────────────────────
+    if not verdict["allowed"]:
+        raise HTTPException(403, verdict["message"] or "super-admin only")
+    if u:
         return u
-    raise HTTPException(403, "super-admin only")
+    # A registry operator with no tenant membership at all (the fully separated persona the console
+    # exists to create). They are authorized; they simply have no employment row to return, so the
+    # shape callers expect is synthesized with NO org — an operator is not an employee of anyone.
+    a = verdict.get("authority") or {}
+    return {"auth_id": uid, "org_id": None, "email": None, "role": "operator",
+            "super_admin": False, "operator_role": a.get("operator_role")}
 
 
 @router.get("/access-log")
@@ -3143,7 +3176,12 @@ class ConnectTenantIn(LaxModel):
 
 
 @router.post("/connect-tenant")
-async def connect_tenant(body: ConnectTenantIn, authorization: str = Header(default="")):
+# PLAIN `def`, NOT `async def` (nav-perf discipline). This handler awaits nothing and its body is
+# blocking Supabase I/O; declared `async` it ran on the single uvicorn event loop and stalled every
+# other in-flight request for its full duration — the shape harness_nav_perf.py exists to prevent.
+# FastAPI dispatches a plain `def` handler to a worker thread instead. Added after the original sweep,
+# so it was missed by it; pinned now by harness_nav_perf.py B2.
+def connect_tenant(body: ConnectTenantIn, authorization: str = Header(default="")):
     """The authenticated user ACCEPTS a pending invite: attach the inviting tenant as a membership on
     their EXISTING login (mig 706 shared model → the top-bar tenant switcher then applies). Requires
     the access code the admin gave them (consent). Idempotent. org_id comes from the BODY (the invite
@@ -4800,3 +4838,25 @@ from app.modules.core import platform_attention as _platform_attention   # noqa:
 from app.modules.core import onboarding as _onboarding   # noqa: E402  (bottom-of-file mount)
 
 router.include_router(_onboarding.router)
+
+# ── Platform Operator Console (migs 980/981, owner directive 2026-09-05) ─────────────────────────
+# "Need to separate the super admin access … from Cellfonz r us tenant, make a separate view for the
+# super admin but the option for the super admin to log in to any tenant from it".
+#
+# Mounted ONTO this router for the same reason as the six above: main.py (SHARED) needs no change and
+# the sub-router's own "/operator" prefix resolves its paths to /api/v1/core/operator/*. It imports
+# core.router only LAZILY (inside functions), so there is no cycle.
+#
+# IT ADDS NO SECOND GATE. `operator_api._authority` CALLS `_require_super_admin` (above, line ~553)
+# and then unions the `core.platform_operator` registry on top; the union can only ever be a superset
+# of today's answer, which is the no-lockout property `harness_operator_console.py` §A proves. With
+# migrations 980/981 un-run every table read fails soft to None and the console resolves to exactly
+# today's all-capability super-admin.
+#
+# `public_router` carries the TWO endpoints a non-operator may call — the tenant-facing platform
+# status banner and a tenant admin's "who from the platform was in my company" — mounted WITHOUT the
+# /operator prefix so they read as /api/v1/core/platform-notice and /api/v1/core/tenant-operator-access.
+from app.modules.core import operator_api as _operator_api   # noqa: E402  (bottom-of-file mount)
+
+router.include_router(_operator_api.router)
+router.include_router(_operator_api.public_router)

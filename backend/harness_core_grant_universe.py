@@ -29,10 +29,15 @@ Proves:
  12. Degradation: a missing commcalc.store_mapping never 500s either endpoint.
 """
 import asyncio
+import inspect
 import os
 import sys
 
-sys.path.insert(0, ".")
+# Anchored to THIS FILE's directory so the harness runs identically from `backend/` and from the
+# repo root (commit 564c171f). A cwd-relative sys.path makes it die on import, which reads as
+# "not run" rather than "failed".
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
 os.environ.setdefault("SUPABASE_URL", "https://example-harness.supabase.co")
 os.environ.setdefault("SUPABASE_SERVICE_KEY", "harness-dummy-service-key")
 
@@ -48,8 +53,23 @@ def check(name, cond, detail=""):
     print(("PASS" if cond else "FAIL") + f"  {name}" + (f"  [{detail}]" if detail and not cond else ""))
 
 
-def run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+async def _drain(aw):
+    return await aw
+
+
+def run(result):
+    """Call a handler WITHOUT caring whether it is `async def` today.
+
+    `grant_universe` and `scope_preview` were `async def` when this harness was written and are now
+    plain `def`s — the CORRECT shape, because both drive the synchronous supabase client and await
+    nothing (FastAPI dispatches a plain `def` to a worker thread instead of blocking the event
+    loop; see the SEV-1 of 2026-07-30). The hard-coded `run_until_complete()` here meant that
+    correct product change silently killed all 30-odd assertions below with a TypeError. Shape is
+    not behaviour, so the behavioural assertions no longer depend on it.
+    """
+    if inspect.isawaitable(result):
+        return asyncio.run(_drain(result))
+    return result
 
 
 ORG = "00000000-0000-0000-0000-000000000001"
@@ -242,8 +262,32 @@ check("12. store_mapping missing → still answers with storeops markets",
       u2["markets"] == ["CT", "NJ", "NY"], u2["markets"])
 install(nodata)
 r5 = run(rt.scope_preview(email="dm@x.com", org_id=ORG, authorization="Bearer t"))
-check("12b. scope-preview survives the same outage",
-      r5["reporting"]["stores"] == ["B101", "B102", "C401", "J201"], r5["reporting"]["stores"])
+# 12b was written before the ORPHAN-STORE rule (app/core/scope.login_grant_breakdown, owner "fix by
+# design" 2026-08): a store in NO market in EITHER vocabulary is folded into any login holding at
+# least one market grant, because an unassigned store is a data gap, not a deliberate exclusion.
+# P301's ONLY market source is commcalc.store_mapping ("PA"), so when that table is the thing that
+# is down, P301 becomes an orphan and the rule correctly picks it up. The old literal predates the
+# rule — STALE ASSERTION, not a regression. Split in two so the survival claim and the widening
+# claim can never again fail as one lump.
+check("12b. scope-preview survives the same outage (answers, never 500s), and the granted markets "
+      "still bind their own stores",
+      {"B101", "B102", "J201"} <= set(r5["reporting"]["stores"])
+      and r5["reporting"]["unrestricted"] is False, r5["reporting"])
+check("12b-ii. no OTHER tenant's store crosses over during the outage",
+      "Z999" not in r5["reporting"]["stores"], r5["reporting"]["stores"])
+# The outage WIDENS the span by one store, and that is worth stating out loud rather than hiding
+# inside a tolerant assertion: losing the market vocabulary that classifies a store turns it into an
+# orphan, and the orphan rule fails OPEN by design (same tenant only). Pinned so that if the orphan
+# rule is ever made to fail closed, this tells you here rather than in a support ticket.
+check("12b-iii. KNOWN FAIL-OPEN: a store whose only market source is the down table is treated as "
+      "an orphan and folded into a market-scoped span (owner 'fix by design' 2026-08, same-tenant "
+      "only, reversible via MARKET_ORPHAN_STORES_VISIBLE=0)",
+      "P301" in r5["reporting"]["stores"], r5["reporting"]["stores"])
+# Non-vacuity for the pair above: with store_mapping HEALTHY, P301 has market PA and is NOT an
+# orphan, so it stays OUT of a NY/NJ/CT span. That is assertion 6c — this line proves 12b-iii is
+# reporting the outage, not a permanently-open span.
+check("12b-iv. …and the SAME store is correctly excluded when the market vocabulary is healthy",
+      "P301" not in r["reporting"]["stores"], r["reporting"]["stores"])
 
 rt.sb, rt._uid_from_token, rt._resolve_caller = _orig
 print(f"\n{'='*72}\n  RESULT: {len(PASS)} passed, {len(FAIL)} failed\n{'='*72}")

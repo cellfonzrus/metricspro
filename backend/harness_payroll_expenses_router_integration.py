@@ -20,9 +20,13 @@ Proves:
      by exactly what month 1 already consumed, proving the persisted `payroll_tax_ledger` (not just
      the pure engine's `ytd_taxable_before` param) is what actually drives the cap in production.
 """
+import os
 import sys
 
-sys.path.insert(0, ".")
+# Anchor imports AND every source read below to THIS file's own directory, so the
+# harness runs identically from backend/ and from the repo root (cf. 564c171f).
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 
 PASS, FAIL = [], []
 
@@ -147,10 +151,26 @@ def fake_get_supabase():
     return FAKE_CLIENT
 
 
+import _harness_dbfree  # noqa: E402
 import app.modules.storeops.router as router_mod          # noqa: E402
 import app.modules.core.router as core_router_mod         # noqa: E402
 
 router_mod.get_supabase = fake_get_supabase
+# DB-FREE GUARD: the line(s) above bind only THIS module's name. Shipped code also
+# reaches the factory directly (tenant_middleware.caller_app_user) and through other
+# routers' sb() (storeops.router._rbac_enabled), both of which used to land on the
+# REAL production client. Route every acquisition in the process at the fake.
+_harness_dbfree.install(FAKE_CLIENT)
+
+
+def _body(model, payload):
+    """Build the endpoint's REAL Pydantic body model, exactly as FastAPI builds it from the JSON
+    request. These handlers accepted a plain dict until they were migrated to typed bodies; passing
+    a bare dict now dies on `body.<field>`, so the harness has to call them the way the shipped app
+    does or it proves nothing about the real contract. LaxModel ignores unknown keys, so this is
+    byte-for-byte what a real request produces."""
+    return model(**payload)
+
 core_router_mod._uid_from_token = lambda auth: ("test-uid" if auth == "Bearer manager" else
                                                  ("rep-uid" if auth == "Bearer rep" else None))
 
@@ -190,34 +210,34 @@ STORE["payroll_expense_item"].append({"id": "item-org2", "org_id": ORG2, "key": 
 before = router_mod.get_payroll_tax_config(org_id=ORG)
 check("t1a: no org row yet -> falls back to code defaults", before["row"] is None and before["effective"]["fica_ss_rate"] == 0.062, before)
 
-r1 = router_mod.put_payroll_tax_config({"fica_ss_rate": 0.062, "fica_ss_wage_base": 168600,
+r1 = router_mod.put_payroll_tax_config(_body(router_mod.PayrollTaxConfigIn, {"fica_ss_rate": 0.062, "fica_ss_wage_base": 168600,
                                          "medicare_rate": 0.0145, "futa_rate": 0.006, "futa_wage_base": 7000,
-                                         "suta_rate": 0.031, "suta_wage_base": 12000, "enabled": True},
+                                         "suta_rate": 0.031, "suta_wage_base": 12000, "enabled": True}),
                                         authorization="Bearer manager", org_id=ORG)
 check("t1b: PUT creates the org row", r1["ok"] is True, r1)
 after = router_mod.get_payroll_tax_config(org_id=ORG)
 check("t1c: GET reflects the saved SUTA override", after["row"]["suta_rate"] == 0.031 and after["row"]["suta_wage_base"] == 12000, after)
 
 # partial update
-r2 = router_mod.put_payroll_tax_config({"suta_rate": 0.045}, authorization="Bearer manager", org_id=ORG)
+r2 = router_mod.put_payroll_tax_config(_body(router_mod.PayrollTaxConfigIn, {"suta_rate": 0.045}), authorization="Bearer manager", org_id=ORG)
 after2 = router_mod.get_payroll_tax_config(org_id=ORG)
 check("t1d: partial PUT updates just suta_rate", after2["row"]["suta_rate"] == 0.045, after2)
 check("t1e: partial PUT leaves fica_ss_rate untouched", after2["row"]["fica_ss_rate"] == 0.062, after2)
 
 try:
-    router_mod.put_payroll_tax_config({"fica_ss_rate": 0.5}, authorization="Bearer rep", org_id=ORG)
+    router_mod.put_payroll_tax_config(_body(router_mod.PayrollTaxConfigIn, {"fica_ss_rate": 0.5}), authorization="Bearer rep", org_id=ORG)
     check("t1f: a non-manager PUT is rejected", False, "no exception raised")
 except Exception as e:
     check("t1f: a non-manager PUT is rejected (403)", getattr(e, "status_code", None) == 403, e)
 
 
 # ── 2. payroll expense item CRUD ─────────────────────────────────────────────────────────────────
-r3 = router_mod.create_payroll_expense_item({"key": "unemployment_insurance", "name": "Unemployment Insurance",
-                                              "calc_method": "pct_wages", "rate_or_amount": 0.02, "scope": "store"},
+r3 = router_mod.create_payroll_expense_item(_body(router_mod.PayrollExpenseItemIn, {"key": "unemployment_insurance", "name": "Unemployment Insurance",
+                                              "calc_method": "pct_wages", "rate_or_amount": 0.02, "scope": "store"}),
                                              authorization="Bearer manager", org_id=ORG)
 check("t2a: create item succeeds", r3["ok"] is True, r3)
-r4 = router_mod.create_payroll_expense_item({"key": "workers_comp", "name": "Workers Comp",
-                                              "calc_method": "pct_wages", "rate_or_amount": 0.035, "scope": "store"},
+r4 = router_mod.create_payroll_expense_item(_body(router_mod.PayrollExpenseItemIn, {"key": "workers_comp", "name": "Workers Comp",
+                                              "calc_method": "pct_wages", "rate_or_amount": 0.035, "scope": "store"}),
                                              authorization="Bearer manager", org_id=ORG)
 check("t2b: second item create succeeds", r4["ok"] is True, r4)
 
@@ -226,20 +246,20 @@ check("t2c: GET lists exactly the 2 items created for ORG (not ORG2's)", len(lis
 check("t2d: GET exposes calc_methods/scopes for the picker", "pct_wages" in listed["calc_methods"] and "company" in listed["scopes"], listed)
 
 try:
-    router_mod.create_payroll_expense_item({"key": "unemployment_insurance", "name": "Dup", "calc_method": "fixed", "rate_or_amount": 1},
+    router_mod.create_payroll_expense_item(_body(router_mod.PayrollExpenseItemIn, {"key": "unemployment_insurance", "name": "Dup", "calc_method": "fixed", "rate_or_amount": 1}),
                                             authorization="Bearer manager", org_id=ORG)
     check("t2e: a duplicate key is rejected", False, "no exception raised")
 except Exception as e:
     check("t2e: a duplicate key is rejected (400)", getattr(e, "status_code", None) == 400, e)
 
 item_id = r3["id"]
-router_mod.update_payroll_expense_item(item_id, {"rate_or_amount": 0.03}, authorization="Bearer manager", org_id=ORG)
+router_mod.update_payroll_expense_item(item_id, _body(router_mod.PayrollExpenseItemIn, {"rate_or_amount": 0.03}), authorization="Bearer manager", org_id=ORG)
 listed2 = router_mod.get_payroll_expense_items(org_id=ORG)
 ui_item = next(i for i in listed2["items"] if i["id"] == item_id)
 check("t2f: PATCH updates the rate", ui_item["rate_or_amount"] == 0.03, ui_item)
 
 try:
-    router_mod.update_payroll_expense_item(item_id, {"rate_or_amount": 1}, authorization="Bearer rep", org_id=ORG)
+    router_mod.update_payroll_expense_item(item_id, _body(router_mod.PayrollExpenseItemIn, {"rate_or_amount": 1}), authorization="Bearer rep", org_id=ORG)
     check("t2g: a non-manager PATCH is rejected", False, "no exception raised")
 except Exception as e:
     check("t2g: a non-manager PATCH is rejected (403)", getattr(e, "status_code", None) == 403, e)
@@ -303,7 +323,7 @@ org_items = router_mod.get_payroll_expense_items(org_id=ORG)
 check("t6b: ORG's item list does not include org2's item", not any(i["key"] == "ui" and i["rate_or_amount"] == 12345.0 for i in org_items["items"]), org_items)
 
 # A mutation with a foreign org's row id must be a no-op, never a cross-tenant write.
-router_mod.update_payroll_expense_item("item-org2", {"rate_or_amount": 0.0}, authorization="Bearer manager", org_id=ORG)
+router_mod.update_payroll_expense_item("item-org2", _body(router_mod.PayrollExpenseItemIn, {"rate_or_amount": 0.0}), authorization="Bearer manager", org_id=ORG)
 org2_item_row = next(r for r in STORE["payroll_expense_item"] if r["id"] == "item-org2")
 check("t6c: PATCH scoped to ORG cannot touch org2's item even by guessing its id",
       org2_item_row["rate_or_amount"] == 12345.0, org2_item_row)

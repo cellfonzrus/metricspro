@@ -73,6 +73,10 @@ PINNED = {
         "_store_mapping_market_index": "STORED",
         "get_filter_options": "CANONICAL",
     },
+    # Card Settlement Recon (owner 2026-09-04, migs 960/961): composes org_market_options over the
+    # canonical vocabulary ∪ its own rows' stamps — including SETTLEMENT-ONLY store-days, which have
+    # no roster row at all, so an option list built from the loaded roster would have hidden them.
+    "closing/router.py": {"external_credit_recon": "CANONICAL"},
     "commcalc/custom_report.py": {"option_values": "FEEDER"},   # custom_report_run unions canonical
     "commcalc/device_cost_recon.py": {"filter_options": "FEEDER"},
     "commcalc/imei_rebate_report.py": {"filter_options": "FEEDER"},

@@ -37,9 +37,16 @@ Everything in this module is PURE (dict in, dict out — no DB, no framework) so
 backend/harness_dm_verification_audit.py proves it stdlib-only.
 """
 
-# The six DM-corrected money figures, in the exact column spelling of BOTH tables
-# (daily_closing_verification and its _audit twin).
-DM_FIELDS = ("dm_store_cash", "dm_store_cc", "dm_epay_cash", "dm_epay_cc", "dm_acc_sale", "dm_other")
+# The DM-corrected money figures, in the exact column spelling of BOTH tables
+# (daily_closing_verification and its _audit twin). Six since mig 935; `dm_ext_cc` (mig 961) is the
+# seventh — the EXTERNAL-CREDIT-MACHINE portion OF `dm_store_cc`, which SPLITS the corrected card
+# total without moving it (t_credit = dm_store_cc − dm_ext_cc, t_ext_cc = dm_ext_cc; see
+# verified_overlay.apply_overlay). It joins this tuple so the whole mig-935 trail —
+# changed_fields / build_audit_row / edited_after_verify / submission_dm_fields — covers it with no
+# new logic and the Original-vs-DM exports pick it up automatically. NULL everywhere pre-961 ⇒ every
+# existing behavior is byte-identical.
+DM_FIELDS = ("dm_store_cash", "dm_store_cc", "dm_epay_cash", "dm_epay_cc", "dm_acc_sale", "dm_other",
+             "dm_ext_cc")
 # Non-money fields whose change alone still deserves a revision row.
 META_FIELDS = ("verified", "verified_by", "note")
 

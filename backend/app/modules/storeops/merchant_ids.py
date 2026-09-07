@@ -15,6 +15,17 @@ from app.core.database import get_supabase
 PROCESSORS = [
     {"key": "epay", "label": "ePay (Boost)", "id_label": "ePay ID"},
     {"key": "vidapay", "label": "Vidapay (Total)", "id_label": "Vidapay ID"},
+    # Merchant CARD processors (owner 2026-09-04, mig 955). Their daily portal scrape resolves each
+    # settlement row's merchant id back to a store through THIS table — the same resolution the ePay
+    # and VidaPay feeds use, so no second mapping table and no second store-setup panel exists. A
+    # store whose merchant id is not entered here still has its money captured, but it is reported as
+    # an unmapped merchant rather than counted toward that store's card total.
+    {"key": "payanywhere", "label": "PayAnywhere / Payments Hub (external credit card)",
+     "id_label": "Merchant ID (MID)"},
+    {"key": "transfirst", "label": "TransFirst TransLink (POS merchant)",
+     "id_label": "Merchant Number"},
+    {"key": "businesstrack", "label": "ClientLine / BusinessTrack (POS merchant)",
+     "id_label": "Outlet ID"},
 ]
 
 

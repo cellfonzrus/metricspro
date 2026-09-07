@@ -68,10 +68,28 @@ export default function DashboardDesignerPage() {
   // The pages available to place — the group's real items (never the '/hub/…' entry itself),
   // canSeeItem-filtered (a formality for the super admins this page serves, but kept so a
   // menu_layout-granted manager never designs with pages their own role cannot see).
-  const pages = useMemo(
-    () => (navGroup?.items || []).filter(it => !it.href.startsWith('/hub/'))
-      .filter(it => canSeeItem(permissions, it)),
-    [navGroup, permissions])
+  // OWNER 2026-09-07: "I just added inventory aging and inventory values FROM FINANCE to management
+  // overview … they are not showing up". There was no supported way to do that: this panel only ever
+  // offered the SELECTED group's own pages, so a Finance page could not be placed on the Management
+  // Overview dashboard at all. (The /hub renderer had the matching half of the same limitation — it
+  // resolved designed hrefs against the group's own items and dropped everything else in silence.)
+  //
+  // `crossModule` opens the panel to every group's pages, each chipped with the module it comes from.
+  // Still canSeeItem-filtered, and the RENDERER re-applies the full viewer gate (RBAC + capability +
+  // carrier + hidden), so this widens what a DESIGNER may place, never what a VIEWER may see.
+  const [crossModule, setCrossModule] = useState(false)
+  const pages = useMemo(() => {
+    const own = (navGroup?.items || []).filter(it => !it.href.startsWith('/hub/'))
+    const rest = crossModule
+      ? NAV.filter(g => g.group !== groupName)
+          .flatMap(g => g.items.filter(it => !it.href.startsWith('/hub/'))
+                               .map(it => ({ ...it, _from: g.group })))
+      : []
+    const seen = new Set<string>()
+    return [...own, ...rest]
+      .filter(it => canSeeItem(permissions, it))
+      .filter(it => (seen.has(it.href) ? false : (seen.add(it.href), true)))
+  }, [navGroup, groupName, crossModule, permissions])
   const pageByHref = useMemo(() => new Map(pages.map(p => [p.href, p])), [pages])
   const placed = useMemo(() => new Set(tiles.flatMap(t => t.items.map(i => i.href))), [tiles])
 
@@ -290,11 +308,18 @@ export default function DashboardDesignerPage() {
         <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
           {/* ── LEFT: the module's pages ── */}
           <div className="card" style={{ padding: 12, flex: '0 1 300px', minWidth: 260, position: 'sticky', top: 72 }}>
-            <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 2 }}>Pages in {groupName}</div>
+            <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 2 }}>
+              Pages in {crossModule ? 'every module' : groupName}
+            </div>
             <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>
               Drag a page onto a tile — or use its &ldquo;add&rdquo; picker. Dimmed pages are already placed.
             </div>
-            {pages.length === 0 && <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>No pages in this group.</div>}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5,
+                            color: 'var(--text2)', marginBottom: 8 }}>
+              <input type="checkbox" checked={crossModule} onChange={e => setCrossModule(e.target.checked)} />
+              Include pages from other modules
+            </label>
+            {pages.length === 0 && <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>No pages available.</div>}
             {pages.map(p => {
               const isPlaced = placed.has(p.href)
               const being = drag?.kind === 'page' && drag.href === p.href
@@ -308,6 +333,11 @@ export default function DashboardDesignerPage() {
                   <span style={{ width: 20, textAlign: 'center' }}>{p.icon}</span>
                   <span style={{ flex: 1, fontSize: 12.5, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                     title={p.href}>{p.label}</span>
+                  {(p as any)._from && (
+                    <span style={{ fontSize: 10, color: 'var(--text3)', border: '1px solid var(--border)',
+                                   borderRadius: 3, padding: '0 4px', whiteSpace: 'nowrap' }}
+                      title={`From the ${(p as any)._from} module`}>{(p as any)._from}</span>
+                  )}
                   {/* Keyboard fallback for the drag: pick a destination tile explicitly. */}
                   <select aria-label={`Add ${p.label} to a tile`} value="" style={{ ...inp, padding: '2px 4px', fontSize: 11.5, maxWidth: 76 }}
                     onChange={e => {

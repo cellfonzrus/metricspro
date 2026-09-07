@@ -711,7 +711,15 @@ def dedupe_check(body: DedupeCheckIn, org_id: str = ORG_ID):
         if r.get("id") in seen:
             continue
         seen.add(r.get("id"))
-        if core.is_duplicate(body, r, cfg.get("duplicate_match")):
+        # BUG FIX 2026-09-06 (found by harness_crm_pipeline): `is_duplicate` takes a plain dict —
+        # pipeline_core is deliberately FastAPI-free — but this passed the pydantic body straight
+        # in, so the call raised `AttributeError: 'DedupeCheckIn' object has no attribute 'get'`
+        # and the endpoint returned a 500. It failed on EXACTLY the case it exists to report: with
+        # no candidate rows this loop never runs, so an empty result stayed healthy and the warning
+        # 500'd only when a real duplicate was found. Introduced by the `body: dict` -> typed-model
+        # migration (item 15), which deferred the other handlers that hand a raw body to a helper
+        # and missed this one.
+        if core.is_duplicate(body.model_dump(), r, cfg.get("duplicate_match")):
             dupes.append({"id": r.get("id"), "lead_no": r.get("lead_no"),
                           "name": core.display_name(r), "status": r.get("status"),
                           "owner_employee_id": r.get("owner_employee_id"),

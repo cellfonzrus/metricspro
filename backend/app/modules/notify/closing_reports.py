@@ -103,6 +103,49 @@ async def _billpay_recon_report(org_id, f, authorization=""):
                         "columns": _RECON_COLS}]}
 
 
+_SETTLEMENT_COLS = [
+    {"header": "Date", "key": "close_date"},
+    {"header": "Store", "key": "store_address"},
+    {"header": "Market", "key": "market"},
+    {"header": "Processor", "key": "role_title"},
+    {"header": "Declared at closing", "key": "declared_amount", "money": True},
+    {"header": "Declared basis", "key": "declared_basis"},
+    {"header": "Processor settled", "key": "settled_amount", "money": True},
+    {"header": "Variance", "key": "variance", "money": True},
+    {"header": "Status", "key": "status"},
+]
+
+
+async def _external_credit_recon_report(org_id, f, authorization=""):
+    """The card-settlement tally (owner 2026-09-04) as a scheduled/emailed report — the SAME
+    in-process handler the screen reads (`closing.router.external_credit_recon`), so an emailed copy
+    can never disagree with the page. Inherits the endpoint's market-manager-and-above gate
+    (`billpay_pickup.can_see_cash_recon`): an on-demand send rides the caller's token; a scheduled
+    run's blank header passes only where the platform's login master switch is off — fail-closed,
+    the gate's own rule, never bypassed for email."""
+    from fastapi.concurrency import run_in_threadpool
+    from app.modules.closing import router as closing_router
+
+    date_from, date_to = _resolve_range(f)
+    data = await run_in_threadpool(
+        closing_router.external_credit_recon, date_from, date_to, None,
+        (f or {}).get("markets"), (f or {}).get("stores"),
+        str((f or {}).get("role") or ""), str((f or {}).get("status") or ""),
+        authorization, org_id)
+    titles = data.get("role_titles") or {}
+    rows = [{**r, "role_title": titles.get(r.get("processor_role")) or r.get("role_title")}
+            for r in (data.get("rows") or [])]
+    t = data.get("totals") or {}
+    gaps = sum(t.get(k, 0) for k in ("no_processor_data", "no_declared_data", "dm_merged"))
+    sub = (f"{data.get('date_from')} → {data.get('date_to')} · {t.get('cells', 0)} store-day(s) · "
+           f"declared ${t.get('declared_total', 0):,.2f} vs settled ${t.get('settled_total', 0):,.2f} · "
+           f"{t.get('short', 0)} short (${t.get('short_total', 0):,.2f}) · "
+           f"{t.get('over', 0)} over (${t.get('over_total', 0):,.2f}) · {gaps} without evidence")
+    return {"title": "Card Settlement Recon", "subtitle": sub,
+            "filename": f"card-settlement-recon_{data.get('date_from')}_{data.get('date_to')}",
+            "sheets": [{"name": "Settlement Recon", "rows": rows, "columns": _SETTLEMENT_COLS}]}
+
+
 CLOSING_REPORTS = {
     "closing_envelope_report": {
         "label": "Envelope Report (Daily Closing)",
@@ -118,6 +161,15 @@ CLOSING_REPORTS = {
         "filters": ["date_from", "date_to"],
         "live_path": lambda f: "/closing/cash-recon-management",
         "build": _billpay_recon_report,
+        "wants_auth": True,
+    },
+    # Card-settlement tally (owner directive 2026-09-04) — declared closing figures vs the
+    # processors' scraped daily totals, per store per day per processor role.
+    "closing_external_credit_recon": {
+        "label": "Card Settlement Recon (Daily Closing)",
+        "filters": ["date_from", "date_to", "stores", "markets", "role", "status"],
+        "live_path": lambda f: "/closing/external-credit-recon",
+        "build": _external_credit_recon_report,
         "wants_auth": True,
     },
 }

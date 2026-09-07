@@ -84,6 +84,18 @@ from app.modules.commcalc import ma_product_class as M  # noqa: E402
 ORG = "854f6d7b"
 
 
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    This endpoint was migrated from `body: dict` to a declared pydantic model, so the handler reads
+    `body.<field>`. Every probe below used to pass a dict and die with AttributeError BEFORE reaching
+    the logic under test — the harness read as "failing" when it was not exercising the product at
+    all. `model_validate` reproduces FastAPI's own call shape, including which fields count as
+    explicitly set (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
+
+
 def setup(existing):
     st = {"ma_product_class_map": [dict(r) for r in existing]}
     c = FakeClient(st)
@@ -99,7 +111,7 @@ def setup(existing):
 
 print("\n§1 · THE BUG: confirming a proposal with no saved row used to save NOTHING")
 st = setup([])
-res = R.confirm_ma_product_class({"product_names": ["Subsidy"]}, org_id=ORG)
+res = R.confirm_ma_product_class(_body(R.ConfirmMaProductClassIn, {"product_names": ["Subsidy"]}), org_id=ORG)
 ok(res["created_count"] == 1, f"Subsidy is CREATED on confirm (created_count={res['created_count']})")
 ok(res["confirmed_count"] == 1, "and counted as confirmed")
 row = st["ma_product_class_map"][0]
@@ -113,14 +125,16 @@ ok(not res["not_found"], "nothing reported missing")
 print("\n§2 · THE UI'S OWN CLASS WINS (what the user saw is what gets saved)")
 st = setup([])
 R.confirm_ma_product_class(
-    {"items": [{"product_name": "Trac Autopay Residual", "product_class": "residual"}]}, org_id=ORG)
+    _body(R.ConfirmMaProductClassIn,
+          {"items": [{"product_name": "Trac Autopay Residual", "product_class": "residual"}]}), org_id=ORG)
 ok(st["ma_product_class_map"][0]["product_class"] == "residual",
    "the class shown on screen is the class stored")
 ok(st["ma_product_class_map"][0]["product_name"] == "Trac Autopay Residual", "name stored trimmed/exact")
 
 print("\n§3 · NEVER GUESSES — an unknown name with no class is REPORTED, not invented")
 st = setup([])
-res = R.confirm_ma_product_class({"product_names": ["Some Brand New Product 9000"]}, org_id=ORG)
+res = R.confirm_ma_product_class(
+    _body(R.ConfirmMaProductClassIn, {"product_names": ["Some Brand New Product 9000"]}), org_id=ORG)
 ok(res["created_count"] == 0 and res["not_found"] == ["Some Brand New Product 9000"],
    "no proposal + no class ⇒ not_found, and nothing written")
 ok(len(st["ma_product_class_map"]) == 0, "the table is untouched")
@@ -128,16 +142,17 @@ ok(len(st["ma_product_class_map"]) == 0, "the table is untouched")
 print("\n§4 · A RESERVED / UNKNOWN CLASS IS REFUSED")
 st = setup([])
 res = R.confirm_ma_product_class(
-    {"items": [{"product_name": "X", "product_class": "unmapped"}]}, org_id=ORG)
+    _body(R.ConfirmMaProductClassIn, {"items": [{"product_name": "X", "product_class": "unmapped"}]}), org_id=ORG)
 ok(res["created_count"] == 0 and "X" in res["not_found"], "'unmapped' can never be assigned")
 res = R.confirm_ma_product_class(
-    {"items": [{"product_name": "Y", "product_class": "not_a_real_class"}]}, org_id=ORG)
+    _body(R.ConfirmMaProductClassIn,
+          {"items": [{"product_name": "Y", "product_class": "not_a_real_class"}]}), org_id=ORG)
 ok(res["created_count"] == 0 and "Y" in res["not_found"], "an unknown class is refused, not stored")
 
 print("\n§5 · EXISTING ROWS STILL JUST FLIP STATUS (no duplicate, no reclassification)")
 st = setup([{"id": "id1", "org_id": ORG, "source_report": "ma_daily_tx", "product_name": "Subsidy",
              "product_class": "commission", "status": "proposed"}])
-res = R.confirm_ma_product_class({"product_names": ["Subsidy"]}, org_id=ORG)
+res = R.confirm_ma_product_class(_body(R.ConfirmMaProductClassIn, {"product_names": ["Subsidy"]}), org_id=ORG)
 ok(len(st["ma_product_class_map"]) == 1, "still ONE row — confirm did not duplicate it")
 ok(st["ma_product_class_map"][0]["status"] == "confirmed", "status flipped to confirmed")
 ok(st["ma_product_class_map"][0]["product_class"] == "commission",
@@ -146,12 +161,12 @@ ok(res["created_count"] == 0, "nothing created for a name that already had a row
 
 print("\n§6 · IDEMPOTENT — confirming twice changes nothing")
 before = len(st["ma_product_class_map"])
-R.confirm_ma_product_class({"product_names": ["Subsidy"]}, org_id=ORG)
+R.confirm_ma_product_class(_body(R.ConfirmMaProductClassIn, {"product_names": ["Subsidy"]}), org_id=ORG)
 ok(len(st["ma_product_class_map"]) == before, "second confirm leaves the row count unchanged")
 
 print("\n§7 · EMPTY REQUEST STILL 400s")
 try:
-    R.confirm_ma_product_class({}, org_id=ORG)
+    R.confirm_ma_product_class(_body(R.ConfirmMaProductClassIn, {}), org_id=ORG)
     ok(False, "an empty body should be rejected")
 except Exception as e:
     ok("400" in str(e) or "required" in str(e).lower(), "empty body ⇒ 400, not a silent no-op")

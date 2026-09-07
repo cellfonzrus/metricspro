@@ -159,11 +159,12 @@ def wrote(client):
 
 # ── endpoint invocations (kwargs mirror the real signatures) ──────────────────────────────────────
 def call_create_role(auth="Bearer t"):
-    return rt.create_role({"name": "pwn", "permissions": {"modules": {"admin": True}, "scope": "all"}},
+    return rt.create_role(rt.CreateRoleIn(name="pwn",
+                                          permissions={"modules": {"admin": True}, "scope": "all"}),
                           org_id=ORG, authorization=auth, x_active_org="")
 
 def call_update_role(auth="Bearer t"):
-    return rt.update_role(7, {"permissions": {"modules": {"admin": True}, "scope": "all"}},
+    return rt.update_role(7, rt.UpdateRoleIn(permissions={"modules": {"admin": True}, "scope": "all"}),
                           authorization=auth, x_active_org="")
 
 def call_assign(auth="Bearer t"):
@@ -171,20 +172,22 @@ def call_assign(auth="Bearer t"):
                           authorization=auth, x_active_org="")
 
 def call_delete_user(auth="Bearer t"):
-    return rt.delete_user({"email": "victim@x.com"}, org_id=ORG, authorization=auth, x_active_org="")
+    return rt.delete_user(rt.DeleteUserIn(email="victim@x.com"), org_id=ORG, authorization=auth,
+                          x_active_org="")
 
 def call_deactivate(auth="Bearer t"):
-    return rt.deactivate_user({"email": "victim@x.com", "is_active": False}, org_id=ORG,
+    return rt.deactivate_user(rt.DeactivateUserIn(email="victim@x.com", is_active=False), org_id=ORG,
                               authorization=auth, x_active_org="")
 
 def call_auth_config(auth="Bearer t"):
-    return rt.set_auth_config({"rbac_enabled": False}, org_id=ORG, authorization=auth, x_active_org="")
+    return rt.set_auth_config(rt.AuthConfigIn(rbac_enabled=False), org_id=ORG, authorization=auth,
+                              x_active_org="")
 
 def call_delete_role(auth="Bearer t"):
     return rt.delete_role(7, org_id=ORG, authorization=auth, x_active_org="")
 
 def call_bulk_provision(auth="Bearer t"):
-    return rt.bulk_provision({}, org_id=ORG, authorization=auth, x_active_org="")
+    return rt.bulk_provision(rt.BulkProvisionIn(), org_id=ORG, authorization=auth, x_active_org="")
 
 
 # _can_edit_setting(caller,"security") endpoints — a sales_rep (scope=self) is denied, an admin allowed.
@@ -206,8 +209,23 @@ def allowed(fn):
         return True
     except HTTPException as e:
         return e.status_code not in (401, 403)
+    except (TypeError, AttributeError) as e:
+        # The handler signature/body contract moved and this harness did not follow it. That is a
+        # WIRING BUG, not a passing gate — fail loudly rather than scoring it as "allowed".
+        raise AssertionError(f"harness wiring out of date with the handler: {type(e).__name__}: {e}")
     except Exception:
         return True   # got past the gate into handler logic (fake-client edge) = allowed
+
+
+def call_ignoring_http(fn):
+    """Invoke a handler for its WRITE side effect. HTTPException/fake-client noise is expected and
+    ignored; a signature/body mismatch is re-raised so a stale harness can't silently assert nothing."""
+    try:
+        fn()
+    except (TypeError, AttributeError) as e:
+        raise AssertionError(f"harness wiring out of date with the handler: {type(e).__name__}: {e}")
+    except Exception:
+        pass
 
 
 print("── (1) non-admin sales_rep is REJECTED 403, NOTHING written (security-gated endpoints) ──")
@@ -253,10 +271,9 @@ _orig = rt._require_setting
 try:
     rt._require_setting = lambda *a, **k: CALLERS["sales_rep"]   # simulate the ungated handler
     c = install("sales_rep")
-    try:
-        rt.update_role(7, {"permissions": {"modules": {"admin": True}}}, authorization="Bearer t", x_active_org="")
-    except Exception:
-        pass
+    call_ignoring_http(lambda: rt.update_role(
+        7, rt.UpdateRoleIn(permissions={"modules": {"admin": True}}),
+        authorization="Bearer t", x_active_org=""))
     check("neg-control: PUT /roles writes WITHOUT the gate (proves the gate is load-bearing)", wrote(c))
 finally:
     rt._require_setting = _orig
@@ -268,19 +285,15 @@ check("post-restore: no write", not wrote(c))
 print("\n── (6) cross-tenant guard on PUT /roles/{id}: the UPDATE is ALWAYS org_id-scoped ──")
 # tenant admin: middleware-rewritten org_id (=ORG here) is the only role scope reachable.
 c = install("admin")
-try:
-    rt.update_role(7, {"permissions": {"x": 1}}, org_id=ORG, authorization="Bearer t", x_active_org="")
-except Exception:
-    pass
+call_ignoring_http(lambda: rt.update_role(7, rt.UpdateRoleIn(permissions={"x": 1}), org_id=ORG,
+                                          authorization="Bearer t", x_active_org=""))
 ru = [w for w in c.writes if w["table"] == "roles" and w["op"] == "update"]
 check("update_role filters by org_id (id alone can't cross tenants)",
       bool(ru) and ru[-1]["filters"].get("org_id") == ORG and ru[-1]["filters"].get("id") == 7, str(ru))
 # super_admin editing ANOTHER tenant: their honored org_id param scopes the write to THAT tenant.
 c = install("super")
-try:
-    rt.update_role(7, {"permissions": {"x": 1}}, org_id=OTHER, authorization="Bearer t", x_active_org="")
-except Exception:
-    pass
+call_ignoring_http(lambda: rt.update_role(7, rt.UpdateRoleIn(permissions={"x": 1}), org_id=OTHER,
+                                          authorization="Bearer t", x_active_org=""))
 ru = [w for w in c.writes if w["table"] == "roles" and w["op"] == "update"]
 check("super_admin update_role scopes to the honored org_id param (legit cross-tenant)",
       bool(ru) and ru[-1]["filters"].get("org_id") == OTHER, str(ru))

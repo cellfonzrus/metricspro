@@ -402,6 +402,18 @@ def fresh_tables():
 
 
 import app.modules.referral.router as rr  # noqa: E402
+
+
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
 from fastapi import HTTPException  # noqa: E402
 
 MGR = {"org_id": ORG_A, "employee_id": "EMP-MGR", "id": "uid-mgr", "perms": {"scope": "all"},
@@ -415,6 +427,12 @@ def patch(tables, caller=MGR, keyset=None, missing=()):
     rr._caller = lambda *_a, **_k: caller
     rr._keyset = lambda *_a, **_k: keyset
     rr._secret = lambda: SECRET
+    # PIN THE CLOCK. Every fixture row is stamped at NOW (2026-08-13) and the redeem-deadline checks
+    # compare against `rr._now()`, which was the REAL wall clock — so the QR-redeem assertions passed
+    # only while the harness was younger than the 48h redeem window and have been failing on the
+    # calendar ever since, with nothing wrong in the product. A proof harness whose result depends on
+    # the day it is run cannot be trusted in either direction.
+    rr._now = lambda: NOW
     return fake
 
 
@@ -427,8 +445,8 @@ check("I2 the other tenant sees only its own", [r["id"] for r in rr.list_referra
 
 # ── create stamps org_id from the param, never the body ──
 T = fresh_tables(); patch(T)
-created = rr.create_referral({"referrer_phone": "5165551212", "referrer_name": "New",
-                              "org_id": ORG_B, "products": ["Phone", "BYOD"]}, org_id=ORG_A)
+created = rr.create_referral(_body(rr.CreateReferralIn, {"referrer_phone": "5165551212", "referrer_name": "New",
+                              "org_id": ORG_B, "products": ["Phone", "BYOD"]}), org_id=ORG_A)
 check("I3 a new referral is created and org-stamped from the PARAM, not the body",
       T["referral"][-1]["org_id"] == ORG_A and not created["flagged"], T["referral"][-1].get("org_id"))
 check("I4 products are normalized on create", T["referral"][-1]["products"] == ["Phone", "BYOD"])
@@ -436,7 +454,7 @@ check("I4 products are normalized on create", T["referral"][-1]["products"] == [
 # ── create refuses a referral with no referrer contact ──
 T = fresh_tables(); patch(T)
 try:
-    rr.create_referral({"referrer_name": "No contact"}, org_id=ORG_A)
+    rr.create_referral(_body(rr.CreateReferralIn, {"referrer_name": "No contact"}), org_id=ORG_A)
     check("I5 a referral with no referrer phone/email is refused", False, "accepted")
 except HTTPException as e:
     check("I5 a referral with no referrer phone/email is refused", e.status_code == 400)
@@ -444,7 +462,7 @@ except HTTPException as e:
 # ── create with a bad product is refused loudly ──
 T = fresh_tables(); patch(T)
 try:
-    rr.create_referral({"referrer_phone": "5165551212", "products": ["Spaceship"]}, org_id=ORG_A)
+    rr.create_referral(_body(rr.CreateReferralIn, {"referrer_phone": "5165551212", "products": ["Spaceship"]}), org_id=ORG_A)
     check("I6 a forged product option is refused, not silently dropped", False, "accepted")
 except HTTPException as e:
     check("I6 a forged product option is refused, not silently dropped",
@@ -452,7 +470,7 @@ except HTTPException as e:
 
 # ── create-time self-referral trips the fraud flag (not a silent fail) ──
 T = fresh_tables(); patch(T)
-out = rr.create_referral({"referrer_phone": "5167778888", "customer_phone": "516-777-8888"}, org_id=ORG_A)
+out = rr.create_referral(_body(rr.CreateReferralIn, {"referrer_phone": "5167778888", "customer_phone": "516-777-8888"}), org_id=ORG_A)
 check("I7 a self-referral at create is FLAGGED with a reason, not accepted clean",
       out["flagged"] and out["referral"]["status"] == "flagged_fraud" and out["reasons"], out.get("reasons"))
 check("I8 the fraud flag wrote an audit row",
@@ -470,20 +488,20 @@ except HTTPException as e:
 # ── the transition gate: illegal jumps are refused; the happy path works ──
 T = fresh_tables(); patch(T)
 rid = "RA"
-rr.send_qr(rid, {}, org_id=ORG_A)
+rr.send_qr(rid, _body(rr.ReferralNoteIn, {}), org_id=ORG_A)
 check("I10 created -> sent works and stamps a redeem deadline",
       T["referral"][0]["status"] == "sent" and T["referral"][0].get("redeem_expires_at"))
 try:
-    rr.approve(rid, {"commission_amount": 25}, org_id=ORG_A)
+    rr.approve(rid, _body(rr.ApproveReferralIn, {"commission_amount": 25}), org_id=ORG_A)
     check("I11 you cannot approve a referral that is only 'sent'", False, "approved a sent referral")
 except HTTPException as e:
     check("I11 you cannot approve a referral that is only 'sent'", e.status_code == 400)
 # walk it up the ladder
 rr.redeem_view  # (public path tested below); drive staff steps here
 T["referral"][0]["status"] = "redeemed"
-rr.log_sale(rid, {"sale_ref": "S-9"}, org_id=ORG_A)
-rr.activate(rid, {"activation_ref": "ACT-9"}, org_id=ORG_A)
-rr.submit_for_approval(rid, {}, org_id=ORG_A)
+rr.log_sale(rid, _body(rr.LogSaleIn, {"sale_ref": "S-9"}), org_id=ORG_A)
+rr.activate(rid, _body(rr.ActivateReferralIn, {"activation_ref": "ACT-9"}), org_id=ORG_A)
+rr.submit_for_approval(rid, _body(rr.ReferralNoteIn, {}), org_id=ORG_A)
 check("I12 the ladder reaches commission_pending only via activated",
       T["referral"][0]["status"] == "commission_pending"
       and T["referral"][0].get("activated_at") and T["referral"][0].get("sale_ref") == "S-9")
@@ -493,24 +511,24 @@ check("I12 the ladder reaches commission_pending only via activated",
 patch(T, caller={"org_id": ORG_A, "employee_id": "EMP-REP", "id": "uid-rep",
                  "perms": {"scope": "all"}, "role": "admin"})
 try:
-    rr.approve(rid, {"commission_amount": 25}, org_id=ORG_A)
+    rr.approve(rid, _body(rr.ApproveReferralIn, {"commission_amount": 25}), org_id=ORG_A)
     check("I13 a rep cannot approve their OWN referral (segregation of duties)", False, "self-approved")
 except HTTPException as e:
     check("I13 a rep cannot approve their OWN referral (segregation of duties)", e.status_code == 403)
 # a different manager approves, with a user-defined amount + date
 patch(T, caller=MGR)
-appr = rr.approve(rid, {"commission_amount": 42, "payout_date": "2026-12-01"}, org_id=ORG_A)
+appr = rr.approve(rid, _body(rr.ApproveReferralIn, {"commission_amount": 42, "payout_date": "2026-12-01"}), org_id=ORG_A)
 check("I14 a different manager approves with the user-defined amount + date",
       T["referral"][0]["status"] == "approved" and appr["commission_amount"] == 42.0
       and appr["payout_date"] == "2026-12-01" and T["referral"][0]["approver_employee_id"] == "EMP-MGR")
-rr.mark_paid(rid, {}, org_id=ORG_A)
+rr.mark_paid(rid, _body(rr.ReferralNoteIn, {}), org_id=ORG_A)
 check("I15 paid is reachable from approved", T["referral"][0]["status"] == "paid")
 
 # ── a plain rep can't approve at all ──
 T = fresh_tables(); T["referral"][0]["status"] = "commission_pending"
 patch(T, caller={"org_id": ORG_A, "employee_id": "EMP-X", "id": "uid-x", "perms": {"scope": "store"}})
 try:
-    rr.approve("RA", {"commission_amount": 25}, org_id=ORG_A)
+    rr.approve("RA", _body(rr.ApproveReferralIn, {"commission_amount": 25}), org_id=ORG_A)
     check("I16 a store-scoped rep cannot approve a payout at all", False, "approved")
 except HTTPException as e:
     check("I16 a store-scoped rep cannot approve a payout at all", e.status_code == 403)
@@ -531,8 +549,8 @@ for bad in ("garbage", core.sign_token("RA", 2, SECRET), core.sign_token("NOPE",
     except HTTPException as e:
         check(f"I18 uniform 404 on a bad token ({str(bad)[:6]})", e.status_code == 404)
 # submit intake → redeemed (single use)
-resp = rr.redeem_submit(good_tok, {"customer_name": "Bob", "customer_phone": "5165551212",
-                                   "products": ["Phone", "Home Internet"]})
+resp = rr.redeem_submit(good_tok, _body(rr.RedeemSubmitIn, {"customer_name": "Bob", "customer_phone": "5165551212",
+                                   "products": ["Phone", "Home Internet"]}))
 check("I19 a clean redeem captures intake and moves to redeemed",
       resp == {"ok": True} and T["referral"][0]["status"] == "redeemed"
       and T["referral"][0]["customer_phone"] == "5165551212"
@@ -559,7 +577,7 @@ T["referral"][0].update({"status": "sent", "referrer_phone": "5165551212",
                          "redeem_expires_at": (NOW + timedelta(hours=48)).isoformat()})
 patch(T)
 resp = rr.redeem_submit(core.sign_token("RA", 1, SECRET),
-                        {"customer_name": "Bob", "customer_phone": "516-555-1212", "products": []})
+                        _body(rr.RedeemSubmitIn, {"customer_name": "Bob", "customer_phone": "516-555-1212", "products": []}))
 check("I22 a self-referral at redeem FLAGS fraud but the customer sees the SAME thank-you (no oracle)",
       resp == {"ok": True} and T["referral"][0]["status"] == "flagged_fraud"
       and T["referral"][0]["fraud_flag"] is True)

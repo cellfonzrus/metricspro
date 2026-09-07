@@ -25,11 +25,15 @@ Proves:
      sharpest possible test of "did the WHERE clause actually scope it".
 """
 import asyncio
+import os
 import sys
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 
-sys.path.insert(0, ".")
+# Anchor imports AND every source read below to THIS file's own directory, so the
+# harness runs identically from backend/ and from the repo root (cf. 564c171f).
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 
 PASS, FAIL = [], []
 
@@ -154,6 +158,7 @@ def role_row(org, name, perms):
     return {"id": nid("role"), "org_id": org, "name": name, "permissions": perms}
 
 
+import _harness_dbfree  # noqa: E402
 import app.modules.core.router as core            # noqa: E402
 import app.modules.closing.router as cr            # noqa: E402
 import app.modules.closing.attention_providers as cap   # noqa: E402
@@ -162,11 +167,26 @@ import app.modules.storevisit.attention_providers as svp  # noqa: E402
 from fastapi import HTTPException                  # noqa: E402
 
 
+def _body(model, payload):
+    """Build the endpoint's REAL Pydantic body model, exactly as FastAPI builds it from the JSON
+    request. These handlers accepted a plain dict until they were migrated to typed bodies; passing
+    a bare dict now dies on `payload.<field>`, so the harness has to call them the way the shipped
+    app does or it proves nothing about the real contract. LaxModel ignores unknown keys, so this is
+    byte-for-byte what a real request produces."""
+    return model(**payload)
+
+
 def wire(store):
     fake = FakeClient(store)
     core.get_supabase = lambda: fake
     cr.sb = lambda: fake
     sv.sb = lambda: fake       # storevisit's sb() is schema-bound in real code; FakeClient.schema is a no-op anyway
+    # DB-FREE GUARD: the bindings above cover only core/cr/sv. Caller RESOLUTION goes through
+    # closing.router._caller_perms -> tenant_middleware.caller_app_user, which imports the client
+    # factory INSIDE the function body and so never saw them — it was reaching the REAL production
+    # database, failing, and denying every caller. That is why each "ALLOWED" check below used to
+    # fail while every "DENIED" check passed, and why put_tender_config 403'd mid-harness.
+    _harness_dbfree.install(fake)
     return fake
 
 
@@ -266,7 +286,7 @@ st = fresh_store(); as_dm(st)
 check("B1. put_tender_config: DM → 403",
       expect_403(cr.put_tender_config, {"defs": []}, org_id=HOUSE, authorization=AUTH_GOOD))
 st = fresh_store(); as_company_wide(st)
-r = cr.put_tender_config({"defs": []}, org_id=HOUSE, authorization=AUTH_GOOD)
+r = cr.put_tender_config(_body(cr.PutTenderConfigIn, {"defs": []}), org_id=HOUSE, authorization=AUTH_GOOD)
 check("B2. put_tender_config: company-wide → succeeds", r.get("ok") is True)
 
 st = fresh_store(); as_dm(st)
@@ -286,7 +306,7 @@ st = fresh_store(); wire(st)  # completely unauthenticated — the exact ORIGINA
 check("B7. put_deposit_config: NO auth header at all → 403 (was fully open before this package)",
       expect_403(cr.put_deposit_config, {"match_target": "total_cash"}, org_id=HOUSE, authorization=AUTH_NONE))
 st = fresh_store(); as_company_wide(st)
-r = cr.put_deposit_config({"match_target": "store_cash"}, org_id=HOUSE, authorization=AUTH_GOOD)
+r = cr.put_deposit_config(_body(cr.PutDepositConfigIn, {"match_target": "store_cash"}), org_id=HOUSE, authorization=AUTH_GOOD)
 check("B8. put_deposit_config: company-wide → succeeds", r.get("match_target") == "store_cash")
 
 st = fresh_store(); as_dm(st)
@@ -299,7 +319,7 @@ st = fresh_store(); as_dm(st)
 check("B11. upsert_alert_recipient: DM → 403",
       expect_403(cr.upsert_alert_recipient, {"scope": "all", "email": "x@y.com"}, org_id=HOUSE, authorization=AUTH_GOOD))
 st = fresh_store(); as_company_wide(st)
-rec = cr.upsert_alert_recipient({"scope": "all", "email": "x@y.com"}, org_id=HOUSE, authorization=AUTH_GOOD)
+rec = cr.upsert_alert_recipient(_body(cr.UpsertAlertRecipientIn, {"scope": "all", "email": "x@y.com"}), org_id=HOUSE, authorization=AUTH_GOOD)
 rid = rec.get("id")
 st_recipients_before = len(st["alert_recipient"])
 check("B12a. upsert_alert_recipient: company-wide → succeeds", rec.get("ok") is True and rid)
@@ -314,14 +334,14 @@ st = fresh_store(); as_dm(st)
 check("B13. closing_sweep_put_config: DM → 403",
       expect_403(cr.closing_sweep_put_config, {"sheet_id": "abc"}, org_id=HOUSE, authorization=AUTH_GOOD))
 st = fresh_store(); as_company_wide(st)
-r = cr.closing_sweep_put_config({"sheet_id": "abc123"}, org_id=HOUSE, authorization=AUTH_GOOD)
+r = cr.closing_sweep_put_config(_body(cr.ClosingSweepPutConfigIn, {"sheet_id": "abc123"}), org_id=HOUSE, authorization=AUTH_GOOD)
 check("B14. closing_sweep_put_config: company-wide → succeeds", r.get("sheet_id") == "abc123")
 
 # Confirm pickup-config was INTENTIONALLY left ungated (nav scope ['all','market'] — DM-editable by
 # design; see rbac.ts). Calling it with a DM identity and no `authorization` param at all must still
 # work exactly as before this package (byte-identical signature/behaviour).
 st = fresh_store(); as_dm(st)
-r = cr.put_pickup_config({"recipient_email": "dm@x.com"}, org_id=HOUSE)
+r = cr.put_pickup_config(_body(cr.PutPickupConfigIn, {"recipient_email": "dm@x.com"}), org_id=HOUSE)
 check("B15. put_pickup_config UNCHANGED — still callable with no auth gate (by design)",
       r.get("recipient_email") == "dm@x.com")
 
@@ -334,7 +354,7 @@ st = fresh_store(); as_dm(st)
 check("C2. put_storevisit_config: DM → 403",
       expect_403(sv.put_storevisit_config, {"accessory_order_url": "https://x.example"}, org_id=HOUSE, authorization=AUTH_GOOD))
 st = fresh_store(); as_company_wide(st)
-r = sv.put_storevisit_config({"accessory_order_url": "https://x.example", "accessory_order_label": "Order"}, org_id=HOUSE, authorization=AUTH_GOOD)
+r = sv.put_storevisit_config(_body(sv.PutStorevisitConfigIn, {"accessory_order_url": "https://x.example", "accessory_order_label": "Order"}), org_id=HOUSE, authorization=AUTH_GOOD)
 check("C3. put_storevisit_config: company-wide → succeeds", r.get("accessory_order_url") == "https://x.example")
 
 st = fresh_store(); wire(st)
@@ -344,7 +364,7 @@ st = fresh_store(); as_dm(st)
 check("C5. create_checklist_item: DM → 403",
       expect_403(sv.create_checklist_item, {"label": "Broom"}, org_id=HOUSE, authorization=AUTH_GOOD))
 st = fresh_store(); as_company_wide(st)
-item = sv.create_checklist_item({"label": "Broom", "item_key": "broom"}, org_id=HOUSE, authorization=AUTH_GOOD)
+item = sv.create_checklist_item(_body(sv.ChecklistItemIn, {"label": "Broom", "item_key": "broom"}), org_id=HOUSE, authorization=AUTH_GOOD)
 check("C6. create_checklist_item: company-wide → succeeds", item.get("label") == "Broom")
 as_dm(st)
 check("C7. update_checklist_item: DM → 403",
@@ -362,7 +382,7 @@ st = fresh_store(); as_company_wide(st)
 g = cr.get_cash_config(HOUSE)
 check("D1. get_cash_config defaults closing_stale_alert_days to 3 (no column/row yet)",
       g.get("closing_stale_alert_days") == 3)
-r = cr.put_cash_config({"closing_stale_alert_days": 5}, org_id=HOUSE, authorization=AUTH_GOOD)
+r = cr.put_cash_config(_body(cr.PutCashConfigIn, {"closing_stale_alert_days": 5}), org_id=HOUSE, authorization=AUTH_GOOD)
 check("D2. put_cash_config persists closing_stale_alert_days", r.get("closing_stale_alert_days") == 5)
 g2 = cr.get_cash_config(HOUSE)
 check("D3. get_cash_config re-read reflects the saved value", g2.get("closing_stale_alert_days") == 5)
@@ -378,7 +398,7 @@ fake2 = FakeClient(st2)
 fake2.table = lambda name: _BoomOnStale(st2, name)
 as_company_wide(st2)
 cr.sb = lambda: fake2
-r3 = cr.put_cash_config({"closing_deadline": "21:00", "closing_stale_alert_days": 9}, org_id=HOUSE, authorization=AUTH_GOOD)
+r3 = cr.put_cash_config(_body(cr.PutCashConfigIn, {"closing_deadline": "21:00", "closing_stale_alert_days": 9}), org_id=HOUSE, authorization=AUTH_GOOD)
 check("D4. put_cash_config degrades: closing_deadline still saved even if the new column throws",
       r3.get("closing_deadline") == "21:00")
 
@@ -538,7 +558,7 @@ st["checklist_items"] = [
     {"id": "shared-1", "org_id": HOUSE, "label": "House label", "is_active": True},
     {"id": "shared-1", "org_id": TENANT_B, "label": "Tenant B label", "is_active": True},
 ]
-sv.update_checklist_item("shared-1", {"label": "HACKED"}, org_id=HOUSE, authorization=AUTH_GOOD)
+sv.update_checklist_item("shared-1", _body(sv.UpdateChecklistItemIn, {"label": "HACKED"}), org_id=HOUSE, authorization=AUTH_GOOD)
 house_row = next(r for r in st["checklist_items"] if r["org_id"] == HOUSE)
 b_row = next(r for r in st["checklist_items"] if r["org_id"] == TENANT_B)
 check("F1. update_checklist_item updates the caller's own-org row", house_row["label"] == "HACKED")
@@ -606,10 +626,10 @@ check("F6. upload_photo is org-scoped — same-id visit row in ANOTHER org is un
 # Sanity: the REST of the write path (create_visit / update_visit / submit_visit / action-items /
 # action-plan / signoff) was ALREADY correctly org-scoped on every read/write — code-path review found
 # no further gap. Exercise it once end-to-end so this isn't just a grep-based claim.
-v = sv.create_visit({"store_code": "S1", "market": "NY", "dm_email": "dm@x.com"}, org_id=HOUSE)
+v = sv.create_visit(_body(sv.CreateVisitIn, {"store_code": "S1", "market": "NY", "dm_email": "dm@x.com"}), org_id=HOUSE)
 vid = v["id"]
-sv.update_visit(vid, {"responses": [{"item_key": "uniform", "checked": True}],
-                     "accessories": [{"accessory_name": "case", "qty": 2}]}, org_id=HOUSE)
+sv.update_visit(vid, _body(sv.UpdateVisitIn, {"responses": [{"item_key": "uniform", "checked": True}],
+                     "accessories": [{"accessory_name": "case", "qty": 2}]}), org_id=HOUSE)
 got = sv.get_visit(vid, org_id=HOUSE)
 check("F7. create_visit → update_visit (responses+accessories) → get_visit round-trips",
       len(got["responses"]) == 1 and got["responses"][0]["item_key"] == "uniform"
@@ -617,9 +637,9 @@ check("F7. create_visit → update_visit (responses+accessories) → get_visit r
 sv.submit_visit(vid, org_id=HOUSE)
 check("F8. submit_visit marks the visit submitted",
       sv.get_visit(vid, org_id=HOUSE)["visit"]["status"] == "submitted")
-sv.save_action_items(vid, {"items": [{"item_key": "uniform", "severity": "warning", "discussed": True}]}, org_id=HOUSE)
-sv.save_action_plan(vid, {"plan": [{"description": "Fix uniform", "store_code": "S1"}]}, org_id=HOUSE)
-sv.signoff(vid, {"who": "dm", "name": "DM One", "signed": True}, org_id=HOUSE)
+sv.save_action_items(vid, _body(sv.SaveActionItemsIn, {"items": [{"item_key": "uniform", "severity": "warning", "discussed": True}]}), org_id=HOUSE)
+sv.save_action_plan(vid, _body(sv.SaveActionPlanIn, {"plan": [{"description": "Fix uniform", "store_code": "S1"}]}), org_id=HOUSE)
+sv.signoff(vid, _body(sv.SignoffIn, {"who": "dm", "name": "DM One", "signed": True}), org_id=HOUSE)
 act = sv.get_visit_action(vid, org_id=HOUSE)
 check("F9. action-items/action-plan/signoff round-trip through get_visit_action",
       len(act["items"]) == 1 and len(act["plan"]) == 1 and act["signoff"]["plan_dm_signed"] is True)

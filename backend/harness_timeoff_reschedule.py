@@ -9,9 +9,13 @@ get_timeoff_conflict_mode, set_timeoff_conflict_mode, update_time_off, apply_tem
 reconcile_timeoff_duplicates) against an in-memory fake Supabase client.
 Run: `python3 harness_timeoff_reschedule.py` from backend/.
 """
+import os
 import sys
 
-sys.path.insert(0, ".")
+# Anchor imports AND every source read below to THIS file's own directory, so the
+# harness runs identically from backend/ and from the repo root (cf. 564c171f).
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 
 PASS, FAIL = [], []
 
@@ -149,11 +153,27 @@ def fake_get_supabase():
     return FAKE_CLIENT
 
 
+import _harness_dbfree  # noqa: E402
 import app.modules.storeops.router as router_mod          # noqa: E402
 import app.modules.core.router as core_router_mod         # noqa: E402
 from fastapi import HTTPException                         # noqa: E402
 
 router_mod.get_supabase = fake_get_supabase
+# DB-FREE GUARD: the line(s) above bind only THIS module's name. Shipped code also
+# reaches the factory directly (tenant_middleware.caller_app_user) and through other
+# routers' sb() (storeops.router._rbac_enabled), both of which used to land on the
+# REAL production client. Route every acquisition in the process at the fake.
+_harness_dbfree.install(FAKE_CLIENT)
+
+
+def _body(model, payload):
+    """Build the endpoint's REAL Pydantic body model, exactly as FastAPI builds it from the JSON
+    request. These handlers accepted a plain dict until they were migrated to typed bodies; passing
+    a bare dict now dies on `body.<field>`, so the harness has to call them the way the shipped app
+    does or it proves nothing about the real contract. LaxModel ignores unknown keys, so this is
+    byte-for-byte what a real request produces."""
+    return model(**payload)
+
 core_router_mod._uid_from_token = lambda auth: ("mgr-uid" if auth == "Bearer manager" else
                                                  ("rep-uid" if auth == "Bearer rep" else None))
 
@@ -262,18 +282,18 @@ check("6b org B's own conflicting shift succeeds with a warning, unaffected by o
 reset()
 STORE["tenants"] = [{"org_id": ORG, "timeoff_conflict_mode": "warn"}]
 try:
-    router_mod.set_timeoff_conflict_mode({"mode": "block"}, authorization="Bearer rep", org_id=ORG)
+    router_mod.set_timeoff_conflict_mode(_body(router_mod.TimeoffConflictModeIn, {"mode": "block"}), authorization="Bearer rep", org_id=ORG)
     check("7a non-manager caller is rejected", False, "no exception raised")
 except HTTPException as e:
     check("7a non-manager caller is rejected", e.status_code == 403, e.detail)
 check("7b rejected PUT never changed the stored value",
       router_mod._timeoff_conflict_mode(ORG) == "warn")
 try:
-    router_mod.set_timeoff_conflict_mode({"mode": "nonsense"}, authorization="Bearer manager", org_id=ORG)
+    router_mod.set_timeoff_conflict_mode(_body(router_mod.TimeoffConflictModeIn, {"mode": "nonsense"}), authorization="Bearer manager", org_id=ORG)
     check("7c invalid mode value is rejected 400", False, "no exception raised")
 except HTTPException as e:
     check("7c invalid mode value is rejected 400", e.status_code == 400, e.detail)
-r7 = router_mod.set_timeoff_conflict_mode({"mode": "block"}, authorization="Bearer manager", org_id=ORG)
+r7 = router_mod.set_timeoff_conflict_mode(_body(router_mod.TimeoffConflictModeIn, {"mode": "block"}), authorization="Bearer manager", org_id=ORG)
 check("7d manager PUT succeeds", r7 == {"ok": True, "mode": "block"}, r7)
 check("7e GET now reflects the persisted 'block' mode",
       router_mod.get_timeoff_conflict_mode(org_id=ORG) == {"mode": "block"})
@@ -305,7 +325,7 @@ STORE["shift_templates"] = [
     {"org_id": ORG, "employee_id": "EMP1", "employee_name": "Alice Rep", "store_code": "Store1",
      "weekday": 1, "start_time": "09:00", "end_time": "17:00", "scheduled_hours": 8},  # Tue
 ]
-r9 = router_mod.apply_templates({"week_start": "2026-07-27"}, org_id=ORG)  # Mon 07-27 -> Tue 07-28 (the time-off day)
+r9 = router_mod.apply_templates(_body(router_mod.WeekStartIn, {"week_start": "2026-07-27"}), org_id=ORG)  # Mon 07-27 -> Tue 07-28 (the time-off day)
 check("9a bulk apply-templates still SKIPS the time-off day (unchanged, safe-default behavior)",
       r9.get("skipped_timeoff") == 1 and r9.get("added") == 0, r9)
 check("9b no phantom shift was created for the skipped day", len(shifts_for(ORG)) == 0, shifts_for(ORG))

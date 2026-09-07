@@ -42,7 +42,10 @@ import subprocess
 import sys
 import zipfile
 
-sys.path.insert(0, ".")
+# Anchored to THIS FILE's directory, not the shell's cwd, so the harness runs identically from
+# `backend/` and from the repo root (commit 564c171f).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
 
 PASS, FAIL = 0, 0
 BASE_REF = "6aadb14"
@@ -62,6 +65,61 @@ def ok(name, cond, extra=""):
 def fatal(msg):
     print(f"\nFATAL: {msg}")
     sys.exit(2)
+
+
+# ── reportlab: SKIP (loudly) vs PRODUCT DEFECT ───────────────────────────────────────────────────
+# Section C below died on `ModuleNotFoundError: No module named 'reportlab'`. Before making it
+# tolerate that, the question that actually matters was answered: does the PRODUCT need reportlab?
+#
+#   It needs it    — app/modules/notify/render.py::build_pdf (the module under test here) imports it
+#                    lazily inside the render call, as do three other shipped modules. Live paths.
+#   It declares it — backend/requirements.txt line 13, `reportlab>=4.2.0`, uncommented.
+#   It installs it — backend/Dockerfile: `RUN pip install --no-cache-dir -r requirements.txt`.
+#
+# So the deployed image HAS reportlab; no production defect. What is missing is THIS container's
+# copy (it is short 7 declared deps). A skip is the honest answer — but only for that case:
+#   installed              -> RUN section C for real.
+#   missing but DECLARED   -> SKIP, counted and printed in the summary. Never a silent pass.
+#   missing and UNDECLARED -> FAIL loudly: shipped code importing an undeclared package is a
+#                             production defect and this harness will say so.
+#
+# WHY A PLAIN try/except WOULD HAVE BEEN WORSE THAN THE CRASH. C1 is a NEGATIVE control: it asserts
+# the pre-fix renderer CRASHES on tenant markup, by catching any Exception. `ModuleNotFoundError` is
+# an Exception, so with reportlab absent C1 was recorded as a PASS — the control "fired" without the
+# code under test ever being reached. Every skip below therefore replaces BOTH halves of the pair.
+SKIPPED = []
+
+
+def _pdf_backend():
+    """('run' | 'skip' | 'defect', message) for the reportlab PDF backend."""
+    import importlib.util
+    installed = importlib.util.find_spec("reportlab") is not None
+    declared = False
+    try:
+        for line in open(os.path.join(_HERE, "requirements.txt"), encoding="utf-8"):
+            line = line.strip()
+            if line and not line.startswith("#") and line.split("[")[0].split("=")[0] \
+                    .split(">")[0].split("<")[0].strip().lower() == "reportlab":
+                declared = True
+                break
+    except OSError:
+        pass
+    if installed:
+        return "run", "reportlab present"
+    if declared:
+        return "skip", ("reportlab is DECLARED in backend/requirements.txt and installed by the "
+                        "Dockerfile, but is absent from THIS container — environment gap, not a "
+                        "product defect. Install it to run section C: pip install reportlab")
+    return "defect", ("PRODUCT DEFECT: shipped code imports reportlab but backend/requirements.txt "
+                      "does not declare it — the deployed image would 500 on every PDF export")
+
+
+PDF_MODE, PDF_WHY = _pdf_backend()
+
+
+def skip(name, why):
+    SKIPPED.append(name)
+    print(f"  SKIP {name}\n       {why}")
 
 
 def section(t):
@@ -250,7 +308,7 @@ ok("B4  an ordinary report is grid-identical to base",
    grid(BASE_RENDER.build_xlsx(plain)) == grid(R.build_xlsx(plain)))
 
 # B5 — money is a float BEFORE it can ever reach the guard: no money value can be neutralised.
-src_render = open("app/modules/notify/render.py", encoding="utf-8").read()
+src_render = open(os.path.join(_HERE, "app/modules/notify/render.py"), encoding="utf-8").read()
 xlsx_body = src_render.split("def build_xlsx")[1].split("def build_pdf")[0]
 money_branch = xlsx_body.split('if col.get("money"):')[1].split("else:")[0]
 ok("B5  the build_xlsx MONEY branch still writes a float + number format",
@@ -267,7 +325,7 @@ section("C. PDF leg — reportlab Paragraph markup (pre-existing crash, fixed in
 # containing a KNOWN markup tag (<b> <i> <u> <br> <font> <super> ...) that is not balanced makes
 # doc.build() RAISE and the entire PDF send fail for that tenant.
 MARKUP = "Rate <b of 2"          # e.g. a note/label an admin typed; base cannot render it
-for where, pay in [
+PDF_CASES = [
     ("title", {"title": MARKUP, "filename": "f",
                "sheets": [{"name": "S", "columns": [{"header": "H", "key": "k"}], "rows": [{"k": 1}]}]}),
     ("subtitle", {"title": "t", "subtitle": MARKUP, "filename": "f",
@@ -278,22 +336,53 @@ for where, pay in [
     ("sheet name", {"title": "t", "filename": "f", "sheets": [
         {"name": MARKUP, "columns": [{"header": "H", "key": "k"}], "rows": [{"k": 1}]},
         {"name": "S2", "columns": [{"header": "H", "key": "k"}], "rows": [{"k": 1}]}]}),
-]:
-    base_ok = True
-    try:
-        BASE_RENDER.build_pdf(pay)
-    except Exception:
-        base_ok = False
-    ok(f"C1  NEGATIVE CONTROL: base CRASHES the whole PDF on tenant markup in the {where}", not base_ok)
-    try:
-        fixed_ok = R.build_pdf(pay).startswith(b"%PDF")
-    except Exception as exc:                                                      # pragma: no cover
-        fixed_ok = False
-        print("        ", exc)
-    ok(f"C1b FIXED: the same report renders a real PDF ({where})", fixed_ok)
-ok("C2  an ordinary PDF still renders", R.build_pdf(payload_of(["Jamaica"], MONEY)).startswith(b"%PDF"))
-ok("C3  a formula payload cannot execute from a PDF (text only) and still renders",
-   R.build_pdf(payload_of(RISKY, MONEY)).startswith(b"%PDF"))
+]
+
+if PDF_MODE == "defect":
+    ok("C0  reportlab is DECLARED wherever shipped code imports it", False, PDF_WHY)
+elif PDF_MODE == "skip":
+    for where, _pay in PDF_CASES:
+        skip(f"C1  NEGATIVE CONTROL: base CRASHES the whole PDF on tenant markup in the {where}",
+             PDF_WHY)
+        skip(f"C1b FIXED: the same report renders a real PDF ({where})", PDF_WHY)
+    skip("C2  an ordinary PDF still renders", PDF_WHY)
+    skip("C3  a formula payload cannot execute from a PDF (text only) and still renders", PDF_WHY)
+else:
+    for where, pay in PDF_CASES:
+        base_ok = True
+        try:
+            BASE_RENDER.build_pdf(pay)
+        except ModuleNotFoundError:          # never let a missing dep masquerade as "base crashes"
+            fatal("reportlab vanished mid-run — the C1 negative control cannot be trusted")
+        except Exception:
+            base_ok = False
+        ok(f"C1  NEGATIVE CONTROL: base CRASHES the whole PDF on tenant markup in the {where}",
+           not base_ok)
+        try:
+            fixed_ok = R.build_pdf(pay).startswith(b"%PDF")
+        except Exception as exc:                                                  # pragma: no cover
+            fixed_ok = False
+            print("        ", exc)
+        ok(f"C1b FIXED: the same report renders a real PDF ({where})", fixed_ok)
+    ok("C2  an ordinary PDF still renders",
+       R.build_pdf(payload_of(["Jamaica"], MONEY)).startswith(b"%PDF"))
+    ok("C3  a formula payload cannot execute from a PDF (text only) and still renders",
+       R.build_pdf(payload_of(RISKY, MONEY)).startswith(b"%PDF"))
+
+# Reportlab-INDEPENDENT half of section C, so a missing PDF backend never takes the whole H7 proof
+# down with it: the FIX itself is pure string work and is readable from source either way.
+_RENDER_SRC = open(os.path.join(_HERE, "app/modules/notify/render.py"), encoding="utf-8").read()
+assert "def _para(" in _RENDER_SRC, "render.py::_para is gone — this anchor moved, fix the harness"
+_para_body = _RENDER_SRC.split("def _para(")[1].split("\ndef ")[0]
+ok("C4  (backend-independent) the Paragraph escape helper covers all three metacharacters",
+   all(m in _para_body for m in ('"&", "&amp;"', '"<", "&lt;"', '">", "&gt;"')), _para_body[-160:])
+_pdf_body = _RENDER_SRC.split("def build_pdf")[1]
+ok("C5  (backend-independent) build_pdf applies it to the FOUR tenant-text sites the fix names "
+   "(title, subtitle, sheet name, column header), not only to data cells",
+   all(f"_para({site}" in _pdf_body.replace(" ", "") or site in _pdf_body
+       for site in ('payload.get("title")', 'payload["subtitle"]',
+                    "sheet.get('name')", 'c.get("header")'))
+   and _pdf_body.count("_para(") >= 4, _pdf_body.count("_para("))
 
 
 # ══ D. H6 — stored XSS via javascript: hrefs ═════════════════════════════════════════════════════
@@ -322,7 +411,7 @@ ok("D2c clean_step keeps every legitimate page_href unchanged",
        for h in GOOD_HREF))
 
 # D2d — the SHIPPED tour pack must survive the new gate untouched (real product data, not a fixture).
-seed = json.load(open("app/data/training_tours_seed.json", encoding="utf-8"))
+seed = json.load(open(os.path.join(_HERE, "app/data/training_tours_seed.json"), encoding="utf-8"))
 seed_hrefs = [t.get("start_href") for t in seed["tours"] if t.get("start_href")]
 seed_hrefs += [s.get("page_href") for t in seed["tours"] for s in t.get("steps", []) if s.get("page_href")]
 ok(f"D2d all {len(seed_hrefs)} hrefs in the SHIPPED tour pack survive unchanged",
@@ -367,10 +456,14 @@ fc = FakeClient()
 _orig_gate = IH._gate
 IH._gate = lambda *a, **k: (fc, {"role": "admin"}, "00000000-0000-0000-0000-0000000000ff")
 try:
-    IH.create_import_feed({"label": "x", "deep_link": "javascript:alert(1)"})
+    # FastAPI hands a POST handler its DECLARED, validated pydantic model — never a bare dict.
+    # `create_import_feed` reads `body.feed_key`, so a dict raised AttributeError and the handler
+    # blew up BEFORE reaching the deep_link check these two assertions exist to prove. Same drift
+    # and same repair as commit 564c171f (harness_ssrf_import_gate).
+    IH.create_import_feed(IH.CreateImportFeedIn(label="x", deep_link="javascript:alert(1)"))
     ok("D4  POST /core/import-feeds falls back to the safe default for a javascript: deep_link",
        fc.rows[-1]["deep_link"] == "/commcalc/upload", fc.rows[-1]["deep_link"])
-    IH.create_import_feed({"label": "x", "deep_link": "/commcalc/ftp-imports"})
+    IH.create_import_feed(IH.CreateImportFeedIn(label="x", deep_link="/commcalc/ftp-imports"))
     ok("D4b a real deep_link is stored unchanged", fc.rows[-1]["deep_link"] == "/commcalc/ftp-imports")
 finally:
     IH._gate = _orig_gate
@@ -381,14 +474,21 @@ from app.modules.core import router as CR                                       
 _orig_req = CR._require_setting
 CR._require_setting = lambda *a, **k: None
 try:
-    rejected = 0
+    # Was passing a bare dict; FastAPI hands this handler its declared `SetPortalReportIn`, so every
+    # probe died on AttributeError — and the bare `except Exception: pass` below SWALLOWED it, so
+    # `rejected` stayed 0 and this security assertion had silently stopped guarding the href gate
+    # entirely. The blanket except is now narrowed: anything that is not an HTTPException is a
+    # harness fault and is reported, never counted and never quietly ignored.
+    rejected, faults = 0, []
     for v in BAD_HREF:
         try:
-            CR.set_portal_report({"href": v}, org_id="x")
+            CR.set_portal_report(CR.SetPortalReportIn(href=v), org_id="x")
         except HTTPException as e:
             rejected += 1 if e.status_code == 400 else 0
-        except Exception:
-            pass
+        except Exception as exc:                                                  # pragma: no cover
+            faults.append(f"{v!r} -> {type(exc).__name__}: {exc}")
+    ok("D5a the probes actually reached the endpoint (no harness-side error was swallowed)",
+       not faults, "; ".join(faults[:3]))
     ok(f"D5  PUT /core/portal-reports rejects all {len(BAD_HREF)} unsafe hrefs with 400",
        rejected == len(BAD_HREF), f"{rejected}/{len(BAD_HREF)}")
 finally:
@@ -616,10 +716,29 @@ ok("E6b the 413 leaks no path, stack or internal detail",
 # ══ F. H5 — the read_only=True half of the finding ═══════════════════════════════════════════════
 section("F. H5 — `read_only=True`: REGISTER CORRECTION, with evidence")
 
-app_py = subprocess.run(["grep", "-rn", "load_workbook", os.path.join(REPO, "backend", "app")],
+app_py = subprocess.run(["grep", "-rn", "--include=*.py", "load_workbook",
+                         os.path.join(REPO, "backend", "app")],
                         capture_output=True).stdout.decode()
-ok("F1  there is NO direct openpyxl.load_workbook anywhere in backend/app — nothing to add it to",
-   "load_workbook" not in app_py, app_py[:200])
+_lw_sites = [ln for ln in app_py.splitlines() if "load_workbook(" in ln and "def " not in ln]
+# F1 asserted "there are NO direct load_workbook calls in backend/app — nothing to add read_only to".
+# That was true when written; two have since been added (commcalc/carrier_recon.py,
+# pos/vendor_rebate_report.py) and the absolute went red while the HARDENING IT PROTECTS is
+# perfectly healthy — both new sites pass read_only=True. Same stale-literal class as the provider
+# list re-expressed in commit 564c171f: an absolute that says "none exist" cannot survive the first
+# legitimate one, and a harness that cries wolf gets ignored.
+#
+# The invariant that actually matters (finding H5) is that a workbook is never loaded with the whole
+# file materialised in memory — i.e. EVERY direct call passes read_only=True. Asserted as that
+# property, adding a third safe call site can no longer break it, and adding an UNSAFE one now
+# fails, which the old absolute could not distinguish.
+ok("F1  every direct openpyxl.load_workbook in backend/app passes read_only=True (H5 hardening)",
+   all("read_only=True" in ln for ln in _lw_sites),
+   [ln for ln in _lw_sites if "read_only=True" not in ln])
+ok("F1b …and data_only=True, so no formula is ever evaluated on load",
+   all("data_only=True" in ln for ln in _lw_sites),
+   [ln for ln in _lw_sites if "data_only=True" not in ln])
+ok("F1c the F1 scan is non-vacuous (it really found the call sites it is judging)",
+   len(_lw_sites) >= 2, _lw_sites)
 
 import pandas as _pd                                                               # noqa: E402
 import inspect as _inspect                                                         # noqa: E402
@@ -630,7 +749,7 @@ ok(f"F2  pandas {_pd.__version__} ALREADY loads every workbook with read_only=Tr
 ok("F2b ...and with data_only=True + keep_links=False (no formula eval, no external links)",
    '"data_only": True' in src_lw and '"keep_links": False' in src_lw)
 
-writes_only = open("app/modules/notify/render.py", encoding="utf-8").read()
+writes_only = open(os.path.join(_HERE, "app/modules/notify/render.py"), encoding="utf-8").read()
 ok("F3  the ONE direct openpyxl use in this codebase is a WRITE (Workbook()), where read_only "
    "does not apply", "from openpyxl import Workbook" in writes_only and
    "load_workbook" not in writes_only)
@@ -642,58 +761,99 @@ section("G. Wiring, route surface and blast radius")
 from app.main import app as APP                                                    # noqa: E402
 mw = [m.cls.__name__ for m in APP.user_middleware]
 ok("G1  BodySizeLimitMiddleware is registered", "BodySizeLimitMiddleware" in mw)
-ok("G1b order is CORS → Hardening → BodySizeLimit → TenantScope → GZip",
-   mw == ["CORSMiddleware", "HardeningMiddleware", "BodySizeLimitMiddleware",
-          "TenantScopeMiddleware", "GZipMiddleware"], mw)
+# G1b pinned the middleware stack as an EXACT list of five. Two unrelated middlewares have since
+# been registered (AccessLogMiddleware, RateLimitMiddleware), so the literal went red while every
+# ORDERING CONSTRAINT it encoded still holds. Re-expressed as the relative order — which is the
+# thing that carries meaning — so an unrelated middleware can be added without a false alarm, while
+# any actual re-ordering of these five still fails.
+_order_ok = all(a in mw and b in mw and mw.index(a) < mw.index(b) for a, b in [
+    ("CORSMiddleware", "HardeningMiddleware"),
+    ("HardeningMiddleware", "BodySizeLimitMiddleware"),
+    ("BodySizeLimitMiddleware", "TenantScopeMiddleware"),
+    ("TenantScopeMiddleware", "GZipMiddleware"),
+])
+ok("G1b relative order holds: CORS → Hardening → BodySizeLimit → TenantScope → GZip", _order_ok, mw)
 ok("G1c it is OUTER of TenantScope (an oversized body costs zero identity/DB work)",
    mw.index("BodySizeLimitMiddleware") < mw.index("TenantScopeMiddleware"))
 ok("G1d it is INNER of Hardening (a 413 still carries the security headers)",
    mw.index("HardeningMiddleware") < mw.index("BodySizeLimitMiddleware"))
 
-EXPECT_ROUTES = int(os.environ.get("EXPECT_ROUTES", "1054"))
-ok(f"G2  route count unchanged vs base ({EXPECT_ROUTES})", len(APP.routes) == EXPECT_ROUTES,
-   len(APP.routes))
-
-changed = subprocess.run(["git", "-C", REPO, "diff", "--name-only", BASE_REF],
-                         capture_output=True).stdout.decode().split()
-MONEY_TREES = ("backend/app/modules/commcalc/", "backend/app/modules/asset/",
-               "backend/app/modules/account/", "backend/app/modules/payables/",
-               "backend/app/modules/closing/", "backend/app/modules/storeops/",
-               "backend/app/modules/hr/", "backend/app/modules/storevisit/",
-               "backend/app/modules/billing/")
-touched_money = [f for f in changed if f.startswith(MONEY_TREES)]
-ok("G3  NOT ONE money/other-module backend file touched — no payout number can move",
-   not touched_money, touched_money)
-fe_other = [f for f in changed if f.startswith("frontend/src/app/(platform)/")
-            and not any(f.startswith("frontend/src/app/(platform)/" + o)
-                        for o in ("admin/", "notify/", "helpdesk/", "remediation/",
-                                  "configurations/", "failures/", "training/"))]
-ok("G3b no other module agent's frontend tree touched", not fe_other, fe_other)
-ok("G4  no migration in this package (nothing to run in Supabase)",
-   not [f for f in changed if f.startswith("database/migrations/")],
-   [f for f in changed if f.startswith("database/migrations/")])
-
-ent = open("app/modules/core/entitlements.py", encoding="utf-8").read()
-base_ent = subprocess.run(["git", "-C", REPO, "show", f"{BASE_REF}:backend/app/modules/core/entitlements.py"],
-                          capture_output=True).stdout.decode()
-sv = re.search(r"SEED_VERSION\s*=\s*(\d+)", ent)
-sv_b = re.search(r"SEED_VERSION\s*=\s*(\d+)", base_ent)
-ok("G5  SEED_VERSION unchanged (this package seeds no new content)",
-   sv and sv_b and sv.group(1) == sv_b.group(1))
-
-reqs = open("requirements.txt", encoding="utf-8").read()
-base_reqs = subprocess.run(["git", "-C", REPO, "show", f"{BASE_REF}:backend/requirements.txt"],
-                           capture_output=True).stdout.decode()
-ok("G6  no new backend dependency", reqs == base_reqs)
-
-pkg = open(os.path.join(REPO, "frontend", "package.json"), encoding="utf-8").read()
-base_pkg = subprocess.run(["git", "-C", REPO, "show", f"{BASE_REF}:frontend/package.json"],
-                          capture_output=True).stdout.decode()
-ok("G6b no new frontend dependency", pkg == base_pkg)
+# ── G2-G6b: BLAST-RADIUS checks, which are PR-REVIEW instruments ────────────────────────────────
+# Every assertion below diffs the WORKING TREE against BASE_REF (6aadb14) — "this package touched no
+# money file, added no migration, added no dependency, moved no route count". They were true and
+# valuable while that package was under review. It merged; the branch has moved on by hundreds of
+# commits, so today they assert "NOTHING IN THE ENTIRE PRODUCT HAS CHANGED SINCE 6aadb14", which is
+# guaranteed false and says nothing whatever about this package. That is not a defect they are
+# detecting — it is the instrument outliving the measurement.
+#
+# NOT DELETED, and deliberately NOT quietly relaxed into passing: they are SKIPPED, counted, and
+# printed, so nobody reads this file as "blast radius verified". Re-run them against any base by
+# exporting XSS_BASE_REF (e.g. `XSS_BASE_REF=$(git merge-base HEAD main)`), which is what makes them
+# useful again the next time this package is genuinely under review.
+_BASE = os.environ.get("XSS_BASE_REF")
+if not _BASE:
+    for _n, _d in [
+        ("G2  route count unchanged vs base", "the base's route count is not this branch's"),
+        ("G3  NOT ONE money/other-module backend file touched", "diffs the whole tree vs a merged base"),
+        ("G3b no other module agent's frontend tree touched", "diffs the whole tree vs a merged base"),
+        ("G4  no migration in this package", "diffs the whole tree vs a merged base"),
+        ("G5  SEED_VERSION unchanged", "SEED_VERSION has legitimately moved many times since"),
+        ("G6  no new backend dependency", "requirements.txt has legitimately grown since"),
+        ("G6b no new frontend dependency", "package.json has legitimately grown since"),
+    ]:
+        skip(_n, f"PR-review blast-radius check against a MERGED base ({BASE_REF}): {_d}. "
+                 f"Re-run with XSS_BASE_REF=<ref> to measure a live changeset.")
+else:
+    _surface = {(pth, m.upper()) for pth, ops in APP.openapi()["paths"].items() for m in ops}
+    _pinned_routes = os.environ.get("EXPECT_ROUTES")
+    if _pinned_routes:
+        ok(f"G2  route surface matches the pinned {_pinned_routes}",
+           len(_surface) == int(_pinned_routes), len(_surface))
+    else:
+        print(f"  --   G2  route surface: {len(_surface)} (path, method) pairs "
+              f"— set EXPECT_ROUTES to pin it")
+    changed = subprocess.run(["git", "-C", REPO, "diff", "--name-only", _BASE],
+                             capture_output=True).stdout.decode().split()
+    MONEY_TREES = ("backend/app/modules/commcalc/", "backend/app/modules/asset/",
+                   "backend/app/modules/account/", "backend/app/modules/payables/",
+                   "backend/app/modules/closing/", "backend/app/modules/storeops/",
+                   "backend/app/modules/hr/", "backend/app/modules/storevisit/",
+                   "backend/app/modules/billing/")
+    touched_money = [f for f in changed if f.startswith(MONEY_TREES)]
+    ok("G3  NOT ONE money/other-module backend file touched — no payout number can move",
+       not touched_money, touched_money)
+    fe_other = [f for f in changed if f.startswith("frontend/src/app/(platform)/")
+                and not any(f.startswith("frontend/src/app/(platform)/" + o)
+                            for o in ("admin/", "notify/", "helpdesk/", "remediation/",
+                                      "configurations/", "failures/", "training/"))]
+    ok("G3b no other module agent's frontend tree touched", not fe_other, fe_other)
+    ok("G4  no migration in this package (nothing to run in Supabase)",
+       not [f for f in changed if f.startswith("database/migrations/")],
+       [f for f in changed if f.startswith("database/migrations/")])
+    ent = open(os.path.join(_HERE, "app/modules/core/entitlements.py"), encoding="utf-8").read()
+    base_ent = subprocess.run(
+        ["git", "-C", REPO, "show", f"{_BASE}:backend/app/modules/core/entitlements.py"],
+        capture_output=True).stdout.decode()
+    sv = re.search(r"SEED_VERSION\s*=\s*(\d+)", ent)
+    sv_b = re.search(r"SEED_VERSION\s*=\s*(\d+)", base_ent)
+    ok("G5  SEED_VERSION unchanged (this package seeds no new content)",
+       bool(sv and sv_b and sv.group(1) == sv_b.group(1)))
+    reqs = open(os.path.join(_HERE, "requirements.txt"), encoding="utf-8").read()
+    base_reqs = subprocess.run(["git", "-C", REPO, "show", f"{_BASE}:backend/requirements.txt"],
+                               capture_output=True).stdout.decode()
+    ok("G6  no new backend dependency", reqs == base_reqs)
+    pkg = open(os.path.join(REPO, "frontend", "package.json"), encoding="utf-8").read()
+    base_pkg = subprocess.run(["git", "-C", REPO, "show", f"{_BASE}:frontend/package.json"],
+                              capture_output=True).stdout.decode()
+    ok("G6b no new frontend dependency", pkg == base_pkg)
 
 ok("G7  safe_href is importable by any module agent from one place (no re-implementation)",
-   os.path.exists("app/modules/core/safe_href.py"))
+   os.path.exists(os.path.join(_HERE, "app/modules/core/safe_href.py")))
 
 
-print(f"\n{'='*96}\nRESULT: {PASS} passed, {FAIL} failed\n{'='*96}")
+print(f"\n{'='*96}\nRESULT: {PASS} passed, {FAIL} failed"
+      + (f", {len(SKIPPED)} SKIPPED (not passed)" if SKIPPED else ""))
+for _s in SKIPPED:
+    print(f"  SKIPPED: {_s}")
+print('='*96)
 sys.exit(1 if FAIL else 0)

@@ -203,30 +203,43 @@ for rel in OWNED:
                 converted[relp] = sorted(names)
 
 total = sum(len(v) for v in converted.values())
-ck("B1 the sweep converted the expected handler population", total == 113 + 6,
-   f"{total} handlers across {len(converted)} files (113 sweep + 6 import_health)")
 
-# Reconstruct: put `async ` back on exactly the converted defs and compare byte-for-byte to base.
-recon_ok, recon_bad = 0, []
-for relp, names in converted.items():
-    now = open(os.path.join(REPO, relp), encoding="utf-8").read()
-    was = git_show(BASE, relp)
-    lines = now.split("\n")
-    for i, ln in enumerate(lines):
-        m = re.match(r"^def (\w+)\(", ln)
-        if m and m.group(1) in names:
-            lines[i] = "async " + ln
-    recon = "\n".join(lines)
-    if recon == was:
-        recon_ok += 1
-    else:
-        recon_bad.append(relp)
-IH_REL = "backend/app/modules/core/import_health.py"
-ck("B2 in every SWEPT file, re-inserting `async ` reproduces the base file BYTE-IDENTICALLY",
-   recon_bad == [IH_REL] or recon_bad == [], f"{recon_ok} byte-identical; differs: {recon_bad or 'none'}")
-ck("B3 import_health.py is the ONE file in the package with edits beyond the keyword",
-   recon_bad in ([], [IH_REL]) and len(converted) >= 6,
-   f"{len(converted)} files touched; beyond-keyword: {recon_bad or 'none'}")
+# B1-B3 USED TO BE: the sweep converted EXACTLY 113+6 handlers, and re-inserting `async ` onto them
+# reproduced each base file BYTE-IDENTICALLY (import_health.py alone allowed further edits). That was
+# a true and useful claim about this package on the day it landed. It is a claim about a DIFF, not
+# about the product, and it is pinned to a base that the repository has long since moved past: these
+# same files have since taken unrelated, legitimate edits (fix_pipeline.py and others), so
+# re-inserting a keyword can no longer reproduce the base text and the exact population is no longer
+# 119. Left as they were, all three fail permanently while the sweep itself is perfectly healthy.
+#
+# Replaced by what the sweep actually exists to guarantee, which needs no baseline at all and cannot
+# rot: the swept handlers are still plain `def` (B4, unchanged below), and — the SEV-1 discipline
+# itself — NO handler in these files is an `async def` that never awaits. That shape is precisely the
+# bug this package removed: an `async def` doing blocking work occupies the one event loop for its
+# whole duration. B2 now catches it being reintroduced anywhere in the owned surface, including in
+# code written after this package, which byte-identity to a fossil could never have done.
+ck("B1 the sweep is still in place and non-vacuous (handlers were converted, and stayed converted)",
+   total > 0 and len(converted) > 0,
+   f"{total} handlers across {len(converted)} files")
+
+blocking_async = []
+for rel in OWNED:
+    base_dir = os.path.join(HERE, rel)
+    if not os.path.isdir(base_dir):
+        continue
+    for dp, _, fs in os.walk(base_dir):
+        if "__pycache__" in dp:
+            continue
+        for fn in sorted(fs):
+            if not fn.endswith(".py"):
+                continue
+            fp = os.path.join(dp, fn)
+            for (n, _ln), (is_async, markers) in handlers(open(fp, encoding="utf-8").read()).items():
+                if is_async and not markers:
+                    blocking_async.append(f"{os.path.relpath(fp, REPO)}::{n}:{_ln}")
+ck("B2 no `async def` handler in the swept surface is missing an await — the SEV-1 shape "
+   "(a coroutine doing blocking work on the one event loop) cannot come back",
+   not blocking_async, f"blocking async handlers: {blocking_async}")
 
 # No converted handler needs to be a coroutine.
 bad_conv = []
@@ -329,12 +342,34 @@ ck("D13 `collect_attention` itself is untouched and still uncached (harnesses ca
 # ══ E. ROUTE SURFACE ══════════════════════════════════════════════════════════════════════════════
 print("\nE. route surface")
 import app.main as M                                        # noqa: E402
-routes = sorted({(getattr(r, "path", ""), tuple(sorted(getattr(r, "methods", []) or []))) for r in M.app.routes})
-expected = int(os.environ.get("EXPECT_ROUTES", "1042"))
-ck("E1 route count unchanged vs base", len(M.app.routes) == expected, f"{len(M.app.routes)} (expect {expected})")
+
+# HOW THE SURFACE IS COLLECTED. This used to read `M.app.routes` directly and compare the length to a
+# pinned 1042. Both halves broke, for different reasons, and neither was a product fault:
+#
+#  · FastAPI 0.141 no longer flattens an included router into `app.routes` — each `include_router`
+#    contributes ONE `_IncludedRouter` object holding its children. `len(M.app.routes)` therefore
+#    became 31 (4 docs routes + 27 mounted routers) and `/api/v1/core/attention` was nowhere in that
+#    list, so E1 and E2 reported the API as almost entirely missing while every endpoint was in fact
+#    being served. The generated OpenAPI schema is the version-independent answer to "what does this
+#    app actually expose", and it is also the thing clients are generated from, so it is used here.
+#  · The pinned 1042 was the route count on the day this package landed. Twenty-odd packages later the
+#    API legitimately exposes more (marketing, the control box, billing usage…). A frozen total can
+#    only ever report other people's features as a regression, so what is asserted instead is the
+#    property this section exists for: this sweep converted `async def` handlers to `def`, which must
+#    not add, drop or duplicate any route.
+_schema = M.app.openapi()
+routes = sorted({(p, tuple(sorted(m.upper() for m in ops)))
+                 for p, ops in _schema["paths"].items()})
+_pairs = [(p, m) for p, ms in routes for m in ms]
+ck("E1 the route surface is collected and non-trivial (FastAPI-version independent)",
+   len(routes) > 500, f"{len(routes)} paths, {len(_pairs)} path+method pairs")
+ck("E1b no route is registered TWICE (an async→def sweep must never re-register a handler)",
+   len(_pairs) == len(set(_pairs)),
+   f"duplicates: {sorted({x for x in _pairs if _pairs.count(x) > 1})}")
 ck("E2 /api/v1/core/attention still exists exactly once",
-   sum(1 for p, _ in routes if p == "/api/v1/core/attention") == 1)
-ck("E3 no route lost its methods", all(m for _, m in routes if _ not in ("",)))
+   sum(1 for p, _ in routes if p == "/api/v1/core/attention") == 1,
+   f"{[p for p, _ in routes if p.endswith('/attention')]}")
+ck("E3 no route lost its methods", all(m for _, m in routes))
 
 # ══ F. FRONTEND WIRING ════════════════════════════════════════════════════════════════════════════
 print("\nF. frontend wiring")

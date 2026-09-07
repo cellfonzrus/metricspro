@@ -398,7 +398,13 @@ ok("H-SHIPPED the finished work is present and marked live",
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 print("\nI. WIRING + ROUTE SURFACE")
 
-ok("I1 SEED_VERSION was bumped to 9", ENT.SEED_VERSION == 9)
+# Was `== 9`. The invariant this protects is "the What's New package bumped SEED_VERSION, so every
+# tenant re-syncs its entitlements on the next login" — an exact equality also asserts that NOTHING
+# HAS SHIPPED SINCE, which is not this file's business and is false the moment the next feature
+# bumps it (it is 14 today). Same stale-literal class as the provider list re-expressed in commit
+# 564c171f. A floor keeps the real guarantee and stops rotting.
+ok(f"I1 SEED_VERSION is at or past the What's New bump of 9 (is {ENT.SEED_VERSION}) — every tenant "
+   "re-syncs on its next login", ENT.SEED_VERSION >= 9, ENT.SEED_VERSION)
 src = open(os.path.join(os.path.dirname(__file__), "app/modules/core/entitlements.py"), encoding="utf-8").read()
 house_block = src.split("if org_id == ORG_ID:")[1]
 ok("I2 the release-note seeder runs on the HOUSE org's sync pass only", "seed_release_notes" in house_block)
@@ -410,18 +416,50 @@ ok("I4 NO new entitlement module was invented (it is an admin surface, not billa
    "whats_new" not in ENT.MODULE_CATALOG and "release_note" not in ENT.MODULE_CATALOG)
 
 from app.main import app                                            # noqa: E402
-paths = sorted({r.path for r in app.routes if "whats-new" in r.path})
+
+
+def route_surface(application):
+    """Every (path, METHOD) the app exposes, read from its OpenAPI schema.
+
+    WHY NOT `app.routes`. This section used to walk `app.routes` and read `r.path`. That worked only
+    while FastAPI FLATTENED every `include_router()` into one list; as of fastapi 0.141 an included
+    router stays there as a lazy `_IncludedRouter` with no `.path`, so the walk died with
+    `AttributeError: '_IncludedRouter' object has no attribute 'path'` and this whole section
+    stopped running. `len(app.routes)` reads 31 for a 1,285-path app, so counting that way is
+    actively misleading rather than merely broken.
+
+    `app.openapi()` is the SUPPORTED public description of the route surface — it resolves prefixes
+    and nested includes and is the same document the frontend reads. The lesson worth keeping:
+    assert against a framework's public contract, never its private structure.
+    """
+    spec = application.openapi()["paths"]
+    return {(p, m.upper()) for p, ops in spec.items() for m in ops}
+
+
+SURFACE = route_surface(app)
+paths = sorted({p for p, _m in SURFACE if "whats-new" in p})
 EXPECT = sorted(["/api/v1/core/whats-new", "/api/v1/core/whats-new/ingest",
                  "/api/v1/core/whats-new/seed", "/api/v1/core/whats-new/{note_id}"])
 ok("I5 exactly the expected paths exist", paths == EXPECT, paths)
-n_routes = len([r for r in app.routes if "whats-new" in getattr(r, "path", "")])
+n_routes = len([1 for p, _m in SURFACE if "whats-new" in p])
 ok("I6 the package adds exactly 5 routes", n_routes == 5, n_routes)
 from app.core import tenant_middleware as TM                        # noqa: E402
 ok("I7 NO whats-new path is allowlisted as public today (the ship door needs a JWT until it is)",
    not any(TM._is_public(p) for p in paths))
-expect_routes = int(os.environ.get("EXPECT_ROUTES", "1018"))
-ok(f"I8 total app route count is {expect_routes} (1003 base + 7 training + 5 what's-new)",
-   len(app.routes) == expect_routes, len(app.routes))
+# I8 was `len(app.routes) == 1018`, a whole-app absolute measured off the broken walk above and by
+# now ~550 routes stale. NOT DROPPED, re-aimed: what this file may assert is what the What's New
+# package adds (I5/I6, both exact). The whole-app total stays available as a deliberate reviewer
+# pin via EXPECT_ROUTES; unset, it reports rather than failing on somebody else's feature.
+_pinned = os.environ.get("EXPECT_ROUTES")
+if _pinned:
+    ok(f"I8 total app route surface is the pinned {_pinned}",
+       len(SURFACE) == int(_pinned), len(SURFACE))
+else:
+    print(f"  --   I8 app route surface: {len(SURFACE)} (path, method) pairs across "
+          f"{len({p for p, _ in SURFACE})} paths — set EXPECT_ROUTES to pin it")
+# Non-vacuity: an enumeration that silently returned nothing would let I5-I7 pass vacuously.
+ok("I9 the route enumeration is non-vacuous (the app really was introspected)",
+   len(SURFACE) > 500 and ("/api/v1/core/whats-new", "GET") in SURFACE, len(SURFACE))
 
 print(f"\n{'='*78}\n  {PASS} passed, {FAIL} failed\n{'='*78}")
 sys.exit(1 if FAIL else 0)

@@ -27,9 +27,13 @@ Proves:
      shows the derived $1000 (the ONE shared engine, not a second implementation).
   6. hr_update_employee threads `authorization` through to the SAME manager gate.
 """
+import os
 import sys
 
-sys.path.insert(0, ".")
+# Anchor imports AND every source read below to THIS file's own directory, so the
+# harness runs identically from backend/ and from the repo root (cf. 564c171f).
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 
 PASS, FAIL = [], []
 
@@ -169,12 +173,28 @@ def fake_get_supabase():
     return FAKE_CLIENT
 
 
+import _harness_dbfree  # noqa: E402
 import app.modules.storeops.router as router_mod          # noqa: E402
 import app.modules.core.router as core_router_mod         # noqa: E402
 import app.modules.hr.router as hr_router_mod              # noqa: E402
 
 router_mod.get_supabase = fake_get_supabase
 hr_router_mod.get_supabase = fake_get_supabase
+# DB-FREE GUARD: the line(s) above bind only THIS module's name. Shipped code also
+# reaches the factory directly (tenant_middleware.caller_app_user) and through other
+# routers' sb() (storeops.router._rbac_enabled), both of which used to land on the
+# REAL production client. Route every acquisition in the process at the fake.
+_harness_dbfree.install(FAKE_CLIENT)
+
+
+def _body(model, payload):
+    """Build the endpoint's REAL Pydantic body model, exactly as FastAPI builds it from the JSON
+    request. These handlers accepted a plain dict until they were migrated to typed bodies; passing
+    a bare dict now dies on `body.<field>`, so the harness has to call them the way the shipped app
+    does or it proves nothing about the real contract. LaxModel ignores unknown keys, so this is
+    byte-for-byte what a real request produces."""
+    return model(**payload)
+
 core_router_mod._uid_from_token = lambda auth: ("mgr-uid" if auth == "Bearer manager" else
                                                  ("rep-uid" if auth == "Bearer rep" else None))
 
@@ -281,7 +301,7 @@ check("4c: the SAME non-manager editing only `name` succeeds (gate is field-scop
       r5.get("name") == "Harry H. Hourly", r5)
 
 try:
-    router_mod.bulk_payscale({"rows": [{"employee_id": "HRL1", "pay_rate": 999}]},
+    router_mod.bulk_payscale(_body(router_mod.BulkPayscaleIn, {"rows": [{"employee_id": "HRL1", "pay_rate": 999}]}),
                               authorization="Bearer rep", org_id=ORG)
     check("5: bulk-payscale is manager-gated (non-manager rejected)", False, "no exception raised")
 except Exception as e:
@@ -421,7 +441,7 @@ check("F2e: both new log rows use entry_point='pay_basis_change' (same trail as 
 # (before this fix: zero ✎ audit trail for a bulk upload, unlike the single-row PATCH). Harry's
 # pay_rate is 25.0 at this point (from F2c above).
 bulk_log_before = len(STORE["payroll_change_log"])
-r_bulk = router_mod.bulk_payscale({"rows": [{"employee_id": "HRL1", "pay_rate": 30.0}]},
+r_bulk = router_mod.bulk_payscale(_body(router_mod.BulkPayscaleIn, {"rows": [{"employee_id": "HRL1", "pay_rate": 30.0}]}),
                                    authorization="Bearer manager", org_id=ORG)
 check("D2a: bulk_payscale succeeds (manager)", r_bulk.get("updated") == 1, r_bulk)
 bulk_log = [r for r in STORE["payroll_change_log"] if r.get("employee_id") == "HRL1"
@@ -432,7 +452,7 @@ check("D2c: before/after captured correctly ($25.00 -> $30.00)",
       bulk_log and bulk_log[0]["before_value"] == "25.0" and bulk_log[0]["after_value"] == "30.0", bulk_log)
 check("D2d: a SECOND identical bulk_payscale call (no actual change) writes NO additional row "
       "(before==after skip, same convention as the single-row PATCH)",
-      router_mod.bulk_payscale({"rows": [{"employee_id": "HRL1", "pay_rate": 30.0}]},
+      router_mod.bulk_payscale(_body(router_mod.BulkPayscaleIn, {"rows": [{"employee_id": "HRL1", "pay_rate": 30.0}]}),
                                 authorization="Bearer manager", org_id=ORG) and
       len([r for r in STORE["payroll_change_log"] if r.get("employee_id") == "HRL1"
            and r.get("entry_point") == "bulk_payscale"]) == 1)

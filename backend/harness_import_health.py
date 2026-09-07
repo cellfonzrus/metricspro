@@ -449,9 +449,20 @@ ok("F4 the healthy daily_sales feed raises NOTHING",
    "feed:email:default:daily_sales" not in keys)
 ok("F5 PENDING MAPPING: the store missing from the market map is reported",
    "stores_unmapped" in keys and next(i for i in res["items"] if i["key"] == "stores_unmapped")["count"] == 1)
-ok("F6 heavy providers are DEFERRED on the cheap (login) call",
-   {"carrier_category_map", "product_mrc", "plan_coverage"} == {d["key"] for d in res["deferred"]},
-   res["deferred"])
+# Asserted as a PROPERTY over the live registry, not a hard-coded list of three keys. The literal
+# set went stale the moment a fourth heavy provider was registered (commcalc_sales_export and
+# commcalc_sales_derive_gap both are), and a stale literal fails loudly while the MECHANISM is
+# perfectly healthy — which trains people to ignore the harness. The invariant that actually matters
+# is the one the login path depends on: every heavy provider is deferred on a cheap call, and no
+# cheap provider is.
+_heavy = {p["key"] for p in IH.PROVIDERS if p.get("cost") == "heavy"}
+_cheap = {p["key"] for p in IH.PROVIDERS if p.get("cost") != "heavy"}
+_deferred = {d["key"] for d in res["deferred"]}
+ok("F6 EVERY heavy provider is DEFERRED on the cheap (login) call",
+   _heavy == _deferred, {"heavy": sorted(_heavy), "deferred": sorted(_deferred)})
+ok("F6b no CHEAP provider is deferred (the login popup still answers)",
+   not (_cheap & _deferred), sorted(_cheap & _deferred))
+ok("F6c there is at least one heavy provider to defer (the guard is not vacuous)", bool(_heavy))
 ok("F7 counts are grouped for the popup summary",
    res["counts"]["total"] == len(res["items"]) and res["counts"]["import"] >= 1 and res["counts"]["mapping"] >= 1,
    res["counts"])

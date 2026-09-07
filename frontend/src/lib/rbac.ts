@@ -311,6 +311,26 @@ export const NAV: NavGroup[] = [
     { href: '/crm/reports', label: 'CRM Reports', icon: '📈', module: 'crm', scopes: ['all', 'market'], tileOnly: true },
     { href: '/crm/settings', label: 'CRM Settings', icon: '⚙️', module: 'crm', scopes: ['all'], tileOnly: true },
   ]},
+  // Marketing & Events (migs 986/987, owner directive 2026-09-06) — outside-store event management:
+  // theme/venue/goals, a user-created checklist, planned creative links, the outside party, planned
+  // staff with a NAMED BACKUP, transport + pickups, giveaways, and GPS check-in. Placed after CRM
+  // because it is the other top-of-funnel surface: an event is where a lead is met before any sale
+  // exists. Same block shape as the CRM/Referral groups, so regrouping is a ZERO-RBAC-CHANGE move as
+  // long as each item keeps its `module: 'marketing'` + scopes.
+  //
+  // 'My check-ins' carries NO scope restriction on purpose: it shows a person only their OWN location
+  // records (the backend filters to the caller's employee id and cannot be pointed at anyone else), so
+  // every employee must be able to reach it. Restricting it would mean the people the data is about
+  // are the only ones who cannot see it.
+  //
+  // Settings is 'all' only, like every other module's config surface; planning and approving are
+  // ['all','market'] with the backend (_require_manager / _require_approver) as the real gate.
+  { group: 'Marketing', module: 'marketing', items: [
+    { href: '/marketing', label: 'Events Dashboard', icon: '🎪', module: 'marketing', scopes: ['all', 'market', 'store'] },
+    { href: '/marketing/events/new', label: 'Plan an Event', icon: '➕', module: 'marketing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/marketing/my-checkins', label: 'My Check-ins', icon: '📍', module: 'marketing', tileOnly: true },
+    { href: '/marketing/settings', label: 'Marketing Settings', icon: '⚙️', module: 'marketing', scopes: ['all'], tileOnly: true },
+  ]},
   // Referral (mig 850, owner directive 2026-08-13) — QR-code customer referrals + activation-gated,
   // approval-gated commission. Placed after CRM: it is a sibling top-of-funnel surface (a rep hands a
   // referrer a QR before any sale exists). Same shape as the CRM block, so regrouping/relabeling is a
@@ -399,6 +419,8 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/recovery', label: 'Appeal Recovery', icon: '💰', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // First NAV home for the ingest-guard quarantine queue (page pre-existed, menu-less; admin tier).
     { href: '/commcalc/ingest-guard', label: 'Ingest Guard', icon: '🛡️', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/admin/control-box', label: 'System Control Box', icon: '🛎️', module: 'admin', tileOnly: true },
+    { href: '/admin/billing-usage', label: 'Billing Usage & Pricing', icon: '💳', module: 'admin', tileOnly: true },
     { href: '/admin/import-health', label: 'Import Health', icon: '📡', module: 'admin', tileOnly: true },
     { href: '/failures', label: 'Failure Logs', icon: '🩺', module: 'admin', tileOnly: true },
     { href: '/storeops/attendance', label: 'Attendance Exceptions', icon: '🚨', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
@@ -407,6 +429,7 @@ export const NAV: NavGroup[] = [
     { href: '/approvals', label: 'Approvals', icon: '✅', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
     { href: '/closing/deposit-recon', label: 'Cash Deposit Recon', icon: '💵', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/envelope-report', label: 'Envelope Report', icon: '✉️', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/external-credit-recon', label: 'Card Settlement Recon', icon: '💳', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/tender-recon-3way', label: '3-Way Tender Recon', icon: '🧮', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/recon', label: 'Reconciliation', icon: '🔎', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
   ]},
@@ -651,6 +674,11 @@ export const NAV: NavGroup[] = [
     // at the two. Same module + scopes on all three, so no role re-seeding.
     { href: '/storeops/setup/stores', label: 'Store Setup', icon: '🏬', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     { href: '/storeops/setup/employees', label: 'Employee Setup', icon: '🧑‍🔧', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
+    // Insurance & Leases (owner directive 2026-09-05, migs 964-967): ONE insurance policy covering
+    // MANY stores, its document + AI reading, and the lease/COI expiry notices. Same module +
+    // scopes as Store Setup so no role re-seeding; the SERVER gate (store_lease.can_see_lease,
+    // fail-closed) is the real protection — this row only decides who sees the tile.
+    { href: '/storeops/setup/insurance', label: 'Insurance & Leases', icon: '🛡️', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     // tileOnly WITHOUT a tile of its own — deliberate (W2.1): this page is a backward-compat alias
     // whose two surfaces ARE the Store Setup + Employee Setup tiles, and its own banner points there.
     // Bookmarks, ⌘K search and direct links still reach it; a sidebar row would undo the cleanup.
@@ -713,6 +741,13 @@ export const NAV: NavGroup[] = [
     // DM-vs-market-manager is a ROLE distinction the scope vocabulary cannot express; a gated
     // role that opens the page sees the server's restriction message, never the data.
     { href: '/closing/cash-recon-management', label: 'Cash Recon (Management)', icon: '🧮', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    // Card Settlement Recon (owner directive 2026-09-04): the declared closing card figures —
+    // including the external credit machine — tallied against each processor's scraped daily
+    // settlement totals. Server-side gate is the SAME market-manager-and-above rule as Cash Recon
+    // (Management) (closing/billpay_pickup.can_see_cash_recon, fail-closed 403), so the nav scope
+    // tiers match that sibling exactly; the page label is carrier-neutral (the tenant's own name
+    // for the terminal comes from the mig-960 label preset, rendered inside the page).
+    { href: '/closing/external-credit-recon', label: 'Card Settlement Recon', icon: '💳', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/expenses-report', label: 'Closing Expenses', icon: '📋', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/epay-recon', label: 'ePay Bank-Deposit Recon', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     // Cash Deposit Recon + Deposit Categories (mig 509) — nav entries per mod-retail-ops NEEDS CORE
@@ -861,7 +896,33 @@ export const NAV: NavGroup[] = [
     // 403s a non-super-admin independently), so this nav line adds no new permission surface and needs
     // no SEED_VERSION bump for roles. Deliberately NOT a new module key: it is a platform surface, not
     // a billable tenant module.
+    // System Control Box (owner directive 2026-09-05, migs 970-972) — the red/green board over every
+    // subsystem the platform can actually check, plus the scheduled daily run. Tagged module 'admin'
+    // with NO `scopes`, byte-identical in shape to its Auto-Fix Pipeline sibling below: the PAGE is
+    // super-admin-only (every backend endpoint calls core.router._require_super_admin and 403s a
+    // non-super-admin independently), so this nav line adds no new permission surface and needs no
+    // SEED_VERSION bump. Not a new module key: it is a platform surface, not a billable tenant module.
+    { href: '/admin/control-box', label: 'System Control Box', icon: '🛎️', module: 'admin' },
+    // Billing usage & pricing (owner directives 2026-09-05, migs 972-975) — per-tenant AI and
+    // per-module usage, the plan x module pricing grid, and the itemized statement. module 'admin'
+    // with NO `scopes`, same shape as its siblings: every backend endpoint calls
+    // _require_super_admin and 403s independently, so this adds no permission surface.
+    { href: '/admin/billing-usage', label: 'Billing Usage & Pricing', icon: '💳', module: 'admin' },
     { href: '/admin/fix-requests', label: 'Auto-Fix Pipeline', icon: '🛠️', module: 'admin' },
+    // Platform Operator Console (owner directive 2026-09-05, migs 980/981) — "make a separate view
+    // for the super admin". APPENDED, never restructured: this single line is the only change this
+    // work makes to the NAV registry, so it cannot collide with concurrent edits elsewhere in this
+    // file. Tagged module 'admin' with NO `scopes`, byte-identical in shape to its System Control Box
+    // and Auto-Fix Pipeline siblings above: an existing admin role already carries modules.admin, so
+    // this adds NO new permission surface and needs no SEED_VERSION bump.
+    //
+    // The CONSOLE ITSELF is not gated by this line. /operator lives in its own route group with its
+    // own shell, and asks the SERVER who it is talking to (`GET /core/operator/me` →
+    // core.router._require_super_admin, unioned with the core.platform_operator registry). A tenant
+    // admin who reaches it by URL gets a plain explanation and a way back, never a half-console; every
+    // endpoint behind it 403s independently. This line only puts the door where an operator will
+    // find it while the two personas still share one menu.
+    { href: '/operator', label: 'Operator Console', icon: '🛰️', module: 'admin' },
   ]},
   // Reports LAST (owner directive 2026-08-10) — the Report Center directory sits at the foot of the
   // sidebar, immediately above the per-category report groups applyNavLayout() appends after it.
@@ -967,6 +1028,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/closing/pickup', 'ops'], ['/closing/billpay-pickup', 'ops'],
   ['/closing/cash-recon-management', 'ops'], ['/closing/epay-recon', 'ops'],
   ['/closing/envelope-report', 'ops'],
+  ['/closing/external-credit-recon', 'ops'],
   // Admin & System
   ['/failures', 'admin'], ['/helpdesk', 'admin'], ['/helpdesk/dashboard', 'admin'], ['/remediation', 'admin'],
   ['/admin/tenants', 'admin'],
@@ -1079,6 +1141,7 @@ export function moduleForPath(path: string): string {
   if (path.startsWith('/notify')) return 'notify'
   if (path.startsWith('/helpdesk')) return 'helpdesk'
   if (path.startsWith('/crm')) return 'crm'
+  if (path.startsWith('/marketing')) return 'marketing'
   if (path.startsWith('/remediation')) return 'helpdesk'
   if (path.startsWith('/commcalc/targets')) return 'targets'
   if (path.startsWith('/commcalc/asset')) return 'asset'

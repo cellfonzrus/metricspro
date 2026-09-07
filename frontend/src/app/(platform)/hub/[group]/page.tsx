@@ -17,7 +17,7 @@
 // viewer may not see simply renders without it (and a tile left empty by that filtering is dropped).
 // The curated /payroll and /storeops hubs deliberately do NOT route here (they keep their hand-woven
 // tiles + KPI rows); this page serves every other group, including unknown slugs (friendly notice).
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { useAuth, useActiveCarrier } from '@/lib/auth-context'
@@ -48,25 +48,50 @@ export default function HubDashboardPage() {
   // and a session exists (the open app shows everything, like the sidebar's `open` path), then
   // tenant capability, active-carrier lens, and the tenant nav-layout `hidden` override. The
   // group's own '/hub/…' entry is excluded — a dashboard must not tile a link to itself.
-  const visibleItems = useMemo<NavItem[]>(() => {
-    if (!navGroup) return []
+  // ONE gate, applied to whichever set of nav items we are filtering. Mirrors the sidebar exactly
+  // ((platform)/layout.tsx): RBAC only while login is enforced and a session exists (the open app
+  // shows everything, like the sidebar's `open` path), then tenant capability, active-carrier lens,
+  // and the tenant nav-layout `hidden` override.
+  const gateItems = useCallback((items: NavItem[]) => {
     const caps = navCfg?.capabilities || {}
     const gated = rbacEnabled !== false && !!session
-    return navGroup.items
+    return items
       .filter(it => !it.href.startsWith('/hub/'))
       .filter(it => !gated || canSeeItem(permissions, it))
       .filter(it => !it.cap || caps[it.cap] !== false)
       .filter(it => carrierOKActive(it.href, activeCarrier, caps))
       .filter(it => !navCfg?.layout?.items?.[it.href]?.hidden)
-  }, [navGroup, navCfg, permissions, session, rbacEnabled, activeCarrier])
+  }, [navCfg, permissions, session, rbacEnabled, activeCarrier])
+
+  // THIS group's own items — what the auto-derived default tiles, and the "not yet placed" tile, are
+  // built from. A dashboard with no design still shows its own module, not the whole app.
+  const visibleItems = useMemo<NavItem[]>(
+    () => (navGroup ? gateItems(navGroup.items) : []), [navGroup, gateItems])
+
+  // EVERY group's items, same gate. A DESIGNED tile may name a page from another group — that is the
+  // entire point of the designer (owner 2026-09-07: "I just added inventory aging and inventory
+  // values from finance to management overview … they are not showing up").
+  //
+  // `layoutToHubGroups` resolves each designed href against this map and DROPS anything it cannot
+  // find. It used to be handed only `visibleItems`, so a cross-group pick could never resolve:
+  // 'Inventory Values' (/accounts/inventory) lives in Finance and 'Inventory Aging'
+  // (/commcalc/asset/aging) in Assets, while the hub being designed is Management Overview. Both
+  // saved correctly and both vanished at render, with nothing said — and a tile made ONLY of
+  // cross-group picks disappeared whole.
+  //
+  // The gate is applied to the wider set too, so composing across groups can never surface a page
+  // the viewer is not allowed to open: this widens what a DESIGNER may place, never what a VIEWER
+  // may see.
+  const allVisibleItems = useMemo<NavItem[]>(
+    () => gateItems(NAV.flatMap(g => g.items)), [gateItems])
 
   const groups = useMemo(() => {
     if (!navGroup) return []
-    const designed = layoutToHubGroups(tileResp?.layout, visibleItems)
+    const designed = layoutToHubGroups(tileResp?.layout, allVisibleItems)
     if (designed.length) return mergeUnplacedItems(designed, visibleItems)
     const subs = subsFromNavLayout(navGroup.group, visibleItems, navCfg?.layout)
     return defaultHubGroups(navGroup.group, visibleItems, subs)
-  }, [navGroup, tileResp, visibleItems, navCfg])
+  }, [navGroup, tileResp, visibleItems, allVisibleItems, navCfg])
 
   if (!navGroup) {
     return (

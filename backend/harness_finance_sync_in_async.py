@@ -111,8 +111,41 @@ print("\n[2] Every async endpoint that reaches a blocking site hops off the loop
 ar, br = read_now(AROUTER), read_now(BROUTER)
 
 check("router: run_in_threadpool imported", "from fastapi.concurrency import run_in_threadpool" in ar)
-check("/compute hops to threadpool",
-      "await run_in_threadpool(engine.compute_and_store, sb(), org_id, period)" in ar)
+
+
+def hops_to_threadpool(src, endpoint, callee):
+    """True when EVERY reference to `callee` inside async endpoint `endpoint` is handed to an
+    AWAITED run_in_threadpool — i.e. the blocking work provably cannot run on the event loop.
+
+    Deliberately AST-based and module-agnostic. The earlier form matched the exact source line
+    `await run_in_threadpool(engine.compute_and_store, ...)`, so when 386a196d (2026-09-02,
+    balance-sheet truths) re-pointed /compute at statement_engine.compute_and_store — same threadpool
+    hop, same SEV-1 protection — the literal stopped matching and the harness reported the freeze-class
+    fix as missing. Which module supplies compute_and_store is not the safety property; staying off
+    the loop is. This also catches what the literal could not: a SECOND, un-hopped call added later.
+    """
+    fn = next((n for n in ast.walk(ast.parse(src))
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == endpoint), None)
+    if fn is None:
+        return False
+    hopped, total = 0, 0
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Attribute) and n.attr == callee:
+            total += 1
+    for n in ast.walk(fn):
+        if not isinstance(n, ast.Await):
+            continue
+        c = n.value
+        if not (isinstance(c, ast.Call) and getattr(c.func, "id", getattr(c.func, "attr", None))
+                == "run_in_threadpool" and c.args):
+            continue
+        if isinstance(c.args[0], ast.Attribute) and c.args[0].attr == callee:
+            hopped += 1
+    return total > 0 and hopped == total
+
+
+check("/compute hops to threadpool (every compute_and_store call is awaited off-loop)",
+      hops_to_threadpool(ar, "compute", "compute_and_store"))
 check("/run-due hops to threadpool", "await run_in_threadpool(autocompute.recompute_due, sb()," in ar)
 check("/recon hops to threadpool", "await run_in_threadpool(recon.reconcile, sb(), org_id, period," in ar)
 check("billing: fetch_cost is awaited", "await _pc.fetch_cost(r)" in br)
@@ -193,8 +226,14 @@ for rel, allowed in EXPECTED_DELTA.items():
     check(f"{os.path.basename(rel)}: no function added/removed", set(base_f) == set(now_f),
           f"+{sorted(set(now_f) - set(base_f))} -{sorted(set(base_f) - set(now_f))}")
     changed = {q for q in set(base_f) & set(now_f) if base_f[q] != now_f[q]}
-    check(f"{os.path.basename(rel)}: only {sorted(allowed)} changed",
-          changed == allowed, f"actually changed: {sorted(changed)}")
+    # SUBSET, not equality. The money property this guards is "no COMPUTATIONAL function drifted
+    # from main" — nothing outside the transport sites. Equality additionally required each listed
+    # transport function to still DIFFER from main, which quietly became false as this package
+    # merged (main now has the fix, so the delta is legitimately empty) — reporting a failure at the
+    # exact moment the fix is fully landed. The presence of the fix is proven directly, and far more
+    # strongly, by sections [1] and [2] above; this check's job is the "nothing else moved" half.
+    check(f"{os.path.basename(rel)}: no function outside {sorted(allowed)} changed",
+          changed <= allowed, f"also changed: {sorted(changed - allowed)}")
 
 # The deterministic money modules must be untouched outright.
 for rel in (f"{MOD}/account/coa.py", f"{MOD}/account/autocompute.py",

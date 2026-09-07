@@ -61,6 +61,8 @@ def ocr_receipt(raw: bytes, ext: str) -> tuple[dict, dict]:
             messages=[{"role": "user", "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": media, "data": b64}},
                 {"type": "text", "text": _OCR_PROMPT}]}])
+        from app.modules.billing import ai_meter as _ai_meter
+        _ai_meter.record("pos_receipt_ocr", settings.ACCOUNT_ENGINE_MODEL, msg)  # usage metering only (mig 972/973) — no auth implication
         text = "".join(getattr(b, "text", "") for b in msg.content) if msg.content else ""
         text = text.strip()
         if text.startswith("```"):

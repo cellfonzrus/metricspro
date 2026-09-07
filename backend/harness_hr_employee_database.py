@@ -1,7 +1,7 @@
 """Integration-style proof for the Employee Database report (OWNER DIRECTIVE 2026-07-29).
 
 Runs the ACTUAL shipped `hr_employee_database` / `hr_employee_database_fields` / `_mask_last4` /
-`_mask_ssn` / `_dd_field_is_masked` / `_require_admin_reveal` from app.modules.hr.router against an
+`_dd_field_is_masked` / `_require_admin_reveal` from app.modules.hr.router against an
 in-memory fake Supabase client (same convention as harness_payroll_salary_router_integration.py /
 harness_hr_compliance_doc_filters.py) — no live DB/network. Run:
 `python3 harness_hr_employee_database.py` from backend/.
@@ -11,8 +11,8 @@ Proves (see PROOF section in the final report for the mapping to the work order'
      gets 401 for both reveal=false and reveal=true WITHOUT the `employees` table ever being touched
      (instrumented table-access log, not just "an exception happened").
   2. Masked-by-default: an HR-titled (non-admin) caller's reveal=false response has dd_routing/
-     dd_account rendered as last-4-real/rest-masked, dd_bank_name/dd_account_type UNMASKED, and ssn
-     always "(not collected)".
+     dd_account rendered as last-4-real/rest-masked, dd_bank_name/dd_account_type UNMASKED, and NO
+     ssn field present at all (capture removed outright by 1a6038bd, owner directive).
   3. reveal=true from an HR-titled (non-admin, non-super-admin) caller is REJECTED 403 — narrower
      than the base HR/admin page gate — before any employee row is read (same instrumented proof).
   4. reveal=true from an admin (and, separately, a super_admin with a non-'admin' role title) caller
@@ -33,12 +33,16 @@ Proves (see PROOF section in the final report for the mapping to the work order'
  11. Encryption-key-lost degrade: a value encrypted under a key no longer configured renders
      "(unavailable — encryption key rotated/lost)" in BOTH masked and revealed responses — never a
      crash, never silently blank.
- 12. Pure masking-format unit checks: `_mask_last4` / `_mask_ssn` (SSN not wired to real data today —
-     see the router docstring — but the format is proven ready).
+ 12. Pure masking-format unit checks for `_mask_last4`, plus proof that the SSN surface is GONE:
+     no `_mask_ssn` helper and no `ssn` column in the catalog (1a6038bd, owner directive).
 """
+import os
 import sys
 
-sys.path.insert(0, ".")
+# Anchor imports AND every source read below to THIS file's own directory, so the
+# harness runs identically from backend/ and from the repo root (cf. 564c171f).
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 
 PASS, FAIL = [], []
 
@@ -141,6 +145,7 @@ def fake_get_supabase():
     return FAKE_CLIENT
 
 
+import _harness_dbfree  # noqa: E402
 import app.modules.hr.router as hr_router          # noqa: E402
 import app.modules.core.router as core_router_mod  # noqa: E402
 from fastapi import HTTPException                  # noqa: E402
@@ -148,6 +153,11 @@ from app.core import crypto                         # noqa: E402
 from app.core.config import settings                 # noqa: E402
 
 hr_router.get_supabase = fake_get_supabase
+# DB-FREE GUARD: the line(s) above bind only THIS module's name. Shipped code also
+# reaches the factory directly (tenant_middleware.caller_app_user) and through other
+# routers' sb() (storeops.router._rbac_enabled), both of which used to land on the
+# REAL production client. Route every acquisition in the process at the fake.
+_harness_dbfree.install(FAKE_CLIENT)
 core_router_mod._uid_from_token = lambda auth: {
     "Bearer admin": "admin-uid", "Bearer hr": "hr-uid", "Bearer rep": "rep-uid",
     "Bearer super": "super-uid", "Bearer org2admin": "org2admin-uid",
@@ -253,7 +263,15 @@ try:
     check("2 dd_account masked (last4 real)", e1["dd_account"] == "x" * (len(DD_ACCOUNT_PLAIN) - 4) + DD_ACCOUNT_PLAIN[-4:], e1["dd_account"])
     check("2 dd_bank_name NOT masked", e1["dd_bank_name"] == "Chase Bank", e1["dd_bank_name"])
     check("2 dd_account_type NOT masked", e1["dd_account_type"] == "Checking", e1["dd_account_type"])
-    check("2 ssn always not-collected", e1["ssn"] == "(not collected)", e1["ssn"])
+    # SSN CAPTURE WAS REMOVED OUTRIGHT (commit 1a6038bd, explicit owner directive: "SSN and
+    # driver's licence capture is disabled, not deleted. The application no longer collects it").
+    # This used to assert the placeholder `ssn == "(not collected)"`. Asserting the STRONGER
+    # property the product now has: there is no SSN key to leak in the first place — not in this
+    # row, not anywhere in the payload.
+    check("2 no SSN key on the row at all (capture removed, not merely blanked)",
+          "ssn" not in e1, sorted(e1))
+    check("2 the word 'ssn' appears nowhere in the whole masked payload",
+          "ssn" not in str(r).lower(), [k for k in e1 if "ssn" in k.lower()])
     check("2 personal_email surfaced", e1["personal_email"] == "alice.personal@example.com", e1["personal_email"])
     check("2 no full dd value anywhere in non-reveal payload", DD_ROUTING_PLAIN not in str(r) and DD_ACCOUNT_PLAIN not in str(r))
 
@@ -272,7 +290,12 @@ try:
     e1r = next(x for x in r_admin["employees"] if x["employee_id"] == "E1")
     check("4 admin reveal -> full routing", e1r["dd_routing"] == DD_ROUTING_PLAIN, e1r["dd_routing"])
     check("4 admin reveal -> full account", e1r["dd_account"] == DD_ACCOUNT_PLAIN, e1r["dd_account"])
-    check("4 admin reveal -> ssn still not-collected (nothing to reveal)", e1r["ssn"] == "(not collected)")
+    # The sharpest form of the privacy guarantee: even the MOST privileged path (an admin with an
+    # audited reveal=true) cannot surface an SSN, because none is collected or stored.
+    check("4 admin reveal=true surfaces no SSN key (nothing exists to reveal)",
+          "ssn" not in e1r, sorted(e1r))
+    check("4 the word 'ssn' appears nowhere in the REVEALED payload either",
+          "ssn" not in str(r_admin).lower())
     check("4 exactly one audit event written", len(STORE["onboarding_event"]) == before_events + 1, STORE["onboarding_event"])
     ev = STORE["onboarding_event"][-1]
     check("4 audit event type", ev["event_type"] == "employee_database_reveal", ev)
@@ -349,8 +372,17 @@ try:
     check("12b mask_last4 short (<=4) fully masked", hr_router._mask_last4("12") == "xx")
     check("12c mask_last4 empty", hr_router._mask_last4("") == "")
     check("12d mask_last4 none", hr_router._mask_last4(None) == "")
-    check("12e mask_ssn 9-digit standard grouping", hr_router._mask_ssn("123-45-6789") == "xxx-xx-6789")
-    check("12f mask_ssn non-9-digit falls back to generic last4", hr_router._mask_ssn("12345") == "xxx45" or hr_router._mask_ssn("12345") == hr_router._mask_last4("12345"))
+    # `_mask_ssn` existed to prove the masking FORMAT was ready for a field the app had not yet
+    # wired. 1a6038bd removed SSN capture altogether, so the helper went with it. The masking-format
+    # checks are replaced by the guarantee that supersedes them: the SSN surface is gone, so there
+    # is nothing left to mask. (A returning _mask_ssn would mean SSN capture is creeping back in and
+    # should fail this harness until the owner directive is revisited.)
+    check("12e the SSN masking helper is GONE, not merely unused — the app cannot mask what it "
+          "must never collect", not hasattr(hr_router, "_mask_ssn"))
+    check("12f the column CATALOG offers no SSN field, so it can never be selected or revealed",
+          all((f.get("key") or "").lower() != "ssn"
+              for f in hr_router.hr_employee_database_fields(authorization="Bearer admin")["fields"]),
+          [f.get("key") for f in hr_router.hr_employee_database_fields(authorization="Bearer admin")["fields"]])
     check("12g dd_field_is_masked: routing/account True, type/name False",
           hr_router._dd_field_is_masked("dd_routing") and hr_router._dd_field_is_masked("dd_account")
           and not hr_router._dd_field_is_masked("dd_account_type") and not hr_router._dd_field_is_masked("dd_bank_name"))

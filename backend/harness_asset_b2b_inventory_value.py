@@ -40,6 +40,7 @@ crux of proof (1) above) feeds the REAL module code directly.
 Run:  cd backend && python3 harness_asset_b2b_inventory_value.py
 """
 import asyncio
+import inspect
 import sys
 
 sys.path.insert(0, ".")
@@ -195,12 +196,29 @@ class BrokenInventoryValueClient(FakeClient):
         return real
 
 
-def _run(coro):
-    return asyncio.run(coro)
+def _run(res):
+    """Run the handler's result: await it if it is a coroutine, pass it through if it is not.
+
+    `upload_b2b_inventory` used to be `async def` and is now a plain `def`. Hard-coding one or the
+    other made this harness die on a refactor that changed nothing about the behaviour it proves.
+    """
+    return asyncio.run(res) if inspect.iscoroutine(res) else res
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 from app.modules.asset import router as R  # noqa: E402
+
+
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
 
 ROWS_VALUE_ONLY = [
     {"store": "1800 Great Neck Rd", "value": "1000"},
@@ -216,7 +234,8 @@ c1 = FakeClient(store={
     ],
 })
 R.sb = lambda: c1
-resp = _run(R.upload_b2b_inventory({"as_of_date": "2026-07-01", "rows": ROWS_VALUE_ONLY}, org_id=ORG_A))
+resp = _run(R.upload_b2b_inventory(
+    _body(R.UploadB2bInventoryIn, {"as_of_date": "2026-07-01", "rows": ROWS_VALUE_ONLY}), org_id=ORG_A))
 rows_a = [r for r in c1.store[("commcalc", "inventory_value")] if r["org_id"] == ORG_A]
 rows_b = [r for r in c1.store[("commcalc", "inventory_value")] if r["org_id"] == ORG_B]
 ok("1a org A gets exactly one summed row (1000+500)",
@@ -236,7 +255,8 @@ c2 = FakeClient(store={
     ],
 })
 R.sb = lambda: c2
-resp = _run(R.upload_b2b_inventory({"as_of_date": "2026-07-15", "rows": ROWS_VALUE_ONLY}, org_id=ORG_A))
+resp = _run(R.upload_b2b_inventory(
+    _body(R.UploadB2bInventoryIn, {"as_of_date": "2026-07-15", "rows": ROWS_VALUE_ONLY}), org_id=ORG_A))
 row = [r for r in c2.store[("commcalc", "inventory_value")] if r["org_id"] == ORG_A][0]
 ok("2a swept_value DID update (newer as_of_date, normal path)", row["swept_value"] == 1500.0, row)
 ok("2b manual_value is EXACTLY what it was before (42000.0, never touched)",
@@ -255,7 +275,8 @@ c3 = FakeClient(store={
     ],
 })
 R.sb = lambda: c3
-resp = _run(R.upload_b2b_inventory({"as_of_date": "2026-07-01", "rows": ROWS_VALUE_ONLY}, org_id=ORG_A))
+resp = _run(R.upload_b2b_inventory(
+    _body(R.UploadB2bInventoryIn, {"as_of_date": "2026-07-01", "rows": ROWS_VALUE_ONLY}), org_id=ORG_A))
 row = [r for r in c3.store[("commcalc", "inventory_value")] if r["org_id"] == ORG_A][0]
 ok("3a swept_value stays at the NEWER value (5000), not overwritten by the older upload's 1500",
    row["swept_value"] == 5000.0, row)
@@ -275,7 +296,8 @@ c4 = FakeClient(store={
     ],
 })
 R.sb = lambda: c4
-resp = _run(R.upload_b2b_inventory({"as_of_date": "2026-07-01", "rows": ROWS_VALUE_ONLY}, org_id=ORG_A))
+resp = _run(R.upload_b2b_inventory(
+    _body(R.UploadB2bInventoryIn, {"as_of_date": "2026-07-01", "rows": ROWS_VALUE_ONLY}), org_id=ORG_A))
 row = [r for r in c4.store[("commcalc", "inventory_value")] if r["org_id"] == ORG_A][0]
 ok("4a equal as_of_date corrects the value (1500), not blocked", row["swept_value"] == 1500.0, row)
 ok("4b nothing reported as skipped-stale", resp["inventory_value_skipped_stale"] == [], resp)
@@ -283,7 +305,8 @@ ok("4b nothing reported as skipped-stale", resp["inventory_value_skipped_stale"]
 print("\n5. First-ever upload for a store (no existing row) is never blocked")
 c5 = FakeClient(store={("commcalc", "store_mapping"): [], ("commcalc", "inventory_value"): []})
 R.sb = lambda: c5
-resp = _run(R.upload_b2b_inventory({"as_of_date": "2026-07-01", "rows": ROWS_VALUE_ONLY}, org_id=ORG_A))
+resp = _run(R.upload_b2b_inventory(
+    _body(R.UploadB2bInventoryIn, {"as_of_date": "2026-07-01", "rows": ROWS_VALUE_ONLY}), org_id=ORG_A))
 ok("5a new row created", resp["inventory_value_stores"] == 1 and resp["inventory_value_total"] == 1500.0, resp)
 ok("5b nothing reported as skipped-stale", resp["inventory_value_skipped_stale"] == [], resp)
 
@@ -296,7 +319,8 @@ c6 = FakeClient(store={
     ],
 })
 R.sb = lambda: c6
-resp = _run(R.upload_b2b_inventory({"as_of_date": "2026-07-01", "rows": ROWS_VALUE_ONLY}, org_id=ORG_A))
+resp = _run(R.upload_b2b_inventory(
+    _body(R.UploadB2bInventoryIn, {"as_of_date": "2026-07-01", "rows": ROWS_VALUE_ONLY}), org_id=ORG_A))
 row = [r for r in c6.store[("commcalc", "inventory_value")] if r["org_id"] == ORG_A][0]
 ok("6a garbage existing as_of_date -> guard can't read it -> write proceeds (fails open)",
    row["swept_value"] == 1500.0, row)
@@ -307,7 +331,8 @@ ok("6b _iso_date_key itself returns None for garbage / None / short strings",
 print("\n7. Degrade path — commcalc.inventory_value missing (pre-migration-026) never breaks the upload")
 c7 = BrokenInventoryValueClient(store={("commcalc", "store_mapping"): []})
 R.sb = lambda: c7
-resp = _run(R.upload_b2b_inventory({"as_of_date": "2026-07-01", "rows": ROWS_VALUE_ONLY}, org_id=ORG_A))
+resp = _run(R.upload_b2b_inventory(
+    _body(R.UploadB2bInventoryIn, {"as_of_date": "2026-07-01", "rows": ROWS_VALUE_ONLY}), org_id=ORG_A))
 ok("7a degrades to 0 stores / 0 total / 0 skipped, no exception raised",
    resp["inventory_value_stores"] == 0 and resp["inventory_value_total"] == 0.0
    and resp["inventory_value_skipped_stale"] == [], resp)
@@ -324,7 +349,8 @@ mixed_rows = [
     {"store": "1800 Great Neck Rd", "category": "iPhone", "qty": "2", "value": "600"},   # canon variant
     {"store": "1800 Great Neck Rd", "category": "Accessory", "qty": "5"},                # unmappable bucket, no value
 ]
-resp = _run(R.upload_b2b_inventory({"as_of_date": "2026-07-01", "rows": mixed_rows}, org_id=ORG_A))
+resp = _run(R.upload_b2b_inventory(
+    _body(R.UploadB2bInventoryIn, {"as_of_date": "2026-07-01", "rows": mixed_rows}), org_id=ORG_A))
 inv_rows = [r for r in c8.store[("commcalc", "inventory_value")] if r["org_id"] == ORG_A]
 ok("8a both store-spelling variants land under ONE canonical inventory_value row",
    len(inv_rows) == 1 and inv_rows[0]["store"] == "1800 Great Neck Rd" and inv_rows[0]["swept_value"] == 1500.0,

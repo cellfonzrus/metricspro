@@ -85,9 +85,19 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   // Carrier vocabulary (owner 2026-09-04): the bill-pay processor and financing-program names are
   // preset DATA per carrier (mig 953 — boost: ePay/ACIMA = byte-identical to today; total:
   // VidaPay/Edge), never hardcoded to one carrier's brand on this shared form.
-  const { term } = useReportLabels()
+  const { term, colLabel } = useReportLabels()
   const procName = term('processor', 'Bill-pay')
   const finName = term('financing', 'Financing')
+  // EXTERNAL CREDIT MACHINE (owner 2026-09-04): the standalone third-party card terminal the POS
+  // does not integrate. What a tenant CALLS it is a mig-960 carrier label PRESET on the existing
+  // mig-945/953 machinery (registry key `closing_t_ext_cc`), tenant-overridable — never a tenant
+  // or carrier branch here. No preset ⇒ the built-in wording below, byte-identical to today.
+  const extCcName = colLabel('closing_t_ext_cc', 'External Credit Card')
+  // One label rule for the tender boxes, so the grid, the totals and the export agree.
+  const tenderLabel = (t: { key: TenderKey; label: string }) =>
+    t.key === 't_acima' ? `${finName} (lease) $`
+      : t.key === 't_ext_cc' ? `${extCcName} $`
+        : t.label
   const [f, setF] = useState<State>(blank())
   const [stores, setStores] = useState<any[]>([])
   const [recent, setRecent] = useState<any[]>([])
@@ -443,12 +453,12 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           <>
             <Row>
               {TENDERS.slice(0, 3).map(t => (
-                <Field key={t.key} label={t.key === 't_acima' ? `${finName} (lease) $` : t.label}><input style={inp} inputMode="decimal" value={f[t.key]} onChange={e => set({ [t.key]: e.target.value } as Partial<State>)} placeholder="0.00" /></Field>
+                <Field key={t.key} label={tenderLabel(t)}><input style={inp} inputMode="decimal" value={f[t.key]} onChange={e => set({ [t.key]: e.target.value } as Partial<State>)} placeholder="0.00" /></Field>
               ))}
             </Row>
             <Row>
               {TENDERS.slice(3).map(t => (
-                <Field key={t.key} label={t.key === 't_acima' ? `${finName} (lease) $` : t.label}><input style={inp} inputMode="decimal" value={f[t.key]} onChange={e => set({ [t.key]: e.target.value } as Partial<State>)} placeholder="0.00" /></Field>
+                <Field key={t.key} label={tenderLabel(t)}><input style={inp} inputMode="decimal" value={f[t.key]} onChange={e => set({ [t.key]: e.target.value } as Partial<State>)} placeholder="0.00" /></Field>
               ))}
             </Row>
           </>
@@ -600,7 +610,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           <div className="card table-wrapper" style={{ padding: 0 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {['Employee', 'Store', 'Cash', 'Credit', 'Ext CC', 'Gift', 'Acct', 'Zelle', 'Acc', ...countCols.map(c => c.label), ''].map((h, i) =>
+                {['Employee', 'Store', 'Cash', 'Credit', extCcName, 'Gift', 'Acct', 'Zelle', 'Acc', ...countCols.map(c => c.label), ''].map((h, i) =>
                   <th key={i} style={{ textAlign: 'left', padding: '6px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
               </tr></thead>
               <tbody>

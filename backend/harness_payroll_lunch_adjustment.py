@@ -83,6 +83,18 @@ class FakeClient:
 import app.modules.storeops.payroll_approval as R           # noqa: E402
 import app.modules.storeops.router as SR                     # noqa: E402
 
+
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
+
 ORG = "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
 S, E = date(2026, 8, 3), date(2026, 8, 10)
 
@@ -97,6 +109,12 @@ HOURS = [{"employee_id": "E1", "name": "Rep One", "store": "957",
 
 R._hours_for_period = lambda org, s, e, auth: copy.deepcopy(HOURS)
 R._resolve_period = lambda org, s, e: (S, E)
+# The approvals board strips every pay-scale figure from the payload when the caller may not see pay
+# rates (owner 2026-08-11, mig 434) and FAILS CLOSED on a caller it cannot resolve — which the fake
+# "Bearer t" is. That gate is not this harness's subject (the HOURS arithmetic is), so resolve the
+# caller as one who MAY see pay. The gate is not merely switched off: B11 below asserts that it still
+# strips the pay columns when it denies.
+R._can_see_pay_rates = lambda *a, **k: True
 R._payers = lambda org: []
 R._store_payer_map = lambda org: {}
 
@@ -131,17 +149,17 @@ ok(r["adjustment_hours"] == 0 and r["adjustment_reason"] is None,
 print("\n=== B · an adjustment moves a payroll number, so it needs a reason ===")
 store, fc = fresh()
 LOGGED.clear()
-res = R.decide({"stage": "dm", "rows": [
-    {"employee_id": "E1", "action": "approve", "adjustment_hours": 3}]},
+res = R.decide(_body(R.PayrollDecideIn, {"stage": "dm", "rows": [
+    {"employee_id": "E1", "action": "approve", "adjustment_hours": 3}]}),
     authorization="Bearer t", org_id=ORG)
 ok(res["applied"] == 0 and "reason" in (res["errors"][0]["error"]),
    "B1 an adjustment with no reason is REFUSED")
 ok(not store["payroll_approval"], "B2 the refused row was not written at all")
 ok(not LOGGED, "B3 nothing was logged for a refused adjustment")
 
-res = R.decide({"stage": "dm", "rows": [
+res = R.decide(_body(R.PayrollDecideIn, {"stage": "dm", "rows": [
     {"employee_id": "E1", "action": "approve", "adjustment_hours": 3,
-     "adjustment_reason": "covered the Penn Ave close, missed punch"}]},
+     "adjustment_reason": "covered the Penn Ave close, missed punch"}]}),
     authorization="Bearer t", org_id=ORG)
 ok(res["applied"] == 1, "B4 with a reason it goes through")
 saved = store["payroll_approval"][0]
@@ -158,19 +176,26 @@ ok(round(r["hours_worked"] - r["lunch_hours"] + r["adjustment_hours"], 2) == r["
 ok(r["hours_effective"] == 37.0, "B9 the DM approves the PAYABLE figure")
 ok(r["pay_effective"] == 740.0, "B10 pay follows payable hours (37.0 × $20)")
 
+R._can_see_pay_rates = lambda *a, **k: False
+_denied = board()["rows"][0]
+ok("pay_effective" not in _denied and "pay_rate" not in _denied,
+   "B11 a caller who may NOT see pay scales gets every pay figure STRIPPED from the payload "
+   "(the gate above was resolved, not disabled)")
+R._can_see_pay_rates = lambda *a, **k: True
+
 print("\n=== C · the guard rails ===")
 store, fc = fresh()
-res = R.decide({"stage": "dm", "rows": [
+res = R.decide(_body(R.PayrollDecideIn, {"stage": "dm", "rows": [
     {"employee_id": "E1", "action": "approve", "adjustment_hours": -40,
-     "adjustment_reason": "typo"}]}, authorization="Bearer t", org_id=ORG)
+     "adjustment_reason": "typo"}]}), authorization="Bearer t", org_id=ORG)
 ok(res["applied"] == 0 and "negative" in res["errors"][0]["error"],
    "C1 an adjustment that drives payable below zero is refused")
 
 store, fc = fresh()
-R.decide({"stage": "dm", "rows": [{"employee_id": "E1", "action": "approve",
-                                   "adjustment_hours": 2, "adjustment_reason": "missed punch"}]},
+R.decide(_body(R.PayrollDecideIn, {"stage": "dm", "rows": [{"employee_id": "E1", "action": "approve",
+                                   "adjustment_hours": 2, "adjustment_reason": "missed punch"}]}),
          authorization="Bearer t", org_id=ORG)
-R.decide({"stage": "hr", "rows": [{"employee_id": "E1", "action": "approve"}]},
+R.decide(_body(R.PayrollDecideIn, {"stage": "hr", "rows": [{"employee_id": "E1", "action": "approve"}]}),
          authorization="Bearer t", org_id=ORG)
 saved = store["payroll_approval"][0]
 ok(saved["adjustment_hours"] == 2.0,
@@ -180,8 +205,8 @@ ok(saved["hr_status"] == "approved" and saved["dm_status"] == "approved",
 
 # an explicit hours_approved override still beats the computed payable
 store, fc = fresh()
-R.decide({"stage": "dm", "rows": [{"employee_id": "E1", "action": "approve",
-                                   "hours_approved": 30, "reason": "agreed with the rep"}]},
+R.decide(_body(R.PayrollDecideIn, {"stage": "dm", "rows": [{"employee_id": "E1", "action": "approve",
+                                   "hours_approved": 30, "reason": "agreed with the rep"}]}),
          authorization="Bearer t", org_id=ORG)
 r = board()["rows"][0]
 ok(r["hours_effective"] == 30.0, "C4 an explicit hours_approved override still wins over payable")
@@ -189,7 +214,7 @@ ok(r["hours_payable"] == 34.0, "C5 …and payable still reports what the maths s
 
 print("\n=== D · an approved week cannot restate itself in silence ===")
 store, fc = fresh()
-R.decide({"stage": "dm", "rows": [{"employee_id": "E1", "action": "approve"}]},
+R.decide(_body(R.PayrollDecideIn, {"stage": "dm", "rows": [{"employee_id": "E1", "action": "approve"}]}),
          authorization="Bearer t", org_id=ORG)
 saved = store["payroll_approval"][0]
 ok(saved["worked_at_approval"] == 36.5 and saved["lunch_at_approval"] == 2.5,
@@ -204,7 +229,7 @@ ok(r["hours_drifted"] is True,
 ok(r["worked_at_approval"] == 36.5, "D4 the board still shows what was actually approved")
 HOURS[0]["actual_hours"] = 34.0
 
-R.decide({"stage": "dm", "rows": [{"employee_id": "E1", "action": "reset"}]},
+R.decide(_body(R.PayrollDecideIn, {"stage": "dm", "rows": [{"employee_id": "E1", "action": "reset"}]}),
          authorization="Bearer t", org_id=ORG)
 saved = store["payroll_approval"][0]
 ok(saved["worked_at_approval"] is None and saved["lunch_at_approval"] is None,

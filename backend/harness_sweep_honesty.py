@@ -60,6 +60,34 @@ def check(name, cond):
         print(f"  FAIL  {name}")
 
 
+class _Missing(dict):
+    """Stands in for a row/alert the sweep was supposed to produce but did not.
+
+    WHY. Assertions below index the first recorded row (`email_processed[0]`, `alerts[0]`). When a
+    change upstream stops the sweep recording anything, that raises IndexError and the harness DIES
+    mid-file — which reads as "not run" rather than "failed" and silently retires every assertion
+    after it. That is exactly how the section-3 IndexError hid the stale `fetch_new_attachments`
+    stub. `first()` converts an absent row into a LOUD, recorded failure and hands back this object,
+    whose every lookup is falsy, so the dependent checks fail honestly instead of exploding.
+    """
+
+    def __getitem__(self, k):
+        return ''
+
+    def get(self, k, default=None):
+        return ''
+
+
+def first(seq, what):
+    """seq[0], or a recorded FAILURE plus a falsy stand-in when the sweep produced nothing."""
+    if seq:
+        return seq[0]
+    check(f"ANCHOR: the sweep produced a {what} for the assertions below to inspect", False)
+    return _Missing()
+
+
+
+
 HOUSE = "00000000-0000-0000-0000-000000000001"
 TEN = "00000000-0000-0000-0000-0000000000aa"
 
@@ -75,6 +103,7 @@ class _Q:
 
     def select(self, *a, **k):
         self._verb = 'select'
+        self._cols = list(a)          # recorded so a SCHEMA PROBE can be told from a DATA read
         return self
 
     def eq(self, k, v):
@@ -107,7 +136,8 @@ class _Q:
     def execute(self):
         v = getattr(self, '_verb', 'select')
         self.log.append({'table': self.t, 'verb': v, 'eq': dict(self._eq),
-                         'row': getattr(self, '_row', None)})
+                         'row': getattr(self, '_row', None),
+                         'cols': list(getattr(self, '_cols', [])), 'limit': self._limit})
         if v in ('upsert', 'insert', 'update') and self.t in self._fail:
             raise RuntimeError(f"write to {self.t} rejected (fake)")
         rows = self.s.setdefault(self._key(), [])
@@ -230,28 +260,50 @@ check("_ingest_rows_saved reads every count spelling (saved/tenders/stores/rows/
       and R._ingest_rows_saved(None) == 0)
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-print("\n── 2. OLD-vs-NEW differential against the REAL pre-change email ladder (origin/main) ──")
-_old_ladder = None
-try:
-    _main_src = subprocess.check_output(
-        ['git', 'show', 'origin/main:backend/app/modules/commcalc/router.py'],
-        cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), '..')), text=True)
-    _i = _main_src.index("            rows_saved = (res or {}).get('saved', 0)\n"
-                         "            shrink = (res or {}).get('shrink') or []")
-    _j = _main_src.index("        except HTTPException as he:", _i)
-    _block = textwrap.dedent(_main_src[_i:_j])
-    _fn = ("def _old_ladder(res, XREPORT_ZERO_REASONS):\n"
-           "    status, detail, rows_saved, shrink, skipped_flag = 'ok', None, 0, [], None\n"
-           + textwrap.indent(_block, '    ')
-           + "    return status, detail, rows_saved\n")
-    _ns = {}
-    exec(compile(_fn, '<origin/main email ladder>', 'exec'), _ns)
-    _old_ladder = _ns['_old_ladder']
-except Exception as e:                                            # pragma: no cover
-    print(f"  (could not extract the origin/main ladder: {e})")
+print("\n── 2. OLD-vs-NEW differential against the REAL pre-change email ladder (pinned commit) ──")
+# WHY THIS BLOCK IS ANCHORED TO A COMMIT AND NOT TO `origin/main`.
+# The differential compares today's ladder against the code as it was BEFORE the honest-zero fix.
+# It read that "before" from `origin/main` — a MOVING ref. The fix merged, origin/main absorbed it,
+# the old text ceased to exist there, `str.index` raised, and the bare `except` printed a
+# parenthetical note and set `_old_ladder = None`. The `if _old_ladder:` below then skipped FIVE
+# assertions while the run still reported all-green: the harness whose entire job is to prove the
+# sweep never reports a green lie was, itself, reporting a green lie. That is the single most
+# important thing this repair fixes.
+#
+# Two changes. (1) The counterparty is now `f66139f2^` — the immutable commit immediately before
+# "fix(commcalc): FTP/email sweep honest-zero + dedup parity" — so the differential is runnable
+# forever instead of until the next merge. (2) Failing to extract it is now a LOUD FAILURE, never a
+# silent skip: if no candidate ref yields the old ladder, the check below goes red and says so.
+_old_ladder, _ladder_err, _ladder_ref = None, None, None
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+_CANDIDATE_REFS = [r for r in (os.environ.get('SWEEP_BASE_REF'), 'f66139f2^', 'origin/main') if r]
+for _ref in _CANDIDATE_REFS:
+    try:
+        _main_src = subprocess.check_output(
+            ['git', 'show', f'{_ref}:backend/app/modules/commcalc/router.py'],
+            cwd=_REPO_ROOT, text=True, stderr=subprocess.DEVNULL)
+        _i = _main_src.index("            rows_saved = (res or {}).get('saved', 0)\n"
+                             "            shrink = (res or {}).get('shrink') or []")
+        _j = _main_src.index("        except HTTPException as he:", _i)
+        _block = textwrap.dedent(_main_src[_i:_j])
+        _fn = ("def _old_ladder(res, XREPORT_ZERO_REASONS):\n"
+               "    status, detail, rows_saved, shrink, skipped_flag = 'ok', None, 0, [], None\n"
+               + textwrap.indent(_block, '    ')
+               + "    return status, detail, rows_saved\n")
+        _ns = {}
+        exec(compile(_fn, f'<{_ref} email ladder>', 'exec'), _ns)
+        _old_ladder, _ladder_ref = _ns['_old_ladder'], _ref
+        break
+    except Exception as e:                                        # pragma: no cover
+        _ladder_err = f'{_ref}: {type(e).__name__}: {e}'
+
+if _old_ladder is None:                                           # pragma: no cover
+    print(f"        tried {_CANDIDATE_REFS}; last error: {_ladder_err}\n"
+          f"        set SWEEP_BASE_REF to a ref that still contains the pre-fix email ladder.")
+check("the pre-change ladder was extracted from a PERMANENT ref and runs "
+      f"(ref={_ladder_ref or 'NONE'})", _old_ladder is not None)
 
 if _old_ladder:
-    check("the pre-change ladder was extracted from origin/main and runs", True)
     agreed, diverged = [], []
     for name, res in PAYLOADS.items():
         o = R._sweep_ingest_outcome(res, upload_type='daily_sales')
@@ -285,8 +337,19 @@ def run_email(store, attachments, payloads, *, org=HOUSE, fail_writes_on=(), ale
     (or an HTTPException to raise)."""
     log = []
     R.sb = lambda: FakeClient(store, log, fail_writes_on)                       # noqa: E731
-    R._email.fetch_new_attachments = lambda cfg, already: [
-        a for a in attachments if (a['message_id'], a['name']) not in already]
+    # The REAL signature is `fetch_new_attachments(cfg, already, unrouted=None)`, and the sweep calls
+    # it with all three (router.py: `await _asyncio.to_thread(_email.fetch_new_attachments, cfg,
+    # already, _unrouted)`). `unrouted` is a genuine later FEATURE — the list the fetcher appends
+    # "data file that matched no pattern" records to, so a report renamed at the source is surfaced
+    # instead of dropped silently. This stub still took two arguments, so every email sweep died
+    # inside the driver with "takes 2 positional arguments but 3 were given", the sweep recorded
+    # NOTHING, and section 3 then blew up on `email_processed[0]` — an IndexError standing in for
+    # what was really a stale test double. Mirrors the real contract now, including leaving
+    # `unrouted` untouched (every fixture attachment matches a pattern).
+    def _fetch(cfg, already, unrouted=None):
+        return [a for a in attachments if (a['message_id'], a['name']) not in already]
+
+    R._email.fetch_new_attachments = _fetch
     seen_files = []
 
     async def _uf(ut, uf, period, force=False, org_id=None, trace_source=None, **kw):
@@ -365,8 +428,8 @@ for fx in ('clean_sales', 'price_guard', 'inv_devices_only', 'xreport_zero', 'ma
     eo, _l, _s = run_email(es, [att('f.csv')], {'f.csv': PAYLOADS[fx]})
     fs = ftp_store()
     fo, _l2, _s2 = run_ftp(fs, [ffile('f.csv')], {'f.csv': PAYLOADS[fx]})
-    er = es['commcalc.email_processed'][0]
-    fr = fs['commcalc.ftp_processed'][0]
+    er = first(es['commcalc.email_processed'], 'email_processed row')
+    fr = first(fs['commcalc.ftp_processed'], 'ftp_processed row')
     check(f"{fx}: FTP records the same status/detail/rows as email "
           f"({er['status']} · {er['rows_saved']} rows)",
           (er['status'], er['detail'], er['rows_saved']) == (fr['status'], fr['detail'], fr['rows_saved']))
@@ -374,18 +437,18 @@ for fx in ('clean_sales', 'price_guard', 'inv_devices_only', 'xreport_zero', 'ma
 fs = ftp_store()
 fo, _l, _s = run_ftp(fs, [ffile('inv.csv', 'inventory_aging')], {'inv.csv': PAYLOADS['inv_devices_only']})
 check("FTP now records the REAL row count for a device-only inventory ingest (743, was 0)",
-      fs['commcalc.ftp_processed'][0]['rows_saved'] == 743)
+      first(fs['commcalc.ftp_processed'], 'ftp_processed row')['rows_saved'] == 743)
 fs = ftp_store()
 fo, _l, _s = run_ftp(fs, [ffile('x.xlsx', 'x_report')], {'x.xlsx': PAYLOADS['xreport_zero']})
 check("FTP no longer records a green ✓ for an X-Report that saved 0 tender rows",
-      fs['commcalc.ftp_processed'][0]['status'] == 'skipped'
-      and 'header' in (fs['commcalc.ftp_processed'][0]['detail'] or ''))
+      first(fs['commcalc.ftp_processed'], 'ftp_processed row')['status'] == 'skipped'
+      and 'header' in (first(fs['commcalc.ftp_processed'], 'ftp_processed row')['detail'] or ''))
 check("...and the FTP sweep's status line names it instead of claiming 0/1 ingested only",
-      'saved 0 rows' in (fs['commcalc.ftp_sweep_config'][0]['last_status'] or ''))
+      'saved 0 rows' in (first(fs['commcalc.ftp_sweep_config'], 'ftp_sweep_config row')['last_status'] or ''))
 fs = ftp_store()
 fo, _l, _s = run_ftp(fs, [ffile('ma.csv', 'ma_commission')], {'ma.csv': PAYLOADS['clean_sales']})
 check("FTP passes NO period for the four DATE-KEYED reports (email-sweep parity)",
-      _s[0]['period'] == '')
+      first(_s, 'uploaded file record')['period'] == '')
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\n── 4. dedup: cannot RE-INGEST hourly (terminal outcomes are done) ────────────────────")
@@ -427,7 +490,7 @@ fs = ftp_store([{'org_id': HOUSE, 'filename': 'f.csv', 'file_size': 50, 'upload_
                  'rows_saved': 0, 'status': 'ok', 'detail': None}])
 o, _l, seen = run_ftp(fs, [ffile('f.csv')], {'f.csv': PAYLOADS['clean_sales']})
 check("a historical FTP green-zero row is retried ONCE and then settles honestly",
-      len(seen) == 1 and fs['commcalc.ftp_processed'][0]['rows_saved'] == 4533)
+      len(seen) == 1 and first(fs['commcalc.ftp_processed'], 'ftp_processed row')['rows_saved'] == 4533)
 fs2 = ftp_store([{'org_id': HOUSE, 'filename': 'f.csv', 'file_size': 50, 'upload_type': 'daily_sales',
                   'rows_saved': 4533, 'status': 'ok', 'detail': None}])
 o, _l, seen = run_ftp(fs2, [ffile('f.csv')], {'f.csv': PAYLOADS['clean_sales']})
@@ -441,14 +504,14 @@ o, _l, _s = run_email(es, [att('f.csv')], {'f.csv': PAYLOADS['clean_sales']},
 check("email: a failed history write is COUNTED (was `except Exception: pass`)",
       o['journal_failures'] == 1 and o['journal_first_error'])
 check("email: and reported on the mailbox status line, naming the re-processing consequence",
-      'could NOT be recorded' in (es['commcalc.email_sweep_config'][0]['last_status'] or ''))
+      'could NOT be recorded' in (first(es['commcalc.email_sweep_config'], 'email_sweep_config row')['last_status'] or ''))
 check("email: the ingest itself still counts as ingested (the rows DID land)", o['ingested'] == 1)
 fs = ftp_store()
 o, _l, _s = run_ftp(fs, [ffile('f.csv')], {'f.csv': PAYLOADS['clean_sales']},
                     fail_writes_on=('ftp_processed',))
 check("ftp: a failed history write is COUNTED and reported",
       o['journal_failures'] == 1
-      and 'could NOT be recorded' in (fs['commcalc.ftp_sweep_config'][0]['last_status'] or ''))
+      and 'could NOT be recorded' in (first(fs['commcalc.ftp_sweep_config'], 'ftp_sweep_config row')['last_status'] or ''))
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\n── 7. truncated-export (shrink) alert now fires on BOTH sweeps ───────────────────────")
@@ -457,14 +520,16 @@ SHRUNK = {'saved': 40, 'file_type': 'daily_sales',
 ea = []
 run_email(email_store(), [att('f.csv')], {'f.csv': SHRUNK}, alerts=ea)
 check("email: alerts (unchanged behaviour, now via the shared helper)",
-      len(ea) == 1 and 'dropped to 40 rows' in ea[0]['subject'] and 'Mailbox: default' in ea[0]['text'])
+      len(ea) == 1 and 'dropped to 40 rows' in first(ea, 'email shrink alert')['subject']
+      and 'Mailbox: default' in first(ea, 'email shrink alert')['text'])
 fa = []
 run_ftp(ftp_store(), [ffile('f.csv')], {'f.csv': SHRUNK}, alerts=fa)
 check("ftp: NOW alerts too (it discarded `shrink` entirely before)",
-      len(fa) == 1 and 'dropped to 40 rows' in fa[0]['subject'])
-check("ftp: the alert names the FTP source, not a mailbox", 'FTP: ftp.x/out/' in fa[0]['text'])
+      len(fa) == 1 and 'dropped to 40 rows' in first(fa, 'ftp shrink alert')['subject'])
+check("ftp: the alert names the FTP source, not a mailbox",
+      'FTP: ftp.x/out/' in first(fa, 'ftp shrink alert')['text'])
 check("both alerts share the ref key so one data drop cannot double-alert",
-      ea[0]['ref'] == fa[0]['ref'])
+      first(ea, 'email shrink alert')['ref'] == first(fa, 'ftp shrink alert')['ref'])
 fs = ftp_store()
 run_ftp(fs, [ffile('f.csv')], {'f.csv': SHRUNK}, alerts=[])
 check("ftp: the partial-export drop is also on the status line",
@@ -495,8 +560,25 @@ es['commcalc.email_processed'] = [
      'upload_type': 'daily_sales', 'rows_saved': 4533, 'status': 'ok'}]
 o, log, seen = run_email(es, [att('f.csv')], {'f.csv': PAYLOADS['clean_sales']}, org=TEN)
 check("the HOUSE journal row does NOT dedup the tenant's identical attachment", len(seen) == 1)
-check("every read carries .eq('org_id', <caller>)",
-      all(q['eq'].get('org_id') == TEN for q in log if q['verb'] == 'select'))
+# RULE ONE, read side. One exemption, and it is stated rather than hidden: `_table_has_column()`
+# (router.py) probes whether a column EXISTS by issuing `select(<col>).limit(1)` and throwing the
+# result away — it returns a bool, never rows. It carries no org filter because it is generic over
+# tables, some of which have no org_id. That is a schema question, not a tenant-data read, so it is
+# exempt; but the exemption is defined by SHAPE (exactly one column, limit 1), not by table name, so
+# it cannot quietly widen into "this table is allowed to skip org scoping".
+def _is_schema_probe(q):
+    return q['verb'] == 'select' and q['limit'] == 1 and len(q['cols']) == 1
+
+
+_data_reads = [q for q in log if q['verb'] == 'select' and not _is_schema_probe(q)]
+check("every DATA read carries .eq('org_id', <caller>)",
+      all(q['eq'].get('org_id') == TEN for q in _data_reads))
+check("the org-scope check is non-vacuous (it really saw the sweep's reads)",
+      len(_data_reads) >= 2)
+# And the exempted probes are only ever that: single-column, limit-1, no row data consumed.
+check("every org-unscoped read is a bare schema probe, nothing else",
+      all(_is_schema_probe(q) for q in log
+          if q['verb'] == 'select' and q['eq'].get('org_id') != TEN))
 check("every write STAMPS the caller's org_id (RULE ONE write side)",
       all((q['row'] or {}).get('org_id', TEN) == TEN for q in log
           if q['verb'] in ('upsert', 'insert')))

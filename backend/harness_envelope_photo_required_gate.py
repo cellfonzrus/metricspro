@@ -145,6 +145,18 @@ import app.modules.storeops.router as storeops         # noqa: E402
 import app.modules.closing.router as cr                # noqa: E402
 
 
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
+
+
 def wire(store, unrestricted_span=True, manager=True):
     fake = FakeClient(store)
     cr.sb = lambda: fake
@@ -192,7 +204,8 @@ check("row written with envelope_picture NULL (today's exact symptom, unblocked)
 print("\n== B. org default require_photo_if_cash=True -> cash>0 + no photo BLOCKS ==")
 store = fresh_store()
 fake = wire(store)
-cr.put_envelope_config({"require_photo_if_cash": True}, org_id=HOUSE, authorization="")
+cr.put_envelope_config(_body(cr.PutEnvelopeConfigIn, {"require_photo_if_cash": True}),
+                       org_id=HOUSE, authorization="")
 cfg = cr._envelope_config(fake, HOUSE, "S1")
 check("org default now reads True", cfg.get("require_photo_if_cash") is True)
 
@@ -227,7 +240,8 @@ check("$0 cash, no photo, gate ON -> still accepted", resp.get("accepted") is Tr
 # E. Per-store override turns the gate back OFF for one store
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\n== E. store override wins over org default ==")
-cr.put_envelope_config({"store_code": "S2", "require_photo_if_cash": False}, org_id=HOUSE, authorization="")
+cr.put_envelope_config(_body(cr.PutEnvelopeConfigIn, {"store_code": "S2", "require_photo_if_cash": False}),
+                       org_id=HOUSE, authorization="")
 cfg_s1 = cr._envelope_config(fake, HOUSE, "S1")
 cfg_s2 = cr._envelope_config(fake, HOUSE, "S2")
 check("S1 (no override) still True (org default)", cfg_s1.get("require_photo_if_cash") is True)
@@ -243,8 +257,8 @@ check("S2 cash>0, no photo, store override OFF -> accepted despite org default O
 print("\n== F. PUT/GET round-trip + sibling fields untouched ==")
 store2 = fresh_store()
 fake2 = wire(store2)
-cr.put_envelope_config({"take_commission": True, "take_salary": False, "commission_cadence": "weekly",
-                        "order_preference": "newest_first", "require_photo_if_cash": True},
+cr.put_envelope_config(_body(cr.PutEnvelopeConfigIn, {"take_commission": True, "take_salary": False, "commission_cadence": "weekly",
+                        "order_preference": "newest_first", "require_photo_if_cash": True}),
                        org_id=HOUSE, authorization="")
 got = cr.get_envelope_config(org_id=HOUSE)
 eff = got["effective"]
@@ -253,7 +267,8 @@ check("sibling field take_salary unaffected (False)", eff.get("take_salary") is 
 check("sibling field order_preference unaffected", eff.get("order_preference") == "newest_first")
 
 # Explicit False is honored too (not just "unset").
-cr.put_envelope_config({"require_photo_if_cash": False}, org_id=HOUSE, authorization="")
+cr.put_envelope_config(_body(cr.PutEnvelopeConfigIn, {"require_photo_if_cash": False}),
+                       org_id=HOUSE, authorization="")
 got2 = cr.get_envelope_config(org_id=HOUSE)
 check("explicit False round-trips as False", got2["effective"].get("require_photo_if_cash") is False)
 

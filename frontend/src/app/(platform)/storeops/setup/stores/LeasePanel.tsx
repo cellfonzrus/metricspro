@@ -9,6 +9,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
 import { sel } from '../lib'
+import ExtractionReview from '../insurance/ExtractionReview'
 
 type Due = { kind: 'week' | 'day'; value: number }
 type SchedRow = { effective_from: string; monthly_rent: number | string }
@@ -35,6 +36,15 @@ export default function LeasePanel({ storeCode }: { storeCode: string }) {
   const [sched, setSched] = useState<SchedRow[]>([])
   const [monthRent, setMonthRent] = useState<number | null>(null)
   const [upBusy, setUpBusy] = useState<Record<string, boolean>>({})
+  // migs 964-966 (owner 2026-09-05): the master policies COVERING this store, the store's expiry
+  // notification contacts (they cover both the lease and the certificate), and the AI reading of an
+  // uploaded document — held as a draft until a human accepts it (ExtractionReview).
+  const [policies, setPolicies] = useState<any[]>([])
+  const [contacts, setContacts] = useState<any[]>([])
+  const [noticeResolved, setNoticeResolved] = useState<number | null>(null)
+  const [extraction, setExtraction] = useState<any>(null)
+  const [aiBusy, setAiBusy] = useState('')
+  const [showContacts, setShowContacts] = useState(false)
 
   async function load() {
     setLoading(true); setMsg('')
@@ -49,6 +59,9 @@ export default function LeasePanel({ storeCode }: { storeCode: string }) {
       setLinks((l?.rent_payment_links || []).join('\n'))
       setSched((l?.rent_schedule || []).map((e: any) => ({ effective_from: e.effective_from, monthly_rent: e.monthly_rent })))
       setMonthRent(typeof r?.current_month_rent === 'number' ? r.current_month_rent : null)
+      setPolicies(r?.policies || [])
+      setContacts((r?.contacts || []).map((c: any) => ({ ...c })))
+      setNoticeResolved(typeof r?.notice_days_resolved === 'number' ? r.notice_days_resolved : null)
       setDenied(false)
     } catch (err: any) {
       if (err?.status === 403) setDenied(true)
@@ -79,6 +92,10 @@ export default function LeasePanel({ storeCode }: { storeCode: string }) {
         insurance_premium: lease.insurance_premium, insurance_premium_due: lease.insurance_premium_due,
         insurance_premium_frequency: lease.insurance_premium_frequency || 'annual',
         insurance_notes: lease.insurance_notes, notes: lease.notes,
+        coi_expires: lease.coi_expires || null,
+        lease_notice_days: lease.lease_notice_days ?? null,
+        notice_address: lease.notice_address, lease_exit_clause: lease.lease_exit_clause,
+        lease_termination_liabilities: lease.lease_termination_liabilities,
       }
       await api(`/api/v1/storeops/store-lease?store_code=${encodeURIComponent(storeCode)}`,
         { method: 'PUT', body: JSON.stringify(body) })
@@ -105,6 +122,29 @@ export default function LeasePanel({ storeCode }: { storeCode: string }) {
       await load()
     } catch (err: any) { setMsg('Upload failed: ' + (err?.message || err)) }
     setUpBusy(b => ({ ...b, [kind]: false }))
+  }
+
+  async function readDoc(docId: string) {
+    // The AI reading is a DRAFT: it lands in storeops.document_extraction with per-field provenance
+    // and never touches a rent or premium column until someone accepts it in ExtractionReview.
+    setAiBusy(docId); setMsg('')
+    try {
+      const r = await api('/api/v1/storeops/document-extract', { method: 'POST', body: JSON.stringify({ document_id: docId }) })
+      setExtraction(r?.extraction || null)
+    } catch (err: any) { setMsg('Could not read the document: ' + (err?.message || err)) }
+    setAiBusy('')
+  }
+
+  async function saveContacts() {
+    setBusy(true); setMsg('')
+    try {
+      await api('/api/v1/storeops/document-contacts', {
+        method: 'PUT',
+        body: JSON.stringify({ subject_kind: 'lease', subject_ref: storeCode, contacts }),
+      })
+      setMsg('✓ contacts saved'); await load()
+    } catch (err: any) { setMsg('Could not save contacts: ' + (err?.message || err)) }
+    setBusy(false)
   }
 
   async function download(docId: string) {
@@ -145,6 +185,9 @@ export default function LeasePanel({ storeCode }: { storeCode: string }) {
               {d.file_name || 'document'}{i === 0 ? ' (current)' : ''}
             </span>
             <span style={{ color: 'var(--text3)' }}>{String(d.uploaded_at || '').slice(0, 10)}{d.uploaded_by ? ` · ${d.uploaded_by}` : ''}</span>
+            <button className="btn" style={{ fontSize: 11, padding: '1px 7px' }} disabled={aiBusy === d.id}
+              title="Read this document and fill the fields in as a draft for you to check"
+              onClick={() => readDoc(d.id)}>{aiBusy === d.id ? '⏳ Reading…' : '✨ Read with AI'}</button>
           </div>
         ))}
     </div>
@@ -225,6 +268,53 @@ export default function LeasePanel({ storeCode }: { storeCode: string }) {
           </select>
         </Field>
         <Field label="Insurance notes" width={220}><input style={sel} value={lease.insurance_notes || ''} onChange={e => set({ insurance_notes: e.target.value })} /></Field>
+        <Field label="COI expires" width={140}>
+          <input style={sel} type="date" title="When THIS store's certificate of insurance expires — what the expiry reminders count down to"
+            value={lease.coi_expires || ''} onChange={e => set({ coi_expires: e.target.value })} />
+        </Field>
+      </div>
+
+      {/* Lease terms & notice (mig 966, owner 2026-09-05) — the fields the AI reader fills as a
+          draft and a human accepts, all typeable by hand too. None of these is a money column. */}
+      <div>
+        <div style={{ ...lbl, marginBottom: 4 }}>Lease terms &amp; notice</div>
+        <div style={group}>
+          <Field label="Notice required (days)" width={150}>
+            <input style={sel} type="number" min={1} value={lease.lease_notice_days ?? ''}
+              placeholder={noticeResolved ? String(noticeResolved) : ''}
+              title="This lease's own advance-notice requirement. Blank uses the company minimum; the LONGER of the two always wins."
+              onChange={e => set({ lease_notice_days: e.target.value })} />
+          </Field>
+          <Field label="Notice address" width={320}>
+            <input style={sel} value={lease.notice_address || ''} onChange={e => set({ notice_address: e.target.value })} />
+          </Field>
+          {noticeResolved != null &&
+            <span style={{ fontSize: 12, color: 'var(--text2)', paddingBottom: 6 }}>
+              Reminders start <b>{noticeResolved} days</b> before the lease ends.
+            </span>}
+        </div>
+        <div style={{ ...group, marginTop: 8 }}>
+          <Field label="Exit clause" width={420}>
+            <textarea style={{ ...sel, height: 50, resize: 'vertical' }} value={lease.lease_exit_clause || ''}
+              onChange={e => set({ lease_exit_clause: e.target.value })} />
+          </Field>
+          <Field label="Termination liabilities" width={420}>
+            <textarea style={{ ...sel, height: 50, resize: 'vertical' }} value={lease.lease_termination_liabilities || ''}
+              onChange={e => set({ lease_termination_liabilities: e.target.value })} />
+          </Field>
+        </div>
+        {Array.isArray(lease.lease_critical_clauses) && lease.lease_critical_clauses.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ ...lbl, marginBottom: 4 }}>Critical clauses — in plain English</div>
+            {lease.lease_critical_clauses.map((c: any, i: number) => (
+              <div key={i} style={{ fontSize: 12, padding: '2px 0' }}>
+                <b>{c.clause_number ? `${c.clause_number} · ` : ''}{c.title || ''}</b>
+                {c.source_page ? <span style={{ color: 'var(--text3)' }}> (page {c.source_page})</span> : null}
+                {' — '}{c.plain_english}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Documents */}
@@ -232,6 +322,73 @@ export default function LeasePanel({ storeCode }: { storeCode: string }) {
         <DocList kind="lease" title="📄 Current lease" />
         <DocList kind="insurance_coi" title="🛡️ Insurance COI" />
       </div>
+
+      {/* Master insurance policies COVERING this store (mig 964) — one policy can cover many
+          stores, so it is never copied onto this row; this is a read-only reference with a link to
+          the page that owns it. */}
+      <div>
+        <div style={{ ...lbl, marginBottom: 4 }}>Insurance policies covering this store</div>
+        {policies.length === 0
+          ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+              None assigned. Policies are managed on the{' '}
+              <a href="/storeops/setup/insurance" style={{ textDecoration: 'underline' }}>Insurance &amp; Leases</a> page —
+              upload the policy once and tick every store it covers.
+            </div>
+          : policies.map((p: any) => (
+            <div key={p.id} style={{ fontSize: 12, padding: '2px 0' }}>
+              🛡️ <b>{p.policy_number || '(no number)'}</b>{p.insurer ? ` · ${p.insurer}` : ''}
+              {p.coverage_type ? ` · ${p.coverage_type}` : ''}
+              {p.coverage_end ? <span style={{ color: 'var(--text3)' }}> — cover to {p.coverage_end}</span> : null}
+              <span style={{ color: 'var(--text3)' }}> · covers {(p.store_codes || []).length} store(s)</span>
+            </div>
+          ))}
+      </div>
+
+      {/* Expiry notification contacts (mig 966) — these people are told about BOTH this store's
+          lease ending and its certificate expiring. */}
+      <div>
+        <button className="btn" style={{ fontSize: 12, padding: '3px 8px' }} onClick={() => setShowContacts(v => !v)}>
+          📇 Who to notify before this lease or certificate expires ({contacts.length})
+        </button>
+        {showContacts && (
+          <div style={{ marginTop: 8, padding: 10, background: 'var(--surface)', borderRadius: 8 }}>
+            {contacts.map((c: any, i: number) => (
+              <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 5, flexWrap: 'wrap' }}>
+                <input style={{ ...sel, width: 150 }} placeholder="Name" value={c.name || ''}
+                  onChange={e => setContacts(cs => cs.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} />
+                <input style={{ ...sel, width: 210 }} placeholder="Email" value={c.email || ''}
+                  onChange={e => setContacts(cs => cs.map((x, j) => j === i ? { ...x, email: e.target.value } : x))} />
+                <input style={{ ...sel, width: 130 }} placeholder="Phone" value={c.phone || ''}
+                  onChange={e => setContacts(cs => cs.map((x, j) => j === i ? { ...x, phone: e.target.value } : x))} />
+                <input style={{ ...sel, width: 130 }} placeholder="Role" value={c.role || ''}
+                  onChange={e => setContacts(cs => cs.map((x, j) => j === i ? { ...x, role: e.target.value } : x))} />
+                <input style={{ ...sel, width: 110 }} type="number" placeholder="Days ahead" value={c.notice_days ?? ''}
+                  title="Optional: this person's own lead time. It can only make the notice EARLIER, never later than the company minimum."
+                  onChange={e => setContacts(cs => cs.map((x, j) => j === i ? { ...x, notice_days: e.target.value } : x))} />
+                <button className="btn" style={{ fontSize: 12, padding: '3px 8px' }}
+                  onClick={() => setContacts(cs => cs.filter((_, j) => j !== i))}>✕</button>
+              </div>
+            ))}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn" style={{ fontSize: 12, padding: '3px 8px' }}
+                onClick={() => setContacts(cs => [...cs, { name: '', email: '', notify_expiry: true }])}>➕ Add contact</button>
+              <button className="btn btn-primary" style={{ fontSize: 12, padding: '3px 8px' }}
+                disabled={busy} onClick={saveContacts}>💾 Save contacts</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* The AI reading of an uploaded lease/COI — a DRAFT until a human ticks each value. */}
+      {extraction && (
+        <div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+            <span style={{ ...lbl }}>What the reader found</span>
+            <button className="btn" style={{ fontSize: 11, padding: '1px 7px' }} onClick={() => setExtraction(null)}>✕ close</button>
+          </div>
+          <ExtractionReview extraction={extraction} onAccepted={() => { setExtraction(null); load() }} />
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
         <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? '⏳ Saving…' : '💾 Save lease & insurance'}</button>

@@ -28,6 +28,7 @@ Run:  cd backend && python3 harness_notify_failure_leads.py
 """
 import importlib.util
 import inspect
+import os
 import re
 import subprocess
 import sys
@@ -35,7 +36,17 @@ import tempfile
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
-sys.path.insert(0, ".")
+# Anchor every path to THIS FILE, not to the shell's working directory. With `sys.path.insert(0, ".")`
+# plus relative `open("app/…")` and a `cwd=".."` git call, running from the repo root imported nothing
+# and died on the first git show — which reads as "the harness is broken", not "the harness failed".
+# Now runnable from backend/ and from the repo root alike (same fix as commit 564c171f).
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+
+
+def _src(rel):
+    return open(os.path.join(HERE, rel), encoding="utf-8").read()
 
 BASE_REV = "542b4ab"          # origin/main this package is parked off
 HOUSE = "00000000-0000-0000-0000-000000000001"
@@ -56,7 +67,7 @@ def ok(name, cond, extra=""):
 
 def base_source(path):
     """The file's bytes at origin/main — every 'before' proof runs THESE, not a paraphrase."""
-    return subprocess.run(["git", "show", f"{BASE_REV}:{path}"], cwd="..",
+    return subprocess.run(["git", "show", f"{BASE_REV}:{path}"], cwd=REPO,
                           capture_output=True, text=True, check=True).stdout
 
 
@@ -428,7 +439,7 @@ def sentinel_violations(source):
 
 
 base_bad = sentinel_violations(base_source("backend/app/modules/notify/report_registry.py"))
-now_bad = sentinel_violations(open("app/modules/notify/report_registry.py").read())
+now_bad = sentinel_violations(_src("app/modules/notify/report_registry.py"))
 ok("E1 BASE leaves exactly the four reported handlers unbound (root cause pinned)",
    sorted(base_bad) == ["C.get_action_plan(authorization=<Header>)",
                         "C.get_commissions(authorization=<Header>)",
@@ -468,12 +479,29 @@ try:
 finally:
     RR.REPORTS.pop("_probe_auth"), RR.REPORTS.pop("_probe_plain")
 
-ok("F5 exactly the four caller-scoped reports opt into wants_auth",
-   sorted(k for k, v in RR.REPORTS.items() if v.get("wants_auth"))
-   == ["action_plan", "commissions", "flags", "gp"])
-ok("F6 only owed_weekly opts into wants_tz, and it is the only report with a filter validator",
-   [k for k, v in RR.REPORTS.items() if v.get("wants_tz")] == ["owed_weekly"]
-   and list(RF.FILTER_VALIDATORS) == ["owed_weekly"])
+# F5/F6 pinned the exact membership of these opt-in lists on the day the package landed (four
+# wants_auth reports; owed_weekly the only wants_tz report and the only one with a filter validator).
+# Reports have legitimately been REGISTERED since — the closing_* and storeops_* families are
+# caller-scoped and time-zone sensitive in exactly the same way, and each brought its own validator.
+# An equality test over a registry can only fail as the registry grows, which is the same drift class
+# as the hardcoded /health module list (see 564c171f). What must never happen is the reverse: a report
+# LOSING wants_auth silently broadens the data it returns (it would stop being scoped to the caller),
+# and losing a validator lets unvalidated filters through. Both are asserted as containment, so
+# registering a new report cannot break them but dropping an opt-in still does.
+_ORIGINAL_AUTH = {"action_plan", "commissions", "flags", "gp"}
+_auth_now = {k for k, v in RR.REPORTS.items() if v.get("wants_auth")}
+ok("F5 every originally caller-scoped report still opts into wants_auth "
+   f"(now {len(_auth_now)} reports opt in)",
+   _ORIGINAL_AUTH <= _auth_now, f"lost wants_auth: {sorted(_ORIGINAL_AUTH - _auth_now)}")
+ok("F5b every wants_auth report is a real registered report (no dead opt-in)",
+   _auth_now <= set(RR.REPORTS))
+_tz_now = {k for k, v in RR.REPORTS.items() if v.get("wants_tz")}
+ok("F6 owed_weekly still opts into wants_tz and still has a filter validator "
+   f"(now {len(_tz_now)} tz-aware reports, {len(RF.FILTER_VALIDATORS)} validators)",
+   "owed_weekly" in _tz_now and "owed_weekly" in RF.FILTER_VALIDATORS,
+   f"tz={sorted(_tz_now)} validators={sorted(RF.FILTER_VALIDATORS)}")
+ok("F6c every tz-aware report is a real registered report (no dead opt-in)",
+   _tz_now <= set(RR.REPORTS), sorted(_tz_now - set(RR.REPORTS)))
 ok("F6b every validator key is a real report (no dead entry)",
    set(RF.FILTER_VALIDATORS) <= set(RR.REPORTS))
 ok("F7 /notify/send and /send-to-designated now accept the caller header",
@@ -578,11 +606,11 @@ ok("H7 a schedule pointing at a report this build no longer has is ALSO surfaced
 
 # the provider must stay a LEAF: pulling report_registry in here would import the asset / commcalc /
 # account routers (and their attention providers) into any process that only wanted this provider.
-leaf_src = open("app/modules/notify/report_filters.py").read()
+leaf_src = _src("app/modules/notify/report_filters.py")
 ok("H8 report_filters imports nothing from another module (true leaf)",
    not re.search(r"^\s*(from|import)\s+app\.modules", leaf_src, re.M))
 ok("H9 attention.py does not import report_registry",
-   not re.search(r"^\s*from \. import report_registry", open("app/modules/notify/attention.py").read(), re.M))
+   not re.search(r"^\s*from \. import report_registry", _src("app/modules/notify/attention.py"), re.M))
 ok("H10 …and resolves the live report-key list from sys.modules instead",
    NA._known_report_keys() == set(RR.REPORTS))
 

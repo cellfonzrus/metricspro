@@ -168,6 +168,18 @@ CLIENT = FakeClient()
 
 import app.modules.hr.letters as L  # noqa: E402
 
+
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
+
 L.get_supabase = lambda: CLIENT
 L._require_hr_or_admin = lambda authorization: ("ORG-A", "hr@example.com", "admin")  # bypass real auth/JWT
 
@@ -222,7 +234,7 @@ L._ensure_letter_templates(ORG_B)
 check("org B seeds independently once touched", len([r for r in CLIENT.store[("storeops", "letter_template")] if r["org_id"] == ORG_B]) == 9)
 
 # editing a template flips is_default False and a re-seed never clobbers the edit
-L.update_template("cash_shortage", {"subject": "CUSTOM SUBJECT"}, org_id=ORG_A, authorization="")
+L.update_template("cash_shortage", _body(L.UpdateTemplateIn, {"subject": "CUSTOM SUBJECT"}), org_id=ORG_A, authorization="")
 edited = L._get_template(ORG_A, "cash_shortage")
 check("edit applied", edited["subject"] == "CUSTOM SUBJECT")
 check("edit flips is_default False", edited["is_default"] is False)
@@ -400,7 +412,7 @@ qrow = letters_by_dedupe[f"late_clockin:E1:{d0.isoformat()}"]
 qlist = L.list_queue(org_id=ORG_A, authorization="")
 check("queued letter appears in the approval queue", any(l["id"] == qrow["id"] for l in qlist["queue"]))
 
-approved = run(L.approve_letter(qrow["id"], {"subject": "EDITED SUBJECT"}, org_id=ORG_A, authorization=""))
+approved = run(L.approve_letter(qrow["id"], _body(L.ApproveLetterIn, {"subject": "EDITED SUBJECT"}), org_id=ORG_A, authorization=""))
 check("approve sends the email (captured by the fake email sender)",
      any(e["subject"] == "EDITED SUBJECT" for e in SENT_EMAILS))
 check("approved letter status -> approved_sent", approved["status"] == "approved_sent", approved)
@@ -412,7 +424,7 @@ check("approved letter leaves the queue", not any(l["id"] == qrow["id"] for l in
 # re-approving an already-sent letter is rejected (409-equivalent HTTPException)
 raised = False
 try:
-    run(L.approve_letter(qrow["id"], {}, org_id=ORG_A, authorization=""))
+    run(L.approve_letter(qrow["id"], _body(L.ApproveLetterIn, {}), org_id=ORG_A, authorization=""))
 except Exception as e:
     raised = "already" in str(e).lower() or getattr(e, "status_code", None) == 409
 check("re-approving an already-sent letter is rejected", raised)
@@ -423,7 +435,7 @@ merge = L._common_merge(ORG_A, tenantA, emp)
 merge.update({"incident_date": "2026-07-10", "shortage_amount": "$40.00"})
 qrow2 = run(L._create_and_dispatch_letter(ORG_A, tenantA, emp, tpl_cash, merge, incident_date="2026-07-10"))
 check("a fresh manual queue-mode letter is queued_approval", qrow2["status"] == "queued_approval")
-rejected = L.reject_letter(qrow2["id"], {"reason": "not accurate"}, org_id=ORG_A, authorization="")
+rejected = L.reject_letter(qrow2["id"], _body(L.RejectLetterIn, {"reason": "not accurate"}), org_id=ORG_A, authorization="")
 check("reject sets status=rejected + records the reason", rejected["status"] == "rejected" and rejected["rejected_reason"] == "not accurate")
 check("reject never sends an email", not any(e["subject"] == tpl_cash["subject"] for e in SENT_EMAILS))
 
@@ -440,7 +452,7 @@ CLIENT.store[("storeops", "sent_letter")] = [
 emails_before_claim_test = len(SENT_EMAILS)
 raised_claimed = False
 try:
-    run(L.approve_letter(qrow3["id"], {}, org_id=ORG_A, authorization=""))
+    run(L.approve_letter(qrow3["id"], _body(L.ApproveLetterIn, {}), org_id=ORG_A, authorization=""))
 except Exception as e:
     raised_claimed = "already" in str(e).lower() or getattr(e, "status_code", None) == 409
 check("approving a letter already claimed (status='sending') is refused — no duplicate-send race",
@@ -454,27 +466,27 @@ check("the claimed row's status is untouched by the refused approve attempt", cl
 # 5. Manual send: force_send bypasses approval; subject/body overrides are sent verbatim
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 before_emails = len(SENT_EMAILS)
-letter = run(L.send_letter({"employee_id": "E1", "template_key": "cash_shortage",
+letter = run(L.send_letter(_body(L.SendLetterIn, {"employee_id": "E1", "template_key": "cash_shortage",
                           "subject": "Manual Override Subject", "body": "Custom body text.",
-                          "force_send": True}, org_id=ORG_A, authorization=""))
+                          "force_send": True}), org_id=ORG_A, authorization=""))
 check("force_send sends immediately even though the template is approval-mode", letter["status"] == "sent")
 check("subject/body overrides are sent verbatim (not re-rendered)",
      letter["subject"] == "Manual Override Subject" and letter["body"] == "Custom body text.")
 check("exactly one more email was actually sent", len(SENT_EMAILS) == before_emails + 1)
 
 # manual send WITHOUT force_send on an approval-mode template queues instead of sending
-letter2 = run(L.send_letter({"employee_id": "E1", "template_key": "cash_shortage"}, org_id=ORG_A, authorization=""))
+letter2 = run(L.send_letter(_body(L.SendLetterIn, {"employee_id": "E1", "template_key": "cash_shortage"}), org_id=ORG_A, authorization=""))
 check("manual send without force_send on an approval template queues for approval", letter2["status"] == "queued_approval")
 
 # sending an inactive template is rejected
-L.update_template("cash_shortage", {"active": False}, org_id=ORG_A, authorization="")
+L.update_template("cash_shortage", _body(L.UpdateTemplateIn, {"active": False}), org_id=ORG_A, authorization="")
 raised = False
 try:
-    run(L.send_letter({"employee_id": "E1", "template_key": "cash_shortage"}, org_id=ORG_A, authorization=""))
+    run(L.send_letter(_body(L.SendLetterIn, {"employee_id": "E1", "template_key": "cash_shortage"}), org_id=ORG_A, authorization=""))
 except Exception as e:
     raised = "inactive" in str(e).lower()
 check("sending an inactive template is rejected", raised)
-L.update_template("cash_shortage", {"active": True}, org_id=ORG_A, authorization="")  # restore for later checks
+L.update_template("cash_shortage", _body(L.UpdateTemplateIn, {"active": True}), org_id=ORG_A, authorization="")  # restore for later checks
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -585,7 +597,7 @@ check("metrics-miss run-due degrades cleanly pre-mig-408 (no 500, tenants_checke
 L.get_supabase = lambda: _BrokenClient("update")
 raised_put_cfg = False
 try:
-    L.put_letters_config({"late_clockin": {"enabled": True}}, org_id=ORG_A, authorization="")
+    L.put_letters_config(_body(L.PutLettersConfigIn, {"late_clockin": {"enabled": True}}), org_id=ORG_A, authorization="")
 except Exception as e:
     raised_put_cfg = getattr(e, "status_code", None) == 500 and "migration 408" in str(getattr(e, "detail", e))
 check("PUT /config surfaces a clear 'run migration 408' 500 (not an unhandled crash) when the column is missing",

@@ -232,15 +232,67 @@ ck("both versions share the calculation-body anchor",
    BODY_ANCHOR in b_calc and BODY_ANCHOR in n_calc)
 b_body = b_calc[b_calc.index(BODY_ANCHOR):]
 n_body = n_calc[n_calc.index(BODY_ANCHOR):]
-ck("the ENTIRE 366-line calculation body is BYTE-IDENTICAL to base "
-   "(delete-then-insert, guards, engines, notices, status stamps)",
-   b_body == n_body, f"{len(b_body)} bytes")
-ck("everything added to _run_calculation sits BEFORE that anchor (signature, docstring, claim)",
-   len(n_calc) - len(b_calc) == len(n_calc[:n_calc.index(BODY_ANCHOR)]) - len(b_calc[:b_calc.index(BODY_ANCHOR)]))
-
-for token in ("delete()", "rep_commissions", "chargeback_items", "flags"):
+# ── RETIRED: whole-body byte-identity and the "everything sits before the anchor" arithmetic ──────
+# These asserted that THIS package (the single-flight recompute guard: `async def` -> `def` plus a
+# guard_token) changed not one line of the calculation. GUARD_BASE is PINNED to da961df, and that was
+# a fair claim at the time. It is not a claim about the product's correctness — it is a claim about
+# one pull request — and da961df is now more than twenty merged commits behind. The body has since
+# grown deliberate, documented, migration-registered money changes, each with an owner directive in
+# the comment beside it: the additive flag write (mig 287, "DM review should not be erased"), on-write
+# store resolution for flags (mig 285), and the union sales basis reaching the Boost calc
+# (mig 306/sales_source). Byte-identity against a fossil can only fail from here on, and it fails for
+# work that is supposed to be there — it cannot distinguish that from a real money regression, which
+# is precisely what makes it useless rather than merely noisy.
+#
+# What stays below is what is still checkable and still means something: the money-write vocabulary
+# of the calculation body has not multiplied, the endpoint contract is unchanged, and `force` still
+# cannot bypass the concurrency guard. The guard's actual BEHAVIOUR is proven for real in sections
+# C/D/F/G/I against a live Postgres — that is where this file's value lives.
+for token in ("delete()", "rep_commissions", "chargeback_items"):
     ck(f"'{token}' occurrences in the calculation body unchanged vs base",
-       b_body.count(token) == n_body.count(token), f"{b_body.count(token)}")
+       b_body.count(token) == n_body.count(token),
+       f"base={b_body.count(token)} now={n_body.count(token)}")
+
+# 'flags' deliberately moved (mig 287): the wholesale per-period DELETE that erased district-manager
+# review within 24h was replaced by an additive flag_persist.sync. Assert that END STATE instead of a
+# stale count — the wipe may exist ONLY as the degradation path for an unapplied migration 287.
+_wipe = "table('flags').delete()"
+ck("mig 287: the calculation uses the ADDITIVE flag write (flag_persist.sync)",
+   "flag_persist.sync(" in n_body)
+def _flag_deletes_all_guarded(src):
+    """Every flags DELETE in _run_calculation must sit inside an `except FlagPersistUnavailable`
+    handler — i.e. only on the degraded path where migration 287 has not been applied. On the normal
+    path the write is additive and a district manager's review survives the daily recalc.
+    Returns (total_deletes, guarded_deletes)."""
+    import ast as _a
+    fnode = None
+    for n in _a.walk(_a.parse(src)):
+        if isinstance(n, (_a.FunctionDef, _a.AsyncFunctionDef)) and n.name == "_run_calculation":
+            fnode = n
+    if fnode is None:
+        return (0, 0)
+    guarded = set()
+    for n in _a.walk(fnode):
+        if isinstance(n, _a.ExceptHandler) and "FlagPersistUnavailable" in _a.dump(n.type or _a.Pass()):
+            for sub in _a.walk(n):
+                guarded.add(id(sub))
+    total = ok = 0
+    for n in _a.walk(fnode):
+        if not (isinstance(n, _a.Call) and getattr(n.func, "attr", "") == "delete"):
+            continue
+        inner = n.func.value
+        if not (isinstance(inner, _a.Call) and getattr(inner.func, "attr", "") == "table"
+                and inner.args and getattr(inner.args[0], "value", "") == "flags"):
+            continue
+        total += 1
+        ok += (id(n) in guarded)
+    return (total, ok)
+
+
+_dtot, _dok = _flag_deletes_all_guarded(branch_src)
+ck("mig 287: every wholesale flags DELETE is confined to the unapplied-migration fallback — the "
+   "daily recalc cannot erase a district manager's review",
+   _dtot == _dok, f"{_dtot - _dok} of {_dtot} flag DELETEs run on the NORMAL path")
 
 b_ep, n_ep = fn_source(base_src, "calculate"), fn_source(branch_src, "calculate")
 ck("POST /calculate still: require_org → mark running → enqueue → 'started'",
@@ -251,21 +303,15 @@ ck("the endpoint's only behavioural addition is the 409 refusal",
 ck("`force` does NOT bypass the running guard (force is the zero-wipe outcome check, not concurrency)",
    "force" not in R._calc_guard_acquire.__code__.co_varnames)
 
+# ── RETIRED: the file-list blast radius (see the note above) ──────────────────────────────────────
+# "router.py is the ONLY backend app file touched", "the only non-app edits are proof files", and the
+# six `<engine>.py untouched` checks all diffed the WORKING TREE against the same fossil pin. Twenty
+# packages later that list is most of the backend, so they report this package's blast radius as the
+# whole repository. A per-PR scope guard has no durable form once the PR has merged and the branch
+# has moved on; keeping them red would only train a reader to skip this file's output.
 changed = [l for l in git("diff", "--name-only", BASE, "--").splitlines() if l.strip()]
 # APP code: router.py and nothing else. (backend/harness_* and backend/scratchpad/* are proof files —
 # the two scratchpad edits only make existing assertions shape-agnostic; they are re-run below.)
-_app_changed = [c for c in changed if c.startswith("backend/app/")]
-ck("router.py is the ONLY backend app file touched — no engine, no calculator, no other module",
-   _app_changed == [ROUTER_REL], ";".join(_app_changed))
-ck("the only non-app backend edits are proof files",
-   not [c for c in changed if c.startswith("backend/") and c not in _app_changed
-        and not (c.startswith("backend/harness_") or c.startswith("backend/scratchpad/"))],
-   ";".join(changed))
-for f in ("calculator.py", "commission_engine.py", "sale_installment_engine.py", "installment_engine.py",
-          "plan_impact.py", "commission_legs.py"):
-    ck(f"{f} untouched", f"backend/app/modules/commcalc/{f}" not in changed)
-
-
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 #  A PostgREST-shaped client over a REAL Postgres — used by sections C/D/F/G/I
 # ════════════════════════════════════════════════════════════════════════════════════════════════

@@ -83,8 +83,23 @@ assert tbc["byod"]["pct"] is None, ("byod pct should be None (new)", tbc["byod"]
 assert tbc["accessory"]["current"] == 2, ("acc base", tbc["accessory"]["current"])
 assert tbc["accessory"]["previous"] == 1, ("acc prev", tbc["accessory"]["previous"])
 assert tbc["accessory"]["current_rev"] == 55.0, ("acc rev", tbc["accessory"]["current_rev"])
-# financing acima: 1 in base, 0 in compare
-assert tbc["fin:acima"]["current"] == 1 and tbc["fin:acima"]["previous"] == 0, "acima"
+# Financing: 1 in base, 0 in compare.
+# This used to assert a PER-VENDOR key, `tbc["fin:acima"]`. Commit f4ce76c5 deliberately collapsed
+# the per-vendor financing rows into ONE neutral "Financing" line, and that collapse is
+# COMPLIANCE-CRITICAL, not cosmetic: the report was flagged for a dual-affiliation leak, and the
+# fix is that the vendor BRAND (ACIMA / TW / Edge) is never emitted at all — only the neutral
+# label. So the old key is not something to restore; asserting it back would re-open the defect.
+assert "fin:acima" not in tbc, ("per-vendor financing keys must stay collapsed (f4ce76c5) — a "
+                                "fin:<vendor> key is the dual-affiliation leak coming back", sorted(tbc))
+assert tbc["financing"]["current"] == 1 and tbc["financing"]["previous"] == 0, (
+    "financing", tbc["financing"])
+assert tbc["financing"]["label"] == "Financing", ("financing label must stay brand-neutral",
+                                                  tbc["financing"]["label"])
+# The compliance guarantee itself, asserted over the WHOLE payload rather than one row: the
+# configured vendor's brand and key appear nowhere a screen could render them.
+_payload = repr(out).lower()
+assert "acima" not in _payload, "financing vendor BRAND leaked into the sales-comparison payload"
+assert "fin:" not in _payload, "a per-vendor financing key leaked into the sales-comparison payload"
 # phone revenue for base = txn1 (800, accessory excluded) + txn2 (700) = 1500
 assert tbc["phone"]["current_rev"] == 1500.0, ("phone rev", tbc["phone"]["current_rev"])
 # overall txns: base has 5 live txns (t6 voided), compare has 2

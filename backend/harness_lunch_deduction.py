@@ -27,9 +27,13 @@ Covers:
 
 Run: `python3 harness_lunch_deduction.py` from backend/.
 """
+import os
 import sys
 
-sys.path.insert(0, ".")
+# Anchor imports AND every source read below to THIS file's own directory, so the
+# harness runs identically from backend/ and from the repo root (cf. 564c171f).
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 
 PASS, FAIL = [], []
 
@@ -44,6 +48,7 @@ def check(name, cond, detail=""):
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # SECTION A — pure lunch_deduction.py, no DB/router involved at all.
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
+import _harness_dbfree  # noqa: E402
 from app.modules.storeops.lunch_deduction import (  # noqa: E402
     resolve_employee_lunch_settings, compute_lunch_deduction_from_rows, LUNCH_GAP_EPSILON_MINUTES,
 )
@@ -357,6 +362,12 @@ import app.modules.storeops.router as R  # noqa: E402
 import app.modules.core.router as core_router  # noqa: E402
 
 R.get_supabase = lambda: fake
+# DB-FREE GUARD: the line(s) above bind only THIS module's name. Shipped code also
+# reaches the factory directly (tenant_middleware.caller_app_user) and through other
+# routers' sb() (storeops.router._rbac_enabled), both of which used to land on the
+# REAL production client. Route every acquisition in the process at the fake.
+_harness_dbfree.install(fake)
+
 R.sb = lambda: fake.schema("storeops")
 core_router._uid_from_token = lambda auth: {"Bearer mgr": "uid-mgr"}.get(auth)
 

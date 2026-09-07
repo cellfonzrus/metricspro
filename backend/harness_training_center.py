@@ -522,23 +522,62 @@ ok("H5 the training router is mounted onto the CORE router (main.py, a SHARED fi
 print("\nI. ROUTE SURFACE")
 
 from app.main import app                                              # noqa: E402
-paths = sorted({r.path for r in app.routes if "/training" in r.path})
+
+
+def route_surface(application):
+    """Every (path, METHOD) the app exposes, read from its OpenAPI schema.
+
+    WHY NOT `app.routes`. This section used to walk `app.routes` and read `r.path` off each entry.
+    That worked only while FastAPI happened to FLATTEN every `include_router()` into one list. As of
+    fastapi 0.141 an included router stays in `app.routes` as a lazy `_IncludedRouter` wrapper with
+    no `.path`, so the walk died with `AttributeError: '_IncludedRouter' object has no attribute
+    'path'` — and this whole route-surface section stopped running. `len(app.routes)` is now 31 for
+    a 1,285-path app, so a count taken that way is not just broken, it is misleading.
+
+    `app.openapi()` is the SUPPORTED, public description of an app's route surface; it resolves
+    prefixes and nested includes for us and is the same document the frontend and the docs page
+    read. Reaching past it into the router's internal storage is what rotted here, and the lesson is
+    the general one: assert against a framework's public contract, never its private structure.
+    """
+    spec = application.openapi()["paths"]
+    return {(p, m.upper()) for p, ops in spec.items() for m in ops}
+
+
+SURFACE = route_surface(app)
+paths = sorted({p for p, _m in SURFACE if "/training" in p})
 EXPECT = sorted(["/api/v1/core/training/tours", "/api/v1/core/training/tours/{slug}",
                  "/api/v1/core/training/tours/{tour_id}", "/api/v1/core/training/scripts",
                  "/api/v1/core/training/script/{slug}", "/api/v1/core/training/seed"])
 ok("I1 exactly the expected training paths exist", paths == EXPECT, paths)
 ok("I2 every training path is under /api/v1/core (no new top-level surface)",
    all(p.startswith("/api/v1/core/training") for p in paths))
-n_routes = len([r for r in app.routes if "/api/v1/core/training" in getattr(r, "path", "")])
+n_routes = len([1 for p, _m in SURFACE if "/api/v1/core/training" in p])
 ok("I3 the package adds exactly 7 routes", n_routes == 7, n_routes)
 from app.core import tenant_middleware as TM                          # noqa: E402
 ok("I4 NO training path is allowlisted as public (they keep full tenant protection)",
    not any(TM._is_public(p) for p in paths))
-# Default is the BRANCH total: 1003 base + 7 training + 5 What's New (the scope addition committed on
-# this same branch). A reviewer checking the training commits ALONE passes EXPECT_ROUTES=1010.
-expect_routes = int(os.environ.get("EXPECT_ROUTES", "1018"))
-ok(f"I5 total app route count is {expect_routes} (base 1003 + 7 training + 5 what's-new)",
-   len(app.routes) == expect_routes, len(app.routes))
+# I5 was `len(app.routes) == 1018` — "1003 base + 7 training + 5 What's New" — a whole-app absolute
+# that every unrelated endpoint added anywhere in the product invalidates. The branch is at 1,569
+# routes now, so the literal had rotted by ~550 and, worse, it was being measured off the broken
+# `app.routes` walk above. Same class as the hard-coded provider list re-expressed in commit
+# 564c171f: a literal that stops matching trains people to ignore the harness.
+#
+# NOT DROPPED, re-aimed. What this file is entitled to assert is what the TRAINING package adds —
+# that is I1/I2/I3 above, and they are exact. The whole-app total stays available as a deliberate
+# reviewer pin: set EXPECT_ROUTES to check a specific commit's total. Left unset it reports the
+# figure instead of failing on someone else's feature.
+_pinned = os.environ.get("EXPECT_ROUTES")
+if _pinned:
+    ok(f"I5 total app route surface is the pinned {_pinned}",
+       len(SURFACE) == int(_pinned), len(SURFACE))
+else:
+    print(f"  --   I5 app route surface: {len(SURFACE)} (path, method) pairs across "
+          f"{len({p for p, _ in SURFACE})} paths — set EXPECT_ROUTES to pin it")
+# Non-vacuity for the enumeration itself: if `route_surface` ever silently returns nothing, I1-I4
+# would all pass vacuously (empty lists satisfy `all()` and an empty == empty). This is the guard
+# that the FIRST failure of this class taught us to add.
+ok("I6 the route enumeration is non-vacuous (the app really was introspected)",
+   len(SURFACE) > 500 and ("/api/v1/core/training/tours", "GET") in SURFACE, len(SURFACE))
 
 print(f"\n{'='*78}\n  {PASS} passed, {FAIL} failed\n{'='*78}")
 sys.exit(1 if FAIL else 0)

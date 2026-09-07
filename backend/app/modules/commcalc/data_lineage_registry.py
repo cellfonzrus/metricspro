@@ -74,6 +74,14 @@ INGEST_TABLES_BY_MODULE = {
         "raw_comp_report", "raw_ma_commission", "raw_ma_daily_tx", "raw_ma_fulfillment",
         "pos_tender_summary", "inventory_value", "ma_overview_upload",
         "raw_custom_import", "raw_epay_daily_tx",
+        # Merchant-processor portal scrape (owner 2026-09-04, migs 955/956). The daily pull from the
+        # three card-processor portals — PayAnywhere/Payments Hub (the EXTERNAL credit-card terminal
+        # both current tenants run, the "white machine"), TransFirst TransLink and ClientLine/
+        # BusinessTrack (the POS merchant providers). Settlement is the day-grain feed the closing
+        # recon tallies against what employees declared; the batch table is the funding grain the
+        # cash/deposit recon reads. Two tables because they are two GRAINS — summing them
+        # double-counts, which is exactly the confusion a lineage edge exists to prevent.
+        "merchant_settlement_day", "merchant_settlement_batch",
     ),
     # pos — the in-house POS. Its builtin stream (commcalc.pos_builtin_daily_sales /
     # commcalc.pos_builtin_sales) promotes into the sales feed; receipt OCR and the carrier vendor-rebate
@@ -134,6 +142,14 @@ MODULES_WITHOUT_EXTERNAL_FEEDS = (
     # pure in-app feature modules (user-created data, no external file/API feed):
     "approvals", "chat", "crm", "helpdesk", "hr", "notify",
     "recovery", "referral", "remediation", "storevisit", "vision",
+    # marketing (migs 986/987) — outside-store event management. Feed-LESS on purpose: every row it
+    # owns is typed by a human (the event, its staff, the checklist, the giveaway counts) or captured
+    # from the device at check-in. Its one derived number, event planned-vs-actual, is READ from
+    # commcalc's shared sales pass (_sales_cell_agg via _compute_feed_actuals_py, §3/§23) rather than
+    # ingested, so it introduces no external feed and owns no ingest table. The later creative-gallery
+    # / marketing-portal-pull phase WILL bring an external feed; when it does it moves to
+    # INGEST_TABLES_BY_MODULE above and seeds database/migrations/925_data_lineage_seed.sql.
+    "marketing",
 )
 
 

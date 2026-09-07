@@ -43,6 +43,18 @@ os.environ.setdefault("SUPABASE_ANON_KEY", "harness-dummy-anon-key")
 
 import app.modules.helpdesk.router as hd   # noqa: E402
 import app.modules.core.router as core     # noqa: E402
+
+
+def _body(model, d):
+    """Build the request model FastAPI hands the handler, instead of a plain dict.
+
+    These endpoints were migrated from `body: dict` to a declared pydantic model, so the handler
+    reads `body.<field>`. A probe passing a dict dies with AttributeError BEFORE reaching the logic
+    under test — the harness then reads as "failing" while proving nothing. `model_validate`
+    reproduces FastAPI's own call shape, including which fields count as explicitly set
+    (`model_fields_set`), which several handlers branch on.
+    """
+    return model.model_validate(d)
 from fastapi import HTTPException           # noqa: E402
 
 PASS, FAIL = [], []
@@ -264,7 +276,7 @@ st["support_sla_policy"] = [
 wire(st)
 hd._require_module = lambda org, key="helpdesk": None       # entitlement gate out of scope here
 
-r1 = run(hd.escalate_ticket("tkt-1", {"page_key": "/storeops/payroll"}, org_id=TEN_A, actor="agent@alpha.com"))
+r1 = run(hd.escalate_ticket("tkt-1", _body(hd.EscalateTicketIn, {"page_key": "/storeops/payroll"}), org_id=TEN_A, actor="agent@alpha.com"))
 cases = st["support_case"]
 case = cases[0] if cases else {}
 check("12a. escalate creates exactly ONE case", len(cases) == 1 and not r1.get("already_escalated"))
@@ -279,7 +291,7 @@ check("12d. visible 'escalated' comment on the tenant ticket",
 check("12e. ticket_event 'escalated' recorded",
       any(e.get("event_type") == "escalated" for e in st["ticket_events"]))
 
-r2 = run(hd.escalate_ticket("tkt-1", {}, org_id=TEN_A, actor="agent@alpha.com"))
+r2 = run(hd.escalate_ticket("tkt-1", _body(hd.EscalateTicketIn, {}), org_id=TEN_A, actor="agent@alpha.com"))
 check("13. second escalate = no-op (already_escalated, still ONE case)",
       r2.get("already_escalated") is True and len(st["support_case"]) == 1)
 
@@ -291,7 +303,7 @@ wire(st)
 core._uid_from_token = lambda auth: ("uid-1" if auth == "Bearer good" else None)
 cid = st["support_case"][0]["id"]
 before_comments = len(st["ticket_comments"])
-run(hd.support_case_reply(cid, {"body": "We fixed the pay rate on your record."},
+run(hd.support_case_reply(cid, _body(hd.SupportCaseTextIn, {"body": "We fixed the pay rate on your record."}),
                           authorization="Bearer good", x_active_org=""))
 ev = st["support_case_event"]
 check("14a. case event kind='reply' visible_to_user=true",
@@ -304,7 +316,7 @@ check("14c. support_reply ticket_event recorded",
 
 # internal note must NOT fan out
 before = len(st["ticket_comments"])
-run(hd.support_case_note(cid, {"body": "internal: root-caused to a stale rate"},
+run(hd.support_case_note(cid, _body(hd.SupportCaseTextIn, {"body": "internal: root-caused to a stale rate"}),
                          authorization="Bearer good", x_active_org=""))
 check("14d. internal note does NOT touch the tenant ticket thread",
       len(st["ticket_comments"]) == before
@@ -312,7 +324,7 @@ check("14d. internal note does NOT touch the tenant ticket thread",
 
 # resolve without a resolution note is rejected
 try:
-    run(hd.support_case_status(cid, {"status": "resolved"}, authorization="Bearer good", x_active_org=""))
+    run(hd.support_case_status(cid, _body(hd.SupportCaseStatusIn, {"status": "resolved"}), authorization="Bearer good", x_active_org=""))
     check("14e. resolve requires a resolution note", False)
 except HTTPException as e:
     check("14e. resolve requires a resolution note", e.status_code == 422)

@@ -37,9 +37,10 @@ SCOPE_COL = "report_col"
 SCOPE_BANNER = "report_banner"
 SCOPE_TERM = "report_term"
 
-# ── The label-able report columns (key → built-in default header). These are the Exec MTD /
-#    Activations activation-report columns; the SETTINGS UI lists exactly this registry
-#    (pick-don't-type — a tenant can only relabel a real column, never invent a phantom key).
+# ── The label-able report columns (key → built-in default header). Mostly the Exec MTD /
+#    Activations activation-report columns, plus the DAILY-CLOSING field labels that differ by
+#    carrier (`closing_*`); the SETTINGS UI lists exactly this registry (pick-don't-type — a tenant
+#    can only relabel a real column, never invent a phantom key).
 LABELABLE_COLUMNS = (
     ("total_activation", "Total Activation"),
     ("activation", "Activation"),
@@ -63,6 +64,12 @@ LABELABLE_COLUMNS = (
     ("setup_fee_dealer_share", "Dealer share"),
     ("setup_fee_employee_pay", "Employee pay"),
     ("acc_plus_setup", "Acc.+Set-up (target basis)"),
+    # Daily-closing field labels (owner directive 2026-09-04). `closing_t_ext_cc` is the
+    # `commcalc.daily_closing.t_ext_cc` external-credit-machine tender — a standalone third-party
+    # card terminal the POS does not integrate. Boost/Total tenants call it "White machine" (house
+    # presets, mig 960); everyone else keeps the built-in wording below. RULE TWO: the wording is a
+    # config row, never a tenant/carrier branch.
+    ("closing_t_ext_cc", "External Credit Card"),
 )
 DEFAULT_COLUMN_LABELS = dict(LABELABLE_COLUMNS)
 
