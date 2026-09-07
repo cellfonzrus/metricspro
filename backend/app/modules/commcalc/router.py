@@ -21678,12 +21678,33 @@ def _store_resolution_report(client, org_id, period=None, limit=60000):
     so_codes, alias_to_code, _resolve_store = M['so_codes'], M['alias_to_code'], M['resolve_store']
     stores = M['stores']
     seen = {}
-    srcs = [('raw_sales', 'store'), ('daily_sales_feed', 'store')]
-    for table, col in srcs:
+    # (table, store column, the column `period` narrows on — 'period' for the month-keyed sales
+    # sources, 'close_date' for the day-keyed X-report).
+    #
+    # `pos_tender_summary` (the POS X-REPORT — the AUTHORITATIVE cash/card tender split every closing
+    # recon reads) was ADDED 2026-09-07 after the owner reported "POS data for B-1800 and 1115 store is
+    # not capturing". It had never been observed here, and that blind spot is the whole reason the
+    # failure survived four months: the X-report resolves its store the same way everything else does,
+    # but the ONE screen built to show a store string that resolves to nothing could not see the
+    # strings the X-report emits. So '1115 Liberty Ave' (a real store, correctly on the storeops master
+    # as B-1115) was dropped on import, silently, every day, and never appeared on the audit view that
+    # exists precisely to surface it. Observing the source here does not change any number — it makes
+    # the gap visible and gives it the same one-click confirm-as-alias path every other source has.
+    srcs = [('raw_sales', 'store', 'period'), ('daily_sales_feed', 'store', 'period'),
+            ('pos_tender_summary', 'store', 'close_date')]
+    for table, col, pcol in srcs:
         try:
             q = client.schema('commcalc').table(table).select(col).eq('org_id', org_id)
             if period:
-                q = q.in_('period', _pvariants(period))
+                if pcol == 'period':
+                    q = q.in_('period', _pvariants(period))
+                else:
+                    # A day-keyed source narrows by date PREFIX (period 'August 2026' -> '2026-08').
+                    # An unparseable period must never silently widen the source to all of time, so an
+                    # unknown period skips this source rather than reporting every day it ever saw.
+                    _y, _m = _period_ym(period)      # raises on an unparseable label
+                    q = (q.gte(pcol, '%04d-%02d-01' % (_y, _m))
+                          .lte(pcol, '%04d-%02d-31' % (_y, _m)))
             rows = (q.limit(limit).execute().data) or []
         except Exception:
             continue   # table missing / no org_id → skip that source

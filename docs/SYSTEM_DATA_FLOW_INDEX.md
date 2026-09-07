@@ -2143,6 +2143,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `core.ai_budget_config` / `core.ai_call_audit` (mig `972`; SHARED per-`(org,purpose)` AI ceiling + per-call meter/audit — tokens only, $ joins `core.token_rates`. Purposes seeded: `control_box_triage` mig `972`, `remediation_diagnose` mig `982`, `lease_extraction` mig `983`) | `billing/ai_meter` — the ONE writer since 2026-09-06, buffered and drained off the event loop. `core/ai_gate.audit` (used by `control_box_api._audit`, `remediation/router._ai_diagnose`, `storeops/router.post_document_extract`) and `ai_meter.record()` both feed that single sink; `usage_flush.flush_ai_now` is the backstop | `core/ai_gate.budget_config` (30s TTL cache) / `recent_rows` (24h floor + in-flight buffered rows) → `control_box.rollup_usage` → `control_box.ai_guard_decision`; refusal scan = the "someone is probing us" signal |
 | `core.ai_margin_config` (mig `973`; per-tenant AI margin, effective-dated + APPEND-ONLY so history IS the audit) | `PUT /billing/ai-margin` (super-admin, records `changed_by`) | `ai_usage.margin_for` → `price_period` → the statement's AI line |
 | `core.ai_usage_period` (mig `973`; FROZEN AI period snapshots — rate + margin + figures at close) | `POST /billing/ai-usage/close` | `ai_usage.price_period(frozen=)` — read, NEVER recomputed |
+| `commcalc.pos_tender_summary` (POS X-REPORT — the AUTHORITATIVE cash/card tender split; `store` is an ADDRESS STRING, not a code) | the X-report import | `closing/router._xreport_tenders_by_store` → `_addr_resolver` (alias > storeops MASTER > store_mapping > unambiguous house number; §23b) → every closing cash/card recon. Also an OBSERVED source of `GET /commcalc/store-resolution` since 2026-09-07 |
 | `core.module_usage_daily` (mig `974`; per (org, module, day) counters — `billable_calls` vs `system_calls` vs `anonymous_calls`) | `core.bump_module_usage` RPC from `billing/usage_flush` (batched every 30s; the request path only increments a dict) | `module_usage.rollup_by_module` → `statement.build_statement` → `GET /billing/statement` |
 | `core.module_route_map` (mig `974`; route prefix → billable module overrides, RULE TWO) | operator SQL | `module_usage.classify` (unmapped is SHOWN, never guessed) |
 | `core.module_price` (mig `975`; price per plan x module, effective-dated; UNPRICED = the ABSENCE of a row) | `PUT /billing/module-pricing` (super-admin, `changed_by`) | `statement.price_for` → `module_line` / `pricing_grid` |
@@ -3239,6 +3240,53 @@ self-provision the entitlement on next login. Router gated by `require_module("m
 `frontend/src/lib/rbac.ts` under group **Marketing**.
 
 ---
+
+## 23b. STORE IDENTITY ON THE POS X-REPORT PATH (owner bug report 2026-09-07)
+
+**Owner:** *"POS data for B-1800 and 1115 store is not capturing."*
+
+**The feed was never missing.** `commcalc.pos_tender_summary` held **144** X-report rows for
+`'1115 Liberty Ave'` and **142** for `'1800 Great Neck rd'` over 2026-07-27..09-06.
+`closing/router._addr_resolver` — a PRIVATE address→store_code map used only by the X-report tender
+read — indexed `commcalc.store_mapping` and nothing else, and `_xreport_tenders_by_store` dropped
+whatever it could not resolve with a bare `continue`: no error, no counter, no log line. Two stores'
+POS cash was absent from every closing recon for months and nothing said so.
+
+| store | pre-fix resolution | why |
+|---|---|---|
+| `1115 Liberty Ave` | **None — 144 rows discarded** | on the storeops MASTER as `B-1115`; the resolver never read the master |
+| `1800 Great Neck rd` | `'1800GreatNeckRd'` — a code nothing reads | `B-1800`'s master address is NULL and its store_mapping address is the placeholder `'B-1800'`; the real address sits on a rogue code |
+
+Closing store_codes with **zero** POS coverage before the fix: exactly `['B-1115', 'B-1800']` — the
+two the owner named. After: all 28 of the org's X-report store names resolve, and no closing store
+lacks coverage.
+
+**Lookup order now** (`_addr_resolver`), the same collapse rule `/closing/stores` already documents —
+the survivor is the code the store MASTER knows, because a closing row's `store_code` is always a
+master code and that is the identity the join must land on:
+
+1. explicit `commcalc.store_aliases` row (what the Store-Matching screen writes)
+2. `storeops.stores` address — **the master**
+3. `commcalc.store_mapping` address (the house canon)
+4. unambiguous leading street-number; an ambiguous number resolves to NOTHING, never a coin-flip
+
+An unresolved name is still not counted — attributing real cash to a guessed store would be worse —
+but it is now **named in the log** instead of vanishing.
+
+`GET /commcalc/store-resolution` (the Store-Matching UI) also now observes `pos_tender_summary`
+alongside `raw_sales` / `daily_sales_feed`. That blind spot is why this survived four months: the one
+screen built to show a store string that resolves to nothing could not see the strings the X-report
+emits. A day-keyed source narrows by date prefix; an unparseable `period` skips the source rather than
+silently widening it to all of time.
+
+**METHOD NOTE, worth keeping.** The first pass at this diagnosis was WRONG because the live probes
+were not org-scoped: `storeops.stores` returns 49 rows unfiltered but **29** for the house org, and
+the `LUX-*` codes that looked like duplicate "twins" are LuxeLink's own stores in their own org. Every
+conclusion about cross-store duplication evaporated once `org_id` was applied. **Probe org-scoped, or
+do not probe** — `harness_closing_store_resolver.py` §D pins it as an assertion.
+
+- Proof: `backend/harness_closing_store_resolver.py` (15 — lookup order, both live regressions as
+  fixtures, never-silent, org scoping).
 
 ## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
 

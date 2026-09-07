@@ -7244,29 +7244,67 @@ def _b2b_counts_by_store(client, org_id: str, date: str) -> dict:
 
 
 def _addr_resolver(client, org_id):
-    """A store-name/address → store_code resolver (exact lowercased address, then unambiguous leading
-    street-number), shared by the B2B and X-report tender aggregations."""
-    addr_to_code, num_to_code, num_counts = {}, {}, {}
-    sm = (client.schema("commcalc").table("store_mapping")
-          .select("store_code,store_address").eq("org_id", org_id).execute().data) or []
-    for r in sm:
-        code = (r.get("store_code") or "").strip()
-        addr = (r.get("store_address") or "").strip()
-        if not (code and addr):
-            continue
-        addr_to_code[addr.lower()] = code
-        nk = _num_key(addr)
-        if nk:
-            num_counts[nk] = num_counts.get(nk, 0) + 1
-            num_to_code.setdefault(nk, code)
+    """A store-name/address → store_code resolver, shared by the B2B and X-report tender aggregations.
+
+    OWNER BUG REPORT 2026-09-07: "POS data for B-1800 and 1115 store is not capturing". The feed was
+    fine — `commcalc.pos_tender_summary` held 19 days for each store. THIS function was throwing the
+    rows away. It indexed `commcalc.store_mapping` and nothing else, so:
+
+      · '1115 Liberty Ave' — correctly on the storeops store MASTER as B-1115, absent from
+        store_mapping — resolved to None and was dropped outright by the caller.
+      · Ten Chicago/NY stores have ONE address under TWO codes (the code the business uses, and an
+        onboarding-invented 'LUX-*' twin). This map was last-writer-wins, so POS landed on the twin,
+        which nothing else reads. 12 store codes with live closings had ZERO POS coverage.
+
+    The lookup order below is the one `/closing/stores` already documents for collapsing twins — the
+    survivor is the code the store MASTER knows, because that is the identity the rest of the platform
+    writes (a closing row's store_code is always a master code):
+
+      1. an EXPLICIT `commcalc.store_aliases` row — an admin has confirmed this spelling IS this store
+         (the Store-Matching screen writes these; mig 988 seeds the X-report's names). Outranks every
+         heuristic, exactly as it does in `commcalc.router._store_code_resolver`.
+      2. the storeops MASTER address.
+      3. the store_mapping address (the house canon, and where the LUX-* twins live).
+      4. an unambiguous leading street-number.
+
+    Steps 2-4 are unchanged in kind; only their ORDER and the master source are new, and a store whose
+    two sources agree resolves identically either way."""
+    alias_to_code, so_addr_to_code, addr_to_code = {}, {}, {}
+    num_to_code, num_counts = {}, {}
+
+    def _idx(rows, code_col, addr_col, target):
+        for r in rows or []:
+            code = (r.get(code_col) or "").strip()
+            addr = (r.get(addr_col) or "").strip()
+            if not (code and addr):
+                continue
+            target.setdefault(addr.lower(), code)
+            nk = _num_key(addr)
+            if nk:
+                num_counts[nk] = num_counts.get(nk, 0) + 1
+                num_to_code.setdefault(nk, code)
+
+    def _read(schema, table, cols):
+        try:
+            return (client.schema(schema).table(table).select(cols)
+                    .eq("org_id", org_id).execute().data) or []
+        except Exception:
+            return []   # a missing/unreadable source costs precision, never an exception in a recon
+
+    _idx(_read("commcalc", "store_aliases", "store_code,alias"), "store_code", "alias", alias_to_code)
+    _idx(_read("storeops", "stores", "store_code,address"), "store_code", "address", so_addr_to_code)
+    _idx(_read("commcalc", "store_mapping", "store_code,store_address"),
+         "store_code", "store_address", addr_to_code)
 
     def resolve(store_str):
         s = (store_str or "").strip()
         if not s:
             return None
-        c = addr_to_code.get(s.lower())
-        if c:
-            return c
+        low = s.lower()
+        for m in (alias_to_code, so_addr_to_code, addr_to_code):
+            c = m.get(low)
+            if c:
+                return c
         nk = _num_key(s)
         if nk and num_counts.get(nk, 0) == 1:
             return num_to_code.get(nk)
@@ -7287,10 +7325,16 @@ def _xreport_tenders_by_store(client, org_id: str, date: str) -> dict:
     if not rows:
         return {}
     resolve = _addr_resolver(client, org_id)
-    out = {}
+    out, _unresolved = {}, set()
     for r in rows:
         code = resolve(r.get("store"))
         if not code:
+            # NEVER SILENTLY. A dropped store string is a whole store's POS cash vanishing from every
+            # closing recon, and the four months this went unnoticed (owner report 2026-09-07) are what
+            # a bare `continue` costs. The row still cannot be counted — attributing it to a guessed
+            # store would be worse — but the gap is now named, and `/commcalc/store-resolution` lists
+            # the X-report's strings so it can be mapped in one click.
+            _unresolved.add((r.get("store") or "").strip())
             continue
         cls = (r.get("tender_class") or "other").lower()
         if cls not in ("cash", "card", "other"):
@@ -7302,6 +7346,10 @@ def _xreport_tenders_by_store(client, org_id: str, date: str) -> dict:
     for a in out.values():
         for k in list(a):
             a[k] = round(a[k], 2)
+    if _unresolved:
+        print("WARN [closing] X-report %s: %d store name(s) map to no store, their POS tenders are "
+              "NOT counted: %s -- map them on the Store-Matching screen"
+              % (date, len(_unresolved), sorted(_unresolved)[:10]), flush=True)
     return out
 
 
