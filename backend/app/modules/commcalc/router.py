@@ -276,6 +276,73 @@ _XR_TENDERS = {"cash", "check", "credit card", "gift card", "store account",
                "debit card", "credit", "debit", "card",
                "acima", "acima lease", "acima leasing", "acima (lease)", "lease"}
 
+
+def _xr_canon_known(label: str) -> bool:
+    """Does the RECON's own canonical tender mapper recognize this label? (owner bug 2026-09-07)
+
+    Two vocabularies described the same thing and drifted. `_XR_TENDERS` above is the INGEST list;
+    `closing/router._canon_tender` (+ CANON_TENDER_LABEL) is the 3-way RECON axis, and it has known
+    'External Credit Card' as `ext_cc` all along. A real B2B Soft X-Report for 117 E Burnside on
+    2026-09-05 carried the row `Externel Credit Card  112.22` (the POS's own spelling). It matched no
+    ingest label, so it was skipped — and the closing money recon then compared declared credit
+    $113.97 against an X-report credit of $0.00 and reported the WHOLE amount as a discrepancy,
+    instead of the real $1.75. Cash on the same sheet reconciled fine, which is what made the gap look
+    like "the POS is not capturing" rather than "one label was dropped".
+
+    Asking the recon axis makes the two ends share ONE vocabulary: any label the recon can place, the
+    ingest can now store. It is substring-based ('ext' → ext_cc), so the POS's misspelling costs
+    nothing and no per-carrier literal is added (RULE TWO). Lazy import: main.py loads both routers,
+    and this module must not take a hard dependency on closing at import time.
+    """
+    try:
+        from app.modules.closing.router import _canon_tender
+    except Exception:
+        return False
+    try:
+        return _canon_tender(label) is not None
+    except Exception:
+        return False
+
+
+def _xr_is_amount(cell) -> bool:
+    """Does this cell hold a NUMBER? The canon fallback above is substring-based and therefore
+    permissive, so it is only allowed to accept a row that actually looks like a tender-matrix row.
+    Without this a later caption such as 'Cash Drawer Detail' could be read as a tender line."""
+    t = str(cell or "").strip().replace("$", "").replace(",", "").replace("(", "-").replace(")", "")
+    if not t:
+        return False
+    try:
+        float(t)
+        return True
+    except Exception:
+        return False
+
+
+# Descriptive words are matched as SUBSTRINGS; the short register codes are matched as whole TOKENS.
+# 'cc' as a substring calls "Store A-cc-ount" a card — which is how the flat path has been booking
+# store-account money as X-report CREDIT, inflating the very number the closing money recon compares
+# declared credit against. The multi-sheet path never had that bug (it had no 'cc' at all), so the
+# two paths disagreed about the same label; this rule keeps the multi-sheet answer and gives the flat
+# path the register codes it was reaching for.
+_XR_CARD_WORDS = ("credit", "debit", "card", "visa", "master", "amex", "discover")
+_XR_CARD_CODES = frozenset({"cc", "emv", "chip"})
+
+
+def _xr_tender_class(t) -> str:
+    """cash / card / other for one raw tender label — ONE rule for BOTH ingest paths.
+
+    The multi-sheet loop used to inline its own ternary and the flat loop its own `_tclass`; the two
+    had already drifted, so the same POS label could land in a different bucket depending on which
+    parser read the file."""
+    s = str(t or "").lower()
+    if "cash" in s:
+        return "cash"
+    if any(k in s for k in _XR_CARD_WORDS):
+        return "card"
+    if set(re.split(r"[^a-z0-9]+", s)) & _XR_CARD_CODES:
+        return "card"
+    return "other"
+
 # The header cell that OPENS the tender matrix. B2B Soft writes the plural; other POS builds (and some
 # report-designer variants) write the singular — accepted ONLY when the same row also carries the
 # Net + Refunds/Sub Net signals, so a stray "Tender Type" caption elsewhere can't be mistaken for it.
@@ -344,11 +411,14 @@ def _parse_xreport_detail(contents: bytes, filename: str, fallback_date: str = N
     so the scan can never run into a later section of the sheet.
 
     `extra_labels` extends the recognized vocabulary (RULE TWO — the tenant's own
-    commcalc.closing_tender_map labels); it never replaces the built-ins."""
+    commcalc.closing_tender_map labels); it never replaces the built-ins. A label none of those lists
+    carries is offered to the RECON's canonical mapper before being skipped (`_xr_canon_known`), so
+    the ingest and the recon can no longer disagree about what a tender is."""
     import re as _re
     diag = {"sheets_read": 0, "workbook_error": None, "sheets": [], "headers_found": 0,
             "tender_rows_matched": 0, "tender_rows_skipped": 0, "duplicate_label_rows": 0,
             "unmatched_labels": [],
+            "canon_matched_rows": 0, "canon_matched_labels": [],
             "date": None, "builtin_label_count": len(_XR_TENDERS), "config_label_count": 0}
     m = _re.search(r'(\d{2})(\d{2})(\d{4})\s*-\s*(\d{2})(\d{2})(\d{4})', filename or "")
     if m:
@@ -410,16 +480,25 @@ def _parse_xreport_detail(contents: bytes, filename: str, fallback_date: str = N
             if not label or label in ("0", "nan", "none"):
                 break   # blank row / next section ends the tender block (unchanged)
             if label not in known:
-                # UNKNOWN LABEL: skip this row and KEEP READING (it used to `break`, silently losing
-                # every tender row below it). Nothing is written for an unmapped label — it is
-                # REPORTED so the tenant can map it under Closing -> Tender Config.
-                sd["skipped"] += 1
-                diag["tender_rows_skipped"] += 1
-                if raw not in sd["skipped_labels"] and len(sd["skipped_labels"]) < 25:
-                    sd["skipped_labels"].append(raw)
-                if raw not in seen_unmatched and len(seen_unmatched) < 50:
-                    seen_unmatched.append(raw)
-                continue
+                # Before calling a label unknown, ask the RECON's own canonical mapper — the ingest
+                # list and the recon axis are one vocabulary now (see _xr_canon_known). Guarded by
+                # _xr_is_amount so the permissive substring match can only accept a real matrix row.
+                if _xr_canon_known(label) and net_col < len(cells) and _xr_is_amount(cells[net_col]):
+                    sd["canon_matched"] = sd.get("canon_matched", 0) + 1
+                    diag["canon_matched_rows"] += 1
+                    if raw not in diag["canon_matched_labels"] and len(diag["canon_matched_labels"]) < 50:
+                        diag["canon_matched_labels"].append(raw)
+                else:
+                    # UNKNOWN LABEL: skip this row and KEEP READING (it used to `break`, silently
+                    # losing every tender row below it). Nothing is written for an unmapped label —
+                    # it is REPORTED so the tenant can map it under Closing -> Tender Config.
+                    sd["skipped"] += 1
+                    diag["tender_rows_skipped"] += 1
+                    if raw not in sd["skipped_labels"] and len(sd["skipped_labels"]) < 25:
+                        sd["skipped_labels"].append(raw)
+                    if raw not in seen_unmatched and len(seen_unmatched) < 50:
+                        seen_unmatched.append(raw)
+                    continue
             if label in seen_labels:
                 # FIRST occurrence wins. Dropping the `break` above means the scan can, on an export
                 # with no blank row before its totals/next section, reach a SECOND row carrying a
@@ -520,6 +599,11 @@ def _xreport_outcome(*, saved, path, diag, flat_diag, attempts, save_failures, f
             'tender_rows_skipped': diag.get("tender_rows_skipped", 0),
             'duplicate_label_rows': diag.get("duplicate_label_rows", 0),
             'unmatched_labels': unmatched,
+            # Labels the built-in/config lists did not have but the RECON's canonical mapper did
+            # (owner bug 2026-09-07 "Externel Credit Card"). Reported so a spelling the POS invents
+            # is visible rather than merely working.
+            'canon_matched_rows': diag.get("canon_matched_rows", 0),
+            'canon_matched_labels': diag.get("canon_matched_labels", []),
             'builtin_label_count': diag.get("builtin_label_count", 0),
             'config_label_count': diag.get("config_label_count", 0),
             'sheets': sheets[:40],
@@ -1269,9 +1353,9 @@ async def _upload_file_impl(
                 try:
                     client.schema('commcalc').table('pos_tender_summary').upsert(
                         {"org_id": org_id, "close_date": d, "store": store, "tender_type": tender,
-                         "tender_class": ("cash" if "cash" in tender.lower() else
-                                          ("card" if any(k in tender.lower() for k in
-                                           ("credit", "debit", "card", "visa", "master", "amex", "discover")) else "other")),
+                         # ONE class rule for both parser paths (_xr_tender_class) — this loop used
+                         # to inline its own ternary, which did not know 'cc'/'chip'/'emv'.
+                         "tender_class": _xr_tender_class(tender),
                          "amount": amount, "source": "x_report",
                          "updated_at": datetime.now(timezone.utc).isoformat()},
                         on_conflict="org_id,close_date,store,tender_type").execute()
@@ -1303,13 +1387,7 @@ async def _upload_file_impl(
         TENDER_K = ("tender_type", "Tender Type", "tender", "Tender", "payment_type", "Payment Type", "Payment", "Type", "Media", "media")
         AMT_K = ("amount", "Amount", "total", "Total", "value", "Value", "net", "Net", "Net Amount", "amt", "Amt")
 
-        def _tclass(t):
-            t = (t or "").lower()
-            if "cash" in t:
-                return "cash"
-            if any(k in t for k in ("credit", "debit", "card", "visa", "master", "amex", "discover", "cc", "chip", "emv")):
-                return "card"
-            return "other"
+        _tclass = _xr_tender_class      # same rule as the multi-sheet loop above — never a second copy
         # Stamp the BUSINESS-local date (not UTC): the X report is swept in the evening (~6:50 PM ET),
         # which is already the next UTC day part of the year — a UTC stamp would file it under tomorrow.
         if close_date and len(close_date) >= 10 and close_date[4] == "-":

@@ -259,7 +259,9 @@ export default function TaxCodesSection({ stores, rows, onSettingsChanged }: Pro
   ), [grid, stores])
 
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, marginBottom: 16, overflow: 'hidden' }}>
+    // id="sales-tax": the deep-link target for SalesTaxRateLink (Tax Collected + Store Setup both
+    // point here). scrollMarginTop keeps the section clear of the sticky app header on arrival.
+    <div id="sales-tax" style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, marginBottom: 16, overflow: 'hidden', scrollMarginTop: 80 }}>
       <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 700 }}>💵 Sales Tax</div>

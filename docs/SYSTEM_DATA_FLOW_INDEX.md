@@ -2143,7 +2143,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `core.ai_budget_config` / `core.ai_call_audit` (mig `972`; SHARED per-`(org,purpose)` AI ceiling + per-call meter/audit — tokens only, $ joins `core.token_rates`. Purposes seeded: `control_box_triage` mig `972`, `remediation_diagnose` mig `982`, `lease_extraction` mig `983`) | `billing/ai_meter` — the ONE writer since 2026-09-06, buffered and drained off the event loop. `core/ai_gate.audit` (used by `control_box_api._audit`, `remediation/router._ai_diagnose`, `storeops/router.post_document_extract`) and `ai_meter.record()` both feed that single sink; `usage_flush.flush_ai_now` is the backstop | `core/ai_gate.budget_config` (30s TTL cache) / `recent_rows` (24h floor + in-flight buffered rows) → `control_box.rollup_usage` → `control_box.ai_guard_decision`; refusal scan = the "someone is probing us" signal |
 | `core.ai_margin_config` (mig `973`; per-tenant AI margin, effective-dated + APPEND-ONLY so history IS the audit) | `PUT /billing/ai-margin` (super-admin, records `changed_by`) | `ai_usage.margin_for` → `price_period` → the statement's AI line |
 | `core.ai_usage_period` (mig `973`; FROZEN AI period snapshots — rate + margin + figures at close) | `POST /billing/ai-usage/close` | `ai_usage.price_period(frozen=)` — read, NEVER recomputed |
-| `commcalc.pos_tender_summary` (POS X-REPORT — the AUTHORITATIVE cash/card tender split; `store` is an ADDRESS STRING, not a code) | the X-report import | `closing/router._xreport_tenders_by_store` → `_addr_resolver` (alias > storeops MASTER > store_mapping > unambiguous house number; §23b) → every closing cash/card recon. Also an OBSERVED source of `GET /commcalc/store-resolution` since 2026-09-07 |
+| `commcalc.pos_tender_summary` (POS X-REPORT — the AUTHORITATIVE cash/card tender split; `store` is an ADDRESS STRING, not a code) | the X-report import — `commcalc/router._parse_xreport_detail`; the recognized tender vocabulary is the built-in `_XR_TENDERS` ∪ the tenant's `closing_tender_map` labels ∪ **anything `closing/_canon_tender` can place** (`_xr_canon_known`, §23h — one vocabulary with the recon axis), and `tender_class` comes from the single `_xr_tender_class` rule shared by BOTH parser paths | `closing/router._xreport_tenders_by_store` → `_addr_resolver` (alias > storeops MASTER > store_mapping > unambiguous house number; §23b) → every closing cash/card recon. Also an OBSERVED source of `GET /commcalc/store-resolution` since 2026-09-07 |
 | `core.module_usage_daily` (mig `974`; per (org, module, day) counters — `billable_calls` vs `system_calls` vs `anonymous_calls`) | `core.bump_module_usage` RPC from `billing/usage_flush` (batched every 30s; the request path only increments a dict) | `module_usage.rollup_by_module` → `statement.build_statement` → `GET /billing/statement` |
 | `core.module_route_map` (mig `974`; route prefix → billable module overrides, RULE TWO) | operator SQL | `module_usage.classify` (unmapped is SHOWN, never guessed) |
 | `core.module_price` (mig `975`; price per plan x module, effective-dated; UNPRICED = the ABSENCE of a row) | `PUT /billing/module-pricing` (super-admin, `changed_by`) | `statement.price_for` → `module_line` / `pricing_grid` |
@@ -3532,6 +3532,86 @@ does not suddenly list the whole app.
   silent `continue` — the page compiled, rendered, and was simply missing rows, so neither `tsc` nor a
   build could see it. §A re-reads the live nav to confirm those two pages really are in other groups,
   §C pins the viewer gate, §D pins that defaults stay group-scoped.
+
+## 23h. THE X-REPORT DROPPED THE EXTERNAL CREDIT CARD TENDER (owner bug report 2026-09-07)
+
+**Owner, with the primary document attached:** *"the external credit card is not being captured and
+showing a discrepancy — it should show both check marked, or discrepancy if anything is entered."*
+
+The B2B Soft X-Report for **117 E Burnside Ave, 2026-09-05**:
+
+| Tender Types | Net |
+|---|---|
+| Cash | 522.08 |
+| Check | 0.00 |
+| **Externel Credit Card** *(the POS's own spelling)* | **112.22** |
+| Gift Card | 0.00 |
+| Store Account | 0.00 |
+| | **$634.30** |
+
+and the money reconciliation the same store-day showed:
+
+| | closing | X-report | Δ |
+|---|---|---|---|
+| cash | $521.00 | $522.08 | −$1.08 |
+| credit | $113.97 | **$0.00** | **+$113.97** |
+
+**ROOT CAUSE — TWO VOCABULARIES FOR ONE THING.** `commcalc/router._XR_TENDERS` is the INGEST list;
+`closing/router._canon_tender` + `CANON_TENDER_LABEL` is the 3-way RECON axis — and the recon has
+known *External Credit Card* as `ext_cc` all along (§23f rides the same mapper). The ingest list
+carried it in **no** spelling, so `_parse_xreport_detail` skipped the row, it never reached
+`commcalc.pos_tender_summary`, and `_xreport_tenders_by_store` then handed the recon a `$0.00` that
+only ever meant *"we did not store this row"*. Cash on the SAME sheet ingested fine, which is exactly
+what made this read as *"the POS is not capturing"* rather than *"one label was dropped"* — the same
+shape as the §23b store-resolver defect, five days apart, in the same pipeline.
+
+**THE FIX — one vocabulary, not a 44th literal.** A label none of the lists carry is offered to the
+RECON's own mapper before being skipped (`commcalc/router._xr_canon_known`, lazy import so this module
+takes no import-time dependency on closing). It is substring-based (`ext` → `ext_cc`), so the POS's
+misspelling costs nothing and no carrier/vendor/tenant literal enters the code (RULE TWO — pinned).
+The permissive match is fenced by `_xr_is_amount`: it may only accept a row that actually carries a
+number in the Net column, so a later caption such as *"Cash Drawer Detail"* still cannot be read as a
+tender. A label NOTHING can place is still skipped, still counted, and still named verbatim in the
+upload's `x_report_unmapped_labels` note; a label the canon mapper rescued is reported too
+(`canon_matched_labels`), so a spelling the POS invents is **visible**, not merely working.
+
+**ALSO FOLDED IN — one cash/card/other rule (`_xr_tender_class`).** The multi-sheet upsert inlined its
+own ternary and the flat path had its own `_tclass`; the two had already drifted. Worse, the flat
+rule's `cc` hint was a SUBSTRING test, so **"Store A-cc-ount"** classified as `card` — booking
+store-account money as X-report CREDIT, the very figure the closing money recon compares declared
+credit against. Descriptive words (`credit`/`debit`/`card`/`visa`/…) stay substrings; the short
+register codes (`cc`/`emv`/`chip`) are now whole TOKENS. The multi-sheet answer is preserved, so live
+multi-sheet ingest is byte-identical apart from the rescued row.
+
+**Already-imported days are not retroactively fixed** — the dropped row was never stored, and nothing
+can invent it. Re-upload the affected X-Report(s) after deploy; the upsert key is
+`(org_id, close_date, store, tender_type)`, so a re-upload adds the missing tender and rewrites
+nothing else.
+
+- Proof: `backend/harness_xreport_tender_vocab.py` (63) — builds a REAL `.xlsx` of the owner's own
+  sheet and runs the REAL parser. §D ingests all $634.30; §E re-runs the PRE-FIX acceptance rule on
+  the same bytes and reproduces the missing $112.22; §F recomputes the owner's reconciliation and
+  shows the credit variance falling from +$113.97 to a real +$1.75; §C13 pins the `Store Account`
+  defect the fold uncovered; §I scans CODE not prose (tokenize drops comments/docstrings, which cite
+  the real store as the evidence — the trap `harness_tax_collected` §B1 hit the same day).
+
+## 23i. NO WAY TO REACH THE SALES-TAX RATE FROM WHERE IT IS NOTICED (owner 2026-09-07)
+
+**Owner:** *"the rate to fix the sales tax link is not there on top of that page, in addition to the
+finance or set up store module."*
+
+The editor already existed and is good: `components/pos/TaxCodesSection` on `/pos/settings` — store >
+market > org-wide precedence (`pos/router._resolve_tax`, the register's own resolver), an
+uncovered-stores banner, bulk set by market or multi-store. What did not exist was any route to it
+from the two screens where a wrong rate is *noticed*: **Tax Collected** (Finance group — the rate it
+shows is OBSERVED, tax ÷ taxable sales, §23f) and **Store Setup**.
+
+**No second editor was built.** `frontend/src/components/SalesTaxRateLink.tsx` is one signpost
+component pointing at `/pos/settings#sales-tax` (`TaxCodesSection` now carries that `id`), rendered on
+both pages. It gates itself with the SAME predicate the sidebar uses — `canSeeItem` over the
+`/pos/settings` NAV entry — so it can never advertise a page its viewer would be bounced out of, and
+renders nothing rather than a dead link. Registered here so the next person adding a "set the tax
+rate" affordance extends this component instead of starting a third path to the same rate.
 
 ## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
 

@@ -4,6 +4,7 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { ReportExportBar } from '@/components/ReportExportBar'
 import { MultiSelect } from '@/lib/multiselect'
+import SalesTaxRateLink from '@/components/SalesTaxRateLink'
 
 // Tax Collected — per-store drill-down with a date-range + store multi-select + market multi-select.
 // Tax is sourced from the UNIFIED sales set (raw_sales ∪ daily_sales_feed deduped by trans_id) on the
@@ -42,10 +43,16 @@ export default function TaxCollectedPage() {
   // content, and unmounting the date input the user is currently typing into is what made this unusable.
   const [firstLoad, setFirstLoad] = useState(true)
 
+  // 600ms, and only ever a COMPLETE date. A half-typed value is not a range the user meant, and
+  // refetching on it is what made the page feel like it was fighting the person entering the range.
+  // The no-op guard stops the very first tick (both already '') from firing a duplicate fetch.
   useEffect(() => {
-    const t = setTimeout(() => { setQStart(start); setQEnd(end) }, 350)
+    const ok = (v: string) => v === '' || v.length === 10
+    if (!ok(start) || !ok(end)) return
+    if (start === qStart && end === qEnd) return
+    const t = setTimeout(() => { setQStart(start); setQEnd(end) }, 600)
     return () => clearTimeout(t)
-  }, [start, end])
+  }, [start, end, qStart, qEnd])
 
   useEffect(() => {
     setLoading(true)
@@ -117,6 +124,10 @@ export default function TaxCollectedPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* The rate on this page is OBSERVED (tax / taxable sales). When it is wrong the fix is a
+              CONFIGURED rate, which lives in POS Settings -> Sales Tax — and there was no way to get
+              there from here (owner report 2026-09-07). */}
+          <SalesTaxRateLink />
           <select className="select" value={period} onChange={e => setPeriod(e.target.value)}>
             {periods.map(p => <option key={p} value={p}>{p}</option>)}
           </select>

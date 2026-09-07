@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { api } from '@/lib/client'
 import { sel, cell, STORE_EDIT_FIELDS, STORE_TZ_OPTS, isDirty, MarketField } from '../lib'
 import LeasePanel from './LeasePanel'
+import SalesTaxRateLink from '@/components/SalesTaxRateLink'
 
 export default function StoreSetupPage() {
   const [stores, setStores] = useState<any[]>([])
@@ -156,12 +157,18 @@ export default function StoreSetupPage() {
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🏬 Store Setup</h1>
-        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Store codes, addresses, markets, time zones and targets — add, edit, bulk-upload.
-          People live in <Link href="/storeops/setup/employees" style={{ color: 'var(--accent)' }}>Employee Setup</Link>.
-        </p>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🏬 Store Setup</h1>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+            Store codes, addresses, markets, time zones and targets — add, edit, bulk-upload.
+            People live in <Link href="/storeops/setup/employees" style={{ color: 'var(--accent)' }}>Employee Setup</Link>.
+          </p>
+        </div>
+        {/* A store's sales-tax RATE is set in POS Settings -> Sales Tax (store > market > company).
+            It is not a column on this page, and there was no way to reach it from store setup
+            (owner report 2026-09-07). */}
+        <SalesTaxRateLink label="Sales-tax rates" />
       </div>
 
       {msg && <div style={{ fontSize: 13, marginBottom: 12 }}>{msg}</div>}
