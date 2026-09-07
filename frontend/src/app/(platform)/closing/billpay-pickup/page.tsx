@@ -11,6 +11,7 @@ import { EntityPickerChips } from '../_lib/EntityPickerChips'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 import { resolveStoreCodes } from '../_lib/market-store-cascade'
 import EnvelopeViewLink from '@/components/EnvelopeViewLink'
+import { repOptions } from '@/lib/rep-options'
 
 // Bill Payment Pickup (owner directive 2026-09-02, mig 942): "one more pick up for the bill
 // payment pickup and deposit menu, just under the cash pick up module, the same process same
@@ -143,9 +144,7 @@ export default function BillPayPickupPage() {
   }, [rangeMode, date, rangeStart, rangeEnd, market, resolvedStores, fEmps, fDm])
   useEffect(() => { load() }, [load])
 
-  const empOptions: EntityOption[] = useMemo(
-    () => pEmps.filter((e: any) => (e.name || '').trim()).map((e: any) => ({ id: e.name, label: e.name, sublabel: e.email || undefined })),
-    [pEmps])
+  const empOptions: EntityOption[] = useMemo(() => repOptions(pEmps, data?.employee_options), [pEmps, data])
 
   const envelopes: any[] = data?.envelopes || []
   const key = (e: any) => `${e.close_date || ''}|${e.store_code || ''}|${e.employee_name || ''}`

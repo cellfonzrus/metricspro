@@ -11,6 +11,7 @@ import { EntityPickerChips } from '../_lib/EntityPickerChips'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 import { resolveStoreCodes } from '../_lib/market-store-cascade'
 import EnvelopeViewLink from '@/components/EnvelopeViewLink'
+import { repOptions } from '@/lib/rep-options'
 
 // DM cash pickup — see the day's cash envelopes, check off the ones collected with a note, confirm.
 // On confirm, the assigned recipient gets an email + WhatsApp summary.
@@ -176,9 +177,7 @@ export default function CashPickupPage() {
   // Filters/id use exact server-side matching (store_code exact-match; employee/dm substring on the
   // name) — the SAME query params as before, just picked instead of typed (id === label for the
   // employee/dm name fields; store's id is already the canonical store_code, not a hack).
-  const empOptions: EntityOption[] = useMemo(
-    () => pEmps.filter((e: any) => (e.name || '').trim()).map((e: any) => ({ id: e.name, label: e.name, sublabel: e.email || undefined })),
-    [pEmps])
+  const empOptions: EntityOption[] = useMemo(() => repOptions(pEmps, data?.employee_options), [pEmps, data])
 
   const envelopes: any[] = data?.envelopes || []
   // key includes close_date (2026-07-15, range mode): the same store+employee can have a pending

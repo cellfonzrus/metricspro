@@ -307,6 +307,47 @@ check("6j. billpay pickup_totals_by_store_day: default byte-identical (40), actu
       _bptot(_bp_rows)[0] == {"S1": {"2026-09-01": 40.0}}
       and _bptot(_bp_rows, actual_wins=True)[0] == {"S1": {"2026-09-01": 42.0}})
 
+# ═══ 7. The REP filter can only match names the picker can offer (owner report 2026-09-07) ═══════
+# "It does not hold sort by rep." `employees=` is an EXACT match, and the picker offered ONLY
+# storeops.employees — but 252 of the org's 1,729 closing rows since May carry a name in no roster
+# ('Waleed', 'Syed 117', 'Abdul K', 'arif', 'Naima', 'Asad Umar', 'Yasir', 'David', 'Venkata
+# Penumatcha'), usually a short form of a real person. Those reps were UNPICKABLE: absent from the
+# dropdown, and unmatched by the roster spelling of the same person. The endpoint now returns the rep
+# names the DATA carries, which the page unions into the picker. The MATCH rule is unchanged.
+st = fresh_store(); wire(st)
+st["stores"] = [
+    {"org_id": HOUSE, "store_code": "S1", "address": "1 Main St", "market": "Texas", "is_active": True},
+    {"org_id": HOUSE, "store_code": "S2", "address": "2 Oak Ave", "market": "Ohio", "is_active": True},
+]
+st["daily_closing"] = [
+    dc_row(id="r1", store_code="S1", employee_name="Jane Rep", store_cash=50.0),
+    dc_row(id="r2", store_code="S1", employee_name="Waleed", store_cash=60.0),
+    dc_row(id="r3", store_code="S2", employee_name="Syed 117", store_cash=70.0),
+]
+_all = cr.closing_pickups(date="2026-07-15", org_id=HOUSE)
+check("7a. every rep with an envelope is offered — including the ones no roster knows "
+      "(pre-fix these were invisible in the picker and unmatchable by the roster spelling)",
+      _all.get("employee_options") == ["Jane Rep", "Syed 117", "Waleed"],
+      str(_all.get("employee_options")))
+_one = cr.closing_pickups(date="2026-07-15", employees="Waleed", org_id=HOUSE)
+check("7b. picking that rep now actually filters (1 envelope, $60)",
+      [e["employee_name"] for e in _one["envelopes"]] == ["Waleed"]
+      and _one["envelopes"][0]["cash"] == 60.0,
+      str(_one["envelopes"]))
+check("7c. …and the option list does NOT shrink to the filtered rep — the names are collected "
+      "BEFORE the employee filter, so the next pick is still possible",
+      _one.get("employee_options") == ["Jane Rep", "Syed 117", "Waleed"],
+      str(_one.get("employee_options")))
+_scoped = cr.closing_pickups(date="2026-07-15", stores="S1", org_id=HOUSE)
+check("7d. the option list RESPECTS the store/market/keyset narrowing — one scope never leaks "
+      "another scope's rep names into the picker",
+      _scoped.get("employee_options") == ["Jane Rep", "Waleed"],
+      str(_scoped.get("employee_options")))
+_miss = cr.closing_pickups(date="2026-07-15", employees="Waleed Ahmed", org_id=HOUSE)
+check("7e. matching is STILL exact — a roster spelling that no envelope carries matches nothing, "
+      "rather than the filter silently widening",
+      _miss["envelopes"] == [], str(_miss["envelopes"]))
+
 # ── Summary ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:

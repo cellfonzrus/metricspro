@@ -3288,6 +3288,37 @@ do not probe** — `harness_closing_store_resolver.py` §D pins it as an asserti
 - Proof: `backend/harness_closing_store_resolver.py` (15 — lookup order, both live regressions as
   fixtures, never-silent, org scoping).
 
+## 23c. THE REP FILTER ON THE PICKUP SCREENS (owner bug report 2026-09-07)
+
+**Owner:** *"It does not hold sort by rep."*
+
+`GET /closing/pickups` matches `employees=` **exactly** — the picker was assumed to supply real roster
+names — but the picker offered ONLY `storeops.employees`. **252 of the org's 1,729 closing rows since
+May carry an `employee_name` that is in no roster**: `Waleed` (56 rows), `Syed 117` (41), `Abdul K`
+(39), `arif` (31), `Naima` (28), `Asad Umar` (24), `Yasir` (23), `David` (9), `Venkata Penumatcha` (1)
+— usually a short form of a real person. Those reps were unpickable **twice over**: absent from the
+dropdown, and unmatched by the roster spelling of the same person.
+
+**Fix.** Both pickup endpoints now return `employee_options` — every rep with an envelope in the
+window/scope, collected **before** the employee filter so choosing one rep never shrinks the list you
+can choose from next, and **after** the keyset/market/store filters so one scope never leaks another's
+rep names. The match rule is unchanged (still exact); nothing silently widens.
+`frontend/src/lib/rep-options.ts::repOptions` is the ONE union of roster + data names, shared by
+`/closing/pickup` and `/closing/billpay-pickup` — the two screens run the same parameterized pickup
+machinery, and two copies of that list is exactly where they would drift. The roster spelling wins on
+a collision because it carries the email that separates two people with the same first name.
+
+Proof: `harness_cash_pickup.py` §7 (5 checks — offered, filters, does-not-shrink, scope-respecting,
+still-exact). The billpay mirror was caught by `harness_billpay_pickup` /
+`harness_pickup_market_span` when the first edit landed there without its initializer.
+
+**Still open on this screen:** the STORE half of the same report ("sort by store → all stores after a
+few seconds") is NOT diagnosed. The picker is controlled and nothing in the page clears it, and the
+backend's `store_set` match is exact-uppercase against codes that all exist on the master, so neither
+half reproduces on inspection. It needs one observation from the owner: does the store CHIP clear, or
+does it stay selected while the table shows everything? Chip clears = frontend state; chip stays =
+the server ignoring the parameter. Do not guess this — the two fixes are in different files.
+
 ## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
 
 **Read this before writing a new harness, and before trusting an old one.** Owner directive

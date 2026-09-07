@@ -5120,7 +5120,7 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
         client, org_id, date_from=(_pu_dates[0] if _pu_dates else None),
         date_to=(_pu_dates[-1] if _pu_dates else None))
 
-    out = []
+    out, emp_options = [], set()
     for r in rows:
         cash = _f(r.get("store_cash")) + _f(r.get("epay_cash"))
         cash = _envelope.net_row(cash, r.get("id"), _exp_by_row, _wd_by_row)
@@ -5141,7 +5141,21 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
         # "never silently drop an unresolved row" rule /closing/summary already applies.
         if store_set and code and code.upper() not in store_set:
             continue
-        _rname = (r.get("employee_name") or "").lower()
+        # The rep names that ACTUALLY filed an envelope in this window and scope. Collected BEFORE the
+        # employee filter below, so narrowing to one rep never shrinks the list of reps you can pick.
+        #
+        # OWNER BUG REPORT 2026-09-07: "it does not hold sort by rep". `employees=` is an EXACT match
+        # (the picker was assumed to supply real roster names), but the picker offered ONLY
+        # storeops.employees — and 252 of the org's 1,729 closing rows since May carry a name that is
+        # in no roster ('Waleed', 'Syed 117', 'Abdul K', 'arif', 'Naima', 'Asad Umar', 'Yasir',
+        # 'David', 'Venkata Penumatcha'). Those reps were unpickable: absent from the dropdown, and
+        # unmatched by the roster spelling of the same person. Returning the names the DATA carries
+        # makes every rep visible in the list pickable, which is what the filter always claimed to do.
+        # The MATCHING rule is unchanged — still exact, so no filter silently widens.
+        _rname_raw = (r.get("employee_name") or "").strip()
+        if _rname_raw:
+            emp_options.add(_rname_raw)
+        _rname = _rname_raw.lower()
         if emp_f and emp_f not in _rname:
             continue
         if emp_set and _rname not in emp_set:
@@ -5268,7 +5282,11 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             "not_closed": not_closed,
             # Per-store cash-on-hand, AS OF `_as_of` (the Day-mode date, or Range-mode's end date) --
             # closes the loop between the Store Cash on Hand report and the actual pickup action.
-            "as_of": _as_of, "by_store": by_store}
+            "as_of": _as_of, "by_store": by_store,
+            # Every rep with an envelope in this window/scope — what the rep filter can actually
+            # match (see the note in the row loop). The frontend unions this with the employee
+            # roster so a rep who filed a closing is always pickable.
+            "employee_options": sorted(emp_options, key=lambda n: n.lower())}
 
 
 # ── Cash-position report (retail-ops-7 item 5): per-store cash on hand, as of a chosen day or over a
@@ -6069,7 +6087,7 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
     # comma-joined grant matched nothing as one exact string — zero envelopes; see the /pickups note).
     market_set = _resolve_market_filter(market, None)
 
-    out = []
+    out, emp_options = [], set()
     for r in rows:
         cash = _f(r.get("epay_on_cash"))
         # OWNER 2026-09-02 #2: "in the billpayment pick, add another column for bill payment on
@@ -6093,7 +6111,21 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
             continue
         if store_set and code and code.upper() not in store_set:
             continue
-        _rname = (r.get("employee_name") or "").lower()
+        # The rep names that ACTUALLY filed an envelope in this window and scope. Collected BEFORE the
+        # employee filter below, so narrowing to one rep never shrinks the list of reps you can pick.
+        #
+        # OWNER BUG REPORT 2026-09-07: "it does not hold sort by rep". `employees=` is an EXACT match
+        # (the picker was assumed to supply real roster names), but the picker offered ONLY
+        # storeops.employees — and 252 of the org's 1,729 closing rows since May carry a name that is
+        # in no roster ('Waleed', 'Syed 117', 'Abdul K', 'arif', 'Naima', 'Asad Umar', 'Yasir',
+        # 'David', 'Venkata Penumatcha'). Those reps were unpickable: absent from the dropdown, and
+        # unmatched by the roster spelling of the same person. Returning the names the DATA carries
+        # makes every rep visible in the list pickable, which is what the filter always claimed to do.
+        # The MATCHING rule is unchanged — still exact, so no filter silently widens.
+        _rname_raw = (r.get("employee_name") or "").strip()
+        if _rname_raw:
+            emp_options.add(_rname_raw)
+        _rname = _rname_raw.lower()
         if emp_f and emp_f not in _rname:
             continue
         if emp_set and _rname not in emp_set:
@@ -6193,6 +6225,9 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
             "collected_cash": round(sum(e["cash"] for e in out if e["picked_up"]), 2),
             "ready_cash": round(sum(e["cash"] for e in out if not e["picked_up"]), 2),
             "as_of": _as_of, "by_store": by_store, "position": pos_meta,
+            # Same rep-picker contract as GET /closing/pickups (owner report 2026-09-07): every rep
+            # with an envelope in this window/scope, collected before the employee filter.
+            "employee_options": sorted(emp_options, key=lambda n: n.lower()),
             "pos_source": _pos_src}
 
 
