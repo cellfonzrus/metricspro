@@ -3433,6 +3433,52 @@ DEFAULT, never to 0: an unreadable config table must not silently switch off a m
 - Proof: `backend/harness_envelope_outstanding.py` (25 — registration+cost, both findings, grace
   period, disjointness, EEP netting incl. partial/pending, config incl. read-failure, org scoping).
 
+## 23f. TAX COLLECTED — the rate was divided by the wrong thing (owner 2026-09-07)
+
+**Owner:** *"the sales tax rate is not correct… the tax report should also have the total sales from
+which the sales tax was collected, also it should show how much is on cash sale and how much is on
+credit card and financing"*, plus *"the date picker… every time you pick the date it is refreshing
+itself"*.
+
+**THE RATE.** `effective_rate` was tax ÷ **all** `ext_price`. Live August 2026, house org, 24,241
+non-void non-return lines:
+
+| | |
+|---|---|
+| tax | $13,733.70 |
+| ext_price of every line (the old base) | $615,344.62 → **"2.23%"** |
+| ext_price of the lines that CARRIED tax | $164,751.76 → **8.34%** |
+
+No jurisdiction charges 2.23%. **73.2% of the old base ($450,592.86) is not taxable merchandise**:
+$377,746.92 of bill payments and $55,704.92 of device set-up fees, both taxed $0.00 by construction.
+The rate was not miscalculated — it was divided by the wrong thing. The report now returns
+`revenue` (all sales), `taxable_revenue`, `untaxed_revenue` and a rate over the taxable base, and the
+page states the gap rather than leaving it to be inferred.
+
+**Taxability is read from the line's own `tax > 0`, never from a list of department names in code** —
+RULE TWO, and the same lesson as mig 962: a hardcoded vocabulary describes one tenant's POS and
+silently mis-reports for the next. `harness_tax_collected.py` §B asserts no department literal reaches
+the taxability decision (scanning the code, not the docstring, which cites those departments as the
+evidence that found the defect).
+
+**THE TENDER SPLIT** buckets each line's `tender_type` through the SHARED `closing/_canon_tender` —
+the mapper the 3-way tender recon already rides, so the two can never disagree about what "cash"
+means, and the traps it exists for come free ('gift card' contains 'card', 'cash app' contains 'cash',
+'external credit card' contains 'credit'). Display buckets: cash / card / financing / other / **mixed**.
+A line naming SEVERAL tenders ("Cash; Externel Credit Card" — 233 lines in that month) carries one
+amount and no split, so it is reported as `mixed` rather than assigned whole to whichever tender
+matched first. August split: cash $447,855.92 · card $120,814.34 · financing $11,291.58 · other
+$21,554.87 · mixed $13,827.91.
+
+**THE DATE PICKER** was rendered INSIDE `{loading ? <spinner/> : (…)}`. Changing a date set
+`loading=true`, which **unmounted the input being typed into** and remounted it when the fetch
+returned — the calendar closed and focus was lost on every segment, so a date could not be finished.
+Fixed by lifting the whole filter bar out of the loading branch (a control must not be a casualty of
+loading the content it controls), debouncing the query dates 350ms away from the displayed ones, and
+blanking the page only on the FIRST load — later refetches keep the previous rows and show "updating…".
+
+- Proof: `backend/harness_tax_collected.py` (23).
+
 ## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
 
 **Read this before writing a new harness, and before trusting an old one.** Owner directive

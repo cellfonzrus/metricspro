@@ -2273,6 +2273,53 @@ def _store_market_resolver(client, org_id):
         return (lambda store: ''), []
 
 
+# ── Tender buckets for the tax report (owner 2026-09-07: "how much is on cash sale and how much is on
+#    credit card and financing") ────────────────────────────────────────────────────────────────────
+# The DISPLAY buckets the owner asked for, over the SHARED canonical tender mapper. `closing/_canon_tender`
+# is the one place that knows 'gift card' contains 'card', 'cash app' contains 'cash' and 'external credit
+# card' contains 'credit' — reusing it means this report and the 3-way tender recon can never disagree
+# about what "cash" means, which is exactly the drift CLAUDE.md's duplicate-check gate exists to stop.
+TAX_TENDER_BUCKETS = ('cash', 'card', 'financing', 'other', 'mixed')
+_CANON_TO_TAX_BUCKET = {'cash': 'cash', 'credit': 'card', 'ext_cc': 'card',
+                        'acima': 'financing', 'gift': 'other', 'store_acct': 'other',
+                        'zelle': 'other'}
+
+
+def _blank_tender_split():
+    return {b: {'sales': 0.0, 'taxable_revenue': 0.0, 'tax': 0.0} for b in TAX_TENDER_BUCKETS}
+
+
+def _round_tender_split(d):
+    return {b: {k: round(v, 2) for k, v in d[b].items()} for b in TAX_TENDER_BUCKETS}
+
+
+def _tax_tender_bucket(raw):
+    """One sales line's tender_type -> cash | card | financing | other | mixed.
+
+    MIXED IS NOT A GUESS, IT IS THE HONEST ANSWER. A POS line can name several tenders at once
+    ("Cash; Externel Credit Card" — 233 such lines in the house org's August) while carrying ONE amount
+    and no split between them. Assigning the whole amount to whichever tender the mapper happens to
+    match first would overstate that tender by real money, so those lines are reported separately and
+    the reader can see exactly how much is unallocated.
+
+    `financing` is matched on the generic word, NOT on a lender's brand name: the canonical mapper
+    already carries brand strings for historical reasons and this must not add more (RULE TWO)."""
+    t = (raw or '').strip()
+    if not t:
+        return 'other'
+    if ';' in t or ',' in t or '/' in t or ' and ' in t.lower():
+        return 'mixed'
+    low = t.lower()
+    if 'financ' in low or 'lease' in low:
+        return 'financing'
+    try:
+        from app.modules.closing.router import _canon_tender
+        canon = _canon_tender(t)
+    except Exception:
+        canon = None
+    return _CANON_TO_TAX_BUCKET.get(canon or '', 'other')
+
+
 @router.get("/tax-collected")
 def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG_ID):
     """Retail SALES TAX collected, per store WITH a per-day drill-down, for a period (from the sales
@@ -2280,13 +2327,36 @@ def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG
     by trans_id — `_sales_rows_union_txn`) so a tenant on the daily feed (no monthly upload) still gets a
     tax report and a promoted month is never masked by a stale feed. `start`/`end` (YYYY-MM-DD, optional)
     narrow to a date range WITHIN the period. Each store row carries its `market` (store_mapping) and a
-    `days` array so the frontend can drill store → day and multi-select by store / market. Also returns
-    `effective_rate` (tax ÷ pre-tax merchandise)."""
+    `days` array so the frontend can drill store → day and multi-select by store / market.
+
+    THREE NUMBERS, NOT ONE (owner 2026-09-07: "the sales tax rate is not correct … it should also have
+    the total sales from which the sales tax was collected"):
+
+      revenue          ALL pre-tax sales in scope.
+      taxable_revenue  only the lines that actually CARRIED tax.
+      effective_rate   tax ÷ TAXABLE revenue.
+
+    The old rate divided by ALL sales and was therefore meaningless here. Live August 2026, house org:
+    $615,344.62 of sales carried $13,733.70 of tax — a "2.23% sales tax rate", which no jurisdiction
+    charges. **73.2% of that base ($450,592.86) is not taxable merchandise at all**: $377,746.92 of bill
+    payments and $55,704.92 of device set-up fees, both taxed $0.00 by construction. Over the lines that
+    were actually taxed ($164,751.76) the rate is **8.34%**, which is the real one.
+
+    Taxability is read from the DATA (tax > 0 on the line), never from a list of department names in
+    code — RULE TWO, and the same reason mig 962 exists: a hardcoded vocabulary describes one tenant's
+    POS and silently mis-reports for the next.
+
+    TENDER SPLIT (owner: "how much is on cash sale and how much is on credit card and financing"): each
+    line's `tender_type` is bucketed through the SHARED `closing/_canon_tender` — the same mapper the
+    3-way tender recon rides, so this report and that recon can never disagree about what "cash" means.
+    A line whose tender names SEVERAL tenders ("Cash; Externel Credit Card") is reported as `mixed`
+    rather than assigned whole to one of them: the row carries one amount and no split, so choosing one
+    would silently overstate it."""
     require_org(org_id)
     client = sb()
     rows, _meta = _sales_rows_union_txn(
         client, org_id, period,
-        cols='trans_id,trans_date,store,ext_price,tax,voided,trans_type')
+        cols='trans_id,trans_date,store,ext_price,tax,voided,trans_type,tender_type')
     resolve_market, all_markets = _store_market_resolver(client, org_id)
     s0 = (start or '').strip()[:10]
     s1 = (end or '').strip()[:10]
@@ -2305,30 +2375,57 @@ def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG
         s = by_store.get(store)
         if not s:
             s = by_store[store] = {'store': store, 'market': resolve_market(store),
-                                   'tax': 0.0, 'revenue': 0.0, '_days': {}}
+                                   'tax': 0.0, 'revenue': 0.0, 'taxable_revenue': 0.0,
+                                   'tender': _blank_tender_split(), '_days': {}}
         tx = safe_float(r.get('tax'))
         ext = safe_float(r.get('ext_price'))
         s['tax'] += tx
         s['revenue'] += ext
+        bucket = _tax_tender_bucket(r.get('tender_type'))
+        s['tender'][bucket]['sales'] += ext
+        s['tender'][bucket]['tax'] += tx
+        if tx:
+            s['taxable_revenue'] += ext
+            s['tender'][bucket]['taxable_revenue'] += ext
         if day:
-            d = s['_days'].setdefault(day, {'date': day, 'tax': 0.0, 'revenue': 0.0})
+            d = s['_days'].setdefault(day, {'date': day, 'tax': 0.0, 'revenue': 0.0,
+                                            'taxable_revenue': 0.0})
             d['tax'] += tx
             d['revenue'] += ext
+            if tx:
+                d['taxable_revenue'] += ext
     out = []
     for s in by_store.values():
         days = sorted(s['_days'].values(), key=lambda d: d['date'])
         for d in days:
             d['tax'] = round(d['tax'], 2)
             d['revenue'] = round(d['revenue'], 2)
-            d['effective_rate'] = round(100 * d['tax'] / d['revenue'], 2) if d['revenue'] else 0.0
+            d['taxable_revenue'] = round(d['taxable_revenue'], 2)
+            d['effective_rate'] = (round(100 * d['tax'] / d['taxable_revenue'], 2)
+                                   if d['taxable_revenue'] else 0.0)
         out.append({'store': s['store'], 'market': s['market'],
                     'tax': round(s['tax'], 2), 'revenue': round(s['revenue'], 2),
-                    'effective_rate': round(100 * s['tax'] / s['revenue'], 2) if s['revenue'] else 0.0,
+                    'taxable_revenue': round(s['taxable_revenue'], 2),
+                    'effective_rate': (round(100 * s['tax'] / s['taxable_revenue'], 2)
+                                       if s['taxable_revenue'] else 0.0),
+                    'tender': _round_tender_split(s['tender']),
                     'days': days})
     out.sort(key=lambda x: -x['tax'])
     total_tax = round(sum(x['tax'] for x in out), 2)
+    total_taxable = round(sum(x['taxable_revenue'] for x in out), 2)
+    total_rev = round(sum(x['revenue'] for x in out), 2)
+    tender_tot = _blank_tender_split()
+    for x in out:
+        for b, v in x['tender'].items():
+            for kk in ('sales', 'taxable_revenue', 'tax'):
+                tender_tot[b][kk] += v[kk]
     return {'period': period, 'start': s0, 'end': s1, 'stores': out, 'markets': all_markets,
-            'totals': {'tax': total_tax, 'revenue': round(sum(x['revenue'] for x in out), 2)},
+            'totals': {'tax': total_tax, 'revenue': total_rev,
+                       'taxable_revenue': total_taxable,
+                       'untaxed_revenue': round(total_rev - total_taxable, 2),
+                       'effective_rate': (round(100 * total_tax / total_taxable, 2)
+                                          if total_taxable else 0.0),
+                       'tender': _round_tender_split(tender_tot)},
             'has_tax': total_tax > 0,
             'note': (None if total_tax > 0 else
                      'No tax captured for this period yet — re-send a Sales Transaction Details file that '
