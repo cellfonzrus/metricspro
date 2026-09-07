@@ -3288,6 +3288,29 @@ do not probe** — `harness_closing_store_resolver.py` §D pins it as an asserti
 - Proof: `backend/harness_closing_store_resolver.py` (15 — lookup order, both live regressions as
   fixtures, never-silent, org scoping).
 
+**CONFIRMED BY THE OWNER 2026-09-07:** the store mapping is correct, including the five names that
+resolve to stores with no recent closings (`1 S 60th street`→`B-1`, `1710 W 4th St`→`B-1710`,
+`2701 Germantown ave`→`B-2701`, `2778 Ephraim Ave`→`B-1598` (a relocation), `3 Palisade Ave
+Yonkers`→`B-3PL`). No seed and no further code change: they already resolve that way. Verified
+end to end over 2026-07-27..09-06 — B-1115 now carries 144 POS rows against 34 closings, B-1800 142
+against 34; before the fix both were zero.
+
+**TWO DATA FINDINGS THIS SURFACED — both are the owner's call, neither is touched:**
+
+1. **Nine stores sell every day and file NO closing.** Full POS activity (142–177 X-report rows each
+   over six weeks) against **zero** `daily_closing` rows: `B-1`, `B-1598`, `B-1710`, `B-2701`,
+   `B-3605`, `B-5619`, `B-6149`, `B-6507`, `B-723`. That is ~1,270 store-days with POS sales and no
+   closing filed, and it bears directly on §23d: an envelope that is never declared cannot be picked
+   up, counted or deposited, so a third of the estate is invisible to every cash control by
+   construction.
+2. **$910 of envelope cash is stranded under a code that is not a store.** Four closings were filed
+   against `1800GreatNeckRd` — B-1800's twin spelling, absent from the storeops master: 2026-08-05
+   Angelica Escobar $318.00, 08-19 Leslie Martinez $0.00, 08-20 Leslie Martinez $418.00, 08-27 Leslie
+   Martinez $174.00 (three carry envelope photos). This is the twin-identity failure
+   `/closing/stores` was written to prevent, caught on the other side: the picker collapses twins for
+   NEW closings, but these four already exist and are keyed to an identity no report reads. Re-keying
+   them to `B-1800` is a money-row edit and is NOT done without the owner's instruction.
+
 ## 23c. THE REP FILTER ON THE PICKUP SCREENS (owner bug report 2026-09-07)
 
 **Owner:** *"It does not hold sort by rep."*
