@@ -30614,7 +30614,12 @@ def _ensure_data_sources_cron():
         secret = (getattr(settings, "NOTIFY_RUN_SECRET", "") or "").strip()
         if not url or not secret:
             return "skipped: BROWSER_SERVICE_URL/API_PUBLIC_URL or NOTIFY_RUN_SECRET not set"
-        res = sb().rpc("ensure_data_sources_cron", {"p_url": url, "p_secret": secret}).execute()
+        # .schema("commcalc"): mig 956 defines the function as commcalc.ensure_data_sources_cron,
+        # and the shared client defaults to `public`, where it does not exist. Without this the
+        # call raises "function not found", the hook swallows it as a WARN, and portal pulls stay
+        # unscheduled forever — the exact silent-skip this self-healing hook was written to end.
+        res = sb().schema("commcalc").rpc(
+            "ensure_data_sources_cron", {"p_url": url, "p_secret": secret}).execute()
         return res.data if isinstance(res.data, str) else (res.data or None)
     except Exception as e:
         print(f"WARN _ensure_data_sources_cron skipped: {e}")

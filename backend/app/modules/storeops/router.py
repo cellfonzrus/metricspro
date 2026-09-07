@@ -3811,7 +3811,11 @@ def _ensure_doc_expiry_alert_cron():
         secret = (getattr(settings, "NOTIFY_RUN_SECRET", "") or "").strip()
         if not url or not secret:
             return "skipped: API_PUBLIC_URL or NOTIFY_RUN_SECRET not set"
-        res = sb().rpc("ensure_doc_expiry_alert_cron", {"p_url": url, "p_secret": secret}).execute()
+        # .schema("storeops"): mig 967 defines storeops.ensure_doc_expiry_alert_cron; the shared
+        # client defaults to `public`, where it does not exist (see the note in commcalc
+        # _ensure_data_sources_cron). Lease/COI expiry alerts never scheduled because of this.
+        res = sb().schema("storeops").rpc(
+            "ensure_doc_expiry_alert_cron", {"p_url": url, "p_secret": secret}).execute()
         return res.data if isinstance(res.data, str) else (res.data or None)
     except Exception as e:
         print(f"WARN _ensure_doc_expiry_alert_cron skipped: {e}")
@@ -9754,7 +9758,10 @@ def _ensure_google_reviews_sweep_cron():
         secret = (getattr(settings, "NOTIFY_RUN_SECRET", "") or "").strip()
         if not url or not secret:
             return "skipped: API_PUBLIC_URL or NOTIFY_RUN_SECRET not set"
-        res = sb().rpc("ensure_google_reviews_sweep_cron", {"p_url": url, "p_secret": secret}).execute()
+        # .schema("storeops"): the function is storeops.ensure_google_reviews_sweep_cron; the
+        # shared client defaults to `public`. Same silent-skip as the two above.
+        res = sb().schema("storeops").rpc(
+            "ensure_google_reviews_sweep_cron", {"p_url": url, "p_secret": secret}).execute()
         return res.data if isinstance(res.data, str) else (res.data or None)
     except Exception as e:
         print(f"WARN _ensure_google_reviews_sweep_cron skipped: {e}")

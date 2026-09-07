@@ -3342,6 +3342,45 @@ half reproduces on inspection. It needs one observation from the owner: does the
 does it stay selected while the table shows everything? Chip clears = frontend state; chip stays =
 the server ignoring the parameter. Do not guess this — the two fixes are in different files.
 
+## 23d. THE CRON REGISTRARS CALLED THEIR RPC IN THE WRONG SCHEMA (2026-09-07)
+
+Found while verifying the owner's Railway redeploy. Each `_ensure_*_cron()` helper self-registers a
+pg_cron job on **every boot** by calling an idempotent RPC. The shared Supabase client is built with
+no options, so its default PostgREST schema is `public` — and PostgREST resolves a function ONLY
+inside the request's schema. Three registrars called `sb().rpc(...)` with no `.schema()`:
+
+| registrar | function lives in | what never got scheduled |
+|---|---|---|
+| `_ensure_data_sources_cron` | `commcalc` (mig 956) | portal pulls / merchant-processor scrapes |
+| `_ensure_doc_expiry_alert_cron` | `storeops` (mig 967) | lease + COI expiry alerts |
+| `_ensure_google_reviews_sweep_cron` | `storeops` (mig 950) | google reviews sweep |
+
+Confirmed live: `public.ensure_data_sources_cron` and `public.ensure_doc_expiry_alert_cron` both
+return **PGRST202** (no such function), while `core.ensure_system_check_cron` and
+`storeops.ensure_doc_expiry_alert_cron` resolve. Those three calls could only ever raise "function
+not found". `_ensure_account_recompute_cron`, `_ensure_email_sweep_cron` and
+`_ensure_system_check_cron` always named their schema — this was drift, not a design choice.
+
+**Why it stayed invisible, which is the real lesson.** Every hook is deliberately best-effort
+(`except Exception: print("WARN … self-register failed")`) because a cron registrar must never block
+boot. That is right. But it means a registrar that can NEVER succeed looks exactly like one skipped
+for a missing secret: one WARN at boot, silence forever. Each hook's own docstring says it exists
+because mig 241 "shipped its cron as a commented-out block for someone to paste" and scheduling
+"depended on a human remembering" — the hooks replaced that with automation that then failed just as
+quietly. A best-effort `except` cannot catch this class; a static check can.
+
+- Proof: `backend/harness_cron_registrar_schema.py` (13) — reads the CREATE FUNCTION schema out of
+  `database/migrations/` and the `.schema()` out of every call site, so adding a registrar or moving a
+  function re-checks itself. Negative-controlled against the pre-fix source.
+- `harness_people_google_reviews.py` F37b now asserts the schema too; its fake had no `schema()`
+  method at all, which is why it could not have caught this.
+
+**A CAVEAT ON `core.system_check_run` AS A DEPLOY SIGNAL.** Through 2026-09-06/07 that table being
+empty was repeatedly read as "the backend was never redeployed". That inference is WRONG: the boot
+hooks REGISTER cron jobs, they do not write a `system_check_run` row. A row appears only when the
+daily check actually RUNS (on its schedule, or via the control box's "Run check now"). Verify a
+deploy by whether the cron job exists or by running the check once — never by that table alone.
+
 ## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
 
 **Read this before writing a new harness, and before trusting an old one.** Owner directive

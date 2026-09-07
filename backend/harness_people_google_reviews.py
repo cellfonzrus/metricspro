@@ -874,8 +874,20 @@ def section_router():
         real_secret_v = getattr(_settings, "NOTIFY_RUN_SECRET", "")
 
         class _RpcRecorder:
+            """Records the RPC AND the schema it was addressed to.
+
+            2026-09-07: the registrar was calling `sb().rpc(...)` with no `.schema()`, so PostgREST
+            looked in `public` while mig 950 defines the function in `storeops` — it could only ever
+            raise "function not found", and the hook's best-effort `except` turned that into a WARN
+            nobody read. This fake previously had no `schema()` at all, so it could not have caught
+            it; capturing the schema is what makes F37 prove the call actually resolves."""
             def __init__(self):
                 self.calls = []
+                self.schema_used = None
+
+            def schema(self, name):
+                self.schema_used = name
+                return self
 
             def rpc(self, name, params=None):
                 self.calls.append((name, params))
@@ -898,6 +910,9 @@ def section_router():
                rec.calls == [("ensure_google_reviews_sweep_cron",
                               {"p_url": "https://api.example.com", "p_secret": "s3cret"})]
                and out2 == "scheduled job 7", (rec.calls, out2))
+            ok("F37b ...IN THE storeops SCHEMA — mig 950 defines it there and the shared client "
+               "defaults to `public`, so an omitted .schema() is a registrar that can never succeed",
+               rec.schema_used == "storeops", rec.schema_used)
         finally:
             router_mod.sb = real_sb_fn
             _settings.API_PUBLIC_URL = real_api_url
