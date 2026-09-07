@@ -3479,6 +3479,46 @@ blanking the page only on the FIRST load — later refetches keep the previous r
 
 - Proof: `backend/harness_tax_collected.py` (23).
 
+## 23g. A DASHBOARD TILE COULD NOT NAME A PAGE FROM ANOTHER MODULE (owner 2026-09-07)
+
+**Owner:** *"I just added inventory aging and inventory values from finance to management overview as
+additional view from the menu designer but they are not showing up, among some others I did last
+week."*
+
+**Both halves were broken, and both failed in silence.**
+
+`/hub/<group>` renders a designed layout through `tile-hubs.ts::layoutToHubGroups(layout, items)`,
+which resolves each designed href against `items` and drops what it cannot find — `if (!nav) continue`,
+and `if (!items.length) continue` for a whole tile. It was handed only `navGroup.items`, **the one
+group being rendered**. Against the live nav:
+
+| page | href | its group |
+|---|---|---|
+| Inventory Values | `/accounts/inventory` | **Finance** |
+| Inventory Aging | `/commcalc/asset/aging` | **Assets** |
+| *(the dashboard being designed)* | | **Management Overview** |
+
+So a cross-module pick could never resolve, and a tile made only of such picks vanished whole, with
+nothing said. The DESIGNER (`/admin/dashboards`) had the matching limitation: its left panel offered
+only the selected group's pages, so there was no supported way to place them at all — which is why
+`commcalc.ui_label_override` scope=`tiles` key=`management-overview` still held its 2026-09-04 layout
+of 7 tiles with no inventory entries.
+
+**Fixed on both sides.** The hub resolves designed hrefs against **every** group; the designer has an
+*"Include pages from other modules"* toggle that chips each foreign page with the module it came from.
+
+**The rule this must not break:** widening what a DESIGNER may place must never widen what a VIEWER
+may see. There is now ONE `gateItems()` helper in the hub, applied identically to the group's items and
+to the all-groups set — RBAC (`canSeeItem`) + tenant capability + active-carrier lens + the nav-layout
+`hidden` override — so a composed dashboard can never surface a page the viewer cannot open. The
+auto-derived tiles and the "not yet placed" tile stay scoped to the group, so an *undesigned* dashboard
+does not suddenly list the whole app.
+
+- Proof: `backend/harness_hub_cross_module_tiles.py` (20). **Static on purpose**: the failure was a
+  silent `continue` — the page compiled, rendered, and was simply missing rows, so neither `tsc` nor a
+  build could see it. §A re-reads the live nav to confirm those two pages really are in other groups,
+  §C pins the viewer gate, §D pins that defaults stay group-scoped.
+
 ## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
 
 **Read this before writing a new harness, and before trusting an old one.** Owner directive
