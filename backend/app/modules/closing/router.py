@@ -5237,6 +5237,20 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
                 continue
             if ks is not None and not in_keyset(ks, code, s.get("address")):
                 continue
+            # STORE FILTER — owner bug report 2026-09-07: "the data gets lost when the store is
+            # picked and the filter does not work as a proper filter", and earlier "result screen
+            # change to all stores". BOTH are this line's absence. `store_set` narrowed the ENVELOPE
+            # list above but was never applied here, so picking one store emptied the envelopes and
+            # left this straggler list showing EVERY store in the org — the screen looked like it had
+            # reset to "all stores" precisely when it had been filtered hardest.
+            #
+            # It bites hardest on a store that has filed nothing: 13 of the 33 stores this picker
+            # offers have no daily_closing rows at all (B-1, B-1598, B-1710, B-2701, B-3605, B-5619,
+            # B-60TH, B-6149, B-6507, B-723, B-2778 and two non-store roster entries), so picking one
+            # produced an empty envelope list beside a full straggler list. Filtered, this list now
+            # ANSWERS the question instead: that store did not submit a closing.
+            if store_set and code.upper() not in store_set:
+                continue
             mk = (s.get("market") or "").strip() or sm_market.get(code, "")
             if market_set and mk and mk.casefold() not in market_set:
                 continue

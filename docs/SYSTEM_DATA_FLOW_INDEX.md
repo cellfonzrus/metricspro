@@ -3335,12 +3335,26 @@ Proof: `harness_cash_pickup.py` §7 (5 checks — offered, filters, does-not-shr
 still-exact). The billpay mirror was caught by `harness_billpay_pickup` /
 `harness_pickup_market_span` when the first edit landed there without its initializer.
 
-**Still open on this screen:** the STORE half of the same report ("sort by store → all stores after a
-few seconds") is NOT diagnosed. The picker is controlled and nothing in the page clears it, and the
-backend's `store_set` match is exact-uppercase against codes that all exist on the master, so neither
-half reproduces on inspection. It needs one observation from the owner: does the store CHIP clear, or
-does it stay selected while the table shows everything? Chip clears = frontend state; chip stays =
-the server ignoring the parameter. Do not guess this — the two fixes are in different files.
+**THE STORE HALF — diagnosed and fixed 2026-09-07** once the owner added *"the data gets lost when
+the store is picked and the filter does not work as a proper filter"*. Both that and the original
+*"result screen change to all stores"* are ONE defect: `store_set` narrowed the **envelope list** but
+was never applied to `not_closed` — the "stores that did not submit a closing" list. Picking one store
+emptied the envelopes and left that list showing **every store in the org**, so the screen looked like
+it had reset to "all stores" exactly when it had been filtered hardest.
+
+It bites hardest on a store that has filed nothing. **13 of the 33 stores the picker offers have no
+`daily_closing` rows at all** — `B-1`, `B-1598`, `B-1710`, `B-2701`, `B-3605`, `B-5619`, `B-60TH`,
+`B-6149`, `B-6507`, `B-723`, `B-2778`, plus two non-store roster entries (`<2022>`, `Cellular
+Services`) — so picking one produced a legitimately empty envelope list beside a full, unfiltered
+straggler list, which is exactly "the data gets lost". Filtered, that list now ANSWERS the question:
+*this store did not submit a closing*. (Nine of those thirteen are the same stores §23b found selling
+every day with no closing.)
+
+Neither the controlled picker nor the exact-uppercase `store_set` match was ever at fault, which is
+why inspecting those two reproduced nothing.
+
+Proof: `harness_cash_pickup.py` §8 (7 checks — unfiltered, single pick, a store that filed nothing,
+the store that did close, multi-store OR, case-insensitivity, market filter unaffected).
 
 ## 23d. THE CRON REGISTRARS CALLED THEIR RPC IN THE WRONG SCHEMA (2026-09-07)
 

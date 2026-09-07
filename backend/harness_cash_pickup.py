@@ -348,6 +348,50 @@ check("7e. matching is STILL exact — a roster spelling that no envelope carrie
       "rather than the filter silently widening",
       _miss["envelopes"] == [], str(_miss["envelopes"]))
 
+# ═══ 8. The STORE filter must filter the WHOLE screen, not just the envelope list ════════════════
+# Owner 2026-09-07: "the data gets lost when the store is picked and the filter does not work as a
+# proper filter" — and earlier, "result screen change to all stores in few second". Both are the same
+# defect: `store_set` narrowed the ENVELOPE list but was never applied to `not_closed` (the "stores
+# that did not submit a closing" list), so picking ONE store emptied the envelopes while that list
+# still showed EVERY store. The screen looked like it had reset to "all stores" exactly when it had
+# been filtered hardest.
+#
+# It bites hardest on a store that has filed nothing — 13 of the 33 stores the picker offers have no
+# daily_closing rows at all — because then the envelope list is legitimately empty and the unfiltered
+# straggler list is the ONLY thing on screen.
+st = fresh_store(); wire(st)
+st["stores"] = [
+    {"org_id": HOUSE, "store_code": "S1", "address": "1 Main St", "market": "Texas", "is_active": True},
+    {"org_id": HOUSE, "store_code": "S2", "address": "2 Oak Ave", "market": "Texas", "is_active": True},
+    {"org_id": HOUSE, "store_code": "S3", "address": "3 Elm Rd", "market": "Texas", "is_active": True},
+]
+st["daily_closing"] = [dc_row(id="e1", store_code="S1", employee_name="Jane Rep", store_cash=90.0)]
+_all = cr.closing_pickups(date="2026-07-15", org_id=HOUSE)
+check("8a. with NO store filter, both stores that did not close are listed (S2, S3)",
+      sorted(x["store_code"] for x in _all["not_closed"]) == ["S2", "S3"],
+      str(_all["not_closed"]))
+_one = cr.closing_pickups(date="2026-07-15", stores="S2", org_id=HOUSE)
+check("8b. picking S2 narrows the straggler list to S2 — it no longer shows every store "
+      "(THE BUG: this used to return S2 AND S3 while the envelope list went empty)",
+      [x["store_code"] for x in _one["not_closed"]] == ["S2"], str(_one["not_closed"]))
+check("8c. …and picking a store that filed NOTHING gives an empty envelope list beside a straggler "
+      "row that says so — the screen answers the question instead of looking broken",
+      _one["envelopes"] == [] and len(_one["not_closed"]) == 1,
+      f"envelopes={_one['envelopes']} not_closed={_one['not_closed']}")
+_s1 = cr.closing_pickups(date="2026-07-15", stores="S1", org_id=HOUSE)
+check("8d. picking the store that DID close shows its envelope and no stragglers",
+      [e["store_code"] for e in _s1["envelopes"]] == ["S1"] and _s1["not_closed"] == [],
+      f"envelopes={_s1['envelopes']} not_closed={_s1['not_closed']}")
+_multi = cr.closing_pickups(date="2026-07-15", stores="S2,S3", org_id=HOUSE)
+check("8e. a multi-store pick ORs them (S2 and S3), it does not intersect to nothing",
+      sorted(x["store_code"] for x in _multi["not_closed"]) == ["S2", "S3"],
+      str(_multi["not_closed"]))
+_lower = cr.closing_pickups(date="2026-07-15", stores="s2", org_id=HOUSE)
+check("8f. the store match stays case-insensitive on this list too",
+      [x["store_code"] for x in _lower["not_closed"]] == ["S2"], str(_lower["not_closed"]))
+check("8g. the market filter still works alongside it (unchanged)",
+      len(cr.closing_pickups(date="2026-07-15", market="Ohio", org_id=HOUSE)["not_closed"]) == 0)
+
 # ── Summary ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:
