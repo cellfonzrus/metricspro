@@ -354,6 +354,63 @@ commissions, expenses.
   pre-934 DB keeps its mig-314 seeds. LuxeLink seeded `'income'` by mig `934`. Proof:
   `harness_pl_rebate_presentation.py`.
 
+- **COMMISSION RECEIVED vs THE MASTER AGENT'S OWN BACK-OFFICE P&L (owner directive 2026-09-08,
+  mig `992`).** Owner: *"check the commission received as per our system and the back office, seems
+  like a big difference, all items should match and there should be nothing in unsplit, everything
+  has a reason and everything is assigned to the code … dont count any rebate received in the
+  commission … also the residual seems a lot off."* The two workbooks are the SAME org —
+  `854f6d7b-6590-4e4d-88ab-646f560d4f4c`, company `Luxlink Wireless` (13 Chicago stores) +
+  `Nova Wave Communications` (7 NY/NJ stores). There is no second org_id.
+  - **DUPLICATE CHECK (build gate):** nothing new was built. The variance was measured through the
+    mechanisms that already own each answer — `ma_store_pnl.ma_tx_bookings` (classification),
+    `ma_store_pnl.load_store_index`/`canonical_store_index` (mig-314 store attribution),
+    `residual_subs.ma_residual_row_matcher` (which rows are residual), `coa.company_assignment`
+    (store→company), the mig-312 `ma_recon.NO_RULE_REASON` literal (honest absence). The two NEW
+    functions are read-outs/predicates beside those, not sibling derivations, and no reconciliation
+    surface was forked.
+  - **AUGUST 2026, MEASURED (ours vs back office):** Postpaid Residual `mi_income` **35,490.67 vs
+    35,490.67 — exact, 20/20 stores**; Postpaid Spiff `carrier_comm` 94,861.81 vs 97,465.36
+    (−2,603.55); Premium Store Spiff `mdf_income` 16,000.00 vs 15,000.00 (+1,000.00); rebate
+    `rebate_income` **251,946.31 vs a line the back office does not have**.
+  - **CAUSE 1 — a spiff family nobody configured.** `pl_ma_spiff_order_types` names only
+    `'PostPaid Additional Spiff'`, so August's 230 `'Retroactive Postpaid Spiff'` rows (**$3,794.56**
+    of carrier spiff cash, every dollar store-attributable) book to NO P&L line. Silence like that is
+    now VISIBLE: **`ma_store_pnl.ma_tx_coverage`** (PURE) re-runs the same classification and reports
+    every unbooked order-type family with its amount and a reason — per-org
+    `commission_org_config.pl_ma_unbooked_reasons`, else the mig-312 literal
+    `'no business rule configured'`. The device families (`Postpaid Branded MarketPlace`,
+    `Postpaid Promo Order`, `Postpaid Branded Void`, `Sales Order`, `Activation Order`, SIM kits,
+    `Fee`) are unbooked ON PURPOSE — they are the device leg, already in the books through
+    `device_cogs`, and booking them from daily-tx too would double-count; mig `992` §B3 states each
+    reason as config rather than leaving it to be re-derived.
+  - **CAUSE 2 — the rebate is not commission.** `pl_rebate_presentation='income'` (mig 934) puts
+    **$251,946.31** of device-purchase rebate on the `rebate_income` REVENUE line — 1.49× the whole
+    month's real MA commission ($169,628.40) and the single biggest reason our income reads nothing
+    like the back office's. `ma_store_pnl.COMMISSION_RECEIVED_LINES` /
+    `commission_received_lines()` now state which lines ARE commission received (`carrier_comm`,
+    `mi_income`, `atu_income`, `ma_merchant_discount`, `mdf_income`, `fee_income`) and the exclusion
+    of BOTH rebate lines is a checked invariant. Mig `992` §B1 (owner-gated) returns the org to the
+    house `'contra_cogs'` route: revenue −251,946.31, the same dollars netting against the handset
+    purchase they belong to, **gross profit and net income unchanged**. FINANCE-SIDE FOLLOW-UP, not
+    a commission line: the back office carries neither the device purchase nor its rebate at all
+    (its only COGS is "Accessories 20%"); today the whole device leg (`device_rev` 80.81 −
+    `device_cost` 260,206.80 + rebate 251,946.31) contributes **−$8,179.68** to gross profit.
+  - **NOTHING IS UNSPLIT.** All 20 processor accounts resolve to a store (19 derived from
+    `raw_ma_fulfillment`, `170405` pinned in `ma_account_store_map`), so for August the consolidated
+    P&L equals Σ(store scopes) on EVERY commission line — company-wide commission is **$0.00**. The
+    only company-wide dollars in the month are **$346.91 of `rep_comm`**. The company-level accrual
+    the owner named (the $1,000 Premium Store Spiff) splits per store on the carrier's OWN
+    attribution — the processor account each row is booked against — not on an allocation formula;
+    it matches the back office store for store except at **3560 Nostrand**, where our feed carries a
+    real $1,000 row the back office shows as 0.
+  - **WHAT THE BACK OFFICE GETS WRONG (evidence, not agreement for its own sake):** its Postpaid
+    Spiff is **$1,191.01 short** of its own feed (4 of 20 stores tie exactly, 16 are short) and it
+    drops the **$1,000** Nostrand premium store spiff. Its `Activation Spiff` line (**$18,061.37**)
+    could not be reproduced from either MA feed or the POS feed and is **UNRESOLVED** — see §19.
+  - **Proof:** `backend/harness_commission_backoffice_recon.py` (stdlib-only, 54 checks, DB-free;
+    carries the per-store back-office figures and both regressions). Migration `992` is WRITTEN AND
+    NOT APPLIED — its money seeds are commented behind the owner gate.
+
 - **Bill-pay pass-through carve-out + coverage recon (owner directive 2026-09-02, mig `939`):**
   "billpay is deducted from [revenue] as it is not income and is offset by either the cash
   deposited… or by the commission received; different carriers do it in a different way." (a)
@@ -906,6 +963,23 @@ the master-agent ENTITY name ("Luxelink Wireless LLC"), and the two feeds bucket
 labels, so stores showed dollars with no subscribers beside stores with subscribers and no dollars;
 20/20 accounts resolve through the mig-314 index (markets NY + Chicago). The synthetic
 `"(VidaPay/MA)"` market stamp — a carrier word masquerading as a market — is gone.
+**FIXED 2026-09-08 (owner: "also the residual seems a lot off, check and fix").** The report
+summed `residual = mi + atu` for BOTH sources. On the MA/VidaPay source `atu` is the AIRTIME MARGIN
+(`merchant_discount`), which has had its own P&L line ("Merchant discount", `ma_merchant_discount`)
+since mig 309 precisely because it is not residual, and which recurs per TRANSACTION, not per
+subscriber — so the per-subscriber figure was 55% air. Measured, org `854f6d7b…` August 2026:
+reported **$54,972.03** against booked residual **$35,490.67** — overstated by exactly the month's
+**$19,481.36** merchant discount; the master agent's own back-office P&L says $35,490.67, and OUR
+booked figure ties to it **store for store, 20/20, to the cent**. The composition is now
+**`residual_subs.residual_components(source, cfg)`** — PURE, per SOURCE (a feed-shape key, the
+`processor_ledger.FEED_SHAPES` precedent, never a carrier or tenant name), house defaults
+`boost_mi_atu → (mi, atu)` (raw_mi's MI and ATU are two halves of ONE booked line) and
+`vidapay_ma → (mi,)`; per-org override `commission_org_config.residual_report_components` (mig
+`992`, `load_residual_report_config`, ADAPTIVE — a pre-992 DB keeps the defaults). Nothing is
+hidden: `mi` and `atu` both stay in every series entry, the payload states `residual_components`,
+and a non-`atu` basis carries `residual_basis_note`. Proof:
+`backend/harness_commission_backoffice_recon.py` §A/§B (the regression reproduces $54,972.03).
+
 **Proof:** `backend/harness_residual_per_sub.py`.
 
 ---
@@ -2190,6 +2264,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `commcalc.raw_dlar_rep` | `dlar_sweep` (replace), upload | rep KPI, comp trend `15238` |
 | `commcalc.raw_catalog` | upload `/product-mrc/import` region, catalog | GP, device COGS, installment MRC |
 | `commcalc.payout_config` | `/config/{period}` `10474`, `/commission-settings` `10517` | `calc_rep_commissions` (spiffs/tiers), installment base rates |
+| `commcalc.commission_org_config` | `/commission-settings`, migrations (`209`,`306`,`308`,`309`,`314`,`934`,`939`,**`992`**) | THE per-org money-policy row (RULE TWO). Readers: `ma_store_pnl.load_config` (store attribution · month-spiff source/order types · MDF tokens · line labels · rebate presentation) · `ma_store_pnl.load_unbooked_reasons` (`pl_ma_unbooked_reasons`, mig 992) · `residual_subs.load_ma_pnl_config` (`pl_merchant_discount_own_line`, `pl_ma_residual_order_types`) · `residual_subs.load_residual_report_config` (`residual_report_components`, mig 992) · `billpay_pl` (`pl_billpay_presentation`/`pl_billpay_settlement`) · the installment/plan engines (`installment_mrc_basis`, `plan_pay_gate`, `sales_source`). EVERY reader is org-scoped and ADAPTIVE — a missing column/row degrades to the code defaults, never raises |
 | `commcalc.rep_commissions` | `_run_calculation`/`_apply_new_engines` `9183` | `/commissions/{period}` `10222`, GP report, commission-by-store, statements, MI (indirect) |
 | `commcalc.store_kpis` | KPI ingest/snapshot | tiers, exec |
 | `commcalc.carrier_kpi_metric` | `/carrier-kpi-metrics` POST `19773` | KPI/tier config resolution |
@@ -2421,11 +2496,13 @@ as a market-grant keyset member; ambiguity fails closed):
 | MA-TX month-n paid evidence | `raw_ma_daily_tx.retail_cost` net of the `'MONTH n'`-worded rows (`product_name` via `commission_ledger.parse_payment_month`) | `sale_installment_engine.ma_tx_month_evidence` / `_gate_met_ma_tx` — UNION with `raw_ma_commission.spiff_m{n}` (n ≤ 6); direction `ma_payout_sign`, floor `ma_min_amount`, horizon `ma_max_month` ≤ 16 (mig `308`) |
 | MA merchant discount (P&L "Merchant discount") | `raw_ma_daily_tx.merchant_discount` (+, dealer income) | `account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings` (mig `309`); per-org toggle `commission_org_config.pl_merchant_discount_own_line` — `false` = legacy `atu_income` fold, byte-identical dollars |
 | MA residual (P&L "MI residual income") | `raw_ma_daily_tx.retail_cost` sign-flipped (negative = paid to dealer) on rows in the `'%residual%'` product family ∪ `pl_ma_residual_order_types` order types (default `Postpaid Residual Order`) | `residual_subs.ma_residual_row_matcher` → `coa.build_inputs` (mig `309`; union dedup — each row books once) |
-| Residual per subscriber (per store, per month) | Boost: `raw_mi.actual_mi_payout + actual_atu_payout` ÷ distinct paid `phone_number`. MA/VidaPay: (−`retail_cost` on the SAME mig-309 residual union as the row above + `merchant_discount` airtime margin) ÷ `raw_ma_commission` activated lines | `residual_subs.compute` → `GET /account/residual-per-sub` (§7a); store names via `ma_store_pnl.canonical_store_index`; pinned `harness_residual_per_sub.py` |
+| Residual per subscriber (per store, per month) | **Components are per SOURCE, config, since 2026-09-08** (`residual_subs.residual_components`, override `commission_org_config.residual_report_components`, mig `992`). Boost `boost_mi_atu`: `raw_mi.actual_mi_payout + actual_atu_payout` (two halves of ONE booked `mi_income` line) ÷ distinct paid `phone_number`. MA/VidaPay `vidapay_ma`: −`retail_cost` on the SAME mig-309 residual union as the row above ONLY ÷ `raw_ma_commission` activated lines — the `merchant_discount` airtime margin is reported BESIDE it (`atu` in every series entry) and is NOT residual (it has had its own P&L line since mig 309 and recurs per transaction, not per subscriber) | `residual_subs.compute` → `GET /account/residual-per-sub` (§7a); store names via `ma_store_pnl.canonical_store_index`; pinned `harness_residual_per_sub.py` + `harness_commission_backoffice_recon.py` §A/§B |
 | MA month-spiff commission M1..M12+ (P&L `carrier_comm`, cash basis) | `raw_ma_daily_tx.retail_cost` sign-flipped on `order_type ∈ pl_ma_spiff_order_types` rows (default `PostPaid Additional Spiff`); month detail `M<n>` from `product_name` via `commission_ledger.parse_payment_month` (no token → 'Spiff (other)') | `ma_store_pnl.ma_tx_bookings` → `coa.build_inputs` (mig `314`; only when `pl_ma_month_spiff_source='daily_tx'`, which also suppresses the `raw_ma_commission.spiff_m1..m6` activation-month booking — never both) |
 | MDF / market spiff (P&L `mdf_income`) | `raw_ma_daily_tx.retail_cost` sign-flipped on rows whose `product_name` contains a `pl_mdf_product_tokens` token (luxelink: `premium store spiff`, $1,000/store) | `ma_store_pnl.ma_tx_bookings` → `coa.build_inputs` (mig `314`; `auto_opt` line, per store; retail_cost precedence residual → MDF → month-spiff) |
 | MA processor account → store | `raw_ma_fulfillment.tspid` × `business_address` (derived, ambiguous dropped) ∪ `ma_account_store_map` (override wins) | `ma_store_pnl.account_store_index`/`load_store_index` → `coa.build_inputs` `_ma_store` + `device_cogs._ma_sold_cost` (mig `314`; gated by `pl_ma_store_attribution`; unmapped accounts book company-wide) |
 | Device-purchase rebate (P&L `device_rebate` contra-COGS OR `rebate_income` revenue) | `raw_ma_commission.rebate` (negative = paid to dealer) + `activation_rebate_ledger.device_rebate_amount` (positive money-in) | `ma_store_pnl.rebate_route` per `commission_org_config.pl_rebate_presentation` (mig `934`: `contra_cogs` default = K1 negative in COGS; `income` = positive revenue, luxelink) → `ma_store_pnl.ma_commission_bookings` + `coa.build_inputs` activation-ledger booking; store grain via the mig-314 account→store index |
+| **Commission received (which P&L lines ARE commission)** | the fixed line-key family `ma_store_pnl.COMMISSION_RECEIVED_LINES` = `carrier_comm` · `mi_income` · `atu_income` · `ma_merchant_discount` · `mdf_income` · `fee_income`. EXCLUDES both rebate lines, device margin and device revenue — a rebate is money back on a purchase, never commission earned (owner 2026-09-08 "dont count any rebate received in the commission") | `ma_store_pnl.commission_received_lines()`; the exclusion is a CHECKED invariant in `harness_commission_backoffice_recon.py` §F, so no future edit can re-file a rebate as commission |
+| **MA daily-tx booking COVERAGE (“everything has a reason”)** | every `raw_ma_daily_tx` `retail_cost` dollar, grouped by `order_type`, split into BOOKED (the line `ma_tx_bookings` books it to) and UNBOOKED with a reason — per-org `commission_org_config.pl_ma_unbooked_reasons` (mig `992`), else the literal `'no business rule configured'` (= `ma_recon.NO_RULE_REASON`, mig `312`) | `ma_store_pnl.ma_tx_coverage` (PURE; re-runs the SAME classification, moves no dollar) + `load_unbooked_reasons`; proof `harness_commission_backoffice_recon.py` §E |
 | B2B sold vs MA paid (activation discrepancy) | sold: `SALES_DISPLAY_SOURCES` rows with non-blank `contract_type` (no swap/void), keyed on digit-normalized `serial_1`; paid: `raw_ma_commission.spiff_m1`+`rebate`/`device_margin` ∪ `raw_ma_daily_tx` month-1 / activation-order evidence (two-hop join, +1-month lookahead) | `ma_recon.reconcile_ma_activations` via `sale_installment_engine._gate_met_ma_tx` (mig `312`); unpaid rows → `discrepancy_results` `source='ma'` with rule attribution or `'no business rule configured'` |
 | Commission not received + APPEAL pipeline (open $ / appeal filed / won / denied / written off, per range) | `discrepancy_results` rows (both engines) + mig-947 appeal columns; buckets computed by the PURE `discrepancy_appeals.summarize_appeals` (`no_rule_count` = the LITERAL `'no business rule configured'` marker only — evidence-first, never inferred) | `GET /discrepancy-appeals` → Commission Discrepancy hub cards (`commission-discrepancy/page.tsx`); chase list = mig-098 `/recovery/claims` (reused) |
 | Card settlement recon — store→MARKET + the market option list | THE canonical union index ONLY (`core.scope.market_by_code` / `org_market_options`, §13a/§13c) — the roster read takes ADDRESS only, so no market-vocabulary site exists to pin. Deliberately CANONICAL rather than the closing family's OVERLAY: a settlement-only store has no roster row, and a `store_mapping`-only market would otherwise vanish from the filter | `closing/router.external_credit_recon` (pinned `CANONICAL` in `harness_market_enumeration_guard`; nothing to pin in `harness_market_resolution_guard`); truth table `harness_external_credit_recon.py` §J |
@@ -2458,6 +2535,29 @@ as a market-grant keyset member; ambiguity fails closed):
 ---
 
 ## 19. Known gaps & inert config
+
+- **The back office's `Activation Spiff` line is UNRESOLVED (2026-09-08).** The master agent's own
+  Aug-2026 P&L carries `Activation Spiff` $18,061.37 (Luxelink 13,589.71 / NovaWave 4,471.66,
+  per store in the workbook) and `Activation Profit` $3,570.74. `Activation Profit` is very nearly
+  `merchant_discount` on the `Activation Order` rows of `raw_ma_daily_tx` ($3,745.65 — 8 of 20 stores
+  tie EXACTLY, the rest are ours-higher by $174.91 in total), which is enough to say the source is
+  right and the back office is missing rows; we book those dollars, undifferentiated, inside
+  "Merchant discount" ($19,481.36 = $3,745.65 activation-plan margin + $15,735.71 refill/RTR wallet
+  margin), so a like-for-like `Activation Profit` line would need that split to be config. But
+  `Activation Spiff` matches NOTHING measured: not any `order_type`/`product_name` family of
+  `raw_ma_daily_tx`, not any `raw_ma_commission` component (`spiff_m1..m6` = 26,593.15,
+  `mrc_net_discount` = 39,807.22, `wallet_funding` = 43,445.63), and not the POS plan-activation GP
+  ($23,755.10 in `daily_sales_feed` blank-department rows — closest, still 0/20 stores). Two other
+  back-office lines from the SAME workbooks reconcile exactly against our copy of the feeds
+  (Postpaid Residual 20/20, Accessories Sales $51,159.91 20/20), so the store keying and the feeds
+  are not in doubt. NOT GUESSED AT — the owner needs to name the report `Activation Spiff` is pulled
+  from before it can be mapped. `Activation Fee` ($12.50, 639 W Lincoln Hwy only) is unexplained for
+  the same reason.
+- **The NovaWave workbook's store-code row is mis-aligned (2026-09-08, owner's sheet, not ours).**
+  Row 4 carries codes for only 4 of 7 columns (158611 / 158610 / 158948 over the first three stores,
+  158817 over 7812 Bergenline) and **159172 sits over the Total column, not a store**. None of those
+  ids is a processor account in our data (ours are 1688xx / 169288 / 170405), so they are a separate
+  id space. NOT adopted as store codes anywhere; reported to the owner.
 
 1. **Named `payout_schedule.activation_type` variants are STORED-BUT-INERT.** `installment_engine.
    _resolve_schedule` forces `activation_type='*'` (`installment_engine.py:120,194,267`; mig `078:34-36`).

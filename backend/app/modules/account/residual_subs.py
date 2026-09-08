@@ -119,6 +119,69 @@ _MA_ATU_COLUMN = assert_money_columns(["merchant_discount"], "raw_ma_daily_tx AT
 assert_money_columns(_MA_COMPONENTS, "raw_ma_commission MI-equivalent")
 
 
+# ── WHAT THE REPORTED "residual" IS MADE OF (owner directive 2026-09-08: "the residual seems a lot
+# off, check and fix") ───────────────────────────────────────────────────────────────────────────
+# MEASURED, luxelink+novawave org 854f6d7b…, August 2026: the report said $54,972.03 of residual
+# where the books (`mi_income`, the mig-309/314 residual line) say $35,490.87 → $35,490.67, and
+# where the master agent's own back-office P&L says $35,490.67 (Luxelink 28,370.84 + Novawave
+# 7,119.83 — matching OUR figure store for store, 20/20, to the cent). The $19,481.36 gap is
+# EXACTLY the month's `merchant_discount` (airtime margin): the per-store series reported
+# `residual = mi + atu` for BOTH sources.
+#
+# On the BOOST source that sum is correct and stays: `raw_mi.actual_mi_payout` and
+# `actual_atu_payout` are two halves of ONE recurring per-subscriber residual, and the P&L books
+# them to ONE line (`mi_income`). On the MA/VidaPay source it is NOT: since mig 309 the airtime
+# margin has its OWN P&L line ("Merchant discount", `ma_merchant_discount`) precisely because it is
+# not residual — it is the dealer's margin on refills/top-ups, which recur per TRANSACTION, not per
+# subscriber. Dividing it by a subscriber count produces a per-sub figure that is 55% air.
+#
+# So the composition is per SOURCE (a feed-shape fact — the `processor_ledger.FEED_SHAPES`
+# precedent), never per carrier or tenant, and it is overridable per org as CONFIG (RULE TWO):
+# `commcalc.commission_org_config.residual_report_components`, e.g. {"vidapay_ma": ["mi", "atu"]}
+# restores the pre-fix fold for an org that wants it. The `atu` component is still REPORTED beside
+# residual in every series entry — nothing is hidden, it just stops being called residual.
+RESIDUAL_COMPONENT_KEYS = ("mi", "atu")
+RESIDUAL_COMPONENTS_DEFAULT = {
+    "boost_mi_atu": ("mi", "atu"),   # raw_mi: MI + ATU are one residual line in the books
+    "vidapay_ma":   ("mi",),         # raw_ma_daily_tx: airtime margin is its own P&L line
+}
+_RESIDUAL_FALLBACK_COMPONENTS = ("mi",)
+
+
+def residual_components(source, cfg=None):
+    """PURE: which per-store component keys sum into the REPORTED `residual` for this source.
+
+    `cfg` is the resolved org config (`load_residual_report_config`) — a dict of
+    {source: [component, ...]}. An unknown source, an empty/garbage override or an override naming
+    a component that does not exist falls back to the house default for that source, and a source
+    with no house default falls back to `mi` alone (the booked residual line) — never to a guess
+    that silently inflates the figure. Always returns a non-empty tuple of known keys."""
+    src = str(source or "").strip()
+    override = (cfg or {}).get(src) if isinstance(cfg, dict) else None
+    if isinstance(override, (list, tuple)):
+        picked = tuple(str(c).strip().lower() for c in override
+                       if str(c).strip().lower() in RESIDUAL_COMPONENT_KEYS)
+        if picked:
+            return tuple(dict.fromkeys(picked))
+    return RESIDUAL_COMPONENTS_DEFAULT.get(src, _RESIDUAL_FALLBACK_COMPONENTS)
+
+
+def load_residual_report_config(client, org_id):
+    """Per-org override of `residual_components` (commcalc.commission_org_config, org-scoped).
+    ADAPTIVE, exactly like `load_ma_pnl_config`: a missing column/table/row (pre-migration) or a
+    non-dict value degrades to {} = the house defaults. NEVER raises."""
+    try:
+        rows = (client.schema("commcalc").table("commission_org_config")
+                .select("residual_report_components").eq("org_id", org_id)
+                .limit(1).execute().data) or []
+        val = rows[0].get("residual_report_components") if rows else None
+        if isinstance(val, dict):
+            return {str(k).strip(): v for k, v in val.items() if str(k).strip()}
+    except Exception:
+        pass
+    return {}
+
+
 # ── MA TX → P&L booking (Phase B, owner spec 2026-09-01, mig 309) ────────────────────────────────
 # "Merchant discount for each line item goes into the P&L as merchant discount, residual under
 # residual." The row classification is PURE (rows + resolved config in, per-row bookings out) so
@@ -578,6 +641,10 @@ def compute(client, org_id, months=6):
     # (the store_mapping row). Naming this one `meta` silently shadowed it and blanked the provenance.
     src_meta = {}
     agg = _aggregate(client, org_id, months, meta=src_meta)
+    # WHAT COUNTS AS RESIDUAL for this source (owner directive 2026-09-08) — resolved ONCE, per
+    # org, from config with the per-source house default. See `residual_components` above.
+    _res_cfg = load_residual_report_config(client, org_id)
+    res_components = residual_components(src_meta.get("source"), _res_cfg)
 
     # salesforce_id → store metadata
     sm_rows = (client.schema("commcalc").table("store_mapping")
@@ -685,7 +752,9 @@ def compute(client, org_id, months=6):
         series, t_res, t_subs, t_comm = [], 0.0, 0, 0.0
         for p in kept:
             pp = d["per"].get(p, {"mi": 0.0, "atu": 0.0, "subs": 0})
-            res = pp["mi"] + pp["atu"]
+            # `residual` = only the components this source's books call residual (owner 2026-09-08).
+            # `mi` and `atu` both stay in the payload, so nothing disappears from the screen.
+            res = sum(pp.get(c, 0.0) for c in res_components)
             subs = int(pp["subs"])
             comm = round((comm_by_num.get(d["num"], {}) or {}).get(p, 0.0), 2) if d["num"] else 0.0
             series.append({"period": p, "mi": round(pp["mi"], 2), "atu": round(pp["atu"], 2),
@@ -739,6 +808,14 @@ def compute(client, org_id, months=6):
                        + " residual sweep, or the master-agent commission + daily-transaction "
                          "reports) first.")
     out.update(_source_diagnostics(src_meta.get("source"), src_meta, kept, terms=_terms))
+    # WHAT "residual" IS ON THIS SCREEN (owner directive 2026-09-08). Read-only provenance; the
+    # figure it describes was already computed from exactly these components.
+    out["residual_components"] = list(res_components)
+    if "atu" not in res_components:
+        out["residual_basis_note"] = (
+            "Residual is the booked residual line only. Airtime margin (the per-transaction "
+            "refill/top-up margin) is reported beside it as its own column and is NOT counted as "
+            "residual — it has its own P&L line and does not recur per subscriber.")
     # STORE-ATTRIBUTION provenance (read-only; moves no figure). Names the processor accounts the
     # mig-314 index could not place, so an "(Unassigned)" row is actionable — pin them in
     # commcalc.ma_account_store_map — instead of being a mystery bucket.
