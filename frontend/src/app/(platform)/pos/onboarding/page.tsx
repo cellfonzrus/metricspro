@@ -416,12 +416,31 @@ function ImportFromExisting({ source, onChanged }: { source: string; onChanged: 
       {preview && (
         <div style={{ fontSize: 13, marginBottom: 10 }}>
           <b>{preview.count}</b> record(s) ready to create in <code>{preview.creates}</code>.
-          {preview.count === 0 && ' Nothing found for your tenant — use the template instead.'}
+          {/* A green "0 records" with no explanation is the defect this panel kept paying for
+              (owner, 2026-09-08: "nothing shows up to be brought over"). The operator could not
+              tell an empty tenant from a broken importer, so the backend now says WHICH it is and
+              what to do about it, and this renders that instead of a shrug. */}
+          {preview.count === 0 && !preview.empty_reason &&
+            ' Nothing found for your tenant — use the template instead.'}
+          {preview.count === 0 && preview.empty_reason && (
+            <div style={{ marginTop: 8, background: '#fffbeb', border: '1px solid #fde68a',
+              borderRadius: 8, padding: '8px 10px', color: '#78350f' }}>
+              <div>{preview.empty_reason}</div>
+              {preview.empty_next && (
+                <div style={{ marginTop: 6, fontWeight: 600 }}>{preview.empty_next}</div>
+              )}
+            </div>
+          )}
           {preview.sample?.length > 0 && (
             <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text2)',
               maxHeight: 92, overflow: 'auto', fontFamily: 'ui-monospace, monospace' }}>
               {preview.sample.slice(0, 8).map((s: any, i: number) => (
-                <div key={i}>{typeof s === 'string' ? s : (s.short_name || s.legal_name || s.plan_name || s.serial_number || JSON.stringify(s).slice(0, 90))}</div>
+                <div key={i}>{typeof s === 'string' ? s : (
+                  s.plan_name
+                    ? `${s.plan_name}${s.monthly_fee != null ? ` — $${s.monthly_fee}/mo` : ''}${s.subscribers ? ` (${s.subscribers} subs)` : ''}`
+                    : s.code
+                      ? `${s.code}${s.description ? ` — ${s.description}` : ''}`
+                      : (s.short_name || s.legal_name || s.serial_number || JSON.stringify(s).slice(0, 90)))}</div>
               ))}
               {preview.sample.length > 8 && <div>…</div>}
             </div>

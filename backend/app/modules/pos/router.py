@@ -2092,8 +2092,19 @@ def _dealer_sync(org_id: str, commit: bool):
             continue
         sel = col + (("," + namecol) if namecol else "")
         try:
-            rows = (client.schema("commcalc").table(tbl).select(sel)
-                    .eq("org_id", org_id).limit(50000).execute().data) or []
+            # PAGED, NOT limit(50000) (2026-09-08). The single capped read silently dropped the
+            # tail: live Cellfonz raw_mi is 234,724 rows and the first 50,000 of them contain 26 of
+            # the tenant's 28 Salesforce IDs, so two doors were missing from every sync with no
+            # error anywhere. A dealer code that never gets imported is an activation that never
+            # gets paid — exactly what this task's own `why` warns about — so this reads to the end.
+            rows, start, page = [], 0, 10000
+            while True:
+                batch = (client.schema("commcalc").table(tbl).select(sel)
+                         .eq("org_id", org_id).range(start, start + page - 1).execute().data) or []
+                rows.extend(batch)
+                if len(batch) < page:
+                    break
+                start += page
         except Exception as e:
             out.append({"carrier": c.get("name"), "configured": True, "error": str(e)[:160]})
             continue

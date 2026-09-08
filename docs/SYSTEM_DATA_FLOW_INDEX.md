@@ -2098,6 +2098,9 @@ as a market-grant keyset member; ambiguity fails closed):
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `core.module_onboarding_task` (mig `733`) | `onboarding.seed_tasks` (INSERTS missing task rows only) + `_backfill_import_sources` (fills a BLANK `import_source` from the shipped registry, nothing else, never overwriting an operator value) | `load_tasks_with_source` → `build_status`, the POS wizard (§23n). DB is truth, the in-code registry is the fallback — so a task that GAINS an import source after a tenant was seeded needs the backfill to reach it |
+| `pos.service_plans` · `pos.dealer_codes` (mig `726`, `742`) | POS settings CRUD; `POST /pos/dealer-codes/sync-from-reports`; the wizard's `apply_import` (ADDITIVE — a name/code already present is SKIPPED, never overwritten) | the register, activations, and the wizard's `count` predicates (§23n) |
+| `commcalc.product_mrc` (mig `074`/`201`) — an MRC CATALOGUE keyed on `raw_mi.customer_plan`, NOT a plan list | `POST /commcalc/product-mrc` + the price-sheet import | `installment_engine._catalog_mrc` (payout MRC), `GET /commcalc/product-mrc/coverage`, `import_health._p_product_mrc`, and — with `commcalc.raw_mi` as its other half — `onboarding.resolve_service_plans` (§23n). Empty on a carrier that reports MRC per subscriber, which is WHY reading it alone showed the house tenant zero plans |
 | `core.marketing_option` (mig `986`) | `POST /marketing/options` (the owner's "+"), `DELETE /marketing/options` (deactivate, never delete) | `event_logic.resolve_options` — HOUSE seed rows (mig `987`) ∪ TENANT rows, tenant wins per (list_key,key); every picker in the module (§23). NO code branches on a value here |
 | `core.marketing_config` (mig `986`) | `PUT /marketing/config` | `event_logic.resolve_config` → `approval_decision` (switch DEFAULT OFF), geofence radius/accuracy, GPS retention days, staffing lead hours (§23) |
 | `core.marketing_event` (mig `986`) | `POST/PATCH /marketing/events`, `/status`, `/approval` | `GET /marketing/events`, `GET /marketing/events/{id}`, `GET /marketing/summary`, `marketing/attention_providers`, `actuals.event_actuals` (§23). **Stores goals, NEVER actuals** |
@@ -2211,6 +2214,8 @@ as a market-grant keyset member; ambiguity fails closed):
 | `POST /marketing/events/{id}/checkin` · `POST .../checkout` · `GET /marketing/my-checkins` · `GET /marketing/checkin-retention` | `marketing/router.py`; pure decision `core/geo.evaluate_checkin` | §23 GPS attendance. Check-out stores a TIMESTAMP only; `my-checkins` is filtered to the caller's own employee id and cannot be pointed at anyone else |
 | `GET /marketing/events/{id}/actuals` | `marketing/actuals.event_actuals` → `commcalc.router._compute_feed_actuals_py` → `_sales_cell_agg` | §23 planned-vs-actual, DERIVED from the §3 shared pass. Carries a mandatory `attribution` block: store performance over the window, NOT sales caused by the event |
 | `GET /marketing/summary` | `marketing/router.py` | §23 dashboard — uses the SAME `event_logic.event_readiness` as the event page and the attention providers, so the three cannot disagree |
+| `GET /core/onboarding/{module_key}` (wizard state; seeds + backfills the tenant registry) · `GET /core/onboarding/import-sources/{source}/preview` · `POST .../apply` | `core/onboarding.py` (`build_status`, `preview_import`/`apply_import`; plans via `resolve_service_plans` = `commcalc.product_mrc` + `commcalc.raw_mi`; dealer codes DELEGATE to `pos/router._dealer_sync`) | §23n — "bring it over" preview-then-apply. Every zero carries an `empty_reason`/`empty_next` naming the cause and the fix |
+| `GET /pos/dealer-codes/sync-preview` · `POST /pos/dealer-codes/sync-from-reports` | `pos/router.py:_dealer_sync` (per-carrier source table/column from `commcalc.carrier`, mig `293`; PAGED since 2026-09-08) | §23n — the ONE dealer-code harvest; the POS wizard calls it rather than deriving codes a second time |
 | `GET /core/control-box` (the red/green board; `deep=1` runs heavy providers) · `GET /core/control-box/checks` (effective registry) · `GET /core/control-box/history` · `GET /core/control-box/platform` (the ONE cross-org surface — lamps + counts ONLY, no tenant figures) | `core/control_box_api.py` | §20 super-admin control box |
 | `GET /billing/ai-usage` · `GET/PUT /billing/ai-margin` (append-only, effective-dated = its own audit) · `POST /billing/ai-usage/close` (freeze) | `billing/usage_api.py`; pure `billing/ai_usage.py` | §21 AI usage + margin (migs `972`/`973`) |
 | `GET/PUT /billing/module-pricing` (the plan x module grid, DERIVED from the entitlement catalog) · `GET /billing/module-usage` | `billing/usage_api.py`; pure `billing/statement.pricing_grid` / `billing/module_usage.py` | §21 module pricing (migs `974`/`975`) |
@@ -3814,6 +3819,67 @@ netting one.
 - Proof: `backend/harness_billpay_netting.py` (57 — the split rule, exhaustively) and
   `backend/harness_cash_pickup.py` §10 (57 total — the wiring: the switch, the source precedence, and
   that the collected number actually changes).
+
+## 23n. THE POS WIZARD HAD NOTHING TO "BRING OVER" (owner 2026-09-08)
+
+**Owner, verbatim:** *"have them fix the bring over of plans and features [and] dealer codes in
+cellfonz rus as nothing shows up to be brought over."*
+
+One sentence, two unrelated defects — and both showed the operator the same unexplained **0**.
+
+**PLANS & FEATURES — the source read one half of a pair.** The `service_plans` step's import source
+`service_plans_from_product_mrc` read `commcalc.product_mrc` alone. That table is not a plan list: mig
+`074` defines it as an MRC **catalogue keyed on `raw_mi.customer_plan`**, built (mig `078`) for a
+carrier whose statement carries no per-subscriber charge. A carrier that DOES report the charge per
+subscriber never needs a catalogue row, so the catalogue stays empty — and reading it alone returns
+nothing while the tenant's own subscriber feed names every plan they sell.
+
+| org-scoped read, 2026-09-08 | `commcalc.product_mrc` | `commcalc.raw_mi` | wizard said |
+|---|---|---|---|
+| Cellfonz R Us | **0 rows** | 234,724 rows · **77** distinct `customer_plan`, each with a `base_mrc` | 0 |
+| Luxelink | 1,017 rows | **0 rows** | 1,017 ✓ |
+| Vzone | 0 rows | 0 rows | 0 (genuinely empty) |
+
+Luxelink is the mirror image of Cellfonz, which is exactly why its wizard completed this step and the
+house tenant's could not. The fix reads **both halves of the pairing mig 074 already defined** — the
+catalogue AND the subscriber feed — rather than adding a second import source keyed off a carrier's
+name (RULE TWO). The catalogue still wins on a name collision: a rate the operator confirmed beats one
+observed on a statement line. Cellfonz now previews **73** plans with real monthly fees; Luxelink's
+1,017 are byte-identical to before.
+
+**DEALER CODES — the step had no import wired to it at all.** The harvest already existed
+(`POST /pos/dealer-codes/sync-from-reports` → `_dealer_sync`, with mig `293` making *which field is the
+dealer code* per-carrier config on `commcalc.carrier`). The `dealer_codes` task simply carried
+`import_source = NULL`, so the wizard rendered no panel. It now delegates to that same function —
+preview is `commit=False`, apply is `commit=True`, so the wizard and the settings page can never
+disagree. **Registry drift was the other half:** `seed_tasks` only ever INSERTS missing task rows, so
+every already-seeded tenant kept the NULL; `_backfill_import_sources` now fills a blank
+`import_source` from the shipped registry (and nothing else, never overwriting an operator's value).
+
+**A silent truncation found on the way in.** `_dealer_sync` read its source with a single
+`.limit(50000)`. Cellfonz `raw_mi` is 234,724 rows and the first 50,000 contain **26 of the tenant's
+28** Salesforce IDs — two doors missing from every sync, with no error anywhere. A dealer code that is
+never imported is an activation that never gets paid, so that read is now paged to the end (28/28).
+
+**And the empty state now explains itself.** A green *"0 records — nothing found for your tenant"* is
+the defect class this keeps paying for: the operator cannot tell an empty tenant from a broken
+importer, so they report the second. `plans_empty_reason` / `dealer_codes_empty_reason` name WHICH
+cause it is and what clears it — no carrier attached · carrier unmapped · report not uploaded · already
+imported · read failed — and the wizard renders that instead of a shrug. Vzone, which genuinely has no
+data, is told exactly that and what to upload. **Nothing is ever invented to fill the list.**
+
+- Files: `backend/app/modules/core/onboarding.py` (`resolve_service_plans`, `fold_subscriber_plans`,
+  `merge_plan_sources`, `plans_empty_reason`, `dealer_codes_empty_reason`, `_backfill_import_sources`,
+  import source `dealer_codes_from_carrier_reports`; the duplicate `_all_plans` derivation deleted so
+  preview and apply share one), `backend/app/modules/pos/router.py` (`_dealer_sync` paging),
+  `frontend/src/app/(platform)/pos/onboarding/page.tsx` (empty-state + plan/code sample rendering).
+- Duplicate check: reused `_dealer_sync` (mig 293 config) and `commcalc.product_mrc`; the distinct-plan
+  scan mirrors `GET /commcalc/product-mrc/coverage` and `import_health._p_product_mrc`, which answer
+  "which plans have no MRC" rather than "which plans exist", and are left untouched (commission-owned).
+- Proof: `backend/harness_pos_onboarding.py` §P12–P16 — **182 pass · 0 fail** (was 155). P13 folds the
+  live data's own shapes (a suspended month reporting `0.00` must not become the plan's price); P14
+  pins both tenants' shapes; P15 pins that every empty state names a cause AND a fix; P16 pins that
+  preview and apply share one derivation and that the dealer-code path delegates.
 
 ## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
 
