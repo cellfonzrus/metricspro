@@ -245,18 +245,30 @@ for rel, allowed in EXPECTED_DELTA.items():
 #   coa.py {_account_config, build_inputs} — the org-vs-store payroll authority grain (mig 994).
 #   build_inputs kept ONE has_payroll_gross boolean for the whole org, so a single entered payroll
 #   row anywhere suppressed wages_by_store for EVERY store and a store with no entry booked $0.00
-#   instead of its own hours. Proven by backend/harness_labour_coverage.py (81 checks), and inert
-#   by default: payroll_authority_grain defaults to 'org', which is the pre-994 behaviour.
+#   instead of its own hours. Proven by backend/harness_labour_coverage.py, and inert by default:
+#   payroll_authority_grain defaults to 'org', which is the pre-994 behaviour.
+#   coa.py +{_lcov_mod} (2026-09-08) — commission double-book suppression, owner decision
+#   "Rep commision should go in p&l". rep_commissions → `rep_comm` is the authoritative route and
+#   is untouched; a commission-named store_expenses row is the same dollars again on `store_opex`
+#   and now stops booking. `_lcov_mod` is a two-line lazy import of the SHARED decision module
+#   (commcalc/labour_coverage.py) so this file and the GP report suppress identically; it computes
+#   nothing itself. Inert by default: labour_commission_expense_names defaults to '{}'.
+#   Proven by backend/harness_labour_coverage.py (161 checks) and measured on live LuxeLink.
+#
+# The value is (functions allowed to CHANGE, functions allowed to be ADDED). A removal is never
+# sanctioned, and an addition must be named here — a new helper in a money module is exactly the
+# kind of thing this guard exists to make someone justify, not something it should wave through.
 MONEY_MODULE_DELTA = {
-    f"{MOD}/account/coa.py": {"_account_config", "build_inputs"},
-    f"{MOD}/account/autocompute.py": set(),
-    f"{MOD}/account/statement_filter.py": set(),
+    f"{MOD}/account/coa.py": ({"_account_config", "build_inputs"}, {"_lcov_mod"}),
+    f"{MOD}/account/autocompute.py": (set(), set()),
+    f"{MOD}/account/statement_filter.py": (set(), set()),
 }
-for rel, allowed in MONEY_MODULE_DELTA.items():
+for rel, (allowed, allowed_new) in MONEY_MODULE_DELTA.items():
     base_f, now_f = funcs(read_base(rel)), funcs(read_now(rel))
     name = os.path.basename(rel)
-    check(f"{name}: no function added or removed", set(base_f) == set(now_f),
-          f"+{sorted(set(now_f) - set(base_f))} -{sorted(set(base_f) - set(now_f))}")
+    added, removed = set(now_f) - set(base_f), set(base_f) - set(now_f)
+    check(f"{name}: no function added or removed", added <= allowed_new and not removed,
+          f"+{sorted(added - allowed_new)} -{sorted(removed)}")
     changed = {q for q in set(base_f) & set(now_f) if base_f[q] != now_f[q]}
     check(f"{name}: no function outside {sorted(allowed) or 'the empty set'} changed",
           changed <= allowed, f"also changed: {sorted(changed - allowed)}")

@@ -798,6 +798,16 @@ def route_expense_line(source_key):
     return _DEFAULT_EXPENSE_ROUTE
 
 
+def _lcov_mod():
+    """The shared labour/commission derivation (`commcalc/labour_coverage.py`) — the SAME module the
+    GP report reads, so the salary-coverage banner and the commission-suppression decision are one
+    derivation with two surfaces. Imported lazily and in ONE place here so both users in this file
+    bind the same module and the account→commcalc import stays where every other one in this file
+    is (inside the call), never at module scope where it could cycle."""
+    from app.modules.commcalc import labour_coverage as _lcov
+    return _lcov
+
+
 # ── per-line aggregation: each store-keyed line → {store_address: amount}; company-wide → scalar
 def build_inputs(client, org_id, period):
     """Aggregate every chart-of-accounts line for `period`. Returns a dict:
@@ -1239,6 +1249,10 @@ def build_inputs(client, org_id, period):
     # coverage report honest); only CONSUMED when payroll_authority_grain == 'store'.
     payroll_auth_stores = set()
     _exp_carried_from = None
+    # The commission double-book plan (owner decision 2026-09-08), resolved inside the try below and
+    # initialised here so an unreadable expense feed leaves it None — no plan, no suppression, and
+    # the statement is exactly what it is today.
+    _comm_plan = None
     try:
         # STICKY expenses (owner 2026-09-02, systematic fix): read through the ONE shared
         # carry-forward rule the Expenses sheet displays with (commcalc.expenses_effective) — a month
@@ -1251,9 +1265,47 @@ def build_inputs(client, org_id, period):
         exp_rows, _exp_carried_from = effective_expense_rows(
             client, org_id, period, list(period_keys),
             "store_code,expense_name,expense_type,amount,period,source_key")
+        # ── COMMISSION DOUBLE-BOOK SUPPRESSION (owner decision 2026-09-08: "Rep commision should
+        # go in p&l") ─────────────────────────────────────────────────────────────────────────────
+        # Rep commission reaches these books by TWO routes: `rep_comm` (fed from
+        # commcalc.rep_commissions.total_payout, booked ABOVE and untouched — that is the
+        # authoritative one) and, for a tenant that also types it into the expense sheet, an
+        # ordinary opex row landing on `store_opex`. Same labour dollars, subtracted twice.
+        #
+        # The DECISION is `commcalc/labour_coverage.suppression_plan`, shared verbatim with the GP
+        # report (`gp_report.calc_gp_report`, whose `exp_total` carries the same rows inside the
+        # same net-profit line) so the two surfaces can never suppress differently.
+        # Gated on `account_config.labour_commission_expense_names` — HOUSE DEFAULT '{}' ⇒ the plan
+        # is inert, `suppresses_row` is always False and every org's statement is BYTE-IDENTICAL
+        # until its owner names its own label (RULE TWO: no tenant or expense name in code).
+        #
+        # NEVER a silent deletion: suppression happens per STORE-MONTH and only where
+        # `rep_comm` actually books something for that store to replace it. A store with the
+        # expense row and NO rep commission for the month KEEPS its row (removing it would delete a
+        # real cost and book nothing back) and is named in the note instead. The pairing runs in
+        # THIS reader's key space — canonical store address, exactly what `add()` keys by — so what
+        # the plan pairs is what the statement books.
+        _comm_plan, _comm_idx = None, (frozenset(), frozenset())
+        _comm_suppresses = lambda idx, name, key: False    # noqa: E731 — inert until resolved
+        try:
+            _lcov = _lcov_mod()
+            _comm_plan = _lcov.suppression_plan(
+                exp_rows, dict(L["rep_comm"]["by_store"]),
+                acct_cfg.get("labour_commission_expense_names_list") or [],
+                key_of=lambda c: resolve_store(code2addr.get(_norm_store(c), _norm_store(c))))
+            _comm_idx = _lcov.suppression_index(_comm_plan)
+            _comm_suppresses = _lcov.suppresses_row
+        except Exception as e:
+            _warn("commission double-book suppression skipped", e)
         for r in exp_rows:
             sa = code2addr.get(_norm_store(r.get("store_code")), _norm_store(r.get("store_code")))
             sk = (r.get("source_key") or "").strip()
+            # The expense-side copy of a commission this statement already books on `rep_comm`.
+            # Skipped entirely rather than booked at $0.00 — a zero would read as a measurement.
+            # What was removed, and what `rep_comm` books in its place, is reported per store in
+            # `_comm_plan` and summarised on the `rep_comm` line's note below.
+            if _comm_suppresses(_comm_idx, r.get("expense_name"), resolve_store(sa) if sa else None):
+                continue
             line_key, fallback_label = route_expense_line(sk)
             # ── OWNER RULING K2 (2026-08-10) — a HAND-ENTERED payroll row is authoritative too ──────
             # The old guard keyed ONLY on the producer token `payroll_gross`, so a tenant that types its
@@ -1306,6 +1358,23 @@ def build_inputs(client, org_id, period):
                 add(line_key, sa, r.get("amount"), detail_label=label)
     except Exception:
         pass
+
+    # ── THE SWAP, stated on the line that won (owner decision 2026-09-08) ─────────────────────────
+    # A bottom line that moved with no explanation is the thing this house does not ship. When
+    # commission expense rows stop booking, the `rep_comm` line says HOW MUCH left `store_opex` and
+    # how much it books in their place — two figures, never one, because they are NOT equal (a flat
+    # per-store expense against the real payout). Any store whose row was KEPT because rep
+    # commission could not replace it is named in the same sentence, with its dollars.
+    # Reuses ruling K3(b)'s `note` passthrough (`engine._assemble`) — the same honesty channel the
+    # wages line and the declared-zero device-cost line already speak through, not a third one.
+    # The per-store table is NOT attached here: the GP payload's `labour_commission_suppressed`
+    # already serves it from this same plan, and a nested dict on an inputs line would ride into
+    # every snapshot for no gain (the same call made for the labour-coverage report below).
+    try:
+        if _comm_plan and _comm_plan.get("note"):
+            L["rep_comm"]["note"] = _comm_plan["note"]
+    except Exception as e:
+        _warn("commission suppression note skipped", e)
 
     # Gross Payroll — reuses the `wages` line. AUTHORITATIVE source = the payroll_gross system line
     # (the EXACT gross paid to employees, pushed by mod-people) booked just above. Only FALL BACK to the
@@ -1366,7 +1435,7 @@ def build_inputs(client, org_id, period):
     # device-cost line already speaks through, so there is one honesty mechanism, not two. This
     # block moves NO figure; if it fails entirely the statement is byte-identical.
     try:
-        from app.modules.commcalc import labour_coverage as _lcov
+        _lcov = _lcov_mod()
         _cov_stores = (client.schema("storeops").table("stores").select("store_code,is_active")
                        .eq("org_id", org_id).limit(50000).execute().data) or []
         _cov = _lcov.labour_coverage(
