@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
@@ -336,6 +336,97 @@ export default function DepositReconPage() {
 // day "handed over" records the existing handed_to_mgmt disposition on each still-undisposed
 // picked-up envelope (the same POST /pickup/deposit machinery the pickup pages use — no second
 // write path); it is one-way here, like any disposition (undo stays a deliberate act).
+// CASH SHORT BY DM (owner directive 2026-09-08: "if the cash is short then it should generate a
+// cash short report by DM"). Rendered on the accountability board rather than as a fourth screen:
+// the board's own payload already carries it (`by_dm`), folded server-side from the very rows below
+// via deposit_accountability.dm_shortage_rows, so the report and the board can never disagree and
+// no second query exists to drift. Short/over is not re-derived anywhere — it is the mig-949 pickup
+// variance (envelope_report's count_fields truth table).
+//
+// UNCOUNTED IS NOT SHORT, and the panel says so out loud: an envelope collected sealed has no count
+// and belongs in neither bucket. A DM with a clean report and 40 uncounted envelopes has not been
+// cleared of anything, and the numbers must not imply they have.
+function CashShortByDm({ rows, summary }: { rows: any[]; summary: any }) {
+  const [open, setOpen] = useState(false)
+  const [showAll, setShowAll] = useState(false)
+  if (!rows.length) return null
+  const shortRows = rows.filter(r => r.is_short)
+  const view = showAll ? rows : shortRows
+  const cellS: React.CSSProperties = { padding: '6px 10px', borderTop: '1px solid var(--border)', fontSize: 12.5, whiteSpace: 'nowrap' }
+  return (
+    <div style={{ marginBottom: 10, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '8px 12px',
+        background: summary.dms_short ? 'rgba(220,38,38,0.08)' : 'var(--surface2)', cursor: 'pointer' }}
+        onClick={() => setOpen(o => !o)}>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>{summary.dms_short ? '⚠' : '✓'} Cash short by DM</span>
+        <span style={{ fontSize: 12, color: 'var(--text2)' }}>
+          {summary.dms_short
+            ? <><b style={{ color: '#dc2626' }}>{fmt(Math.abs(summary.short_amount || 0))}</b> short across {summary.short_rows} envelope{summary.short_rows === 1 ? '' : 's'} · {summary.dms_short} of {summary.dms} DM{summary.dms === 1 ? '' : 's'}</>
+            : <>No short pickups counted in this range.</>}
+          {summary.over_rows ? <span style={{ color: '#b45309' }}> · {summary.over_rows} over (+{fmt(summary.over_amount || 0)})</span> : null}
+          {summary.uncounted_rows ? <span style={{ color: 'var(--text3)' }}> · {summary.uncounted_rows} envelope{summary.uncounted_rows === 1 ? '' : 's'} collected sealed (not counted — neither short nor over)</span> : null}
+        </span>
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>{open ? '▾ hide' : '▸ show'}</span>
+      </div>
+      {open && (
+        <div style={{ padding: '4px 0 8px' }}>
+          <div style={{ padding: '6px 12px', fontSize: 11.5, color: 'var(--text3)' }}>
+            Short = the DM counted LESS than the envelope declared, at pickup time. Only envelopes the DM
+            actually counted appear here; an envelope collected sealed is reported as uncounted, never as
+            short. {shortRows.length === 0 && !showAll ? 'Nothing is short — ' : ''}
+            <a onClick={(e) => { e.stopPropagation(); setShowAll(s => !s) }}
+               style={{ color: 'var(--accent)', cursor: 'pointer', textDecoration: 'underline' }}>
+              {showAll ? 'show only DMs with a shortage' : `show all ${rows.length} DM${rows.length === 1 ? '' : 's'}`}
+            </a>
+          </div>
+          {view.length === 0 ? null : (
+            <div className="table-wrapper" style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead><tr style={{ background: 'var(--surface2)' }}>
+                  {['DM (picked up by)', 'Short', 'Envelopes short', 'Over', 'Counted', 'Sealed / uncounted', 'Declared', 'Counted total', 'Stores · days'].map((h, i) =>
+                    <th key={i} style={{ textAlign: i === 0 ? 'left' : 'right', padding: '7px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {view.map((r: any) => (
+                    <Fragment key={r.dm}>
+                      <tr style={{ background: r.is_short ? 'rgba(220,38,38,0.06)' : undefined }}>
+                        <td style={{ ...cellS, fontWeight: 600 }}>{r.dm}</td>
+                        <td style={{ ...cellS, textAlign: 'right', color: r.is_short ? '#dc2626' : 'var(--text3)', fontWeight: r.is_short ? 700 : 400 }}>
+                          {r.short_rows ? fmt(Math.abs(r.short_amount)) : '—'}</td>
+                        <td style={{ ...cellS, textAlign: 'right' }}>{r.short_rows || '—'}</td>
+                        <td style={{ ...cellS, textAlign: 'right', color: r.over_rows ? '#b45309' : 'var(--text3)' }}>{r.over_rows ? `+${fmt(r.over_amount)}` : '—'}</td>
+                        <td style={{ ...cellS, textAlign: 'right' }}>{r.counted_rows}</td>
+                        <td style={{ ...cellS, textAlign: 'right', color: 'var(--text3)' }}>{r.uncounted_rows}</td>
+                        <td style={{ ...cellS, textAlign: 'right' }}>{fmt(r.declared_total)}</td>
+                        <td style={{ ...cellS, textAlign: 'right' }}>{r.counted_rows ? fmt(r.actual_total) : '—'}</td>
+                        <td style={{ ...cellS, textAlign: 'right', color: 'var(--text3)' }}>{r.stores_count} · {r.days_count}</td>
+                      </tr>
+                      {/* the actual short envelopes, so the report names the cash and not just the DM */}
+                      {(r.shorts || []).map((s: any, i: number) => (
+                        <tr key={`${r.dm}|${i}`}>
+                          <td style={{ ...cellS, paddingLeft: 26, fontSize: 11.5, color: 'var(--text2)' }} colSpan={3}>
+                            ↳ {s.day} · {s.store_name || s.store_code} · {s.employee_name || '—'}
+                            {s.kind === 'billpay' ? <span style={{ color: 'var(--text3)' }}> (bill-pay)</span> : null}
+                            {s.envelope_opened ? <span style={{ color: 'var(--text3)' }}> · 📂 opened</span> : null}
+                          </td>
+                          <td style={{ ...cellS, textAlign: 'right', fontSize: 11.5, color: '#dc2626', fontWeight: 700 }} colSpan={2}>{fmt(s.variance)}</td>
+                          <td style={{ ...cellS, textAlign: 'right', fontSize: 11.5, color: 'var(--text3)' }} colSpan={4}>
+                            declared {fmt(s.declared)} · counted {fmt(s.actual)}
+                          </td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function AccountabilityBoard({ dateFrom, dateTo }: { dateFrom: string; dateTo: string }) {
   const { user } = useAuth()
   const [data, setData] = useState<any>(null)
@@ -431,6 +522,7 @@ function AccountabilityBoard({ dateFrom, dateTo }: { dateFrom: string; dateTo: s
         )}
       </div>
       {msg && <div style={{ fontSize: 12, marginBottom: 8 }}>{msg}</div>}
+      {!loading && <CashShortByDm rows={data?.by_dm || []} summary={data?.dm_summary || {}} />}
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 30 }}><div className="spinner" /></div>
       ) : rows.length === 0 ? (

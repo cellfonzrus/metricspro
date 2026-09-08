@@ -81,6 +81,85 @@ def row_variance(row):
     return variance_fields(r.get("amount"), r.get("actual_picked_amount"))
 
 
+# ── THE OPENED-ENVELOPE GATE (owner directive 2026-09-08; mig 990) ─────────────────────────────
+# Owner: "it should have a check box asking if the cash envelope was opened", reported alongside
+# "if the declared cash pick by the dm is less then the sheet does not update the actual cash picked
+# up, it only shows the envelope amount".
+#
+# Those are ONE defect. mig 949 gave the DM somewhere to record the actual count, but recording it
+# was optional and nothing ever asked — so a DM could open an envelope, find it short, confirm, and
+# leave `actual_picked_amount` NULL. The row then reads "not recorded" and only the declared
+# envelope amount stands, which is exactly what the owner is seeing.
+#
+# The flag is the DM's ASSERTION about what they physically did; the amount is the EVIDENCE. Pairing
+# them closes the hole: an opened envelope cannot be confirmed without its count. A SEALED envelope
+# still needs no count — a blank there is correct (nobody opened it), and the declared snapshot
+# rightly stands until management's own count (mig 936). Inferring "opened" from
+# `actual_picked_amount IS NOT NULL` would collapse those two states into one, which is the whole
+# reason the short cash went unrecorded.
+
+
+def envelope_opened(row):
+    """PURE: did the DM open this envelope (mig 990)? Absent column / None / '' = NOT opened —
+    the pre-990 and pre-checkbox behavior, and the honest default (nobody asserted they opened
+    it). Accepts the string forms a form/query round-trip produces ('true'/'false'/'1'/'0'), so
+    a JSON boolean and a stringified one can never disagree."""
+    v = (row or {}).get("envelope_opened")
+    if isinstance(v, str):
+        return v.strip().lower() in ("true", "t", "1", "yes", "on")
+    return bool(v)
+
+
+def opened_without_count(item):
+    """PURE — THE CONFIRM GATE. True when this pickup item claims the envelope was OPENED but
+    carries no actual count. That combination is the defect the owner reported, so the confirm
+    is refused rather than recorded as a blank.
+
+    Accepts either wire shape the confirm endpoint takes (`actual_amount` from the page,
+    `actual_picked_amount` from a direct/harness caller) through the same has_actual rule, so
+    the gate can never disagree with what gets stored.
+
+    NOT opened -> never blocked (a sealed envelope needs no count — the declared snapshot
+    stands). Opened WITH a count -> never blocked, including a count of 0.00, which on an
+    opened envelope is a real and serious finding ("I opened it and it was empty") rather than
+    an absence."""
+    it = item or {}
+    if not envelope_opened(it):
+        return False
+    probe = dict(it)
+    if "actual_picked_amount" not in probe and "actual_amount" in probe:
+        probe["actual_picked_amount"] = probe.get("actual_amount")
+    return not has_actual(probe)
+
+
+def gate_items(items):
+    """PURE: the confirm payload's items -> the list of (index, item) that trip
+    opened_without_count. Empty list = the batch may be confirmed. Returned as a LIST (not a
+    bool) so the caller can name WHICH envelopes are missing their count — a DM confirming
+    twenty envelopes must not be told only that "one" of them is wrong."""
+    out = []
+    for i, it in enumerate(items or []):
+        if opened_without_count(it):
+            out.append((i, it or {}))
+    return out
+
+
+def gate_message(offenders):
+    """PURE: the 400 text for a blocked confirm — names the envelopes, so the DM knows exactly
+    which box to fill in. Empty offenders -> None (nothing to say)."""
+    if not offenders:
+        return None
+    names = []
+    for _, it in offenders:
+        who = (str(it.get("employee_name") or "").strip()
+               or str(it.get("store_name") or "").strip()
+               or str(it.get("store_code") or "").strip() or "envelope")
+        day = str(it.get("close_date") or "").strip()
+        names.append(f"{who}{f' ({day})' if day else ''}")
+    return ("Enter the actual cash counted for the envelope(s) marked opened: "
+            + ", ".join(names) + ".")
+
+
 def outflow_amount(row, actual_wins):
     """PURE — THE MONEY GATE. The dollars this picked-up envelope relieves from the general
     cash movement (_cash_position_core → BS store-cash line, Cash Position, Store Cash on

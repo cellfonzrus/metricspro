@@ -1234,6 +1234,28 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   blank-clears, billpay mirror) + `harness_deposit_accountability.py` (§G). Frontend: "Actual
   picked" input column on `closing/pickup/page.tsx` + `closing/billpay-pickup/page.tsx`
   (optional; live short/over hint), short-pickup chips on the `deposit-recon` board.
+- **The opened-envelope checkbox + CASH SHORT BY DM (owner directive 2026-09-08, mig `990` WRITTEN
+  NOT APPLIED — see §23p for the full write-up):** the mig-949 count above was OPTIONAL and nothing
+  ever asked for it, and the page's actual-picked input showed the ENVELOPE AMOUNT as its
+  placeholder while `load()` wiped anything typed on every refetch — so a short count was routinely
+  never recorded and the row read "not recorded" with only the declared figure standing.
+  **`commcalc.cash_pickup.envelope_opened`** (+ the `billpay_pickup` sibling) is the DM's own
+  assertion: unticked = collected SEALED (no count needed, declared stands, byte-identical to
+  pre-990); ticked = opened, and `actual_picked_amount` becomes **REQUIRED to confirm** (pure
+  `pickup_actual.opened_without_count`/`gate_items`/`gate_message`, enforced in
+  `_confirm_pickup_impl` for the WHOLE batch before any row is written; a count of 0.00 is allowed).
+  Deliberately NOT inferred from `actual_picked_amount IS NOT NULL` — a blank on a sealed envelope is
+  correct, a blank on an opened one is a missing fact. Reads AND writes are adaptive (the write
+  retries without the key on a pre-990 schema, mig-201 precedent).
+  **CASH SHORT BY DM** is `deposit_accountability.dm_shortage_rows` (PURE) — `by_dm`/`dm_summary` on
+  `GET /closing/deposit-accountability`, folded from the SAME keyset-filtered day rows on
+  `cash_pickup.picked_up_by`. NO new read and NO re-derivation: short/over arrives from
+  `pickup_actual.row_variance`. UNCOUNTED IS NOT SHORT (a sealed envelope is in neither bucket),
+  `over` never nets a short away (`net_variance` is separate), unpicked envelopes are excluded, and
+  an unattributed pickup is reported, not dropped. Proof `harness_cash_pickup.py` §11 (78) +
+  `harness_deposit_accountability.py` §H (71). Frontend: "Opened?" checkbox + count requirement and
+  the **"Cash sales equip/acc"** column with its basis (POS / DECLARED / no bill-pay) on
+  `closing/pickup/page.tsx`; the `CashShortByDm` panel on the `deposit-recon` accountability board.
 
 - **Bill-pay-on-credit column + 3-WAY bill-payment recon (owner directive 2026-09-02 #2, mig
   `944`):** "in the billpayment pick, add another column for bill payment on credit card, and the
@@ -2158,6 +2180,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `commcalc.billpay_pickup_config` (mig `942`) | `PUT /closing/billpay-pickup-config` | `_notify_pickup` (billpay kind; falls back to `cash_pickup_config` recipient when unset) |
 | `commcalc.cash_pickup` + `commcalc.billpay_pickup` `mgmt_confirmed(+by/at)` (mig `943`) | `POST /closing/deposit-mgmt-confirm` (management-gated confirm/revoke) | `GET /closing/deposit-accountability` (green-day rule), `GET /closing/deposit-recon` `pickup_deposit` line item (§12 deposit accountability) |
 | `commcalc.cash_pickup` + `commcalc.billpay_pickup` `actual_picked_amount` (mig `949`) + `cash_pickup_config.pickup_actual_relieves_cash` knob | `POST /closing/pickup` / `/billpay-pickup` (item `actual_amount`, shared `_confirm_pickup_impl`; NULL = not recorded) | `GET /closing/pickups` + `/billpay-pickups` variance fields, `GET /closing/deposit-accountability` short-pickup chips (pure `closing/pickup_actual.py`, reusing `envelope_report.count_fields`); outflow swap in `_cash_position_core` ONLY under the knob (default false = declared, byte-identical; §12 actual cash picked) |
+| `commcalc.cash_pickup` + `commcalc.billpay_pickup` `envelope_opened` (mig **`990`**, WRITTEN NOT APPLIED) | `POST /closing/pickup` / `/billpay-pickup` (item `envelope_opened`, shared `_confirm_pickup_impl`; written only when sent, and the upsert retries WITHOUT it on a pre-990 schema — mig-201 precedent) | THE CONFIRM GATE: opened ⇒ `actual_amount` REQUIRED (pure `pickup_actual.opened_without_count`/`gate_items`, batch checked before any write). Surfaced on `GET /closing/pickups` + `/billpay-pickups` and on the deposit-accountability envelopes. NULL and FALSE are ONE state ('collected sealed'); never relieves cash, never summed (§23p) |
 | `commcalc.daily_closing_verification` | `POST /closing/verify` (upsert; `dm_*` = the DM's corrected store-day totals — `dm_ext_cc` since mig `961`: the EXTERNAL-CREDIT portion OF `dm_store_cc`, total-preserving) | `verified_overlay.build_overlay_map` (summary/tender/cash-position overlays), `closing_submissions` dm fields, ops_chargebacks missed_dm_verify detection; `dm_epay_cash` also replaces verified days in `_billpay_position_core` (mig `942`) |
 | `commcalc.daily_closing_verification_audit` (mig `935`, append-only; +`dm_ext_cc`/`prior_dm_ext_cc` mig `961`) | `POST /closing/verify` via `verification_audit.build_audit_row` (one revision per changed save; `edited_after_verify` flags a money change on an already-verified day) | audit/history readers only — no report sums these rows |
 | `commcalc.closing_tender_def` (mig `111` tenant tender registry; +`processor_key` mig `960`) | tender-setup editor (`/closing/tender-config`) | closing tender fields + `_closing_amt`; **card-settlement recon leg routing** (`external_credit_recon.tender_processor_map`/`role_columns` — NULL/no row ⇒ the house map, §12) |
@@ -2296,6 +2319,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
 | `GET /closing/billpay-pickups` (envelopes carry `credit` = declared bill-pay-on-card + `total_credit`, mig `944`; POS comparison base = declared cash+credit; `market=` resolves via the shared `_resolve_market_filter` — comma-joined multi-market grants match per-component, 2026-09-02 DM-envelopes fix, same as `GET /closing/pickups`), `POST /closing/billpay-pickup` (+`/undo`, `/deposit`), `GET/PUT /closing/billpay-pickup-config` (mig `942` — the cash-pickup machinery, parameterized, on the sibling `billpay_pickup` table) | `closing/router.py` (`billpay_pickups`/`billpay_confirm_pickup`/`billpay_undo_pickup`/`billpay_record_deposit`; core `_billpay_position_core`, pure `closing/billpay_pickup.py`) | §12 Bill Payment Pickup / §12 3-way recon / §12 multi-market-grant filter |
 | `GET /closing/cash-recon-management` (GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403; declared vs pickups vs POS on one screen, bill-pay mismatch flag; since mig `944` ALSO the 3-WAY bill-pay recon — declared vs sales-tx (tender-split) vs processor, `three_way_status` per row + `three_way` summary); W3 scheduled report key `closing_billpay_recon` | `closing/router.py` (`cash_recon_management`; POS sides via the shared `_pos_tenders_for_days`/`_pos_billpay_for_days`, sales side via `_sales_billpay_for_days` → `commcalc.router._billpay_sales_by_store_day`; pure math `metric_recon.reconcile_billpay_three_way_days`); `notify/closing_reports.py` | §12 management cash recon / §12 3-way recon |
+| `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`; since 2026-09-08 also **`by_dm` + `dm_summary` — THE CASH SHORT BY DM REPORT**, folded from the SAME keyset-filtered day rows on `cash_pickup.picked_up_by`, never a second read; uncounted is reported as uncounted, never as short, and `over` never nets a short away, §23p), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
 | `GET /billpay-coverage/{period}` (per store/day: bill-pay ≤ cash+card, exceptions surfaced) | `commcalc/router.py` (`billpay_coverage` → `metric_recon.reconcile_billpay_coverage`) | §4 bill-pay carve-out / §15 |
 | `GET /kpi-failing/{period}` (failing-KPI overview: /coaching target resolution + in-process `/dlar-store` store rows + `rep_commissions.kpi_values`; pure `kpi_failing.py`) | `commcalc/router.py` (`get_kpi_failing`, beside `/dlar-store`) | §10 failing-KPI report |
@@ -3976,6 +4000,138 @@ deliberately NOT in the registry: inventing an href would be worse than the gap.
   proved against the BACKEND's string as well as the frontend's; §D boundaries/case; §E the 10 render
   sites still route their prose through the mechanism; §F there is one signpost implementation and one
   gate.
+
+## 23p. THE CASH PICKUP RECORDED THE ENVELOPE, NOT THE COUNT (owner 2026-09-08)
+
+Four owner reports on Cash Pickup, all the same day. Three of them are one defect.
+
+**Owner (1):** *"on cash pick up if the declared cash pick by the dm is less then the sheet does not
+update the actual cash picked up, it only shows the envelope amount"*
+**Owner (2):** *"it should have a check box asking if the cash envelope was opened"*
+**Owner (3):** *"if the cash is short then it should generate a cash short report by DM"*
+**Owner (4):** *"cash pick up is still showing the total cash, let it be like that, just add another
+column for cash sales equip/acc which is total cash minus epay cash — and cash picked up is still
+not fixed"*
+
+### (1) ROOT CAUSE — two lines on the page, neither in the backend
+
+mig 949 built the whole actual-picked mechanism correctly: the column, the variance triple, the
+endpoint, the confirm writer. Live, it recorded nothing, because the SCREEN never let the value
+reach it. Two independent bugs in `closing/pickup/page.tsx`, both proven at the source:
+
+1. **The empty box looked full.** The actual-picked input carried
+   `placeholder={String(e.cash ?? '')}` — the envelope's own amount, rendered greyed INSIDE the
+   field. A DM opening a $312 envelope saw "312" already sitting in the box, typed nothing, and
+   confirmed. `actual_amount` is sent only when non-blank, so no key was sent, the server stored
+   NULL, and the row afterwards reads *"not recorded"* with only the envelope amount standing —
+   **exactly the sentence the owner wrote.** A placeholder is not a value; presenting the expected
+   figure as one guaranteed the DM would never contradict it, which is the one thing the field
+   existed to let them do.
+2. **Anything typed was wiped before Confirm.** `load()` began `setSel({}); setNotes({});
+   setActuals({})`. The page refetches far more often than it looks: `load` is a `useCallback` over
+   `resolvedStores`, a `useMemo` over the store roster **fetched asynchronously on mount**, so the
+   roster landing is itself a reload — as is the market-scope auto-apply
+   (`setMarket(user.market)`) and every filter change. A DM who started typing counts before those
+   returned lost them silently, with no error and the rows still on screen.
+
+Both are fixed: the field's placeholder is now `count` / `required` (never the expected figure), and
+counts and notes are treated as the DM's **unsaved work** that survives a reload — only the
+SELECTION is cleared, because rows may have gone. Confirmed envelopes' entries are retired after a
+successful save. Keys are the same `date|store|rep` envelope key, so a value can never migrate to a
+different envelope, and confirm maps over the CURRENT rows so nothing off-screen is submitted.
+
+### (2) THE OPENED CHECKBOX — the flag is the assertion, the amount is the evidence
+
+Reports (1) and (2) are one hole: recording the count was **optional and nothing ever asked**. The
+checkbox makes the DM state what they physically did, and binds the two:
+
+- **unticked = collected SEALED** — no count needed, the declared snapshot stands, and the envelope
+  goes on to management's own count (mig 936 `envelope_count`). This is the pre-990 behavior exactly.
+- **ticked = opened and counted** — `actual_picked_amount` becomes **REQUIRED to confirm**.
+
+`commcalc.cash_pickup.envelope_opened` + the `billpay_pickup` sibling, **migration `990`, WRITTEN AND
+NOT APPLIED**. **Deliberately not inferred from `actual_picked_amount IS NOT NULL`:** a blank count on
+a sealed envelope is *correct*; a blank count on an opened one is a *missing fact*. Without the column
+those two are indistinguishable — which is precisely how the short cash went unrecorded.
+
+**The gate is server-side** (`_confirm_pickup_impl` → pure `pickup_actual.gate_items` /
+`gate_message`), checked for the WHOLE batch **before any row is written**, so a blocked confirm never
+lands half a pickup. The page mirrors it (disabled button + per-row "count required") only to save the
+round-trip. A count of **0.00 on an opened envelope is ALLOWED** — "I opened it and it was empty" is a
+serious finding, not an absence. `NULL` and `FALSE` are one state by design, so an untouched checkbox
+writes nothing and costs no retry.
+
+**Adaptive both ways:** reads resolve a missing column to False; the write retries WITHOUT the key on
+a pre-990 schema (the mig-201 `product_mrc` precedent), so the pickup and the count that matters most
+still record. An un-migrated database behaves exactly as today and the gate never fires.
+
+### (3) CASH SHORT BY DM — a fold, not a fourth surface
+
+**Duplicate check (build gate).** Three surfaces already carry pickup short/over, each answering a
+different question, and a fourth was NOT built:
+
+| surface | grain | why it is not the home for this |
+|---|---|---|
+| `GET /closing/pickups` | envelope | the DM's working screen for a day/range, not a report |
+| `GET /closing/cash-recon-management` | store-day | rows carry no `picked_up_by`, so grouping by DM means a SECOND read of the pickup tables — a sibling derivation of what `_accountability_pickup_rows` already returns — and its market-manager gate would hide a DM's own shortages from that DM |
+| `GET /closing/deposit-accountability` | store-day, **both pickup tables**, keyset-scoped | already reads cash ∪ billpay over the range and already computes `pickup_short_rows`/`short_pickup_days` from `row_variance` |
+
+So the report is **one more fold over rows already in hand** on the accountability board:
+`deposit_accountability.dm_shortage_rows` (PURE) groups the SAME day rows on `cash_pickup.picked_up_by`
+and returns `by_dm` + `dm_summary`. **No new read, no new query, and short/over is not re-derived** —
+it arrives pre-computed from `pickup_actual.row_variance` (`envelope_report.count_fields`), the truth
+table every other surface uses.
+
+**It folds the DAY ROWS, not the raw pickups, and that is load-bearing:** the endpoint filters day rows
+by the caller's keyset, so folding those rows makes the DM totals agree with the board by construction
+and no store outside the viewer's span can leak in through a shortage line.
+
+**UNCOUNTED IS NOT SHORT**, stated on screen and pinned in the harness: a sealed envelope has no count
+and lands in neither bucket. A DM with zero shortages and forty uncounted envelopes has not been
+cleared of anything. `over` is reported separately and **never nets a shortage away** — `net_variance`
+is a distinct field, so a DM $20 short on one envelope and $15 over on another is never shown as "$5
+short". A pickup with no recorded DM is reported under `(unattributed)` rather than dropped.
+
+### (4) CASH SALES EQUIP/ACC — the column, with its basis visible
+
+The envelope amount **stays the whole drawer** — bill-pay netting stays **OFF**
+(`pickup_nets_pos_billpay_cash`, mig `989` unapplied, §23m) — and `cash_equip_acc` is a DISPLAY split
+beside it, computed from the one shared `billpay_netting.net_store_day` rule whether or not netting is
+on, so the column and the netting can never disagree. The backend half landed on the base commit; the
+**column is now rendered**, and its **basis is shown, never hidden**: `POS` (green — computed from the
+sales transactions) · `DECLARED` (amber — the rep's own figure, no POS number for that store-day) ·
+`no bill-pay` (grey — nothing recorded, so the whole drawer is equip/acc by default rather than by
+evidence). A POS-derived split and a declared-derived one must not look alike. Both the column and the
+basis export (RULE FOUR).
+
+### FILES
+
+- `database/migrations/990_pickup_envelope_opened.sql` — **WRITTEN, NOT APPLIED** (owner approval).
+- `backend/app/modules/closing/pickup_actual.py` — `envelope_opened`, `opened_without_count`,
+  `gate_items`, `gate_message` (all pure).
+- `backend/app/modules/closing/deposit_accountability.py` — `dm_shortage_rows` (pure);
+  `picked_up_by` + `envelope_opened` carried onto the day view's envelopes.
+- `backend/app/modules/closing/router.py` — the confirm gate + adaptive write in
+  `_confirm_pickup_impl` (`opened_count` in the response); `envelope_opened` on `GET /closing/pickups`
+  and `GET /closing/billpay-pickups`; `by_dm`/`dm_summary` on `GET /closing/deposit-accountability`.
+- `frontend/.../closing/pickup/page.tsx` — the placeholder fix, the unsaved-work fix, the Opened?
+  checkbox + count requirement, the Cash sales equip/acc column, and both export columns.
+- `frontend/.../closing/deposit-recon/page.tsx` — the `CashShortByDm` panel on the accountability board.
+
+### PROOF
+
+- `backend/harness_cash_pickup.py` §11 — **78 pass** (was 57). The gate truth table (sealed needs no
+  count; opened without one is refused; a count of 0.00 is allowed; a mixed batch is refused whole
+  with nothing written; the billpay sibling inherits the same gate; a client that never sends the flag
+  is byte-identical), plus §11r–u pinning the two FRONTEND lines at the source — neither is reachable
+  from Python, and a harness that proves the backend while the screen keeps eating the DM's input
+  proves nothing (§24). All four frontend assertions were verified to FAIL against the pre-fix file.
+- `backend/harness_deposit_accountability.py` §H — **71 pass** (was 51). Grouping, attribution,
+  uncounted-is-not-short, over never netting a short away, unpicked envelopes excluded, the keyset
+  fold, the tolerance parameter, both pickup kinds, and that the variance is read rather than
+  re-derived.
+- Unchanged and green: `harness_billpay_pickup.py` 47 · `harness_billpay_netting.py` 57 ·
+  `harness_org_scope_guard.py` 25, plus the 18 other closing/cash harnesses.
 
 ## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
 

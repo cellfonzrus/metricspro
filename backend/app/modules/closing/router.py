@@ -5274,6 +5274,10 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
                                      if p and _pickup_actual.has_actual(p) else None),
             "pickup_variance": (_pickup_actual.row_variance(p) or {}).get("variance") if p else None,
             "pickup_variance_status": (_pickup_actual.row_variance(p) or {}).get("status") if p else None,
+            # mig 990 (owner 2026-09-08) — did the DM OPEN this envelope? False on a pre-990
+            # schema and on every row recorded before the checkbox existed: "collected sealed",
+            # which is exactly how those pickups behaved.
+            "envelope_opened": _pickup_actual.envelope_opened(p) if p else False,
         })
     # OWNER 2026-09-02 ("the cash pick up ... only show what the stores have entered but not what
     # is in the system, from the pos report, those numbers should be right next to these numbers"):
@@ -6007,8 +6011,21 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
     if not items:
         raise HTTPException(400, "Select at least one envelope.")
     dm = (payload.picked_up_by or "DM").strip()
+    # THE OPENED-ENVELOPE GATE (owner 2026-09-08, mig 990): "it should have a check box asking if the
+    # cash envelope was opened" — reported together with "if the declared cash pick by the dm is less
+    # then the sheet does not update the actual cash picked up, it only shows the envelope amount".
+    # An envelope the DM says they OPENED must carry the count they made; otherwise the pickup is
+    # recorded with a NULL actual and the declared snapshot is all that survives — the exact hole the
+    # owner is reporting. Checked for the WHOLE batch before a single row is written, so a blocked
+    # confirm never lands half of the envelopes. Sealed envelopes are untouched (no count needed),
+    # so a client that never sends the flag behaves exactly as before. Pure rule:
+    # pickup_actual.gate_items / gate_message.
+    _offenders = _pickup_actual.gate_items(items)
+    if _offenders:
+        raise HTTPException(400, _pickup_actual.gate_message(_offenders))
     total = 0.0
     actual_total, variance_short, variance_over = None, 0, 0
+    opened_count = 0
     for it in items:
         item_date = _date(it.get("close_date")) or top_date
         if not item_date:
@@ -6033,8 +6050,25 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
                 actual_total = round((actual_total or 0.0) + _vf["actual"], 2)
                 variance_short += 1 if _vf["status"] == "short" else 0
                 variance_over += 1 if _vf["status"] == "over" else 0
-        client.schema("commcalc").table(table).upsert(
-            row, on_conflict="org_id,close_date,store_code,employee_name").execute()
+        # mig 990 — the DM's own statement that they opened this envelope, stored beside the count
+        # it required. Written ONLY when the client sends the key, so an older frontend is
+        # byte-identical; the upsert below retries WITHOUT it on a pre-990 schema.
+        if "envelope_opened" in it:
+            row["envelope_opened"] = _pickup_actual.envelope_opened(it)
+            opened_count += 1 if row["envelope_opened"] else 0
+        try:
+            client.schema("commcalc").table(table).upsert(
+                row, on_conflict="org_id,close_date,store_code,employee_name").execute()
+        except Exception:
+            # pre-990 schema (no envelope_opened column): retry without it so the pickup — and the
+            # mig-949 count that matters most — still records. The mig-201 product_mrc precedent.
+            # The flag is a statement ABOUT the count, never a substitute for it, so dropping it
+            # loses no money figure. Re-raised if the write fails for any other reason.
+            if "envelope_opened" not in row:
+                raise
+            row.pop("envelope_opened", None)
+            client.schema("commcalc").table(table).upsert(
+                row, on_conflict="org_id,close_date,store_code,employee_name").execute()
     item_dates = sorted({_date(it.get("close_date")) or top_date for it in items} - {None})
     notify_label = top_date or (item_dates[0] if len(item_dates) == 1 else
                                 f"{item_dates[0]}..{item_dates[-1]}" if item_dates else "—")
@@ -6044,7 +6078,9 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
     return {"ok": True, "count": len(items), "total": round(total, 2), "notify": notify,
             # mig 949 — actual-picked summary (None when no item carried an actual figure)
             "actual_total": actual_total,
-            "variance_short": variance_short, "variance_over": variance_over}
+            "variance_short": variance_short, "variance_over": variance_over,
+            # mig 990 — how many of the confirmed envelopes the DM opened and counted
+            "opened_count": opened_count}
 
 
 @router.post("/pickup")
@@ -6353,6 +6389,10 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
                                      if p and _pickup_actual.has_actual(p) else None),
             "pickup_variance": (_pickup_actual.row_variance(p) or {}).get("variance") if p else None,
             "pickup_variance_status": (_pickup_actual.row_variance(p) or {}).get("status") if p else None,
+            # mig 990 (owner 2026-09-08) — did the DM OPEN this envelope? False on a pre-990
+            # schema and on every row recorded before the checkbox existed: "collected sealed",
+            # which is exactly how those pickups behaved.
+            "envelope_opened": _pickup_actual.envelope_opened(p) if p else False,
         })
     # OWNER 2026-09-02 ("bill pick up only show what the stores have entered but not what is in
     # the system, from the pos report"): attach the POS-report bill payments for each envelope's
@@ -6928,7 +6968,15 @@ def deposit_accountability_board(date: str = "", start: str = "", end: str = "",
         # mig 949 — short-pickup visibility (actual < declared at pickup time), visible rows only
         "short_pickup_days": sum(1 for r in out if r.get("pickup_short_rows")),
     }
+    # CASH SHORT BY DM (owner 2026-09-08: "if the cash is short then it should generate a cash short
+    # report by DM"). Folded from `out` — the rows already filtered by this caller's keyset — so the
+    # by-DM totals and the board can never disagree, and no store outside the viewer's span can leak
+    # in through a shortage line. Short/over is NOT re-derived: it arrives on each envelope from
+    # pickup_actual.row_variance (the envelope_report count_fields truth table). Uncounted envelopes
+    # are reported as uncounted, never as short.
+    dm_rows, dm_summary = _da.dm_shortage_rows(out)
     return {"start": start, "end": end, "rows": out, "summary": summary,
+            "by_dm": dm_rows, "dm_summary": dm_summary,
             "can_confirm": _bp.can_see_cash_recon(authorization or "", org_id, client)}
 
 

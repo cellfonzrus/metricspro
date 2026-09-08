@@ -123,6 +123,7 @@ def day_accountability(pickup_rows):
         by_sd.setdefault((code, dday), []).append(r)
 
     from .pickup_actual import row_variance as _row_variance
+    from .pickup_actual import envelope_opened as _envelope_opened
     rows = []
     for (code, dday), rs in sorted(by_sd.items(), key=lambda kv: (kv[0][1], kv[0][0])):
         agg = {"deposited": 0.0, "missing_slip": 0.0, "handed_confirmed": 0.0,
@@ -160,6 +161,12 @@ def day_accountability(pickup_rows):
             envs.append({
                 "kind": r.get("kind") or "cash", "employee_name": r.get("employee_name"),
                 "amount": round(amt, 2), "state": st,
+                # WHO collected it (mig 034) — carried onto the envelope so the by-DM shortage
+                # rollup below folds the rows that are ACTUALLY ON SCREEN (post-keyset), rather
+                # than re-reading the pickup tables and risking a different population.
+                "picked_up_by": r.get("picked_up_by"),
+                # mig 990 — the DM's statement that they opened and counted this envelope
+                "envelope_opened": _envelope_opened(r),
                 # mig 949 — the DM's actual count at pickup (None = not recorded, never fake 0)
                 "actual_picked_amount": vf["actual"] if vf else None,
                 "pickup_variance": vf["variance"] if vf else None,
@@ -211,6 +218,122 @@ def day_accountability(pickup_rows):
         "handed_total": round(sum(r["handed_total"] for r in rows), 2),
         # mig 949 — days with at least one short pickup (actual < declared at pickup time)
         "short_pickup_days": sum(1 for r in rows if r["pickup_short_rows"]),
+    }
+    return rows, summary
+
+
+# ── CASH SHORT BY DM (owner directive 2026-09-08) ──────────────────────────────────────────────
+# Owner, verbatim: "if the cash is short then it should generate a cash short report by DM".
+#
+# WHY THIS LIVES HERE AND IS NOT A FOURTH SURFACE (the duplicate-check verdict). Three surfaces
+# already carry pickup short/over, and each answers a DIFFERENT question:
+#   · GET /closing/pickups          — per ENVELOPE, on the DM's own working screen for a day/range.
+#   · GET /closing/cash-recon-management — per STORE-DAY, management-gated, with the dm_short_days /
+#     dm_short_amount totals. Its rows are store-days and carry no picked_up_by, so grouping by DM
+#     there would mean a SECOND read of the pickup tables — a sibling derivation of exactly what
+#     _accountability_pickup_rows already returns — and its market-manager gate would hide a DM's
+#     own shortages from the DM.
+#   · this board — already reads BOTH pickup tables over the range (cash ∪ billpay, org-scoped,
+#     keyset-filtered), already computes pickup_short_rows / short_pickup_days from row_variance,
+#     and is the surface where "was this cash accounted for" is answered.
+# So the by-DM report is ONE MORE FOLD over rows already in hand: no new read, no new query, and
+# short/over is not re-derived — it is pickup_actual.row_variance, the same envelope_report
+# count_fields truth table used everywhere else, arriving pre-computed on the day rows' envelopes.
+#
+# IT FOLDS THE DAY ROWS, NOT THE RAW PICKUPS, and that is deliberate: the endpoint filters day rows
+# by the caller's keyset, so folding those rows makes the DM totals agree with what is on screen by
+# construction. Re-reading the raw rows could report a shortage for a store the viewer cannot see.
+
+
+def dm_shortage_rows(day_rows, tolerance=0.0):
+    """PURE: accountability day rows (already keyset-filtered) -> one row per DM who picked up,
+    with their counted/uncounted envelopes and their short/over money. Sorted worst-short first.
+    Returns (rows, summary).
+
+    UNCOUNTED IS NOT SHORT. An envelope with no recorded count contributes to `uncounted_rows`
+    and to NEITHER short nor over — the same rule the rest of this file follows (a store-day
+    nobody counted is None, never 0.00). A DM whose envelopes were all collected sealed shows
+    zero short and every envelope uncounted, which is an honest description of a sealed round,
+    not a clean bill of health.
+
+    `tolerance` is a dollar band, default 0 — the pickup variance ties out to the cent or it
+    does not (count_fields' own rule). It is a parameter rather than a constant because
+    cash-recon-management already exposes one on the same comparison; nothing here invents a
+    second default.
+    """
+    tol = abs(_f(tolerance))
+    by_dm = {}
+    for r in day_rows or []:
+        for env in (r or {}).get("envelopes") or []:
+            if (env or {}).get("state") == "unpicked":
+                continue          # still in the store — nobody has picked it up to be short of it
+            dm = (str(env.get("picked_up_by") or "").strip()) or "(unattributed)"
+            b = by_dm.setdefault(dm, {
+                "dm": dm, "envelopes": 0, "counted_rows": 0, "uncounted_rows": 0,
+                "opened_rows": 0, "short_rows": 0, "over_rows": 0, "match_rows": 0,
+                "declared_total": 0.0, "actual_total": 0.0,
+                "short_amount": 0.0, "over_amount": 0.0, "net_variance": 0.0,
+                "stores": set(), "days": set(), "shorts": [],
+            })
+            b["envelopes"] += 1
+            b["declared_total"] = round(b["declared_total"] + _f(env.get("amount")), 2)
+            if env.get("envelope_opened"):
+                b["opened_rows"] += 1
+            b["stores"].add(r.get("store_code") or "?")
+            b["days"].add(r.get("day") or "")
+            var = env.get("pickup_variance")
+            if var is None:
+                b["uncounted_rows"] += 1
+                continue
+            b["counted_rows"] += 1
+            b["actual_total"] = round(b["actual_total"] + _f(env.get("actual_picked_amount")), 2)
+            b["net_variance"] = round(b["net_variance"] + _f(var), 2)
+            if _f(var) < -tol:
+                b["short_rows"] += 1
+                b["short_amount"] = round(b["short_amount"] + _f(var), 2)   # negative = short
+                b["shorts"].append({
+                    "day": r.get("day"), "store_code": r.get("store_code"),
+                    "store_name": r.get("store_name"), "market": r.get("market"),
+                    "kind": env.get("kind") or "cash",
+                    "employee_name": env.get("employee_name"),
+                    "declared": round(_f(env.get("amount")), 2),
+                    "actual": round(_f(env.get("actual_picked_amount")), 2),
+                    "variance": round(_f(var), 2),
+                    "envelope_opened": bool(env.get("envelope_opened")),
+                })
+            elif _f(var) > tol:
+                b["over_rows"] += 1
+                b["over_amount"] = round(b["over_amount"] + _f(var), 2)
+            else:
+                b["match_rows"] += 1
+
+    rows = []
+    for b in by_dm.values():
+        b["stores_count"] = len(b["stores"])
+        b["days_count"] = len([d for d in b["days"] if d])
+        b.pop("stores", None)
+        b.pop("days", None)
+        b["shorts"].sort(key=lambda s: (_f(s.get("variance")), str(s.get("day") or "")))
+        b["is_short"] = b["short_rows"] > 0
+        rows.append(b)
+    # worst shortage first (short_amount is negative), then most short envelopes, then name —
+    # the DM the report exists to surface is the one at the top.
+    rows.sort(key=lambda b: (b["short_amount"], -b["short_rows"], str(b["dm"])))
+
+    summary = {
+        "dms": len(rows),
+        "dms_short": sum(1 for b in rows if b["is_short"]),
+        "short_rows": sum(b["short_rows"] for b in rows),
+        "over_rows": sum(b["over_rows"] for b in rows),
+        "counted_rows": sum(b["counted_rows"] for b in rows),
+        "uncounted_rows": sum(b["uncounted_rows"] for b in rows),
+        "opened_rows": sum(b["opened_rows"] for b in rows),
+        "short_amount": round(sum(b["short_amount"] for b in rows), 2),
+        "over_amount": round(sum(b["over_amount"] for b in rows), 2),
+        "net_variance": round(sum(b["net_variance"] for b in rows), 2),
+        "declared_total": round(sum(b["declared_total"] for b in rows), 2),
+        "actual_total": round(sum(b["actual_total"] for b in rows), 2),
+        "tolerance": tol,
     }
     return rows, summary
 
