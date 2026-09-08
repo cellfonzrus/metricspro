@@ -4348,3 +4348,75 @@ enters the codebase: `--accent` (#1e3a5f) is the house blue already used by thos
 
 The general rule is what matters here: §A is what caught the `tfoot` pair, which the original
 report did not mention and a fix aimed only at the reported headers would have left broken.
+
+## 23r. THE GP MAP COULD NOT SEE PAST THE DEPARTMENT (owner 2026-09-08)
+
+Owner, verbatim: *"on gp category map i should be able to click on the line items to properly assign
+them to the right category it is showing 2447 blank department, all of them need to be categorized,
+new categories should be able to add"*.
+
+**Measured live.** `commcalc.gp_category_map` (mig 069) keys an override by DEPARTMENT, and the
+built-in rule sends a blank department to `plan`:
+
+| org | blank-department lines | of total |
+|---|---|---|
+| `854f6d7b…` (Luxelink) | **2,447** | 14,823 (16.5%) |
+| `00000000…0001` (house) | **27,010** | 155,677 (17.4%) |
+
+The 2,447 carry **$31,084.02 of gross profit** and resolve to **twenty** distinct products — and they
+are not all plans:
+
+| lines | product | what it actually is |
+|---|---|---|
+| 385 | Device Protection | protection |
+| 247 | Total Wireless Protect+ | protection |
+| 149 | Total Wireless Home Internet | home internet |
+| 136 | Total Wireless Device Upgrade | upgrade |
+| 1,530 | (16 plan SKUs) | genuinely plan |
+
+Every one has a blank department **and** a blank category, so no setting of the department map can
+separate them: one label, twenty products, four meanings. **The grain was the defect** — which is
+exactly why the owner asked to click into the line items.
+
+### The item grain, on the row that already classifies the item
+
+`commcalc.item_mapping` (mig 041) already keys per item (`item_key` = SKU else description) and
+already carries `item_type`, `sales_category` and `kpi_category`. Mig 992 adds `gp_category` to that
+same row — an item's GP meaning sits beside its other classifications rather than in a fourth
+mapping table. Precedence: **item override > accessory config > department override > box department
+> blank = plan > other**. `router._item_key` now DELEGATES to `gp_report.item_key`, so the
+item-mapping editor and the GP override cannot key the same product differently.
+
+### "New categories" without losing money — the trap
+
+The GP report aggregates into exactly four money buckets (device at `ext_price`, accessory at the
+configured basis, plan at `gp`, other at `gp`) plus `exclude`. **A tenant-invented category matching
+none of them would be summed into nothing** — its lines would leave the report with no error raised
+and no total visibly moving. So a GP category is a free-form label that ALWAYS declares its bucket
+(`item_category_config.rolls_up_to`), defaulting to `other` — where an unmapped line already sits —
+so adding one can never lose a dollar. A built-in cannot be re-pointed: that would restate history.
+
+`item_category_config` (mig 210) is REUSED as the registry — its `dimension` is free text with no
+CHECK, so `'gp'` joins `'sales'`/`'kpi'` with no schema change to that table.
+
+### Relabelled is not rebucketed
+
+On the real mix, the four overrides the owner would set give **917 lines an explicit category**, but
+only **768 change money bucket** — home internet declares `plan` as its bucket, so its 149 lines are
+now correctly *named* while the GP arithmetic is unmoved. The harness pins both numbers separately;
+conflating them is how a fix gets mis-sold.
+
+| endpoint | |
+|---|---|
+| `GET /commcalc/gp-department-items` | the products inside one department, with lines/GP and **why** each classifies as it does (`item` / `department` / `default`) |
+| `POST /commcalc/gp-item-category` | assign one item; empty category clears it back to the department rule |
+| `PUT /commcalc/item-categories` | extended to `dimension:'gp'` with `rolls_up_to` |
+
+- Proof: `backend/harness_gp_item_category.py` (42). §B byte-identity — no item rows and no category
+  rows reproduces today's classification exactly, so a tenant without mig 992 sees unchanged GP;
+  §C/§D a tenant category resolves through its bucket, an unset bucket falls to `other`, a built-in
+  cannot be re-pointed, an inactive one is ignored; §E the 2,447-line regression rebuilt from the
+  real product mix, pinning that no line is lost and that 917-relabelled/768-rebucketed split;
+  §F one item identity across router and gp_report.
+- Migration `992_gp_item_category.sql` — **written, NOT applied.** Additive and nullable; applying it
+  alone leaves every GP number byte-identical.

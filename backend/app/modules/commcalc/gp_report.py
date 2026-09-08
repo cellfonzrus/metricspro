@@ -16,24 +16,94 @@ DEVICE_DEPTS = {'Android - XP', 'IPHONE - XP', 'TABLET - XP'}
 ONDIGO_DEPT = 'Ondigo'
 GP_CATEGORIES = {'device', 'accessory', 'plan', 'other', 'exclude'}
 
-def _gp_overrides(gp_category_map):
+# ── CUSTOM GP CATEGORIES (owner 2026-09-08) ──────────────────────────────────────────────────────
+# Owner: "new categories should be able to add". The GP report aggregates into exactly FOUR money
+# buckets — device (at ext_price), accessory (at the configured basis), plan (at gp) and other (at
+# gp) — plus 'exclude', which drops the line. A tenant-invented category that matched none of them
+# would have its money counted into NOTHING: the lines would vanish from GP with no error and no
+# total moving anywhere visible. That is the silent-zero class, applied to a whole category.
+#
+# So a category is a LABEL the tenant may create freely, and it always declares where its money
+# goes: `rolls_up_to` names one of the four built-in buckets. The label is what the tenant sees and
+# assigns; the bucket is what the arithmetic uses. A new category therefore cannot lose money — the
+# worst case is that it rolls into 'other', which is exactly where an unmapped line sits today.
+#
+# `basis` is derived from the bucket, never stored twice: device counts ext_price, everything else
+# counts gp (accessory's sales-vs-gp choice stays with accessory_config.gp_acc_basis, mig 932 — this
+# does NOT introduce a second place to decide it).
+DEFAULT_GP_CATEGORIES = [
+    {"value": "device",    "label": "Device",    "rolls_up_to": "device",    "sort_order": 10, "builtin": True},
+    {"value": "accessory", "label": "Accessory", "rolls_up_to": "accessory", "sort_order": 20, "builtin": True},
+    {"value": "plan",      "label": "Plan",      "rolls_up_to": "plan",      "sort_order": 30, "builtin": True},
+    {"value": "other",     "label": "Other",     "rolls_up_to": "other",     "sort_order": 40, "builtin": True},
+    {"value": "exclude",   "label": "Exclude",   "rolls_up_to": "exclude",   "sort_order": 50, "builtin": True},
+]
+
+
+def bucket_map(gp_categories=None):
+    """{category value -> money bucket}. The five built-ins map to themselves, so passing None (or an
+    empty list) reproduces the pre-existing behaviour byte-for-byte. A configured row may add a new
+    value or RELABEL a built-in, but may never point a built-in at a different bucket — that would
+    silently restate history, so a row attempting it is ignored and the built-in stands."""
+    out = {c["value"]: c["rolls_up_to"] for c in DEFAULT_GP_CATEGORIES}
+    builtin = set(out)
+    for row in (gp_categories or []):
+        v = str(row.get("value") or "").strip().lower()
+        if not v or v in builtin:
+            continue
+        if row.get("is_active") is False:
+            continue
+        b = str(row.get("rolls_up_to") or "").strip().lower()
+        out[v] = b if b in GP_CATEGORIES else "other"
+    return out
+
+
+def _gp_overrides(gp_category_map, allowed=None):
     """{department: gp-bucket} from commcalc.gp_category_map rows (mig 069) — the ONE override-parsing
-    rule, shared by the legacy department classifier and the config-mode per-line classifier."""
+    rule, shared by the legacy department classifier and the config-mode per-line classifier.
+
+    `allowed` is the org's bucket_map when custom categories are in play; omitting it keeps the
+    original built-ins-only behaviour. A mapping is resolved THROUGH the map, so a department mapped
+    to a tenant category lands on that category's bucket and the arithmetic downstream is unchanged."""
+    buckets = allowed if allowed is not None else {c: c for c in GP_CATEGORIES}
     overrides = {}
     for row in (gp_category_map or []):
         d = str(row.get('department') or '').strip()
         c = str(row.get('category') or '').strip().lower()
-        if c in GP_CATEGORIES:
-            overrides[d] = c
+        if c in buckets:
+            overrides[d] = buckets[c]
     return overrides
 
 
-def _dept_classifier(gp_category_map):
+def item_key(sku, desc):
+    """The item identity used by commcalc.item_mapping (mig 041): SKU when there is one, else the
+    description. Duplicated NOWHERE — router._item_key delegates here so the GP item overrides and the
+    item-mapping editor can never key the same product differently."""
+    s = str(sku or "").strip()
+    if s and s.lower() not in ("nan", "none", "0", "0.0"):
+        return s.upper()[:200]
+    return str(desc or "").strip().upper()[:200]
+
+
+def _item_overrides(item_gp_map, allowed=None):
+    """{item_key -> money bucket} from commcalc.item_mapping.gp_category (mig 992). Same resolution
+    rule as the department overrides, so the two grains can never disagree about what a name means."""
+    buckets = allowed if allowed is not None else {c: c for c in GP_CATEGORIES}
+    out = {}
+    for row in (item_gp_map or []):
+        k = str(row.get('item_key') or '').strip().upper()
+        c = str(row.get('gp_category') or '').strip().lower()
+        if k and c in buckets:
+            out[k] = buckets[c]
+    return out
+
+
+def _dept_classifier(gp_category_map, gp_categories=None):
     """Return a fn department_label -> GP category. The map (commcalc.gp_category_map, mig 069) is a set
     of OVERRIDES layered on the built-in Boost defaults — so an EMPTY/None map reproduces the original
     hard-coded buckets byte-for-byte (device = Android/IPHONE/TABLET-XP, accessory = Ondigo, blank = plan,
     everything else = other). A tenant maps only the labels that differ; '' overrides blank-department rows."""
-    overrides = _gp_overrides(gp_category_map)
+    overrides = _gp_overrides(gp_category_map, bucket_map(gp_categories))
     def classify(dept) -> str:
         d = str(dept or '').strip()
         if d in overrides:        return overrides[d]
@@ -129,6 +199,8 @@ def calc_gp_report(
     period: str,
     comp_rows: list[dict] = None,
     gp_category_map: list[dict] = None,
+    item_gp_map: list[dict] = None,
+    gp_categories: list[dict] = None,
     resolve_store_code=None,
     config_classify: dict = None,
     ma_income: dict = None,
@@ -177,17 +249,28 @@ def calc_gp_report(
     acc_basis = 'sales' if str(acc_basis or '').strip().lower() == 'sales' else 'gp'
     _acc_field = 'ext_price' if acc_basis == 'sales' else 'gp'
     leg_ladder: dict[str, dict] = {}
-    classify = _dept_classifier(gp_category_map)
+    _buckets = bucket_map(gp_categories)
+    classify = _dept_classifier(gp_category_map, gp_categories)
+    # ITEM grain (mig 992) beats every department rule: it is the tenant pointing at ONE product and
+    # saying what it is, which a department label -- blank, in the case that prompted this -- cannot
+    # express. An empty map leaves _items empty, so every branch below is reached exactly as before.
+    _items = _item_overrides(item_gp_map, _buckets)
+    def _item_hit(r):
+        return _items.get(item_key(r.get('sku'), r.get('product_desc'))) if _items else None
     if config_classify is None:
         def classify_row(r) -> str:
-            return classify(r.get('department'))
+            return _item_hit(r) or classify(r.get('department'))
     else:
         _is_acc = config_classify.get('is_accessory') or (lambda _r: False)
         _box = {str(b).strip() for b in (config_classify.get('box_departments') or ())}
-        _ovr = _gp_overrides(gp_category_map)
+        _ovr = _gp_overrides(gp_category_map, _buckets)
         def classify_row(r) -> str:
-            # Accessory FIRST (the whole point: category-level discrimination the dept map can't express),
-            # then the tenant's explicit department overrides, then box departments = device, blank = plan.
+            # Item override FIRST -- the most specific statement of intent there is. Then accessory
+            # (category-level discrimination the dept map can't express), then the tenant's explicit
+            # department overrides, then box departments = device, blank = plan.
+            hit = _item_hit(r)
+            if hit:
+                return hit
             if _is_acc(r):
                 return 'accessory'
             d = str(r.get('department') or '').strip()

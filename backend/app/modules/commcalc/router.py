@@ -8607,10 +8607,11 @@ PHONE_STRONG = ("IPHONE", "GALAXY", "PIXEL", "MOTOROLA", "MOTO ", "SAMSUNG", "AP
 
 
 def _item_key(sku, desc):
-    s = str(sku or "").strip()
-    if s and s.lower() not in ("nan", "none", "0", "0.0"):
-        return s.upper()[:200]
-    return str(desc or "").strip().upper()[:200]
+    """The item identity for commcalc.item_mapping: SKU when there is one, else the description.
+    DELEGATES to gp_report.item_key so the item-mapping editor and the GP item-category override
+    cannot key the same product differently — one identity, defined once (owner 2026-09-08)."""
+    from app.modules.commcalc.gp_report import item_key as _ik
+    return _ik(sku, desc)
 
 
 def _guess_item_type(department, category, desc):
@@ -9044,7 +9045,17 @@ DEFAULT_KPI_CATEGORIES = [
     {"value": "plan", "label": "Plan", "sort_order": 50},
     {"value": "other", "label": "Other", "sort_order": 60},
 ]
-_DEFAULT_CATS = {"sales": DEFAULT_SALES_CATEGORIES, "kpi": DEFAULT_KPI_CATEGORIES}
+# The GP dimension REUSES this same registry (owner 2026-09-08: "new categories should be able to
+# add"). `item_category_config.dimension` is free text with no CHECK, so 'gp' needs no schema change
+# — only mig 992's `rolls_up_to`, which says WHICH of the GP report's four money buckets a
+# tenant-added category counts into. Without that a new category would be summed into nothing and
+# its lines would leave the report silently. The five built-ins are defined once, in gp_report.
+from app.modules.commcalc.gp_report import (DEFAULT_GP_CATEGORIES as _GP_CATS_DEFAULT,
+                                            GP_CATEGORIES as _GP_CATEGORIES_SET)
+
+_DEFAULT_CATS = {"sales": DEFAULT_SALES_CATEGORIES, "kpi": DEFAULT_KPI_CATEGORIES,
+                 "gp": _GP_CATS_DEFAULT}
+_CATEGORY_DIMENSIONS = ("sales", "kpi", "gp")
 
 
 def _item_category_values(client, org_id, dimension, seed_if_empty=True):
@@ -9061,7 +9072,9 @@ def _item_category_values(client, org_id, dimension, seed_if_empty=True):
         if seed_if_empty:
             try:
                 seed = [{"org_id": org_id, "dimension": dim, "value": d["value"], "label": d["label"],
-                         "sort_order": d["sort_order"], "is_active": True, "source": "seed"} for d in _DEFAULT_CATS[dim]]
+                         "sort_order": d["sort_order"], "is_active": True, "source": "seed",
+                         **({"rolls_up_to": d["rolls_up_to"]} if d.get("rolls_up_to") else {})}
+                        for d in _DEFAULT_CATS[dim]]
                 client.schema("commcalc").table("item_category_config").upsert(
                     seed, on_conflict="org_id,dimension,value").execute()
             except Exception:
@@ -9078,7 +9091,9 @@ def get_item_categories(org_id: str = ORG_ID):
     require_org(org_id)
     client = sb()
     return {"sales": _item_category_values(client, org_id, "sales"),
-            "kpi": _item_category_values(client, org_id, "kpi"), "ready": True}
+            "kpi": _item_category_values(client, org_id, "kpi"),
+            "gp": _item_category_values(client, org_id, "gp"),
+            "gp_buckets": sorted(_GP_CATEGORIES_SET), "ready": True}
 
 
 class PutItemCategoryIn(LaxModel):
@@ -9087,6 +9102,7 @@ class PutItemCategoryIn(LaxModel):
     label: Any = None
     is_active: Any = None
     sort_order: Any = None
+    rolls_up_to: Any = None   # dimension 'gp' only — which money bucket this category counts into
 
 
 @router.put("/item-categories")
@@ -9097,12 +9113,21 @@ def put_item_category(body: PutItemCategoryIn, authorization: str = Header(defau
     _require_commission_admin(authorization, org_id)
     dim = (body.dimension or "").strip().lower()
     val = (body.value or "").strip().lower().replace(" ", "_")
-    if dim not in ("sales", "kpi") or not val:
-        raise HTTPException(400, "dimension ('sales'|'kpi') and value are required.")
+    if dim not in _CATEGORY_DIMENSIONS or not val:
+        raise HTTPException(400, "dimension ('sales'|'kpi'|'gp') and value are required.")
     row = {"org_id": org_id, "dimension": dim, "value": val,
            "label": (body.label or val.replace("_", " ").title()),
            "is_active": bool(body.is_active) if body.is_active is not None else True,
            "source": "manual", "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    if dim == "gp":
+        # A GP category MUST say which money bucket it counts into, or its lines would be summed
+        # into nothing and vanish from the report with no error. Unset/unknown falls to 'other',
+        # which is where an unmapped line already sits — so adding a category cannot lose money.
+        bucket = str(body.rolls_up_to or "").strip().lower()
+        if val in {c["value"] for c in _GP_CATS_DEFAULT}:
+            raise HTTPException(400, f"'{val}' is a built-in GP category — it cannot be redefined. "
+                                     "Add a new category instead.")
+        row["rolls_up_to"] = bucket if bucket in _GP_CATEGORIES_SET else "other"
     if body.sort_order is not None:
         row["sort_order"] = int(body.sort_order or 100)
     try:
@@ -17208,10 +17233,23 @@ def _compute_gp(client, org_id, period, market=""):
     for r in pay_detail:
         pt = str(r.get('payment_type', '') or '').strip()
         r['category'] = cat_map.get(pt, 'Unknown')
+    # Bound BEFORE the reads: every one of these degrades to empty, and an empty trio reproduces the
+    # pre-mig-992 department-only classification byte-for-byte. Binding them here (not inside the try)
+    # is deliberate — a failed read must leave a usable empty list, never an unbound name.
+    gp_cat_map, gp_item_map, gp_cats = [], [], []
     try:   # per-tenant department→GP-category overrides (mig 069); empty/missing = built-in Boost buckets
         gp_cat_map = sc.table('gp_category_map').select('department,category').eq('org_id', org_id).execute().data or []
     except Exception:
         gp_cat_map = []
+    try:   # ITEM-grain GP overrides (mig 992) — the grain a blank department cannot express
+        gp_item_map = (sc.table('item_mapping').select('item_key,gp_category').eq('org_id', org_id)
+                       .not_.is_('gp_category', 'null').limit(100000).execute().data) or []
+    except Exception:
+        gp_item_map = []
+    try:   # the org's GP category registry (mig 210 dimension 'gp'); never seeded from a report read
+        gp_cats = _item_category_values(sb(), org_id, 'gp', seed_if_empty=False)
+    except Exception:
+        gp_cats = []
     # Config-driven GP bucket classification (mig 250 apply_to_gp; owner 2026-07-29: "accessory sales
     # should be in accessory column"). OPT-IN per org: when the tenant ticked "use these rules for the
     # GP report" (Classification settings), accessory lines classify via the SAME rule the Sales Report
@@ -17258,7 +17296,9 @@ def _compute_gp(client, org_id, period, market=""):
     if _acc_basis not in ('sales', 'gp'):
         _acc_basis = 'sales'
     result = calc_gp_report(sales, pay_detail, mi_rows, rep_comms, expenses, catalog, store_map, period,
-                            comp_rows=comp_rows, gp_category_map=gp_cat_map, resolve_store_code=_resolve_code,
+                            comp_rows=comp_rows, gp_category_map=gp_cat_map,
+                            item_gp_map=gp_item_map, gp_categories=gp_cats,
+                            resolve_store_code=_resolve_code,
                             config_classify=config_classify, ma_income=ma_income, leg_classify=_legcls,
                             acc_basis=_acc_basis)
     result['expenses_carried_from'] = _exp_carried_from
@@ -17541,6 +17581,112 @@ def get_gp_departments(period: str = "", org_id: str = ORG_ID):
     out = [{"department": d, "count": n, "category": classify(d), "mapped": d in mapped_keys}
            for d, n in sorted(cnt.items(), key=lambda kv: -kv[1])]
     return {"departments": out}
+
+
+@router.get("/gp-department-items")
+def get_gp_department_items(department: str = "", period: str = "", org_id: str = ORG_ID):
+    """The distinct ITEMS inside one POS department, with line counts, GP dollars and each item's
+    CURRENT GP category — so a department the tenant cannot split by its label can be split by
+    product (owner 2026-09-08).
+
+    `department` is matched exactly after strip; pass "" for the BLANK department, which is the case
+    that prompted this (2,447 lines on one tenant, 20 products, four different meanings, all counted
+    as 'plan'). Read-only. The `source` on each row says WHY it currently classifies as it does —
+    'item' (an explicit override), 'department' (a gp_category_map row) or 'default' (a built-in
+    rule) — so the reader can tell a deliberate assignment from an accident."""
+    from collections import defaultdict
+    from app.modules.commcalc.gp_report import _dept_classifier, bucket_map, item_key as _ik
+    require_org(org_id)
+    sc = sb().schema('commcalc')
+    dept = str(department or '').strip()
+    q = sc.table('raw_sales').select('sku,product_desc,category,gp,ext_price,trans_type') \
+          .eq('org_id', org_id).eq('department', dept)
+    if period:
+        q = q.in_('period', _pvariants(period))
+    rows = q.limit(50000).execute().data or []
+
+    try:
+        omap = (sc.table('gp_category_map').select('department,category').eq('org_id', org_id)
+                .execute().data) or []
+    except Exception:
+        omap = []
+    cats = _item_category_values(sb(), org_id, 'gp')
+    try:
+        imap_rows = (sc.table('item_mapping').select('item_key,gp_category').eq('org_id', org_id)
+                     .not_.is_('gp_category', 'null').limit(100000).execute().data) or []
+    except Exception:
+        imap_rows = []   # mig 992 not applied — the department rules still answer for every item
+    item_cat = {str(r.get('item_key') or '').strip().upper(): str(r.get('gp_category') or '').strip().lower()
+                for r in imap_rows if r.get('item_key')}
+    buckets = bucket_map(cats)
+    dept_classify = _dept_classifier(omap, cats)
+    dept_answer = dept_classify(dept)
+    dept_mapped = any(str(r.get('department') or '').strip() == dept for r in omap)
+
+    agg = defaultdict(lambda: {'lines': 0, 'gp': 0.0, 'ext_price': 0.0, 'returns': 0})
+    for r in rows:
+        k = _ik(r.get('sku'), r.get('product_desc'))
+        a = agg[k]
+        a['lines'] += 1
+        a['gp'] += safe_float(r.get('gp'))
+        a['ext_price'] += safe_float(r.get('ext_price'))
+        if str(r.get('trans_type') or '').strip().lower() == 'return':
+            a['returns'] += 1
+        a.setdefault('desc', str(r.get('product_desc') or '').strip())
+        a.setdefault('sku', str(r.get('sku') or '').strip())
+
+    out = []
+    for k, a in agg.items():
+        assigned = item_cat.get(k)
+        out.append({
+            'item_key': k, 'product_desc': a.get('desc') or '', 'sku': a.get('sku') or '',
+            'lines': a['lines'], 'returns': a['returns'],
+            'gp': round(a['gp'], 2), 'ext_price': round(a['ext_price'], 2),
+            # what it is TODAY, and why
+            'category': assigned if assigned in buckets else dept_answer,
+            'bucket': buckets.get(assigned, dept_answer) if assigned in buckets else dept_answer,
+            'source': 'item' if assigned in buckets else ('department' if dept_mapped else 'default'),
+            'mapped': assigned in buckets,
+        })
+    out.sort(key=lambda r: -r['lines'])
+    return {'department': dept, 'items': out, 'item_count': len(out),
+            'line_count': sum(r['lines'] for r in out),
+            'department_category': dept_answer, 'department_mapped': dept_mapped,
+            'categories': cats, 'buckets': sorted(_GP_CATEGORIES_SET)}
+
+
+class SetGpItemCategoryIn(LaxModel):
+    item_key: Any = None
+    sku: Any = None
+    product_desc: Any = None
+    category: str = ""
+
+
+@router.post("/gp-item-category")
+def set_gp_item_category(body: SetGpItemCategoryIn, org_id: str = ORG_ID):
+    """Assign ONE item to a GP category (mig 992). An empty category CLEARS the override, so the
+    department rules decide again — the same revert contract the department map already has.
+
+    Writes `gp_category` on the item's EXISTING commcalc.item_mapping row (mig 041), beside the
+    item_type / sales_category / kpi_category it already carries. No second mapping table."""
+    require_org(org_id)
+    key = str(body.item_key or _item_key(body.sku, body.product_desc) or '').strip().upper()
+    if not key:
+        raise HTTPException(400, "item_key (or sku/product_desc) required")
+    cat = str(body.category or '').strip().lower()
+    if cat:
+        from app.modules.commcalc.gp_report import bucket_map
+        allowed = set(bucket_map(_item_category_values(sb(), org_id, 'gp')))
+        if cat not in allowed:
+            raise HTTPException(400, f"unknown GP category '{cat}'. Add it first under GP categories.")
+    row = {"org_id": org_id, "item_key": key, "gp_category": (cat or None),
+           "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    try:
+        sb().schema('commcalc').table('item_mapping').upsert(row, on_conflict="org_id,item_key").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — run migration 992_gp_item_category.sql first. [{e}]")
+    _invalidate_accessory_config(org_id)
+    return {"ok": True, "item_key": key, "category": cat or None}
 
 
 # ═══ COMMISSION LEGS — 1st month vs M2–M12 (owner directive 2026-08-04) ══════════════════════════
