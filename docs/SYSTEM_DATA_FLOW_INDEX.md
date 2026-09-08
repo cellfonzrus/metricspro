@@ -470,6 +470,47 @@ commissions, expenses.
   the P&L (`account/coa.build_inputs` `store_opex` + the K2 payroll-name suppression), matching
   what the sticky Expenses sheet (`GET /expenses/{period}`) has always DISPLAYED. Proof:
   `harness_expenses_carry_forward.py`.
+- **Salary READ path — labour coverage, three states not two (owner directive 2026-09-08, mig
+  `992`):** "pull the exact salaries paid as per the schedule … if we have the actual hours then the
+  salary is based on actual hours if not then the salary is based on scheduled hours FOR THAT MONTH
+  to go in the gross profit for that month." The DOLLAR rule already existed and is NOT duplicated:
+  `coa.derive_wage_cells` has always paid `actual_hours or scheduled_hours` per shift (hourly ×
+  `pay_rate`, salaried × `monthly_salary_equivalent`), and `expenses_effective` already owns which
+  month's rows a period displays. NEW pure module **`commcalc/labour_coverage.py`** adds only the
+  question neither answered: was this store's salary MEASURED for the month on screen?
+  - **States:** `entered` (an authoritative payroll figure for THIS month) · `derived_actual` ·
+    `derived_scheduled` · `carried` (the period has no rows of its own — another month's dollars) ·
+    `not_measured` (no figure and no hours on either column — UNKNOWN, not $0.00) · `no_staff`
+    (inactive store, no shifts — genuinely zero). `authoritative_codes` mirrors coa's ruling-K2
+    predicate exactly so the banner can never disagree with the booking.
+  - **`allocated_names`** discounts a payroll name charged at ONE identical amount across a dominant
+    majority of stores (evidence, no name in code — RULE TWO): live LuxeLink 'DM Salaries' $1,275.00
+    at 19 stores ($1,275.01 at the 20th) was marking three stores "payroll entered" while their
+    employee wage was missing entirely.
+  - **`commission_collisions`** detects labour booked by BOTH routes: the GP row deducts `rep_pay`
+    (`rep_commissions`) SEPARATELY from `exp_total` and the P&L books `rep_comm` separately from
+    `store_opex`, so a commission-named expense row is the same dollars twice. Reports, never nets.
+  - **Readers (one derivation, two surfaces):** `_compute_gp` → payload keys **`labour_coverage`** +
+    **`labour_double_booked`** (alongside the existing `expenses_carried_from`); `coa.build_inputs`
+    → the `wages` line's **`note`**, reusing ruling K3(b)'s existing declared-zero passthrough
+    (`engine._assemble`), not a second honesty channel.
+  - **Per-store payroll authority (mig `992`, MONEY — seed not applied):**
+    `account_config.payroll_authority_grain` `'org'` (HOUSE DEFAULT, byte-identical to K2/mig-621:
+    one authoritative row anywhere suppresses every store's estimate) | `'store'` (a store's own
+    entered figure suppresses only its own; a store with none books its own hours). The company-wide
+    estimate cell is deliberately never booked in the mixed case — it cannot be shown absent from
+    the entered store figures — and is reported in the note instead.
+    `account_config.labour_commission_expense_names` (`'{}'` default) names the commission-bearing
+    expense vocabulary for the collision detector.
+  - **Measured on live LuxeLink `854f6d7b-…`, 2026-09-08:** July 2026 — 17 of 20 stores have an
+    'Employee Salaries' row; `3352 26th` / `3735 26th` / `Chicago heights` have none AND 0.0 hours
+    on both columns (6 / 17 / 15 shifts) → `not_measured`, rendering $0.00. August — 20/20 entered
+    ($133,460.00). September — NO rows of its own, so the whole $295,610.15 (incl. $158,960.01 of
+    salary) is August's, carried; September's own 20 stores have 3,133 scheduled hours. **Every
+    LuxeLink shift in July and August carries 0.0 `actual_hours`** — the owner's "if we have the
+    actual hours" branch never fires today; the estimate is 100% scheduled-hours. August also books
+    twenty $500.00 'Employee Commission' rows ($10,000.00) against $11,118.78 of `rep_commissions`
+    — **$7,626.14 double-booked**. Proof: `harness_labour_coverage.py` (81 checks).
 - **GP accessory column basis — "Acc Sales" (owner 2026-09-02, mig `932_gp_acc_basis.sql`):**
   `accessory_config.gp_acc_basis` (`'sales'` = Σ `ext_price` of accessory lines — HOUSE DEFAULT,
   applied on NULL/absent; `'gp'` = legacy Σ `gp`, per-org opt-back via `PUT /accessory-config`) →
@@ -2264,12 +2305,12 @@ as a market-grant keyset member; ambiguity fails closed):
 | `commcalc.raw_dlar_rep` | `dlar_sweep` (replace), upload | rep KPI, comp trend `15238` |
 | `commcalc.raw_catalog` | upload `/product-mrc/import` region, catalog | GP, device COGS, installment MRC |
 | `commcalc.payout_config` | `/config/{period}` `10474`, `/commission-settings` `10517` | `calc_rep_commissions` (spiffs/tiers), installment base rates |
-| `commcalc.commission_org_config` | `/commission-settings`, migrations (`209`,`306`,`308`,`309`,`314`,`934`,`939`,**`992`**) | THE per-org money-policy row (RULE TWO). Readers: `ma_store_pnl.load_config` (store attribution · month-spiff source/order types · MDF tokens · line labels · rebate presentation) · `ma_store_pnl.load_unbooked_reasons` (`pl_ma_unbooked_reasons`, mig 992) · `residual_subs.load_ma_pnl_config` (`pl_merchant_discount_own_line`, `pl_ma_residual_order_types`) · `residual_subs.load_residual_report_config` (`residual_report_components`, mig 992) · `billpay_pl` (`pl_billpay_presentation`/`pl_billpay_settlement`) · the installment/plan engines (`installment_mrc_basis`, `plan_pay_gate`, `sales_source`). EVERY reader is org-scoped and ADAPTIVE — a missing column/row degrades to the code defaults, never raises |
+| `commcalc.commission_org_config` | `/commission-settings`, migrations (`209`,`306`,`308`,`309`,`314`,`934`,`939`,**`992`**) | THE per-org money-policy row (RULE TWO). Readers: `ma_store_pnl.load_config` (store attribution · month-spiff source/order types · MDF tokens · line labels · rebate presentation) · `ma_store_pnl.load_unbooked_reasons` (`pl_ma_unbooked_reasons`, mig 994) · `residual_subs.load_ma_pnl_config` (`pl_merchant_discount_own_line`, `pl_ma_residual_order_types`) · `residual_subs.load_residual_report_config` (`residual_report_components`, mig 994) · `billpay_pl` (`pl_billpay_presentation`/`pl_billpay_settlement`) · the installment/plan engines (`installment_mrc_basis`, `plan_pay_gate`, `sales_source`). EVERY reader is org-scoped and ADAPTIVE — a missing column/row degrades to the code defaults, never raises |
 | `commcalc.rep_commissions` | `_run_calculation`/`_apply_new_engines` `9183` | `/commissions/{period}` `10222`, GP report, commission-by-store, statements, MI (indirect) |
 | `commcalc.store_kpis` | KPI ingest/snapshot | tiers, exec |
 | `commcalc.carrier_kpi_metric` | `/carrier-kpi-metrics` POST `19773` | KPI/tier config resolution |
 | `commcalc.flags` | calc + flag rules | `/flags/{period}` `10299`, `_cr_resolve_flags` |
-| `commcalc.store_expenses` | `/expenses/{period}` PUT `21695` | GP report + P&L, BOTH via the sticky carry-forward reader `expenses_effective.effective_expense_rows` (2026-09-02, §4); `_cr_resolve_store_expenses` |
+| `commcalc.store_expenses` | `/expenses/{period}` PUT `21695` | GP report + P&L, BOTH via the sticky carry-forward reader `expenses_effective.effective_expense_rows` (2026-09-02, §4); `_cr_resolve_store_expenses`; **salary coverage** `labour_coverage.authoritative_codes`/`allocated_names`/`commission_collisions` (2026-09-08, §4) |
 | `commcalc.sale_installment_ledger` | `compute_sale_installments(persist=True)` `9212` (mig `308` adds `order_number`/`account_id` MA TX provenance, adaptive write) | `/plan-installments/*` previews, `installment_comm_sale` |
 | `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx` (slice-scoped replace: org × day × `account_id`, `ingest_slice.py` §2), VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store(_day)` — since mig `944` FILTERED to bill-payment rows via `metric_recon.ma_billpay_predicate`, accounts via store_merchant_id → mig-314 index; §12 3-way Leg C), **residual-per-subscriber report §7a** (`residual_subs._aggregate_ma` — ONE sweep: residual = −`retail_cost` on the mig-309 `ma_residual_row_matcher` union, airtime margin = `merchant_discount`; stores via the mig-314 account index), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier), **P&L mig `309`** (`account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings`: `merchant_discount` → "Merchant discount" line (or legacy `atu_income` fold per `pl_merchant_discount_own_line`), −`retail_cost` → `mi_income` for the `'%residual%'` ∪ `pl_ma_residual_order_types` union, each row once), **P&L mig `314`** (`ma_store_pnl.ma_tx_bookings`: per-store via `account_id`→store index; MDF token rows → `mdf_income`; `'daily_tx'` month-spiff rows → `carrier_comm` `M<n>` detail), **BS mig `933`** (`balance_sheet.handset_payable_bookings` via `statement_engine._fetch_outstanding_tx`: configured `handset_payable_order_types` rows with `tx_date ≤ as-of < due_date` → the `handset_payable` liability; money column `retail_cost` ONLY), **liabilities-due 2026-09-03** (`GET /account/liabilities-due`: same fetch + same family predicate — outstanding today + `liabilities_due.payables_due_in_window` for the due-this-week rows, equivalence pinned in `harness_liabilities_due.py`; §4), **Processor Daily Debits & Credits** (`processor_ledger.assemble` — `retail_cost` sign = debit/credit to the dealer, §15) |
 | `commcalc.raw_ma_commission` | upload `/upload/ma_commission` (slice-scoped replace: org × day × `merchant_account_id`, `ingest_slice.py` §2 — 2026-09-02 two-portal wipe incident), VidaPay sweep | MA overview/recon, installment MA gate (`_read_ma_commission` spiffs), **mig `308` two-hop link** (`build_ma_link_index`: `imei|sim → activation_order`), **P&L mig `314`** (`ma_store_pnl.ma_commission_bookings`: component heads per-store via `merchant_account_id`→store index; sheet spiffs suppressed under `pl_ma_month_spiff_source='daily_tx'`; MA device COGS store slice `device_cogs._ma_sold_cost`), **residual-per-subscriber SUBSCRIBER count §7a** (`residual_subs._aggregate_ma` — one row = one activated line, keyed by `merchant_account_id` through the SAME mig-314 index the residual rows use) |
@@ -2317,7 +2358,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `commcalc.exec_metric_config` (per-org Exec-MTD metric DEFINITIONS, mig `204`; **`carrier` preset column mig `962`, `applicable` flag mig `963`**; seed fn `seed_exec_metric_config`) | `GET/PUT /exec-metric-config` `router.py` (upsert by `org_id,bucket`); 2026-09-02: LuxeLink `bill_payment` rules gained `product_desc_contains:["wallet funding"]`; **mig `962`** corrects the HOUSE `bill_payment` rules + seeds the boost carrier PRESET | `_exec_metric_config` → **`exec_metric_defs.resolve`** (tenant row > house carrier preset > built-in default) → `_sales_cell_agg` exec metrics via `exec_metric_defs.line_match` |
 | `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`); `PUT /report-labels` (scopes `report_col`/`report_banner`/`report_term` at the TENANT org — overrides; gated on `classification`); mig `945` seeds the HOUSE carrier-preset rows (scopes `report_col:<carrier>`/`report_banner:<carrier>`); mig `953` seeds the HOUSE carrier VOCABULARY-TERM presets (scope `report_term:<carrier>` — boost: ePay/VIP Wireless/ACIMA/b2bsoft, total: VidaPay/T-CETRA/Edge/marketplace feed, §3); mig `954` seeds the HOUSE distributor-payable BASIS presets (NEW scope `finance_basis:<carrier>`, key `distributor_payable` — boost: `asset_ledger`, total: `marketplace_due`; read by `statement_engine.carrier_payable_preset`, §4); mig `947` seeds the HOUSE Incentives tile layout (scope `tiles` key `incentives`) + HOUSE nav-label presets (NEW scopes `nav_default`/`group_default`, e.g. `/commcalc/commission-legs` → 'Commission received over M1-M12'); mig `948` seeds the HOUSE Management Overview (`tiles` key `management-overview` — incl. the `/commcalc/exec` item-label 'Rep Incentive') + Flags & Compliance (`tiles` key `flags-compliance`) layouts (§14 mig 948) | `GET /nav-config` (house `nav_default`/`group_default` presets first, then the caller org's `nav`/`group` nicknames overlay per key — tenant > house preset > built-in, since mig 947; caps/layout stay caller-org-only), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins), `GET /report-labels` (`report_labels.load_report_labels`: tenant ∪ HOUSE, tenant override > carrier preset > built-in — §3 carrier column labels) |
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
-| `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3) |
+| `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3); **P&L wages estimate** `coa.wages_by_store`→`derive_wage_cells` (actual_hours else scheduled_hours — the owner's 2026-09-08 rule, already implemented); **salary coverage basis** `labour_coverage.load_shift_hours`→`hours_basis_by_code` (hours only, never dollars — §4) |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
 | `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs), store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
@@ -2372,7 +2413,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `GET /commissions/{period}` | `10222` | §6 — the Rep Incentive Report read; market stamped per row via §13a (2026-09-03 fix) |
 | `GET /commcalc/processor-ledger` | `commcalc/processor_ledger_api.py` | §15 Processor Daily Debits & Credits — day × transaction type, DEBITS/CREDITS/NET; store-span gated; serves the canonical §13c `market_options` |
 | `GET /sales-report` | `15792` | §3 |
-| `GET /gp/{period}` | `14750` | §4 |
+| `GET /gp/{period}` (payload also carries `expenses_carried_from`, **`labour_coverage`** and **`labour_double_booked`** — the salary silent-zero / month-grain / double-book detectors, display-only) | `14750` | §4 |
 | `GET/PUT /targets/{period}` | `19005/19071` | §5 |
 | `GET /targets/{period}/summary` | `19440` | §5 |
 | `GET /targets/{period}/action-plan` | `21334` | §5 |
@@ -2527,6 +2568,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | Days-in-stock (aging) | `inventory_aging_device.days_in_stock` (snapshot) | device-cost recon `27338`; MI aging bonus |
 | Lateness % (`late_rate` — late shifts ÷ scheduled shifts) | `storeops.timelog` punches vs `storeops.shifts` windows | `attendance_exceptions.compute_attendance_exceptions` → `accountability.aggregate`; surfaced by `/storeops/accountability` ('Lateness %' page, W2 rename) and the `storeops_lateness` scheduled report (§14 W3) |
 | Withholding estimate (gross/FICA/federal/state/net) | `storeops.timelog`+`manual_hours` hours × `employees.pay_rate` × `payroll_settings` W-4 | browser: `frontend/src/lib/payroll-tax.ts computePay`; server twin: `storeops/payroll_tax_estimate.compute_pay` (§14 W3 — keep in lockstep) |
+| Store salary coverage state for a month (`entered` / `derived_actual` / `derived_scheduled` / `carried` / `not_measured` / `no_staff`) | `commcalc.store_expenses` authoritative payroll rows (ruling-K2 predicate, minus flat allocations) + `storeops.shifts` hours (actual else scheduled) + `expenses_effective` carry answer | `commcalc/labour_coverage.labour_coverage` → `GET /gp/{period}` key `labour_coverage` and the P&L `wages` line `note` (§4, mig `992`). Computes NO dollars — the amounts stay with `coa.derive_wage_cells` |
 | Rent due this month / current-month rent (per store) | `storeops.store_lease.rent_schedule`→`current_rent`×`escalation_pct` (schedule wins); due window from `rent_due` → `tenants.rent_due_default` → house first-week (mig `946`) | `store_lease.rent_for_month` + `resolve_rent_due`/`rent_due_window` (the §14 read contract for the finance rents-due/recurring-expenses build); surfaced on `GET /storeops/store-lease` |
 | Insurance premium due (per store, recurring) | `storeops.store_lease.insurance_premium` on `insurance_premium_due`, repeating per `insurance_premium_frequency` (mig `946`) | same read contract — finance recurring-expenses reader computes from these columns |
 | Expiry notice window (per lease / policy / COI) | **MAX**(the document's own requirement — `store_lease.lease_notice_days` / `insurance_policy.notice_days` — and the org floor `tenants.doc_expiry_notice_days`, house 60; migs `964`/`966`). MAX, not override: 90/180 beats the floor, 30 never drops below it | `doc_intel.resolve_notice_days` → `doc_intel.expiry_alerts` (ladder `milestones_for`, ASCENDING = the tightest milestone crossed fires) → `GET /storeops/doc-expiry`, the daily sweep `_run_doc_expiry`, and the `storeops_doc_expiry` attention providers; dedupe in `storeops.alert_log` |
@@ -4513,7 +4555,7 @@ conflating them is how a fix gets mis-sold.
 | `PUT /commcalc/item-categories` | extended to `dimension:'gp'` with `rolls_up_to` |
 
 - Proof: `backend/harness_gp_item_category.py` (42). §B byte-identity — no item rows and no category
-  rows reproduces today's classification exactly, so a tenant without mig 992 sees unchanged GP;
+  rows reproduces today's classification exactly, so a tenant without mig 994 sees unchanged GP;
   §C/§D a tenant category resolves through its bucket, an unset bucket falls to `other`, a built-in
   cannot be re-pointed, an inactive one is ignored; §E the 2,447-line regression rebuilt from the
   real product mix, pinning that no line is lost and that 917-relabelled/768-rebucketed split;

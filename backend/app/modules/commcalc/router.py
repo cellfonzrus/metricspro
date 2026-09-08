@@ -9047,7 +9047,7 @@ DEFAULT_KPI_CATEGORIES = [
 ]
 # The GP dimension REUSES this same registry (owner 2026-09-08: "new categories should be able to
 # add"). `item_category_config.dimension` is free text with no CHECK, so 'gp' needs no schema change
-# — only mig 992's `rolls_up_to`, which says WHICH of the GP report's four money buckets a
+# — only mig 994's `rolls_up_to`, which says WHICH of the GP report's four money buckets a
 # tenant-added category counts into. Without that a new category would be summed into nothing and
 # its lines would leave the report silently. The five built-ins are defined once, in gp_report.
 from app.modules.commcalc.gp_report import (DEFAULT_GP_CATEGORIES as _GP_CATS_DEFAULT,
@@ -17205,8 +17205,12 @@ def _compute_gp(client, org_id, period, market=""):
     # (expenses_effective.effective_expense_rows — manual rows only, latest strictly-prior month,
     # nothing when the period has its own rows), so sheet and report can never disagree again.
     from app.modules.commcalc import expenses_effective as _expfx
+    # `expense_name` + `source_key` are selected ONLY so the labour-coverage detector below can tell
+    # an entered payroll figure from a flat allocation and spot a commission row booked twice. The
+    # GP engine reads `store_code` and `amount` and nothing else from these rows (gp_report.py
+    # "Expenses by store_code"), so every money column is byte-identical with the wider select.
     expenses, _exp_carried_from = _expfx.effective_expense_rows(
-        client, org_id, period, pv, 'store_code,amount')
+        client, org_id, period, pv, 'store_code,amount,expense_name')
     # Wide select so the cost map can key on the TOTAL variant's UPC/SKU/desc (migs 230/231); high limit so
     # a multi-thousand-row catalog isn't truncated at the PostgREST default. Falls back to the legacy
     # product_id,cost select when the TOTAL columns don't exist yet (pre-230) → house byte-identical.
@@ -17241,7 +17245,7 @@ def _compute_gp(client, org_id, period, market=""):
         gp_cat_map = sc.table('gp_category_map').select('department,category').eq('org_id', org_id).execute().data or []
     except Exception:
         gp_cat_map = []
-    try:   # ITEM-grain GP overrides (mig 992) — the grain a blank department cannot express
+    try:   # ITEM-grain GP overrides (mig 994) — the grain a blank department cannot express
         gp_item_map = (sc.table('item_mapping').select('item_key,gp_category').eq('org_id', org_id)
                        .not_.is_('gp_category', 'null').limit(100000).execute().data) or []
     except Exception:
@@ -17302,6 +17306,55 @@ def _compute_gp(client, org_id, period, market=""):
                             config_classify=config_classify, ma_income=ma_income, leg_classify=_legcls,
                             acc_basis=_acc_basis)
     result['expenses_carried_from'] = _exp_carried_from
+    # LABOUR COVERAGE (owner directive 2026-09-08: "salaries … not getting updated for a lot of
+    # stores … actual hours if we have them, else scheduled hours, FOR THAT MONTH"). DISPLAY-ONLY —
+    # every figure above is byte-identical with or without this block; it only says whether a
+    # store's salary was MEASURED for this month, so a store with no payroll data can never render
+    # $0.00 as though somebody had counted it. The GP report has no wages estimate of its own (only
+    # the P&L does, via coa.wages_by_store), so an unmeasured store's labour cost is simply absent
+    # from the '-Expenses' column — which is exactly the silent zero this reports.
+    try:
+        from app.modules.commcalc import labour_coverage as _lcov
+        _lc_stores = (client.schema('storeops').table('stores').select('store_code,is_active')
+                      .eq('org_id', org_id).limit(50000).execute().data) or []
+    except Exception as e:
+        print(f'WARN gp labour coverage inputs unavailable: {e}')
+        _lc_stores = []
+    # SEPARATE defensive selects, the same pattern `coa._account_config` uses: the mig-992 column
+    # does not exist yet on a database where that migration has not run, and a combined select would
+    # fail as a whole — leaving the payroll vocabulary EMPTY and flipping every correctly-entered
+    # store into a false "not measured" banner. A noisy wrong warning is worse than none.
+    _lc_names, _lc_comm = [], []
+    try:
+        _r = (sc.table('account_config').select('payroll_expense_names')
+              .eq('org_id', org_id).limit(1).execute().data) or []
+        _lc_names = (_r[0].get('payroll_expense_names') if _r else None) or []
+    except Exception:
+        pass
+    try:
+        _r = (sc.table('account_config').select('labour_commission_expense_names')
+              .eq('org_id', org_id).limit(1).execute().data) or []
+        _lc_comm = (_r[0].get('labour_commission_expense_names') if _r else None) or []
+    except Exception:
+        pass   # pre-992: no vocabulary ⇒ no double-book claim, exactly as before
+    try:
+        _lc_codes = [s.get('store_code') for s in _lc_stores]
+        _lc_active = [s.get('store_code') for s in _lc_stores if s.get('is_active') is not False]
+        _lc_month = _lcov.load_shift_hours(client, org_id, period)
+        result['labour_coverage'] = _lcov.labour_coverage(
+            _lc_codes, expenses, _lc_month, _lc_names, period,
+            carried_from=_exp_carried_from, active_codes=_lc_active)
+        # Labour booked by BOTH routes: the GP row already deducts `rep_pay` (rep_commissions)
+        # SEPARATELY from `exp_total`, so a commission-named expense row is the same dollars twice.
+        # Reported, never netted — which of the two routes is authoritative is the owner's call.
+        _lc_reppay = {}
+        for _r in (result.get('store_rows') or []):
+            _c = str(_r.get('store_code') or '').strip()
+            if _c:
+                _lc_reppay[_c] = _lc_reppay.get(_c, 0.0) + safe_float(_r.get('rep_pay'))
+        result['labour_double_booked'] = _lcov.commission_collisions(expenses, _lc_reppay, _lc_comm)
+    except Exception as e:
+        print(f'WARN gp labour coverage skipped: {e}')
     if market:
         result['store_rows'] = [r for r in result['store_rows'] if r.get('market', '').upper() == market.upper()]
     return result
@@ -17615,7 +17668,7 @@ def get_gp_department_items(department: str = "", period: str = "", org_id: str 
         imap_rows = (sc.table('item_mapping').select('item_key,gp_category').eq('org_id', org_id)
                      .not_.is_('gp_category', 'null').limit(100000).execute().data) or []
     except Exception:
-        imap_rows = []   # mig 992 not applied — the department rules still answer for every item
+        imap_rows = []   # mig 994 not applied — the department rules still answer for every item
     item_cat = {str(r.get('item_key') or '').strip().upper(): str(r.get('gp_category') or '').strip().lower()
                 for r in imap_rows if r.get('item_key')}
     buckets = bucket_map(cats)
@@ -17664,7 +17717,7 @@ class SetGpItemCategoryIn(LaxModel):
 
 @router.post("/gp-item-category")
 def set_gp_item_category(body: SetGpItemCategoryIn, org_id: str = ORG_ID):
-    """Assign ONE item to a GP category (mig 992). An empty category CLEARS the override, so the
+    """Assign ONE item to a GP category (mig 994). An empty category CLEARS the override, so the
     department rules decide again — the same revert contract the department map already has.
 
     Writes `gp_category` on the item's EXISTING commcalc.item_mapping row (mig 041), beside the

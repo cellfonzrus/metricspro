@@ -546,6 +546,13 @@ def _account_config(client, org_id):
            # K2 (mig 621). EMPTY defaults ⇒ every org byte-identical until a name is explicitly picked.
            "payroll_expense_names": set(), "payroll_expense_names_list": [],
            "payroll_expense_routes": {},
+           # mig 994 (owner directive 2026-09-08). 'org' = the pre-992 ORG-WIDE suppression flag,
+           # byte-identical for every tenant; 'store' = per-store authority (see build_inputs).
+           "payroll_authority_grain": "org",
+           # mig 994. Expense names that carry commission ALREADY booked from rep_commissions.
+           # EMPTY default ⇒ nothing is claimed and no org changes.
+           "labour_commission_expense_names": set(),
+           "labour_commission_expense_names_list": [],
            # K3 (mig 621). 'off' ⇒ POS-only device cost, i.e. pre-621 behaviour.
            "device_cogs_mode": "off"}
     try:
@@ -597,6 +604,24 @@ def _account_config(client, org_id):
                     str(k).strip().lower(): str(v).strip()
                     for k, v in routes.items()
                     if str(v).strip() in ("wages", "payroll_expenses") and str(k).strip()}
+    except Exception:
+        pass
+    # PAYROLL AUTHORITY GRAIN + the commission-expense vocabulary (mig 994, owner directive
+    # 2026-09-08). Same defensive shape as every block above: a pre-992 column set falls back to
+    # 'org' + an empty list, which is byte-identical to the behaviour that shipped before it.
+    try:
+        grows = (client.schema("commcalc").table("account_config")
+                 .select("payroll_authority_grain,labour_commission_expense_names")
+                 .eq("org_id", org_id).limit(1).execute().data) or []
+        if grows:
+            grain = str(grows[0].get("payroll_authority_grain") or "").strip().lower()
+            if grain in ("org", "store"):
+                cfg["payroll_authority_grain"] = grain
+            cnames = grows[0].get("labour_commission_expense_names")
+            if isinstance(cnames, list):
+                cpicked = [str(n).strip() for n in cnames if str(n).strip()]
+                cfg["labour_commission_expense_names_list"] = cpicked
+                cfg["labour_commission_expense_names"] = {n.lower() for n in cpicked}
     except Exception:
         pass
     # DEVICE COGS MODE (mig 621, owner ruling K3) — same defensive shape; 'off' keeps pre-621 behaviour.
@@ -1206,6 +1231,14 @@ def build_inputs(client, org_id, period):
     # in this module. Reading them here would double-count every dollar. Salary/commission-KIND
     # closing-expense lines are likewise never posted as system lines by the producer.
     has_payroll_gross = False
+    # mig 994 (owner directive 2026-09-08): the SET of store addresses whose payroll figure for this
+    # period is authoritative, alongside the org-wide flag. `has_payroll_gross` alone could not tell
+    # "this org entered payroll" from "THIS STORE entered payroll", so one row anywhere suppressed
+    # the hours estimate for every store — a store with no entry then booked $0.00 rather than its
+    # own actual-else-scheduled hours. Populated unconditionally (it costs nothing and keeps the
+    # coverage report honest); only CONSUMED when payroll_authority_grain == 'store'.
+    payroll_auth_stores = set()
+    _exp_carried_from = None
     try:
         # STICKY expenses (owner 2026-09-02, systematic fix): read through the ONE shared
         # carry-forward rule the Expenses sheet displays with (commcalc.expenses_effective) — a month
@@ -1251,6 +1284,8 @@ def build_inputs(client, org_id, period):
                 # tenant-entered payroll figure exists for this period, so the estimate must not be
                 # added on top of it.
                 has_payroll_gross = True
+                if sa:
+                    payroll_auth_stores.add(sa)
                 routed = payroll_routes.get(ename.lower())
                 if routed:
                     line_key = routed
@@ -1258,7 +1293,10 @@ def build_inputs(client, org_id, period):
             if line_key == "wages":
                 add("wages", sa, r.get("amount"))            # exact Gross Payroll — relabelled below
                 # ONLY an authoritative exact-gross key suppresses the shifts×rate fallback.
-                has_payroll_gross = has_payroll_gross or (sk in _WAGES_AUTHORITATIVE_KEYS)
+                if sk in _WAGES_AUTHORITATIVE_KEYS:
+                    has_payroll_gross = True
+                    if sa:
+                        payroll_auth_stores.add(sa)
             else:
                 # Drill label = the row's own expense_name (the tenant's category name for a closing
                 # expense, 'Additional Payroll' for the payroll excess), falling back to the route's
@@ -1276,11 +1314,42 @@ def build_inputs(client, org_id, period):
     # (byte-identical) for the estimate so a tenant without the payroll job is unchanged from today.
     # `has_payroll_gross` now means "an AUTHORITATIVE payroll figure exists for this period", from
     # either the `payroll_gross` producer token or a tenant-configured manual payroll name (K2).
+    #
+    # ── PER-STORE AUTHORITY (mig 994, owner directive 2026-09-08) ──────────────────────────────
+    # "if we have the actual hours then the salary is based on actual hours, if not then the salary
+    # is based on scheduled hours for that month". That rule is per STORE per MONTH, but the flag
+    # above is one boolean for the whole org: the moment ONE store had an entered payroll figure,
+    # every OTHER store's estimate was suppressed too and booked $0.00 — a silent zero that reads
+    # exactly like "this store paid nobody". Live LuxeLink July 2026: three of twenty stores have no
+    # employee-salary row at all, so their labour cost is simply missing from the P&L.
+    #
+    # `payroll_authority_grain` = 'org' (HOUSE DEFAULT, byte-identical to every statement computed
+    # before this) or 'store'. Under 'store' a store's own entered figure suppresses only ITS OWN
+    # estimate; a store with none falls back to its hours exactly as an org with no payroll rows at
+    # all always has. The COMPANY-WIDE estimate cell (an employee attributable to no store) is
+    # deliberately NOT booked in the mixed case: it cannot be proven absent from the entered store
+    # figures, and booking a dollar we cannot prove is un-duplicated is worse than reporting it.
+    _grain = acct_cfg.get("payroll_authority_grain", "org")
+    _est_added, _est_skipped_cw = {}, 0.0
+    if has_payroll_gross and _grain == "store":
+        try:
+            for st, amt in wages_by_store(client, org_id, period).items():
+                if st in payroll_auth_stores:
+                    continue                    # this store's own entry is authoritative
+                if st is None:
+                    _est_skipped_cw = round(_est_skipped_cw + safe_float(amt), 2)
+                    continue                    # unattributable — reported, never booked
+                add("wages", st, amt)
+                _est_added[st] = amt
+        except Exception as e:
+            _warn("StoreOps hours wages estimate (store grain) skipped", e)
     if has_payroll_gross:
         # Only relabel when the line actually carries money. Under ruling K2's default presentation the
         # authoritative salaries stay on `store_opex`, so `wages` is legitimately $0.00 — calling an
         # empty line "Gross Payroll" would be a lie, and `auto` lines render even at zero.
-        if L["wages"]["by_store"] or L["wages"]["company_wide"]:
+        # A line that MIXES entered figures with hours estimates is not an exact gross either, so it
+        # keeps the estimate label and says so in its note.
+        if (L["wages"]["by_store"] or L["wages"]["company_wide"]) and not _est_added:
             L["wages"]["label"] = "Gross Payroll"
     else:
         try:
@@ -1288,6 +1357,43 @@ def build_inputs(client, org_id, period):
                 add("wages", st, amt)
         except Exception as e:
             _warn("StoreOps shifts x rate wages estimate skipped", e)
+
+    # ── SILENT ZERO GUARD on the salary line (owner directive 2026-09-08) ──────────────────────
+    # Three states, never two: MEASURED, genuinely zero, and NOT MEASURED. A store with no payroll
+    # figure and no hours on either column must not render $0.00 as though somebody had counted it,
+    # and a month showing the PREVIOUS month's carried rows must say whose dollars they are. Reuses
+    # ruling K3(b)'s `note` passthrough (`engine._assemble`) — the same channel the declared-zero
+    # device-cost line already speaks through, so there is one honesty mechanism, not two. This
+    # block moves NO figure; if it fails entirely the statement is byte-identical.
+    try:
+        from app.modules.commcalc import labour_coverage as _lcov
+        _cov_stores = (client.schema("storeops").table("stores").select("store_code,is_active")
+                       .eq("org_id", org_id).limit(50000).execute().data) or []
+        _cov = _lcov.labour_coverage(
+            [s.get("store_code") for s in _cov_stores], exp_rows,
+            _lcov.load_shift_hours(client, org_id, period),
+            acct_cfg.get("payroll_expense_names_list") or [], period,
+            carried_from=_exp_carried_from,
+            active_codes=[s.get("store_code") for s in _cov_stores
+                          if s.get("is_active") is not False])
+        # Only the NOTE is attached to the line. The full per-store coverage report is served by the
+        # GP payload (`labour_coverage`), which is where a reader drills; putting a nested dict on an
+        # inputs line would ride into every snapshot for no gain.
+        _bits = [b for b in (_cov.get("note"),) if b]
+        if _est_added:
+            _bits.append(
+                f"{len(_est_added)} store(s) with no payroll figure of their own are shown at their "
+                f"hours (actual where clocked, otherwise scheduled), so this line MIXES entered "
+                f"payroll with an estimate.")
+        if _est_skipped_cw:
+            _bits.append(
+                f"${_est_skipped_cw:,.2f} of salaried pay could not be attributed to any store and is "
+                f"NOT booked here — it cannot be shown to be absent from the entered store figures. "
+                f"Set a home store for those employees to place it.")
+        if _bits:
+            L["wages"]["note"] = " ".join(_bits)
+    except Exception as e:
+        _warn("labour coverage note skipped", e)
 
     # #6 inter-store borrowings (auto*, migration 018) — receivable/payable. Degrade to 0 if absent.
     # BUG FIX 2026-08-10 (formula book §F #7): this select asked for `from_store,to_store,amount,repaid`
