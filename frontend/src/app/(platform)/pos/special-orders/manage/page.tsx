@@ -12,6 +12,7 @@
 //                their API), or 'inbound_api' (they call ours with a token shown once here).
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
+import ScreenLink from '@/components/ScreenLink'
 
 interface VendorLink {
   vendor: string | null; vendor_sku: string | null; vendor_url: string | null
@@ -226,7 +227,7 @@ export default function SpecialOrderManagePage() {
         <h2 style={{ fontSize: 18, margin: '0 0 6px' }}>HQ access required</h2>
         <p style={{ color: 'var(--text2)', fontSize: 14 }}>
           Managing the special-order catalog and vendors needs the <b>pos_special_order_admin</b> permission.
-          Ask an administrator to grant it in Roles &amp; Access.
+          Ask an administrator to grant it in <ScreenLink to="roles_access" />.
         </p>
       </div>
     )

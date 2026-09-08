@@ -19,6 +19,7 @@ import RegisterDrawer, { RegisterSession } from '@/components/pos/RegisterDrawer
 import RegisterLock from '@/components/pos/RegisterLock'
 import { getActiveStore, setActiveStore } from '@/lib/pos-store'
 import { PosConfigValues, loadEffectivePosConfig, resolvePosConfig, getRegisterNumber } from '@/lib/pos-config'
+import { LinkedText } from '@/components/ScreenLink'
 
 interface Product {
   id: string
@@ -1435,7 +1436,8 @@ export default function PosSalesPage() {
               </div>
               {blockIssues.map((issue, i) => (
                 <div key={i} style={{ background: 'var(--surface2)', borderLeft: '3px solid var(--amber)', borderRadius: 6, padding: '10px 12px', fontSize: 12, marginBottom: 8, lineHeight: 1.5 }}>
-                  {issue}
+                  {/* A blocker names where to go ("… in the Employees module") — link it (owner 2026-09-08). */}
+                  <LinkedText text={issue} />
                 </div>
               ))}
             </div>

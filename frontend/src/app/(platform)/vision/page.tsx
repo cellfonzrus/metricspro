@@ -14,6 +14,7 @@ import Link from 'next/link'
 import { api } from '@/lib/client'
 import { panel, btn, btnPrimary, cameraName, fmtDateTime, buildSha, type Camera, type VisionConfig, visionError,
 } from '@/lib/vision'
+import { LinkedText } from '@/components/ScreenLink'
 
 export default function VisionLiveWall() {
   const [cameras, setCameras] = useState<Camera[]>([])
@@ -98,7 +99,8 @@ function Notice({ title, body, action }: { title: string; body: string; action?:
     <div style={{ padding: 20, maxWidth: 620 }}>
       <div style={{ ...panel }}>
         <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>{title}</div>
-        <div style={{ fontSize: 13.5, color: 'var(--text2)', marginBottom: action ? 14 : 0 }}>{body}</div>
+        {/* A notice body may NAME a screen ("… turn the module on in Vision → Settings") — link it. */}
+        <div style={{ fontSize: 13.5, color: 'var(--text2)', marginBottom: action ? 14 : 0 }}><LinkedText text={body} /></div>
         {action && <Link href={action.href} style={{ ...btnPrimary, textDecoration: 'none' }}>{action.label}</Link>}
       </div>
     </div>

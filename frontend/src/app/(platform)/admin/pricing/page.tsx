@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api, fmt } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
+import ScreenLink from '@/components/ScreenLink'
 
 // Pricing & Free Trial (mig 908) — SUPER-ADMIN only. This is where the price the public sees is
 // SET. The marketing site (/welcome) renders whatever is published here and carries no price of its
@@ -116,7 +117,7 @@ export default function PricingAdmin() {
       <h1 style={{ fontSize: 22, fontWeight: 700 }}>🏷️ Pricing &amp; Free Trial</h1>
       <div className="card" style={{ marginTop: 12 }}>
         This page sets the prices shown on the public website and the length of the free trial, so it is
-        limited to platform super-admins. Your own company&apos;s plan lives under <b>Billing</b>.
+        limited to platform super-admins. Your own company&apos;s plan lives under <ScreenLink to="billing_usage">Billing</ScreenLink>.
       </div>
     </div>
   )

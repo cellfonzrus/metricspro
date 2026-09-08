@@ -8,6 +8,7 @@ import type { EntityOption } from '@/components/EntityPicker'
 import type { StandardFilterValue } from '@/lib/standard-filters'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import EnvelopeViewLink from '@/components/EnvelopeViewLink'
+import { LinkedText } from '@/components/ScreenLink'
 import { useReportLabels } from '@/lib/report-labels'
 
 // DM evening verification view — per-store totals, missing-rep check, B2B reconciliation, and
@@ -645,7 +646,10 @@ export default function DailyClosingVerify() {
                 says here, once, why the assignment did not apply. */}
             {s.closer_note && (
               <div style={{ marginTop: 6, fontSize: 12, color: '#9a3412', background: '#ffedd5', padding: '6px 10px', borderRadius: 8 }}>
-                👤 {s.closer_note}
+                {/* The note NAMES a screen ("clear the assignment under Cash Setup") — owner
+                    directive 2026-09-08: a named destination must be a LINK. LinkedText turns the
+                    backend's own sentence into one, self-gated, without a second copy of the text. */}
+                👤 <LinkedText text={s.closer_note} />
               </div>
             )}
             {/* TWO WORKED, ONE CLOSED. Green when the cash ties to the X-report — the owner's own

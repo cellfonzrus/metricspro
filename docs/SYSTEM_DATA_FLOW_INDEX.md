@@ -3663,6 +3663,11 @@ both pages. It gates itself with the SAME predicate the sidebar uses — `canSee
 renders nothing rather than a dead link. Registered here so the next person adding a "set the tax
 rate" affordance extends this component instead of starting a third path to the same rate.
 
+**Generalised 2026-09-08 (§23o).** The fleet-wide "a named screen is a link" sweep needed the same
+self-gating behaviour for 16 destinations, so this component's mechanism was lifted into
+`components/ScreenLink` (`Signpost` + `ScreenLink` + `LinkedText`, one registry, one gate) and
+`SalesTaxRateLink` became a thin wrapper. Behaviour here is unchanged; there is still ONE signpost.
+
 ## 23j. WHO THE CLOSER IS — a deleted employee kept the job (owner directive 2026-09-07)
 
 **Owner:** *"the rep asad amar has been deleted from the system but it shows that he is still the
@@ -3880,6 +3885,97 @@ data, is told exactly that and what to upload. **Nothing is ever invented to fil
   live data's own shapes (a suspended month reporting `0.00` must not become the plan's price); P14
   pins both tenants' shapes; P15 pins that every empty state names a cause AND a fix; P16 pins that
   preview and apply share one derivation and that the dealer-code path delegates.
+
+## 23o. A NAMED SCREEN THAT IS NOT A LINK (owner directive 2026-09-08)
+
+**Owner, verbatim:** *"for dm verify it shows 'Asad Umar is still assigned as this store's closer but
+is no longer an employee — clear the assignment under Cash Setup.' — need to have a link for Cash
+setup if the option is presented for any menu — assign an agent to check all references and add the
+menus and make a summary where all the links have been added and for what purpose."*
+
+**The rule, fleet-wide:** *when user-facing copy NAMES a screen the reader is meant to go to, that
+name is a LINK.* `closing/closer_resolution.closer_for_day` (§23j) writes a correct sentence and
+`components/DailyClosingVerify` printed it verbatim — the reader is told where to go and then left to
+find it. The same shape was in ~24 other places: "map them under Closing → Tender Config", "grant it
+in Roles & Access", "Fix a mapping at Store Matching", "add one under Onboarding → Carrier".
+
+### ONE mechanism — `frontend/src/components/ScreenLink.tsx`
+
+**Duplicate check (build gate).** The only existing affordance of this kind was
+`components/SalesTaxRateLink` (§23i) — one self-gating signpost to `/pos/settings#sales-tax`. A sweep
+needing ~16 destinations could not copy it 16 times, so it was **generalised, not forked**:
+`SalesTaxRateLink` is now a 5-line wrapper over the shared `Signpost` and there is still exactly ONE
+signpost implementation and ONE gate. Nothing else in the index served "route a reader to a screen
+named in prose".
+
+| export | what it is |
+|---|---|
+| `SCREENS` | the registry: screen name + prose *aliases* → the NAV href that already exists in `lib/rbac.ts`. 16 destinations. |
+| `ScreenLink` | inline link inside hand-written JSX copy |
+| `LinkedText` | linkifies a plain **string** — this is what makes it work for BACKEND-authored notes |
+| `Signpost` | the standalone button form (what `SalesTaxRateLink` always was) |
+
+**Why a frontend linkifier and not a structured `href` on every note payload.** A backend note is a
+sentence and it *already names the screen*. Adding a parallel `href`/`link_label` field to every
+note-producing endpoint would touch dozens of routers and create a **second** source of truth for
+"where does this screen live" — the drift the house rules forbid. The screen→href map exists once, in
+NAV, and this reads it. One consequence worth having: `<LinkedText>` on **one** render site fixes both
+the frontend-authored and the backend-authored copy that flows through it — the upload guard banner
+linkifies `uploadGuard.XREPORT_ZERO_FIX` *and* `commcalc/router.py`'s own `note` with one change.
+
+**RBAC — every link gates itself.** `canSeeItem` over the destination's OWN NAV entry: the same
+predicate the sidebar uses, so a link can never advertise a page its viewer would be bounced out of.
+An inline link degrades to **plain bold text** for such a viewer (deleting the words would maim the
+sentence — this is what the employee portal's "Roles & Access" mentions do); a standalone `Signpost`
+renders **nothing**. An href with no NAV entry is refused rather than guessed.
+
+### Where links were added (17 files, 25 sites)
+
+| screen it is ON | the copy | links TO | why |
+|---|---|---|---|
+| **DM Verify** (`components/DailyClosingVerify`) | "…is no longer an employee — clear the assignment under **Cash Setup**." (backend `closer_resolution`) | `/closing/cash-config` | clear a dead closer assignment — **the reported defect** |
+| Every upload surface (`commcalc/_lib/uploadGuard` banner + forensics list) | "Map the labels listed below under **Closing → Tender Config**…" (both this file and `commcalc/router.py`'s `note`) | `/closing/tender-config` | map the unrecognised X-report tender labels so their dollars reconcile |
+| Carrier Reconciliation | "Fix a mapping at **Store Matching** to resolve them" | `/commcalc/store-match` | map the workbook's unmatched store names |
+| Daily Targets · My Targets | server `setup_hint`s: "map your POS store names to stores in **Store Matching**" | `/commcalc/store-match` | make achieved numbers attach to a target row |
+| Daily Targets (empty state) | "No targets set. Add monthly targets in **Target Settings**." | `/commcalc/targets/settings` | set the targets that make the page non-empty |
+| Accessory Targets | "identified per tenant in **Sales Report → Accessory settings**" | `/commcalc/sales-report` | change what counts as an accessory / set-up fee |
+| Dashboard Designer (gate + 403) | "assign it to your role under **Roles & Access → Settings editing**" | `/admin/roles` | grant the "Menu & dashboard layout designer" setting |
+| Import Health | "…setting to your role under **Roles & Access**." | `/admin/roles` | grant the Import Health setting |
+| Companies (Tenants) ×2 | "manages their own staff in **Roles & Access**" · "login (created in **Roles & Access**)" | `/admin/roles` | create/manage the tenant's logins |
+| Sign-in-as Audit | "…setting on **Roles & Access**." | `/admin/roles` | grant the sign-in-as policy/audit setting |
+| Special Order Setup | "Ask an administrator to grant it in **Roles & Access**." | `/admin/roles` | grant the page |
+| Employee portal ×2 | "check your login in **Roles & Access**" · "set your Employee ID in **Roles & Access**" | `/admin/roles` | (self-gated → plain text for the employee; the link appears only for a reader who can act) |
+| Device Cost Recon · Handset COGS · IMEI Rebates | "(**Roles & Access** → your role → sensitive data grants)" | `/admin/roles` | grant the report's sensitive-data clearance |
+| Management Review | "…page at **Administration → Roles**." | `/admin/roles` | grant the Management Review page |
+| Report Center | "clearance from **Roles & Access**" | `/admin/roles` | grant the report's clearance |
+| Sales Report (read-only classification) | "ask an administrator to grant it (**Roles & Access** → settings permissions)" | `/admin/roles` | grant Classification settings |
+| Pay Simulator | server reason: "Ask an admin to add you under **Roles & Access**" / "set your Employee ID in **Roles & Access**" | `/admin/roles` | provision/link the login |
+| Register (`pos/sales` checkout blockers) | "link your login to an employee record in the **Employees module**" | `/storeops/employees` | link the login before a sale can be rung |
+| Employee dashboard widget | "ask an admin to set your **home store** in **Employees**" | `/storeops/employees` | set the home store so daily goals compute |
+| MA Upload | "add one under **Onboarding → Carrier**" | `/commcalc/onboarding` | add the carrier this upload needs |
+| Sales Derive | "(**Connectors → Sales Transactions** is set to manual)" | `/commcalc/connectors` | turn automatic derivation on |
+| Asset Ledger (market re-sync result) | "conflicting markets in **Settings → Stores**" | `/storeops/setup/stores` | fix the duplicate store rows the re-sync skipped |
+| Camera analytics notices | "an administrator can turn the module on in **Vision → Settings**" | `/vision/settings` | enable the module |
+| My Team | "assign you to an org unit in **Org Structure**" | `/admin/org` | put the manager in the tree so a team appears |
+| Pricing & Free Trial (non-super-admin) | "Your own company's plan lives under **Billing**." | `/admin/billing-usage` | see the company's own plan/usage |
+| Tax Collected · Store Setup | *(unchanged)* `SalesTaxRateLink` | `/pos/settings#sales-tax` | pre-existing §23i signpost, now on the shared mechanism |
+
+### No menu had to be added
+
+Every destination named in copy already had a NAV entry in `rbac.ts` — the gap was the link, not the
+menu. **One exception, reported not fixed:** *"Metric Source of Truth"* is named in a `title=` tooltip
+on `closing/cash-recon-management` and **no such page exists** anywhere in NAV or under `app/`. It is
+deliberately NOT in the registry: inventing an href would be worse than the gap.
+
+- Proof: `backend/harness_screen_link_guard.py` (51). **Static on purpose** — the defect renders
+  perfectly and compiles, so neither `tsc` nor a build can see it. §A every registered href is a real
+  NAV href (an invented one would gate to `false` for every viewer and silently print plain text);
+  §B the owner's exact sentence, rebuilt from `closer_resolution.py`'s own source, links Cash Setup to
+  `/closing/cash-config` and leaves the rest of the sentence — including the person's name — untouched;
+  §C longest-alias-first, so "Closing → Tender Config" links as one breadcrumb and not just its tail,
+  proved against the BACKEND's string as well as the frontend's; §D boundaries/case; §E the 10 render
+  sites still route their prose through the mechanism; §F there is one signpost implementation and one
+  gate.
 
 ## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
 

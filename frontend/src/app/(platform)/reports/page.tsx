@@ -6,6 +6,7 @@ import { apiCached, CONFIG } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import { isSuperAdmin } from '@/lib/rbac'
 import { REPORT_CATEGORIES, clearedFor, PortalCfg } from '@/lib/reports'
+import ScreenLink from '@/components/ScreenLink'
 
 // Unified Report Center — every report across modules, in one place, categorized. Each report links
 // to its real page. Admins can also toggle "show in employee portal" per report and choose which
@@ -43,7 +44,10 @@ export default function ReportCenterPage() {
     <div style={{ padding: 24, maxWidth: 980 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📊 Report Center</h1>
       <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>
-        Every report, in one place. {admin ? 'Toggle “Portal” to surface a report in the employee portal, and pick which roles can see it (employees still need the report’s clearance from Roles & Access).' : 'Open any report you have access to.'}
+        Every report, in one place. {admin
+          ? <>Toggle “Portal” to surface a report in the employee portal, and pick which roles can see it
+              (employees still need the report’s clearance from <ScreenLink to="roles_access" />).</>
+          : 'Open any report you have access to.'}
       </p>
 
       {REPORT_CATEGORIES.map(grp => {

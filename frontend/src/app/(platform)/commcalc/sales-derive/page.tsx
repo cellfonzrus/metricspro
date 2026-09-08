@@ -15,6 +15,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import ScreenLink from '@/components/ScreenLink'
 
 type Cfg = { enabled: boolean; days: number; retain: number | null }
 type CfgResp = {
@@ -181,7 +182,7 @@ export default function SalesDerivePage() {
             )}
             {!status.auto_derive_enabled && (
               <div style={{ marginTop: 6, fontSize: 12, color: '#b45309' }}>
-                Automatic derivation is switched OFF for this tenant (Connectors → Sales Transactions is set to manual),
+                Automatic derivation is switched OFF for this tenant (<ScreenLink to="connectors">Connectors → Sales Transactions</ScreenLink> is set to manual),
                 so nothing will build this basis on its own.
               </div>
             )}

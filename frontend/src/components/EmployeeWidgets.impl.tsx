@@ -9,6 +9,7 @@ import {
 // is safe — non-granted reps still see history, the sell/upgrade prompt, and tenure. Reusable widget
 // intentionally shared out of the commcalc route tree (see its header comment).
 import DeviceHistoryLookup from '@/app/(platform)/commcalc/device-history/DeviceHistoryLookup'
+import ScreenLink from '@/components/ScreenLink'
 
 // Shared employee widget grid — rendered by BOTH the admin /employee dashboard (pick-anyone) and the
 // self-service kiosk /portal (scoped to the signed-in employee). Pure presentation: the caller fetches
@@ -250,7 +251,7 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
             </div>
           ) : (
             <div style={{ color: 'var(--text3)', fontSize: 13 }}>
-              Targets unavailable — ask an admin to set your <b>home store</b> in Employees so your daily goals can be computed.
+              Targets unavailable — ask an admin to set your <b>home store</b> in <ScreenLink to="employees">Employees</ScreenLink> so your daily goals can be computed.
             </div>
           )}
         </Card>

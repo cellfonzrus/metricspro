@@ -11,6 +11,7 @@ import EntityPicker from '@/components/EntityPicker'
 import { optionsFromRows } from '@/lib/standard-filters'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 import { useActiveCarrier } from '@/lib/auth-context'
+import ScreenLink from '@/components/ScreenLink'
 
 // Targeted super-admin org-resolution mitigation (see NEEDS CORE): the sales-report reads carry NO org_id
 // in the URL, so for a super-admin (whom the tenant middleware does NOT rewrite) the backend defaults to
@@ -604,7 +605,7 @@ export default function SalesReportPage() {
               <>
                 {!accCanEdit && (
                   <div style={{ background: '#fef9c3', border: '1px solid #fde047', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#92400e', marginBottom: 10 }}>
-                    🔒 Read-only. Editing Classification settings requires the <b>Classification settings</b> permission — ask an administrator to grant it (Roles &rarr; settings permissions).
+                    🔒 Read-only. Editing Classification settings requires the <b>Classification settings</b> permission — ask an administrator to grant it (<ScreenLink to="roles_access">Roles &amp; Access</ScreenLink> &rarr; settings permissions).
                   </div>
                 )}
                 <div style={{ pointerEvents: accCanEdit ? 'auto' : 'none', opacity: accCanEdit ? 1 : 0.6 }}>

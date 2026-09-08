@@ -5,6 +5,7 @@ import { api, apiUpload } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import EntityPicker from '@/components/EntityPicker'
 import { LastUploadLine, useLastUploads } from '../_lib/lastUpload'
+import ScreenLink from '@/components/ScreenLink'
 
 // Per-carrier MANUAL upload for the MA reports — the SAP-style parallel track to the flaky live portal
 // pull (owner directive 2026-07-17). Wizard: pick a carrier → pick a report (mapping status shown) →
@@ -76,7 +77,7 @@ export default function MaManualUpload() {
               value={carrierId || null} width={320}
               onChange={(v) => { setCarrierId(v || ''); setReportKey('') }}
               placeholder="Carrier…" ariaLabel="Carrier" />
-            {carriers.length === 0 && <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>No carriers configured for this tenant yet — add one under Onboarding → Carrier.</p>}
+            {carriers.length === 0 && <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>No carriers configured for this tenant yet — add one under <ScreenLink to="comm_onboarding">Onboarding → Carrier</ScreenLink>.</p>}
           </div>
         )}
 

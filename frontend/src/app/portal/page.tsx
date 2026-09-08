@@ -11,6 +11,7 @@ import PortalReports from '@/components/PortalReports'
 import PortalHelpdesk from '@/components/PortalHelpdesk'
 import PortalOnboarding from '@/components/PortalOnboarding'
 import MyChargebacks from '@/components/MyChargebacks'
+import ScreenLink from '@/components/ScreenLink'
 
 // Employee kiosk (Part B / B4 + B2): mobile-first, standalone (no platform chrome). Now GUARDED by a
 // real login — an employee signs in with their email + password, so a punch is locked to the
@@ -629,7 +630,7 @@ export default function PortalPage() {
               <div style={{ fontSize: 14, color: 'var(--text2)', marginBottom: 16 }}>
                 You&apos;re signed in as <b>{session?.user?.email || ''}</b>, but your account profile didn&apos;t load.
                 Retrying automatically — if this doesn&apos;t clear in a minute, ask an admin to check your login
-                in <b>Roles &amp; Access</b>.
+                in <ScreenLink to="roles_access" />.
               </div>
             </>
           )}
@@ -649,7 +650,7 @@ export default function PortalPage() {
         <div style={{ ...box }} className="card">
           <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>Login not linked to an employee</div>
           <div style={{ fontSize: 14, color: 'var(--text2)', marginBottom: 16 }}>
-            You're signed in as <b>{user?.email}</b>, but your account isn't linked to an employee record yet. Ask an admin to set your Employee ID in <b>Roles &amp; Access</b>.
+            You're signed in as <b>{user?.email}</b>, but your account isn't linked to an employee record yet. Ask an admin to set your Employee ID in <ScreenLink to="roles_access" />.
           </div>
           <button className="btn btn-secondary" onClick={logout}>Log out</button>
         </div>

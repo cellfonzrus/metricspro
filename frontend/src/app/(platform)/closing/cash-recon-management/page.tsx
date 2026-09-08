@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import StandardFilterBar from '@/components/StandardFilterBar'
+import { useReportLabels } from '@/lib/report-labels'
 import type { StandardFilterValue } from '@/lib/standard-filters'
 import type { StoreOpt } from '@/lib/market-store-cascade'
 import { ExportButtons, ExportPayload } from '@/lib/export'
@@ -43,6 +44,12 @@ export default function CashReconManagementPage() {
   const [loading, setLoading] = useState(true)
   const [denied, setDenied] = useState<string | null>(null)
   const [mismatchOnly, setMismatchOnly] = useState(false)
+  // RULE TWO — the bill-pay processor's NAME is per-carrier config (mig 953), never a brand typed
+  // into shared copy. The owner asked for "DM verified epay"; ePay is what THIS tenant's processor
+  // is called, so the label resolves it rather than freezing one carrier's word into the page.
+  // harness_carrier_vocab_guard caught the literal on the first pass.
+  const { term } = useReportLabels()
+  const procName = term('processor', 'Bill-pay')
   // RULE FIVE §3d — the SHARED StandardFilterBar, not a hand-rolled set (owner 2026-09-08: "it does
   // not have our standard filters for employee, store or market"). Period is off: this screen owns
   // its own Day/Range control above, which is the same window in a different shape.
@@ -101,7 +108,7 @@ export default function CashReconManagementPage() {
           { header: 'DM actually took', get: (r: any) => r.cash_picked_actual ?? '', money: true },
           { header: 'Management counted', get: (r: any) => r.mgmt_counted ?? '', money: true },
           { header: 'Mgmt short / over', get: (r: any) => r.mgmt_variance ?? '' },
-          { header: 'DM verified ePay', get: (r: any) => r.billpay_pickup, money: true },
+          { header: `DM verified ${procName}`, get: (r: any) => r.billpay_pickup, money: true },
           { header: 'Closed by', get: (r: any) => (r.reps || []).join('; ') },
           { header: 'POS cash', get: (r: any) => r.pos_cash ?? '', money: true },
           { header: 'POS card', get: (r: any) => r.pos_card ?? '', money: true },
@@ -187,7 +194,7 @@ export default function CashReconManagementPage() {
               <Stat label="Bill-pay declared" value={fmt(t.epay_declared || 0)} />
               <Stat label="DM verified cash" value={fmt(t.cash_pickup || 0)}
                 sub={t.cash_picked_actual ? `${fmt(t.cash_picked_actual)} actually taken` : 'declared at pickup'} />
-              <Stat label="DM verified ePay" value={fmt(t.billpay_pickup || 0)} />
+              <Stat label={`DM verified ${procName}`} value={fmt(t.billpay_pickup || 0)} />
               {/* MANAGEMENT'S OWN COUNT — fed from commcalc.envelope_count (mig 936), the count the
                   envelope report already captures with counted_by/counted_at. No second entry box:
                   one number, one place it is entered. */}
@@ -230,7 +237,7 @@ export default function CashReconManagementPage() {
                   <th style={thTop} title="What the DM recorded actually taking out of the envelope (mig 949). Blank = not recorded.">DM actually took</th>
                   <th style={thTop} title="Management's own count of the envelope, from the envelope report (envelope_count, mig 936). Blank = not counted yet.">Management counted</th>
                   <th style={thTop} title="Management counted minus cash declared. Negative = short.">Mgmt short / over</th>
-                  <th style={thTop}>DM verified ePay</th>
+                  <th style={thTop}>{`DM verified ${procName}`}</th>
                   <th style={thTop}>POS cash</th>
                   <th style={thTop}>POS card</th>
                   <th style={thTop} title="Bill payments in the email-ingested sales transactions for the day (Leg B of the 3-way recon)">Sales-tx bill pay</th>

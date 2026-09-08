@@ -1,6 +1,7 @@
 'use client'
 import { useCallback, useMemo, useState } from 'react'
 import { apiUpload, fmt, getActiveOrg } from '@/lib/client'
+import ScreenLink from '@/components/ScreenLink'
 
 // CARRIER RECONCILIATION (upload & reconcile) — v1 Boost/ePay.
 //
@@ -200,7 +201,7 @@ export default function CarrierReconPage() {
               background: 'var(--surface2, #fffbeb)', fontSize: 13 }}>
               <b style={{ color: '#b45309' }}>⚠️ {data.unmatched_stores.length} workbook store(s) could not be matched to our data</b>{' '}
               — shown below with a zeroed “Ours” column, never dropped. Fix a mapping at{' '}
-              <b>Store Matching</b> to resolve them:
+              <ScreenLink to="store_matching" /> to resolve them:
               <div style={{ marginTop: 6, color: 'var(--text2)' }}>{data.unmatched_stores.join(' · ')}</div>
             </div>
           )}

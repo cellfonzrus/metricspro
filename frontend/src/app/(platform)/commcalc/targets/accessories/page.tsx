@@ -5,6 +5,7 @@ import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
+import ScreenLink from '@/components/ScreenLink'
 
 // Accessory Sales target tracker: per store, the monthly accessory-$ target vs achieved MTD vs what's
 // still needed (total + per-remaining-day pace), with a behind/on-track flag. Reuses the Daily Targets
@@ -225,7 +226,7 @@ export default function AccessoryTargetsPage() {
             <b>Acc. Sales</b> column is the accessory‑only figure, so it is <i>legitimately smaller</i>;
             its <b>Acc.+Set‑up</b> column is this page&apos;s basis and matches to the cent. The set‑up‑fee
             portion is broken out in the <b>Set‑up fee</b> column here, and the set‑up‑fee lines are
-            identified per tenant in Sales Report → Accessory settings. Both pages read the same sales rows
+            identified per tenant in <ScreenLink to="sales_report_settings">Sales Report → Accessory settings</ScreenLink>. Both pages read the same sales rows
             through the same classifier — nothing here affects anyone&apos;s pay.
           </p>
         </>
