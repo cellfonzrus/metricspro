@@ -5480,6 +5480,28 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             "total_cash": round(sum(e["cash"] for e in out), 2),
             "collected_cash": round(sum(e["cash"] for e in out if e["picked_up"]), 2),
             "ready_cash": round(sum(e["cash"] for e in out if not e["picked_up"]), 2),
+            # WHAT WAS ACTUALLY TAKEN, totalled (owner 2026-09-08: "does the cash pick up show the
+            # actual pick up and total that at the bottom"). `collected_cash` above is the DECLARED
+            # envelope amount — the figure a short pickup does NOT change — so on its own it can
+            # never show a shortfall. These three are the counted side.
+            #
+            # ONLY the collected envelopes that actually CARRY a count are summed, and the ones that
+            # do not are counted separately rather than folded in at their declared value: adding a
+            # declared amount into an "actual" total would quietly manufacture agreement, and
+            # treating an unrecorded envelope as 0.00 would manufacture a 100% shortfall. Both are
+            # the silent-zero defect this page keeps paying for. `collected_actual_variance` is only
+            # meaningful over the envelopes it covers, which is why the count travels with it.
+            "collected_actual": round(sum(_f(e["actual_picked_amount"]) for e in out
+                                          if e["picked_up"] and e.get("actual_picked_amount") is not None), 2),
+            "collected_actual_envelopes": sum(1 for e in out
+                                              if e["picked_up"] and e.get("actual_picked_amount") is not None),
+            "collected_actual_missing": sum(1 for e in out
+                                            if e["picked_up"] and e.get("actual_picked_amount") is None),
+            "collected_actual_variance": round(sum(_f(e["actual_picked_amount"]) - _f(e["cash"])
+                                                   for e in out
+                                                   if e["picked_up"] and e.get("actual_picked_amount") is not None), 2),
+            # The equipment/accessory split (§23m), totalled the same way the column shows it.
+            "total_cash_equip_acc": round(sum(_f(e.get("cash_equip_acc")) for e in out), 2),
             "not_closed": not_closed,
             # Per-store cash-on-hand, AS OF `_as_of` (the Day-mode date, or Range-mode's end date) --
             # closes the loop between the Store Cash on Hand report and the actual pickup action.

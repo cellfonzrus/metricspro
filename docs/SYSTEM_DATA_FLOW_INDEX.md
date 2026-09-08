@@ -4133,6 +4133,20 @@ basis export (RULE FOUR).
 - Unchanged and green: `harness_billpay_pickup.py` 47 · `harness_billpay_netting.py` 57 ·
   `harness_org_scope_guard.py` 25, plus the 18 other closing/cash harnesses.
 
+**TOTALLED AT THE BOTTOM (owner 2026-09-08: "does the cash pick up show the actual pick up and total
+that at the bottom" — it did not).** `collected_cash` is the DECLARED envelope figure, which a short
+pickup does not change, so on its own it could never show a shortfall however carefully the DM
+counted. `GET /closing/pickups` now also returns `collected_actual`, `collected_actual_envelopes`,
+`collected_actual_missing`, `collected_actual_variance` and `total_cash_equip_acc`, and the page
+gained a `<tfoot>` total row plus an "Actually picked" stat beside "Collected (declared)".
+
+**An envelope picked up but NOT counted is neither absorbed nor zeroed.** Adding it at its declared
+value manufactures agreement; treating it as 0.00 manufactures a 100% shortfall. It is counted
+separately and reported, and the variance covers exactly the envelopes the total covers. The footer
+sums the rows ON SCREEN so it always agrees with the filters above it, which a server-side total
+could not promise. Per-envelope short/over stays on the row: a $40 short and a $40 over net to zero
+on a day total, and the day total must not be the only place a DM looks.
+
 ## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
 
 **Read this before writing a new harness, and before trusting an old one.** Owner directive

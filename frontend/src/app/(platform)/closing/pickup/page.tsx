@@ -226,6 +226,24 @@ export default function CashPickupPage() {
   const selectedKeys = ready.filter(e => sel_[key(e)])
   const selTotal = selectedKeys.reduce((s, e) => s + (e.cash || 0), 0)
 
+  // Footer totals over the envelopes CURRENTLY ON SCREEN — so the bottom line always agrees with the
+  // filters, which a server-side total could not promise. The actual-picked total deliberately
+  // covers only the collected envelopes that carry a count; the rest are counted, not absorbed.
+  const footTotals = useMemo(() => {
+    let cash = 0, equipAcc = 0, actual = 0, actualCount = 0, missingCount = 0, variance = 0
+    for (const e of envelopes) {
+      cash += e.cash || 0
+      equipAcc += e.cash_equip_acc ?? 0
+      if (!e.picked_up) continue
+      if (e.actual_picked_amount == null) { missingCount++; continue }
+      actual += e.actual_picked_amount
+      variance += (e.actual_picked_amount - (e.cash || 0))
+      actualCount++
+    }
+    return { cash: round2(cash), equipAcc: round2(equipAcc), actual: round2(actual),
+             actualCount, missingCount, variance: round2(variance) }
+  }, [envelopes])
+
   // Per-store "cash on hand" + a live "left after this pickup" preview (OWNER DIRECTIVE 2026-08-04).
   // `by_store` (backend, reusing the SAME `_cash_position_core` Store Cash on Hand / Cash Position
   // read) already nets out every past pickup/EEP-withdrawal — subtracting just the CURRENTLY-SELECTED
@@ -361,7 +379,18 @@ export default function CashPickupPage() {
       {data && (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
           <Stat label="Total cash (end of day)" value={fmt(data.total_cash || 0)} accent />
-          <Stat label="Collected" value={fmt(data.collected_cash || 0)} sub={`${data.collected} envelope${data.collected === 1 ? '' : 's'}`} />
+          <Stat label="Collected (declared)" value={fmt(data.collected_cash || 0)} sub={`${data.collected} envelope${data.collected === 1 ? '' : 's'}`} />
+          {/* The COUNTED side beside the declared one. Collected(declared) is the envelope figure a
+              short pickup does not change, so on its own it can never show a shortfall. */}
+          <Stat label="Actually picked"
+            value={data.collected_actual_envelopes ? fmt(data.collected_actual || 0) : '—'}
+            color={data.collected_actual_variance < 0 ? '#dc2626' : undefined}
+            sub={data.collected_actual_envelopes
+              ? `${data.collected_actual_variance === 0 ? 'ties'
+                  : data.collected_actual_variance < 0 ? `${fmt(data.collected_actual_variance)} short`
+                  : `+${fmt(data.collected_actual_variance)} over`} over ${data.collected_actual_envelopes} counted`
+                + (data.collected_actual_missing ? ` · ${data.collected_actual_missing} not counted` : '')
+              : `no counts recorded${data.collected ? ` on ${data.collected} collected` : ''}`} />
           <Stat label="Still to collect" value={fmt(data.ready_cash || 0)} sub={`${data.ready} envelope${data.ready === 1 ? '' : 's'}`} />
         </div>
       )}
@@ -579,6 +608,47 @@ export default function CashPickupPage() {
                   )
                 })}
               </tbody>
+              {/* FOOTER TOTALS (owner 2026-09-08: "does the cash pick up show the actual pick up and
+                  total that at the bottom" — it did not). Totals the rows ON SCREEN, so the footer
+                  always agrees with the filters above it.
+
+                  "Actual picked" totals ONLY the collected envelopes that carry a count. An
+                  envelope nobody counted is reported beside the total as "not counted", never added
+                  in at its declared value (which would manufacture agreement) and never as 0.00
+                  (which would manufacture a 100% shortfall). The variance covers exactly the
+                  envelopes the total covers. */}
+              <tfoot>
+                <tr style={{ background: 'var(--surface2)', borderTop: '2px solid var(--border)', fontWeight: 700 }}>
+                  {rangeMode && <td style={{ ...cell, border: 0 }} />}
+                  <td style={{ ...cell, border: 0 }} />
+                  <td style={{ ...cell, border: 0 }} colSpan={2}>
+                    Totals <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 11 }}>
+                      · {envelopes.length} envelope{envelopes.length === 1 ? '' : 's'} shown</span>
+                  </td>
+                  <td style={{ ...cell, border: 0 }}>{fmt(footTotals.cash)}</td>
+                  <td style={{ ...cell, border: 0, color: 'var(--text2)' }}>{fmt(footTotals.equipAcc)}</td>
+                  <td style={{ ...cell, border: 0 }} />
+                  <td style={{ ...cell, border: 0 }}>
+                    {footTotals.actualCount === 0
+                      ? <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 11.5 }}>none counted</span>
+                      : <>
+                          {fmt(footTotals.actual)}
+                          {footTotals.variance !== 0 && (
+                            <span style={{ fontSize: 11, fontWeight: 700, marginLeft: 6,
+                              color: footTotals.variance < 0 ? '#dc2626' : '#b45309' }}>
+                              {footTotals.variance < 0 ? `${fmt(footTotals.variance)} short` : `+${fmt(footTotals.variance)} over`}
+                            </span>
+                          )}
+                          {footTotals.variance === 0 && <span style={{ fontSize: 11, color: '#166534', marginLeft: 6 }}>✓</span>}
+                          <div style={{ fontWeight: 400, fontSize: 11, color: 'var(--text3)' }}>
+                            over {footTotals.actualCount} counted envelope{footTotals.actualCount === 1 ? '' : 's'}
+                            {footTotals.missingCount > 0 && ` · ${footTotals.missingCount} picked up but not counted`}
+                          </div>
+                        </>}
+                  </td>
+                  <td style={{ ...cell, border: 0 }} colSpan={4} />
+                </tr>
+              </tfoot>
             </table>
           </div>
 
@@ -650,10 +720,10 @@ const L = ({ t, children }: { t: string; children: React.ReactNode }) => (
   <label style={{ fontSize: 11, color: 'var(--text3)' }}><div style={{ marginBottom: 3 }}>{t}</div>{children}</label>
 )
 
-const Stat = ({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) => (
+const Stat = ({ label, value, sub, accent, color }: { label: string; value: string; sub?: string; accent?: boolean; color?: string }) => (
   <div className="card" style={{ padding: '12px 16px', minWidth: 150, flex: '0 1 auto', borderTop: accent ? '3px solid var(--accent)' : undefined }}>
     <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</div>
-    <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2 }}>{value}</div>
+    <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2, color: color || undefined }}>{value}</div>
     {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
   </div>
 )
