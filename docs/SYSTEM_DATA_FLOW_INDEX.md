@@ -3508,7 +3508,35 @@ Fixed by lifting the whole filter bar out of the loading branch (a control must 
 loading the content it controls), debouncing the query dates 350ms away from the displayed ones, and
 blanking the page only on the FIRST load — later refetches keep the previous rows and show "updating…".
 
-- Proof: `backend/harness_tax_collected.py` (23).
+**THE DATE RANGE WAS BEING CLIPPED TO THE PERIOD DROPDOWN (owner 2026-09-07, second report).** With
+the selector on August and the picker set **From 06/01/2026 To 08/01/2026**, the screen showed
+**"0 store(s)"** under *"No tax captured for this period yet — re-send a Sales Transaction Details
+file that includes the Tax column."* Nothing was wrong with the upload. `_sales_rows_union_txn` reads
+`.in_('period', _pvariants(period))` — ONE month — and `start`/`end` then filtered *within* it, so
+June→Aug-1 intersected down to a single day. The range is now the window: `_periods_spanning(start,
+end, period)` enumerates every month a range touches (both bounds → start's month .. end's month; one
+bound → that month .. the selected period's; neither → `[]`, and the caller's single-period read is
+untouched), and `_sales_rows_union_txn_range` calls the ONE union once per month and concatenates —
+safe because the union dedupes by trans_id within a month and a transaction belongs to exactly one
+month. Capped at 24 months, and a truncated range says so.
+
+**And the note now names what actually happened.** One sentence covered both *"we read sales and none
+carried tax"* and *"we read no sales at all"*, so an emptied window accused the operator of a bad
+upload. An empty window now says it is empty, names the window and the months read, and states that
+nothing was filtered out; a window with rows but no tax still points at the Tax column, and says how
+many rows it found. The response carries `window`, `periods_read` and `rows_in_window`.
+
+**TAXABLE vs NON-TAXABLE IS NOW SEGREGATED AT EVERY GRAIN** (owner 2026-09-07: *"also need to
+segregate the sales from taxable and non taxable sales"*). `untaxed_revenue` is carried on the store
+row, on each day of the drill-down and in each tender bucket — not left for a reader to subtract —
+and `taxable_revenue + untaxed_revenue == revenue` is asserted at all three grains. The page shows
+five stat tiles (tax · total sales · taxable · non-taxable · rate), Taxable/Non-taxable columns in the
+store table, the day drill-down and the tender table, and a Non-taxable column in both export sheets.
+
+- Proof: `backend/harness_tax_collected.py` (54) — §F pins the range spanning, including a regression
+  that reproduces the owner's "0 store(s)" screen by reading only the selected period; §G pins that
+  taxable + non-taxable ties back to total sales at store, day and tender grain; §H pins the two
+  distinct notes.
 
 ## 23g. A DASHBOARD TILE COULD NOT NAME A PAGE FROM ANOTHER MODULE (owner 2026-09-07)
 
