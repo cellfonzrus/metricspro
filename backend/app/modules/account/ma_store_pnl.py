@@ -336,6 +336,135 @@ def ma_tx_bookings(rows, pnl_cfg=None, cfg=None):
     return out
 
 
+# ── "everything has a reason" — MA TX booking COVERAGE (owner directive 2026-09-08) ──────────────
+# The owner's words: "all items should match and there should be nothing in unsplit, everything has
+# a reason and everything is assigned to the code".
+#
+# `ma_tx_bookings` books a row's `retail_cost` to at most one line — residual → MDF → month spiff —
+# and books NOTHING for every other order-type family. That silence is how $3,794.56 of August-2026
+# 'Retroactive Postpaid Spiff' cash reached no P&L line at all without anyone noticing: the org's
+# `pl_ma_spiff_order_types` names only 'PostPaid Additional Spiff', and a family nobody configured
+# is indistinguishable from a family deliberately left to another feed.
+#
+# So the unbooked money gets NAMED, per order-type family, with its reason. Reasons are CONFIG
+# (`commission_org_config.pl_ma_unbooked_reasons`, {order_type: reason}); a family with no
+# configured reason carries `ma_recon.NO_RULE_REASON` — the SAME literal honest-absence marker the
+# MA activation recon already uses for "sold, unpaid, nothing explains it" (mig 312). Absence of a
+# rule is REPORTED, never papered over and never guessed at.
+#
+# This is a COVERAGE READ-OUT, not a second booking path: it re-runs the very same classification
+# `ma_tx_bookings` runs (same matcher, same precedence, same config) and reports what fell through.
+# It moves no dollar.
+NO_RULE_REASON = "no business rule configured"     # = commcalc.ma_recon.NO_RULE_REASON (mig 312)
+
+
+def load_unbooked_reasons(client, org_id):
+    """Per-org {order_type: stated reason} for MA daily-tx families that book to no P&L line
+    (commcalc.commission_org_config, org-scoped). ADAPTIVE — a missing column/table/row degrades to
+    {} (= every unbooked family reported as `NO_RULE_REASON`). NEVER raises."""
+    try:
+        rows = (client.schema("commcalc").table("commission_org_config")
+                .select("pl_ma_unbooked_reasons").eq("org_id", org_id).limit(1).execute().data) or []
+        val = rows[0].get("pl_ma_unbooked_reasons") if rows else None
+        if isinstance(val, dict):
+            return {str(k).strip().lower(): str(v).strip()
+                    for k, v in val.items() if str(k).strip() and str(v).strip()}
+    except Exception:
+        pass
+    return {}
+
+
+def ma_tx_coverage(rows, pnl_cfg=None, cfg=None, reasons=None):
+    """PURE: raw_ma_daily_tx rows + the SAME two configs `ma_tx_bookings` resolves → coverage.
+
+    Returns {"booked": {line_key: amount}, "unbooked": [ {order_type, rows, amount, reason}, ... ],
+             "unbooked_total": float, "unexplained_total": float}
+    where `unexplained_total` is the part of `unbooked_total` whose family carries no configured
+    reason (i.e. the literal NO_RULE_REASON). `unbooked` is ordered by |amount| descending so the
+    biggest silent family is the first thing read.
+
+    `merchant_discount` is separate money that ALWAYS books, so it never appears as unbooked; only
+    `retail_cost` — the column that books at most once — is accounted for here."""
+    pnl_cfg = pnl_cfg if pnl_cfg is not None else _rs.default_ma_pnl_config()
+    cfg = cfg if cfg is not None else default_config()
+    reasons = {str(k).strip().lower(): str(v) for k, v in (reasons or {}).items()}
+    match = _rs.ma_residual_row_matcher(pnl_cfg)
+    mdf_tokens = [t.lower() for t in (cfg.get("mdf_product_tokens") or [])]
+    spiff_types = ({str(t).strip().lower() for t in (cfg.get("spiff_order_types") or [])}
+                   if cfg.get("month_spiff_source") == "daily_tx" else set())
+    disc_line = (_rs._MA_PNL_DISCOUNT_LINE if pnl_cfg.get("merchant_discount_own_line", True)
+                 else _rs._MA_PNL_LEGACY_DISCOUNT_LINE)
+    booked, unbooked = {}, {}
+    for r in rows or []:
+        r = r or {}
+        prod = str(r.get("product_name") or "")
+        ot = str(r.get("order_type") or "").strip()
+        md = safe_float(r.get("merchant_discount"))
+        amt = -safe_float(r.get("retail_cost"))
+        # The key is recorded even when the sum is 0.00: a line these rows DID classify into and
+        # measured as zero must stay distinguishable from a line no row ever reached (three states,
+        # not two). The same reason `booked[key]` below is written unconditionally.
+        booked[disc_line] = booked.get(disc_line, 0.0) + md
+        if match(r.get("product_name"), r.get("order_type")):
+            key = _rs._MA_PNL_RESIDUAL_LINE
+        elif mdf_tokens and any(t in prod.lower() for t in mdf_tokens):
+            key = MDF_LINE
+        elif spiff_types and ot.lower() in spiff_types:
+            key = "carrier_comm"
+        else:
+            slot = unbooked.setdefault(ot, {"order_type": ot, "rows": 0, "amount": 0.0})
+            slot["rows"] += 1
+            slot["amount"] += amt
+            continue
+        booked[key] = booked.get(key, 0.0) + amt
+    out = []
+    for ot, slot in unbooked.items():
+        slot["amount"] = round(slot["amount"], 2)
+        slot["reason"] = reasons.get(ot.lower()) or NO_RULE_REASON
+        out.append(slot)
+    out.sort(key=lambda s: (-abs(s["amount"]), s["order_type"]))
+    return {"booked": {k: round(v, 2) for k, v in booked.items()},
+            "unbooked": out,
+            "unbooked_total": round(sum(s["amount"] for s in out), 2),
+            "unexplained_total": round(sum(s["amount"] for s in out
+                                           if s["reason"] == NO_RULE_REASON), 2)}
+
+
+# ── "rebate received is not commission" (owner directive 2026-09-08) ─────────────────────────────
+# "dont count any rebate received in the commission — it reflects in the balance sheet towards gross
+# sales but not in gross profit."
+#
+# A device-purchase rebate is the vendor giving back part of what the dealer PAID for a handset. It
+# is not the carrier paying the dealer for producing a subscriber, so it must never be summed into
+# "commission received" on any surface. Measured (org 854f6d7b…, Aug-2026): `pl_rebate_presentation`
+# = 'income' put $251,946.31 of rebate on the `rebate_income` REVENUE line — three times the whole
+# month's real MA commission — while the master agent's own back-office P&L carries no rebate line
+# at all. Switching the org back to the house default 'contra_cogs' takes those dollars out of
+# revenue and nets them against Device cost where the purchase sits; gross profit and net income are
+# identical either way (revenue and COGS move together), so this changes what the number IS CALLED,
+# not what the dealer earned.
+#
+# The list below is the checked invariant: no rebate line may ever be part of the commission-received
+# family. Pinned by harness_commission_backoffice_recon.py so a future edit cannot re-file a rebate
+# as commission by accident.
+COMMISSION_RECEIVED_LINES = (
+    "carrier_comm",           # M1..M12+ month spiffs / bounties paid by the carrier
+    "mi_income",              # residual (labelled "Residual" on the MA side)
+    "atu_income",             # legacy airtime fold (pre-mig-309 orgs)
+    "ma_merchant_discount",   # airtime margin — its own line since mig 309
+    "mdf_income",             # MDF / market spiffs (the $1,000-per-store premium store spiff)
+    "fee_income",             # fee margin from the commission sheet
+)
+REBATE_LINES = tuple(line for line, _sign in REBATE_ROUTES.values())
+
+
+def commission_received_lines():
+    """PURE: the P&L line keys that make up "commission received" from the carrier / master agent.
+    Deliberately EXCLUDES every rebate line (`REBATE_LINES`), device margin and device revenue —
+    a rebate is money back on a purchase, not commission earned."""
+    return COMMISSION_RECEIVED_LINES
+
+
 def apply_line_labels(lines, labels):
     """PURE: set the per-line display label override (`lines[key]['label']`) for each configured
     key that exists — the SAME passthrough `engine._assemble` already honours for 'Gross Payroll'.

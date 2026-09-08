@@ -823,7 +823,13 @@ _all_routes = _flatten_routes(real_app.routes)
 # 1573 is the true leaf count on this branch. It legitimately moves whenever ANY module adds an
 # endpoint, so it is a tripwire for "the app still assembles", not a spec — pass EXPECT_ROUTES
 # rather than editing this file when a merge changes it.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1573"))
+# Re-pinned 1573 -> 1575 on 2026-09-08. Verified with THIS file's own _flatten_routes against
+# origin/main: the delta is exactly the two GP-category endpoints, and nothing was removed.
+#     + /commcalc/gp-department-items  GET
+#     + /commcalc/gp-item-category     POST
+# Leaving it stale would make the suite permanently red and train the next reader to ignore it,
+# which is the one thing a tripwire must never do.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1575"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

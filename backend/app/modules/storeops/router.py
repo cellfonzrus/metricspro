@@ -41,9 +41,13 @@ from app.modules.storeops.payroll_expenses import (
     rollup_cells as payex_rollup_cells,
     tax_ledger_rows as payex_tax_ledger_rows,
     expense_ledger_rows as payex_expense_ledger_rows,
-    gross_payroll_cells as payex_gross_payroll_cells,
-    gross_payroll_ledger_rows as payex_gross_payroll_ledger_rows,
 )
+# The 'payroll_gross' line's per-store figure moved to salary_expense.py + get_payroll_by_store on
+# 2026-09-08 (owner directive). payroll_expenses.gross_payroll_cells / gross_payroll_ledger_rows are
+# no longer imported here: they shaped a `shifts.actual_hours`-only wage base that ignored timelog
+# punches and salaried pay-basis — the second derivation this change removed. They stay in
+# payroll_expenses.py as the wage base for the TAX/burden buckets, which is their real job.
+from app.modules.storeops import salary_expense as _salexp
 from app.modules.storeops.payroll_identity import (
     business_id_alias_map as _business_id_alias_map,
     reconcile_employee_identity as _reconcile_employee_identity,
@@ -8827,6 +8831,149 @@ def delete_payroll_expense_item(item_id: str, authorization: str = Header(defaul
     return {"ok": True}
 
 
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# SALARY -> STORE EXPENSES (owner directive 2026-09-08). Pure math in salary_expense.py; I/O here.
+#
+# DUPLICATE CHECK (build gate, CLAUDE.md). The per-store salary figure is NOT recomputed here. The
+# ONE derivation is `get_payroll_by_store` above — punch-driven pay, manual corrections, scheduled
+# fallback, payroll_salary.py's salaried pay-basis allocation, lunch deduction, inactive handling —
+# whose own docstring already names "the Store Expenses 'Employee Salaries' auto-fill" as its
+# purpose. Until now that figure only ever reached the sheet through the BROWSER (the Expenses page
+# fills the cell on load when the month looks fresh and persists it only if a human saves), while the
+# one SERVER-side producer, `payroll_expenses.wages_by_store_from_hours`, read a DIFFERENT and poorer
+# basis (`shifts.actual_hours` alone — no timelog punches, no salary pay-basis). Two paths answering
+# one question: they had drifted. These helpers delete the second one — `_payex_gather` now sources
+# the gross-payroll line from `get_payroll_by_store` — and add only what the write path lacked:
+# hours PROVENANCE, store-code canonicalization, and a withhold rule.
+def _salary_hours_provenance(org_id: str, lo: str, hi: str, fold):
+    """{canonical_store_code: {'measured_hours','scheduled_hours'}} for [lo, hi).
+
+    This annotates the money `get_payroll_by_store` already computed; it derives no dollars of its own.
+    The split follows salary_expense's three-state rule EXACTLY: a (employee, day) with a CLOSED punch
+    or a manual correction is MEASURED (its hours count as measured even when they are 0.0 — a
+    measured zero is a fact, not a gap), and ONLY a day with neither falls back to that day's
+    scheduled hours. `shifts.actual_hours` is deliberately not consulted as evidence of measurement:
+    it is 0 rather than NULL on tenants with no shift-level corrections, so it cannot distinguish
+    "worked zero" from "never written" (live Luxelink: 0 on 1,486/1,486 Jul+Aug rows alongside 1,146
+    closed punches). A shift row carrying actual_hours > 0 IS a manual correction and is read as one.
+
+    Hours land at the store the measurement happened at (the punch's own store_code), matching
+    get_payroll_by_store's attribution; every raw code is folded to canonical first."""
+    out: dict = {}
+
+    def _bump(code, key, hrs):
+        if not code:
+            return
+        d = out.setdefault(code, {"measured_hours": 0.0, "scheduled_hours": 0.0})
+        d[key] += float(hrs or 0)
+
+    try:
+        q = sb().table("shifts").select(
+            "employee_id,store_code,shift_date,scheduled_hours,actual_hours").eq(
+            "org_id", org_id).eq("is_deleted", False)
+        if lo and hi:
+            q = q.gte("shift_date", lo).lt("shift_date", hi)
+        shifts = q.limit(200000).execute().data or []
+    except Exception:
+        shifts = []
+    try:
+        tl = []
+        if lo and hi:
+            tl = (sb().table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
+                  .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi)
+                  .limit(200000).execute().data) or []
+    except Exception:
+        tl = []
+
+    # Presence-keyed measurement maps: a day is present IFF a measurement exists for it, whatever its
+    # hours (0.0 included). This is the SAME evidence _punch_driven_day_maps builds for the pay path.
+    manual_by_day: dict = {}
+    punch_by_day: dict = {}
+    for s in shifts:
+        if float(s.get("actual_hours") or 0) > 0:
+            manual_by_day.setdefault(s.get("employee_id"), {})[str(s.get("shift_date") or "")[:10]] = \
+                float(s.get("actual_hours") or 0)
+    for t in tl:
+        if t.get("clock_out") and t.get("hours") is not None:
+            punch_by_day.setdefault(t.get("employee_id"), {})[str(t.get("work_date") or "")[:10]] = \
+                float(t.get("hours") or 0)
+
+    for s in shifts:
+        hrs, prov = _salexp.hours_for_shift(s, manual_by_day, punch_by_day)
+        if prov == _salexp.NOT_MEASURED and hrs:
+            _bump(fold(s.get("store_code"))[0], "scheduled_hours", hrs)
+        elif prov == _salexp.MEASURED_NONZERO and float(s.get("actual_hours") or 0) > 0:
+            # a manual correction is measured AT THE SHIFT'S OWN STORE (there is no punch to place it)
+            _bump(fold(s.get("store_code"))[0], "measured_hours", float(s.get("actual_hours") or 0))
+    for t in tl:
+        if not (t.get("clock_out") and t.get("hours") is not None):
+            continue
+        eid = t.get("employee_id")
+        day = str(t.get("work_date") or "")[:10]
+        if day in (manual_by_day.get(eid) or {}):
+            continue                      # the manual correction already counted, at its own store
+        _bump(fold(t.get("store_code"))[0], "measured_hours", float(t.get("hours") or 0))
+    return out
+
+
+def _salary_expense_config(org_id: str) -> dict:
+    """This org's salary-expense config merged over the house defaults (RULE TWO — the line label and
+    the unmeasured-fallback policy are CONFIG rows, never a branch in the code). Degrades to the house
+    defaults when migration 435 has not run."""
+    row = None
+    try:
+        rows = (sb().table("salary_expense_config").select("*").eq("org_id", org_id)
+                .limit(1).execute().data) or []
+        row = rows[0] if rows else None
+    except Exception:
+        row = None
+    return _salexp.resolve_config(row)
+
+
+def _salary_expense_gather(org_id: str, period: str) -> dict:
+    """Compute this period's per-store salary expense + its three-state provenance. READ-ONLY.
+
+    Money comes from `get_payroll_by_store` (unscoped, in-process — the same route-vs-function split
+    every payroll consumer uses); provenance from `_salary_hours_provenance`; store codes are folded
+    through the platform's existing canonical resolver (`commcalc.router._store_code_resolver`) plus
+    an exact-case fold onto the org's roster, because `store_expenses.store_code` is matched by exact
+    string on the sheet and a case variant otherwise shows a store half its own payroll."""
+    cfg = _salary_expense_config(org_id)
+    lo, hi = _resolve_range(period, None, None)
+    try:
+        roster = [ (s.get("store_code") or "").strip()
+                   for s in ((sb().table("stores").select("store_code").eq("org_id", org_id)
+                              .execute().data) or []) ]
+    except Exception:
+        roster = []
+    resolve = None
+    try:
+        from app.modules.commcalc.router import _store_code_resolver
+        resolve = _store_code_resolver(get_supabase(), org_id)
+    except Exception:
+        resolve = None
+    fold = _salexp.build_store_folder(roster, resolve)
+    # NO SILENT EMPTY. If the canonical payroll read fails, every store would classify as `no_data`
+    # and the run would report "nothing to book" — which reads like a clean answer but is an outage.
+    # The failure is stated, and it is stated as a FAILURE, never as $0 salary anywhere.
+    source_error = None
+    try:
+        by_store_rows = (get_payroll_by_store(month=period, authorization="", org_id=org_id)
+                         or {}).get("stores") or []
+    except Exception as e:
+        by_store_rows = []
+        source_error = f"{type(e).__name__}: {e}"
+        print(f"WARN salary-expense: get_payroll_by_store failed for org {org_id} {period}: {e}")
+    by_code, unbound = _salexp.fold_store_rows(by_store_rows, fold)
+    split = _salary_hours_provenance(org_id, lo, hi, fold)
+    out = _salexp.build_salary_expense(by_code, split, roster, cfg, unbound)
+    out["source_error"] = source_error
+    if source_error:
+        # Nothing is pushed off a broken read — a wrong number in the books is worse than no number.
+        out["cells"] = []
+    return out
+
+
 def _payex_gather(org_id: str, period: str):
     """Shared fetch+compute for both the read-only GET and the persisting POST /run. Reuses the SAME
     shifts/rate basis pto_accrual.py + /payroll-by-store use (hours = actual if clocked else
@@ -8926,11 +9073,20 @@ def get_payroll_expenses(period: str, authorization: str = Header(default=""), o
             "total": round(tax_d.get("total", 0.0) + sum(item_d.values()), 2),
         })
     cells = [c for c in g["cells"] if ks is None or in_keyset(ks, c["store"])]
-    gross_cells_all = payex_gross_payroll_cells(g["wages_by_store"])
-    gross_cells = [c for c in gross_cells_all if ks is None or in_keyset(ks, c["store"])]
+    # GROSS PAYROLL / salary expense (owner directive 2026-09-08) — the canonical per-store salary
+    # figure with its THREE-STATE hours provenance. `gross_withheld` is the report the owner asked
+    # for: the store-months this run will NOT book, and why. `gross_unbound` is payroll whose raw
+    # store string folds onto no store in the roster — money that would otherwise land nowhere.
+    sal = _salary_expense_gather(org_id, period)
+    gross_cells = [c for c in sal["cells"] if ks is None or in_keyset(ks, c["store"])]
+    gross_stores = [s for s in sal["stores"] if ks is None or in_keyset(ks, s["store_code"])]
+    gross_withheld = [s for s in sal["withheld"] if ks is None or in_keyset(ks, s["store_code"])]
     return {"period": period, "tax_cfg": g["tax_cfg"], "items": g["items"]["items"],
             "stores": stores_out, "cells": cells, "last_run_at": last_run_at,
-            "gross_cells": gross_cells, "gross_last_run_at": gross_last_run_at}
+            "gross_cells": gross_cells, "gross_last_run_at": gross_last_run_at,
+            "gross_label": sal["config"]["line_label"], "gross_stores": gross_stores,
+            "gross_withheld": gross_withheld, "gross_unbound": sal["unbound"],
+            "gross_totals": sal["totals"], "gross_source_error": sal.get("source_error")}
 
 
 def _payex_push_expense_line(org_id: str, period: str, cells: list) -> dict:
@@ -8951,7 +9107,8 @@ def _payex_push_expense_line(org_id: str, period: str, cells: list) -> dict:
         return {"pushed": False, "status": None, "note": f"push failed ({type(e).__name__}: {e}) — ledger persisted, pull via GET /payroll-expenses/{{period}} instead"}
 
 
-def _payex_push_gross_line(org_id: str, period: str, cells: list) -> dict:
+def _payex_push_gross_line(org_id: str, period: str, cells: list, label: str = "Gross Payroll",
+                            expense_type: str = "Fixed") -> dict:
     """POST the per-store GROSS PAYROLL — the exact wages basis the burden calc above uses — to
     mod-commission's Store Expenses system-line endpoint as its OWN line: source_key='payroll_gross',
     label='Gross Payroll'. OWNER DECISION 2026-07-15: this is a DIFFERENT source_key than
@@ -8961,7 +9118,8 @@ def _payex_push_gross_line(org_id: str, period: str, cells: list) -> dict:
     raised — the gross ledger is already persisted (when migration 405 has run) by the time this
     executes."""
     url = f"{PTO_INTERNAL_API_BASE}/api/v1/commcalc/expenses/{period}/system-line"
-    body = {"source_key": "payroll_gross", "label": "Gross Payroll", "cells": cells}
+    body = {"source_key": "payroll_gross", "label": label, "cells": cells,
+            "expense_type": expense_type}
     try:
         resp = requests.post(url, params={"org_id": org_id}, json=body, timeout=10)
         if resp.status_code == 404:
@@ -8980,13 +9138,24 @@ def run_payroll_expenses(period: str, authorization: str = Header(default=""), o
     shifts/timelog/employees — read-only against payroll inputs, so it cannot change what anyone is
     paid.
 
-    Also computes + pushes the SEPARATE 'Gross Payroll' line (source_key='payroll_gross') on the SAME
-    run — OWNER DECISION 2026-07-15: the exact $ paid to employees (g['wages_by_store'], the identical
-    wage base the tax bucket above already uses), persisted to storeops.payroll_gross_ledger
-    (migration 405) and pushed via the identical system-line contract, so the P&L can show Gross
-    Payroll and Payroll Expenses as two distinct, non-double-counting lines. Purely ADDITIVE: never
-    modifies payroll_tax_ledger / payroll_expense_ledger / the 'payroll_expenses' push above, and
-    degrades gracefully (push still attempted, run still succeeds) if migration 405 hasn't run yet."""
+    Also computes + pushes the SEPARATE salary line (source_key='payroll_gross', label per-org config,
+    house default 'Gross Payroll') on the SAME run — OWNER DECISION 2026-07-15, REBASED 2026-09-08.
+
+    ITS SOURCE CHANGED (owner directive 2026-09-08). It is now `_salary_expense_gather` — i.e. the
+    canonical `get_payroll_by_store` figure (actual hours where measured, scheduled hours where not,
+    salaried pay-basis via payroll_salary.py, punches included) folded onto canonical store codes —
+    NOT `g['wages_by_store']`, whose `shifts.actual_hours`-only basis silently ignored every timelog
+    punch and multiplied a SALARIED employee's per-period pay_rate by their hours. The burden buckets
+    above keep `g['wages_by_store']` unchanged; only the gross line moved.
+
+    THREE-STATE, NOT TWO. A store-month with no measured hours AND no schedule is WITHHELD — reported
+    in `gross_withheld`, written to the ledger with hours_state='no_data' and booked=false, and never
+    pushed as $0.00. Wages whose raw store string folds onto no store in the roster are reported in
+    `gross_unbound` rather than booked to an invented code or dropped.
+
+    Purely ADDITIVE with respect to pay: never modifies shifts/timelog/employees, never changes what
+    anyone is paid. Degrades gracefully (push still attempted, run still succeeds) if migration
+    405/435 hasn't run yet."""
     u = _require_manager(authorization, org_id)
     run_by = u.get("email") or u.get("employee_id") or "manager"
     g = _payex_gather(org_id, period)
@@ -9007,9 +9176,11 @@ def run_payroll_expenses(period: str, authorization: str = Header(default=""), o
 
     # ── Gross Payroll (additive, migration 405) — org-scoped write, wrapped so a not-yet-applied
     # migration degrades gracefully (the push still fires; only the audit-ledger persist is skipped).
-    gross_cells = payex_gross_payroll_cells(g["wages_by_store"])
-    gross_rows = payex_gross_payroll_ledger_rows(org_id, period, g["wages_by_store"],
-                                                  g.get("headcount_by_store"), run_by=run_by)
+    sal = _salary_expense_gather(org_id, period)
+    gross_cells = sal["cells"]
+    gross_rows = _salexp.ledger_rows(org_id, period, sal, run_by=run_by)
+    for _r, _h in zip(gross_rows, sal["stores"]):
+        _r["headcount"] = int((g.get("headcount_by_store") or {}).get(_h["store_code"], 0))
     gross_ledger_rows_written = 0
     try:
         sb().table("payroll_gross_ledger").delete().eq("org_id", org_id).eq("period", period).execute()
@@ -9018,18 +9189,27 @@ def run_payroll_expenses(period: str, authorization: str = Header(default=""), o
                 sb().table("payroll_gross_ledger").insert(gross_rows[i:i + 500]).execute()
         gross_ledger_rows_written = len(gross_rows)
     except Exception as e:
-        gross_ledger_rows_written = None  # migration 405 likely not applied yet — ledger skipped, push still attempted below
+        gross_ledger_rows_written = None  # migration 405/435 likely not applied yet — ledger skipped, push still attempted below
         _gross_ledger_error = f"{type(e).__name__}: {e}"
     else:
         _gross_ledger_error = None
 
-    gross_push = _payex_push_gross_line(org_id, period, gross_cells) if gross_cells else {"pushed": False, "status": None, "note": "no store activity this period — nothing to push"}
+    gross_push = (_payex_push_gross_line(org_id, period, gross_cells, sal["config"]["line_label"],
+                                          sal["config"]["expense_type"])
+                  if gross_cells else
+                  {"pushed": False, "status": None,
+                   "note": "no bookable store had payroll evidence this period — nothing to push "
+                           "(see gross_withheld; a store with no measured hours AND no schedule is "
+                           "reported, never booked as $0.00)"})
 
     return {"period": period, "tax_cfg": g["tax_cfg"], "items": g["items"]["items"],
             "cells": g["cells"], "tax_ledger_rows_written": len(tax_rows),
             "expense_ledger_rows_written": len(exp_rows), "push": push,
             "gross_cells": gross_cells, "gross_ledger_rows_written": gross_ledger_rows_written,
-            "gross_ledger_error": _gross_ledger_error, "gross_push": gross_push}
+            "gross_ledger_error": _gross_ledger_error, "gross_push": gross_push,
+            "gross_label": sal["config"]["line_label"], "gross_stores": sal["stores"],
+            "gross_withheld": sal["withheld"], "gross_unbound": sal["unbound"],
+            "gross_totals": sal["totals"], "gross_source_error": sal.get("source_error")}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
