@@ -4,6 +4,7 @@ import { api, apiUpload, fmt, ORG_ID } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { LinkedText } from '@/components/ScreenLink'
 
 type Summary = {
   loaded: boolean
@@ -267,7 +268,8 @@ export default function AssetPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          {uploadMsg && <span style={{ fontSize: 13 }}>{uploadMsg}</span>}
+          {/* The re-sync result names Settings → Stores when it skipped a conflicting row — link it. */}
+          {uploadMsg && <span style={{ fontSize: 13 }}><LinkedText text={uploadMsg} /></span>}
           {summary?.loaded && <ExportButtons payload={buildPayload} />}
           {/* WYSIWYG (§3c) — the send-path used to be the SERVER re-query (reportKey="asset_ledger",
               filters={{}}): notify/report_registry._asset_ledger calls get_asset_summary(org_id) with

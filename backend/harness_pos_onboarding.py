@@ -447,6 +447,125 @@ except Exception as e:                                          # pragma: no cov
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
+print("\n── PURE: import sources — 'bring it over' ─────────────────────────────────────────")
+#
+# OWNER REPORT 2026-09-08 (verbatim): "have them fix the bring over of plans and features [and]
+# dealer codes in cellfonz rus as nothing shows up to be brought over."
+#
+# Two distinct defects sat behind that one sentence, and P12/P13/P14 are the regressions for them:
+#   • PLANS      the source read commcalc.product_mrc alone. That table is an MRC CATALOGUE keyed on
+#                raw_mi.customer_plan (mig 074), needed only by carriers whose statement omits the
+#                charge — so on Cellfonz it is empty (0 rows) while raw_mi holds 234,724 subscriber
+#                rows naming 77 plans. Luxelink is the mirror image (1,017 catalogue rows, 0 raw_mi),
+#                which is exactly why its wizard completed the step and Cellfonz's could not.
+#   • CODES      the dealer_codes task had NO import_source at all, so the wizard rendered no panel,
+#                even though the carrier-report harvest it needed already existed and mig 293 had
+#                already made "which field is the dealer code" per-carrier config.
+
+# P12 — every task's import_source is a real source, and every source is reachable from a task.
+_srcs = set(ob.IMPORT_SOURCES)
+_wired = {t.get("import_source") for m in ob.DEFAULT_TASKS for t in ob._shipped(m)
+          if t.get("import_source")}
+check("P12a every task's import_source names a declared source", _wired <= _srcs,
+      str(sorted(_wired - _srcs)))
+check("P12b every declared source is wired to a task", _srcs <= _wired,
+      str(sorted(_srcs - _wired)))
+check("P12c the dealer-codes step offers an import (the reported defect)",
+      any(t["task_key"] == "dealer_codes" and t.get("import_source")
+          for t in ob._shipped("pos")),
+      "dealer_codes has no import_source — the wizard shows no 'bring it over' panel at all")
+
+# P13 — fold_subscriber_plans: the pure half of the plan derivation, on the live data's own shapes.
+_rows = (
+    [{"customer_plan": "Unlimited +", "base_mrc": 55.0, "commissionable_mrc": 10.0}] * 12
+    + [{"customer_plan": "Unlimited +", "base_mrc": 0.0, "commissionable_mrc": 0.0}] * 8
+    + [{"customer_plan": "unlimited +", "base_mrc": 35.0, "commissionable_mrc": 10.0}] * 3
+    + [{"customer_plan": "Android Tablet Plan", "base_mrc": 20.0}] * 2
+    + [{"customer_plan": "  ", "base_mrc": 99.0}]
+    + [{"customer_plan": "No Fee Ever", "base_mrc": 0.0}]
+    + [{"customer_plan": "Commissionable Only", "base_mrc": None, "commissionable_mrc": 7.5}]
+    + [{"customer_plan": "Junk MRC", "base_mrc": "n/a"}]
+)
+_folded = {p["plan_name"]: p for p in ob.fold_subscriber_plans(_rows)}
+check("P13a a suspended/credited 0.00 month never sets the plan's fee",
+      _folded["Unlimited +"]["monthly_fee"] == 55.0,
+      f"got {_folded['Unlimited +']['monthly_fee']} (the modal NON-ZERO charge is 55.00)")
+check("P13b plan names fold case-insensitively but keep the first spelling seen",
+      _folded["Unlimited +"]["subscribers"] == 23 and "unlimited +" not in _folded)
+check("P13c a blank plan name is never a plan", "" not in _folded and "  " not in _folded)
+check("P13d a plan whose every row reports 0.00 gets no invented fee",
+      _folded["No Fee Ever"]["monthly_fee"] is None)
+check("P13e a feed carrying only commissionable_mrc still prices its plans",
+      _folded["Commissionable Only"]["monthly_fee"] == 7.5)
+check("P13f an unparseable charge is skipped, not crashed on and not zero",
+      _folded["Junk MRC"]["monthly_fee"] is None and _folded["Junk MRC"]["subscribers"] == 1)
+check("P13g the plans the tenant actually sells sort first",
+      [p["plan_name"] for p in ob.fold_subscriber_plans(_rows)][0] == "Unlimited +")
+_ties = ob.fold_subscriber_plans([{"customer_plan": "Tie", "base_mrc": 30.0},
+                                  {"customer_plan": "Tie", "base_mrc": 50.0}])
+check("P13h a tied charge resolves to the FULL rate, not the promotional one",
+      _ties[0]["monthly_fee"] == 50.0, f"got {_ties[0]['monthly_fee']}")
+check("P13i no rows in, no plans out (and no exception)", ob.fold_subscriber_plans([]) == []
+      and ob.fold_subscriber_plans(None) == [])
+
+# P14 — merge_plan_sources: the catalogue is authority, the subscriber feed is the filler.
+_cat = [{"plan_name": "Unlimited +", "monthly_fee": 55.0, "source": "catalogue"}]
+_obs = [{"plan_name": "unlimited +", "monthly_fee": 35.0, "source": "subscribers"},
+        {"plan_name": "Android Tablet Plan", "monthly_fee": 20.0, "source": "subscribers"}]
+_merged = ob.merge_plan_sources(_cat, _obs)
+check("P14a a confirmed catalogue rate beats one observed on a statement line",
+      len(_merged) == 2 and _merged[0]["monthly_fee"] == 55.0)
+check("P14b a plan the catalogue never priced is still brought over",
+      _merged[1]["plan_name"] == "Android Tablet Plan")
+check("P14c the catalogue-only tenant is unchanged by the new half (Luxelink's shape)",
+      ob.merge_plan_sources(_cat, []) == _cat)
+check("P14d the feed-only tenant now gets its plans (Cellfonz's shape)",
+      len(ob.merge_plan_sources([], _obs)) == 2)
+check("P14e nothing the preview shows is inserted that pos.service_plans cannot store",
+      all(set(p) - {"subscribers", "source"} <= ob.SERVICE_PLAN_IMPORT_COLS | {"plan_name"}
+          for p in _merged))
+
+# P15 — the empty state EXPLAINS itself. "0 records, no reason" is the defect class this ships to
+# kill: the operator cannot tell an empty tenant from a broken importer, so they report the second.
+for _name, _reason in (
+    ("no carrier attached", ob.plans_empty_reason({"carriers": 0})),
+    ("no data on either side", ob.plans_empty_reason({"carriers": 1, "catalogue": 0, "observed": 0})),
+    ("the feed errored", ob.plans_empty_reason({"carriers": 1, "error": "raw_mi: timeout"})),
+):
+    check(f"P15 plans empty-state names the cause and the fix — {_name}",
+          bool(_reason.get("empty_reason")) and bool(_reason.get("empty_next"))
+          and len(_reason["empty_reason"]) > 40)
+_dc_none = ob.dealer_codes_empty_reason([], [], [])
+_dc_unmapped = ob.dealer_codes_empty_reason(
+    [{"carrier": "Verizon", "configured": False}], ["Verizon"], [])
+_dc_nofeed = ob.dealer_codes_empty_reason(
+    [{"carrier": "Boost Mobile", "configured": True, "source": "raw_mi.salesforce_id", "found": 0}],
+    [], [])
+_dc_done = ob.dealer_codes_empty_reason(
+    [{"carrier": "Boost Mobile", "configured": True, "source": "raw_mi.salesforce_id", "found": 28}],
+    [], [])
+check("P15e an UNMAPPED carrier is named as unmapped, and no code is guessed",
+      "Verizon" in _dc_unmapped["empty_reason"] and "Carriers" in _dc_unmapped["empty_next"])
+check("P15f a mapped carrier with no report says WHICH table is empty",
+      "raw_mi.salesforce_id" in _dc_nofeed["empty_reason"])
+check("P15g 'already imported' is not reported as 'nothing found'",
+      "28" in _dc_done["empty_reason"] and "already" in _dc_done["empty_reason"])
+check("P15h no carrier at all is its own sentence",
+      "No carrier" in _dc_none["empty_reason"])
+check("P15i a read error is surfaced, never swallowed into an empty list",
+      "boom" in ob.dealer_codes_empty_reason([], [], ["Boost: boom"])["empty_reason"])
+
+# P16 — preview and apply must not re-derive the plan set independently: that drift is what made
+# apply able to insert a different set from the count the operator approved.
+_ob_src = open(os.path.join(HERE, "app/modules/core/onboarding.py")).read()
+check("P16a preview and apply share ONE plan derivation",
+      _ob_src.count("resolve_service_plans(c, org_id)") == 2 and "_all_plans(" not in _ob_src)
+check("P16b the dealer-code import delegates to the existing harvest, not a second copy",
+      _ob_src.count("from app.modules.pos.router import _dealer_sync") == 2
+      and "dealer_code_source_table" not in _ob_src)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
 print("\n── LIVE: schema drift + migration state ───────────────────────────────────────────")
 
 if "--pure" in sys.argv:

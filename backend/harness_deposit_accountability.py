@@ -241,6 +241,134 @@ check("G6 unpicked envelope's actual (if any) never counted — cash still in th
            {**base, "employee_name": "B", "disposition": "deposited",
             "deposit_slip_path": "p.jpg"}])["pickup_variance_total"] == 0.0)
 
+
+# ═══ H. CASH SHORT BY DM (owner directive 2026-09-08) ═══════════════════════════════════════════
+# Owner, verbatim: "if the cash is short then it should generate a cash short report by DM."
+#
+# The report is ONE MORE FOLD over the day rows this board already produces — same rows, grouped on
+# cash_pickup.picked_up_by instead of (store, day) — so it cannot disagree with the board and there
+# is no second query to drift. Short/over is NOT re-derived here: it arrives on each envelope from
+# pickup_actual.row_variance (envelope_report.count_fields), the same truth table §G proves above.
+from app.modules.closing.deposit_accountability import dm_shortage_rows   # noqa: E402
+
+_h_rows, _h_sum = day_accountability([
+    # DM Alpha: one SHORT (200 declared, 180 counted), one exact match, one collected SEALED
+    {"store_code": "S1", "close_date": "2026-09-08", "picked_up": True, "picked_up_by": "DM Alpha",
+     "employee_name": "Jane", "amount": 200, "actual_picked_amount": 180, "envelope_opened": True,
+     "disposition": "deposited", "deposit_slip_path": "s.jpg"},
+    {"store_code": "S1", "close_date": "2026-09-08", "picked_up": True, "picked_up_by": "DM Alpha",
+     "employee_name": "Mo", "amount": 100, "actual_picked_amount": 100,
+     "disposition": "deposited", "deposit_slip_path": "s.jpg"},
+    {"store_code": "S2", "close_date": "2026-09-08", "picked_up": True, "picked_up_by": "DM Alpha",
+     "employee_name": "Sam", "amount": 50},
+    # DM Beta: one OVER, and one envelope still sitting in the store (never picked up)
+    {"store_code": "S3", "close_date": "2026-09-08", "picked_up": True, "picked_up_by": "DM Beta",
+     "employee_name": "Ali", "amount": 100, "actual_picked_amount": 115},
+    {"store_code": "S3", "close_date": "2026-09-08", "picked_up": False, "picked_up_by": None,
+     "employee_name": "Nia", "amount": 900, "actual_picked_amount": 10},
+])
+_hd_rows, _hd_sum = dm_shortage_rows(_h_rows)
+_h = {r["dm"]: r for r in _hd_rows}
+
+check("H1 grouped by the DM WHO PICKED UP (cash_pickup.picked_up_by), not by store or rep",
+      sorted(_h) == ["DM Alpha", "DM Beta"], str(sorted(_h)))
+check("H2 the SHORT is attributed to the DM who took it: 180 counted vs 200 declared = -20",
+      _h["DM Alpha"]["short_rows"] == 1 and _h["DM Alpha"]["short_amount"] == -20.0
+      and _h["DM Alpha"]["is_short"] is True, str(_h["DM Alpha"]))
+check("H3 UNCOUNTED IS NOT SHORT — the sealed envelope counts as uncounted and lands in NEITHER "
+      "bucket (a store-day nobody counted is not a shortage)",
+      _h["DM Alpha"]["uncounted_rows"] == 1 and _h["DM Alpha"]["counted_rows"] == 2
+      and _h["DM Alpha"]["short_rows"] == 1 and _h["DM Alpha"]["over_rows"] == 0,
+      str(_h["DM Alpha"]))
+check("H4 an exact count is a MATCH, not a shortage", _h["DM Alpha"]["match_rows"] == 1)
+check("H5 OVER is reported separately and never nets away a shortage — Beta is +15 over, 0 short, "
+      "and is NOT flagged as short",
+      _h["DM Beta"]["over_rows"] == 1 and _h["DM Beta"]["over_amount"] == 15.0
+      and _h["DM Beta"]["short_rows"] == 0 and _h["DM Beta"]["is_short"] is False,
+      str(_h["DM Beta"]))
+check("H6 an UNPICKED envelope is excluded entirely — nobody has picked it up to be short of it, "
+      "and its stray actual (900 vs 10) must not become a $890 phantom shortage",
+      _h["DM Beta"]["envelopes"] == 1 and _h["DM Beta"]["counted_rows"] == 1,
+      str(_h["DM Beta"]))
+check("H7 the report NAMES THE CASH, not just the DM: each shortage carries its day, store, rep, "
+      "declared and counted figures",
+      len(_h["DM Alpha"]["shorts"]) == 1
+      and _h["DM Alpha"]["shorts"][0]["declared"] == 200.0
+      and _h["DM Alpha"]["shorts"][0]["actual"] == 180.0
+      and _h["DM Alpha"]["shorts"][0]["variance"] == -20.0
+      and _h["DM Alpha"]["shorts"][0]["employee_name"] == "Jane"
+      and _h["DM Alpha"]["shorts"][0]["day"] == "2026-09-08", str(_h["DM Alpha"]["shorts"]))
+check("H8 the mig-990 opened flag rides along, so the report distinguishes a shortage found in an "
+      "envelope the DM OPENED AND COUNTED from one inferred any other way",
+      _h["DM Alpha"]["shorts"][0]["envelope_opened"] is True
+      and _h["DM Alpha"]["opened_rows"] == 1)
+check("H9 declared/counted totals are per DM and only count what was actually counted",
+      _h["DM Alpha"]["declared_total"] == 350.0 and _h["DM Alpha"]["actual_total"] == 280.0,
+      str(_h["DM Alpha"]))
+check("H10 worst shortage FIRST — the DM the report exists to surface is at the top",
+      [r["dm"] for r in _hd_rows][0] == "DM Alpha", str([r["dm"] for r in _hd_rows]))
+check("H11 the summary totals the shortage without letting the over cancel it",
+      _hd_sum["dms"] == 2 and _hd_sum["dms_short"] == 1 and _hd_sum["short_rows"] == 1
+      and _hd_sum["short_amount"] == -20.0 and _hd_sum["over_amount"] == 15.0
+      and _hd_sum["uncounted_rows"] == 1, str(_hd_sum))
+check("H12 net_variance is reported SEPARATELY from short_amount, so a DM who is $20 short on one "
+      "envelope and $15 over on another is never shown as merely '$5 short'",
+      _hd_sum["net_variance"] == -5.0 and _hd_sum["short_amount"] == -20.0, str(_hd_sum))
+
+# ── no shortages, and the empty case ─────────────────────────────────────────────────────────────
+_c_rows, _c_sum = day_accountability([
+    {"store_code": "S1", "close_date": "2026-09-08", "picked_up": True, "picked_up_by": "DM Clean",
+     "employee_name": "Jane", "amount": 100, "actual_picked_amount": 100},
+])
+_cr, _cs = dm_shortage_rows(_c_rows)
+check("H13 a DM whose counts all tie out is reported with zero short and is_short False — the "
+      "report exists whether or not anyone is short, so 'no shortages' is a stated result",
+      len(_cr) == 1 and _cr[0]["is_short"] is False and _cs["dms_short"] == 0
+      and _cs["short_amount"] == 0.0, str(_cr))
+_s_rows, _s_sum = day_accountability([
+    {"store_code": "S1", "close_date": "2026-09-08", "picked_up": True, "picked_up_by": "DM Sealed",
+     "employee_name": "Jane", "amount": 100},
+])
+_sr, _ss = dm_shortage_rows(_s_rows)
+check("H14 a DM whose whole round was collected SEALED shows 0 short and every envelope "
+      "uncounted — an honest description of a sealed round, never a clean bill of health",
+      _sr[0]["short_rows"] == 0 and _sr[0]["counted_rows"] == 0
+      and _sr[0]["uncounted_rows"] == 1 and _ss["uncounted_rows"] == 1, str(_sr))
+check("H15 no rows in, nothing out (no fabricated DM, no divide-by-zero)",
+      dm_shortage_rows([]) == ([], dm_shortage_rows([])[1]) and dm_shortage_rows([])[0] == []
+      and dm_shortage_rows(None)[0] == [])
+
+# ── attribution and keyset safety ────────────────────────────────────────────────────────────────
+_u_rows, _ = day_accountability([
+    {"store_code": "S1", "close_date": "2026-09-08", "picked_up": True, "picked_up_by": "",
+     "employee_name": "Jane", "amount": 100, "actual_picked_amount": 80},
+])
+_ur, _us = dm_shortage_rows(_u_rows)
+check("H16 a pickup with no recorded DM is reported under '(unattributed)' — a shortage nobody is "
+      "named for is still a shortage, and must not be silently dropped",
+      _ur[0]["dm"] == "(unattributed)" and _ur[0]["short_amount"] == -20.0, str(_ur))
+check("H17 IT FOLDS THE DAY ROWS, not the raw pickup table — so the endpoint's keyset filter "
+      "(applied to those rows) governs the report too, and a store outside the viewer's span can "
+      "never leak in through a shortage line",
+      dm_shortage_rows([r for r in _h_rows if r["store_code"] == "S1"])[1]["short_rows"] == 1
+      and dm_shortage_rows([r for r in _h_rows if r["store_code"] == "S3"])[1]["short_rows"] == 0)
+check("H18 the tolerance band is a parameter, not a second invented default: at $25 the $20 "
+      "shortage falls inside the band and is a match, not a short",
+      dm_shortage_rows(_h_rows, tolerance=25.0)[1]["short_rows"] == 0
+      and dm_shortage_rows(_h_rows, tolerance=25.0)[1]["over_rows"] == 0
+      and dm_shortage_rows(_h_rows)[1]["short_rows"] == 1)
+check("H19 short/over is NOT re-derived — the fold reads the variance day_accountability already "
+      "computed via pickup_actual.row_variance (envelope_report.count_fields)",
+      "row_variance" not in open("app/modules/closing/deposit_accountability.py")
+      .read().split("def dm_shortage_rows")[1].split("def pickup_deposit_line")[0])
+check("H20 both pickup kinds are covered — a bill-pay envelope short is the DM's shortage too "
+      "(mig 942: one machinery, one report)",
+      dm_shortage_rows(day_accountability([
+          {"store_code": "S1", "close_date": "2026-09-08", "picked_up": True, "kind": "billpay",
+           "picked_up_by": "DM K", "employee_name": "J", "amount": 60,
+           "actual_picked_amount": 45}])[0])[0][0]["shorts"][0]["kind"] == "billpay")
+
+
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:
     print("FAILED:")

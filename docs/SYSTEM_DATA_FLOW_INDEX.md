@@ -1234,6 +1234,28 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   blank-clears, billpay mirror) + `harness_deposit_accountability.py` (§G). Frontend: "Actual
   picked" input column on `closing/pickup/page.tsx` + `closing/billpay-pickup/page.tsx`
   (optional; live short/over hint), short-pickup chips on the `deposit-recon` board.
+- **The opened-envelope checkbox + CASH SHORT BY DM (owner directive 2026-09-08, mig `990` WRITTEN
+  NOT APPLIED — see §23p for the full write-up):** the mig-949 count above was OPTIONAL and nothing
+  ever asked for it, and the page's actual-picked input showed the ENVELOPE AMOUNT as its
+  placeholder while `load()` wiped anything typed on every refetch — so a short count was routinely
+  never recorded and the row read "not recorded" with only the declared figure standing.
+  **`commcalc.cash_pickup.envelope_opened`** (+ the `billpay_pickup` sibling) is the DM's own
+  assertion: unticked = collected SEALED (no count needed, declared stands, byte-identical to
+  pre-990); ticked = opened, and `actual_picked_amount` becomes **REQUIRED to confirm** (pure
+  `pickup_actual.opened_without_count`/`gate_items`/`gate_message`, enforced in
+  `_confirm_pickup_impl` for the WHOLE batch before any row is written; a count of 0.00 is allowed).
+  Deliberately NOT inferred from `actual_picked_amount IS NOT NULL` — a blank on a sealed envelope is
+  correct, a blank on an opened one is a missing fact. Reads AND writes are adaptive (the write
+  retries without the key on a pre-990 schema, mig-201 precedent).
+  **CASH SHORT BY DM** is `deposit_accountability.dm_shortage_rows` (PURE) — `by_dm`/`dm_summary` on
+  `GET /closing/deposit-accountability`, folded from the SAME keyset-filtered day rows on
+  `cash_pickup.picked_up_by`. NO new read and NO re-derivation: short/over arrives from
+  `pickup_actual.row_variance`. UNCOUNTED IS NOT SHORT (a sealed envelope is in neither bucket),
+  `over` never nets a short away (`net_variance` is separate), unpicked envelopes are excluded, and
+  an unattributed pickup is reported, not dropped. Proof `harness_cash_pickup.py` §11 (78) +
+  `harness_deposit_accountability.py` §H (71). Frontend: "Opened?" checkbox + count requirement and
+  the **"Cash sales equip/acc"** column with its basis (POS / DECLARED / no bill-pay) on
+  `closing/pickup/page.tsx`; the `CashShortByDm` panel on the `deposit-recon` accountability board.
 
 - **Bill-pay-on-credit column + 3-WAY bill-payment recon (owner directive 2026-09-02 #2, mig
   `944`):** "in the billpayment pick, add another column for bill payment on credit card, and the
@@ -2098,6 +2120,9 @@ as a market-grant keyset member; ambiguity fails closed):
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `core.module_onboarding_task` (mig `733`) | `onboarding.seed_tasks` (INSERTS missing task rows only) + `_backfill_import_sources` (fills a BLANK `import_source` from the shipped registry, nothing else, never overwriting an operator value) | `load_tasks_with_source` → `build_status`, the POS wizard (§23n). DB is truth, the in-code registry is the fallback — so a task that GAINS an import source after a tenant was seeded needs the backfill to reach it |
+| `pos.service_plans` · `pos.dealer_codes` (mig `726`, `742`) | POS settings CRUD; `POST /pos/dealer-codes/sync-from-reports`; the wizard's `apply_import` (ADDITIVE — a name/code already present is SKIPPED, never overwritten) | the register, activations, and the wizard's `count` predicates (§23n) |
+| `commcalc.product_mrc` (mig `074`/`201`) — an MRC CATALOGUE keyed on `raw_mi.customer_plan`, NOT a plan list | `POST /commcalc/product-mrc` + the price-sheet import | `installment_engine._catalog_mrc` (payout MRC), `GET /commcalc/product-mrc/coverage`, `import_health._p_product_mrc`, and — with `commcalc.raw_mi` as its other half — `onboarding.resolve_service_plans` (§23n). Empty on a carrier that reports MRC per subscriber, which is WHY reading it alone showed the house tenant zero plans |
 | `core.marketing_option` (mig `986`) | `POST /marketing/options` (the owner's "+"), `DELETE /marketing/options` (deactivate, never delete) | `event_logic.resolve_options` — HOUSE seed rows (mig `987`) ∪ TENANT rows, tenant wins per (list_key,key); every picker in the module (§23). NO code branches on a value here |
 | `core.marketing_config` (mig `986`) | `PUT /marketing/config` | `event_logic.resolve_config` → `approval_decision` (switch DEFAULT OFF), geofence radius/accuracy, GPS retention days, staffing lead hours (§23) |
 | `core.marketing_event` (mig `986`) | `POST/PATCH /marketing/events`, `/status`, `/approval` | `GET /marketing/events`, `GET /marketing/events/{id}`, `GET /marketing/summary`, `marketing/attention_providers`, `actuals.event_actuals` (§23). **Stores goals, NEVER actuals** |
@@ -2155,6 +2180,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `commcalc.billpay_pickup_config` (mig `942`) | `PUT /closing/billpay-pickup-config` | `_notify_pickup` (billpay kind; falls back to `cash_pickup_config` recipient when unset) |
 | `commcalc.cash_pickup` + `commcalc.billpay_pickup` `mgmt_confirmed(+by/at)` (mig `943`) | `POST /closing/deposit-mgmt-confirm` (management-gated confirm/revoke) | `GET /closing/deposit-accountability` (green-day rule), `GET /closing/deposit-recon` `pickup_deposit` line item (§12 deposit accountability) |
 | `commcalc.cash_pickup` + `commcalc.billpay_pickup` `actual_picked_amount` (mig `949`) + `cash_pickup_config.pickup_actual_relieves_cash` knob | `POST /closing/pickup` / `/billpay-pickup` (item `actual_amount`, shared `_confirm_pickup_impl`; NULL = not recorded) | `GET /closing/pickups` + `/billpay-pickups` variance fields, `GET /closing/deposit-accountability` short-pickup chips (pure `closing/pickup_actual.py`, reusing `envelope_report.count_fields`); outflow swap in `_cash_position_core` ONLY under the knob (default false = declared, byte-identical; §12 actual cash picked) |
+| `commcalc.cash_pickup` + `commcalc.billpay_pickup` `envelope_opened` (mig **`990`**, WRITTEN NOT APPLIED) | `POST /closing/pickup` / `/billpay-pickup` (item `envelope_opened`, shared `_confirm_pickup_impl`; written only when sent, and the upsert retries WITHOUT it on a pre-990 schema — mig-201 precedent) | THE CONFIRM GATE: opened ⇒ `actual_amount` REQUIRED (pure `pickup_actual.opened_without_count`/`gate_items`, batch checked before any write). Surfaced on `GET /closing/pickups` + `/billpay-pickups` and on the deposit-accountability envelopes. NULL and FALSE are ONE state ('collected sealed'); never relieves cash, never summed (§23p) |
 | `commcalc.daily_closing_verification` | `POST /closing/verify` (upsert; `dm_*` = the DM's corrected store-day totals — `dm_ext_cc` since mig `961`: the EXTERNAL-CREDIT portion OF `dm_store_cc`, total-preserving) | `verified_overlay.build_overlay_map` (summary/tender/cash-position overlays), `closing_submissions` dm fields, ops_chargebacks missed_dm_verify detection; `dm_epay_cash` also replaces verified days in `_billpay_position_core` (mig `942`) |
 | `commcalc.daily_closing_verification_audit` (mig `935`, append-only; +`dm_ext_cc`/`prior_dm_ext_cc` mig `961`) | `POST /closing/verify` via `verification_audit.build_audit_row` (one revision per changed save; `edited_after_verify` flags a money change on an already-verified day) | audit/history readers only — no report sums these rows |
 | `commcalc.closing_tender_def` (mig `111` tenant tender registry; +`processor_key` mig `960`) | tender-setup editor (`/closing/tender-config`) | closing tender fields + `_closing_amt`; **card-settlement recon leg routing** (`external_credit_recon.tender_processor_map`/`role_columns` — NULL/no row ⇒ the house map, §12) |
@@ -2211,6 +2237,8 @@ as a market-grant keyset member; ambiguity fails closed):
 | `POST /marketing/events/{id}/checkin` · `POST .../checkout` · `GET /marketing/my-checkins` · `GET /marketing/checkin-retention` | `marketing/router.py`; pure decision `core/geo.evaluate_checkin` | §23 GPS attendance. Check-out stores a TIMESTAMP only; `my-checkins` is filtered to the caller's own employee id and cannot be pointed at anyone else |
 | `GET /marketing/events/{id}/actuals` | `marketing/actuals.event_actuals` → `commcalc.router._compute_feed_actuals_py` → `_sales_cell_agg` | §23 planned-vs-actual, DERIVED from the §3 shared pass. Carries a mandatory `attribution` block: store performance over the window, NOT sales caused by the event |
 | `GET /marketing/summary` | `marketing/router.py` | §23 dashboard — uses the SAME `event_logic.event_readiness` as the event page and the attention providers, so the three cannot disagree |
+| `GET /core/onboarding/{module_key}` (wizard state; seeds + backfills the tenant registry) · `GET /core/onboarding/import-sources/{source}/preview` · `POST .../apply` | `core/onboarding.py` (`build_status`, `preview_import`/`apply_import`; plans via `resolve_service_plans` = `commcalc.product_mrc` + `commcalc.raw_mi`; dealer codes DELEGATE to `pos/router._dealer_sync`) | §23n — "bring it over" preview-then-apply. Every zero carries an `empty_reason`/`empty_next` naming the cause and the fix |
+| `GET /pos/dealer-codes/sync-preview` · `POST /pos/dealer-codes/sync-from-reports` | `pos/router.py:_dealer_sync` (per-carrier source table/column from `commcalc.carrier`, mig `293`; PAGED since 2026-09-08) | §23n — the ONE dealer-code harvest; the POS wizard calls it rather than deriving codes a second time |
 | `GET /core/control-box` (the red/green board; `deep=1` runs heavy providers) · `GET /core/control-box/checks` (effective registry) · `GET /core/control-box/history` · `GET /core/control-box/platform` (the ONE cross-org surface — lamps + counts ONLY, no tenant figures) | `core/control_box_api.py` | §20 super-admin control box |
 | `GET /billing/ai-usage` · `GET/PUT /billing/ai-margin` (append-only, effective-dated = its own audit) · `POST /billing/ai-usage/close` (freeze) | `billing/usage_api.py`; pure `billing/ai_usage.py` | §21 AI usage + margin (migs `972`/`973`) |
 | `GET/PUT /billing/module-pricing` (the plan x module grid, DERIVED from the entitlement catalog) · `GET /billing/module-usage` | `billing/usage_api.py`; pure `billing/statement.pricing_grid` / `billing/module_usage.py` | §21 module pricing (migs `974`/`975`) |
@@ -2291,6 +2319,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
 | `GET /closing/billpay-pickups` (envelopes carry `credit` = declared bill-pay-on-card + `total_credit`, mig `944`; POS comparison base = declared cash+credit; `market=` resolves via the shared `_resolve_market_filter` — comma-joined multi-market grants match per-component, 2026-09-02 DM-envelopes fix, same as `GET /closing/pickups`), `POST /closing/billpay-pickup` (+`/undo`, `/deposit`), `GET/PUT /closing/billpay-pickup-config` (mig `942` — the cash-pickup machinery, parameterized, on the sibling `billpay_pickup` table) | `closing/router.py` (`billpay_pickups`/`billpay_confirm_pickup`/`billpay_undo_pickup`/`billpay_record_deposit`; core `_billpay_position_core`, pure `closing/billpay_pickup.py`) | §12 Bill Payment Pickup / §12 3-way recon / §12 multi-market-grant filter |
 | `GET /closing/cash-recon-management` (GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403; declared vs pickups vs POS on one screen, bill-pay mismatch flag; since mig `944` ALSO the 3-WAY bill-pay recon — declared vs sales-tx (tender-split) vs processor, `three_way_status` per row + `three_way` summary); W3 scheduled report key `closing_billpay_recon` | `closing/router.py` (`cash_recon_management`; POS sides via the shared `_pos_tenders_for_days`/`_pos_billpay_for_days`, sales side via `_sales_billpay_for_days` → `commcalc.router._billpay_sales_by_store_day`; pure math `metric_recon.reconcile_billpay_three_way_days`); `notify/closing_reports.py` | §12 management cash recon / §12 3-way recon |
+| `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`; since 2026-09-08 also **`by_dm` + `dm_summary` — THE CASH SHORT BY DM REPORT**, folded from the SAME keyset-filtered day rows on `cash_pickup.picked_up_by`, never a second read; uncounted is reported as uncounted, never as short, and `over` never nets a short away, §23p), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
 | `GET /billpay-coverage/{period}` (per store/day: bill-pay ≤ cash+card, exceptions surfaced) | `commcalc/router.py` (`billpay_coverage` → `metric_recon.reconcile_billpay_coverage`) | §4 bill-pay carve-out / §15 |
 | `GET /kpi-failing/{period}` (failing-KPI overview: /coaching target resolution + in-process `/dlar-store` store rows + `rep_commissions.kpi_values`; pure `kpi_failing.py`) | `commcalc/router.py` (`get_kpi_failing`, beside `/dlar-store`) | §10 failing-KPI report |
@@ -3658,6 +3687,11 @@ both pages. It gates itself with the SAME predicate the sidebar uses — `canSee
 renders nothing rather than a dead link. Registered here so the next person adding a "set the tax
 rate" affordance extends this component instead of starting a third path to the same rate.
 
+**Generalised 2026-09-08 (§23o).** The fleet-wide "a named screen is a link" sweep needed the same
+self-gating behaviour for 16 destinations, so this component's mechanism was lifted into
+`components/ScreenLink` (`Signpost` + `ScreenLink` + `LinkedText`, one registry, one gate) and
+`SalesTaxRateLink` became a thin wrapper. Behaviour here is unchanged; there is still ONE signpost.
+
 ## 23j. WHO THE CLOSER IS — a deleted employee kept the job (owner directive 2026-09-07)
 
 **Owner:** *"the rep asad amar has been deleted from the system but it shows that he is still the
@@ -3814,6 +3848,290 @@ netting one.
 - Proof: `backend/harness_billpay_netting.py` (57 — the split rule, exhaustively) and
   `backend/harness_cash_pickup.py` §10 (57 total — the wiring: the switch, the source precedence, and
   that the collected number actually changes).
+
+## 23n. THE POS WIZARD HAD NOTHING TO "BRING OVER" (owner 2026-09-08)
+
+**Owner, verbatim:** *"have them fix the bring over of plans and features [and] dealer codes in
+cellfonz rus as nothing shows up to be brought over."*
+
+One sentence, two unrelated defects — and both showed the operator the same unexplained **0**.
+
+**PLANS & FEATURES — the source read one half of a pair.** The `service_plans` step's import source
+`service_plans_from_product_mrc` read `commcalc.product_mrc` alone. That table is not a plan list: mig
+`074` defines it as an MRC **catalogue keyed on `raw_mi.customer_plan`**, built (mig `078`) for a
+carrier whose statement carries no per-subscriber charge. A carrier that DOES report the charge per
+subscriber never needs a catalogue row, so the catalogue stays empty — and reading it alone returns
+nothing while the tenant's own subscriber feed names every plan they sell.
+
+| org-scoped read, 2026-09-08 | `commcalc.product_mrc` | `commcalc.raw_mi` | wizard said |
+|---|---|---|---|
+| Cellfonz R Us | **0 rows** | 234,724 rows · **77** distinct `customer_plan`, each with a `base_mrc` | 0 |
+| Luxelink | 1,017 rows | **0 rows** | 1,017 ✓ |
+| Vzone | 0 rows | 0 rows | 0 (genuinely empty) |
+
+Luxelink is the mirror image of Cellfonz, which is exactly why its wizard completed this step and the
+house tenant's could not. The fix reads **both halves of the pairing mig 074 already defined** — the
+catalogue AND the subscriber feed — rather than adding a second import source keyed off a carrier's
+name (RULE TWO). The catalogue still wins on a name collision: a rate the operator confirmed beats one
+observed on a statement line. Cellfonz now previews **73** plans with real monthly fees; Luxelink's
+1,017 are byte-identical to before.
+
+**DEALER CODES — the step had no import wired to it at all.** The harvest already existed
+(`POST /pos/dealer-codes/sync-from-reports` → `_dealer_sync`, with mig `293` making *which field is the
+dealer code* per-carrier config on `commcalc.carrier`). The `dealer_codes` task simply carried
+`import_source = NULL`, so the wizard rendered no panel. It now delegates to that same function —
+preview is `commit=False`, apply is `commit=True`, so the wizard and the settings page can never
+disagree. **Registry drift was the other half:** `seed_tasks` only ever INSERTS missing task rows, so
+every already-seeded tenant kept the NULL; `_backfill_import_sources` now fills a blank
+`import_source` from the shipped registry (and nothing else, never overwriting an operator's value).
+
+**A silent truncation found on the way in.** `_dealer_sync` read its source with a single
+`.limit(50000)`. Cellfonz `raw_mi` is 234,724 rows and the first 50,000 contain **26 of the tenant's
+28** Salesforce IDs — two doors missing from every sync, with no error anywhere. A dealer code that is
+never imported is an activation that never gets paid, so that read is now paged to the end (28/28).
+
+**And the empty state now explains itself.** A green *"0 records — nothing found for your tenant"* is
+the defect class this keeps paying for: the operator cannot tell an empty tenant from a broken
+importer, so they report the second. `plans_empty_reason` / `dealer_codes_empty_reason` name WHICH
+cause it is and what clears it — no carrier attached · carrier unmapped · report not uploaded · already
+imported · read failed — and the wizard renders that instead of a shrug. Vzone, which genuinely has no
+data, is told exactly that and what to upload. **Nothing is ever invented to fill the list.**
+
+- Files: `backend/app/modules/core/onboarding.py` (`resolve_service_plans`, `fold_subscriber_plans`,
+  `merge_plan_sources`, `plans_empty_reason`, `dealer_codes_empty_reason`, `_backfill_import_sources`,
+  import source `dealer_codes_from_carrier_reports`; the duplicate `_all_plans` derivation deleted so
+  preview and apply share one), `backend/app/modules/pos/router.py` (`_dealer_sync` paging),
+  `frontend/src/app/(platform)/pos/onboarding/page.tsx` (empty-state + plan/code sample rendering).
+- Duplicate check: reused `_dealer_sync` (mig 293 config) and `commcalc.product_mrc`; the distinct-plan
+  scan mirrors `GET /commcalc/product-mrc/coverage` and `import_health._p_product_mrc`, which answer
+  "which plans have no MRC" rather than "which plans exist", and are left untouched (commission-owned).
+- Proof: `backend/harness_pos_onboarding.py` §P12–P16 — **182 pass · 0 fail** (was 155). P13 folds the
+  live data's own shapes (a suspended month reporting `0.00` must not become the plan's price); P14
+  pins both tenants' shapes; P15 pins that every empty state names a cause AND a fix; P16 pins that
+  preview and apply share one derivation and that the dealer-code path delegates.
+
+## 23o. A NAMED SCREEN THAT IS NOT A LINK (owner directive 2026-09-08)
+
+**Owner, verbatim:** *"for dm verify it shows 'Asad Umar is still assigned as this store's closer but
+is no longer an employee — clear the assignment under Cash Setup.' — need to have a link for Cash
+setup if the option is presented for any menu — assign an agent to check all references and add the
+menus and make a summary where all the links have been added and for what purpose."*
+
+**The rule, fleet-wide:** *when user-facing copy NAMES a screen the reader is meant to go to, that
+name is a LINK.* `closing/closer_resolution.closer_for_day` (§23j) writes a correct sentence and
+`components/DailyClosingVerify` printed it verbatim — the reader is told where to go and then left to
+find it. The same shape was in ~24 other places: "map them under Closing → Tender Config", "grant it
+in Roles & Access", "Fix a mapping at Store Matching", "add one under Onboarding → Carrier".
+
+### ONE mechanism — `frontend/src/components/ScreenLink.tsx`
+
+**Duplicate check (build gate).** The only existing affordance of this kind was
+`components/SalesTaxRateLink` (§23i) — one self-gating signpost to `/pos/settings#sales-tax`. A sweep
+needing ~16 destinations could not copy it 16 times, so it was **generalised, not forked**:
+`SalesTaxRateLink` is now a 5-line wrapper over the shared `Signpost` and there is still exactly ONE
+signpost implementation and ONE gate. Nothing else in the index served "route a reader to a screen
+named in prose".
+
+| export | what it is |
+|---|---|
+| `SCREENS` | the registry: screen name + prose *aliases* → the NAV href that already exists in `lib/rbac.ts`. 16 destinations. |
+| `ScreenLink` | inline link inside hand-written JSX copy |
+| `LinkedText` | linkifies a plain **string** — this is what makes it work for BACKEND-authored notes |
+| `Signpost` | the standalone button form (what `SalesTaxRateLink` always was) |
+
+**Why a frontend linkifier and not a structured `href` on every note payload.** A backend note is a
+sentence and it *already names the screen*. Adding a parallel `href`/`link_label` field to every
+note-producing endpoint would touch dozens of routers and create a **second** source of truth for
+"where does this screen live" — the drift the house rules forbid. The screen→href map exists once, in
+NAV, and this reads it. One consequence worth having: `<LinkedText>` on **one** render site fixes both
+the frontend-authored and the backend-authored copy that flows through it — the upload guard banner
+linkifies `uploadGuard.XREPORT_ZERO_FIX` *and* `commcalc/router.py`'s own `note` with one change.
+
+**RBAC — every link gates itself.** `canSeeItem` over the destination's OWN NAV entry: the same
+predicate the sidebar uses, so a link can never advertise a page its viewer would be bounced out of.
+An inline link degrades to **plain bold text** for such a viewer (deleting the words would maim the
+sentence — this is what the employee portal's "Roles & Access" mentions do); a standalone `Signpost`
+renders **nothing**. An href with no NAV entry is refused rather than guessed.
+
+### Where links were added (17 files, 25 sites)
+
+| screen it is ON | the copy | links TO | why |
+|---|---|---|---|
+| **DM Verify** (`components/DailyClosingVerify`) | "…is no longer an employee — clear the assignment under **Cash Setup**." (backend `closer_resolution`) | `/closing/cash-config` | clear a dead closer assignment — **the reported defect** |
+| Every upload surface (`commcalc/_lib/uploadGuard` banner + forensics list) | "Map the labels listed below under **Closing → Tender Config**…" (both this file and `commcalc/router.py`'s `note`) | `/closing/tender-config` | map the unrecognised X-report tender labels so their dollars reconcile |
+| Carrier Reconciliation | "Fix a mapping at **Store Matching** to resolve them" | `/commcalc/store-match` | map the workbook's unmatched store names |
+| Daily Targets · My Targets | server `setup_hint`s: "map your POS store names to stores in **Store Matching**" | `/commcalc/store-match` | make achieved numbers attach to a target row |
+| Daily Targets (empty state) | "No targets set. Add monthly targets in **Target Settings**." | `/commcalc/targets/settings` | set the targets that make the page non-empty |
+| Accessory Targets | "identified per tenant in **Sales Report → Accessory settings**" | `/commcalc/sales-report` | change what counts as an accessory / set-up fee |
+| Dashboard Designer (gate + 403) | "assign it to your role under **Roles & Access → Settings editing**" | `/admin/roles` | grant the "Menu & dashboard layout designer" setting |
+| Import Health | "…setting to your role under **Roles & Access**." | `/admin/roles` | grant the Import Health setting |
+| Companies (Tenants) ×2 | "manages their own staff in **Roles & Access**" · "login (created in **Roles & Access**)" | `/admin/roles` | create/manage the tenant's logins |
+| Sign-in-as Audit | "…setting on **Roles & Access**." | `/admin/roles` | grant the sign-in-as policy/audit setting |
+| Special Order Setup | "Ask an administrator to grant it in **Roles & Access**." | `/admin/roles` | grant the page |
+| Employee portal ×2 | "check your login in **Roles & Access**" · "set your Employee ID in **Roles & Access**" | `/admin/roles` | (self-gated → plain text for the employee; the link appears only for a reader who can act) |
+| Device Cost Recon · Handset COGS · IMEI Rebates | "(**Roles & Access** → your role → sensitive data grants)" | `/admin/roles` | grant the report's sensitive-data clearance |
+| Management Review | "…page at **Administration → Roles**." | `/admin/roles` | grant the Management Review page |
+| Report Center | "clearance from **Roles & Access**" | `/admin/roles` | grant the report's clearance |
+| Sales Report (read-only classification) | "ask an administrator to grant it (**Roles & Access** → settings permissions)" | `/admin/roles` | grant Classification settings |
+| Pay Simulator | server reason: "Ask an admin to add you under **Roles & Access**" / "set your Employee ID in **Roles & Access**" | `/admin/roles` | provision/link the login |
+| Register (`pos/sales` checkout blockers) | "link your login to an employee record in the **Employees module**" | `/storeops/employees` | link the login before a sale can be rung |
+| Employee dashboard widget | "ask an admin to set your **home store** in **Employees**" | `/storeops/employees` | set the home store so daily goals compute |
+| MA Upload | "add one under **Onboarding → Carrier**" | `/commcalc/onboarding` | add the carrier this upload needs |
+| Sales Derive | "(**Connectors → Sales Transactions** is set to manual)" | `/commcalc/connectors` | turn automatic derivation on |
+| Asset Ledger (market re-sync result) | "conflicting markets in **Settings → Stores**" | `/storeops/setup/stores` | fix the duplicate store rows the re-sync skipped |
+| Camera analytics notices | "an administrator can turn the module on in **Vision → Settings**" | `/vision/settings` | enable the module |
+| My Team | "assign you to an org unit in **Org Structure**" | `/admin/org` | put the manager in the tree so a team appears |
+| Pricing & Free Trial (non-super-admin) | "Your own company's plan lives under **Billing**." | `/admin/billing-usage` | see the company's own plan/usage |
+| Tax Collected · Store Setup | *(unchanged)* `SalesTaxRateLink` | `/pos/settings#sales-tax` | pre-existing §23i signpost, now on the shared mechanism |
+
+### No menu had to be added
+
+Every destination named in copy already had a NAV entry in `rbac.ts` — the gap was the link, not the
+menu. **One exception, reported not fixed:** *"Metric Source of Truth"* is named in a `title=` tooltip
+on `closing/cash-recon-management` and **no such page exists** anywhere in NAV or under `app/`. It is
+deliberately NOT in the registry: inventing an href would be worse than the gap.
+
+- Proof: `backend/harness_screen_link_guard.py` (51). **Static on purpose** — the defect renders
+  perfectly and compiles, so neither `tsc` nor a build can see it. §A every registered href is a real
+  NAV href (an invented one would gate to `false` for every viewer and silently print plain text);
+  §B the owner's exact sentence, rebuilt from `closer_resolution.py`'s own source, links Cash Setup to
+  `/closing/cash-config` and leaves the rest of the sentence — including the person's name — untouched;
+  §C longest-alias-first, so "Closing → Tender Config" links as one breadcrumb and not just its tail,
+  proved against the BACKEND's string as well as the frontend's; §D boundaries/case; §E the 10 render
+  sites still route their prose through the mechanism; §F there is one signpost implementation and one
+  gate.
+
+## 23p. THE CASH PICKUP RECORDED THE ENVELOPE, NOT THE COUNT (owner 2026-09-08)
+
+Four owner reports on Cash Pickup, all the same day. Three of them are one defect.
+
+**Owner (1):** *"on cash pick up if the declared cash pick by the dm is less then the sheet does not
+update the actual cash picked up, it only shows the envelope amount"*
+**Owner (2):** *"it should have a check box asking if the cash envelope was opened"*
+**Owner (3):** *"if the cash is short then it should generate a cash short report by DM"*
+**Owner (4):** *"cash pick up is still showing the total cash, let it be like that, just add another
+column for cash sales equip/acc which is total cash minus epay cash — and cash picked up is still
+not fixed"*
+
+### (1) ROOT CAUSE — two lines on the page, neither in the backend
+
+mig 949 built the whole actual-picked mechanism correctly: the column, the variance triple, the
+endpoint, the confirm writer. Live, it recorded nothing, because the SCREEN never let the value
+reach it. Two independent bugs in `closing/pickup/page.tsx`, both proven at the source:
+
+1. **The empty box looked full.** The actual-picked input carried
+   `placeholder={String(e.cash ?? '')}` — the envelope's own amount, rendered greyed INSIDE the
+   field. A DM opening a $312 envelope saw "312" already sitting in the box, typed nothing, and
+   confirmed. `actual_amount` is sent only when non-blank, so no key was sent, the server stored
+   NULL, and the row afterwards reads *"not recorded"* with only the envelope amount standing —
+   **exactly the sentence the owner wrote.** A placeholder is not a value; presenting the expected
+   figure as one guaranteed the DM would never contradict it, which is the one thing the field
+   existed to let them do.
+2. **Anything typed was wiped before Confirm.** `load()` began `setSel({}); setNotes({});
+   setActuals({})`. The page refetches far more often than it looks: `load` is a `useCallback` over
+   `resolvedStores`, a `useMemo` over the store roster **fetched asynchronously on mount**, so the
+   roster landing is itself a reload — as is the market-scope auto-apply
+   (`setMarket(user.market)`) and every filter change. A DM who started typing counts before those
+   returned lost them silently, with no error and the rows still on screen.
+
+Both are fixed: the field's placeholder is now `count` / `required` (never the expected figure), and
+counts and notes are treated as the DM's **unsaved work** that survives a reload — only the
+SELECTION is cleared, because rows may have gone. Confirmed envelopes' entries are retired after a
+successful save. Keys are the same `date|store|rep` envelope key, so a value can never migrate to a
+different envelope, and confirm maps over the CURRENT rows so nothing off-screen is submitted.
+
+### (2) THE OPENED CHECKBOX — the flag is the assertion, the amount is the evidence
+
+Reports (1) and (2) are one hole: recording the count was **optional and nothing ever asked**. The
+checkbox makes the DM state what they physically did, and binds the two:
+
+- **unticked = collected SEALED** — no count needed, the declared snapshot stands, and the envelope
+  goes on to management's own count (mig 936 `envelope_count`). This is the pre-990 behavior exactly.
+- **ticked = opened and counted** — `actual_picked_amount` becomes **REQUIRED to confirm**.
+
+`commcalc.cash_pickup.envelope_opened` + the `billpay_pickup` sibling, **migration `990`, WRITTEN AND
+NOT APPLIED**. **Deliberately not inferred from `actual_picked_amount IS NOT NULL`:** a blank count on
+a sealed envelope is *correct*; a blank count on an opened one is a *missing fact*. Without the column
+those two are indistinguishable — which is precisely how the short cash went unrecorded.
+
+**The gate is server-side** (`_confirm_pickup_impl` → pure `pickup_actual.gate_items` /
+`gate_message`), checked for the WHOLE batch **before any row is written**, so a blocked confirm never
+lands half a pickup. The page mirrors it (disabled button + per-row "count required") only to save the
+round-trip. A count of **0.00 on an opened envelope is ALLOWED** — "I opened it and it was empty" is a
+serious finding, not an absence. `NULL` and `FALSE` are one state by design, so an untouched checkbox
+writes nothing and costs no retry.
+
+**Adaptive both ways:** reads resolve a missing column to False; the write retries WITHOUT the key on
+a pre-990 schema (the mig-201 `product_mrc` precedent), so the pickup and the count that matters most
+still record. An un-migrated database behaves exactly as today and the gate never fires.
+
+### (3) CASH SHORT BY DM — a fold, not a fourth surface
+
+**Duplicate check (build gate).** Three surfaces already carry pickup short/over, each answering a
+different question, and a fourth was NOT built:
+
+| surface | grain | why it is not the home for this |
+|---|---|---|
+| `GET /closing/pickups` | envelope | the DM's working screen for a day/range, not a report |
+| `GET /closing/cash-recon-management` | store-day | rows carry no `picked_up_by`, so grouping by DM means a SECOND read of the pickup tables — a sibling derivation of what `_accountability_pickup_rows` already returns — and its market-manager gate would hide a DM's own shortages from that DM |
+| `GET /closing/deposit-accountability` | store-day, **both pickup tables**, keyset-scoped | already reads cash ∪ billpay over the range and already computes `pickup_short_rows`/`short_pickup_days` from `row_variance` |
+
+So the report is **one more fold over rows already in hand** on the accountability board:
+`deposit_accountability.dm_shortage_rows` (PURE) groups the SAME day rows on `cash_pickup.picked_up_by`
+and returns `by_dm` + `dm_summary`. **No new read, no new query, and short/over is not re-derived** —
+it arrives pre-computed from `pickup_actual.row_variance` (`envelope_report.count_fields`), the truth
+table every other surface uses.
+
+**It folds the DAY ROWS, not the raw pickups, and that is load-bearing:** the endpoint filters day rows
+by the caller's keyset, so folding those rows makes the DM totals agree with the board by construction
+and no store outside the viewer's span can leak in through a shortage line.
+
+**UNCOUNTED IS NOT SHORT**, stated on screen and pinned in the harness: a sealed envelope has no count
+and lands in neither bucket. A DM with zero shortages and forty uncounted envelopes has not been
+cleared of anything. `over` is reported separately and **never nets a shortage away** — `net_variance`
+is a distinct field, so a DM $20 short on one envelope and $15 over on another is never shown as "$5
+short". A pickup with no recorded DM is reported under `(unattributed)` rather than dropped.
+
+### (4) CASH SALES EQUIP/ACC — the column, with its basis visible
+
+The envelope amount **stays the whole drawer** — bill-pay netting stays **OFF**
+(`pickup_nets_pos_billpay_cash`, mig `989` unapplied, §23m) — and `cash_equip_acc` is a DISPLAY split
+beside it, computed from the one shared `billpay_netting.net_store_day` rule whether or not netting is
+on, so the column and the netting can never disagree. The backend half landed on the base commit; the
+**column is now rendered**, and its **basis is shown, never hidden**: `POS` (green — computed from the
+sales transactions) · `DECLARED` (amber — the rep's own figure, no POS number for that store-day) ·
+`no bill-pay` (grey — nothing recorded, so the whole drawer is equip/acc by default rather than by
+evidence). A POS-derived split and a declared-derived one must not look alike. Both the column and the
+basis export (RULE FOUR).
+
+### FILES
+
+- `database/migrations/990_pickup_envelope_opened.sql` — **WRITTEN, NOT APPLIED** (owner approval).
+- `backend/app/modules/closing/pickup_actual.py` — `envelope_opened`, `opened_without_count`,
+  `gate_items`, `gate_message` (all pure).
+- `backend/app/modules/closing/deposit_accountability.py` — `dm_shortage_rows` (pure);
+  `picked_up_by` + `envelope_opened` carried onto the day view's envelopes.
+- `backend/app/modules/closing/router.py` — the confirm gate + adaptive write in
+  `_confirm_pickup_impl` (`opened_count` in the response); `envelope_opened` on `GET /closing/pickups`
+  and `GET /closing/billpay-pickups`; `by_dm`/`dm_summary` on `GET /closing/deposit-accountability`.
+- `frontend/.../closing/pickup/page.tsx` — the placeholder fix, the unsaved-work fix, the Opened?
+  checkbox + count requirement, the Cash sales equip/acc column, and both export columns.
+- `frontend/.../closing/deposit-recon/page.tsx` — the `CashShortByDm` panel on the accountability board.
+
+### PROOF
+
+- `backend/harness_cash_pickup.py` §11 — **78 pass** (was 57). The gate truth table (sealed needs no
+  count; opened without one is refused; a count of 0.00 is allowed; a mixed batch is refused whole
+  with nothing written; the billpay sibling inherits the same gate; a client that never sends the flag
+  is byte-identical), plus §11r–u pinning the two FRONTEND lines at the source — neither is reachable
+  from Python, and a harness that proves the backend while the screen keeps eating the DM's input
+  proves nothing (§24). All four frontend assertions were verified to FAIL against the pre-fix file.
+- `backend/harness_deposit_accountability.py` §H — **71 pass** (was 51). Grouping, attribution,
+  uncounted-is-not-short, over never netting a short away, unpicked envelopes excluded, the keyset
+  fold, the tolerance parameter, both pickup kinds, and that the variance is read rather than
+  re-derived.
+- Unchanged and green: `harness_billpay_pickup.py` 47 · `harness_billpay_netting.py` 57 ·
+  `harness_org_scope_guard.py` 25, plus the 18 other closing/cash harnesses.
 
 ## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
 

@@ -6,6 +6,7 @@ import EmployeeWidgets from '@/components/EmployeeWidgets'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
+import ScreenLink from '@/components/ScreenLink'
 
 // Manager TEAM snapshot — headline target tiles + per-store + per-rep rollup for the caller's span
 // (or a chosen org unit). Shared by the /portal "My Team" tab and the platform /storeops/team page.
@@ -94,7 +95,7 @@ export default function TeamSnapshot({ period, token, unitId, today }:
   if (!data) return null
   if (!data.is_manager && !unitId) {
     return <div className="card" style={{ padding: 18, color: 'var(--text2)', fontSize: 14 }}>
-      You don’t manage any team yet. An admin can assign you to an org unit in <b>Org Structure</b>, then your
+      You don’t manage any team yet. An admin can assign you to an org unit in <ScreenLink to="org_structure" />, then your
       stores and reps appear here.
     </div>
   }

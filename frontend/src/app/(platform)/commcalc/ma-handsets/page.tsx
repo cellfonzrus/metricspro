@@ -8,6 +8,7 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import StandardFilterBar from '@/components/StandardFilterBar'
 import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
+import ScreenLink from '@/components/ScreenLink'
 
 // MARKETPLACE HANDSET COGS (owner-approved package 2026-07-29).
 //
@@ -62,7 +63,7 @@ function LockNote() {
       background: 'var(--surface2, #f8fafc)', border: '1px solid var(--border)' }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>🔒 This report is restricted</div>
       Ask an admin to grant <b>“Marketplace handset COGS report”</b> on your role
-      (Roles &amp; Access → your role → sensitive data grants). This report has <b>no default access</b>:
+      (<ScreenLink to="roles_access">Roles &amp; Access</ScreenLink> → your role → sensitive data grants). This report has <b>no default access</b>:
       what the company pays for handset inventory — the lines, the quantities and the costs — is
       restricted for everyone until it is explicitly granted.
       <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>

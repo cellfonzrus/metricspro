@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import { safeHref } from '@/lib/safe-url'   // H6: deep_link is tenant-editable on this very page
+import ScreenLink from '@/components/ScreenLink'
 
 // IMPORT HEALTH (owner directive 2026-07-25, mig 717) — the universal registry of every import this
 // tenant expects, its EXPECTED CADENCE, when it last actually delivered, and the page an admin fixes it
@@ -278,7 +279,7 @@ export default function ImportHealthPage() {
       {!canEdit && (
         <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>
           You can view import health but not change schedules. Ask an owner to grant the
-          &ldquo;Import Health&rdquo; setting to your role under Roles &amp; Access.
+          &ldquo;Import Health&rdquo; setting to your role under <ScreenLink to="roles_access" />.
         </p>
       )}
       {att?.provider_errors?.length ? (

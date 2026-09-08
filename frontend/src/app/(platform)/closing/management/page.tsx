@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
+import ScreenLink from '@/components/ScreenLink'
 
 // Management Review (permission-gated: super-admin / company-wide scope / explicit /closing/management
 // grant — DMs excluded). Shows the 3-try close-attempt log: every value a rep entered before a close
@@ -79,7 +80,7 @@ export default function ClosingManagementPage() {
       ) : forbidden ? (
         <div className="card" style={{ padding: 24, textAlign: 'center' }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>🔒 Restricted</div>
-          <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 6 }}>Management Review is limited to company-wide leadership. Ask an admin to grant your role the “Closing: Management Review” page at Administration → Roles.</div>
+          <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 6 }}>Management Review is limited to company-wide leadership. Ask an admin to grant your role the “Closing: Management Review” page at <ScreenLink to="roles_access">Administration → Roles</ScreenLink>.</div>
         </div>
       ) : err ? (
         <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {err}</div>

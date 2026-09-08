@@ -9,6 +9,7 @@
 // (the luxelink 330-row grouped-file incident, 2026-07-14). This file changes NO money/guard behavior;
 // it only maps a response the guard already produced into an honest label + banner.
 import type { CSSProperties } from 'react'
+import { LinkedText } from '@/components/ScreenLink'
 
 export type UploadTone = 'ok' | 'warn' | 'guard'
 
@@ -176,13 +177,16 @@ export function UploadGuardBanner({ outcome, style }: { outcome: UploadOutcome |
         {outcome.title ? `⚠️ ${outcome.title}`
           : guard ? '⚠️ Upload refused — existing data protected' : '⚠️ Saved, but with a data warning'}
       </div>
-      <div>{outcome.reason || outcome.text}</div>
+      {/* The reason SENTENCE names where to go ("… map them under Closing → Tender Config"), and it
+          is authored in two places — here (XREPORT_ZERO_FIX) and by the backend's own `note`. Both
+          arrive as plain strings, so both are linkified by the one mechanism. */}
+      <div><LinkedText text={outcome.reason || outcome.text} /></div>
       {!!outcome.details?.length && (
         <details style={{ marginTop: 8 }}>
           <summary style={{ cursor: 'pointer', fontWeight: 600 }}>What the importer actually saw</summary>
           <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
             {outcome.details.map((d, i) => (
-              <li key={i} style={{ marginBottom: 3, fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }}>{d}</li>
+              <li key={i} style={{ marginBottom: 3, fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }}><LinkedText text={d} /></li>
             ))}
           </ul>
         </details>

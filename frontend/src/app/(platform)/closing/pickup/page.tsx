@@ -48,9 +48,15 @@ export default function CashPickupPage() {
   const [sel_, setSel] = useState<Record<string, boolean>>({})
   const [notes, setNotes] = useState<Record<string, string>>({})
   // OWNER 2026-09-04 ("one more column is needed actual cash picked from envelope"): the ACTUAL
-  // cash the DM physically takes out, typed per envelope at confirm time. Optional — blank sends
-  // nothing (the server stores NULL "not recorded", never a fake 0).
+  // cash the DM physically takes out, typed per envelope at confirm time. Optional UNLESS the DM
+  // ticks "opened" below — blank sends nothing (the server stores NULL "not recorded", never a
+  // fake 0).
   const [actuals, setActuals] = useState<Record<string, string>>({})
+  // OWNER 2026-09-08 ("it should have a check box asking if the cash envelope was opened", mig 990):
+  // the DM's own statement about what they physically did. Ticked ⇒ the count above becomes
+  // REQUIRED to confirm — an opened envelope recorded without its count is exactly how short cash
+  // went unrecorded. Unticked ⇒ collected sealed, and the declared envelope amount stands.
+  const [opened, setOpened] = useState<Record<string, boolean>>({})
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [cfg, setCfg] = useState<any>(null)
@@ -122,6 +128,11 @@ export default function CashPickupPage() {
           { header: 'Store', get: (r: any) => r.store_name || r.store_code },
           { header: 'Rep', get: (r: any) => r.employee_name },
           { header: 'Cash', get: (r: any) => r.cash, money: true },
+          // owner 2026-09-08 — the equip/acc split, with its BASIS beside it so an exported number
+          // derived from a rep's declaration is never mistaken for a POS-calculated one.
+          { header: 'Cash sales equip/acc', get: (r: any) => r.cash_equip_acc ?? '', money: true },
+          { header: 'Equip/acc basis', get: (r: any) => r.cash_equip_acc_basis === 'pos' ? 'POS' : r.cash_equip_acc_basis === 'declared' ? 'declared' : 'no bill-pay' },
+          { header: 'Envelope opened', get: (r: any) => (r.picked_up ? (r.envelope_opened ? 'opened' : 'sealed') : '') },
           { header: 'Actual picked', get: (r: any) => r.actual_picked_amount ?? '', money: true },
           { header: 'Pickup variance', get: (r: any) => r.pickup_variance_status ? `${r.pickup_variance} (${r.pickup_variance_status})` : '' },
           { header: 'POS cash (store-day)', get: (r: any) => r.pos_cash ?? 'no POS data', money: true },
@@ -163,7 +174,22 @@ export default function CashPickupPage() {
   const reqSeq = useRef(0)   // see the note inside load()
   const load = useCallback(() => {
     if (rangeMode ? !(rangeStart && rangeEnd) : !date) return
-    setLoading(true); setSel({}); setNotes({}); setActuals({})
+    // OWNER BUG REPORT 2026-09-08 ("if the declared cash pick by the dm is less then the sheet does
+    // not update the actual cash picked up, it only shows the envelope amount") — HALF TWO of that
+    // defect. This line used to read `setActuals({})`, wiping every typed count on ANY refetch. The
+    // page refetches more often than it looks: `load` is a useCallback over `resolvedStores`, which
+    // is a useMemo over the store roster fetched ASYNCHRONOUSLY on mount, so the roster landing is
+    // itself a reload — as is the scope auto-apply (`setMarket(user.market)`) and every filter
+    // change. A DM who started typing counts before the roster returned lost them silently, then
+    // confirmed a batch that recorded no actual at all.
+    //
+    // Counts and notes are the DM's UNSAVED WORK, not server state: they now SURVIVE a reload, and
+    // only the SELECTION is cleared (rows may have gone or been picked up by someone else, so a
+    // stale checkbox could confirm an envelope that is no longer on screen). Keys are the same
+    // date|store|rep envelope key, so a value can never migrate to a different envelope; entries
+    // for envelopes that are gone are simply unread. The confirm below maps over the CURRENT rows,
+    // so nothing off-screen is ever submitted.
+    setLoading(true); setSel({})
     const qs = [
       rangeMode ? `start=${rangeStart}&end=${rangeEnd}` : `date=${date}`,
       market && `market=${encodeURIComponent(market)}`,
@@ -216,8 +242,18 @@ export default function CashPickupPage() {
     })),
     [data, selByStore])
 
+  // OWNER 2026-09-08 (mig 990): an envelope the DM ticked as OPENED must carry the count they made.
+  // Mirrors the server's own gate (pickup_actual.gate_items / gate_message) so the DM is told before
+  // the round-trip rather than by a 400 — the server stays the authority, this is only the warning.
+  const openedNoCount = selectedKeys.filter(e => opened[key(e)] && (actuals[key(e)] || '').trim() === '')
+
   async function confirm() {
     if (!selectedKeys.length) { setMsg('Select at least one envelope.'); return }
+    if (openedNoCount.length) {
+      setMsg('❌ Enter the actual cash counted for the envelope(s) marked opened: '
+        + openedNoCount.map(e => `${e.employee_name || e.store_name || e.store_code}${e.close_date ? ` (${e.close_date})` : ''}`).join(', ') + '.')
+      return
+    }
     setBusy(true); setMsg('')
     try {
       const r = await api('/api/v1/closing/pickup', { method: 'POST', body: JSON.stringify({
@@ -228,16 +264,26 @@ export default function CashPickupPage() {
         // no key at all, so the server stores nothing (NULL = not recorded, never a fake 0).
         items: selectedKeys.map(e => {
           const a = (actuals[key(e)] || '').trim()
-          return { store_code: e.store_code, store_name: e.store_name, employee_name: e.employee_name, close_date: e.close_date, amount: e.cash, note: notes[key(e)] || '', ...(a !== '' ? { actual_amount: Number(a) } : {}) }
+          return { store_code: e.store_code, store_name: e.store_name, employee_name: e.employee_name, close_date: e.close_date, amount: e.cash, note: notes[key(e)] || '',
+            ...(a !== '' ? { actual_amount: Number(a) } : {}),
+            // mig 990 — the opened flag rides along only when the DM ticked it, so an untouched
+            // row is byte-identical to what this page sent yesterday.
+            ...(opened[key(e)] ? { envelope_opened: true } : {}) }
         }),
       }) })
       const n = (r.notify || []) as any[]
       const sent = n.filter(x => x.ok).map(x => x.channel)
       const failed = n.filter(x => !x.ok)
       setMsg(`✅ ${r.count} envelope(s) picked up (${fmt(r.total)}${r.actual_total != null ? ` · actual ${fmt(r.actual_total)}` : ''}).` +
+        (r.opened_count ? ` ${r.opened_count} opened & counted.` : '') +
         (r.variance_short ? ` ⚠ ${r.variance_short} short.` : '') + (r.variance_over ? ` ${r.variance_over} over.` : '') +
         (sent.length ? ` Notified: ${sent.join(', ')}.` : '') +
         (failed.length ? ` ⚠️ ${failed.map(f => `${f.channel}: ${f.detail}`).join('; ')}` : ''))
+      // These envelopes are now SAVED, so their unsaved-work entries are retired (the reload below
+      // deliberately keeps everything else the DM has typed — see the note in load()).
+      const submitted = new Set(selectedKeys.map(key))
+      const prune = <T,>(m: Record<string, T>) => Object.fromEntries(Object.entries(m).filter(([k]) => !submitted.has(k)))
+      setActuals(prune); setNotes(prune); setOpened(prune)
       load()
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
     finally { setBusy(false) }
@@ -391,7 +437,7 @@ export default function CashPickupPage() {
           <div className="card table-wrapper" style={{ padding: 0 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {[...(rangeMode ? ['Date'] : []), '', 'Store', 'Rep', 'Cash', 'Actual picked', 'POS cash', 'Envelope', 'Note / status', 'Deposit'].map((h, i) =>
+                {[...(rangeMode ? ['Date'] : []), '', 'Store', 'Rep', 'Cash', 'Cash sales equip/acc', 'Opened?', 'Actual picked', 'POS cash', 'Envelope', 'Note / status', 'Deposit'].map((h, i) =>
                   <th key={i} style={{ textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -404,6 +450,47 @@ export default function CashPickupPage() {
                       <td style={cell}>{e.store_name || e.store_code || '—'}</td>
                       <td style={cell}>{e.employee_name || '—'}</td>
                       <td style={{ ...cell, fontWeight: 600 }}>{fmt(e.cash)}</td>
+                      {/* CASH SALES EQUIP/ACC (owner 2026-09-08: "cash pick up is still showing the
+                          total cash, let it be like that, just add another column for cash sales
+                          equip/acc which is total cash minus epay cash"). The envelope amount to the
+                          left STAYS the whole drawer — netting stays off — and this is the display
+                          split beside it. The BASIS is shown, never hidden: a POS-calculated split
+                          (computed from the sales transactions) must not look like one derived from
+                          the rep's own declaration, and "none" means no bill-pay figure existed at
+                          all for this store-day, so the whole drawer is equip/acc by default rather
+                          than by evidence. */}
+                      <td style={cell} title={
+                        e.cash_equip_acc_basis === 'pos' ? `POS-calculated: ${fmt(e.cash_gross ?? e.cash)} total cash − ${fmt(e.cash_billpay_used)} POS bill-pay cash`
+                          : e.cash_equip_acc_basis === 'declared' ? `From the rep's declaration (no POS bill-pay figure for this store-day): ${fmt(e.cash_gross ?? e.cash)} total cash − ${fmt(e.cash_billpay_used)} declared bill-pay cash`
+                          : 'No bill-pay cash recorded for this store-day — the whole drawer is equipment/accessory cash'}>
+                        {e.cash_equip_acc == null ? <span style={{ color: 'var(--text3)' }}>—</span> : <>
+                          <span style={{ fontWeight: 600 }}>{fmt(e.cash_equip_acc)}</span>
+                          <span style={{ display: 'block', fontSize: 10, fontWeight: 700, letterSpacing: 0.2, marginTop: 1,
+                            color: e.cash_equip_acc_basis === 'pos' ? '#166534' : e.cash_equip_acc_basis === 'declared' ? '#b45309' : 'var(--text3)' }}>
+                            {e.cash_equip_acc_basis === 'pos' ? 'POS' : e.cash_equip_acc_basis === 'declared' ? 'DECLARED' : 'no bill-pay'}
+                          </span>
+                        </>}
+                      </td>
+                      {/* OPENED? (owner 2026-09-08: "it should have a check box asking if the cash
+                          envelope was opened", mig 990). The DM's own statement about what they
+                          physically did. Ticking it makes the count to the right REQUIRED — an
+                          opened envelope confirmed with no count is exactly how short cash went
+                          unrecorded. Left unticked the envelope was collected SEALED and the
+                          declared amount stands, which is honest: nobody counted it. */}
+                      <td style={cell}>
+                        {done ? (
+                          e.envelope_opened
+                            ? <span style={{ fontSize: 12, fontWeight: 600 }} title="The DM opened and counted this envelope">📂 opened</span>
+                            : <span style={{ fontSize: 12, color: 'var(--text3)' }} title="Collected sealed — the declared amount stands">✉️ sealed</span>
+                        ) : (
+                          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, cursor: 'pointer' }}
+                                 title="Tick if you opened this envelope. The actual cash counted then becomes required.">
+                            <input type="checkbox" checked={!!opened[k]}
+                              onChange={ev => setOpened(m => ({ ...m, [k]: ev.target.checked }))} />
+                            <span style={{ color: 'var(--text3)' }}>opened</span>
+                          </label>
+                        )}
+                      </td>
                       {/* Actual cash picked from the envelope (owner 2026-09-04, mig 949): the DM's
                           physical count at pickup time, recorded BESIDE the declared figure.
                           Optional — blank stores nothing ("not recorded", never a fake 0). Variance
@@ -423,12 +510,26 @@ export default function CashPickupPage() {
                         ) : (() => {
                           const a = (actuals[k] || '').trim()
                           const v = a === '' || isNaN(Number(a)) ? null : round2(Number(a) - (e.cash || 0))
+                          const mustCount = !!opened[k] && a === ''
                           return (
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                              <input type="number" inputMode="decimal" step="0.01" style={{ ...sel, width: 96 }}
-                                placeholder={String(e.cash ?? '')} value={actuals[k] || ''}
+                              {/* OWNER BUG REPORT 2026-09-08 ("if the declared cash pick by the dm is
+                                  less then the sheet does not update the actual cash picked up, it
+                                  only shows the envelope amount") — HALF ONE. This placeholder used
+                                  to be `String(e.cash)`, so the envelope amount sat greyed INSIDE the
+                                  empty box. A DM reads that as already filled in, types nothing, and
+                                  confirms — no `actual_amount` is ever sent, the server stores NULL,
+                                  and the row reads "not recorded" with only the envelope amount
+                                  standing. An empty field must LOOK empty; the declared figure is one
+                                  column to the left and does not need repeating inside the input. */}
+                              <input type="number" inputMode="decimal" step="0.01"
+                                style={{ ...sel, width: 96, ...(mustCount ? { borderColor: '#dc2626', background: '#fef2f2' } : {}) }}
+                                placeholder={mustCount ? 'required' : 'count'} value={actuals[k] || ''}
                                 onChange={ev => setActuals(m => ({ ...m, [k]: ev.target.value }))}
-                                title="Actual cash physically taken from this envelope (optional)" />
+                                title={mustCount
+                                  ? 'You marked this envelope opened — enter the cash you counted before confirming.'
+                                  : 'Actual cash physically counted from this envelope (required once you tick "opened")'} />
+                              {mustCount && <span style={{ fontSize: 11, fontWeight: 700, color: '#dc2626' }}>count required</span>}
                               {v != null && v !== 0 && (
                                 <span style={{ fontSize: 11, fontWeight: 700, color: v < 0 ? '#dc2626' : '#b45309' }}>
                                   {v < 0 ? `${fmt(v)} short` : `+${fmt(v)} over`}
@@ -482,9 +583,19 @@ export default function CashPickupPage() {
           </div>
 
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 14, flexWrap: 'wrap' }}>
-            <button className="btn btn-primary" style={{ fontSize: 14 }} disabled={busy || !selectedKeys.length} onClick={confirm}>
+            {/* mig 990 — an envelope ticked OPENED cannot be confirmed without its count. The
+                server enforces the same rule (pickup_actual.gate_items), so this only saves the
+                DM a round-trip; it is not the guard itself. */}
+            <button className="btn btn-primary" style={{ fontSize: 14 }}
+                    disabled={busy || !selectedKeys.length || openedNoCount.length > 0} onClick={confirm}
+                    title={openedNoCount.length ? 'Enter the actual cash counted for every envelope marked opened.' : undefined}>
               {busy ? '⏳ Confirming…' : `✅ Confirm pickup (${selectedKeys.length} · ${fmt(selTotal)})`}
             </button>
+            {openedNoCount.length > 0 && (
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#dc2626' }}>
+                ⚠ {openedNoCount.length} envelope(s) marked opened still need the cash you counted.
+              </span>
+            )}
             {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
           </div>
         </>

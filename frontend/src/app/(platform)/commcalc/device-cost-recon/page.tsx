@@ -8,6 +8,7 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import StandardFilterBar from '@/components/StandardFilterBar'
 import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
+import ScreenLink from '@/components/ScreenLink'
 
 // DEVICE COST RECONCILIATION — the OPTION-A MEASUREMENT PASS (owner GO 2026-07-30; the design note
 // docs/designs/device-cost-ledger.md §9 "Execution order locked", item 1).
@@ -71,7 +72,7 @@ function LockNote() {
       background: 'var(--surface2, #f8fafc)', border: '1px solid var(--border)' }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>🔒 This report is restricted</div>
       Ask an admin to grant <b>“Device cost reconciliation”</b> on your role
-      (Roles &amp; Access → your role → sensitive data grants). This report has <b>no default access</b>:
+      (<ScreenLink to="roles_access">Roles &amp; Access</ScreenLink> → your role → sensitive data grants). This report has <b>no default access</b>:
       it shows what every single device cost the company, from every source at once, which is more
       sensitive than any one of the per-source reports it reconciles.
       <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>

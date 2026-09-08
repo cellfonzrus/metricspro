@@ -9,27 +9,20 @@
 // re-implemented here; this is a signpost to the one editor, so a second place to type a rate can
 // never come into being.
 //
-// RBAC: the link renders only for a viewer who could already open /pos/settings from the menu — the
-// SAME predicate the sidebar uses (canSeeItem over that page's own NAV entry). It can therefore never
-// advertise a page its viewer would be bounced out of.
-import Link from 'next/link'
-import { useMemo } from 'react'
-import { useAuth } from '@/lib/auth-context'
-import { NAV, canSeeItem } from '@/lib/rbac'
+// GENERALISED 2026-09-08 (owner: "need to have a link … if the option is presented for any menu").
+// This component was the house's first self-gating signpost; the fleet-wide sweep needed the same
+// behaviour for ~a dozen destinations, so the mechanism now lives ONCE in `components/ScreenLink`
+// (registry of screen → NAV href, the same `canSeeItem` gate, plus `LinkedText` for backend-authored
+// prose). This file is kept as the named, single-purpose wrapper its two call sites already use —
+// the behaviour is unchanged, and there is still exactly one signpost implementation.
+import { Signpost, SCREENS, useCanOpenScreen } from '@/components/ScreenLink'
 
 /** The POS Settings page, anchored at its Sales Tax section (TaxCodesSection carries the id). */
-export const SALES_TAX_HREF = '/pos/settings#sales-tax'
-const SETTINGS_HREF = '/pos/settings'
+export const SALES_TAX_HREF = SCREENS.sales_tax.href
 
-/** Can this viewer open the sales-tax editor? Mirrors the sidebar's gate exactly: RBAC applies only
- *  while login is enforced and a session exists (the open app shows everything, as the sidebar does). */
+/** Can this viewer open the sales-tax editor? Mirrors the sidebar's gate exactly. */
 export function useCanEditTaxRates(): boolean {
-  const { permissions, session, rbacEnabled } = useAuth()
-  const item = useMemo(
-    () => NAV.flatMap(g => g.items).find(it => it.href === SETTINGS_HREF) || null, [])
-  if (!item) return false
-  if (rbacEnabled === false || !session) return true
-  return canSeeItem(permissions, item)
+  return useCanOpenScreen('sales_tax')
 }
 
 /**
@@ -37,13 +30,5 @@ export function useCanEditTaxRates(): boolean {
  * the editor, so a store manager reading a tax report is not sent to a 403.
  */
 export default function SalesTaxRateLink({ label, title }: { label?: string; title?: string }) {
-  const allowed = useCanEditTaxRates()
-  if (!allowed) return null
-  return (
-    <Link href={SALES_TAX_HREF} className="btn btn-secondary"
-      title={title || 'POS Settings → Sales Tax: set a rate for one store, a whole market, or the company'}
-      style={{ fontSize: 12, padding: '5px 10px', whiteSpace: 'nowrap' }}>
-      💵 {label || 'Set / fix a sales-tax rate'}
-    </Link>
-  )
+  return <Signpost to="sales_tax" icon="💵" label={label || 'Set / fix a sales-tax rate'} title={title} />
 }

@@ -133,7 +133,8 @@ POS_TASKS = [
          why="The dealer code is how the carrier identifies the store that made the sale. A wrong "
              "or missing code is the usual reason an activation never gets paid.",
          predicate={"type": "count", "schema": "pos", "table": "dealer_codes", "min": 1},
-         is_required=False, skippable=True, template_key="dealer_codes", href="/pos/settings"),
+         is_required=False, skippable=True, template_key="dealer_codes",
+         import_source="dealer_codes_from_carrier_reports", href="/pos/settings"),
 
     # ── STEP GROUP: trading partners ──────────────────────────────────────────────────────────
     dict(task_key="vendors", sort_order=100, step_group="Partners",
@@ -395,9 +396,44 @@ def seed_tasks(org_id: str, module_key: str) -> int:
                for t in shipped if t["task_key"] not in have]
         if new:
             sb().schema("core").table("module_onboarding_task").insert(new).execute()
+        _backfill_import_sources(org_id, module_key, shipped)
         return len(new)
     except Exception:
         return 0
+
+
+def _backfill_import_sources(org_id: str, module_key: str, shipped: list) -> int:
+    """Give an ALREADY-SEEDED tenant the import sources shipped since it was seeded.
+
+    WHY (owner report 2026-09-08 — "fix the bring over of plans and features and dealer codes in
+    cellfonz rus as nothing shows up to be brought over"). seed_tasks only INSERTS task_keys the
+    tenant is missing; it never touches a row that already exists. So when a task gains an
+    import_source in the shipped registry — `dealer_codes` did, once the carrier-report harvest
+    that mig 293 configured was wired into the wizard — every tenant seeded before that keeps a
+    NULL, the wizard renders no "bring it over" panel at all, and the operator sees a step with
+    nothing behind it. That is not a data problem, it is registry drift.
+
+    Deliberately narrow: it fills a NULL/blank import_source from the shipped default and NOTHING
+    else. An operator who has set (or deliberately cleared to something non-null) their own value is
+    never overwritten, and no other column is reconciled here. Best-effort, like the seed itself."""
+    filled = 0
+    try:
+        want = {t["task_key"]: t.get("import_source") for t in shipped if t.get("import_source")}
+        if not want:
+            return 0
+        rows = ((sb().schema("core").table("module_onboarding_task")
+                 .select("task_key,import_source").eq("org_id", org_id)
+                 .eq("module_key", module_key).execute().data) or [])
+        for r in rows:
+            src = want.get(r.get("task_key"))
+            if src and not (r.get("import_source") or "").strip():
+                (sb().schema("core").table("module_onboarding_task")
+                 .update({"import_source": src}).eq("org_id", org_id)
+                 .eq("module_key", module_key).eq("task_key", r["task_key"]).execute())
+                filled += 1
+    except Exception:
+        return filled
+    return filled
 
 
 def _states(org_id: str, module_key: str) -> dict:
@@ -790,9 +826,16 @@ IMPORT_SOURCES = {
                "description matches.",
         creates="pos.products"),
     "service_plans_from_product_mrc": dict(
-        title="Plans from your commission plan config",
-        detail="Your configured rate plans and their monthly recurring charge.",
+        title="Plans from your carrier data",
+        detail="Your configured rate-plan catalogue, PLUS every plan your subscribers are actually "
+               "on, with the monthly recurring charge the carrier reports for it.",
         creates="pos.service_plans"),
+    "dealer_codes_from_carrier_reports": dict(
+        title="Dealer codes from your carrier reports",
+        detail="The dealer codes your carrier itself puts on your reports. What that carrier calls "
+               "the field, and which report carries it, is per-carrier config on the Carriers page "
+               "— never a guess.",
+        creates="pos.dealer_codes"),
     "vendors_from_distributors": dict(
         title="Vendors from your distributor list",
         detail="Your configured distributors and companies, as POS vendors.",
@@ -811,18 +854,217 @@ IMPORT_SOURCES = {
 _PII_LINE_ITEM = _re.compile(r"(Phone\s*#)|(\(\d{3}\)\s*\d{3}-\d{4})|(\b\d{3}-\d{3}-\d{4}\b)", _re.I)
 
 
-def _page(client, schema, table, cols, org_id, extra=None, cap=20000):
+def _page(client, schema, table, cols, org_id, extra=None, cap=20000, size=1000):
     out, page = [], 0
-    while page * 1000 < cap:
+    while page * size < cap:
         q = client.schema(schema).table(table).select(cols).eq("org_id", org_id)
         if extra:
             q = extra(q)
-        rows = q.range(page * 1000, page * 1000 + 999).execute().data or []
+        rows = q.range(page * size, page * size + size - 1).execute().data or []
         out.extend(rows)
-        if len(rows) < 1000:
+        if len(rows) < size:
             break
         page += 1
     return out
+
+
+# ── PLANS & FEATURES: the two halves of one already-defined pairing ───────────────────────────
+# WHY THIS READS TWO TABLES (owner report 2026-09-08: "fix the bring over of plans and features …
+# in cellfonz rus as nothing shows up to be brought over").
+#
+# This source used to read commcalc.product_mrc ALONE. product_mrc (mig 074) is not the plan list —
+# it is a CATALOGUE OF MRCs "keyed on raw_mi.customer_plan", built for carriers whose statement
+# carries no per-subscriber MRC (mig 078: Total Wireless). A carrier that DOES report the charge per
+# subscriber never needs a catalogue row, so the catalogue stays empty and reading it alone returns
+# nothing — while the tenant's own subscriber feed names every plan they sell and what it costs.
+#
+# Live proof, 2026-09-08, org-scoped:
+#   Cellfonz R Us  commcalc.product_mrc = 0 rows · commcalc.raw_mi = 234,724 rows / 77 distinct
+#                  customer_plan values, each with a reported base_mrc ("Unlimited Premium." → 65.00)
+#   Luxelink       commcalc.product_mrc = 1,017 rows · commcalc.raw_mi = 0 rows  ← catalogue-only,
+#                  which is why Luxelink's wizard completed this step and Cellfonz's could not
+#
+# So the fix is not a second import source keyed off the carrier's name (RULE TWO) — it is to read
+# BOTH HALVES of the pairing mig 074 already defined. The catalogue still wins on a name collision:
+# a rate the operator confirmed beats one observed on a statement line.
+MI_PLAN_COLS = "customer_plan,base_mrc,commissionable_mrc"
+MI_SCAN_CAP = 120000          # ≈3 pages of a big tenant's newest period; truncation is REPORTED
+
+# What the preview shows about a plan and what pos.service_plans can actually STORE are not the same
+# list: `source` and `subscribers` exist to let the operator judge the row ("2,686 subscribers, from
+# your subscribers report") and are dropped on the way in. Keeping the filter next to the columns it
+# mirrors is what stops the next added preview field from 400-ing every import.
+SERVICE_PLAN_IMPORT_COLS = {"plan_name", "carrier", "plan_code", "plan_description", "monthly_fee",
+                            "included_minutes", "service_area", "contract_type", "contract_terms",
+                            "dealer_code", "status"}
+
+
+def fold_subscriber_plans(rows) -> list:
+    """PURE. Distinct rate plans observed on a subscriber feed, with the charge each one reports.
+
+    `monthly_fee` is the MOST COMMON NON-ZERO reported charge for that plan, not the first or the
+    mean: a subscriber row reports 0.00 for a month the line was suspended, credited or ported out,
+    and roughly a fifth of the live rows are such months (Cellfonz "Unlimited +": 12,540 rows at
+    55.00, 7,949 at 0.00). Averaging those would seed every plan with a fee lower than any price the
+    carrier actually charges, and taking the first row would seed whichever month sorted first.
+    Ties break toward the HIGHER charge — the full rate rather than a promotional one.
+
+    base_mrc is the customer's monthly recurring charge, which is what a POS rate plan's monthly_fee
+    means. commissionable_mrc is a commission BASIS (Cellfonz reports 10.00 against a 55.00 plan) and
+    is only consulted when the feed carries no base_mrc at all, so a feed that populates one column
+    or the other both work. Returns [{plan_name, monthly_fee, subscribers}] sorted by subscribers
+    desc — the plans the tenant actually sells come first."""
+    seen = {}
+    for r in rows or []:
+        name = str(r.get("customer_plan") or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        slot = seen.setdefault(key, {"plan_name": name[:120], "subscribers": 0, "_fees": {}})
+        slot["subscribers"] += 1
+        raw = r.get("base_mrc")
+        if raw in (None, ""):
+            raw = r.get("commissionable_mrc")
+        try:
+            fee = round(float(raw), 2)
+        except (TypeError, ValueError):
+            continue
+        if fee > 0:
+            slot["_fees"][fee] = slot["_fees"].get(fee, 0) + 1
+    out = []
+    for slot in seen.values():
+        fees = slot.pop("_fees")
+        best = max(fees.items(), key=lambda kv: (kv[1], kv[0]))[0] if fees else None
+        out.append({**slot, "monthly_fee": best})
+    out.sort(key=lambda p: (-p["subscribers"], p["plan_name"].lower()))
+    return out
+
+
+def merge_plan_sources(catalog: list, observed: list) -> list:
+    """PURE. The catalogue and the observed plans as ONE list, catalogue first, deduped by name
+    (case-insensitively). A plan the operator has already priced in the catalogue is never replaced
+    by a charge scraped off a statement line."""
+    out, seen = [], set()
+    for p in list(catalog or []) + list(observed or []):
+        name = str(p.get("plan_name") or "").strip()
+        key = name.lower()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+
+def _catalog_plans(c, org_id: str, cmap: dict, default_carrier: str) -> list:
+    """Half one: commcalc.product_mrc, the confirmed rate catalogue (mig 074)."""
+    rows = _page(c, "commcalc", "product_mrc",
+                 "plan_pattern,mrc,carrier_id,classification,is_active", org_id)
+    out, seen = [], set()
+    for r in rows:
+        n = (r.get("plan_pattern") or "").strip()
+        if not n or n.lower() in seen:
+            continue
+        seen.add(n.lower())
+        out.append({"plan_name": n[:120], "monthly_fee": r.get("mrc"),
+                    "carrier": cmap.get(r.get("carrier_id")) or default_carrier,
+                    "plan_description": r.get("classification") or None,
+                    "status": "active" if r.get("is_active") is not False else "inactive",
+                    "source": "catalogue"})
+    return out
+
+
+def _observed_plans(c, org_id: str, default_carrier: str):
+    """Half two: the plans this tenant's own subscribers are on, from commcalc.raw_mi.
+
+    Scans the NEWEST period only. The wizard is seeding what the tenant sells now, and a full-history
+    scan is 234k rows on the live house tenant against 42k for its newest month — for four extra
+    plan names last seen in 2025. The period scanned is returned and shown, so this is a stated
+    choice rather than a silent cap. Returns (plans, diag)."""
+    diag = {"period": None, "rows": 0, "truncated": False}
+    try:
+        newest = (c.schema("commcalc").table("raw_mi").select("period,period_year,period_month")
+                  .eq("org_id", org_id).order("period_year", desc=True)
+                  .order("period_month", desc=True).limit(1).execute().data) or []
+    except Exception as e:
+        diag["error"] = str(e)[:200]
+        return [], diag
+    if not newest:
+        return [], diag
+    period = (newest[0].get("period") or "").strip()
+    diag["period"] = period or None
+    rows = _page(c, "commcalc", "raw_mi", MI_PLAN_COLS, org_id,
+                 extra=(lambda q: q.eq("period", period)) if period else None,
+                 cap=MI_SCAN_CAP, size=10000)
+    diag["rows"] = len(rows)
+    diag["truncated"] = len(rows) >= MI_SCAN_CAP
+    return [{"plan_name": p["plan_name"], "monthly_fee": p["monthly_fee"],
+             "carrier": default_carrier, "plan_description": None, "status": "active",
+             "subscribers": p["subscribers"], "source": "subscribers"}
+            for p in fold_subscriber_plans(rows)], diag
+
+
+def resolve_service_plans(c, org_id: str):
+    """The FULL plan set this tenant can bring over, used by BOTH preview and apply so the two can
+    never disagree about what "bring over 77" meant. Returns (plans, diag)."""
+    carriers = _page(c, "commcalc", "carrier", "id,name", org_id)
+    cmap = {r["id"]: r.get("name") for r in carriers}
+    default_carrier = (carriers[0].get("name") if carriers else "") or ""
+    catalog = _catalog_plans(c, org_id, cmap, default_carrier)
+    observed, diag = _observed_plans(c, org_id, default_carrier)
+    diag.update(catalogue=len(catalog), observed=len(observed), carriers=len(carriers))
+    return merge_plan_sources(catalog, observed), diag
+
+
+def plans_empty_reason(diag: dict) -> dict:
+    """PURE. Why a tenant sees zero plans, and what to do about it. A green "0 records" with no
+    explanation is the defect this whole change exists to kill: the operator cannot tell an empty
+    tenant from a broken importer, so they file the second and get told the first."""
+    if diag.get("error"):
+        return {"empty_reason": "Your subscriber report could not be read: "
+                                + str(diag["error"])[:160],
+                "empty_next": "Re-run the import, or tell support if it keeps failing."}
+    if not diag.get("carriers"):
+        return {"empty_reason": "No carrier is attached to this tenant yet, so there is nothing to "
+                                "take plans from.",
+                "empty_next": "Attach a carrier first (Configurations → Carriers), then re-check."}
+    return {"empty_reason": "Neither source has anything yet: your rate-plan catalogue "
+                            "(commcalc.product_mrc) is empty and MetricsPro holds no subscriber "
+                            "report (commcalc.raw_mi) for this tenant, which is where plan names "
+                            "and their monthly charge come from.",
+            "empty_next": "Upload a carrier subscriber/MI report, or price your plans under "
+                          "Payout Schedules → Plan MRC — either one fills this list. Until then, "
+                          "use the CSV template below."}
+
+
+def dealer_codes_empty_reason(carriers: list, unconfigured: list, errored: list) -> dict:
+    """PURE. Why the dealer-code harvest found nothing — and which of the three reasons it is: no
+    carrier, an unmapped carrier, a mapped carrier whose report has not been uploaded, or codes that
+    are all already in the POS. Each one has a different fix, so each one gets its own sentence."""
+    if errored:
+        return {"empty_reason": "Your carrier's report could not be read: " + "; ".join(errored)[:200],
+                "empty_next": "Check the carrier's dealer-code source on the Carriers page."}
+    if not carriers:
+        return {"empty_reason": "No carrier is attached to this tenant, so no report has a dealer "
+                                "code on it yet.",
+                "empty_next": "Attach a carrier first (Configurations → Carriers), then re-check."}
+    if unconfigured and len(unconfigured) == len(carriers):
+        return {"empty_reason": "Nobody has told MetricsPro what "
+                                + " and ".join(unconfigured)
+                                + " calls its dealer code, so it will not guess at one — seeding "
+                                  "your POS with the wrong identifier is worse than seeding none.",
+                "empty_next": "Open Configurations → Carriers and set that carrier's dealer-code "
+                              "field — the one its own reports use to identify your store — then "
+                              "re-check. Until then, use the CSV template below."}
+    found = sum(int(c.get("found") or 0) for c in carriers)
+    if found:
+        return {"empty_reason": f"All {found} dealer code(s) on your carrier reports are already in "
+                                "your POS — there is nothing left to bring over.",
+                "empty_next": "This step is done; you can mark it complete."}
+    src = ", ".join(str(c.get("source")) for c in carriers if c.get("configured"))
+    return {"empty_reason": "Your carrier's dealer codes come from " + (src or "its report")
+                            + ", and MetricsPro holds no rows there for this tenant yet.",
+            "empty_next": "Upload that carrier report, then re-check. Until then, use the CSV "
+                          "template below."}
 
 
 def preview_import(source: str, org_id: str, variant: str = "") -> dict:
@@ -860,19 +1102,38 @@ def preview_import(source: str, org_id: str, variant: str = "") -> dict:
                 "sample": items[:25], "variant": variant}
 
     if source == "service_plans_from_product_mrc":
-        carriers = _page(c, "commcalc", "carrier", "id,name", org_id)
-        cmap = {r["id"]: r.get("name") for r in carriers}
-        default_carrier = (carriers[0].get("name") if carriers else "") or ""
-        rows = _page(c, "commcalc", "product_mrc",
-                     "plan_pattern,mrc,carrier_id,classification,is_active", org_id)
-        plans = [{"plan_name": (r.get("plan_pattern") or "").strip(),
-                  "monthly_fee": r.get("mrc"),
-                  "carrier": cmap.get(r.get("carrier_id")) or default_carrier,
-                  "plan_description": r.get("classification") or None,
-                  "status": "active" if r.get("is_active") is not False else "inactive"}
-                 for r in rows if (r.get("plan_pattern") or "").strip()]
-        return {**meta, "source": source, "count": len(plans),
-                "sample": plans[:25], "variant": variant}
+        plans, diag = resolve_service_plans(c, org_id)
+        out = {**meta, "source": source, "count": len(plans), "sample": plans[:25],
+               "variant": variant, "diagnostic": diag}
+        if diag.get("period"):
+            out["detail"] = (meta["detail"] + f" Subscriber plans read from {diag['period']} "
+                             f"({diag['rows']:,} subscriber rows).")
+        if not plans:
+            out.update(plans_empty_reason(diag))
+        return out
+
+    if source == "dealer_codes_from_carrier_reports":
+        # DELEGATED, NOT RE-DERIVED. The harvest already exists: POST /pos/dealer-codes/
+        # sync-from-reports (mig 293 put the per-carrier source table/column on commcalc.carrier so
+        # "which field is the dealer code" is config). The wizard simply had no import_source wired
+        # to it, so the step offered nothing to bring over. Calling the same function keeps the two
+        # doors answering identically.
+        from app.modules.pos.router import _dealer_sync
+        res = _dealer_sync(org_id, commit=False)
+        codes, unconfigured, errored = [], [], []
+        for car in res.get("carriers") or []:
+            if car.get("error"):
+                errored.append(f"{car.get('carrier')}: {car['error']}")
+            elif not car.get("configured"):
+                unconfigured.append(car.get("carrier") or "?")
+            codes.extend(car.get("sample") or [])
+        count = sum(int(car.get("new") or 0) for car in (res.get("carriers") or []))
+        out = {**meta, "source": source, "count": count, "sample": codes[:25],
+               "variant": variant, "diagnostic": {"carriers": res.get("carriers")}}
+        if not count:
+            out.update(dealer_codes_empty_reason(res.get("carriers") or [],
+                                                 unconfigured, errored))
+        return out
 
     if source == "vendors_from_distributors":
         dists = _page(c, "commcalc", "distributors", "name,arrangement,is_active", org_id)
@@ -1030,10 +1291,22 @@ def apply_import(source: str, org_id: str, variant: str = "", actor: str = "") -
 
     elif source == "service_plans_from_product_mrc":
         have = existing("service_plans", "plan_name")
-        allp = _all_plans(c, org_id)
-        new = [p for p in allp if (p.get("plan_name") or "").lower() not in have]
+        allp, _diag = resolve_service_plans(c, org_id)
+        new = [{k: v for k, v in p.items() if k in SERVICE_PLAN_IMPORT_COLS}
+               for p in allp if (p.get("plan_name") or "").lower() not in have]
         skipped = len(allp) - len(new)
         insert("service_plans", new)
+
+    elif source == "dealer_codes_from_carrier_reports":
+        # Same delegated harvest as the preview, in commit mode: it is ADDITIVE (a code already in
+        # pos.dealer_codes is left exactly as the operator has it) and stamps org_id itself.
+        from app.modules.pos.router import _dealer_sync
+        res = _dealer_sync(org_id, commit=True)
+        created = int(res.get("inserted") or 0)
+        skipped = max(0, sum(int(car.get("found") or 0)
+                             for car in (res.get("carriers") or [])) - created)
+        errors += [f"{car.get('carrier')}: {car['error']}"
+                   for car in (res.get("carriers") or []) if car.get("error")]
 
     elif source == "vendors_from_distributors":
         have = existing("vendors", "legal_name")
@@ -1104,23 +1377,9 @@ def _cost_by_desc(c, org_id):
     return out
 
 
-def _all_plans(c, org_id):
-    carriers = _page(c, "commcalc", "carrier", "id,name", org_id)
-    cmap = {r["id"]: r.get("name") for r in carriers}
-    default_carrier = (carriers[0].get("name") if carriers else "") or ""
-    rows = _page(c, "commcalc", "product_mrc",
-                 "plan_pattern,mrc,carrier_id,classification,is_active", org_id)
-    seen, out = set(), []
-    for r in rows:
-        n = (r.get("plan_pattern") or "").strip()
-        if not n or n.lower() in seen:
-            continue
-        seen.add(n.lower())
-        out.append({"plan_name": n[:120], "monthly_fee": r.get("mrc"),
-                    "carrier": cmap.get(r.get("carrier_id")) or default_carrier,
-                    "plan_description": r.get("classification") or None,
-                    "status": "active" if r.get("is_active") is not False else "inactive"})
-    return out
+# NOTE: `_all_plans` used to live here — a SECOND copy of the preview's product_mrc derivation, so
+# apply could (and after 2026-09-08 would) disagree with the count the operator had just approved.
+# Both sides now call resolve_service_plans().
 
 
 def _all_vendors(c, org_id):

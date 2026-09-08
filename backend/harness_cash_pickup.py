@@ -527,6 +527,164 @@ check("10p. the switch is per-org config, not a code branch (RULE TWO)",
 check("10q. it defaults OFF, so an un-migrated database is unchanged",
       "except Exception:\n        return False" in _src_cr)
 
+# ═══ 11. THE OPENED-ENVELOPE CHECKBOX + THE SHORT COUNT THAT WAS NEVER RECORDED ═════════════════
+#         (owner bug reports 2026-09-08, mig 990)
+#
+# Owner (1): "if the declared cash pick by the dm is less then the sheet does not update the actual
+#             cash picked up, it only shows the envelope amount"
+# Owner (2): "it should have a check box asking if the cash envelope was opened"
+#
+# ONE defect, two halves. mig 949 gave the DM somewhere to record the actual count but never asked
+# for it, and the input LOOKED pre-filled (its placeholder was the envelope amount), so a DM who
+# opened an envelope and found it short could type nothing, confirm, and leave actual_picked_amount
+# NULL — after which the row reads "not recorded" and only the declared envelope amount stands.
+# The checkbox is the DM's assertion; the count is the evidence; the gate binds them.
+st11 = fresh_store(); wire(st11)
+st11["stores"] = [{"org_id": HOUSE, "store_code": "S1", "address": "1 Main St", "market": "Texas", "is_active": True}]
+st11["daily_closing"] = [dc_row(id="d11", store_code="S1", close_date="2026-09-08", store_cash=312.0)]
+cr._notify_pickup = _notify_stub
+
+
+def _item11(**kw):
+    return dict({"store_code": "S1", "store_name": "1 Main St", "employee_name": "Jane Rep",
+                 "close_date": "2026-09-08", "amount": 312.0}, **kw)
+
+
+# ── 11a-i: the pure gate (pickup_actual.opened_without_count / gate_items / gate_message) ────────
+check("11a. NOT opened + no count -> allowed (a sealed envelope needs no count; the declared "
+      "snapshot stands, which is how every pickup before today behaved)",
+      _pa.opened_without_count({"amount": 312.0}) is False
+      and _pa.opened_without_count({"amount": 312.0, "envelope_opened": False}) is False)
+check("11b. OPENED + no count -> BLOCKED (this is the exact hole the owner reported)",
+      _pa.opened_without_count({"amount": 312.0, "envelope_opened": True}) is True)
+check("11c. OPENED + a count -> allowed, on BOTH wire shapes (actual_amount from the page, "
+      "actual_picked_amount from a direct caller) — the gate can never disagree with what stores",
+      _pa.opened_without_count({"envelope_opened": True, "actual_amount": 300.0}) is False
+      and _pa.opened_without_count({"envelope_opened": True, "actual_picked_amount": 300.0}) is False)
+check("11d. OPENED + a count of 0.00 -> ALLOWED. On an opened envelope zero is a real and serious "
+      "finding ('I opened it and it was empty'), not an absence — it must not be blocked as blank",
+      _pa.opened_without_count({"envelope_opened": True, "actual_amount": 0.0}) is False)
+check("11e. OPENED + an empty-string/None count -> BLOCKED (a blank input is not a count)",
+      _pa.opened_without_count({"envelope_opened": True, "actual_amount": ""}) is True
+      and _pa.opened_without_count({"envelope_opened": True, "actual_amount": None}) is True)
+check("11f. envelope_opened reads the string forms a form round-trip produces, so a JSON boolean "
+      "and a stringified one can never disagree; absent/None = NOT opened (the pre-990 default)",
+      _pa.envelope_opened({"envelope_opened": "true"}) is True
+      and _pa.envelope_opened({"envelope_opened": "false"}) is False
+      and _pa.envelope_opened({"envelope_opened": "1"}) is True
+      and _pa.envelope_opened({}) is False and _pa.envelope_opened({"envelope_opened": None}) is False)
+_off = _pa.gate_items([_item11(), _item11(envelope_opened=True),
+                       _item11(envelope_opened=True, actual_amount=300.0)])
+check("11g. gate_items returns EVERY offender with its index, not a bool — a DM confirming twenty "
+      "envelopes must be told which ones, not merely that one is wrong",
+      [i for i, _ in _off] == [1], str(_off))
+check("11h. gate_message names the rep and the day so the DM knows which box to fill in",
+      "Jane Rep" in _pa.gate_message(_off) and "2026-09-08" in _pa.gate_message(_off),
+      _pa.gate_message(_off) or "")
+check("11i. nothing to say when nothing is blocked", _pa.gate_message([]) is None)
+
+# ── 11j-o: the gate ON THE REAL ENDPOINT ────────────────────────────────────────────────────────
+_blocked = None
+try:
+    asyncio.new_event_loop().run_until_complete(cr.confirm_pickup(
+        {"date": "2026-09-08", "picked_up_by": "DM Eleven",
+         "items": [_item11(envelope_opened=True)]}, org_id=HOUSE))
+except Exception as _e:
+    _blocked = _e
+check("11j. THE REGRESSION: confirming an envelope marked OPENED with no count is REFUSED (400) — "
+      "the short cash can no longer be recorded as a blank",
+      _blocked is not None and getattr(_blocked, "status_code", None) == 400, str(_blocked))
+check("11k. and NOTHING was written — a blocked confirm never lands a partial pickup",
+      st11["cash_pickup"] == [], str(st11["cash_pickup"]))
+
+st11["cash_pickup"] = []
+st11["daily_closing"].append(dc_row(id="d11b", store_code="S1", close_date="2026-09-08",
+                                    employee_name="Mo Rep", store_cash=200.0))
+_blocked2 = None
+try:
+    asyncio.new_event_loop().run_until_complete(cr.confirm_pickup(
+        {"date": "2026-09-08", "picked_up_by": "DM Eleven",
+         "items": [_item11(actual_amount=312.0),
+                   _item11(employee_name="Mo Rep", amount=200.0, envelope_opened=True)]},
+        org_id=HOUSE))
+except Exception as _e:
+    _blocked2 = _e
+check("11l. a MIXED batch is refused WHOLE — the good envelope is not half-committed",
+      _blocked2 is not None and st11["cash_pickup"] == [], str(st11["cash_pickup"]))
+
+r11 = asyncio.new_event_loop().run_until_complete(cr.confirm_pickup(
+    {"date": "2026-09-08", "picked_up_by": "DM Eleven",
+     "items": [_item11(envelope_opened=True, actual_amount=300.0),
+               _item11(employee_name="Mo Rep", amount=200.0)]}, org_id=HOUSE))
+_r11 = {r.get("employee_name"): r for r in st11["cash_pickup"]}
+check("11m. with the count supplied the batch confirms, the flag is stored beside it, and the "
+      "SHORTAGE IS RECORDED (312 declared, 300 counted) instead of vanishing",
+      _r11["Jane Rep"].get("envelope_opened") is True
+      and _r11["Jane Rep"].get("actual_picked_amount") == 300.0
+      and r11.get("variance_short") == 1 and r11.get("opened_count") == 1, str(_r11))
+check("11n. the SEALED envelope in the same batch writes NO envelope_opened key and no count. "
+      "NULL and FALSE are ONE state by design (mig 990: 'FALSE/NULL — collected sealed'), so an "
+      "untouched checkbox costs no write and a pre-990 database needs no retry — 11o proves the "
+      "read collapses them to False",
+      "envelope_opened" not in _r11["Mo Rep"]
+      and _r11["Mo Rep"].get("actual_picked_amount") is None
+      and _pa.envelope_opened(_r11["Mo Rep"]) is False, str(_r11["Mo Rep"]))
+_l11 = cr.closing_pickups(date="2026-09-08", org_id=HOUSE)
+_e11 = {e["employee_name"]: e for e in _l11["envelopes"]}
+check("11o. GET /pickups exposes envelope_opened, and the short row now reads its COUNT and "
+      "variance rather than 'not recorded' with only the envelope amount",
+      _e11["Jane Rep"]["envelope_opened"] is True
+      and _e11["Jane Rep"]["actual_picked_amount"] == 300.0
+      and _e11["Jane Rep"]["pickup_variance"] == -12.0
+      and _e11["Jane Rep"]["pickup_variance_status"] == "short"
+      and _e11["Mo Rep"]["envelope_opened"] is False, str(_e11))
+
+# ── 11p: BYTE-IDENTITY for a client that never sends the flag (the pre-990 posture) ─────────────
+st11["cash_pickup"] = []
+asyncio.new_event_loop().run_until_complete(cr.confirm_pickup(
+    {"date": "2026-09-08", "picked_up_by": "DM Eleven", "items": [_item11(actual_amount=312.0)]},
+    org_id=HOUSE))
+check("11p. an older frontend that never sends envelope_opened writes NO such key — an "
+      "un-migrated database is byte-identical and the gate never fires",
+      "envelope_opened" not in st11["cash_pickup"][0], str(st11["cash_pickup"][0]))
+
+# ── 11q: the billpay sibling inherits the gate from the ONE shared writer (mig 942) ─────────────
+_bp_blocked = None
+try:
+    asyncio.new_event_loop().run_until_complete(cr.billpay_confirm_pickup(
+        {"date": "2026-09-08", "picked_up_by": "DM Eleven",
+         "items": [_item11(amount=40.0, envelope_opened=True)]}, org_id=HOUSE))
+except Exception as _e:
+    _bp_blocked = _e
+check("11q. BILLPAY MIRROR: the same parameterized confirm enforces the same gate — one rule, "
+      "not two that can drift",
+      _bp_blocked is not None and getattr(_bp_blocked, "status_code", None) == 400, str(_bp_blocked))
+
+# ── 11r-u: THE FRONTEND HALVES OF THE OWNER'S REPORT (source assertions) ────────────────────────
+# These are the two lines that actually produced "it only shows the envelope amount". Neither is
+# reachable from Python, so they are pinned at the source: a harness that proves the backend while
+# the screen keeps eating the DM's input proves nothing (index 24, the proof-harness audit).
+_pg = open("../frontend/src/app/(platform)/closing/pickup/page.tsx").read()
+check("11r. HALF ONE — the actual-picked input no longer puts the ENVELOPE AMOUNT inside itself as "
+      "a placeholder. It read `placeholder={String(e.cash ?? '')}`, so an empty box looked already "
+      "filled in and the DM typed nothing",
+      "placeholder={String(e.cash ?? '')}" not in _pg
+      and "placeholder={mustCount ? 'required' : 'count'}" in _pg)
+check("11s. HALF TWO — load() no longer wipes the DM's typed counts. It called `setActuals({})` on "
+      "EVERY refetch, and the async store-roster landing is itself a refetch, so counts typed "
+      "before it returned were silently discarded before Confirm",
+      "setLoading(true); setSel({}); setNotes({}); setActuals({})" not in _pg
+      and "setLoading(true); setSel({})\n" in _pg)
+check("11t. the checkbox is wired to the count requirement on screen too, so the DM is stopped "
+      "before the round-trip (the server stays the authority — 11j proves it)",
+      "openedNoCount" in _pg and "envelope_opened: true" in _pg
+      and "disabled={busy || !selectedKeys.length || openedNoCount.length > 0}" in _pg)
+check("11u. and the equip/acc column renders its BASIS, so a POS-calculated split never looks like "
+      "one derived from a rep's own declaration (owner 2026-09-08)",
+      "Cash sales equip/acc" in _pg and "cash_equip_acc_basis" in _pg
+      and "'POS'" in _pg and "'DECLARED'" in _pg)
+
+
 # ── Summary ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:

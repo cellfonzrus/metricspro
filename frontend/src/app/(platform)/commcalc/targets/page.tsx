@@ -5,6 +5,7 @@ import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
+import ScreenLink, { LinkedText } from '@/components/ScreenLink'
 
 const CATS = [
   { key: 'activations', label: 'Activations', unit: 'count' },
@@ -212,7 +213,7 @@ export default function DailyTargetsPage() {
         {setupHint.length > 0 && summary.length > 0 && (
           <div style={{ margin: '10px 16px 0', padding: '9px 12px', borderRadius: 6, fontSize: 12.5,
             background: 'var(--warning-bg, #fff7ed)', border: '1px solid var(--warning, #f59e0b)', color: 'var(--text2)' }}>
-            {setupHint.map((h, i) => <div key={i}>⚙️ {h}</div>)}
+            {setupHint.map((h, i) => <div key={i}>⚙️ <LinkedText text={h} /></div>)}
           </div>
         )}
         {loadingSum ? (
@@ -221,10 +222,10 @@ export default function DailyTargetsPage() {
           <div style={{ textAlign: 'center', padding: 30, color: 'var(--text3)' }}>
             {setupHint.length > 0 ? (
               <div style={{ display: 'inline-block', textAlign: 'left', maxWidth: 560 }}>
-                {setupHint.map((h, i) => <div key={i} style={{ marginBottom: 6 }}>⚙️ {h}</div>)}
+                {setupHint.map((h, i) => <div key={i} style={{ marginBottom: 6 }}>⚙️ <LinkedText text={h} /></div>)}
               </div>
             ) : (
-              <>No targets set. Add monthly targets in <strong>Target Settings</strong>.</>
+              <>No targets set. Add monthly targets in <ScreenLink to="target_settings" />.</>
             )}
           </div>
         ) : (

@@ -24,6 +24,7 @@ import { NAV, canSeeItem, isSuperAdmin, canEditSettingArea, type NavItem } from 
 import HubTiles, { type HubGroup, type HubItem } from '@/components/HubTiles'
 import { slugGroup, defaultHubGroups, layoutToHubGroups, hubGroupsToLayout,
          type TileLayout } from '@/lib/tile-hubs'
+import ScreenLink, { LinkedText } from '@/components/ScreenLink'
 
 const HOUSE = ORG_ID   // the platform-default row's org (house)
 const inp: React.CSSProperties = { padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
@@ -223,8 +224,8 @@ export default function DashboardDesignerPage() {
         <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>Dashboard Designer</div>
         <p style={{ fontSize: 13.5, color: 'var(--text2)', margin: 0, lineHeight: 1.55 }}>
           Designing module dashboards needs the <b>Menu &amp; dashboard layout designer</b> grant —
-          an administrator can assign it to your role under <b>Roles &amp; Access → Settings
-          editing</b>. Super admins always have access.
+          an administrator can assign it to your role under <ScreenLink to="roles_access">Roles &amp; Access → Settings
+          editing</ScreenLink>. Super admins always have access.
         </p>
       </div>
     )
@@ -299,7 +300,8 @@ export default function DashboardDesignerPage() {
             generic /hub page.
           </span>
         )}
-        {err && <span style={{ fontSize: 12, color: '#dc2626', flexBasis: '100%' }}>{err}</span>}
+        {/* friendly403() names Roles & Access — a named destination is a link (owner 2026-09-08). */}
+        {err && <span style={{ fontSize: 12, color: '#dc2626', flexBasis: '100%' }}><LinkedText text={err} /></span>}
       </div>
 
       {loading ? (

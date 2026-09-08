@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import ScreenLink from '@/components/ScreenLink'
 
 // ── "Sign in as an employee" — audit log + policy (owner directive 2026-08-06) ───────────────────
 // Requirement 4 of the impersonation build: the trail must be VIEWABLE, not just written. Every
@@ -135,7 +136,7 @@ export default function ImpersonationAuditPage() {
           </div>
           {!canEdit && <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 8 }}>
             Read-only — ask an administrator to grant your role the “Sign in as an employee — policy &amp;
-            audit log” setting on Roles &amp; Access.
+            audit log” setting on <ScreenLink to="roles_access" />.
           </div>}
           <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 8, maxWidth: 780, lineHeight: 1.5 }}>
             An unlock is good for exactly ONE clock in or clock out, and the employee has to enter their

@@ -7,6 +7,7 @@ import { SendReportButton } from '@/lib/send-report'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import AreaTargets from './_components/AreaTargets'
+import { LinkedText } from '@/components/ScreenLink'
 
 const CATS = [
   { key: 'activations', label: 'Activations', unit: 'count', hint: 'premium + BYOD' },
@@ -177,7 +178,7 @@ export default function MyTargetsPage() {
           <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>⚙️ No store assigned yet</div>
           <div style={{ fontSize: 13.5, color: 'var(--text2)', lineHeight: 1.55 }}>
             {setupHint.length > 0
-              ? setupHint.map((h, i) => <div key={i} style={{ marginBottom: 6 }}>{h}</div>)
+              ? setupHint.map((h, i) => <div key={i} style={{ marginBottom: 6 }}><LinkedText text={h} /></div>)
               : <div>No store is assigned to your login yet, so there are no targets to show. Ask your manager to set your store on your employee record.</div>}
           </div>
         </div>
@@ -185,7 +186,7 @@ export default function MyTargetsPage() {
       <>
       {setupHint.length > 0 && (
         <div style={{ background: 'var(--warning-bg, #fff7ed)', border: '1px solid var(--warning, #f59e0b)', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12.5, color: 'var(--text2)' }}>
-          {setupHint.map((h, i) => <div key={i}>⚙️ {h}</div>)}
+          {setupHint.map((h, i) => <div key={i}>⚙️ <LinkedText text={h} /></div>)}
         </div>
       )}
 

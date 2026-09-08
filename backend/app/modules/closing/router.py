@@ -5274,6 +5274,10 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
                                      if p and _pickup_actual.has_actual(p) else None),
             "pickup_variance": (_pickup_actual.row_variance(p) or {}).get("variance") if p else None,
             "pickup_variance_status": (_pickup_actual.row_variance(p) or {}).get("status") if p else None,
+            # mig 990 (owner 2026-09-08) — did the DM OPEN this envelope? False on a pre-990
+            # schema and on every row recorded before the checkbox existed: "collected sealed",
+            # which is exactly how those pickups behaved.
+            "envelope_opened": _pickup_actual.envelope_opened(p) if p else False,
         })
     # OWNER 2026-09-02 ("the cash pick up ... only show what the stores have entered but not what
     # is in the system, from the pos report, those numbers should be right next to these numbers"):
@@ -5324,9 +5328,12 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     # subtracting a fabricated zero and calling it reconciled is the defect class this file exists to
     # avoid. RULE TWO: off unless the tenant switches it on.
     _net_on = billpay_netting_enabled(client, org_id)
+    # The POS bill-pay figure is fetched whether or not NETTING is on, because the equipment/
+    # accessory column below needs it either way (owner 2026-09-08: the split should come from the
+    # POS, not the employee's declaration, even though the envelope keeps showing the whole drawer).
     _bp_days = sorted({str(e.get("close_date") or "")[:10] for e in out if e.get("close_date")})
     _bp_cash, _bp_src = {}, "none"
-    if _net_on and _bp_days:
+    if _bp_days:
         try:
             _sales_bp, _s_src, _s_key = _sales_billpay_for_days(client, org_id, _bp_days)
             if _sales_bp:
@@ -5359,21 +5366,40 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
                 _pos_bp = _bp_cash.get((_bp_key(_sd[0]), _sd[1]))
             except Exception:
                 _pos_bp = None
+        # The SPLIT is always computed (the column needs it); whether it is APPLIED to the envelope
+        # is the tenant switch. One call, one rule — the column and the netting can never disagree.
         _res = billpay_netting.net_store_day(
             [{"key": id(e), "t_cash": e.get("cash"),
               "epay_on_cash": _decl_bp.get((_sd[0], _sd[1], e.get("employee_name") or ""), 0.0)}
              for e in _envs],
-            pos_billpay_cash=_pos_bp, enabled=_net_on)
+            pos_billpay_cash=_pos_bp, enabled=True)
         for e in _envs:
             _row = _res["rows"].get(id(e)) or {}
             e["cash_gross"] = _row.get("gross", e.get("cash"))
-            e["billpay_netted"] = _row.get("billpay_netted", 0.0)
-            e["billpay_basis"] = _res["basis"]
-            e["billpay_source"] = _bp_src if _res["basis"] == "pos" else None
+            e["billpay_netted"] = _row.get("billpay_netted", 0.0) if _net_on else 0.0
+            e["billpay_basis"] = _res["basis"] if _net_on else "off"
+            e["billpay_source"] = _bp_src if (_net_on and _res["basis"] == "pos") else None
             e["billpay_declared"] = _row.get("declared_billpay", 0.0)
             e["billpay_declared_exceeds_cash"] = bool(_row.get("declared_exceeds_cash"))
-            e["billpay_note"] = billpay_netting.envelope_note(_res, id(e))
-            e["cash"] = _row.get("net", e.get("cash"))
+            e["billpay_note"] = billpay_netting.envelope_note(_res, id(e)) if _net_on else None
+            if _net_on:
+                e["cash"] = _row.get("net", e.get("cash"))
+            # OWNER REFINEMENT 2026-09-08: "cash pick up is still showing the total cash — let it be
+            # like that, just add another column for cash sales equip/acc which is total cash minus
+            # epay cash." So the envelope amount STAYS the whole drawer (netting stays off) and this
+            # is a DISPLAY split beside it: what of the drawer is equipment/accessory sales rather
+            # than bill payments. Uses the POS figure when there is one, else the rep's declaration,
+            # and says which — an equipment figure derived from a number nobody checked should not
+            # look like one that was.
+            _gross = _f(e.get("cash_gross") if e.get("cash_gross") is not None else e.get("cash"))
+            if _res["basis"] == "pos":
+                _bp_used, _bp_basis = _f(_row.get("billpay_netted")), "pos"
+            else:
+                _bp_used = _f(_row.get("declared_billpay"))
+                _bp_basis = "declared" if _bp_used else "none"
+            e["cash_equip_acc"] = round(max(0.0, _gross - _bp_used), 2)
+            e["cash_equip_acc_basis"] = _bp_basis
+            e["cash_billpay_used"] = round(_bp_used, 2)
 
     out.sort(key=lambda e: (e["picked_up"], str(e.get("close_date") or ""), str(e.get("store_name") or "")))
 
@@ -5985,8 +6011,21 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
     if not items:
         raise HTTPException(400, "Select at least one envelope.")
     dm = (payload.picked_up_by or "DM").strip()
+    # THE OPENED-ENVELOPE GATE (owner 2026-09-08, mig 990): "it should have a check box asking if the
+    # cash envelope was opened" — reported together with "if the declared cash pick by the dm is less
+    # then the sheet does not update the actual cash picked up, it only shows the envelope amount".
+    # An envelope the DM says they OPENED must carry the count they made; otherwise the pickup is
+    # recorded with a NULL actual and the declared snapshot is all that survives — the exact hole the
+    # owner is reporting. Checked for the WHOLE batch before a single row is written, so a blocked
+    # confirm never lands half of the envelopes. Sealed envelopes are untouched (no count needed),
+    # so a client that never sends the flag behaves exactly as before. Pure rule:
+    # pickup_actual.gate_items / gate_message.
+    _offenders = _pickup_actual.gate_items(items)
+    if _offenders:
+        raise HTTPException(400, _pickup_actual.gate_message(_offenders))
     total = 0.0
     actual_total, variance_short, variance_over = None, 0, 0
+    opened_count = 0
     for it in items:
         item_date = _date(it.get("close_date")) or top_date
         if not item_date:
@@ -6011,8 +6050,25 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
                 actual_total = round((actual_total or 0.0) + _vf["actual"], 2)
                 variance_short += 1 if _vf["status"] == "short" else 0
                 variance_over += 1 if _vf["status"] == "over" else 0
-        client.schema("commcalc").table(table).upsert(
-            row, on_conflict="org_id,close_date,store_code,employee_name").execute()
+        # mig 990 — the DM's own statement that they opened this envelope, stored beside the count
+        # it required. Written ONLY when the client sends the key, so an older frontend is
+        # byte-identical; the upsert below retries WITHOUT it on a pre-990 schema.
+        if "envelope_opened" in it:
+            row["envelope_opened"] = _pickup_actual.envelope_opened(it)
+            opened_count += 1 if row["envelope_opened"] else 0
+        try:
+            client.schema("commcalc").table(table).upsert(
+                row, on_conflict="org_id,close_date,store_code,employee_name").execute()
+        except Exception:
+            # pre-990 schema (no envelope_opened column): retry without it so the pickup — and the
+            # mig-949 count that matters most — still records. The mig-201 product_mrc precedent.
+            # The flag is a statement ABOUT the count, never a substitute for it, so dropping it
+            # loses no money figure. Re-raised if the write fails for any other reason.
+            if "envelope_opened" not in row:
+                raise
+            row.pop("envelope_opened", None)
+            client.schema("commcalc").table(table).upsert(
+                row, on_conflict="org_id,close_date,store_code,employee_name").execute()
     item_dates = sorted({_date(it.get("close_date")) or top_date for it in items} - {None})
     notify_label = top_date or (item_dates[0] if len(item_dates) == 1 else
                                 f"{item_dates[0]}..{item_dates[-1]}" if item_dates else "—")
@@ -6022,7 +6078,9 @@ async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str
     return {"ok": True, "count": len(items), "total": round(total, 2), "notify": notify,
             # mig 949 — actual-picked summary (None when no item carried an actual figure)
             "actual_total": actual_total,
-            "variance_short": variance_short, "variance_over": variance_over}
+            "variance_short": variance_short, "variance_over": variance_over,
+            # mig 990 — how many of the confirmed envelopes the DM opened and counted
+            "opened_count": opened_count}
 
 
 @router.post("/pickup")
@@ -6331,6 +6389,10 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
                                      if p and _pickup_actual.has_actual(p) else None),
             "pickup_variance": (_pickup_actual.row_variance(p) or {}).get("variance") if p else None,
             "pickup_variance_status": (_pickup_actual.row_variance(p) or {}).get("status") if p else None,
+            # mig 990 (owner 2026-09-08) — did the DM OPEN this envelope? False on a pre-990
+            # schema and on every row recorded before the checkbox existed: "collected sealed",
+            # which is exactly how those pickups behaved.
+            "envelope_opened": _pickup_actual.envelope_opened(p) if p else False,
         })
     # OWNER 2026-09-02 ("bill pick up only show what the stores have entered but not what is in
     # the system, from the pos report"): attach the POS-report bill payments for each envelope's
@@ -6507,6 +6569,8 @@ def _sales_billpay_for_days(client, org_id, days):
 # ── Management one-screen cash reconciliation (owner directive 2026-09-02, follow-up) ───────────
 @router.get("/cash-recon-management")
 def cash_recon_management(date: str = "", start: str = "", end: str = "", tolerance: float = 1.0,
+                          market: str = None, markets: str = None, stores: str = "",
+                          employees: str = "",
                           authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Owner, verbatim: "for the management it should show what has been received as per the
     system in both cash pick up, epay pick up and the cash declared and the epay declared fields
@@ -6556,8 +6620,8 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
 
     # DECLARED side (daily_closing, DM overlay winning at store-day grain).
     rows = (client.schema("commcalc").table("daily_closing")
-            .select("store_code,close_date,t_cash,store_cash,t_credit,t_ext_cc,store_cc,"
-                    "epay_cash,epay_cc,epay_on_cash,epay_on_credit")
+            .select("id,employee_name,store_code,close_date,t_cash,store_cash,t_credit,t_ext_cc,"
+                    "store_cc,epay_cash,epay_cc,epay_on_cash,epay_on_credit")
             .eq("org_id", org_id).gte("close_date", start).lte("close_date", end)
             .limit(100000).execute().data) or []
     decl = {}
@@ -6567,7 +6631,13 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
         if not dday:
             continue
         slot = decl.setdefault((code, dday), {"cash": 0.0, "credit": 0.0,
-                                              "epay_cash": 0.0, "epay_credit": 0.0})
+                                              "epay_cash": 0.0, "epay_credit": 0.0,
+                                              "_ids": [], "_reps": set()})
+        if r.get("id") is not None:
+            slot["_ids"].append(r.get("id"))
+        _rn = (r.get("employee_name") or "").strip()
+        if _rn:
+            slot["_reps"].add(_rn)
         cash = _f(r.get("t_cash")) or _f(r.get("store_cash"))
         credit = (_f(r.get("t_credit")) or _f(r.get("store_cc"))) + _f(r.get("t_ext_cc")) + _f(r.get("epay_cc"))
         slot["cash"] = round(slot["cash"] + cash, 2)
@@ -6609,6 +6679,51 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
     cash_picked = _picked_sums("cash_pickup")
     billpay_picked = _picked_sums("billpay_pickup")
 
+    # WHAT THE DM ACTUALLY TOOK, and WHAT MANAGEMENT ACTUALLY COUNTED — both already exist; this
+    # screen simply had neither on it (owner 2026-09-08: "there should be a box to add the actual
+    # cash received by the management — if we have it somewhere else then tell me and this should
+    # still feed from there"). It does, so it feeds from there and no second entry point is built:
+    #   · the DM's own count at pickup  = `cash_pickup.actual_picked_amount` (mig 949)
+    #   · MANAGEMENT's later count      = `commcalc.envelope_count.counted_amount` (mig 936,
+    #     counted_by/counted_at, and the envelope_short chargeback keys off it)
+    # Both are NULL when nobody recorded one — never coerced to 0.0, which would read as 100% short.
+    def _actual_sums(table):
+        try:
+            prs = (client.schema("commcalc").table(table)
+                   .select("store_code,close_date,actual_picked_amount,picked_up")
+                   .eq("org_id", org_id).gte("close_date", start).lte("close_date", end)
+                   .limit(100000).execute().data) or []
+        except Exception:
+            return {}
+        outm = {}
+        for p in prs:
+            if not p.get("picked_up") or not _pickup_actual.has_actual(p):
+                continue
+            k = ((p.get("store_code") or "").strip() or "?", str(p.get("close_date") or "")[:10])
+            outm[k] = round(outm.get(k, 0.0) + _f(p.get("actual_picked_amount")), 2)
+        return outm
+    cash_actual = _actual_sums("cash_pickup")
+    billpay_actual = _actual_sums("billpay_pickup")
+
+    # Management's count joins through daily_closing.id (envelope_count keys on closing_row_id).
+    _row_to_sd = {}
+    for (code, dday), slot in decl.items():
+        for _rid in slot["_ids"]:
+            _row_to_sd[str(_rid)] = (code, dday)
+    mgmt_counted = {}
+    try:
+        _ec = (client.schema("commcalc").table("envelope_count")
+               .select("closing_row_id,counted_amount").eq("org_id", org_id)
+               .limit(100000).execute().data) or []
+        for c in _ec:
+            if c.get("counted_amount") is None:
+                continue
+            k = _row_to_sd.get(str(c.get("closing_row_id")))
+            if k:
+                mgmt_counted[k] = round(mgmt_counted.get(k, 0.0) + _f(c.get("counted_amount")), 2)
+    except Exception as _e:
+        print(f"WARN cash_recon_management envelope_count read failed: {_e}")
+
     # POS side 1 — X-report tenders (authoritative cash/card split), per day.
     # POS side 2 — bill payments per the processor feed (the mig-939 coverage resolution).
     # Leg B    — bill payments in the email-ingested sales transactions, tender-split (mig 944).
@@ -6622,13 +6737,31 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
     # sales-transactions vs Leg C processor/portal report, per (store, day) — ONE pure math
     # implementation (metric_recon.reconcile_billpay_three_way_days), joined back onto the rows.
     from app.modules.commcalc import metric_recon as _mr
+    # RULE FIVE FILTERS (owner 2026-09-08: "it does not have our standard filters for employee,
+    # store or market"). They select WHOLE STORE-DAYS — a recon row is a store-day, so narrowing
+    # inside one would compare a partial declared figure against a full POS figure and invent a
+    # variance. The rep filter therefore keeps the store-days that rep filed a closing on, with
+    # every rep's money on them intact; the screen says so rather than leaving it to be assumed.
+    # Resolution is the SHARED `_resolve_market_filter` every other closing surface uses.
+    market_set = _resolve_market_filter(market, markets)
+    store_set = {x.strip().upper() for x in (stores or "").split(",") if x.strip()} or None
+    emp_set = {x.strip().casefold() for x in (employees or "").split(",") if x.strip()} or None
+
     _twA, _twB, _twC = {}, {}, {}
-    _kept = []
+    _kept, _rep_options = [], set()
     for (code, dday), slot in sorted(decl.items()):
         if code == "?":
             continue
         meta = smeta.get(code, {})
         if ks is not None and not in_keyset(ks, code, meta.get("address")):
+            continue
+        _rep_options |= slot["_reps"]          # collected BEFORE the rep filter, so it never shrinks
+        if store_set and code.upper() not in store_set:
+            continue
+        _mk = (meta.get("market") or "").strip()
+        if market_set and _mk and _mk.casefold() not in market_set:
+            continue
+        if emp_set and not any(n.casefold() in emp_set for n in slot["_reps"]):
             continue
         _kept.append((code, dday, slot, meta))
         _twA[(code, dday)] = round(slot["epay_cash"] + slot["epay_credit"], 2)
@@ -6654,9 +6787,20 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
         delta = (round(epay_declared - pos_bp, 2) if pos_bp is not None else None)
         pt = pos_tenders.get((code, dday))
         tw = _tw_by_key.get((code, dday)) or {}
+        _ca = cash_actual.get((code, dday))
+        _mc = mgmt_counted.get((code, dday))
         out.append({
             "store_code": code, "store_name": meta.get("address") or code,
             "market": meta.get("market"), "day": dday,
+            "reps": sorted(slot["_reps"]),
+            # The DM's own count at pickup and MANAGEMENT's later count, each None when nobody
+            # recorded one. The variances are against the DECLARED cash, the same base the rest of
+            # this row reconciles to; short is negative, over positive.
+            "cash_picked_actual": _ca,
+            "cash_picked_variance": (round(_ca - slot["cash"], 2) if _ca is not None else None),
+            "mgmt_counted": _mc,
+            "mgmt_variance": (round(_mc - slot["cash"], 2) if _mc is not None else None),
+            "billpay_picked_actual": billpay_actual.get((code, dday)),
             "cash_declared": slot["cash"], "credit_declared": slot["credit"],
             "epay_cash_declared": slot["epay_cash"], "epay_credit_declared": slot["epay_credit"],
             "cash_pickup": cash_picked.get((code, dday), 0.0),
@@ -6687,9 +6831,25 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
         _notes.append("No sales-transaction rows resolved for this range — the sales-side "
                       "bill-payment columns are empty and the 3-way recon runs on the legs that "
                       "are present (upload or route the sales transactions feed to activate it).")
+    # SHORT / OVER, management side (owner 2026-09-08: "the cash short report should be generated
+    # for Management cash short / over report"). Counted from the rows already on screen so the
+    # report and the screen can never disagree; a store-day nobody counted is neither short nor
+    # over, it is UNCOUNTED, and is reported as such rather than folded into either bucket.
+    _mgmt_short = [r for r in out if r["mgmt_variance"] is not None
+                   and r["mgmt_variance"] < -abs(_f(tolerance))]
+    _mgmt_over = [r for r in out if r["mgmt_variance"] is not None
+                  and r["mgmt_variance"] > abs(_f(tolerance))]
+    _dm_short = [r for r in out if r["cash_picked_variance"] is not None
+                 and r["cash_picked_variance"] < -abs(_f(tolerance))]
+    _dm_over = [r for r in out if r["cash_picked_variance"] is not None
+                and r["cash_picked_variance"] > abs(_f(tolerance))]
     return {"start": start, "end": end, "rows": out, "billpay_source": billpay_source,
             "sales_source": sales_source,
             "tolerance": _f(tolerance),
+            "rep_options": sorted(_rep_options),
+            "filters": {"market": market or markets or None,
+                        "stores": sorted(store_set) if store_set else None,
+                        "employees": sorted(emp_set) if emp_set else None},
             "totals": {"cash_declared": round(sum(r["cash_declared"] for r in out), 2),
                        "credit_declared": round(sum(r["credit_declared"] for r in out), 2),
                        "epay_declared": round(sum(r["epay_cash_declared"] + r["epay_credit_declared"] for r in out), 2),
@@ -6700,6 +6860,21 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
                                          if sales_present else None),
                        "sales_billpay_card": (round(sum(r["sales_billpay_card"] or 0.0 for r in out), 2)
                                               if sales_present else None),
+                       # Management's own count (envelope_count, mig 936) and the DM's count at
+                       # pickup (actual_picked_amount, mig 949), each summed over the store-days
+                       # where one was actually recorded.
+                       "mgmt_counted": round(sum(r["mgmt_counted"] or 0.0 for r in out), 2),
+                       "mgmt_counted_days": sum(1 for r in out if r["mgmt_counted"] is not None),
+                       "mgmt_uncounted_days": sum(1 for r in out if r["mgmt_counted"] is None),
+                       "mgmt_short_days": len(_mgmt_short),
+                       "mgmt_over_days": len(_mgmt_over),
+                       "mgmt_short_amount": round(sum(r["mgmt_variance"] for r in _mgmt_short), 2),
+                       "mgmt_over_amount": round(sum(r["mgmt_variance"] for r in _mgmt_over), 2),
+                       "cash_picked_actual": round(sum(r["cash_picked_actual"] or 0.0 for r in out), 2),
+                       "dm_short_days": len(_dm_short),
+                       "dm_over_days": len(_dm_over),
+                       "dm_short_amount": round(sum(r["cash_picked_variance"] for r in _dm_short), 2),
+                       "dm_over_amount": round(sum(r["cash_picked_variance"] for r in _dm_over), 2),
                        "mismatched_store_days": mismatches,
                        "three_way_mismatched": sum(1 for r in out
                                                    if r["three_way_status"] == "mismatch")},
@@ -6793,7 +6968,15 @@ def deposit_accountability_board(date: str = "", start: str = "", end: str = "",
         # mig 949 — short-pickup visibility (actual < declared at pickup time), visible rows only
         "short_pickup_days": sum(1 for r in out if r.get("pickup_short_rows")),
     }
+    # CASH SHORT BY DM (owner 2026-09-08: "if the cash is short then it should generate a cash short
+    # report by DM"). Folded from `out` — the rows already filtered by this caller's keyset — so the
+    # by-DM totals and the board can never disagree, and no store outside the viewer's span can leak
+    # in through a shortage line. Short/over is NOT re-derived: it arrives on each envelope from
+    # pickup_actual.row_variance (the envelope_report count_fields truth table). Uncounted envelopes
+    # are reported as uncounted, never as short.
+    dm_rows, dm_summary = _da.dm_shortage_rows(out)
     return {"start": start, "end": end, "rows": out, "summary": summary,
+            "by_dm": dm_rows, "dm_summary": dm_summary,
             "can_confirm": _bp.can_see_cash_recon(authorization or "", org_id, client)}
 
 

@@ -26,6 +26,7 @@
 // asks a human to type the name of an existing entity.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, fmt } from '@/lib/client'
+import { LinkedText } from '@/components/ScreenLink'
 
 export type Lever = {
   key: string; rule_id: string; label: string; payout_kind: string
@@ -192,7 +193,8 @@ function Unavailable({ ctx, err }: { ctx: Ctx | null; err: string }) {
       <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 3 }}>
         {ctx?.needs_rep ? 'Pick an employee' : 'Not available yet'}
       </div>
-      <div style={{ fontSize: 12, color: 'var(--text2)' }}>{msg}</div>
+      {/* The server's reason names Roles & Access when the login isn't provisioned/linked — link it. */}
+      <div style={{ fontSize: 12, color: 'var(--text2)' }}><LinkedText text={msg} /></div>
     </div>
   )
 }

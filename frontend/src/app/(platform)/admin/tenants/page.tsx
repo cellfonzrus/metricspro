@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
 import { apiCached, CONFIG } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
+import ScreenLink from '@/components/ScreenLink'
 
 // SaaS logins — super-admin onboarding: create a company (tenant) + provision its first admin login.
 type Tenant = { org_id: string; name: string; slug: string | null; is_active: boolean; created_at: string; users: number; logins: number }
@@ -122,7 +123,7 @@ export default function TenantsAdmin() {
       </div>
       <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
         Onboard a company onto MetricsPro: this creates its own org, seeds its roles + modules, and provisions its first admin login.
-        That admin then manages their own staff in Roles &amp; Access.
+        That admin then manages their own staff in <ScreenLink to="roles_access" />.
       </p>
       {err && <div className="card" style={{ borderColor: '#c0392b', color: '#c0392b', padding: 12, marginBottom: 12 }}>{err}</div>}
 
@@ -147,7 +148,7 @@ export default function TenantsAdmin() {
         <div style={{ fontWeight: 700, marginBottom: 4 }}>🔑 Reset a user's password</div>
         <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
           Works for <b>any tenant's</b> user (Luxelink, etc.) by email. Sets a temp password and forces a change on next login.
-          The account must already have a login (created in Roles &amp; Access).
+          The account must already have a login (created in <ScreenLink to="roles_access" />).
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <input style={{ ...inp, width: 240 }} placeholder="User email *" value={rp.email} onChange={e => setRp(v => ({ ...v, email: e.target.value }))} />
