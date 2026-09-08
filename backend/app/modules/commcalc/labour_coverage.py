@@ -35,13 +35,24 @@ WHY IT EXISTS (the defect class, measured on LUXELINK 854f6d7b-…-646f560d4f4c,
   4. DOUBLE BOOKING. August 2026 carries twenty $500.00 'Employee Commission' expense rows
      ($10,000.00) while `commcalc.rep_commissions` for the same month totals $11,118.78 and is
      ALREADY deducted separately — by the GP report as `rep_pay` and by the P&L as the `rep_comm`
-     line. Same labour dollars, two routes. Detected here and REPORTED; nothing is netted
-     automatically, because which of the two routes is authoritative is the owner's call.
+     line. Same labour dollars, two routes. `commission_collisions` detects and REPORTS it.
+     OWNER DECISION 2026-09-08 — "Rep commision should go in p&l" — settled which route is
+     authoritative: `rep_commissions` → `rep_comm`, untouched. The EXPENSE-side row is the
+     duplicate, and `suppression_plan` (below) is what stops it booking, on BOTH readers at once,
+     gated on the org's `labour_commission_expense_names` config and NEVER dropping a cost that
+     rep_commissions cannot replace.
 
 SHAPE. Mirrors the house's existing silent-zero detector `exec_metric_defs.bucket_coverage`
-(`{'scanned', 'gaps', …, 'note'}`) so the two banners read alike: DISPLAY-ONLY and
-TOTAL-PRESERVING — every function here is pure, moves no figure, and a caller that ignores the
+(`{'scanned', 'gaps', …, 'note'}`) so the two banners read alike. Every function here is PURE: it
+computes no dollar of its own and mutates nothing it is handed, and a caller that ignores the
 result gets byte-identical numbers.
+
+  • The COVERAGE half (`labour_coverage`, `commission_collisions` and their helpers) is also
+    DISPLAY-ONLY: acting on it changes nothing.
+  • The SUPPRESSION half (`suppression_plan` and the two reader helpers below) is NOT display-only.
+    It is a routing DECISION its callers act on, so a configured org's `store_opex` / `exp_total`
+    genuinely move. It still computes no dollar — it only says which existing rows stop booking —
+    and it is inert for every org whose `labour_commission_expense_names` is the house default.
 
 RULE TWO: no tenant, carrier or account name appears in this file. The payroll/commission expense
 vocabularies are handed in by the caller from per-org config
@@ -302,6 +313,32 @@ def coverage_note(scanned, counts, carried_from, period, allocated=()):
             f"cost.{tail}")
 
 
+def commission_expense_by_key(exp_rows, commission_names, key_of=None):
+    """PURE: {key: Σ commission-named expense dollars}. The ONE accumulator both the collision
+    DETECTOR and the suppression PLAN read, so the dollars they talk about can never disagree.
+
+    `key_of` maps a row's raw `store_code` into the CALLER's key space and defaults to the code
+    itself (the GP report's space). The P&L keys its store lines by canonical store ADDRESS, so it
+    passes its own `code → resolve_store(code2addr[code])`; the pairing is then made in the very
+    key space that reader books in, and this module stays DB-free and key-agnostic.
+    Rows with no store key are skipped — an unattributable expense pairs with nothing.
+    """
+    want = _names(commission_names)
+    out = {}
+    if not want:
+        return out
+    for r in (exp_rows or []):
+        name = str(r.get("expense_name") or "").strip().lower()
+        if name not in want:
+            continue
+        code = _norm(r.get("store_code"))
+        key = _norm(key_of(code)) if (key_of and code) else code
+        if not key:
+            continue
+        out[key] = round(out.get(key, 0.0) + _f(r.get("amount")), 2)
+    return out
+
+
 def commission_collisions(exp_rows, rep_pay_by_code, commission_names, tolerance=0.005):
     """PURE: labour dollars that reach the report by TWO routes at once.
 
@@ -317,12 +354,7 @@ def commission_collisions(exp_rows, rep_pay_by_code, commission_names, tolerance
     want = _names(commission_names)
     if not want:
         return {"names": [], "stores": [], "total_double_booked": 0.0, "note": None}
-    by_code = {}
-    for r in (exp_rows or []):
-        name = str(r.get("expense_name") or "").strip().lower()
-        code = _norm(r.get("store_code"))
-        if code and name in want:
-            by_code[code] = round(by_code.get(code, 0.0) + _f(r.get("amount")), 2)
+    by_code = commission_expense_by_key(exp_rows, commission_names)
     stores, total = [], 0.0
     for code in sorted(by_code):
         exp = by_code[code]
@@ -341,6 +373,151 @@ def commission_collisions(exp_rows, rep_pay_by_code, commission_names, tolerance
                 f"the P&L already deduct on their own line. Remove one of the two routes.")
     return {"names": sorted(want), "stores": stores,
             "total_double_booked": total, "note": note}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# SUPPRESSION — the owner's ruling on WHICH of the two routes books (2026-09-08: "Rep commision
+# should go in p&l"). `commission_collisions` above REPORTS the overlap; everything below ACTS on
+# it, in exactly one derivation that BOTH readers (the P&L `account/coa.build_inputs` and the GP
+# report `commcalc/gp_report.calc_gp_report`) route through. Suppressing on one surface and not the
+# other would leave the two reports disagreeing about the same month — the drift the house rules
+# forbid — so the decision is made HERE, once, and each reader only asks "is this row suppressed?"
+#
+# AUTHORITATIVE ROUTE: `commcalc.rep_commissions` → the P&L `rep_comm` line / the GP `rep_pay`
+# column. It already exists, already books to the cent, and is NOT touched by anything here.
+# THE DUPLICATE: manual `store_expenses` rows whose `expense_name` is in the org's configured
+# `labour_commission_expense_names`. Listing a name makes the EXPENSE-side booking disappear.
+#
+# THREE STATES, NEVER TWO — this is the trap the owner named, and the reason suppression is not a
+# blanket filter on the name:
+#   `replaced`        the store-month has rep_commissions to book in the expense row's place, so
+#                     the expense row is suppressed and the swap is reported (both dollar figures).
+#   `no_replacement`  the expense row exists but rep_commissions carries NOTHING for that store in
+#                     that month. Suppressing there would delete a REAL cost and book nothing back.
+#                     The row is therefore KEPT (still booked) and surfaced with its amount and the
+#                     reason, so a missing feed is reported rather than papered over.
+#   `not_applicable`  no commission-named expense for that key — nothing to decide.
+# A suppressed row is never rendered as $0.00 as though it had been measured: it is removed from
+# the expense line entirely and accounted for in the plan's report and note.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+REPLACED = "replaced"
+NO_REPLACEMENT = "no_replacement"
+NOT_APPLICABLE = "not_applicable"
+
+
+def suppression_state(expense, rep_pay, tolerance=0.005):
+    """PURE: the state of ONE store-month. See the three states above.
+
+    A ZERO expense is `not_applicable` (there is nothing to suppress — a $0.00 placeholder row is
+    not a booking, the same guard ruling K2 applies to a payroll placeholder). A non-zero expense
+    with no rep pay is `no_replacement`: the dangerous case, never suppressed.
+    """
+    if abs(_f(expense)) <= tolerance:
+        return NOT_APPLICABLE
+    if abs(_f(rep_pay)) <= tolerance:
+        return NO_REPLACEMENT
+    return REPLACED
+
+
+def suppression_plan(exp_rows, rep_pay_by_key, commission_names, key_of=None, tolerance=0.005):
+    """PURE: which commission-named expense rows stop booking, and what books in their place.
+
+    `commission_names` empty/None ⇒ `{'active': False}` with no suppressed keys, so EVERY org's
+    books are byte-identical until its owner sets `account_config.labour_commission_expense_names`
+    (RULE TWO — the house default is `'{}'` and no tenant or expense-name literal appears here).
+
+    Returns (JSON-safe, so a reader can hand it straight to its payload):
+      {'names': [lowercased configured names], 'active': bool,
+       'suppressed_keys': [key…]                       — the keys whose rows stop booking,
+       'stores': [{'store_code', 'expense', 'rep_pay', 'state', 'suppressed', 'booked_instead',
+                   'reason'}…]                          — EVERY commission-named store, both states,
+       'total_suppressed': $ removed from the expense line,
+       'total_booked_instead': $ the authoritative route books for those same stores,
+       'total_kept': $ NOT suppressed because there was nothing to replace it with,
+       'kept': [store_code…], 'note': str|None}
+
+    `total_suppressed` and `total_booked_instead` are deliberately BOTH reported and are NOT equal
+    in general (LuxeLink books a flat $500.00 per store against a real payout that ranges $44.87 to
+    $1,075.51): a reader must be able to see the swap, not just a moved bottom line.
+    """
+    want = _names(commission_names)
+    if not want:
+        return {"names": [], "active": False, "suppressed_keys": [], "stores": [],
+                "total_suppressed": 0.0, "total_booked_instead": 0.0, "total_kept": 0.0,
+                "kept": [], "note": None}
+    by_key = commission_expense_by_key(exp_rows, commission_names, key_of)
+    stores, suppressed_keys, kept = [], [], []
+    t_supp = t_instead = t_kept = 0.0
+    for key in sorted(by_key, key=lambda k: str(k)):
+        exp = by_key[key]
+        rep = round(_f((rep_pay_by_key or {}).get(key)), 2)
+        state = suppression_state(exp, rep, tolerance)
+        row = {"store_code": key, "expense": exp, "rep_pay": rep, "state": state,
+               "suppressed": state == REPLACED,
+               "booked_instead": rep if state == REPLACED else 0.0,
+               "reason": None}
+        if state == REPLACED:
+            suppressed_keys.append(key)
+            t_supp = round(t_supp + exp, 2)
+            t_instead = round(t_instead + rep, 2)
+        elif state == NO_REPLACEMENT:
+            kept.append(key)
+            t_kept = round(t_kept + exp, 2)
+            row["reason"] = ("rep_commissions has nothing for this store this month, so suppressing "
+                             "this row would remove a real cost and book no replacement — it is "
+                             "still booked as an expense and reported here instead")
+        else:
+            row["reason"] = "no commission expense to suppress"
+        stores.append(row)
+    return {"names": sorted(want), "active": bool(suppressed_keys or kept),
+            "suppressed_keys": suppressed_keys, "stores": stores,
+            "total_suppressed": t_supp, "total_booked_instead": t_instead,
+            "total_kept": t_kept, "kept": kept,
+            "note": suppression_note(t_supp, t_instead, len(suppressed_keys), t_kept, kept)}
+
+
+def suppression_note(total_suppressed, total_booked_instead, n_suppressed, total_kept, kept):
+    """PURE: the sentence that makes the SWAP legible — both dollar figures, never one.
+
+    Says what left the expense line AND what the authoritative route books in its place, then names
+    every store where nothing could replace the cost. None when the config claims nothing."""
+    bits = []
+    if n_suppressed:
+        bits.append(
+            f"${total_suppressed:,.2f} of commission entered as a store OPERATING EXPENSE at "
+            f"{n_suppressed} store(s) no longer books there: rep commission books on this line "
+            f"from commcalc.rep_commissions instead (owner decision 2026-09-08), and it carries "
+            f"${total_booked_instead:,.2f} for those same stores. The two figures differ because "
+            f"the expense rows are a flat per-store amount and the payout is the real one — this "
+            f"is a swap of routes, not a discount.")
+    if kept:
+        bits.append(
+            f"${total_kept:,.2f} at {len(kept)} store(s) — {', '.join(str(k) for k in kept)} — is "
+            f"STILL booked as an expense: rep_commissions has nothing for those stores this month, "
+            f"so removing the row would delete a real cost and replace it with nothing. Post those "
+            f"stores' rep commissions (or correct the expense row); this is a data gap, not a "
+            f"figure to net out.")
+    return " ".join(bits) or None
+
+
+def suppression_index(plan):
+    """PURE: (names, keys) frozensets hoisted out of a plan for O(1) per-row routing.
+
+    The plan itself stays JSON-safe (lists, not sets) because both readers put it in a payload;
+    this is the reader-side companion so a 300-row expense loop does not rebuild a set per row."""
+    if not plan or not plan.get("active"):
+        return frozenset(), frozenset()
+    return frozenset(plan.get("names") or ()), frozenset(plan.get("suppressed_keys") or ())
+
+
+def suppresses_row(index, expense_name, key):
+    """PURE: does the plan suppress THIS expense row? The single predicate BOTH readers call, so
+    the P&L and the GP report can never suppress different rows. `index` = suppression_index(plan).
+    """
+    names, keys = index
+    if not names or not keys:
+        return False
+    return (str(expense_name or "").strip().lower() in names) and (_norm(key) in keys)
 
 
 # ── the ONE hours reader both surfaces go through (I/O; pure logic above is DB-free) ──────────────

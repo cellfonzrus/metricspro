@@ -510,7 +510,44 @@ commissions, expenses.
     LuxeLink shift in July and August carries 0.0 `actual_hours`** — the owner's "if we have the
     actual hours" branch never fires today; the estimate is 100% scheduled-hours. August also books
     twenty $500.00 'Employee Commission' rows ($10,000.00) against $11,118.78 of `rep_commissions`
-    — **$7,626.14 double-booked**. Proof: `harness_labour_coverage.py` (81 checks).
+    — **$7,626.14 double-booked**.
+- **WHICH commission route books — the duplicate stops (owner decision 2026-09-08, verbatim
+  "Rep commision should go in p&l"; mig `994` col `labour_commission_expense_names`):** the
+  question above is answered. **AUTHORITATIVE = `commcalc.rep_commissions` → the `rep_comm` P&L
+  line** (`coa.py:149`, fed from `total_payout` at `coa.py:1195-1199`) / the GP `−Rep Pay`
+  column — unchanged, un-moved, amounts untouched. **THE DUPLICATE = the manual
+  `commcalc.store_expenses` rows whose `expense_name` is in the org's
+  `labour_commission_expense_names`**, which land in `store_opex` (P&L) and inside `exp_total`
+  (GP), both of which are subtracted alongside the rep line. Listing a name now SUPPRESSES that
+  expense-side booking.
+  - **ONE decision, both readers** (extends `labour_coverage.py`, no sibling path):
+    `labour_coverage.suppression_plan` / `.suppression_index` / `.suppresses_row` —
+    `coa.build_inputs` skips the row before routing (`_lcov_mod()`), `gp_report.calc_gp_report`
+    (new arg `commission_suppression_names`, wired from config in `router._compute_gp` BEFORE
+    the report runs) subtracts it from `exp_total`. Suppressing on one surface only would leave
+    the two reports disagreeing about the same month. `commission_collisions` now measures what
+    is STILL double-booked, reading that same plan rather than re-deciding.
+  - **THREE states, never two** — a suppressed cost must never vanish unreplaced:
+    `replaced` (rep pay exists for that store-month; the row stops booking and BOTH dollar
+    figures are reported) · `no_replacement` (the expense row exists and `rep_commissions` has
+    NOTHING for that store-month — the row KEEPS booking and is surfaced by name and amount;
+    removing it would delete a real cost) · `not_applicable`. A suppressed row is REMOVED, never
+    rendered $0.00 as though measured.
+  - **Reported, not just netted:** GP payload key **`labour_commission_suppressed`** (per-store
+    swap + totals) and the P&L **`rep_comm` line `note`** (ruling K3(b)'s existing `note`
+    passthrough, not a second channel). NOT yet on screen — no frontend surface reads it.
+  - **RULE TWO:** house default `'{}'` ⇒ every org byte-identical until its owner names its own
+    label; no tenant or expense-name literal in code.
+  - **Measured on live LuxeLink `854f6d7b-…`, both readers run with and without the config,
+    2026-09-08:** August — twenty $500.00 rows stop booking; P&L `store_opex`
+    $295,610.15 → $285,610.15 and GP `−Expenses` the same to the cent (−$10,000.00, −$500.00 per
+    store); `rep_comm` $11,118.78 and `−Rep Pay` $10,771.87 UNCHANGED; net income / GP net profit
+    +$10,000.00; every other P&L line and GP total byte-identical. The $7,626.14 overlap is gone;
+    the other $2,373.86 was expense the real payout never covered. September — carries August's
+    rows while `rep_commissions` has NO September rows, so NOTHING is suppressed and all twenty
+    are reported as still booked. July — no such rows, unaffected.
+  Proof: `harness_labour_coverage.py` (161 checks, extended — §H carries the $7,626.14
+  regression and its removal, the byte-identity default, and the nothing-to-replace-with case).
 - **GP accessory column basis — "Acc Sales" (owner 2026-09-02, mig `932_gp_acc_basis.sql`):**
   `accessory_config.gp_acc_basis` (`'sales'` = Σ `ext_price` of accessory lines — HOUSE DEFAULT,
   applied on NULL/absent; `'gp'` = legacy Σ `gp`, per-org opt-back via `PUT /accessory-config`) →
@@ -2367,7 +2404,7 @@ that month to go in the gross profit for that month."
 | `commcalc.store_kpis` | KPI ingest/snapshot | tiers, exec |
 | `commcalc.carrier_kpi_metric` | `/carrier-kpi-metrics` POST `19773` | KPI/tier config resolution |
 | `commcalc.flags` | calc + flag rules | `/flags/{period}` `10299`, `_cr_resolve_flags` |
-| `commcalc.store_expenses` | `/expenses/{period}` PUT `21695` | GP report + P&L, BOTH via the sticky carry-forward reader `expenses_effective.effective_expense_rows` (2026-09-02, §4); `_cr_resolve_store_expenses`; **salary coverage** `labour_coverage.authoritative_codes`/`allocated_names`/`commission_collisions` (2026-09-08, §4) |
+| `commcalc.store_expenses` | `/expenses/{period}` PUT `21695` | GP report + P&L, BOTH via the sticky carry-forward reader `expenses_effective.effective_expense_rows` (2026-09-02, §4); `_cr_resolve_store_expenses`; **salary coverage** `labour_coverage.authoritative_codes`/`allocated_names`/`commission_collisions` (2026-09-08, §4); **commission double-book SUPPRESSION** `labour_coverage.suppression_plan`/`suppresses_row` — a row named in `account_config.labour_commission_expense_names` stops booking on BOTH readers because `rep_commissions` is authoritative (owner 2026-09-08, mig `994`, §4) |
 | `commcalc.sale_installment_ledger` | `compute_sale_installments(persist=True)` `9212` (mig `308` adds `order_number`/`account_id` MA TX provenance, adaptive write) | `/plan-installments/*` previews, `installment_comm_sale` |
 | `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx` (slice-scoped replace: org × day × `account_id`, `ingest_slice.py` §2), VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store(_day)` — since mig `944` FILTERED to bill-payment rows via `metric_recon.ma_billpay_predicate`, accounts via store_merchant_id → mig-314 index; §12 3-way Leg C), **residual-per-subscriber report §7a** (`residual_subs._aggregate_ma` — ONE sweep: residual = −`retail_cost` on the mig-309 `ma_residual_row_matcher` union, airtime margin = `merchant_discount`; stores via the mig-314 account index), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier), **P&L mig `309`** (`account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings`: `merchant_discount` → "Merchant discount" line (or legacy `atu_income` fold per `pl_merchant_discount_own_line`), −`retail_cost` → `mi_income` for the `'%residual%'` ∪ `pl_ma_residual_order_types` union, each row once), **P&L mig `314`** (`ma_store_pnl.ma_tx_bookings`: per-store via `account_id`→store index; MDF token rows → `mdf_income`; `'daily_tx'` month-spiff rows → `carrier_comm` `M<n>` detail), **BS mig `933`** (`balance_sheet.handset_payable_bookings` via `statement_engine._fetch_outstanding_tx`: configured `handset_payable_order_types` rows with `tx_date ≤ as-of < due_date` → the `handset_payable` liability; money column `retail_cost` ONLY), **liabilities-due 2026-09-03** (`GET /account/liabilities-due`: same fetch + same family predicate — outstanding today + `liabilities_due.payables_due_in_window` for the due-this-week rows, equivalence pinned in `harness_liabilities_due.py`; §4), **Processor Daily Debits & Credits** (`processor_ledger.assemble` — `retail_cost` sign = debit/credit to the dealer, §15) |
 | `commcalc.raw_ma_commission` | upload `/upload/ma_commission` (slice-scoped replace: org × day × `merchant_account_id`, `ingest_slice.py` §2 — 2026-09-02 two-portal wipe incident), VidaPay sweep | MA overview/recon, installment MA gate (`_read_ma_commission` spiffs), **mig `308` two-hop link** (`build_ma_link_index`: `imei|sim → activation_order`), **P&L mig `314`** (`ma_store_pnl.ma_commission_bookings`: component heads per-store via `merchant_account_id`→store index; sheet spiffs suppressed under `pl_ma_month_spiff_source='daily_tx'`; MA device COGS store slice `device_cogs._ma_sold_cost`), **residual-per-subscriber SUBSCRIBER count §7a** (`residual_subs._aggregate_ma` — one row = one activated line, keyed by `merchant_account_id` through the SAME mig-314 index the residual rows use) |
@@ -2472,7 +2509,7 @@ that month to go in the gross profit for that month."
 | `GET /commissions/{period}` | `10222` | §6 — the Rep Incentive Report read; market stamped per row via §13a (2026-09-03 fix) |
 | `GET /commcalc/processor-ledger` | `commcalc/processor_ledger_api.py` | §15 Processor Daily Debits & Credits — day × transaction type, DEBITS/CREDITS/NET; store-span gated; serves the canonical §13c `market_options` |
 | `GET /sales-report` | `15792` | §3 |
-| `GET /gp/{period}` (payload also carries `expenses_carried_from`, **`labour_coverage`** and **`labour_double_booked`** — the salary silent-zero / month-grain / double-book detectors, display-only) | `14750` | §4 |
+| `GET /gp/{period}` (payload also carries `expenses_carried_from`, **`labour_coverage`** and **`labour_double_booked`** — the salary silent-zero / month-grain / double-book detectors, display-only — plus **`labour_commission_suppressed`**, the per-store record of which commission expense rows STOPPED booking and what `rep_commissions` books in their place; that one is NOT display-only, `exp_total`/`net_profit` move with it) | `14750` | §4 |
 | `GET/PUT /targets/{period}` | `19005/19071` | §5 |
 | `GET /targets/{period}/summary` | `19440` | §5 |
 | `GET /targets/{period}/action-plan` | `21334` | §5 |
@@ -2629,6 +2666,7 @@ that month to go in the gross profit for that month."
 | Lateness % (`late_rate` — late shifts ÷ scheduled shifts) | `storeops.timelog` punches vs `storeops.shifts` windows | `attendance_exceptions.compute_attendance_exceptions` → `accountability.aggregate`; surfaced by `/storeops/accountability` ('Lateness %' page, W2 rename) and the `storeops_lateness` scheduled report (§14 W3) |
 | Store salary expense for a MONTH (the `payroll_gross` P&L/GP line) | `get_payroll_by_store` — ACTUAL hours where MEASURED (a closed `storeops.timelog` punch or a manual `shifts.actual_hours>0` correction), SCHEDULED hours only where NOT measured; salaried via `payroll_salary.py`, never hours×`pay_rate`. A MEASURED ZERO pays zero and never falls back. No measurement AND no schedule ⇒ WITHHELD, never $0.00 | `storeops/salary_expense.py` via `router._salary_expense_gather` → `POST /storeops/payroll-expenses/run/{period}` → `commcalc.store_expenses` `source_key='payroll_gross'` → `account/coa.py` `wages`. Proof `harness_salary_expense.py` (§14s) |
 | Withholding estimate (gross/FICA/federal/state/net) | `storeops.timelog`+`manual_hours` hours × `employees.pay_rate` × `payroll_settings` W-4 | browser: `frontend/src/lib/payroll-tax.ts computePay`; server twin: `storeops/payroll_tax_estimate.compute_pay` (§14 W3 — keep in lockstep) |
+| Which route books rep commission, and what happens to the other one (`replaced` / `no_replacement` / `not_applicable`) | `commcalc.rep_commissions` is AUTHORITATIVE (owner 2026-09-08 "Rep commision should go in p&l") — the `rep_comm` P&L line / GP `−Rep Pay`. A `store_expenses` row named in `account_config.labour_commission_expense_names` (mig `994`, house default `'{}'`) is the duplicate and stops booking, per store-month, ONLY where rep commission exists to replace it | `commcalc/labour_coverage.suppression_plan` → `account/coa.build_inputs` (skips the row; `rep_comm` line `note`) **and** `commcalc/gp_report.calc_gp_report` (`commission_suppression_names` → `exp_total`; payload `labour_commission_suppressed`). ONE decision, two readers — they can never suppress differently. Proof `harness_labour_coverage.py` §H (§4) |
 | Store salary coverage state for a month (`entered` / `derived_actual` / `derived_scheduled` / `carried` / `not_measured` / `no_staff`) | `commcalc.store_expenses` authoritative payroll rows (ruling-K2 predicate, minus flat allocations) + `storeops.shifts` hours (actual else scheduled) + `expenses_effective` carry answer | `commcalc/labour_coverage.labour_coverage` → `GET /gp/{period}` key `labour_coverage` and the P&L `wages` line `note` (§4, mig `992`). Computes NO dollars — the amounts stay with `coa.derive_wage_cells` |
 | Rent due this month / current-month rent (per store) | `storeops.store_lease.rent_schedule`→`current_rent`×`escalation_pct` (schedule wins); due window from `rent_due` → `tenants.rent_due_default` → house first-week (mig `946`) | `store_lease.rent_for_month` + `resolve_rent_due`/`rent_due_window` (the §14 read contract for the finance rents-due/recurring-expenses build); surfaced on `GET /storeops/store-lease` |
 | Insurance premium due (per store, recurring) | `storeops.store_lease.insurance_premium` on `insurance_premium_due`, repeating per `insurance_premium_frequency` (mig `946`) | same read contract — finance recurring-expenses reader computes from these columns |

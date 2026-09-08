@@ -17299,12 +17299,33 @@ def _compute_gp(client, org_id, period, market=""):
         _acc_basis = 'sales'
     if _acc_basis not in ('sales', 'gp'):
         _acc_basis = 'sales'
+    # Per-org payroll + commission expense vocabularies (mig 621 K2 / mig 994). Read BEFORE the
+    # report because `labour_commission_expense_names` now decides which expense rows book at all
+    # (owner 2026-09-08: rep commission books from rep_commissions, so the expense-side copy is the
+    # duplicate). SEPARATE defensive selects, the same pattern `coa._account_config` uses: the
+    # mig-994 column does not exist on a database where that migration has not run, and a combined
+    # select would fail as a whole — leaving the payroll vocabulary EMPTY and flipping every
+    # correctly-entered store into a false "not measured" banner. A noisy wrong warning is worse
+    # than none; an unreadable commission vocabulary means NO suppression, i.e. today's figures.
+    _lc_names, _lc_comm = [], []
+    try:
+        _r = (sc.table('account_config').select('payroll_expense_names')
+              .eq('org_id', org_id).limit(1).execute().data) or []
+        _lc_names = (_r[0].get('payroll_expense_names') if _r else None) or []
+    except Exception:
+        pass
+    try:
+        _r = (sc.table('account_config').select('labour_commission_expense_names')
+              .eq('org_id', org_id).limit(1).execute().data) or []
+        _lc_comm = (_r[0].get('labour_commission_expense_names') if _r else None) or []
+    except Exception:
+        pass   # pre-994: no vocabulary ⇒ no double-book claim and no suppression, exactly as before
     result = calc_gp_report(sales, pay_detail, mi_rows, rep_comms, expenses, catalog, store_map, period,
                             comp_rows=comp_rows, gp_category_map=gp_cat_map,
                             item_gp_map=gp_item_map, gp_categories=gp_cats,
                             resolve_store_code=_resolve_code,
                             config_classify=config_classify, ma_income=ma_income, leg_classify=_legcls,
-                            acc_basis=_acc_basis)
+                            acc_basis=_acc_basis, commission_suppression_names=_lc_comm)
     result['expenses_carried_from'] = _exp_carried_from
     # LABOUR COVERAGE (owner directive 2026-09-08: "salaries … not getting updated for a lot of
     # stores … actual hours if we have them, else scheduled hours, FOR THAT MONTH"). DISPLAY-ONLY —
@@ -17320,23 +17341,9 @@ def _compute_gp(client, org_id, period, market=""):
     except Exception as e:
         print(f'WARN gp labour coverage inputs unavailable: {e}')
         _lc_stores = []
-    # SEPARATE defensive selects, the same pattern `coa._account_config` uses: the mig-992 column
-    # does not exist yet on a database where that migration has not run, and a combined select would
-    # fail as a whole — leaving the payroll vocabulary EMPTY and flipping every correctly-entered
-    # store into a false "not measured" banner. A noisy wrong warning is worse than none.
-    _lc_names, _lc_comm = [], []
-    try:
-        _r = (sc.table('account_config').select('payroll_expense_names')
-              .eq('org_id', org_id).limit(1).execute().data) or []
-        _lc_names = (_r[0].get('payroll_expense_names') if _r else None) or []
-    except Exception:
-        pass
-    try:
-        _r = (sc.table('account_config').select('labour_commission_expense_names')
-              .eq('org_id', org_id).limit(1).execute().data) or []
-        _lc_comm = (_r[0].get('labour_commission_expense_names') if _r else None) or []
-    except Exception:
-        pass   # pre-992: no vocabulary ⇒ no double-book claim, exactly as before
+    # `_lc_names` / `_lc_comm` were resolved ABOVE (the commission vocabulary now gates the report's
+    # own expense booking, so it has to be read before the report runs) — deliberately NOT re-read
+    # here: two selects answering the same question would be two things to drift.
     try:
         _lc_codes = [s.get('store_code') for s in _lc_stores]
         _lc_active = [s.get('store_code') for s in _lc_stores if s.get('is_active') is not False]
@@ -17344,15 +17351,24 @@ def _compute_gp(client, org_id, period, market=""):
         result['labour_coverage'] = _lcov.labour_coverage(
             _lc_codes, expenses, _lc_month, _lc_names, period,
             carried_from=_exp_carried_from, active_codes=_lc_active)
-        # Labour booked by BOTH routes: the GP row already deducts `rep_pay` (rep_commissions)
-        # SEPARATELY from `exp_total`, so a commission-named expense row is the same dollars twice.
-        # Reported, never netted — which of the two routes is authoritative is the owner's call.
+        # Labour booked by BOTH routes: the GP row deducts `rep_pay` (rep_commissions) SEPARATELY
+        # from `exp_total`, so a commission-named expense row is the same dollars twice. The owner
+        # ruled on 2026-09-08 that rep_commissions is the authoritative route, so the report above
+        # already SUPPRESSED the expense-side copy wherever there was rep pay to replace it. What
+        # remains double-booked is therefore measured on the rows that STILL book — reading the
+        # ONE plan the report acted on rather than re-deciding, so the banner can never claim a
+        # double-book the same request has already removed.
         _lc_reppay = {}
         for _r in (result.get('store_rows') or []):
             _c = str(_r.get('store_code') or '').strip()
             if _c:
                 _lc_reppay[_c] = _lc_reppay.get(_c, 0.0) + safe_float(_r.get('rep_pay'))
-        result['labour_double_booked'] = _lcov.commission_collisions(expenses, _lc_reppay, _lc_comm)
+        _supp_idx = _lcov.suppression_index(result.get('labour_commission_suppressed'))
+        _still_booking = [_e for _e in expenses
+                          if not _lcov.suppresses_row(_supp_idx, _e.get('expense_name'),
+                                                      _e.get('store_code'))]
+        result['labour_double_booked'] = _lcov.commission_collisions(
+            _still_booking, _lc_reppay, _lc_comm)
     except Exception as e:
         print(f'WARN gp labour coverage skipped: {e}')
     if market:

@@ -24,13 +24,33 @@
 --   labour_commission_expense_names   TEXT[]  '{}' (default)
 --       Expense names that carry commission ALREADY booked from commcalc.rep_commissions. The GP
 --       report deducts `rep_pay` SEPARATELY from `exp_total`, and the P&L books `rep_comm` separately
---       from `store_opex`, so such a row is the same labour dollars twice. Listing a name here makes
---       the collision VISIBLE in the GP payload (`labour_double_booked`). It nets NOTHING — which of
---       the two routes is authoritative is a money decision and stays with the owner.
+--       from `store_opex`, so such a row is the same labour dollars twice.
 --
---       MEASURED, LuxeLink August 2026 (2026-09-08): twenty $500.00 'Employee Commission' rows =
---       $10,000.00 in commcalc.store_expenses, against $11,118.78 of commcalc.rep_commissions for the
---       same month. Overlap booked on BOTH routes across the 20 stores: $7,626.14.
+--       ⚠️ OWNER DECISION 2026-09-08, verbatim: "Rep commision should go in p&l". That names
+--       commcalc.rep_commissions → the `rep_comm` P&L line as the AUTHORITATIVE route (unchanged,
+--       untouched), and the manual expense row as the duplicate. So listing a name here no longer
+--       only REPORTS the collision — it SUPPRESSES the expense-side booking, on BOTH readers at
+--       once (the P&L `account/coa.build_inputs` and the GP report `commcalc/gp_report`, whose
+--       `exp_total` carries the same rows), from ONE shared decision in
+--       commcalc/labour_coverage.suppression_plan. Suppressing on one surface only would leave the
+--       two reports disagreeing about the same month.
+--
+--       ⚠️ THIS COLUMN NOW MOVES MONEY FOR THE ORG THAT SETS IT. The column itself, and this
+--       migration, still move nothing: the default stays '{}' and every org's books are
+--       byte-identical until an owner names a value. The UPDATE in section (b) is the money change
+--       and stays commented out behind the owner gate.
+--
+--       IT NEVER SILENTLY DROPS A COST. Suppression is decided per STORE-MONTH and only where
+--       rep_commissions actually books something for that store to replace it. A store carrying the
+--       expense row with NO rep commission that month KEEPS its row (removing it would delete a real
+--       cost and book nothing back) and is reported by name and amount instead. Three states:
+--       replaced / no_replacement / not_applicable.
+--
+--       MEASURED, LuxeLink August 2026 (2026-09-08, re-verified before this change): twenty $500.00
+--       'Employee Commission' rows = $10,000.00 in commcalc.store_expenses, against $11,118.78 of
+--       commcalc.rep_commissions for the same month ($10,771.87 of it attributable to those twenty
+--       stores; $346.91 carries a blank store and books company-wide). Overlap booked on BOTH routes
+--       across the 20 stores: $7,626.14.
 --
 -- MONEY: the columns themselves move nothing. The LuxeLink seeds at the bottom DO change reported
 -- figures and are therefore COMMENTED OUT behind the owner gate, exactly as migs 938/939 did.
@@ -68,8 +88,13 @@ COMMENT ON COLUMN commcalc.account_config.payroll_authority_grain IS
 COMMENT ON COLUMN commcalc.account_config.labour_commission_expense_names IS
   'store_expenses.expense_name values that carry commission ALREADY booked from '
   'commcalc.rep_commissions (which the GP report deducts as rep_pay and the P&L as rep_comm). '
-  'Listing a name SURFACES the double-booking in the GP payload key labour_double_booked; it nets '
-  'nothing. Read by commcalc/labour_coverage.commission_collisions. Empty = no claim (default).';
+  'Owner decision 2026-09-08 "Rep commision should go in p&l": rep_commissions is the authoritative '
+  'route, so listing a name here SUPPRESSES the expense-side booking on BOTH the P&L (store_opex) '
+  'and the GP report (exp_total) from one shared decision, and surfaces the swap per store. '
+  'Suppression is per store-month and only where rep_commissions has something to book in its '
+  'place; a store with no rep commission that month keeps its row and is reported instead. '
+  'Read by commcalc/labour_coverage.suppression_plan (and commission_collisions, which reports what '
+  'is STILL double-booked afterwards). Empty = no claim, byte-identical books (default).';
 
 -- ── LuxeLink seeds — NOT APPLIED. These MOVE MONEY. Owner GO required. ────────────────────────────
 -- (a) payroll_authority_grain = 'store'
@@ -87,9 +112,29 @@ COMMENT ON COLUMN commcalc.account_config.labour_commission_expense_names IS
 --    SET payroll_authority_grain = 'store'
 --  WHERE org_id = '854f6d7b-6590-4e4d-88ab-646f560d4f4c';
 --
--- (b) labour_commission_expense_names = '{Employee Commission}'
---     Display-only: it makes the $7,626.14 August overlap visible on the GP report. It does NOT
---     remove either booking. Removing one of the two routes is a separate, owner-approved change.
+-- (b) labour_commission_expense_names = '{Employee Commission}'   ⚠️ THIS ONE MOVES MONEY
+--     This is the statement that ENACTS the owner's 2026-09-08 decision for LuxeLink. Measured
+--     against live rows on 2026-09-08 by running both readers with and without it:
+--
+--       AUGUST 2026 — twenty $500.00 'Employee Commission' rows stop booking.
+--         P&L  store_opex   $295,610.15 → $285,610.15   (−$10,000.00, −$500.00 at each of 20 stores)
+--         P&L  rep_comm     $11,118.78  → $11,118.78    (UNCHANGED — the authoritative route)
+--         GP   −Expenses    $295,610.15 → $285,610.15   (the two readers move identically)
+--         GP   −Rep Pay     $10,771.87  → $10,771.87    (UNCHANGED)
+--         GP   net_profit  −$290,908.47 → −$280,908.47  (+$10,000.00); P&L net income +$10,000.00
+--         Every other P&L line and every other GP total is BYTE-IDENTICAL.
+--         The swap is not a wash: $10,000.00 of flat expense leaves, and the $10,771.87 that
+--         rep_comm books for those same stores was ALREADY on the books — $7,626.14 of it was the
+--         genuine double-count, the remaining $2,373.86 was expense the real payout never covered.
+--
+--       SEPTEMBER 2026 — the dangerous case, and it is HANDLED, not suppressed. September has no
+--         store_expenses rows of its own, so it carries August's twenty rows, while
+--         commcalc.rep_commissions has NO September rows at all. Nothing would replace the cost, so
+--         NOTHING is suppressed: all twenty rows keep booking and the month reports
+--         "$10,000.00 at 20 store(s) … is STILL booked as an expense". Post September's rep
+--         commissions and the swap happens on its own; until then the cost stays where it is.
+--
+--       JULY 2026 — no 'Employee Commission' rows exist. Unaffected, byte-identical.
 --
 -- UPDATE commcalc.account_config
 --    SET labour_commission_expense_names = ARRAY['Employee Commission']

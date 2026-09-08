@@ -13,6 +13,10 @@ Every fixture below is the LIVE LuxeLink shape measured on 2026-09-08
   §D  REGRESSION 2 — the month grain: a carried period is not a measurement
   §E  REGRESSION 3 — the org-wide suppression gap (per-store authority)
   §F  REGRESSION 4 — the commission double-book ($10,000 August, live)
+  §H  SUPPRESSION — the owner's 2026-09-08 ruling: rep_commissions is the authoritative
+      route, so the expense-side copy stops booking. Carries the REGRESSION for the measured
+      $7,626.14 double-book and its proof of removal, the byte-identity default, the
+      nothing-to-replace-with case, and the P&L/GP one-derivation tie-out.
   §G  totals are preserved: this module never moves a dollar
 
 Run: python3 backend/harness_labour_coverage.py
@@ -285,6 +289,260 @@ ok("F9 a store with an expense row but NO rep pay is not a collision",
                             COMMISSION_NAMES)["stores"], [])
 ok("F10 a store with rep pay but NO expense row is not a collision",
    lc.commission_collisions([], {"Solo": 900.0}, COMMISSION_NAMES)["stores"], [])
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# §H  SUPPRESSION — the owner's ruling on WHICH route books (2026-09-08: "Rep commision should go
+#     in p&l"). `rep_commissions` → `rep_comm` / `−Rep Pay` is authoritative and untouched; the
+#     manual commission-named expense row is the duplicate and stops booking.
+#
+#     THE FIXTURE IS THE LIVE AUGUST 2026 MONTH, verified against LuxeLink
+#     (org 854f6d7b-…-646f560d4f4c) on 2026-09-08 through read-only PostgREST:
+#       • commcalc.store_expenses 'Employee Commission' — twenty rows, $500.00 each = $10,000.00
+#       • commcalc.rep_commissions August total_payout   — $11,118.78 over 46 rows, of which
+#         $10,771.87 attributes to one of the twenty stores and $346.91 carries a BLANK store
+#         (booked company-wide by the P&L, so it pairs with no expense row and replaces nothing)
+#       • overlap booked on BOTH routes                  — $7,626.14
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# store_code → (Employee Commission expense, rep_commissions.total_payout) — LIVE, to the cent.
+AUG_LIVE = {
+    "3352 26th":       (500.00,  616.59),
+    "3735 26th":       (500.00,  381.50),
+    "7812":            (500.00,  294.39),
+    "957":             (500.00,  957.36),
+    "Armitage":        (500.00,  971.88),
+    "Ave U":           (500.00,  217.36),
+    "Belmont":         (500.00,  821.65),
+    "Cermark":         (500.00,  872.75),
+    "Chicago heights": (500.00,  226.67),
+    "Cicero":          (500.00,  339.16),
+    "Diversey":        (500.00, 1062.93),
+    "Grand":           (500.00,  744.55),
+    "Irving Park":     (500.00,  292.42),
+    "kedzie":          (500.00,  211.62),
+    "lawrence":        (500.00,  475.10),
+    "Lefferts":        (500.00,  334.10),
+    "Narragansett":    (500.00,  308.95),
+    "Nostrand":        (500.00,   44.87),
+    "QV":              (500.00,  522.51),
+    "Utica":           (500.00, 1075.51),
+}
+AUG_UNATTRIBUTED_REP = 346.91          # rep_commissions rows with a BLANK store (company-wide)
+
+# The whole August expense sheet in miniature: the commission rows PLUS ordinary opex that must be
+# completely untouched by any of this (rent is not commission and never becomes suppressible).
+aug_full_exp = ([expense(c, "Employee Commission", e) for c, (e, _r) in AUG_LIVE.items()]
+                + [expense(c, "Rent / Lease", 3673.25) for c in AUG_LIVE]
+                + [expense(c, "Employee Salaries", 6673.00) for c in AUG_LIVE])
+aug_rep = {c: r for c, (_e, r) in AUG_LIVE.items()}
+
+near("H0 fixture ties to live: Σ 'Employee Commission' expense = $10,000.00",
+     sum(e for e, _r in AUG_LIVE.values()), 10000.00)
+near("H0a fixture ties to live: Σ store-attributed rep_commissions = $10,771.87",
+     sum(r for _e, r in AUG_LIVE.values()), 10771.87)
+near("H0b …and with the blank-store rows the month totals the live $11,118.78",
+     sum(r for _e, r in AUG_LIVE.values()) + AUG_UNATTRIBUTED_REP, 11118.78)
+
+# ── H1  REGRESSION: the measured double-book, before the fix ─────────────────────────────────
+before_col = lc.commission_collisions(aug_full_exp, aug_rep, COMMISSION_NAMES)
+near("H1 REGRESSION reproduces the measured August double-book: $7,626.14",
+     before_col["total_double_booked"], 7626.14)
+ok("H1a …across all twenty stores", len(before_col["stores"]), 20)
+
+# ── H2  the plan: what stops booking and what books in its place ─────────────────────────────
+plan = lc.suppression_plan(aug_full_exp, aug_rep, COMMISSION_NAMES)
+ok("H2 the plan is active once a name is configured and rows match", plan["active"], True)
+ok("H2a every one of the twenty stores is suppressed", len(plan["suppressed_keys"]), 20)
+near("H2b $10,000.00 of expense stops booking", plan["total_suppressed"], 10000.00)
+near("H2c $10,771.87 of rep commission books in its place", plan["total_booked_instead"], 10771.87)
+near("H2d nothing is kept — every store has a replacement this month", plan["total_kept"], 0.0)
+ok("H2e …and no store is listed as un-replaceable", plan["kept"], [])
+ok("H2f the swap is reported PER STORE, both figures, never one",
+   [(s["store_code"], s["expense"], s["rep_pay"]) for s in plan["stores"] if s["store_code"] == "Nostrand"],
+   [("Nostrand", 500.00, 44.87)])
+ok("H2g …and every store row carries its state", sorted({s["state"] for s in plan["stores"]}),
+   [lc.REPLACED])
+ok("H2h the note states BOTH dollar figures, so a reader sees a swap not a discount",
+   ("$10,000.00" in plan["note"]) and ("$10,771.87" in plan["note"]), True)
+
+# ── H3  REGRESSION CLEARED: after suppression the double-book is gone ────────────────────────
+idx = lc.suppression_index(plan)
+still_booking = [r for r in aug_full_exp
+                 if not lc.suppresses_row(idx, r["expense_name"], r["store_code"])]
+after_col = lc.commission_collisions(still_booking, aug_rep, COMMISSION_NAMES)
+near("H3 REGRESSION CLEARED: $0.00 double-booked after suppression",
+     after_col["total_double_booked"], 0.0)
+ok("H3a …and no store is still colliding", after_col["stores"], [])
+ok("H3b exactly the twenty commission rows stopped booking",
+   len(aug_full_exp) - len(still_booking), 20)
+near("H3c the expense sheet drops by exactly $10,000.00 — the suppressed rows, nothing else",
+     sum(float(r["amount"]) for r in aug_full_exp) - sum(float(r["amount"]) for r in still_booking),
+     10000.00)
+ok("H3d NOT ONE ordinary opex row is touched (rent + salaries all survive)",
+   sorted({r["expense_name"] for r in still_booking}), ["Employee Salaries", "Rent / Lease"])
+ok("H3e a suppressed row is REMOVED, never rewritten to $0.00",
+   [r for r in still_booking if r["expense_name"] == "Employee Commission"], [])
+
+# ── H4  BYTE-IDENTITY: the house default '{}' changes nothing for anyone ─────────────────────
+for _empty, _label in ((None, "None"), ([], "[]"), (["   "], "blank-only")):
+    _p = lc.suppression_plan(aug_full_exp, aug_rep, _empty)
+    ok(f"H4 empty config ({_label}) ⇒ plan inert", _p["active"], False)
+    ok(f"H4a empty config ({_label}) ⇒ nothing suppressed", _p["suppressed_keys"], [])
+    ok(f"H4b empty config ({_label}) ⇒ no note", _p["note"], None)
+    _i = lc.suppression_index(_p)
+    _kept = [r for r in aug_full_exp if not lc.suppresses_row(_i, r["expense_name"], r["store_code"])]
+    ok(f"H4c empty config ({_label}) ⇒ every expense row still books", len(_kept), len(aug_full_exp))
+    near(f"H4d empty config ({_label}) ⇒ the sheet total is byte-identical",
+         sum(float(r["amount"]) for r in _kept), sum(float(r["amount"]) for r in aug_full_exp))
+# RULE TWO in one check: suppression is driven ENTIRELY by the org's configured vocabulary, and no
+# expense name is privileged in code. With the commission name configured, rent is invisible to the
+# plan; name rent instead and rent is what stops booking. Nothing in this module knows what either
+# string means — which is why another tenant calling its commission row something else just works.
+near("H4e with 'Employee Commission' configured, rent is not even considered",
+     lc.suppression_plan(aug_full_exp, aug_rep, COMMISSION_NAMES)["total_suppressed"], 10000.00)
+near("H4f …and configuring the rent name instead moves the rent rows, not the commission rows",
+     lc.suppression_plan(aug_full_exp, aug_rep, ["Rent / Lease"])["total_suppressed"], 73465.00)
+
+# ── H5  THE DANGEROUS CASE: nothing to replace the cost with ─────────────────────────────────
+#     A store carrying the expense row while rep_commissions has NOTHING for it that month. This
+#     is the case where blind suppression would delete a real cost and book nothing back.
+gap_exp = [expense("Diversey", "Employee Commission", 500.00),
+           expense("Nostrand", "Employee Commission", 500.00),
+           expense("NewStore", "Employee Commission", 500.00)]
+gap_plan = lc.suppression_plan(gap_exp, {"Diversey": 1062.93, "Nostrand": 44.87}, COMMISSION_NAMES)
+ok("H5 the store with no rep commission is NOT suppressed", gap_plan["kept"], ["NewStore"])
+ok("H5a …its state names the reason, not a silent skip",
+   [s["state"] for s in gap_plan["stores"] if s["store_code"] == "NewStore"], [lc.NO_REPLACEMENT])
+near("H5b …its dollars are reported, not lost", gap_plan["total_kept"], 500.00)
+ok("H5c …and it is NOT in the suppressed set, so its row still books",
+   "NewStore" in gap_plan["suppressed_keys"], False)
+ok("H5d …the row survives the reader predicate",
+   lc.suppresses_row(lc.suppression_index(gap_plan), "Employee Commission", "NewStore"), False)
+ok("H5e the note NAMES the store and its amount",
+   ("NewStore" in gap_plan["note"]) and ("$500.00" in gap_plan["note"]), True)
+ok("H5f the two replaceable stores are still suppressed",
+   gap_plan["suppressed_keys"], ["Diversey", "Nostrand"])
+near("H5g …so $1,000.00 leaves the expense line and $1,107.80 books in its place",
+     gap_plan["total_suppressed"], 1000.00)
+near("H5h …the replacement figure is the real payout, not the flat expense",
+     gap_plan["total_booked_instead"], 1107.80)
+ok("H5i THREE states exist, never two",
+   sorted({lc.REPLACED, lc.NO_REPLACEMENT, lc.NOT_APPLICABLE}),
+   sorted(["replaced", "no_replacement", "not_applicable"]))
+
+# ── H5-SEPT  THE DANGEROUS CASE, MEASURED LIVE ───────────────────────────────────────────────
+#     September 2026 has NO store_expenses rows of its own, so `expenses_effective` carries all 327
+#     of August's MANUAL rows — the twenty $500.00 'Employee Commission' rows among them — while
+#     commcalc.rep_commissions has ZERO September rows (verified 2026-09-08: periods present are
+#     March, May, June, July, August). A blanket name filter would delete $10,000.00 of cost from
+#     September and book NOTHING back. It must not, and the month must say so out loud.
+sept_carried = [expense(c, "Employee Commission", 500.00) for c in AUG_LIVE]
+sept_plan = lc.suppression_plan(sept_carried, {}, COMMISSION_NAMES)
+near("H5-SEPT REGRESSION: not one dollar is suppressed in a month with no rep commissions",
+     sept_plan["total_suppressed"], 0.0)
+ok("H5-SEPTa …all twenty carried rows are KEPT", len(sept_plan["kept"]), 20)
+near("H5-SEPTb …and the $10,000.00 at risk is reported, not deleted",
+     sept_plan["total_kept"], 10000.00)
+ok("H5-SEPTc …every one of them in the no_replacement state",
+   sorted({s["state"] for s in sept_plan["stores"]}), [lc.NO_REPLACEMENT])
+ok("H5-SEPTd …the plan is 'active' so the month cannot go unreported",
+   sept_plan["active"], True)
+ok("H5-SEPTe …and no store is silently rendered at $0.00",
+   all(s["expense"] == 500.00 and not s["suppressed"] for s in sept_plan["stores"]), True)
+
+# ── H6  state predicate at the edges ─────────────────────────────────────────────────────────
+ok("H6 a $0.00 placeholder expense is not a suppression candidate",
+   lc.suppression_state(0.0, 900.0), lc.NOT_APPLICABLE)
+ok("H6a a real expense with zero rep pay is the dangerous case",
+   lc.suppression_state(500.0, 0.0), lc.NO_REPLACEMENT)
+ok("H6b a real expense with rep pay is replaced", lc.suppression_state(500.0, 0.01), lc.REPLACED)
+ok("H6c sub-cent rep pay is NOT a replacement (tolerance, not a rounding accident)",
+   lc.suppression_state(500.0, 0.004), lc.NO_REPLACEMENT)
+ok("H6d a NEGATIVE expense correction is still a real booking to decide on",
+   lc.suppression_state(-500.0, 900.0), lc.REPLACED)
+ok("H6e a $0.00 expense row never reaches the plan at all",
+   lc.suppression_plan([expense("Zero", "Employee Commission", 0.0)], {"Zero": 900.0},
+                       COMMISSION_NAMES)["active"], False)
+
+# ── H7  the row predicate: name AND key, case-insensitively, or it books ─────────────────────
+ok("H7 a configured name at a suppressed key is suppressed",
+   lc.suppresses_row(idx, "Employee Commission", "Diversey"), True)
+ok("H7a …case-insensitively, as the config vocabulary always matches",
+   lc.suppresses_row(idx, "  EMPLOYEE commission ", "Diversey"), True)
+ok("H7b a DIFFERENT name at a suppressed key still books",
+   lc.suppresses_row(idx, "Rent / Lease", "Diversey"), False)
+ok("H7c the configured name at an UNSUPPRESSED key still books",
+   lc.suppresses_row(idx, "Employee Commission", "SomeOtherStore"), False)
+ok("H7d an inert plan suppresses nothing",
+   lc.suppresses_row(lc.suppression_index(lc.suppression_plan(aug_full_exp, aug_rep, [])),
+                     "Employee Commission", "Diversey"), False)
+ok("H7e a None plan is inert too (an unreadable config can never delete a cost)",
+   lc.suppression_index(None), (frozenset(), frozenset()))
+
+# ── H8  ONE derivation, TWO readers: the P&L and the GP report must suppress the SAME rows ───
+#     The GP report keys store_expenses by storeops store_code; the P&L keys its store lines by
+#     canonical store ADDRESS (code2addr → resolve_store). Same rows, different key space — the
+#     plan takes `key_of` so each reader pairs in the space it books in. Verified against the
+#     live LuxeLink key spaces on 2026-09-08 (both pair all twenty stores).
+PNL_ADDR = {"Diversey": "4640-A W Diversey Ave", "Nostrand": "3560 Nostrand Avenue",
+            "Cermark": "2414 W Cermak Rd"}
+two_exp = [expense(c, "Employee Commission", 500.00) for c in PNL_ADDR]
+gp_plan = lc.suppression_plan(two_exp, {"Diversey": 1062.93, "Nostrand": 44.87, "Cermark": 872.75},
+                              COMMISSION_NAMES)
+pnl_plan = lc.suppression_plan(
+    two_exp, {"4640-A W Diversey Ave": 1062.93, "3560 Nostrand Avenue": 44.87,
+              "2414 W Cermak Rd": 872.75},
+    COMMISSION_NAMES, key_of=lambda c: PNL_ADDR.get(c, c))
+near("H8 both readers suppress the same DOLLARS", gp_plan["total_suppressed"],
+     pnl_plan["total_suppressed"])
+near("H8a …and book the same replacement", gp_plan["total_booked_instead"],
+     pnl_plan["total_booked_instead"])
+ok("H8b …and keep the same (empty) set of un-replaceable stores",
+   (gp_plan["kept"], pnl_plan["kept"]), ([], []))
+ok("H8c the P&L plan speaks in ADDRESSES, the GP plan in store codes — same rows, its own space",
+   (sorted(pnl_plan["suppressed_keys"]), sorted(gp_plan["suppressed_keys"])),
+   (["2414 W Cermak Rd", "3560 Nostrand Avenue", "4640-A W Diversey Ave"],
+    ["Cermark", "Diversey", "Nostrand"]))
+ok("H8d a row unattributable to any store pairs with nothing and is never suppressed",
+   lc.suppression_plan([expense(None, "Employee Commission", 500.00)], {}, COMMISSION_NAMES)["active"],
+   False)
+
+# ── H9  READER ARITHMETIC: what each surface's bottom line does, proven on the live month ────
+#     GP:   net_profit = total_rev − rep_pay − exp_total − net_phone_cost, so removing $X from
+#           exp_total raises net profit by exactly $X and moves NOTHING else.
+#     P&L:  store_opex falls by the same $X; rep_comm is untouched, so net income rises by $X.
+#     The two must move by the SAME number or the reports disagree — that is the whole point.
+AUG_OTHER_OPEX = sum(float(r["amount"]) for r in aug_full_exp
+                     if r["expense_name"] != "Employee Commission")
+gp_exp_before = AUG_OTHER_OPEX + 10000.00
+gp_exp_after = AUG_OTHER_OPEX + 10000.00 - plan["total_suppressed"]
+near("H9 GP −Expenses falls by exactly the suppressed $10,000.00",
+     gp_exp_before - gp_exp_after, 10000.00)
+near("H9a …so GP net profit RISES by $10,000.00 for August", gp_exp_before - gp_exp_after, 10000.00)
+near("H9b the P&L store_opex falls by the identical figure (one plan, two readers)",
+     plan["total_suppressed"], gp_exp_before - gp_exp_after)
+near("H9c rep_comm / −Rep Pay is UNTOUCHED — the authoritative route keeps its $11,118.78",
+     sum(r for _e, r in AUG_LIVE.values()) + AUG_UNATTRIBUTED_REP, 11118.78)
+near("H9d net labour actually deducted for August goes from $21,118.78 (both routes) to "
+     "$11,118.78 (rep_commissions alone)",
+     (sum(r for _e, r in AUG_LIVE.values()) + AUG_UNATTRIBUTED_REP + 10000.00)
+     - plan["total_suppressed"], 11118.78)
+near("H9e the correction is NOT the $7,626.14 overlap — the whole duplicate row goes, and the "
+     "remaining $2,373.86 was expense the payout never covered",
+     plan["total_suppressed"] - before_col["total_double_booked"], 2373.86)
+
+# ── H10  the plan reports, it never mutates ──────────────────────────────────────────────────
+_snapshot = [dict(r) for r in aug_full_exp]
+lc.suppression_plan(aug_full_exp, aug_rep, COMMISSION_NAMES)
+ok("H10 the expense rows handed in are not mutated", aug_full_exp, _snapshot)
+ok("H10a the plan is JSON-safe (lists, not sets) — both readers put it in a payload",
+   all(isinstance(plan[k], list) for k in ("names", "suppressed_keys", "stores", "kept")), True)
+ok("H10b the plan's keys are exactly the reported contract",
+   sorted(plan.keys()),
+   ["active", "kept", "names", "note", "stores", "suppressed_keys",
+    "total_booked_instead", "total_kept", "total_suppressed"])
+ok("H10c every store row carries both dollar figures and its reason slot",
+   sorted(plan["stores"][0].keys()),
+   ["booked_instead", "expense", "reason", "rep_pay", "state", "store_code", "suppressed"])
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # §G  TOTAL-PRESERVING: this module reads rows and returns states. It must never change a dollar.

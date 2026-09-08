@@ -11,6 +11,11 @@ from typing import Any
 # own, so this file stays the dependency-free calculator it has always been (calculator.py imports
 # gp_report, so anything reaching back into calculator here would be a cycle).
 from app.modules.commcalc import commission_legs as _legs
+# Commission double-book suppression (owner decision 2026-09-08 "Rep commision should go in p&l").
+# Also a PURE leaf module — its only import is the shared period parser, and that one is lazy — so
+# the calculator stays dependency-free. The DECISION lives there, not here: this file only asks it
+# which rows stop booking, so the P&L (account/coa) and this report can never suppress differently.
+from app.modules.commcalc import labour_coverage as _lcov
 
 DEVICE_DEPTS = {'Android - XP', 'IPHONE - XP', 'TABLET - XP'}
 ONDIGO_DEPT = 'Ondigo'
@@ -206,6 +211,7 @@ def calc_gp_report(
     ma_income: dict = None,
     leg_classify=None,
     acc_basis: str = 'gp',
+    commission_suppression_names: list = None,
 ) -> dict:
     """
     Returns store_rows (by store) and rep_rows (by rep).
@@ -243,6 +249,16 @@ def calc_gp_report(
     The chosen basis flows into `acc_gp` (key name kept so every consumer/export keeps working),
     `total_rev` and `net_profit` consistently, and the result carries `acc_basis` + `acc_label`
     ('Acc Sales' / 'Acc GP') so display surfaces label the column from config, not hardcoded strings.
+    commission_suppression_names (owner decision 2026-09-08, "Rep commision should go in p&l"):
+      the org's `account_config.labour_commission_expense_names`. `rep_commissions` → the `−Rep Pay`
+      column is the AUTHORITATIVE route and is untouched; an expense row whose name is listed here
+      is the SAME labour dollars a second time inside `−Expenses`, so it stops booking. Suppression
+      is per STORE-MONTH and only where rep pay actually exists to replace it — a store with the
+      expense row and NO rep pay keeps its row (removing it would delete a real cost and book
+      nothing back) and is surfaced instead. The decision itself lives in
+      `labour_coverage.suppression_plan`, shared with the P&L so the two reports cannot disagree.
+      None/[] (the house default) ⇒ nothing is suppressed and every figure is byte-identical.
+      The result carries `labour_commission_suppressed` — the per-store swap, both dollar figures.
     """
     if leg_classify is None:
         leg_classify = _legs.default_classifier()
@@ -453,6 +469,35 @@ def calc_gp_report(
         if num and not any(street_num(k) == num for k in by_store.keys()):
             by_store[addr] = []
 
+    # ── Expense-key per store (ONE derivation, used twice) ────────────────────────────────────────
+    # `exp_code` is the key the tenant's store_expenses are filed under: the store_mapping join's
+    # store_code where it yielded one, else the universal resolver (a tenant with no store_mapping).
+    # It was derived inline in the row loop below; the commission-suppression pairing needs the SAME
+    # key BEFORE the loop (to pair each store's commission expense with its rep pay), so it is
+    # derived once here and read in both places rather than computed twice and allowed to drift.
+    exp_code_by_store = {}
+    for store in by_store:
+        _sm = store_by_num.get(street_num(store), {})
+        exp_code_by_store[store] = (
+            str(_sm.get('store_code') or '').strip()
+            or (str(resolve_store_code(store) or '').strip() if resolve_store_code else ''))
+
+    # ── Commission double-book suppression (owner decision 2026-09-08) ────────────────────────────
+    # `rep_pay` (commcalc.rep_commissions) is the authoritative route and is NOT touched. A
+    # commission-named expense row is the same labour dollars again inside `exp_total`, which
+    # `net_profit` subtracts alongside `rep_pay`. The plan decides per STORE-MONTH and never
+    # suppresses a cost rep_commissions cannot replace; with no configured name it is inert and
+    # every column below is byte-identical (`suppression_index` returns empty frozensets).
+    _supp_rep_by_key = {}
+    for store, _ec in exp_code_by_store.items():
+        if _ec:
+            _supp_rep_by_key[_ec] = round(
+                _supp_rep_by_key.get(_ec, 0.0) + rep_pay_by_store.get(street_num(store), 0), 2)
+    commission_suppressed = _lcov.suppression_plan(
+        expenses, _supp_rep_by_key, commission_suppression_names)
+    _supp_by_key = {s['store_code']: s['expense']
+                    for s in commission_suppressed['stores'] if s['suppressed']}
+
     # ── Build store rows ──────────────────────────────────────────
     store_rows = []
     for store, rows in by_store.items():
@@ -501,8 +546,11 @@ def calc_gp_report(
         # When it did NOT (a tenant with no commcalc.store_mapping → store_code=''), resolve the raw store
         # string to the storeops store_code so the tenant's configured expenses attach. This changes ONLY
         # exp_total for rows that had no store_code; the row's displayed store_code/market are untouched.
-        exp_code   = store_code or (str(resolve_store_code(store) or '').strip() if resolve_store_code else '')
-        exp_total  = exp_by_code.get(exp_code, 0)
+        exp_code   = exp_code_by_store.get(store, '')
+        # Commission booked on BOTH routes: the expense-side copy stops booking (owner 2026-09-08).
+        # Subtracted rather than filtered out of `exp_by_code` so the amount removed stays visible
+        # per store in `labour_commission_suppressed` — never rendered as a measured $0.00.
+        exp_total  = exp_by_code.get(exp_code, 0) - _supp_by_key.get(exp_code, 0.0)
         net_phone_cost = phone_sales + reimb  # cash from customer + Boost reimbursement
 
         net_profit     = total_rev - rep_pay - exp_total - net_phone_cost
@@ -749,6 +797,11 @@ def calc_gp_report(
             # Which basis the accessory column carries + its display label — config-driven (mig 932),
             # so no surface hardcodes 'Acc GP' vs 'Acc Sales'.
             'acc_basis': acc_basis, 'acc_label': 'Acc Sales' if acc_basis == 'sales' else 'Acc GP',
+            # The SWAP, per store and in total (owner 2026-09-08): what left `−Expenses` and what
+            # `−Rep Pay` books in its place, plus every store where the cost was KEPT because
+            # rep_commissions had nothing to replace it with. Inert ({'active': False}) for every
+            # org that has configured no commission expense name.
+            'labour_commission_suppressed': commission_suppressed,
             'commission_legs': commission_legs_block,
             'bucket_composition': bucket_composition, 'unmapped_departments': unmapped_departments,
             'bucket_composition_excluded': excluded,
