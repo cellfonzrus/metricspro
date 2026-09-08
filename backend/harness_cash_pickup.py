@@ -685,6 +685,86 @@ check("11u. and the equip/acc column renders its BASIS, so a POS-calculated spli
       and "'POS'" in _pg and "'DECLARED'" in _pg)
 
 
+# ══ 12. THE ACTUAL PICKED IS TOTALLED, AND UNCOUNTED IS NOT ABSORBED ═════════════════════════════
+# OWNER 2026-09-08: "does the cash pick up show the actual pick up and total that at the bottom" —
+# it did not. `collected_cash` is the DECLARED envelope figure, which a short pickup does not change,
+# so on its own it can never show a shortfall however carefully the DM counts.
+#
+# The trap this pins: an envelope that was picked up but NOT counted must be neither added in at its
+# declared value (which manufactures agreement) nor treated as 0.00 (which manufactures a 100%
+# shortfall). It is counted separately and reported — the same silent-zero rule the rest of this file
+# lives by.
+st = fresh_store(); wire(st)
+st["stores"] = [{"org_id": HOUSE, "store_code": "S1", "address": "1 Main St", "market": "Texas",
+                 "is_active": True}]
+st["daily_closing"] = [
+    dc_row(id="t1", store_code="S1", close_date="2026-07-25", employee_name="Jane Rep",
+           store_cash=500.0, t_cash=500.0),
+    dc_row(id="t2", store_code="S1", close_date="2026-07-25", employee_name="Mo Rep",
+           store_cash=300.0, t_cash=300.0),
+    dc_row(id="t3", store_code="S1", close_date="2026-07-25", employee_name="Ann Rep",
+           store_cash=200.0, t_cash=200.0),
+]
+st["cash_pickup"] = [
+    # picked up AND counted, $40 short
+    {"org_id": HOUSE, "store_code": "S1", "close_date": "2026-07-25", "employee_name": "Jane Rep",
+     "amount": 500.0, "actual_picked_amount": 460.0, "picked_up": True},
+    # picked up, NOT counted
+    {"org_id": HOUSE, "store_code": "S1", "close_date": "2026-07-25", "employee_name": "Mo Rep",
+     "amount": 300.0, "picked_up": True},
+    # Ann Rep's envelope is still out there — not picked up at all
+]
+r12 = cr.closing_pickups(date="2026-07-25", org_id=HOUSE)
+check("12a. the declared totals are unchanged (this is additive, not a redefinition)",
+      r12["total_cash"] == 1000.0 and r12["collected_cash"] == 800.0 and r12["ready_cash"] == 200.0,
+      f"total={r12['total_cash']} collected={r12['collected_cash']} ready={r12['ready_cash']}")
+check("12b. the ACTUAL total covers only the envelope that was actually counted",
+      r12["collected_actual"] == 460.0, str(r12["collected_actual"]))
+check("12c. it does NOT absorb the uncounted envelope at its declared $300 — that would "
+      "manufacture agreement",
+      r12["collected_actual"] != 760.0)
+check("12d. nor treat it as 0.00 — that would manufacture a 100% shortfall",
+      r12["collected_actual_variance"] == -40.0, str(r12["collected_actual_variance"]))
+check("12e. the uncounted one is REPORTED, so the total is readable rather than merely correct",
+      r12["collected_actual_envelopes"] == 1 and r12["collected_actual_missing"] == 1,
+      f"counted={r12['collected_actual_envelopes']} missing={r12['collected_actual_missing']}")
+check("12f. an envelope not picked up at all is in neither bucket",
+      r12["collected_actual_envelopes"] + r12["collected_actual_missing"] == r12["collected"] == 2)
+check("12g. the equipment/accessory split is totalled too",
+      r12["total_cash_equip_acc"] == 1000.0, str(r12["total_cash_equip_acc"]))
+# NOBODY counted anything -> the total must be an honest zero-with-no-coverage, not a big shortfall.
+st["cash_pickup"] = [
+    {"org_id": HOUSE, "store_code": "S1", "close_date": "2026-07-25", "employee_name": "Jane Rep",
+     "amount": 500.0, "picked_up": True},
+]
+r12b = cr.closing_pickups(date="2026-07-25", org_id=HOUSE)
+check("12h. no counts recorded at all -> zero coverage and ZERO variance, never a $500 shortfall",
+      r12b["collected_actual"] == 0.0 and r12b["collected_actual_envelopes"] == 0
+      and r12b["collected_actual_variance"] == 0.0 and r12b["collected_actual_missing"] == 1,
+      str({k: r12b[k] for k in ("collected_actual", "collected_actual_envelopes",
+                                "collected_actual_variance", "collected_actual_missing")}))
+# An OVER count is reported as over, not netted into a comfortable-looking small number.
+st["cash_pickup"] = [
+    {"org_id": HOUSE, "store_code": "S1", "close_date": "2026-07-25", "employee_name": "Jane Rep",
+     "amount": 500.0, "actual_picked_amount": 460.0, "picked_up": True},
+    {"org_id": HOUSE, "store_code": "S1", "close_date": "2026-07-25", "employee_name": "Mo Rep",
+     "amount": 300.0, "actual_picked_amount": 340.0, "picked_up": True},
+]
+r12c = cr.closing_pickups(date="2026-07-25", org_id=HOUSE)
+check("12i. a $40 short and a $40 over across two envelopes nets to 0 on the DAY total — which is "
+      "why the per-envelope short/over stays on the row",
+      r12c["collected_actual_variance"] == 0.0 and r12c["collected_actual"] == 800.0,
+      str(r12c["collected_actual_variance"]))
+_src_pg = open("../frontend/src/app/(platform)/closing/pickup/page.tsx").read()
+check("12j. the page has a footer TOTAL row (the owner asked for it at the bottom)",
+      "<tfoot>" in _src_pg and "footTotals" in _src_pg)
+check("12k. and the footer totals the rows ON SCREEN, so it always agrees with the filters",
+      "}, [envelopes])" in _src_pg and "for (const e of envelopes)" in _src_pg)
+check("12l. the footer never absorbs an uncounted envelope",
+      "if (e.actual_picked_amount == null) { missingCount++; continue }" in _src_pg)
+check("12m. 'Collected' is relabelled 'Collected (declared)' so it cannot be read as the counted one",
+      "Collected (declared)" in _src_pg and "Actually picked" in _src_pg)
+
 # ── Summary ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:

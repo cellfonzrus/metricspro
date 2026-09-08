@@ -60,11 +60,16 @@ ALL_KEYS = [k for k, *_ in coa.PL_SPEC] + [k for k, *_ in SE.bs_spec()]
 # ── A. spec + as-of ────────────────────────────────────────────────────────────────────────────
 print("A. spec extension + period as-of")
 spec = SE.bs_spec()
-# mig 938 added store_cash_on_hand to EXTRA_BS_SPEC (verified store cash) — the invariant is
-# "coa.BS_SPEC followed by EXACTLY balance_sheet.EXTRA_BS_SPEC", not a frozen one-line list.
-ok("bs_spec = coa.BS_SPEC + EXTRA_BS_SPEC (handset_payable, store_cash_on_hand)",
+# mig 938 added store_cash_on_hand and mig 991 added sales_tax_payable to EXTRA_BS_SPEC — the
+# invariant is "coa.BS_SPEC followed by EXACTLY balance_sheet.EXTRA_BS_SPEC", not a frozen one-line
+# list. It used to be written as that frozen list, so mig 991 turned a live invariant into a
+# false alarm (harness-audit §24, failure mode "the assertion pins the answer, not the rule").
+ok("bs_spec = coa.BS_SPEC + EXACTLY balance_sheet.EXTRA_BS_SPEC, in that order",
    [k for k, *_ in spec]
-   == [k for k, *_ in coa.BS_SPEC] + ["handset_payable", "store_cash_on_hand"])
+   == [k for k, *_ in coa.BS_SPEC] + [k for k, *_ in balance_sheet.EXTRA_BS_SPEC], [k for k, *_ in spec])
+ok("...and every extra line is one the module actually declares (no key invented in bs_spec)",
+   {k for k, *_ in balance_sheet.EXTRA_BS_SPEC} <= {k for k, *_ in spec}
+   and len(spec) == len(coa.BS_SPEC) + len(balance_sheet.EXTRA_BS_SPEC))
 hp = next(row for row in spec if row[0] == "handset_payable")
 ok("handset_payable is a liability, auto_opt (renders only when it carries value)",
    hp[2] == "liability" and hp[3] == "auto_opt", hp)

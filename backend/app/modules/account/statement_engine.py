@@ -123,6 +123,30 @@ def _fetch_asset_ledger_open(client, org_id):
     return out
 
 
+def _earliest_taxed_sale_date(client, org_id):
+    """The org's earliest sale line that CARRIED tax ('YYYY-MM-DD'), or ''. Two cheap indexed reads
+    (one per side of the sales union), org-scoped, one row each — never a scan.
+
+    This is the accrual start when the tenant has not declared one. It is a DISCOVERY, not a policy
+    guess: a collected-not-remitted balance has to start somewhere, and the first day the tenant
+    ever collected tax is the only defensible answer that invents nothing. A tenant that has been
+    remitting since before this system holds its data sets `account_config.sales_tax_accrual_start`
+    instead, and `meta['accrual_start_source']` always says which of the two was used.
+    Degrades to '' (⇒ nothing books, with a reason in meta) on any read failure."""
+    best = ""
+    for table in ("raw_sales", "daily_sales_feed"):
+        try:
+            rows = (client.schema("commcalc").table(table).select("trans_date")
+                    .eq("org_id", org_id).gt("tax", 0).not_.is_("trans_date", "null")
+                    .order("trans_date").limit(1).execute().data) or []
+        except Exception:
+            continue
+        d = str((rows[0] if rows else {}).get("trans_date") or "")[:10]
+        if d and (not best or d < best):
+            best = d
+    return best
+
+
 def carrier_payable_preset(client, org_id):
     """The distributor-payable basis this org's CARRIER declares, or ''. REUSES the mig-945/953
     carrier-preset machinery end to end (duplicate-check gate — no second preset store, no second
@@ -268,6 +292,63 @@ def build_inputs_full(client, org_id, period):
             meta["store_cash_on_hand"] = cmeta
         except Exception as e:
             coa._warn("store cash-on-hand booking failed — line left empty", e)
+
+    # ── sales tax collected, not yet remitted (config-driven; 'off' default books nothing) ──────
+    # Owner directive 2026-09-08: "now the sales tax in p&l". Sales tax reached NO statement line at
+    # all — `coa._sales_union_rows` never selected the `tax` column and no spec carried a tax line —
+    # so $41,239.46 of the state's money was invisible on the live house org.
+    #
+    # IT DOES NOT TOUCH THE P&L. Revenue here is already pre-tax (re-verified against all 24,890
+    # August raw_sales rows: device_rev and service_income tie to the cent), so this books ONLY to
+    # the balance sheet. Revenue, gross profit and net income cannot move — nothing below writes to
+    # a P&L line key.
+    #
+    # ONE AGGREGATION, NOT A SECOND DERIVATION (duplicate-check gate): the dollars come from
+    # `commcalc.tax_collected.aggregate` — the very function the Tax Collected page renders — read
+    # through that page's OWN reader (`_sales_rows_union_txn_range`, raw_sales ∪ daily_sales_feed
+    # deduped by trans_id) and keyed on the SAME `coa.store_resolver` address the P&L books under.
+    # Nothing about sales tax is computed twice anywhere in the system.
+    #
+    # CUMULATIVE, because a balance sheet is a point in time: the balance is everything collected
+    # from the accrual start through as_of, less what the tenant has remitted. The remittance side
+    # is the EXISTING journal ledger — `engine._assemble` folds a manual balance_sheet/liability
+    # entry onto this line by label — so it is not netted here as well (that would relieve twice).
+    if cfg["sales_tax_basis"] != "off" and meta["as_of"]:
+        stm = {"basis": cfg["sales_tax_basis"], "as_of": meta["as_of"]}
+        try:
+            from app.modules.commcalc import tax_collected as _tc
+            start = cfg["sales_tax_accrual_start"] or ""
+            stm["accrual_start_source"] = "config" if start else "earliest_taxed_sale"
+            if not start:
+                start = _earliest_taxed_sale_date(client, org_id)
+            stm["accrual_start"] = start
+            if not start:
+                # FAIL CLOSED, WITH THE REASON. No start date and no taxed sale to discover one
+                # from ⇒ book nothing rather than claim a balance from an unknown date.
+                stm["reason"] = ("no accrual start: account_config.sales_tax_accrual_start is unset "
+                                 "and no sale line carrying tax was found for this org")
+                meta["sales_tax_payable"] = stm
+            else:
+                from app.modules.commcalc.router import _sales_rows_union_txn_range
+                rows, rmeta = _sales_rows_union_txn_range(
+                    client, org_id, period, start, meta["as_of"], cols=_tc.SALES_COLUMNS)
+                agg = _tc.aggregate(rows, resolve_store=coa.store_resolver(client, org_id),
+                                    start=start, end=meta["as_of"])
+                bookings, smeta = balance_sheet.sales_tax_payable_bookings(
+                    _tc.store_tax_rows(agg), cfg["sales_tax_basis"], meta["as_of"])
+                for store, amt, detail in bookings:
+                    _book("sales_tax_payable", store, amt, detail)
+                stm.update(smeta)
+                stm["periods_read"] = rmeta.get("periods_read")
+                # The union caps a range at 24 months. A capped read UNDERSTATES the balance, so it
+                # is reported rather than quietly returned as the answer.
+                stm["truncated"] = bool(rmeta.get("truncated"))
+                stm["store_renames"] = agg["meta"]["renamed"]
+                stm["suspect_renames"] = agg["meta"]["suspect_renames"]
+                stm["returns_tax_positive"] = agg["meta"]["returns_tax_positive"]
+                meta["sales_tax_payable"] = stm
+        except Exception as e:
+            coa._warn("sales tax payable booking failed — line left empty", e)
 
     # ── inventory basis (config-driven; 'report' default = byte-identical) ──────────────────────
     if cfg["inventory_basis"] == "devices":

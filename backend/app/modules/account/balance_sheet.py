@@ -73,10 +73,35 @@ EXTRA_BS_SPEC = [
     # byte-identical books until an org opts in. In the cash-flow statement this line is CASH
     # (statement_engine.CF_CASH_KEYS), not a working-capital delta.
     ("store_cash_on_hand", "Cash on hand — stores (undeposited)", "asset", "auto_opt", "store"),
+    # Owner directive 2026-09-08 ("now the sales tax in p&l"), mig 991. Retail sales tax reached NO
+    # statement line at all: `coa._sales_union_rows` never SELECTED the `tax` column, and neither
+    # PL_SPEC, BS_SPEC nor this list carried a tax line — $41,239.46 collected and invisible on the
+    # live house org (Jun 13,527.70 · Jul 14,031.80 · Aug 13,679.96, net of returns).
+    #
+    # IT IS A LIABILITY, NOT REVENUE. Revenue is already correctly PRE-tax and does not move: the
+    # P&L's own classifiers re-run over all 24,890 August raw_sales rows reproduce device_rev
+    # 78,735.24 and service_income 17,088.00 to the cent (the tax-INCLUSIVE alternative is $6,552
+    # away). Tax collected is the state's money held by the tenant, so it books here and NOWHERE on
+    # the P&L — revenue, gross profit and net income are unchanged by this line, by construction.
+    #
+    # WHY IT MATTERS EVEN THOUGH THE BOOKS "BALANCE" TODAY: `cash` is manual and reads 0.00 and
+    # `cash_on_hand_basis` is 'off', so the cash side of these dollars is not on the sheet either.
+    # The moment an org turns mig-938 store cash on, the tax dollars enter ASSETS with no matching
+    # liability and fall into `imbalance` / retained earnings (engine._assemble) — and
+    # account/valuation.py's asset-based floor overstates by the same amount.
+    ("sales_tax_payable", "Sales tax payable (collected, not remitted)", "liability", "auto_opt", "store"),
 ]
 
 INVENTORY_BASES = ("report", "devices")
 CASH_ON_HAND_BASES = ("off", "verified", "all")
+
+# ── SALES TAX PAYABLE BASIS (owner directive 2026-09-08, mig 991) ───────────────────────────────
+# The mig-938 / mig-954 pattern exactly: per-org basis, 'off' house default, so every org's books
+# are BYTE-IDENTICAL until it opts in. No jurisdiction, tenant or department literal anywhere — the
+# taxability of a line is the line's own `tax` value (the §23f ruling), never a vocabulary in code.
+#   'off'        books nothing (house default).
+#   'collected'  sales tax COLLECTED and not yet remitted, as of the statement date, NET OF RETURNS.
+SALES_TAX_BASES = ("off", "collected")
 
 # ── DISTRIBUTOR PAYABLE BASIS (owner directive 2026-09-04, mig 954) ─────────────────────────────
 # Owner, verbatim: "balance sheet in cellfonz rus is showing a wrong figure it should be open
@@ -118,6 +143,12 @@ def default_bs_config():
     payable booked, no store cash-on-hand booked. A tenant opts in per org — never a code branch."""
     return {"inventory_basis": "report", "handset_payable_order_types": [],
             "cash_on_hand_basis": "off",
+            # mig 991 — sales tax payable. 'off' ⇒ nothing books. `sales_tax_accrual_start` is the
+            # date the collected-not-remitted balance starts accruing from; NULL means "not
+            # declared", and statement_engine then discovers the org's EARLIEST taxed sale rather
+            # than guessing a fiscal policy (the source is reported in meta either way).
+            "sales_tax_basis": "off",
+            "sales_tax_accrual_start": "",
             # mig 954. `distributor_payable_basis` None ⇒ "not declared": the resolver falls back to
             # the org's CARRIER preset (lazy auto-assign, the mig-945/953 pattern) and only then to
             # 'off'. An explicit 'off' is a tenant DECISION and wins over the preset.
@@ -150,6 +181,22 @@ def load_bs_config(client, org_id):
                 .select("cash_on_hand_basis").eq("org_id", org_id).limit(1).execute().data) or []
         if rows and str(rows[0].get("cash_on_hand_basis") or "").strip().lower() in CASH_ON_HAND_BASES:
             cfg["cash_on_hand_basis"] = str(rows[0]["cash_on_hand_basis"]).strip().lower()
+    except Exception:
+        pass
+    # mig 991 — sales tax payable. Own defensive read: a pre-991 database keeps 'off' and books
+    # nothing, so nothing on any tenant's Balance Sheet moves until the column exists AND is set.
+    try:
+        rows = (client.schema("commcalc").table("account_config")
+                .select("sales_tax_basis").eq("org_id", org_id).limit(1).execute().data) or []
+        if rows and str(rows[0].get("sales_tax_basis") or "").strip().lower() in SALES_TAX_BASES:
+            cfg["sales_tax_basis"] = str(rows[0]["sales_tax_basis"]).strip().lower()
+    except Exception:
+        pass
+    try:
+        rows = (client.schema("commcalc").table("account_config")
+                .select("sales_tax_accrual_start").eq("org_id", org_id).limit(1).execute().data) or []
+        if rows and str(rows[0].get("sales_tax_accrual_start") or "").strip():
+            cfg["sales_tax_accrual_start"] = str(rows[0]["sales_tax_accrual_start"]).strip()[:10]
     except Exception:
         pass
     # mig 954 — distributor payable basis / target line / open-status vocabulary. Each column is its
@@ -550,6 +597,71 @@ def store_cash_cells(decl_by_store_day, taken_by_store_day, verified_keys, basis
             "floored": floored, "floored_total": round(sum(floored.values()), 2),
             "total": round(sum(cells.values()), 2)}
     return cells, meta
+
+
+# ── 2d. sales tax collected and not yet remitted (owner directive 2026-09-08, mig 991) ──────────
+def sales_tax_payable_bookings(store_tax_rows, basis, as_of):
+    """PURE: the per-store rows of `commcalc.tax_collected.aggregate` (via its `store_tax_rows`
+    reducer — {store, tax, tax_net, returns_tax}) → the SALES TAX COLLECTED AND NOT YET REMITTED
+    as of `as_of` ('YYYY-MM-DD').
+
+    ONE AGGREGATION, TWO READERS. The dollars are not re-derived here: they come from the exact
+    function the Tax Collected report renders (`commcalc/tax_collected.py`), so the page and the
+    Balance Sheet can never disagree. This function only decides WHAT BOOKS: the basis, the
+    net-of-returns rule, and the sign discipline.
+
+    NET OF RETURNS, ALWAYS. `tax_net` = the period's collected tax PLUS the return rows' own tax
+    (the export stores a refund's tax negative, so this reduces the balance). Refunded tax is money
+    the tenant does not owe the state, so a liability booked from the report's GROSS headline would
+    overstate what is owed — live house org, $53.74 in August, $120.88 over the three months that
+    carry a Tax column. The gross figure is carried in meta beside it, never silently replaced.
+
+    SIGN IS PRESERVED IN THE INPUT, FLOORED IN THE OUTPUT. Returns are summed exactly as stored
+    (never `abs`-ed — a tenant whose export writes refund tax POSITIVE is a data defect to report,
+    not to paper over; `commcalc.tax_collected` flags it as `returns_tax_positive`). But a LIABILITY
+    line never books negative: a store whose refunds exceeded its collections is a receivable from
+    the state, not a negative payable, so it floors at zero and the suppressed amount is reported
+    per store in meta (`floored`) — the same fail-safe posture as `store_cash_cells`.
+
+    REMITTANCE RELIEVES THIS LINE THROUGH THE EXISTING JOURNAL LEDGER, NOT THROUGH A NEW ONE.
+    `engine._assemble` already folds `commcalc.journal_entries` rows onto a spec line by LABEL, so a
+    remittance is a manual balance_sheet/liability entry labelled exactly
+    "Sales tax payable (collected, not remitted)" carrying a NEGATIVE amount (with its cash side on
+    the `cash` line). That relief is applied by the assembler, so it is deliberately NOT netted here
+    as well — doing both would relieve the liability twice.
+
+    An 'off' basis or a missing as_of books NOTHING (every org's default — byte-identical books).
+    Returns (bookings [(store_or_None, amount, detail_or_None)], meta)."""
+    base = {"basis": basis, "as_of": (str(as_of)[:10] if as_of else None), "stores": 0,
+            "rows": 0, "total": 0.0, "gross": 0.0, "returns": 0.0,
+            "floored": {}, "floored_total": 0.0}
+    if str(basis or "").strip().lower() not in SALES_TAX_BASES or basis == "off" or not as_of:
+        return [], base
+    cells, gross, returns = {}, 0.0, 0.0
+    for r in store_tax_rows or []:
+        r = r or {}
+        store = (str(r.get("store") or "").strip()) or None
+        gross = round(gross + safe_float(r.get("tax")), 2)
+        returns = round(returns + safe_float(r.get("returns_tax")), 2)
+        amt = safe_float(r.get("tax_net"))
+        if store is None:
+            # An unattributable store is booked COMPANY-WIDE rather than dropped: the money is real
+            # (honest beats mis-attributed — the same rule the extra BS lines' store grain follows).
+            cells[None] = round(cells.get(None, 0.0) + amt, 2)
+        else:
+            cells[store] = round(cells.get(store, 0.0) + amt, 2)
+    floored = {}
+    for st in list(cells):
+        if cells[st] < 0:
+            floored[str(st) if st else "(company-wide)"] = round(-cells[st], 2)
+            cells[st] = 0.0
+    bookings = [(st, amt, None) for st, amt in sorted(cells.items(), key=lambda kv: (kv[0] or ""))
+                if amt]
+    meta = {**base, "stores": len(bookings), "rows": len(store_tax_rows or []),
+            "total": round(sum(a for _s, a, _d in bookings), 2),
+            "gross": gross, "returns": returns,
+            "floored": floored, "floored_total": round(sum(floored.values()), 2)}
+    return bookings, meta
 
 
 # ── 3+4. journal entries: company designation + fixed scoping ───────────────────────────────────
