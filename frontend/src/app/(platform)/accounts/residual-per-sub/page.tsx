@@ -293,8 +293,8 @@ export default function ResidualPerSubPage() {
               <thead>
                 <tr style={{ background: 'var(--accent)' }}>
                   <th style={{ padding: '10px 14px', color: 'white', fontSize: 12, textAlign: 'left', position: 'sticky', left: 0, background: 'var(--accent)', whiteSpace: 'nowrap' }}>Store · {metricDef.label}<ResizeHandle onDown={e => cw.start('store', e)} onReset={() => cw.reset('store')} /></th>
-                  {periods.map(p => <th key={p} style={{ padding: '10px 10px', color: 'white', fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative' }}>{shortPeriod(p)}<ResizeHandle onDown={e => cw.start(p, e)} onReset={() => cw.reset(p)} /></th>)}
-                  <th style={{ padding: '10px 12px', color: 'white', fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative' }}>Total<ResizeHandle onDown={e => cw.start('total', e)} onReset={() => cw.reset('total')} /></th>
+                  {periods.map(p => <th key={p} style={{ padding: '10px 10px', color: 'white', fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative', background: 'var(--accent)' }}>{shortPeriod(p)}<ResizeHandle onDown={e => cw.start(p, e)} onReset={() => cw.reset(p)} /></th>)}
+                  <th style={{ padding: '10px 12px', color: 'white', fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative', background: 'var(--accent)' }}>Total<ResizeHandle onDown={e => cw.start('total', e)} onReset={() => cw.reset('total')} /></th>
                 </tr>
               </thead>
               <tbody>

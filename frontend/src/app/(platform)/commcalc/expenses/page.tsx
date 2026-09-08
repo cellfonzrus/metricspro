@@ -706,7 +706,7 @@ export default function ExpensesPage() {
               <tr style={{ background: 'var(--accent)' }}>
                 <th style={{ padding: '10px 16px', color: 'white', fontSize: 12, textAlign: 'left', position: 'sticky', left: 0, background: 'var(--accent)', whiteSpace: 'nowrap' }}>Expense<ResizeHandle onDown={e => cw.start('expense', e)} onReset={() => cw.reset('expense')} /></th>
                 {visStores.map(s => (
-                  <th key={s.store_code} style={{ padding: '8px 10px', color: 'white', fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative' }}>
+                  <th key={s.store_code} style={{ padding: '8px 10px', color: 'white', fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative', background: 'var(--accent)' }}>
                     <div style={{ fontWeight: 700 }}>{s.store_code}</div>
                     <div style={{ fontWeight: 400, opacity: 0.7, fontSize: 10 }}>{(s.address || '').substring(0, 18)}</div>
                     <button onClick={() => { setCopySource(cur => cur === s.store_code ? '' : s.store_code); setCommonOpen(false); setCopyTargets([]) }}
@@ -715,7 +715,7 @@ export default function ExpensesPage() {
                     <ResizeHandle onDown={e => cw.start(s.store_code, e)} onReset={() => cw.reset(s.store_code)} />
                   </th>
                 ))}
-                <th style={{ padding: '10px 14px', color: 'white', fontSize: 12, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative' }}>Total<ResizeHandle onDown={e => cw.start('total', e)} onReset={() => cw.reset('total')} /></th>
+                <th style={{ padding: '10px 14px', color: 'white', fontSize: 12, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative', background: 'var(--accent)' }}>Total<ResizeHandle onDown={e => cw.start('total', e)} onReset={() => cw.reset('total')} /></th>
               </tr>
             </thead>
             <tbody>
@@ -755,8 +755,8 @@ export default function ExpensesPage() {
             <tfoot>
               <tr style={{ background: 'var(--accent)', fontWeight: 700 }}>
                 <td style={{ padding: '10px 16px', color: 'white', fontSize: 13, position: 'sticky', left: 0, background: 'var(--accent)' }}>Total</td>
-                {visStores.map(s => <td key={s.store_code} style={{ padding: '10px 10px', textAlign: 'right', color: 'white', fontSize: 13 }}>{fmt(storeTotal(s.store_code))}</td>)}
-                <td style={{ padding: '10px 14px', textAlign: 'right', color: 'white', fontSize: 13 }}>{fmt(grand)}</td>
+                {visStores.map(s => <td key={s.store_code} style={{ padding: '10px 10px', textAlign: 'right', color: 'white', fontSize: 13, background: 'var(--accent)' }}>{fmt(storeTotal(s.store_code))}</td>)}
+                <td style={{ padding: '10px 14px', textAlign: 'right', color: 'white', fontSize: 13, background: 'var(--accent)' }}>{fmt(grand)}</td>
               </tr>
             </tfoot>
           </table>

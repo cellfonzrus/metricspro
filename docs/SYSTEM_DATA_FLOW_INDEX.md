@@ -4306,3 +4306,45 @@ to match current behaviour, find out why the behaviour changed.**
   problem that will recur.
 - The family-B leak pattern (`some_router.get_supabase = fake` on a gated endpoint) may exist in
   harnesses that currently pass — `_harness_dbfree.install()` is the one-line inoculation.
+
+## 23q. WHITE LETTERS ON A NEAR-WHITE CELL (owner 2026-09-08)
+
+Owner, verbatim: *"the table entries where the store names are not seen as they both white,
+background should be blue and letters white font"*.
+
+**The mechanism, which is why it is not obvious.** `globals.css` styles the ELEMENT TYPE:
+
+```css
+th { background: var(--surface2); ... }   /* #f1f4f8 — near-white */
+tr:hover td { background: var(--surface2); }
+```
+
+A type selector paints the cell's OWN background box, which sits on top of whatever the parent
+`<tr>` set inline. So a header cell that declares `color: 'white'` and lets the row supply the blue
+is **near-white on near-white**. `commcalc/expenses` did exactly that: the sticky first column
+happened to set `background: 'var(--accent)'` for its own reasons and stayed readable, so the
+column that vanished was the one carrying the STORE NAMES — the labels the reader needs to tell
+one column from another.
+
+The `tfoot` grand-total row had the same shape one step removed: its `td`s inherited the row's blue
+and looked fine, but `tr:hover td` repainted them near-white, so the totals disappeared **on hover**.
+
+| screen | cells | was | now |
+|---|---|---|---|
+| `commcalc/expenses` | per-store header, Total header | white on `--surface2` | white on `--accent` |
+| `commcalc/expenses` | `tfoot` per-store + grand total | readable, **invisible on hover** | white on `--accent` |
+| `accounts/residual-per-sub` | per-period header, Total header | white on `--surface2` | white on `--accent` |
+
+`commcalc/gp`, `commcalc/flags` and `accounts/pl` were already correct — they set the background on
+every cell — which is the convention the fix adopts rather than inventing a new one. No new colour
+enters the codebase: `--accent` (#1e3a5f) is the house blue already used by those tables.
+
+- Proof: `backend/harness_table_header_contrast.py` (11). **Static on purpose** — every value is a
+  legal `CSSProperties` string, so the page compiles and renders; `tsc` and a build cannot see it
+  (§24). §A the GENERAL rule over every `.tsx` under `frontend/src` — a `th`/`td` declaring white
+  text declares its own background — plus a guard that the scan actually inspected cells, so a
+  regex that silently matches nothing cannot read as "clean"; §B the two reported regressions named
+  explicitly; §D the stylesheet premise itself, so the rule cannot outlive its own reason.
+
+The general rule is what matters here: §A is what caught the `tfoot` pair, which the original
+report did not mention and a fix aimed only at the reported headers would have left broken.
