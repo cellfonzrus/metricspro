@@ -3734,6 +3734,41 @@ of order". Fixed with a monotonic ticket per request, checked before `setData` *
   rendered, and simply showed the wrong rows, so neither `tsc` nor a build could see it. §9e also
   pins that the `stores=` param is still SENT, so the guard can never mask a dropped filter.
 
+## 23l. THE POS ONBOARDING GATE DEADLOCKED ITS OWN TASKS (owner 2026-09-08)
+
+**Owner:** *"Sales tax menu is hidden from the pos and when i click on setting up the sales tax it
+goes to the pos screen and … no way to do it now"* — under a wizard reading *"29 of 29 stores have NO
+rate — a taxable sale there charges $0."* Then, decisively: *"sales tax menu is working for luxelink,
+so something is definitely wrong in wiring."*
+
+**They were right, and the tenant comparison proves it.** `(platform)/pos/layout.tsx` redirects EVERY
+`/pos/*` route to `/pos/onboarding` while any required step is outstanding. Live, 2026-09-08:
+
+| tenant | required done | complete | outstanding required |
+|---|---|---|---|
+| **Luxelink Wireless** | 8/8 | **true** | — |
+| **Cellfonz R Us** | 6/8 | false | `tax_codes`, `service_plans` |
+| **Vzone** | 6/8 | false | `tax_codes`, `service_plans` |
+
+LuxeLink is complete, so the gate never fires and `/pos/settings` opens normally — the same code,
+working. For the other two the gate fires on every `/pos/*` route, and **both** outstanding tasks
+point INTO `/pos/*`: `tax_codes` → `/pos/settings`, `service_plans` → `/pos/activations`. The gate
+bounced the operator off the only screens that could complete them, and the wizard's own "Do this
+now →" sent them straight back. A closed loop, and neither tenant could ever finish POS setup —
+while every taxable sale on their register charged $0.
+
+**The fix is derived, never a path list.** `build_status` now publishes `open_hrefs` — the pages
+OUTSTANDING tasks point at, read off the same task registry the wizard renders — and
+`GET /core/onboarding/{module}/status` (the cheap call the gate makes) passes it through. The layout
+exempts the current path when an outstanding task points at it, and the banner turns into
+"← Back to setup" so the operator is never stranded. A task added later is reachable with no edit to
+the gate.
+
+- Proof: `backend/harness_pos_onboarding.py` §M (166 total). **Static on the frontend half**: a
+  redirect loop compiles, renders and type-checks perfectly — only a check on the wiring can see it.
+  §M1b pins that at least five task pages sit inside `/pos/*`, which is why the exemption is derived
+  rather than maintained by hand.
+
 ## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
 
 **Read this before writing a new harness, and before trusting an old one.** Owner directive

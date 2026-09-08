@@ -464,6 +464,15 @@ def build_status(org_id: str, module_key: str) -> dict:
         "done": len([r for r in out if r["complete"]]),
         "complete": len(req_done) == len(required) and len(required) > 0,
         "next_task_key": nxt["task_key"] if nxt else None,
+        # THE PAGES AN OUTSTANDING TASK SENDS YOU TO. The POS entry gate redirects every /pos/* route
+        # to the wizard while required setup is outstanding — and "Set your sales-tax rates" points at
+        # /pos/settings, which IS a /pos/* route. So the gate bounced the operator off the one screen
+        # that could complete the step, and the wizard's own "Do this now" bounced them straight back:
+        # a loop with no way out (owner report 2026-09-08, live — 29 of 29 stores with no tax rate and
+        # "no way to do it now"). The gate now exempts these, so a task can always be reached.
+        # Derived from the SAME task registry above — never a hardcoded path list.
+        "open_hrefs": sorted({(r.get("href") or "").strip() for r in out
+                              if not r["complete"] and (r.get("href") or "").strip()}),
         "registry_source": registry_source,
     }
 
@@ -1200,7 +1209,7 @@ def get_onboarding_status(module_key: str, org_id: str = ORG_ID):
     """The cheap version the POS entry gate calls: is this tenant ready, and where do they resume."""
     s = build_status(org_id, module_key)
     return {k: s[k] for k in ("module", "complete", "required_total", "required_done",
-                              "total", "done", "next_task_key")}
+                              "total", "done", "next_task_key", "open_hrefs")}
 
 
 class SetTaskStateIn(LaxModel):
