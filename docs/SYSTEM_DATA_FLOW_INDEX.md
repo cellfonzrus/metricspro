@@ -1954,6 +1954,63 @@ as a market-grant keyset member; ambiguity fails closed):
   - **Proof:** `backend/harness_workforce_report_registry.py` (stdlib-only; entry shape, registry
     splice/key-uniqueness by AST, resolver delegation, end-to-end builders with the REAL
     `strip_pay`, tax-twin vectors, validator).
+### 14s. SALARY → STORE EXPENSES: the write path, and the THREE hours states (owner directive 2026-09-08)
+
+**Owner (verbatim):** "then we need to pull the exact salaries paid as per the schedule and update
+the same in the expenses as those are not getting updated for a lot of stores, if we have the actual
+hours then the salary is based on actual hours if not then the salary is based on scheduled hours for
+that month to go in the gross profit for that month."
+
+- **The ONE per-store salary derivation stays `storeops.router.get_payroll_by_store`** (`:1596` —
+  punch-driven pay, manual corrections, scheduled fallback, `payroll_salary.apply_to_by_store`,
+  lunch deduction, inactive handling). NOTHING here recomputes it. Duplicate check: the search was
+  for every existing salary→expense mechanism; two were found — (a) the BROWSER auto-fill in
+  `commcalc/expenses/page.tsx` (fills the "Employee Salaries" cell from `/storeops/payroll-by-store`
+  only when the month looks fresh, and persists only if a human saves), and (b) the SERVER
+  `payroll_gross` system line pushed by `POST /storeops/payroll-expenses/run/{period}`. (b) was
+  EXTENDED and (a)'s figure reused; no third path exists.
+- **Removed second derivation:** the `payroll_gross` line no longer takes
+  `payroll_expenses.wages_by_store_from_hours` (`shifts.actual_hours` × `employees.pay_rate` — no
+  timelog punches, no salary pay-basis). That basis stays in `payroll_expenses.py` as the wage base
+  for the TAX/burden buckets only. `gross_payroll_cells` / `gross_payroll_ledger_rows` are no longer
+  imported by the router.
+- **NEW pure module `backend/app/modules/storeops/salary_expense.py`** (proof
+  `backend/harness_salary_expense.py`, 56 checks) — what the write path was missing:
+  - **THREE STATES, not two.** `day_measurement` / `hours_for_shift`: a (employee, day) is
+    MEASURED_NONZERO (closed punch or manual DM correction, hours > 0), MEASURED_ZERO (that
+    measurement says 0 — the store was closed, the employee was off) or NOT_MEASURED (no punch, no
+    correction). **Only NOT_MEASURED falls back to that day's scheduled hours.** A measured zero pays
+    zero and NEVER falls back. `shifts.actual_hours == 0` is NOT evidence of measurement — it is 0
+    (never NULL) on 1,486/1,486 live LuxeLink Jul+Aug 2026 shift rows alongside 1,146 CLOSED
+    `storeops.timelog` punches, so it cannot tell "worked zero" from "never written".
+  - **Store-month state** (`store_state`): `measured` | `mixed` | `scheduled_fallback` (whole month
+    unmeasured — booked per the owner's rule AND flagged) | `no_data` (no measurement AND no
+    schedule) → **WITHHELD: reported, never booked as $0.00.** A store showing $0 salary because
+    nobody clocked in is a reported data defect.
+  - **Store-code canonicalization** (`build_store_folder` / `fold_store_rows`): the existing
+    `commcalc.router._store_code_resolver` (§13) is used AS-IS and FIRST, plus an exact-case fold onto
+    the org's `storeops.stores` roster (the resolver returns the caller's own casing for an
+    already-a-code hit, and `store_expenses.store_code` is matched by exact string on the sheet). A
+    string that folds nowhere is REPORTED in `unbound`, never booked to an invented code.
+- **Router I/O** (`storeops/router.py`, beside `_payex_gather`): `_salary_hours_provenance` (the
+  measured/scheduled split per canonical store — annotates money it does not derive),
+  `_salary_expense_config`, `_salary_expense_gather`. Consumed by `GET /storeops/payroll-expenses/
+  {period}` (adds `gross_label`, `gross_stores`, `gross_withheld`, `gross_unbound`, `gross_totals`)
+  and `POST /storeops/payroll-expenses/run/{period}` (same keys on the run result).
+- **Contract for mod-finance (the READ side):** unchanged in shape — `commcalc.store_expenses`,
+  `source_key='payroll_gross'`, one row per (org_id, period, store_code), `amount` = that store's
+  salary for the month, `expense_name` = the per-org label (house default 'Gross Payroll'), already
+  mapped by `account/coa.py` `_SYSTEM_KEY_MAP['payroll_gross'] → 'wages'` and authoritative via
+  `_WAGES_AUTHORITATIVE_KEYS`. What CHANGED is the amount's provenance, and that a store-month with
+  no evidence produces NO ROW (not a $0 row): "absent" now means "unknown", and the three-state truth
+  is in `storeops.payroll_gross_ledger` (mig `435`), not in `store_expenses`.
+- **Migration `435_storeops_salary_expense_three_state.sql` (WRITTEN, NOT APPLIED — owner runs SQL):**
+  additive `measured_hours` / `scheduled_hours` / `hours_state` / `booked` / `raw_store_codes` on
+  `storeops.payroll_gross_ledger`, plus NEW `storeops.salary_expense_config` (RULE TWO: `line_label`,
+  `expense_type`, `book_scheduled_fallback`; `book_no_data_as_zero` is FALSE and stays false).
+  House-default seed for every org; the engine degrades to the house defaults and a skipped ledger
+  persist until it runs. Not a new external feed → no lineage-registry entry.
+
 - **Dashboard-builder Phase D1 — user-designed TILE LAYOUTS, backend (owner spec 2026-09-01):**
   every module's tiled dashboard layout becomes per-org CONFIG (RULE TWO), not code. SUPER ADMIN
   designs for all modules and ANY tenant; a layout saved on the HOUSE org
@@ -2362,6 +2419,8 @@ as a market-grant keyset member; ambiguity fails closed):
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
 | `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs), store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
+| `storeops.payroll_gross_ledger` (mig `405`; provenance columns `measured_hours`/`scheduled_hours`/`hours_state`/`booked`/`raw_store_codes` mig `435`) | `POST /storeops/payroll-expenses/run/{period}` — delete-by-(org,period) then insert, one row per store INCLUDING the WITHHELD ones (`booked=false`) | the audit trail for the `payroll_gross` system line, and the ONLY place the three-state truth lives (`commcalc.store_expenses` cannot say "unknown" — its receiver drops zero-amount cells). §14s |
+| `storeops.salary_expense_config` (mig `435` — RULE TWO: `line_label`, `expense_type`, `book_scheduled_fallback`, `book_no_data_as_zero`) | one row per org, house defaults seeded; absent row == house defaults | `storeops.router._salary_expense_config` → `salary_expense.resolve_config`. §14s |
 | `storeops.store_lease` (mig `946` — one row per org×store: landlord/site contact, rent links + ACH (SENSITIVE), `current_rent`/`rent_effective_from`/`escalation_pct`/`rent_schedule`/`rent_due`, lease dates, insurance + `insurance_premium_due`/`_frequency`) | `PUT /storeops/store-lease` (gated `can_see_lease`, upsert on org+store) | `GET /storeops/store-lease`; the finance rents-due/recurring-expenses reader `GET /account/liabilities-due` (`account/liabilities_due.rent_due_rows`/`insurance_due_rows` computing FROM `store_lease.rent_for_month`/`resolve_rent_due`/`rent_due_window` — the §14 read contract honored, never re-derived; gated `can_see_lease`, ACH columns never selected) |
 | `storeops.store_document` (mig `946` — append-only lease/COI versions; files in PRIVATE bucket `store-docs`) | `POST /storeops/store-lease/doc` (gated; INSERT only, prior versions kept) | `GET /storeops/store-lease` version lists (path never echoed), `GET /storeops/store-lease/doc-url`/`doc-view` (org-scoped by id → signed URL) |
 | `storeops.insurance_policy` + `insurance_policy_store` (mig `964` — ONE policy covering MANY stores; `premium` here is INFORMATIONAL, no money reader reads this table) | `POST/PUT/DELETE /storeops/insurance-policies`, `PUT /storeops/insurance-policies/stores` (all gated `can_see_lease`, store codes validated against this org's `storeops.stores`) | `GET /storeops/insurance-policies`; `GET /storeops/store-lease` (`policies` covering that store); `router._expiry_subjects` → expiry notices + the `storeops_doc_expiry` attention providers |
@@ -2455,6 +2514,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `POST /notify/send`, `POST /notify/run-due` → report keys `storeops_payroll` / `storeops_hours_approval` / `storeops_payroll_tax` / `storeops_payroll_expenses` / `storeops_attendance` / `storeops_lateness` (W3 scheduled workforce reports) | `notify/router.py` `_dispatch` → `report_registry.build_payload` → `notify/workforce_reports.py` builders | §14 W3 |
 | `GET /storeops/payroll-raw` (payroll-tax page inputs; mig-434 pay gate, FAIL-CLOSED 403 — ALL-money feed, §19.12 closed 2026-09-01; route `payroll_raw_route`, shared `payroll_raw()` stays ungated for pre-gated in-process callers) | `storeops/router.py` (`payroll_raw_route`) | §14 W3 |
 | `GET /storeops/payroll-expenses/{period}`, `GET /storeops/payroll/approvals`, `GET /storeops/timeclock/attendance-exceptions`, `GET /storeops/accountability` | `storeops/router.py:7703` / `payroll_approval.py:469` / `storeops/router.py:4294` / `:4318` | §14 W3 |
+| `GET /storeops/payroll-expenses/{period}` + `POST /storeops/payroll-expenses/run/{period}` — salary→expenses keys `gross_label`/`gross_cells`/`gross_stores`/`gross_withheld`/`gross_unbound`/`gross_totals` (the `payroll_gross` system line; three-state hours, canonical store fold, withhold-don't-zero) | `storeops/router.py` `_salary_expense_gather` → `storeops/salary_expense.py`; money from `get_payroll_by_store` (never recomputed) | §14s |
 | `GET/PUT /storeops/store-lease`, `PUT /storeops/store-lease/tenant-defaults`, `POST /storeops/store-lease/doc`, `GET /storeops/store-lease/doc-url` + `/doc-view` (ALL gated fail-closed by `store_lease.can_see_lease` — mig 946 lease/landlord/ACH/insurance + document versions) | `storeops/router.py` (`get_store_lease`/`put_store_lease`/`put_lease_tenant_defaults`/`upload_store_lease_doc`/`store_lease_doc_url`/`store_lease_doc_view`) | §14 mig 946 |
 | `GET/POST/PUT/DELETE /storeops/insurance-policies`, `PUT /storeops/insurance-policies/stores`, `POST /storeops/insurance-policies/doc` (one policy, many stores — ALL gated `can_see_lease`) | `storeops/router.py` (`list_insurance_policies`/`create_insurance_policy`/`update_insurance_policy`/`delete_insurance_policy`/`set_insurance_policy_stores`/`upload_insurance_policy_doc`) | §14 migs 964-967 |
 | `POST /storeops/document-extract` (AI reads an uploaded lease/policy/COI → a DRAFT; `async def` + `run_in_threadpool`, SEV-1 2026-07-30 rule), `GET /storeops/document-extraction`, `POST /storeops/document-extraction/accept` (THE money gate — `doc_intel.apply_plan`) | `storeops/router.py` (`post_document_extract`/`get_document_extraction`/`accept_document_extraction`) | §14 mig 965 |
@@ -2567,6 +2627,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | Bill-pay coverage (billpay ≤ cash+card per store/day) | processor feed (`raw_epay_daily_tx` per_store_day / `raw_ma_daily_tx` by `tx_date` — mig-944 row filter `ma_billpay_predicate`, accounts via store_merchant_id → mig-314 index) or declared closing split, vs `daily_closing` tender totals (DM-corrected) | `metric_recon.reconcile_billpay_coverage` via `GET /billpay-coverage/{period}` |
 | Days-in-stock (aging) | `inventory_aging_device.days_in_stock` (snapshot) | device-cost recon `27338`; MI aging bonus |
 | Lateness % (`late_rate` — late shifts ÷ scheduled shifts) | `storeops.timelog` punches vs `storeops.shifts` windows | `attendance_exceptions.compute_attendance_exceptions` → `accountability.aggregate`; surfaced by `/storeops/accountability` ('Lateness %' page, W2 rename) and the `storeops_lateness` scheduled report (§14 W3) |
+| Store salary expense for a MONTH (the `payroll_gross` P&L/GP line) | `get_payroll_by_store` — ACTUAL hours where MEASURED (a closed `storeops.timelog` punch or a manual `shifts.actual_hours>0` correction), SCHEDULED hours only where NOT measured; salaried via `payroll_salary.py`, never hours×`pay_rate`. A MEASURED ZERO pays zero and never falls back. No measurement AND no schedule ⇒ WITHHELD, never $0.00 | `storeops/salary_expense.py` via `router._salary_expense_gather` → `POST /storeops/payroll-expenses/run/{period}` → `commcalc.store_expenses` `source_key='payroll_gross'` → `account/coa.py` `wages`. Proof `harness_salary_expense.py` (§14s) |
 | Withholding estimate (gross/FICA/federal/state/net) | `storeops.timelog`+`manual_hours` hours × `employees.pay_rate` × `payroll_settings` W-4 | browser: `frontend/src/lib/payroll-tax.ts computePay`; server twin: `storeops/payroll_tax_estimate.compute_pay` (§14 W3 — keep in lockstep) |
 | Store salary coverage state for a month (`entered` / `derived_actual` / `derived_scheduled` / `carried` / `not_measured` / `no_staff`) | `commcalc.store_expenses` authoritative payroll rows (ruling-K2 predicate, minus flat allocations) + `storeops.shifts` hours (actual else scheduled) + `expenses_effective` carry answer | `commcalc/labour_coverage.labour_coverage` → `GET /gp/{period}` key `labour_coverage` and the P&L `wages` line `note` (§4, mig `992`). Computes NO dollars — the amounts stay with `coa.derive_wage_cells` |
 | Rent due this month / current-month rent (per store) | `storeops.store_lease.rent_schedule`→`current_rent`×`escalation_pct` (schedule wins); due window from `rent_due` → `tenants.rent_due_default` → house first-week (mig `946`) | `store_lease.rent_for_month` + `resolve_rent_due`/`rent_due_window` (the §14 read contract for the finance rents-due/recurring-expenses build); surfaced on `GET /storeops/store-lease` |

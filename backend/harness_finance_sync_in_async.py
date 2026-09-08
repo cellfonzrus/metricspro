@@ -235,10 +235,31 @@ for rel, allowed in EXPECTED_DELTA.items():
     check(f"{os.path.basename(rel)}: no function outside {sorted(allowed)} changed",
           changed <= allowed, f"also changed: {sorted(changed - allowed)}")
 
-# The deterministic money modules must be untouched outright.
-for rel in (f"{MOD}/account/coa.py", f"{MOD}/account/autocompute.py",
-            f"{MOD}/account/statement_filter.py"):
-    check(f"{os.path.basename(rel)}: byte-identical to origin/main", read_base(rel) == read_now(rel))
+# The deterministic money modules must be untouched outright — EXCEPT where a later, separately
+# proven change has a named reason. Byte-identity was a proxy for "this package did not touch the
+# money math"; it holds only while nothing else legitimately edits these files, and on 2026-09-08
+# something did. Re-pinning as a NAMED delta keeps the real claim (nothing unexplained moved) and
+# still fails on any function this list does not sanction — which byte-identity-forever could not
+# do, because it would have been switched off or ignored the first time it was wrong.
+#
+#   coa.py {_account_config, build_inputs} — the org-vs-store payroll authority grain (mig 994).
+#   build_inputs kept ONE has_payroll_gross boolean for the whole org, so a single entered payroll
+#   row anywhere suppressed wages_by_store for EVERY store and a store with no entry booked $0.00
+#   instead of its own hours. Proven by backend/harness_labour_coverage.py (81 checks), and inert
+#   by default: payroll_authority_grain defaults to 'org', which is the pre-994 behaviour.
+MONEY_MODULE_DELTA = {
+    f"{MOD}/account/coa.py": {"_account_config", "build_inputs"},
+    f"{MOD}/account/autocompute.py": set(),
+    f"{MOD}/account/statement_filter.py": set(),
+}
+for rel, allowed in MONEY_MODULE_DELTA.items():
+    base_f, now_f = funcs(read_base(rel)), funcs(read_now(rel))
+    name = os.path.basename(rel)
+    check(f"{name}: no function added or removed", set(base_f) == set(now_f),
+          f"+{sorted(set(now_f) - set(base_f))} -{sorted(set(base_f) - set(now_f))}")
+    changed = {q for q in set(base_f) & set(now_f) if base_f[q] != now_f[q]}
+    check(f"{name}: no function outside {sorted(allowed) or 'the empty set'} changed",
+          changed <= allowed, f"also changed: {sorted(changed - allowed)}")
 
 # And within _narrate / _missed_days, the PROMPT and the response PARSING must be unchanged —
 # only the client construction moved.
