@@ -1,7 +1,11 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import type { StandardFilterValue } from '@/lib/standard-filters'
+import type { StoreOpt } from '@/lib/market-store-cascade'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 
@@ -20,6 +24,15 @@ import { SendReportButton } from '@/lib/send-report'
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '7px 9px', borderTop: '1px solid var(--border)', fontSize: 12.5, verticalAlign: 'middle', whiteSpace: 'nowrap' }
 const th: React.CSSProperties = { textAlign: 'right', padding: '8px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }
+// FROZEN PANES (owner 2026-09-08: "the columns are not freezing on the left and the row on the top
+// as required"). The header row sticks to the top of the scroll box and the first two columns (Day,
+// Store) stick to the left, so a row read 15 columns across still says which store-day it is. The
+// header's own Day/Store cells need BOTH offsets and a higher z-index, or the body cells scroll over
+// the header corner.
+const STICK_L0 = 0, STICK_L1 = 96
+const thL: React.CSSProperties = { ...th, textAlign: 'left', position: 'sticky', top: 0, zIndex: 4, background: 'var(--surface2)' }
+const thTop: React.CSSProperties = { ...th, position: 'sticky', top: 0, zIndex: 3, background: 'var(--surface2)' }
+const stickCell = (left: number, bg: string): React.CSSProperties => ({ position: 'sticky', left, zIndex: 1, background: bg })
 
 export default function CashReconManagementPage() {
   const [rangeMode, setRangeMode] = useState(false)
@@ -30,20 +43,41 @@ export default function CashReconManagementPage() {
   const [loading, setLoading] = useState(true)
   const [denied, setDenied] = useState<string | null>(null)
   const [mismatchOnly, setMismatchOnly] = useState(false)
+  // RULE FIVE §3d — the SHARED StandardFilterBar, not a hand-rolled set (owner 2026-09-08: "it does
+  // not have our standard filters for employee, store or market"). Period is off: this screen owns
+  // its own Day/Range control above, which is the same window in a different shape.
+  const [flt, setFlt] = useState<StandardFilterValue>({ stores: [], markets: [], reps: [] })
+  const [roster, setRoster] = useState<StoreOpt[]>([])
+  useEffect(() => {
+    apiCached('/api/v1/closing/stores', LOOKUP)
+      .then((r: any) => setRoster((Array.isArray(r) ? r : []).filter((x: any) => x.store_code)
+        .map((x: any) => ({ id: x.store_code, label: x.store_address || x.store_code, market: x.market || null }))))
+      .catch(() => {})
+  }, [])
 
+  // Same request-ticket guard as the pickup pages (§23k): filters fire a fetch each, and applying
+  // them in return order let a slower unfiltered answer overwrite a filtered one.
+  const reqSeq = useRef(0)
   const load = useCallback(() => {
     if (rangeMode ? !(rangeStart && rangeEnd) : !date) return
     setLoading(true); setDenied(null)
-    const qs = rangeMode ? `start=${rangeStart}&end=${rangeEnd}` : `date=${date}`
+    const qs = [
+      rangeMode ? `start=${rangeStart}&end=${rangeEnd}` : `date=${date}`,
+      flt.markets.length && `markets=${encodeURIComponent(flt.markets.join(','))}`,
+      flt.stores.length && `stores=${encodeURIComponent(flt.stores.join(','))}`,
+      flt.reps.length && `employees=${encodeURIComponent(flt.reps.join(','))}`,
+    ].filter(Boolean).join('&')
+    const ticket = ++reqSeq.current
     api(`/api/v1/closing/cash-recon-management?${qs}`)
-      .then(setData)
+      .then(d => { if (ticket === reqSeq.current) setData(d) })
       .catch((e: any) => {
+        if (ticket !== reqSeq.current) return
         const m = String(e?.message || e)
         if (m.includes('restricted') || m.includes('403')) { setDenied(m); setData(null) }
         else console.error(e)
       })
-      .finally(() => setLoading(false))
-  }, [rangeMode, date, rangeStart, rangeEnd])
+      .finally(() => { if (ticket === reqSeq.current) setLoading(false) })
+  }, [rangeMode, date, rangeStart, rangeEnd, flt])
   useEffect(() => { load() }, [load])
 
   const rows: any[] = (data?.rows || []).filter((r: any) => !mismatchOnly || r.billpay_status === 'mismatch' || r.three_way_status === 'mismatch')
@@ -63,8 +97,12 @@ export default function CashReconManagementPage() {
           { header: 'Credit declared', get: (r: any) => r.credit_declared, money: true },
           { header: 'Bill-pay on cash (declared)', get: (r: any) => r.epay_cash_declared, money: true },
           { header: 'Bill-pay on credit (declared)', get: (r: any) => r.epay_credit_declared, money: true },
-          { header: 'Cash pickup recorded', get: (r: any) => r.cash_pickup, money: true },
-          { header: 'Bill-pay pickup recorded', get: (r: any) => r.billpay_pickup, money: true },
+          { header: 'DM verified cash', get: (r: any) => r.cash_pickup, money: true },
+          { header: 'DM actually took', get: (r: any) => r.cash_picked_actual ?? '', money: true },
+          { header: 'Management counted', get: (r: any) => r.mgmt_counted ?? '', money: true },
+          { header: 'Mgmt short / over', get: (r: any) => r.mgmt_variance ?? '' },
+          { header: 'DM verified ePay', get: (r: any) => r.billpay_pickup, money: true },
+          { header: 'Closed by', get: (r: any) => (r.reps || []).join('; ') },
           { header: 'POS cash', get: (r: any) => r.pos_cash ?? '', money: true },
           { header: 'POS card', get: (r: any) => r.pos_card ?? '', money: true },
           { header: 'Sales-tx bill pay', get: (r: any) => r.sales_billpay ?? '', money: true },
@@ -127,13 +165,43 @@ export default function CashReconManagementPage() {
             </div>
           </div>
 
+          <div style={{ marginBottom: 12 }}>
+            <StandardFilterBar value={flt} onChange={setFlt}
+              show={{ period: false, stores: true, markets: true, reps: true }}
+              cascadeStores={roster} repOptions={(data?.rep_options || []).map((n: string) => ({ id: n, label: n }))}
+              repLabel="People…" />
+            {flt.reps.length > 0 && (
+              <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 4 }}>
+                A row here is a whole store-day, so the people filter picks the store-days
+                {' '}{flt.reps.join(', ')} filed a closing on — every rep&apos;s money on those days is still
+                counted. Narrowing inside a day would compare part of the declared cash against all of the
+                POS cash and invent a variance.
+              </div>
+            )}
+          </div>
+
           {data && (
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
               <Stat label="Cash declared" value={fmt(t.cash_declared || 0)} accent />
               <Stat label="Credit declared" value={fmt(t.credit_declared || 0)} />
               <Stat label="Bill-pay declared" value={fmt(t.epay_declared || 0)} />
-              <Stat label="Cash pickups" value={fmt(t.cash_pickup || 0)} />
-              <Stat label="Bill-pay pickups" value={fmt(t.billpay_pickup || 0)} />
+              <Stat label="DM verified cash" value={fmt(t.cash_pickup || 0)}
+                sub={t.cash_picked_actual ? `${fmt(t.cash_picked_actual)} actually taken` : 'declared at pickup'} />
+              <Stat label="DM verified ePay" value={fmt(t.billpay_pickup || 0)} />
+              {/* MANAGEMENT'S OWN COUNT — fed from commcalc.envelope_count (mig 936), the count the
+                  envelope report already captures with counted_by/counted_at. No second entry box:
+                  one number, one place it is entered. */}
+              <Stat label="Management counted" value={t.mgmt_counted_days ? fmt(t.mgmt_counted || 0) : '—'}
+                sub={t.mgmt_uncounted_days
+                  ? `${t.mgmt_counted_days || 0} counted · ${t.mgmt_uncounted_days} not counted yet`
+                  : 'every store-day counted'} />
+              <Stat label="Management short / over"
+                value={(t.mgmt_short_days || t.mgmt_over_days)
+                  ? `${fmt(t.mgmt_short_amount || 0)} / +${fmt(t.mgmt_over_amount || 0)}`
+                  : '✓'}
+                sub={(t.mgmt_short_days || t.mgmt_over_days)
+                  ? `${t.mgmt_short_days || 0} short · ${t.mgmt_over_days || 0} over`
+                  : 'counted store-days all tie'} />
               <Stat label="Sales-tx bill pay" value={t.sales_billpay == null ? '—' : fmt(t.sales_billpay)} sub={t.sales_billpay_card == null ? 'no sales-tx data' : `${fmt(t.sales_billpay_card)} on card`} />
               <Stat label="Processor bill pay" value={fmt(t.pos_billpay || 0)} sub={t.mismatched_store_days ? `⚠ ${t.mismatched_store_days} mismatched store-day${t.mismatched_store_days === 1 ? '' : 's'}` : 'no mismatches'} />
               <Stat label="3-way recon" value={t.three_way_mismatched ? `⚠ ${t.three_way_mismatched}` : '✓'} sub={t.three_way_mismatched ? `store-day${t.three_way_mismatched === 1 ? '' : 's'} out of tolerance` : 'declared vs sales-tx vs processor agree'} />
@@ -149,35 +217,54 @@ export default function CashReconManagementPage() {
               No closings {mismatchOnly ? 'with bill-pay mismatches ' : ''}for {rangeMode ? `${rangeStart} → ${rangeEnd}` : date}.
             </div>
           ) : (
-            <div className="card table-wrapper" style={{ padding: 0, overflowX: 'auto' }}>
+            <div className="card table-wrapper" style={{ padding: 0, overflow: 'auto', maxHeight: '70vh' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead><tr style={{ background: 'var(--surface2)' }}>
-                  <th style={{ ...th, textAlign: 'left' }}>Day</th>
-                  <th style={{ ...th, textAlign: 'left' }}>Store</th>
-                  <th style={th}>Cash declared</th>
-                  <th style={th}>Credit declared</th>
-                  <th style={th}>Bill-pay on cash</th>
-                  <th style={th}>Bill-pay on credit</th>
-                  <th style={th}>Cash pickup</th>
-                  <th style={th}>Bill-pay pickup</th>
-                  <th style={th}>POS cash</th>
-                  <th style={th}>POS card</th>
-                  <th style={th} title="Bill payments in the email-ingested sales transactions for the day (Leg B of the 3-way recon)">Sales-tx bill pay</th>
-                  <th style={th} title="Of the sales-tx bill payments, the share taken on credit/debit card">Sales-tx on card</th>
-                  <th style={th} title="Carrier-side report (owner portal / daily-TX feed, per Metric Source of Truth — Leg C)">Processor bill pay</th>
-                  <th style={th}>Bill-pay Δ</th>
-                  <th style={th} title="Declared vs sales-tx vs processor, all present legs within tolerance">3-way</th>
+                  <th style={{ ...thL, left: STICK_L0, zIndex: 5, minWidth: 88 }}>Day</th>
+                  <th style={{ ...thL, left: STICK_L1, zIndex: 5 }}>Store</th>
+                  <th style={thTop}>Cash declared</th>
+                  <th style={thTop}>Credit declared</th>
+                  <th style={thTop}>Bill-pay on cash</th>
+                  <th style={thTop}>Bill-pay on credit</th>
+                  <th style={thTop} title="The pickup the DM confirmed — the declared envelope figure">DM verified cash</th>
+                  <th style={thTop} title="What the DM recorded actually taking out of the envelope (mig 949). Blank = not recorded.">DM actually took</th>
+                  <th style={thTop} title="Management's own count of the envelope, from the envelope report (envelope_count, mig 936). Blank = not counted yet.">Management counted</th>
+                  <th style={thTop} title="Management counted minus cash declared. Negative = short.">Mgmt short / over</th>
+                  <th style={thTop}>DM verified ePay</th>
+                  <th style={thTop}>POS cash</th>
+                  <th style={thTop}>POS card</th>
+                  <th style={thTop} title="Bill payments in the email-ingested sales transactions for the day (Leg B of the 3-way recon)">Sales-tx bill pay</th>
+                  <th style={thTop} title="Of the sales-tx bill payments, the share taken on credit/debit card">Sales-tx on card</th>
+                  <th style={thTop} title="Carrier-side report (owner portal / daily-TX feed, per Metric Source of Truth — Leg C)">Processor bill pay</th>
+                  <th style={thTop}>Bill-pay Δ</th>
+                  <th style={thTop} title="Declared vs sales-tx vs processor, all present legs within tolerance">3-way</th>
                 </tr></thead>
                 <tbody>
                   {rows.map((r: any, i: number) => (
                     <tr key={`${r.day}|${r.store_code}|${i}`} style={{ background: r.billpay_status === 'mismatch' ? 'rgba(220,38,38,0.06)' : undefined }}>
-                      <td style={{ ...cell, color: 'var(--text3)' }}>{r.day}</td>
-                      <td style={cell}>{r.store_name || r.store_code}{r.market ? <span style={{ color: 'var(--text3)' }}> · {r.market}</span> : null}</td>
+                      {/* The two frozen columns carry the row's own background, or the sticky cell
+                          would be transparent and the scrolled columns would show through it. */}
+                      <td style={{ ...cell, ...stickCell(STICK_L0, r.billpay_status === 'mismatch' ? '#fdeaea' : 'var(--surface)'), color: 'var(--text3)' }}>{r.day}</td>
+                      <td style={{ ...cell, ...stickCell(STICK_L1, r.billpay_status === 'mismatch' ? '#fdeaea' : 'var(--surface)') }}
+                          title={(r.reps || []).length ? `Closed by ${(r.reps || []).join(', ')}` : undefined}>
+                        {r.store_name || r.store_code}{r.market ? <span style={{ color: 'var(--text3)' }}> · {r.market}</span> : null}</td>
                       <td style={{ ...cell, textAlign: 'right', fontWeight: 600 }}>{fmt(r.cash_declared)}</td>
                       <td style={{ ...cell, textAlign: 'right' }}>{fmt(r.credit_declared)}</td>
                       <td style={{ ...cell, textAlign: 'right' }}>{fmt(r.epay_cash_declared)}</td>
                       <td style={{ ...cell, textAlign: 'right' }}>{fmt(r.epay_credit_declared)}</td>
                       <td style={{ ...cell, textAlign: 'right' }}>{fmt(r.cash_pickup)}</td>
+                      <td style={{ ...cell, textAlign: 'right', color: 'var(--text2)' }}
+                          title={r.cash_picked_actual == null ? 'The DM did not record an actual count at pickup'
+                            : `${r.cash_picked_variance > 0 ? '+' : ''}${fmt(r.cash_picked_variance)} vs declared`}>
+                        {r.cash_picked_actual == null ? '—' : fmt(r.cash_picked_actual)}</td>
+                      <td style={{ ...cell, textAlign: 'right', color: 'var(--text2)' }}
+                          title={r.mgmt_counted == null ? 'Nobody has counted this envelope yet (envelope report)' : undefined}>
+                        {r.mgmt_counted == null ? '—' : fmt(r.mgmt_counted)}</td>
+                      <td style={{ ...cell, textAlign: 'right', fontWeight: r.mgmt_variance != null && Math.abs(r.mgmt_variance) > (data?.tolerance ?? 1) ? 700 : 400,
+                        color: r.mgmt_variance == null ? 'var(--text3)'
+                          : r.mgmt_variance < -(data?.tolerance ?? 1) ? '#dc2626'
+                          : r.mgmt_variance > (data?.tolerance ?? 1) ? '#b45309' : '#166534' }}>
+                        {r.mgmt_variance == null ? '—' : `${r.mgmt_variance > 0 ? '+' : ''}${fmt(r.mgmt_variance)}`}</td>
                       <td style={{ ...cell, textAlign: 'right' }}>{fmt(r.billpay_pickup)}</td>
                       <td style={{ ...cell, textAlign: 'right', color: 'var(--text2)' }}>{r.pos_cash == null ? '—' : fmt(r.pos_cash)}</td>
                       <td style={{ ...cell, textAlign: 'right', color: 'var(--text2)' }}>{r.pos_card == null ? '—' : fmt(r.pos_card)}</td>

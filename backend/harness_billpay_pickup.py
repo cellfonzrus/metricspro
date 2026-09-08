@@ -331,6 +331,97 @@ r_xundo = cr.billpay_undo_pickup({"store_code": "X9", "close_date": "2026-08-01"
 check("F2. cross-tenant undo attempt is a no-op (`already`) — never reaches the other tenant's row",
       r_xundo.get("already") is True and st7["billpay_pickup"][0]["picked_up"] is True)
 
+# ═══ G. THE MANAGEMENT SCREEN: standard filters, and the counts that already existed ═══════════
+# OWNER 2026-09-08: "we need to go to the cash recon by management — it does not have our standard
+# filters for employee, store or market, there should be a box to add the actual cash received by
+# the management, IF WE HAVE IT SOMEWHERE ELSE THEN TELL ME AND THIS SHOULD STILL FEED FROM THERE …
+# the cash short report should be generated for Management cash short / over report … the [ones] we
+# have right now should be labelled as dm verified cash and dm verified epay."
+#
+# We do have it somewhere else, twice over, so no second entry box is built:
+#   · the DM's own count at pickup  = cash_pickup.actual_picked_amount   (mig 949)
+#   · MANAGEMENT's later count      = commcalc.envelope_count.counted_amount (mig 936, counted_by/at)
+# This section pins that the screen READS both, and that the filters select whole store-days.
+st8 = fresh_store(); wire(st8)
+st8["envelope_count"] = []
+st8["stores"] = [
+    {"org_id": HOUSE, "store_code": "S1", "address": "1 Main St", "market": "Texas", "is_active": True},
+    {"org_id": HOUSE, "store_code": "S2", "address": "2 Oak Ave", "market": "Ohio", "is_active": True},
+]
+st8["daily_closing"] = [
+    dc_row(id="g1", store_code="S1", close_date="2026-08-01", employee_name="Jane Rep",
+           t_cash=500.0, store_cash=500.0),
+    dc_row(id="g2", store_code="S1", close_date="2026-08-01", employee_name="Mo Rep",
+           t_cash=300.0, store_cash=300.0),
+    dc_row(id="g3", store_code="S2", close_date="2026-08-01", employee_name="Ann Rep",
+           t_cash=200.0, store_cash=200.0),
+]
+# Management counted S1's two envelopes at 480 + 300 = 780 against 800 declared -> $20 SHORT.
+st8["envelope_count"] = [
+    {"org_id": HOUSE, "closing_row_id": "g1", "counted_amount": 480.0},
+    {"org_id": HOUSE, "closing_row_id": "g2", "counted_amount": 300.0},
+]
+# The DM recorded taking 790 of S1's 800 at pickup.
+st8["cash_pickup"] = [
+    {"org_id": HOUSE, "store_code": "S1", "close_date": "2026-08-01", "employee_name": "Jane Rep",
+     "amount": 500.0, "actual_picked_amount": 495.0, "picked_up": True},
+    {"org_id": HOUSE, "store_code": "S1", "close_date": "2026-08-01", "employee_name": "Mo Rep",
+     "amount": 300.0, "actual_picked_amount": 295.0, "picked_up": True},
+]
+g = cr.cash_recon_management(date="2026-08-01", org_id=HOUSE)
+g_by = {r["store_code"]: r for r in g["rows"]}
+check("G1. management's own count is READ from envelope_count — no new entry point, no re-derivation",
+      g_by["S1"]["mgmt_counted"] == 780.0, str(g_by["S1"]))
+check("G2. and its variance is against the declared cash: 780 counted vs 800 declared = $20 short",
+      g_by["S1"]["mgmt_variance"] == -20.0, str(g_by["S1"]["mgmt_variance"]))
+check("G3. the DM's own count at pickup is read from actual_picked_amount, beside it",
+      g_by["S1"]["cash_picked_actual"] == 790.0 and g_by["S1"]["cash_picked_variance"] == -10.0,
+      str(g_by["S1"]))
+check("G4. a store-day NOBODY counted is None, never 0.00 — uncounted is not short",
+      g_by["S2"]["mgmt_counted"] is None and g_by["S2"]["mgmt_variance"] is None
+      and g_by["S2"]["cash_picked_actual"] is None, str(g_by["S2"]))
+t8 = g["totals"]
+check("G5. the short/over report counts only COUNTED store-days, and says how many are uncounted",
+      t8["mgmt_short_days"] == 1 and t8["mgmt_short_amount"] == -20.0
+      and t8["mgmt_over_days"] == 0 and t8["mgmt_uncounted_days"] == 1
+      and t8["mgmt_counted_days"] == 1, str(t8))
+check("G6. the DM short/over totals are reported separately from management's",
+      t8["dm_short_days"] == 1 and t8["dm_short_amount"] == -10.0, str(t8))
+check("G7. an OVER count lands in the over bucket, not netted against the shorts",
+      (lambda _r: _r["totals"]["mgmt_over_days"] == 1 and _r["totals"]["mgmt_short_days"] == 0)(
+          (lambda: (st8["envelope_count"].clear(),
+                    st8["envelope_count"].append({"org_id": HOUSE, "closing_row_id": "g1",
+                                                  "counted_amount": 560.0}),
+                    st8["envelope_count"].append({"org_id": HOUSE, "closing_row_id": "g2",
+                                                  "counted_amount": 300.0}),
+                    cr.cash_recon_management(date="2026-08-01", org_id=HOUSE))[-1])()))
+
+# RULE FIVE filters — they select WHOLE store-days.
+st8["envelope_count"].clear()
+f_store = cr.cash_recon_management(date="2026-08-01", stores="S2", org_id=HOUSE)
+check("G8. the store filter narrows to that store's days only",
+      [r["store_code"] for r in f_store["rows"]] == ["S2"], str(f_store["rows"]))
+f_mkt = cr.cash_recon_management(date="2026-08-01", markets="Texas", org_id=HOUSE)
+check("G9. the market filter narrows by market",
+      [r["store_code"] for r in f_mkt["rows"]] == ["S1"], str([r["store_code"] for r in f_mkt["rows"]]))
+f_rep = cr.cash_recon_management(date="2026-08-01", employees="Ann Rep", org_id=HOUSE)
+check("G10. the people filter keeps the store-days that rep closed on",
+      [r["store_code"] for r in f_rep["rows"]] == ["S2"], str([r["store_code"] for r in f_rep["rows"]]))
+check("G11. and it keeps the WHOLE store-day's money — never a partial declared figure against a "
+      "full POS figure",
+      cr.cash_recon_management(date="2026-08-01", employees="Jane Rep",
+                               org_id=HOUSE)["rows"][0]["cash_declared"] == 800.0,
+      str(cr.cash_recon_management(date="2026-08-01", employees="Jane Rep", org_id=HOUSE)["rows"][0]))
+check("G12. the people options come from the data and are collected BEFORE the filter, so picking "
+      "one never shrinks the list",
+      cr.cash_recon_management(date="2026-08-01", employees="Ann Rep",
+                               org_id=HOUSE)["rep_options"] == ["Ann Rep", "Jane Rep", "Mo Rep"],
+      str(cr.cash_recon_management(date="2026-08-01", employees="Ann Rep", org_id=HOUSE)["rep_options"]))
+check("G13. every row names who closed it, so the rep filter is explainable on screen",
+      sorted(g_by["S1"]["reps"]) == ["Jane Rep", "Mo Rep"], str(g_by["S1"]["reps"]))
+check("G14. no filters = every store-day, unchanged",
+      len(cr.cash_recon_management(date="2026-08-01", org_id=HOUSE)["rows"]) == 2)
+
 # ── Summary ────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:
