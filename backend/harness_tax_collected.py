@@ -66,7 +66,7 @@ ORG = "org-1"
 READS = []          # every (org, period) the endpoint actually asked the union for
 
 
-def run(rows, period="August 2026", by_period=None, **kw):
+def run(rows, period="August 2026", by_period=None, resolve_store=None, **kw):
     """Drive the real endpoint. `rows` is the unified sales set for EVERY period; pass `by_period`
     ({period: [rows]}) instead when a test needs different months to hold different data — the range
     wrapper calls the union once per month it reads, and READS records which."""
@@ -80,6 +80,9 @@ def run(rows, period="August 2026", by_period=None, **kw):
 
     R._sales_rows_union_txn = _union
     R._store_market_resolver = lambda *_a, **_k: ((lambda s: "M1"), ["M1"])
+    # The canonical P&L store key (coa.store_resolver in production). Identity unless a test injects
+    # one, so every pre-existing check below keeps reading the raw export labels it always did.
+    R._pl_store_resolver = lambda *_a, **_k: (resolve_store or (lambda s: s))
     R.require_org = lambda *_a, **_k: None
     R.sb = lambda: None
     return R.tax_collected(period, org_id=ORG, **kw)
@@ -321,6 +324,111 @@ check("H6 a healthy report carries no note at all", r_ok["note"] is None, r_ok["
 check("H7 a void/return row does not count toward rows_in_window",
       run([line(100.0, 8.0), line(50.0, 4.0, voided="true"),
            line(50.0, 4.0, trans_type="Return")])["rows_in_window"] == 1)
+
+print()
+print("=" * 78)
+print("I. ONE AGGREGATION, AND IT SPEAKS THE BOOKS' STORE VOCABULARY")
+print("=" * 78)
+# OWNER 2026-09-08: "now the sales tax in p&l". Three readers of raw_sales.tax already disagreed
+# (commcalc tax_collected drops voids+returns on the RAW store string; closing _b2b_money drops
+# voids only with its own resolver; account coa._sales_union_rows drops voids only on the canonical
+# resolver — and never selects `tax` at all). The books must not become a FOURTH. The report's own
+# per-(store, day) pass now lives in commcalc/tax_collected.py and the balance sheet calls it.
+import app.modules.commcalc.tax_collected as TC                      # noqa: E402
+
+endpoint_src = src[src.index("def tax_collected("):]
+endpoint_src = endpoint_src[:endpoint_src.index("\n@router.")]
+check("I1 the endpoint delegates to the shared aggregator instead of holding its own loop",
+      "_tax_agg.aggregate(" in endpoint_src and "s['tax'] +=" not in endpoint_src,
+      "a second per-store tax loop is still in the endpoint")
+check("I2 the shared module is PURE — no client, no I/O, importable with no app environment",
+      not any(w in open(TC.__file__, encoding="utf-8").read()
+              for w in ("client.schema(", "get_supabase", "import requests", ".execute()")))
+
+# The live house-org divergence, verbatim: 6 of 28 tax-report labels did not match the key the P&L
+# books under — $3,346.02, 24.4% of August's tax. These are DATA in the test, never code.
+LIVE_RENAMES = {"3 Palisade Ave Yonkers": "3 Palisade Ave",
+                "1800 Great Neck rd": "1800 Great Neck Rd",
+                "559 BROADWAY": "559 Broadway",
+                "5135 BERGENLINE": "5135 Bergenline",
+                "2509 Bergenline Ave Ste A": "2509 Bergenline Ave",
+                "2778 Ephraim Ave": "1598 Mount Ephraim Ave"}
+canon = lambda s: LIVE_RENAMES.get(s, s)                             # noqa: E731
+
+r = run([line(1000.0, 80.0, store="559 BROADWAY"), line(500.0, 40.0, store="559 Broadway")],
+        resolve_store=canon)
+check("I3 two spellings of ONE store collapse to ONE row on the canonical key",
+      len(r["stores"]) == 1 and r["stores"][0]["store"] == "559 Broadway", r["stores"])
+check("I4 …and their money is summed, never dropped or double-counted",
+      r["stores"][0]["tax"] == 120.0 and r["totals"]["tax"] == 120.0, r["totals"])
+check("I5 the row says which raw labels it merged — the rename is never silent",
+      r["stores"][0].get("raw_labels") == ["559 BROADWAY", "559 Broadway"], r["stores"][0])
+check("I6 the response lists every rename with its dollars",
+      [(e["raw"], e["canonical"], e["tax"]) for e in r["store_renames"]]
+      == [("559 BROADWAY", "559 Broadway", 80.0)], r["store_renames"])
+
+r = run([line(100.0, 8.0, store=raw) for raw in LIVE_RENAMES], resolve_store=canon)
+check("I7 all six live labels rename, and none of them vanishes",
+      len(r["stores"]) == 6 and r["totals"]["tax"] == 48.0, r["totals"])
+susp = [e for e in r["store_renames"] if e["suspect"]]
+check("I8 the ONE rename that changes the STREET NUMBER is flagged suspect — '2778 Ephraim Ave' -> "
+      "'1598 Mount Ephraim Ave' is a different address, not a spelling variant",
+      [e["raw"] for e in susp] == ["2778 Ephraim Ave"], susp)
+check("I9 …and the five true spelling variants are NOT flagged (same street number both sides)",
+      len([e for e in r["store_renames"] if not e["suspect"]]) == 5, r["store_renames"])
+check("I10 the suspect rule is generic — it reads the leading street number, it does not carry an "
+      "address literal (RULE TWO)",
+      not any(w in open(TC.__file__, encoding="utf-8").read().lower()
+              for w in ("ephraim", "bergenline", "broadway", "palisade", "great neck")))
+check("I11 a store the resolver does not know keeps its raw label — never dropped, never invented",
+      run([line(100.0, 8.0, store="Unknown Store")], resolve_store=canon)["stores"][0]["store"]
+      == "Unknown Store")
+check("I12 with the identity resolver the grouping is exactly what it was before the refactor",
+      run([line(100.0, 8.0, store="559 BROADWAY")])["stores"][0]["store"] == "559 BROADWAY")
+
+print()
+print("=" * 78)
+print("J. GROSS AND NET OF RETURNS, SIDE BY SIDE — the headline does not move")
+print("=" * 78)
+# The report's headline excludes trans_type=='Return' and MUST keep doing so. But refunded tax is
+# money the tenant does not owe the state, so the LIABILITY has to be net of it. Live house org,
+# August 2026: 109 return rows, tax -$53.74, ext_price -$1,807.25 against a $13,733.70 headline.
+LIVE_AUG = ([line(164751.76, 13733.70, tender="Cash")]
+            + [line(-1807.25, -53.74, tender="Cash", trans_type="Return")])
+r = run(LIVE_AUG)
+t = r["totals"]
+check("J1 the headline `tax` is UNCHANGED — returns are still excluded from it ($13,733.70)",
+      t["tax"] == 13733.70, t["tax"])
+check("J2 the return rows' own tax is reported separately (-$53.74)", t["returns_tax"] == -53.74,
+      t["returns_tax"])
+check("J3 `tax_net` is the liability figure — gross + returns = $13,679.96, the owner's number",
+      t["tax_net"] == 13679.96, t["tax_net"])
+check("J4 a liability booked from the GROSS headline would overstate by exactly the refund",
+      round(t["tax"] - t["tax_net"], 2) == 53.74)
+check("J5 returns do NOT touch revenue, taxable revenue or the tender split — the page is unmoved",
+      t["revenue"] == 164751.76 and t["taxable_revenue"] == 164751.76
+      and t["tender"]["cash"]["sales"] == 164751.76, t)
+check("J6 …and `revenue_net` carries the returned sales beside it, for anyone who needs it",
+      t["revenue_net"] == 162944.51, t["revenue_net"])
+check("J7 `rows_in_window` still counts only the non-void, non-return rows (the note is unchanged)",
+      r["rows_in_window"] == 1 and t["return_rows"] == 1, (r["rows_in_window"], t["return_rows"]))
+st = r["stores"][0]
+check("J8 store grain carries both figures", st["tax"] == 13733.70 and st["tax_net"] == 13679.96, st)
+d = st["days"][0]
+check("J9 …and so does the per-DAY drill-down, which is the grain the books read",
+      d["tax"] == 13733.70 and d["returns_tax"] == -53.74 and d["tax_net"] == 13679.96, d)
+r = run([line(100.0, 8.0), line(50.0, 4.0, voided="true", trans_type="Return")])
+check("J10 a VOIDED return is excluded from both figures — a void is not a sale, gross or net",
+      r["totals"]["tax"] == 8.0 and r["totals"]["tax_net"] == 8.0 and
+      r["totals"]["returns_tax"] == 0.0, r["totals"])
+r = run([line(100.0, 8.0), line(-50.0, 4.0, trans_type="Return")])
+check("J11 a refund whose tax is stored POSITIVE is FLAGGED, not silently abs()-ed into the right "
+      "direction — sign is preserved and the data defect is surfaced",
+      r["totals"]["tax_net"] == 12.0
+      and TC.aggregate([line(-50.0, 4.0, trans_type="Return")])["meta"]["returns_tax_positive"],
+      r["totals"])
+check("J12 taxable + non-taxable still ties to revenue with returns present",
+      round(t["taxable_revenue"] + t["untaxed_revenue"], 2) == t["revenue"])
 
 print()
 print("=" * 78)

@@ -22,6 +22,13 @@ Proves the pure logic in app/modules/account/balance_sheet.py:
      and the per-tenant cost-centre line mapping (directive B: LuxeLink's line never moves).
   H. CASH-AT-BANK GRAINS, mig 954 (owner directive 2026-09-04) — per store / per company / one
      tenant total, and the NO-DOUBLE-COUNT residual rule across every mix of them.
+  J. SALES TAX PAYABLE, mig 991 (owner directive 2026-09-08, "now the sales tax in p&l") — the new
+     liability books the NET-OF-RETURNS figure from the report's OWN aggregator
+     (commcalc/tax_collected.py, never a second derivation); 'off' books nothing; a liability never
+     goes negative; remittance relieves it through the EXISTING journal ledger, exactly once. And
+     the money-touching guarantee, proven end to end on the REAL assembler (engine._assemble):
+     revenue, gross profit, net income and in fact the ENTIRE P&L payload are byte-identical with
+     and without the booking — only liabilities and `imbalance` move.
 
 Run:  cd backend && python3 harness_balance_sheet_truths.py
 """
@@ -382,6 +389,134 @@ ok("the owner's live entries are unchanged by the grain rule ($560,000 consolida
 lux, _ = B.journal_grain_entries(LIVE, "company:e0e28bd6", set(), live_m, lambda _s: None)
 ok("...and still reach their company scope ($250k capital + $210k loan on Luxlink Wireless)",
    round(sum(e["amount"] for e in lux), 2) == 460000.0, lux)
+
+
+# ── J. SALES TAX PAYABLE (owner directive 2026-09-08, mig 991) ──────────────────────────────────
+print()
+print("J. sales tax payable — collected, not remitted (owner 2026-09-08: 'now the sales tax in p&l')")
+from app.modules.account import coa as C, statement_engine as SE, engine as E   # noqa: E402
+from app.modules.commcalc import tax_collected as TC                            # noqa: E402
+
+# The live house-org August figures, from the report's OWN aggregator (never re-derived here):
+# gross $13,733.70, 109 return rows at -$53.74, net $13,679.96.
+AUG_ROWS = [{"trans_date": "2026-08-05", "store": "559 Broadway", "ext_price": 164751.76,
+             "tax": 13733.70, "voided": None, "trans_type": "Sale"},
+            {"trans_date": "2026-08-06", "store": "559 Broadway", "ext_price": -1807.25,
+             "tax": -53.74, "voided": None, "trans_type": "Return"}]
+AUG = TC.store_tax_rows(TC.aggregate(AUG_ROWS))
+
+spec_line = [t for t in B.EXTRA_BS_SPEC if t[0] == "sales_tax_payable"]
+ok("the line exists on the balance sheet as a LIABILITY, auto_opt, store grain — the same 5-tuple "
+   "shape as handset_payable / store_cash_on_hand",
+   spec_line == [("sales_tax_payable", "Sales tax payable (collected, not remitted)",
+                  "liability", "auto_opt", "store")], spec_line)
+ok("it is NOT a P&L line — sales tax is the state's money, never revenue or expense",
+   "sales_tax_payable" not in {k for k, *_ in C.PL_SPEC}
+   and "sales_tax_payable" in {k for k, *_ in SE.bs_spec()})
+
+# BYTE-IDENTITY: the house default books nothing at all.
+for basis in ("off", "", None):
+    b, m = B.sales_tax_payable_bookings(AUG, basis, "2026-08-31")
+    ok(f"basis {basis!r} books NOTHING — every org is byte-identical until it opts in",
+       b == [] and m["total"] == 0.0, (b, m))
+b, m = B.sales_tax_payable_bookings(AUG, "collected", None)
+ok("no as-of books nothing either (a point-in-time line needs a point in time)", b == [] and not m["stores"])
+
+books, meta = B.sales_tax_payable_bookings(AUG, "collected", "2026-08-31")
+ok("basis 'collected' books the NET figure, per store ($13,679.96 on the one store)",
+   books == [("559 Broadway", 13679.96, None)], books)
+ok("...and meta carries the GROSS beside it, so the report's headline is never silently replaced",
+   meta["gross"] == 13733.70 and meta["returns"] == -53.74 and meta["total"] == 13679.96, meta)
+ok("booking from the GROSS headline would have overstated the debt to the state by $53.74",
+   round(meta["gross"] - meta["total"], 2) == 53.74)
+
+# FAIL-SAFE FLOOR: a liability never books negative (refunds exceeding collections = a receivable
+# from the state, not a negative payable) — floored, and the suppressed amount REPORTED.
+neg = [{"store": "S1", "tax": 10.0, "tax_net": -40.0, "returns_tax": -50.0}]
+b, m = B.sales_tax_payable_bookings(neg, "collected", "2026-08-31")
+ok("a store whose refunds exceed its collections floors at zero — never a negative liability",
+   b == [] and m["total"] == 0.0, b)
+ok("...and the floored amount is REPORTED, never silently dropped",
+   m["floored"] == {"S1": 40.0} and m["floored_total"] == 40.0, m)
+unk = [{"store": "", "tax": 100.0, "tax_net": 100.0, "returns_tax": 0.0}]
+b, _m = B.sales_tax_payable_bookings(unk, "collected", "2026-08-31")
+ok("an unattributable store books COMPANY-WIDE rather than being dropped (honest beats "
+   "mis-attributed)", b == [(None, 100.0, None)], b)
+
+# ── THE MONEY-TOUCHING GUARANTEE, proven on the REAL assembler ─────────────────────────────────
+# Revenue, gross profit and net income MUST NOT MOVE. Nothing above writes a P&L line key, and this
+# runs engine._assemble over a full inputs dict to prove it end to end rather than by inspection.
+
+def _inputs(extra=None):
+    ins = {k: {"by_store": {}, "company_wide": 0.0, "detail": {}}
+           for k, *_ in list(C.PL_SPEC) + list(SE.bs_spec())}
+    ins["device_rev"]["by_store"]["559 Broadway"] = 78735.24
+    ins["service_income"]["by_store"]["559 Broadway"] = 17088.00
+    ins["device_cost"]["by_store"]["559 Broadway"] = 60000.00
+    ins["wages"]["by_store"]["559 Broadway"] = 20000.00
+    ins["inventory"]["by_store"]["559 Broadway"] = 100000.00
+    ins["owed_vip"]["by_store"]["559 Broadway"] = 50000.00
+    for k, v in (extra or {}).items():
+        ins[k]["by_store"]["559 Broadway"] = v
+    return ins
+
+
+def _pl(ins):
+    return E._assemble(ins, [], C.PL_SPEC, C.PL_LABEL, SE.PL_SECTIONS, "consolidated", None, True)
+
+
+def _bs(ins, journal=()):
+    return E._assemble(ins, list(journal), SE.bs_spec(), SE.bs_label(), SE.BS_SECTIONS,
+                       "consolidated", None, True)
+
+
+base_pl, base_bs = _pl(_inputs()), _bs(_inputs())
+booked = _inputs({"sales_tax_payable": 13679.96})
+new_pl, new_bs = _pl(booked), _bs(booked)
+ok("REVENUE is unmoved by the new liability ($95,823.24 either way)",
+   new_pl["sections"][0]["subtotal"] == base_pl["sections"][0]["subtotal"] == 95823.24,
+   (base_pl["sections"][0]["subtotal"], new_pl["sections"][0]["subtotal"]))
+ok("GROSS PROFIT is unmoved", new_pl["gross_profit"] == base_pl["gross_profit"] == 35823.24,
+   (base_pl["gross_profit"], new_pl["gross_profit"]))
+ok("NET INCOME is unmoved ($15,823.24)", new_pl["net_income"] == base_pl["net_income"] == 15823.24,
+   (base_pl["net_income"], new_pl["net_income"]))
+ok("the ENTIRE P&L payload is byte-identical — not one line moves", new_pl == base_pl)
+ok("the balance sheet's LIABILITIES rise by exactly the booked amount",
+   round(new_bs["liabilities_total"] - base_bs["liabilities_total"], 2) == 13679.96,
+   (base_bs["liabilities_total"], new_bs["liabilities_total"]))
+ok("...assets and equity do not move, so `imbalance` absorbs exactly that much — which is the "
+   "defect this line fixes: with mig-938 store cash ON, those dollars land in assets with no "
+   "liability and fall into retained earnings",
+   new_bs["assets_total"] == base_bs["assets_total"]
+   and new_bs["equity_total"] == base_bs["equity_total"]
+   and round(base_bs["imbalance"] - new_bs["imbalance"], 2) == 13679.96,
+   (base_bs["imbalance"], new_bs["imbalance"]))
+ok("with NOTHING booked the auto_opt line does not render at all (byte-identical balance sheet)",
+   not any(l["key"] == "sales_tax_payable" for s in base_bs["sections"] for l in s["lines"]))
+line = next(l for s in new_bs["sections"] for l in s["lines"] if l["key"] == "sales_tax_payable")
+ok("...and once it carries value it renders under Liabilities with the spec label",
+   line["label"] == "Sales tax payable (collected, not remitted)" and line["amount"] == 13679.96, line)
+
+# REMITTANCE relieves the line through the EXISTING journal ledger — no new mechanism, and it is
+# deliberately NOT netted inside the booking as well (that would relieve the debt twice).
+REMIT = [{"statement": "balance_sheet", "account_type": "liability",
+          "account_line": "Sales tax payable (collected, not remitted)", "amount": -13679.96}]
+relieved = _bs(booked, REMIT)
+line = next((l for s in relieved["sections"] for l in s["lines"]
+             if l["key"] == "sales_tax_payable"), None)
+ok("a remittance journal entry relieves the line to zero (engine._assemble folds it by label)",
+   line and line["amount"] == 0.0, line)
+ok("...and the relieved sheet's liabilities are back where they started",
+   relieved["liabilities_total"] == base_bs["liabilities_total"],
+   (relieved["liabilities_total"], base_bs["liabilities_total"]))
+src_bs = open(B.__file__, encoding="utf-8").read()
+fn_src = src_bs[src_bs.index("def sales_tax_payable_bookings("):]
+fn_src = fn_src[:fn_src.index("\n# ──")]
+ok("the booking never reads journal_entries itself — relief happens once, in the assembler",
+   "journal" not in fn_src.split('"""')[2])
+ok("RULE TWO — no jurisdiction, tenant or department literal decides any of this",
+   not any(w in fn_src.lower() for w in ("jurisdiction", "state ==", "county", "nj", "'ny'",
+                                         "department", "boost", "carrier")))
 
 print()
 if FAIL:

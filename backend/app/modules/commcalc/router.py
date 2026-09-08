@@ -12,6 +12,7 @@ from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_contract_type
 from app.modules.commcalc import whatif
+from app.modules.commcalc import tax_collected as _tax_agg  # THE one per-(store, day) sales-tax pass
 from app.modules.commcalc import exec_metric_defs as _emd   # mig 962 — ONE bucket vocabulary + presets
 from app.modules.commcalc import whatif_gates
 from app.modules.commcalc import pay_simulator
@@ -2408,13 +2409,24 @@ _CANON_TO_TAX_BUCKET = {'cash': 'cash', 'credit': 'card', 'ext_cc': 'card',
                         'zelle': 'other'}
 
 
-def _blank_tender_split():
-    return {b: {'sales': 0.0, 'taxable_revenue': 0.0, 'untaxed_revenue': 0.0, 'tax': 0.0}
-            for b in TAX_TENDER_BUCKETS}
+# The bucket ZEROING and rounding used to live here as `_blank_tender_split`/`_round_tender_split`.
+# Both moved into `commcalc/tax_collected.py` with the aggregation itself — the split's shape is part
+# of the aggregation, and leaving a copy behind is exactly the sibling derivation the duplicate-check
+# gate exists to stop. `TAX_TENDER_BUCKETS` (the DISPLAY vocabulary) stays here and is passed in.
 
 
-def _round_tender_split(d):
-    return {b: {k: round(v, 2) for k, v in d[b].items()} for b in TAX_TENDER_BUCKETS}
+def _pl_store_resolver(client, org_id):
+    """The CANONICAL store key the P&L / Balance Sheet book under (`account.coa.store_resolver`,
+    §13a) — so the Tax Collected report groups on the same vocabulary the books do and the two can
+    be joined. Lazy import (account must not be pulled in at commcalc import time); degrades to the
+    identity resolver on any failure, which is exactly the raw-label behaviour this report had
+    before, never an exception on a reporting path."""
+    try:
+        from app.modules.account import coa as _coa
+        return _coa.store_resolver(client, org_id)
+    except Exception as e:
+        print(f"WARN _pl_store_resolver unavailable — raw store labels kept: {e}")
+        return (lambda s: s)
 
 
 def _tax_tender_bucket(raw):
@@ -2483,7 +2495,24 @@ def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG
     3-way tender recon rides, so this report and that recon can never disagree about what "cash" means.
     A line whose tender names SEVERAL tenders ("Cash; Externel Credit Card") is reported as `mixed`
     rather than assigned whole to one of them: the row carries one amount and no split, so choosing one
-    would silently overstate it."""
+    would silently overstate it.
+
+    ONE AGGREGATION, SHARED WITH THE BOOKS (owner directive 2026-09-08, "now the sales tax in p&l").
+    The per-(store, day) pass lives in `commcalc/tax_collected.py`; this endpoint is its FIRST caller
+    and the Balance Sheet's `sales_tax_payable` liability is its second, so a figure on this page and
+    a figure in the financial statements can never come from two different loops.
+
+    THE STORE KEY IS CANONICAL (§13a). Grouping is on `account.coa.store_resolver`'s address — the
+    key the P&L books under — not on the raw export label. Live (house org, August 2026) SIX of 28
+    labels differed from the P&L's key, $3,346.02 / 24.4% of the month's tax, and the report could
+    not be joined to the books at all. Every rename is listed in `store_renames` with its dollars,
+    and one whose STREET NUMBER changed is flagged `suspect` for a human to check.
+
+    GROSS AND NET SIT SIDE BY SIDE. `tax` stays the headline and still EXCLUDES `trans_type=='Return'`
+    rows — unchanged. `tax_net` (= `tax` + the return rows' own tax) is carried beside it at store,
+    day and totals grain, because refunded tax is money the tenant does not owe the state and the
+    LIABILITY must be net of it. Live August 2026: gross $13,733.70, 109 return rows at -$53.74, net
+    $13,679.96."""
     require_org(org_id)
     client = sb()
     s0 = (start or '').strip()[:10]
@@ -2492,81 +2521,20 @@ def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG
     # day inside it, so From 06/01/2026 To 08/01/2026 with the selector on August intersected down to a
     # single day and returned "0 store(s)" under a note blaming the Tax column (owner 2026-09-07).
     rows, _meta = _sales_rows_union_txn_range(
-        client, org_id, period, s0, s1,
-        cols='trans_id,trans_date,store,ext_price,tax,voided,trans_type,tender_type')
+        client, org_id, period, s0, s1, cols=_tax_agg.SALES_COLUMNS)
     resolve_market, all_markets = _store_market_resolver(client, org_id)
-    in_window = 0          # rows that survived void / return / the day bounds — see the note below
-    by_store = {}
-    for r in rows:
-        if str(r.get('voided') or '').strip().lower() in ('true', 'yes', '1', 'voided', 'void'):
-            continue
-        if str(r.get('trans_type') or '').strip() == 'Return':
-            continue
-        day = str(r.get('trans_date') or '')[:10]
-        if s0 and day and day < s0:
-            continue
-        if s1 and day and day > s1:
-            continue
-        in_window += 1
-        store = (r.get('store') or '?').strip() or '?'
-        s = by_store.get(store)
-        if not s:
-            s = by_store[store] = {'store': store, 'market': resolve_market(store),
-                                   'tax': 0.0, 'revenue': 0.0, 'taxable_revenue': 0.0,
-                                   'untaxed_revenue': 0.0,
-                                   'tender': _blank_tender_split(), '_days': {}}
-        tx = safe_float(r.get('tax'))
-        ext = safe_float(r.get('ext_price'))
-        s['tax'] += tx
-        s['revenue'] += ext
-        bucket = _tax_tender_bucket(r.get('tender_type'))
-        s['tender'][bucket]['sales'] += ext
-        s['tender'][bucket]['tax'] += tx
-        # TAXABLE vs NON-TAXABLE, carried as its own number rather than left to be subtracted
-        # (owner 2026-09-07: "need to segregate the sales from taxable and non taxable sales").
-        # Taxability is the LINE's own tax > 0 — never a department name in code (RULE TWO).
-        if tx:
-            s['taxable_revenue'] += ext
-            s['tender'][bucket]['taxable_revenue'] += ext
-        else:
-            s['untaxed_revenue'] += ext
-            s['tender'][bucket]['untaxed_revenue'] += ext
-        if day:
-            d = s['_days'].setdefault(day, {'date': day, 'tax': 0.0, 'revenue': 0.0,
-                                            'taxable_revenue': 0.0, 'untaxed_revenue': 0.0})
-            d['tax'] += tx
-            d['revenue'] += ext
-            if tx:
-                d['taxable_revenue'] += ext
-            else:
-                d['untaxed_revenue'] += ext
-    out = []
-    for s in by_store.values():
-        days = sorted(s['_days'].values(), key=lambda d: d['date'])
-        for d in days:
-            d['tax'] = round(d['tax'], 2)
-            d['revenue'] = round(d['revenue'], 2)
-            d['taxable_revenue'] = round(d['taxable_revenue'], 2)
-            d['untaxed_revenue'] = round(d['untaxed_revenue'], 2)
-            d['effective_rate'] = (round(100 * d['tax'] / d['taxable_revenue'], 2)
-                                   if d['taxable_revenue'] else 0.0)
-        out.append({'store': s['store'], 'market': s['market'],
-                    'tax': round(s['tax'], 2), 'revenue': round(s['revenue'], 2),
-                    'taxable_revenue': round(s['taxable_revenue'], 2),
-                    'untaxed_revenue': round(s['untaxed_revenue'], 2),
-                    'effective_rate': (round(100 * s['tax'] / s['taxable_revenue'], 2)
-                                       if s['taxable_revenue'] else 0.0),
-                    'tender': _round_tender_split(s['tender']),
-                    'days': days})
-    out.sort(key=lambda x: -x['tax'])
-    total_tax = round(sum(x['tax'] for x in out), 2)
-    total_taxable = round(sum(x['taxable_revenue'] for x in out), 2)
-    total_rev = round(sum(x['revenue'] for x in out), 2)
-    tender_tot = _blank_tender_split()
-    for x in out:
-        for b, v in x['tender'].items():
-            for kk in ('sales', 'taxable_revenue', 'untaxed_revenue', 'tax'):
-                tender_tot[b][kk] += v[kk]
+    # THE ONE aggregation (commcalc/tax_collected.py) — this endpoint is its first caller and the
+    # Balance Sheet's `sales_tax_payable` line is its second, so the report and the books can never
+    # disagree about what a store collected. The store key is canonicalized through the SAME
+    # `coa.store_resolver` the P&L books under (§13a): live, 6 of 28 raw export labels here did not
+    # match the P&L's key — $3,346.02, 24.4% of August's tax — and the two vocabularies could not be
+    # joined at all. Renames are reported in `store_renames`, never silent.
+    agg = _tax_agg.aggregate(
+        rows, resolve_store=_pl_store_resolver(client, org_id), resolve_market=resolve_market,
+        bucket=_tax_tender_bucket, start=s0, end=s1, tender_buckets=TAX_TENDER_BUCKETS)
+    out = agg['stores']
+    in_window = agg['rows_in_window']   # non-void, non-return rows the window kept — see the note
+    total_tax = agg['totals']['tax']
     # THE NOTE MUST NAME WHAT ACTUALLY HAPPENED. It used to say "no tax captured for this period —
     # re-send a file with the Tax column" for BOTH "we read sales and none carried tax" and "we read no
     # sales at all", so an empty date range accused the operator of a bad upload (owner 2026-09-07,
@@ -2589,12 +2557,10 @@ def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG
     return {'period': period, 'start': s0, 'end': s1, 'window': window,
             'periods_read': periods_read, 'rows_in_window': in_window,
             'stores': out, 'markets': all_markets,
-            'totals': {'tax': total_tax, 'revenue': total_rev,
-                       'taxable_revenue': total_taxable,
-                       'untaxed_revenue': round(total_rev - total_taxable, 2),
-                       'effective_rate': (round(100 * total_tax / total_taxable, 2)
-                                          if total_taxable else 0.0),
-                       'tender': _round_tender_split(tender_tot)},
+            'totals': agg['totals'],
+            # The store labels this read canonicalized, with their dollars. `suspect` marks a rename
+            # whose STREET NUMBER changed — not a spelling variant, so a human should look.
+            'store_renames': agg['meta']['renamed'],
             'has_tax': total_tax > 0,
             'note': note}
 

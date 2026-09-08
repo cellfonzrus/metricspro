@@ -36,8 +36,11 @@ Row-shape conventions (matching the b2bsoft Sales-Transaction-Details grain, one
 sale item): period '%B %Y' stamped in BUSINESS_TZ America/New_York; store = store_code;
 salesperson = the storeops employee NAME (the calculator's rep_map is name-keyed) with
 user_login = employee_id; ext_price = TAX-EXCLUSIVE (unit_price − discount) × qty (NOT the
-tax-inclusive extended_price column); gp = ext_price − cost × qty; voided = 'Yes'/'No'
-(shared VOID_TOKENS treats 'YES' as voided); trans_type = 'Sale'.
+tax-inclusive extended_price column); tax = the LINE's own pos.sale_items.tax_value (mig 991 —
+this used to be dropped entirely, so a built-in-POS tenant reported $0.00 sales tax and would
+book a $0.00 sales-tax liability while the money sat in pos.sale_items all along); gp =
+ext_price − cost × qty; voided = 'Yes'/'No' (shared VOID_TOKENS treats 'YES' as voided);
+trans_type = 'Sale'.
 
 Every successful sync writes a commcalc.upload_trace row and idempotently registers
 commcalc.pos_profile (pos_key='pos') + core.import_feed (feed_key below) so import-health
@@ -216,6 +219,13 @@ def _fetch_sale_rows(org_id: str, utc_start: str, utc_end: str):
             "sku": prod.get("upc"),
             "gp": round(ext - cost * qty, 2),
             "ext_price": ext,
+            # SALES TAX (mig 991). `ext_price` above is deliberately tax-EXCLUSIVE and stays that
+            # way — but the tax was being dropped on the floor entirely, so every tenant on the
+            # built-in POS reported $0.00 in the Tax Collected report and would book a $0.00
+            # sales-tax liability, while `pos.sale_items.tax_value` held the money all along. The
+            # per-LINE value is used (not the sale's `tax_total`) because this stream is line-item
+            # grain — summing a sale-level total onto each of its lines would multiply it.
+            "tax": round(float(it.get("tax_value") or 0), 2),
             "trans_id": str(s.get("transaction_id") or ""),
             "trans_date": trans_date,
             "contract_type": None,
@@ -231,6 +241,30 @@ def _fetch_sale_rows(org_id: str, utc_start: str, utc_end: str):
             "customer_no": str(cust.get("cust_number")) if cust.get("cust_number") else None,
         })
     return out
+
+
+def _drop_absent_columns(table: str, payloads: list, columns=("tax",)):
+    """Remove keys the target table does not have yet, so the sync degrades instead of failing.
+
+    The owner applies migrations by hand, so this module can ship BEFORE mig 991 adds `tax` to the
+    pos_builtin_* stream tables. Without this probe, the first sync after deploy would raise on an
+    unknown column — and `_replace_period` deletes the period before it inserts, so the failure mode
+    would be a WIPED period, not a no-op. One cheap select per column decides it; the column is
+    reported as skipped rather than silently dropped."""
+    if not payloads:
+        return payloads, []
+    missing = []
+    for col in columns:
+        if not any(col in p for p in payloads):
+            continue
+        try:
+            sb().schema("commcalc").table(table).select(col).limit(1).execute()
+        except Exception:
+            missing.append(col)
+    if not missing:
+        return payloads, []
+    print(f"WARN {table} is missing column(s) {missing} — syncing without them (run mig 991?)")
+    return [{k: v for k, v in p.items() if k not in missing} for p in payloads], missing
 
 
 def _replace_period(table: str, org_id: str, period_label: str, payloads: list):
@@ -310,6 +344,7 @@ def sync_period(org_id: str, mode: str, period=None):
     # daily grain carries customer columns but no sku; monthly (raw_sales grain) the reverse.
     drop = ("sku",) if mode == "daily" else ("customer", "email", "customer_no")
     payloads = [{**base, **{k: v for k, v in r.items() if k not in drop}} for r in rows]
+    payloads, _skipped_cols = _drop_absent_columns(own_table, payloads)
 
     _replace_period(own_table, org_id, period_label, payloads)
 

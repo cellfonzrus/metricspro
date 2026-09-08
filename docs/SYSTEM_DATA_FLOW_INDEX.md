@@ -487,6 +487,49 @@ commissions, expenses.
   numbers: every store $0.00 (each verified day's cash was picked up same-day for the same
   amount), nothing floored. Proof extended in `harness_verified_cash_bs.py` (§B symmetry+floor,
   §B2 the exact live shape, §C floored-line cash-flow tie-out).
+- **SALES TAX → Balance Sheet (owner directive 2026-09-08, mig `991`): "now the sales tax in p&l".**
+  Retail sales tax reached NO P&L and NO balance-sheet line at all: `coa._sales_union_rows` projects
+  `trans_id,department,category,product_desc,ext_price,gp,voided,store` — **`tax` was never in the
+  select**, so `build_inputs` could not see it — and neither `PL_SPEC`, `BS_SPEC` nor
+  `EXTRA_BS_SPEC` carried a tax line (the only "tax" in `account/` is PAYROLL tax,
+  `liabilities_due.py`). Live house org: **$41,239.46** uncaptured (Jun 13,527.70 · Jul 14,031.80 ·
+  Aug 13,679.96, net of returns; May and earlier carry no Tax column) — August's tax alone is 2.02×
+  that month's net income.
+  **REVENUE IS PRE-TAX AND IS NOT RESTATED** (re-running the P&L's own classifiers over all 24,890
+  August `raw_sales` rows reproduces `device_rev` 78,735.24 and `service_income` 17,088.00 to the
+  cent; the tax-inclusive alternative is $6,552 away). The gap is a MISSING LIABILITY, so **nothing
+  on the P&L moves** — proven end to end on the real `engine._assemble` in
+  `harness_balance_sheet_truths.py` §J (the entire P&L payload is byte-identical with and without
+  the booking; only liabilities and `imbalance` move).
+  NEW BS line **`sales_tax_payable`** "Sales tax payable (collected, not remitted)" (`liability`,
+  `auto_opt`, store grain, `balance_sheet.EXTRA_BS_SPEC`), gated by `account_config.sales_tax_basis`
+  (`'off'` house default = byte-identical; `'collected'` = collected-and-not-yet-remitted as of the
+  statement date) with `account_config.sales_tax_accrual_start` (NULL ⇒ `statement_engine`
+  discovers the org's EARLIEST taxed sale rather than guessing a fiscal policy; the source is always
+  reported in meta as `accrual_start_source`).
+  **ONE AGGREGATION, NOT A FOURTH** (duplicate-check gate): three readers of `raw_sales.tax` already
+  disagreed — `commcalc/router.py tax_collected` (drops voids AND returns, RAW store string),
+  `closing/router.py _b2b_money` (voids only, own resolver) and `coa._sales_union_rows` (voids only,
+  canonical resolver, no `tax` column). The report's per-(store, day) pass was therefore FACTORED
+  OUT into pure **`commcalc/tax_collected.py aggregate()`**; the endpoint is its first caller and
+  `statement_engine.build_inputs_full` its second, reading through that page's OWN
+  `_sales_rows_union_txn_range`. Store keys canonicalize through `coa.store_resolver` (§13a) inside
+  the aggregator, so the report and the books share ONE vocabulary — live, 6 of 28 raw labels
+  differed from the P&L key ($3,346.02, **24.4%** of August's tax); renames are reported in
+  `store_renames`, and one whose STREET NUMBER changes is flagged `suspect` (generic rule, no
+  address literal). **NET OF RETURNS:** the report headline (`tax`) still excludes
+  `trans_type=='Return'` and is unchanged; `tax_net` is carried beside it at store/day/totals grain
+  and is what books (booking from the gross headline would overstate the debt by $53.74 in August,
+  $120.88 over three months). **REMITTANCE relieves the line through the EXISTING journal ledger** —
+  `engine._assemble` folds a negative `journal_entries` row matched by label; the booking function
+  deliberately does not net journal rows as well (that would relieve twice). Pure booking:
+  `balance_sheet.sales_tax_payable_bookings` (liability never books negative — floored per store,
+  suppressed amount reported). Also mig `991`: `pos/commcalc_feed.py` now carries `tax` from
+  `pos.sale_items.tax_value` into the promoted row and the `pos_builtin_*` stream tables +
+  `commcalc.pos_promote_period` gain the column — a built-in-POS tenant used to report $0.00 sales
+  tax and would have booked a $0.00 liability. Proof: `harness_tax_collected.py` (§I the shared
+  aggregator + canonical store key; §J gross vs net) and `harness_balance_sheet_truths.py` §J.
+  Cross-ref §23f (the Tax Collected report), §17.
 
 - **DISTRIBUTOR PAYABLE — one derivation per carrier side, parameterized by AS-OF; the tenant
   mapping; and the cash-at-bank GRAINS (owner directives 2026-09-04, mig `954`):** verbatim —
@@ -2098,6 +2141,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | **Commission plans (rule engine)** | mig `059_commission_plans.sql`, `066`,`067`,`232`,`260`,`262` | `commission_engine.py`; `/commission-plans*` `12557-14246` (coverage, pay-gate, exclusions, bulk-assign) |
 | **Commission ledger (income tracking)** | mig `071_commission_ledger.sql` | `/commission-ledger/*` `3997-4602` |
 | **VIP / PayGo** | mig `008`,`011`,`014` | `vip_sweep.py`; `/vip/*` `2421-3078`, `/vip/paygo/*` `8336-8365` |
+| **epay** | mig `020`,`025` | `epay_sweep.py`; `/epay/*` `8730-8811`, `/tax-collected` `2459` (the line reference here said `2106` until 2026-09-08; the endpoint had moved — see §17 for its own row) |
 | **epay** | mig `020`,`025` | `epay_sweep.py`; `/epay/*` `8730-8811`, `/tax-collected` `2106` |
 | **Processor Daily Debits & Credits (owner directive 2026-09-04)** | NO new table / NO migration — reads the EXISTING processor feeds `raw_payment_detail` (§2, epay sweep, migs `020`/`025`) and `raw_ma_daily_tx` (§2, VidaPay sweep/upload/`report_pull`, mig `083`). Naming config = the mig-`953` `report_term` vocabulary (`processor` key); primary-feed config = `metric_source_of_truth`/`data_source` (migs `923`/`939`) | **`commcalc/processor_ledger.py`** — PURE core `classify_amount`/`fold_cells`/`filter_cells`/`day_type_rollup`, IO only in `assemble`. Rows = DAY × TRANSACTION TYPE with DEBITS / CREDITS / NET (= credits − debits) columns; cell grain (processor, date, tx_type, store) so every rollup ties out. **DEBIT/CREDIT RULE is per FEED SHAPE, never a carrier branch** (`FEED_SHAPES`, RULE TWO): `raw_payment_detail.amount` > 0 = CREDIT to the dealer / < 0 = DEBIT; `raw_ma_daily_tx.retail_cost` > 0 = DEBIT (a charge) / < 0 = CREDIT — both verified against live rows 2026-09-04 (house 2026-07-27: D 1,001.60 / C 80,214.66 / N 79,213.06; luxelink 2026-09-02: D 30,297.96 / C 987.50 / N −29,310.46), pinned in the harness. RESOLUTIONS REUSED, never re-derived: processor identity `router._metric_source`+`_billpay_processor_name`, processor NAME `report_labels.load_report_labels` term `processor` (§18 — no vendor literal in module or page copy), VidaPay account→store `router._vidapay_account_resolver`, raw→canonical store `account.coa.store_resolver`, address→code `flag_store_resolver`, store→market + market dropdown `core.scope.market_by_code`/`org_market_options` (§13a/§13c). Endpoint `commcalc/processor_ledger_api.py` `GET /commcalc/processor-ledger` (span-gated via `scope_keyset`/`in_keyset`; unmapped-store cells hidden from scoped callers). Page `commcalc/processor-ledger/page.tsx` (NAV Assets & Inventory + REPORT_DIRECTORY `'assets'` + REPORT_TREES `'asset'`; carrier-NEUTRAL → deliberately NOT in `NAV_CARRIERS`). Scheduled/emailed via notify W3 key `processor_ledger` (`report_registry.py`; filters date_from/date_to/store/type/market). Proof `harness_processor_ledger.py`; guards `harness_market_enumeration_guard.py` (pins `assemble` CANONICAL), `harness_carrier_vocab_guard.py`, `harness_org_scope_guard.py` |
 | **Chargebacks** | mig `036`,`037`,`504` | `/chargeback-review*` `7063-7295`, `/chargebacks/{period}` `15675` |
@@ -2135,6 +2179,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `core.marketing_event_link` (mig `986`) | `POST/DELETE /marketing/events/{id}/links` | event workspace (§23). `asset_ref`/`asset_source` are the PHASE-2 SEAM — reserved, unread, always NULL today |
 | `core.marketing_event_giveaway` (mig `986`) | `POST/PATCH/DELETE .../giveaways` | `event_logic.giveaway_reconciliation` — out − returned − given = unaccounted, with un-counted items stated rather than assumed reconciled (§23) |
 | `storeops.store_document` **(EXTENDED, not forked — mig `986` adds `event_id` + doc kinds `event_vendor_contract`/`event_photo`/`event_permit`)** | `POST /marketing/events/{id}/doc` (reuses `store_lease.upload_store_doc` + the private `store-docs` bucket) | `GET /marketing/events/{id}/docs`, `GET /marketing/doc-url` (org-scoped id lookup + must be an EVENT doc; path never echoed). Per-store lease/COI readers filter `store_code` and are unaffected (§23) |
+| `commcalc.raw_sales` | upload `/upload-mapped` `3637`, sweeps, `sales/promote-feed` `22757`, **built-in POS promotion** (`commcalc.pos_promote_period`, mig `727`; carries `tax` since mig `991`) | `calc_rep_commissions`, `calc_gp_report`, `_compute_feed_actuals_py` `18678`, `_sales_cell_agg`, `_mi_resolve_numbers` edge/vhi `28843`, installment engines; **`tax` column (mig `105`)** read by `commcalc/tax_collected.py aggregate()` — the ONE pass behind `GET /commcalc/tax-collected` AND the `sales_tax_payable` BS liability (mig `991`, §4); NOTE `coa._sales_union_rows` deliberately does NOT select `tax` (P&L revenue is pre-tax) |
 | `commcalc.raw_sales` | upload `/upload-mapped` `3637`, sweeps, `sales/promote-feed` `22757` | `calc_rep_commissions`, `calc_gp_report`, `_compute_feed_actuals_py` `18678`, `_sales_cell_agg`, `_mi_resolve_numbers` edge/vhi `28843`, installment engines |
 | `commcalc.daily_sales_feed` | B2B/email sweeps, upload | `_compute_feed_actuals_py` (primary source), sales report, fallback in calc |
 | `commcalc.merchant_settlement_day` | `merchant_portal_sweep.store_settlement` (daily portal scrape) | `closing/external_credit_recon` (declared-vs-settled card tally, §12a), resolved via `report_pull_map.merchant_settlement` |
@@ -2326,6 +2371,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | `GET /compliance-summary` (per-queue open counts over the existing flag/exception surfaces; failed probe = null, never 0; pure `compliance_summary.py`) | `commcalc/router.py` (`get_compliance_summary`, beside `/kpi-failing`) | §14 mig 948 Flags & Compliance |
 | `GET /account/liabilities-due` (owed-to-distributor + due-this-week payments/payroll/payroll-tax/rents/insurance per store; mig-434 + mig-946 gates fail closed; pure `account/liabilities_due.py`; distributor side = the SAME as-of-parameterized derivation the BS books, mig `954`) | `account/router.py` (`liabilities_due_endpoint` → `_liabilities_due_impl`) | §4 Current Monetary Liabilities |
 | `GET /account/config` / `PUT /account/config` (this tenant's finance config: accessory COGS %, service-fee products, payroll names/routes, device-COGS mode, **and the mig-954 distributor-payable tenant mapping** — resolved basis + source + valid target-line options) | `account/router.py` (`get_config` → `_distributor_payable_config`, `put_config`) | §4 balance-sheet truths / tenant onboarding contract |
+| `GET /commcalc/tax-collected` (retail sales tax per store WITH a per-day drill-down, tender split, taxable/non-taxable segregation, and a date range that spans months; **had no row in this table until 2026-09-08**, and §16's epay row cited a stale line number for it) | `commcalc/router.py` (`tax_collected` `2459`) → **the shared pure pass `commcalc/tax_collected.py aggregate()`**, read via `_sales_rows_union_txn_range`, store key canonicalized through `coa.store_resolver` (§13a) | §23f (the rate + the taxable base), §4 (mig `991` — the SAME aggregator books the `sales_tax_payable` BS liability) |
 
 | `POST /storeops/google-reviews/sweep/run-now` + `/sweep/run-due` → `_do_google_reviews_sweep` → `google_reviews.sweep_org/sweep_store`. run-due is SELF-SCHEDULED since mig `950`: pg_cron job `google-reviews-sweep-run-due` (every 15 min; per-org `next_run_at` gates actual sweeps) via `storeops.ensure_google_reviews_sweep_cron`, re-registered on every backend boot (`main.py` startup → `storeops/router._ensure_google_reviews_sweep_cron`) — before 950 NOTHING ever invoked run-due | `storeops/router.py` | §14 Google Reviews |
 
@@ -2383,6 +2429,7 @@ as a market-grant keyset member; ambiguity fails closed):
 | B2B sold vs MA paid (activation discrepancy) | sold: `SALES_DISPLAY_SOURCES` rows with non-blank `contract_type` (no swap/void), keyed on digit-normalized `serial_1`; paid: `raw_ma_commission.spiff_m1`+`rebate`/`device_margin` ∪ `raw_ma_daily_tx` month-1 / activation-order evidence (two-hop join, +1-month lookahead) | `ma_recon.reconcile_ma_activations` via `sale_installment_engine._gate_met_ma_tx` (mig `312`); unpaid rows → `discrepancy_results` `source='ma'` with rule attribution or `'no business rule configured'` |
 | Commission not received + APPEAL pipeline (open $ / appeal filed / won / denied / written off, per range) | `discrepancy_results` rows (both engines) + mig-947 appeal columns; buckets computed by the PURE `discrepancy_appeals.summarize_appeals` (`no_rule_count` = the LITERAL `'no business rule configured'` marker only — evidence-first, never inferred) | `GET /discrepancy-appeals` → Commission Discrepancy hub cards (`commission-discrepancy/page.tsx`); chase list = mig-098 `/recovery/claims` (reused) |
 | Card settlement recon — store→MARKET + the market option list | THE canonical union index ONLY (`core.scope.market_by_code` / `org_market_options`, §13a/§13c) — the roster read takes ADDRESS only, so no market-vocabulary site exists to pin. Deliberately CANONICAL rather than the closing family's OVERLAY: a settlement-only store has no roster row, and a `store_mapping`-only market would otherwise vanish from the filter | `closing/router.external_credit_recon` (pinned `CANONICAL` in `harness_market_enumeration_guard`; nothing to pin in `harness_market_resolution_guard`); truth table `harness_external_credit_recon.py` §J |
+| Sales tax collected (report) / Sales tax payable (BS liability, mig `991`) | `raw_sales.tax` ∪ `daily_sales_feed.tax` (mig `105`), voids excluded; report headline `tax` also excludes `trans_type=='Return'`, the liability figure `tax_net` includes them (refunded tax is not owed). Store key = `coa.store_resolver` (§13a) for BOTH. Balance = cumulative from the accrual start through as-of, less remittances | **ONE pure pass** `commcalc/tax_collected.py aggregate()` → `GET /commcalc/tax-collected` (first caller) **and** `balance_sheet.sales_tax_payable_bookings` via `statement_engine.build_inputs_full` (`account_config.sales_tax_basis`: off default / collected; `sales_tax_accrual_start` or the earliest taxed sale). Remittance = a negative `journal_entries` row folded by label in `engine._assemble` — never a second ledger. Proof `harness_tax_collected.py` §I/§J + `harness_balance_sheet_truths.py` §J |
 | Distributor payable — WHICH derivation and WHICH line (mig `954`) | `account_config.distributor_payable_basis` / `.distributor_payable_line` / `.asset_ledger_open_statuses`, else the house carrier preset (`ui_label_override` scope `finance_basis:<carrier>`, key `distributor_payable`) over the org's `commcalc.carrier` rows | `balance_sheet.resolve_payable_basis`/`resolve_payable_line` (org > carrier preset > declared mig-933 family > off; target line defaults `asset_ledger`→`owed_vip`, `marketplace_due`→`handset_payable`) → `statement_engine.build_inputs_full` + `GET /account/liabilities-due`; proof `harness_balance_sheet_truths.py` §G |
 | Distributor open balance — consignment side (BS liability, mig `954`) | `asset_ledger.owed_to_vip` on rows whose `status` is in `asset_ledger_open_statuses` (default `["Open"]`) with `acquired_date ≤ as-of`; live house org 2026-09-04 = $358,221.13 (past-due $29,839.62 / not-yet-due $328,381.51) | `balance_sheet.asset_ledger_open_bookings` via `statement_engine.build_inputs_full` → the resolved target line (default `owed_vip`); store grain = the ledger's own `store` through `coa.store_resolver`; as-of = `period_as_of` (open period ⇒ today, closed ⇒ period end) |
 | Handset payable (BS liability, mig `933`) | `raw_ma_daily_tx.retail_cost` on the org's `handset_payable_order_types` families, `tx_date ≤ as-of < due_date` (the vendor's own terms) | `balance_sheet.handset_payable_bookings` via `statement_engine.build_inputs_full` → BS `handset_payable` line; store grain = the mig-314 account→store index |
@@ -3561,11 +3608,27 @@ row, on each day of the drill-down and in each tender bucket — not left for a 
 and `taxable_revenue + untaxed_revenue == revenue` is asserted at all three grains. The page shows
 five stat tiles (tax · total sales · taxable · non-taxable · rate), Taxable/Non-taxable columns in the
 store table, the day drill-down and the tender table, and a Non-taxable column in both export sheets.
+- Proof: `backend/harness_tax_collected.py` (82) — §F pins the range spanning, including a regression
 
 - Proof: `backend/harness_tax_collected.py` (54) — §F pins the range spanning, including a regression
   that reproduces the owner's "0 store(s)" screen by reading only the selected period; §G pins that
   taxable + non-taxable ties back to total sales at store, day and tender grain; §H pins the two
   distinct notes.
+**→ THIS REPORT NOW FEEDS THE BOOKS (owner directive 2026-09-08, mig `991` — see §4 "SALES TAX →
+Balance Sheet").** The per-(store, day) pass moved out of the endpoint into pure
+`commcalc/tax_collected.py aggregate()`; this endpoint is its FIRST caller and
+`statement_engine.build_inputs_full` is its second, so the page and the `sales_tax_payable` balance-
+sheet liability can never come from two different loops. Two things about THIS page changed with the
+move, both deliberate and both visible in the response:
+- **the store key is now canonical** (`coa.store_resolver`, §13a) instead of the raw export label, so
+  6 of 28 live store rows RENAME — $3,346.02, 24.4% of August's tax — and the report can finally be
+  joined to the books. Every rename is listed in the new `store_renames` field; one whose street
+  NUMBER changes is flagged `suspect` (`2778 Ephraim Ave` → `1598 Mount Ephraim Ave`, $80.49 — an
+  alias to a different address, reported rather than silently trusted).
+- **`tax_net` is carried beside `tax`** at store, day and totals grain. The HEADLINE is unchanged —
+  `tax` still excludes `trans_type=='Return'`. `tax_net` adds the return rows' own tax back (live
+  August: 109 rows, −$53.74) because refunded tax is not owed to the state, and that is the figure
+  the liability books.
 
 ## 23g. A DASHBOARD TILE COULD NOT NAME A PAGE FROM ANOTHER MODULE (owner 2026-09-07)
 
