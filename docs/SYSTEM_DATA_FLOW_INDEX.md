@@ -3769,6 +3769,52 @@ the gate.
   §M1b pins that at least five task pages sit inside `/pos/*`, which is why the exemption is derived
   rather than maintained by hand.
 
+## 23m. THE PICKUP ENVELOPE NETS OUT BILL-PAY CASH (owner directive 2026-09-08)
+
+**Owner:** *"on the cash pick up it shows the full amount but it should only show the store cash
+amount to be picked up, as the epay amount is being declared and picked up on a different menu — this
+is duplicating the total cash."* Asked which figure to net by: *"not as declared by the employee but
+as **calculated by the POS**."*
+
+**The overlap was real.** The closing form's cash field is, per the owner's own 2026-09-02 directive,
+*"Total cash in store including Bill Payments"* — `t_cash` is the whole drawer and `epay_on_cash` is a
+SUBSET of it. Cash Pickup collected the drawer; the bill-pay pickup page separately offers that share
+for collection. Same physical dollars, two screens. (`epay_cash`, the legacy column Cash Pickup also
+added, is $0.00 on all 539 August rows — so the total on screen was exactly `Σ t_cash` = $209,583.23.)
+
+**Why the declaration cannot be the amount.** Live August 2026, house org: declared `epay_on_cash`
+totals $183,156.03 against $209,583.23 of `t_cash`, and on **147 rows (27.3%)** the declared bill-pay
+cash EXCEEDS the total cash — 30-odd of them with `t_cash` $0.00 and $687–$891 declared. A subset
+cannot exceed its whole. The POS figure can be trusted: it is computed from the sales transactions,
+not typed by the person holding the cash (Aug 1–7 sales leg: $91,232.22 of bill-pay cash,
+$12,873.94 on card).
+
+**`closing/billpay_netting.py` (PURE)** takes the store-day's POS figure and splits it across that
+day's envelopes. The POS decides the **amount**; the reps' own declarations decide only the **split**.
+An envelope never nets below zero, and cash that cannot be netted comes back as `unallocated` —
+reported, never dropped, because it means the POS saw more bill-pay cash than anyone declared holding.
+
+**THREE STATES, never two.** `pos` (netted) · `none` (no POS figure for that store-day — NOTHING is
+netted and the envelope says so) · `off` (tenant switch). Subtracting a fabricated zero and calling it
+reconciled is the silent-zero class this file exists to avoid.
+
+**Sources, in order, both already-shared resolutions:** `_sales_billpay_for_days` (bill payments in
+the POS sales transactions, `cash` leg, mig 944 split) then `_pos_billpay_for_days` (the processor's
+own figure). Neither is re-derived here.
+
+**RULE TWO:** `commcalc.cash_pickup_config.pickup_nets_pos_billpay_cash`, **house default FALSE**,
+read adaptively so an un-migrated database is byte-identical. Migration `989` adds the column and
+leaves the house-org seed **commented** — switching it on changes what a DM is told to collect, which
+is the owner's call with the numbers on screen, not a side effect of running a migration.
+
+**Also flagged, per the owner:** an envelope whose declared bill-pay cash exceeds its total cash is
+marked `billpay_declared_exceeds_cash` regardless of the switch — it is a data-entry defect, not a
+netting one.
+
+- Proof: `backend/harness_billpay_netting.py` (57 — the split rule, exhaustively) and
+  `backend/harness_cash_pickup.py` §10 (57 total — the wiring: the switch, the source precedence, and
+  that the collected number actually changes).
+
 ## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
 
 **Read this before writing a new harness, and before trusting an old one.** Owner directive
