@@ -2331,6 +2331,26 @@ def delete_employee(emp_id: str, org_id: str = ORG_ID):
         sb().table("employees").delete().eq("id", emp_id).eq("org_id", org_id).execute()
     except Exception as ex:
         raise HTTPException(409, f"cannot delete (linked records exist — try deactivating): {ex}")
+    # CASCADE THE CLOSER ASSIGNMENT. storeops.store_closer is a per-store pointer at a person; when
+    # that person is deleted the pointer used to survive, and DM Verify went on naming them as the
+    # store's closer for ever (owner report 2026-09-07: the house org still had B-1115 -> E008
+    # "Asad Umar" months after E008 left the roster). Deleting the login but not this was the same
+    # omission the luxelink-parity audit found for app_users. Best-effort: a failure here must not
+    # turn a completed delete into a 500 — and the summary now also refuses to obey an assignment
+    # whose employee is off-roster, so an older stale row still cannot mislead.
+    cleared_closers = []
+    try:
+        for field, val in (("employee_id", str(e.get("employee_id") or "").strip()),):
+            if not val:
+                continue
+            gone = (sb().table("store_closer").select("store_code")
+                    .eq("org_id", org_id).eq(field, val).execute().data) or []
+            if gone:
+                sb().table("store_closer").delete().eq("org_id", org_id).eq(field, val).execute()
+                cleared_closers = [g.get("store_code") for g in gone]
+    except Exception as ex:
+        print(f"WARN delete_employee: could not clear store_closer for {e.get('employee_id')}: {ex}")
+
     login = {}
     try:
         # BUG FIX (luxelink-parity audit 2026-07-16): this used to purge under the imported HOUSE
@@ -2342,7 +2362,8 @@ def delete_employee(emp_id: str, org_id: str = ORG_ID):
         login = purge_app_user(org_id, email=e.get("email"), employee_id=e.get("employee_id"), hard=True)
     except Exception:
         pass
-    return {"ok": True, "deleted": emp_id, "name": e.get("name"), "login": login}
+    return {"ok": True, "deleted": emp_id, "name": e.get("name"), "login": login,
+            "cleared_closer_stores": cleared_closers}
 
 
 class MergeEmployeesIn(LaxModel):
@@ -2386,6 +2407,21 @@ def merge_employees(body: MergeEmployeesIn, org_id: str = ORG_ID):
         moved["time_off"] += len(r.data or [])
     except Exception:
         pass
+    # A merged-away duplicate must not take the store's closer assignment with them: hand it to the
+    # target, same as their shifts. Without this the merge left a pointer at an id that no longer
+    # exists, which is the stale-closer state DM Verify used to display verbatim (owner 2026-09-07).
+    moved["store_closer"] = 0
+    try:
+        for val in {str(dup["id"]), str(dup.get("employee_id") or "").strip()}:
+            if not val:
+                continue
+            r = (sb().table("store_closer")
+                 .update({"employee_id": tgt.get("employee_id") or str(tgt["id"]),
+                          "employee_name": tgt.get("name")})
+                 .eq("org_id", org_id).eq("employee_id", val).execute())
+            moved["store_closer"] += len(r.data or [])
+    except Exception as ex:
+        print(f"WARN merge_employees: could not move store_closer: {ex}")
     deleted = True
     try:
         sb().table("employees").delete().eq("id", dup_id).eq("org_id", org_id).execute()

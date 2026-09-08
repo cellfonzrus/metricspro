@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
@@ -130,6 +130,7 @@ export default function BillPayPickupPage() {
     () => resolveStoreCodes(storesForCascade, fMarkets, fStores),
     [storesForCascade, fMarkets, fStores])
 
+  const reqSeq = useRef(0)   // see the note inside load()
   const load = useCallback(() => {
     if (rangeMode ? !(rangeStart && rangeEnd) : !date) return
     setLoading(true); setSel({}); setNotes({}); setActuals({})
@@ -140,7 +141,18 @@ export default function BillPayPickupPage() {
       fEmps.length && `employees=${encodeURIComponent(fEmps.join(','))}`,
       fDm && `dm=${encodeURIComponent(fDm)}`,
     ].filter(Boolean).join('&')
-    api(`/api/v1/closing/billpay-pickups?${qs}`).then(setData).catch(console.error).finally(() => setLoading(false))
+    // ONE IN-FLIGHT ANSWER WINS, AND IT IS THE LATEST ONE ASKED FOR (owner bug report 2026-09-08,
+    // with the screen: "the data for 103 Fulton showed for a few seconds then all stores came back
+    // as results"). Every filter change fires a fetch, and these responses were applied in the order
+    // they HAPPENED TO RETURN — so a slower, older, less-filtered request landing after the filtered
+    // one silently replaced the filtered rows with everything. The filter chip stayed on screen, which
+    // is what made it read as "the filter does not work". A monotonic ticket per request, checked
+    // before touching state, makes a stale response a no-op instead of a rollback.
+    const ticket = ++reqSeq.current
+    api(`/api/v1/closing/billpay-pickups?${qs}`)
+      .then(d => { if (ticket === reqSeq.current) setData(d) })
+      .catch(e => { if (ticket === reqSeq.current) console.error(e) })
+      .finally(() => { if (ticket === reqSeq.current) setLoading(false) })
   }, [rangeMode, date, rangeStart, rangeEnd, market, resolvedStores, fEmps, fDm])
   useEffect(() => { load() }, [load])
 

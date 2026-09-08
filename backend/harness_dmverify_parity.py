@@ -639,16 +639,29 @@ check("M3. storeops.tenants (closing_mode) queried ONCE for the whole range (was
       call_counts.get("tenants") == 1, str(call_counts.get("tenants")))
 check("M4. storeops.store_closer queried ONCE for the whole range (was 3x before)",
       call_counts.get("store_closer") == 1, str(call_counts.get("store_closer")))
-check("M5. each of the 3 cards still resolved the assigned closer correctly (org_ctx carried the "
-      "closer_by_store map through, not lost by hoisting it)",
-      all(s.get("closer") == "Closer One" for s in resp["stores"]), str([s.get("closer") for s in resp["stores"]]))
+# M5/M6 exist to prove the PERF HOIST — that the closer map survives being computed once for the
+# whole range — and they used to do it by asserting `closer == "Closer One"`, the STATIC assignment,
+# on a tenant whose closing_mode is 'per_rep'. That assertion encoded the very defect the owner
+# reported on 2026-09-07 ("asad amar has been deleted but it still shows he is the closer"): in
+# per_rep mode there is no predefined closer at all. They now pin the same threading through
+# `closer_assigned` — which is the map, carried verbatim — while `closer` reports reality.
+check("M5. each of the 3 cards still carried the assigned-closer map through the hoist "
+      "(closer_assigned survives being computed once for the range)",
+      all(s.get("closer_assigned") == "Closer One" for s in resp["stores"]),
+      str([s.get("closer_assigned") for s in resp["stores"]]))
+check("M5b. and in per_rep mode the EFFECTIVE closer is the person who actually closed, never the "
+      "static assignee (owner 2026-09-07)",
+      all(s.get("closer") == "Jane Rep" and s.get("closer_source") == "submitted"
+          for s in resp["stores"]), str([(s.get("closer"), s.get("closer_source")) for s in resp["stores"]]))
 
 # Backward-compat: _closing_summary_for_date called directly WITHOUT org_ctx (any future/other caller)
 # must still compute it inline and return the IDENTICAL result as the org_ctx-threaded path above.
 direct = cr._closing_summary_for_date(fake_client, HOUSE, "2026-07-01", None, None, None, 1.0, False)
 threaded = [s for s in resp["stores"] if s["close_date"] == "2026-07-01"]
 check("M6. omitting org_ctx (backward-compat) yields the SAME card as the range call threaded it through",
-      direct and threaded and direct[0]["closer"] == threaded[0]["closer"] == "Closer One",
+      direct and threaded
+      and direct[0]["closer"] == threaded[0]["closer"] == "Jane Rep"
+      and direct[0]["closer_assigned"] == threaded[0]["closer_assigned"] == "Closer One",
       str((direct, threaded)))
 
 # ═══ N. Nit sweep (2026-07-30): N2 range-date 400-not-500 (closing_summary + closing_submissions,

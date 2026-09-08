@@ -29,6 +29,7 @@ from . import external_credit_recon as _external_credit_recon
 from . import envelope_report as envelope_report_mod
 from . import entry_quality
 from . import pickup_actual as _pickup_actual
+from . import closer_resolution
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -973,13 +974,29 @@ def _closing_summary_org_ctx(client, org_id) -> dict:
     closing_mode = (tcfg[0].get("closing_mode") if tcfg else None) or "per_rep"
     try:
         closer_rows = (client.schema("storeops").table("store_closer")
-                       .select("store_code,employee_name").eq("org_id", org_id).execute().data) or []
+                       .select("store_code,employee_id,employee_name").eq("org_id", org_id)
+                       .execute().data) or []
     except Exception:
         closer_rows = []
-    closer_by_store = {c.get("store_code"): (c.get("employee_name") or "").strip()
-                       for c in closer_rows if c.get("store_code")}
+    # The WHOLE row, not just the name. Deciding whether an assignment still means anything needs the
+    # employee_id too (a rename is not a deletion), and the name alone is what let a deleted employee
+    # keep appearing as a store's closer (owner report 2026-09-07 — §23j).
+    closer_row_by_store = {c.get("store_code"): c for c in closer_rows if c.get("store_code")}
+    closer_by_store = {k: (c.get("employee_name") or "").strip() for k, c in closer_row_by_store.items()}
+    # The roster, ONCE per request (date-independent, same reason as every other lookup here): an
+    # assignment pointing at somebody who is no longer an employee must be visible, not obeyed.
+    try:
+        emp_rows = (client.schema("storeops").table("employees")
+                    .select("employee_id,name").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        emp_rows = []
+    roster_names = [(e.get("name") or "").strip() for e in emp_rows if (e.get("name") or "").strip()]
+    roster_ids = [str(e.get("employee_id") or "").strip() for e in emp_rows
+                  if str(e.get("employee_id") or "").strip()]
     return {"ckeys": _ckeys, "clabels": _clabels, "crclass": _crclass, "tlabels": tlabels,
             "store_meta": store_meta, "closing_mode": closing_mode, "closer_by_store": closer_by_store,
+            "closer_row_by_store": closer_row_by_store,
+            "roster_names": roster_names, "roster_ids": roster_ids,
             "roster_ok": _roster_ok}
 
 
@@ -1003,6 +1020,18 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
     store_meta = org_ctx["store_meta"]
     closing_mode = org_ctx["closing_mode"]
     closer_by_store = org_ctx["closer_by_store"]
+    closer_row_by_store = org_ctx.get("closer_row_by_store") or {}
+    roster_names = org_ctx.get("roster_names") or []
+    roster_ids = org_ctx.get("roster_ids") or []
+
+    def _closer_for(code, worked, submitted):
+        """THE closer for one store-day, through the one shared rule (closer_resolution)."""
+        row = closer_row_by_store.get(code) or {}
+        return closer_resolution.resolve_closer(
+            closing_mode=closing_mode,
+            assigned_name=row.get("employee_name") or "", assigned_id=row.get("employee_id") or "",
+            worked=worked, submitted=submitted,
+            roster_names=roster_names, roster_ids=roster_ids)
 
     # Scheduled reps that day (to flag who didn't submit) — genuinely date-scoped, stays per-call.
     shifts = (client.schema("storeops").table("shifts").select("store_code,employee_name")
@@ -1213,10 +1242,17 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
         def _submitted(nm):
             return any(_name_match(nm, sn) for sn in submitted_set)
 
+        # THE closer for this store-day — the assignment only when the tenant mandates one AND that
+        # person is still an employee who actually worked; otherwise reality decides (§23j).
+        closer_res = _closer_for(code, worked, submitted_display) if code else \
+            closer_resolution.resolve_closer(closing_mode=closing_mode, worked=worked,
+                                             submitted=submitted_display)
+        closer = closer_res["name"]
+
         # missing_reps = who OWES a closing but hasn't submitted. In per_rep mode that's every worker;
-        # in one_closing mode only the assigned closer owes it (they tally the whole store's cash).
+        # in one_closing mode only the closer owes it (they tally the whole store's cash) — and a
+        # stale assignment must not make a departed employee "owe" a closing for ever.
         if closing_mode == "one_closing":
-            closer = closer_by_store.get(code) if code else None
             owes = {closer} if closer else worked
         else:
             owes = worked
@@ -1357,6 +1393,23 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
                              "_custom_tenders_display": ct_display, "_custom_counts_display": rc_display,
                              "_expense_lines": exp_lines_by_row.get(rp.get("id"), [])})
 
+        # "2 people worked but only 1 closed" — green when the cash ties to the X-report, the DM's
+        # problem when it does not (owner 2026-09-07). money_ok is deliberately THREE-STATE: with no
+        # X-report there is nothing to tie the cash against, and calling that green would be the same
+        # silent-zero mistake the money recon itself refuses to make.
+        _mr_cash = (money_recon or {}).get("cash") or {}
+        _mr_credit = (money_recon or {}).get("credit") or {}
+        if not money_recon or _mr_cash.get("pending") or _mr_credit.get("pending"):
+            _money_ok = None
+        else:
+            _money_ok = not (_mr_cash.get("flag") or _mr_credit.get("flag"))
+        _vars = [f"{lab} off by ${abs(_f(leg.get('var'))):,.2f}"
+                 for lab, leg in (("cash", _mr_cash), ("credit", _mr_credit))
+                 if leg.get("flag") and leg.get("var") is not None]
+        partial = closer_resolution.partial_closing(
+            worked=worked, submitted=submitted_display, closing_mode=closing_mode,
+            money_ok=_money_ok, money_variances=_vars)
+
         out.append({
             "store_code": code, "store_name": (reps[0].get("store_name") or code or "—"),
             "store_address": meta.get("address") or reps[0].get("store_address"),
@@ -1366,7 +1419,12 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
             "worked_reps": sorted(worked), "worked_count": len(worked),
             "scheduled_no_show": scheduled_no_show, "worked_unscheduled": worked_unscheduled,
             "cross_login": cross_login, "closing_mode": closing_mode,
-            "closer": closer_by_store.get(code) if code else None,
+            "closer": closer, "closer_source": closer_res["source"],
+            "closer_assigned": closer_res["assigned_name"] or None,
+            "closer_assigned_off_roster": closer_res["assigned_off_roster"],
+            "closer_assigned_did_not_work": closer_res["assigned_did_not_work"],
+            "closer_note": closer_res["note"],
+            "partial_closing": partial,
             "verification": ver_by_store.get(code), "recon": recon, "money_recon": money_recon,
             "dm_corrected": _dm_corrected,   # store-day totals reflect the DM's verified correction (TKT-1030)
             "totals_original": totals_original,  # store-entered aggregate BEFORE the DM overlay (owner 2026-09-02)
@@ -1396,7 +1454,8 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
         if not worked:
             continue
         scheduled = sched_by_store.get(code, set())
-        closer = closer_by_store.get(code)
+        closer_res = _closer_for(code, worked, ())
+        closer = closer_res["name"]
         owes = ({closer} if closer else worked) if closing_mode == "one_closing" else worked
         missing_here = sorted({n for n in owes if n})
         if rep_set is not None:
@@ -1416,6 +1475,15 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
             "scheduled_no_show": sorted({nm for nm in scheduled if not any(_name_match(nm, w) for w in worked)}),
             "worked_unscheduled": sorted({nm for nm in worked if not any(_name_match(nm, s) for s in scheduled)}),
             "cross_login": cross_login, "closing_mode": closing_mode, "closer": closer,
+            "closer_source": closer_res["source"],
+            "closer_assigned": closer_res["assigned_name"] or None,
+            "closer_assigned_off_roster": closer_res["assigned_off_roster"],
+            "closer_assigned_did_not_work": closer_res["assigned_did_not_work"],
+            "closer_note": closer_res["note"],
+            # NOBODY closed here — that is already its own alarm (`no_closing_submitted`), so the
+            # partial-closing flag stays off rather than double-reporting the same store.
+            "partial_closing": closer_resolution.partial_closing(
+                worked=worked, submitted=(), closing_mode=closing_mode, money_ok=None),
             "no_closing_submitted": True,
             "verification": ver_by_store.get(code), "recon": None, "money_recon": None,
         })
@@ -3965,6 +4033,23 @@ def get_cash_config(org_id: str = ORG_ID):
         closers = (c.schema("storeops").table("store_closer").select("*").eq("org_id", org_id).execute().data) or []
     except Exception:
         closers = []
+    # STALE ASSIGNMENTS ARE NAMED, NOT SILENTLY IGNORED. The picker below renders by employee_id, so an
+    # assignment pointing at a deleted employee simply showed "— no closer —" while the row was still
+    # in the table and DM Verify still printed the departed person's name (owner 2026-09-07 — §23j).
+    try:
+        _emps = (c.schema("storeops").table("employees").select("employee_id,name")
+                 .eq("org_id", org_id).execute().data) or []
+        _ids = {str(e.get("employee_id") or "").strip() for e in _emps if str(e.get("employee_id") or "").strip()}
+        _names = [(e.get("name") or "").strip() for e in _emps if (e.get("name") or "").strip()]
+        for row in closers:
+            eid = str(row.get("employee_id") or "").strip()
+            enm = (row.get("employee_name") or "").strip()
+            on_roster = (eid in _ids) if eid else False
+            if not on_roster and enm:
+                on_roster = any(closer_resolution.name_match(enm, n) for n in _names)
+            row["off_roster"] = bool(_emps and not on_roster)
+    except Exception:
+        pass
     try:
         recips = (c.schema("storeops").table("alert_recipient").select("*").eq("org_id", org_id).execute().data) or []
     except Exception:

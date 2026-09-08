@@ -392,6 +392,40 @@ check("8f. the store match stays case-insensitive on this list too",
 check("8g. the market filter still works alongside it (unchanged)",
       len(cr.closing_pickups(date="2026-07-15", market="Ohio", org_id=HOUSE)["not_closed"]) == 0)
 
+# ══ 9. THE FILTERED ANSWER MUST NOT BE OVERWRITTEN BY A STALE ONE ════════════════════════════════
+# OWNER BUG REPORT 2026-09-08, with the screen: Cash Pickup filtered to "103 Fulton Ave" showed the
+# filtered rows "for a few seconds then all stores came back as results" — while the filter chip
+# stayed on. Section 8 above proves the SERVER filter is right (and a live org-scoped read on
+# 2026-09-08 confirmed all 539 August closing rows carry a real store_code, so nothing was slipping
+# through the deliberate "never drop an unresolved row" bypass either). The defect was in the page:
+# every filter change fires a fetch, and the responses were applied in the order they RETURNED, so a
+# slower earlier request landing last replaced the filtered rows with everything.
+#
+# STATIC ON PURPOSE (the §24 rule): the page compiled, rendered, and simply showed the wrong rows —
+# neither tsc nor a build can see a promise resolving out of order. This pins the guard's presence in
+# BOTH pickup pages, so removing it fails here instead of in front of a DM.
+import os as _os                                                                    # noqa: E402
+_FE = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "frontend", "src", "app",
+                    "(platform)", "closing")
+for _page, _fetch in (("pickup", "/api/v1/closing/pickups"),
+                      ("billpay-pickup", "/api/v1/closing/billpay-pickups")):
+    _path = _os.path.join(_FE, _page, "page.tsx")
+    try:
+        _src = open(_path).read()
+    except Exception as _e:
+        check(f"9. {_page}/page.tsx is readable", False, str(_e))
+        continue
+    check(f"9a[{_page}] the fetch carries a request ticket",
+          "const ticket = ++reqSeq.current" in _src and "useRef(0)" in _src)
+    check(f"9b[{_page}] a stale response can never call setData",
+          "if (ticket === reqSeq.current) setData(d)" in _src)
+    check(f"9c[{_page}] nor clear the spinner out from under the live request",
+          "if (ticket === reqSeq.current) setLoading(false)" in _src)
+    check(f"9d[{_page}] the un-guarded `.then(setData)` shape is gone",
+          f"api(`{_fetch}?${{qs}}`).then(setData)" not in _src)
+    check(f"9e[{_page}] the store filter is still SENT (a guard must not mask a dropped param)",
+          "stores=${encodeURIComponent(" in _src)
+
 # ── Summary ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:
