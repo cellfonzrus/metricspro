@@ -27,7 +27,16 @@ WHAT THIS PINS
      tender recon cannot disagree about what "cash" means), incl. the traps that mapper exists for:
      'gift card' contains 'card', 'cash app' contains 'cash', 'external credit card' contains 'credit';
   D. a MULTI-TENDER line is reported as `mixed`, never assigned whole to one tender;
-  E. voids and returns stay excluded, and the split always ties back to the totals.
+  E. voids and returns stay excluded, and the split always ties back to the totals;
+  F. a DATE RANGE spans every month it touches instead of being clipped to the period dropdown
+     (owner 2026-09-07: From 06/01/2026 To 08/01/2026 returned "0 store(s)" because the range and the
+     selected month intersected down to a single day), and with no range the single-period read is
+     unchanged;
+  G. TAXABLE and NON-TAXABLE sales are carried as separate numbers at every grain — store, day and
+     tender bucket — and always sum back to total sales (owner 2026-09-07: "need to segregate the
+     sales from taxable and non taxable sales");
+  H. the note distinguishes "we read no sales at all in this window" from "we read sales and none
+     carried tax" — the first used to accuse the operator of a bad upload.
 
 PURE-ish: drives the real `tax_collected` over an in-memory fake. stdlib only.
 """
@@ -54,13 +63,26 @@ import app.modules.commcalc.router as R                      # noqa: E402
 ORG = "org-1"
 
 
-def run(rows, **kw):
-    """Drive the real endpoint with `rows` as the unified sales set."""
-    R._sales_rows_union_txn = lambda *_a, **_k: (rows, {})
+READS = []          # every (org, period) the endpoint actually asked the union for
+
+
+def run(rows, period="August 2026", by_period=None, **kw):
+    """Drive the real endpoint. `rows` is the unified sales set for EVERY period; pass `by_period`
+    ({period: [rows]}) instead when a test needs different months to hold different data — the range
+    wrapper calls the union once per month it reads, and READS records which."""
+    del READS[:]
+
+    def _union(_client, _org, p, **_k):
+        READS.append(p)
+        if by_period is not None:
+            return list(by_period.get(p, [])), {}
+        return rows, {}
+
+    R._sales_rows_union_txn = _union
     R._store_market_resolver = lambda *_a, **_k: ((lambda s: "M1"), ["M1"])
     R.require_org = lambda *_a, **_k: None
     R.sb = lambda: None
-    return R.tax_collected("August 2026", org_id=ORG, **kw)
+    return R.tax_collected(period, org_id=ORG, **kw)
 
 
 def line(ext, tax, tender="Cash", store="S1", day="2026-08-05", **kw):
@@ -166,6 +188,139 @@ check("E5 tender TAXABLE sums to total taxable",
 st = out["stores"][0]
 check("E6 every store row carries the same four figures the totals do",
       all(k in st for k in ("revenue", "taxable_revenue", "effective_rate", "tender")), str(st.keys()))
+
+print()
+print("=" * 78)
+print("F. A DATE RANGE SPANS MONTHS — it does not get clipped to the period dropdown")
+print("=" * 78)
+# OWNER 2026-09-07, with the screen: From 06/01/2026 To 08/01/2026 returned
+#   "0 store(s)" + "No tax captured for this period yet — re-send a Sales Transaction Details file…"
+# The read was `.in_('period', _pvariants(period))` for the ONE selected month, and start/end then
+# filtered WITHIN it. With the selector on August, June..Aug-1 intersected down to a single day. The
+# note then blamed the operator's upload for what was a windowing bug.
+check("F1 no bounds -> no span, the single-period read is untouched",
+      R._periods_spanning("", "", "August 2026") == [])
+check("F2 both bounds -> every month the range touches, oldest first",
+      R._periods_spanning("2026-06-01", "2026-08-01", "August 2026")
+      == ["June 2026", "July 2026", "August 2026"])
+check("F3 a range inside one month is that one month",
+      R._periods_spanning("2026-08-03", "2026-08-09", "August 2026") == ["August 2026"])
+check("F4 it crosses a year boundary",
+      R._periods_spanning("2025-11-20", "2026-02-02", "January 2026")
+      == ["November 2025", "December 2025", "January 2026", "February 2026"])
+check("F5 reversed bounds are still read in order, never as an empty span",
+      R._periods_spanning("2026-08-01", "2026-06-01", "August 2026")
+      == ["June 2026", "July 2026", "August 2026"])
+check("F6 ONE bound spans between it and the selected period",
+      R._periods_spanning("2026-06-15", "", "August 2026") == ["June 2026", "July 2026", "August 2026"]
+      and R._periods_spanning("", "2026-08-01", "June 2026") == ["June 2026", "July 2026", "August 2026"])
+check("F7 an unparseable bound falls back to the period, never to a wrong month",
+      R._periods_spanning("not-a-date", "", "August 2026") == [])
+check("F8 a very wide range is capped at 24 months rather than reading forever",
+      len(R._periods_spanning("2000-01-01", "2026-08-01", "August 2026")) == 24)
+check("F8b the cap keeps the MOST RECENT months, and cap=None gives the true span",
+      R._periods_spanning("2000-01-01", "2026-08-01", "August 2026")[-1] == "August 2026"
+      and len(R._periods_spanning("2000-01-01", "2026-08-01", "August 2026", cap=None)) == 320)
+check("F8c a span of exactly 24 months is NOT reported as truncated",
+      len(R._periods_spanning("2024-09-01", "2026-08-01", "August 2026")) == 24)
+
+JUNE = [line(1000.0, 80.0, day="2026-06-10")]
+JULY = [line(2000.0, 160.0, day="2026-07-10")]
+AUG1 = [line(500.0, 0.0, day="2026-08-01")]        # Aug 1 exists but carried no tax
+BY = {"June 2026": JUNE, "July 2026": JULY, "August 2026": AUG1}
+
+r = run(None, period="August 2026", by_period=BY, start="2026-06-01", end="2026-08-01")
+check("F9 all three months are read", READS == ["June 2026", "July 2026", "August 2026"], READS)
+check("F10 the owner's range now returns stores instead of '0 store(s)'", len(r["stores"]) == 1,
+      r["stores"])
+check("F11 and the money is the whole range, not one month",
+      r["totals"]["tax"] == 240.0 and r["totals"]["revenue"] == 3500.0, r["totals"])
+check("F12 the note is gone, because there IS tax", r["note"] is None, r["note"])
+check("F13 the response names the window it actually read",
+      r["window"] == "2026-06-01 to 2026-08-01"
+      and r["periods_read"] == ["June 2026", "July 2026", "August 2026"], r.get("window"))
+
+# REGRESSION: the pre-fix behaviour, reproduced by reading only the selected period.
+r_old = run(None, period="August 2026", by_period={"August 2026": AUG1})
+check("F14 PRE-FIX: reading only August gave 500.00 of sales and $0.00 of tax — the '0 store(s)' screen",
+      r_old["totals"]["tax"] == 0.0 and r_old["totals"]["revenue"] == 500.0, r_old["totals"])
+
+r_none = run(None, period="August 2026", by_period=BY)
+check("F15 with NO range the endpoint still reads exactly one period (byte-identical path)",
+      READS == ["August 2026"], READS)
+r_wide = run([], period="August 2026", start="2000-01-01", end="2026-08-01")
+check("F16 an over-wide range is truncated AND says so, never silently half-read",
+      "more than 24 months" in (r_wide["note"] or "") and len(r_wide["periods_read"]) == 24,
+      r_wide["note"])
+r_24 = run([line(100.0, 8.0, day="2026-08-05")], period="August 2026",
+           start="2024-09-01", end="2026-08-01")
+check("F17 an exactly-24-month range is NOT flagged as truncated",
+      "more than 24 months" not in (r_24["note"] or ""), r_24["note"])
+
+print()
+print("=" * 78)
+print("G. TAXABLE AND NON-TAXABLE SALES ARE SEGREGATED AT EVERY GRAIN")
+print("=" * 78)
+# OWNER 2026-09-07: "also need to segregate the sales from taxable and non taxable sales".
+MIX = [line(100.0, 8.0, tender="Cash", day="2026-08-05"),          # taxable, cash
+       line(400.0, 0.0, tender="Cash", day="2026-08-05"),          # NOT taxable, cash
+       line(200.0, 16.0, tender="Credit Card", day="2026-08-06"),  # taxable, card
+       line(300.0, 0.0, tender="Acima", day="2026-08-06")]         # NOT taxable, financing
+r = run(MIX)
+st = r["stores"][0]
+check("G1 the store row carries non-taxable as its own number",
+      st["untaxed_revenue"] == 700.0, st.get("untaxed_revenue"))
+check("G2 taxable + non-taxable == total sales, exactly",
+      round(st["taxable_revenue"] + st["untaxed_revenue"], 2) == st["revenue"],
+      (st["taxable_revenue"], st["untaxed_revenue"], st["revenue"]))
+check("G3 the same holds on the totals",
+      round(r["totals"]["taxable_revenue"] + r["totals"]["untaxed_revenue"], 2)
+      == r["totals"]["revenue"], r["totals"])
+days = {d["date"]: d for d in st["days"]}
+check("G4 and per DAY, in the drill-down",
+      days["2026-08-05"]["taxable_revenue"] == 100.0
+      and days["2026-08-05"]["untaxed_revenue"] == 400.0
+      and days["2026-08-06"]["taxable_revenue"] == 200.0
+      and days["2026-08-06"]["untaxed_revenue"] == 300.0, days)
+check("G5 every day still ties: taxable + non-taxable == that day's revenue",
+      all(round(d["taxable_revenue"] + d["untaxed_revenue"], 2) == d["revenue"] for d in st["days"]))
+tn = r["totals"]["tender"]
+check("G6 and per TENDER BUCKET — cash was 100 taxable / 400 not",
+      tn["cash"]["taxable_revenue"] == 100.0 and tn["cash"]["untaxed_revenue"] == 400.0, tn["cash"])
+check("G7 financing was entirely non-taxable",
+      tn["financing"]["taxable_revenue"] == 0.0 and tn["financing"]["untaxed_revenue"] == 300.0,
+      tn["financing"])
+check("G8 every bucket ties: taxable + non-taxable == that bucket's sales",
+      all(round(v["taxable_revenue"] + v["untaxed_revenue"], 2) == v["sales"] for v in tn.values()), tn)
+check("G9 the rate still divides by TAXABLE only, unchanged by the new column",
+      r["totals"]["effective_rate"] == 8.0, r["totals"]["effective_rate"])
+
+print()
+print("=" * 78)
+print("H. THE NOTE NAMES WHAT ACTUALLY HAPPENED")
+print("=" * 78)
+# It used to say "no tax captured for this period — re-send a file with the Tax column" for BOTH
+# "we read sales and none carried tax" AND "we read no sales at all", so an emptied window accused
+# the operator of a bad upload. Those are different problems and now read differently.
+r_empty = run([], start="2026-06-01", end="2026-08-01")
+check("H1 an empty window says so, and does NOT blame the upload",
+      "No sales rows at all" in (r_empty["note"] or "")
+      and "Tax column" not in (r_empty["note"] or ""), r_empty["note"])
+check("H2 it names the window and the months it read",
+      "2026-06-01 to 2026-08-01" in r_empty["note"] and "June 2026" in r_empty["note"], r_empty["note"])
+check("H3 it says plainly that nothing was filtered out",
+      "Nothing was filtered out" in r_empty["note"] and r_empty["rows_in_window"] == 0, r_empty["note"])
+r_notax = run([line(500.0, 0.0)])
+check("H4 rows present but no tax anywhere STILL points at the Tax column",
+      "Tax column" in (r_notax["note"] or "") and "migration 105" in (r_notax["note"] or ""),
+      r_notax["note"])
+check("H5 and it says how many rows it did find, so the two cases are distinguishable",
+      "1 sales row(s)" in r_notax["note"] and r_notax["rows_in_window"] == 1, r_notax["note"])
+r_ok = run([line(100.0, 8.0)])
+check("H6 a healthy report carries no note at all", r_ok["note"] is None, r_ok["note"])
+check("H7 a void/return row does not count toward rows_in_window",
+      run([line(100.0, 8.0), line(50.0, 4.0, voided="true"),
+           line(50.0, 4.0, trans_type="Return")])["rows_in_window"] == 1)
 
 print()
 print("=" * 78)

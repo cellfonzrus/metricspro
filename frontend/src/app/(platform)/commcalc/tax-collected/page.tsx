@@ -12,11 +12,12 @@ import SalesTaxRateLink from '@/components/SalesTaxRateLink'
 // values that actually appear in the data (markets come from store_mapping). RULE FOUR exports honor the
 // active filters (Excel/PDF via ExportButtons).
 
-type Day = { date: string; tax: number; revenue: number; taxable_revenue: number; effective_rate: number }
-type Bucket = { sales: number; taxable_revenue: number; tax: number }
+type Day = { date: string; tax: number; revenue: number; taxable_revenue: number
+             untaxed_revenue: number; effective_rate: number }
+type Bucket = { sales: number; taxable_revenue: number; untaxed_revenue: number; tax: number }
 type Tender = Record<'cash' | 'card' | 'financing' | 'other' | 'mixed', Bucket>
 type Store = { store: string; market: string; tax: number; revenue: number; taxable_revenue: number
-               effective_rate: number; tender: Tender; days: Day[] }
+               untaxed_revenue: number; effective_rate: number; tender: Tender; days: Day[] }
 const TENDERS: { key: keyof Tender; label: string }[] = [
   { key: 'cash', label: 'Cash' }, { key: 'card', label: 'Credit / debit card' },
   { key: 'financing', label: 'Financing' }, { key: 'other', label: 'Other' },
@@ -75,15 +76,20 @@ export default function TaxCollectedPage() {
   // "2.23%" on the house org's August — no jurisdiction charges that — because 73% of the base was bill
   // payments and device set-up fees, both taxed $0.00 by construction (owner report 2026-09-07).
   const taxable = rows.reduce((a, r) => a + (r.taxable_revenue || 0), 0)
-  const untaxed = revenue - taxable
+  // Non-taxable comes from the backend per row now (owner 2026-09-07: "segregate the sales from
+  // taxable and non taxable sales") rather than being inferred by subtraction here.
+  const untaxed = rows.reduce((a, r) => a + (r.untaxed_revenue ?? ((r.revenue || 0) - (r.taxable_revenue || 0))), 0)
   const effRate = taxable ? (100 * tax / taxable) : 0
   const tender = TENDERS.map(t => ({
     ...t,
     sales: rows.reduce((a, r) => a + (r.tender?.[t.key]?.sales || 0), 0),
     taxable: rows.reduce((a, r) => a + (r.tender?.[t.key]?.taxable_revenue || 0), 0),
+    untaxed: rows.reduce((a, r) => a + (r.tender?.[t.key]?.untaxed_revenue || 0), 0),
     tax: rows.reduce((a, r) => a + (r.tender?.[t.key]?.tax || 0), 0),
   })).filter(t => t.sales || t.tax)
-  const rangeLabel = start || end ? `${start || '…'} → ${end || '…'}` : period
+  // The window the SERVER actually read (it spans whole months for a cross-month range), not what the
+  // inputs happen to show mid-edit.
+  const rangeLabel = data?.window || (start || end ? `${start || '…'} → ${end || '…'}` : period)
 
   // RULE FOUR §3c: export the CURRENTLY-VISIBLE (filtered) rows to Excel/PDF/Print + Send (email/WhatsApp).
   const dayRows = rows.flatMap(s => s.days.map(d => ({ store: s.store, market: s.market, ...d })))
@@ -94,6 +100,7 @@ export default function TaxCollectedPage() {
       { header: 'Tax collected', get: (r: any) => r.tax, money: true },
       { header: 'Total sales (pre-tax)', get: (r: any) => r.revenue, money: true },
       { header: 'Taxable sales', get: (r: any) => r.taxable_revenue, money: true },
+      { header: 'Non-taxable sales', get: (r: any) => r.untaxed_revenue, money: true },
       { header: 'Effective rate %', get: (r: any) => r.effective_rate },
       { header: 'Cash sales', get: (r: any) => r.tender?.cash?.sales ?? 0, money: true },
       { header: 'Card sales', get: (r: any) => r.tender?.card?.sales ?? 0, money: true },
@@ -106,6 +113,7 @@ export default function TaxCollectedPage() {
       { header: 'Tax collected', get: (r: any) => r.tax, money: true },
       { header: 'Total sales (pre-tax)', get: (r: any) => r.revenue, money: true },
       { header: 'Taxable sales', get: (r: any) => r.taxable_revenue, money: true },
+      { header: 'Non-taxable sales', get: (r: any) => r.untaxed_revenue, money: true },
       { header: 'Effective rate %', get: (r: any) => r.effective_rate },
       { header: 'Cash sales', get: (r: any) => r.tender?.cash?.sales ?? 0, money: true },
       { header: 'Card sales', get: (r: any) => r.tender?.card?.sales ?? 0, money: true },
@@ -166,24 +174,27 @@ export default function TaxCollectedPage() {
         <>
           {data?.note && <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 13, color: '#92400e', background: '#fffbeb', borderLeft: '3px solid #f59e0b' }}>⚠️ {data.note}</div>}
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12, marginBottom: 16 }}>
             <Stat label="Total tax collected" value={fmt(tax)} color="var(--accent)" />
             <Stat label="Total sales (all)" value={fmt(revenue)} />
-            <Stat label="Taxable sales" value={fmt(taxable)} />
+            <Stat label="Taxable sales" value={fmt(taxable)} color="#16a34a" />
+            <Stat label="Non-taxable sales" value={fmt(untaxed)} color="var(--text2)" />
             <Stat label="Effective tax rate" value={`${effRate.toFixed(2)}%`} color="#16a34a" />
           </div>
           <div style={{ fontSize: 12, color: 'var(--text3)', margin: '-6px 0 16px' }}>
-            Rate is tax ÷ <strong>taxable</strong> sales. {fmt(untaxed)} of the {fmt(revenue)} total carried
-            no tax (bill payments, set-up fees and the like) and is excluded from the rate.
+            Rate is tax ÷ <strong>taxable</strong> sales. Taxable + non-taxable = total sales; a line counts
+            as taxable when it actually carried tax, so bill payments, set-up fees and the like fall on the
+            non-taxable side and never dilute the rate.
           </div>
 
           {tender.length > 0 && (
             <div className="card" style={{ padding: 0, overflow: 'auto', marginBottom: 16 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 660 }}>
                 <thead><tr style={{ background: 'var(--surface2)', fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>
                   <th style={{ textAlign: 'left', padding: '8px 12px' }}>How it was paid</th>
                   <th style={{ textAlign: 'right', padding: '8px 12px' }}>Sales</th>
-                  <th style={{ textAlign: 'right', padding: '8px 12px' }}>Taxable sales</th>
+                  <th style={{ textAlign: 'right', padding: '8px 12px' }}>Taxable</th>
+                  <th style={{ textAlign: 'right', padding: '8px 12px' }}>Non-taxable</th>
                   <th style={{ textAlign: 'right', padding: '8px 12px' }}>Tax collected</th>
                 </tr></thead>
                 <tbody>
@@ -197,6 +208,7 @@ export default function TaxCollectedPage() {
                       </td>
                       <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(t.sales)}</td>
                       <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(t.taxable)}</td>
+                      <td style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--text2)' }}>{fmt(t.untaxed)}</td>
                       <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>{fmt(t.tax)}</td>
                     </tr>
                   ))}
@@ -209,12 +221,14 @@ export default function TaxCollectedPage() {
             <div className="card" style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No tax data for {rangeLabel}.</div>
           ) : (
             <div className="card" style={{ padding: 0, overflow: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
                 <thead><tr style={{ background: 'var(--surface2)', fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>
                   <th style={{ textAlign: 'left', padding: '8px 14px' }}>Store</th>
                   <th style={{ textAlign: 'left', padding: '8px 14px' }}>Market</th>
                   <th style={{ textAlign: 'right', padding: '8px 14px' }}>Tax collected</th>
-                  <th style={{ textAlign: 'right', padding: '8px 14px' }}>Merchandise (pre-tax)</th>
+                  <th style={{ textAlign: 'right', padding: '8px 14px' }}>Total sales</th>
+                  <th style={{ textAlign: 'right', padding: '8px 14px' }}>Taxable</th>
+                  <th style={{ textAlign: 'right', padding: '8px 14px' }}>Non-taxable</th>
                   <th style={{ textAlign: 'right', padding: '8px 14px' }}>Effective rate</th>
                 </tr></thead>
                 <tbody>
@@ -230,6 +244,8 @@ export default function TaxCollectedPage() {
                           <td style={{ padding: '9px 14px', fontSize: 13, color: 'var(--text2)' }}>{r.market || '—'}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13, fontWeight: 700 }}>{fmt(r.tax)}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13 }}>{fmt(r.revenue)}</td>
+                          <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13, color: '#16a34a' }}>{fmt(r.taxable_revenue)}</td>
+                          <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13, color: 'var(--text2)' }}>{fmt(r.untaxed_revenue)}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13, color: 'var(--text2)' }}>{r.effective_rate}%</td>
                         </tr>
                         {isOpen && r.days.map(d => (
@@ -238,6 +254,8 @@ export default function TaxCollectedPage() {
                             <td />
                             <td style={{ padding: '6px 14px', textAlign: 'right', fontSize: 12 }}>{fmt(d.tax)}</td>
                             <td style={{ padding: '6px 14px', textAlign: 'right', fontSize: 12, color: 'var(--text3)' }}>{fmt(d.revenue)}</td>
+                            <td style={{ padding: '6px 14px', textAlign: 'right', fontSize: 12, color: 'var(--text3)' }}>{fmt(d.taxable_revenue)}</td>
+                            <td style={{ padding: '6px 14px', textAlign: 'right', fontSize: 12, color: 'var(--text3)' }}>{fmt(d.untaxed_revenue)}</td>
                             <td style={{ padding: '6px 14px', textAlign: 'right', fontSize: 12, color: 'var(--text3)' }}>{d.effective_rate}%</td>
                           </tr>
                         ))}

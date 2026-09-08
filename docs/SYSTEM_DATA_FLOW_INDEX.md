@@ -3508,7 +3508,35 @@ Fixed by lifting the whole filter bar out of the loading branch (a control must 
 loading the content it controls), debouncing the query dates 350ms away from the displayed ones, and
 blanking the page only on the FIRST load — later refetches keep the previous rows and show "updating…".
 
-- Proof: `backend/harness_tax_collected.py` (23).
+**THE DATE RANGE WAS BEING CLIPPED TO THE PERIOD DROPDOWN (owner 2026-09-07, second report).** With
+the selector on August and the picker set **From 06/01/2026 To 08/01/2026**, the screen showed
+**"0 store(s)"** under *"No tax captured for this period yet — re-send a Sales Transaction Details
+file that includes the Tax column."* Nothing was wrong with the upload. `_sales_rows_union_txn` reads
+`.in_('period', _pvariants(period))` — ONE month — and `start`/`end` then filtered *within* it, so
+June→Aug-1 intersected down to a single day. The range is now the window: `_periods_spanning(start,
+end, period)` enumerates every month a range touches (both bounds → start's month .. end's month; one
+bound → that month .. the selected period's; neither → `[]`, and the caller's single-period read is
+untouched), and `_sales_rows_union_txn_range` calls the ONE union once per month and concatenates —
+safe because the union dedupes by trans_id within a month and a transaction belongs to exactly one
+month. Capped at 24 months, and a truncated range says so.
+
+**And the note now names what actually happened.** One sentence covered both *"we read sales and none
+carried tax"* and *"we read no sales at all"*, so an emptied window accused the operator of a bad
+upload. An empty window now says it is empty, names the window and the months read, and states that
+nothing was filtered out; a window with rows but no tax still points at the Tax column, and says how
+many rows it found. The response carries `window`, `periods_read` and `rows_in_window`.
+
+**TAXABLE vs NON-TAXABLE IS NOW SEGREGATED AT EVERY GRAIN** (owner 2026-09-07: *"also need to
+segregate the sales from taxable and non taxable sales"*). `untaxed_revenue` is carried on the store
+row, on each day of the drill-down and in each tender bucket — not left for a reader to subtract —
+and `taxable_revenue + untaxed_revenue == revenue` is asserted at all three grains. The page shows
+five stat tiles (tax · total sales · taxable · non-taxable · rate), Taxable/Non-taxable columns in the
+store table, the day drill-down and the tender table, and a Non-taxable column in both export sheets.
+
+- Proof: `backend/harness_tax_collected.py` (54) — §F pins the range spanning, including a regression
+  that reproduces the owner's "0 store(s)" screen by reading only the selected period; §G pins that
+  taxable + non-taxable ties back to total sales at store, day and tender grain; §H pins the two
+  distinct notes.
 
 ## 23g. A DASHBOARD TILE COULD NOT NAME A PAGE FROM ANOTHER MODULE (owner 2026-09-07)
 
@@ -3629,6 +3657,82 @@ both pages. It gates itself with the SAME predicate the sidebar uses — `canSee
 `/pos/settings` NAV entry — so it can never advertise a page its viewer would be bounced out of, and
 renders nothing rather than a dead link. Registered here so the next person adding a "set the tax
 rate" affordance extends this component instead of starting a third path to the same rate.
+
+## 23j. WHO THE CLOSER IS — a deleted employee kept the job (owner directive 2026-09-07)
+
+**Owner:** *"the rep asad amar has been deleted from the system but it shows that he is still the
+closer. by default the closer will be the person who worked in the store for that day, not a
+predefined person, unless mandated by the tenant … there could be 2 or more people working and they
+are expected to close their own registers … if there are 2 people working and the closing is done by
+one, and the cash tallies up with the register x-report and pos report then it is green, but if the
+total is off and the second person who worked has not done their closing then it should be flagged in
+the DM verify … and the dm should verify."*
+
+**Live state that found it (org-scoped read, house org, 2026-09-07):**
+
+| | |
+|---|---|
+| `storeops.store_closer` | `B-1115 → E008 "Asad Umar"` |
+| `storeops.employees` | 45 rows — **E008 is not one of them** |
+| `storeops.tenants.closing_mode` | `per_rep` |
+
+Two defects, one card. (1) `delete_employee` cascaded to `app_users` but **never** to `store_closer`,
+so the pointer outlived the person — the same omission the luxelink-parity audit found for logins.
+(2) `_closing_summary_for_date` printed `closer_by_store.get(code)` **verbatim on every card, in every
+mode**, without asking whether that person worked or still existed. So a deleted employee was named
+as the closer of a store, on a tenant that does not even use a predefined closer.
+
+**The money path was already safe** — `ops_chargebacks._effective_closer` falls back when the assignee
+has no punch, and a deleted employee cannot punch, so nobody was ever *charged*. It was a
+display-and-attention defect, which is exactly why it survived months of month-end review.
+
+**ONE RULE, IN ONE PLACE:** `closing/closer_resolution.py` (PURE). `closing_mode` decides (RULE TWO —
+no carrier or tenant literal, pinned):
+
+- **`per_rep` (the default)** — there is no predefined closer. Reality decides: the sole submitter,
+  else the sole worker, else **nobody** (two people worked ⇒ no single closer to name).
+- **`one_closing` (the tenant's mandate)** — the assignee holds the role only while they are still an
+  employee **and** actually worked; otherwise the day falls back to reality.
+
+The assignment is never silently discarded: `closer_assigned`, `closer_assigned_off_roster`,
+`closer_assigned_did_not_work` and a one-sentence `closer_note` always come back, and a **failed**
+roster lookup never accuses the config of being stale. `GET /closing/cash-config` now marks an
+off-roster assignment (the picker renders by `employee_id`, so a stale row read as "— no closer —"
+while the table still held it), and `delete_employee` / `merge_employees` clear or reassign it.
+
+**`partial_closing` — two worked, one closed.** Also in the pure module. `flag` is True only when
+somebody who worked did not close **and** the money does not tie; a single closing in `one_closing`
+mode is what the tenant asked for and is never flagged. `money_ok` is deliberately **three-state**:
+`True` ties, `False` off, **`None` = no X-report to tie it against** — which is flagged, not waved
+through, because calling an unverifiable day green is the silent-zero class this codebase keeps
+paying for. Rendered on the DM-Verify card (amber when flagged, a green one-liner when the cash ties)
+and carried into the export.
+
+- Proof: `backend/harness_closer_resolution.py` (44). `harness_dmverify_parity.py` §M5/M6 were
+  **asserting the defect** — they pinned the perf hoist by checking `closer == "Closer One"` (the
+  static assignee) on a `per_rep` tenant; they now pin the same threading through `closer_assigned`
+  while `closer` reports reality.
+
+## 23k. A STALE RESPONSE OVERWROTE THE FILTERED ONE (owner 2026-09-08)
+
+**Owner, with the screen:** *"the filters in cash pick is not working properly — the data for 103
+Fulton showed for a few seconds then all stores came back as results."*
+
+The SERVER filter was right. An org-scoped read the same day showed all **539** August closing rows
+carry a real `store_code` (20 distinct), so nothing was slipping through the deliberate *"a store
+filter never excludes a row whose store didn't resolve"* bypass either, and `harness_cash_pickup` §8
+already pinned the endpoint.
+
+The page fired a fetch on every filter change and applied the responses **in the order they
+returned** — `api(...).then(setData)`, no sequencing, no abort. A slower, earlier, less-filtered
+request landing last replaced the filtered rows with everything, while the filter chip stayed on
+screen. That is what made it read as "the filter does not work" rather than "the answers arrived out
+of order". Fixed with a monotonic ticket per request, checked before `setData` **and** before
+`setLoading(false)`, on `closing/pickup` and `closing/billpay-pickup` alike.
+
+- Proof: `backend/harness_cash_pickup.py` §9 (40 total) — **static on purpose**: the page compiled,
+  rendered, and simply showed the wrong rows, so neither `tsc` nor a build could see it. §9e also
+  pins that the `stores=` param is still SENT, so the guard can never mask a dropped filter.
 
 ## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
 

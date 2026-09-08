@@ -424,6 +424,9 @@ export default function DailyClosingVerify() {
     { header: 'Rep submissions', field: 'rep_count', type: 'number', get: (r: any) => r.totals?.rep_count ?? 0 },
     { header: 'No closing submitted', field: 'no_closing_submitted', get: (r: any) => r.no_closing_submitted ? 'Yes' : 'No' },
     { header: 'Missing reps', field: 'missing_reps', get: (r: any) => (r.missing_reps || []).join('; ') },
+    { header: 'Closer', field: 'closer', get: (r: any) => r.closer || '' },
+    { header: 'Partial closing to verify', field: 'partial_closing',
+      get: (r: any) => (r.partial_closing?.flag ? (r.partial_closing.note || 'yes') : '') },
     { header: 'Store cash $', field: 'store_cash', money: true, get: (r: any) => r.totals?.store_cash },
     { header: 'Store CC $', field: 'store_cc', money: true, get: (r: any) => r.totals?.store_cc },
     { header: `${ep} cash $`, field: 'epay_cash', money: true, get: (r: any) => r.totals?.epay_on_cash },
@@ -599,7 +602,7 @@ export default function DailyClosingVerify() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 700 }}>{s.store_address || s.store_name}{isRange && <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--text3)' }}> · {s.close_date}</span>}</div>
-                <div style={{ fontSize: 12, color: 'var(--text3)' }}>{s.market || '—'} · {t.rep_count || 0} rep submission{(t.rep_count || 0) === 1 ? '' : 's'}{typeof s.worked_count === 'number' ? ` · ${s.worked_count} actually worked` : ''}{s.closer ? ` · closer: ${s.closer}` : ''}{s.closing_mode === 'one_closing' ? ' (one closing/store)' : ''}</div>
+                <div style={{ fontSize: 12, color: 'var(--text3)' }}>{s.market || '—'} · {t.rep_count || 0} rep submission{(t.rep_count || 0) === 1 ? '' : 's'}{typeof s.worked_count === 'number' ? ` · ${s.worked_count} actually worked` : ''}{s.closer ? ` · closer: ${s.closer}${s.closer_source === 'assigned' ? ' (assigned)' : ''}` : ''}{s.closing_mode === 'one_closing' ? ' (one closing/store)' : ''}</div>
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <GateBadge status={s.gate_status} resolved={!!(ver || autoAcceptedRep || releasedRep)} />
@@ -634,6 +637,29 @@ export default function DailyClosingVerify() {
             {s.missing_reps?.length > 0 && !s.no_closing_submitted && (
               <div style={{ marginTop: 8, fontSize: 12, color: 'var(--amber, #b45309)' }}>
                 ⚠️ Worked but no closing submitted: {s.missing_reps.join(', ')}
+              </div>
+            )}
+            {/* A CLOSER ASSIGNMENT THAT NO LONGER MEANS ANYTHING (owner 2026-09-07: "asad amar has
+                been deleted from the system but it shows that he is still the closer"). The card used
+                to print the static assignee verbatim; it now names the person who actually closed and
+                says here, once, why the assignment did not apply. */}
+            {s.closer_note && (
+              <div style={{ marginTop: 6, fontSize: 12, color: '#9a3412', background: '#ffedd5', padding: '6px 10px', borderRadius: 8 }}>
+                👤 {s.closer_note}
+              </div>
+            )}
+            {/* TWO WORKED, ONE CLOSED. Green when the cash ties to the X-report — the owner's own
+                rule — amber only when the money is off (or there is no X-report to tie it against,
+                which is not the same as tying). */}
+            {s.partial_closing?.flag && !s.no_closing_submitted && (
+              <div style={{ marginTop: 6, fontSize: 12, fontWeight: 600, color: 'var(--amber, #b45309)', background: '#fffbeb', border: '1px solid #fcd34d', padding: '6px 10px', borderRadius: 8 }}>
+                🧾 {s.partial_closing.note} <span style={{ fontWeight: 400 }}>— DM to verify.</span>
+              </div>
+            )}
+            {s.partial_closing && !s.partial_closing.flag && s.partial_closing.missing?.length > 0
+              && s.partial_closing.money_ok === true && !s.no_closing_submitted && (
+              <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--green, #16794a)' }}>
+                ✅ {s.partial_closing.note}
               </div>
             )}
             {s.cross_login?.length > 0 && (

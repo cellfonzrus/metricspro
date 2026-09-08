@@ -202,6 +202,51 @@ def _pvariants(period):
         return [p]
     return list({p, f"{_calendar.month_name[mo]} {yr}", f"{yr}-{mo:02d}"})
 
+def _periods_spanning(start, end, period=None, cap=24):
+    """Every month-period a DATE RANGE touches, oldest first (owner bug report 2026-09-07).
+
+    A month-keyed read (`.in_('period', _pvariants(period))`) can only ever see ONE month, so a range
+    that crosses a month boundary silently collapses to the intersection with whatever month the
+    period dropdown happens to be on. Live: From 06/01/2026 To 08/01/2026 with the selector on
+    August returned **"0 store(s)"** and a note blaming the Tax column — the range and the period had
+    intersected down to a single day.
+
+    Rules, so a half-filled range still behaves:
+      · neither bound  -> [] (the caller keeps its single-period read, byte-identical to before)
+      · both bounds    -> start's month .. end's month
+      · one bound only -> that month .. the selected `period`'s month (either direction)
+
+    `cap` bounds how many months may be read (default 24); a wider ask is truncated to the LAST `cap`
+    months so the caller can compare lengths and say so, rather than quietly reading half a range.
+    Pass cap=None for the untruncated span. Unparseable input -> [] (fall back to period).
+    """
+    def _ym_of_date(v):
+        t = str(v or "").strip()[:10]
+        if len(t) >= 7 and t[:4].isdigit() and t[4] == "-" and t[5:7].isdigit():
+            y, m = int(t[:4]), int(t[5:7])
+            if 1 <= m <= 12 and y:
+                return y, m
+        return None
+
+    a, b = _ym_of_date(start), _ym_of_date(end)
+    if not a and not b:
+        return []
+    if not (a and b):
+        mo, yr = _month_year(period)
+        anchor_ym = (yr, mo) if (1 <= mo <= 12 and yr) else (a or b)
+        a, b = (a or anchor_ym), (b or anchor_ym)
+    if a > b:
+        a, b = b, a
+    out = []
+    y, m = a
+    while (y, m) <= b:
+        out.append(f"{_calendar.month_name[m]} {y}")
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+    return out if cap is None else out[-int(cap):]
+
+
 def _canon_period(period):
     """The SINGLE canonical 'Month YYYY' spelling of a month-period — what the sweeps and the existing
     May/June calc_status + rep_commissions rows use. So '2026-07' and 'July 2026' collapse to one key
@@ -2364,7 +2409,8 @@ _CANON_TO_TAX_BUCKET = {'cash': 'cash', 'credit': 'card', 'ext_cc': 'card',
 
 
 def _blank_tender_split():
-    return {b: {'sales': 0.0, 'taxable_revenue': 0.0, 'tax': 0.0} for b in TAX_TENDER_BUCKETS}
+    return {b: {'sales': 0.0, 'taxable_revenue': 0.0, 'untaxed_revenue': 0.0, 'tax': 0.0}
+            for b in TAX_TENDER_BUCKETS}
 
 
 def _round_tender_split(d):
@@ -2404,8 +2450,16 @@ def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG
     export's Tax column, mig 105). Sourced from the UNIFIED sales set (raw_sales ∪ daily_sales_feed deduped
     by trans_id — `_sales_rows_union_txn`) so a tenant on the daily feed (no monthly upload) still gets a
     tax report and a promoted month is never masked by a stale feed. `start`/`end` (YYYY-MM-DD, optional)
-    narrow to a date range WITHIN the period. Each store row carries its `market` (store_mapping) and a
-    `days` array so the frontend can drill store → day and multi-select by store / market.
+    define a DATE RANGE that may cross month boundaries — every month it touches is read
+    (`_sales_rows_union_txn_range`), and `period` is then only the fallback window for a range with no
+    bounds at all. It used to narrow WITHIN the single `period`, so From 06/01/2026 To 08/01/2026 with
+    the selector on August intersected down to one day and returned "0 store(s)" under a note blaming
+    the Tax column (owner 2026-09-07). Each store row carries its `market` (store_mapping) and a `days`
+    array so the frontend can drill store → day and multi-select by store / market.
+
+    TAXABLE vs NON-TAXABLE is carried as its own number at every grain — store, day and tender bucket
+    (owner 2026-09-07: "need to segregate the sales from taxable and non taxable sales"), rather than
+    being left for a reader to subtract. `revenue` = `taxable_revenue` + `untaxed_revenue`, always.
 
     THREE NUMBERS, NOT ONE (owner 2026-09-07: "the sales tax rate is not correct … it should also have
     the total sales from which the sales tax was collected"):
@@ -2432,12 +2486,16 @@ def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG
     would silently overstate it."""
     require_org(org_id)
     client = sb()
-    rows, _meta = _sales_rows_union_txn(
-        client, org_id, period,
-        cols='trans_id,trans_date,store,ext_price,tax,voided,trans_type,tender_type')
-    resolve_market, all_markets = _store_market_resolver(client, org_id)
     s0 = (start or '').strip()[:10]
     s1 = (end or '').strip()[:10]
+    # RANGE MODE reads every month the range touches. It used to read ONLY `period` and then filter by
+    # day inside it, so From 06/01/2026 To 08/01/2026 with the selector on August intersected down to a
+    # single day and returned "0 store(s)" under a note blaming the Tax column (owner 2026-09-07).
+    rows, _meta = _sales_rows_union_txn_range(
+        client, org_id, period, s0, s1,
+        cols='trans_id,trans_date,store,ext_price,tax,voided,trans_type,tender_type')
+    resolve_market, all_markets = _store_market_resolver(client, org_id)
+    in_window = 0          # rows that survived void / return / the day bounds — see the note below
     by_store = {}
     for r in rows:
         if str(r.get('voided') or '').strip().lower() in ('true', 'yes', '1', 'voided', 'void'):
@@ -2449,11 +2507,13 @@ def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG
             continue
         if s1 and day and day > s1:
             continue
+        in_window += 1
         store = (r.get('store') or '?').strip() or '?'
         s = by_store.get(store)
         if not s:
             s = by_store[store] = {'store': store, 'market': resolve_market(store),
                                    'tax': 0.0, 'revenue': 0.0, 'taxable_revenue': 0.0,
+                                   'untaxed_revenue': 0.0,
                                    'tender': _blank_tender_split(), '_days': {}}
         tx = safe_float(r.get('tax'))
         ext = safe_float(r.get('ext_price'))
@@ -2462,16 +2522,24 @@ def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG
         bucket = _tax_tender_bucket(r.get('tender_type'))
         s['tender'][bucket]['sales'] += ext
         s['tender'][bucket]['tax'] += tx
+        # TAXABLE vs NON-TAXABLE, carried as its own number rather than left to be subtracted
+        # (owner 2026-09-07: "need to segregate the sales from taxable and non taxable sales").
+        # Taxability is the LINE's own tax > 0 — never a department name in code (RULE TWO).
         if tx:
             s['taxable_revenue'] += ext
             s['tender'][bucket]['taxable_revenue'] += ext
+        else:
+            s['untaxed_revenue'] += ext
+            s['tender'][bucket]['untaxed_revenue'] += ext
         if day:
             d = s['_days'].setdefault(day, {'date': day, 'tax': 0.0, 'revenue': 0.0,
-                                            'taxable_revenue': 0.0})
+                                            'taxable_revenue': 0.0, 'untaxed_revenue': 0.0})
             d['tax'] += tx
             d['revenue'] += ext
             if tx:
                 d['taxable_revenue'] += ext
+            else:
+                d['untaxed_revenue'] += ext
     out = []
     for s in by_store.values():
         days = sorted(s['_days'].values(), key=lambda d: d['date'])
@@ -2479,11 +2547,13 @@ def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG
             d['tax'] = round(d['tax'], 2)
             d['revenue'] = round(d['revenue'], 2)
             d['taxable_revenue'] = round(d['taxable_revenue'], 2)
+            d['untaxed_revenue'] = round(d['untaxed_revenue'], 2)
             d['effective_rate'] = (round(100 * d['tax'] / d['taxable_revenue'], 2)
                                    if d['taxable_revenue'] else 0.0)
         out.append({'store': s['store'], 'market': s['market'],
                     'tax': round(s['tax'], 2), 'revenue': round(s['revenue'], 2),
                     'taxable_revenue': round(s['taxable_revenue'], 2),
+                    'untaxed_revenue': round(s['untaxed_revenue'], 2),
                     'effective_rate': (round(100 * s['tax'] / s['taxable_revenue'], 2)
                                        if s['taxable_revenue'] else 0.0),
                     'tender': _round_tender_split(s['tender']),
@@ -2495,9 +2565,30 @@ def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG
     tender_tot = _blank_tender_split()
     for x in out:
         for b, v in x['tender'].items():
-            for kk in ('sales', 'taxable_revenue', 'tax'):
+            for kk in ('sales', 'taxable_revenue', 'untaxed_revenue', 'tax'):
                 tender_tot[b][kk] += v[kk]
-    return {'period': period, 'start': s0, 'end': s1, 'stores': out, 'markets': all_markets,
+    # THE NOTE MUST NAME WHAT ACTUALLY HAPPENED. It used to say "no tax captured for this period —
+    # re-send a file with the Tax column" for BOTH "we read sales and none carried tax" and "we read no
+    # sales at all", so an empty date range accused the operator of a bad upload (owner 2026-09-07,
+    # seeing it on a range that had simply been intersected away). Those are different problems.
+    window = (f"{s0 or '…'} to {s1 or '…'}" if (s0 or s1) else period)
+    periods_read = _meta.get('periods_read') or [period]
+    if total_tax > 0:
+        note = None
+    elif in_window == 0:
+        note = (f"No sales rows at all for {window}"
+                + (f" (read {', '.join(periods_read)})" if (s0 or s1) else "")
+                + ". Nothing was filtered out — there is no data in this window to report on.")
+    else:
+        note = (f"{in_window:,} sales row(s) found for {window}, but NONE carries a tax amount — "
+                "re-send a Sales Transaction Details file that includes the Tax column (migration 105 "
+                "adds the field; the parser maps Tax / Sales Tax).")
+    if _meta.get('truncated'):
+        note = ((note + " ") if note else "") + ("The range spans more than 24 months; only the most "
+                                                 "recent 24 were read.")
+    return {'period': period, 'start': s0, 'end': s1, 'window': window,
+            'periods_read': periods_read, 'rows_in_window': in_window,
+            'stores': out, 'markets': all_markets,
             'totals': {'tax': total_tax, 'revenue': total_rev,
                        'taxable_revenue': total_taxable,
                        'untaxed_revenue': round(total_rev - total_taxable, 2),
@@ -2505,9 +2596,7 @@ def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG
                                           if total_taxable else 0.0),
                        'tender': _round_tender_split(tender_tot)},
             'has_tax': total_tax > 0,
-            'note': (None if total_tax > 0 else
-                     'No tax captured for this period yet — re-send a Sales Transaction Details file that '
-                     'includes the Tax column (migration 105 adds the field; the parser maps Tax / Sales Tax).')}
+            'note': note}
 
 
 @router.get("/upload/history")
@@ -21045,6 +21134,34 @@ def _sales_rows_union_txn(client, org_id, period, cols=_SALES_DISPLAY_COLS):
         'primary_trans': len(ptids),
     }
     return merged, meta
+
+
+def _sales_rows_union_txn_range(client, org_id, period, start, end, cols=_SALES_DISPLAY_COLS):
+    """`_sales_rows_union_txn` over a DATE RANGE that may cross month boundaries. Returns
+    (rows, meta) with meta carrying `periods_read` and `truncated`.
+
+    A THIN WRAPPER, never a second union: it calls the ONE transaction-grain union once per month the
+    range touches (`_periods_spanning`) and concatenates. Safe to concatenate because the union dedupes
+    by trans_id WITHIN a month and a transaction belongs to exactly one month — so nothing is
+    double-counted across the calls, and with no range the caller's single-period read is unchanged.
+    """
+    periods = _periods_spanning(start, end, period)
+    if not periods:
+        rows, meta = _sales_rows_union_txn(client, org_id, period, cols=cols)
+        meta = dict(meta or {}, periods_read=[period], truncated=False)
+        return rows, meta
+    wanted = _periods_spanning(start, end, period, cap=None)
+    rows, metas = [], []
+    for p in periods:
+        r, m = _sales_rows_union_txn(client, org_id, p, cols=cols)
+        rows.extend(r)
+        metas.append(m or {})
+    meta = {k: sum(int(m.get(k) or 0) for m in metas)
+            for k in ('primary_rows', 'other_rows', 'feed_rows', 'raw_rows',
+                      'other_only_rows', 'shown_rows', 'primary_trans')}
+    meta['periods_read'] = periods
+    meta['truncated'] = len(periods) < len(wanted)
+    return rows, meta
 
 
 _ACTUALS_COLS = ("trans_id,trans_date,store,salesperson,user_login,contract_type,department,category,"
