@@ -26,7 +26,8 @@ import { canAccessPath } from '@/lib/rbac'
 
 const DISMISS_KEY = 'pos_onboarding_dismissed_v1'
 
-type Gate = { complete: boolean; required_total: number; required_done: number; next_task_key: string | null }
+type Gate = { complete: boolean; required_total: number; required_done: number
+              next_task_key: string | null; open_hrefs?: string[] }
 
 export default function PosLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
@@ -64,12 +65,23 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     return () => { dead = true }
   }, [])
 
+  // NEVER BOUNCE SOMEONE OFF THE PAGE A TASK SENT THEM TO (owner report 2026-09-08).
+  // "Set your sales-tax rates" links to /pos/settings — itself a /pos/* route — so the gate
+  // redirected the operator to the wizard, whose "Do this now →" sent them back to /pos/settings,
+  // which redirected again. A closed loop, and the step it blocked was the one that stops every
+  // taxable sale charging $0 (live: 29 of 29 stores with no rate, "no way to do it now").
+  // `open_hrefs` is the set of pages OUTSTANDING tasks point at, derived server-side from the same
+  // task registry the wizard renders — never a hardcoded path list here, so a task added later is
+  // reachable without touching this file.
+  const taskTarget = !!gate?.open_hrefs?.some(h => h && (pathname === h || pathname.startsWith(h + '/')))
+
   // The redirect. Only once we KNOW setup is incomplete, only when the user has not asked to
-  // continue later, and never when they are already looking at the wizard.
+  // continue later, never when they are already looking at the wizard, and never away from a page
+  // an outstanding task is asking them to go to.
   useEffect(() => {
-    if (!checked || onWizard || dismissed || !mayConfigure) return
+    if (!checked || onWizard || dismissed || !mayConfigure || taskTarget) return
     if (gate && !gate.complete) router.replace('/pos/onboarding')
-  }, [checked, onWizard, dismissed, mayConfigure, gate, router])
+  }, [checked, onWizard, dismissed, mayConfigure, taskTarget, gate, router])
 
   const outstanding = gate && !gate.complete
     ? Math.max(0, gate.required_total - gate.required_done) : 0
@@ -84,11 +96,14 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
             {outstanding} required step{outstanding === 1 ? '' : 's'} left before you can ring a sale
             reliably.{!mayConfigure && ' Ask your manager to finish the POS setup.'}
           </span>
+          {taskTarget && (
+            <span style={{ fontWeight: 700 }}>You are on the page for one of them.</span>
+          )}
           {mayConfigure && (
             <Link href="/pos/onboarding" style={{ marginLeft: 'auto', fontWeight: 700, color: '#92400e',
               border: '1px solid #fbbf24', borderRadius: 8, padding: '5px 12px',
               textDecoration: 'none', whiteSpace: 'nowrap' }}>
-              Finish setup →
+              {taskTarget ? '← Back to setup' : 'Finish setup →'}
             </Link>
           )}
         </div>

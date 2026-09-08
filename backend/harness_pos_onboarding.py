@@ -517,6 +517,66 @@ else:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
+#  M. THE GATE MUST NOT BLOCK THE PAGE A TASK SENDS YOU TO
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER REPORT 2026-09-08, live: "Sales tax menu is hidden from the pos and when i click on setting
+# up the sales tax it goes to the pos screen and … no way to do it now" — under a wizard reading
+# "29 of 29 stores have NO rate — a taxable sale there charges $0".
+#
+# The POS entry gate redirects EVERY /pos/* route to /pos/onboarding while a required step is
+# outstanding. The "Set your sales-tax rates" task points at /pos/settings — itself a /pos/* route —
+# so the gate bounced the operator off the only screen that could complete it, and the wizard's own
+# "Do this now →" sent them straight back. A closed loop around the step that stops every taxable
+# sale charging $0.
+#
+# `open_hrefs` (the pages OUTSTANDING tasks point at, derived from the same task registry the wizard
+# renders) is now on the status payload, and the layout exempts them. STATIC on the frontend half:
+# a redirect loop compiles, renders and type-checks perfectly.
+print()
+print("=" * 82)
+print("  M. the onboarding gate cannot deadlock a task's own page")
+print("=" * 82)
+try:
+    from app.modules.core import onboarding as _ob
+    _tax = next((t for t in _ob.POS_TASKS if t.get("task_key") == "tax_codes"), None)
+    check("M1 the sales-tax task still points into /pos/*, which is what made the loop possible",
+          bool(_tax) and str(_tax.get("href", "")).startswith("/pos/"),
+          str(_tax.get("href") if _tax else None))
+    _in_pos = [t for t in _ob.POS_TASKS if str(t.get("href", "")).startswith("/pos/")
+               and t.get("href") != "/pos/onboarding"]
+    check("M1b it is not alone — the gate could deadlock any of these task pages",
+          len(_in_pos) >= 5, str(sorted({t.get("href") for t in _in_pos})))
+    check("M1c which is exactly why the exemption is DERIVED, not a list someone maintains",
+          all(str(t.get("href") or "").strip() for t in _in_pos))
+    _src_ob = open("app/modules/core/onboarding.py").read()
+    check("M2 build_status publishes the OUTSTANDING tasks' hrefs",
+          '"open_hrefs"' in _src_ob and 'if not r["complete"]' in _src_ob)
+    check("M3 the cheap status endpoint the gate calls passes them through",
+          '"next_task_key", "open_hrefs"' in _src_ob)
+    check("M4 they are derived from the task registry, not a hardcoded path list",
+          '"/pos/settings"' not in _src_ob.split('"open_hrefs"')[1][:600])
+except Exception as e:
+    skip("M1-M4 onboarding module", str(e)[:140])
+
+_lay = None
+for _p in ("../frontend/src/app/(platform)/pos/layout.tsx",):
+    try:
+        _lay = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), _p)).read()
+    except Exception:
+        _lay = None
+if _lay is None:
+    skip("M5-M8 pos/layout.tsx", "not readable from here")
+else:
+    check("M5 the layout reads open_hrefs", "open_hrefs" in _lay)
+    check("M6 it computes whether the current path is a task target", "const taskTarget" in _lay)
+    check("M7 and the redirect stands down on one",
+          "|| taskTarget) return" in _lay or "taskTarget) return" in _lay)
+    check("M8 taskTarget is in the effect's deps, so it cannot go stale",
+          "taskTarget, gate, router]" in _lay)
+    check("M9 the banner still offers the way BACK to the wizard from a task page",
+          "Back to setup" in _lay)
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
 print(f"\n{'=' * 82}\n  {len(PASS)} pass · {len(FAIL)} FAIL · {len(SKIP)} skip\n{'=' * 82}")
 if FAIL:
     for f in FAIL:

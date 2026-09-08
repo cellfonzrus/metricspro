@@ -44,6 +44,29 @@ lines — is assigned to the **commission-agent** (`.claude/agents/commission-ag
 such work rather than handling inline, and follow its working rules (index-first, config-never-code,
 proof harnesses for money changes, org-scoped queries, evidence-first reconciliation).
 
+## Ship it — merging is autonomous (owner directive 2026-09-08)
+
+Owner: *"I should not be giving instruction to merge, it should be autonomous."*
+
+**Do not ask whether to merge.** When a PR on the working branch is green on its current head, has no
+merge conflict and no unaddressed review thread, take it out of draft and merge it — then say what
+landed. Both hosts auto-deploy from `main`, so merging IS shipping (see §23d: `GET /health` returns the
+built commit; never ask the owner to redeploy).
+
+This is authority to merge, not licence to skip the bar. Everything the house already requires still
+gates the merge, and nothing here weakens it:
+
+- CI green on the head being merged — never skip, disable or quarantine a check to get there.
+- The duplicate check done and stated in the PR (see the index rules above).
+- A DB-free proof harness for the logic, and the regression that reproduces the reported defect.
+- **Money-touching changes and migrations are still surfaced for owner approval before applying** —
+  autonomy covers merging code, not moving money or mutating the schema unasked.
+- A defect found in live data (a stale feed, a missing upload) is REPORTED, never "fixed" by writing
+  code that hides it.
+
+If any of those is not satisfied, the PR waits and the reason is stated plainly — that is the one
+case where the owner hears about a merge that has not happened.
+
 ## House conventions (apply everywhere)
 
 - **RULE TWO — config, never code**: no carrier/tenant/product branch names in code; behavior is

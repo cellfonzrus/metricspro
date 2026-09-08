@@ -426,6 +426,107 @@ for _page, _fetch in (("pickup", "/api/v1/closing/pickups"),
     check(f"9e[{_page}] the store filter is still SENT (a guard must not mask a dropped param)",
           "stores=${encodeURIComponent(" in _src)
 
+# ══ 10. THE ENVELOPE NETS OUT THE BILL-PAY CASH COLLECTED ON THE OTHER SCREEN ════════════════════
+# OWNER DIRECTIVE 2026-09-08: "on the cash pick up it shows the full amount but it should only show
+# the store cash amount to be picked up, as the epay amount is being declared and picked up on a
+# different menu — this is duplicating the total cash", and, asked which figure: "not as declared by
+# the employee but as CALCULATED BY THE POS".
+#
+# Section 10 drives the REAL endpoint. The split rule itself is proven separately and exhaustively in
+# harness_billpay_netting.py; what is pinned here is the WIRING: the switch, the source precedence,
+# and that the number the DM is told to collect actually changes.
+st = fresh_store(); wire(st)
+st["stores"] = [{"org_id": HOUSE, "store_code": "S1", "address": "1 Main St", "market": "Texas",
+                 "is_active": True}]
+st["daily_closing"] = [
+    dc_row(id="n1", store_code="S1", close_date="2026-07-20", employee_name="Jane Rep",
+           store_cash=1000.0, t_cash=1000.0, epay_on_cash=600.0),
+    dc_row(id="n2", store_code="S1", close_date="2026-07-20", employee_name="Mo Rep",
+           store_cash=500.0, t_cash=500.0, epay_on_cash=200.0),
+]
+
+def _with_netting(on, pos_cash):
+    """Run the endpoint with the tenant switch `on` and the POS sales leg reporting `pos_cash`."""
+    _e, _s = cr.billpay_netting_enabled, cr._sales_billpay_for_days
+    cr.billpay_netting_enabled = lambda *_a, **_k: on
+    cr._sales_billpay_for_days = (lambda *_a, **_k: (
+        ({("S1", "2026-07-20"): {"cash": pos_cash}}, "sales_tx", (lambda x: x))
+        if pos_cash is not None else ({}, "none", (lambda x: x))))
+    _p = cr._pos_billpay_for_days
+    cr._pos_billpay_for_days = lambda *_a, **_k: ({}, "none", (lambda x: x))
+    try:
+        return cr.closing_pickups(date="2026-07-20", org_id=HOUSE)
+    finally:
+        cr.billpay_netting_enabled, cr._sales_billpay_for_days, cr._pos_billpay_for_days = _e, _s, _p
+
+_by = lambda r: {e["employee_name"]: e for e in r["envelopes"]}
+
+r_off = _with_netting(False, 800.0)
+e_off = _by(r_off)
+check("10a. switch OFF -> the envelopes are untouched (byte-identical to before this feature)",
+      e_off["Jane Rep"]["cash"] == 1000.0 and e_off["Mo Rep"]["cash"] == 500.0,
+      str([(k, v["cash"]) for k, v in e_off.items()]))
+check("10b. and they say so, rather than claiming to be netted",
+      all(e["billpay_basis"] == "off" and e["billpay_note"] is None for e in e_off.values()))
+
+r_on = _with_netting(True, 800.0)
+e_on = _by(r_on)
+check("10c. switch ON -> the POS $800 comes out, split 3:1 on the reps' own declarations",
+      e_on["Jane Rep"]["billpay_netted"] == 600.0 and e_on["Mo Rep"]["billpay_netted"] == 200.0,
+      str([(k, v["billpay_netted"]) for k, v in e_on.items()]))
+check("10d. the DM is told to collect the NET, not the drawer",
+      e_on["Jane Rep"]["cash"] == 400.0 and e_on["Mo Rep"]["cash"] == 300.0,
+      str([(k, v["cash"]) for k, v in e_on.items()]))
+check("10e. the gross is kept beside it, so nothing is hidden",
+      e_on["Jane Rep"]["cash_gross"] == 1000.0 and e_on["Mo Rep"]["cash_gross"] == 500.0)
+check("10f. the source is named — this is 'as calculated by the POS', and it says which POS figure",
+      all(e["billpay_basis"] == "pos" and str(e["billpay_source"]).startswith("sales:")
+          for e in e_on.values()), str([e["billpay_source"] for e in e_on.values()]))
+check("10g. and the envelope carries one plain sentence for the DM",
+      "bill-pay screen" in (e_on["Jane Rep"]["billpay_note"] or ""), e_on["Jane Rep"]["billpay_note"])
+
+# THE AMOUNT IS THE POS'S, NEVER THE DECLARATION. Same rows, same $800 declared between them, but the
+# POS says only $300 of bill-pay cash actually passed through.
+r_small = _with_netting(True, 300.0)
+e_small = _by(r_small)
+check("10h. the reps declared $800 between them but the POS says $300 — $300 is what comes out",
+      round(sum(e["billpay_netted"] for e in e_small.values()), 2) == 300.0,
+      str([(k, v["billpay_netted"]) for k, v in e_small.items()]))
+check("10i. leaving $1,200 of the $1,500 drawer to collect",
+      round(sum(e["cash"] for e in e_small.values()), 2) == 1200.0)
+
+# NO POS FIGURE IS NOT A ZERO.
+r_none = _with_netting(True, None)
+e_none = _by(r_none)
+check("10j. switch ON but no POS figure for the store-day -> NOTHING is netted",
+      all(e["billpay_basis"] == "none" and e["billpay_netted"] == 0.0 for e in e_none.values()))
+check("10k. the envelope keeps its full amount AND says why it was not netted",
+      e_none["Jane Rep"]["cash"] == 1000.0
+      and "No POS bill-pay figure" in (e_none["Jane Rep"]["billpay_note"] or ""),
+      e_none["Jane Rep"]["billpay_note"])
+
+# THE 27.3% OF LIVE ROWS THAT DECLARE MORE BILL-PAY THAN THEY HOLD (owner: flag them for the DM).
+st["daily_closing"].append(dc_row(id="n3", store_code="S1", close_date="2026-07-20",
+                                  employee_name="Impossible Rep", store_cash=0.0, t_cash=0.0,
+                                  epay_on_cash=891.0, envelope_picture="e.jpg"))
+r_flag = _by(_with_netting(True, 300.0))
+check("10l. a rep declaring $891 of bill-pay against $0.00 of cash is FLAGGED",
+      r_flag["Impossible Rep"]["billpay_declared_exceeds_cash"] is True, str(r_flag.get("Impossible Rep")))
+check("10m. and their honest neighbours are not",
+      r_flag["Jane Rep"]["billpay_declared_exceeds_cash"] is False
+      and r_flag["Mo Rep"]["billpay_declared_exceeds_cash"] is False)
+check("10n. an envelope with no cash can never be netted below zero",
+      r_flag["Impossible Rep"]["cash"] == 0.0 and r_flag["Impossible Rep"]["billpay_netted"] == 0.0)
+check("10o. the flag stands even with netting switched OFF — it is a data-entry defect, not a "
+      "netting one",
+      _by(_with_netting(False, None))["Impossible Rep"]["billpay_declared_exceeds_cash"] is True)
+
+_src_cr = open("app/modules/closing/router.py").read()
+check("10p. the switch is per-org config, not a code branch (RULE TWO)",
+      "def billpay_netting_enabled" in _src_cr and "pickup_nets_pos_billpay_cash" in _src_cr)
+check("10q. it defaults OFF, so an un-migrated database is unchanged",
+      "except Exception:\n        return False" in _src_cr)
+
 # ── Summary ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:

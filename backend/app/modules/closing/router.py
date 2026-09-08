@@ -30,6 +30,7 @@ from . import envelope_report as envelope_report_mod
 from . import entry_quality
 from . import pickup_actual as _pickup_actual
 from . import closer_resolution
+from . import billpay_netting
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -5299,6 +5300,81 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
         e["pos_delta"] = _c.get("delta")
         e["pos_status"] = _c.get("status") or "no_pos_data"
         e["pos_declared_day"] = _c.get("declared")   # the store-day declared total the delta uses
+
+    # ── BILL-PAY CASH IS COLLECTED ON THE OTHER SCREEN ────────────────────────────────────────────
+    # OWNER DIRECTIVE 2026-09-08: "on the cash pick up it shows the full amount but it should only
+    # show the store cash amount to be picked up, as the epay amount is being declared and picked up
+    # on a different menu — this is duplicating the total cash", and, asked which figure: "not as
+    # declared by the employee but as CALCULATED BY THE POS".
+    #
+    # The closing form's cash field is "Total cash in store including Bill Payments" (owner
+    # 2026-09-02), so `t_cash` is the whole drawer and the bill-pay share sits inside it. This page
+    # collected the drawer; the bill-pay page separately offers that share. Same dollars, two screens.
+    #
+    # The AMOUNT comes from the POS, never the declaration: live August, 147 of 539 closings (27.3%)
+    # declared MORE bill-pay cash than total cash — 30-odd with $0.00 of cash and $687-$891 of
+    # bill-pay — so the declaration cannot be the amount. It only decides the SPLIT between the reps
+    # who worked (see billpay_netting, which is pure and proven).
+    #
+    # SOURCES, in order, both already-shared resolutions — never a second derivation:
+    #   1. `_sales_billpay_for_days` — bill payments in the POS sales transactions, `cash` leg
+    #      (mig 944 tender split). This is "as calculated by the POS".
+    #   2. `_pos_billpay_for_days` — the processor's own figure, when the sales leg has nothing.
+    # Neither has the store-day -> basis 'none': NOTHING is netted and the envelope says so, because
+    # subtracting a fabricated zero and calling it reconciled is the defect class this file exists to
+    # avoid. RULE TWO: off unless the tenant switches it on.
+    _net_on = billpay_netting_enabled(client, org_id)
+    _bp_days = sorted({str(e.get("close_date") or "")[:10] for e in out if e.get("close_date")})
+    _bp_cash, _bp_src = {}, "none"
+    if _net_on and _bp_days:
+        try:
+            _sales_bp, _s_src, _s_key = _sales_billpay_for_days(client, org_id, _bp_days)
+            if _sales_bp:
+                _bp_cash = {k: _f(v.get("cash")) for k, v in _sales_bp.items()}
+                _bp_src, _bp_key = f"sales:{_s_src}", _s_key
+            else:
+                _proc_bp, _p_src, _p_key = _pos_billpay_for_days(client, org_id, _bp_days)
+                if _proc_bp:
+                    _bp_cash, _bp_src, _bp_key = dict(_proc_bp), f"processor:{_p_src}", _p_key
+                else:
+                    _bp_key = _s_key
+        except Exception as _e:
+            print(f"WARN closing_pickups bill-pay netting source failed: {_e}")
+            _bp_key = (lambda x: x)
+    else:
+        _bp_key = (lambda x: x)
+
+    _by_sd, _decl_bp = {}, {}
+    for r in rows:
+        _k = ((r.get("store_code") or ""), str(r.get("close_date") or "")[:10],
+              (r.get("employee_name") or ""))
+        _decl_bp[_k] = _f(r.get("epay_on_cash"))
+    for e in out:
+        _sd = ((e.get("store_code") or ""), str(e.get("close_date") or "")[:10])
+        _by_sd.setdefault(_sd, []).append(e)
+    for _sd, _envs in _by_sd.items():
+        _pos_bp = None
+        if _net_on and _bp_cash:
+            try:
+                _pos_bp = _bp_cash.get((_bp_key(_sd[0]), _sd[1]))
+            except Exception:
+                _pos_bp = None
+        _res = billpay_netting.net_store_day(
+            [{"key": id(e), "t_cash": e.get("cash"),
+              "epay_on_cash": _decl_bp.get((_sd[0], _sd[1], e.get("employee_name") or ""), 0.0)}
+             for e in _envs],
+            pos_billpay_cash=_pos_bp, enabled=_net_on)
+        for e in _envs:
+            _row = _res["rows"].get(id(e)) or {}
+            e["cash_gross"] = _row.get("gross", e.get("cash"))
+            e["billpay_netted"] = _row.get("billpay_netted", 0.0)
+            e["billpay_basis"] = _res["basis"]
+            e["billpay_source"] = _bp_src if _res["basis"] == "pos" else None
+            e["billpay_declared"] = _row.get("declared_billpay", 0.0)
+            e["billpay_declared_exceeds_cash"] = bool(_row.get("declared_exceeds_cash"))
+            e["billpay_note"] = billpay_netting.envelope_note(_res, id(e))
+            e["cash"] = _row.get("net", e.get("cash"))
+
     out.sort(key=lambda e: (e["picked_up"], str(e.get("close_date") or ""), str(e.get("store_name") or "")))
 
     # Stores that did NOT submit a daily closing (single-date only — ambiguous over a range). Same
@@ -6346,6 +6422,20 @@ def _pos_tenders_for_days(client, org_id, days):
         except Exception:
             pass
     return out
+
+
+def billpay_netting_enabled(client, org_id) -> bool:
+    """Does this tenant collect bill-pay cash on its OWN screen, so the pickup envelope must net it
+    out? (owner directive 2026-09-08). RULE TWO: per-org config, house default OFF — ADAPTIVE, so a
+    database without mig 989 behaves exactly as before. NEVER raises: a config read that fails must
+    not change what a DM is told to collect."""
+    try:
+        rows = (client.schema("commcalc").table("cash_pickup_config")
+                .select("pickup_nets_pos_billpay_cash").eq("org_id", org_id).limit(1)
+                .execute().data) or []
+        return bool(rows and rows[0].get("pickup_nets_pos_billpay_cash"))
+    except Exception:
+        return False
 
 
 def _pos_billpay_for_days(client, org_id, days):
