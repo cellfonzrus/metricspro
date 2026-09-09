@@ -84,6 +84,11 @@ MA_HEAD_DETAIL = {"carrier_comm": "SPIFF / bounty",
 #       and COGS both move by the same amount); only the section subtotals move. Config, never
 #       code: the routing is data-driven off the resolved org config, no tenant branch anywhere.
 REBATE_ROUTES = {"contra_cogs": ("device_rebate", -1), "income": ("rebate_income", 1)}
+# ── mig 996 (owner directive 2026-09-09: "what we need to book as profit in p&L is not the device
+# rebate but it should be a seaprate set of columns which represent the device margin which is equal
+# to selling price + device rebate - device cost"). See the DEVICE MARGIN section at the foot of
+# this module for the block, its columns and the gross-profit identity.
+DEVICE_MARGIN_ROUTES = ("off", "margin_block")
 
 
 def rebate_route(cfg):
@@ -113,12 +118,14 @@ def default_config():
         "mdf_product_tokens": [],
         "line_labels": {},
         "rebate_presentation": "contra_cogs",
+        "device_margin_presentation": "off",
     }
 
 
 _CFG_COLS_314 = ("pl_ma_store_attribution,pl_ma_month_spiff_source,"
                  "pl_ma_spiff_order_types,pl_mdf_product_tokens,pl_line_labels")
 _CFG_COLS_934 = _CFG_COLS_314 + ",pl_rebate_presentation"
+_CFG_COLS_996 = _CFG_COLS_934 + ",pl_device_margin_presentation"
 
 
 def load_config(client, org_id):
@@ -129,10 +136,11 @@ def load_config(client, org_id):
     try:
         # Column-set fallback, NEWEST first: selecting a column a live DB doesn't have yet is a
         # PostgREST error for the WHOLE select, and falling all the way back to defaults would
-        # silently drop the mig-314 seeds an org already runs on. So: mig-934 column set, then the
-        # mig-314 set, then defaults — each older set keeps every value it does carry.
+        # silently drop the mig-314 seeds an org already runs on. So: mig-996 column set, then the
+        # mig-934 set, then the mig-314 set, then defaults — each older set keeps every value it
+        # does carry.
         rows = []
-        for _cols in (_CFG_COLS_934, _CFG_COLS_314):
+        for _cols in (_CFG_COLS_996, _CFG_COLS_934, _CFG_COLS_314):
             try:
                 rows = (client.schema("commcalc").table("commission_org_config")
                         .select(_cols).eq("org_id", org_id).limit(1).execute().data) or []
@@ -160,6 +168,9 @@ def load_config(client, org_id):
             reb = str(r.get("pl_rebate_presentation") or "").strip().lower()
             if reb in REBATE_ROUTES:
                 cfg["rebate_presentation"] = reb
+            dmp = str(r.get("pl_device_margin_presentation") or "").strip().lower()
+            if dmp in DEVICE_MARGIN_ROUTES:
+                cfg["device_margin_presentation"] = dmp
     except Exception:
         pass
     return cfg
@@ -430,6 +441,160 @@ def ma_tx_coverage(rows, pnl_cfg=None, cfg=None, reasons=None):
                                            if s["reason"] == NO_RULE_REASON), 2)}
 
 
+# ── DEVICE MARGIN IS THE PROFIT, NOT THE REBATE (owner directive 2026-09-09, mig 996) ────────────
+# Owner, verbatim: "what we need to book as profit in p&L is not the device rebate but it should be
+# a seaprate set of columns which represent the device margin which is equal to selling price +
+# device rebate - device cost".
+#
+# ❶ THE CARRIER'S OWN `device_margin` COLUMN IS **NOT** THAT FORMULA — MEASURED, NOT ASSUMED.
+#   `commcalc.raw_ma_commission.device_margin`, org 854f6d7b…, August 2026: 354 non-zero rows of
+#   1,248, taking exactly TWO values — −20.00 (262 rows) and −10.00 (92 rows) — summing to −6,160.00
+#   (feed convention: negative = paid TO the dealer). A flat $20/$10 per-unit allowance the master
+#   agent pays on a device sale. It cannot be "selling price + rebate − cost": it does not vary with
+#   the handset (an iPhone 17 Pro Max carrying a −1,199.99 rebate and an iPhone 16e carrying −575.00
+#   both show −20.00), and the sheet's `consumer_value` / `consumer_margin` (the only price-shaped
+#   columns) are 0.00 for the whole month. So it is KEPT WHERE IT IS — its own `ma_device_margin`
+#   revenue line, dollars unchanged — and the owner's device margin is a DIFFERENT, computed thing.
+#   `carrier_device_margin_profile()` below is the pure read-out that establishes this per period,
+#   so no future month is assumed to behave like August.
+#
+# ❷ THE OWNER'S DEVICE MARGIN IS ALREADY IN THE BOOKS — SPREAD ACROSS THREE LINES IN TWO SECTIONS.
+#   selling price = `device_rev` (POS device sales revenue) · device rebate = the rebate route's
+#   line (`device_rebate` contra-COGS, house default, or `rebate_income`) · device cost =
+#   `device_cost` (device_cogs.resolve, invoice-first). August 2026, measured:
+#       80.81 + 251,946.31 − 260,206.80 = −8,179.68
+#   which is EXACTLY what the device leg already contributes to gross profit today. The owner is not
+#   asking for a new dollar; he is asking for that dollar to be presented as ONE margin with its
+#   components as columns, instead of a $251,946.31 rebate that reads like profit next to a
+#   $260,206.80 cost.
+#
+# ❸ SO THE BLOCK REPLACES ITS COMPONENTS — IT NEVER SITS BESIDE THEM. `margin_block` books the three
+#   component amounts onto ONE line (`device_margin`) as three named COLUMNS (the drill-down detail),
+#   and the lines it supersedes (`device_margin_supersedes()`) must carry nothing. Adding the block
+#   while leaving the components booked would double-count the device leg — that is the single
+#   dangerous mistake here, so `device_margin_gp_delta()` exists to prove the swap is GP-neutral and
+#   the harness pins it at 0.00.
+#
+# RULE TWO: one per-org knob, `commission_org_config.pl_device_margin_presentation`
+# ('off' = house default, byte-identical for every org | 'margin_block'), no carrier or tenant name.
+DEVICE_MARGIN_LINE = "device_margin"
+# (column key, display label, component name, sign against the component amount as it is booked to
+#  the legacy line). `device_rebate` is passed in the ROUTE'S OWN sign — negative under
+#  'contra_cogs' (contra-COGS), positive under 'income' — and normalised here, so the block reads
+#  the same under either rebate route.
+DEVICE_MARGIN_COLUMNS = (
+    ("device_margin_price",  "Device selling price", "selling_price"),
+    ("device_margin_rebate", "Device rebate",        "device_rebate"),
+    ("device_margin_cost",   "Device cost",          "device_cost"),
+)
+DEVICE_MARGIN_COLUMN_KEYS = tuple(k for k, _l, _c in DEVICE_MARGIN_COLUMNS)
+# The P&L lines whose dollars the block ABSORBS. Under 'margin_block' every one of these must book
+# nothing (see ❸); under 'off' the block books nothing and these are untouched.
+# (the two rebate lines are `REBATE_ROUTES`' own line keys — BOTH, so the block is complete under
+#  either rebate route; the harness pins that equality rather than letting the two lists drift.)
+DEVICE_MARGIN_SUPERSEDES = ("device_rev", "device_cost") + tuple(
+    line for line, _sign in REBATE_ROUTES.values())
+
+
+def device_margin_presentation(cfg):
+    """PURE: the org's device-margin presentation — 'off' (house default; the block books nothing
+    and every existing line is byte-identical) or 'margin_block'. An unknown/absent value is 'off',
+    never a guess."""
+    key = (cfg or {}).get("device_margin_presentation") if isinstance(cfg, dict) else None
+    key = str(key or "").strip().lower()
+    return key if key in DEVICE_MARGIN_ROUTES else "off"
+
+
+def device_margin_supersedes(cfg):
+    """PURE: the P&L line keys the block absorbs under this org's config — () when 'off'. Finance
+    suppresses exactly these while the block is on; anything left booked would double-count."""
+    return DEVICE_MARGIN_SUPERSEDES if device_margin_presentation(cfg) == "margin_block" else ()
+
+
+def device_margin_columns(selling_price=0.0, device_rebate=0.0, device_cost=0.0):
+    """PURE: the owner's formula, as its columns. `device_rebate` is accepted in EITHER rebate-route
+    sign (negative contra-COGS or positive income) and is normalised to money-in; `device_cost` is a
+    positive COGS figure and enters the margin negatively.
+
+    Returns {"columns": [(key, label, amount), …], "net": float} where
+        net = selling price + device rebate − device cost.
+    August-2026 org 854f6d7b…: 80.81 + 251,946.31 − 260,206.80 = −8,179.68."""
+    price = round(safe_float(selling_price), 2)
+    rebate = round(abs(safe_float(device_rebate)), 2)
+    cost = round(safe_float(device_cost), 2)
+    amounts = {"device_margin_price": price,
+               "device_margin_rebate": rebate,
+               "device_margin_cost": -cost}
+    cols = [(k, label, amounts[k]) for k, label, _c in DEVICE_MARGIN_COLUMNS]
+    return {"columns": cols, "net": round(price + rebate - cost, 2)}
+
+
+def device_margin_bookings(components_by_store, cfg=None):
+    """PURE: {store_or_None: {selling_price, device_rebate, device_cost}} + resolved config →
+    ordered bookings [(line_key, store_or_None, amount, column_label), …] for coa's `add()`.
+
+    'off' ⇒ [] (byte-identical: nothing books, the three existing lines keep their dollars).
+    'margin_block' ⇒ per store the THREE columns book to the ONE `device_margin` line, so the line
+    total is the margin and its drill-down is the owner's formula, term by term. Stores are emitted
+    in a stable order (company-wide `None` last) so the incremental 2-dp rounding in `add()` is
+    deterministic."""
+    if device_margin_presentation(cfg) != "margin_block":
+        return []
+    out = []
+    keys = sorted((k for k in (components_by_store or {}) if k is not None), key=str)
+    if None in (components_by_store or {}):
+        keys.append(None)
+    for st in keys:
+        comp = (components_by_store or {}).get(st) or {}
+        block = device_margin_columns(comp.get("selling_price"), comp.get("device_rebate"),
+                                      comp.get("device_cost"))
+        for key, label, amt in block["columns"]:
+            out.append((DEVICE_MARGIN_LINE, st, amt, label))
+    return out
+
+
+def device_margin_gp_delta(components_by_store, cfg=None):
+    """PURE: what switching an org to 'margin_block' does to GROSS PROFIT, in dollars.
+
+    Legacy presentation contributes `selling_price − (device_cost − device_rebate)` to GP (the
+    rebate nets against cost under 'contra_cogs', or adds to revenue under 'income' — identical
+    either way, mig 934). The block contributes its net. The two are the same arithmetic, so this
+    is 0.00 whenever the block supersedes its components as it must; a non-zero result means a
+    caller left a superseded line booked and the device leg is being counted twice."""
+    legacy = block = 0.0
+    for comp in (components_by_store or {}).values():
+        comp = comp or {}
+        price = safe_float(comp.get("selling_price"))
+        rebate = abs(safe_float(comp.get("device_rebate")))
+        cost = safe_float(comp.get("device_cost"))
+        legacy += price - (cost - rebate)
+        block += device_margin_columns(price, rebate, cost)["net"]
+    return round(block - legacy, 2)
+
+
+def carrier_device_margin_profile(rows, column="device_margin"):
+    """PURE: what the CARRIER's own margin column actually is, for a set of raw_ma_commission rows.
+    Establishes ❶ per period instead of assuming August's shape holds forever.
+
+    Returns {"rows", "nonzero_rows", "total", "distinct_values" (sorted), "flat_per_unit" (bool),
+             "matches_owner_formula" (None — undecidable from this column alone)}.
+    `flat_per_unit` True means the column takes so few distinct values that it cannot be a
+    price-derived margin: it is a per-unit allowance, and the owner's device margin must be
+    COMPUTED (device_margin_columns) rather than read off the sheet."""
+    vals, total, nonzero, n = {}, 0.0, 0, 0
+    for r in rows or []:
+        n += 1
+        v = round(safe_float((r or {}).get(column)), 2)
+        total += v
+        if v:
+            nonzero += 1
+            vals[v] = vals.get(v, 0) + 1
+    return {"rows": n, "nonzero_rows": nonzero, "total": round(total, 2),
+            "distinct_values": sorted(vals), "value_counts": dict(vals),
+            "flat_per_unit": 0 < len(vals) <= 3,
+            "matches_owner_formula": None}
+
+
 # ── "rebate received is not commission" (owner directive 2026-09-08) ─────────────────────────────
 # "dont count any rebate received in the commission — it reflects in the balance sheet towards gross
 # sales but not in gross profit."
@@ -456,13 +621,57 @@ COMMISSION_RECEIVED_LINES = (
     "fee_income",             # fee margin from the commission sheet
 )
 REBATE_LINES = tuple(line for line, _sign in REBATE_ROUTES.values())
+# Owner directive 2026-09-09 makes the device margin a BOOKED PROFIT line. That does NOT make it
+# commission: it is selling price + rebate − cost on handsets the dealer bought and sold, and the
+# rebate the owner explicitly excluded is one of its three columns. The block's line and all three
+# of its column keys are therefore excluded from "commission received" for exactly the reason the
+# rebate is — pinned by harness_commission_backoffice_recon.py §F and harness_device_margin_block.py
+# so no future edit can re-file device profit as commission earned.
+NON_COMMISSION_DEVICE_LINES = ((DEVICE_MARGIN_LINE, "ma_device_margin", "device_rev", "device_cost")
+                               + DEVICE_MARGIN_COLUMN_KEYS + REBATE_LINES)
 
 
 def commission_received_lines():
     """PURE: the P&L line keys that make up "commission received" from the carrier / master agent.
-    Deliberately EXCLUDES every rebate line (`REBATE_LINES`), device margin and device revenue —
-    a rebate is money back on a purchase, not commission earned."""
+    Deliberately EXCLUDES every rebate line (`REBATE_LINES`), the device-margin block and its
+    columns, the carrier's own per-unit device margin and device revenue
+    (`NON_COMMISSION_DEVICE_LINES`) — a rebate is money back on a purchase, and a device margin is
+    trading profit on a handset; neither is commission earned for producing a subscriber."""
     return COMMISSION_RECEIVED_LINES
+
+
+# ── "a hypothesis must reproduce the stores, not just the total" (owner directive 2026-09-09) ────
+# Reverse-calculating a back-office line is only finished when it lands STORE BY STORE. Two
+# different money families can total the same month to the dollar and still be different money, so
+# a total-only agreement is not evidence — it is a coincidence waiting to be found out. This is the
+# shared comparator the back-office recon uses to say so out loud, rather than each investigation
+# re-deciding what "matches" means.
+AGREEMENT_REPRODUCES = "reproduces"          # total AND every store, within tolerance
+AGREEMENT_TOTAL_ONLY = "total only"          # the coincidence case — explicitly NOT a match
+AGREEMENT_NO = "does not reproduce"
+
+
+def per_store_agreement(ours, theirs, tol=0.01):
+    """PURE: {store: amount} ours vs theirs → how well a candidate reproduces a target, per store.
+
+    Returns {"stores", "stores_exact", "total_ours", "total_theirs", "total_diff", "max_abs_diff",
+             "worst_store", "verdict"}. `verdict` is AGREEMENT_REPRODUCES only when the total AND
+    every store agree within `tol`; a candidate that ties on the month but misses stores is
+    AGREEMENT_TOTAL_ONLY — named, so it can never be reported as a match."""
+    keys = sorted(set(ours or {}) | set(theirs or {}))
+    diffs = {k: round(safe_float((ours or {}).get(k)) - safe_float((theirs or {}).get(k)), 2)
+             for k in keys}
+    exact = sum(1 for k in keys if abs(diffs[k]) <= tol)
+    to = round(sum(safe_float(v) for v in (ours or {}).values()), 2)
+    tt = round(sum(safe_float(v) for v in (theirs or {}).values()), 2)
+    worst = max(keys, key=lambda k: abs(diffs[k])) if keys else None
+    total_ok = abs(round(to - tt, 2)) <= tol
+    verdict = (AGREEMENT_REPRODUCES if total_ok and exact == len(keys) and keys
+               else AGREEMENT_TOTAL_ONLY if total_ok else AGREEMENT_NO)
+    return {"stores": len(keys), "stores_exact": exact, "total_ours": to, "total_theirs": tt,
+            "total_diff": round(to - tt, 2),
+            "max_abs_diff": round(max((abs(d) for d in diffs.values()), default=0.0), 2),
+            "worst_store": worst, "verdict": verdict}
 
 
 def apply_line_labels(lines, labels):
@@ -476,3 +685,129 @@ def apply_line_labels(lines, labels):
         if k and v and k in (lines or {}):
             lines[k]["label"] = v
     return lines
+
+
+# ── A SPIFF PAID LATE BELONGS TO THE ACTIVATION THAT EARNED IT (owner directive 2026-09-09) ──────
+# Owner, verbatim: "not sure what retrto active post paid spiff is im assuming spiff paid later but
+# it must be assigned to a phone number or imei or order actiavted at a certain store".
+#
+# He is right about the principle, and the data answers only half of it. MEASURED, org 854f6d7b…,
+# August 2026, the 230 `'Retroactive Postpaid Spiff'` rows ($3,794.56, which now book to
+# `carrier_comm` because the owner added the family to `pl_ma_spiff_order_types`):
+#   • STORE — YES. All 230 carry `account_id`, and all 230 resolve to a store through the mig-314
+#     account→store index. Nothing is company-wide; nothing is allocated by a formula.
+#   • REP — YES. All 230 carry `user_name` (42 distinct clerk logins).
+#   • WHEN PAID — YES. All 230 carry `tx_date`, all inside August.
+#   • THE ACTIVATION — NO. Every product_name is a MONTH-1 "… New Activation Commission", i.e. an
+#     activation-month spiff arriving late, exactly as the owner assumed. But the row cannot be
+#     pointed AT that activation: `raw_ma_daily_tx` has no imei and no mdn, and its `order_number`
+#     matches NOTHING — not `raw_ma_commission.activation_order` (0 of 230 against all 2,522
+#     activation orders we hold, June–September), not `merchant_invoice`, `platform_tx_id`,
+#     `pos_invoice` or `external_ref` (0 each), and not any other daily-tx row: each of the 230
+#     order numbers appears exactly once in 56,515 rows spanning February–September.
+#     ⚠ This is NOT special to the retroactive family — it is how the whole PAYOUT side of this feed
+#     is keyed. `order_number` matches an activation order ONLY on `'Activation Order'` rows (1,735
+#     of 4,995); across `Postpaid Residual Order` (19,790), `PostPaid Additional Spiff` (11,060),
+#     `Sales Order` (10,758), `Postpaid Promo Order` (3,707) and every other family the match rate
+#     is 0.0%. So the mig-308 hop-2 premise ("one order = activation row + MONTH-n rows +
+#     adjustments", `sale_installment_engine.build_ma_tx_index`) does not hold for this tenant's
+#     export: each payout row carries its own transaction id, so `build_ma_tx_index[order]['months']`
+#     can never be populated for an order whose activation row the same index holds. REPORTED as a
+#     live-data fact, not worked around in code.
+#
+# WHAT THE FEED WOULD HAVE TO CARRY: the activation's own identifier on the payout row — the same id
+# space as `raw_ma_commission.activation_order` / the `'Activation Order'` rows' `order_number` — or
+# an `imei`/`mdn` column. With either, the month a late spiff belongs to becomes a lookup and the
+# `activation_period` below stops being None. WITHOUT it, matching a $15.00 retroactive row to one
+# of a store's month-old $15.00 activations by amount+plan is a GUESS, and a guess that looks
+# precise is worse than a stated absence — so this function never makes one.
+ATTRIBUTION_NO_ACTIVATION_REASON = (
+    "activation not identifiable — the payout row carries no imei/mdn and its order_number "
+    "matches no activation order in any feed")
+
+
+def _norm_order(v):
+    """Trim + strip an Excel-float trailing '.0'. The SAME normalization the mig-308 join owner
+    (`sale_installment_engine._norm_order`) applies to `activation_order` ↔ `order_number`; it is
+    restated here as two lines rather than importing that heavy module, so this stays a pure,
+    DB-free read-out. NOT digit-only — order numbers can be alphanumeric."""
+    s = str(v or "").strip()
+    return s[:-2] if s.endswith(".0") else s
+
+
+def ma_payout_attribution(rows, activation_orders=None, store_index=None, activation_period=None):
+    """PURE: raw_ma_daily_tx payout rows → what each order-type family CAN honestly be attributed
+    to, and what it cannot.
+
+    A READ-OUT beside `ma_tx_bookings` / `ma_tx_coverage` — not a second join and not a second
+    booking path. It reports which rows the EXISTING mig-308 activation_order ↔ order_number linkage
+    reaches, and names the absence for the rest. It moves no dollar.
+
+      rows              — raw_ma_daily_tx dicts (order_type, order_number, account_id, user_name,
+                          tx_date, retail_cost).
+      activation_orders — known activation order ids (`raw_ma_commission.activation_order` ∪ the
+                          `'Activation Order'` rows' `order_number`). None/empty ⇒ nothing links.
+      store_index       — {account_id: store} (`canonical_store_index`). None ⇒ no store is claimed
+                          for any row; a store is NEVER inferred from anything else.
+      activation_period — {activation_order: period} so a linked late spiff can be reported against
+                          the month it was EARNED in. Absent ⇒ no period is claimed.
+
+    Returns {"families": [{order_type, rows, amount, stores, reps, dated, linked_rows,
+                           linked_amount, unlinked_rows, unlinked_amount, store_resolved_rows,
+                           store_unresolved_rows, activation_periods, reason}, …],
+             "rows", "amount", "linked_amount", "unlinked_amount", "store_resolved_amount"}
+    ordered biggest-|amount| first. `amount` is money TO the dealer (−retail_cost) — the same sign
+    convention `ma_tx_bookings` books with. `reason` is set only for a family with unlinked rows."""
+    known = {_norm_order(o) for o in (activation_orders or [])} - {""}
+    idx = {str(k).strip(): v for k, v in (store_index or {}).items() if str(k).strip()}
+    per = {}
+    for r in rows or []:
+        r = r or {}
+        ot = str(r.get("order_type") or "").strip()
+        fam = per.setdefault(ot, {"order_type": ot, "rows": 0, "amount": 0.0,
+                                  "stores": set(), "reps": set(), "dated": 0,
+                                  "linked_rows": 0, "linked_amount": 0.0,
+                                  "unlinked_rows": 0, "unlinked_amount": 0.0,
+                                  "store_resolved_rows": 0, "store_unresolved_rows": 0,
+                                  "activation_periods": set()})
+        amt = -safe_float(r.get("retail_cost"))
+        fam["rows"] += 1
+        fam["amount"] += amt
+        store = idx.get(str(r.get("account_id") or "").strip())
+        if store:
+            fam["stores"].add(store)
+            fam["store_resolved_rows"] += 1
+        else:
+            fam["store_unresolved_rows"] += 1
+        rep = str(r.get("user_name") or "").strip()
+        if rep:
+            fam["reps"].add(rep)
+        if str(r.get("tx_date") or "").strip():
+            fam["dated"] += 1
+        order = _norm_order(r.get("order_number"))
+        if order and order in known:
+            fam["linked_rows"] += 1
+            fam["linked_amount"] += amt
+            p = (activation_period or {}).get(order)
+            if p:
+                fam["activation_periods"].add(str(p))
+        else:
+            fam["unlinked_rows"] += 1
+            fam["unlinked_amount"] += amt
+    out = []
+    for fam in per.values():
+        fam["stores"] = sorted(fam["stores"])
+        fam["reps"] = sorted(fam["reps"])
+        fam["activation_periods"] = sorted(fam["activation_periods"])
+        for k in ("amount", "linked_amount", "unlinked_amount"):
+            fam[k] = round(fam[k], 2)
+        fam["reason"] = ATTRIBUTION_NO_ACTIVATION_REASON if fam["unlinked_rows"] else None
+        out.append(fam)
+    out.sort(key=lambda fm: (-abs(fm["amount"]), fm["order_type"]))
+    return {"families": out,
+            "rows": sum(fm["rows"] for fm in out),
+            "amount": round(sum(fm["amount"] for fm in out), 2),
+            "linked_amount": round(sum(fm["linked_amount"] for fm in out), 2),
+            "unlinked_amount": round(sum(fm["unlinked_amount"] for fm in out), 2),
+            "store_resolved_amount": round(
+                sum(fm["amount"] for fm in out if not fm["store_unresolved_rows"]), 2)}

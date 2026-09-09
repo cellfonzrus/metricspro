@@ -341,5 +341,159 @@ check("a row worth 0.00 records its line as a MEASURED zero, not as an absence",
 check("a store with NO rows is absent from the mapping, never rendered as 0.00",
       mdf.get(not_measured) is None and not_measured not in mdf)
 
+print("I. REVERSE-CALCULATING 'Activation Spiff' $18,061.37 — a clean negative, store by store")
+# Owner 2026-09-09: "do the reverse calculation for 18061.37 as it might be back offices own
+# terminolofy it could be just a total of all commision recd". The per-store figures below are the
+# owner's own workbooks; the candidate vectors are LIVE August-2026 measurements (read 2026-09-09).
+BO_ACTIVATION_SPIFF = {
+    "4640-A W Diversey Ave": 1460.29, "3248 W Lawrence Ave": 863.61,
+    "6500 W Irving Park Rd": 492.89, "2640 Narragansett": 863.92, "3966 W Grand Ave": 1582.25,
+    "5601 W Belmont Ave": 1772.04, "4801 W Armitage Ave": 1414.05,
+    "2317 S Cicero Ave STE A": 1187.14, "2414 W Cermak Rd": 797.57, "3352 W 26th St": 1038.17,
+    "3735 W 26th St": 1069.15, "639 W Lincoln Hwy": 572.55, "18226 Kedzie Ave": 476.08,
+    "3560 Nostrand Avenue": 592.46, "957 Pennsylvania Avenue": 1464.27,
+    "218-80 Hempstead Avenue": 613.02, "531 Utica Ave": 517.31, "104-08 Lefferts Blvd": 506.51,
+    "902 Avenue U": 427.99, "7812 Bergenline Ave": 350.10,
+}
+# Finalist 1 — the commission sheet's MONTH-1 activation commission (|raw_ma_commission.spiff_m1|),
+# the only "activation spiff" shaped money in the feeds. Σ 23,271.90.
+OURS_SPIFF_M1 = {
+    "4640-A W Diversey Ave": 2007.01, "3248 W Lawrence Ave": 1052.09,
+    "6500 W Irving Park Rd": 813.94, "2640 Narragansett": 1198.95, "3966 W Grand Ave": 1951.55,
+    "5601 W Belmont Ave": 1959.80, "4801 W Armitage Ave": 1849.05,
+    "2317 S Cicero Ave STE A": 1384.64, "2414 W Cermak Rd": 1017.57, "3352 W 26th St": 1162.45,
+    "3735 W 26th St": 1199.15, "639 W Lincoln Hwy": 673.52, "18226 Kedzie Ave": 695.51,
+    "3560 Nostrand Avenue": 712.46, "957 Pennsylvania Avenue": 1919.29,
+    "218-80 Hempstead Avenue": 920.52, "531 Utica Ave": 789.81, "104-08 Lefferts Blvd": 866.50,
+    "902 Avenue U": 597.99, "7812 Bergenline Ave": 500.10,
+}
+# Finalist 2 — the refill/RTR wallet margin (raw_ma_daily_tx 'Sales Order' merchant_discount), the
+# half of our one "Merchant discount" line the back office does not carry as Activation Profit.
+OURS_WALLET_MARGIN = {
+    "4640-A W Diversey Ave": 1151.99, "3248 W Lawrence Ave": 1032.99,
+    "6500 W Irving Park Rd": 286.26, "2640 Narragansett": 353.96, "3966 W Grand Ave": 1870.95,
+    "5601 W Belmont Ave": 1030.95, "4801 W Armitage Ave": 1168.94,
+    "2317 S Cicero Ave STE A": 1016.81, "2414 W Cermak Rd": 833.14, "3352 W 26th St": 1073.69,
+    "3735 W 26th St": 1166.54, "639 W Lincoln Hwy": 454.32, "18226 Kedzie Ave": 263.86,
+    "3560 Nostrand Avenue": 598.69, "957 Pennsylvania Avenue": 828.15,
+    "218-80 Hempstead Avenue": 785.48, "531 Utica Ave": 451.62, "104-08 Lefferts Blvd": 320.77,
+    "902 Avenue U": 491.54, "7812 Bergenline Ave": 555.06,
+}
+check("the owner's per-store Activation Spiff sums to the reported 18,061.37",
+      r2(sum(BO_ACTIVATION_SPIFF.values())) == BO_TOTALS["Activation Spiff"] == 18061.37)
+check("the two companies split 13,589.71 / 4,471.66 as the workbooks do",
+      r2(sum(BO_ACTIVATION_SPIFF[s] for s in LUX_STORES)) == 13589.71
+      and r2(sum(BO_ACTIVATION_SPIFF[s] for s in NOVA_STORES)) == 4471.66)
+a1 = msp.per_store_agreement(OURS_SPIFF_M1, BO_ACTIVATION_SPIFF)
+check("ELIMINATED — month-1 activation commission: 0 of 20 stores, 5,210.53 over on the month",
+      a1["stores_exact"] == 0 and a1["total_diff"] == 5210.53
+      and a1["verdict"] == msp.AGREEMENT_NO, str(a1))
+check("and it is over at EVERY store, so no subset-of-rows filter can close it",
+      all(OURS_SPIFF_M1[s] > BO_ACTIVATION_SPIFF[s] for s in BO_ACTIVATION_SPIFF))
+a2 = msp.per_store_agreement(OURS_WALLET_MARGIN, BO_ACTIVATION_SPIFF)
+check("ELIMINATED — refill/RTR wallet margin: 0 of 20 stores, 2,325.66 short, and it is over at "
+      "some stores and short at others (not a rate, not a subset)",
+      a2["stores_exact"] == 0 and a2["total_diff"] == -2325.66
+      and any(OURS_WALLET_MARGIN[s] > BO_ACTIVATION_SPIFF[s] for s in BO_ACTIVATION_SPIFF)
+      and any(OURS_WALLET_MARGIN[s] < BO_ACTIVATION_SPIFF[s] for s in BO_ACTIVATION_SPIFF),
+      str(a2))
+check("no flat per-activation rate can produce it either — $/activation runs 10.27 to 23.78",
+      round(492.89 / 48, 2) == 10.27 and round(427.99 / 18, 2) == 23.78)
+# THE ONE POSITIVE FINDING: the owner's hypothesis holds at the MONTH level. The back office's six
+# commission lines total within $27.76 of our whole commission-received figure — the same money,
+# cut into different lines, with 'Activation Spiff' as the slice we book inside "Merchant discount".
+BO_SIX_LINE_TOTAL = r2(sum(BO_TOTALS.values()))
+check("the back office's six commission lines total 169,600.64",
+      BO_SIX_LINE_TOTAL == 169600.64, str(BO_SIX_LINE_TOTAL))
+check("ours is 169,628.40 — the two books differ by $27.76 on the month (0.016%)",
+      r2(ALL_COMM) == 169628.40 and r2(ALL_COMM - BO_SIX_LINE_TOTAL) == 27.76)
+check("so the owner's reading is right in kind: their lines are a repartition of the SAME "
+      "commission received, not extra money",
+      abs(r2(ALL_COMM - BO_SIX_LINE_TOTAL)) < 0.02 * ALL_COMM / 100)
+check("and the arithmetic is exact — our spiff excess + our MDF excess − their activation-family "
+      "excess over our merchant discount = the same $27.76",
+      r2(1191.01 + 1000.00
+         - (BO_TOTALS["Activation Profit"] + BO_TOTALS["Activation Fee"]
+            + BO_TOTALS["Activation Spiff"] - FEED["merchant_discount"])) == 27.76)
+TIES_ON_TOTAL_ONLY = dict(BO_ACTIVATION_SPIFF)          # same month to the cent…
+TIES_ON_TOTAL_ONLY["4640-A W Diversey Ave"] = r2(TIES_ON_TOTAL_ONLY["4640-A W Diversey Ave"] + 100)
+TIES_ON_TOTAL_ONLY["18226 Kedzie Ave"] = r2(TIES_ON_TOTAL_ONLY["18226 Kedzie Ave"] - 100)
+_agree_total_only = msp.per_store_agreement(TIES_ON_TOTAL_ONLY, BO_ACTIVATION_SPIFF)
+check("REGRESSION: a candidate that ties on the MONTH but not on the stores is never a match",
+      _agree_total_only["total_diff"] == 0.0 and _agree_total_only["stores_exact"] == 18
+      and _agree_total_only["verdict"] == msp.AGREEMENT_TOTAL_ONLY, str(_agree_total_only))
+check("a candidate that reproduces every store IS a match (the comparator is not simply strict)",
+      msp.per_store_agreement(dict(BO_ACTIVATION_SPIFF), BO_ACTIVATION_SPIFF)["verdict"]
+      == msp.AGREEMENT_REPRODUCES)
+check("so 'Activation Spiff' stays UNRESOLVED and no P&L line was invented to absorb it",
+      "activation_spiff" not in msp.COMMISSION_RECEIVED_LINES
+      and "activation_spiff" not in [k for k, _l, _c in msp.DEVICE_MARGIN_COLUMNS])
+
+print("J. RETROACTIVE POSTPAID SPIFF — store yes, rep yes, activation NO (owner 2026-09-09)")
+# "im assuming spiff paid later but it must be assigned to a phone number or imei or order
+# actiavted at a certain store." Live shape: 230 rows / $3,794.56, every row a MONTH-1
+# "… New Activation Commission" arriving late.
+RETRO_ROWS = [
+    {"order_type": "Retroactive Postpaid Spiff", "order_number": "353264249",
+     "product_name": "Total MAX 5G BYO Plan $30 New Activation Commission", "retail_cost": -15.00,
+     "account_id": "170075", "user_name": "Nespinoza1", "tx_date": "2026-08-12",
+     "merchant_invoice": 353338146.0},
+    {"order_type": "Retroactive Postpaid Spiff", "order_number": "353475632",
+     "product_name": "Total MAX 5G Plan $55 New Activation Commission", "retail_cost": -27.50,
+     "account_id": "170073", "user_name": "Mcollins", "tx_date": "2026-08-14",
+     "merchant_invoice": 353947241.0},
+    {"order_type": "Retroactive Postpaid Spiff", "order_number": "354122954",
+     "product_name": "Total MAX 5G BYO Plan $30 New Activation Commission", "retail_cost": -15.00,
+     "account_id": "168872", "user_name": "Oneyda", "tx_date": "2026-08-18",
+     "merchant_invoice": 354326784.0},
+]
+# The CONTROL: an 'Activation Order' row, the ONE family whose order_number does join (1,735 of
+# 4,995 live). If the retro zero were a broken function this would be zero too.
+ACT_ROW = {"order_type": "Activation Order", "order_number": "353659935",
+           "product_name": "Total MAX 5G Plan $55", "retail_cost": 33.56, "account_id": "170084",
+           "user_name": "Jgaribay", "tx_date": "2026-08-14", "merchant_discount": 2.85}
+KNOWN_ACTIVATIONS = ["353659935", "356137121", "353890564"]   # raw_ma_commission.activation_order
+STORE_INDEX = {a: s for a, s in ACCOUNT_STORE.items()}
+att = msp.ma_payout_attribution(RETRO_ROWS + [ACT_ROW], KNOWN_ACTIVATIONS, STORE_INDEX,
+                                {"353659935": "August 2026"})
+fam = {f["order_type"]: f for f in att["families"]}
+retro = fam["Retroactive Postpaid Spiff"]
+check("every retroactive row resolves to a STORE through the mig-314 account index",
+      retro["store_resolved_rows"] == len(RETRO_ROWS) and retro["store_unresolved_rows"] == 0)
+check("three different stores, none of them company-wide or allocated",
+      sorted(retro["stores"]) == sorted({ACCOUNT_STORE[a] for a in ("170075", "170073", "168872")}))
+check("every row names a REP", sorted(retro["reps"]) == ["Mcollins", "Nespinoza1", "Oneyda"])
+check("every row is DATED", retro["dated"] == len(RETRO_ROWS))
+check("REGRESSION: not one row links to an activation — order_number matches no activation order",
+      retro["linked_rows"] == 0 and retro["linked_amount"] == 0.0
+      and retro["unlinked_amount"] == r2(sum(-r["retail_cost"] for r in RETRO_ROWS)))
+check("so the month it was EARNED in is not claimed — no period is invented",
+      retro["activation_periods"] == [])
+check("and the absence is REPORTED with its reason, never papered over",
+      retro["reason"] == msp.ATTRIBUTION_NO_ACTIVATION_REASON
+      and "no imei/mdn" in retro["reason"] and "order_number" in retro["reason"])
+check("CONTROL — the activation family DOES link, so the zero is the feed's keying, not a bug",
+      fam["Activation Order"]["linked_rows"] == 1
+      and fam["Activation Order"]["activation_periods"] == ["August 2026"]
+      and fam["Activation Order"]["reason"] is None)
+check("the same rows carrying an activation key WOULD be attributed to the earned month — the "
+      "wiring is ready for the day the feed carries it",
+      msp.ma_payout_attribution(
+          [dict(RETRO_ROWS[0], order_number="356137121")], KNOWN_ACTIVATIONS, STORE_INDEX,
+          {"356137121": "July 2026"})["families"][0]["activation_periods"] == ["July 2026"])
+check("no store index ⇒ no store is claimed for anything (never guessed from the rep or the date)",
+      msp.ma_payout_attribution(RETRO_ROWS)["families"][0]["store_resolved_rows"] == 0)
+check("amounts use the booking sign convention — money TO the dealer is positive",
+      r2(att["amount"]) == r2(sum(-r["retail_cost"] for r in RETRO_ROWS) - ACT_ROW["retail_cost"]))
+check("the family the owner configured still books — attribution is a read-out, not a gate",
+      any(line == "carrier_comm" for line, _a, amt, _d in
+          msp.ma_tx_bookings(RETRO_ROWS, PNL_CFG,
+                             dict(LIVE_CFG, spiff_order_types=["PostPaid Additional Spiff",
+                                                               "Retroactive Postpaid Spiff"]))
+          if amt))
+check("empty input is a clean empty attribution, never an exception",
+      msp.ma_payout_attribution([])["families"] == []
+      and msp.ma_payout_attribution(None)["amount"] == 0.0)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
