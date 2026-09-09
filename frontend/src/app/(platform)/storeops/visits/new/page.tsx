@@ -12,10 +12,14 @@ const sel: React.CSSProperties = { padding: '7px 10px', borderRadius: 7, border:
 const input: React.CSSProperties = { ...sel, width: '100%' }
 const labelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', display: 'block', marginBottom: 4 }
 
-// Category display order for the checklist.
+// Category display order for the checklist. The carrier brand-review sections (mig 1000) are
+// ordered after the day-to-day ones so the routine checks stay at the top of a visit.
 const CATS: [string, string][] = [
   ['appearance', 'Appearance'], ['facilities', 'Facilities'], ['security', 'Security'],
-  ['supplies', 'Supplies'], ['accessories', 'Accessories'], ['general', 'Other'],
+  ['supplies', 'Supplies'], ['accessories', 'Accessories'],
+  ['customer', 'Customer experience'], ['merchandise', 'Merchandise & brand'],
+  ['employee', 'Employee experience'],
+  ['general', 'Other'],
 ]
 
 type Resp = { checked: boolean; note: string; photo_path?: string; photo_url?: string }
@@ -167,8 +171,19 @@ export default function NewVisitPage() {
   }
 
   const mismatch = actualRep && schedReps.length > 0 && !schedReps.includes(actualRep)
-  const grouped = CATS.map(([key, label]) => [label, items.filter(it => (it.category || 'general') === key)] as [string, any[]])
-    .filter(([, list]) => list.length > 0)
+  // An item whose category is not in CATS used to be dropped here ENTIRELY: it existed in
+  // storeops.checklist_items, never rendered on the visit form, and nothing said so. The API accepts
+  // any category string, so that was a silent hole between config and the screen. Anything unknown
+  // now falls into the trailing group instead of vanishing — a checklist question the DM cannot see
+  // is worse than one filed under the wrong heading.
+  const known = new Set(CATS.map(([k]) => k))
+  const grouped = CATS.map(([key, label]) => [
+    label,
+    items.filter(it => {
+      const c = it.category || 'general'
+      return key === 'general' ? (c === 'general' || !known.has(c)) : c === key
+    }),
+  ] as [string, any[]]).filter(([, list]) => list.length > 0)
 
   return (
     <div style={{ maxWidth: 860 }}>
