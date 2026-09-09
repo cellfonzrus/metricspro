@@ -2465,6 +2465,7 @@ that month to go in the gross profit for that month."
 | `storeops.document_contact` (mig `966` — MULTIPLE expiry contacts; `subject_kind` 'lease' + store_code covers that store's lease AND certificate, 'insurance_policy' + policy id) | `PUT /storeops/document-contacts` (gated; replace-set per subject) | `GET /storeops/document-contacts`, `GET /storeops/store-lease` (`contacts`), `GET /storeops/insurance-policies`, and the expiry sweep's recipient list (`doc_intel.expiry_alerts`) |
 | `storeops.tenants.rent_due_default` + `lease_visible_roles` (mig `946` config columns) | `PUT /storeops/store-lease/tenant-defaults` (due default); roles column set per-org via SQL/admin | `store_lease.tenant_lease_config` (adaptive — pre-946 = house first-week + market-manager-and-above), `can_see_lease` gate |
 | `storeops.google_review_config` / `google_review_sweep_config` / `google_review_store` / `google_review_snapshot` / `google_review_item` (migs `411`/`412`, service-role-only; sequence grants mig `951`) | config: `PUT /storeops/google-reviews/config` + `/sweep-config` + `/store-config/{code}`; data: `google_reviews.sweep_store` (place pin upsert, snapshot insert, item dedupe-insert) via run-now/run-due; sweep status: `_gr_set_sweep_status` (`last_detail` carries error samples since 2026-09-04) | `/google-reviews/my`, `/dm-dashboard`, `/store/{code}`, `/stores`, `/employee/{id}`, `/employee-summary` (§14 Google Reviews); below-target → `storeops.action_plan` rows |
+| `core.marketing_event_cost` | what a HUMAN said an event cost (event spend / payroll / per-model phone cost), append-only with who typed it and when | mig `995`; read by `GET /marketing/event-sales/roi` and by NOTHING else — no P&L, statement, payout, accrual or commission figure reads it. `marketing_event_giveaway.unit_cost` is deliberately NOT promoted into this money path (§23s.6) |
 
 ---
 | `core.platform_operator` (mig `980` — the SEPARATED identity: keyed by auth_id, **no org_id column at all**; scoped `operator_role` + optional per-row capability overrides + `expires_at` for just-in-time elevation) | `POST/DELETE /core/operator/roster` (never creates a login, never touches `app_users.super_admin`); SEEDED by mig 980 from the existing `super_admin` flag | `operator_api._authority` → `operator.resolve_authority` (unioned with the legacy flag), `GET /core/operator/roster` |
@@ -2557,6 +2558,10 @@ that month to go in the gross profit for that month."
 | `POST /storeops/document-extract` (AI reads an uploaded lease/policy/COI → a DRAFT; `async def` + `run_in_threadpool`, SEV-1 2026-07-30 rule), `GET /storeops/document-extraction`, `POST /storeops/document-extraction/accept` (THE money gate — `doc_intel.apply_plan`) | `storeops/router.py` (`post_document_extract`/`get_document_extraction`/`accept_document_extraction`) | §14 mig 965 |
 | `GET/PUT /storeops/document-contacts` (multiple expiry-notification contacts per lease/store or policy) | `storeops/router.py` (`get_document_contacts`/`put_document_contacts`) | §14 mig 966 |
 | `GET /storeops/doc-expiry` (what expires, its resolved notice window, who would be told), `POST /storeops/doc-expiry/run-now` (DRY RUN by default), `POST /storeops/doc-expiry/run-due` (NOTIFY_RUN_SECRET pg_cron entrypoint, daily) | `storeops/router.py` (`get_doc_expiry`/`doc_expiry_run_now`/`doc_expiry_run_due` → `_run_doc_expiry`; cron RPC `_ensure_doc_expiry_alert_cron`) | §14 mig 967 |
+| `GET /marketing/event-sales` | Sales from Events — report 1: every sale rung on the org's event register(s), all available fields, per (store, date) | §23s |
+| `GET /marketing/event-sales/subscriber-retention` | report 2: do the lines activated at the event stay? THREE states — active / churned / unmatched-with-a-reason; the unmatched line is never churn and never in a denominator. **Not** `/marketing/checkin-retention`, which is GDPR data retention | §23s.5 |
+| `GET /marketing/event-sales/roi` | report 3: commission received (an ALLOCATION, labelled) less the day's cost; withheld entirely while any cost is unknown | §23s.6 |
+| `POST /marketing/event-sales/roi/link-event` | link a (store, date) to an event, or CREATE one through the module's existing creator with the minimum needed to cost it | §23s.7 |
 
 | `GET /account/pl/{period}`, `GET /account/balance-sheet/{period}` (`?scope=&stores=&markets=` — stored snapshot when unfiltered; store/market-filtered view via `statement_filter.filtered_statement`: canonical-union market resolution + company-scope AND-composition, 2026-09-02) | `account/router.py` (`get_pl`/`get_bs` → `_filtered_read`) | §4 P&L filter |
 | `GET /account/statement/{period}` (`?scope=&kinds=pl,balance_sheet,cash_flow` — FRESH on-demand statements, nothing persisted; the platform statement service) | `account/router.py` (`on_demand_statement` → `statement_engine.statement`) | §4 statement engine |
@@ -2672,6 +2677,9 @@ that month to go in the gross profit for that month."
 | Insurance premium due (per store, recurring) | `storeops.store_lease.insurance_premium` on `insurance_premium_due`, repeating per `insurance_premium_frequency` (mig `946`) | same read contract — finance recurring-expenses reader computes from these columns |
 | Expiry notice window (per lease / policy / COI) | **MAX**(the document's own requirement — `store_lease.lease_notice_days` / `insurance_policy.notice_days` — and the org floor `tenants.doc_expiry_notice_days`, house 60; migs `964`/`966`). MAX, not override: 90/180 beats the floor, 30 never drops below it | `doc_intel.resolve_notice_days` → `doc_intel.expiry_alerts` (ladder `milestones_for`, ASCENDING = the tightest milestone crossed fires) → `GET /storeops/doc-expiry`, the daily sweep `_run_doc_expiry`, and the `storeops_doc_expiry` attention providers; dedupe in `storeops.alert_log` |
 | Whether an AI-extracted value may become a booked number | `doc_intel.MONEY_GUARDED` (rent, rent effective-from, escalation, rent schedule, rent due, insurance premium + premium due, policy premium + premium due) + `doc_intel.FORBIDDEN_TARGETS` (every ACH/banking + identity column, no override) | `doc_intel.apply_plan` — the ONLY writer from `document_extraction` to `store_lease`/`insurance_policy`; refusals returned to the UI with a reason. Proof `harness_doc_intel.py` §D |
+| Event-register sales + activations (per store, per event day) | `raw_sales` rows whose `register` is in `marketing_config.event_sales_registers` (house `{RSK}`) — the predicate is `commcalc/sales_register.is_event_register`, SHARED with `flags.py`'s RSK_ACTIVATIONS flag. RSK is a REGISTER, not a tender | `marketing/event_sales.sales_summary`; counts from `_compute_feed_actuals_py(rows=<register-filtered>)` — the shared pass, given a pre-filtered row set, so nothing is re-classified. `GET /marketing/event-sales`; §23s |
+| Subscriber retention of event-activated lines (30/60/90 + still-active-now) | `raw_mi` `subscriber_status`, matched from `raw_sales.mdn`→`serial_1` through the paid gate's `sale_installment_engine._mi_index`/`_match_mi` | `event_sales.retention_report`; denominator is MATCHED lines only — an unmatched line is reported with its reason and is NEVER churn, and an all-unmatched window is `null`, never 0% (§23s.5) |
+| Event ROI (per store, per event day) | commission: `commission_received_breakout` for the store-MONTH × the day's share of that store's month activations — an ALLOCATION, `commission_exact: false`, because no commission feed carries a register or a transaction. cost: `marketing_event.planned_spend` ∪ `marketing_event_cost` ∪ hours from `salary_expense.day_measurement` × `employees.pay_rate` ∪ handset count × `raw_catalog.cost` | `event_sales.roi_compute` → `GET /marketing/event-sales/roi`. A single unknown cost withholds the ROI; nothing is ever rendered as $0.00 (§23s.6) |
 
 ---
 
@@ -4450,6 +4458,178 @@ separately and reported, and the variance covers exactly the envelopes the total
 sums the rows ON SCREEN so it always agrees with the filters above it, which a server-side total
 could not promise. Per-envelope short/over stays on the row: a $40 short and a $40 over net to zero
 on a day total, and the day total must not be the only place a DM looks.
+
+---
+
+## 23s. SALES FROM EVENTS — the event-register reports (owner directive 2026-09-09)
+
+**Owner directive (verbatim):** *"i need a seaprate reporting menu for only rsk activations done per
+store and their retention , the report will be called sales from events and in marketing menu, for
+boost it will eb coming from teh rsk events tender and the others not sure yet but provision will be
+made - so 2 reports - 1 total sales with all available fields n that report and the second is the
+retention , the third will be roi from te event, that will include teh cost to set up teh event and
+teh total commssion received for the lines activated on that day via teh rsk , if teh event was not
+loaded previously it will still run a report with the roi and ask the user to input teh cost details
+or link it to the event created in the system if the user inputs teh details it will create the event
+in the system with the minimal information which is required to compute the cost , cost of event ,
+payroll paid , the number of phones activated and their cosrt willcome from teh sales report and the
+sku report, it is an unlocked phones given away the the systtem will ask while gatehring this
+information how much is teh cost of teh phone, for boost check the register of rsk"*
+
+Three reports under **Marketing → Sales from Events**. Migration `995` (config + the ROI's cost rows,
+**written, NOT applied**). Pure logic `backend/app/modules/marketing/event_sales.py` +
+`backend/app/modules/commcalc/sales_register.py`; HTTP/IO in `marketing/router.py`; page
+`frontend/src/app/(platform)/marketing/sales-from-events/page.tsx`. Proof
+`backend/harness_marketing_event_sales.py` (**178 checks**).
+
+### 23s.1 ⚠ THE CORRECTION THE OWNER SHOULD SEE — RSK is a REGISTER, not a tender
+
+The directive says "the rsk events tender". In the live data RSK is the value of
+**`raw_sales.register`**; `tender_type` on those very same rows reads Cash / Credit Card / Debit Card
+/ Externel Credit Card. Filtering on the tender would answer "how did the customer pay" and would
+match **nothing**. The reports read the REGISTER — which is also the owner's own last line, *"for
+boost check the register of rsk"*. Measured 2026-09-09, house org `00000000-…-0001`: **602 RSK rows,
+8 stores, 13 distinct `trans_date`s, 128 transactions**; Luxelink `854f6d7b…` has **zero** (its
+`register` is uniformly `'1'`).
+
+### 23s.2 What was checked before building, and what is REUSED rather than rebuilt
+
+| Searched for | Found | What this work does |
+|---|---|---|
+| event / campaign / ROI / event cost | `core.marketing_event` + `POST /marketing/events` (mig `986`, §23) | **links to it and creates through it.** No second event table, no second creator |
+| event ↔ store attribution | `core.marketing_event_store` (mig `986`) | **reads it.** `event_sales.match_event` resolves membership through that many-to-many with `primary_store_code` as fallback — no second path |
+| "which register is this sale on" | `commcalc/flags.py:193` RSK_ACTIVATIONS, written INLINE | **EXTRACTED** to `commcalc/sales_register.py`; `flags.py` now calls it. Byte-identical (pinned on the 602 live rows, harness §A1–A2) |
+| activations per store per day | `commcalc.router._sales_cell_agg` via `_compute_feed_actuals_py` — THE shared pass (§3) | **calls it with the register-filtered rows** through the `rows=` seam `_fetch_actuals` already uses. The register is a ROW FILTER applied BEFORE the pass, so classification, void/return skips, distinct-`trans_id` counting and canonical store-code resolution are all the shared pass's |
+| sale line → subscriber | `sale_installment_engine._mi_index` / `_match_mi` — the commission paid gate's line key | **reuses both.** Retention is a second READER of that key, not a second key (`commission_engine._norm_mdn` identity pinned, harness §F1) |
+| commission received | `commission_received_breakout` → `commission_received.build_breakout`, honouring `ma_store_pnl.commission_received_lines()` (§18) | **READS it.** Computing commission stays with the commission agent; rebates stay excluded |
+| payroll for a day | `storeops/salary_expense.day_measurement` / `hours_for_shift` (§14s three-state contract) | **reuses the hours contract.** No third payroll derivation |
+| subscriber retention | nothing — `GET /marketing/checkin-retention` is **GDPR data retention** (purge dates on staff check-in GPS rows) and shares only the word | new, and named `subscriber-retention` everywhere so the two can never be confused |
+
+### 23s.3 RULE TWO — "the others not sure yet but provision will be made"
+
+Every value is a config row on `core.marketing_config` (mig `995`), house defaults in
+`event_sales.DEFAULT_EVENT_SALES_CONFIG`, resolver `resolve_event_sales_config` (ADAPTIVE — a
+pre-995 database yields the house defaults and the reports still run):
+
+- `event_sales_registers` — default `{RSK}` (the value `flags.py` has always used). **An EMPTY list
+  matches NOTHING**, deliberately: an org with no event register has no event sales, and "empty
+  means all" would show it every sale in the store.
+- `event_sales_activation_classes` — default `{premium,byod}`. These are the SHARED classifier's own
+  output vocabulary, never a carrier label. Upgrades are excluded from the headline (an upgrade is an
+  existing line — there is nothing the event created to retain) and reported beside it regardless.
+- `event_retention_windows_days` — default `{30,60,90}`; "still active now" is always reported too.
+- `event_roi_phone_cost_from_catalog` — default TRUE.
+
+Another carrier's event register is an UPDATE to one array. Harness §B statically fails the build if
+`RSK`, a carrier name or a live contract-type label appears as a literal in the module's executable
+code.
+
+### 23s.4 THE ACTIVATION DEFINITION, and the trap in the blanks
+
+An activation is whatever `commcalc.calculator.classify_contract_type` says it is — the ONE
+classifier behind the Sales Report, Exec MTD and Daily Targets. **362 of the 602 live rows have a
+BLANK contract type**, and a filter that treated blank as "unknown, count it" would report them as
+activations. They are not: they are Device Setup Charge (119), Boost RTR bill payments (117), SIM
+cards (102) and services (14) — the accompanying lines of the same transactions. Decisive check:
+**every one of the 125 distinct MDNs on the RSK rows sits on a line whose contract type is NON-blank**,
+so excluding the blanks loses no line. Pinned as a regression (harness §D5–D7).
+
+### 23s.5 REPORT 2 — retention has THREE states, and the third is never churn
+
+`active` · `churned` · `unmatched`. The unmatched line carries a REASON
+(`no_mdn_on_sale_row` · `subscriber_feed_not_loaded` · `absent_from_loaded_feed` ·
+`dropped_out_of_the_feed`), **never enters a retention percentage's denominator**, and an
+all-unmatched window reports `retention_pct: null` rather than 0%. Matching is MDN → device serial
+through the paid gate's `_mi_index`/`_match_mi`; the verdict is the feed's own `subscriber_status`
+under the paid gate's own `startswith('activ')` test.
+
+**Live measurement (2026-09-09, house org, read THROUGH the shipped endpoint, latest loaded feed
+month August 2026):** **122 activated lines** → **79 matched**, of which **56 ACTIVE**, 21
+INVOLUNTARY-SUSPENDED, 1 INACTIVE, 1 PORTED-OUT → **retention 70.9%** on the matched denominator.
+**43 unmatched**: 16 were present in an EARLIER loaded month and are gone from the latest
+(`dropped_out_of_the_feed`), 27 appear in no loaded month at all (`absent_from_loaded_feed`). The
+naive figure 56/122 = 45.9% is exactly the number this report refuses to print.
+
+Two numbers worth not confusing: **125** is the distinct mobile numbers on the RSK rows (report 1's
+`distinct_mdns`); **122** is the retention line count, because the 3 numbers that appear ONLY on an
+`Upgrade` line are correctly not lines the event created. And `mi_deactivation_date` is populated on
+just 1 of the matched rows, so **`subscriber_status` — not the deactivation date — is the churn
+signal**; a report keyed on the deactivation date would have found almost no churn at all.
+
+The subscriber feed is a MONTHLY snapshot, so a 30/60/90-day window is answered by the snapshot for
+the month the target day falls in; a window whose month has not been loaded is reported as
+not-yet-answerable, never as a loss.
+
+### 23s.6 REPORT 3 — ROI, and the two boundaries it does not cross silently
+
+**Costs.** Three components, each carrying a `basis`: `derived` · `entered` · `prompt_required`.
+A single `prompt_required` withholds the ROI entirely (`roi_pct: null` + `missing_costs`) — an ROI
+computed from a missing cost is wrong in the flattering direction. **Nothing is ever rendered as
+$0.00 to fill a gap**; a day on which no handset went out is a MEASURED zero and says so.
+
+| Component | Derived from | Prompted when |
+|---|---|---|
+| Cost of the event | `marketing_event.planned_spend` | no event row covers the (store, date) |
+| Payroll paid | `salary_expense.day_measurement`/`hours_for_shift` hours × `employees.pay_rate` | no staffing recorded, or an employee has hours and no hourly rate (a salaried person's pay is allocated per MONTH and cannot be split onto one day without inventing an allocation) |
+| Phones given away | count from the RSK sale lines carrying a device serial × `commcalc.raw_catalog` cost by `product_id`/`sku` | the SKU does not resolve — the question is asked **once per model**, not once per handset |
+
+**⚠ THE GIVEAWAY BOUNDARY — decided, implemented, and stated.** `core.marketing_event_giveaway.unit_cost`
+already exists and mig `986` says of it *"INFORMATIONAL money … Never seeded, never read by a money
+path."* Reading it into an ROI would reverse that decision silently and would change what an existing
+column MEANS for any tenant that has already typed a number into it. **RECOMMENDATION IMPLEMENTED
+(option a): it is NOT promoted.** The ROI's costs live on their own explicitly-declared
+`core.marketing_event_cost` rows (who typed it, when). What the ROI takes from the giveaway side is
+`qty_given` — a COUNT, never money. To overrule, read it in `event_sales.build_costs` and amend mig
+986's column note; it is deliberately not something a later edit can do by accident.
+
+**⚠ COMMISSION PER DAY × REGISTER IS NOT EXACTLY EXPRESSIBLE, and the report says so.** No commission
+feed carries a register or a transaction id: ePay Commission Payment Detail carries a store address
+and a month-of-life in the payment type; VidaPay/MA commission carries no store at all (the breakout
+EXCLUDES it while a store filter is active); only `raw_mi` residual is per SUBSCRIBER. So the report
+publishes an **allocation, labelled as one** — `commission_basis: allocated_store_month`,
+`commission_exact: false`: the store's commission received for the event's MONTH × the event day's
+share of that store's countable activations for the month, both counts from the SAME shared pass. The
+exactly-attributable basis (`matched_line_residual` — the residual actually paid on the very numbers
+the event activated) is described in the payload as a FLOOR, not the whole. Rebates stay excluded
+throughout (owner 2026-09-08).
+
+**DECLARED SEAM:** only `allocated_store_month` is COMPUTED today. `matched_line_residual` is defined
+and described so a reader knows an exact basis exists and what it would mean, and the payload says so
+in `commission_bases_available` + `commission_basis_note` rather than advertising a basis nothing
+computes. Wiring it is a read of `raw_mi.actual_mi_payout + actual_atu_payout` over the SAME matched
+rows report 2 already builds — no new derivation, no new key.
+
+**⚠ NOT RESOLVED — a store-month commission of $0.00 may be a coverage gap, not a measurement.**
+Live 2026-09-09, store `B-2509` July 2026 reads $0.00 store-month commission (against `B-3565`'s
+$3,655.12), so its allocated figure is $0.00. That is what `commission_received_breakout` reports for
+that store filter; whether it is a true zero or an ePay store-attribution gap was NOT chased. The row
+carries `store_month_commission` and the breakout's own note verbatim so the zero is traceable rather
+than silent — but it should be verified before anyone reads an ROI off that store.
+
+### 23s.7 THE "EVENT NOT LOADED" FLOW IS THE NORMAL PATH
+
+`core.marketing_event` holds **zero rows** today, so most (store, date) pairs have no event record.
+The ROI report runs anyway, states that no event covers the day, derives what it can, names what it
+cannot, and returns `event_prompt` — the MINIMAL `POST /marketing/events` body (title, one store set
+both ways the creator understands, the single calendar day, the spend). `POST
+/marketing/event-sales/roi/link-event` either links an existing event or creates one **through
+`create_event`**, the module's one creator, with its own approval decision and store-set write.
+
+### 23s.8 Endpoints, tables, files
+
+- `GET /marketing/event-sales` — report 1 (detail rows with every field + per-(store,date) summary +
+  the shared pass's counts).
+- `GET /marketing/event-sales/subscriber-retention` — report 2.
+- `GET /marketing/event-sales/roi` — report 3.
+- `POST /marketing/event-sales/roi/link-event` — link or create the event that carries the cost.
+- `GET`/`PUT /marketing/config` — EXTENDED with the four config keys (one settings surface, not a
+  second one).
+- `core.marketing_event_cost` (mig `995`) — the typed cost figures. Read by the ROI endpoint and by
+  NOTHING else: no P&L line, statement, payout, accrual or commission figure reads it.
+- No new external feed → **no `data_lineage_registry` entry** (these reports read `raw_sales`,
+  `raw_mi` and `raw_catalog`, all already registered).
+
+---
 
 ## 24. PROOF-HARNESS AUDIT — why 58 of 272 harnesses had stopped proving anything (2026-09-06)
 
