@@ -5,7 +5,8 @@ import { api } from '@/lib/client'
 
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '8px 10px', borderBottom: '1px solid var(--border)' }
-const CATS = ['appearance', 'facilities', 'security', 'supplies', 'accessories', 'general']
+const CATS = ['appearance', 'facilities', 'security', 'supplies', 'accessories',
+              'customer', 'merchandise', 'employee', 'general']
 
 export default function VisitChecklistSettingsPage() {
   const [items, setItems] = useState<any[]>([])

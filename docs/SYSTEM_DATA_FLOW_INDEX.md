@@ -5219,3 +5219,63 @@ conflating them is how a fix gets mis-sold.
   §F one item identity across router and gp_report.
 - Migration `992_gp_item_category.sql` — **written, NOT applied.** Additive and nullable; applying it
   alone leaves every GP number byte-identical.
+
+## 23s. THE CARRIER BRAND REVIEW JOINS THE DM CHECKLIST (owner 2026-09-09)
+
+Owner, verbatim: *"Make the following a part of the dm checklist and replace boost to carrier"* —
+followed by a carrier Brand Resolution Visit form: six sections, 24 questions.
+
+**No new mechanism — these are config rows.** `storeops.checklist_items` (mig 027) is already the
+configurable, management-editable DM visit checklist (`item_key / label / category / input_type /
+sort_order / is_active`, org-scoped), read by `GET /storevisit/checklist-items` and rendered by
+`/storeops/visits/new`. Migration 1000 seeds 24 rows into it for the house org, inherited exactly
+like the mig-027 defaults above them. No table, no endpoint, no second checklist.
+
+Sort orders start at **200** so the mig-027 day-to-day checks (10–160) stay at the top of a visit:
+the routine questions are asked every time, the brand review is the longer tail beneath them.
+
+### The defect the seed would have hit — found before writing the rows
+
+`visits/new/page.tsx` grouped the checklist by mapping over a **fixed list of six categories**:
+
+```js
+const grouped = CATS.map(([key, label]) => [label, items.filter(it => (it.category||'general') === key)])
+```
+
+An item whose category was not one of those six matched **no** group and was filtered out of **all**
+of them — it sat in the database, never rendered, and nothing said so. `create_checklist_item` passes
+`item.category` straight through, so config and screen could disagree in total silence.
+
+**Three of this form's six sections are new categories** (`customer`, `merchandise`, `employee`).
+Seeding them against the old page would have written **twelve questions the DM could never see** — a
+checklist that looks complete in Visit Settings and is missing half its questions on the visit form.
+
+Fixed generally, not just for this seed: an unknown category now falls into the trailing group rather
+than vanishing, and both the visit form and Visit Settings carry one shared category vocabulary.
+
+### RULE TWO — the carrier is never named
+
+The source form names one carrier in fifteen questions ("Boost Signage Family standards", "Boost U",
+"Boost Mobile Return Policy"). Every one reads **`carrier`**. These labels are **tenant-editable
+text**, not code: an org that wants its carrier's real name types it in Visit Settings and no other
+tenant sees it. Seeding a brand name would put one carrier's vocabulary in front of every tenant.
+
+| section | category | items |
+|---|---|---|
+| General | `general` | 2 (notes = `text`, infraction photos = `photo`) |
+| Store appearance — exterior and entry | `appearance` | 5 |
+| Store appearance — interior and manager compliance | `facilities` | 5 |
+| Customer experience | `customer` **(new)** | 5 |
+| Merchandise and brand | `merchandise` **(new)** | 4 |
+| Employee experience | `employee` **(new)** | 3 |
+
+- Proof: `backend/harness_dm_checklist_carrier_review.py` (19). **Static on purpose** — every value is
+  a legal string and the page renders perfectly, so neither `tsc` nor a build can see the dropped
+  items (§24). §A the seed is parsed **out of** migration 1000, so the harness cannot pass against a
+  seed the migration does not contain; §B every seeded category is one the visit page groups — the
+  regression that would have hidden the twelve; §C the unknown-category fallback, and that the
+  original drop-everything filter is **gone**; §D no seeded label names a carrier brand while the
+  carrier-specific questions still ask their thing; §E both screens share one vocabulary; §F ordering.
+- Migration `1000_dm_checklist_carrier_brand_review.sql` — **written, NOT applied.** Its REVERT
+  deletes only `qa\_%` keys; historical visits are unaffected because `store_visit_responses` carries
+  `label_snapshot` and `category_snapshot`.
