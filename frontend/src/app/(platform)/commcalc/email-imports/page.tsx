@@ -417,6 +417,19 @@ export default function EmailImportsPage() {
   // { blocked:true, requires_confirm:true, warning } instead of acting, and the second, deliberate
   // click re-sends the SAME call with ?confirm=true. Retrying into an active block extends it, which
   // is exactly what happened on the 27th.
+  // ── CONNECTOR ROUTE GATE (mig 998, owner directive 2026-09-09) ────────────────────────────────
+  // A vendor told us not to use their portal's 2FA/browser login, so that ROUTE is closed by config
+  // for every org until it is re-opened. Unlike the cooldown above there is deliberately NO
+  // confirm-to-override: a cooldown is a timer, an instruction is not. The page never decides this —
+  // it only renders `route_policy`, computed server-side per (org, connector).
+  function routeOff(s: any): boolean {
+    return !!(s?.route_policy && s.route_policy.allowed === false)
+  }
+  function routeOffTitle(s: any): string {
+    const rp = s?.route_policy || {}
+    return [rp.reason, rp.remedy_label ? `Use ${rp.remedy_label} instead.` : ''].filter(Boolean).join(' ')
+      || 'Automatic portal login is switched off for this connector.'
+  }
   function blockTime(v: any): string {
     if (!v) return 'later'
     try { return new Date(v).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) } catch { return String(v) }
@@ -640,6 +653,28 @@ export default function EmailImportsPage() {
     }
     const m = map[st] || map.unconfigured
     const exp = s.session_expires_at ? new Date(s.session_expires_at) : null
+    // 🚫 ROUTE SWITCHED OFF (mig 998). A connector whose automatic portal login is closed by config
+    // must not render "✅ Connected" over a stale error, and must not render a session chip whose only
+    // remedy is the sign-in that was switched off. It replaces both, states WHY, and points at the
+    // route that IS supported. Computed server-side (connector_route_policy) so no vendor name and no
+    // policy logic lives on this page; absent pre-migration and nothing changes.
+    if (routeOff(s)) {
+      const rp = s.route_policy
+      return (
+        <span>
+          <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: '#3f3f46', background: '#e4e4e7' }}>🚫 Login switched off</span>
+          <div style={{ marginTop: 4, padding: '4px 7px', borderRadius: 6, maxWidth: 260, whiteSpace: 'normal', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)' }}>
+            <div style={{ fontWeight: 700, fontSize: 11 }}>{s.session_health?.headline || 'Automatic portal login is switched off for this connector.'}</div>
+            <div style={{ fontSize: 10, marginTop: 2, fontWeight: 400 }}>{s.session_health?.detail || rp?.reason}</div>
+            {rp?.remedy_href && (
+              <a href={rp.remedy_href} style={{ fontSize: 10, fontWeight: 700, marginTop: 3, display: 'inline-block' }}>
+                Use {rp.remedy_label || 'the supported route'} →
+              </a>
+            )}
+          </div>
+        </span>
+      )
+    }
     // ⛔ THE COOLDOWN CHIP. A blocked login used to render "✅ Connected" over a misleading error
     // ("session expired" / "report not listed"), which is precisely what made a human keep retrying
     // into an active block. `blocked` is computed server-side (_strip_source_pw) so the page never has
@@ -967,15 +1002,28 @@ export default function EmailImportsPage() {
                     {/* "Connected" describes the LOGIN. Whether anything was IMPORTED is a separate
                         fact, and it is the one that matters — so a 0-row pull is amber here, never a
                         green success line under a green chip. */}
-                    {s.last_status && <div style={{ color: s.last_pull_delivered === false ? '#9a3412' : 'var(--text3)', background: s.last_pull_delivered === false ? '#fff7ed' : undefined, borderRadius: 6, padding: s.last_pull_delivered === false ? '3px 6px' : undefined, fontSize: 11, marginTop: 2, maxWidth: 240, whiteSpace: 'normal' }}>{s.last_status}</div>}
+                    {/* With the login route switched off the stored last_status is the LAST attempt
+                        made before it was closed — showing it as a live fault is the misleading error
+                        that keeps people retrying. It is kept, but labelled as history. */}
+                    {s.last_status && <div style={{ color: routeOff(s) ? 'var(--text3)' : (s.last_pull_delivered === false ? '#9a3412' : 'var(--text3)'), background: (!routeOff(s) && s.last_pull_delivered === false) ? '#fff7ed' : undefined, borderRadius: 6, padding: (!routeOff(s) && s.last_pull_delivered === false) ? '3px 6px' : undefined, fontSize: 11, marginTop: 2, maxWidth: 240, whiteSpace: 'normal' }}>{routeOff(s) ? `Last attempt before the login was switched off: ${s.last_status}` : s.last_status}</div>}
                     {s.has_pull_diag && <button className="btn btn-secondary" style={{ fontSize: 11, padding: '1px 7px', marginTop: 4 }} onClick={() => openPullDiag(s)}>🔧 What the pull saw</button>}
                   </td>
                   <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {/* ROUTE GATE (mig 998): when the automatic login is switched off for this
+                        connector, the three buttons that would attempt it are replaced by the route
+                        that IS supported. The backend refuses them anyway — this stops a person
+                        spending an afternoon on a remedy that no longer applies. */}
+                    {routeOff(s) ? (
+                      <a className="btn btn-secondary" href={s.route_policy?.remedy_href || '/commcalc/email-imports'} title={routeOffTitle(s)} style={{ fontSize: 12, padding: '3px 9px', fontWeight: 700 }}>
+                        📨 Use {s.route_policy?.remedy_label || 'the supported route'}
+                      </a>
+                    ) : (<>
                     {['vidapay', 'total_access', 'b2bsoft', 'b2b', 'payanywhere', 'transfirst', 'businesstrack'].includes((s.processor || '').toLowerCase()) && (
                       <><button className="btn btn-secondary" title="Watchable LIVE login: one browser stays open from login through the 2FA code — the code is sent ONCE (no re-send). Best for portals that send a single-use code." style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626', fontWeight: 700 }} onClick={() => startLive(s)}>🔴 Live login</button>{' '}</>
                     )}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} disabled={authBusy === s.id} onClick={() => startLogin(s)}>{authBusy === s.id ? '…' : (s.auth_status === 'authenticated' ? '🔁 Re-auth' : '🔐 Log in')}</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => runSource(s)}>▶ Pull now</button>{' '}
+                    </>)}
                     <button className="btn btn-secondary" title="See the page the headless login browser last saw (2FA screen / bot-wall / error)" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => openShot(s)}>📷</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => setSrcDraft({ ...s, password: '' })}>Edit</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626' }} onClick={() => delSource(s)}>✕</button>
@@ -1086,7 +1134,19 @@ export default function EmailImportsPage() {
             {/* Processor-specific how-tos render only for processors this tenant actually has a login
                 row for — a tenant never sees another carrier's processor vocabulary (owner 2026-09-04). */}
             <p style={{ fontSize: 12, color: 'var(--text3)', margin: '8px 0 0' }}>
-              {sources.some((s: any) => ['b2bsoft', 'b2b'].includes((s.processor || '').toLowerCase())) && <>
+              {/* A how-to that tells someone to sign in is WRONG for a connector whose login route is
+                  switched off, so the two variants are chosen by `route_policy`, never by the vendor
+                  name (mig 998). The sign-in instructions are kept verbatim for the day the route is
+                  re-opened — the config row is the switch, not this copy. */}
+              {sources.some((s: any) => ['b2bsoft', 'b2b'].includes((s.processor || '').toLowerCase()) && routeOff(s)) ? <>
+                <b>POS sales reports (daily Sales Transaction Details):</b> the automatic portal login for this
+                connector is <b>switched off</b> — {sources.find((s: any) => routeOff(s))?.route_policy?.reason}
+                {' '}Do not try to sign in or re-authenticate it; nothing is broken. These reports arrive through
+                the <b>email subscription</b> instead: schedule them from the portal to the ingestion mailbox
+                configured at the top of this page, and they import automatically (→ daily feed + Sales Feed
+                Recon). If the vendor re-opens the login later, one config row switches it back on and the
+                instructions below apply again.<br /><br /></>
+              : sources.some((s: any) => ['b2bsoft', 'b2b'].includes((s.processor || '').toLowerCase())) && <>
                 <b>b2bsoft (daily Sales Transaction Details):</b> processor <code>b2bsoft</code>, Portal URL
                 <code>https://wsreports.b2bsoft.com</code>, fill User ID + Password (Account ID optional), Save, then
                 click <b>🔐 Log in</b> in the table above and enter the 2-factor code when prompted. b2bsoft usually
@@ -1098,8 +1158,15 @@ export default function EmailImportsPage() {
                 table above. The portal will text/email a 2-factor code — enter it when prompted. The signed-in session
                 is saved and reused for scheduled pulls; when it expires the status shows <b>🔒 Needs 2FA</b> and you just
                 log in again.<br /><br /></>}
-              Fill the login fields, Save, then click <b>🔐 Log in</b> in the table above and enter the 2-factor code
-              when prompted. Credentials are never hard-coded — they live only in this form.
+              {/* The generic "click Log in" line is suppressed when EVERY login on this page has its
+                  route switched off — otherwise the page's closing instruction would be the one
+                  remedy that no longer applies to anything the tenant has. */}
+              {(sources.length === 0 || sources.some((s: any) => !routeOff(s))) ? <>
+                Fill the login fields, Save, then click <b>🔐 Log in</b> in the table above and enter the 2-factor code
+                when prompted. Credentials are never hard-coded — they live only in this form.</>
+              : <>Every portal login configured here has its automatic sign-in switched off by config, so there is
+                nothing to log in to. These reports arrive through the email subscription above. Credentials are
+                never hard-coded — they live only in this form, and are kept for the day a route re-opens.</>}
             </p>
           </div>
         )}

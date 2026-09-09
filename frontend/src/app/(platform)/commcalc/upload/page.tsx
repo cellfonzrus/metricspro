@@ -306,19 +306,24 @@ export default function UploadPage() {
           <tbody>
             {AUTO_SOURCES.filter(s => tileVisible((s as any).carrier)).map(s => {
               const c = cfgs[s.id] || {}
-              const stColor = c.last_status === 'ok' ? '#15803d' : c.last_status === 'error' ? '#b91c1c' : c.last_status === 'running' ? '#b45309' : 'var(--text3)'
+              // ROUTE GATE (mig 998): a portal sweep whose login route is switched off by config must
+              // not read as "pending" or as a fault, and must not offer Run now. `route_policy` is
+              // computed server-side per (org, connector) — no vendor name is decided on here.
+              const off = c.route_policy && c.route_policy.allowed === false
+              const stColor = off ? 'var(--text3)' : c.last_status === 'ok' ? '#15803d' : c.last_status === 'error' ? '#b91c1c' : c.last_status === 'running' ? '#b45309' : 'var(--text3)'
               const needsDate = (scope[s.id] || s.scopes[0].v).match(/day|custom/)
               return (
                 <tr key={s.id} style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={{ padding: '10px 16px', verticalAlign: 'top', width: 270 }}>
                     <div style={{ fontWeight: 600, fontSize: 13 }}>{s.icon} {s.name}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>{s.desc}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>{off ? c.route_policy.reason : s.desc}</div>
                     <div style={{ fontSize: 11, marginTop: 4, color: stColor }}>
-                      {c.has_credentials ? (c.enabled ? '● scheduled' : '○ creds set, schedule off') : '○ not configured'}
-                      {c.last_status ? ` · last: ${c.last_status}` : ''}
-                      {c.last_run_at ? ` · ${fmtWhen(c.last_run_at)}` : ''}
+                      {off ? `🚫 automatic portal login switched off${c.route_policy.remedy_label ? ` · use ${c.route_policy.remedy_label}` : ''}`
+                        : (c.has_credentials ? (c.enabled ? '● scheduled' : '○ creds set, schedule off') : '○ not configured')}
+                      {!off && c.last_status ? ` · last: ${c.last_status}` : ''}
+                      {!off && c.last_run_at ? ` · ${fmtWhen(c.last_run_at)}` : ''}
                     </div>
-                    {(c.next_run_at || c.frequency) && (
+                    {!off && (c.next_run_at || c.frequency) && (
                       <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
                         {c.frequency ? `🗓 ${c.frequency}` : ''}
                         {c.next_run_at ? `${c.frequency ? ' · ' : ''}next: ${fmtWhen(c.next_run_at)}` : ''}
@@ -333,10 +338,12 @@ export default function UploadPage() {
                         {s.scopes.map(x => <option key={x.v} value={x.v}>{x.l}</option>)}
                       </select>
                       {needsDate && <input type="date" className="input" style={{ fontSize: 12, width: 150 }} value={adate[s.id] || ''} onChange={e => setAdate(p => ({ ...p, [s.id]: e.target.value }))} />}
-                      <button className="btn btn-secondary" style={{ fontSize: 12 }} disabled={running[s.id] || !c.has_credentials} onClick={() => runAuto(s)}>
+                      <button className="btn btn-secondary" title={off ? c.route_policy.reason : undefined} style={{ fontSize: 12 }} disabled={running[s.id] || !c.has_credentials || off} onClick={() => runAuto(s)}>
                         {running[s.id] ? '…' : '▶ Run now'}
                       </button>
-                      <a href={s.configure} className="btn" style={{ fontSize: 12 }}>⚙️ Configure</a>
+                      <a href={off ? (c.route_policy.remedy_href || s.configure) : s.configure} className="btn" style={{ fontSize: 12 }}>
+                        {off ? `📨 Use ${c.route_policy.remedy_label || 'the supported route'}` : '⚙️ Configure'}
+                      </a>
                     </div>
                     {autoMsg[s.id] && <div style={{ fontSize: 11, color: autoMsg[s.id].startsWith('❌') ? '#b91c1c' : 'var(--text2)', marginTop: 6 }}>{autoMsg[s.id]}</div>}
                   </td>
@@ -346,7 +353,7 @@ export default function UploadPage() {
           </tbody>
         </table>
         <div style={{ padding: '8px 16px', fontSize: 11, color: 'var(--text3)', borderTop: '1px solid var(--border)' }}>
-          b2bsoft auto-fetch is pending login access; until then use its manual upload below. Each portal pulls its own date range — the period selector sets the target.
+          A sweep marked 🚫 has its automatic portal login switched off by config — that is a decision, not a fault, and the row says which route carries its data instead. Each portal pulls its own date range — the period selector sets the target.
         </div>
       </div>
 

@@ -148,6 +148,27 @@ PL_SPEC = [
     ("vip_fees",      "Distributor fees paid (shipping / SIM kit / processing)", "cogs", "auto", "store"),
     ("rep_comm",      "Rep commissions paid",                        "opex",    "auto",  "store"),
     ("wages",         "Wages / hourly payroll",                      "opex",    "auto",  "store"),
+    # ── THE WAGES BOX (owner directive 2026-09-09) ───────────────────────────────────────────────
+    # "All employees who are salaried and not attached to stores like the DM and market manager
+    # shoudl have thier won seaprat line and thier salary will be divided amongs he store they
+    # handle … simialry thier commission will also be a seaprate line item so at the end of the year
+    # we know who got paid how much with clear distinction, all these will be a seaprate box in the
+    # p&l under wages."
+    #
+    # TWO lines, sited immediately after `wages` so the three read as one box, and BOTH at STORE
+    # grain — the owner's first sentence ("payroll needs to be attributed to each store rather than
+    # the company") forbids a company-wide overhead bucket, and the company figure is the sum of
+    # these store cells and nothing else. The amounts come from
+    # `storeops/overhead_allocation.py`; NEITHER line derives a dollar of pay of its own (the salary
+    # conversion stays `monthly_salary_equivalent`, the commission stays whatever
+    # commcalc.management_incentive_payout already decided).
+    #
+    # `auto_opt` ⇒ the line materialises ONLY when it carries value (engine._assemble), and the
+    # allocation's house default is mode='off', so every org — including the house org — is
+    # BYTE-IDENTICAL until an owner turns it on. Labels are per-org config (RULE TWO); these are the
+    # house defaults and are overridden onto `L[key]['label']` in build_inputs.
+    ("overhead_wages", "Overhead salaries (allocated to stores)",     "opex",    "auto_opt", "store"),
+    ("overhead_comm", "Overhead commission (allocated to stores)",    "opex",    "auto_opt", "store"),
     ("payroll_expenses", "Payroll Expenses",                         "opex",    "auto_opt", "store"),
     ("chargebacks",   "Chargebacks / clawbacks",                     "opex",    "auto",  "store"),
     ("store_opex",    "Store operating expenses (rent / utilities / supplies)", "opex", "auto", "store"),
@@ -553,6 +574,9 @@ def _account_config(client, org_id):
            # EMPTY default ⇒ nothing is claimed and no org changes.
            "labour_commission_expense_names": set(),
            "labour_commission_expense_names_list": [],
+           # mig 997 (owner directive 2026-09-09). Overhead staff attached to no store. NONE default
+           # ⇒ storeops.overhead_allocation resolves mode='off' and books nothing (byte-identical).
+           "overhead_config": None,
            # K3 (mig 621). 'off' ⇒ POS-only device cost, i.e. pre-621 behaviour.
            "device_cogs_mode": "off"}
     try:
@@ -622,6 +646,18 @@ def _account_config(client, org_id):
                 cpicked = [str(n).strip() for n in cnames if str(n).strip()]
                 cfg["labour_commission_expense_names_list"] = cpicked
                 cfg["labour_commission_expense_names"] = {n.lower() for n in cpicked}
+    except Exception:
+        pass
+    # OVERHEAD ALLOCATION (mig 997, owner directive 2026-09-09) — its OWN defensive query, same
+    # shape as every block above, so a pre-997 column set can never disturb them. A missing column,
+    # a missing row or a malformed JSON value all land on None, which `overhead_allocation
+    # .resolve_config` reads as the house default mode='off' — nothing derived, nothing booked,
+    # every org byte-identical.
+    try:
+        orows = (client.schema("commcalc").table("account_config")
+                 .select("overhead_config").eq("org_id", org_id).limit(1).execute().data) or []
+        if orows and isinstance(orows[0].get("overhead_config"), dict):
+            cfg["overhead_config"] = orows[0]["overhead_config"]
     except Exception:
         pass
     # DEVICE COGS MODE (mig 621, owner ruling K3) — same defensive shape; 'off' keeps pre-621 behaviour.
@@ -1463,6 +1499,53 @@ def build_inputs(client, org_id, period):
             L["wages"]["note"] = " ".join(_bits)
     except Exception as e:
         _warn("labour coverage note skipped", e)
+
+    # ── THE OVERHEAD BOX (owner directive 2026-09-09) ─────────────────────────────────────────────
+    # "All employees who are salaried and not attached to stores like the DM and market manager
+    # shoudl have thier won seaprat line and thier salary will be divided amongs he store they
+    # handle … simialry thier commission will also be a seaprate line item."
+    #
+    # Such a person is exactly the one `derive_wage_cells` can only key as company-wide, and the
+    # store-grain block above deliberately does NOT book a company-wide cell (`_est_skipped_cw`) —
+    # so today their pay lands nowhere at all. This block gives it a home, at STORE grain, on its
+    # own two lines. It derives NO dollar of pay: the salary conversion is the same
+    # `monthly_salary_equivalent` the wages estimate uses, and the commission is whatever
+    # `commcalc.management_incentive_payout` already decided (§9). The spread itself lives in
+    # `storeops/overhead_allocation.py` (pure; proof harness_overhead_allocation.py).
+    #
+    # BYTE-IDENTICAL BY DEFAULT: `overhead_config` is NULL for every org, `resolve_config` reads
+    # that as mode='off', `gather` returns a skipped shell, both lines stay empty and `auto_opt`
+    # drops them. Nothing about any existing statement moves until an owner opts in.
+    #
+    # COMPANY IS THE SUM OF STORES: every cell added here is a STORE cell. There is no
+    # `add("overhead_wages", None, …)` anywhere, and a person whose covered stores cannot be
+    # resolved is REPORTED on the note with their dollars rather than booked company-wide.
+    try:
+        from app.modules.storeops import overhead_allocation as _oa
+        _ovh_cfg = _oa.resolve_config(acct_cfg.get("overhead_config"))
+        if _ovh_cfg["mode"] == "derive":
+            _ovh = _oa.gather(client, org_id, period, _ovh_cfg,
+                              code_to_key=lambda c: resolve_store(code2addr.get(_norm_store(c),
+                                                                               _norm_store(c))))
+            if not _ovh.get("skipped"):
+                for _st, _amt in (_ovh.get("wages_by_store") or {}).items():
+                    add("overhead_wages", _st, _amt)
+                for _st, _amt in (_ovh.get("commission_by_store") or {}).items():
+                    add("overhead_comm", _st, _amt)
+                L["overhead_wages"]["label"] = _ovh_cfg["wages_label"]
+                L["overhead_comm"]["label"] = _ovh_cfg["commission_label"]
+                # The gap between what the roster explains and what the tenant already types in by
+                # hand. REPORTED on the line, never acted on: the manual rows are the larger and
+                # more complete figure, so suppressing them on the strength of a smaller derived
+                # number would delete real cost and book nothing back.
+                _recon = _oa.reconcile_manual(
+                    _ovh.get("wages_by_store") or {}, exp_rows, _ovh_cfg,
+                    key_of=lambda c: resolve_store(code2addr.get(_norm_store(c), _norm_store(c))))
+                _n = _oa.line_note(_ovh, _recon)
+                if _n:
+                    L["overhead_wages"]["note"] = _n
+    except Exception as e:
+        _warn("overhead allocation skipped", e)
 
     # #6 inter-store borrowings (auto*, migration 018) — receivable/payable. Degrade to 0 if absent.
     # BUG FIX 2026-08-10 (formula book §F #7): this select asked for `from_store,to_store,amount,repaid`

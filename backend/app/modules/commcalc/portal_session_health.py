@@ -15,6 +15,11 @@ page reason about clock skew.
 
 STATES (ordered by severity — `worse_of` picks the one that must be shown):
   healthy        a saved session with comfortable life left; the daily pull will just work.
+  route_disabled the portal-login ROUTE is switched off for this connector by config (owner directive
+                 2026-09-09: a vendor told us not to use their browser/2FA login). Not a fault and not
+                 fixable by signing in — `connector_route_policy` owns the reason and names the route
+                 that IS supported. Deliberately NOT actionable (it never pages) and deliberately NOT
+                 healthy (control_box lights it `unmonitored`).
   never_linked   the source is configured but nobody has ever signed in. Nothing will pull.
   expiring_soon  a saved session inside the warn window. Still works today; ask for a re-login now,
                  in daylight, rather than at 3am when the pull fails.
@@ -29,13 +34,18 @@ chip that stays red for a week does not send seven identical alerts — a notifi
 state gets WORSE (or after the re-notify interval), which is the same discipline the epay-discrepancy
 and connector-health alerts use.
 
-PURE: stdlib datetime only. No DB, no network. harness_portal_session_health.py proves every branch.
+PURE: stdlib datetime, plus the equally-pure `connector_route_policy` (whose wording for a
+CLOSED route is owned there, not duplicated here). No DB, no network.
+harness_portal_session_health.py proves every branch.
 """
 from datetime import datetime, timedelta, timezone
 
 # Severity order — index is the rank `worse_of` and the escalation check compare. Lower is better.
 # The ordering is a JUDGEMENT about how big a hole each state leaves in the recon, not alphabetical:
 #   healthy       data is flowing.
+#   route_disabled this route is CLOSED BY CONFIG, so no session state below can be true of it. It sits
+#                 second because it is not a fault — but it is not green either: nothing is arriving by
+#                 this route, and the roll-up must say so rather than imply a working connector.
 #   expiring_soon still flowing today; a human has time to act in daylight.
 #   error         the session is fine but the last pull failed for another reason (proxy, portal down,
 #                 parse). Actionable, but NOT by signing in — so it must not outrank the states whose
@@ -44,7 +54,8 @@ from datetime import datetime, timedelta, timezone
 #   needs_login   the portal ACTIVELY rejected us — a working connector just broke.
 #   never_linked  nobody has ever signed in: this source has produced nothing, ever. The largest hole
 #                 a recon can have, so it speaks loudest in a roll-up.
-STATES = ("healthy", "expiring_soon", "error", "expired", "needs_login", "never_linked")
+STATES = ("healthy", "route_disabled", "expiring_soon", "error", "expired", "needs_login",
+          "never_linked")
 _RANK = {s: i for i, s in enumerate(STATES)}
 
 # A session inside this many hours of expiry is "expiring_soon". House default; per-source override via
@@ -96,6 +107,17 @@ def evaluate(row, now=None, warn_hours=None):
 
     Returns {state, headline, detail, hours_left, actionable, needs_human, since}. No secret is read
     and none can appear in the output: only booleans and timestamps are touched."""
+    # 0. IS THIS ROUTE EVEN OPEN? (owner directive 2026-09-09). A connector whose portal-login route is
+    #    switched off by config has no session question to answer: every state below describes how a
+    #    login is faring, and this one is not being attempted at all. Checked FIRST and terminal, for
+    #    the same reason the portal cooldown is checked first in import_audit.p_connectors — stacking a
+    #    "sign in again" prompt on top of "do not sign in" is exactly the afternoon this must prevent.
+    #    The policy travels ON THE ROW (`route_policy`, computed by the caller from
+    #    connector_route_policy) so this function stays pure and no vendor name reaches it.
+    pol = row.get("route_policy")
+    if isinstance(pol, dict) and pol.get("allowed") is False:
+        from app.modules.commcalc import connector_route_policy as _crp
+        return _crp.health(pol)
     now = _dt(now) or datetime.now(timezone.utc)
     warn = warn_hours if warn_hours is not None else row.get("session_warn_hours")
     try:
@@ -222,5 +244,8 @@ def summarize(rows, now=None):
         items.append({"source_id": r.get("id"), "label": r.get("label"),
                       "processor": r.get("processor"), **h})
     worst = worse_of(*[i["state"] for i in items]) if items else "healthy"
+    # `disabled` is reported ALONGSIDE needs_human so a roll-up can never describe a set of
+    # deliberately-closed routes as "all sessions riding a valid login" (needs_human would be 0).
     return {"worst": worst, "needs_human": sum(1 for i in items if i["needs_human"]),
+            "disabled": sum(1 for i in items if i["state"] == "route_disabled"),
             "total": len(items), "items": items}

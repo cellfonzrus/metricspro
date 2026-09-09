@@ -1,0 +1,155 @@
+-- 996_pl_device_margin_presentation.sql
+-- mod-account/commission · follows 995. Additive + idempotent + safe to re-run.
+--
+-- WHAT IT IS FOR (owner directive 2026-09-09, verbatim): "what we need to book as profit in p&L is
+-- not the device rebate but it should be a seaprate set of columns which represent the device
+-- margin which is equal to selling price + device rebate - device cost".
+--
+-- ═══ 1. THE CARRIER'S OWN `device_margin` COLUMN IS NOT THAT FORMULA (MEASURED, NOT ASSUMED) ════
+-- `commcalc.raw_ma_commission` already has a `device_margin` column, so the first question was
+-- whether the carrier already computes what the owner asked for. It does not. Live read
+-- 2026-09-09, org 854f6d7b-6590-4e4d-88ab-646f560d4f4c, August 2026 (1,248 rows):
+--   • 354 non-zero rows taking exactly TWO values — -20.00 (262 rows) and -10.00 (92 rows),
+--     Σ -6,160.00 (feed convention: negative = paid TO the dealer).
+--   • The value does not move with the handset: an iPhone 17 Pro Max carrying a -1,199.99 rebate
+--     and an iPhone 16e carrying -575.00 both show -20.00.
+--   • The sheet's only price-shaped columns, `consumer_value` and `consumer_margin`, are 0.00 for
+--     the entire month, so the formula cannot be sourced from the sheet at all.
+-- It is a FLAT PER-UNIT ALLOWANCE ($20/$10 a device), not a computed margin. It therefore KEEPS its
+-- own `ma_device_margin` revenue line, dollars unchanged, and the owner's device margin is a
+-- separate, COMPUTED thing. (`ma_store_pnl.carrier_device_margin_profile` re-establishes this from
+-- the rows every period, so no future month is assumed to look like August.)
+--
+-- ═══ 2. THE OWNER'S DEVICE MARGIN IS ALREADY IN THE BOOKS — SPREAD OVER THREE LINES ═════════════
+--   selling price = `device_rev` (POS device sales revenue)
+--   device rebate = the rebate route's line (`device_rebate` contra-COGS, house default and the
+--                   org's live setting since mig 992 §B1, or `rebate_income` under 'income')
+--   device cost   = `device_cost` (device_cogs.resolve, invoice-first, IMEI-deduped)
+-- August 2026, measured:   80.81 + 251,946.31 - 260,206.80 = -8,179.68
+-- which is EXACTLY what the device leg contributes to gross profit today. The owner is not asking
+-- for a new dollar. He is asking for that dollar to READ as one margin with its components as
+-- columns, instead of a $251,946.31 rebate sitting next to a $260,206.80 cost where the rebate
+-- looks like profit.
+--
+-- ═══ 3. WHAT THIS COLUMN DOES ══════════════════════════════════════════════════════════════════
+--   commcalc.commission_org_config.pl_device_margin_presentation (text):
+--   • 'off' (house default) — the block books nothing; every org is byte-identical to pre-996.
+--   • 'margin_block' — the three component amounts book to ONE `device_margin` P&L line as three
+--     named COLUMNS (the drill-down detail): "Device selling price", "Device rebate", "Device
+--     cost". The line total IS the margin; the columns ARE the owner's formula, term by term.
+--     Store grain via the mig-314 account->store index, exactly as the components book today.
+--
+-- ⚠ THE BLOCK REPLACES ITS COMPONENTS — IT NEVER SITS BESIDE THEM. Under 'margin_block' every line
+-- named by `ma_store_pnl.device_margin_supersedes()` (`device_rev`, `device_cost`, `device_rebate`,
+-- `rebate_income` — BOTH rebate lines, so the swap is complete under either rebate route) must
+-- carry nothing. Leaving one booked counts the device leg twice. `device_margin_gp_delta()` exists
+-- to prove the swap is GP-neutral and the harness pins it at 0.00.
+--
+-- 💰 MONEY POSTURE — the DDL alone changes NOTHING for any org (default 'off'), and the seed below
+-- is COMMENTED OUT behind the owner's own GO (mig-224 pattern). Switching an org to 'margin_block'
+-- is PRESENTATION: revenue falls by device_rev, COGS falls by (device_cost - device_rebate), and
+-- the block carries their net, so GROSS PROFIT AND NET INCOME ARE UNCHANGED TO THE PENNY. For
+-- August 2026 the device leg contributes -8,179.68 before and -8,179.68 after; what changes is that
+-- the $251,946.31 rebate stops presenting as its own line and becomes a column of a margin that is
+-- honestly negative. Proof: backend/harness_device_margin_block.py (44 checks, DB-free).
+--
+-- 🧾 FINANCE HAND-OFF (CLAUDE.md: commission owns the AMOUNTS, finance owns the P&L display).
+-- The amounts, the routing and the config are in this migration and in
+-- backend/app/modules/account/ma_store_pnl.py. To RENDER the block, finance must:
+--   (a) add to `account/coa.py` PL_SPEC one line
+--         ("device_margin", "Device margin", "revenue", "auto_opt", "store")
+--       and (recommended) relabel the existing `ma_device_margin` line — today it reads "Device
+--       margin (Distributor/MA)" and would be confused with the new block; it is the carrier's
+--       flat $20/$10 per-unit allowance and should say so;
+--   (b) call `ma_store_pnl.device_margin_bookings({store: {selling_price, device_rebate,
+--       device_cost}}, cfg)` in `coa.build_inputs` with the amounts already computed for
+--       device_rev / device_cost / the rebate route, and SUPPRESS every line in
+--       `device_margin_supersedes(cfg)` when the block is on (`suppress_zero` passthrough);
+--   (c) assert `device_margin_gp_delta(...) == 0.00` on the assembled inputs so a partial wiring
+--       can never ship.
+-- Until (a)-(c) land, `pl_device_margin_presentation` is STORED-BUT-INERT — registered as such in
+-- docs/SYSTEM_DATA_FLOW_INDEX.md §19 rather than left to be rediscovered.
+--
+-- REVERT:
+--   ALTER TABLE commcalc.commission_org_config DROP COLUMN IF EXISTS pl_device_margin_presentation;
+--   (The backend then resolves 'off' for every org — pre-996 presentation, byte-identical.)
+
+ALTER TABLE commcalc.commission_org_config
+  ADD COLUMN IF NOT EXISTS pl_device_margin_presentation TEXT NOT NULL DEFAULT 'off'
+  CHECK (pl_device_margin_presentation IN ('off', 'margin_block'));
+
+COMMENT ON COLUMN commcalc.commission_org_config.pl_device_margin_presentation IS
+  'Mig 996. Device-margin presentation on the P&L: off = the device leg presents as device_rev / '
+  'device_cost / the rebate route line (house default, byte-identical pre-996); margin_block = the '
+  'three amounts book to ONE device_margin line as the columns selling price + device rebate - '
+  'device cost (owner directive 2026-09-09), and every line in device_margin_supersedes() is '
+  'suppressed. Gross profit and net income are identical either way. Resolved by '
+  'ma_store_pnl.load_config / device_margin_presentation.';
+
+-- ── LUXELINK SEED — NOT AUTO-APPLIED. Needs the owner's own GO (money-touching presentation change
+-- on a live tenant) AND the finance-side render (a)-(c) above; switching the config on before the
+-- render exists would suppress nothing and therefore double-count the device leg. Uncomment ONLY
+-- when both are in place.
+--
+-- UPDATE commcalc.commission_org_config SET
+--   pl_device_margin_presentation = 'margin_block'
+-- WHERE org_id = '854f6d7b-6590-4e4d-88ab-646f560d4f4c';
+
+
+-- ═══ 4. TWO FINDINGS THIS MIGRATION RECORDS BUT DOES NOT CHANGE ═════════════════════════════════
+--
+-- (A) THE BACK OFFICE'S `Activation Spiff` $18,061.37 IS STILL UNRESOLVED (2026-09-09 pass).
+--     Newly eliminated this pass, per store and not merely on the total (the standard the shared
+--     comparator `ma_store_pnl.per_store_agreement` now enforces: a candidate that ties on the
+--     month but misses stores is reported as 'total only', never as a match):
+--       • the commission sheet's month-1 activation commission |spiff_m1| Sigma 23,271.90 — 0 of 20
+--         stores, and OVER at every single store, so no row-subset filter can close it;
+--       • every single-value slice of every raw_ma_commission money column by activation_type,
+--         activation_type2, platform, port_status, line_status, sub_type, perfect_sale,
+--         is_financed and carrier_name (131 per-store candidate vectors; best least-squares fit
+--         leaves a $252 residual on a $4,476-norm target at a coefficient of 0.5258);
+--       • every raw_ma_daily_tx order_type family's retail_cost, merchant_discount and row count
+--         per store, including the refill/RTR wallet margin (Sales Order merchant_discount
+--         15,735.71 — 0 of 20 stores, over at some and short at others);
+--       • the M1..M6 month split of the spiff family per store;
+--       • all 8,515 two-basis least-squares combinations of the above (best residual $173, with
+--         coefficients 0.5498 / -2.1072 — a store-volume correlation artifact, not an identity);
+--       • a flat per-activation rate: $/activation runs 10.27 (Irving Park) to 23.78 (Avenue U).
+--     THE ONE POSITIVE FINDING, which is the owner's own hypothesis ("it could be just a total of
+--     all commision recd") holding at the MONTH level: the back office's six commission lines total
+--     $169,600.64 against our $169,628.40 — $27.76 apart, 0.016%. Their lines are a repartition of
+--     the same commission received, not extra money; the arithmetic is exact (our spiff excess
+--     1,191.01 + our MDF excess 1,000.00 - their activation-family excess over our merchant
+--     discount 2,163.25 = 27.76). So `Activation Spiff` is that book's name for a slice we book
+--     inside "Merchant discount", but WHICH slice cannot be established from the feeds we hold:
+--     the owner still needs to name the report it is pulled from. NOT GUESSED AT, and no P&L line
+--     was invented to absorb it. Pinned by harness_commission_backoffice_recon.py section I.
+--
+-- (B) THE PAYOUT SIDE OF `raw_ma_daily_tx` CANNOT BE JOINED TO THE ACTIVATION IT PAYS FOR.
+--     Owner 2026-09-09 on the 230 'Retroactive Postpaid Spiff' rows ($3,794.56, now booking to
+--     carrier_comm because the owner added the family to pl_ma_spiff_order_types): "it must be
+--     assigned to a phone number or imei or order actiavted at a certain store." Measured:
+--       • STORE yes — 230/230 carry account_id and 230/230 resolve through the mig-314 index.
+--       • REP yes — 230/230 carry user_name (42 distinct clerk logins). DATE yes — 230/230.
+--       • ACTIVATION no — every product_name is a MONTH-1 "... New Activation Commission" (a spiff
+--         paid late, exactly as the owner assumed), but the row cannot be pointed at it:
+--         raw_ma_daily_tx has no imei and no mdn, and order_number matches nothing — 0 of 230
+--         against all 2,522 activation_orders held (June-September), 0 against merchant_invoice,
+--         platform_tx_id, pos_invoice and external_ref, and 0 against any other daily-tx row (each
+--         of the 230 order numbers appears exactly once in 56,515 rows, February-September).
+--       ⚠ NOT special to this family. order_number matches an activation order ONLY on
+--         'Activation Order' rows (1,735 of 4,995); Postpaid Residual Order (19,790), PostPaid
+--         Additional Spiff (11,060), Sales Order (10,758), Postpaid Promo Order (3,707) and every
+--         other family match at 0.0%. The mig-308 hop-2 premise ("one order = activation row +
+--         MONTH-n rows + adjustments", sale_installment_engine.build_ma_tx_index) therefore does
+--         not hold for this tenant's export: build_ma_tx_index[order]['months'] can never be
+--         populated for an order whose activation row the same index holds.
+--     WHAT THE FEED WOULD HAVE TO CARRY for the owner's ask to be answerable: the activation's own
+--     identifier on the payout row (the same id space as raw_ma_commission.activation_order / the
+--     'Activation Order' rows' order_number), or an imei/mdn column. With either,
+--     `ma_store_pnl.ma_payout_attribution` already reports the month the spiff was EARNED in —
+--     that path is written and proven, it is simply never taken by today's data. Matching a $15.00
+--     retroactive row to one of a store's month-old $15.00 activations by amount and plan would be
+--     a guess, and a guess that looks precise is worse than a stated absence. Pinned by
+--     harness_commission_backoffice_recon.py section J. NO SCHEMA CHANGE IS MADE FOR THIS: adding a
+--     column the feed does not populate would be a place for a guess to hide.

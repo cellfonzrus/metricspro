@@ -225,6 +225,28 @@ def p_connectors(client, org_id, ctx):
         from app.modules.commcalc import portal_backoff as _pb
     except Exception:
         _pb = None
+    # Connector route policy (mig 998, owner directive 2026-09-09). The rows arrive on the CONTEXT,
+    # already read once by the org-scoped endpoint that called collect_attention — deliberately NOT
+    # read here. This provider runs on the login-popup (cheap) path, which harness_import_health §D
+    # pins to reading ONLY the acting org's rows, and the policy's house defaults are an inheritance
+    # read (`org_id IN (tenant, house)`, the mig-244 shape). Doing it here would put a non-tenant
+    # select on that path; doing it at the endpoint keeps the isolation invariant exactly as it is.
+    # No context ⇒ no rows ⇒ every branch below is inert, exactly as before mig 998.
+    pol_rows = (ctx or {}).get("route_policy") or []
+    try:
+        from app.modules.commcalc import connector_route_policy as _crp
+    except Exception:
+        _crp = None
+
+    def _route_policy(_client, _org, connector, rows):
+        """The (connector, portal-login) policy for one row. Never raises; open when unknown."""
+        if _crp is None or not rows:
+            return {"allowed": True}
+        try:
+            return _crp.resolve(rows, _org, connector)
+        except Exception:
+            return {"allowed": True}
+
     try:
         alert_fails = int(cfg.get("portal_block_alert_failures") or 0) or DEFAULT_BLOCK_ALERT_FAILURES
     except Exception:
@@ -259,6 +281,21 @@ def p_connectors(client, org_id, ctx):
         enabled = bool(r.get("enabled"))
         has_creds = bool((r.get("portal_user") or "").strip() and (r.get("portal_pass") or "").strip())
         status = (r.get("last_status") or "")
+        # ── ROUTE CLOSED BY CONFIG (mig 998) ────────────────────────────────────────────────────
+        # Checked FIRST and terminal for this sweep, exactly like the portal cooldown below: while the
+        # login route is switched off, every other symptom on the row (a stale 'error', a past-due
+        # next_run_at, missing credentials) is a CONSEQUENCE, and prescribing "fix the login" for a
+        # login we have been told not to use is the afternoon this exists to prevent. It is still an
+        # ITEM — `info`, never absent — so a connector that stopped is never invisible.
+        rpol = _route_policy(client, org_id, r.get("connector"), pol_rows)
+        if _crp is not None and _crp.is_closed(rpol):
+            out.append(_item("import", f"commcalc:route_off:{table}", "info",
+                             f"{label}: automatic portal login is switched off",
+                             _crp.detail(rpol) + f" Affected: {what}.",
+                             1, (rpol.get("remedy_href") or page),
+                             (f"Use {rpol['remedy_label']}" if rpol.get("remedy_label")
+                              else "See the connector")))
+            continue
         if enabled and not has_creds:
             out.append(_item("import", f"commcalc:creds:{table}", "error",
                              f"{label} is switched on but has no saved login",
@@ -302,6 +339,20 @@ def p_connectors(client, org_id, ctx):
         procs.add(proc.lower())
         name = (s.get("label") or proc or "portal login").strip()
         if not s.get("enabled"):
+            continue
+        # ── ROUTE CLOSED BY CONFIG (mig 998) ────────────────────────────────────────────────────
+        # First and terminal, ahead of the credential/cooldown/failure checks below, for the same
+        # reason as in (a): none of their remedies apply to a login nobody is allowed to attempt.
+        # Reported as `info` — a stated state, never a silence and never a green.
+        rpol = _route_policy(client, org_id, proc, pol_rows)
+        if _crp is not None and _crp.is_closed(rpol):
+            out.append(_item("import", f"commcalc:route_off:{s.get('id')}", "info",
+                             f"{name}: automatic portal login is switched off",
+                             _crp.detail(rpol) + " Nothing is pulled by this login while it is off, "
+                             "and no alert will be raised for it.",
+                             1, (rpol.get("remedy_href") or "/commcalc/email-imports"),
+                             (f"Use {rpol['remedy_label']}" if rpol.get("remedy_label")
+                              else "See the login")))
             continue
         if not ((s.get("username") or s.get("account_id")) and s.get("password")):
             out.append(_item("import", f"commcalc:src_creds:{s.get('id')}", "error",
@@ -719,6 +770,15 @@ def p_portal_sessions(client, org_id, ctx):
         from app.modules.commcalc import portal_session_health as _psh
     except Exception:
         return []
+    # Route policy (mig 998): a connector whose login route is switched off has no session question to
+    # answer, so it must not raise a "sign in again" popup. `evaluate` reads it off the row and returns
+    # the non-actionable `route_disabled` state, which this provider then skips. Same posture as
+    # p_connectors above — the rows arrive on the CONTEXT from the org-scoped endpoint, never read here.
+    _pol_rows = (ctx or {}).get("route_policy") or []
+    try:
+        from app.modules.commcalc import connector_route_policy as _crp
+    except Exception:
+        _crp = None
     now = ctx.get("now") or _now()
     try:
         rows = (client.schema("commcalc").table("data_source")
@@ -734,6 +794,11 @@ def p_portal_sessions(client, org_id, ctx):
         # Never let session material reach the item: swap the blob for the boolean the evaluator wants.
         probe = {k: v for k, v in r.items() if k != "session_state"}
         probe["has_session"] = bool(r.get("session_state"))
+        if _crp is not None and _pol_rows:
+            try:
+                probe["route_policy"] = _crp.resolve(_pol_rows, org_id, r.get("processor"))
+            except Exception:
+                pass
         h = _psh.evaluate(probe, now=now)
         if not h.get("needs_human"):
             continue
