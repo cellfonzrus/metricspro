@@ -95,6 +95,10 @@ DEFAULT_EVENT_SALES_CONFIG = {
     "event_retention_windows_days": [30, 60, 90],
     # Whether the ROI report may read a phone's cost from the SKU catalog before asking a human.
     "event_roi_phone_cost_from_catalog": True,
+    # Which per-line commission feed shapes the ROI sums the paid commission from (mig 999). None =
+    # every shape that has rows, which is what an adaptive probe already does. A SHAPE is a property
+    # of the report a feed arrives as, never a carrier or a tenant (RULE TWO).
+    "event_roi_commission_feed_shapes": None,
 }
 
 #: The classifier buckets that exist at all — the whitelist a configured list is checked against, so
@@ -162,6 +166,15 @@ def resolve_event_sales_config(row):
 
     if row.get("event_roi_phone_cost_from_catalog") is not None:
         cfg["event_roi_phone_cost_from_catalog"] = bool(row["event_roi_phone_cost_from_catalog"])
+
+    shapes = _as_list(row.get("event_roi_commission_feed_shapes"))
+    if shapes:
+        # Checked against the shapes that EXIST, so a typo cannot quietly switch a feed off and take
+        # its commission out of every ROI with nothing on screen to say so.
+        picked = [x for x in (str(v).strip() for v in shapes)
+                  if x in COMMISSION_LINE_FEED_SHAPES]
+        if picked:
+            cfg["event_roi_commission_feed_shapes"] = picked
     return cfg
 
 
@@ -643,17 +656,360 @@ COMMISSION_BASIS_EXACT = "matched_line_residual"
 COMMISSION_BASIS_ALLOCATED = "allocated_store_month"
 
 COMMISSION_BASIS_NOTES = {
+    # THE PRIMARY BASIS (owner 2026-09-09). Defined here so the note travels with the constant; the
+    # mechanism is section 5b below.
+    "paid_against_activated_numbers": (
+        "THE COMMISSION ACTUALLY PAID against the numbers and IMEIs this day activated, summed per "
+        "line from the commission feeds themselves — no share, no allocation. A line reachable by "
+        "both its number and its IMEI is counted once. It is a FLOOR AS OF A DATE, not a settled "
+        "total: commission on a new line keeps arriving for months, so the payload carries the "
+        "as-of date, the periods actually read, and the paid-to-date split by period."),
     COMMISSION_BASIS_EXACT: (
         "EXACT for what it covers. The subscriber feed is per line, so the residual paid on the very "
         "numbers this event activated is attributable to them with no allocation. It is only the "
         "residual leg, so it is a FLOOR on what the event earned, not the whole of it."),
     COMMISSION_BASIS_ALLOCATED: (
-        "AN ALLOCATION, NOT A MEASUREMENT. No commission feed carries a register or a transaction, so "
-        "commission cannot be traced to one till on one day. This takes the store's commission "
-        "received for the event's month and multiplies it by the event's share of that store's "
-        "countable activations for the month. Both counts come from the one shared sales pass. Read "
-        "it as an estimate with a stated method."),
+        "AN ALLOCATION, NOT A MEASUREMENT — and no longer the headline (owner 2026-09-09). It takes "
+        "the store's commission received for the event's month and multiplies it by the event's "
+        "share of that store's countable activations for the month. On the measured event day that "
+        "produced $2,613.35 against $203.50 actually paid on the day's numbers, because most of a "
+        "store's month is bounty and residual on its pre-existing subscriber base — money the day's "
+        "new lines never earned. It survives for ONE job: estimating the lines the per-number basis "
+        "could not match, so an unlooked-up line is never treated as zero-earning."),
 }
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# 5b. THE PER-NUMBER COMMISSION BASIS — what was actually PAID on the numbers the day activated
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER DIRECTIVE 2026-09-09 (verbatim): *"days share cannot be calcultaed as vag it needs to tbe
+# total of teh commisison paid on each number"*, then *"find a connection between the ma comm, and ma
+# tx report whioch gives us the comm paid details"*, and on making per-number the primary basis:
+# *"yes"*.
+#
+# ═══ WHY THE ALLOCATION HAD TO BE DEMOTED, MEASURED ═══════════════════════════════════════════════
+# 196 Martin Luther King Jr Dr, 2026-05-02, house org. 50 event-register rows carrying 10 distinct
+# numbers. What the allocation reported: $2,613.35 — 10/32 of the store's ENTIRE May commission of
+# $8,362.72, most of which is bounty and residual on the store's pre-existing subscriber base. What
+# those 10 numbers were actually paid, traced row by row: $203.50. The allocation was ~13x too high,
+# and wrong in the flattering direction, because a day's share of a store's month is not a
+# measurement of anything the day earned.
+#
+# ═══ THE CONNECTION, AND WHY IT IS THE IMEI AND NOT THE ORDER NUMBER ══════════════════════════════
+# Both live feed shapes carry a per-line key, so "commission paid on THIS number" is reachable:
+#   • the payment-detail shape carries `mdn` on 278,154 of 278,564 rows (99.85%) and `imei` beside it;
+#   • the subscriber-residual shape is per subscriber already (`phone_number`);
+#   • the master-agent shape carries `imei` on 100% of its rows, and `raw_sales.serial_1` carries the
+#     same IMEI on the device line — 1,323 IMEIs intersect on the tenant measured.
+# The master-agent ORDER NUMBER is NOT the spine: `activation_order` -> `raw_ma_daily_tx.order_number`
+# matches only the one order family (1,735 of 4,995) and 0.0% of every other. The IMEI is the spine.
+#
+# ═══ THE AS-OF PROBLEM — THE HONESTY REQUIREMENT ══════════════════════════════════════════════════
+# Commission on a new line keeps arriving for months. Those 10 May numbers were still being paid in
+# AUGUST: $105.00 in May, $22.50 in June, $15.50 in July, $15.50 in August. So a per-number figure
+# GROWS and is never final. Every payload therefore carries `as_of`, the periods actually read, and
+# the paid-to-date split by period — so a reader sees an accruing number and is never handed a
+# settled-looking one. This report states that it is a floor as of a date; it does not imply a total.
+#
+# ═══ RULE TWO ════════════════════════════════════════════════════════════════════════════════════
+# The shapes below are FEED SHAPES — a property of the report a feed arrives as, exactly like
+# `processor_ledger.FEED_SHAPES` (the precedent the residual fix used). They are named for what they
+# ARE, never for a carrier or a tenant, and which shapes an org reads is a config row.
+STREAM_COMMISSION = "commission"
+STREAM_RESIDUAL = "residual"
+
+#: The category the platform's ONE commission-received read counts (`commission_received.
+#: add_label_rows` keeps `category == 'Commission'` and nothing else). Routed through, never
+#: re-derived: the mapping label -> category is the per-org `commcalc.payment_categories` config, so
+#: bounties/SPIFFs count and promos/reimbursements do not WITHOUT a keyword list living here.
+CATEGORY_COMMISSION = "Commission"
+COUNTED_CATEGORIES = (CATEGORY_COMMISSION,)
+
+#: Per-line commission feed shapes. `keys` names the columns that carry the two line identities;
+#: `amount` the money; `label`/`period` the classification and accrual columns. A shape an org does
+#: not receive simply yields no events and is reported as not loaded — never as zero earned.
+COMMISSION_LINE_FEED_SHAPES = {
+    "payment_detail_lines": {
+        "source": "commcalc.raw_payment_detail",
+        "keys": {"mdn": "mdn", "imei": "imei"},
+        "amount": "amount", "label": "payment_type", "period": "period", "date": "payment_date",
+        "stream": STREAM_COMMISSION, "label_classified": True,
+        "note": ("Per-payment-row feed keyed by the mobile number (and IMEI beside it). Each row's "
+                 "label is classified through the org's own payment_categories config, so only what "
+                 "the platform already calls Commission is counted."),
+    },
+    "subscriber_residual": {
+        "source": "commcalc.raw_mi",
+        "keys": {"mdn": "phone_number", "imei": "device_serial"},
+        "amount": ("actual_mi_payout", "actual_atu_payout"), "period": "period",
+        "stream": STREAM_RESIDUAL, "label_classified": False,
+        "note": ("Per-subscriber residual. It carries no label to classify — residual IS commission "
+                 "received by construction, which is how the breakout already treats it."),
+    },
+    "master_agent_lines": {
+        "source": "commcalc.raw_ma_commission",
+        "keys": {"imei": "imei"},
+        "amount": "components", "period": "period",
+        "stream": STREAM_COMMISSION, "label_classified": False,
+        "note": ("Per-IMEI master-agent commission. The money is the component columns summed by "
+                 "`commission_legs.split_ma_components` with the org's configured sign — and with "
+                 "the rebate component EXCLUDED, because a rebate is not commission (owner "
+                 "2026-09-08), the same rule `ma_store_pnl.commission_received_lines()` applies."),
+    },
+}
+
+COMMISSION_BASIS_PER_NUMBER = "paid_against_activated_numbers"
+
+#: The three states a line can be in. The third is the one that decides whether the ROI is honest.
+PAID_STATE_PAID = "paid"
+PAID_STATE_MATCHED_UNPAID = "matched_unpaid"
+PAID_STATE_UNMATCHABLE = "unmatchable"
+
+PAID_REASON_NO_KEY = "no_mdn_or_imei_on_sale_row"
+PAID_REASON_ABSENT = "absent_from_every_commission_feed"
+PAID_REASON_FEED_NOT_LOADED = "commission_feed_not_loaded"
+
+PAID_STATE_NOTES = {
+    PAID_STATE_PAID: ("The line was matched into a commission feed and money has been paid against "
+                      "it. Counted."),
+    PAID_STATE_MATCHED_UNPAID: ("The line WAS matched — the number is known to the commission feed — "
+                                "and nothing has been paid against it yet. This is a MEASURED zero: "
+                                "it is stated rather than being silently absent, and because "
+                                "commission keeps arriving for months it may stop being zero."),
+    PAID_STATE_UNMATCHABLE: ("The line could not be looked up at all. It is NEVER treated as a "
+                             "zero-earning line: a total whose denominator quietly includes lines "
+                             "nobody could look up understates the return exactly the way the old "
+                             "allocation overstated it. Its count and reason are reported, and the "
+                             "clearly-labelled fallback covers it."),
+}
+
+PAID_REASONS = {
+    PAID_REASON_NO_KEY: ("The sale row carries neither a mobile number nor a device serial, so there "
+                         "is no key to look commission up by. Nothing about this line's earnings is "
+                         "known — which is not the same as it having earned nothing."),
+    PAID_REASON_ABSENT: ("The number and/or IMEI is in no loaded commission feed. That is consistent "
+                         "with nothing having been paid, but the feeds do not SAY so, and this "
+                         "report will not read an absence as a zero."),
+    PAID_REASON_FEED_NOT_LOADED: ("No commission feed is loaded for the window this line falls in, "
+                                  "so the line could not be looked up. A missing upload is reported, "
+                                  "never absorbed into the number."),
+}
+
+
+def commission_event(feed, uid, *, mdn="", imei="", amount=0.0, label="", category="",
+                     period="", paid_on="", stream=STREAM_COMMISSION):
+    """ONE unit of commission paid, normalised. The caller (the IO layer) reads whichever feed shapes
+    the org has and emits these; everything downstream is shape-blind.
+
+    `uid` must be the source row's own identity — the total is deduped on it, which is what makes a
+    line reachable by BOTH its number and its IMEI count exactly once.
+
+    A zero `amount` is a real event and must still be emitted: it is the only thing that distinguishes
+    "matched, nothing paid yet" from "could not be looked up at all".
+    """
+    return {"feed": str(feed or ""), "uid": "%s:%s" % (feed, uid),
+            "mdn": _norm_key(mdn), "imei": _norm_key(imei),
+            "amount": round(_f(amount), 2),
+            "label": str(label or "").strip(), "category": str(category or "").strip(),
+            "period": str(period or "").strip(), "paid_on": str(paid_on or "")[:10],
+            "stream": str(stream or STREAM_COMMISSION)}
+
+
+def index_commission_events(events):
+    """Index commission events by BOTH line keys. A key present here — even with only zero-amount
+    events under it — means "this number is known to the commission system", which is the test that
+    separates the second state from the third."""
+    by_mdn, by_imei, by_uid = {}, {}, {}
+    for ev in (events or []):
+        by_uid[ev["uid"]] = ev
+        if ev["mdn"]:
+            by_mdn.setdefault(ev["mdn"], []).append(ev["uid"])
+        if ev["imei"]:
+            by_imei.setdefault(ev["imei"], []).append(ev["uid"])
+    return {"mdn": by_mdn, "imei": by_imei, "by_uid": by_uid}
+
+
+def _line_event_uids(line, index):
+    """Every commission event reachable from this line, by number OR by device serial, as a SET —
+    so a row reachable by BOTH keys appears once, not twice.
+
+    ═══ WHY THE IMEI LEG IS BOTH NECESSARY AND FENCED ═══════════════════════════════════════════
+    Necessary: on the live feed the CHARGEBACK leg is keyed by IMEI and carries NO number at all —
+    349 withholding rows org-scoped, every one with an IMEI, not one with an MDN. A number-only join
+    cannot see a single chargeback, so it reports gross commission as if it were net. On the measured
+    event day nine of the ten devices were charged back $180.00 in July that a number-only trace
+    misses entirely.
+
+    Fenced: the same device is re-activated on a NEW number later, and the commission paid to that
+    later line belongs to that line, not to this one. So an IMEI match is REFUSED when the event
+    names a different number than the line does — same handset, different subscriber. The refusal
+    needs both numbers to be present: where the sale row carries no number (the feed shape whose sale
+    lines are keyed only by device serial) the IMEI is the only evidence there is, and nothing
+    contradicts it.
+    """
+    uids, seen = [], set()
+    line_mdn = _norm_key(line.get("mdn"))
+    for u in (index.get("mdn") or {}).get(line_mdn, ()) if line_mdn else ():
+        if u not in seen:
+            seen.add(u)
+            uids.append(u)
+    imei = _norm_key(line.get("serial_1"))
+    for u in ((index.get("imei") or {}).get(imei, ()) if imei else ()):
+        if u in seen:
+            continue
+        ev_mdn = (index.get("by_uid") or {}).get(u, {}).get("mdn") or ""
+        if ev_mdn and line_mdn and ev_mdn != line_mdn:
+            continue                      # same device, a different subscriber line's money
+        seen.add(u)
+        uids.append(u)
+    return uids
+
+
+def paid_against_lines(lines, index, *, as_of, periods_read=(), feeds_loaded=(),
+                       counted_categories=COUNTED_CATEGORIES):
+    """THE PRIMARY BASIS: the commission actually paid against the numbers/IMEIs a day activated.
+
+    PURE. Returns the counted total, the per-line detail, the three-state census, the accrual split
+    by period, and — evidence-first — the money that could not be classified because no category rule
+    is configured for its label. That last bucket is NAMED, never folded into the headline and never
+    silently dropped: "no business rule configured" is itself a finding.
+
+    DEDUPLICATION is on the source row's uid, globally across the day's lines, so a payment row that
+    is reachable from one line by its number and from another by its IMEI is counted ONCE. Lines are
+    processed in their sorted order, so which line an event is attributed to is deterministic.
+    """
+    counted = set(counted_categories or COUNTED_CATEGORIES)
+    loaded = [f for f in (feeds_loaded or ())]
+    claimed = set()
+    per_line = []
+    states = {PAID_STATE_PAID: 0, PAID_STATE_MATCHED_UNPAID: 0, PAID_STATE_UNMATCHABLE: 0}
+    reasons, by_period, by_stream, by_label = {}, {}, {}, {}
+    unclassified = {"total": 0.0, "labels": {}}
+    excluded = {}
+    total = 0.0
+
+    for line in (lines or []):
+        has_key = bool(_norm_key(line.get("mdn")) or _norm_key(line.get("serial_1")))
+        reachable_uids = _line_event_uids(line, index)
+        # A line whose every event was already claimed by an earlier line is still MATCHED — the
+        # number is known to the feed — it simply has no money left to attribute to it. That is the
+        # second state, not the third.
+        uids = [u for u in reachable_uids if u not in claimed]
+        entry = dict(line)
+
+        if not has_key:
+            entry.update({"state": PAID_STATE_UNMATCHABLE, "reason": PAID_REASON_NO_KEY,
+                          "paid": None, "events": 0})
+        elif not reachable_uids:
+            r = PAID_REASON_FEED_NOT_LOADED if not loaded else PAID_REASON_ABSENT
+            entry.update({"state": PAID_STATE_UNMATCHABLE, "reason": r, "paid": None, "events": 0})
+        else:
+            paid = 0.0
+            unc = 0.0
+            evs = []
+            for u in uids:
+                claimed.add(u)
+                ev = index["by_uid"][u]
+                evs.append(ev)
+                amt = _f(ev.get("amount"))
+                cat = ev.get("category") or ""
+                if cat in counted:
+                    paid += amt
+                    total += amt
+                    p = ev.get("period") or "unstated"
+                    by_period[p] = round(by_period.get(p, 0.0) + amt, 2)
+                    s = ev.get("stream") or STREAM_COMMISSION
+                    by_stream[s] = round(by_stream.get(s, 0.0) + amt, 2)
+                    lab = ev.get("label") or s
+                    by_label[lab] = round(by_label.get(lab, 0.0) + amt, 2)
+                elif not cat:
+                    unc += amt
+                    unclassified["total"] = round(unclassified["total"] + amt, 2)
+                    lab = ev.get("label") or "(no label)"
+                    unclassified["labels"][lab] = round(
+                        unclassified["labels"].get(lab, 0.0) + amt, 2)
+                else:
+                    excluded[cat] = round(excluded.get(cat, 0.0) + amt, 2)
+            entry.update({
+                "state": (PAID_STATE_PAID if round(paid, 2) else PAID_STATE_MATCHED_UNPAID),
+                "reason": None, "paid": round(paid, 2), "events": len(evs),
+                "unclassified_paid": round(unc, 2),
+                "matched_by": ("mdn" if any(e["mdn"] == _norm_key(line.get("mdn")) and e["mdn"]
+                                            for e in evs) else "imei"),
+            })
+        states[entry["state"]] += 1
+        if entry.get("reason"):
+            reasons[entry["reason"]] = reasons.get(entry["reason"], 0) + 1
+        per_line.append(entry)
+
+    matched = states[PAID_STATE_PAID] + states[PAID_STATE_MATCHED_UNPAID]
+    return {
+        "basis": COMMISSION_BASIS_PER_NUMBER,
+        "total": round(total, 2),
+        "exact": states[PAID_STATE_UNMATCHABLE] == 0 and matched > 0,
+        "lines": per_line,
+        "line_count": len(per_line),
+        "matched_lines": matched,
+        "states": states,
+        "state_notes": dict(PAID_STATE_NOTES),
+        "unmatchable": [{"reason": r, "count": n, "note": PAID_REASONS.get(r)}
+                        for r, n in sorted(reasons.items())],
+        # ── THE AS-OF BLOCK. Commission keeps arriving; this is a floor as of a date, and says so. ──
+        "as_of": as_of,
+        "periods_read": list(periods_read or ()),
+        "feeds_loaded": loaded,
+        "paid_to_date_by_period": dict(sorted(by_period.items())),
+        "by_stream": dict(sorted(by_stream.items())),
+        "by_label": dict(sorted(by_label.items(), key=lambda kv: (-kv[1], kv[0]))),
+        "still_accruing": True,
+        "accrual_note": (
+            "This is commission paid AS OF %s, not a settled total. Commission on a new line keeps "
+            "arriving for months — on the measured event day the same 10 numbers were still being "
+            "paid three months later — so this figure only grows and the ROI computed from it is a "
+            "FLOOR. The split by period above shows how much has landed when." % (as_of,)),
+        # ── EVIDENCE-FIRST: money whose label has no category rule configured. ──
+        "unclassified": unclassified,
+        "unclassified_note": (
+            "Paid against these very numbers, but the label carries NO category rule in the org's "
+            "payment_categories config, so the platform's one commission-received read cannot say "
+            "whether it is commission. It is NOT in the headline and it is NOT dropped: it is named "
+            "here so the gap can be closed with a config row rather than a code change."
+            if unclassified["total"] else None),
+        "excluded_by_category": dict(sorted(excluded.items())),
+        "excluded_note": (
+            "Paid against these numbers but classified as something other than commission "
+            "(promotional and reimbursement money, and every rebate). Correctly outside the "
+            "commission figure — the same rule the P&L's commission-received lines apply."
+            if excluded else None),
+    }
+
+
+def commission_fallback(per_number, store_month_commission, store_month_activations):
+    """The DEMOTED allocation, used ONLY for the lines the per-number basis could not match.
+
+    The allocation is no longer anybody's headline. It survives for one job: an unmatchable line must
+    not be treated as having earned nothing, so the store-month rate is applied to those lines ALONE
+    and the result is reported separately, with its line count, as an estimate.
+    """
+    n = int((per_number or {}).get("states", {}).get(PAID_STATE_UNMATCHABLE) or 0)
+    if not n:
+        return None
+    if store_month_commission is None or not store_month_activations:
+        return {"lines": n, "amount": None, "basis": COMMISSION_BASIS_ALLOCATED,
+                "note": ("%d line(s) could not be matched to any commission feed, and there is no "
+                         "store-month figure to estimate them from either. They are reported, not "
+                         "counted as zero." % n)}
+    rate = float(store_month_commission) / float(store_month_activations)
+    return {
+        "lines": n, "amount": round(rate * n, 2), "basis": COMMISSION_BASIS_ALLOCATED,
+        "per_activation_rate": round(rate, 2),
+        "store_month_commission": round(float(store_month_commission), 2),
+        "store_month_activations": int(store_month_activations),
+        "note": ("ESTIMATE, NOT A MEASUREMENT. %d line(s) could not be matched to any commission "
+                 "feed, so the store's month rate per countable activation is applied to those "
+                 "lines only. The rest of the figure is measured per number. Because any of this is "
+                 "present, the whole figure is marked not exact." % n),
+    }
+
 
 #: The cost components the owner named, in the order the ROI screen collects them.
 COST_EVENT_SPEND = "event_spend"

@@ -745,6 +745,271 @@ count("K")
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
+section("M. THE PER-NUMBER COMMISSION BASIS — the defect, the three states, and the as-of")
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER 2026-09-09: "days share cannot be calcultaed as vag it needs to tbe total of teh commisison
+# paid on each number". This section reproduces the real event day the allocation was measured wrong
+# on, both feed shapes, and every state the report can be in.
+#
+# THE FIXTURE IS THE LIVE SHAPE OF 196 Martin Luther King Jr Dr, 2026-05-02 (house org), with the
+# numbers and device serials replaced by structurally-identical synthetic ones — the AMOUNTS, labels,
+# periods, row counts and feed keys are the measured ones:
+#   • 10 activated lines, each with a number and a device serial;
+#   • $158.50 of payment-detail money reachable by NUMBER, spread May→August ($105.00 / $22.50 /
+#     $15.50 / $15.50) — the owner's own traced figure;
+#   • $45.00 of subscriber residual on the same numbers;
+#   • $180.00 of chargeback reachable ONLY by IMEI (the live withholding leg carries no number at
+#     all: 349 rows org-scoped, 349 with an IMEI, 0 with an MDN);
+#   • $10.00 whose label has no category rule configured;
+#   • $11.40 paid to a DIFFERENT number that shares one of the ten device serials.
+MP_N = 10
+MP_MDNS = ["5550100%03d" % i for i in range(MP_N)]
+MP_IMEIS = ["35006994795%04d" % i for i in range(MP_N)]
+MP_LINES = [{"store": "S1", "trans_date": "2026-05-02", "mdn": MP_MDNS[i],
+             "serial_1": MP_IMEIS[i], "trans_id": "T%d" % i, "line_class": "byod"}
+            for i in range(MP_N)]
+
+_uid = [0]
+
+
+def pe(mdn, imei, amt, label, cat, period, feed="payment_detail_lines",
+       stream=ES.STREAM_COMMISSION):
+    _uid[0] += 1
+    return ES.commission_event(feed, "r%d" % _uid[0], mdn=mdn, imei=imei, amount=amt,
+                               label=label, category=cat, period=period, stream=stream)
+
+
+COMM = ES.CATEGORY_COMMISSION
+MP_EVENTS = []
+# ── the number-keyed bounty ladder, exactly as the live feed pays it ──────────────────────────────
+for i in range(MP_N):                                    # May — every line: 6.00 + 3.00 + 1.50
+    MP_EVENTS += [pe(MP_MDNS[i], MP_IMEIS[i], 6.00, "Activation Bounty - Month 1", COMM, "May 2026"),
+                  pe(MP_MDNS[i], MP_IMEIS[i], 3.00, "SIM Loading Bounty - Month 1", COMM, "May 2026"),
+                  pe(MP_MDNS[i], MP_IMEIS[i], 1.50, "Ready Bounty - Month 1", COMM, "May 2026")]
+for i in range(2):                                       # June — 2 lines still paying + a top-up
+    MP_EVENTS += [pe(MP_MDNS[i], MP_IMEIS[i], 6.00, "Activation Bounty - Month 2", COMM, "June 2026"),
+                  pe(MP_MDNS[i], MP_IMEIS[i], 3.00, "SIM Loading Bounty - Month 2", COMM, "June 2026"),
+                  pe(MP_MDNS[i], MP_IMEIS[i], 1.50, "Ready Bounty - Month 2", COMM, "June 2026")]
+MP_EVENTS += [pe(MP_MDNS[0], MP_IMEIS[0], 1.50, "Auto Top-Up", COMM, "June 2026")]
+for mo, lg in (("July 2026", 3), ("August 2026", 4)):    # July + August — one line still paying
+    MP_EVENTS += [pe(MP_MDNS[0], MP_IMEIS[0], 6.00, "Activation Bounty - Month %d" % lg, COMM, mo),
+                  pe(MP_MDNS[0], MP_IMEIS[0], 3.00, "SIM Loading Bounty - Month %d" % lg, COMM, mo),
+                  pe(MP_MDNS[0], MP_IMEIS[0], 1.50, "Ready Bounty - Month %d" % lg, COMM, mo)]
+    # …and the label nobody has configured a category for. 10 rows of 0.50 in each of two months.
+    for i in range(MP_N):
+        MP_EVENTS += [pe(MP_MDNS[i], MP_IMEIS[i], 0.50, "Momentum Incentive", "", mo)]
+# ── the subscriber residual, per number ───────────────────────────────────────────────────────────
+for i in range(MP_N):
+    MP_EVENTS += [pe(MP_MDNS[i], MP_IMEIS[i], 3.15, "", COMM, "May 2026",
+                     feed="subscriber_residual", stream=ES.STREAM_RESIDUAL),
+                  pe(MP_MDNS[i], MP_IMEIS[i], 0.45, "", COMM, "June 2026",
+                     feed="subscriber_residual", stream=ES.STREAM_RESIDUAL)]
+for i in range(2):
+    MP_EVENTS += [pe(MP_MDNS[i], MP_IMEIS[i], 2.25, "", COMM, "July 2026",
+                     feed="subscriber_residual", stream=ES.STREAM_RESIDUAL),
+                  pe(MP_MDNS[i], MP_IMEIS[i], 2.25, "", COMM, "August 2026",
+                     feed="subscriber_residual", stream=ES.STREAM_RESIDUAL)]
+# ── the CHARGEBACK leg: keyed by device only, NO number anywhere on the row ───────────────────────
+for i in range(9):
+    MP_EVENTS += [pe("", MP_IMEIS[i], -20.00, "Commission Withholding", COMM, "July 2026")]
+# ── a DIFFERENT subscriber later activated on one of the ten handsets ─────────────────────────────
+MP_EVENTS += [pe("5559999999", MP_IMEIS[9], 7.60, "Activation Bounty - Month 1", COMM, "August 2026"),
+              pe("5559999999", MP_IMEIS[9], 3.80, "SIM Loading Bounty - Month 1", COMM, "August 2026")]
+# ── promo/reimbursement money on the same numbers: classified, and correctly NOT commission ──────
+MP_EVENTS += [pe(MP_MDNS[0], MP_IMEIS[0], 500.00, "Promo New Act Offer", "Re-imbursement", "May 2026")]
+
+MP_IDX = ES.index_commission_events(MP_EVENTS)
+MP = ES.paid_against_lines(MP_LINES, MP_IDX, as_of="2026-09-09",
+                           periods_read=["May 2026", "June 2026", "July 2026", "August 2026"],
+                           feeds_loaded=["payment_detail_lines", "subscriber_residual"])
+
+# ── M1–M6: THE DEFECT, REPRODUCED AND CORRECTED ──────────────────────────────────────────────────
+# The old basis: the store's whole May commission times the day's share of the store's May
+# activations. The measured live figures were $8,362.72 over 32 activations, 10 of them on this day.
+MP_OLD_ALLOC = round(8362.72 * (10.0 / 32.0), 2)
+check("M1 the OLD allocated basis reproduces the measured $2,613.35", MP_OLD_ALLOC, 2613.35)
+check("M2 the per-number basis is the commission actually paid on the day's numbers, and it is "
+      "NOT the allocation", MP["total"] != MP_OLD_ALLOC and MP["total"] < 100.0)
+check("M3 gross traced on the day's numbers reconciles to the owner's own $203.50 "
+      "(counted + unclassified + the chargebacks the number-only trace cannot see)",
+      round(MP["total"] + MP["unclassified"]["total"] + 180.00, 2), 203.50)
+check("M4 the number-keyed payment money is the traced $158.50",
+      round(sum(e["amount"] for e in MP_EVENTS
+                if e["feed"] == "payment_detail_lines" and e["mdn"] in MP_MDNS
+                and e["category"] != "Re-imbursement" and e["amount"] > 0), 2), 158.50)
+check("M5 the subscriber residual on those numbers is the traced $45.00",
+      MP["by_stream"][ES.STREAM_RESIDUAL], 45.00)
+check("M6 the headline is the NET of the chargebacks — $148.50 classified + $45.00 residual "
+      "− $180.00 withheld", MP["total"], 13.50)
+
+# ── M7–M11: THE THREE STATES ─────────────────────────────────────────────────────────────────────
+check("M7 every one of the ten lines matched", MP["states"][ES.PAID_STATE_PAID], 10)
+check("M8 nothing was unmatchable, so the basis is exact", MP["exact"], True)
+MP_UNPAID = ES.paid_against_lines(
+    [{"store": "S1", "trans_date": "2026-05-02", "mdn": "5550109999", "serial_1": "3500699479X"}],
+    ES.index_commission_events([pe("5550109999", "3500699479X", 0.0, "", COMM, "August 2026",
+                                   feed="subscriber_residual", stream=ES.STREAM_RESIDUAL)]),
+    as_of="2026-09-09", feeds_loaded=["subscriber_residual"])
+check("M9 STATE 2 — a line the feed KNOWS and has paid nothing on is a MEASURED zero, reported",
+      MP_UNPAID["states"][ES.PAID_STATE_MATCHED_UNPAID], 1)
+check("M9b …and it is counted as matched, so it IS in the denominator",
+      MP_UNPAID["matched_lines"], 1)
+check("M9c …and its measured zero keeps the basis exact", MP_UNPAID["exact"], True)
+MP_UNMATCH = ES.paid_against_lines(
+    [{"store": "S1", "trans_date": "2026-05-02", "mdn": "", "serial_1": ""},
+     {"store": "S1", "trans_date": "2026-05-02", "mdn": "5550107777", "serial_1": ""}],
+    MP_IDX, as_of="2026-09-09", feeds_loaded=["payment_detail_lines"])
+check("M10 STATE 3 — both unmatchable lines are reported, never counted as zero-earning",
+      MP_UNMATCH["states"][ES.PAID_STATE_UNMATCHABLE], 2)
+check("M10b …each with its own reason, and no number-with-no-key is confused with a number that "
+      "is simply absent",
+      sorted(u["reason"] for u in MP_UNMATCH["unmatchable"]),
+      [ES.PAID_REASON_ABSENT, ES.PAID_REASON_NO_KEY])
+check("M10c …an unmatchable line's paid figure is None, NOT 0.00",
+      [ln["paid"] for ln in MP_UNMATCH["lines"]], [None, None])
+check("M10d …and an unmatchable line makes the whole basis not exact", MP_UNMATCH["exact"], False)
+check("M11 'no feed loaded at all' is a DIFFERENT reason from 'absent from the feed'",
+      ES.paid_against_lines([{"mdn": "5550107777", "serial_1": ""}], MP_IDX, as_of="2026-09-09",
+                            feeds_loaded=[])["unmatchable"][0]["reason"],
+      ES.PAID_REASON_FEED_NOT_LOADED)
+
+# ── M12–M15: COUNTED ONCE, AND THE IMEI FENCE ────────────────────────────────────────────────────
+BOTH = ES.paid_against_lines(
+    [{"store": "S", "trans_date": "d", "mdn": "5550100000", "serial_1": "3500699479500"}],
+    ES.index_commission_events(
+        [ES.commission_event("payment_detail_lines", "one", mdn="5550100000",
+                             imei="3500699479500", amount=25.00, label="Bounty", category=COMM,
+                             period="May 2026")]),
+    as_of="2026-09-09", feeds_loaded=["payment_detail_lines"])
+check("M12 a row reachable by BOTH the number and the IMEI is counted ONCE, not twice",
+      BOTH["total"], 25.00)
+check("M12b …and it is one event, not two", BOTH["lines"][0]["events"], 1)
+check("M13 the chargeback leg — keyed by device with NO number — IS reached, which is the whole "
+      "reason the IMEI is in the match at all",
+      round(sum(v for k, v in MP["by_label"].items() if k == "Commission Withholding"), 2), -180.00)
+check("M14 the IMEI fence — money paid to a DIFFERENT number on the same handset is that line's, "
+      "and is NOT attributed to this event",
+      any(k.startswith("Activation Bounty") and v == 60.00 for k, v in MP["by_label"].items()))
+check("M14b …the foreign subscriber's $11.40 is nowhere in the total",
+      round(MP["total"] + 180.00 - 45.00, 2), 148.50)
+check("M15 …but where the sale row carries NO number, nothing contradicts the IMEI and the match "
+      "stands — the feed shape whose sale lines are keyed only by device serial",
+      ES.paid_against_lines(
+          [{"store": "S", "trans_date": "d", "mdn": "", "serial_1": "999888777"}],
+          ES.index_commission_events(
+              [ES.commission_event("master_agent_lines", "m1", mdn="5551112222",
+                                   imei="999888777", amount=40.00, category=COMM,
+                                   period="May 2026")]),
+          as_of="2026-09-09", feeds_loaded=["master_agent_lines"])["total"], 40.00)
+
+# ── M16–M19: THE AS-OF / ACCRUAL CONTRACT ────────────────────────────────────────────────────────
+check("M16 the payload carries the as-of date it was measured at", MP["as_of"], "2026-09-09")
+check("M17 …and the periods actually read, so the window is stated not implied",
+      MP["periods_read"], ["May 2026", "June 2026", "July 2026", "August 2026"])
+check("M18 …and the paid-to-date split by period, which is what shows the figure still accruing",
+      {k: MP["paid_to_date_by_period"][k] for k in ("May 2026", "June 2026")},
+      {"May 2026": 136.50, "June 2026": 27.00})
+check("M18b …a May activation is demonstrably STILL being paid in August, so no per-number figure "
+      "is ever final", MP["paid_to_date_by_period"]["August 2026"] != 0)
+check("M18c …the periods re-sum to the headline",
+      round(sum(MP["paid_to_date_by_period"].values()), 2), MP["total"])
+check("M19 the payload says in words that this is a floor as of a date, not a settled total",
+      "as of 2026-09-09" in MP["accrual_note"].lower()
+      and "floor" in MP["accrual_note"].lower() and MP["still_accruing"] is True)
+
+# ── M20–M23: EVIDENCE-FIRST — the money no rule classifies ───────────────────────────────────────
+check("M20 money whose label has NO category rule is kept OUT of the headline",
+      MP["unclassified"]["total"] == 10.00 and MP["total"] == 13.50)
+check("M20b …and is NOT silently dropped — it is named, with its label and amount",
+      MP["unclassified"]["labels"], {"Momentum Incentive": 10.00})
+check("M20c …and the payload says a config row, not a code change, closes the gap",
+      "payment_categories" in (MP["unclassified_note"] or ""))
+check("M21 promo/reimbursement money on the same numbers is excluded from commission…",
+      MP["excluded_by_category"], {"Re-imbursement": 500.00})
+check("M21b …and is reported by category rather than vanishing",
+      "reimbursement" in (MP["excluded_note"] or "").lower())
+check("M22 the counted category is the one the platform's own commission-received read uses",
+      ES.COUNTED_CATEGORIES, (ES.CATEGORY_COMMISSION,))
+check("M23 RULE TWO, proven by behaviour — WHICH labels count is DATA: the same events under a "
+      "different counted-category set give a different total, so no label vocabulary is baked in",
+      ES.paid_against_lines(MP_LINES, MP_IDX, as_of="2026-09-09",
+                            counted_categories=("Re-imbursement",))["total"], 500.00)
+check("M23b …and the pure module reads no table at all — it is HANDED each event's category, so "
+      "the platform's one commission classifier stays the only one", ".table(" in BODY, False)
+
+# ── M24–M27: THE ALLOCATION, DEMOTED TO A FALLBACK ───────────────────────────────────────────────
+check("M24 with nothing unmatchable there is NO fallback at all — the store month is not even read",
+      ES.commission_fallback(MP, 8362.72, 32), None)
+FB = ES.commission_fallback(MP_UNMATCH, 8362.72, 32)
+check("M25 the fallback covers ONLY the unmatchable lines, at the store's month rate",
+      (FB["lines"], FB["amount"]), (2, round(8362.72 / 32.0 * 2, 2)))
+check("M25b …and names itself an estimate, not a measurement", "ESTIMATE" in FB["note"])
+check("M26 with no store-month figure to estimate from, the lines are still REPORTED and the "
+      "amount is None — never 0.00",
+      (ES.commission_fallback(MP_UNMATCH, None, 32)["amount"],
+       ES.commission_fallback(MP_UNMATCH, None, 32)["lines"]), (None, 2))
+check("M27 the allocated basis's own note now says it is the fallback and records why it was "
+      "demoted", "$2,613.35" in ES.COMMISSION_BASIS_NOTES[ES.COMMISSION_BASIS_ALLOCATED]
+      and "$203.50" in ES.COMMISSION_BASIS_NOTES[ES.COMMISSION_BASIS_ALLOCATED])
+
+# ── M28–M31: FEED SHAPES ARE DATA (RULE TWO), AND THE REBATE STAYS OUT ───────────────────────────
+check("M28 the feed shapes are named for what they ARE, never for a carrier or a tenant",
+      sorted(ES.COMMISSION_LINE_FEED_SHAPES),
+      ["master_agent_lines", "payment_detail_lines", "subscriber_residual"])
+check("M29 every shape declares its source table and its line keys",
+      all(s.get("source") and s.get("keys") for s in ES.COMMISSION_LINE_FEED_SHAPES.values()))
+check("M30 the number-keyed shape reaches BOTH keys; the master-agent shape is IMEI-only, which "
+      "is what its feed carries",
+      (sorted(ES.COMMISSION_LINE_FEED_SHAPES["payment_detail_lines"]["keys"]),
+       sorted(ES.COMMISSION_LINE_FEED_SHAPES["master_agent_lines"]["keys"])),
+      (["imei", "mdn"], ["imei"]))
+check("M31 the master-agent money EXCLUDES the rebate component — a rebate is not commission",
+      "rebate" in _R_SRC.split("def _es_ma_components")[1].split("def ")[0]
+      and 'c != "rebate"' in _R_SRC)
+check("M31b …and the component list is the shared one, not a second list",
+      "_MA_COMPONENTS" in _R_SRC)
+
+# ── M32–M34: THE READER IS BOUNDED, ORG-SCOPED AND PROBES BEFORE IT CONCLUDES ────────────────────
+_MP_READER = _R_SRC.split("def _es_commission_events")[1].split("\ndef _es_ma_components")[0]
+check("M32 every read in the per-line commission reader is org-scoped by hand (this file is NOT "
+      "covered by the CI org-scope guard)",
+      _MP_READER.count('.eq("org_id", org_id)'), _MP_READER.count(".select("))
+check("M33 the reader probes whether a feed exists before concluding anything from its silence",
+      "_probe(" in _MP_READER and "does not receive this feed" in _MP_READER)
+check("M34 the reads are chunked, so the 278k-row payment feed never travels whole",
+      "_es_chunks(values)" in _R_SRC and "n=150" in _R_SRC)
+
+# ── M35–M40: THE CONFIG COLUMN AND MIGRATION 999 ─────────────────────────────────────────────────
+MIG999 = open(os.path.join(REPO, "database", "migrations",
+                           "999_event_roi_per_number_commission.sql"), encoding="utf-8").read()
+check("M35 the house default reads EVERY shape that has rows — adaptive, no config needed",
+      ES.DEFAULT_EVENT_SALES_CONFIG["event_roi_commission_feed_shapes"], None)
+check("M36 a pre-999 config row still yields the house defaults (the reports run on the old schema)",
+      ES.resolve_event_sales_config({"approval_required": False})
+      ["event_roi_commission_feed_shapes"], None)
+check("M37 a tenant narrows the shapes with a config ROW, not a deploy",
+      ES.resolve_event_sales_config(
+          {"event_roi_commission_feed_shapes": ["subscriber_residual"]})
+      ["event_roi_commission_feed_shapes"], ["subscriber_residual"])
+check("M37b …and a typo cannot quietly switch a feed off with nothing on screen to say so",
+      ES.resolve_event_sales_config(
+          {"event_roi_commission_feed_shapes": ["typo_shape"]})
+      ["event_roi_commission_feed_shapes"], None)
+check("M38 the reader honours the configured subset", "shape in want" in _R_SRC)
+check("M39 migration 999 is additive, idempotent and carries REVERT notes",
+      "ADD COLUMN IF NOT EXISTS" in MIG999 and "-- REVERT:" in MIG999)
+check("M39b …it creates no table and seeds no money",
+      "CREATE TABLE" in MIG999 or "INSERT INTO" in MIG999, False)
+check("M39c …and it records the duplicate check it was gated on",
+      "duplicate-check build gate" in MIG999)
+check("M40 the live-data defect this work found is REPORTED in the migration, not seeded away",
+      "Momentum Incentive" in MIG999 and "deliberately DOES NOT seed" in MIG999)
+check("M40b …and the column comment names the shapes, so the vocabulary is discoverable in the DB",
+      all(k in MIG999 for k in ES.COMMISSION_LINE_FEED_SHAPES))
+count("M")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("L. ARMED — the negative control")
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 armed = []
@@ -761,6 +1026,16 @@ if any(ES.line_class(r, classify_contract_type) in CFG["event_sales_activation_c
     armed.append("a blank contract type was counted as an activation")
 if ES.cost_component("x", None, ES.BASIS_PROMPT, "s")["amount"] == 0.0:
     armed.append("an unknown cost was rendered as 0.00")
+if MP_UNMATCH["lines"][0]["paid"] == 0.0:
+    armed.append("a line nobody could look up was reported as having earned 0.00")
+if MP_UNMATCH["exact"]:
+    armed.append("a day carrying unmatchable lines still claimed an exact commission figure")
+if BOTH["total"] != 25.00:
+    armed.append("a row reachable by both the number and the IMEI was double-counted")
+if MP["unclassified"]["total"] and not MP["unclassified_note"]:
+    armed.append("money no rule classifies was dropped without being named")
+if round(MP["total"] + MP["unclassified"]["total"], 2) != 23.50:
+    armed.append("the unclassified money leaked into the headline")
 check("L1 the negative control found no regression (and CAN fail — see the source)", armed, [])
 
 _before = len(FAIL)

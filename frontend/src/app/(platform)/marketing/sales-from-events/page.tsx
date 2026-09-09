@@ -352,6 +352,101 @@ function RetentionTab({ d }: { d: any }) {
 
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════
+// REPORT 3 — the per-number commission basis: the three states, the accrual, and the fallback.
+// THREE STATES, NOT TWO. A line that matched and has been paid nothing is a MEASURED zero and is
+// shown as one; a line nobody could look up is shown SEPARATELY with its reason and is never
+// rendered as $0.00 earned. Collapsing the third into the second would understate the return the
+// same way the old allocation overstated it.
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+function CommissionDetail({ pn, fb }: { pn: any; fb: any }) {
+  const [open, setOpen] = useState(false)
+  if (!pn) return null
+  const st = pn.states || {}
+  const periods = Object.entries(pn.paid_to_date_by_period || {})
+  const unc = pn.unclassified || {}
+  return (
+    <div style={{ marginTop: 8, fontSize: 12 }}>
+      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'baseline' }}>
+        <span style={{ color: '#16a34a' }}><b>{nf(st.paid)}</b> paid</span>
+        <span style={{ color: 'var(--text2)' }}>
+          <b>{nf(st.matched_unpaid)}</b> matched, nothing paid yet (a measured zero)
+        </span>
+        <span style={{ color: st.unmatchable ? '#b45309' : 'var(--text2)' }}>
+          <b>{nf(st.unmatchable)}</b> could not be looked up
+        </span>
+        <button style={{ ...btn, padding: '2px 8px' }} onClick={() => setOpen(o => !o)}>
+          {open ? 'Hide the detail' : 'Show the detail'}
+        </button>
+      </div>
+
+      {st.unmatchable > 0 && (
+        <div style={{ marginTop: 6, color: '#b45309' }}>
+          {(pn.unmatchable || []).map((u: any) => (
+            <div key={u.reason} style={{ marginBottom: 3 }}>
+              <b>{nf(u.count)} line(s) — {u.reason}:</b> {u.note}
+            </div>
+          ))}
+          {fb && (
+            <div style={{ marginTop: 3 }}>
+              <b>Fallback for those lines: {fb.amount === null ? 'not estimable' : money(fb.amount)}</b>
+              {' — '}{fb.note}
+            </div>
+          )}
+        </div>
+      )}
+
+      {unc.total > 0 && (
+        <div style={{ marginTop: 6, color: '#b45309' }}>
+          <b>{money(unc.total)} paid against these numbers has no category rule configured</b>
+          {' ('}{Object.keys(unc.labels || {}).join(', ')}{'). '}
+          {pn.unclassified_note}
+        </div>
+      )}
+
+      {open && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ marginBottom: 6 }}>{pn.accrual_note}</div>
+          {periods.length > 0 && (
+            <table style={{ borderCollapse: 'collapse', marginBottom: 8 }}>
+              <thead><tr>
+                <th style={th}>Feed period</th><th style={{ ...th, textAlign: 'right' }}>Paid</th>
+              </tr></thead>
+              <tbody>
+                {periods.map(([p, v]: any) => (
+                  <tr key={p}>
+                    <td style={cell}>{p}</td>
+                    <td style={{ ...cell, textAlign: 'right' }}>{money(v)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {Object.keys(pn.by_label || {}).length > 0 && (
+            <table style={{ borderCollapse: 'collapse' }}>
+              <thead><tr>
+                <th style={th}>What was paid</th><th style={{ ...th, textAlign: 'right' }}>Amount</th>
+              </tr></thead>
+              <tbody>
+                {Object.entries(pn.by_label).map(([k, v]: any) => (
+                  <tr key={k}>
+                    <td style={cell}>{k}</td>
+                    <td style={{ ...cell, textAlign: 'right' }}>{money(v)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {Object.keys(pn.excluded_by_category || {}).length > 0 && (
+            <div style={{ marginTop: 6, color: 'var(--text2)' }}>{pn.excluded_note}</div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
 // REPORT 3
 // ══════════════════════════════════════════════════════════════════════════════════════════════
 function RoiTab({ d, onSaved }: { d: any; onSaved: () => void }) {
@@ -363,6 +458,22 @@ function RoiTab({ d, onSaved }: { d: any; onSaved: () => void }) {
           How the commission figure is arrived at
         </div>
         <div>{d.commission_bases?.[d.commission_basis]}</div>
+        {d.commission_basis_note && (
+          <div style={{ marginTop: 6 }}>{d.commission_basis_note}</div>
+        )}
+        <div style={{ marginTop: 6, fontWeight: 600, color: '#b45309' }}>
+          Measured as of {d.commission_as_of || '—'}
+          {(d.commission_periods_read || []).length > 0
+            ? ` · read across ${(d.commission_periods_read || []).length} feed period(s): ${(d.commission_periods_read || []).join(', ')}`
+            : ''}
+          . These figures keep growing — commission on a new line arrives for months, so this is a
+          floor, not a settled total.
+        </div>
+        {(d.commission_feeds_loaded || []).length > 0 && (
+          <div style={{ marginTop: 4 }}>
+            Per-line commission feeds loaded: {(d.commission_feeds_loaded || []).join(', ')}.
+          </div>
+        )}
         <div style={{ marginTop: 6 }}>
           An ROI is only shown when every cost is known. Where one is not, the report says which and
           asks for it — it is never filled in as $0.00.
@@ -444,10 +555,13 @@ function RoiDay({ row, onSaved }: { row: any; onSaved: () => void }) {
       )}
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 10 }}>
-        <Tile label="Commission (allocated)" value={money(row.commission_received)}
-              sub={row.commission_allocation?.share !== null && row.commission_allocation?.share !== undefined
-                ? `${nf(row.commission_allocation?.day_register_activations)} of ${nf(row.commission_allocation?.store_month_activations)} store activations that month`
-                : (row.commission_allocation?.note || 'no share to allocate by')} />
+        <Tile label={row.commission_exact ? 'Commission paid on these numbers'
+                                          : 'Commission paid on these numbers (part estimated)'}
+              value={row.commission_received === null ? 'Not known' : money(row.commission_received)}
+              color={row.commission_received === null ? '#b45309' : undefined}
+              sub={row.commission_per_number
+                ? `${nf(row.commission_per_number.matched_lines)} of ${nf(row.commission_per_number.line_count)} line(s) matched · as of ${row.commission_per_number.as_of}`
+                : 'no per-line commission feed'} />
         {(row.cost_components || []).map((c: any) => (
           <Tile key={c.kind} label={c.label}
                 value={c.basis === 'prompt_required' ? 'Not known' : money(c.amount)}
@@ -462,6 +576,8 @@ function RoiDay({ row, onSaved }: { row: any; onSaved: () => void }) {
           <div key={c.kind} style={{ marginBottom: 3 }}><b>{c.label}:</b> {c.note}</div>
         ))}
       </div>
+
+      <CommissionDetail pn={row.commission_per_number} fb={row.commission_fallback} />
 
       <button style={{ ...btn, marginTop: 10 }} onClick={() => setOpen(o => !o)}>
         {open ? 'Close' : (row.event_linked ? 'Correct the cost' : 'Enter the cost / create the event')}

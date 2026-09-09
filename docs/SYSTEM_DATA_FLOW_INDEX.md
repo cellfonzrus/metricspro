@@ -60,7 +60,7 @@ email), (c) **RPC/manual entry**.
 |-------|-----------|-------------|-------|
 | `raw_sales` | `002_commcalc.sql:19` | `store, salesperson, user_login, department, category, product_desc, product_id, gp, ext_price, trans_id, trans_date, contract_type, mdn, serial_1, register, tender_type, voided, trans_type, sku` | Rep commission, GP, sales report, installments |
 | `daily_sales_feed` | `047_sales_feed_recon.sql:19` | superset of raw_sales + `customer, email, customer_no` | The **processed** daily sales source; falls back to raw_sales |
-| `raw_payment_detail` | `002_commcalc.sql:34` | `business_address, payment_type, amount, mdn, imei, payment_date, rep_username, sequence` | GP (payment categorization), commission reimbursement |
+| `raw_payment_detail` | `002_commcalc.sql:34` | `business_address, payment_type, amount, mdn, imei, payment_date, rep_username, sequence` | GP (payment categorization), commission reimbursement; **per-LINE commission** for the event ROI via `mdn` (99.85% populated) and `imei` — note the CHARGEBACK leg (`Commission Withholding`) is keyed by `imei` with NO `mdn` at all (349 house rows, 349 imei, 0 mdn), so a number-only join reports GROSS as if it were net (§23s.8) |
 | `merchant_settlement_day` | `955_merchant_portal_settlement.sql` | `org_id, source_id, portal_key, settlement_role, business_date, merchant_id, terminal_id, store_code, card_brand, gross_amount, refund_amount, net_amount, fee_amount, txn_count, batch_ref, raw` | **Merchant-processor card settlement** — the PROCESSOR side of the daily-closing card tally (§12a). Grain = org × source × merchant × business_date × card_brand |
 | `merchant_settlement_batch` | `955_merchant_portal_settlement.sql` | `org_id, source_id, portal_key, settlement_role, deposit_date, batch_date, merchant_id, store_code, batch_ref, deposit_amount, fee_amount, raw` | Processor **funding** events (money to the bank) — cash/deposit recon (§12). A DIFFERENT grain from settlement; never sum the two |
 | `raw_mi` | `002_commcalc.sql:46` | `salesforce_id, actual_mi_payout, actual_atu_payout, phone_number, subscriber_status` | Carrier residual gate (paid-proof), MI/ATU |
@@ -2680,6 +2680,7 @@ be a seaprate box in the p&l under wages"
 | `storeops.document_contact` (mig `966` — MULTIPLE expiry contacts; `subject_kind` 'lease' + store_code covers that store's lease AND certificate, 'insurance_policy' + policy id) | `PUT /storeops/document-contacts` (gated; replace-set per subject) | `GET /storeops/document-contacts`, `GET /storeops/store-lease` (`contacts`), `GET /storeops/insurance-policies`, and the expiry sweep's recipient list (`doc_intel.expiry_alerts`) |
 | `storeops.tenants.rent_due_default` + `lease_visible_roles` (mig `946` config columns) | `PUT /storeops/store-lease/tenant-defaults` (due default); roles column set per-org via SQL/admin | `store_lease.tenant_lease_config` (adaptive — pre-946 = house first-week + market-manager-and-above), `can_see_lease` gate |
 | `storeops.google_review_config` / `google_review_sweep_config` / `google_review_store` / `google_review_snapshot` / `google_review_item` (migs `411`/`412`, service-role-only; sequence grants mig `951`) | config: `PUT /storeops/google-reviews/config` + `/sweep-config` + `/store-config/{code}`; data: `google_reviews.sweep_store` (place pin upsert, snapshot insert, item dedupe-insert) via run-now/run-due; sweep status: `_gr_set_sweep_status` (`last_detail` carries error samples since 2026-09-04) | `/google-reviews/my`, `/dm-dashboard`, `/store/{code}`, `/stores`, `/employee/{id}`, `/employee-summary` (§14 Google Reviews); below-target → `storeops.action_plan` rows |
+| `core.marketing_config.event_roi_commission_feed_shapes` | which per-line commission feed SHAPES the event ROI sums the paid commission from — `payment_detail_lines` / `subscriber_residual` / `master_agent_lines`. NULL = every shape that has rows (adaptive). A SHAPE, never a carrier or tenant (RULE TWO), same vocabulary as `processor_ledger.FEED_SHAPES` | mig `999` (**written, NOT applied**); resolver `event_sales.resolve_event_sales_config`, read by `router._es_commission_events` (§23s.8) |
 | `core.marketing_event_cost` | what a HUMAN said an event cost (event spend / payroll / per-model phone cost), append-only with who typed it and when | mig `995`; read by `GET /marketing/event-sales/roi` and by NOTHING else — no P&L, statement, payout, accrual or commission figure reads it. `marketing_event_giveaway.unit_cost` is deliberately NOT promoted into this money path (§23s.6) |
 
 ---
@@ -2775,7 +2776,7 @@ be a seaprate box in the p&l under wages"
 | `GET /storeops/doc-expiry` (what expires, its resolved notice window, who would be told), `POST /storeops/doc-expiry/run-now` (DRY RUN by default), `POST /storeops/doc-expiry/run-due` (NOTIFY_RUN_SECRET pg_cron entrypoint, daily) | `storeops/router.py` (`get_doc_expiry`/`doc_expiry_run_now`/`doc_expiry_run_due` → `_run_doc_expiry`; cron RPC `_ensure_doc_expiry_alert_cron`) | §14 mig 967 |
 | `GET /marketing/event-sales` | Sales from Events — report 1: every sale rung on the org's event register(s), all available fields, per (store, date) | §23s |
 | `GET /marketing/event-sales/subscriber-retention` | report 2: do the lines activated at the event stay? THREE states — active / churned / unmatched-with-a-reason; the unmatched line is never churn and never in a denominator. **Not** `/marketing/checkin-retention`, which is GDPR data retention | §23s.5 |
-| `GET /marketing/event-sales/roi` | report 3: commission received (an ALLOCATION, labelled) less the day's cost; withheld entirely while any cost is unknown | §23s.6 |
+| `GET /marketing/event-sales/roi` | report 3: the commission actually PAID against the numbers/IMEIs the day activated (`paid_against_activated_numbers`, with `commission_as_of` + the paid-to-date split by period) less the day's cost; withheld entirely while any cost is unknown. The store-month allocation is a labelled fallback for unmatchable lines only | §23s.6, §23s.8 |
 | `POST /marketing/event-sales/roi/link-event` | link a (store, date) to an event, or CREATE one through the module's existing creator with the minimum needed to cost it | §23s.7 |
 
 | `GET /account/pl/{period}`, `GET /account/balance-sheet/{period}` (`?scope=&stores=&markets=` — stored snapshot when unfiltered; store/market-filtered view via `statement_filter.filtered_statement`: canonical-union market resolution + company-scope AND-composition, 2026-09-02) | `account/router.py` (`get_pl`/`get_bs` → `_filtered_read`) | §4 P&L filter |
@@ -2898,7 +2899,7 @@ be a seaprate box in the p&l under wages"
 | Whether an AI-extracted value may become a booked number | `doc_intel.MONEY_GUARDED` (rent, rent effective-from, escalation, rent schedule, rent due, insurance premium + premium due, policy premium + premium due) + `doc_intel.FORBIDDEN_TARGETS` (every ACH/banking + identity column, no override) | `doc_intel.apply_plan` — the ONLY writer from `document_extraction` to `store_lease`/`insurance_policy`; refusals returned to the UI with a reason. Proof `harness_doc_intel.py` §D |
 | Event-register sales + activations (per store, per event day) | `raw_sales` rows whose `register` is in `marketing_config.event_sales_registers` (house `{RSK}`) — the predicate is `commcalc/sales_register.is_event_register`, SHARED with `flags.py`'s RSK_ACTIVATIONS flag. RSK is a REGISTER, not a tender | `marketing/event_sales.sales_summary`; counts from `_compute_feed_actuals_py(rows=<register-filtered>)` — the shared pass, given a pre-filtered row set, so nothing is re-classified. `GET /marketing/event-sales`; §23s |
 | Subscriber retention of event-activated lines (30/60/90 + still-active-now) | `raw_mi` `subscriber_status`, matched from `raw_sales.mdn`→`serial_1` through the paid gate's `sale_installment_engine._mi_index`/`_match_mi` | `event_sales.retention_report`; denominator is MATCHED lines only — an unmatched line is reported with its reason and is NEVER churn, and an all-unmatched window is `null`, never 0% (§23s.5) |
-| Event ROI (per store, per event day) | commission: `commission_received_breakout` for the store-MONTH × the day's share of that store's month activations — an ALLOCATION, `commission_exact: false`, because no commission feed carries a register or a transaction. cost: `marketing_event.planned_spend` ∪ `marketing_event_cost` ∪ hours from `salary_expense.day_measurement` × `employees.pay_rate` ∪ handset count × `raw_catalog.cost` | `event_sales.roi_compute` → `GET /marketing/event-sales/roi`. A single unknown cost withholds the ROI; nothing is ever rendered as $0.00 (§23s.6) |
+| Event ROI (per store, per event day) | commission: **`paid_against_activated_numbers`** — the commission ACTUALLY PAID against the numbers/IMEIs the day activated, summed per line from the per-line feeds and deduped on the source row so a line reachable by both keys counts once (owner 2026-09-09 *"needs to tbe total of teh commisison paid on each number"*). Labels are classified through the org's `payment_categories` — the SAME gate `commission_received.add_label_rows` uses. A FLOOR AS OF A DATE (`commission_as_of`, `paid_to_date_by_period`): commission on a new line keeps arriving for months. The store-month ALLOCATION is DEMOTED to a labelled fallback for unmatchable lines only. cost: `marketing_event.planned_spend` ∪ `marketing_event_cost` ∪ hours from `salary_expense.day_measurement` × `employees.pay_rate` ∪ handset count × `raw_catalog.cost` | `event_sales.paid_against_lines` / `index_commission_events` / `commission_fallback` + `roi_compute` → `GET /marketing/event-sales/roi`; reader `router._es_commission_events`. THREE line states — paid / matched-but-unpaid (a MEASURED zero) / unmatchable-with-a-reason (never zero-earning). A single unknown cost withholds the ROI; nothing is ever rendered as $0.00 (§23s.6, §23s.8) |
 
 ---
 
@@ -4759,7 +4760,9 @@ Three reports under **Marketing → Sales from Events**. Migration `995` (config
 **written, NOT applied**). Pure logic `backend/app/modules/marketing/event_sales.py` +
 `backend/app/modules/commcalc/sales_register.py`; HTTP/IO in `marketing/router.py`; page
 `frontend/src/app/(platform)/marketing/sales-from-events/page.tsx`. Proof
-`backend/harness_marketing_event_sales.py` (**178 checks**).
+`backend/harness_marketing_event_sales.py` (**237 checks**). Migration `999` adds the ROI's per-line
+commission feed-shape config (**written, NOT applied**) — see §23s.8, which replaced the ROI's
+allocated commission basis with what was actually paid per number (owner 2026-09-09).
 
 ### 23s.1 ⚠ THE CORRECTION THE OWNER SHOULD SEE — RSK is a REGISTER, not a tender
 
@@ -4861,22 +4864,11 @@ column MEANS for any tenant that has already typed a number into it. **RECOMMEND
 `qty_given` — a COUNT, never money. To overrule, read it in `event_sales.build_costs` and amend mig
 986's column note; it is deliberately not something a later edit can do by accident.
 
-**⚠ COMMISSION PER DAY × REGISTER IS NOT EXACTLY EXPRESSIBLE, and the report says so.** No commission
-feed carries a register or a transaction id: ePay Commission Payment Detail carries a store address
-and a month-of-life in the payment type; VidaPay/MA commission carries no store at all (the breakout
-EXCLUDES it while a store filter is active); only `raw_mi` residual is per SUBSCRIBER. So the report
-publishes an **allocation, labelled as one** — `commission_basis: allocated_store_month`,
-`commission_exact: false`: the store's commission received for the event's MONTH × the event day's
-share of that store's countable activations for the month, both counts from the SAME shared pass. The
-exactly-attributable basis (`matched_line_residual` — the residual actually paid on the very numbers
-the event activated) is described in the payload as a FLOOR, not the whole. Rebates stay excluded
-throughout (owner 2026-09-08).
-
-**DECLARED SEAM:** only `allocated_store_month` is COMPUTED today. `matched_line_residual` is defined
-and described so a reader knows an exact basis exists and what it would mean, and the payload says so
-in `commission_bases_available` + `commission_basis_note` rather than advertising a basis nothing
-computes. Wiring it is a read of `raw_mi.actual_mi_payout + actual_atu_payout` over the SAME matched
-rows report 2 already builds — no new derivation, no new key.
+**⚠ THE COMMISSION BASIS WAS AN ALLOCATION AND IS NOW A MEASUREMENT — see §23s.8.** The declared
+seam this section used to describe (`matched_line_residual`, defined but not computed) has been
+superseded: the report now sums the commission ACTUALLY PAID against the numbers and IMEIs each day
+activated, and the store-month allocation survives only as a labelled fallback for lines that cannot
+be matched. Rebates stay excluded throughout (owner 2026-09-08).
 
 **⚠ NOT RESOLVED — a store-month commission of $0.00 may be a coverage gap, not a measurement.**
 Live 2026-09-09, store `B-2509` July 2026 reads $0.00 store-month commission (against `B-3565`'s
@@ -4884,6 +4876,113 @@ $3,655.12), so its allocated figure is $0.00. That is what `commission_received_
 that store filter; whether it is a true zero or an ePay store-attribution gap was NOT chased. The row
 carries `store_month_commission` and the breakout's own note verbatim so the zero is traceable rather
 than silent — but it should be verified before anyone reads an ROI off that store.
+
+### 23s.8 ⚠ THE COMMISSION BASIS: an allocation replaced by what was actually paid (owner 2026-09-09)
+
+OWNER, verbatim: *"days share cannot be calcultaed as vag it needs to tbe total of teh commisison
+paid on each number"*, then *"find a connection between the ma comm, and ma tx report whioch gives us
+the comm paid details"*, and on making per-number the primary basis: *"yes"*.
+
+**THE DEFECT, QUANTIFIED.** 196 Martin Luther King Jr Dr, 2026-05-02, house org: 50 event-register
+rows carrying **10 distinct numbers**. The allocation reported **$2,613.35** — 10/32 of the store's
+ENTIRE May commission of $8,362.72, most of it bounty and residual on the store's *pre-existing*
+subscriber base, money those ten new lines never earned. It was ~13x too high, and wrong in the
+flattering direction.
+
+**THE SPINE IS THE IMEI, NOT THE ORDER NUMBER.** `raw_ma_commission.imei` is populated on 2,523/2,523
+rows (100%) and intersects `raw_sales.serial_1` on **1,323 IMEIs**. The master-agent ORDER NUMBER is
+not usable: `activation_order` → `raw_ma_daily_tx.order_number` matches only the one order family
+(1,735 of 4,995) and **0.0% of every other**.
+
+**THE THREE STATES — and the third is what keeps the ROI honest.** A per-number total whose
+denominator silently includes lines nobody could look up understates the return exactly the way the
+allocation overstated it.
+
+| State | Meaning | Treatment |
+|---|---|---|
+| `paid` | matched into a feed, money paid against it | counted |
+| `matched_unpaid` | matched — the number IS known to the feed — nothing paid yet | a MEASURED zero, stated, never silently absent |
+| `unmatchable` | no key on the sale row, or in no loaded feed | reported with count + reason; **never** treated as zero-earning |
+
+Reasons: `no_mdn_or_imei_on_sale_row` · `absent_from_every_commission_feed` ·
+`commission_feed_not_loaded`. `commission_exact` is TRUE only when nothing is unmatchable.
+
+**⚠ THE AS-OF PROBLEM — a per-number ROI is never final.** Commission on a new line keeps arriving
+for months: those ten May numbers were still being paid in **August** ($105.00 May → $22.50 June →
+$15.50 July → $15.50 August on the payment feed). Every payload therefore carries `commission_as_of`,
+`commission_periods_read` and `paid_to_date_by_period`, and says in words that the figure is a FLOOR
+as of a date. The screen repeats it above the day cards.
+
+**⚠ THE CHARGEBACK LEG IS IMEI-ONLY — a number-only join reports GROSS as if it were net.**
+`Commission Withholding` on `raw_payment_detail`: **349 house rows, 349 with an `imei`, ZERO with an
+`mdn`**. On the measured day, nine of the ten devices were charged back **−$180.00** in July that a
+number-only trace cannot see at all. This is why the match reaches both keys.
+
+**⚠ …AND THE IMEI LEG IS FENCED.** The same handset gets re-activated on a NEW number later, and that
+line's commission is not this line's. An IMEI match is REFUSED when the event names a *different*
+number than the line does; the refusal needs BOTH numbers present, so a feed shape whose sale lines
+carry only a device serial still matches. On the measured day this correctly kept $11.40 paid to a
+different subscriber out of the total.
+
+**RECONCILIATION of the measured day, owner's numbers → shipped figure:**
+
+| | |
+|---|---|
+| payment-detail money reachable by NUMBER (the owner's own trace) | $158.50 |
+| less `Momentum Incentive` — **no category rule configured** | −$10.00 |
+| plus MI + ATU residual on the same numbers | +$45.00 |
+| plus the IMEI-keyed chargebacks a number-only trace cannot see | −$180.00 |
+| **`commission_received`, reproduced through the shipped endpoint** | **$13.50** |
+| *(what the allocation reported)* | *$2,613.35* |
+
+**WHICH MONEY COUNTS — ROUTED, NOT RE-DERIVED.** Each payment label is classified through the org's
+own `commcalc.payment_categories` and kept only at `category = 'Commission'` — **the same gate
+`commission_received.add_label_rows` applies** (mig `274`). So bounties/SPIFFs count and promos and
+reimbursements do not because a CONFIG ROW says so; there is no keyword list in code. Residual is
+commission by construction (no label to map). The master-agent leg sums
+`account.residual_subs._MA_COMPONENTS` through `commission_legs.split_ma_components` **minus
+`rebate`** — `ma_store_pnl.commission_received_lines()`'s rule, applied per line.
+
+**⚠ LIVE-DATA DEFECT FOUND, REPORTED, NOT PAPERED OVER.** Labels paid to the house org carry NO row
+in `payment_categories`, so the platform's one commission-received read cannot classify them and
+drops them silently: **`Momentum Incentive` — 113,052 rows, $56,526.00** (July + August 2026),
+`2026 Q3 Promo New Act Offer`, `2026 Q3 Promo PIC Offer`, `2026 BYOD SPIFF - Month 2`,
+`2026 Q1 Promo Upgrade - Quarterly True-Up` ($3,379.00 in May alone). Mig `999` deliberately does NOT
+seed them — deciding that a label is commission is a money decision that belongs to the owner. The
+ROI names this money on every affected day (`unclassified` + `unclassified_note`) instead, and one
+row per label on the existing `/commcalc/commission-legs` admin surface closes it with no deploy.
+
+**MEASURED THROUGH THE SHIPPED ENDPOINT (house org, all 18 event days, 2026-09-09):** 122 activated
+lines → **95 paid · 1 matched-but-unpaid · 26 unmatchable** (match rate **78.7%**, every unmatchable
+one `absent_from_every_commission_feed`); $1,053.74 counted commission; $1,825.92 named as
+unclassified; $2,991.38 excluded as `Re-imbursement`; **4 of 18 days use the fallback and are marked
+`commission_exact: false`**. The tenant with the master-agent feed shape has **zero** event-register
+rows (its `register` is uniformly `'1'` — §23s.1), so that shape is proven in the harness rather than
+on live event days.
+
+**FEED SHAPES ARE DATA (RULE TWO).** `event_sales.COMMISSION_LINE_FEED_SHAPES` — `payment_detail_lines`
+(keys `mdn`+`imei`, label-classified) · `subscriber_residual` (keys `phone_number`+`device_serial`) ·
+`master_agent_lines` (key `imei`). Named for what they ARE, never a carrier or tenant — the same
+vocabulary as `processor_ledger.FEED_SHAPES`. Which shapes an org reads is
+`marketing_config.event_roi_commission_feed_shapes` (mig `999`, **written NOT applied**); NULL = every
+shape that has rows.
+
+**WHAT WAS CHECKED BEFORE BUILDING, AND REUSED:**
+
+| Searched | Found | What this change does |
+|---|---|---|
+| commission received | `commission_received_breakout` / `add_label_rows`, gated on `payment_categories.category = 'Commission'` (mig `274`) | **routes through the same classifier**; no second label→category rule, no keyword list |
+| sale line → subscriber/number | `sale_installment_engine._mi_index`/`_match_mi`, keyed by `commission_engine._norm_mdn` | **reuses that key** (`event_sales._norm_key` is byte-identical); no second normaliser |
+| rebate exclusion | `ma_store_pnl.commission_received_lines()` (owner 2026-09-08) | **applied per line** — the `rebate` component is dropped from the master-agent sum |
+| MA money columns | `account.residual_subs._MA_COMPONENTS` + `commission_legs.split_ma_components` | **reused**, so no identifier column can be summed as money (the mig-`083` guarded mistake) |
+| per-feed shape vocabulary | `processor_ledger.FEED_SHAPES` | **same vocabulary**, extended to per-line commission |
+| the store-month allocation | `event_sales.COMMISSION_BASIS_ALLOCATED` | **kept and demoted** to the unmatchable-line fallback — not deleted, not the headline |
+
+**CODE:** pure `event_sales.commission_event` / `index_commission_events` / `_line_event_uids` /
+`paid_against_lines` / `commission_fallback`; IO `router._es_commission_events` /
+`_es_payment_categories` / `_es_ma_components` / `_es_ma_amount` (org-scoped BY HAND — the CI
+org-scope guard scans `commcalc/router.py` only, so the harness asserts it statically instead).
+Proof `backend/harness_marketing_event_sales.py` §M (**237 checks total**, was 178).
 
 ### 23s.7 THE "EVENT NOT LOADED" FLOW IS THE NORMAL PATH
 

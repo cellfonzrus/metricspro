@@ -1633,6 +1633,179 @@ def _es_event_payroll(org_id: str, event, day: str):
     return out
 
 
+def _es_f(v):
+    """Float, blank-safe — byte-identical to `event_sales._f` / `gp_report.safe_float`."""
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _es_payment_categories(org_id: str):
+    """{label: category} — the org's OWN `commcalc.payment_categories` config, which is what the
+    platform's one commission-received read (`commission_received.add_label_rows`, gated on
+    `category == 'Commission'`) already classifies ePay labels with. Read, never re-derived: no
+    keyword list lives in this module, so bounties/SPIFFs count and promos/reimbursements do not
+    because a CONFIG ROW says so (RULE TWO). A label with no row classifies as unclassified and is
+    reported as such — never guessed into or out of the commission figure.
+    ORG-SCOPED BY HAND (this file is outside the CI org-scope guard's scan of commcalc/router.py).
+    """
+    try:
+        rows = (get_supabase().schema("commcalc").table("payment_categories")
+                .select("description,category").eq("org_id", org_id)
+                .limit(5000).execute().data) or []
+    except Exception:
+        return {}
+    return {str(r.get("description") or "").strip(): str(r.get("category") or "").strip()
+            for r in rows if str(r.get("description") or "").strip()}
+
+
+def _es_chunks(values, n=150):
+    vals = [v for v in sorted(set(values or ())) if v]
+    return [vals[i:i + n] for i in range(0, len(vals), n)]
+
+
+def _es_commission_events(org_id: str, lines, cfg=None):
+    """READ the per-line commission feeds for THESE numbers/IMEIs — every period, so the figure is
+    paid-to-date rather than paid-in-the-activation-month.
+
+    (events, feeds_loaded, periods_read, notes). One shape-blind list of `ES.commission_event`s; the
+    pure code does the matching, the dedup and the three states.
+
+    Bounded by construction: every read is filtered to the event's own keys in chunks of 150, so the
+    278k-row payment feed never travels to answer a question about a few dozen numbers. Each shape is
+    probed with a ONE-ROW existence query first — "this org does not receive this feed" and "this
+    org receives it and nothing was paid" are different facts and only the second is a zero.
+
+    ORG-SCOPED BY HAND: every query below carries `.eq('org_id', org_id)`. This file is NOT covered
+    by the CI org-scope guard (which scans commcalc/router.py only), so the scoping is asserted in
+    the harness's static guard instead.
+    """
+    sc = get_supabase().schema("commcalc")
+    # Which shapes this org reads: the config subset (mig 999) or, by default, every shape that has
+    # rows. A shape the org does not receive yields nothing and is REPORTED as not loaded — never as
+    # zero commission earned.
+    want = (cfg or {}).get("event_roi_commission_feed_shapes") or list(ES.COMMISSION_LINE_FEED_SHAPES)
+    mdns = sorted({str(x.get("mdn") or "") for x in (lines or []) if x.get("mdn")})
+    imeis = sorted({str(x.get("serial_1") or "") for x in (lines or []) if x.get("serial_1")})
+    events, loaded, periods, notes = [], [], set(), []
+    if not mdns and not imeis:
+        return events, loaded, [], notes
+
+    def _probe(table):
+        try:
+            return bool((sc.table(table).select("id").eq("org_id", org_id)
+                         .limit(1).execute().data) or [])
+        except Exception:
+            return False
+
+    def _read(table, cols, field, values, cap=20000):
+        out = []
+        for chunk in _es_chunks(values):
+            try:
+                out += (sc.table(table).select(cols).eq("org_id", org_id)
+                        .in_(field, chunk).limit(cap).execute().data) or []
+            except Exception:
+                continue
+        return out
+
+    # ── shape 1: the per-payment-row feed, keyed by number AND by IMEI ──────────────────────────
+    shape = "payment_detail_lines"
+    if shape in want and _probe("raw_payment_detail"):
+        loaded.append(shape)
+        cat_of = _es_payment_categories(org_id)
+        cols = "id,mdn,imei,payment_type,amount,period,payment_date"
+        rows = _read("raw_payment_detail", cols, "mdn", mdns) + \
+            _read("raw_payment_detail", cols, "imei", imeis)
+        seen = set()
+        for r in rows:
+            rid = str(r.get("id"))
+            if rid in seen:
+                continue
+            seen.add(rid)
+            label = str(r.get("payment_type") or "").strip()
+            periods.add(str(r.get("period") or ""))
+            events.append(ES.commission_event(
+                shape, rid, mdn=r.get("mdn"), imei=r.get("imei"), amount=r.get("amount"),
+                label=label, category=cat_of.get(label, ""), period=r.get("period"),
+                paid_on=r.get("payment_date"), stream=ES.STREAM_COMMISSION))
+
+    # ── shape 2: the per-subscriber residual feed ───────────────────────────────────────────────
+    shape = "subscriber_residual"
+    if shape in want and _probe("raw_mi"):
+        loaded.append(shape)
+        cols = "id,phone_number,device_serial,actual_mi_payout,actual_atu_payout,period"
+        rows = _read("raw_mi", cols, "phone_number", mdns) + \
+            _read("raw_mi", cols, "device_serial", imeis)
+        seen = set()
+        for r in rows:
+            rid = str(r.get("id"))
+            if rid in seen:
+                continue
+            seen.add(rid)
+            periods.add(str(r.get("period") or ""))
+            amt = _es_f(r.get("actual_mi_payout")) + _es_f(r.get("actual_atu_payout"))
+            # Emitted even at 0.00 — a zero-payout subscriber row is what proves the line WAS
+            # matched and simply has not earned yet (the second state), rather than being unlookable.
+            events.append(ES.commission_event(
+                shape, rid, mdn=r.get("phone_number"), imei=r.get("device_serial"), amount=amt,
+                label="", category=ES.CATEGORY_COMMISSION, period=r.get("period"),
+                stream=ES.STREAM_RESIDUAL))
+
+    # ── shape 3: the per-IMEI master-agent feed ─────────────────────────────────────────────────
+    shape = "master_agent_lines"
+    if shape in want and imeis and _probe("raw_ma_commission"):
+        loaded.append(shape)
+        comps, sign_cfg = _es_ma_components(org_id)
+        cols = ("id,imei,period," + ",".join(comps)) if comps else "id,imei,period"
+        rows = _read("raw_ma_commission", cols, "imei", imeis)
+        for r in rows:
+            periods.add(str(r.get("period") or ""))
+            events.append(ES.commission_event(
+                shape, str(r.get("id")), imei=r.get("imei"),
+                amount=_es_ma_amount(r, comps, sign_cfg), label="",
+                category=ES.CATEGORY_COMMISSION, period=r.get("period"),
+                stream=ES.STREAM_COMMISSION))
+
+    if not loaded:
+        notes.append("No per-line commission feed is loaded for this organisation, so no commission "
+                     "could be traced to any number. Nothing here is reported as $0.00 earned.")
+    return events, loaded, sorted(p for p in periods if p), notes
+
+
+def _es_ma_components(org_id: str):
+    """The master-agent money columns to sum, MINUS the rebate component.
+
+    The column list is `account.residual_subs._MA_COMPONENTS` — the SAME list the residual and
+    commission-received surfaces build their totals from, so this cannot drift into summing an
+    identifier column (the guarded mistake mig 083 documents). `rebate` is dropped because a rebate is
+    money back on a purchase, not commission earned: the rule
+    `ma_store_pnl.commission_received_lines()` states for the P&L, applied here per line
+    (owner 2026-09-08 "dont count any rebate received in the commission").
+    """
+    try:
+        from app.modules.account.residual_subs import _MA_COMPONENTS
+        from app.modules.commcalc.commission_legs import for_org
+        comps = [c for c in _MA_COMPONENTS if c != "rebate"]
+        return comps, for_org(get_supabase(), org_id)
+    except Exception:
+        return [], None
+
+
+def _es_ma_amount(row, comps, legcls):
+    """One master-agent row's commission, through `commission_legs.split_ma_components` so the sign
+    convention is the org's configured one and this agrees with every other MA money surface."""
+    if not comps:
+        return 0.0
+    try:
+        from app.modules.commcalc.commission_legs import split_ma_components
+        sums = {c: row.get(c) for c in comps}
+        return float((split_ma_components(sums, comps,
+                                          getattr(legcls, "cfg", None)) or {}).get("total") or 0.0)
+    except Exception:
+        return 0.0
+
+
 def _es_commission(org_id: str, period_label: str, store_raw: str):
     """Commission received for ONE store in ONE month — READ, never recomputed.
 
@@ -1687,7 +1860,18 @@ def event_sales_roi(date_from: str = "", date_to: str = "", store: str = "", tra
     labels = _es_period_labels(lo, hi)
     month_totals = {}
 
-    out, notes = [], [n for n in (note, cell_note) if n]
+    # ── THE PRIMARY COMMISSION BASIS, read ONCE for the whole window ────────────────────────────
+    # One activation line per number (`activation_lines` already de-duplicates the device/SIM/fee
+    # lines of the same activation), one bounded read of the per-line commission feeds for those
+    # numbers, one index. The per-day match then costs nothing and every day in the window is
+    # measured against the same as-of instant.
+    all_lines = ES.activation_lines(rows, cfg)
+    comm_events, feeds_loaded, periods_read, comm_feed_notes = _es_commission_events(
+        org_id, all_lines, cfg)
+    comm_index = ES.index_commission_events(comm_events)
+    as_of = _now().date().isoformat()
+
+    out, notes = [], [n for n in (note, cell_note) if n] + list(comm_feed_notes)
     for key in summary["event_keys"]:
         s_raw, day = key["store"], key["trans_date"]
         code = code_by_store.get(s_raw) or s_raw
@@ -1704,29 +1888,37 @@ def event_sales_roi(date_from: str = "", date_to: str = "", store: str = "", tra
         costs = ES.build_costs(ev, entered_by_event.get(ev_id) or {}, payroll, phones)
 
         period_label = labels.get(day[:7]) or day[:7]
-        comm, comm_note = _es_commission(org_id, period_label, s_raw)
         cell = by_key.get((str(code or ""), day)) or {}
-        day_acts = int(cell.get("prem_count") or 0) + int(cell.get("byod_count") or 0)
         # NAMED `day_register_activations`, not "event activations": §23's attribution rule (enforced
         # statically by harness_marketing_event.py §G) forbids a field name that claims the event
         # CAUSED a sale. This is what the event register rang that day — a fact about the till.
-        alloc = {"store_month_commission": comm, "day_register_activations": day_acts,
-                 "store_month_activations": None, "share": None,
-                 "method": ES.COMMISSION_BASIS_NOTES[ES.COMMISSION_BASIS_ALLOCATED]}
-        if comm is not None:
+        day_acts = int(cell.get("prem_count") or 0) + int(cell.get("byod_count") or 0)
+
+        # ── THE HEADLINE: commission actually paid on THIS day's numbers/IMEIs (owner 2026-09-09).
+        day_lines = [ln for ln in all_lines
+                     if ln.get("store") == s_raw and ln.get("trans_date") == day]
+        per_number = ES.paid_against_lines(day_lines, comm_index, as_of=as_of,
+                                           periods_read=periods_read, feeds_loaded=feeds_loaded)
+
+        # ── THE FALLBACK, and ONLY for the lines the per-number basis could not match. The store
+        # month is not read at all when every line matched — the allocation is no longer on the
+        # happy path, it is the estimate of last resort for named lines.
+        comm_note, fallback = None, None
+        if per_number["states"][ES.PAID_STATE_UNMATCHABLE]:
+            store_month_comm, comm_note = _es_commission(org_id, period_label, s_raw)
             mk = (code, day[:7])
             if mk not in month_totals:
                 month_totals[mk] = _es_store_month_activations(org_id, code, day[:7])
-            tot = month_totals[mk]
-            alloc["store_month_activations"] = tot
-            if tot:
-                alloc["share"] = round(float(day_acts) / float(tot), 4)
-                comm = round(comm * alloc["share"], 2)
-            else:
-                comm = None
-                alloc["note"] = ("The store rang no countable activation in this month, so there is "
-                                 "no share to allocate the month's commission by.")
-        roi = ES.roi_compute(comm, costs, ES.COMMISSION_BASIS_ALLOCATED, commission_exact=False)
+            fallback = ES.commission_fallback(per_number, store_month_comm, month_totals[mk])
+
+        fb_amount = (fallback or {}).get("amount")
+        comm = round(float(per_number["total"]) + float(fb_amount or 0.0), 2)
+        # Nothing matched AND nothing to estimate from ⇒ the commission is UNKNOWN, not zero, and
+        # `roi_compute` withholds the ROI rather than reporting a return on money nobody measured.
+        if not per_number["matched_lines"] and fb_amount is None:
+            comm = None
+        exact = bool(per_number["exact"]) and fallback is None
+        roi = ES.roi_compute(comm, costs, ES.COMMISSION_BASIS_PER_NUMBER, commission_exact=exact)
         roi.update({
             "store": s_raw, "store_code": code, "trans_date": day,
             "event": ({"id": ev.get("id"), "title": ev.get("title"), "status": ev.get("status"),
@@ -1734,7 +1926,10 @@ def event_sales_roi(date_from: str = "", date_to: str = "", store: str = "", tra
             "event_linked": bool(ev),
             "event_prompt": (None if ev else ES.minimal_event_payload(code, day)),
             "sales": key, "phones": phones, "payroll": payroll,
-            "commission_allocation": alloc, "commission_source_note": comm_note,
+            "commission_per_number": per_number,
+            "commission_fallback": fallback,
+            "day_register_activations": day_acts,
+            "commission_source_note": comm_note,
         })
         out.append(roi)
         if comm_note:
@@ -1744,17 +1939,21 @@ def event_sales_roi(date_from: str = "", date_to: str = "", store: str = "", tra
         "window": {"from": lo, "to": hi},
         "config": cfg,
         "days": out,
-        "commission_basis": ES.COMMISSION_BASIS_ALLOCATED,
+        "commission_basis": ES.COMMISSION_BASIS_PER_NUMBER,
         "commission_bases": dict(ES.COMMISSION_BASIS_NOTES),
-        # DECLARED, NOT IMPLIED. The exactly-attributable basis is DESCRIBED above because a reader
-        # is owed the knowledge that one exists and what it would mean — but this endpoint does not
-        # yet compute it, and advertising a basis as available when nothing computes it would be the
-        # same class of quiet untruth the rest of this report exists to avoid. It is a declared seam
-        # (§23s.6), not a hidden gap.
-        "commission_bases_available": [ES.COMMISSION_BASIS_ALLOCATED],
+        "commission_bases_available": [ES.COMMISSION_BASIS_PER_NUMBER,
+                                       ES.COMMISSION_BASIS_ALLOCATED],
+        "commission_as_of": as_of,
+        "commission_periods_read": periods_read,
+        "commission_feeds_loaded": feeds_loaded,
+        "commission_feed_shapes": dict(ES.COMMISSION_LINE_FEED_SHAPES),
         "commission_basis_note": (
-            "Only the allocated basis is computed today. The per-line residual basis is defined and "
-            "described but not yet wired to this endpoint."),
+            "The headline is the commission ACTUALLY PAID against the numbers and IMEIs each day "
+            "activated, summed per line — not a share of the store's month. It is a floor as of %s "
+            "and it keeps growing: commission on a new line arrives for months, so every day here "
+            "carries its own paid-to-date split by period. The store-month allocation survives only "
+            "as a clearly-labelled fallback for lines that could not be matched, and any day that "
+            "uses it is marked not exact." % as_of),
         "empty_reason": (ES.no_register_note(cfg, seen) if not rows else None),
         "notes": sorted({n for n in notes if n}),
         "attribution": ES.attribution(cfg, seen, source_note=(note or cell_note)),
