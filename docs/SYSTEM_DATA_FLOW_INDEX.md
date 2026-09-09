@@ -2091,6 +2091,111 @@ that month to go in the gross profit for that month."
   House-default seed for every org; the engine degrades to the house defaults and a skipped ledger
   persist until it runs. Not a new external feed → no lineage-registry entry.
 
+### 14t. OVERHEAD STAFF WHO BELONG TO NO STORE — the P&L wages box (owner directive 2026-09-09)
+
+**Owner (verbatim):** "payroll needs to be attributed to each store rather than teh company as that
+will give the real picture of the store perfromace, the company will only calculate as a result of
+all store combined together. All employees who are salaried and not attached to stores like the DM
+and market manager shoudl have thier won seaprat line and thier salary will be divided amongs he
+store they handle , if th market manager is 78000 and he handles all markets then his salary will be
+78000/ the number of stores in each market, simialry thier commission will also be a seaprate line
+item so at the end of the year we know who got paid how much with clear distinction , all these will
+be a seaprate box in the p&l under wages"
+
+- **THE GAP IT CLOSES.** `coa.derive_wage_cells` can only key a salaried employee with no
+  `home_store` and no shifts as **company-wide (`None`)**, and `coa.build_inputs` under
+  `payroll_authority_grain='store'` (§14s, mig `994`, LIVE for LuxeLink) deliberately does NOT book
+  a company-wide cell (`_est_skipped_cw` — it cannot be shown absent from the entered per-store
+  figures). Such a person's pay therefore appears in **NO P&L line at all**. Measured live
+  2026-09-09, LuxeLink `854f6d7b-…`: ONE active employee, `pay_basis='annual'`,
+  `pay_amount=78000` (**$6,500.00/month**), no `home_store`, no shifts → **$78,000/yr invisible**.
+- **DUPLICATE CHECK (build gate).** Searched for every existing mechanism that places a salary on a
+  store before building: `get_payroll_by_store` (§14s — THE per-store salary derivation),
+  `salary_expense.day_measurement`/`hours_for_shift`/`build_store_folder` (THE hours contract + THE
+  store fold), `coa.derive_wage_cells` (THE wage estimate incl. its salaried allocate-by-worked-hours
+  rule), `coa.monthly_salary_equivalent` (THE weekly/monthly/annual conversion),
+  `payroll_salary.allocate_across_stores`, `storeops.org_span_for_manager` (§13 — THE manager→stores
+  span), `management_incentive_payout` (§9 — THE manager commission), `labour_coverage.
+  suppression_plan` (§4 — THE double-book decision). **Every one of them is REUSED as-is; none is
+  forked.** The one thing none of them can express — a person attached to NO store — is the only
+  thing built. No dollar of pay is derived here: the conversion is injected, the commission is read
+  already-computed.
+- **NEW pure module `backend/app/modules/storeops/overhead_allocation.py`** (proof
+  `backend/harness_overhead_allocation.py`, 52 checks):
+  - `classify_employee` — the **structural** overhead test (`is_active` AND a usable monthly salary
+    equivalent AND blank `home_store`), so **no role string lives in code** (RULE TWO). Config
+    `roles[]` WIDENS it (a DM pinned to a store for scheduling); nothing narrows it.
+  - `covered_stores` — the coverage LADDER, most authoritative first: (1) `storeops.
+    org_span_for_manager` (§13) used AS-IS; (2) the subtree of the employee's own `org_unit_id`,
+    because the RPC keys on `storeops.org_managers` and an org that placed its people but never
+    wrote a manager row gets an empty span (**the live LuxeLink shape: `org_managers` is EMPTY**);
+    (3) every active store, only under `span_fallback='org_wide'`. Nothing resolved ⇒ **REPORTED in
+    `unallocated`, never guessed** — a store wearing another market's overhead is worse than a
+    visible gap.
+  - `allocate` — **THE AMBIGUITY IN THE DIRECTIVE, MADE CONFIG.** "divided among the stores they
+    handle" and "78000 / the number of stores in each market" are different arithmetic whenever the
+    covered markets differ in size. `basis`: **`equal_stores` (DEFAULT — the defensible reading)** |
+    `equal_market_then_store` (the second clause) | `weighted` (per-store revenue/GP/hours supplied
+    by the caller). Cents-exact, last store absorbs the residue (same convention as
+    `derive_wage_cells`). A weighted basis with no usable weights **degrades to equal and SAYS SO**
+    in `basis_used` — a report can never show an equal split as revenue-weighted.
+    Measured for the live $78k employee: equal over their 13 covered stores = **$500.00/store/mo**;
+    over all 20 = $325.00; market-then-store over both markets = $250.00 Chicago / $464.29 NY.
+  - `build_overhead` — the two maps (`wages_by_store`, `commission_by_store`) plus the **per-person
+    audit rows** the owner asked for ("at the end of the year we know who got paid how much").
+  - `company_total` / `rollup_by_market` — **company IS the sum of stores and is computed no other
+    way.** There is no company-wide bucket to book into; the functions exist so the identity can be
+    ASSERTED, not so a second figure can be derived.
+  - `reconcile_manual` — REPORTS the overhead salary the org already types in by hand against what
+    the roster explains. **It suppresses nothing and deletes nothing** — deliberately UNLIKE
+    `labour_coverage.suppression_plan`, because there the authoritative source (`rep_commissions`)
+    books the same dollars, whereas here the DERIVED figure is the smaller one (an incomplete
+    roster), so switching the manual rows off would delete real cost and book nothing back.
+  - `gather(client, org_id, period, cfg, code_to_key)` — the only IO. **Org-scoped by hand**: the
+    CI org-scope guard scans only `commcalc/router.py`, so every read carries an explicit
+    `.eq("org_id", org_id)` with the CALLER's org, never a value off a row.
+- **P&L contract — what finance renders (the WAGES BOX).** TWO new `PL_SPEC` lines sited
+  immediately after `wages`, both `opex`, both **`auto_opt`** (materialise only when they carry
+  value), both **grain `store`** (a company-wide overhead cell is forbidden by the directive):
+  | order | line key | house label (per-org configurable) | source |
+  |---|---|---|---|
+  | 1 | `wages` | Wages / hourly payroll → "Gross Payroll" | unchanged (§14s) |
+  | 2 | `overhead_wages` | Overhead salaries (allocated to stores) | `overhead_allocation.build_overhead().wages_by_store` |
+  | 3 | `overhead_comm` | Overhead commission (allocated to stores) | `management_incentive_payout` (§9), allocated — **amount never recomputed** |
+  Labels come from `overhead_config.wages_label` / `.commission_label` onto `L[key]['label']` (the
+  same override channel `wages` already uses); the honesty note rides `L['overhead_wages']['note']`
+  — ruling K3(b)'s existing `note` passthrough (`engine._assemble`), NOT a third mechanism.
+  `rep_comm` and `payroll_expenses` are untouched and keep their positions.
+- **Migration `997_overhead_allocation_config.sql` (WRITTEN, NOT APPLIED — owner runs SQL):** ONE
+  additive JSONB `commcalc.account_config.overhead_config` (+ an object-typed CHECK). **NULL default
+  ⇒ `resolve_config` reads mode `'off'` ⇒ nothing derived, both lines empty, `auto_opt` drops them
+  ⇒ every org byte-identical, house org included.** Keys: `mode`, `basis`, `span_fallback`,
+  `roles[]`, `include_inactive_stores`, `wages_label`, `commission_label`, `commission_source`
+  (`off` | `management_incentive`), `commission_statuses[]`, `manual_expense_names[]`. The LuxeLink
+  seed MOVES MONEY and is COMMENTED OUT behind the owner gate (migs 938/939/994 precedent). Not a
+  new external feed → no lineage-registry entry.
+- **REPORTED live-data defects (NOT papered over).** (a) `storeops.org_managers` is EMPTY for
+  LuxeLink, so the canonical span RPC answers nothing for anybody — the org-unit fallback is what
+  resolves coverage today. (b) LuxeLink types **$35,500.01/month** of overhead salary by hand
+  (twenty `DM Salaries` $25,500.01 + twenty `Owner / Mgmt Salaries` $10,000.00, Aug 2026) while the
+  roster explains **$6,500.00** — a **$29,000.01** gap meaning the overhead people are missing from
+  `storeops.employees`. (c) 6 roster rows carry `pay_rate = 0` and one `shifts.employee_id` (12 Aug
+  rows) has NO roster row at all, silently valuing **351.00 August hours at $0.00**. (d) 19
+  `store_mapping` addresses carry TWO codes each (a canonical one and a `LUX-…` one) — harmless
+  today, last-write-wins for any reader that trusts that map alone. All are reported on the line /
+  in mig `997`'s handover block; none is coded around.
+- **STORE-CODE BINDING — measured, and it is NOT a code defect.** Replaying the SHIPPED chain
+  (`coa.store_resolver` → `router._store_code_resolver` → `salary_expense.build_store_folder`) over
+  ALL 64 distinct raw `store_code` values in `storeops.shifts` ∪ `storeops.timelog` for LuxeLink
+  (3,674 rows, 2026-09-09): **63 of 64 values / 3,672 of 3,674 rows already bind.** Case
+  (`CERMARK`), a trailing city (`3966 GRAND CHICAGO`), a bare number (`3560`, `104-08`) and the
+  misspelling `3248 LAWARANCE` all resolve — the last via the leading-street-number step, which is
+  guarded to UNAMBIGUOUS numbers. **`T-7812` (2 rows) is the only unbound value**, and it is an
+  alias row for the owner (in mig `997`, commented), not a resolver change: loosening the resolver
+  for 2 rows risks over-matching `3352 26th` onto `3735 26th` — one digit apart, four live raw
+  spellings — which silently moves one store's payroll onto another. That over-match guard is
+  pinned in `harness_overhead_allocation.py` §6.
+
 - **Dashboard-builder Phase D1 — user-designed TILE LAYOUTS, backend (owner spec 2026-09-01):**
   every module's tiled dashboard layout becomes per-org CONFIG (RULE TWO), not code. SUPER ADMIN
   designs for all modules and ANY tenant; a layout saved on the HOUSE org
@@ -2496,6 +2601,8 @@ that month to go in the gross profit for that month."
 | `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`); `PUT /report-labels` (scopes `report_col`/`report_banner`/`report_term` at the TENANT org — overrides; gated on `classification`); mig `945` seeds the HOUSE carrier-preset rows (scopes `report_col:<carrier>`/`report_banner:<carrier>`); mig `953` seeds the HOUSE carrier VOCABULARY-TERM presets (scope `report_term:<carrier>` — boost: ePay/VIP Wireless/ACIMA/b2bsoft, total: VidaPay/T-CETRA/Edge/marketplace feed, §3); mig `954` seeds the HOUSE distributor-payable BASIS presets (NEW scope `finance_basis:<carrier>`, key `distributor_payable` — boost: `asset_ledger`, total: `marketplace_due`; read by `statement_engine.carrier_payable_preset`, §4); mig `947` seeds the HOUSE Incentives tile layout (scope `tiles` key `incentives`) + HOUSE nav-label presets (NEW scopes `nav_default`/`group_default`, e.g. `/commcalc/commission-legs` → 'Commission received over M1-M12'); mig `948` seeds the HOUSE Management Overview (`tiles` key `management-overview` — incl. the `/commcalc/exec` item-label 'Rep Incentive') + Flags & Compliance (`tiles` key `flags-compliance`) layouts (§14 mig 948) | `GET /nav-config` (house `nav_default`/`group_default` presets first, then the caller org's `nav`/`group` nicknames overlay per key — tenant > house preset > built-in, since mig 947; caps/layout stay caller-org-only), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins), `GET /report-labels` (`report_labels.load_report_labels`: tenant ∪ HOUSE, tenant override > carrier preset > built-in — §3 carrier column labels) |
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3); **P&L wages estimate** `coa.wages_by_store`→`derive_wage_cells` (actual_hours else scheduled_hours — the owner's 2026-09-08 rule, already implemented); **salary coverage basis** `labour_coverage.load_shift_hours`→`hours_basis_by_code` (hours only, never dollars — §4) |
+| `storeops.employees` / `stores` / `org_units` (+ RPC `org_span_for_manager`) | storeops roster + org tree | **OVERHEAD ALLOCATION** `storeops/overhead_allocation.gather` → `classify_employee` (structural: active + salaried + blank `home_store`) / `covered_stores` (span RPC → org-unit subtree → org-wide) / `build_overhead` → the P&L `overhead_wages` + `overhead_comm` lines (§14t, mig `997`, house default OFF). Reads the roster only; derives NO pay — the conversion is `coa.monthly_salary_equivalent`, the commission is `management_incentive_payout` (§9) |
+| `commcalc.account_config.overhead_config` (JSONB, mig `997`) | Settings / owner SQL | §14t — `mode` / `basis` (`equal_stores` \| `equal_market_then_store` \| `weighted`) / `span_fallback` / `roles[]` / labels / `commission_source` / `manual_expense_names[]`. Read ONLY via `coa._account_config` → `overhead_allocation.resolve_config`. NULL = house default = nothing booked |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
 | `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs), store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
@@ -2718,6 +2825,7 @@ that month to go in the gross profit for that month."
 | Store salary expense for a MONTH (the `payroll_gross` P&L/GP line) | `get_payroll_by_store` — ACTUAL hours where MEASURED (a closed `storeops.timelog` punch or a manual `shifts.actual_hours>0` correction), SCHEDULED hours only where NOT measured; salaried via `payroll_salary.py`, never hours×`pay_rate`. A MEASURED ZERO pays zero and never falls back. No measurement AND no schedule ⇒ WITHHELD, never $0.00 | `storeops/salary_expense.py` via `router._salary_expense_gather` → `POST /storeops/payroll-expenses/run/{period}` → `commcalc.store_expenses` `source_key='payroll_gross'` → `account/coa.py` `wages`. Proof `harness_salary_expense.py` (§14s) |
 | Withholding estimate (gross/FICA/federal/state/net) | `storeops.timelog`+`manual_hours` hours × `employees.pay_rate` × `payroll_settings` W-4 | browser: `frontend/src/lib/payroll-tax.ts computePay`; server twin: `storeops/payroll_tax_estimate.compute_pay` (§14 W3 — keep in lockstep) |
 | Which route books rep commission, and what happens to the other one (`replaced` / `no_replacement` / `not_applicable`) | `commcalc.rep_commissions` is AUTHORITATIVE (owner 2026-09-08 "Rep commision should go in p&l") — the `rep_comm` P&L line / GP `−Rep Pay`. A `store_expenses` row named in `account_config.labour_commission_expense_names` (mig `994`, house default `'{}'`) is the duplicate and stops booking, per store-month, ONLY where rep commission exists to replace it | `commcalc/labour_coverage.suppression_plan` → `account/coa.build_inputs` (skips the row; `rep_comm` line `note`) **and** `commcalc/gp_report.calc_gp_report` (`commission_suppression_names` → `exp_total`; payload `labour_commission_suppressed`). ONE decision, two readers — they can never suppress differently. Proof `harness_labour_coverage.py` §H (§4) |
+| Overhead salary / commission of staff attached to NO store (DM, market manager) — per store, and who got paid how much | `storeops.employees` (salaried + active + blank `home_store`) × the covered store set (`org_span_for_manager` → `employees.org_unit_id` subtree → org-wide) ÷ the configured `basis`. Commission = `commcalc.management_incentive_payout` (§9), **never recomputed**. Company = the SUM of the store cells and nothing else | `storeops/overhead_allocation.py` (`classify_employee` / `covered_stores` / `allocate` / `build_overhead` / `company_total` / `reconcile_manual`) → `account/coa.build_inputs` → P&L lines **`overhead_wages`** + **`overhead_comm`**, `auto_opt`, store grain, sited under `wages`. Config `account_config.overhead_config` (mig `997`, house default `mode='off'` ⇒ books nothing). Proof `harness_overhead_allocation.py` (52 checks) (§14t) |
 | Store salary coverage state for a month (`entered` / `derived_actual` / `derived_scheduled` / `carried` / `not_measured` / `no_staff`) | `commcalc.store_expenses` authoritative payroll rows (ruling-K2 predicate, minus flat allocations) + `storeops.shifts` hours (actual else scheduled) + `expenses_effective` carry answer | `commcalc/labour_coverage.labour_coverage` → `GET /gp/{period}` key `labour_coverage` and the P&L `wages` line `note` (§4, mig `992`). Computes NO dollars — the amounts stay with `coa.derive_wage_cells` |
 | Rent due this month / current-month rent (per store) | `storeops.store_lease.rent_schedule`→`current_rent`×`escalation_pct` (schedule wins); due window from `rent_due` → `tenants.rent_due_default` → house first-week (mig `946`) | `store_lease.rent_for_month` + `resolve_rent_due`/`rent_due_window` (the §14 read contract for the finance rents-due/recurring-expenses build); surfaced on `GET /storeops/store-lease` |
 | Insurance premium due (per store, recurring) | `storeops.store_lease.insurance_premium` on `insurance_premium_due`, repeating per `insurance_premium_frequency` (mig `946`) | same read contract — finance recurring-expenses reader computes from these columns |
