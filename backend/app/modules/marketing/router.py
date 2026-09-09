@@ -23,7 +23,7 @@ DESIGN
   • A missing migration degrades to an empty list or a named 400 — never a 500 that takes an
     unrelated page down.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -34,6 +34,8 @@ from app.modules.core.entitlements import require_module
 from app.modules.core import geo
 from app.modules.marketing import actuals as A
 from app.modules.marketing import event_logic as L
+from app.modules.marketing import event_sales as ES
+from app.modules.commcalc import sales_register as _reg
 
 router = APIRouter(prefix="/marketing", tags=["Marketing & Events"],
                    dependencies=[Depends(require_module("marketing"))])
@@ -77,6 +79,14 @@ class ConfigIn(LaxModel):
     block_checkin_outside_fence: Any = None
     checkin_geo_retention_days: Any = None
     staffing_alert_lead_hours: Any = None
+    # Sales from Events (mig 995) — RULE TWO: the event REGISTER value, which classifier buckets the
+    # headline activation number counts, and the retention windows are all DATA. Another carrier's
+    # event register is an edit here, never a deploy ("the others not sure yet but provision will be
+    # made" — owner 2026-09-09).
+    event_sales_registers: Any = None
+    event_sales_activation_classes: Any = None
+    event_retention_windows_days: Any = None
+    event_roi_phone_cost_from_catalog: Any = None
 
 
 class EventIn(LaxModel):
@@ -338,7 +348,12 @@ def get_config(org_id: str = ORG_ID):
     anything, so it can say "approval is off (default)" rather than implying a decision was made."""
     raw = _config_row(org_id)
     return {"config": _config(org_id), "is_default": not bool(raw),
-            "defaults": dict(L.DEFAULT_CONFIG)}
+            "defaults": dict(L.DEFAULT_CONFIG),
+            # The Sales-from-Events settings ride the SAME row and the SAME screen — one config
+            # surface for the module, not a second settings page nobody finds.
+            "event_sales": ES.resolve_event_sales_config(raw),
+            "event_sales_defaults": dict(ES.DEFAULT_EVENT_SALES_CONFIG),
+            "activation_classes": {c: ES.CLASS_LABELS[c] for c in ES.ACTIVATION_CLASSES}}
 
 
 @router.put("/config")
@@ -359,6 +374,30 @@ def put_config(body: ConfigIn, authorization: str = Header(default=""),
             row[f] = L._int(getattr(body, f), L.DEFAULT_CONFIG[f])
     if body.approval_spend_threshold is not None:
         row["approval_spend_threshold"] = L._num(body.approval_spend_threshold)
+    # Sales-from-Events settings (mig 995). Validated through the PURE resolver so a typo cannot be
+    # stored: an unknown activation bucket is dropped rather than saved to count nothing in silence,
+    # and clearing the register list is refused for the same reason `is_event_register` refuses to
+    # treat an empty list as "everything" — an org with no event register has no event sales.
+    if body.event_sales_registers is not None:
+        regs = _reg.normalize_registers(ES._as_list(body.event_sales_registers) or [])
+        if not regs:
+            raise HTTPException(400, "at least one event register is required — an empty list would "
+                                     "mean every sale is an event sale, or none is")
+        row["event_sales_registers"] = list(regs)
+    if body.event_sales_activation_classes is not None:
+        picked = [c for c in (str(x).strip().lower()
+                              for x in (ES._as_list(body.event_sales_activation_classes) or []))
+                  if c in ES.ACTIVATION_CLASSES]
+        if not picked:
+            raise HTTPException(400, "activation classes must be one or more of %s"
+                                % (ES.ACTIVATION_CLASSES,))
+        row["event_sales_activation_classes"] = picked
+    if body.event_retention_windows_days is not None:
+        row["event_retention_windows_days"] = ES._int_list(
+            body.event_retention_windows_days,
+            ES.DEFAULT_EVENT_SALES_CONFIG["event_retention_windows_days"])
+    if body.event_roi_phone_cost_from_catalog is not None:
+        row["event_roi_phone_cost_from_catalog"] = bool(body.event_roi_phone_cost_from_catalog)
     try:
         sb().table("marketing_config").upsert(row, on_conflict="org_id").execute()
     except Exception as e:
@@ -1187,6 +1226,672 @@ def marketing_summary(days_ahead: int = 30, days_back: int = 30, org_id: str = O
         "config": cfg,
         "window": {"from": start_s, "to": end_s},
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# SALES FROM EVENTS — the three reports (owner directive 2026-09-09). See event_sales.py's header.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# HTTP + I/O only. Every decision — what an activation is, what retention's three states are, what
+# an unknown cost is allowed to look like — lives in the pure module and is proved DB-free by
+# `backend/harness_marketing_event_sales.py`.
+#
+# Declared ABOVE the `/events/{event_id}/{collection}` catch-all like every other literal route in
+# this file. These live under /event-sales/, so they could not be swallowed anyway — but the rule in
+# this module is positional, and a future rename must not be the thing that discovers the exception.
+_ES_MAX_ROWS = 200000
+_ES_DEFAULT_MONTHS = 12
+
+
+def _es_config(org_id: str) -> dict:
+    """The event-sales config: the org's `marketing_config` row over the house defaults. ADAPTIVE —
+    a database without migration 995 yields the house defaults rather than an error."""
+    return ES.resolve_event_sales_config(_config_row(org_id))
+
+
+def _es_range(date_from: str, date_to: str):
+    """The calendar window the reports read. Defaults to the last 12 months ending today — long
+    enough to cover a season of events without asking a manager to pick dates before seeing anything.
+    """
+    hi = str(date_to or "").strip()[:10] or _now().date().isoformat()
+    lo = str(date_from or "").strip()[:10]
+    if not lo:
+        y, m = int(hi[:4]), int(hi[5:7])
+        m -= _ES_DEFAULT_MONTHS
+        while m <= 0:
+            m += 12
+            y -= 1
+        lo = "%04d-%02d-01" % (y, m)
+    if lo > hi:
+        lo, hi = hi, lo
+    return lo, hi
+
+
+def _es_sales_rows(org_id: str, lo: str, hi: str, cfg: dict, stores=()):
+    """The event-register sale rows for the window → `(rows, registers_seen, note)`.
+
+    Reads `commcalc.raw_sales` with `select("*")` deliberately: report 1 is "all available fields",
+    and a column added to raw_sales tomorrow must appear here without a code change. The register
+    filter is applied SERVER-side so a period holding 200k sales does not travel to answer a question
+    about 602 rows; the second, bounded read of the window's registers is what lets an empty result
+    say WHICH registers the period does carry instead of rendering an empty table with no reason.
+    """
+    sc = get_supabase().schema("commcalc")
+    regs = list(cfg.get("event_sales_registers") or ())
+    if not regs:
+        return [], {}, None
+    try:
+        rows = (sc.table("raw_sales").select("*").eq("org_id", org_id)
+                .gte("trans_date", lo).lte("trans_date", hi).in_("register", regs)
+                .limit(_ES_MAX_ROWS).execute().data) or []
+    except Exception as e:
+        return [], {}, ("The sales rows could not be read (%s)." % str(e)[:140])
+    picked = {str(s).strip().upper() for s in (stores or []) if str(s or "").strip()}
+    if picked:
+        rows = [r for r in rows if str(r.get("store") or "").strip().upper() in picked]
+    try:
+        probe = (sc.table("raw_sales").select("register").eq("org_id", org_id)
+                 .gte("trans_date", lo).lte("trans_date", hi).limit(5000).execute().data) or []
+        seen = _reg.registers_present(probe)
+    except Exception:
+        seen = {}
+    return rows, seen, None
+
+
+def _es_shared_counts(org_id: str, rows):
+    """The activation counts for these very rows, from THE shared per-(store, rep, day) sales pass.
+
+    `_compute_feed_actuals_py(..., rows=<pre-built>)` is the documented seam for exactly this: the
+    caller supplies the row set, the shared pass supplies every classification, the distinct-`trans_id`
+    counting rule, the void/return skips and the canonical store-code resolution. Filtering by
+    register BEFORE the pass is a ROW FILTER, not a second derivation — which is why this report's
+    activation numbers cannot drift from the Sales Report's.
+    """
+    if not rows:
+        return [], {}, None
+    try:
+        from app.modules.commcalc.router import _compute_feed_actuals_py
+    except Exception as e:                                    # pragma: no cover - import environment
+        return [], {}, ("The shared sales aggregation could not be loaded (%s), so only the "
+                        "row-level classification is shown." % str(e)[:120])
+    try:
+        cells = _compute_feed_actuals_py(get_supabase(), org_id, "", rows=rows) or []
+    except Exception as e:
+        return [], {}, ("The shared sales aggregation failed (%s)." % str(e)[:140])
+    # THE JOIN KEY IS THE STORE CODE, NOT THE STORE STRING. The shared pass returns `store` as its
+    # own CANONICAL grouping key (e.g. 'b-652'), not the POS spelling on the sale row ('652
+    # Communipaw Avenue') — joining on the raw string silently matches nothing and every count reads
+    # empty. The raw spelling is resolved to a code through the SAME canonical resolver the shared
+    # pass itself uses (`_store_code_resolver`, §13a), never a second store-matching rule.
+    try:
+        from app.modules.commcalc.router import _store_code_resolver
+        resolve = _store_code_resolver(get_supabase(), org_id)
+    except Exception:                                         # pragma: no cover - import environment
+        resolve = None
+    code_by_store = {}
+    for r in rows:
+        raw = str(r.get("store") or "").strip()
+        if raw and raw not in code_by_store and resolve:
+            try:
+                code_by_store[raw] = resolve(raw)
+            except Exception:
+                continue
+    return cells, code_by_store, None
+
+
+def _es_cells_by_key(cells):
+    """The shared pass's per-(store CODE, day) totals — the numbers this report headlines."""
+    out = {}
+    for c in (cells or []):
+        k = (str(c.get("store_code") or ""), str(c.get("trans_date") or "")[:10])
+        s = out.setdefault(k, {"prem_count": 0, "byod_count": 0, "upg_count": 0, "box_count": 0,
+                               "billpay_count": 0, "acc_gp": 0.0, "setup_fee": 0.0,
+                               "store_code": c.get("store_code")})
+        for f in ("prem_count", "byod_count", "upg_count", "box_count", "billpay_count"):
+            s[f] += int(c.get(f) or 0)
+        for f in ("acc_gp", "setup_fee"):
+            s[f] = round(s[f] + float(c.get(f) or 0), 2)
+    return out
+
+
+@router.get("/event-sales")
+def event_sales_report(date_from: str = "", date_to: str = "", store: str = "",
+                       org_id: str = ORG_ID):
+    """REPORT 1 — total sales rung on the event register, with every field the rows carry.
+
+    The `attribution` block is not decoration: it states that this is what the event TILL rang, which
+    is not the same as what the event caused, and it carries the register-not-tender correction.
+    """
+    cfg = _es_config(org_id)
+    lo, hi = _es_range(date_from, date_to)
+    stores = [s for s in (store or "").split(",") if s.strip()]
+    rows, seen, note = _es_sales_rows(org_id, lo, hi, cfg, stores)
+    cells, code_by_store, cell_note = _es_shared_counts(org_id, rows)
+    summary = ES.sales_summary(rows, cfg)
+    by_key = _es_cells_by_key(cells)
+    for k in summary["event_keys"]:
+        k["store_code"] = code_by_store.get(k["store"])
+        c = by_key.get((str(k["store_code"] or ""), k["trans_date"])) or {}
+        k["shared_pass"] = {f: v for f, v in c.items() if f != "store_code"}
+    return {
+        "window": {"from": lo, "to": hi},
+        "config": cfg,
+        "summary": summary,
+        "rows": ES.annotate_rows(rows, cfg),
+        "shared_pass_cells": cells,
+        "empty_reason": (ES.no_register_note(cfg, seen) if not rows else None),
+        "attribution": ES.attribution(cfg, seen, source_note=(note or cell_note)),
+    }
+
+
+# ── report 2: SUBSCRIBER retention (NOT the GDPR check-in retention on /checkin-retention) ────────
+def _es_period_labels(lo: str, hi: str):
+    """{'YYYY-MM': 'Month YYYY'} for every month a retention window can land in."""
+    from datetime import date as _d
+    out, guard = {}, 0
+    y, m = int(lo[:4]), int(lo[5:7])
+    ey, em = int(hi[:4]), int(hi[5:7])
+    while (y, m) <= (ey, em) and guard < 120:
+        out["%04d-%02d" % (y, m)] = _d(y, m, 1).strftime("%B %Y")
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+        guard += 1
+    return out
+
+
+def _es_mi_snapshots(org_id: str, period_labels: dict, lines):
+    """{'YYYY-MM': {'index': …, 'loaded': bool}} — the subscriber feed, per month, for THESE lines.
+
+    Two reads per month, both org-scoped and both bounded:
+      • a ONE-ROW probe answering "was this month's feed ever loaded" — the difference between "the
+        line is gone" and "we never looked", which is the whole point of the third retention state;
+      • the rows for the event's own numbers only, so a 42,000-row month does not travel to answer a
+        question about 125 of them.
+    The index is built by `sale_installment_engine._mi_index` — the commission paid gate's OWN index
+    — so the key this report matches on and the key the money path matches on are the same key.
+    """
+    from app.modules.commcalc.sale_installment_engine import _mi_index
+    from app.modules.commcalc.router import _pvariants
+    sc = get_supabase().schema("commcalc")
+    mdns = sorted({str(x.get("mdn") or "") for x in (lines or []) if x.get("mdn")})
+    serials = sorted({str(x.get("serial_1") or "") for x in (lines or []) if x.get("serial_1")})
+    cols = ("phone_number,subscriber_id,subscriber_status,mi_activation_date,"
+            "mi_deactivation_date,device_serial")
+    out = {}
+    for key, label in sorted(period_labels.items()):
+        variants = _pvariants(label)
+        try:
+            probe = (sc.table("raw_mi").select("id").eq("org_id", org_id)
+                     .in_("period", variants).limit(1).execute().data) or []
+            loaded = bool(probe)
+        except Exception:
+            loaded = False
+        rows = []
+        if loaded:
+            for field, values in (("phone_number", mdns), ("device_serial", serials)):
+                for i in range(0, len(values), 150):
+                    chunk = values[i:i + 150]
+                    if not chunk:
+                        continue
+                    try:
+                        rows += (sc.table("raw_mi").select(cols).eq("org_id", org_id)
+                                 .in_("period", variants).in_(field, chunk)
+                                 .limit(5000).execute().data) or []
+                    except Exception:
+                        continue
+        out[key] = {"loaded": loaded, "index": _mi_index(rows), "rows": len(rows), "label": label}
+    return out
+
+
+@router.get("/event-sales/subscriber-retention")
+def event_sales_subscriber_retention(date_from: str = "", date_to: str = "", store: str = "",
+                                     org_id: str = ORG_ID):
+    """REPORT 2 — do the lines activated at the event STAY?
+
+    ⚠ This is SUBSCRIBER retention. `GET /marketing/checkin-retention` is the GDPR purge schedule for
+    staff check-in GPS rows and is an entirely different thing; the two share nothing but the word.
+
+    THREE STATES, NOT TWO: active, churned, and could-not-be-matched. The third never enters a
+    retention percentage's denominator and is never rendered as a loss.
+    """
+    cfg = _es_config(org_id)
+    lo, hi = _es_range(date_from, date_to)
+    stores = [s for s in (store or "").split(",") if s.strip()]
+    rows, seen, note = _es_sales_rows(org_id, lo, hi, cfg, stores)
+    lines = ES.activation_lines(rows, cfg)
+    windows = list(cfg.get("event_retention_windows_days") or ())
+
+    hi_scan = hi
+    if lines and windows:
+        try:
+            last = max(str(x["trans_date"])[:10] for x in lines)
+            hi_scan = max(hi, (datetime.fromisoformat(last).date()
+                               + timedelta(days=max(windows))).isoformat())
+        except Exception:
+            hi_scan = hi
+    labels = _es_period_labels(lo, min(hi_scan, _now().date().isoformat()))
+    snapshots = {}
+    if lines:
+        try:
+            snapshots = _es_mi_snapshots(org_id, labels, lines)
+        except Exception as e:
+            note = ((note or "") + " The subscriber feed could not be read (%s)."
+                    % str(e)[:120]).strip()
+    loaded_keys = sorted(k for k, v in snapshots.items() if v.get("loaded"))
+    latest = loaded_keys[-1] if loaded_keys else None
+    report = ES.retention_report(lines, snapshots, labels, windows, latest_key=latest)
+    report.update({
+        "window": {"from": lo, "to": hi},
+        "config": cfg,
+        "feed_coverage": [{"period": k, "label": labels.get(k), "loaded": v.get("loaded"),
+                           "matched_rows": v.get("rows", 0)} for k, v in sorted(snapshots.items())],
+        "latest_loaded_period": (labels.get(latest) if latest else None),
+        "empty_reason": (ES.no_register_note(cfg, seen) if not rows else
+                         (None if lines else
+                          "No line rung on the event register in this window classifies as an "
+                          "activation, so there is nothing whose retention could be measured.")),
+        "attribution": ES.attribution(cfg, seen, source_note=note),
+    })
+    return report
+
+
+# ── report 3: ROI ─────────────────────────────────────────────────────────────────────────────────
+def _es_events_for(org_id: str, lo: str, hi: str):
+    """The org's events whose window could overlap [lo, hi], with their store sets. ONE read of the
+    EXISTING event tables — no parallel event store, no second store-attribution path."""
+    try:
+        events = (sb().table(EVENT_TABLE).select("*").eq("org_id", org_id).eq("is_active", True)
+                  .gte("event_start", "%sT00:00:00+00:00" % lo)
+                  .lte("event_start", "%sT23:59:59+00:00" % hi)
+                  .limit(2000).execute().data) or []
+    except Exception:
+        return [], []
+    ids = [e["id"] for e in events if e.get("id")]
+    stores = []
+    if ids:
+        try:
+            stores = (sb().table("marketing_event_store").select("event_id,store_code")
+                      .eq("org_id", org_id).in_("event_id", ids).limit(10000).execute().data) or []
+        except Exception:
+            stores = []
+    return events, stores
+
+
+def _es_entered_costs(org_id: str, event_ids):
+    """The cost figures a human typed, per event (`core.marketing_event_cost`, migration 995).
+
+    Absent table ⇒ empty, never an error: the ROI report must still run on a database where 995 has
+    not been applied — it simply has nothing entered to read.
+    """
+    amounts, units = {}, {}
+    ids = [i for i in (event_ids or []) if i]
+    if not ids:
+        return amounts, units
+    try:
+        rows = (sb().table("marketing_event_cost")
+                .select("event_id,cost_kind,amount,unit_cost,product_ref,entered_by,entered_at")
+                .eq("org_id", org_id).in_("event_id", ids)
+                .order("entered_at", desc=False).limit(5000).execute().data) or []
+    except Exception:
+        return amounts, units
+    for r in rows:
+        ev = str(r.get("event_id") or "")
+        if r.get("product_ref") and r.get("unit_cost") is not None:
+            units.setdefault(ev, {})[str(r["product_ref"]).upper()] = r["unit_cost"]
+        elif r.get("amount") is not None:
+            amounts.setdefault(ev, {})[str(r.get("cost_kind") or "")] = r["amount"]
+    return amounts, units
+
+
+def _es_catalog(org_id: str, phones):
+    """`commcalc.raw_catalog` costs for the SKUs these phones carry — the owner's "sku report"."""
+    pids = sorted({p["product_id"] for p in (phones or []) if p.get("product_id")})
+    skus = sorted({p["sku"] for p in (phones or []) if p.get("sku")})
+    sc = get_supabase().schema("commcalc")
+    rows = []
+    for field, values in (("product_id", pids), ("sku", skus)):
+        for i in range(0, len(values), 150):
+            chunk = values[i:i + 150]
+            if not chunk:
+                continue
+            try:
+                rows += (sc.table("raw_catalog").select("product_id,product_desc,cost,sku")
+                         .eq("org_id", org_id).in_(field, chunk).limit(5000).execute().data) or []
+            except Exception:
+                continue
+    return ES.catalog_index(rows)
+
+
+def _es_event_payroll(org_id: str, event, day: str):
+    """Event payroll HOURS at (employee, day) grain, through the EXISTING three-state contract.
+
+    `salary_expense.day_measurement` decides the state and the measured hours; a NOT_MEASURED day
+    falls back to that day's SCHEDULED hours, and a MEASURED ZERO stays zero and never falls back.
+    Nothing about hours is re-decided here — this asks that contract's question for one day and one
+    roster, which is why no third payroll derivation exists.
+    """
+    if not event or not event.get("id"):
+        return None
+    try:
+        from app.modules.storeops import salary_expense as _salexp
+    except Exception:                                         # pragma: no cover - import environment
+        return None
+    try:
+        staff = (sb().table("marketing_event_staff").select("employee_id,employee_name")
+                 .eq("org_id", org_id).eq("event_id", event["id"]).limit(200).execute().data) or []
+    except Exception:
+        staff = []
+    ids = sorted({str(s.get("employee_id")) for s in staff if s.get("employee_id")})
+    if not ids:
+        return {"rows": [], "total": 0.0, "hours_measured": 0.0, "hours_scheduled": 0.0,
+                "unpriced": [], "no_staff": True}
+    so = get_supabase().schema("storeops")
+    try:
+        shifts = (so.table("shifts")
+                  .select("employee_id,store_code,shift_date,scheduled_hours,actual_hours")
+                  .eq("org_id", org_id).eq("is_deleted", False).eq("shift_date", day)
+                  .in_("employee_id", ids).limit(2000).execute().data) or []
+    except Exception:
+        shifts = []
+    try:
+        tl = (so.table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
+              .eq("org_id", org_id).eq("work_date", day).in_("employee_id", ids)
+              .limit(2000).execute().data) or []
+    except Exception:
+        tl = []
+    try:
+        emps = (so.table("employees").select("employee_id,name,pay_rate")
+                .eq("org_id", org_id).in_("employee_id", ids).limit(2000).execute().data) or []
+    except Exception:
+        emps = []
+    rates = {str(e["employee_id"]): e.get("pay_rate") for e in emps if e.get("employee_id")}
+    names = {str(e["employee_id"]): (e.get("name") or "") for e in emps if e.get("employee_id")}
+
+    manual_by_day, punch_by_day, sched = {}, {}, {}
+    for s in shifts:
+        eid = str(s.get("employee_id"))
+        if float(s.get("actual_hours") or 0) > 0:
+            manual_by_day.setdefault(eid, {})[day] = float(s.get("actual_hours") or 0)
+        sched[eid] = sched.get(eid, 0.0) + float(s.get("scheduled_hours") or 0)
+    for t in tl:
+        if t.get("clock_out") and t.get("hours") is not None:
+            punch_by_day.setdefault(str(t.get("employee_id")), {})[day] = float(t.get("hours") or 0)
+
+    hours = []
+    for eid in ids:
+        state, measured = _salexp.day_measurement(eid, day, manual_by_day, punch_by_day)
+        if state == _salexp.NOT_MEASURED:
+            h, st = sched.get(eid, 0.0), "scheduled"
+            if not h:
+                continue          # nothing measured and nothing scheduled: no hours to cost at all
+        else:
+            h, st = measured, "measured"
+        hours.append({"employee_id": eid, "employee_name": names.get(eid) or eid,
+                      "day": day, "hours": h, "state": st})
+    out = ES.payroll_from_hours(hours, rates)
+    out["no_staff"] = not hours
+    return out
+
+
+def _es_commission(org_id: str, period_label: str, store_raw: str):
+    """Commission received for ONE store in ONE month — READ, never recomputed.
+
+    Calls `commcalc.router.commission_received_breakout`, the platform's ONE commission-received
+    read. It honours `ma_store_pnl.commission_received_lines()`'s rule that a REBATE IS NOT COMMISSION
+    (owner 2026-09-08 "dont count any rebate received in the commission"), and its own payload states
+    that carrier money carrying no store address is EXCLUDED while a store filter is active. Computing
+    commission is the commission agent's territory; this is a reader and nothing else.
+
+    Comprehensive Comp is deliberately NOT added: that report shows it beside the commission total,
+    never inside it, and this reader keeps that separation.
+    """
+    try:
+        from app.modules.commcalc.router import commission_received_breakout
+    except Exception as e:                                    # pragma: no cover - import environment
+        return None, "The commission read could not be loaded (%s)." % str(e)[:120]
+    try:
+        out = commission_received_breakout(period=period_label, months=1, market="",
+                                           store=store_raw, org_id=org_id) or {}
+    except Exception as e:
+        return None, "The commission figure could not be read (%s)." % str(e)[:140]
+    slot = (out.get("totals_by_period") or {}).get(period_label)
+    if slot is None:
+        return None, "No commission was reported for %s at this store." % period_label
+    total = float(slot.get("commission") or 0.0) + float(slot.get("residual") or 0.0)
+    return round(total, 2), (list(out.get("notes") or []) or [None])[0]
+
+
+@router.get("/event-sales/roi")
+def event_sales_roi(date_from: str = "", date_to: str = "", store: str = "", trans_date: str = "",
+                    org_id: str = ORG_ID):
+    """REPORT 3 — ROI per event day: commission received against what the day cost.
+
+    THE EVENT-NOT-LOADED FLOW IS THE NORMAL PATH. `core.marketing_event` holds no rows today, so most
+    (store, date) pairs have no event record. The report still runs, says that no event covers the
+    day, derives everything it can and names exactly what a human has to supply. Nothing is ever
+    rendered as $0.00 to make a number appear, and the ROI itself is withheld while a cost is unknown.
+    """
+    cfg = _es_config(org_id)
+    lo, hi = _es_range(date_from, date_to)
+    stores = [s for s in (store or "").split(",") if s.strip()]
+    rows, seen, note = _es_sales_rows(org_id, lo, hi, cfg, stores)
+    if str(trans_date or "").strip():
+        want = str(trans_date).strip()[:10]
+        rows = [r for r in rows if str(r.get("trans_date") or "")[:10] == want]
+    cells, code_by_store, cell_note = _es_shared_counts(org_id, rows)
+    by_key = _es_cells_by_key(cells)
+    summary = ES.sales_summary(rows, cfg)
+    events, event_stores = _es_events_for(org_id, lo, hi)
+    entered_by_event, units_by_event = _es_entered_costs(
+        org_id, [e.get("id") for e in events])
+    labels = _es_period_labels(lo, hi)
+    month_totals = {}
+
+    out, notes = [], [n for n in (note, cell_note) if n]
+    for key in summary["event_keys"]:
+        s_raw, day = key["store"], key["trans_date"]
+        code = code_by_store.get(s_raw) or s_raw
+        krows = [r for r in rows if str(r.get("store") or "") == s_raw
+                 and str(r.get("trans_date") or "")[:10] == day]
+        ev = ES.match_event(events, event_stores, code, day, store_aliases=[s_raw])
+        ev_id = str((ev or {}).get("id") or "")
+
+        lines = ES.phone_lines(krows, cfg)
+        phones = ES.price_phones(lines, _es_catalog(org_id, lines),
+                                 entered_unit_costs=units_by_event.get(ev_id),
+                                 use_catalog=bool(cfg.get("event_roi_phone_cost_from_catalog")))
+        payroll = _es_event_payroll(org_id, ev, day) if ev else None
+        costs = ES.build_costs(ev, entered_by_event.get(ev_id) or {}, payroll, phones)
+
+        period_label = labels.get(day[:7]) or day[:7]
+        comm, comm_note = _es_commission(org_id, period_label, s_raw)
+        cell = by_key.get((str(code or ""), day)) or {}
+        day_acts = int(cell.get("prem_count") or 0) + int(cell.get("byod_count") or 0)
+        # NAMED `day_register_activations`, not "event activations": §23's attribution rule (enforced
+        # statically by harness_marketing_event.py §G) forbids a field name that claims the event
+        # CAUSED a sale. This is what the event register rang that day — a fact about the till.
+        alloc = {"store_month_commission": comm, "day_register_activations": day_acts,
+                 "store_month_activations": None, "share": None,
+                 "method": ES.COMMISSION_BASIS_NOTES[ES.COMMISSION_BASIS_ALLOCATED]}
+        if comm is not None:
+            mk = (code, day[:7])
+            if mk not in month_totals:
+                month_totals[mk] = _es_store_month_activations(org_id, code, day[:7])
+            tot = month_totals[mk]
+            alloc["store_month_activations"] = tot
+            if tot:
+                alloc["share"] = round(float(day_acts) / float(tot), 4)
+                comm = round(comm * alloc["share"], 2)
+            else:
+                comm = None
+                alloc["note"] = ("The store rang no countable activation in this month, so there is "
+                                 "no share to allocate the month's commission by.")
+        roi = ES.roi_compute(comm, costs, ES.COMMISSION_BASIS_ALLOCATED, commission_exact=False)
+        roi.update({
+            "store": s_raw, "store_code": code, "trans_date": day,
+            "event": ({"id": ev.get("id"), "title": ev.get("title"), "status": ev.get("status"),
+                       "planned_spend": ev.get("planned_spend")} if ev else None),
+            "event_linked": bool(ev),
+            "event_prompt": (None if ev else ES.minimal_event_payload(code, day)),
+            "sales": key, "phones": phones, "payroll": payroll,
+            "commission_allocation": alloc, "commission_source_note": comm_note,
+        })
+        out.append(roi)
+        if comm_note:
+            notes.append(comm_note)
+
+    return {
+        "window": {"from": lo, "to": hi},
+        "config": cfg,
+        "days": out,
+        "commission_basis": ES.COMMISSION_BASIS_ALLOCATED,
+        "commission_bases": dict(ES.COMMISSION_BASIS_NOTES),
+        # DECLARED, NOT IMPLIED. The exactly-attributable basis is DESCRIBED above because a reader
+        # is owed the knowledge that one exists and what it would mean — but this endpoint does not
+        # yet compute it, and advertising a basis as available when nothing computes it would be the
+        # same class of quiet untruth the rest of this report exists to avoid. It is a declared seam
+        # (§23s.6), not a hidden gap.
+        "commission_bases_available": [ES.COMMISSION_BASIS_ALLOCATED],
+        "commission_basis_note": (
+            "Only the allocated basis is computed today. The per-line residual basis is defined and "
+            "described but not yet wired to this endpoint."),
+        "empty_reason": (ES.no_register_note(cfg, seen) if not rows else None),
+        "notes": sorted({n for n in notes if n}),
+        "attribution": ES.attribution(cfg, seen, source_note=(note or cell_note)),
+    }
+
+
+def _es_store_month_activations(org_id: str, store_code: str, month_key: str):
+    """The store's countable activations for the WHOLE month, from THE shared pass — the denominator
+    of the commission allocation. Same pass as the numerator, so the ratio is internally consistent.
+
+    Keyed on the CANONICAL store code the shared pass emits, never the POS store string: the pass
+    groups on its own canonical key, and joining on the raw spelling matches nothing.
+    """
+    try:
+        from app.modules.commcalc.router import _compute_feed_actuals_py
+    except Exception:                                         # pragma: no cover - import environment
+        return 0
+    try:
+        cells = _compute_feed_actuals_py(get_supabase(), org_id, month_key) or []
+    except Exception:
+        return 0
+    return sum(int(c.get("prem_count") or 0) + int(c.get("byod_count") or 0)
+               for c in cells if str(c.get("store_code") or "") == str(store_code or ""))
+
+
+class EventSalesLinkIn(LaxModel):
+    """The ROI screen's "I will tell you what it cost" body. `event_id` links an EXISTING event;
+    otherwise the minimum needed to CREATE one is accepted and handed to the existing creator."""
+    store_code: Any = None
+    trans_date: Any = None
+    event_id: Any = None
+    title: Any = None
+    market: Any = None
+    planned_spend: Any = None
+    payroll_cost: Any = None
+    phone_unit_costs: Any = None      # {product_id or sku: unit cost}
+    note: Any = None
+
+
+@router.post("/event-sales/roi/link-event")
+def event_sales_link_event(body: EventSalesLinkIn, authorization: str = Header(default=""),
+                           x_active_org: str = Header(default=""), org_id: str = ORG_ID):
+    """Link a (store, date) to an event — or CREATE the event from the minimum needed to cost it.
+
+    The owner: *"if teh event was not loaded previously it will still run a report with the roi and
+    ask the user to input teh cost details or link it to the event created in the system if the user
+    inputs teh details it will create the event in the system with the minimal information which is
+    required to compute the cost"*.
+
+    It creates through `create_event` — the module's ONE event creator, with its own approval
+    decision, its own store-set write and its own permission check. No second creation path exists,
+    and no parallel event table was invented to hold a cost.
+    """
+    caller = _caller(authorization, x_active_org)
+    _require_manager(caller, "record what an event cost")
+    code = str(body.store_code or "").strip()
+    day = str(body.trans_date or "").strip()[:10]
+    if not code or not day:
+        raise HTTPException(400, "store_code and trans_date are required")
+
+    entered = {}
+    if body.planned_spend is not None and str(body.planned_spend) != "":
+        entered[ES.COST_EVENT_SPEND] = L._num(body.planned_spend)
+    if body.payroll_cost is not None and str(body.payroll_cost) != "":
+        entered[ES.COST_PAYROLL] = L._num(body.payroll_cost)
+
+    if body.event_id:
+        event = _event(org_id, str(body.event_id))
+        if entered.get(ES.COST_EVENT_SPEND) is not None:
+            upd = {"planned_spend": entered[ES.COST_EVENT_SPEND], "updated_at": _now_iso(),
+                   "updated_by": _who(caller)}
+            decision = L.approval_decision(_config(org_id), upd["planned_spend"])
+            upd["approval_state"], upd["approval_reason"] = decision["state"], decision["reason"]
+            try:
+                sb().table(EVENT_TABLE).update(upd) \
+                    .eq("org_id", org_id).eq("id", event["id"]).execute()
+            except Exception as e:
+                raise HTTPException(400, "could not record the cost (%s)" % str(e)[:140])
+        _set_event_stores(org_id, event["id"],
+                          sorted(set(_event_store_codes(org_id, event["id"])) | {code}))
+        created = False
+    else:
+        payload = ES.minimal_event_payload(code, day, title=(str(body.title or "").strip() or None),
+                                           market=(str(body.market or "").strip() or None),
+                                           planned_spend=entered.get(ES.COST_EVENT_SPEND))
+        result = create_event(EventIn(**payload), authorization=authorization,
+                              x_active_org=x_active_org, org_id=org_id)
+        event = result["event"]
+        created = True
+
+    saved = _es_save_costs(org_id, event.get("id"), entered, body.phone_unit_costs, _who(caller),
+                           str(body.note or "").strip() or None)
+    return {"ok": True, "created": created, "event": event, "costs": saved,
+            "note": ("The event now carries the day's cost. Re-run the ROI report and it will "
+                     "compute — nothing was assumed on your behalf.")}
+
+
+def _es_save_costs(org_id: str, event_id, entered, phone_unit_costs, who, note):
+    """Persist the typed cost figures on `core.marketing_event_cost` (migration 995).
+
+    ═══ THE GIVEAWAY BOUNDARY — DECIDED, IMPLEMENTED, AND SAID OUT LOUD ══════════════════════════
+    `core.marketing_event_giveaway.unit_cost` already exists, and migration 986 says of it:
+    *"INFORMATIONAL money … Never seeded, never read by a money path."* Feeding it into an ROI would
+    reverse that decision silently, and would change what an existing column MEANS for every tenant
+    that has already typed a number into it as a note-to-self.
+
+    So it is NOT promoted. The ROI's phone cost lives on its own explicitly-declared row here, and
+    the giveaway row keeps its contract untouched. What the ROI takes from the giveaway side is the
+    COUNT (`qty_given`) — never money — and only ever beside the count the sales rows already give.
+    The recommendation and its reasoning are registered in the index (§23s) so the owner can overrule
+    it in exactly one place if they would rather promote the column.
+    """
+    if not event_id:
+        return []
+    rows = []
+    for kind, amount in (entered or {}).items():
+        if amount is None:
+            continue
+        rows.append({"org_id": org_id, "event_id": event_id, "cost_kind": kind,
+                     "amount": float(amount), "basis": ES.BASIS_ENTERED, "note": note,
+                     "entered_by": who, "entered_at": _now_iso()})
+    for key, unit in (phone_unit_costs or {}).items():
+        n = L._num(unit)
+        if n is None:
+            continue
+        rows.append({"org_id": org_id, "event_id": event_id, "cost_kind": ES.COST_PHONES,
+                     "product_ref": str(key)[:200], "unit_cost": float(n),
+                     "basis": ES.BASIS_ENTERED, "note": note,
+                     "entered_by": who, "entered_at": _now_iso()})
+    if not rows:
+        return []
+    try:
+        r = sb().table("marketing_event_cost").insert(rows).execute()
+        return r.data or rows
+    except Exception as e:
+        raise HTTPException(400, "the cost figures could not be saved — run migration 995 first (%s)"
+                            % str(e)[:140])
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════

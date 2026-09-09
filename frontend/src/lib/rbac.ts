@@ -328,6 +328,9 @@ export const NAV: NavGroup[] = [
   { group: 'Marketing', module: 'marketing', items: [
     { href: '/marketing', label: 'Events Dashboard', icon: '🎪', module: 'marketing', scopes: ['all', 'market', 'store'] },
     { href: '/marketing/events/new', label: 'Plan an Event', icon: '➕', module: 'marketing', scopes: ['all', 'market'], tileOnly: true },
+    // Sales from Events (owner directive 2026-09-09, §23s) — the three event-register reports. Same
+    // scopes as the dashboard: a store manager must be able to read their own store's event day.
+    { href: '/marketing/sales-from-events', label: 'Sales from Events', icon: '📈', module: 'marketing', scopes: ['all', 'market', 'store'] },
     { href: '/marketing/my-checkins', label: 'My Check-ins', icon: '📍', module: 'marketing', tileOnly: true },
     { href: '/marketing/settings', label: 'Marketing Settings', icon: '⚙️', module: 'marketing', scopes: ['all'], tileOnly: true },
   ]},

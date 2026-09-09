@@ -190,7 +190,15 @@ def calc_flags(
                 })
 
     # ── 5. RSK ACTIVATIONS ────────────────────────────────────────
-    rsk_rows = [r for r in valid_sales if str(r.get('register', '') or '').strip().upper() == 'RSK']
+    # THE register predicate is shared with the Sales-from-Events reports (§23s) — extracted to
+    # commcalc/sales_register.py so the flag and the report can never disagree about what an event
+    # register sale is (CLAUDE.md duplicate-check gate). Byte-identical to the expression that was
+    # inline here: the HOUSE default list is the single value this flag has always used, and this
+    # call site deliberately passes the HOUSE default rather than per-org config — a commission
+    # FLAG must not change its meaning because a reporting setting was edited.
+    from app.modules.commcalc.sales_register import (
+        filter_by_register as _filter_by_register, HOUSE_EVENT_REGISTERS as _HOUSE_REGISTERS)
+    rsk_rows = _filter_by_register(valid_sales, _HOUSE_REGISTERS)
     if rsk_rows:
         rsk_by_rep: dict[str, int] = defaultdict(int)
         for r in rsk_rows:
