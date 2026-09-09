@@ -1135,10 +1135,30 @@ def _p_plan_coverage(client, org_id, ctx):
                   n, "/commcalc/commission-plans", "Assign plans")]
 
 
-def collect_attention(client, org_id, *, deep=False, feed_h=None):
+def _route_policy_rows(client, org_id):
+    """The org's + house connector_route_policy rows (mig 998) for `collect_attention`'s context.
+    ORG-SCOPED inside connector_route_policy.load_rows; [] before the migration or on any failure, so
+    the attention popup can never be broken — or silenced — by this read."""
+    try:
+        from app.modules.commcalc import connector_route_policy as _crp
+        return _crp.load_rows(client, org_id)
+    except Exception:
+        return []
+
+
+# `route_policy` (mig 998) = the caller org's + house commcalc.connector_route_policy rows, read ONCE by
+# the ORG-SCOPED endpoint that calls this (`_route_policy_rows` above) and handed down on the provider
+# context. It is a PARAMETER rather than a read inside a provider on purpose: resolving the house
+# DEFAULT needs an inheritance read (`org_id IN (tenant, house)` — the mig-244 shape), and the
+# cheap/login-popup path is pinned by harness_import_health §D to selects filtered to the acting org
+# alone. Omitting it ⇒ providers see no policy and behave exactly as they did before mig 998, so an
+# absent parameter can never invent a closure. This one optional keyword + its ctx entry are the only
+# change to this function since the nav-perf baseline (harness_nav_perf D13 normalises exactly them).
+def collect_attention(client, org_id, *, deep=False, feed_h=None, route_policy=None):
     """Run every registered provider for ONE org. Exception-isolated per provider."""
     now = _now()
-    ctx = {"now": now, "feed_health": feed_h if feed_h is not None else feed_health(client, org_id)}
+    ctx = {"now": now, "feed_health": feed_h if feed_h is not None else feed_health(client, org_id),
+           "route_policy": route_policy or []}
     items, deferred, errors = [], [], []
     for p in PROVIDERS:
         if p["cost"] == "heavy" and not deep:
@@ -1430,6 +1450,6 @@ def get_attention(org_id: str = ORG_ID, deep: int = 0, fresh: int = 0,
         memo = _attention_memo_get(org, deep)
         if memo is not None:
             return {**memo, "org_id": org}
-    payload = collect_attention(client, org, deep=bool(deep))
+    payload = collect_attention(client, org, deep=bool(deep), route_policy=_route_policy_rows(client, org))
     _attention_memo_put(org, deep, payload)
     return {**payload, "org_id": org}

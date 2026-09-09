@@ -335,9 +335,21 @@ ck("D11 the permission gate runs BEFORE any memo read (a revoked admin is 403'd 
    < SRC_IH.index("memo = _attention_memo_get(org, deep)"))
 ck("D12 the memo key uses the SERVER-resolved org (`org` from _gate/_scope_org), never the raw param",
    "_attention_memo_get(org, deep)" in SRC_IH and "_attention_memo_get(org_id" not in SRC_IH)
+# The pin below is a BYTE comparison against the nav-perf baseline, and it stays one. Migration 998
+# (owner directive 2026-09-09) added ONE optional keyword to collect_attention — `route_policy`, so the
+# org-scoped endpoint can hand the connector-route rows down to the providers instead of a cheap
+# provider doing an inheritance read the org-isolation pin in harness_import_health §D forbids. Those
+# two exact deltas are normalised away here and NOTHING else is: any other edit to the function — a
+# memo, a cache, a reordered ctx — still fails this check exactly as before.
+_MIG998_DELTAS = ((", route_policy=None", ""),
+                  ("""feed_health(client, org_id),
+           "route_policy": route_policy or []}""", "feed_health(client, org_id)}"))
+_ca_now = SRC_IH.split("def collect_attention")[1][:1400]
+for _a, _b in _MIG998_DELTAS:
+    _ca_now = _ca_now.replace(_a, _b, 1)
 ck("D13 `collect_attention` itself is untouched and still uncached (harnesses call it directly)",
    git_show(BASE, "backend/app/modules/core/import_health.py").split("def collect_attention")[1][:1200]
-   == SRC_IH.split("def collect_attention")[1][:1200])
+   == _ca_now[:1200])
 
 # ══ E. ROUTE SURFACE ══════════════════════════════════════════════════════════════════════════════
 print("\nE. route surface")

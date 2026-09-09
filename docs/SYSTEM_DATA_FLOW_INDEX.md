@@ -111,7 +111,7 @@ email), (c) **RPC/manual entry**.
 | Sweep | Module | Writes | Config table / endpoints |
 |-------|--------|--------|--------------------------|
 | DLAR (rep+store KPI) | `dlar_sweep.py` `run_dlar_sweep:209` | **replaces** period `raw_dlar_rep`/`raw_dlar_store` (`dlar_sweep.py:237`) | `dlar_sweep_config` (mig `012`); `/dlar/sweep/*` `router.py:8447-8490` |
-| B2B (sales + inventory aging) | `b2b_sweep.py` | `raw_sales`/feed + `inventory_aging_device` upsert (`b2b_sweep.py:341`) | `/b2b/sweep/*` `router.py:8575-8618`; `fetch_inventory_aging` is a **stub** (`b2b_sweep.py:77` — needs live b2bsoft creds) `⚠` |
+| B2B (sales + inventory aging) | `b2b_sweep.py` | `raw_sales`/feed + `inventory_aging_device` upsert (`b2b_sweep.py:341`) | `/b2b/sweep/*` (`b2b_sweep_run_now`/`run_due`); `fetch_inventory_aging` is a **stub** (`b2b_sweep.py:77`) `⚠`. **Its portal-login route is CLOSED by config since mig `998`** (vendor instruction, owner 2026-09-09) — the supported route is the email sweep; see §12a.1 |
 | epay (payment detail) | `epay_sweep.py` | `raw_payment_detail` | `/epay/sweep/*` `router.py:8730-8811` (mig `020`,`025`) |
 | VIP invoices | `vip_sweep.py` | vip invoice tables (mig `008`,`011`,`014`) | `/vip/sweep/*` `router.py:3034-3078` |
 | FTP drop | `ftp_sweep.py` | per report-pull-map | `/ftp-sweep/*` `router.py:22175-22237` (mig `046`) |
@@ -133,7 +133,9 @@ batch through the guard and the union/promotion paths.
 - KPI/targets/expenses/plans are entered via their own PUT endpoints (see each section).
 
 **Known gaps:** `b2b_sweep.fetch_inventory_aging` and `login` are stubs (`b2b_sweep.py:11,77`) — inventory
-aging currently arrives by **upload**, not live scrape. `⚠`
+aging currently arrives by **upload**, not live scrape. `⚠` This is now also the POLICY: mig `998`
+closes that connector's `pull` route for every org (§12a.1), so email ingest + upload are the
+supported routes until the vendor re-opens the login and one config row is flipped back.
 
 ---
 
@@ -1609,6 +1611,67 @@ what an employee typed at closing. This feed is the other side of that tally.
 - **Harnesses:** `harness_merchant_portals.py` (73), `harness_portal_session_health.py` (41),
   `harness_portal_totp.py` (35 — RFC 6238 vectors + secret hygiene).
 
+#### 12a.1 CONNECTOR ROUTE GATE — which ingest route a connector may use (owner directive 2026-09-09, mig `998`)
+
+Owner, relaying a VENDOR INSTRUCTION, verbatim: *"we are not doing the 2FA login for b2b as they sent
+an email out to not do it, so make that gated by default for all unless it opens up later, only option
+for b2b is email ingested reports"*. Live evidence at the time (`commcalc.data_source` `d0c12f4f…`,
+house org): `enabled=true`, **`consecutive_failures=29`**, last delivery **2026-07-16**, `last_status`
+= *"error: The b2bsoft session has expired — please re-authenticate (Log in + enter the 2FA code)."* —
+29 scheduled attempts each ending in a prompt to do the very thing the vendor forbade.
+
+- **THE QUESTION NOTHING ELSE ANSWERED** (duplicate gate — all four were checked and left untouched):
+  `data_source.enabled` is the OPERATOR's per-ROW knob with no reason attached; `portal_backoff`
+  (mig 244) answers "may we contact this portal *right now*" with a TIMER and calls a deliberate
+  closure a fault; `report_pull_map.enabled` picks WHICH REPORTS a pull fetches; `core.import_feed
+  .enabled` says whether a tenant EXPECTS a feed. None answers **"is this ROUTE open for this
+  CONNECTOR, for this org?"** — so mig 998 adds exactly that, at the layer the other three live on.
+- **Table** `commcalc.connector_route_policy` (mig `998`): `(org_id, connector, route, allowed,
+  reason, remedy_route, remedy_label, remedy_href)`. A HOUSE-org row is the platform default inherited
+  by every tenant; a tenant row for the same `(connector, route)` overrides it — the identical
+  inheritance shape `portal_block_marker` (244) and `report_pull_map` (207) use. `route` REUSES
+  `core.import_feed.source_type` verbatim (`pull | email_sweep | ftp | google_sa | manual_expected`).
+  **RULE TWO:** the connector slug is `data_source.processor` (what `_SOURCE_SCRAPERS` already
+  dispatches on); the vendor's name exists only in the SEEDED ROWS, never in a code path.
+- **Module** `commcalc/connector_route_policy.py` (PURE): `resolve` / `is_open` / `is_closed` /
+  `headline` / `detail` / `health` / `refusal` / `status_line`, plus the one IO helper `load_rows`
+  (org-scoped `in_(org_id, [org, HOUSE])`). No rows / no table ⇒ **OPEN** — pre-migration it is inert.
+- **Gated (all read the ONE policy, none branches on a vendor):** `POST /data-sources/{sid}/run`,
+  `POST /data-sources/{sid}/login/start`, `POST /data-sources/{sid}/live-login/start`,
+  `POST /data-sources/sweep/run-due` (dropped BEFORE `next_run_at` is advanced and before dispatch —
+  reported as `route_disabled` in the tick's answer) + `_data_sources_pull_worker`, and the legacy
+  per-vendor `POST /b2b/sweep/run-now` · `/run-due` · `_do_b2b_sweep`. Unlike the cooldown there is
+  **no `?confirm=true` override**: a cooldown is a timer a human may knowingly override, an
+  instruction is not. The skip is NOT an attempt — `last_status`, `auth_status`, `last_attempt_at`
+  and `consecutive_failures` are left exactly as they are, so the 29 failures stay on the record.
+- **STATED, NEVER SILENT, NEVER FALSE-GREEN:** new `portal_session_health` state **`route_disabled`**
+  (rank 2, right after `healthy`; NOT in `_ACTIONABLE`, so `should_notify` never fires) →
+  `control_box.LAMP_FROM_PORTAL_STATE` lights it **`unmonitored`** — this module's own word for
+  "disabled, never folded into a green headline". `psh.summarize` gained a `disabled` count and
+  `control_box._eval_portal_sessions` refuses to say "all portal sessions are riding a valid login"
+  while one is off. `import_audit.p_connectors` replaces its ERROR item with ONE `info` item naming
+  the reason and the supported route (first and terminal, like the cooldown branch).
+- **The policy reaches the attention providers on the CONTEXT**, never by a read inside them:
+  `collect_attention(..., route_policy=…)` fed by `import_health._route_policy_rows` from the
+  org-scoped `GET /core/attention` and `control_box_api._attention_evidence`. Reason: resolving the
+  house DEFAULT is an inheritance read, and the cheap/login-popup path is pinned by
+  `harness_import_health` §D to selects filtered to the acting org alone.
+- **UI:** `_strip_source_pw` attaches the computed `route_policy` (never stored) →
+  `commcalc/email-imports` renders a 🚫 chip with the reason + a link to the remedy route, replaces
+  🔴 Live login / 🔐 Log in / ▶ Pull now with "📨 Use the email-ingested reports", labels the stored
+  error as history, and swaps the sign-in how-to for the email-route one; `commcalc/upload`'s auto-
+  sweep card does the same (`_b2b_public_cfg` carries `route_policy`; `b2b_sweep_config.connector`,
+  added by mig 998, is what names the connector for that legacy per-vendor sweep).
+- **REVERSIBLE — one row:** `UPDATE commcalc.connector_route_policy SET allowed = true WHERE
+  connector = '<slug>'`. Nothing is deleted: credentials, saved sessions, `live_login.py`,
+  `vidapay_sweep.run_b2bsoft_sweep` and every ingested row are untouched.
+- **Proof** `harness_connector_route_policy.py` (126) — the seed is parsed OUT of mig 998, so the
+  harness cannot pass against a seed the migration does not contain; covers off-by-default for house
+  + existing + future orgs, the stated non-actionable state, the roll-up honesty, one-row reversal,
+  the sibling carriers (VidaPay/T-CETRA — **a different vendor's 2FA, still working** — the three card
+  portals and every unlisted slug), the live 29-failure regression, pre-migration inertness and
+  RULE TWO/secret hygiene. Also pinned by `harness_control_box.py` §B (an unmapped state fails CI).
+
 - **External credit machine + CARD SETTLEMENT RECON (owner directive 2026-09-04, migs `960`/`961`):**
   "a lot of tenants will be using 3rd party credit card processor which is not integrated to the
   pos, which is recorded as external credit card … need to scrape the reports on a daily basis and
@@ -2598,6 +2661,8 @@ be a seaprate box in the p&l under wages"
 | `commcalc.report_pull_map` (mig `207` — report_key → `target_table` + `column_map` + `param_spec`, org row over the house row) | `POST /commcalc/report-mappings` (`/commcalc/report-mappings`); mig `955` seeds `merchant_settlement` / `merchant_funding` | `report_pull` portal ingest; **card-settlement recon feed resolution** (`closing/router._settlement_feed_spec` → `external_credit_recon.SETTLEMENT_REPORT_KEY`, §12 — this is HOW the tally finds the scraped table without hardcoding it) |
 | `commcalc.metric_source_of_truth` (per-metric basis-of-truth config, mig `923`; columns added by `944` `processor_order_types`/`processor_product_tokens` — the bill-payment row filter for the daily-TX processor feed) | `PUT /metric-source-config` | `_metric_source` (consumed by Exec MTD activation override, `/metric-recon`, `/billpay-coverage`, `_pos_billpay_for_days`/`_billpay_processor_by_store(_day)` — §12 3-way Leg C; NULL columns = `metric_recon` house defaults) |
 | `commcalc.exec_metric_config` (per-org Exec-MTD metric DEFINITIONS, mig `204`; **`carrier` preset column mig `962`, `applicable` flag mig `963`**; seed fn `seed_exec_metric_config`) | `GET/PUT /exec-metric-config` `router.py` (upsert by `org_id,bucket`); 2026-09-02: LuxeLink `bill_payment` rules gained `product_desc_contains:["wallet funding"]`; **mig `962`** corrects the HOUSE `bill_payment` rules + seeds the boost carrier PRESET | `_exec_metric_config` → **`exec_metric_defs.resolve`** (tenant row > house carrier preset > built-in default) → `_sales_cell_agg` exec metrics via `exec_metric_defs.line_match` |
+| `commcalc.connector_route_policy` (mig `998` — RULE TWO: WHICH INGEST ROUTE a connector may use, per org. `(org_id, connector, route, allowed, reason, remedy_route/label/href)`; house row = the platform default every tenant inherits, tenant row overrides — the `portal_block_marker` (244) / `report_pull_map` (207) shape. `route` REUSES `core.import_feed.source_type`; `connector` is `data_source.processor`. Seeded CLOSED for the POS sales/inventory connector's `pull` route, owner directive 2026-09-09) | owner SQL (`UPDATE … SET allowed = true` re-opens it — ONE row) | `commcalc/connector_route_policy.py` `load_rows`/`resolve` → the gate on `POST /data-sources/{sid}/run` · `/login/start` · `/live-login/start` · `/data-sources/sweep/run-due` + `_data_sources_pull_worker` · `/b2b/sweep/run-now|run-due` · `_do_b2b_sweep`; the computed `route_policy` on `_strip_source_pw` / `_b2b_public_cfg`; `portal_session_health` state `route_disabled` → `control_box` lamp `unmonitored`; `import_audit.p_connectors` / `p_portal_sessions` via `collect_attention(route_policy=…)`. §12a.1 |
+| `commcalc.b2b_sweep_config.connector` (mig `998`) | mig 998 backfill / owner SQL | names WHICH connector that legacy per-vendor sweep drives, so the route gate can close it from config instead of a vendor literal in code (RULE TWO). NULL = ungated. §12a.1 |
 | `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`); `PUT /report-labels` (scopes `report_col`/`report_banner`/`report_term` at the TENANT org — overrides; gated on `classification`); mig `945` seeds the HOUSE carrier-preset rows (scopes `report_col:<carrier>`/`report_banner:<carrier>`); mig `953` seeds the HOUSE carrier VOCABULARY-TERM presets (scope `report_term:<carrier>` — boost: ePay/VIP Wireless/ACIMA/b2bsoft, total: VidaPay/T-CETRA/Edge/marketplace feed, §3); mig `954` seeds the HOUSE distributor-payable BASIS presets (NEW scope `finance_basis:<carrier>`, key `distributor_payable` — boost: `asset_ledger`, total: `marketplace_due`; read by `statement_engine.carrier_payable_preset`, §4); mig `947` seeds the HOUSE Incentives tile layout (scope `tiles` key `incentives`) + HOUSE nav-label presets (NEW scopes `nav_default`/`group_default`, e.g. `/commcalc/commission-legs` → 'Commission received over M1-M12'); mig `948` seeds the HOUSE Management Overview (`tiles` key `management-overview` — incl. the `/commcalc/exec` item-label 'Rep Incentive') + Flags & Compliance (`tiles` key `flags-compliance`) layouts (§14 mig 948) | `GET /nav-config` (house `nav_default`/`group_default` presets first, then the caller org's `nav`/`group` nicknames overlay per key — tenant > house preset > built-in, since mig 947; caps/layout stay caller-org-only), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins), `GET /report-labels` (`report_labels.load_report_labels`: tenant ∪ HOUSE, tenant override > carrier preset > built-in — §3 carrier column labels) |
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3); **P&L wages estimate** `coa.wages_by_store`→`derive_wage_cells` (actual_hours else scheduled_hours — the owner's 2026-09-08 rule, already implemented); **salary coverage basis** `labour_coverage.load_shift_hours`→`hours_basis_by_code` (hours only, never dollars — §4) |
@@ -2636,7 +2701,7 @@ be a seaprate box in the p&l under wages"
 | _every endpoint filtering/grouping by MARKET_ | — | §13a canonical resolution (`core.scope.store_market_resolver`/`market_by_code`); inventory pinned in `harness_market_resolution_guard.py` |
 | _every endpoint OFFERING market options (dropdown/enumeration)_ | — | §13c canonical vocabulary (`core.scope.canonical_markets` composed via `merge_market_options`/`org_market_options`); inventory pinned in `harness_market_enumeration_guard.py`; B-1115/LI truth table `harness_market_vocabulary_truth.py` (owner 2026-09-04) |
 | `GET /commcalc/exec-mtd/{period}` (returns `metric_coverage` — the silent-zero detector) · `GET/PUT /commcalc/exec-metric-config` | `router.py` `exec_mtd` / `get_exec_metric_config` / `put_exec_metric_config` | §3 Exec-MTD metric definitions (carrier presets + detector, mig `962`) |
-| `POST /commcalc/data-sources/sweep/run-due` | `router.py:data_sources_run_due` | §12a — the ONE portal-pull scheduler (VidaPay, b2bsoft, and the three merchant portals); cron self-registered by mig `956` |
+| `POST /commcalc/data-sources/sweep/run-due` | `router.py:data_sources_run_due` | §12a — the ONE portal-pull scheduler (VidaPay, b2bsoft, and the three merchant portals); cron self-registered by mig `956`; since mig `998` a connector whose `pull` route is closed is dropped BEFORE `next_run_at` is advanced and reported as `route_disabled` in the tick's answer — §12a.1 |
 | `GET /commcalc/merchant-portals/catalog` | `router.py:merchant_portal_catalog` | §12a portal descriptors for the connector settings page |
 | `GET /commcalc/merchant-portals/health` | `router.py:merchant_portal_health` | §12a durable-session health roll-up |
 | `GET/POST/DELETE /marketing/options` · `GET/PUT /marketing/config` | `marketing/router.py` | §23 — RULE TWO option registry (the owner's "+") and the module switches (approval DEFAULT OFF) |
@@ -3068,7 +3133,7 @@ health. Everything it shows comes from mechanisms that already existed (duplicat
 | Reused mechanism | Where | What the board does with it |
 |---|---|---|
 | `core.import_health.collect_attention` + `PROVIDERS` (44 live providers across 12 modules) | `core/import_health.py:781` | ONE lamp per provider, derived from the LIVE registry at call time — a module registering a new provider gains a lamp with **no code change and no migration here** |
-| `commcalc.portal_session_health.summarize` / `STATES` (§12a) | `commcalc/portal_session_health.py` | Its ladder stays THE ladder for sessions; the board only MAPS it (`control_box.LAMP_FROM_PORTAL_STATE`), and `harness_control_box.py` §B fails if a state is ever added there and left unmapped |
+| `commcalc.portal_session_health.summarize` / `STATES` (§12a) | `commcalc/portal_session_health.py` | Its ladder stays THE ladder for sessions; the board only MAPS it (`control_box.LAMP_FROM_PORTAL_STATE`), and `harness_control_box.py` §B fails if a state is ever added there and left unmapped. Since mig `998` the ladder also carries `route_disabled` (rank 2, non-actionable) for a connector whose ingest route is closed by config — lamp `unmonitored`, never green, never a page. §12a.1 |
 | `core.import_health.feed_health` (mig 717) | `core/import_health.py:745` | Consumed through the `imports` provider above; freshness is never recomputed |
 | `GET /health` deployed-commit reporting | `main.py:_deployed_commit` | The `deploy_identity` lamp |
 | `core.token_rates` (mig 718) | mig `718` | The ONLY $/MTok source; `core.ai_call_audit` therefore stores TOKENS only and has no cost column |

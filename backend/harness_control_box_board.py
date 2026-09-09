@@ -156,7 +156,10 @@ _ATT = {"items": [], "deferred": [], "provider_errors": []}
 _real_collect = ih.collect_attention
 
 
-def _fake_collect(client, org_id, deep=False, feed_h=None):
+# `route_policy` (mig 998) tracks the real collect_attention signature — the board now hands the
+# org-scoped connector-route rows down with the rest of the context. The double ignores it; every
+# assertion below is unchanged.
+def _fake_collect(client, org_id, deep=False, feed_h=None, route_policy=None):
     if _ATT.get("_raise"):
         raise RuntimeError("aggregator down")
     items = [i for i in _ATT["items"] if not (i.get("_heavy") and not deep)]

@@ -261,8 +261,11 @@ def _attention_evidence(client, org_id, deep):
     """ONE call to the existing aggregator, then fan its items out per provider. Cheap providers only
     unless `deep` — a board refresh must never pay for a 40k-row scan (import_health's own rule)."""
     try:
-        from app.modules.core.import_health import collect_attention
-        att = collect_attention(client, org_id, deep=bool(deep)) or {}
+        from app.modules.core.import_health import collect_attention, _route_policy_rows
+        # mig 998 — the board sees the same route-policy context the login popup does, so a connector
+        # switched off by config reads as stated-and-off here too, never as a fault and never as green.
+        att = collect_attention(client, org_id, deep=bool(deep),
+                                route_policy=_route_policy_rows(client, org_id)) or {}
     except Exception as e:
         return {}, {"_all": cbx.redact(e)}
     by_provider = {}

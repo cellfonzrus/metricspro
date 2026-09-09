@@ -153,6 +153,23 @@ MODULES_WITHOUT_EXTERNAL_FEEDS = (
 )
 
 
+# ── WHICH ROUTE MAY DELIVER A FEED — pointer, not a second registry ──────────────────────────────
+# This module names WHICH TABLE a feed lands in. WHICH ROUTE is allowed to deliver it (a portal login
+# pull, the email sweep, FTP, a manual upload) is per-org CONFIG, not a fact of the lineage map:
+# `commcalc.connector_route_policy` (migration 998) + `commcalc/connector_route_policy.py`, keyed on
+# the connector slug and the `core.import_feed.source_type` route vocabulary.
+#
+# It is recorded here because the two questions get confused: a feed whose portal login has been closed
+# still lands in exactly the same table, so nothing in THIS registry changes when a route is switched
+# off — and a reader who assumes "no pull ⇒ no data" would wrongly hunt for a broken table.
+#
+# LIVE as of the owner directive 2026-09-09: the POS sales/inventory connector's `pull` route is CLOSED
+# by the house default (the vendor instructed us not to use their 2FA/browser login), so
+# `daily_sales_feed`, `raw_custom_import` and `inventory_value` arrive for it by `email_sweep` and by
+# manual upload ONLY. The connector is named in the migration's seed rows, never here — RULE TWO.
+ROUTE_POLICY_TABLE = "connector_route_policy"      # commcalc schema; migration 998
+
+
 def freshness_column(table: str) -> str:
     """The timestamp column a freshness probe should read for `table` to detect new data — the mapped
     override (e.g. daily_sales_feed → uploaded_at) or 'created_at' by default."""

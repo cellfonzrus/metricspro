@@ -9913,6 +9913,15 @@ def _b2b_public_cfg(cfg):
         'last_attempt_at')}
     out['configured'] = True
     out['has_credentials'] = bool(cfg.get('portal_user') and cfg.get('portal_pass'))
+    # Route policy (mig 998) — computed, so this sweep card SAYS why it is off instead of showing a
+    # stale error next to a switch that looks usable. `connector` is the config value naming which
+    # connector this legacy per-vendor sweep drives (RULE TWO — no vendor literal in this path).
+    try:
+        out['connector'] = cfg.get('connector')
+        out['route_policy'] = _source_route_policy(sb(), cfg.get('org_id'),
+                                                   {"processor": cfg.get('connector')})
+    except Exception:
+        out['route_policy'] = None
     return out
 
 
@@ -9922,9 +9931,17 @@ def _b2b_set_status(client, org_id, status, detail, mark_run=False, success=None
 
 
 def _do_b2b_sweep(org_id):
-    """Background worker: read creds, run the b2bsoft Inventory Aging sweep, record status."""
+    """Background worker: read creds, run the POS Inventory Aging portal sweep, record status."""
     client = sb()
     cfg = _b2b_cfg(client, org_id)
+    # ROUTE GATE (mig 998) — the backstop for this legacy per-vendor sweep, covering every path that
+    # reaches it (run-now, run-due, an operator's own call). Which CONNECTOR this sweep drives is a
+    # config value on its own row (`connector`, added by mig 998), not a literal here: RULE TWO. A
+    # missing column ⇒ None ⇒ no policy row ⇒ inert, exactly as before.
+    pol = _source_route_policy(client, org_id, {"processor": (cfg or {}).get("connector")})
+    if _route_closed(pol):
+        _b2b_set_status(client, org_id, 'disabled', _crp().status_line(pol))
+        return
     if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
         _b2b_set_status(client, org_id, 'error', 'No b2bsoft credentials set in the admin area', mark_run=True)
         return
@@ -9988,9 +10005,15 @@ def b2b_sweep_put_config(body: dict, org_id: str = ORG_ID,
 def b2b_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
     """Manual 'Fetch inventory now' (background task)."""
     require_org(org_id)
-    cfg = _b2b_cfg(sb(), org_id)
+    client = sb()
+    cfg = _b2b_cfg(client, org_id)
+    # ROUTE GATE (mig 998) — ahead of the credential check: with the login route closed by instruction,
+    # "set the credentials first" is the wrong remedy to hand back.
+    pol = _source_route_policy(client, org_id, {"processor": (cfg or {}).get("connector")})
+    if _route_closed(pol):
+        return _crp().refusal(pol, {"status": "route_disabled"})
     if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
-        raise HTTPException(400, "Set the b2bsoft credentials first.")
+        raise HTTPException(400, "Set this connector's portal credentials first.")
     background_tasks.add_task(_do_b2b_sweep, org_id)
     return {"status": "started"}
 
@@ -10005,14 +10028,20 @@ def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = 
     now_iso = _datetime.now(_timezone.utc).isoformat()
     due = client.schema('commcalc').table('b2b_sweep_config').select('*') \
         .eq('enabled', True).lte('next_run_at', now_iso).execute().data or []
+    off = []
     for cfg in due:
         oid = cfg.get('org_id') or ORG_ID
+        # ROUTE GATE (mig 998) — a closed connector is not rescheduled and not dispatched, so the
+        # nightly retry stops. Reported in the tick's answer rather than silently omitted.
+        if _route_closed(_source_route_policy(client, oid, {"processor": cfg.get("connector")})):
+            off.append({"org_id": oid, "skipped": "route_disabled"})
+            continue
         nxt = _vip_next_run(cfg.get('frequency') or 'daily', cfg.get('day_of_week'),
                             cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
         client.schema('commcalc').table('b2b_sweep_config').update(
             {'next_run_at': nxt}).eq('org_id', oid).execute()
         background_tasks.add_task(_do_b2b_sweep, oid)
-    return {"triggered": len(due)}
+    return {"triggered": len(due) - len(off), "route_disabled": off}
 
 
 # ── epay Owner Portal MI+ATU auto-sweep (#5b — headless Playwright; WAF-protected SPA) ──
@@ -29347,8 +29376,13 @@ _SOURCE_SCRAPERS = {"vidapay": _vidapay_scraper, "total_access": _vidapay_scrape
                     "businesstrack": _merchant_portal_scraper}
 
 
-def _strip_source_pw(row):
-    """Public view of a data_source row — drops every secret, exposes only booleans/status."""
+def _strip_source_pw(row, policy_rows=None):
+    """Public view of a data_source row — drops every secret, exposes only booleans/status.
+
+    `policy_rows` are this org's + the house connector_route_policy rows (mig 998, read ONCE by the
+    caller). They are resolved onto the row as `route_policy` BEFORE session health is computed, so a
+    connector whose login route is switched off renders the stated disabled chip instead of a
+    "sign in again" prompt for a login nobody is allowed to attempt."""
     row = dict(row)
     row["has_password"] = bool(row.get("password"))
     row["has_session"] = bool(row.get("session_state"))
@@ -29374,6 +29408,14 @@ def _strip_source_pw(row):
     if isinstance(diag, dict):
         row["last_pull_delivered"] = diag.get("delivered")
         row["last_pull_reason"] = diag.get("reason")
+    # Route policy (mig 998) — is the automated portal-login route even OPEN for this connector? Config,
+    # not code: resolved from the caller's own + house rows on the connector slug already in the row.
+    # Computed (never stored), so re-opening the route is one config UPDATE with nothing to un-write.
+    try:
+        row["route_policy"] = _crp().resolve(policy_rows or [], row.get("org_id"),
+                                             row.get("processor"))
+    except Exception:
+        row["route_policy"] = None
     # Durable-session health (mig 955) — computed, so a session that quietly died is visible on the
     # page BEFORE the overnight pull silently returns nothing. Runs on the ALREADY-STRIPPED row, so it
     # reads has_session/expiry/status only and can never surface session material.
@@ -29445,6 +29487,38 @@ def _source_stamp(client, sid, org_id, patch, *, success=False):
 def _pb():
     from app.modules.commcalc import portal_backoff as _m
     return _m
+
+
+# ── CONNECTOR ROUTE GATE (mig 998, owner directive 2026-09-09) ───────────────────────────────────
+# Owner, relaying a vendor instruction: "we are not doing the 2FA login for b2b as they sent an email
+# out to not do it, so make that gated by default for all unless it opens up later, only option for b2b
+# is email ingested reports". A route CLOSED BY INSTRUCTION is a different thing from every state this
+# module already knew: not a dead session (portal_session_health), not a temporary throttle
+# (portal_backoff), not the operator's own on/off knob (data_source.enabled). It is config — keyed on
+# the CONNECTOR slug already in the row and the FEED-SHAPE route vocabulary — so no vendor name enters
+# any decision here. These three helpers are the ONLY places this module talks to that policy; the
+# logic lives in connector_route_policy.py so every portal login inherits it unchanged.
+def _crp():
+    from app.modules.commcalc import connector_route_policy as _m
+    return _m
+
+
+def _source_route_policy(client, org_id, row, policy_rows=None):
+    """Is the automated portal-login route open for THIS login? Pre-migration-998 (no table) the read
+    returns [] and this reports allowed=True, so every gate below is inert and behaviour is unchanged."""
+    try:
+        crp = _crp()
+        rows = policy_rows if policy_rows is not None else crp.load_rows(client, org_id)
+        return crp.resolve(rows, org_id, row.get("processor"))
+    except Exception:
+        return {"allowed": True}
+
+
+def _route_closed(policy):
+    try:
+        return _crp().is_closed(policy)
+    except Exception:
+        return False
 
 
 def _source_cooldown(client, sid, org_id, row=None):
@@ -29649,7 +29723,8 @@ def list_data_sources(org_id: str = ORG_ID):
                 .eq("org_id", org_id).order("created_at").execute().data) or []
     except Exception:
         return {"ready": False, "sources": [], "note": "Run migration 083_total_processor_sources.sql to enable."}
-    return {"ready": True, "sources": [_strip_source_pw(r) for r in rows],
+    prows = _crp().load_rows(sb(), org_id)     # one read for the whole list (mig 998)
+    return {"ready": True, "sources": [_strip_source_pw(r, prows) for r in rows],
             "scrapers_wired": sorted(_SOURCE_SCRAPERS.keys())}
 
 
@@ -29820,6 +29895,12 @@ async def run_data_source(sid: str, org_id: str = ORG_ID, confirm: bool = False)
     if not rows:
         raise HTTPException(404, "unknown data source")
     src_row = rows[0]
+    # ROUTE GATE (mig 998) — checked BEFORE the cooldown and NOT overridable by ?confirm: a cooldown is
+    # a timer a human may knowingly override, a closed route is an instruction. Nothing is stamped on
+    # the row (no failure counted, no status rewritten) — the refusal states itself and stops.
+    pol = _source_route_policy(client, org_id, src_row)
+    if _route_closed(pol):
+        return _crp().refusal(pol, {"needs_2fa": False})
     cool = _source_cooldown(client, sid, org_id, row=src_row)
     if cool.get("blocked") and not confirm:
         return _blocked_payload(cool, {"needs_2fa": False})
@@ -30434,12 +30515,29 @@ async def data_sources_run_due(org_id: str = ORG_ID, x_notify_secret: str = Head
         # retries at its own cadence instead of going hot-or-never. The worker's cooldown paths may
         # still push next_run_at LATER (past a portal block); nothing in the worker moves it earlier.
         actionable = [s for s in rows if _SOURCE_SCRAPERS.get((s.get("processor") or "").strip().lower())]
+        # ROUTE GATE (mig 998). A login route closed by instruction is dropped BEFORE next_run_at is
+        # advanced and before the worker is dispatched: a closed connector must not be contacted, must
+        # not accumulate another failure, and must not keep a schedule at all. Policy rows are read once
+        # per org in the batch (the cron path spans tenants), never once per source.
+        _pol_cache, skipped_off = {}, []
+        kept = []
+        for s in actionable:
+            oid = s.get("org_id") or org_id
+            if oid not in _pol_cache:
+                _pol_cache[oid] = _crp().load_rows(client, oid)
+            if _route_closed(_source_route_policy(client, oid, s, policy_rows=_pol_cache[oid])):
+                skipped_off.append({"id": s["id"], "org_id": oid, "skipped": "route_disabled"})
+                continue
+            kept.append(s)
+        actionable = kept
         for s in actionable:
             nxt = _vip_next_run(s.get("frequency") or "daily", None, None, s.get("hour"), "America/New_York")
             _source_reschedule(client, s["id"], s.get("org_id") or org_id, nxt)
         if actionable:
             _dispatch_data_sources_worker(actionable, org_id)
-        return {"ok": True, "triggered": len(actionable),
+        # `route_disabled` is REPORTED in the tick's own answer, never dropped silently — a connector
+        # that stopped being swept must be visible in the scheduler's trail, not just absent from it.
+        return {"ok": True, "triggered": len(actionable), "route_disabled": skipped_off,
                 "detail": [{"id": s["id"], "org_id": s.get("org_id") or org_id} for s in actionable]}
     return await _data_sources_pull_worker(rows, org_id)
 
@@ -30451,12 +30549,26 @@ async def _data_sources_pull_worker(rows, org_id):
     client = sb()
     now = datetime.now(timezone.utc)
     ran, skipped = [], []
+    pol_cache = {}
     for s in rows:
         proc = (s.get("processor") or "").strip().lower()
         handler = _SOURCE_SCRAPERS.get(proc)
         oid = s.get("org_id") or org_id
         nxt = _vip_next_run(s.get("frequency") or "daily", None, None, s.get("hour"), "America/New_York")
         if not handler:
+            continue
+        # ── ROUTE GATE (mig 998) ─────────────────────────────────────────────────────────────────
+        # Checked here as well as in the handler, so the INTERACTIVE (secret-less) sweep is gated too
+        # and a closed connector can never be pulled by whichever path reaches this loop. Like the
+        # cooldown skip below this is NOT an attempt — last_attempt_at, last_status, auth_status and
+        # consecutive_failures are all left exactly as they are (the retry counter stops growing rather
+        # than being rewritten, so the 29 failures that led to the instruction stay on the record).
+        if oid not in pol_cache:
+            pol_cache[oid] = _crp().load_rows(client, oid)
+        pol = _source_route_policy(client, oid, s, policy_rows=pol_cache[oid])
+        if _route_closed(pol):
+            skipped.append({"id": s["id"], "skipped": "route_disabled",
+                            "reason": pol.get("reason") or "", "remedy": pol.get("remedy_route")})
             continue
         # ── COOLDOWN (mig 244) ───────────────────────────────────────────────────────────────────
         # A portal that has temporarily blocked us must not be contacted AT ALL by the scheduler. This
@@ -30511,8 +30623,12 @@ async def _data_sources_pull_worker(rows, org_id):
                            "last_run_at": now.isoformat()}, success=False)
             ran.append({"id": s["id"], "ok": False, "error": str(e)[:200],
                         "blocked_until": (plan or {}).get("blocked_until")})
+    # `skipped` now carries BOTH kinds of stand-down — a portal cooldown (mig 244) and a route closed
+    # by config (mig 998) — each labelled by its own `skipped` reason, so neither is ever an unexplained
+    # absence from the run trail. The key keeps its name so existing readers are unaffected.
     return {"ok": True, "ran": ran, "count": len(ran),
-            "skipped_blocked": skipped, "skipped_count": len(skipped)}
+            "skipped_blocked": skipped, "skipped_count": len(skipped),
+            "skipped_route_disabled": len([x for x in skipped if x.get("skipped") == "route_disabled"])}
 
 
 def _unattended_relogin(client, s, org_id):
@@ -30697,6 +30813,11 @@ def data_source_login_start(sid: str, background_tasks: BackgroundTasks, org_id:
     if not rows:
         raise HTTPException(404, "unknown data source")
     s = rows[0]
+    # ROUTE GATE (mig 998) — FIRST, ahead of the credential check: when the login route is closed by
+    # instruction, "enter your password" is the wrong thing to ask for. Not overridable by ?confirm.
+    pol = _source_route_policy(client, org_id, s)
+    if _route_closed(pol):
+        return _crp().refusal(pol, {"status": "route_disabled"})
     if not (s.get("password") and (s.get("username") or s.get("account_id"))):
         raise HTTPException(400, "Enter the Account ID, User ID and Password on this login first, then Log in.")
     cool = _source_cooldown(client, sid, org_id, row=s)
@@ -30957,6 +31078,12 @@ def live_login_start(sid: str, org_id: str = ORG_ID, confirm: bool = False):
     from app.modules.commcalc import live_login
     client = sb()
     s = _live_source_row(client, sid, org_id)
+    # ROUTE GATE (mig 998) — FIRST, and NOT overridable by ?confirm. The cooldown below deliberately
+    # lets a human through on a second click; a route closed by vendor instruction has no such escape,
+    # because the point is that nobody signs in at all until the config row is changed back.
+    pol = _source_route_policy(client, org_id, s)
+    if _route_closed(pol):
+        return _crp().refusal(pol, {"phase": "route_disabled"})
     if not (s.get("password") and (s.get("username") or s.get("account_id"))):
         raise HTTPException(400, "Enter the Account ID, User ID and Password on this login first, then start the live login.")
     cool = _source_cooldown(client, sid, org_id, row=s)
@@ -31057,7 +31184,8 @@ def merchant_portal_health(org_id: str = ORG_ID):
                 .eq("org_id", org_id).execute().data) or []
     except Exception as e:
         return {"ok": False, "error": f"data_source not ready: {e}", "items": []}
-    public = [_strip_source_pw(r) for r in rows
+    prows = _crp().load_rows(client, org_id)   # mig 998 — so a closed route reads as route_disabled
+    public = [_strip_source_pw(r, prows) for r in rows
               if mp.is_portal((r.get("processor") or "").strip().lower())]
     return {"ok": True, **psh.summarize(public)}
 

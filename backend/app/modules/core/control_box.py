@@ -66,6 +66,11 @@ ACTIONABLE = ("amber", "unknown", "red")
 # covers `psh.STATES` exactly — add a state there and the harness fails until it is mapped here.
 LAMP_FROM_PORTAL_STATE = {
     "healthy": "green",
+    # A route switched OFF by config (commcalc.connector_route_policy, owner directive 2026-09-09) is
+    # not a fault and never pages — but it is not green either: nothing arrives by that route.
+    # `unmonitored` is exactly this module's word for it ("a subsystem with no check, or whose check is
+    # disabled … never folded into a green headline"), so a closed connector is reported as coverage.
+    "route_disabled": "unmonitored",
     "expiring_soon": "amber",
     "error": "amber",          # the session is fine; the last pull failed for another reason
     "expired": "red",          # tonight's pull WILL need a human
@@ -216,11 +221,23 @@ def _eval_portal_sessions(spec, ev, now):
     worst = str(summary.get("worst") or "")
     lamp = LAMP_FROM_PORTAL_STATE.get(worst, "unknown")
     need = int(summary.get("needs_human") or 0)
-    return _result(spec, lamp,
-                   "%d of %d portal session(s) need a human." % (need, int(summary.get("total") or 0))
-                   if need else "All portal sessions are riding a valid login.",
+    off = int(summary.get("disabled") or 0)
+    total = int(summary.get("total") or 0)
+    # HONESTY (rule 1). "All portal sessions are riding a valid login" may only be said when that is
+    # true of ALL of them. A connector whose login route is switched off has no login to ride, and
+    # needs_human is 0 for it — so without this branch a deliberately-closed connector would have been
+    # announced as healthy, which is the one thing a STATED disabled state exists to prevent.
+    if need:
+        head = "%d of %d portal session(s) need a human." % (need, total)
+    elif off:
+        head = ("%d of %d portal connector(s) have their login route switched off by config — "
+                "nothing pulls by that route." % (off, total))
+    else:
+        head = "All portal sessions are riding a valid login."
+    return _result(spec, lamp, head,
                    "Worst session state: %s." % (worst or "unrecognised"), count=need,
-                   evidence={"worst": worst, "needs_human": need, "total": summary.get("total"),
+                   evidence={"worst": worst, "needs_human": need, "disabled": off,
+                             "total": summary.get("total"),
                              "items": [{"label": i.get("label"), "state": i.get("state")}
                                        for i in (summary.get("items") or [])[:8]]})
 
