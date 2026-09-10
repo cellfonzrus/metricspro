@@ -141,6 +141,28 @@ const cashFigure = (
 )
 
 const storeCash: Runbook = {
+  stages: [
+    { href: '/closing/submit', label: 'Submit Closing', who: 'Rep',
+      does: 'Count the drawer, enter every tender, attach the envelope photo.',
+      handoff: 'the declared figures and a sealed envelope' },
+    { href: '/closing/verify', label: 'DM Verify', who: 'District Manager',
+      does: 'Check each store-day against the POS and correct what is wrong.',
+      handoff: 'verified figures the money can be collected against' },
+    { href: '/closing/pickup', label: 'Cash Pickup', who: 'District Manager',
+      does: 'Tick the envelopes you physically take, and count any you opened.',
+      handoff: 'cash out of the store, and a count if the seal was broken' },
+    { href: '/closing/billpay-pickup', label: 'Bill Payment Pickup', who: 'District Manager',
+      does: 'The same collection, for bill-payment cash.',
+      handoff: 'bill-payment cash out of the store' },
+    { href: '/closing/deposit-recon', label: 'Cash Deposit Recon', who: 'Market Mgr / Accounting',
+      does: 'Confirm hand-overs, chase missing slips, drive the day green.',
+      handoff: 'every envelope accounted for' },
+    { href: '/closing/envelope-report', label: 'Envelope Report', who: 'Market Manager',
+      does: 'Count disputed envelopes and raise a chargeback where one is genuinely short.' },
+    { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', who: 'Owner / Accounting',
+      does: 'What is still sitting in stores undeposited.' },
+  ],
+
   slug: 'store-cash',
   title: 'Store Cash Runbook',
   summary: 'How cash moves from the drawer to the bank, and who is answerable at each hand-off.',
@@ -303,6 +325,28 @@ const closingFigure = (
 )
 
 const dailyClosing: Runbook = {
+  stages: [
+    { href: '/closing/submit', label: 'Submit Closing', who: 'Rep',
+      does: 'Count the drawer, enter every tender, attach the envelope photo.',
+      handoff: 'the declared figures and a sealed envelope' },
+    { href: '/closing/verify', label: 'DM Verify', who: 'District Manager',
+      does: 'Check each store-day against the POS and correct what is wrong.',
+      handoff: 'verified figures the money can be collected against' },
+    { href: '/closing/pickup', label: 'Cash Pickup', who: 'District Manager',
+      does: 'Tick the envelopes you physically take, and count any you opened.',
+      handoff: 'cash out of the store, and a count if the seal was broken' },
+    { href: '/closing/billpay-pickup', label: 'Bill Payment Pickup', who: 'District Manager',
+      does: 'The same collection, for bill-payment cash.',
+      handoff: 'bill-payment cash out of the store' },
+    { href: '/closing/deposit-recon', label: 'Cash Deposit Recon', who: 'Market Mgr / Accounting',
+      does: 'Confirm hand-overs, chase missing slips, drive the day green.',
+      handoff: 'every envelope accounted for' },
+    { href: '/closing/envelope-report', label: 'Envelope Report', who: 'Market Manager',
+      does: 'Count disputed envelopes and raise a chargeback where one is genuinely short.' },
+    { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', who: 'Owner / Accounting',
+      does: 'What is still sitting in stores undeposited.' },
+  ],
+
   slug: 'daily-closing',
   title: 'Daily Closing Runbook',
   summary: 'What a rep enters at the end of a shift, and how the three-try close gate checks it.',
@@ -445,6 +489,28 @@ const verifyFigure = (
 )
 
 const dmVerify: Runbook = {
+  stages: [
+    { href: '/closing/submit', label: 'Submit Closing', who: 'Rep',
+      does: 'Count the drawer, enter every tender, attach the envelope photo.',
+      handoff: 'the declared figures and a sealed envelope' },
+    { href: '/closing/verify', label: 'DM Verify', who: 'District Manager',
+      does: 'Check each store-day against the POS and correct what is wrong.',
+      handoff: 'verified figures the money can be collected against' },
+    { href: '/closing/pickup', label: 'Cash Pickup', who: 'District Manager',
+      does: 'Tick the envelopes you physically take, and count any you opened.',
+      handoff: 'cash out of the store, and a count if the seal was broken' },
+    { href: '/closing/billpay-pickup', label: 'Bill Payment Pickup', who: 'District Manager',
+      does: 'The same collection, for bill-payment cash.',
+      handoff: 'bill-payment cash out of the store' },
+    { href: '/closing/deposit-recon', label: 'Cash Deposit Recon', who: 'Market Mgr / Accounting',
+      does: 'Confirm hand-overs, chase missing slips, drive the day green.',
+      handoff: 'every envelope accounted for' },
+    { href: '/closing/envelope-report', label: 'Envelope Report', who: 'Market Manager',
+      does: 'Count disputed envelopes and raise a chargeback where one is genuinely short.' },
+    { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', who: 'Owner / Accounting',
+      does: 'What is still sitting in stores undeposited.' },
+  ],
+
   slug: 'dm-verify',
   title: 'DM Verify Runbook',
   summary: 'Checking what the stores submitted, and correcting it without erasing it.',
@@ -509,6 +575,33 @@ const dmVerify: Runbook = {
 // Sort order is the order the work actually happens in, not alphabetical: close, verify, collect.
 // Scheduling joins this list when its runbook lands.
 export const FLOWCHARTS: Runbook[] = [dailyClosing, dmVerify, storeCash]
+
+// ── THE WORKFLOW, ASKED BY BOTH READERS ─────────────────────────────────────────────────────────
+// Owner directive 2026-09-10: "the modules for these should be stacked properly based on thr work
+// flow in one tile so the user does not have to loo for the next module … and also the current
+// module should ask the chart what do they want to do next".
+//
+// `CLOSING_WORKFLOW` is that chart, as data. The stacked hub tile (migration 1003) and the
+// WorkflowNext prompt at the foot of each screen both read THIS — so the order somebody is walked
+// through cannot drift from the order the runbook teaches.
+export const CLOSING_WORKFLOW = dailyClosing.stages
+
+/** The stage AFTER `href` in the closing workflow, or undefined at the end of the chain. */
+export function nextStage(href: string) {
+  const i = CLOSING_WORKFLOW.findIndex(s => s.href === href)
+  return i >= 0 ? CLOSING_WORKFLOW[i + 1] : undefined
+}
+
+/** Every stage after `href`, so a caller who may not open the next one can be offered the one after. */
+export function stagesAfter(href: string) {
+  const i = CLOSING_WORKFLOW.findIndex(s => s.href === href)
+  return i >= 0 ? CLOSING_WORKFLOW.slice(i + 1) : []
+}
+
+/** The runbook that teaches this screen — what "ask the chart" resolves to. */
+export function runbookForScreen(href: string) {
+  return FLOWCHARTS.find(f => f.stages.some(s => s.href === href))
+}
 
 export function flowchartBySlug(slug: string): Runbook | undefined {
   return FLOWCHARTS.find(f => f.slug === slug)

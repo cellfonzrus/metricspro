@@ -2,6 +2,7 @@
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import ClosingSubmitForm from '@/components/ClosingSubmitForm'
+import { WorkflowNext } from '@/components/WorkflowNext'
 
 // Thin wrapper around the shared <ClosingSubmitForm> (also embedded in the /portal kiosk).
 export default function SubmitClosingPage() {
@@ -16,6 +17,7 @@ export default function SubmitClosingPage() {
         <Link href="/closing" className="btn btn-secondary" style={{ fontSize: 13 }}>← Dashboard</Link>
       </div>
       <ClosingSubmitForm defaultEmployeeName={(user as any)?.full_name} />
+      <WorkflowNext here="/closing/submit" />
     </div>
   )
 }

@@ -48,6 +48,28 @@ export type RunbookTable = {
   rows: { key: string; means: ReactNode; move: string }[]
 }
 
+/**
+ * One screen in the workflow, in the order the work actually happens.
+ *
+ * THIS IS THE SOURCE, NOT A COPY OF ONE (owner directive 2026-09-10: "the modules for these should
+ * be stacked properly based on thr work flow in one tile … and also the current module should ask
+ * the chart what do they want to do next"). The same array drives the stacked hub tile AND the
+ * "what next" prompt at the foot of each screen, so the order a user is walked through can never
+ * drift from the order the runbook teaches — there is one list, and both readers ask it.
+ */
+export type RunbookStage = {
+  /** A NAV href. Gating is the destination's own NAV entry, via the shared `useCanOpen`. */
+  href: string
+  /** The screen's name as the user sees it in the menu. */
+  label: string
+  /** Whose job this stage is. */
+  who: string
+  /** One line: what you do here. Shown under the link, so nobody has to open it to find out. */
+  does: string
+  /** What you are handing to whoever is next. Rendered as the reason to go there. */
+  handoff?: string
+}
+
 export type Runbook = {
   slug: string
   title: string
@@ -70,6 +92,8 @@ export type Runbook = {
   rulesHeading: string
   rules: RunbookRule[]
   table?: RunbookTable
+  /** The screens this procedure runs through, in order. See RunbookStage. */
+  stages: RunbookStage[]
 }
 
 const TONE: Record<RunbookLevel['tone'], string> = {
