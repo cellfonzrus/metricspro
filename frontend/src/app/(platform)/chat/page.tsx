@@ -228,21 +228,11 @@ export default function ChatPage() {
   useEffect(() => { loadChannels() }, [loadChannels])
   useEffect(() => { api('/api/v1/chat/me').then((r: any) => setMe(r)).catch(() => {}) }, [])
 
-  // Mobile/web push registration (Phase 5 scaffold). Acts ONLY when the operator has supplied a VAPID
-  // public key AND shipped a service worker; otherwise it is a silent no-op. The backend send path is
-  // likewise gated on FCM credentials — see the plan's Operator TODO. Never fakes a subscription.
-  useEffect(() => {
-    if (!me) return
-    const vapid = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
-    if (!vapid || typeof navigator === 'undefined' || !('serviceWorker' in navigator) || typeof window === 'undefined' || !('PushManager' in window)) return
-    ;(async () => {
-      try {
-        const reg = await navigator.serviceWorker.register('/sw.js')
-        const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8(vapid) as BufferSource })
-        await api('/api/v1/chat/push/register', { method: 'POST', body: JSON.stringify({ token: JSON.stringify(sub), platform: 'web' }) })
-      } catch { /* push unavailable in this environment — skip silently */ }
-    })()
-  }, [me])
+  // Web-push registration MOVED OUT (owner directive 2026-09-10) to lib/chat-push.ts, called once
+  // from the header envelope, which is mounted on every platform page. Registering here meant a
+  // browser subscribed only if the user opened this screen — the one moment they do not need to be
+  // told they have a message. Nothing replaces it here: a private second copy is exactly the drift
+  // the move exists to prevent.
 
   // Realtime (sidebar + thread hints): the caller's user topic receives a hint for every conversation
   // they belong to, so one subscription keeps the whole app live. The socket state drives poll cadence.
@@ -687,12 +677,4 @@ export default function ChatPage() {
 
 const actBtn: React.CSSProperties = { background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1 }
 
-// Standard VAPID key decode for PushManager.subscribe. Only reached when a key is configured.
-function urlB64ToUint8(base64: string): Uint8Array {
-  const padding = '='.repeat((4 - (base64.length % 4)) % 4)
-  const b64 = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/')
-  const raw = atob(b64)
-  const arr = new Uint8Array(raw.length)
-  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i)
-  return arr
-}
+// urlB64ToUint8 moved to lib/chat-push.ts with the registration it serves (2026-09-10).

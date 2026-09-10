@@ -407,6 +407,16 @@ export const NAV: NavGroup[] = [
     { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     // NEW report (2026-09-03): owed-to-distributor + payments/payroll/rents due this week per store.
     { href: '/accounts/liabilities-due', label: 'Current Monetary Liabilities', icon: '💳', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
+    // ALL FLAGS (owner directive 2026-09-10: "sales leak should not be in employee dashbaord, it
+    // shoudl be in management overview under all flags tile which is not here right now"). NOT a new
+    // page — /commcalc/flags already lists EVERY flag type with a type filter, sales_leak included,
+    // and /compliance is the per-queue dashboard over it. These are the same tileOnly DUPLICATE rule
+    // the rest of this group uses: module + scopes byte-identical to their Flags & Compliance
+    // entries, so this changes what is REACHABLE from this hub and nothing about who may see it.
+    // Migration 1002 seeds the "All Flags" tile itself into the house tile layout; until it runs
+    // these surface under the hub's "not yet placed" tile rather than not at all.
+    { href: '/commcalc/flags', label: 'Flags', icon: '🚩', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/compliance', label: 'Flags & Compliance Dashboard', icon: '🛡️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
   ]},
   // ── Flags & Compliance (owner directive 2026-09-03, mig 948) ────────────────────────────────
   // "every flag and compliance issue should be under that": a separate dashboard category whose

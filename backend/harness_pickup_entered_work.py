@@ -65,15 +65,14 @@ with open(PAGE, encoding='utf-8') as fh:
 
 
 def strip_comments(js):
-    """JS source with // and /* */ removed.
+    """Thin alias over harnesslib.js_code_only — THE shared stripper (2026-09-10).
 
-    THIS CHECK MUST READ CODE, NOT PROSE. Its first draft grepped the raw file for `setSel({})` and
-    `setActuals({})` — and failed, because the comment explaining WHY those calls were removed
-    quotes them verbatim. A guard that a truthful comment can break is a guard that gets deleted,
-    so the stripping happens here and every assertion below runs on code alone.
-    """
-    js = re.sub(r'/\*.*?\*/', '', js, flags=re.S)
-    return re.sub(r'^\s*//.*$', '', js, flags=re.M)
+    The reasoning that put it here is unchanged and now lives in that module: this harness's first
+    draft grepped the raw file for `setSel({})` / `setActuals({})` and failed on the COMMENT
+    explaining why those calls were removed. It was the first of three harnesses to hit that, which
+    is why the six lines moved somewhere all of them can share."""
+    from harnesslib import js_code_only
+    return js_code_only(js)
 
 
 src = strip_comments(raw)

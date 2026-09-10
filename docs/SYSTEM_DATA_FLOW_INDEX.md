@@ -2601,6 +2601,87 @@ be a seaprate box in the p&l under wages"
   `google_review_sweep_config.last_detail` (and drops the "OK —" prefix when 0 stores succeeded)
   so the next failure is diagnosable from the row itself.
 
+### 14u. THE PA MARKET HAD NO EMPLOYEE ROWS — the roster named by the feed (owner directive 2026-09-10)
+
+**Owner (verbatim):** *"also assign an agent to create the users from PA Market using the same names
+as in b2b reports so we can do thier scdhuleing also , the data shoudl flow in all systems as
+indexed, , this way the usernames will be same and no mapping needed"*
+
+**THE FINDING.** `storeops.employees` holds 45 rows for the house org and **not one has a PA
+home_store** — the nine PA stores (`B-1710 B-2701 B-2778 B-3605 B-5619 B-60TH B-6149 B-6507 B-723`)
+have zero staff on the roster, so Schedule / Hours Approval / Attendance / Time Clock have nobody to
+put on a shift. Meanwhile the b2b POS feed has carried those people's sales for 15 months and
+`commcalc.rep_commissions` has been PAYING them (74 rows; `epay_salesperson` set, `storeops_name`
+BLANK precisely because no roster row exists). The market itself is not ambiguous: `PA` is a real
+market on 9 `storeops.stores` rows and 10 `commcalc.store_mapping` rows, and every one of the 9 PA
+store spellings in `daily_sales_feed` resolves through the canonical §13a resolver.
+
+**NO NEW MECHANISM — the duplicate check.** `commcalc.name_map` (mig `002:171`) is the platform's
+EXISTING b2b-name→roster-name bridge; it holds 28 rows, ALL LI/NYC/NJ, **zero PA**. It is exactly the
+mapping table the owner does not want to need. The columns that make a name_map row UNNECESSARY are
+`storeops.employees.epay_login` + `.epay_salesperson` (mig `003:21`): `commission_engine` matches a
+feed seller on `epay_salesperson || name` (`commission_engine.py:554,613,1141`) and its own
+remediation text already tells the operator to *"set <person>'s ePay/POS name (epay_salesperson) to
+exactly '<the feed spelling>'"* (`:1195`); `GET /commcalc/rep-employee-map` returns
+`{name, epay_salesperson, aliases}` for the same reason. So the roster EXTENDS that mechanism by
+filling those columns with the feed's own bytes — no table, no endpoint, no importer, no name_map row.
+
+**NAME FIDELITY IS THE DELIVERABLE.** `name`, `epay_salesperson` and `epay_login` are all VERBATIM
+feed values — same bytes, same case, same "Last, First" order. `name` too (not just
+`epay_salesperson`), because any re-ordering is a derivation and a derivation is the mapping problem
+returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three reasons a
+"First Last" transform cannot be trusted. Renaming later is safe — the b2b join rides
+`epay_salesperson`.
+
+- **The write:** `database/migrations/1001_pa_market_employee_roster.sql` — **OWNER-RUN, NOT
+  APPLIED.** Ten people with PA b2b activity on/after 2026-08-01; idempotent (`NOT EXISTS` on
+  `epay_salesperson` OR `name` per org); `employee_id` assigned as `'E' || id`, byte-identical to
+  the platform's own `storeops.router._ensure_employee_id` (`:2245`) — REQUIRED, not cosmetic:
+  `payroll_approval._roster` drops every row with a blank employee_id (`:390`) and `create_shift`
+  canonicalizes to it. A held Section B (ten 2026 leavers/seasonals) is commented out for a decision.
+- **⚠ pay is UNSET, and the platform cannot say so.** `pay_rate` is written EXPLICIT NULL because the
+  column is `NUMERIC DEFAULT 0` (mig `003:28`) — an omitted column lands `0.00`, the "this person
+  earns nothing" lie. But every payroll read coerces `float(pay_rate or 0)`
+  (`storeops/router.py:1208,1232,1269,1310,1507`, `payroll_salary.py:364`), so **there is no
+  "rate not set" state distinct from zero anywhere downstream**: these people print $0.00 until a
+  rate is entered. Hours accrue correctly; PAY MUST BE SET BEFORE THE FIRST PAYROLL RUN INCLUDING
+  THEM. Same class as the six existing `pay_rate=0` employees producing $0.00 over 351 August hours.
+- **NOT created, each a reported finding:** `'Admin, backoffice'`/`PAADMIN` (system account — the
+  shared sales pass already skips rep `admin`, §3); `'Escobar, Angelica'` (**already E232**,
+  home_store `B-1800`/LI — creating a second row would manufacture the duplicate this exercise
+  exists to avoid); two DISTINCT-login pairs that may each be one human
+  (`'Rahman, Abdur'`/`Abdur.Rehman` vs `'Rehman, Abdur'`/`.abdur`; `'Addagarla, Teja Sri'`/`TejaSri`
+  vs `'Sri Addagarla, Teja'`/`Teja`) — if confirmed one person the second spelling belongs in
+  `commcalc.rep_aliases`, NOT a second employee; and seven 2024 leavers (last PA sale 2024-07-16).
+- **⚠ STILL OPEN (data quality, deliberately not papered over).** (1) **No PA branch in the org
+  tree** — `storeops.org_units` has LI/NJ/NYC/TT Regions+Districts only and every PA store carries
+  `org_unit_id = NULL`, so an org-unit-SUBTREE manager reaches no PA store while a `market='PA'`
+  grant does (the §13c B-1115 shape exactly). (2) **Two stores carry two codes each**, one per
+  vocabulary: `B-60TH` ("1 S 60th St, Philadelphia", storeops) vs `B-1` ("1 S 60th street",
+  store_mapping); `B-2778` (address NULL, storeops; literal placeholder `'B-2778'` in store_mapping)
+  vs `B-1598` ("1598 Mount Ephraim Ave") joined by a `store_aliases` row noting the relocation. Both
+  codes in each pair resolve PA, so filtering/grants/scheduling bind either — but one physical store
+  carrying two identities is a store-setup cleanup. (3) **No logins are created** — an employee row
+  makes a person SCHEDULABLE only; time clock, employee dashboard and chat identity need a
+  `storeops.app_users` row linked by `employee_id`, which needs an email address this roster does
+  not have for anybody.
+- **Proof:** `backend/harness_pa_roster_names.py` (119 checks, stdlib-only, `_harness_dbfree`) —
+  parses the roster OUT of the migration (so it cannot pass against a roster that file does not
+  contain) and asserts: every name/login byte-identical to a feed value and paired as the feed pairs
+  them; `name == epay_salesperson`; every home_store resolves to PA through the REAL
+  `core.scope.build_market_index`/`build_store_market_lookup` (never a re-derivation); a set
+  home_store holds ≥80% of that person's PA rows and a floater stays NULL; the money columns are
+  NULL **positionally** in the INSERT (proximity to the word `pay_rate` proves nothing — the
+  harness's own first version missed a figure typed into the SELECT list, found by self-test); the
+  excluded names appear in no executing statement yet stay explained in the file; the `NOT EXISTS`
+  idempotency guard survives. Self-tested against nine deliberate breakages (re-ordered name,
+  trailing space, invented home store, wrong-market home store, mis-paired login, `pay_rate` 17,
+  `pay_rate` 0, dropped pay column, removed guard) — all nine go red by name.
+
+
+---
+
+
 | Subsystem | Tables / migs | Key funcs / endpoints |
 |-----------|---------------|-----------------------|
 | **MA (master-agent) commission** | `raw_ma_commission`, mig `254_ma_product_class`, `251_ledger_ma_sync`, `265_ma_class_money_wiring`, `268_ma_overview_recon` | `ma_product_class.py`, `ma_class_wiring.py`, `ma_upload.py`; `/ma-commission/summary` `router.py:25009`, `/ma-overview-recon*` `25224-25450`, `/ma-handset-cogs` `26851`, `/ma-product-class*` `4868-5151`. **Ingest replace is account-slice scoped** (2026-09-02 two-portal wipe incident, §2): `ingest_slice.py` `day_replace_filters` narrows `/upload/ma_commission|ma_daily_tx|ma_fulfillment` deletes to (org, day, account) — proof `harness_ma_slice_replace.py` |
@@ -2626,8 +2707,6 @@ be a seaprate box in the p&l under wages"
 | **Device Forecasting & Vendor Payables (module 095)** | `device_payable_ledger` + `payable_source_map` (mig `095_device_payables` — a NEW carrier is a config row: source_table/imei_field/store_field/owed_field/sold-match/reimbursement), `device_model_alias` (mig `096` — raw model → canonical + carrier, the forecast alignment) | `payables/engine.py` (`build_ledger` delete+insert per carrier; **`ma_store_resolution`/`resolve_ma_store` — Total/MA device→store attribution, 2026-09-04**: POS sale line → `inventory_aging_device` §11 device grain → mig-314 account index (`ma_store_pnl.load_store_index` + `coa.store_resolver` spelling collapse) → None, fills blanks only); `payables/router.py` `/api/v1/payables/*` — `/forecast` (phones-only velocity/on-hand/recommend, per carrier; Boost leg `raw_sales` device lines, Total leg `raw_ma_commission` + the attribution above), `/payables` (per-IMEI ledger read; read-time blank-store fill via the same attribution), `/filter-options` (canonical §13c roster+markets — the frontend bar's PLATFORM-WIDE gate source), `/owed-by-date` (ledger, else `raw_ma_daily_tx` vendor-feed fallback), `/due`, `/priority`, `/source-maps*`, `/phone-map*`, `/settings`, `POST /rebuild`. Frontend `commcalc/payables/page.tsx` (bar gated on roster ∪ rows — owner 2026-09-04 "need to be platform wide"). Proofs `harness_device_forecast_store_filter.py`, `harness_payables_market_filter.py` |
 | **ATU opportunity** | mig `295` | `atu_opportunity.py`; `/atu-opportunity` `28410` |
 | **Activation-Details basis (b2b activation TYPE buckets)** | `raw_custom_import` (signature-detected sheet: `Serial#`+`Contract Type`); config `accessory_config.activation_details_rules` — mig `313_activation_details_bucket_rules` (per-org token rules; RULE TWO) | `activation_bucketing.py` (PURE: `activation_details_bucket`/`resolve_rules`/`BUCKET_RANK`/`TOTAL_ACTIVATION_EXCLUDED`) ← delegated to by `router._activation_details_bucket`; rules loaded per-org by `_activation_details_rules` (defensive, mig-214 posture); resolver `_cr_resolve_activation_details` (serial-dedup by rank); consumers `_ad_cells_full` → `_apply_activation_basis` (Exec MTD + Sales Report), `_ad_activation_buckets` (metric recon), `GET /activation-counts/{period}`; proof `harness_activation_bucketing.py`. HOUSE DEFAULTS (2026-09-01 approved fix): Edge = whole-word `edge` in CONTRACT TYPE only (`edge_name_tokens` opts device-name matching back in per org — the Motorola-Edge over-match trade-off); `BYOD Upgrade` = its own hidden bucket (excluded from Total Activation exactly like Upgrade, NOT shown in the Upgrade column; `upgrade_hidden_contract_tokens: []` restores one family) |
-
----
 
 ## 16. Cross-reference: by TABLE
 
@@ -2717,6 +2796,7 @@ be a seaprate box in the p&l under wages"
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3); **P&L wages estimate** `coa.wages_by_store`→`derive_wage_cells` (actual_hours else scheduled_hours — the owner's 2026-09-08 rule, already implemented); **salary coverage basis** `labour_coverage.load_shift_hours`→`hours_basis_by_code` (hours only, never dollars — §4) |
 | `storeops.employees` / `stores` / `org_units` (+ RPC `org_span_for_manager`) | storeops roster + org tree | **OVERHEAD ALLOCATION** `storeops/overhead_allocation.gather` → `classify_employee` (structural: active + salaried + blank `home_store`) / `covered_stores` (span RPC → org-unit subtree → org-wide) / `build_overhead` → the P&L `overhead_wages` + `overhead_comm` lines (§14t, mig `997`, house default OFF). Reads the roster only; derives NO pay — the conversion is `coa.monthly_salary_equivalent`, the commission is `management_incentive_payout` (§9) |
 | `commcalc.account_config.overhead_config` (JSONB, mig `997`) | Settings / owner SQL | §14t — `mode` / `basis` (`equal_stores` \| `equal_market_then_store` \| `weighted`) / `span_fallback` / `roles[]` / labels / `commission_source` / `manual_expense_names[]`. Read ONLY via `coa._account_config` → `overhead_allocation.resolve_config`. NULL = house default = nothing booked |
+| `storeops.employees.epay_salesperson` / `epay_login` (the POS/b2b IDENTITY columns — the reason `commcalc.name_map` is not needed) | Employee Setup / HR editors (`POST`/`PATCH /storeops/employees`, `EMP_FIELDS`); **mig `1001`** seeds them VERBATIM from the b2b feed for the PA-market roster (§14u — owner-run, not applied) | `commission_engine` seller match (`epay_salesperson || name`, `:554,613,1141`) and its remediation text (`:1195`); `GET /commcalc/rep-employee-map` aliases; `GET /commcalc/commission-plans/roster` assignment VALUE; `hr/router` + `hr/letters` chargeback/commission keying. Setting them to the feed's exact bytes is what makes a `name_map` row unnecessary (§14u) |
 | `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, manager-gated on `_PAY_GATED_FIELDS`; every edit logged to `storeops.payroll_change_log`) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
 | `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs), store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards** |
@@ -5339,3 +5419,172 @@ tenant sees it. Seeding a brand name would put one carrier's vocabulary in front
 - Migration `1000_dm_checklist_carrier_brand_review.sql` — **written, NOT applied.** Its REVERT
   deletes only `qa\_%` keys; historical visits are unaffected because `store_visit_responses` carries
   `label_snapshot` and `category_snapshot`.
+
+## 23t. THE CHAT ENVELOPE — unread reaches the whole app (owner directive 2026-09-10)
+
+> *"the chat should be able to send notifications to the people and a notification should be shown as an
+> envelope on teh top of the screen so the logged in person knows that there is a message for them or in
+> teh group they are a part of"*
+
+**Duplicate check — nothing here is a new mechanism.** Every part already shipped with Internal Chat
+(mig `868`, `docs/APPROVALS_AND_CHAT_PLAN.md`) and was simply unreachable from anywhere but `/chat`:
+
+| Searched for | Found | What this change does |
+|---|---|---|
+| unread count / nav badge | `GET /chat/unread` — its own docstring already read *"for the nav badge"* | **calls it.** No second count, no new endpoint, no new table |
+| live update transport | `chat/realtime.py` fans a hint to a per-USER topic (`chat-user:<org>:<eid>`) on every message | **subscribes to it** — one socket lights the badge for every DM and group |
+| push to a person's device | `chat/push.py` (`notify`), already called by `send_message` for every other member; gated on operator VAPID/FCM/APNs credentials | **registers the browser app-wide** instead of only on the chat screen |
+| an existing header widget pattern | `AdminAttention` (mig `717`) — fail-silent, renders nothing when there is nothing to say | **mirrors it** |
+
+The defect was **reach, not capability**: all of the above only ran while the chat screen was open —
+the one moment a person does not need to be told they have a message.
+
+- **`frontend/src/components/ChatEnvelope.tsx`** — mounted in the platform header (`(platform)/layout.tsx`),
+  so it is on every page. Reads `GET /chat/unread`, subscribes to the user topic from `GET /chat/me`,
+  polls as a fallback (30 s with the socket up, 15 s without) and re-reads on every navigation so
+  walking away from a thread drops the badge without waiting out the interval.
+- **The envelope is always visible; only the BADGE comes and goes.** A control that exists only while it
+  has something to say cannot be *looked at* — you can never check for messages, you can only be
+  interrupted by them. Deliberately different from `AdminAttention`, which is an alert and correctly
+  vanishes when clear.
+- **A zero is not an unknown.** Before the first successful read the badge renders nothing at all rather
+  than `0` — the silent-zero rule (§23e/§23p) applied to a count instead of money. A failed poll leaves
+  the last known number on screen; a blip must not read as *"your messages went away"*.
+- **The gate is membership, server-side.** `/chat/me` 403s for a login not linked to an employee and
+  `/chat/unread` only ever counts conversations the caller belongs to, so the component needs no RBAC of
+  its own; any error renders nothing.
+
+### The two things this change fixed on the way
+
+1. **`GET /chat/unread` was building the entire sidebar to return one integer.** It called `my_channels`,
+   which reads every channel with `select("*")`, a second members pass for DM naming, and **1000 message
+   bodies** for the previews — then discarded all of it. Acceptable once on one screen; not when every
+   signed-in person polls it from every page. The badge now reads membership rows, which channels are
+   unarchived, and message **timestamps** only. The **counting rule** is shared, not copied:
+   `chat/router._count_unread` is the one implementation, used by the sidebar and the envelope alike —
+   *a badge that disagrees with the list it opens is worse than no badge*.
+2. **Web push could ask for permission it could never honour.** The browser gated on its own build-time
+   `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (Vercel) while the sender gates on `CHAT_VAPID_PUBLIC_KEY` +
+   `CHAT_VAPID_PRIVATE_KEY` (Railway). When those disagree the user answers a permission prompt and then
+   hears nothing forever. `GET /chat/me` now reports **`push_web`** (`push.webpush_configured()`) and
+   `lib/chat-push.ts` — the single registration, moved out of `chat/page.tsx` — requires it.
+
+**Operator TODO (unchanged, and still the gate on real notifications):** browser/mobile push stays an
+honest **no-op** until VAPID keys are set. `push_web:false` is the platform telling the truth about that,
+not a defect.
+
+**Proof:** `backend/harness_chat.py` §14 (78 → **91 checks**). Pins that a GROUP accrues unread exactly as
+a DM does, that the total is the sum across conversations, that reading a thread clears it server-side,
+that a muted conversation is silenced in the total but still reported per channel, and — statically, over
+the shipped source — that the envelope is mounted inside the header, invents no second count, renders no
+badge before its first read, fails silent, and that the chat page no longer carries a private copy of the
+push registration. §14's own first draft measured **0 unread on a channel that had just received two
+messages** (the fake stamps messages with a fixed clock while the handlers write `last_read_at` from the
+real one) and would have passed against a server that counted nothing at all — `_last_read` pins the
+cursor so the numbers mean something.
+
+**Known limit, pre-existing and not introduced here:** the unread scan reads the most recent **1000**
+messages across the caller's conversations, so a caller with more than that unread undercounts. Both the
+sidebar and the envelope share the cap, so they still agree.
+
+## 23u. "0 ACHIEVED, ON TARGET" — the verdict that could not tell absence from success (owner 2026-09-10)
+
+> *"on the employe dashboad under my tagrets it shows 0 achieved with on target, that needs to be fixed"*
+
+**The defect, and it was never only the employee dashboard.** Six render sites decided the verdict with
+the same one-liner: `need > 0 ? '<n> to go' : 'target met'` (the dashboard said `✓ on track`). `need` is
+`max(0, monthly - achieved)` in `commcalc/targets_engine.compute_scope`, and a category with **no target
+set** has `monthly` 0 — which is also exactly what a **missing** target row collapses to
+(`float(monthly_by_cat.get(cat, 0) or 0)`). So `need` came out 0 and the screen rendered a **green pass**.
+A rep with no goals and no sales was told they were on track.
+
+`need` alone genuinely cannot separate the two cases — *"no goal"* and *"goal met"* are both 0. That is
+the whole bug, and it is why the shared helper takes `monthly` as well.
+
+This is the silent-zero rule (§23e, §23p) in its most damaging form: a zero standing in for an absent
+measurement misleads in a money column, but here it does not merely mislead — it tells a person their
+performance is fine while nothing about it is being measured at all.
+
+**`frontend/src/lib/target-state.ts` — one vocabulary, four states:**
+
+| state | meaning | rendered |
+|---|---|---|
+| `unknown` | no figure at all — the scope was never computed | *not measured*, neutral |
+| `unset` | computed, but there IS no goal (`monthly ≤ 0`) | *no target set*, neutral |
+| `met` | a real goal, reached | *✓ target met*, green |
+| `short` | a real goal, with a gap | the gap, in the caller's own units, amber |
+
+`passing` is true for `met` alone — the absence of a goal is never a pass. The helper takes `need`, not
+`achieved`, because `need` already carries it; taking both would let a caller hand in a pair that
+disagrees, which is a second way to compute the same answer.
+
+**All six sites now read that vocabulary**: the employee dashboard's *My Targets* (the reported one), both
+Action Plan boxes, the Targets table and its detail card, and *My Targets*. The three colour-only sites
+counted too — green on a `need` of 0 said "met" just as loudly as the words did. The dashboard's progress
+bar is drawn **flat and neutral** with no target rather than "0% of the way there" toward a goal that does
+not exist.
+
+**Proof:** `backend/harness_target_state.py` (**30 checks**). §A drives the **real engine**: no target →
+`monthly` 0, `achieved` 0, `need` 0 — the exact input every screen read as a pass — alongside a met target
+(`need` 0) and a missed one (`need` 6), pinning that the two 0s are indistinguishable without `monthly`.
+§B–§D assert the shared helper's state order (`unset` decided **before** any pass can be returned) and
+every render site, statically over the shipped source. No existing harness covered `compute_scope`'s
+per-category output or a verdict rendered in TSX (`harness_area_targets` proves `aggregate_stores`,
+`harness_dm_target_attribution` the DM attribution, `harness_targets_rep_name_join` the rep-name join).
+
+### `backend/harnesslib.py` — the stripper that kept being rewritten
+
+A harness asserting on TSX must read the file as text, but the comment above a fixed line **quotes the
+defect** — which is what a good comment does — so a raw substring search matches the explanation and fails
+a file that is correct. That happened three separate times here (`harness_pickup_entered_work`'s
+`setSel({})`, `harness_cash_pickup`'s 11s/11t, and §C2/§D2 of this one on their first run), and each time
+the fix was **another private copy** of the same six lines. `js_code_only` now lives once; all three
+harnesses call it. *A guard a truthful comment can break is a guard that gets deleted.*
+
+## 23v. A SALES LEAK IS NOT A REP FLAG (owner directive 2026-09-10)
+
+> *"sales leak should not be in employee dashbaord, it shoudl be in management overview under all flags
+> tile which is not here right now"*
+
+**What the flag is.** `commcalc/sales_recon.sync_recon_flags` writes `flag_type='sales_leak'`
+(severity `critical`) for a sale that **is** in the daily B2B feed and is **missing** from the monthly
+statement — money the carrier has not paid us yet. The row carries the rep who made the sale because
+that is how the sale is *identified*, not because the rep did anything. On `/employee-dashboard` it
+rendered as a red critical mark against that person for a reconciliation gap between two of **our own**
+feeds, about which they can do nothing.
+
+**Withheld from one audience, not suppressed.** `core/router.REP_HIDDEN_FLAG_TYPES` drops it from the
+rep's bundle only. Detection is untouched: the flag is still written, still `critical`, still counted,
+and management still sees it whole on `/commcalc/flags`. A defect found in live data is **reported**,
+never hidden — a rep's dashboard is simply not the report.
+
+`report_card.flags_count` derives from the same filtered list, so the number on the card cannot
+disagree with the flags under it. That is the defect this class of fix usually springs, and it is
+pinned (§A4).
+
+**Where it lives now — no new page, no new table, no new endpoint.** `/commcalc/flags` already lists
+**every** flag type with a type filter, `sales_leak` included, and `/compliance` is the per-queue
+dashboard over the same data. What did not exist was a way to **reach** them from Management Overview.
+Dashboard tiles are D1 config (mig `068` `commcalc.ui_label_override`, `scope='tiles'`; house rows every
+tenant inherits, tenant-editable in the Dashboard Designer), so this is a config row:
+
+- **Migration `1002`** appends an **All Flags** tile to the **house** `management-overview` layout —
+  an `UPDATE`, because mig `948` already created that row with `ON CONFLICT DO NOTHING`. Idempotent
+  (refuses to append when a tile of that title is present), single transaction with a post-flight check
+  that rolls back rather than half-landing a dashboard, `-- REVERT:` note included.
+- **House row only.** A tenant that has already *designed* its own Management Overview holds a row that
+  wins wholesale, and this deliberately does not reach into it — injecting a tile into somebody's
+  hand-arranged dashboard is editing their work without asking. They add it in the Designer, where
+  `/commcalc/flags` is already offered (`layoutToHubGroups` resolves a designed href against **every**
+  nav group, not just the hub's own).
+- **`rbac.ts`** gains the two `tileOnly` duplicates, module + scopes **byte-identical** to their Flags &
+  Compliance originals — the same zero-RBAC-change duplicate rule the rest of that group uses. This
+  changes what is *reachable* from the hub and nothing about who may see a flag. Until mig `1002` runs
+  they surface under the hub's *"not yet placed"* tile rather than not at all.
+
+**Proof:** `backend/harness_sales_leak_placement.py` (**24 checks**). §A the withheld type is a named
+set applied case- and whitespace-insensitively, the count moves with the list, and detection is
+unchanged (still written, still critical, withheld in exactly one place). §B the migration is
+house-scoped, appending, idempotent, transactional, and its tile JSON parses and names a page that
+exists and really does render this flag type. §C both nav entries match their originals on module and
+scopes. Re-armed: removing the filter fails A2/A3/A7.

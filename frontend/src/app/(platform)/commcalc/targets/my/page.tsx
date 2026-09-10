@@ -20,6 +20,7 @@ function val(unit: string, n: number) {
   return unit === 'dollars' ? fmt(n || 0) : fmtN(n || 0, 1)
 }
 
+import { targetState } from '@/lib/target-state'
 export default function MyTargetsPage() {
   const { period } = usePeriod()
   const [stores, setStores] = useState<any[]>([])
@@ -237,7 +238,7 @@ export default function MyTargetsPage() {
                     <span style={{ color: 'var(--text2)' }}>Pace to finish /day</span>
                     <span style={{ fontWeight: 600 }}>{val(m.unit, m.pace)}</span>
                     <span style={{ color: 'var(--text2)' }}>Need to achieve</span>
-                    <span style={{ fontWeight: 600, color: m.need > 0 ? '#b45309' : 'var(--green)' }}>{val(m.unit, m.need)}</span>
+                    <span style={{ fontWeight: 600, color: targetState(m.monthly, m.need).color }}>{val(m.unit, m.need)}</span>
                     <span style={{ color: 'var(--text2)' }}>Monthly target</span>
                     <span style={{ fontWeight: 600 }}>{val(m.unit, m.monthly)}</span>
                     <span style={{ color: 'var(--text2)' }}>Achieved so far</span>
