@@ -20,6 +20,7 @@ Run: `cd backend && python3 harness_cash_pickup.py`
 No live DB/network — same fake-Supabase-chain-client convention as harness_dmverify_parity.py /
 harness_closing_submissions.py, driving the REAL `closing_pickups` / `confirm_pickup` functions.
 """
+import re
 import sys
 from types import SimpleNamespace
 
@@ -665,6 +666,27 @@ check("11q. BILLPAY MIRROR: the same parameterized confirm enforces the same gat
 # reachable from Python, so they are pinned at the source: a harness that proves the backend while
 # the screen keeps eating the DM's input proves nothing (index 24, the proof-harness audit).
 _pg = open("../frontend/src/app/(platform)/closing/pickup/page.tsx").read()
+
+
+def _code_only(js):
+    """`js` with // and /* */ comments removed — 11s/11t assert over CODE, never prose.
+
+    2026-09-10: 11s and 11t both went red on a page whose behaviour was CORRECT, and stayed red
+    through a merge. Each pinned an exact line SHAPE — `"setLoading(true); setSel({})\n"` and the
+    full `disabled={...}` expression — so PR #216, which REMOVED the selection wipe and ADDED a
+    third guard to that same button, broke both by making the surrounding code stricter. A check
+    that fails when the defect it guards is fixed harder is not a guard, it is a tripwire on
+    formatting. They now assert the PROPERTY (nothing wipes the DM's entered work; the on-screen
+    gate names openedNoCount) and tolerate extra guards beside it. Comment stripping is required
+    because the comments that explain the removals quote `setActuals({})` verbatim — same
+    reasoning, and same helper, as harness_pickup_entered_work.strip_comments.
+    """
+    js = re.sub(r"/\*.*?\*/", "", js, flags=re.S)
+    return re.sub(r"^\s*//.*$", "", js, flags=re.M)
+
+
+_pg_code = _code_only(_pg)
+_confirm_btn = "".join(l for l in _pg_code.splitlines(True) if "onClick={confirm}" in l)
 check("11r. HALF ONE — the actual-picked input no longer puts the ENVELOPE AMOUNT inside itself as "
       "a placeholder. It read `placeholder={String(e.cash ?? '')}`, so an empty box looked already "
       "filled in and the DM typed nothing",
@@ -673,12 +695,15 @@ check("11r. HALF ONE — the actual-picked input no longer puts the ENVELOPE AMO
 check("11s. HALF TWO — load() no longer wipes the DM's typed counts. It called `setActuals({})` on "
       "EVERY refetch, and the async store-roster landing is itself a refetch, so counts typed "
       "before it returned were silently discarded before Confirm",
-      "setLoading(true); setSel({}); setNotes({}); setActuals({})" not in _pg
-      and "setLoading(true); setSel({})\n" in _pg)
+      "setActuals({})" not in _pg_code and "setNotes({})" not in _pg_code
+      and "setSel({})" not in _pg_code and "setOpened({})" not in _pg_code
+      and "setLoading(true)" in _pg_code)
 check("11t. the checkbox is wired to the count requirement on screen too, so the DM is stopped "
       "before the round-trip (the server stays the authority — 11j proves it)",
-      "openedNoCount" in _pg and "envelope_opened: true" in _pg
-      and "disabled={busy || !selectedKeys.length || openedNoCount.length > 0}" in _pg)
+      "openedNoCount" in _pg_code and "envelope_opened: true" in _pg_code
+      and "disabled={" in _confirm_btn and "busy" in _confirm_btn
+      and "!selectedKeys.length" in _confirm_btn
+      and "openedNoCount.length > 0" in _confirm_btn)
 check("11u. and the equip/acc column renders its BASIS, so a POS-calculated split never looks like "
       "one derived from a rep's own declaration (owner 2026-09-08)",
       "Cash sales equip/acc" in _pg and "cash_equip_acc_basis" in _pg
