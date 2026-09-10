@@ -2601,6 +2601,87 @@ be a seaprate box in the p&l under wages"
   `google_review_sweep_config.last_detail` (and drops the "OK —" prefix when 0 stores succeeded)
   so the next failure is diagnosable from the row itself.
 
+### 14u. THE PA MARKET HAD NO EMPLOYEE ROWS — the roster named by the feed (owner directive 2026-09-10)
+
+**Owner (verbatim):** *"also assign an agent to create the users from PA Market using the same names
+as in b2b reports so we can do thier scdhuleing also , the data shoudl flow in all systems as
+indexed, , this way the usernames will be same and no mapping needed"*
+
+**THE FINDING.** `storeops.employees` holds 45 rows for the house org and **not one has a PA
+home_store** — the nine PA stores (`B-1710 B-2701 B-2778 B-3605 B-5619 B-60TH B-6149 B-6507 B-723`)
+have zero staff on the roster, so Schedule / Hours Approval / Attendance / Time Clock have nobody to
+put on a shift. Meanwhile the b2b POS feed has carried those people's sales for 15 months and
+`commcalc.rep_commissions` has been PAYING them (74 rows; `epay_salesperson` set, `storeops_name`
+BLANK precisely because no roster row exists). The market itself is not ambiguous: `PA` is a real
+market on 9 `storeops.stores` rows and 10 `commcalc.store_mapping` rows, and every one of the 9 PA
+store spellings in `daily_sales_feed` resolves through the canonical §13a resolver.
+
+**NO NEW MECHANISM — the duplicate check.** `commcalc.name_map` (mig `002:171`) is the platform's
+EXISTING b2b-name→roster-name bridge; it holds 28 rows, ALL LI/NYC/NJ, **zero PA**. It is exactly the
+mapping table the owner does not want to need. The columns that make a name_map row UNNECESSARY are
+`storeops.employees.epay_login` + `.epay_salesperson` (mig `003:21`): `commission_engine` matches a
+feed seller on `epay_salesperson || name` (`commission_engine.py:554,613,1141`) and its own
+remediation text already tells the operator to *"set <person>'s ePay/POS name (epay_salesperson) to
+exactly '<the feed spelling>'"* (`:1195`); `GET /commcalc/rep-employee-map` returns
+`{name, epay_salesperson, aliases}` for the same reason. So the roster EXTENDS that mechanism by
+filling those columns with the feed's own bytes — no table, no endpoint, no importer, no name_map row.
+
+**NAME FIDELITY IS THE DELIVERABLE.** `name`, `epay_salesperson` and `epay_login` are all VERBATIM
+feed values — same bytes, same case, same "Last, First" order. `name` too (not just
+`epay_salesperson`), because any re-ordering is a derivation and a derivation is the mapping problem
+returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three reasons a
+"First Last" transform cannot be trusted. Renaming later is safe — the b2b join rides
+`epay_salesperson`.
+
+- **The write:** `database/migrations/1001_pa_market_employee_roster.sql` — **OWNER-RUN, NOT
+  APPLIED.** Ten people with PA b2b activity on/after 2026-08-01; idempotent (`NOT EXISTS` on
+  `epay_salesperson` OR `name` per org); `employee_id` assigned as `'E' || id`, byte-identical to
+  the platform's own `storeops.router._ensure_employee_id` (`:2245`) — REQUIRED, not cosmetic:
+  `payroll_approval._roster` drops every row with a blank employee_id (`:390`) and `create_shift`
+  canonicalizes to it. A held Section B (ten 2026 leavers/seasonals) is commented out for a decision.
+- **⚠ pay is UNSET, and the platform cannot say so.** `pay_rate` is written EXPLICIT NULL because the
+  column is `NUMERIC DEFAULT 0` (mig `003:28`) — an omitted column lands `0.00`, the "this person
+  earns nothing" lie. But every payroll read coerces `float(pay_rate or 0)`
+  (`storeops/router.py:1208,1232,1269,1310,1507`, `payroll_salary.py:364`), so **there is no
+  "rate not set" state distinct from zero anywhere downstream**: these people print $0.00 until a
+  rate is entered. Hours accrue correctly; PAY MUST BE SET BEFORE THE FIRST PAYROLL RUN INCLUDING
+  THEM. Same class as the six existing `pay_rate=0` employees producing $0.00 over 351 August hours.
+- **NOT created, each a reported finding:** `'Admin, backoffice'`/`PAADMIN` (system account — the
+  shared sales pass already skips rep `admin`, §3); `'Escobar, Angelica'` (**already E232**,
+  home_store `B-1800`/LI — creating a second row would manufacture the duplicate this exercise
+  exists to avoid); two DISTINCT-login pairs that may each be one human
+  (`'Rahman, Abdur'`/`Abdur.Rehman` vs `'Rehman, Abdur'`/`.abdur`; `'Addagarla, Teja Sri'`/`TejaSri`
+  vs `'Sri Addagarla, Teja'`/`Teja`) — if confirmed one person the second spelling belongs in
+  `commcalc.rep_aliases`, NOT a second employee; and seven 2024 leavers (last PA sale 2024-07-16).
+- **⚠ STILL OPEN (data quality, deliberately not papered over).** (1) **No PA branch in the org
+  tree** — `storeops.org_units` has LI/NJ/NYC/TT Regions+Districts only and every PA store carries
+  `org_unit_id = NULL`, so an org-unit-SUBTREE manager reaches no PA store while a `market='PA'`
+  grant does (the §13c B-1115 shape exactly). (2) **Two stores carry two codes each**, one per
+  vocabulary: `B-60TH` ("1 S 60th St, Philadelphia", storeops) vs `B-1` ("1 S 60th street",
+  store_mapping); `B-2778` (address NULL, storeops; literal placeholder `'B-2778'` in store_mapping)
+  vs `B-1598` ("1598 Mount Ephraim Ave") joined by a `store_aliases` row noting the relocation. Both
+  codes in each pair resolve PA, so filtering/grants/scheduling bind either — but one physical store
+  carrying two identities is a store-setup cleanup. (3) **No logins are created** — an employee row
+  makes a person SCHEDULABLE only; time clock, employee dashboard and chat identity need a
+  `storeops.app_users` row linked by `employee_id`, which needs an email address this roster does
+  not have for anybody.
+- **Proof:** `backend/harness_pa_roster_names.py` (119 checks, stdlib-only, `_harness_dbfree`) —
+  parses the roster OUT of the migration (so it cannot pass against a roster that file does not
+  contain) and asserts: every name/login byte-identical to a feed value and paired as the feed pairs
+  them; `name == epay_salesperson`; every home_store resolves to PA through the REAL
+  `core.scope.build_market_index`/`build_store_market_lookup` (never a re-derivation); a set
+  home_store holds ≥80% of that person's PA rows and a floater stays NULL; the money columns are
+  NULL **positionally** in the INSERT (proximity to the word `pay_rate` proves nothing — the
+  harness's own first version missed a figure typed into the SELECT list, found by self-test); the
+  excluded names appear in no executing statement yet stay explained in the file; the `NOT EXISTS`
+  idempotency guard survives. Self-tested against nine deliberate breakages (re-ordered name,
+  trailing space, invented home store, wrong-market home store, mis-paired login, `pay_rate` 17,
+  `pay_rate` 0, dropped pay column, removed guard) — all nine go red by name.
+
+
+---
+
+
 | Subsystem | Tables / migs | Key funcs / endpoints |
 |-----------|---------------|-----------------------|
 | **MA (master-agent) commission** | `raw_ma_commission`, mig `254_ma_product_class`, `251_ledger_ma_sync`, `265_ma_class_money_wiring`, `268_ma_overview_recon` | `ma_product_class.py`, `ma_class_wiring.py`, `ma_upload.py`; `/ma-commission/summary` `router.py:25009`, `/ma-overview-recon*` `25224-25450`, `/ma-handset-cogs` `26851`, `/ma-product-class*` `4868-5151`. **Ingest replace is account-slice scoped** (2026-09-02 two-portal wipe incident, §2): `ingest_slice.py` `day_replace_filters` narrows `/upload/ma_commission|ma_daily_tx|ma_fulfillment` deletes to (org, day, account) — proof `harness_ma_slice_replace.py` |
@@ -2626,8 +2707,6 @@ be a seaprate box in the p&l under wages"
 | **Device Forecasting & Vendor Payables (module 095)** | `device_payable_ledger` + `payable_source_map` (mig `095_device_payables` — a NEW carrier is a config row: source_table/imei_field/store_field/owed_field/sold-match/reimbursement), `device_model_alias` (mig `096` — raw model → canonical + carrier, the forecast alignment) | `payables/engine.py` (`build_ledger` delete+insert per carrier; **`ma_store_resolution`/`resolve_ma_store` — Total/MA device→store attribution, 2026-09-04**: POS sale line → `inventory_aging_device` §11 device grain → mig-314 account index (`ma_store_pnl.load_store_index` + `coa.store_resolver` spelling collapse) → None, fills blanks only); `payables/router.py` `/api/v1/payables/*` — `/forecast` (phones-only velocity/on-hand/recommend, per carrier; Boost leg `raw_sales` device lines, Total leg `raw_ma_commission` + the attribution above), `/payables` (per-IMEI ledger read; read-time blank-store fill via the same attribution), `/filter-options` (canonical §13c roster+markets — the frontend bar's PLATFORM-WIDE gate source), `/owed-by-date` (ledger, else `raw_ma_daily_tx` vendor-feed fallback), `/due`, `/priority`, `/source-maps*`, `/phone-map*`, `/settings`, `POST /rebuild`. Frontend `commcalc/payables/page.tsx` (bar gated on roster ∪ rows — owner 2026-09-04 "need to be platform wide"). Proofs `harness_device_forecast_store_filter.py`, `harness_payables_market_filter.py` |
 | **ATU opportunity** | mig `295` | `atu_opportunity.py`; `/atu-opportunity` `28410` |
 | **Activation-Details basis (b2b activation TYPE buckets)** | `raw_custom_import` (signature-detected sheet: `Serial#`+`Contract Type`); config `accessory_config.activation_details_rules` — mig `313_activation_details_bucket_rules` (per-org token rules; RULE TWO) | `activation_bucketing.py` (PURE: `activation_details_bucket`/`resolve_rules`/`BUCKET_RANK`/`TOTAL_ACTIVATION_EXCLUDED`) ← delegated to by `router._activation_details_bucket`; rules loaded per-org by `_activation_details_rules` (defensive, mig-214 posture); resolver `_cr_resolve_activation_details` (serial-dedup by rank); consumers `_ad_cells_full` → `_apply_activation_basis` (Exec MTD + Sales Report), `_ad_activation_buckets` (metric recon), `GET /activation-counts/{period}`; proof `harness_activation_bucketing.py`. HOUSE DEFAULTS (2026-09-01 approved fix): Edge = whole-word `edge` in CONTRACT TYPE only (`edge_name_tokens` opts device-name matching back in per org — the Motorola-Edge over-match trade-off); `BYOD Upgrade` = its own hidden bucket (excluded from Total Activation exactly like Upgrade, NOT shown in the Upgrade column; `upgrade_hidden_contract_tokens: []` restores one family) |
-
----
 
 ## 16. Cross-reference: by TABLE
 
@@ -2717,6 +2796,7 @@ be a seaprate box in the p&l under wages"
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3); **P&L wages estimate** `coa.wages_by_store`→`derive_wage_cells` (actual_hours else scheduled_hours — the owner's 2026-09-08 rule, already implemented); **salary coverage basis** `labour_coverage.load_shift_hours`→`hours_basis_by_code` (hours only, never dollars — §4) |
 | `storeops.employees` / `stores` / `org_units` (+ RPC `org_span_for_manager`) | storeops roster + org tree | **OVERHEAD ALLOCATION** `storeops/overhead_allocation.gather` → `classify_employee` (structural: active + salaried + blank `home_store`) / `covered_stores` (span RPC → org-unit subtree → org-wide) / `build_overhead` → the P&L `overhead_wages` + `overhead_comm` lines (§14t, mig `997`, house default OFF). Reads the roster only; derives NO pay — the conversion is `coa.monthly_salary_equivalent`, the commission is `management_incentive_payout` (§9) |
 | `commcalc.account_config.overhead_config` (JSONB, mig `997`) | Settings / owner SQL | §14t — `mode` / `basis` (`equal_stores` \| `equal_market_then_store` \| `weighted`) / `span_fallback` / `roles[]` / labels / `commission_source` / `manual_expense_names[]`. Read ONLY via `coa._account_config` → `overhead_allocation.resolve_config`. NULL = house default = nothing booked |
+| `storeops.employees.epay_salesperson` / `epay_login` (the POS/b2b IDENTITY columns — the reason `commcalc.name_map` is not needed) | Employee Setup / HR editors (`POST`/`PATCH /storeops/employees`, `EMP_FIELDS`); **mig `1001`** seeds them VERBATIM from the b2b feed for the PA-market roster (§14u — owner-run, not applied) | `commission_engine` seller match (`epay_salesperson || name`, `:554,613,1141`) and its remediation text (`:1195`); `GET /commcalc/rep-employee-map` aliases; `GET /commcalc/commission-plans/roster` assignment VALUE; `hr/router` + `hr/letters` chargeback/commission keying. Setting them to the feed's exact bytes is what makes a `name_map` row unnecessary (§14u) |
 | `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, manager-gated on `_PAY_GATED_FIELDS`; every edit logged to `storeops.payroll_change_log`) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
 | `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs), store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards** |
