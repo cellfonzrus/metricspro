@@ -2012,6 +2012,55 @@ as a market-grant keyset member; ambiguity fails closed):
   scheduled twin `storeops_payroll_tax`. The hours-approval board (`payroll_approval.py`) keeps its
   own STRICTER deny-list (market managers hidden too) via the same module.
   Proof: `backend/harness_pay_visibility.py` (§I covers the payroll-raw route).
+- **The DM sweep — ten MORE surfaces bound to that same gate (owner directive 2026-09-10:** *"the dm
+  should s not be able to see the salaries of any employees and should be agted and allowed if
+  wanted"*). No new mechanism: `pay_visibility.can_see_pay` + `strip_pay` were ALREADY the platform's
+  pay RBAC and a DM is already outside `DEFAULT_VISIBLE_ROLES` — the leak was every per-employee pay
+  surface that had never been bound to it. Each call site passes its OWN extra key names (the
+  module's convention — a generic name like `amount` is never globalized into `PAY_FIELDS`):
+  | endpoint | what leaked per employee | keys stripped (deleted, never zeroed) |
+  |---|---|---|
+  | `GET /storeops/employees` (`storeops/router.py:201`) | the roster is a `select("*")` → every person's `pay_rate` + `pay_amount`, on the Employees / Schedule / Setup pages | `PAY_FIELDS` (`pay_basis` KEPT — not a dollar) |
+  | `GET /storeops/payroll-change-log` (`:1119`) | `update_employee` logs every pay edit here with its BEFORE/AFTER **value** | `before_value`/`after_value` on rows whose `field` ∈ `_PAY_MONEY_LOG_FIELDS` (`pay_rate`,`pay_amount`) — the row, actor and timestamp stay, so the audit trail survives |
+  | `PATCH /storeops/employees/{id}` (`:2255`) | PostgREST echoes the WHOLE row, so a phone-number edit returned that person's pay | `PAY_FIELDS` on the echo (a COPY — never the row object the data layer handed back) |
+  | `GET /storeops/pto-accrual/{period}` (`:8380`) | per-employee `rate` IS `employees.pay_rate`; `cost` divides back to it | `rate`,`cost` per person + nested `by_store[].cost`; **`stores[]` rollup and every hours figure LEFT** |
+  | `GET /storeops/salary-advance/additional-payroll/{period}` (`:9519`) | `earned_to_date`/`cash_paid_to_date`/`excess` per person | those three; **`cells`/`total` (the P&L expense) LEFT** |
+  | `GET /storeops/salary-advance/history` (`:9626`) | "$X of salary handed to this named person" | `amount` (dates/store/method/ref stay auditable) |
+  | `GET /core/employees` (`core/router.py`, `list_employees`) | the Roles & Access grid's 'Pay $/hr' column — and the endpoint had **no caller gate at all**; `GET /hr/employees` delegates here | `PAY_FIELDS`; new `authorization` header, threaded through by `hr_list_employees` |
+  | `GET /core/employee-dashboard` | `_enforce_dashboard_access` lets a manager open ANYONE in their span → their `pay_rate`, `scheduled_pay`, `actual_pay` | `PAY_FIELDS` on `employee`+`hours` — **only for someone else's bundle; SELF-PAY deliberately left (owner decision pending)** |
+  | `GET /marketing/event-sales/roi` (`marketing/router.py`) | the event payroll names each person and carries their `pay_rate` + `amount` | `pay_rate`,`amount` on `payroll.rows`/`.unpriced`; **the event's labour `total` + hours mix LEFT** (a store/event cost is not a salary); new `authorization` header |
+  | `POST /hr/employees` (`hr/router.py:98`) | the dedupe path reads an EXISTING row with `select("*")` and echoes it | `PAY_FIELDS` on the echoed `employee` |
+  - **THE WRITE HALF — "you may not write a figure you may not see"** (`update_employee`, the one
+    genuine authority change here): the roles/HR editors POST the whole row back, so once the READ
+    strips `pay_rate` a gated caller's ordinary name/phone save would have sent `pay_rate: null` and
+    DESTROYED that person's rate. Pay fields from a caller who cannot see pay are now DROPPED from
+    the write and named back in the response as `pay_fields_ignored` (never silently discarded); a
+    PAY-ONLY update from such a caller is refused 403. `_require_manager`/`_PAY_GATED_FIELDS` are
+    unchanged and still run first. Config-reversible by the same two knobs. `/admin/roles`
+    `saveDetails` also stops sending the key when the server withheld it.
+  - **The line drawn (owner's rule 2):** the gate is PER-EMPLOYEE pay. Store-level labour aggregates
+    a DM runs their stores on are deliberately NOT stripped — `overhead_allocation`'s
+    `wages_by_store`/`commission_by_store` P&L cells (its per-person `people[]`/`salary_month` never
+    leaves the module), `commcalc.labour_coverage`, `GET /storeops/payroll-expenses/{period}`
+    (per-store wages/tax only — no per-employee row is emitted), `GET /storeops/payroll/over-hours`
+    (hours only), and every hours/attendance surface.
+  - **Config, never code (RULE TWO):** nothing about the DM is in code. An org opens pay to its DMs
+    by adding its own role name to `storeops.tenants.pay_visible_roles` (any spelling —
+    `_norm_role` folds case/space/punctuation, so `District Manager` matches role `district_manager`;
+    `dm` and `district_manager` stay DISTINCT keys, exactly like the existing `market`/`market_manager`
+    pair, so an org lists the name it actually uses), or by `pay_visibility='permissioned'` + the
+    `employee_pay_rates` data grant on that role/login. **There is no admin UI for these two tenant
+    columns today** — they are set in SQL; the grant IS settable in Roles & Access (`rbac.ts`
+    `DATA_GRANTS`). **A DM role configured with `perms.scope='all'` still sees pay** — company-wide
+    is company-wide by definition; that is a role-scope fix in Roles & Access, not a code change.
+  - Frontend: absence-of-key is the signal (the server DELETES, so `fmt(undefined)` printing `$0.00`
+    would be the very lie strip-not-zero prevents) — `EmployeeWidgets.impl.tsx` drops the Pay stat,
+    `/storeops/salary-advances` renders `—` for a withheld figure and withholds its chip totals.
+  - Proof: `backend/harness_pay_visibility.py` §J (the directive: every DM spelling denied by default
+    and by a pre-434 DB; opened again by either config route; closable again) and §K (each bound
+    route's REAL shipped source, AST-extracted and exec'd against the real gate — both halves: the
+    per-employee keys are gone, the store aggregates are still there — plus §K12, the reported defect
+    reproduced by deleting the gate statements from the same AST and then shown fixed).
 - **Phase W2 — tiled Payroll & Workforce dashboards + period alignment (owner directive 2026-09-01,
   frontend-only, no new endpoints):**
   - **Two tile hubs** (landings, deliberately NOT in `REPORT_TREES`/`REPORT_DIRECTORY` as new
@@ -2668,6 +2717,7 @@ be a seaprate box in the p&l under wages"
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3); **P&L wages estimate** `coa.wages_by_store`→`derive_wage_cells` (actual_hours else scheduled_hours — the owner's 2026-09-08 rule, already implemented); **salary coverage basis** `labour_coverage.load_shift_hours`→`hours_basis_by_code` (hours only, never dollars — §4) |
 | `storeops.employees` / `stores` / `org_units` (+ RPC `org_span_for_manager`) | storeops roster + org tree | **OVERHEAD ALLOCATION** `storeops/overhead_allocation.gather` → `classify_employee` (structural: active + salaried + blank `home_store`) / `covered_stores` (span RPC → org-unit subtree → org-wide) / `build_overhead` → the P&L `overhead_wages` + `overhead_comm` lines (§14t, mig `997`, house default OFF). Reads the roster only; derives NO pay — the conversion is `coa.monthly_salary_equivalent`, the commission is `management_incentive_payout` (§9) |
 | `commcalc.account_config.overhead_config` (JSONB, mig `997`) | Settings / owner SQL | §14t — `mode` / `basis` (`equal_stores` \| `equal_market_then_store` \| `weighted`) / `span_fallback` / `roles[]` / labels / `commission_source` / `manual_expense_names[]`. Read ONLY via `coa._account_config` → `overhead_allocation.resolve_config`. NULL = house default = nothing booked |
+| `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, manager-gated on `_PAY_GATED_FIELDS`; every edit logged to `storeops.payroll_change_log`) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
 | `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs), store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
@@ -2756,6 +2806,16 @@ be a seaprate box in the p&l under wages"
 | `GET /storeops/salary-owed` (pay-gated: `owed_total`/`cash_paid_total`/`balance` + per-day `rate`/`owed` stripped) | `storeops/router.py:8023` | §14 |
 | `GET /hr/compensation` (pay-gated: `pay_rate`/`base_salary`/`total_comp`/`annualized` stripped; commission stays — commcalc's own gate domain) | `hr/router.py:334` | §14 |
 | `GET /hr/employee-database` (pay-gated forward guard: pay-classified keys stripped from field registry + rows) | `hr/router.py:1384` | §14 |
+| `GET /storeops/employees` (roster; pay-gated 2026-09-10 — a `select("*")` that shipped every `pay_rate`/`pay_amount`; `pay_basis` kept) | `storeops/router.py:201` | §14 DM sweep |
+| `GET /storeops/payroll-change-log` (pay-gated 2026-09-10 — `before_value`/`after_value` redacted on `pay_rate`/`pay_amount` edits; the row + actor + timestamp stay) | `storeops/router.py:1119` | §14 DM sweep |
+| `PATCH /storeops/employees/{emp_id}` (pay-gated 2026-09-10 — the echoed row; the pay-field WRITE gate `_require_manager`/`_PAY_GATED_FIELDS` unchanged) | `storeops/router.py:2255` | §14 DM sweep |
+| `GET /storeops/pto-accrual/{period}` (pay-gated 2026-09-10 — per-employee `rate`/`cost` incl. `by_store`; the `stores[]` rollup and all hours KEPT) | `storeops/router.py:8380` | §14 DM sweep |
+| `GET /storeops/salary-advance/additional-payroll/{period}` (pay-gated 2026-09-10 — `earned_to_date`/`cash_paid_to_date`/`excess`; `cells`/`total` KEPT) | `storeops/router.py:9519` | §14 DM sweep |
+| `GET /storeops/salary-advance/history` (pay-gated 2026-09-10 — `amount`; dates/store/method/ref stay auditable) | `storeops/router.py:9626` | §14 DM sweep |
+| `GET /core/employees` (Roles & Access grid + `GET /hr/employees` delegate; had NO caller gate — pay-gated 2026-09-10, new `authorization` header threaded from HR) | `core/router.py` (`list_employees`) | §14 DM sweep |
+| `GET /core/employee-dashboard` (pay-gated 2026-09-10 for SOMEONE ELSE'S bundle — `_enforce_dashboard_access` admits a manager's whole span; SELF-PAY deliberately left) | `core/router.py` (`employee_dashboard`) | §14 DM sweep |
+| `GET /marketing/event-sales/roi` (pay-gated 2026-09-10 — `payroll.rows`/`.unpriced` `pay_rate`/`amount`; the event's labour `total` + hours mix KEPT; new `authorization` header) | `marketing/router.py` (`event_sales_roi`) | §14 DM sweep / §23 |
+| `POST /hr/employees` (pay-gated 2026-09-10 — the dedupe path echoes an EXISTING `select("*")` row) | `hr/router.py:98` | §14 DM sweep |
 | `POST /discrepancy/run` (Boost + MA engines, best-effort each) | `19056` | §15 B2B ↔ MA recon |
 | `GET /discrepancy/{period}` (`?source=boost\|ma`) | `19099` | §15 |
 | `GET /discrepancy-appeals` (period-RANGE + source/status/appeal_status/store/date filters; distinct path so `/discrepancy/{period}` can't swallow it) | `commcalc/router.py` (`list_discrepancy_appeals`, beside the discrepancy block) | §15 Commission Discrepancy hub |

@@ -2310,10 +2310,29 @@ def _ensure_employee(client, org_id, email, full_name=None, store_code=None, emp
         return False
 
 
+def _pay_visible(authorization: str, org_id: str) -> bool:
+    """THE platform pay gate (storeops.pay_visibility.can_see_pay, mig 434) — one call, lazily
+    imported so core keeps no import-time dependency on the storeops package and so a fault there
+    degrades CLOSED (no pay) instead of 500-ing an unrelated roster read. Never a second truth
+    table: this wrapper decides nothing, it only routes to the module that does."""
+    try:
+        from app.modules.storeops import pay_visibility as _pv
+        return bool(_pv.can_see_pay(authorization or "", org_id, client=sb()))
+    except Exception:
+        return False
+
+
 @router.get("/employees")
-def list_employees(org_id: str = ORG_ID):
+def list_employees(org_id: str = ORG_ID, authorization: str = Header(default="")):
     """The storeops.employees roster + whether each already has an app login + assigned role.
-    Drives the assignment grid (assign a role, then create logins)."""
+    Drives the assignment grid (assign a role, then create logins).
+
+    PAY VISIBILITY (mig 434, owner directive 2026-09-10 — "the dm should not be able to see the
+    salaries of any employees"): the grid's 'Pay $/hr' column selects employees.pay_rate for every
+    person, and this endpoint had no caller gate at all. The one platform gate
+    (storeops.pay_visibility.can_see_pay — per-org config, fail-closed) is applied to the payload
+    before it leaves, so the column (and the page's export of it) is EMPTY, not merely hidden, for a
+    caller who may not see pay. `/hr/employees` delegates here and threads its own header through."""
     client = sb()
     emps = client.schema("storeops").table("employees").select(
         "id,employee_id,name,home_store,role,pay_rate,email,phone,is_active") \
@@ -2401,6 +2420,9 @@ def list_employees(org_id: str = ORG_ID):
             "widget_overrides": u.get("widget_overrides"),
             "manual": True,
         })
+    if not _pay_visible(authorization, org_id):
+        from app.modules.storeops import pay_visibility as _pv
+        _pv.strip_pay(out)
     return {"employees": out, "with_email": sum(1 for e in emps if (e.get("email") or "").strip())}
 
 
@@ -4556,6 +4578,26 @@ def employee_dashboard(employee_id: str = "", period: str = "",
         "chargebacks_total": round(sum(float(c.get("amount") or 0) for c in mycb), 2),
     }
     out["targets"] = {"acc_target": (myc or {}).get("acc_target"), "acc_comm": (myc or {}).get("acc_comm")}
+    # PAY VISIBILITY (mig 434, owner directive 2026-09-10). _enforce_dashboard_access lets a manager
+    # open ANY employee inside their span, and this bundle carries that person's pay_rate plus their
+    # scheduled/actual pay — so a DM could read a colleague's pay one employee_id at a time. Gated
+    # here on SOMEONE ELSE'S bundle only.
+    #
+    # SELF-PAY IS DELIBERATELY LEFT ALONE (flagged for the owner, 2026-09-10): a person opening their
+    # OWN dashboard still sees their own rate and pay. "A DM may not see employees' salaries" is not
+    # the same directive as "a DM may not see their own paycheck", and quietly blanking someone's own
+    # pay stub is a separate decision for the owner to make, not one to smuggle in here.
+    own_eid = ""
+    try:
+        from app.modules.storeops.router import _caller_app_user
+        own_eid = str((_caller_app_user(authorization, org_id) or {}).get("employee_id") or "").strip()
+    except Exception:
+        own_eid = ""
+    is_self = bool(own_eid) and own_eid == str(employee_id or "").strip()
+    if not is_self and not _pay_visible(authorization, org_id):
+        from app.modules.storeops import pay_visibility as _pv
+        _pv.strip_pay(out.get("employee"))
+        _pv.strip_pay(out.get("hours"))   # PAY_FIELDS covers pay_rate/scheduled_pay/actual_pay
     return out
 
 

@@ -1836,7 +1836,7 @@ def _es_commission(org_id: str, period_label: str, store_raw: str):
 
 @router.get("/event-sales/roi")
 def event_sales_roi(date_from: str = "", date_to: str = "", store: str = "", trans_date: str = "",
-                    org_id: str = ORG_ID):
+                    authorization: str = Header(default=""), org_id: str = ORG_ID):
     """REPORT 3 — ROI per event day: commission received against what the day cost.
 
     THE EVENT-NOT-LOADED FLOW IS THE NORMAL PATH. `core.marketing_event` holds no rows today, so most
@@ -1871,6 +1871,20 @@ def event_sales_roi(date_from: str = "", date_to: str = "", store: str = "", tra
     comm_index = ES.index_commission_events(comm_events)
     as_of = _now().date().isoformat()
 
+    # ONE pay-gate resolution per request (the loop runs once per event day), memoized — the gate
+    # itself lives in storeops.pay_visibility and is never re-implemented here.
+    _pay_memo = {}
+
+    def _pay_allowed():
+        if "v" not in _pay_memo:
+            try:
+                from app.modules.storeops import pay_visibility as _pv
+                _pay_memo["v"] = bool(_pv.can_see_pay(authorization or "", org_id,
+                                                      client=get_supabase()))
+            except Exception:
+                _pay_memo["v"] = False          # fail closed
+        return _pay_memo["v"]
+
     out, notes = [], [n for n in (note, cell_note) if n] + list(comm_feed_notes)
     for key in summary["event_keys"]:
         s_raw, day = key["store"], key["trans_date"]
@@ -1886,6 +1900,16 @@ def event_sales_roi(date_from: str = "", date_to: str = "", store: str = "", tra
                                  use_catalog=bool(cfg.get("event_roi_phone_cost_from_catalog")))
         payroll = _es_event_payroll(org_id, ev, day) if ev else None
         costs = ES.build_costs(ev, entered_by_event.get(ev_id) or {}, payroll, phones)
+        # PAY VISIBILITY (mig 434, owner directive 2026-09-10). `payroll.rows` / `payroll.unpriced`
+        # name each person who worked the event and carry their `pay_rate` and the `amount` that rate
+        # earned them — per-employee pay, on a marketing report. The ONE platform gate strips those
+        # two keys per person; `hours`, `hours_state`, the event's payroll `total` and the ROI itself
+        # are LEFT, because the event's labour COST is the whole point of the report and is a
+        # store/event aggregate, not a salary.
+        if payroll and not _pay_allowed():
+            from app.modules.storeops import pay_visibility as _pv
+            _pv.strip_pay(payroll.get("rows"), fields=_pv.PAY_FIELDS + ("amount",))
+            _pv.strip_pay(payroll.get("unpriced"), fields=_pv.PAY_FIELDS + ("amount",))
 
         period_label = labels.get(day[:7]) or day[:7]
         cell = by_key.get((str(code or ""), day)) or {}

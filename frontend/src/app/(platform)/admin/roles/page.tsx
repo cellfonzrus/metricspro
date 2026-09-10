@@ -460,11 +460,19 @@ export default function RolesAdminPage() {
   async function saveDetails(e: Emp) {
     setMsg('')
     try {
-      await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH', body: JSON.stringify({
+      // Pay visibility (mig 434, owner directive 2026-09-10): the server DELETES pay_rate from this
+      // grid for a caller who may not see pay. This form posts the whole row back, so sending the
+      // key regardless would post `pay_rate: null` and WIPE a rate the user was never shown. Send it
+      // only when the key is actually present. (The server refuses the blind write either way — this
+      // just keeps an ordinary name/phone save from looking like a rejected pay edit.)
+      const body: Record<string, unknown> = {
         name: e.name, home_store: e.home_store, role: e.role,
-        pay_rate: e.pay_rate == null || (e.pay_rate as any) === '' ? null : Number(e.pay_rate),
         phone: e.phone || null, is_active: !!e.is_active,
-      }) })
+      }
+      if (Object.prototype.hasOwnProperty.call(e, 'pay_rate')) {
+        body.pay_rate = e.pay_rate == null || (e.pay_rate as any) === '' ? null : Number(e.pay_rate)
+      }
+      await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH', body: JSON.stringify(body) })
       setMsg(`Saved ${e.name}`)
     } catch (err: any) { setMsg('Save failed: ' + (err?.message || err)) }
   }

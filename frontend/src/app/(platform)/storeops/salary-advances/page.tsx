@@ -23,7 +23,12 @@ import { currentPeriodFromSettingsResponse, monthRange, rangeLabel, type PayPeri
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '8px', borderTop: '1px solid var(--border)', fontSize: 13, whiteSpace: 'nowrap' }
 const chip: React.CSSProperties = { padding: '5px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)', cursor: 'pointer' }
-const $ = (n: number) => `$${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+// Pay visibility (mig 434, owner directive 2026-09-10): the server DELETES the money keys on every
+// per-employee row for a caller who may not see pay (salary-owed, advance history, additional
+// payroll). A missing key must read as WITHHELD, never as $0.00 — printing zero would say "this
+// person earned nothing", the exact lie strip-not-zero exists to prevent. A real 0 still prints.
+const $ = (n: number | null | undefined) => (n == null ? '—'
+  : `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
 
 type OwedEmployee = {
   employee_id: string; name: string; store: string; pay_basis: string
@@ -143,9 +148,16 @@ export default function SalaryAdvancesPage() {
     date: r => r.paid_date,
   }), [history, filt, storeMarket])
 
+  // Pay visibility (mig 434): when the server stripped the per-employee money keys, a SUM over the
+  // rows is 0 — and a $0.00 chip on rows that exist is the zero-lie again. Sum only what is present,
+  // and report null (rendered '—') when nothing on screen carries the figure at all.
+  const payShown = visibleOwed.some(r => r.owed_total != null || r.cash_paid_total != null)
   const totals = visibleOwed.reduce((a, r) => ({
     owed: a.owed + (r.owed_total || 0), paid: a.paid + (r.cash_paid_total || 0),
   }), { owed: 0, paid: 0 })
+  const tOwed = payShown ? totals.owed : null
+  const tPaid = payShown ? totals.paid : null
+  const tBalance = payShown ? totals.owed - totals.paid : null
 
   const periodName = rangeLabel(filt.period || '', filt.periodTo || '')
 
@@ -245,9 +257,9 @@ export default function SalaryAdvancesPage() {
       {msg && <div style={{ fontSize: 13, marginBottom: 10 }}>{msg}</div>}
 
       <div style={{ display: 'flex', gap: 10, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        <span className="badge" style={{ fontSize: 12 }}>Earned {$(totals.owed)}</span>
-        <span className="badge" style={{ fontSize: 12 }}>Cash Paid {$(totals.paid)}</span>
-        <span className="badge" style={{ fontSize: 12 }}>Balance {$(totals.owed - totals.paid)}</span>
+        <span className="badge" style={{ fontSize: 12 }}>Earned {$(tOwed)}</span>
+        <span className="badge" style={{ fontSize: 12 }}>Cash Paid {$(tPaid)}</span>
+        <span className="badge" style={{ fontSize: 12 }}>Balance {$(tBalance)}</span>
         <div style={{ flex: 1 }} />
         <ReportExportBar title="Salary Owed vs Cash Advances" subtitle={periodName}
           filename={`salary-owed-${filt.period}_${filt.periodTo}`} columns={owedCols} rows={visibleOwed} />

@@ -209,6 +209,13 @@ def get_employees(include_inactive: bool = False, all_company: bool = False, aut
     if not include_inactive:
         q = q.eq("is_active", True)
     rows = q.order("name").execute().data or []
+    # PAY VISIBILITY (mig 434, owner directive 2026-09-10 — "the dm should not be able to see the
+    # salaries of any employees"). This roster is a `select("*")`, so it shipped every employee's
+    # pay_rate/pay_amount to whoever could open the Employees / Schedule / Setup pages. Same gate,
+    # same strip-not-zero as /storeops/payroll: PAY_FIELDS covers pay_rate + pay_amount; `pay_basis`
+    # is deliberately KEPT (hourly-vs-salary is not a dollar figure and the pages branch on it).
+    if not _payvis.can_see_pay(authorization or "", org_id, client=get_supabase()):
+        _payvis.strip_pay(rows)
     if all_company:
         au = _caller_app_user(authorization, org_id)
         perms = _role_permissions(org_id, (au.get("role") or "").strip()) if au else {}
@@ -1139,6 +1146,16 @@ def payroll_change_log(start: str = "", end: str = "", employee_id: str = "", st
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         rows = [r for r in rows if in_keyset(ks, r.get("store_code"))]
+    # PAY VISIBILITY (mig 434, owner directive 2026-09-10). `update_employee` logs every
+    # _PAY_LOGGED_FIELDS edit here with its BEFORE/AFTER value — so for field='pay_rate' /
+    # 'pay_amount' this list is a per-employee salary feed. The gate REDACTS the two value keys on
+    # exactly those rows (strip-not-zero: the keys are deleted) and leaves the row itself, so a
+    # caller who may not see pay still sees THAT a pay field was changed, by whom and when — the
+    # audit trail survives, the dollars do not. Hours/punch corrections are untouched.
+    _pay_value_rows = [r for r in rows
+                       if isinstance(r, dict) and str(r.get("field") or "") in _PAY_MONEY_LOG_FIELDS]
+    if _pay_value_rows and not _payvis.can_see_pay(authorization or "", org_id, client=get_supabase()):
+        _payvis.strip_pay(_pay_value_rows, fields=("before_value", "after_value"))
     return {"items": rows, "available": True}
 
 
@@ -2178,6 +2195,10 @@ _PAY_GATED_FIELDS = {"pay_rate", "pay_basis", "pay_amount", "termination_date"}
 # gated field IS a pay field, so every gated field is logged; a tuple, not a set, for a deterministic
 # select-column-list/diff-loop order).
 _PAY_LOGGED_FIELDS = ("pay_rate", "pay_basis", "pay_amount", "termination_date")
+# Of the logged fields, the ones whose before/after VALUE is a dollar figure — i.e. the subset the
+# mig-434 pay gate redacts out of GET /payroll-change-log. 'pay_basis' ('hourly'|'salary') and
+# 'termination_date' are not money and stay readable (see payroll_change_log above).
+_PAY_MONEY_LOG_FIELDS = ("pay_rate", "pay_amount")
 
 
 class BulkCreateEmployeesIn(LaxModel):
@@ -2271,8 +2292,25 @@ def update_employee(emp_id: str, updates: dict, authorization: str = Header(defa
     row = {k: updates[k] for k in EMP_FIELDS if k in updates}
     if not row:
         raise HTTPException(400, "no valid fields to update")
+    # YOU MAY NOT WRITE A FIGURE YOU MAY NOT SEE (owner directive 2026-09-10, the write half of the
+    # same gate). The read side now strips pay from the roster feeds, and several editors POST the
+    # whole row back — so a caller who was shown NO pay_rate would send `pay_rate: null` on an
+    # ordinary name/phone save and DESTROY that person's rate. Pay fields from a caller who cannot
+    # see pay are therefore DROPPED, never written, and the response NAMES what it ignored (silently
+    # discarding someone's typed work is the failure this house has already been burned by). Not a
+    # 403: refusing the whole call would break editing a name. Config-reversible like everything else
+    # here — a role listed in pay_visible_roles, or holding `employee_pay_rates`, writes pay as before.
+    pay_fields_ignored = []
     if _PAY_GATED_FIELDS & set(row):
         _require_manager(authorization, org_id)
+        if not _payvis.can_see_pay(authorization or "", org_id, client=get_supabase()):
+            pay_fields_ignored = sorted(_PAY_GATED_FIELDS & set(row))
+            row = {k: v for k, v in row.items() if k not in _PAY_GATED_FIELDS}
+            if not row:
+                raise HTTPException(403, "Pay fields are restricted for your role (org pay-visibility "
+                                         "policy) — nothing else in this update to apply. An admin can "
+                                         "list your role in storeops.tenants.pay_visible_roles or grant "
+                                         "'employee_pay_rates'.")
     # Clearing the Emp ID must store NULL, not '' (TEXT UNIQUE → '' collides across people).
     if "employee_id" in row and not (row.get("employee_id") or "").strip():
         row["employee_id"] = None
@@ -2317,7 +2355,22 @@ def update_employee(emp_id: str, updates: dict, authorization: str = Header(defa
                                      employee_id=after.get("employee_id"), employee_name=after.get("name"),
                                      before=before.get(f), after=after.get(f),
                                      source_table="employees", source_id=after.get("id"), who=who)
-    return _ensure_employee_id(after)
+    out = _ensure_employee_id(after)
+    # PAY VISIBILITY (mig 434, owner directive 2026-09-10): PostgREST echoes the FULL row back, so
+    # an ordinary edit (a phone number, a home store) handed the caller that person's pay_rate /
+    # pay_amount even when they may not see pay. Strip the ECHO — the write itself is unchanged and
+    # still gated by _require_manager on _PAY_GATED_FIELDS.
+    # A COPY is stripped, never `after` itself: `after` is the row object the data layer handed us,
+    # and deleting keys out of it would reach anything else holding that same object (an in-process
+    # caller, a cache, a test double's store). What the caller may see is a property of the RESPONSE,
+    # not of the record.
+    if not _payvis.can_see_pay(authorization or "", org_id, client=get_supabase()):
+        out = dict(out)
+        _payvis.strip_pay(out)
+    if pay_fields_ignored:
+        out = dict(out)
+        out["pay_fields_ignored"] = pay_fields_ignored
+    return out
 
 
 @router.delete("/employees/{emp_id}")
@@ -8394,6 +8447,15 @@ def get_pto_accrual(period: str, authorization: str = Header(default=""), org_id
     ks = scope_keyset(authorization, org_id)
     stores = [d for s, d in sorted(result["stores"].items()) if in_keyset(ks, s)]
     employees = [e for e in result["employees"].values() if in_keyset(ks, e.get("store"))]
+    # PAY VISIBILITY (mig 434, owner directive 2026-09-10). Each employee row carries `rate` — which
+    # IS employees.pay_rate verbatim (pto_accrual.compute_pto's `rates` map) — and `cost`, from which
+    # the rate divides straight back out. Both are stripped per person, including inside `by_store`.
+    # The STORE rollup (`stores`) and every HOURS figure are deliberately LEFT: accrued/taken hours
+    # and the store's PTO cost are what a DM runs their stores on, and neither names a person's pay.
+    if not _payvis.can_see_pay(authorization or "", org_id, client=get_supabase()):
+        _payvis.strip_pay(employees, fields=_payvis.PAY_FIELDS + ("rate", "cost"))
+        for _e in employees:
+            _payvis.strip_pay(list((_e.get("by_store") or {}).values()), fields=("cost",))
     return {"period": period, "mode": meta["org_effective"]["mode"], "rate": meta["org_effective"]["accrual_rate"],
             "stores": stores, "employees": sorted(employees, key=lambda r: r.get("name") or ""),
             "last_run_at": last_run_at}
@@ -9524,6 +9586,13 @@ def get_additional_payroll(period: str, authorization: str = Header(default=""),
     ks = scope_keyset(authorization, org_id)
     employees = [e for e in g["employees"] if in_keyset(ks, e.get("store"))] if ks is not None else g["employees"]
     cells = [c for c in g["cells"] if ks is None or in_keyset(ks, c["store"])]
+    # PAY VISIBILITY (mig 434, owner directive 2026-09-10): `earned_to_date` is this person's SALARY
+    # earned (salary_owed basis), `cash_paid_to_date` the cash they were handed and `excess` the
+    # difference — three per-employee pay figures. Stripped per person; the per-STORE `cells` and the
+    # period total are left, because that is the P&L expense a DM legitimately needs.
+    if not _payvis.can_see_pay(authorization or "", org_id, client=get_supabase()):
+        _payvis.strip_pay(employees,
+                          fields=_payvis.PAY_FIELDS + ("earned_to_date", "cash_paid_to_date", "excess"))
     return {"period": period, "employees": sorted(employees, key=lambda r: r["name"]),
             "cells": cells, "total": round(sum(c["amount"] for c in cells), 2), "available": g["available"]}
 
@@ -9654,6 +9723,12 @@ def salary_advance_history(start: str = "", end: str = "", employee_id: str = ""
             pass
     for r in rows:
         r["employee_name"] = names.get(r.get("employee_id")) or r.get("employee_id")
+    # PAY VISIBILITY (mig 434, owner directive 2026-09-10): every row is "$X of salary handed to this
+    # named person" — per-employee pay by any reading. `amount` is stripped (never zeroed: a $0.00
+    # advance and a withheld one are different facts); the row itself stays so the ledger's existence,
+    # dates and store attribution remain auditable.
+    if rows and not _payvis.can_see_pay(authorization or "", org_id, client=get_supabase()):
+        _payvis.strip_pay(rows, fields=_payvis.PAY_FIELDS + ("amount",))
     return {"items": rows, "available": True}
 
 

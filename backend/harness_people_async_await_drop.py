@@ -19,10 +19,20 @@ def check(name, cond, detail=""):
 import app.modules.hr.router as hr
 
 # ── 1. _maybe_await duck-typing, called through the REAL hr_list_employees path ─────────────────
-async def fake_async_list_employees(org_id):
+# `authorization` joined core.list_employees' signature on 2026-09-10 (mig-434 pay gate — the roster
+# grid ships pay_rate, so the delegate threads the caller's header through); the doubles mirror the
+# real signature and ASSERT the header actually arrives, because a delegate that dropped it would
+# blank pay for an admin.
+_SEEN_AUTH = []
+
+
+async def fake_async_list_employees(org_id, authorization=""):
+    _SEEN_AUTH.append(authorization)
     return [{"id": "e1", "org_id": org_id}]
 
-def fake_sync_list_employees(org_id):
+
+def fake_sync_list_employees(org_id, authorization=""):
+    _SEEN_AUTH.append(authorization)
     return [{"id": "e1", "org_id": org_id}]
 
 import app.modules.core.router as core
@@ -30,14 +40,17 @@ import app.modules.core.router as core
 orig = core.list_employees
 try:
     core.list_employees = fake_async_list_employees
-    res = asyncio.run(hr.hr_list_employees(org_id="org-x"))
+    res = asyncio.run(hr.hr_list_employees(org_id="org-x", authorization="Bearer t"))
     check("hr_list_employees works when core.list_employees is async def (today's shape)",
           res == [{"id": "e1", "org_id": "org-x"}], res)
 
     core.list_employees = fake_sync_list_employees
-    res = asyncio.run(hr.hr_list_employees(org_id="org-x"))
+    res = asyncio.run(hr.hr_list_employees(org_id="org-x", authorization="Bearer t"))
     check("hr_list_employees ALSO works once core.list_employees becomes sync def (post nav-perf)",
           res == [{"id": "e1", "org_id": "org-x"}], res)
+    check("hr_list_employees threads the caller's Authorization into the delegate, both shapes "
+          "(mig-434 pay gate resolves THIS caller, not a tokenless one)",
+          _SEEN_AUTH == ["Bearer t", "Bearer t"], _SEEN_AUTH)
 finally:
     core.list_employees = orig
 

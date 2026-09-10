@@ -88,10 +88,13 @@ def _pvariants(period):
 # storeops + core helpers (no new business logic) so behavior matches the other create paths.
 
 @router.get("/employees")
-async def hr_list_employees(org_id: str = ORG_ID):
-    """The roster + role/login state (delegates to the same merge core/Roles uses)."""
+async def hr_list_employees(org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """The roster + role/login state (delegates to the same merge core/Roles uses).
+
+    The caller's header is threaded through so core's mig-434 pay gate resolves THIS caller (without
+    it the delegate would see no token and fail closed, blanking pay for an admin too)."""
     from app.modules.core.router import list_employees
-    return await _maybe_await(list_employees(org_id))
+    return await _maybe_await(list_employees(org_id, authorization=authorization))
 
 
 @router.post("/employees")
@@ -164,6 +167,11 @@ async def hr_create_employee(body: dict, org_id: str = ORG_ID,
                                         authorization=authorization, x_active_org=x_active_org)
         except Exception as e:
             invite = {"ok": False, "error": str(e)[:200]}
+    # PAY VISIBILITY (mig 434, owner directive 2026-09-10): on the DEDUPE path `emp` is an existing
+    # roster row read back with select("*") — i.e. somebody else's pay_rate/pay_amount, returned to
+    # whoever posted a matching email. Strip the echo for a caller who may not see pay.
+    if not _payvis.can_see_pay(authorization or "", org_id, client=get_supabase()):
+        _payvis.strip_pay(emp)
     return {"employee": emp, "assigned_role": assigned, "login": login, "invite": invite,
             "note": (None if email or not (role or has_scope)
                      else "Role/scope ignored — an email is required to assign a role or create a login.")}
