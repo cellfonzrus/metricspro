@@ -9,6 +9,7 @@ import {
 // is safe — non-granted reps still see history, the sell/upgrade prompt, and tenure. Reusable widget
 // intentionally shared out of the commcalc route tree (see its header comment).
 import DeviceHistoryLookup from '@/app/(platform)/commcalc/device-history/DeviceHistoryLookup'
+import { targetState } from '@/lib/target-state'
 import ScreenLink from '@/components/ScreenLink'
 
 // Shared employee widget grid — rendered by BOTH the admin /employee dashboard (pick-anyone) and the
@@ -226,6 +227,7 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
                 const money = m.unit !== 'count'
                 const v = (x: any) => x == null ? '—' : money ? fmt(x) : fmtN(x, 1)
                 const pct = m.monthly ? (Number(m.achieved_mtd || 0) / Number(m.monthly)) * 100 : 0
+                const ts = targetState(m.monthly, m.need)
                 return (
                   <div key={k}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 13 }}>
@@ -234,10 +236,17 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
                         today <b style={{ color: 'var(--accent)' }}>{v(m.today_target)}</b> · pace {v(m.pace)}
                       </span>
                     </div>
-                    <Progress pct={pct} color={pct >= 100 ? '#16a34a' : 'var(--accent2, #2e75b6)'} />
+                    {/* A bar toward a goal that does not exist reads as "0% of the way there".
+                        With no target it is drawn flat and neutral instead. */}
+                    <Progress pct={ts.kind === 'met' || ts.kind === 'short' ? pct : 0}
+                      color={ts.kind === 'met' ? '#16a34a' : ts.kind === 'short' ? 'var(--accent2, #2e75b6)' : 'var(--border)'} />
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>
                       <span>{v(m.achieved_mtd)} of {v(m.monthly)}</span>
-                      <span>{m.need > 0 ? <span style={{ color: '#b45309' }}>{v(m.need)} to go</span> : <span style={{ color: 'var(--green)' }}>✓ on track</span>}</span>
+                      {/* OWNER 2026-09-10: this read `need > 0 ? 'to go' : '✓ on track'`, so a rep
+                          with NO TARGET (monthly 0 -> need 0) was told they were on track while
+                          achieving nothing. The verdict now comes from the shared vocabulary, which
+                          separates "no goal" from "goal met". */}
+                      <span style={{ color: ts.color }}>{ts.kind === 'short' ? `${v(m.need)} to go` : ts.label}</span>
                     </div>
                   </div>
                 )

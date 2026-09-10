@@ -45,6 +45,7 @@ function convColor(c?: ConvT) {
   return c.rate >= c.target ? 'var(--green)' : '#dc2626'
 }
 
+import { targetState } from '@/lib/target-state'
 export default function DailyTargetsPage() {
   const { period } = usePeriod()
   const [summary, setSummary] = useState<any[]>([])
@@ -269,7 +270,8 @@ export default function DailyTargetsPage() {
                     </td>
                     <td style={td}>{fmtN(a?.monthly, 0)}</td>
                     <td style={td}>{fmtN(a?.achieved_mtd, 0)}</td>
-                    <td style={{ ...td, color: a?.need > 0 ? '#b45309' : 'var(--green)' }}>{fmtN(a?.need, 0)}</td>
+                    {/* Green on a 0 'need' said "met" even where no target exists — shared verdict. */}
+                    <td style={{ ...td, color: targetState(a?.monthly, a?.need).color }}>{fmtN(a?.need, 0)}</td>
                     <td style={{ ...td, fontWeight: 700, color: 'var(--accent)' }}>{fmtN(a?.today_target, 1)}</td>
                     <td style={td}>{fmtN(a?.pace, 1)}</td>
                     <td style={{ ...td, color: 'var(--accent)', fontWeight: 600 }} title="Projected month-end activations (same source as Executive MTD)">{fmtN(s.trending_box, 0)}</td>
@@ -378,7 +380,7 @@ export default function DailyTargetsPage() {
                     <span style={{ color: 'var(--text2)' }}>Achieved so far</span>
                     <span style={{ fontWeight: 600 }}>{val(m.unit, m.achieved_mtd)}</span>
                     <span style={{ color: 'var(--text2)' }}>Need to achieve</span>
-                    <span style={{ fontWeight: 600, color: m.need > 0 ? '#b45309' : 'var(--green)' }}>{val(m.unit, m.need)}</span>
+                    <span style={{ fontWeight: 600, color: targetState(m.monthly, m.need).color }}>{val(m.unit, m.need)}</span>
                     <span style={{ color: 'var(--text2)', paddingTop: 6, borderTop: '1px solid var(--border)' }}>Today's target</span>
                     <span style={{ fontWeight: 700, color: 'var(--accent)', paddingTop: 6, borderTop: '1px solid var(--border)' }}>{val(m.unit, m.today_target)}</span>
                     <span style={{ color: 'var(--text2)' }}>Pace / open day</span>

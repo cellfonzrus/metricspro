@@ -59,6 +59,7 @@ function ItemRow({ it }: { it: Item }) {
   )
 }
 
+import { targetState } from '@/lib/target-state'
 export default function ActionPlanPage() {
   const { period } = usePeriod()
   const [data, setData] = useState<Resp | null>(null)
@@ -201,7 +202,11 @@ export default function ActionPlanPage() {
                 <div key={cat} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '6px 12px', minWidth: 120 }}>
                   <div style={{ fontSize: 11, color: 'var(--text3)' }}>{a.label}</div>
                   <div style={{ fontSize: 15, fontWeight: 700 }}>{mval(a.unit, a.achieved)} <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>/ {mval(a.unit, a.target)}</span></div>
-                  <div style={{ fontSize: 10, color: a.need > 0 ? '#b45309' : 'var(--green)' }}>{a.need > 0 ? `${mval(a.unit, a.need)} to go` : 'target met'}</div>
+                  {/* OWNER 2026-09-10: 'target met' used to print for a scope with NO target
+                      (need 0 because monthly is 0). Shared verdict — see lib/target-state. */}
+                  {(() => { const ts = targetState(a.target, a.need); return (
+                    <div style={{ fontSize: 10, color: ts.color }}>{ts.kind === 'short' ? `${mval(a.unit, a.need)} to go` : ts.label}</div>
+                  ) })()}
                 </div>
               ))}
             </div>
@@ -236,7 +241,9 @@ export default function ActionPlanPage() {
                     <div key={m.cat} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '6px 10px', minWidth: 118 }}>
                       <div style={{ fontSize: 11, color: 'var(--text3)' }}>{m.label}</div>
                       <div style={{ fontSize: 14, fontWeight: 700 }}>{mval(m.unit, m.achieved)} <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>/ {mval(m.unit, m.target)}</span></div>
-                      <div style={{ fontSize: 10, color: m.need > 0 ? '#b45309' : 'var(--green)' }}>{m.need > 0 ? `${mval(m.unit, m.need)} to go · ${mval(m.unit, m.pace)}/day` : 'target met'}</div>
+                      {(() => { const ts = targetState(m.target, m.need); return (
+                        <div style={{ fontSize: 10, color: ts.color }}>{ts.kind === 'short' ? `${mval(m.unit, m.need)} to go · ${mval(m.unit, m.pace)}/day` : ts.label}</div>
+                      ) })()}
                     </div>
                   ))}
                 </div>

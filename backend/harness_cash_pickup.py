@@ -669,20 +669,13 @@ _pg = open("../frontend/src/app/(platform)/closing/pickup/page.tsx").read()
 
 
 def _code_only(js):
-    """`js` with // and /* */ comments removed — 11s/11t assert over CODE, never prose.
+    """Thin alias over harnesslib.js_code_only — THE shared stripper (2026-09-10).
 
-    2026-09-10: 11s and 11t both went red on a page whose behaviour was CORRECT, and stayed red
-    through a merge. Each pinned an exact line SHAPE — `"setLoading(true); setSel({})\n"` and the
-    full `disabled={...}` expression — so PR #216, which REMOVED the selection wipe and ADDED a
-    third guard to that same button, broke both by making the surrounding code stricter. A check
-    that fails when the defect it guards is fixed harder is not a guard, it is a tripwire on
-    formatting. They now assert the PROPERTY (nothing wipes the DM's entered work; the on-screen
-    gate names openedNoCount) and tolerate extra guards beside it. Comment stripping is required
-    because the comments that explain the removals quote `setActuals({})` verbatim — same
-    reasoning, and same helper, as harness_pickup_entered_work.strip_comments.
-    """
-    js = re.sub(r"/\*.*?\*/", "", js, flags=re.S)
-    return re.sub(r"^\s*//.*$", "", js, flags=re.M)
+    11s and 11t once pinned an exact line SHAPE and went red on a page whose behaviour was correct,
+    because PR #216 made the surrounding code STRICTER. They assert the property now, over code
+    rather than prose — the comments explaining the removals quote the removed calls verbatim."""
+    from harnesslib import js_code_only
+    return js_code_only(js)
 
 
 _pg_code = _code_only(_pg)

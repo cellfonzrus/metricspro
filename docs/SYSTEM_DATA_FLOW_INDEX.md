@@ -5406,3 +5406,57 @@ cursor so the numbers mean something.
 **Known limit, pre-existing and not introduced here:** the unread scan reads the most recent **1000**
 messages across the caller's conversations, so a caller with more than that unread undercounts. Both the
 sidebar and the envelope share the cap, so they still agree.
+
+## 23u. "0 ACHIEVED, ON TARGET" — the verdict that could not tell absence from success (owner 2026-09-10)
+
+> *"on the employe dashboad under my tagrets it shows 0 achieved with on target, that needs to be fixed"*
+
+**The defect, and it was never only the employee dashboard.** Six render sites decided the verdict with
+the same one-liner: `need > 0 ? '<n> to go' : 'target met'` (the dashboard said `✓ on track`). `need` is
+`max(0, monthly - achieved)` in `commcalc/targets_engine.compute_scope`, and a category with **no target
+set** has `monthly` 0 — which is also exactly what a **missing** target row collapses to
+(`float(monthly_by_cat.get(cat, 0) or 0)`). So `need` came out 0 and the screen rendered a **green pass**.
+A rep with no goals and no sales was told they were on track.
+
+`need` alone genuinely cannot separate the two cases — *"no goal"* and *"goal met"* are both 0. That is
+the whole bug, and it is why the shared helper takes `monthly` as well.
+
+This is the silent-zero rule (§23e, §23p) in its most damaging form: a zero standing in for an absent
+measurement misleads in a money column, but here it does not merely mislead — it tells a person their
+performance is fine while nothing about it is being measured at all.
+
+**`frontend/src/lib/target-state.ts` — one vocabulary, four states:**
+
+| state | meaning | rendered |
+|---|---|---|
+| `unknown` | no figure at all — the scope was never computed | *not measured*, neutral |
+| `unset` | computed, but there IS no goal (`monthly ≤ 0`) | *no target set*, neutral |
+| `met` | a real goal, reached | *✓ target met*, green |
+| `short` | a real goal, with a gap | the gap, in the caller's own units, amber |
+
+`passing` is true for `met` alone — the absence of a goal is never a pass. The helper takes `need`, not
+`achieved`, because `need` already carries it; taking both would let a caller hand in a pair that
+disagrees, which is a second way to compute the same answer.
+
+**All six sites now read that vocabulary**: the employee dashboard's *My Targets* (the reported one), both
+Action Plan boxes, the Targets table and its detail card, and *My Targets*. The three colour-only sites
+counted too — green on a `need` of 0 said "met" just as loudly as the words did. The dashboard's progress
+bar is drawn **flat and neutral** with no target rather than "0% of the way there" toward a goal that does
+not exist.
+
+**Proof:** `backend/harness_target_state.py` (**30 checks**). §A drives the **real engine**: no target →
+`monthly` 0, `achieved` 0, `need` 0 — the exact input every screen read as a pass — alongside a met target
+(`need` 0) and a missed one (`need` 6), pinning that the two 0s are indistinguishable without `monthly`.
+§B–§D assert the shared helper's state order (`unset` decided **before** any pass can be returned) and
+every render site, statically over the shipped source. No existing harness covered `compute_scope`'s
+per-category output or a verdict rendered in TSX (`harness_area_targets` proves `aggregate_stores`,
+`harness_dm_target_attribution` the DM attribution, `harness_targets_rep_name_join` the rep-name join).
+
+### `backend/harnesslib.py` — the stripper that kept being rewritten
+
+A harness asserting on TSX must read the file as text, but the comment above a fixed line **quotes the
+defect** — which is what a good comment does — so a raw substring search matches the explanation and fails
+a file that is correct. That happened three separate times here (`harness_pickup_entered_work`'s
+`setSel({})`, `harness_cash_pickup`'s 11s/11t, and §C2/§D2 of this one on their first run), and each time
+the fix was **another private copy** of the same six lines. `js_code_only` now lives once; all three
+harnesses call it. *A guard a truthful comment can break is a guard that gets deleted.*
