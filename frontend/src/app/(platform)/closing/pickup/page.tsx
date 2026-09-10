@@ -183,13 +183,22 @@ export default function CashPickupPage() {
     // change. A DM who started typing counts before the roster returned lost them silently, then
     // confirmed a batch that recorded no actual at all.
     //
-    // Counts and notes are the DM's UNSAVED WORK, not server state: they now SURVIVE a reload, and
-    // only the SELECTION is cleared (rows may have gone or been picked up by someone else, so a
-    // stale checkbox could confirm an envelope that is no longer on screen). Keys are the same
-    // date|store|rep envelope key, so a value can never migrate to a different envelope; entries
-    // for envelopes that are gone are simply unread. The confirm below maps over the CURRENT rows,
-    // so nothing off-screen is ever submitted.
-    setLoading(true); setSel({})
+    // Counts and notes are the DM's UNSAVED WORK, not server state: they SURVIVE a reload. Keys are
+    // the same date|store|rep envelope key, so a value can never migrate to a different envelope;
+    // entries for envelopes that are gone are simply unread.
+    //
+    // RAJIV, 2026-09-10 ("check mark and input amount entered — doesn't save"). This line used to
+    // ALSO read `setSel({})`, clearing every tick on any refetch. That was defended as safety — a
+    // stale checkbox might confirm an envelope no longer on screen — but the safety never depended
+    // on it: `selectedKeys` is `ready.filter(...)`, an INTERSECTION with the rows currently loaded,
+    // so a selection for a vanished or already-picked-up envelope is dropped on its own and nothing
+    // off-screen can ever be submitted. Clearing the map bought no protection and destroyed the
+    // DM's work: tick a row, start typing the count, and any of the reloads listed above (the store
+    // roster landing, the scope auto-apply, a filter change) silently unticked it while leaving the
+    // typed number on screen. Confirm then sent nothing — or refused, reading "Select at least one
+    // envelope" over a screen full of entered amounts. Across 273 pickup rows in production, not one
+    // has ever carried an actual count.
+    setLoading(true)
     const qs = [
       rangeMode ? `start=${rangeStart}&end=${rangeEnd}` : `date=${date}`,
       market && `market=${encodeURIComponent(market)}`,
@@ -265,8 +274,31 @@ export default function CashPickupPage() {
   // the round-trip rather than by a 400 — the server stays the authority, this is only the warning.
   const openedNoCount = selectedKeys.filter(e => opened[key(e)] && (actuals[key(e)] || '').trim() === '')
 
+  // THE OTHER HALF OF THE SAME REPORT. The page happily accepts a count (or an "opened" tick) on a
+  // row whose PICKUP checkbox is not ticked — and `confirm()` maps over selected rows only, so that
+  // work was dropped on the floor with no message at all. The DM's own account of it is "I entered
+  // the amount and it didn't save", which is exactly what happened. Entered work is never discarded
+  // in silence now: it is named, and the confirm is held until the DM either ticks the row for
+  // pickup or clears what they typed. Deliberately NOT auto-selected — ticking a row for pickup is
+  // the DM saying they physically took that envelope, and no amount of typing may say it for them.
+  const strandedEdits = ready.filter(e => {
+    const k = key(e)
+    return !sel_[k] && (((actuals[k] || '').trim() !== '') || !!opened[k])
+  })
+
   async function confirm() {
-    if (!selectedKeys.length) { setMsg('Select at least one envelope.'); return }
+    if (strandedEdits.length) {
+      setMsg('❌ You entered details for ' + strandedEdits.length + ' envelope(s) that are not ticked for pickup: '
+        + strandedEdits.map(e => `${e.employee_name || e.store_name || e.store_code}${e.close_date ? ` (${e.close_date})` : ''}`).join(', ')
+        + '. Tick them for pickup, or clear what you entered — otherwise those counts would not be saved.')
+      return
+    }
+    if (!selectedKeys.length) {
+      setMsg(ready.length
+        ? 'Select at least one envelope — tick the box on the left of each envelope you picked up.'
+        : 'There are no envelopes waiting for pickup in this view.')
+      return
+    }
     if (openedNoCount.length) {
       setMsg('❌ Enter the actual cash counted for the envelope(s) marked opened: '
         + openedNoCount.map(e => `${e.employee_name || e.store_name || e.store_code}${e.close_date ? ` (${e.close_date})` : ''}`).join(', ') + '.')
@@ -657,13 +689,22 @@ export default function CashPickupPage() {
                 server enforces the same rule (pickup_actual.gate_items), so this only saves the
                 DM a round-trip; it is not the guard itself. */}
             <button className="btn btn-primary" style={{ fontSize: 14 }}
-                    disabled={busy || !selectedKeys.length || openedNoCount.length > 0} onClick={confirm}
+                    disabled={busy || !selectedKeys.length || openedNoCount.length > 0 || strandedEdits.length > 0} onClick={confirm}
                     title={openedNoCount.length ? 'Enter the actual cash counted for every envelope marked opened.' : undefined}>
               {busy ? '⏳ Confirming…' : `✅ Confirm pickup (${selectedKeys.length} · ${fmt(selTotal)})`}
             </button>
             {openedNoCount.length > 0 && (
               <span style={{ fontSize: 12, fontWeight: 600, color: '#dc2626' }}>
                 ⚠ {openedNoCount.length} envelope(s) marked opened still need the cash you counted.
+              </span>
+            )}
+            {/* Entered work that would not be saved is called out HERE, beside the button, rather
+                than only when Confirm is pressed — the DM should see it while the row is still in
+                front of them, not after they think they are done. */}
+            {strandedEdits.length > 0 && (
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#b45309' }}>
+                ⚠ You entered details for {strandedEdits.length} envelope(s) you have not ticked for
+                pickup — tick them, or clear what you entered. They would not be saved.
               </span>
             )}
             {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
