@@ -5588,3 +5588,59 @@ unchanged (still written, still critical, withheld in exactly one place). §B th
 house-scoped, appending, idempotent, transactional, and its tile JSON parses and names a page that
 exists and really does render this flag type. §C both nav entries match their originals on module and
 scopes. Re-armed: removing the filter fails A2/A3/A7.
+
+## 23w. FLOWCHARTS IN THE TRAINING MODULE (owner directive 2026-09-10)
+
+> *"All of these will be in the training module under a tile called flowcharts and named appropriately."*
+
+The operating runbooks — **Daily Closing**, **DM Verify**, **Store Cash** (Scheduling to follow) — now live
+inside the app, next to the screens they describe.
+
+**Duplicate check.** The Training Center (mig `720`) already exists with two tabs — *Walk-throughs*
+(tours-as-data from `core.training_tour[_step]`) and *Recording scripts*. A flowchart is neither: a tour
+spotlights controls on a live page, a runbook explains where your part sits in a chain. So this adds a
+third tab to the SAME page rather than a second training surface — no new module, no new nav group.
+
+**No new table and no migration, deliberately.** Tours are data because their content is per-tenant.
+These are platform procedures that must version with the code that implements them — *a runbook whose
+steps disagree with the build is worse than no runbook*. Per-tenant renaming already has a mechanism
+(`commcalc.ui_label_override`) if it is ever wanted.
+
+- **`frontend/src/lib/flowcharts.tsx`** — the registry. Each runbook is typed content: levels, steps,
+  the "done when" bar, the controls list, a state table, and a hand-drawn inline-SVG figure.
+- **`frontend/src/components/RunbookDoc.tsx`** — the renderer. **Typed content, never stored HTML:** a
+  `body_html` column rendered with `dangerouslySetInnerHTML` would make runbooks tenant-editable and
+  hand any writer of a training row script execution in every reader's authenticated session. The
+  harness fails the build if `dangerouslySetInnerHTML` ever appears on this path.
+- **`/training/flowcharts/[slug]`** — one runbook; an unknown slug renders a named miss listing the
+  real ones, never a blank screen.
+- **The tab is NOT admin-gated.** The tab bar was previously rendered only for `canEdit`; the people who
+  must *follow* a procedure cannot be the ones locked out of reading it. *Recording scripts* stays
+  admin-only.
+- Diagrams take every stroke from `currentColor` or a `--rb-*` token declared for **both** themes — a
+  training page nobody can read on the dark theme is a training page nobody reads.
+
+### The $0.00 the research uncovered — a live defect, not a documentation gap
+
+Establishing the scheduling facts turned up that **`/storeops/reports` (Hours & Payroll) had no
+pay-visibility detection at all.** It reads the same gated `GET /storeops/payroll` the Payroll page
+reads, where a gated caller's money keys are **deleted** server-side — and `lib/export.tsx`'s `money()`
+ran `Number(n) || 0`, so those absent values rendered **`$0.00`** in the table, the store rollup, the
+totals tiles **and the Excel/PDF export**.
+
+Since §14's DM sweep (2026-09-10) every DM is a gated caller, so this was live. *"This person earns
+nothing"* is precisely the lie strip-not-zero exists to prevent, and an export is the worst place to
+tell it — the spreadsheet outlives the screen and carries no note.
+
+Fixed in two places, defence in depth:
+1. **The page** detects withheld pay by **absence of the key**, the identical test `payroll/page.tsx`
+   uses (not a second rule), and drops the three money columns and both money tiles. A total of
+   withheld values is still a fabricated number.
+2. **The shared exporter** checks for a missing value **before** formatting: absent renders blank, a
+   **real zero still renders `$0.00`** because zero is a fact. This closes the class across every
+   report, not just this one.
+
+**Proof:** `backend/harness_training_flowcharts.py` (**33 checks**) — §A the registry and its themed,
+labelled diagrams; §B reachable, listed from the registry, deep-linked, and not admin-gated; §C no HTML
+injection anywhere on the path; §D the report's detection, the dropped columns and tiles, and the
+exporter's ordering. Re-armed: restoring the old `money()` fails D6 and D7.

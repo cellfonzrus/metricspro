@@ -118,9 +118,20 @@ export default function StoreOpsReportsPage() {
     sp: t.sp + (r.scheduled_pay || 0), ap: t.ap + (r.actual_pay || 0),
   }), { sh: 0, ah: 0, sp: 0, ap: 0 })
 
+  // PAY VISIBILITY (mig 434). This report reads the SAME gated GET /storeops/payroll the Payroll
+  // page does, and a gated caller's money keys are DELETED server-side — but unlike that page this
+  // one had no detection at all, so every pay column stayed on screen and `money()` rendered the
+  // missing values as $0.00, in the table, the store rollup, the tiles AND the Excel/PDF export.
+  // "This person earns nothing" is the exact lie strip-not-zero exists to prevent, and it was
+  // reaching the one workforce report that shows hours and pay together.
+  // Detection is by ABSENCE OF THE KEY, identical to payroll/page.tsx: rows exist but none carries a
+  // pay key ⇒ gated ⇒ the pay columns and money tiles are DROPPED, never faked.
+  const canSeePay = rows.length === 0
+    || rows.some((r: any) => 'pay_rate' in r || 'actual_pay' in r || 'scheduled_pay' in r)
+
   const periodName = rangeLabel(filt.period || '', filt.periodTo || '')
 
-  const empCols: ExportColumn[] = [
+  const empColsAll: ExportColumn[] = [
     { header: 'Employee', get: r => r.name, role: 'rep' },
     { header: 'Store', get: r => r.store, role: 'store' },
     { header: 'Market', get: r => r.market },
@@ -153,7 +164,7 @@ export default function StoreOpsReportsPage() {
         return f.join(' · ')
       } },
   ]
-  const storeCols: ExportColumn[] = [
+  const storeColsAll: ExportColumn[] = [
     { header: 'Store', get: r => r.store, role: 'store' },
     { header: 'Market', get: r => r.market },
     { header: 'Employees', get: r => r.employees, align: 'right' },
@@ -162,6 +173,12 @@ export default function StoreOpsReportsPage() {
     { header: 'Sched Pay', get: r => r.scheduled_pay, money: true },
     { header: 'Actual Pay', get: r => r.actual_pay, money: true },
   ]
+
+  // One money-column vocabulary, filtered in one place, so the table, the store rollup and every
+  // export agree about what a gated caller may see.
+  const PAY_COLS = new Set(['Pay $/hr', 'Sched Pay', 'Actual Pay'])
+  const empCols = canSeePay ? empColsAll : empColsAll.filter(c => !PAY_COLS.has(c.header))
+  const storeCols = canSeePay ? storeColsAll : storeColsAll.filter(c => !PAY_COLS.has(c.header))
 
   const Tile = ({ label, value }: { label: string; value: string }) => (
     <div className="card" style={{ padding: '12px 16px', minWidth: 130 }}>
@@ -240,8 +257,8 @@ export default function StoreOpsReportsPage() {
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
         <Tile label="Scheduled Hrs" value={tot.sh.toFixed(1)} />
         <Tile label="Actual Hrs" value={tot.ah.toFixed(1)} />
-        <Tile label="Scheduled Pay" value={fmt(tot.sp)} />
-        <Tile label="Actual Pay" value={fmt(tot.ap)} />
+        {canSeePay && <Tile label="Scheduled Pay" value={fmt(tot.sp)} />}
+        {canSeePay && <Tile label="Actual Pay" value={fmt(tot.ap)} />}
         <Tile label="Employees" value={String(visibleRows.length)} />
       </div>
 
