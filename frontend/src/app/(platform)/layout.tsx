@@ -13,6 +13,7 @@ import { NAV, canSeeItem, canAccessPath, carrierOKActive, safeHomeFor, applyNavL
 import { carrierDisplayName } from '@/lib/carrier-scope'
 import HelpPanel from '@/components/HelpPanel'
 import AdminAttention from '@/components/AdminAttention'
+import ChatEnvelope from '@/components/ChatEnvelope'
 import PlatformBanners from '@/components/PlatformBanners'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -510,6 +511,11 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
                 nothing to report, pops ONCE per login session, and is fail-silent on any error — so it
                 can never block a page or leak an item to a user who may not see it. */}
             <AdminAttention />
+            {/* Chat envelope (owner directive 2026-09-10): unread messages across every DM and group
+                the signed-in person belongs to, on EVERY page. Reads the chat module's own
+                GET /chat/unread and rides its existing per-user realtime topic — no new count, no
+                second notifier. Renders nothing for a login with no chat; fail-silent throughout. */}
+            <ChatEnvelope />
             {(permissions?.modules?.admin || permissions?.scope === 'all') && (
               <Link href="/configurations" title="All settings & configuration in one place"
                 style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', textDecoration: 'none', border: '1px solid var(--border)', borderRadius: 8, padding: '5px 10px' }}>

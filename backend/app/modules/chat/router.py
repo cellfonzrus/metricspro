@@ -119,6 +119,23 @@ def _bump(org_id, channel_id):
 
 
 # ── Channels / DMs ────────────────────────────────────────────────────────────────────────────
+def _count_unread(msgs, channel_id, last_read):
+    """THE unread rule — messages in this conversation newer than the caller's read cursor.
+
+    ONE implementation, deliberately. The sidebar (`my_channels`) and the header envelope
+    (`unread_count`, which the app-wide ✉️ polls) both count the same thing, and a badge that
+    disagrees with the list it opens is worse than no badge at all — the whole point of the envelope
+    is that the person can trust it. The two fetch DIFFERENT SHAPES (the sidebar needs bodies and
+    senders for its previews; the envelope needs nothing but timestamps) but they may never carry two
+    ideas of what "unread" means, so the comparison lives here and nowhere else.
+
+    A NULL cursor means never read — every message counts. Timestamps compare as ISO strings, which
+    is the same order as time for the UTC form this schema writes.
+    """
+    return sum(1 for m in msgs if m["channel_id"] == channel_id
+               and (last_read is None or str(m.get("created_at")) > str(last_read)))
+
+
 @router.get("/channels")
 def my_channels(authorization: str = Header(default=""), org_id: str = ORG_ID):
     """The caller's conversations — channels + DMs they belong to — newest-active first, each with an
@@ -148,8 +165,7 @@ def my_channels(authorization: str = Header(default=""), org_id: str = ORG_ID):
     for c in chans:
         mrow = by_ch.get(c["id"], {})
         lr = mrow.get("last_read_at")
-        unread = sum(1 for m in msgs if m["channel_id"] == c["id"]
-                     and (lr is None or str(m.get("created_at")) > str(lr)))
+        unread = _count_unread(msgs, c["id"], lr)
         last = last_by_ch.get(c["id"])
         out.append({**c, "members": mem_by_ch.get(c["id"], []), "unread": unread,
                     "muted": mrow.get("muted", False),
@@ -567,10 +583,43 @@ def decide_from_chat(channel_id: str, message_id: str, body: dict,
 
 @router.get("/unread")
 def unread_count(authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Total unread across the caller's conversations — for the nav badge."""
-    data = my_channels(authorization=authorization, org_id=org_id)
-    total = sum(int(c.get("unread") or 0) for c in data["channels"] if not c.get("muted"))
-    return {"total": total, "by_channel": {c["id"]: c.get("unread", 0) for c in data["channels"]}}
+    """Total unread across the caller's conversations — the number on the header ✉️.
+
+    THE APP-WIDE POLL PAYS FOR ITSELF HERE (owner directive 2026-09-10). This used to call
+    `my_channels` and throw almost all of it away: that builds the whole sidebar — every channel row
+    with `select("*")`, a second members read for DM naming, and 1000 message BODIES for the
+    previews. Fine once, on one screen. The envelope polls it from every page, for every signed-in
+    person, so the badge now reads only what a count needs: the caller's membership rows, which of
+    their channels are unarchived, and message TIMESTAMPS. No bodies, no previews, no member lists.
+
+    The counting rule itself is NOT duplicated — `_count_unread` is shared with the sidebar, so the
+    badge and the list it opens can never disagree.
+
+    `muted` silences the TOTAL but not the per-channel number: the sidebar still shows a muted
+    conversation's count, because muting is "don't interrupt me", not "pretend nothing happened".
+    """
+    org_id, eid, _name = _me(authorization, org_id)
+    mine = (sb().table("chat_members").select("channel_id,last_read_at,muted")
+            .eq("org_id", org_id).eq("employee_id", eid).execute().data) or []
+    if not mine:
+        return {"total": 0, "by_channel": {}}
+    ids = [m["channel_id"] for m in mine]
+    live = {c["id"] for c in ((sb().table("chat_channels").select("id,archived")
+                               .eq("org_id", org_id).in_("id", ids)
+                               .eq("archived", False).execute().data) or [])}
+    msgs = (sb().table("chat_messages").select("channel_id,created_at")
+            .eq("org_id", org_id).in_("channel_id", ids).order("created_at", desc=True)
+            .limit(1000).execute().data) or []
+    by_channel, total = {}, 0
+    for m in mine:
+        cid = m["channel_id"]
+        if cid not in live:
+            continue
+        n = _count_unread(msgs, cid, m.get("last_read_at"))
+        by_channel[cid] = n
+        if not m.get("muted"):
+            total += n
+    return {"total": total, "by_channel": by_channel}
 
 
 # ── Search + org management (Phase 4) ────────────────────────────────────────────────────────────
@@ -739,7 +788,14 @@ def whoami(authorization: str = Header(default=""), org_id: str = ORG_ID):
     org_id, eid, name = _me(authorization, org_id)
     return {"org_id": org_id, "employee_id": eid, "name": name,
             "user_topic": realtime.user_topic(org_id, eid),
-            "is_chat_admin": _is_chat_admin(authorization, org_id)}
+            "is_chat_admin": _is_chat_admin(authorization, org_id),
+            # Whether THIS SERVER can actually deliver a web push (push.webpush_configured — the same
+            # gate _send_webpush uses). The client used to decide that from its OWN build-time
+            # NEXT_PUBLIC_VAPID_PUBLIC_KEY, so a browser could hold a valid subscription while the
+            # backend had no private key and could never send to it: the user answers a permission
+            # prompt and then hears nothing forever. The sender's own answer travels here instead, so
+            # the envelope asks for notification permission only when a push would really arrive.
+            "push_web": push.webpush_configured()}
 
 
 # ── Voice/video signaling + mobile push (Phase 5) ────────────────────────────────────────────────

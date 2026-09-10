@@ -599,6 +599,96 @@ except HTTPException as e:
     check("13m a non-member cannot add anyone to a conversation", e.status_code == 403, e.detail)
 
 
+# ══ 14. THE HEADER ENVELOPE (owner directive 2026-09-10) ═════════════════════════════════════════
+# "the chat should be able to send notifications to the people and a notification should be shown as
+#  an envelope on teh top of the screen so the logged in person knows that there is a message for
+#  them or in teh group they are a part of"
+#
+# NO NEW MECHANISM WAS BUILT FOR THIS, and these checks exist to keep it that way: GET /chat/unread
+# already totalled the caller's conversations (its docstring said "for the nav badge"), the backend
+# already fanned a realtime hint to each member's user topic, and send_message already pushed to the
+# other members' devices. All of it was simply unreachable from anywhere except the chat screen.
+# So §14 pins the TWO halves the directive actually turns on:
+#   • the count the envelope reads is right for a GROUP as well as a DM (server-side, below), and
+#   • the envelope is mounted app-wide and invents no second count (source assertions, §14e+).
+as_user("E1")
+grp = C.create_channel({"name": "ops-team", "is_private": True}, authorization=AUTH, org_id=ORG)["channel"]["id"]
+C.add_member(grp, {"employee_id": "E2"}, authorization=AUTH, org_id=ORG)
+as_user("E2")
+C.send_message(grp, {"body": "team, heads up"}, authorization=AUTH, org_id=ORG)
+C.send_message(grp, {"body": "and one more"}, authorization=AUTH, org_id=ORG)
+as_user("E1")
+
+
+def _last_read(eid, chan, when):
+    """Set one member's read cursor. REQUIRED, not decoration: this fake stamps chat_messages with a
+    FIXED 2026-08-19 clock while the handlers write last_read_at from the real datetime.now(), so a
+    conversation created during the run looks entirely READ (every message predates the cursor by two
+    weeks). The first draft of §14 measured 0 unread on a channel that had just received two messages
+    and would have passed happily against a server that counted nothing at all. Pinning the cursor
+    explicitly is what makes the numbers below mean anything."""
+    for m in fake.store[("storeops", "chat_members")]:
+        if m.get("channel_id") == chan and m.get("employee_id") == eid:
+            m["last_read_at"] = when
+
+
+BEFORE_ALL = "2026-08-19T00:00:00Z"
+_last_read("E1", grp, BEFORE_ALL)
+_u = C.unread_count(authorization=AUTH, org_id=ORG)
+check("14a a GROUP the caller is a part of accrues unread the same as a DM (the owner's 'or in teh "
+      "group they are a part of')", _u["by_channel"].get(grp) == 2, _u)
+check("14b the envelope's number is the TOTAL across conversations, not one thread's",
+      _u["total"] == sum(int(v) for v in _u["by_channel"].values()), _u)
+C.mark_read(grp, authorization=AUTH, org_id=ORG)
+_u2 = C.unread_count(authorization=AUTH, org_id=ORG)
+check("14c reading the conversation drops the badge by exactly that thread's count — the envelope "
+      "clears itself server-side, it is never cleared in the browser",
+      _u2["total"] == _u["total"] - 2 and _u2["by_channel"].get(grp) == 0, (_u, _u2))
+# A muted conversation must not light the header. It still REPORTS its count per channel (the chat
+# sidebar shows it) — muting silences the interruption, it does not falsify the number.
+_last_read("E1", grp, BEFORE_ALL)
+for _m in fake.store[("storeops", "chat_members")]:
+    if _m.get("channel_id") == grp and _m.get("employee_id") == "E1":
+        _m["muted"] = True
+_u3 = C.unread_count(authorization=AUTH, org_id=ORG)
+check("14d a MUTED conversation does not light the envelope, but its count is still reported "
+      "(silenced, not falsified)",
+      _u3["total"] == _u2["total"] and _u3["by_channel"].get(grp) == 2, _u3)
+check("14e /chat/me tells the client whether THIS SERVER can actually send a web push, so the "
+      "browser never asks for notification permission the backend could not honour",
+      "push_web" in C.whoami(authorization=AUTH, org_id=ORG))
+
+# ── source assertions: the envelope is mounted app-wide and forks nothing ───────────────────────
+# Static on purpose. Every value below is a legal string and each page renders perfectly, so neither
+# tsc nor a build can see an envelope that was never mounted or a second unread count quietly grown
+# beside the first (index 24, the proof-harness audit).
+_env = open("../frontend/src/components/ChatEnvelope.tsx").read()
+_lay = open("../frontend/src/app/(platform)/layout.tsx").read()
+_pgc = open("../frontend/src/app/(platform)/chat/page.tsx").read()
+_push = open("../frontend/src/lib/chat-push.ts").read()
+check("14f the envelope is mounted in the platform HEADER, so it is on every page rather than only "
+      "the chat screen",
+      "<ChatEnvelope />" in _lay and "@/components/ChatEnvelope" in _lay
+      and _lay.index("<ChatEnvelope />") < _lay.index("</header>"))
+check("14g it reads the EXISTING count endpoint and defines no second one",
+      "/api/v1/chat/unread" in _env and "chat_members" not in _env and "last_read_at" not in _env)
+check("14h it rides the existing per-user realtime topic (naming stays server-side)",
+      "/api/v1/chat/me" in _env and "user_topic" in _env)
+check("14i a count that has not been read yet renders NO badge rather than a '0' — 'nothing unread' "
+      "and 'not asked yet' are different facts",
+      "total != null && n > 0" in _env and "useState<number | null>(null)" in _env)
+check("14j the envelope fails silent: an error renders nothing and can never break the page it "
+      "decorates", "setDead(true)" in _env and "if (dead || !me) return null" in _env)
+check("14k web-push registration now lives in ONE module, called from the envelope",
+      "registerChatPush" in _env and "export async function registerChatPush" in _push)
+check("14l ... and the chat page no longer carries its own copy to drift from it",
+      "pushManager.subscribe" not in _pgc and "function urlB64ToUint8" not in _pgc
+      and "pushManager.subscribe" in _push)
+check("14m registration is gated on the SERVER's answer, not only the client's build-time key — the "
+      "two live in different places and a mismatch is a permission prompt that never delivers",
+      "serverReady" in _push and "push_web" in _env)
+
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILURES:")

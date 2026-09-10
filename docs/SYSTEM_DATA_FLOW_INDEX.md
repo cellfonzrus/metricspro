@@ -5339,3 +5339,70 @@ tenant sees it. Seeding a brand name would put one carrier's vocabulary in front
 - Migration `1000_dm_checklist_carrier_brand_review.sql` — **written, NOT applied.** Its REVERT
   deletes only `qa\_%` keys; historical visits are unaffected because `store_visit_responses` carries
   `label_snapshot` and `category_snapshot`.
+
+## 23t. THE CHAT ENVELOPE — unread reaches the whole app (owner directive 2026-09-10)
+
+> *"the chat should be able to send notifications to the people and a notification should be shown as an
+> envelope on teh top of the screen so the logged in person knows that there is a message for them or in
+> teh group they are a part of"*
+
+**Duplicate check — nothing here is a new mechanism.** Every part already shipped with Internal Chat
+(mig `868`, `docs/APPROVALS_AND_CHAT_PLAN.md`) and was simply unreachable from anywhere but `/chat`:
+
+| Searched for | Found | What this change does |
+|---|---|---|
+| unread count / nav badge | `GET /chat/unread` — its own docstring already read *"for the nav badge"* | **calls it.** No second count, no new endpoint, no new table |
+| live update transport | `chat/realtime.py` fans a hint to a per-USER topic (`chat-user:<org>:<eid>`) on every message | **subscribes to it** — one socket lights the badge for every DM and group |
+| push to a person's device | `chat/push.py` (`notify`), already called by `send_message` for every other member; gated on operator VAPID/FCM/APNs credentials | **registers the browser app-wide** instead of only on the chat screen |
+| an existing header widget pattern | `AdminAttention` (mig `717`) — fail-silent, renders nothing when there is nothing to say | **mirrors it** |
+
+The defect was **reach, not capability**: all of the above only ran while the chat screen was open —
+the one moment a person does not need to be told they have a message.
+
+- **`frontend/src/components/ChatEnvelope.tsx`** — mounted in the platform header (`(platform)/layout.tsx`),
+  so it is on every page. Reads `GET /chat/unread`, subscribes to the user topic from `GET /chat/me`,
+  polls as a fallback (30 s with the socket up, 15 s without) and re-reads on every navigation so
+  walking away from a thread drops the badge without waiting out the interval.
+- **The envelope is always visible; only the BADGE comes and goes.** A control that exists only while it
+  has something to say cannot be *looked at* — you can never check for messages, you can only be
+  interrupted by them. Deliberately different from `AdminAttention`, which is an alert and correctly
+  vanishes when clear.
+- **A zero is not an unknown.** Before the first successful read the badge renders nothing at all rather
+  than `0` — the silent-zero rule (§23e/§23p) applied to a count instead of money. A failed poll leaves
+  the last known number on screen; a blip must not read as *"your messages went away"*.
+- **The gate is membership, server-side.** `/chat/me` 403s for a login not linked to an employee and
+  `/chat/unread` only ever counts conversations the caller belongs to, so the component needs no RBAC of
+  its own; any error renders nothing.
+
+### The two things this change fixed on the way
+
+1. **`GET /chat/unread` was building the entire sidebar to return one integer.** It called `my_channels`,
+   which reads every channel with `select("*")`, a second members pass for DM naming, and **1000 message
+   bodies** for the previews — then discarded all of it. Acceptable once on one screen; not when every
+   signed-in person polls it from every page. The badge now reads membership rows, which channels are
+   unarchived, and message **timestamps** only. The **counting rule** is shared, not copied:
+   `chat/router._count_unread` is the one implementation, used by the sidebar and the envelope alike —
+   *a badge that disagrees with the list it opens is worse than no badge*.
+2. **Web push could ask for permission it could never honour.** The browser gated on its own build-time
+   `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (Vercel) while the sender gates on `CHAT_VAPID_PUBLIC_KEY` +
+   `CHAT_VAPID_PRIVATE_KEY` (Railway). When those disagree the user answers a permission prompt and then
+   hears nothing forever. `GET /chat/me` now reports **`push_web`** (`push.webpush_configured()`) and
+   `lib/chat-push.ts` — the single registration, moved out of `chat/page.tsx` — requires it.
+
+**Operator TODO (unchanged, and still the gate on real notifications):** browser/mobile push stays an
+honest **no-op** until VAPID keys are set. `push_web:false` is the platform telling the truth about that,
+not a defect.
+
+**Proof:** `backend/harness_chat.py` §14 (78 → **91 checks**). Pins that a GROUP accrues unread exactly as
+a DM does, that the total is the sum across conversations, that reading a thread clears it server-side,
+that a muted conversation is silenced in the total but still reported per channel, and — statically, over
+the shipped source — that the envelope is mounted inside the header, invents no second count, renders no
+badge before its first read, fails silent, and that the chat page no longer carries a private copy of the
+push registration. §14's own first draft measured **0 unread on a channel that had just received two
+messages** (the fake stamps messages with a fixed clock while the handlers write `last_read_at` from the
+real one) and would have passed against a server that counted nothing at all — `_last_read` pins the
+cursor so the numbers mean something.
+
+**Known limit, pre-existing and not introduced here:** the unread scan reads the most recent **1000**
+messages across the caller's conversations, so a caller with more than that unread undercounts. Both the
+sidebar and the envelope share the cap, so they still agree.
