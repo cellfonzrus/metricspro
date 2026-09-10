@@ -262,7 +262,13 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
           <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginBottom: 10 }}>
             <Stat label="Scheduled" value={`${data.hours.scheduled_hours}h`} />
             <Stat label="Actual" value={`${data.hours.actual_hours}h`} />
-            <Stat label={`Pay (${fmt(data.hours.pay_rate)}/hr)`} value={fmt(data.hours.actual_pay)} />
+            {/* Pay visibility (mig 434): the server DELETES the pay keys for a caller who may not
+                see pay (owner directive 2026-09-10). Absence of the key is the signal — rendering
+                fmt(undefined) would print $0.00, i.e. "this person earns nothing", which is the
+                exact lie strip-not-zero exists to prevent. */}
+            {data.hours.pay_rate != null && (
+              <Stat label={`Pay (${fmt(data.hours.pay_rate)}/hr)`} value={fmt(data.hours.actual_pay)} />
+            )}
           </div>
           <ResponsiveContainer width="100%" height={90}>
             <BarChart layout="vertical" data={[{ name: 'Scheduled', v: data.hours.scheduled_hours }, { name: 'Actual', v: data.hours.actual_hours }]} margin={{ top: 0, right: 10, left: 6, bottom: 0 }}>
