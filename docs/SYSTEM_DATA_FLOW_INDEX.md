@@ -5540,3 +5540,51 @@ a file that is correct. That happened three separate times here (`harness_pickup
 `setSel({})`, `harness_cash_pickup`'s 11s/11t, and §C2/§D2 of this one on their first run), and each time
 the fix was **another private copy** of the same six lines. `js_code_only` now lives once; all three
 harnesses call it. *A guard a truthful comment can break is a guard that gets deleted.*
+
+## 23v. A SALES LEAK IS NOT A REP FLAG (owner directive 2026-09-10)
+
+> *"sales leak should not be in employee dashbaord, it shoudl be in management overview under all flags
+> tile which is not here right now"*
+
+**What the flag is.** `commcalc/sales_recon.sync_recon_flags` writes `flag_type='sales_leak'`
+(severity `critical`) for a sale that **is** in the daily B2B feed and is **missing** from the monthly
+statement — money the carrier has not paid us yet. The row carries the rep who made the sale because
+that is how the sale is *identified*, not because the rep did anything. On `/employee-dashboard` it
+rendered as a red critical mark against that person for a reconciliation gap between two of **our own**
+feeds, about which they can do nothing.
+
+**Withheld from one audience, not suppressed.** `core/router.REP_HIDDEN_FLAG_TYPES` drops it from the
+rep's bundle only. Detection is untouched: the flag is still written, still `critical`, still counted,
+and management still sees it whole on `/commcalc/flags`. A defect found in live data is **reported**,
+never hidden — a rep's dashboard is simply not the report.
+
+`report_card.flags_count` derives from the same filtered list, so the number on the card cannot
+disagree with the flags under it. That is the defect this class of fix usually springs, and it is
+pinned (§A4).
+
+**Where it lives now — no new page, no new table, no new endpoint.** `/commcalc/flags` already lists
+**every** flag type with a type filter, `sales_leak` included, and `/compliance` is the per-queue
+dashboard over the same data. What did not exist was a way to **reach** them from Management Overview.
+Dashboard tiles are D1 config (mig `068` `commcalc.ui_label_override`, `scope='tiles'`; house rows every
+tenant inherits, tenant-editable in the Dashboard Designer), so this is a config row:
+
+- **Migration `1002`** appends an **All Flags** tile to the **house** `management-overview` layout —
+  an `UPDATE`, because mig `948` already created that row with `ON CONFLICT DO NOTHING`. Idempotent
+  (refuses to append when a tile of that title is present), single transaction with a post-flight check
+  that rolls back rather than half-landing a dashboard, `-- REVERT:` note included.
+- **House row only.** A tenant that has already *designed* its own Management Overview holds a row that
+  wins wholesale, and this deliberately does not reach into it — injecting a tile into somebody's
+  hand-arranged dashboard is editing their work without asking. They add it in the Designer, where
+  `/commcalc/flags` is already offered (`layoutToHubGroups` resolves a designed href against **every**
+  nav group, not just the hub's own).
+- **`rbac.ts`** gains the two `tileOnly` duplicates, module + scopes **byte-identical** to their Flags &
+  Compliance originals — the same zero-RBAC-change duplicate rule the rest of that group uses. This
+  changes what is *reachable* from the hub and nothing about who may see a flag. Until mig `1002` runs
+  they surface under the hub's *"not yet placed"* tile rather than not at all.
+
+**Proof:** `backend/harness_sales_leak_placement.py` (**24 checks**). §A the withheld type is a named
+set applied case- and whitespace-insensitively, the count moves with the list, and detection is
+unchanged (still written, still critical, withheld in exactly one place). §B the migration is
+house-scoped, appending, idempotent, transactional, and its tile JSON parses and names a page that
+exists and really does render this flag type. §C both nav entries match their originals on module and
+scopes. Re-armed: removing the filter fails A2/A3/A7.

@@ -4406,6 +4406,12 @@ def _enforce_dashboard_access(authorization: str, org_id: str, employee_id: str)
         raise HTTPException(403, "You can only view your own dashboard.")
 
 
+# Flag types that are a MANAGEMENT signal about our own feeds rather than anything the rep did, and so
+# are withheld from the employee dashboard (owner directive 2026-09-10). Withheld from that ONE audience
+# — never deleted, never uncounted anywhere else.
+REP_HIDDEN_FLAG_TYPES = ("sales_leak",)
+
+
 @router.get("/employee-dashboard")
 def employee_dashboard(employee_id: str = "", period: str = "",
                        authorization: str = Header(default=""), org_id: str = ORG_ID):
@@ -4529,8 +4535,21 @@ def employee_dashboard(employee_id: str = "", period: str = "",
     out["employee"]["rep_name"] = rep_full.strip() or eslp or name
 
     # Flags + chargebacks attributed to this rep.
+    #
+    # SALES LEAK IS NOT A REP FLAG (owner directive 2026-09-10: "sales leak should not be in employee
+    # dashbaord, it shoudl be in management overview under all flags tile"). `sales_leak` is written by
+    # commcalc/sales_recon.sync_recon_flags for a sale that is in the DAILY B2B feed but MISSING from
+    # the monthly statement — i.e. money the carrier has not paid us yet. It is stamped with the rep who
+    # made the sale because that is how the row is identified, NOT because the rep did anything wrong,
+    # and there is nothing they can do about it. Shown on their dashboard it reads as a red mark against
+    # them for a reconciliation gap between two of OUR feeds.
+    #
+    # Withheld from the REP's bundle only. The flag itself is untouched — it still exists, still counts,
+    # and management still sees it whole on /commcalc/flags and the Management Overview All Flags tile.
+    # This hides it from the one audience it maligns, it does not suppress a finding.
     fl = client.schema("commcalc").table("flags").select("*").eq("org_id", org_id).in_("period", pvar).execute().data or []
-    myf = [f for f in fl if _is_me(f, "epay_salesperson")]
+    myf = [f for f in fl if _is_me(f, "epay_salesperson")
+           and str(f.get("flag_type") or "").strip().lower() not in REP_HIDDEN_FLAG_TYPES]
     out["flags"] = myf
     cbs = client.schema("commcalc").table("chargeback_items").select("*").eq("org_id", org_id).in_("period", pvar).execute().data or []
     mycb = [c for c in cbs if _is_me(c, "epay_salesperson")]
