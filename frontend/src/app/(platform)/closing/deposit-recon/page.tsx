@@ -7,6 +7,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
+import { WorkflowNext } from '@/components/WorkflowNext'
 
 // Cash Deposit Reconciliation (OWNER DIRECTIVE 2026-08-05) — cross-checks cash COLLECTED (Daily
 // Closing + POS X-Report) against cash DEPOSITED (commcalc.bank_deposit), per tenant-defined category,
@@ -319,6 +320,7 @@ export default function DepositReconPage() {
           </div>
         </div>
       )}
+      <WorkflowNext here="/closing/deposit-recon" />
     </div>
   )
 }

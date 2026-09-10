@@ -22,6 +22,7 @@ import {
   AUDIENCE_LABEL, MODULE_LABEL, Tour, clearTourDone, fetchTours, groupByModule, startTour, tourDoneAt,
 } from '@/lib/tours'
 import { api } from '@/lib/client'
+import { FLOWCHARTS } from '@/lib/flowcharts'
 import { safeHref } from '@/lib/safe-url'   // H6: start_href is tenant-writable tour config
 
 type Scene = {
@@ -35,7 +36,7 @@ export default function TrainingCenterPage() {
   const [ready, setReady] = useState(true)
   const [canEdit, setCanEdit] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [tab, setTab] = useState<'tours' | 'scripts'>('tours')
+  const [tab, setTab] = useState<'tours' | 'scripts' | 'flowcharts'>('tours')
   const [scripts, setScripts] = useState<Script[] | null>(null)
   const [doneTick, setDoneTick] = useState(0)          // bumps to re-read localStorage after a change
 
@@ -52,6 +53,14 @@ export default function TrainingCenterPage() {
       .finally(() => setLoading(false))
   }, [])
   useEffect(() => { load() }, [load])
+
+  // Deep link: /training?tab=flowcharts. Read from the URL rather than useSearchParams so this page
+  // needs no Suspense boundary — a training index that fails to build helps nobody.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const t = new URLSearchParams(window.location.search).get('tab')
+    if (t === 'flowcharts' || t === 'tours') setTab(t)
+  }, [])
 
   useEffect(() => {
     if (tab !== 'scripts' || scripts !== null || !canEdit) return
@@ -105,19 +114,56 @@ export default function TrainingCenterPage() {
         </p>
       </div>
 
-      {canEdit && (
-        <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-          {(['tours', 'scripts'] as const).map(t => (
-            <button key={t} onClick={() => setTab(t)} className="btn"
-              style={{ fontSize: 13, background: tab === t ? 'var(--accent)' : undefined,
-                color: tab === t ? 'white' : undefined }}>
-              {t === 'tours' ? 'Walk-throughs' : 'Recording scripts'}
-            </button>
-          ))}
+      {/* The tab bar is no longer admin-only: Flowcharts are for everyone who has to FOLLOW the
+          procedures (owner directive 2026-09-10), and a rep could not reach them behind an admin
+          gate. Recording scripts stays admin-only, as before. */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+        {(canEdit
+          ? (['tours', 'flowcharts', 'scripts'] as const)
+          : (['tours', 'flowcharts'] as const)
+        ).map((t: 'tours' | 'flowcharts' | 'scripts') => (
+          <button key={t} onClick={() => setTab(t)} className="btn"
+            style={{ fontSize: 13, background: tab === t ? 'var(--accent)' : undefined,
+              color: tab === t ? 'white' : undefined }}>
+            {t === 'tours' ? 'Walk-throughs' : t === 'flowcharts' ? 'Flowcharts' : 'Recording scripts'}
+          </button>
+        ))}
+        {canEdit && (
           <Link href="/admin/training" className="btn btn-secondary" style={{ fontSize: 13, marginLeft: 'auto' }}>
             ⚙️ Edit walk-throughs
           </Link>
-        </div>
+        )}
+      </div>
+
+      {/* ── FLOWCHARTS (owner directive 2026-09-10) ────────────────────────────────────────────
+          The operating runbooks: who does what, in what order, and what "done" looks like at each
+          level. Content is TYPED (lib/flowcharts) and rendered by RunbookDoc — never stored HTML,
+          so a training page can never become a script-injection surface. */}
+      {tab === 'flowcharts' && (
+        <>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 14px',
+            maxWidth: 820, lineHeight: 1.6 }}>
+            The procedures themselves, drawn out. A walk-through shows you which buttons to press;
+            a flowchart shows you where your part sits in the whole chain, who hands work to you,
+            and who is waiting on you.
+          </p>
+          <div style={{ display: 'grid', gap: 10,
+            gridTemplateColumns: 'repeat(auto-fill, minmax(272px, 1fr))' }}>
+            {FLOWCHARTS.map(f => (
+              <Link key={f.slug} href={`/training/flowcharts/${f.slug}`} className="card"
+                style={{ padding: 16, textDecoration: 'none', color: 'inherit', display: 'grid',
+                  gap: 6, alignContent: 'start' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                  <span aria-hidden style={{ fontSize: 17 }}>{f.icon}</span>
+                  <span style={{ fontWeight: 700, fontSize: 15 }}>{f.title}</span>
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 }}>{f.summary}</div>
+                <div style={{ fontSize: 11.5, color: 'var(--text3)', textTransform: 'uppercase',
+                  letterSpacing: '.05em', marginTop: 2 }}>{f.chain}</div>
+              </Link>
+            ))}
+          </div>
+        </>
       )}
 
       {tab === 'tours' && (

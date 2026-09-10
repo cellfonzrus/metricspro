@@ -80,8 +80,16 @@ function imgSize(dataUrl: string): Promise<{ w: number; h: number }> {
   })
 }
 
-const money = (n: any) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(n) || 0)
+// A MISSING money value is not zero (2026-09-10). This read `Number(n) || 0`, so a column whose
+// value was WITHHELD — the pay-visibility gate deletes the key rather than zeroing it — exported as
+// `$0.00`, i.e. "this person earns nothing". That is the precise lie strip-not-zero exists to
+// prevent, and an export is the worst place to tell it: the spreadsheet outlives the screen and
+// carries no note. Absent now renders blank; a REAL zero still renders $0.00, and a non-numeric
+// value renders $0.00 as before rather than silently vanishing.
+const money = (n: any) => {
+  if (n == null || n === '') return ''
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(n) || 0)
+}
 
 function displayCell(col: ExportColumn, row: any): string {
   const v = col.get(row)

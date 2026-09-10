@@ -12,6 +12,7 @@ import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 import { resolveStoreCodes } from '../_lib/market-store-cascade'
 import EnvelopeViewLink from '@/components/EnvelopeViewLink'
 import { repOptions } from '@/lib/rep-options'
+import { WorkflowNext } from '@/components/WorkflowNext'
 
 // DM cash pickup — see the day's cash envelopes, check off the ones collected with a note, confirm.
 // On confirm, the assigned recipient gets an email + WhatsApp summary.
@@ -753,6 +754,7 @@ export default function CashPickupPage() {
           </div>
         </div>
       )}
+      <WorkflowNext here="/closing/pickup" />
     </div>
   )
 }

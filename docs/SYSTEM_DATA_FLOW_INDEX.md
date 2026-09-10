@@ -5588,3 +5588,117 @@ unchanged (still written, still critical, withheld in exactly one place). §B th
 house-scoped, appending, idempotent, transactional, and its tile JSON parses and names a page that
 exists and really does render this flag type. §C both nav entries match their originals on module and
 scopes. Re-armed: removing the filter fails A2/A3/A7.
+
+## 23w. FLOWCHARTS IN THE TRAINING MODULE (owner directive 2026-09-10)
+
+> *"All of these will be in the training module under a tile called flowcharts and named appropriately."*
+
+The operating runbooks — **Daily Closing**, **DM Verify**, **Store Cash** (Scheduling to follow) — now live
+inside the app, next to the screens they describe.
+
+**Duplicate check.** The Training Center (mig `720`) already exists with two tabs — *Walk-throughs*
+(tours-as-data from `core.training_tour[_step]`) and *Recording scripts*. A flowchart is neither: a tour
+spotlights controls on a live page, a runbook explains where your part sits in a chain. So this adds a
+third tab to the SAME page rather than a second training surface — no new module, no new nav group.
+
+**No new table and no migration, deliberately.** Tours are data because their content is per-tenant.
+These are platform procedures that must version with the code that implements them — *a runbook whose
+steps disagree with the build is worse than no runbook*. Per-tenant renaming already has a mechanism
+(`commcalc.ui_label_override`) if it is ever wanted.
+
+- **`frontend/src/lib/flowcharts.tsx`** — the registry. Each runbook is typed content: levels, steps,
+  the "done when" bar, the controls list, a state table, and a hand-drawn inline-SVG figure.
+- **`frontend/src/components/RunbookDoc.tsx`** — the renderer. **Typed content, never stored HTML:** a
+  `body_html` column rendered with `dangerouslySetInnerHTML` would make runbooks tenant-editable and
+  hand any writer of a training row script execution in every reader's authenticated session. The
+  harness fails the build if `dangerouslySetInnerHTML` ever appears on this path.
+- **`/training/flowcharts/[slug]`** — one runbook; an unknown slug renders a named miss listing the
+  real ones, never a blank screen.
+- **The tab is NOT admin-gated.** The tab bar was previously rendered only for `canEdit`; the people who
+  must *follow* a procedure cannot be the ones locked out of reading it. *Recording scripts* stays
+  admin-only.
+- Diagrams take every stroke from `currentColor` or a `--rb-*` token declared for **both** themes — a
+  training page nobody can read on the dark theme is a training page nobody reads.
+
+### The $0.00 the research uncovered — a live defect, not a documentation gap
+
+Establishing the scheduling facts turned up that **`/storeops/reports` (Hours & Payroll) had no
+pay-visibility detection at all.** It reads the same gated `GET /storeops/payroll` the Payroll page
+reads, where a gated caller's money keys are **deleted** server-side — and `lib/export.tsx`'s `money()`
+ran `Number(n) || 0`, so those absent values rendered **`$0.00`** in the table, the store rollup, the
+totals tiles **and the Excel/PDF export**.
+
+Since §14's DM sweep (2026-09-10) every DM is a gated caller, so this was live. *"This person earns
+nothing"* is precisely the lie strip-not-zero exists to prevent, and an export is the worst place to
+tell it — the spreadsheet outlives the screen and carries no note.
+
+Fixed in two places, defence in depth:
+1. **The page** detects withheld pay by **absence of the key**, the identical test `payroll/page.tsx`
+   uses (not a second rule), and drops the three money columns and both money tiles. A total of
+   withheld values is still a fabricated number.
+2. **The shared exporter** checks for a missing value **before** formatting: absent renders blank, a
+   **real zero still renders `$0.00`** because zero is a fact. This closes the class across every
+   report, not just this one.
+
+**Proof:** `backend/harness_training_flowcharts.py` (**33 checks**) — §A the registry and its themed,
+labelled diagrams; §B reachable, listed from the registry, deep-linked, and not admin-gated; §C no HTML
+injection anywhere on the path; §D the report's detection, the dropped columns and tiles, and the
+exporter's ordering. Re-armed: restoring the old `money()` fails D6 and D7.
+
+## 23x. THE WORKFLOW, STACKED — and each screen asks the chart what is next (owner 2026-09-10)
+
+> *"the modules for these should be stacked properly based on thr work flow in one tile so the user
+> does not have to loo for the next module it is user friendly and also the current module should ask
+> the chart what do they want to do next — so changes needed in the dm verify modules also"*
+
+**What was wrong.** `/hub/daily-closing` had no tile layout row, so it fell back to `defaultHubGroups`
+— the module's pages in NAV order, which is a **filing** order, not a **doing** order. A DM finishing
+DM Verify had to already know that *Cash Pickup* was next, with Management Review, X-Tender Recon and
+Accessory Recon sitting between them on screen. And no screen said what came after it.
+
+**One sequence, three readers.** `dailyClosing.stages` in `frontend/src/lib/flowcharts.tsx` is the
+workflow as data — `{href, label, who, does, handoff}` per step, in the order the work happens. It
+drives:
+
+| Reader | What it renders |
+|---|---|
+| the runbook | the procedure a person is trained on |
+| **migration `1003`** | the stacked hub tile — *"The closing workflow"*, first, numbered 1–7 |
+| **`components/WorkflowNext`** | the "next in this workflow" prompt at the foot of each screen |
+
+Three copies of a sequence is exactly how the version a user is *walked through* stops matching the
+version they were *trained on*, and neither `tsc` nor a SQL linter can see that drift — so
+`harness_workflow_stacking.py` §A3 **parses the sequence out of the migration and compares it, in
+order, against the array in the TypeScript**. The migration also carries its own post-flight check and
+rolls back rather than landing a reordered or short tile.
+
+**The prompt (`WorkflowNext`), and its two refusals:**
+- **It gates on the destination's own NAV entry** via the shared `useCanOpen` — the same predicate
+  `ScreenLink` and the sidebar use (owner directive 2026-09-08, one mechanism for "copy names a
+  screen, that name is a link"). It can never advertise a page its viewer would be bounced out of.
+  Where the immediate next stage is closed to them, it offers the first one after it they **can**
+  open, and **names the skip** so the chain does not appear to have a gap.
+- **It never says the work is finished.** It has no idea whether the user completed anything on the
+  screen it sits under; a "✓ Done!" over an unfinished job is precisely the confident-but-wrong
+  statement the rest of this codebase avoids. The heading asks, it does not congratulate.
+
+It also links to the whole flow, so the next step is never the only thing on offer.
+
+**Mounted on** Submit Closing, **DM Verify** (the one the owner named), Cash Pickup and Cash Deposit
+Recon. On DM Verify the prompt lives on the **route**, not in `DailyClosingVerify` — that component is
+mounted at two paths (`/closing/verify` and `/storeops/closing`), and where you are in a workflow is a
+property of the route, not of the verification table. §D4 pins that the shared component stays free of
+a hard-coded position.
+
+**Numbering earns its place here.** The tile numbers its steps 1–7 because this genuinely *is* a
+sequence; the module's other tiles (Dashboard, Review & exceptions, Reconciliation, Setup) are not
+numbered, because pretending all work is a sequence is as unhelpful as pretending none of it is.
+
+**Proof:** `backend/harness_workflow_stacking.py` (**32 checks**) — §A the two surfaces are one
+sequence, numbered consecutively, workflow tile first, rest of the module still reachable; §B the
+migration is house-only, non-clobbering, transactional, revertible; §C the prompt reads the chart,
+gates on the shared predicate, skips-and-names, and never congratulates; §D the four screens ask, each
+naming itself. Re-armed: swapping two steps in the migration alone fails A3 and A5.
+
+**Migration `1003` is WRITTEN, NOT APPLIED.** Until it runs, the hub keeps its auto-derived tiles —
+the "next step" prompts work regardless, since they ship with the code.
