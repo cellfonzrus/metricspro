@@ -124,6 +124,7 @@ export default function DevicePurchasesPage() {
   const products: any[] = data?.by_product || []
   const nonDevice: any[] = data?.non_device_lines || []
   const res = data?.meta?.resolution || {}
+  const voided = data?.excluded_voided || null
   const byResolver = res.resolver || null
 
   function sheets(): ExportSheet[] {
@@ -320,6 +321,30 @@ export default function DevicePurchasesPage() {
               </table>
             </div>
           </Card>
+
+          {voided && voided.invoices > 0 && (
+            <Card title="Voided invoices — excluded from every figure above"
+                  note={<>An invoice the {distributor} marked <strong>VOIDED</strong> was cancelled, so it is not a
+                        purchase. Its money is listed here rather than simply absent, so what was billed still
+                        reconciles to what is counted plus what was voided. The <strong>Device Payable</strong>
+                        report excludes the same invoices under the same rule, so the two cannot disagree.</>}>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr><th style={th}>Invoice</th><th style={th}>Location as billed</th><th style={thr}>Lines</th><th style={thr}>Units</th><th style={thr}>Device</th><th style={thr}>Non-device</th></tr></thead>
+                  <tbody>{(voided.detail || []).map((v: any) => (
+                    <tr key={v.invoice_number}>
+                      <td style={td}>{v.invoice_number}</td>
+                      <td style={td}>{v.location || '—'}</td>
+                      <td style={tdr}>{num(v.lines)}</td>
+                      <td style={tdr}>{num(v.units)}</td>
+                      <td style={tdr}><strong>{money(v.device_amount)}</strong></td>
+                      <td style={tdr}>{money(v.non_device_amount)}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            </Card>
+          )}
 
           <Card title="Not devices — on the same invoices, excluded from the figures above"
                 note={<>SIM packs, services, chargebacks and fees are on these invoices but are not device purchases.

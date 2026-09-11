@@ -5826,6 +5826,47 @@ the street NAME. The targeted fix is a `commcalc.store_aliases` row per address 
 has house precedent — `3 Palisade Ave Yonkers` from the POS feed); that is the owner's call, and the
 report's `resolver` bucket is where to find the rows worth one.
 
+### A VOIDED INVOICE IS NOT A PURCHASE (defect fixed 2026-09-11)
+
+`compute()` filtered lines by period only and never looked at the invoice header, so an invoice the
+distributor had marked **Voided** was counted as a purchase. It no longer is, and the **same rule was
+applied to §23z's Device Payable in the same change** — two finance reports disagreeing about voided
+invoices is a defect that survives until someone reconciles them, and then costs both their
+credibility.
+
+**ONE RULE, ONE DEFINITION.** `device_purchases.VOID_STATUSES` (config, house default `("voided",)`,
+case-folded) and `device_purchases.voided_invoice_set(invoice_rows)` are the platform's only voided
+rule; `device_payable` imports both rather than keeping its own. Status is read from
+`commcalc.vip_invoices` — the HEADER is what a status means. (`vip_invoice_lines.status` was measured
+against it and agrees on **12,536 of 12,536** rows, but agreeing today is not the same as being the
+authority, and this feed's column names have lied before.)
+
+**Before → after, measured live (house org, 2026-09-11).** Six voided invoices in the feed:
+
+| Figure | before | after |
+|---|---|---|
+| Device Purchases 2025 — device | $7,099,841.56 | **$7,090,741.82** |
+| Device Purchases 2025 — non-device | $296,508.59 | **$296,418.59** |
+| Device Purchases **2024** — device | $4,917,452.96 | **$4,896,463.66** |
+| Device Payable at 2025-12-31 | $489,136.63 | **$484,696.79** (1,608 → 1,592 units) |
+
+2025 moves by one invoice (1595336, 2025-11-20, $9,189.74 grand). **2024 moves by more** —
+$20,989.30 over 22 lines on four invoices all dated 2024-11-27 — worth knowing before anyone quotes
+a 2024 figure from memory. 2026 is unaffected. Only one company's payable moves: WIRELESS 2024 LLC,
+$82,487.47 → $78,047.63 (253 → 237 units); the other three are unchanged.
+
+**NOTHING IS SILENTLY DROPPED.** `excluded_voided` (purchases, per invoice, device + non-device +
+units) and `totals.excluded_voided_*` plus `payable_including_voided` (payable) report exactly what
+left, and both pages render it — so the numbers the owner has already seen in writing stay
+explainable rather than merely gone. Purchases still reconciles: counted + voided = billed
+($7,387,160.41 + $9,189.74 = $7,396,350.15).
+
+**Proof:** `harness_device_purchases.py` §I (10 checks, the $9,189.74 fixture) and
+`harness_device_payable.py` §K (10 checks), including that with NO invoice headers nothing is
+excluded (evidence-driven, never assumed), that non-device lines go with the device lines, that the
+serialised-unit count honours the same rule, and that the two modules share one definition.
+
+
 ### Files
 
 `backend/app/modules/account/device_purchases.py` (pure core + `compute`) ·
@@ -5970,20 +6011,21 @@ day. Read-only: books nothing, writes nothing, **no migration**.
 Guards re-pinned, additions only: `harness_db_resilience.py` route count **1580 → 1581** (the one new
 GET) and `harness_finance_sync_in_async.py` `ALLOWED_NEW` (`account/router.py` +`device_payable`).
 
-### VOIDED INVOICES — counted, and the question published rather than decided quietly
+### VOIDED INVOICES — EXCLUDED, under the platform's one shared rule (2026-09-11)
 
-Six house-org invoice headers carry `status='Voided'` (one in the 2025 window: 1595336, 2025-11-20,
-grand total $9,189.74). Their serialised units are still in the feed, and §23y counts them today.
-This report counts them **too, deliberately** — two finance reports disagreeing about voided invoices
-is a worse defect than either rule. It does not hide the question: `totals.voided_invoice_*` publishes
-what an exclude-voided rule would remove and `payable_excluding_voided` computes the alternative, so
-flipping BOTH reports together later is a one-line change. Measured as at 2025-12-31: **16 units /
-$4,439.84 in the payable** (it would read **$484,696.79**), 10 more already paid ($4,359.90), 10 not
-in the ledger. Status comes from `vip_invoices` (the header is what a status means);
-`vip_invoice_lines.status` was checked against it and agrees on **12,536 of 12,536** rows. The void
-vocabulary is config with a house default (`VOID_STATUSES`), case-folded — never a literal in a branch.
+A cancelled invoice is not something we owe. Voided invoices are excluded from every figure, and the
+SAME change excluded them from §23y's Device Purchases — `device_payable` imports
+`device_purchases.VOID_STATUSES` and `.voided_invoice_set` rather than keeping its own, so the two
+reports cannot drift on what "voided" means. Status comes from `commcalc.vip_invoices` (the header).
 
-**Proof:** `backend/harness_device_payable.py` (**90 checks**, stdlib-only, DB-free) — §A the join
+Measured as at 2025-12-31: the payable falls **$489,136.63 → $484,696.79** (1,608 → 1,592 units;
+16 units / $4,439.84 removed). 10 further units on voided invoices were already paid ($4,359.90) and
+10 are not in the unit ledger; all leave together. Only WIRELESS 2024 LLC moves ($82,487.47 →
+$78,047.63); the other three companies are unchanged. `totals.excluded_voided_*` and
+`payable_including_voided` report exactly what left, and the page renders it, so the figure the owner
+saw in writing stays explainable.
+
+**Proof:** `backend/harness_device_payable.py` (**93 checks**, stdlib-only, DB-free) — §A the join
 key, with the negative control that swapping to the column named `imei` collapses the match to zero
 **without erroring**; §B the definition, including that an absent payment date is never read as
 payment; §C the owner's 2025-12-31 numbers reproduced exactly, per company, from a cent-exact
@@ -5992,7 +6034,7 @@ baked in), `not_measured` returning `None` and emitting no rows; §E the `payg_d
 non-device items as a separate basis; §G the report declaring its own weaknesses; §H org scope,
 fail-closed on an unknown org; §I reuse with `coa.py` byte-identity asserted at git level; §J the
 page (including that it renders the licence, the not-measured state and the voided declaration);
-§K voided invoices counted and declared. §J also pins the **stale-response guard** — this
+§K voided invoices EXCLUDED, with what left reported. §J also pins the **stale-response guard** — this
 report takes the better part of a minute, so two requests in flight is the normal case, and a
 superseded response reaching `setData` would render a payable for a date the picker has already
 left. Third occurrence of that class (Cash/ePay Pickup 2026-09-10, Device Purchases 2026-09-11), so

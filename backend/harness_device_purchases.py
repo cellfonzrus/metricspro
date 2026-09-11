@@ -528,6 +528,69 @@ check("E8 parse_month accepts 'YYYY-MM' and rejects junk rather than inventing a
       dp.parse_month("2025-07") == (2025, 7) and dp.parse_month("2025-13") is None
       and dp.parse_month("last year") is None and dp.parse_month("") is None)
 
+# ══ §I — A VOIDED INVOICE IS NOT A PURCHASE ══════════════════════════════════════════════════════
+section("§I  VOIDED INVOICES ARE EXCLUDED — AND THE EXCLUDED MONEY IS REPORTED, NOT DROPPED")
+
+# THE LIVE CASE, pinned as a dated snapshot (house org, 2026-09-11). Invoice 1595336 of 2025-11-20,
+# grand total $9,189.74, header status Voided. Until this release the report counted it:
+#     2025 device      $7,099,841.56  →  $7,090,741.82   (voided $9,099.74 over 5 lines)
+#     2025 non-device    $296,508.59  →    $296,418.59   (voided     $90.00 over 1 line)
+# 2024 moves by MORE — $4,917,452.96 → $4,896,463.66 ($20,989.30 over 22 lines on four invoices all
+# dated 2024-11-27) — which is worth knowing before someone quotes a 2024 figure from memory.
+VOID_INV = "INV-VOIDED"
+VOID_DEVICE = 9099.74
+VOID_NON_DEVICE = 90.00
+VOIDED_LINES = [line(PHONE, VOID_DEVICE, "200 Broadway", qty=36, inv=VOID_INV),
+                line(SIMPACK, VOID_NON_DEVICE, "200 Broadway", inv=VOID_INV)]
+HEADERS = [{"org_id": ORG, "invoice_number": VOID_INV, "status": "Voided", "period_year": 2025},
+           {"org_id": ORG, "invoice_number": "INV-1", "status": "Paid In Full",
+            "period_year": 2025},
+           {"org_id": OTHER_ORG, "invoice_number": "INV-1", "status": "Voided",
+            "period_year": 2025}]
+RV = run(lines=LINES_2025 + VOIDED_LINES,
+         tables={"commcalc.vip_invoices": HEADERS})
+
+check("I1 a VOIDED invoice's device lines are not purchases — the headline is unmoved by $9,099.74 "
+      "of cancelled billing sitting in the same window",
+      RV["totals"]["device_amount"] == 7099841.56, RV["totals"]["device_amount"])
+check("I2 …and its non-device lines go with it ($90.00) — one rule across both bases, not a device "
+      "rule that stops at the device figure",
+      RV["totals"]["non_device_amount"] == 296508.59, RV["totals"]["non_device_amount"])
+check("I3 the excluded money is REPORTED per invoice, so 'billed' still reconciles to 'counted + "
+      "voided' and nothing merely went missing between two releases",
+      RV["excluded_voided"]["device_amount"] == VOID_DEVICE
+      and RV["excluded_voided"]["non_device_amount"] == VOID_NON_DEVICE
+      and RV["excluded_voided"]["invoices"] == 1
+      and RV["excluded_voided"]["detail"][0]["invoice_number"] == VOID_INV,
+      RV["excluded_voided"])
+check("I4 a voided invoice is not counted in the INVOICE count either",
+      RV["totals"]["invoices"] == R["totals"]["invoices"], RV["totals"]["invoices"])
+check("I5 its serialised UNITS are excluded too — a unit count that disagreed with the money would "
+      "be its own defect (and §23z's payable counts the same units)",
+      run(lines=LINES_2025 + VOIDED_LINES,
+          devices=DEVICES_2025 + [dict(dev(PHONE, i=9), invoice_number=VOID_INV)],
+          tables={"commcalc.vip_invoices": HEADERS}
+          )["meta"]["serialised_units_in_window"] == 3)
+check("I6 with NO invoice headers at all nothing is excluded — the exclusion is driven by evidence, "
+      "never by an assumption that a header must exist",
+      run(lines=LINES_2025 + VOIDED_LINES)["totals"]["device_amount"]
+      == round(7099841.56 + VOID_DEVICE, 2))
+check("I7 the rule is CONFIG with a house default, case-folded, never a literal in a branch",
+      dp.VOID_STATUSES == ("voided",)
+      and dp.voided_invoice_set([{"invoice_number": "X", "status": " VOIDED "}]) == {"X"}
+      and dp.voided_invoice_set([{"invoice_number": "X", "status": "Paid In Full"}]) == set())
+check("I8 the status is read from the invoice HEADER, not the line — a status is a property of the "
+      "invoice, and this feed's column names have lied before",
+      "vip_invoices" in src and "voided_invoice_set(invoice_rows)" in src)
+check("I9 another org's voided header can never cancel this org's invoice",
+      RV["totals"]["device_amount"] == 7099841.56)
+check("I10 ONE RULE, NOT TWO: §23z's Device Payable imports this vocabulary and this set builder "
+      "rather than keeping its own, so the two reports cannot drift on what 'voided' means",
+      "dp.VOID_STATUSES" in open(
+          os.path.join(HERE, "app/modules/account/device_payable.py"), encoding="utf-8").read()
+      and "dp.voided_invoice_set" in open(
+          os.path.join(HERE, "app/modules/account/device_payable.py"), encoding="utf-8").read())
+
 # ══ §F — org scope ═══════════════════════════════════════════════════════════════════════════════
 section("§F  MULTI-TENANT: every read is org-scoped, and a foreign row can never arrive")
 
@@ -567,6 +630,9 @@ check("G5 the page uses the SHARED filter bar and the SHARED export bar (RULE FI
       "StandardFilterBar" in pcode and "ReportExportBar" in pcode)
 check("G6 the unmapped buckets are RENDERED, not merely present in the payload",
       "store_not_mapped" in pcode and "company_not_mapped" in pcode)
+check("G7 the page RENDERS the voided exclusion with its money, so a figure that moved between "
+      "releases stays explainable to the reader who saw the old one",
+      "excluded_voided" in pcode and "voided.detail" in pcode)
 
 # ══ §H — the window on screen is the window in the money ═════════════════════════════════════════
 # LIVE DEFECT 2026-09-11, the reason this section exists. The owner set 01/01/2025-12/31/2025 and the

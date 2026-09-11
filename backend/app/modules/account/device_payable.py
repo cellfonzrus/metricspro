@@ -73,24 +73,21 @@ Classification reuses `device_purchases.device_product_names` / `.classify_line`
 data-driven "a line is a device when that product actually arrived serialised" rule the Device
 Purchases report (§23y) already proves. No second definition of what a device is.
 
-═══════════════ VOIDED INVOICES ARE COUNTED, AND SEPARATELY DECLARED (open question) ══════════════
-Six invoice headers on the house org carry `status = 'Voided'` (one in the 2025 window: invoice
-1595336, 2025-11-20, grand total $9,189.74). Their lines and their serialised units are still in the
-feed, and the sibling Device Purchases report (§23y) counts them today.
+═══════════════ A VOIDED INVOICE IS NOT A PAYABLE ═════════════════════════════════════════════════
+An invoice whose header `status` says VOIDED was cancelled: we do not owe it. Its units stay in the
+feed, and until 2026-09-11 both this report and the Device Purchases report counted them. Neither
+does now, and they were changed TOGETHER — two finance reports disagreeing about voided invoices is
+a defect that survives until someone reconciles them, and then costs both their credibility.
 
-This report counts them too — DELIBERATELY, for now, because the two reports disagreeing about
-voided invoices is a worse defect than either rule: someone will reconcile them one day and both
-will lose credibility. What it will NOT do is hide the question. `totals.voided_invoice_*` reports
-exactly what a voided-exclusion would remove, so the number is already published when the rule is
-decided, and flipping BOTH reports together is then a one-line change rather than an investigation.
+There is exactly ONE voided rule in the platform: `device_purchases.VOID_STATUSES` and
+`device_purchases.voided_invoice_set`, imported here rather than redefined. The status comes from
+`commcalc.vip_invoices` — the HEADER is what a status means.
 
-Measured house org as at 2025-12-31: 16 units on voided invoices sit in the payable, worth
-$4,439.84 — i.e. the payable would read $484,696.79 under an exclusion rule. Ten more are already
-paid ($4,359.90) and ten are not in the unit ledger at all.
-
-The invoice status is read from `vip_invoices` (the header, which is authoritative).
-`vip_invoice_lines.status` was checked against it and agrees on 12,536 of 12,536 rows, but the
-header is what a status means, and this feed's column names have lied before (see the join key).
+Measured house org, as at 2025-12-31: the payable falls from $489,136.63 to **$484,696.79** (16
+units, $4,439.84). A further 10 units on voided invoices were already paid ($4,359.90) and 10 more
+are not in the unit ledger at all; all of them leave every figure together. Nothing is silently
+dropped — `totals.excluded_voided_*` reports exactly what left, so the earlier number is explainable
+rather than merely gone.
 
 ═══════════════ DUPLICATE CHECK (CLAUDE.md build gate) ════════════════════════════════════════════
 Searched `docs/SYSTEM_DATA_FLOW_INDEX.md` before building. Nothing backdates a per-unit payable:
@@ -131,10 +128,9 @@ NOT_A_RETAIL_LOCATION = "(not a retail location)"
 #            exactly how much of the figure rests on an absent date rather than a later one.
 PAYMENT_STATES = ("paid", "unpaid", "unknown")
 
-# WHICH INVOICE STATUSES MEAN "this was voided". House default; a tenant whose distributor spells it
-# differently overrides it in config rather than in code (RULE TWO). Matching is case-folded, so
-# spelling drift in the feed does not silently stop the declaration.
-VOID_STATUSES = ("voided",)
+# THE PLATFORM'S ONE VOIDED RULE, imported rather than redefined (see the docstring). Re-exported
+# under this module's name so a reader of either report finds the same vocabulary in the same place.
+VOID_STATUSES = dp.VOID_STATUSES
 
 # COVERAGE. A month counts as covered when the ledger holds at least this share of the units
 # invoiced that month. Measured house org: the collapse is not subtle — 0.02-0.09 through 2024,
@@ -391,13 +387,11 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
             return (NOT_A_RETAIL_LOCATION, company, cid, "", how)
         return (addr, company, cid, mk(addr) or "", how)
 
-    # Invoices whose header says voided. Their units are COUNTED (the sibling report counts them)
-    # and separately DECLARED, so the open rule question carries its own number.
-    void_set = {_t(i.get("invoice_number")) for i in (invoice_rows or [])
-                if _t(i.get("status")).lower() in {str(v).lower() for v in (void_statuses or ())}
-                and _t(i.get("invoice_number"))}
+    # A VOIDED INVOICE IS NOT A PAYABLE. The set is built by the SHARED rule — one definition for
+    # this report and Device Purchases, so the two can never drift on what "voided" means.
+    void_set = dp.voided_invoice_set(invoice_rows, void_statuses)
     voided = {"payable_devices": 0, "payable_amount": 0.0, "paid_devices": 0, "paid_amount": 0.0,
-              "unmatched_devices": 0, "invoices": 0}
+              "unmatched_devices": 0, "invoices": set()}
 
     cells, unmatched_units, unplaced = {}, [], {}
     tot = {"payable_amount": 0.0, "payable_devices": 0, "paid_amount": 0.0, "paid_devices": 0,
@@ -413,8 +407,24 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
             if win_from and inv_date < win_from:
                 tot["before_coverage_devices"] += 1     # billed, but outside what the ledger can
                 continue                                # evidence — declared, never counted as paid
+            inv_no = _t(d.get("invoice_number"))
+            if inv_no and inv_no in void_set:
+                # Excluded from every figure — and KEPT, with its money, so the exclusion is
+                # auditable rather than a number that quietly went missing between two releases.
+                voided["invoices"].add(inv_no)
+                row_v = index.get(norm_key(d.get("serial")))
+                if row_v is None:
+                    voided["unmatched_devices"] += 1
+                else:
+                    amt_v = safe_float(row_v.get("owed_to_vip"))
+                    if payment_state(row_v, as_at) == "paid":
+                        voided["paid_devices"] += 1
+                        voided["paid_amount"] += amt_v
+                    else:
+                        voided["payable_devices"] += 1
+                        voided["payable_amount"] += amt_v
+                continue
             tot["invoiced_devices"] += 1
-            on_void = _t(d.get("invoice_number")) in void_set
             raw = _t(d.get("location"))
             store, company, cid, market, how = place(raw)
             key = (company, store)
@@ -430,8 +440,6 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
             if row is None:
                 tot["unmatched_devices"] += 1
                 c["unmatched_devices"] += 1
-                if on_void:
-                    voided["unmatched_devices"] += 1
                 if len(unmatched_units) < 500:
                     unmatched_units.append({"serial": _t(d.get("serial")), "location": raw,
                                             "invoiced": inv_date,
@@ -444,9 +452,6 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
                 tot["paid_devices"] += 1
                 c["paid_amount"] += amt
                 c["paid_devices"] += 1
-                if on_void:
-                    voided["paid_devices"] += 1
-                    voided["paid_amount"] += amt
                 continue
             # unpaid OR unknown — both are payable at this date; unknown is also counted apart
             if st == "unknown":
@@ -459,9 +464,6 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
             seen_payable.add(unit_key)
             tot["payable_amount"] += amt
             tot["payable_devices"] += 1
-            if on_void:
-                voided["payable_devices"] += 1
-                voided["payable_amount"] += amt
             c["payable_amount"] += amt
             c["payable_devices"] += 1
             if store == NOT_A_RETAIL_LOCATION and raw:
@@ -486,6 +488,8 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
             continue
         if win_from and d0 < win_from:
             continue
+        if _t(l.get("invoice_number")) in void_set:
+            continue                       # the same rule, applied to the non-device basis too
         amt = safe_float(l.get("total"))
         nm = _t(l.get("name"))
         if dp.classify_line(nm, exact_names, ci_names) != "non_device":
@@ -565,13 +569,15 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
                                                if measured else None),
             "distinct_device_payable_devices": (tot["payable_devices"] - repeat["rows"]
                                                 if measured else None),
-            # COUNTED ABOVE, and declared here: what an exclude-voided-invoices rule would remove.
-            # The sibling Device Purchases report counts these too; the two must move together.
-            "voided_invoice_payable_devices": voided["payable_devices"] if measured else None,
-            "voided_invoice_payable_amount": r2(voided["payable_amount"]) if measured else None,
-            "voided_invoice_paid_amount": r2(voided["paid_amount"]) if measured else None,
-            "voided_invoice_unmatched_devices": voided["unmatched_devices"] if measured else None,
-            "payable_excluding_voided": (r2(tot["payable_amount"] - voided["payable_amount"])
+            # EXCLUDED, NOT MISSING. What voided invoices took out of every figure above, so the
+            # number this report used to print stays explainable. The sibling Device Purchases
+            # report excludes them under the SAME shared rule, changed in the same release.
+            "excluded_voided_invoices": len(voided["invoices"]) if measured else None,
+            "excluded_voided_payable_devices": voided["payable_devices"] if measured else None,
+            "excluded_voided_payable_amount": r2(voided["payable_amount"]) if measured else None,
+            "excluded_voided_paid_amount": r2(voided["paid_amount"]) if measured else None,
+            "excluded_voided_unmatched_devices": voided["unmatched_devices"] if measured else None,
+            "payable_including_voided": (r2(tot["payable_amount"] + voided["payable_amount"])
                                          if measured else None),
         },
         "by_company": sorted(by_company.values(),
