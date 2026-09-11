@@ -583,6 +583,10 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/tax-collected', label: 'Tax Collected', icon: '🧾', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/accounts/balance-sheet', label: 'Balance Sheet', icon: '⚖️', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
     { href: '/accounts/inventory', label: 'Inventory Values', icon: '📦', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
+    // Device Purchases (owner directive 2026-09-11): what the distributor BILLED us in a period,
+    // by company and by store. PURCHASES, deliberately not COGS — the page says so on itself.
+    // Module + scopes are byte-identical to its Finance neighbours: ZERO RBAC change, no new grant.
+    { href: '/accounts/device-purchases', label: 'Device Purchases', icon: '📱', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
     { href: '/accounts/recon', label: 'Reconciliation', icon: '🔎', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
     { href: '/accounts/residual-per-sub', label: 'Residual per Subscriber', icon: '📉', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
     { href: '/accounts/journal', label: 'Journal', icon: '📒', module: 'accounts', scopes: ['all'], tileOnly: true },
@@ -1026,6 +1030,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/accounts/balance-sheet', 'finance'], ['/accounts/inventory', 'finance'], ['/accounts/recon', 'finance'],
   ['/accounts/residual-per-sub', 'finance'], ['/accounts/journal', 'finance'],
   ['/accounts/liabilities-due', 'finance'],
+  ['/accounts/device-purchases', 'finance'],
   ['/commcalc/gp', 'finance'], ['/commcalc/expenses', 'finance'], ['/commcalc/tax-collected', 'finance'],
   // Payroll & HR
   ['/hr', 'payroll'], ['/hr/people', 'payroll'], ['/hr/onboarding', 'payroll'], ['/hr/compliance', 'payroll'],
