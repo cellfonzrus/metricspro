@@ -48,7 +48,7 @@ Primary code homes:
 | 23 | **Marketing & Events** | "What outside-store events are planned, who is working one and who backs them up if they don't show, how is everyone getting there, what has to be packed, what was given away and what came back — and how did the stores do over the event window?" |
 | 23y | **Device Purchases from the distributor** | "What did the distributor bill us for phones and devices in this period, per company and per store — and why does it not equal device COGS?" |
 | 23z | **Device Payable as at a date** | "Standing on a given day — a year-end, a closing date — which devices had already been billed to us but not yet paid for, per company and per store? And which of the units billed in one year were actually paid in the next?" |
-| 23aa | **Capitalised chargeback (balance-sheet asset)** | "A distributor chargeback we are paying off in instalments — what is the gross, how much has amortised, what is still carried, and where does the expense land?" |
+| 23aa | **Distributor chargebacks** | "Two separate chargebacks billed to the master dealer account — a one-off and a recurring one — what are they, when did each really start, and where do they book?" |
 
 ---
 
@@ -6042,76 +6042,102 @@ the `alive` flag, its teardown and each guarded setter are asserted, and a bare 
 asserted ABSENT. The live per-company figures are pinned as a **dated snapshot** — they are the report's
 definition made arithmetic.
 
-## 23aa. CAPITALISED CHARGEBACK — a distributor chargeback carried as an ASSET (owner directive 2026-09-11)
+## 23aa. DISTRIBUTOR CHARGEBACKS — two separate charges, both P&L expense (owner directive 2026-09-11)
 
 **Owner, verbatim:** *"9663.75 is actually being mortised towards the chargeback - ttoal chargeback
-is 159106.76 +9663.75 x6 should be in the balance sheet as chargeback"*.
+is 159106.76 +9663.75 x6 should be in the balance sheet as chargeback"*, then — shown what an
+amortisation model implies over time — *"159106.76 is a separate cjhargeback which it seems occured
+iun 4 instalments as per teh report but 9663.75 is a seaparate chargeback which started in 2025 and
+going to 2026"*, then, asked directly whether it belongs on the balance sheet: **"159106.76 is an
+expense"**.
 
-**STATUS: DERIVATION BUILT AND PROVEN; THE BOOKING IS NOT WIRED AND AWAITS OWNER APPROVAL.**
-`chargeback_asset.py` is pure and books nothing. The P&L/Balance-Sheet legs, the `coa.py` line and
-the config migration are specified below and deliberately NOT applied — this is money-touching and
-migrations are owner-run.
+### Two separate charges. Nothing amortises anything. No balance-sheet asset.
 
-### THE FINDING THAT FRAMES IT: this money is on no statement today
+| | | |
+|---|---|---|
+| **A** | one-off chargeback | **$159,106.76** — Return Item Chargeback $159,056.76 + NSF Fee $50.00, invoice 1604147, 2025-12-29 |
+| **B** | recurring monthly chargeback | **$9,663.75** each, 6 so far = **$57,982.50**, still running |
+| | combined to date | **$217,089.26** |
 
-`coa.build_inputs` reads distributor invoice HEADERS only — `shipping + other_cost` → `vip_fees`,
-and unpaid `grand_total` → the `vip_ap` liability. All seven invoices in this event carry
-**shipping $0.00, other_cost $0.00, status 'Paid In Full'**, so they contribute **$0.00 to the P&L
-and $0.00 to the Balance Sheet** as things stand. Capitalising them is RECOGNITION OF MONEY THAT WAS
-NEVER BOOKED, not a reclassification — which is why nothing existing moves when it lands, and why
-the change is material.
+B does not reduce A. Both book to the **existing `chargebacks` opex line** in the month each was
+billed. No new COA line, no BS key, nothing cumulative — `balance_sheet.py` and
+`statement_engine.py` are untouched and needed no re-baseline. An earlier draft carried A as a
+balance-sheet asset; it was withdrawn because an asset implies future recovery and nothing ever
+reduced A. **The module contains no `amortisation`, `carrying_value` or `accumulated` identifier,
+and the harness §F3 asserts their absence from the code.**
 
-### What is measured (live, `commcalc.vip_invoice_lines`, 2026-09-11)
+### ⚠ THIS IS THE ONE BOOKING IN THE PACKAGE THAT MOVES AN EXISTING FIGURE
 
-| | |
-|---|---|
-| Return Item Chargeback, inv 1604147, 2025-12-29, account location | $159,056.76 |
-| NSF Fee, same invoice | $50.00 |
-| Dealer Chargeback × 6 @ $9,663.75 (2026-02-23, 04-03, 05-02, 06-02, 07-02, 08-02) | $57,982.50 |
-| **gross** | **$217,089.26** |
-| **amortised to date** | **$57,982.50** |
-| **carrying value** | **$159,106.76** |
+Everything else shipped here is additive and inert. This is not. Measured live by running the real
+`build_inputs` twice, config off then on (house org):
 
-### THE TRAP a name-only rule falls into
+| period | `chargebacks` before | after | delta |
+|---|---|---|---|
+| **2025-12** | $0.00 | **$159,106.76** | **+$159,106.76** |
+| 2025-11 | $0.00 | $0.00 | — |
+| **2026-02** | $0.00 | **$9,663.75** | **+$9,663.75** |
+| 2026-03 | $0.00 | $0.00 | — (no March charge) |
+| **2026-08** | $0.00 | **$9,663.75** | **+$9,663.75** |
 
-Summing every chargeback-NAMED line gives **$217,660.31** — **$571.05** too much: three RETAIL
-stores' $30 Return Item Chargebacks plus $50 NSF fees on the same day (invoices 1604144/5/6), 19
-Early Life Churn Chargebacks ($306.05, 2023) and one Handset Returns Commission Chargeback ($25.00).
-Same word, same day, unrelated money. The scope is therefore **account LOCATION *and* line-name
-vocabulary**, both per-org config, proven by measuring the naive rule in `harness_chargeback_asset`
-§C.
+Every other period is unchanged. **The money is on no statement today**: `coa.build_inputs` reads
+invoice HEADERS only (`shipping + other_cost` → `vip_fees`; unpaid `grand_total` → `vip_ap`) and all
+seven invoices carry shipping $0.00, other_cost $0.00, status 'Paid In Full'. This is RECOGNITION of
+money that was never booked, not a reclassification.
 
-### RULE TWO
+**Attribution:** the charge books at the account location, which `coa.store_resolver` canonicalises
+to `228 N Wood Ave, Syosset, NY 11791` and the shared company matcher assigns to the company
+**Cellular Services** — the master dealer account, not a store, and not the operating company whose
+payment bounced. Booked where the data says; **not** reallocated. Moving it is an owner decision.
 
-No location, vendor or line name is in the code. **The house default is EMPTY** — no org, the house
-org included, derives or books anything until an owner configures it, the same posture
-`service_fee_products` / `payroll_expense_names` / `overhead_config` already take in
-`coa._account_config`.
+### Two things the owner said that the data does not support — published, not argued
 
-### THE CONSEQUENCE THE OWNER SHOULD SEE
+1. **A did NOT arrive in four instalments.** The "Return Item Chargeback ×4" is ONE charge of
+   $159,056.76 at the account plus **three unrelated $30.00 store-level chargebacks** (559 Broadway,
+   1598 Mt Ephraim Ave, 5619 N Broad St), all billed 2025-12-29.
+2. **B did NOT start in 2025.** Searching the whole feed for any line valued 9,663.75 under ANY name
+   in ANY year returns six hits, **every one in 2026** (Feb 23, Apr 3, May 2, Jun 2, Jul 2, Aug 2).
+   `recurring.first_seen` publishes **2026-02-23** from the data, so the discrepancy is visible
+   rather than settled by memory. `recurring.missing_months` surfaces the real **2026-03** gap.
 
-Under the owner's stated basis (`event_plus_instalments`) each instalment raises the gross AND the
-amortisation by the same amount, so **the carrying value never declines** — $159,106.76 at every
-as-of date, for ever. The payload states this (`carrying_value_moves: false`). The other reading
-(`event_only` — instalments paying DOWN the original) gives carrying **$101,124.26** today and does
-decline. Both are computed every run and published; the basis is config, so switching is not a code
-change.
+### The trap, and what is declared but not booked
+
+A name-only rule totals **$217,660.31** — **$571.05** too much. Scope is therefore account
+**LOCATION and** name vocabulary. That $571.05 is reported as `unbooked_watch` (total, count, and a
+per-location breakdown): in no total, in no P&L leg, visible with its money so the owner can decide
+whether any of it belongs. **Declared, never absorbed.**
+
+### RULE TWO, and how it ships
+
+No location, vendor or line name in the code. Vocabulary is per-org config with an **EMPTY house
+default** and `booking` defaulting to **`off`** — a tenant opts in twice, deliberately — so every
+org including the house org is byte-identical until the config row is seeded. **The migration is
+owner-run and NOT applied.**
+
+### The coa.py guards were re-baselined deliberately, and made stricter
+
+`harness_device_purchases.py` §B2 and `harness_device_payable.py` §I7 pinned `coa.py`
+byte-identical. That was a PROXY for "this work did not re-attribute booked money", and it became
+wrong the moment a sanctioned change landed. Rather than weaken or delete it, it now states the real
+claim via `harnesslib.coa_movement`: **every resolver and attribution function must be byte-identical**
+(`store_resolver`, `build_company_matcher`, `company_assignment`, `store_company_map`,
+`org_companies`, `store_code_to_address`, `_norm_store`, `_squash_key`, `_lead_num_key`) **and the
+only functions that changed at all must be the two sanctioned ones** (`build_inputs`,
+`_account_config`), with nothing removed. Anything unexplained still fails.
 
 ### Where it lives
 
-`backend/app/modules/account/chargeback_asset.py` — PURE (`derive`, `amortisation_in_period`,
-`classify_line`, `normalise_config`). No client, no I/O, no writes; proven with a DEAD client
-installed. **Proof:** `backend/harness_chargeback_asset.py` (**49 checks**) — §A the owner's three
-numbers; §B derived not frozen (a seventh instalment lands with no edit; no count or amount in the
-code; the real March gap honoured); §C the trap measured; §D three states incl. a half-configured
-org refusing to match; §E RULE TWO with the empty default; §F the frozen-carrying consequence and
-both bases; §G as-of; §H purity; §I the P&L leg booking each instalment in exactly one period.
+`backend/app/modules/account/distributor_chargebacks.py` — PURE (`derive`, `expense_in_period`,
+`one_off_in_period`, `recurring_in_period`, `classify_line`, `normalise_config`); no client, no I/O,
+no writes, proven with a DEAD client installed. Booking leg in `coa.build_inputs` (period-scoped),
+config in `coa._account_config`. **Proof:** `backend/harness_distributor_chargebacks.py`
+(**55 checks**) — §A the three numbers; §B derived not frozen; §C the trap and the unbooked watch
+list; §D three states; §E RULE TWO; §F two separate charges and the amortisation vocabulary provably
+gone; §G both data corrections; §H as-of, purity, nothing wired without config; §I the P&L legs.
 
 ### Duplicate check
 
-`chargebacks` ("Chargebacks / clawbacks", opex, store) is REUSED for the amortisation expense.
-`chargeback_res` is **deliberately not** reused: it means EXPECTED, UNDEDUCTED chargebacks (booked
-from `chargeback_items` rows with no `decided_at`), and these are decided, deducted and paid in
-full — a reserve would state the opposite and would corrupt a line the P&L already uses.
-`chargeback_items` / `ops_chargeback` (migs 036/037/504) are INTERNAL store/employee chargebacks
-with their own decide/settle lifecycle; a distributor chargeback is not one and is not written there.
+`chargebacks` (opex, store) REUSED for both legs. `chargeback_res` deliberately NOT reused — it
+means EXPECTED, UNDEDUCTED chargebacks (booked from `chargeback_items` with no `decided_at`), and
+these are decided, deducted and paid in full; a reserve would state the opposite and corrupt a line
+the P&L already uses. `chargeback_items` / `ops_chargeback` (migs 036/037/504) are INTERNAL
+store/employee chargebacks with their own lifecycle; a distributor chargeback is not one.

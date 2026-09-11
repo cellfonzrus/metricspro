@@ -699,18 +699,34 @@ check("I6 the report BOOKS nothing and WRITES nothing — no insert, update, ups
 # THE NO-MOVEMENT PROOF. `coa.py` must be byte-identical to the branch point: every P&L, Balance
 # Sheet and recon figure is unchanged by CONSTRUCTION, not by assertion. This mirrors
 # harness_device_purchases §B2/§B3 and is the same claim for the same reason.
+# RE-BASELINED 2026-09-11, DELIBERATELY. This asserted coa.py byte-identical, which was a PROXY for
+# "this report did not re-attribute booked money". The owner then ruled a distributor chargeback is
+# an expense, which books in `build_inputs`. Rather than delete or weaken the assertion, it now
+# states the real claim and is STRICTER where it counts: every resolver and attribution function
+# must be byte-identical, and only the two functions sanctioned by that ruling may have changed.
+COA_SANCTIONED = ("build_inputs", "_account_config")
 try:
+    import harnesslib
     base = subprocess.run(["git", "merge-base", "HEAD", "origin/main"],
                           cwd=os.path.dirname(HERE), capture_output=True, text=True).stdout.strip()
-    diff = subprocess.run(["git", "diff", "--stat", base, "--",
-                           "backend/app/modules/account/coa.py"],
-                          cwd=os.path.dirname(HERE), capture_output=True, text=True).stdout.strip()
-    git_ok = bool(base)
+    base_src = subprocess.run(["git", "show", "%s:backend/app/modules/account/coa.py" % base],
+                              cwd=os.path.dirname(HERE), capture_output=True,
+                              text=True).stdout
+    git_ok = bool(base) and bool(base_src.strip())
 except Exception:                                                # pragma: no cover - git-less CI
-    diff, git_ok = "", False
-check("I7 account/coa.py is byte-identical to the branch point — this report cannot have moved a "
-      "single booked figure, and that is proven at git level rather than asserted",
-      (not git_ok) or diff == "", diff)
+    base_src, git_ok = "", False
+if git_ok:
+    now_src = open(os.path.join(HERE, "app/modules/account/coa.py"), encoding="utf-8").read()
+    _removed, _outside, _moved = harnesslib.coa_movement(base_src, now_src, COA_SANCTIONED)
+else:                                                            # pragma: no cover - git-less CI
+    _removed = _outside = _moved = []
+check("I7 every store/company RESOLVER and ATTRIBUTION function in coa.py is byte-identical to the "
+      "branch point — this report cannot have moved WHICH store or WHICH company money books to, "
+      "proven per function at git level rather than asserted",
+      _moved == [], _moved)
+check("I7b …and the only functions that changed in coa.py at all are the two sanctioned by the "
+      "chargeback expense ruling; nothing else moved and nothing was removed",
+      _outside == [] and _removed == [], (_outside, _removed))
 
 # ══ §K — A VOIDED INVOICE IS NOT A PAYABLE ══════════════════════════════════════════════════════
 section("§K  VOIDED INVOICES ARE EXCLUDED — UNDER THE SAME RULE THE SIBLING REPORT USES")
