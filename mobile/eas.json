@@ -7,12 +7,14 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "channel": "development",
       "env": {
         "EXPO_PUBLIC_API_URL": "http://localhost:8000"
       }
     },
     "preview": {
       "distribution": "internal",
+      "channel": "preview",
       "ios": { "simulator": false },
       "android": { "buildType": "apk" },
       "env": {
@@ -23,6 +25,7 @@
     },
     "production": {
       "autoIncrement": true,
+      "channel": "production",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://metricspro-production.up.railway.app",
         "EXPO_PUBLIC_SUPABASE_URL": "https://etxdalernqqtwjcrtcuj.supabase.co",

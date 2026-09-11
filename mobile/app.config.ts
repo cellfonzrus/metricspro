@@ -9,6 +9,9 @@ import type { ExpoConfig, ConfigContext } from 'expo/config'
 //
 // Provide these via EAS build env vars (eas.json `env`) or a local `.env` consumed by your shell:
 //   EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SUPABASE_ANON_KEY, EXPO_PUBLIC_API_URL
+// EAS project id — the anchor for both build attribution and the OTA (EAS Update) URL below.
+const projectId = process.env.EAS_PROJECT_ID || 'a3ab84a6-1706-473b-9046-f66dbf2c8b9a'
+
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: 'MetricsPro',
@@ -19,6 +22,15 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   orientation: 'portrait',
   icon: './assets/icon.png',
   userInterfaceStyle: 'automatic',
+  // ── OTA updates (EAS Update) ────────────────────────────────────────────────────────────────
+  // Lets JS/asset-only changes (like a new dashboard screen) reach installed apps without a store
+  // build: `eas update --branch <channel>` publishes, and a build stamped with the matching channel
+  // (see eas.json) pulls it on next launch. `runtimeVersion` is the compatibility key — an OTA only
+  // lands on a build whose runtime matches, so a NATIVE change (new module, permission, SDK bump)
+  // must ship as a fresh build, never OTA. Policy 'appVersion' ties the runtime to `version` above,
+  // so bumping the app version correctly invalidates OTA against the old native binary.
+  runtimeVersion: { policy: 'appVersion' },
+  updates: { url: `https://u.expo.dev/${projectId}` },
   // Disabled for now: the React Native "new architecture" is the most common cause of a first EAS
   // Android build failing on this stack. Off = a more forgiving build; can be re-enabled later once
   // the app is validated on devices. (No app behaviour depends on it.)
@@ -91,6 +103,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL ?? '',
     supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '',
     apiUrl: process.env.EXPO_PUBLIC_API_URL ?? '',
-    eas: { projectId: process.env.EAS_PROJECT_ID || 'a3ab84a6-1706-473b-9046-f66dbf2c8b9a' },
+    eas: { projectId },
   },
 })
