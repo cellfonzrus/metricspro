@@ -46,6 +46,7 @@ Primary code homes:
 | 21 | **Billing — usage & pricing** | "What did this tenant use, what did it cost us, what do we bill them, which modules are still unpriced, and what does their itemized statement say?" |
 | 22 | **Platform OPERATOR console** | "Who operates the platform rather than a company in it, how does an operator enter a tenant without it being a secret, what is on the record afterwards, and how do we stop platform power from riding on somebody's employee row?" |
 | 23 | **Marketing & Events** | "What outside-store events are planned, who is working one and who backs them up if they don't show, how is everyone getting there, what has to be packed, what was given away and what came back — and how did the stores do over the event window?" |
+| 23y | **Device Purchases from the distributor** | "What did the distributor bill us for phones and devices in this period, per company and per store — and why does it not equal device COGS?" |
 
 ---
 
@@ -2691,6 +2692,9 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | **Commission plans (rule engine)** | mig `059_commission_plans.sql`, `066`,`067`,`232`,`260`,`262` | `commission_engine.py`; `/commission-plans*` `12557-14246` (coverage, pay-gate, exclusions, bulk-assign) |
 | **Commission ledger (income tracking)** | mig `071_commission_ledger.sql` | `/commission-ledger/*` `3997-4602` |
 | **VIP / PayGo** | mig `008`,`011`,`014` | `vip_sweep.py`; `/vip/*` `2421-3078`, `/vip/paygo/*` `8336-8365` |
+| `commcalc.vip_invoice_lines` (distributor invoice LINE items; `location` is a STORE ADDRESS in the distributor's own spelling) | `vip_sweep.py` (portal scrape, mig `008`) | **Device Purchases report** (`account/device_purchases.compute` → `GET /account/device-purchases`, §23y — the money grain); `device_cost_recon` (source ② evidence); `asset/invoice_due` (per-invoice device list) |
+| `commcalc.vip_invoice_devices` (one row per SERIALISED unit: serial / IMEI / SIM) | `vip_sweep.py` (mig `008`) | **Device Purchases report** — this table IS the device DEFINITION (`device_purchases.device_product_names`: a line is a device when its `btrim(name)` appears here as a `btrim(product_name)`, §23y); `asset/invoice_due` (serial join); `device_cost_recon` |
+| `commcalc.vip_invoices` (invoice HEADERS — `grand_total`, `shipping`, `other_cost`, `due_date`, `status`) | `vip_sweep.py` (mig `008`) | `coa.build_inputs` (`vip_fees` P&L line = shipping + other_cost; `vip_ap` BS payable on unpaid invoices); `asset/invoice_due`. **NOT read by the Device Purchases report** — invoice-level shipping/tax is not device purchase price, and the P&L already books it |
 | **epay** | mig `020`,`025` | `epay_sweep.py`; `/epay/*` `8730-8811`, `/tax-collected` `2459` (the line reference here said `2106` until 2026-09-08; the endpoint had moved — see §17 for its own row) |
 | **epay** | mig `020`,`025` | `epay_sweep.py`; `/epay/*` `8730-8811`, `/tax-collected` `2106` |
 | **Processor Daily Debits & Credits (owner directive 2026-09-04)** | NO new table / NO migration — reads the EXISTING processor feeds `raw_payment_detail` (§2, epay sweep, migs `020`/`025`) and `raw_ma_daily_tx` (§2, VidaPay sweep/upload/`report_pull`, mig `083`). Naming config = the mig-`953` `report_term` vocabulary (`processor` key); primary-feed config = `metric_source_of_truth`/`data_source` (migs `923`/`939`) | **`commcalc/processor_ledger.py`** — PURE core `classify_amount`/`fold_cells`/`filter_cells`/`day_type_rollup`, IO only in `assemble`. Rows = DAY × TRANSACTION TYPE with DEBITS / CREDITS / NET (= credits − debits) columns; cell grain (processor, date, tx_type, store) so every rollup ties out. **DEBIT/CREDIT RULE is per FEED SHAPE, never a carrier branch** (`FEED_SHAPES`, RULE TWO): `raw_payment_detail.amount` > 0 = CREDIT to the dealer / < 0 = DEBIT; `raw_ma_daily_tx.retail_cost` > 0 = DEBIT (a charge) / < 0 = CREDIT — both verified against live rows 2026-09-04 (house 2026-07-27: D 1,001.60 / C 80,214.66 / N 79,213.06; luxelink 2026-09-02: D 30,297.96 / C 987.50 / N −29,310.46), pinned in the harness. RESOLUTIONS REUSED, never re-derived: processor identity `router._metric_source`+`_billpay_processor_name`, processor NAME `report_labels.load_report_labels` term `processor` (§18 — no vendor literal in module or page copy), VidaPay account→store `router._vidapay_account_resolver`, raw→canonical store `account.coa.store_resolver`, address→code `flag_store_resolver`, store→market + market dropdown `core.scope.market_by_code`/`org_market_options` (§13a/§13c). Endpoint `commcalc/processor_ledger_api.py` `GET /commcalc/processor-ledger` (span-gated via `scope_keyset`/`in_keyset`; unmapped-store cells hidden from scoped callers). Page `commcalc/processor-ledger/page.tsx` (NAV Assets & Inventory + REPORT_DIRECTORY `'assets'` + REPORT_TREES `'asset'`; carrier-NEUTRAL → deliberately NOT in `NAV_CARRIERS`). Scheduled/emailed via notify W3 key `processor_ledger` (`report_registry.py`; filters date_from/date_to/store/type/market). Proof `harness_processor_ledger.py`; guards `harness_market_enumeration_guard.py` (pins `assemble` CANONICAL), `harness_carrier_vocab_guard.py`, `harness_org_scope_guard.py` |
@@ -2855,6 +2859,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `POST /calculate/{period}` | `router.py:8968` | §6 rep commission |
 | `GET /commissions/{period}` | `10222` | §6 — the Rep Incentive Report read; market stamped per row via §13a (2026-09-03 fix) |
 | `GET /commcalc/processor-ledger` | `commcalc/processor_ledger_api.py` | §15 Processor Daily Debits & Credits — day × transaction type, DEBITS/CREDITS/NET; store-span gated; serves the canonical §13c `market_options` |
+| `GET /account/device-purchases` (`from_period`/`to_period` = 'YYYY-MM', inclusive; default = the current calendar year) | `account/router.device_purchases` → `account/device_purchases.compute` (pure core `aggregate`) | §23y Device Purchases from the distributor — device spend BILLED in a window, by company × store. PURCHASES, **not** COGS (`account/device_cogs`), and it books nothing |
 | `GET /sales-report` | `15792` | §3 |
 | `GET /gp/{period}` (payload also carries `expenses_carried_from`, **`labour_coverage`** and **`labour_double_booked`** — the salary silent-zero / month-grain / double-book detectors, display-only — plus **`labour_commission_suppressed`**, the per-store record of which commission expense rows STOPPED booking and what `rep_commissions` books in their place; that one is NOT display-only, `exp_total`/`net_profit` move with it) | `14750` | §4 |
 | `GET/PUT /targets/{period}` | `19005/19071` | §5 |
@@ -3010,6 +3015,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | Card settlement recon — store→MARKET + the market option list | THE canonical union index ONLY (`core.scope.market_by_code` / `org_market_options`, §13a/§13c) — the roster read takes ADDRESS only, so no market-vocabulary site exists to pin. Deliberately CANONICAL rather than the closing family's OVERLAY: a settlement-only store has no roster row, and a `store_mapping`-only market would otherwise vanish from the filter | `closing/router.external_credit_recon` (pinned `CANONICAL` in `harness_market_enumeration_guard`; nothing to pin in `harness_market_resolution_guard`); truth table `harness_external_credit_recon.py` §J |
 | Sales tax collected (report) / Sales tax payable (BS liability, mig `991`) | `raw_sales.tax` ∪ `daily_sales_feed.tax` (mig `105`), voids excluded; report headline `tax` also excludes `trans_type=='Return'`, the liability figure `tax_net` includes them (refunded tax is not owed). Store key = `coa.store_resolver` (§13a) for BOTH. Balance = cumulative from the accrual start through as-of, less remittances | **ONE pure pass** `commcalc/tax_collected.py aggregate()` → `GET /commcalc/tax-collected` (first caller) **and** `balance_sheet.sales_tax_payable_bookings` via `statement_engine.build_inputs_full` (`account_config.sales_tax_basis`: off default / collected; `sales_tax_accrual_start` or the earliest taxed sale). Remittance = a negative `journal_entries` row folded by label in `engine._assemble` — never a second ledger. Proof `harness_tax_collected.py` §I/§J + `harness_balance_sheet_truths.py` §J |
 | Distributor payable — WHICH derivation and WHICH line (mig `954`) | `account_config.distributor_payable_basis` / `.distributor_payable_line` / `.asset_ledger_open_statuses`, else the house carrier preset (`ui_label_override` scope `finance_basis:<carrier>`, key `distributor_payable`) over the org's `commcalc.carrier` rows | `balance_sheet.resolve_payable_basis`/`resolve_payable_line` (org > carrier preset > declared mig-933 family > off; target line defaults `asset_ledger`→`owed_vip`, `marketplace_due`→`handset_payable`) → `statement_engine.build_inputs_full` + `GET /account/liabilities-due`; proof `harness_balance_sheet_truths.py` §G |
+| **Device purchases from the distributor** (what we were BILLED in a period, by company × store) | `commcalc.vip_invoice_lines.total` on lines whose `btrim(name)` is a `btrim(product_name)` in `commcalc.vip_invoice_devices` (i.e. the product actually arrived SERIALISED — no product-name matching, RULE TWO). Recognised on the INVOICE date. Invoice-level shipping/other/tax excluded (already `vip_fees`). Tablets INCLUDED and shown at product grain | `account/device_purchases.aggregate` (pure) → `GET /account/device-purchases` → `/accounts/device-purchases`. Store = `coa.store_resolver` (§13/§13a) **unchanged**, company = `coa.build_company_matcher` **unchanged** (called with `default_id=None` so "unassigned" stays distinguishable from "the default"); a codeless `store_mapping` row (a distributor master/dealer ACCOUNT) is not a store; unresolved rows keep their money in `(store not mapped)` / `(company not mapped)`. Proof `harness_device_purchases.py` (67), incl. §B2/§B3 pinning `coa.py` byte-identical. **Deliberately will NOT tie to `account/device_cogs`** — that is cost of units SOLD, IMEI-deduped, recognised at sale |
 | Distributor open balance — consignment side (BS liability, mig `954`) | `asset_ledger.owed_to_vip` on rows whose `status` is in `asset_ledger_open_statuses` (default `["Open"]`) with `acquired_date ≤ as-of`; live house org 2026-09-04 = $358,221.13 (past-due $29,839.62 / not-yet-due $328,381.51) | `balance_sheet.asset_ledger_open_bookings` via `statement_engine.build_inputs_full` → the resolved target line (default `owed_vip`); store grain = the ledger's own `store` through `coa.store_resolver`; as-of = `period_as_of` (open period ⇒ today, closed ⇒ period end) |
 | Handset payable (BS liability, mig `933`) | `raw_ma_daily_tx.retail_cost` on the org's `handset_payable_order_types` families, `tx_date ≤ as-of < due_date` (the vendor's own terms) | `balance_sheet.handset_payable_bookings` via `statement_engine.build_inputs_full` → BS `handset_payable` line; store grain = the mig-314 account→store index |
 | Unsold-phone inventory (BS asset, mig `933`) | `inventory_aging_device.unit_cost` where `on_hand` at the store's latest `as_of_date` (basis `'devices'`); `inventory_value.swept_value` (basis `'report'`, default); `manual_value` always wins | `balance_sheet.device_inventory_cells`/`apply_inventory_basis`; tie-out `GET /account/inventory-recon` |
@@ -5702,3 +5708,150 @@ naming itself. Re-armed: swapping two steps in the migration alone fails A3 and 
 
 **Migration `1003` is WRITTEN, NOT APPLIED.** Until it runs, the hub keeps its auto-derived tiles —
 the "next step" prompts work regardless, since they ship with the code.
+
+## 23y. DEVICE PURCHASES FROM THE DISTRIBUTOR — purchases, kept separate from COGS (owner directive 2026-09-11)
+
+**Owner:** *"a permanent report in the finance menu giving the cost of all phones/devices purchased
+from [the distributor], segregated by company and by store"* — 2025 asked for first, **built as a
+period-ranged report**. And, explicitly: *"build it as purchases, keep it separate from cogs."*
+
+### The two questions, and why they must not be reconciled
+
+| | Device Purchases (this report) | Device COGS (`account/device_cogs.py`) |
+|---|---|---|
+| Question | what the distributor **BILLED US** in the window | what the units we **SOLD** cost us |
+| Grain | the invoice LINE | the IMEI |
+| Recognised | on the **invoice date** | at **sale** (invoice-first, sale-time fallback) |
+| Dedup | none needed — a line is billed once | **by IMEI**, so one handset is charged once |
+| Unsold stock | **counted** (it was billed) | a balance-sheet asset, not an expense |
+| Books anything? | **No.** Report only | Yes — the P&L COGS lines |
+
+A device bought in December and sold in February is in this report's December and in `device_cogs`'
+February. **They are not meant to tie**, and the page says so in a banner above the figures, naming
+the other report — so nobody reconciles them, finds the gap, and concludes one is broken.
+
+### DUPLICATE CHECK (build gate) — what was checked, what was reused
+
+Checked in this index before building: §4 (the P&L's device/COGS bookings), §11 (inventory & aging),
+§12/§15 (the VIP feed and the distributor surfaces), §13/§13a/§13b (store + entity resolution), §16's
+VIP row, and every existing consumer of `vip_invoice_*` — `asset/invoice_due.py` (per-INVOICE due
+date / total / device list — an AP question, not a spend question), `commcalc/device_cost_recon.py`
+(the four-source measurement pass — a recon of cost SOURCES, not a period purchase report), and
+`coa.build_inputs` (`vip_fees` / `vip_ap` off the invoice HEADERS). None answers "device spend in a
+window by company and store", so this report is new; but it derives nothing any of them derives.
+
+**REUSED, not re-derived:** `coa.store_resolver` (store, §13/§13a) · `coa.company_assignment` →
+`coa.build_company_matcher` (company, §13b's canonical `org_companies` enumeration underneath) ·
+`core.scope.store_market_resolver` (market, §13a) · `commcalc.report_labels.carrier_term`
+(the distributor's NAME — mig `953` `report_term`, so no vendor literal is in code or page copy) ·
+`StandardFilterBar` / `MarketStorePicker` / `ReportExportBar` (RULE FIVE §3d).
+
+**EXTENDED: NOTHING. `coa.py` IS BYTE-IDENTICAL TO `main`.** A first draft added a spelling-match
+step (`address_match_key`) to `coa.store_resolver` plus `match()` evidence twins on both resolvers.
+It was **WITHDRAWN**. Measured live before reverting (origin/main's `coa.py` and the working copy run
+side by side over 75 distinct store strings drawn from `store_mapping`, `vip_invoice_lines.location`,
+`vip_invoices.location`, `raw_sales.store`, `asset_ledger.store`, `store_companies.store_address` and
+`daily_closing.store_code`): **0 divergences** on `store_resolver`, **0** on
+`build_company_matcher.company_of` — every string the new step caught was already landing on the same
+address via the existing unambiguous leading-street-number rule. So the step was safe *and*
+unnecessary: the report is correct without it, and the smaller change is the better one. Where the
+resolver has to reach a store by a fuzzier route, the report SAYS SO (the `resolver` bucket) and the
+house fix is a `commcalc.store_aliases` row — deliberate, per store, and it moves no rule under the
+P&L. `harness_device_purchases.py` §B2/§B3 now assert `coa.py` has no uncommitted change at all, so
+the withdrawal cannot quietly come back.
+
+The three-state evidence the report needs is taken from the shared functions' **output**: a store
+resolved when `store_resolver`'s answer is one of the org's real store addresses, and a company is
+assigned when the SAME pure `coa.build_company_matcher`, called with `default_id=None`, returns an id
+(`None` = no assignment row matched — which the booking call cannot tell you, because it answers with
+the default).
+
+### The definition
+
+- **A line is a DEVICE when its `btrim(name)` also appears as a `btrim(product_name)` in
+  `commcalc.vip_invoice_devices`** — i.e. that product actually arrived as a serialised unit. Read
+  from the DATA, never from product-name matching: a `LIKE '<carrier>%'` would put one carrier's
+  branding in a report definition (RULE TWO), and this feed's product names are full of it. The
+  vocabulary is read across **every** year, not just the window — device-ness is a property of the
+  product, and windowing it would let a narrow window reclassify real handsets as non-device.
+  A CASE-only drift still counts as a device and is reported in `meta.case_drift`.
+- **Tablets are IN** (a tablet is serialised and is billed as a device) and are visible at product
+  grain, with the page saying so — never silently excluded.
+- **Money** = the LINE total. Invoice-level shipping / other cost / tax are not device purchase price
+  and are not here at all; `coa.build_inputs` already books them to `vip_fees`.
+- **Non-device lines** (SIM packs, services, chargebacks, fees) are EXCLUDED from the headline and
+  LISTED beside it, so devices + non-devices always reconcile to every line billed in the window.
+- **Window**: `from_period`/`to_period` as 'YYYY-MM', inclusive, default the current calendar year.
+  The server narrows the read on `period_year`; the month test is pure.
+
+### Nothing is silently dropped (measured / genuinely zero / not measured)
+
+- a `location` no store vocabulary matched → **`(store not mapped)`**, which lists each raw location
+  with its own dollars, lines and units;
+- a store with **no** `store_companies` assignment → **`(company not mapped)`** — deliberately NOT
+  the org's Default Company, which is a booking fallback, not an answer a report may print;
+- a row whose month is unreadable → counted into its year and declared in `meta.month_unknown`;
+- `meta.resolution` counts every device dollar by how it was placed (**exact / resolver / unmapped**).
+  **Read it as a setup report**: money in the `resolver` bucket reached its store by something other
+  than the feed spelling our address our way — on this feed usually the unambiguous leading street
+  NUMBER, which never compares the street name. A right answer by a coincidence-prone route; the
+  house fix is a `commcalc.store_aliases` row. The page surfaces that bucket with its amount.
+- **A DISTRIBUTOR MASTER / DEALER ACCOUNT IS NOT A STORE.** `commcalc.store_mapping` carries rows that
+  name a legal/dealer account rather than a location — live house org: the VIP master dealer
+  ("Cellular Services Dot net LLC", **228 N Wood Ave**, the dealer on 187 of 189 PayGo batches), whose
+  invoices are chargebacks, NSF fees and loans (a **$159,056.76** Return Item Chargeback + a $50 NSF
+  fee on 2025-12-29), not store device purchases. Such a row has **no `store_code`**, and
+  `flag_store_resolver` already pins that a codeless row contributes no store key
+  (`harness_flag_store_resolver` §A10). `device_purchases.store_addresses` holds the same line, so a
+  master-account invoice can never be attributed to whichever retail store happens to share its street
+  number — it lands in `(store not mapped)`, named, with its money, and never reaches the company
+  matcher at all. The signal is DATA (a missing code); no account string is in code.
+  ⚠ Separately worth knowing: `228 N Wood Ave` DOES resolve to the company "Cellular Services" through
+  `build_company_matcher`'s leading-street-number rule **on `origin/main`** — that is pre-existing
+  house behaviour from the 1115-Liberty fix, not anything this work introduced, and "Cellular Services"
+  is the house org's own name in `core.organizations` (mig `001`), i.e. the tenant/dealer identity
+  rather than a retail operating entity.
+
+### ⚠ STORE-SETUP DRIFT FOUND WHILE BUILDING (reported, not fixed)
+
+The distributor writes `5135 Bergenline Ave`, `1 S 60th St` and `1598 Mt Ephraim Ave`; we hold
+`5135 Bergenline` (store `B-5135`, market NJ, company assigned), `1 S 60th street` and
+`1598 Mount Ephraim Ave`. None of these is unmapped — each reaches the right store through the
+resolver's unambiguous leading-street-number rule, which is why the measured divergence of the
+withdrawn spelling step was zero. They are right by a route that compares the street NUMBER and never
+the street NAME. The targeted fix is a `commcalc.store_aliases` row per address (the mechanism already
+has house precedent — `3 Palisade Ave Yonkers` from the POS feed); that is the owner's call, and the
+report's `resolver` bucket is where to find the rows worth one.
+
+### Files
+
+`backend/app/modules/account/device_purchases.py` (pure core + `compute`) ·
+`backend/app/modules/account/router.py` (`GET /account/device-purchases`) ·
+`backend/harness_finance_sync_in_async.py` (**additions-only**: `EXPECTED_DELTA` gains the
+`(allowed_changed, allowed_new)` shape `MONEY_MODULE_DELTA` in the same file already uses, with
+`device_purchases` the one named new mount. A removal stays unsanctionable, no
+"no function outside … changed" allowlist is touched, and `MONEY_MODULE_DELTA` is untouched —
+`coa.py` is clean) ·
+`frontend/src/app/(platform)/accounts/device-purchases/page.tsx` ·
+`frontend/src/lib/rbac.ts` + `frontend/src/lib/reports.ts` (NAV Finance `tileOnly` + hub map +
+Accounts reports category — module `accounts`, scopes `['all','market']`, **zero RBAC change**, no
+new grant key, mirroring `/accounts/inventory` and `/accounts/liabilities-due`).
+
+**Lineage:** no `data_lineage_registry` / `925_data_lineage_seed.sql` entry — this report consumes an
+EXISTING feed and captures nothing. Verified, not assumed: `harness_data_lineage_guard.py` is green
+(59 checks) with no change. Separately noted as a **pre-existing** gap, not introduced here: the VIP
+portal scrape (`vip_sweep.py`, mig `008`) is itself absent from `INGEST_TABLES_BY_MODULE`, so the
+guard has never held an edge for it.
+
+**Proof:** `backend/harness_device_purchases.py` (**67 checks**, stdlib-only, DB-free via
+`_harness_dbfree.install()`) — §A device-ness from the data + tablets visible + no carrier literal in
+the code; §B the shared resolvers used AS SHIPPED — `coa.py` proven to carry no uncommitted change at all
+(the no-movement proof), the placement classifier judging only by the resolver's OUTPUT, the
+company three-state out of the one pure matcher, the pre-existing leading-number behaviour named as
+pre-existing, and the master/dealer account kept out of every store's figures; §C purchases ≠ COGS (no sale, no IMEI,
+no asset ledger, no write); §D the three unresolved states and the bucket-sum invariants, with a
+self-test that deletes a store record and watches its money land in the named bucket; §E the window
+over 2024/2025/2026; §F org scope; §G the page states its question and names the other report. The
+device/non-device split ($7,099,841.56 / $296,508.59 on 2025) is pinned as a **dated live snapshot**;
+every other figure is synthetic on purpose, because per-bucket store-resolution totals move whenever
+a store alias or address is edited and would read as a regression.

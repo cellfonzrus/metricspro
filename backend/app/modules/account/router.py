@@ -1184,6 +1184,39 @@ def residual_per_sub(months: int = 6, authorization: str = Header(default=""), o
     return residual_subs.compute(sb(), org_id, months=max(1, min(int(months or 6), 36)))
 
 
+# ── device purchases from the distributor (owner directive 2026-09-11) ────────────────────────
+@router.get("/device-purchases")
+async def device_purchases(from_period: str = "", to_period: str = "",
+                           org_id: str = ORG_ID):
+    """Cost of every DEVICE the distributor billed us in a period window, segregated by COMPANY and
+    by STORE (`account/device_purchases.py` — pure math, proof `harness_device_purchases.py`).
+
+    PURCHASES, NOT COGS (owner: "build it as purchases, keep it separate from cogs"). This is what
+    the distributor BILLED in the window, on the invoice date, every billed unit. `device_cogs` is
+    what the units we SOLD cost us — IMEI-deduped, recognised at sale. They are not meant to tie;
+    the payload and the page both say so. Nothing is booked and nothing is written.
+
+    Window: `from_period`/`to_period` as 'YYYY-MM', inclusive. Omitted ⇒ the current calendar year,
+    so the page opens on something real; the feed carries 2024-2026 and the window is free.
+
+    PERMISSION: mirrors its Finance-menu neighbours (`/account/inventory-recon`,
+    `/account/liabilities-due`) — module `accounts`, nav scopes ['all','market'], no new grant key.
+    Org-scoped on every read."""
+    require_org(org_id)
+    from app.modules.account import device_purchases as dp
+    now = datetime.now(timezone.utc)
+    a = dp.parse_month(from_period) or (now.year, 1)
+    b = dp.parse_month(to_period) or (now.year, 12)
+    if (a[0] * 12 + a[1]) > (b[0] * 12 + b[1]):
+        a, b = b, a
+    if abs(b[0] - a[0]) > 10:
+        raise HTTPException(400, "window too wide (max 10 calendar years)")
+    try:
+        return await run_in_threadpool(dp.compute, sb(), org_id, (a, b))
+    except Exception as e:
+        raise HTTPException(500, f"device purchases failed: {type(e).__name__}: {e}")
+
+
 # ── financial analysis (chart-ready series from the stored snapshots — roadmap Phase 3) ───────
 @router.get("/analysis")
 async def financial_analysis(months: int = 12, authorization: str = Header(default=""),

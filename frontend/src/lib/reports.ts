@@ -63,6 +63,7 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/accounts/analysis', label: 'Financial Analysis (charts · projections · valuation)', module: 'accounts', scopes: ['all', 'market'] },
     { href: '/accounts/cash-flow', label: 'Cash Flow Statement', module: 'accounts', scopes: ['all', 'market'] },
     { href: '/accounts/liabilities-due', label: 'Current Monetary Liabilities', module: 'accounts', scopes: ['all', 'market'], desc: 'Owed to distributor, payments due this week, payroll & payroll tax due, rents and recurring expenses due — per store' },
+    { href: '/accounts/device-purchases', label: 'Device Purchases', module: 'accounts', scopes: ['all', 'market'], desc: 'Cost of every phone/device the distributor billed us in a period, segregated by company and by store. PURCHASES (what was billed) — deliberately separate from device COGS (what the units we sold cost us)' },
   ] },
   { category: 'StoreOps', reports: [
     { href: '/storeops/reports', label: 'Hours / Payroll Reports', module: 'storeops', scopes: ['all', 'market'] },

@@ -221,10 +221,31 @@ EXPECTED_DELTA = {
     BROUTER: {"refresh_platform_costs"},
 }
 
+# NEW MOUNTS, named one at a time — the SAME "(changed, added)" shape MONEY_MODULE_DELTA already
+# uses below, and for the same reason: a router legitimately grows new endpoints, and a guard that
+# forbids that outright gets switched off the first time it is wrong. This list sanctions ADDITIONS
+# ONLY. Removals are never sanctioned, and the "no function outside {...} changed" check below is
+# untouched — so an existing handler still may not drift by one AST node, which is the money
+# property this file exists to hold.
+#
+#   account/router.py +{device_purchases} (2026-09-11) — Device Purchases from the distributor
+#   (owner directive; index §23y). A NEW read-only mount over the NEW module
+#   account/device_purchases.py: it reads commcalc.vip_invoice_lines/_devices, books nothing, writes
+#   nothing, and calls coa.store_resolver / coa.build_company_matcher WITHOUT MODIFYING EITHER — the
+#   two coa.py checks below are its no-movement proof, and they pass unchanged. No existing handler
+#   body was touched. Proven by backend/harness_device_purchases.py (67 checks), whose §B2/§B3
+#   assert coa.py is byte-identical to the branch point.
+ALLOWED_NEW = {
+    AROUTER: {"device_purchases"},
+}
+
 for rel, allowed in EXPECTED_DELTA.items():
     base_f, now_f = funcs(read_base(rel)), funcs(read_now(rel))
-    check(f"{os.path.basename(rel)}: no function added/removed", set(base_f) == set(now_f),
-          f"+{sorted(set(now_f) - set(base_f))} -{sorted(set(base_f) - set(now_f))}")
+    added, removed = set(now_f) - set(base_f), set(base_f) - set(now_f)
+    allowed_new = ALLOWED_NEW.get(rel, set())
+    check(f"{os.path.basename(rel)}: no function added/removed",
+          added <= allowed_new and not removed,
+          f"+{sorted(added - allowed_new)} -{sorted(removed)}")
     changed = {q for q in set(base_f) & set(now_f) if base_f[q] != now_f[q]}
     # SUBSET, not equality. The money property this guards is "no COMPUTATIONAL function drifted
     # from main" — nothing outside the transport sites. Equality additionally required each listed
