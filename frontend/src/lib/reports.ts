@@ -64,6 +64,7 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/accounts/cash-flow', label: 'Cash Flow Statement', module: 'accounts', scopes: ['all', 'market'] },
     { href: '/accounts/liabilities-due', label: 'Current Monetary Liabilities', module: 'accounts', scopes: ['all', 'market'], desc: 'Owed to distributor, payments due this week, payroll & payroll tax due, rents and recurring expenses due — per store' },
     { href: '/accounts/device-purchases', label: 'Device Purchases', module: 'accounts', scopes: ['all', 'market'], desc: 'Cost of every phone/device the distributor billed us in a period, segregated by company and by store. PURCHASES (what was billed) — deliberately separate from device COGS (what the units we sold cost us)' },
+    { href: '/accounts/device-payable', label: 'Device Payable as at a date', module: 'accounts', scopes: ['all', 'market'], desc: 'Of the devices already billed to us on a chosen day, which ones had not yet been paid for — by company and by store. A BACKDATED payable read from each unit\u2019s own payment date, not from a current status; non-device items (chargebacks, fees, SIMs) are reported separately on a billed basis' },
   ] },
   { category: 'StoreOps', reports: [
     { href: '/storeops/reports', label: 'Hours / Payroll Reports', module: 'storeops', scopes: ['all', 'market'] },

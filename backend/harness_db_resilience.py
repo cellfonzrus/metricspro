@@ -839,9 +839,15 @@ _all_routes = _flatten_routes(real_app.routes)
 # over the new module account/device_purchases.py. It books nothing, writes nothing, and leaves
 # account/coa.py byte-identical, so no existing figure moves; proof
 # backend/harness_device_purchases.py (67 checks), §B2/§B3.
+# Re-pinned 1580 -> 1581 on 2026-09-11. The delta is exactly ONE endpoint and nothing was removed:
+#     + /account/device-payable                       GET
+# Device Payable as at a date (owner directive; index §23z) — a new READ-ONLY report mount over the
+# new module account/device_payable.py. It answers a BACKDATED question the current-state payables
+# cannot (§4 liabilities-due, §23n owed_vip), books nothing, writes nothing, and leaves
+# account/coa.py byte-identical; proof backend/harness_device_payable.py (78 checks), §I7.
 # Leaving it stale would make the suite permanently red and train the next reader to ignore it,
 # which is the one thing a tripwire must never do.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1580"))
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1581"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

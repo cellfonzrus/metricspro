@@ -235,8 +235,16 @@ EXPECTED_DELTA = {
 #   two coa.py checks below are its no-movement proof, and they pass unchanged. No existing handler
 #   body was touched. Proven by backend/harness_device_purchases.py (67 checks), whose §B2/§B3
 #   assert coa.py is byte-identical to the branch point.
+#   account/router.py +{device_payable} (2026-09-11) — Device Payable as at a date (owner directive;
+#   index §23z). A NEW read-only mount over the NEW module account/device_payable.py: it reads
+#   commcalc.vip_invoice_devices / asset_ledger / vip_invoice_lines / vip_paygo_payments, books
+#   nothing, writes nothing, and reuses coa.store_resolver / coa.build_company_matcher and the
+#   device_purchases helpers WITHOUT MODIFYING EITHER MODULE. No existing handler body was touched;
+#   the whole read runs in run_in_threadpool, which is this file's actual subject. Proven by
+#   backend/harness_device_payable.py (78 checks), whose §I7 asserts coa.py is byte-identical to the
+#   branch point.
 ALLOWED_NEW = {
-    AROUTER: {"device_purchases"},
+    AROUTER: {"device_purchases", "device_payable"},
 }
 
 for rel, allowed in EXPECTED_DELTA.items():
