@@ -307,24 +307,60 @@ def _git(*a):
 
 
 coa_path = "backend/app/modules/account/coa.py"
-diff = _git("diff", "--", coa_path)
-check("B2 NO MOVEMENT: coa.py — the file holding store_resolver, build_company_matcher, "
-      "company_assignment and build_inputs — has NO uncommitted change. The P&L and Balance Sheet "
-      "cannot move because this report exists",
-      diff.returncode == 0 and diff.stdout.strip() == "",
-      diff.stdout[:400] or diff.stderr[:200])
-mods = [l[3:] for l in _git("status", "--porcelain").stdout.splitlines()
-        if l[:2].strip() and l[3:].startswith("backend/app/modules/account/")]
+base = _git("merge-base", "HEAD", "origin/main").stdout.strip()
+import harnesslib                                                               # noqa: E402
+
+# ── THE RE-BASELINE (2026-09-11), DELIBERATE AND NAMED ───────────────────────────────────────────
+# This assertion used to be "coa.py has NO uncommitted change at all". That was a PROXY for the
+# claim that actually matters — this work did not re-attribute booked money — and it held only while
+# nothing else legitimately edited the file. The owner then ruled that a distributor chargeback is
+# an expense ("159106.76 is an expense"), which books in `build_inputs` and reads its vocabulary in
+# `_account_config`. A proxy that has become wrong gets switched off or ignored, which is the one
+# thing a money guard must never be.
+#
+# So it is re-expressed as the REAL claim, and it is STRICTER where it counts: every resolver and
+# attribution function must be byte-identical, AND the set of functions that changed at all must be
+# exactly the two sanctioned ones. Anything unexplained still fails. The assertion is not weakened
+# and is not deleted — it is made to say what it always meant.
+COA_SANCTIONED = ("build_inputs", "_account_config")
+_coa_base = _git("show", "%s:%s" % (base or "HEAD", coa_path)).stdout
+_coa_now = open(os.path.join(HERE, "app/modules/account/coa.py"), encoding="utf-8").read()
+if _coa_base.strip():
+    _removed, _outside, _moved = harnesslib.coa_movement(_coa_base, _coa_now, COA_SANCTIONED)
+    check("B2a NO MOVEMENT: every store/company RESOLVER and ATTRIBUTION function in coa.py is "
+          "byte-identical to the branch point — store_resolver, build_company_matcher, "
+          "company_assignment, store_company_map and their key helpers. WHICH store or WHICH "
+          "company money books to cannot have changed",
+          _moved == [], _moved)
+    check("B2b …and the ONLY functions that changed at all are the two sanctioned by the chargeback "
+          "expense ruling (build_inputs, _account_config). Anything else moving fails here",
+          _outside == [], _outside)
+    check("B2c …and nothing was removed from coa.py",
+          _removed == [], _removed)
+else:
+    check("B2a coa.py baseline unavailable (git-less CI) — skipped rather than silently passed",
+          True)
+
+# `git status --porcelain` spells a RENAME as "old -> new"; take the destination, or a renamed
+# module reads as an unknown path and this guard fails for the wrong reason.
+mods = [l[3:].split(" -> ")[-1] for l in _git("status", "--porcelain").stdout.splitlines()
+        if l[:2].strip() and l[3:].split(" -> ")[-1].startswith("backend/app/modules/account/")]
 check("B3 …and the only account-module file this work touches at all, besides its own new module, "
       "is router.py — where it adds a NEW mount and changes no existing handler",
-      # ADDITIONS ONLY (2026-09-11). `device_payable.py` (index §23z) is a NEW module in this
+      # ADDITIONS ONLY (2026-09-11). `device_payable.py` (§23z) and `chargeback_asset.py`
+      # (capitalised chargeback, PURE — it has no client and books nothing on its own) are NEW
+      # modules in this
       # package, not an existing one: the claim B3 protects is that no EXISTING account module
       # moved, and B2 above still pins coa.py byte-identical, which is where the money lives.
       # Listing it makes the guard state what it means, instead of passing only because the file
       # happens to be committed at the moment CI runs.
       set(mods) <= {"backend/app/modules/account/router.py",
                     "backend/app/modules/account/device_purchases.py",
-                    "backend/app/modules/account/device_payable.py"}, mods)
+                    "backend/app/modules/account/device_payable.py",
+                    "backend/app/modules/account/distributor_chargebacks.py",
+                    # coa.py may appear here ONLY because of the sanctioned chargeback expense
+                    # booking; B2a/B2b/B2c above police exactly what may have changed inside it.
+                    "backend/app/modules/account/coa.py"}, mods)
 
 # The resolver contract this report leans on, exercised through coa AS SHIPPED.
 res = coa.store_resolver(FakeClient(TABLES), ORG)
@@ -525,6 +561,69 @@ check("E8 parse_month accepts 'YYYY-MM' and rejects junk rather than inventing a
       dp.parse_month("2025-07") == (2025, 7) and dp.parse_month("2025-13") is None
       and dp.parse_month("last year") is None and dp.parse_month("") is None)
 
+# ══ §I — A VOIDED INVOICE IS NOT A PURCHASE ══════════════════════════════════════════════════════
+section("§I  VOIDED INVOICES ARE EXCLUDED — AND THE EXCLUDED MONEY IS REPORTED, NOT DROPPED")
+
+# THE LIVE CASE, pinned as a dated snapshot (house org, 2026-09-11). Invoice 1595336 of 2025-11-20,
+# grand total $9,189.74, header status Voided. Until this release the report counted it:
+#     2025 device      $7,099,841.56  →  $7,090,741.82   (voided $9,099.74 over 5 lines)
+#     2025 non-device    $296,508.59  →    $296,418.59   (voided     $90.00 over 1 line)
+# 2024 moves by MORE — $4,917,452.96 → $4,896,463.66 ($20,989.30 over 22 lines on four invoices all
+# dated 2024-11-27) — which is worth knowing before someone quotes a 2024 figure from memory.
+VOID_INV = "INV-VOIDED"
+VOID_DEVICE = 9099.74
+VOID_NON_DEVICE = 90.00
+VOIDED_LINES = [line(PHONE, VOID_DEVICE, "200 Broadway", qty=36, inv=VOID_INV),
+                line(SIMPACK, VOID_NON_DEVICE, "200 Broadway", inv=VOID_INV)]
+HEADERS = [{"org_id": ORG, "invoice_number": VOID_INV, "status": "Voided", "period_year": 2025},
+           {"org_id": ORG, "invoice_number": "INV-1", "status": "Paid In Full",
+            "period_year": 2025},
+           {"org_id": OTHER_ORG, "invoice_number": "INV-1", "status": "Voided",
+            "period_year": 2025}]
+RV = run(lines=LINES_2025 + VOIDED_LINES,
+         tables={"commcalc.vip_invoices": HEADERS})
+
+check("I1 a VOIDED invoice's device lines are not purchases — the headline is unmoved by $9,099.74 "
+      "of cancelled billing sitting in the same window",
+      RV["totals"]["device_amount"] == 7099841.56, RV["totals"]["device_amount"])
+check("I2 …and its non-device lines go with it ($90.00) — one rule across both bases, not a device "
+      "rule that stops at the device figure",
+      RV["totals"]["non_device_amount"] == 296508.59, RV["totals"]["non_device_amount"])
+check("I3 the excluded money is REPORTED per invoice, so 'billed' still reconciles to 'counted + "
+      "voided' and nothing merely went missing between two releases",
+      RV["excluded_voided"]["device_amount"] == VOID_DEVICE
+      and RV["excluded_voided"]["non_device_amount"] == VOID_NON_DEVICE
+      and RV["excluded_voided"]["invoices"] == 1
+      and RV["excluded_voided"]["detail"][0]["invoice_number"] == VOID_INV,
+      RV["excluded_voided"])
+check("I4 a voided invoice is not counted in the INVOICE count either",
+      RV["totals"]["invoices"] == R["totals"]["invoices"], RV["totals"]["invoices"])
+check("I5 its serialised UNITS are excluded too — a unit count that disagreed with the money would "
+      "be its own defect (and §23z's payable counts the same units)",
+      run(lines=LINES_2025 + VOIDED_LINES,
+          devices=DEVICES_2025 + [dict(dev(PHONE, i=9), invoice_number=VOID_INV)],
+          tables={"commcalc.vip_invoices": HEADERS}
+          )["meta"]["serialised_units_in_window"] == 3)
+check("I6 with NO invoice headers at all nothing is excluded — the exclusion is driven by evidence, "
+      "never by an assumption that a header must exist",
+      run(lines=LINES_2025 + VOIDED_LINES)["totals"]["device_amount"]
+      == round(7099841.56 + VOID_DEVICE, 2))
+check("I7 the rule is CONFIG with a house default, case-folded, never a literal in a branch",
+      dp.VOID_STATUSES == ("voided",)
+      and dp.voided_invoice_set([{"invoice_number": "X", "status": " VOIDED "}]) == {"X"}
+      and dp.voided_invoice_set([{"invoice_number": "X", "status": "Paid In Full"}]) == set())
+check("I8 the status is read from the invoice HEADER, not the line — a status is a property of the "
+      "invoice, and this feed's column names have lied before",
+      "vip_invoices" in src and "voided_invoice_set(invoice_rows)" in src)
+check("I9 another org's voided header can never cancel this org's invoice",
+      RV["totals"]["device_amount"] == 7099841.56)
+check("I10 ONE RULE, NOT TWO: §23z's Device Payable imports this vocabulary and this set builder "
+      "rather than keeping its own, so the two reports cannot drift on what 'voided' means",
+      "dp.VOID_STATUSES" in open(
+          os.path.join(HERE, "app/modules/account/device_payable.py"), encoding="utf-8").read()
+      and "dp.voided_invoice_set" in open(
+          os.path.join(HERE, "app/modules/account/device_payable.py"), encoding="utf-8").read())
+
 # ══ §F — org scope ═══════════════════════════════════════════════════════════════════════════════
 section("§F  MULTI-TENANT: every read is org-scoped, and a foreign row can never arrive")
 
@@ -564,6 +663,9 @@ check("G5 the page uses the SHARED filter bar and the SHARED export bar (RULE FI
       "StandardFilterBar" in pcode and "ReportExportBar" in pcode)
 check("G6 the unmapped buckets are RENDERED, not merely present in the payload",
       "store_not_mapped" in pcode and "company_not_mapped" in pcode)
+check("G7 the page RENDERS the voided exclusion with its money, so a figure that moved between "
+      "releases stays explainable to the reader who saw the old one",
+      "excluded_voided" in pcode and "voided.detail" in pcode)
 
 # ══ §H — the window on screen is the window in the money ═════════════════════════════════════════
 # LIVE DEFECT 2026-09-11, the reason this section exists. The owner set 01/01/2025-12/31/2025 and the

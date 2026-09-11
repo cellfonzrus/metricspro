@@ -578,7 +578,11 @@ def _account_config(client, org_id):
            # ⇒ storeops.overhead_allocation resolves mode='off' and books nothing (byte-identical).
            "overhead_config": None,
            # K3 (mig 621). 'off' ⇒ POS-only device cost, i.e. pre-621 behaviour.
-           "device_cogs_mode": "off"}
+           "device_cogs_mode": "off",
+           # DISTRIBUTOR CHARGEBACKS (owner directive 2026-09-11, "159106.76 is an expense").
+           # EMPTY vocabulary + booking 'off' ⇒ every org, house org included, is BYTE-IDENTICAL
+           # until an owner seeds the config row. See account/distributor_chargebacks.py.
+           "distributor_chargeback_config": None}
     try:
         rows = (client.schema("commcalc").table("account_config")
                 .select("accessory_cogs_pct").eq("org_id", org_id).limit(1).execute().data) or []
@@ -598,6 +602,22 @@ def _account_config(client, org_id):
             picked = [str(p).strip() for p in (srows[0].get("service_fee_products") or []) if str(p).strip()]
             cfg["service_fee_products_list"] = picked
             cfg["service_fee_products"] = {p.lower() for p in picked}
+    except Exception:
+        pass
+    # DISTRIBUTOR CHARGEBACKS — its OWN defensive query, the same pattern as every knob above: a
+    # missing column can never disturb them, and a missing/empty config books nothing at all.
+    try:
+        crows = (client.schema("commcalc").table("account_config")
+                 .select("distributor_chargeback_locations,distributor_chargeback_one_off_names,"
+                         "distributor_chargeback_recurring_names,distributor_chargeback_booking")
+                 .eq("org_id", org_id).limit(1).execute().data) or []
+        if crows:
+            r0 = crows[0]
+            cfg["distributor_chargeback_config"] = {
+                "locations": r0.get("distributor_chargeback_locations") or [],
+                "one_off_names": r0.get("distributor_chargeback_one_off_names") or [],
+                "recurring_names": r0.get("distributor_chargeback_recurring_names") or [],
+                "booking": r0.get("distributor_chargeback_booking") or "off"}
     except Exception:
         pass
     # PAYROLL AUTHORITY (mig 621, owner ruling K2 2026-08-10) — its OWN defensive query, same pattern as
@@ -1256,6 +1276,37 @@ def build_inputs(client, org_id, period):
                 add("chargebacks", st, amt)
             if not r.get("decided_at"):
                 add("chargeback_res", st, amt)
+    except Exception:
+        pass
+
+    # ── DISTRIBUTOR CHARGEBACKS (owner directive 2026-09-11) ────────────────────────────────────
+    # Owner, asked directly whether the big one belongs on the balance sheet: "159106.76 is an
+    # expense". So BOTH legs book to THIS EXISTING opex line in the month each was billed — a
+    # one-off charge once, and a recurring charge every time it recurs. No new COA line, no
+    # balance-sheet key, nothing cumulative: `balance_sheet.py` and `statement_engine.py` are not
+    # involved at all.
+    #
+    # THIS IS THE ONE BOOKING IN THIS PACKAGE THAT MOVES AN EXISTING FIGURE, and only once a tenant
+    # seeds its config row. The money is on no statement today: the distributor-invoice HEADER read
+    # above books `vip_fees` from shipping + other_cost, and these invoices carry $0.00 of both, so
+    # their LINES have never reached the P&L. Booking them RECOGNISES money that was never on the
+    # books rather than reclassifying money that was.
+    #
+    # SCOPE IS LOCATION **AND** NAME, and that is not fussiness: matching on the chargeback NAME
+    # alone also captures three retail stores' $30.00 chargebacks billed the same day, 19 "early
+    # life churn" lines and one commission chargeback — $571.05 of unrelated money on the live feed.
+    # The vocabulary is per-org config with an EMPTY house default (RULE TWO), so no tenant books a
+    # cent until it opts in, and the derivation is pure and proven in
+    # backend/harness_distributor_chargebacks.py.
+    try:
+        _dc_cfg = acct_cfg.get("distributor_chargeback_config")
+        if _dc_cfg and str(_dc_cfg.get("booking") or "off").strip().lower() == "expense":
+            from app.modules.account import distributor_chargebacks as _dc
+            _dc_rows = _fetch_all(client, "vip_invoice_lines", "location,name,total,period",
+                                  {"org_id": org_id, "period": period_keys})
+            for _loc, _amt in _dc.expense_in_period(_dc_rows, _dc_cfg, lambda _r: True).items():
+                add("chargebacks", _norm_store(_loc), _amt,
+                    detail_label="Distributor chargeback")
     except Exception:
         pass
 

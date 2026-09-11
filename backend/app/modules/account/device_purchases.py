@@ -40,6 +40,28 @@ keeps working for the next distributor, the next carrier and next year's SKUs wi
   · Line money is the LINE total. Invoice-level shipping / other cost / tax are not device purchase
     price and are not here — the P&L already books them (`coa.build_inputs` → `vip_fees`).
 
+═══════════════ A VOIDED INVOICE IS NOT A PURCHASE ════════════════════════════════════════════════
+An invoice whose header `status` says VOIDED was cancelled. Its lines and its serialised units stay
+in the feed, and until 2026-09-11 this report counted them as purchases. It no longer does.
+
+Measured house org (six voided invoices in the feed): the 2025 device figure falls from
+$7,099,841.56 to **$7,090,741.82** ($9,099.74 over 5 lines, invoice 1595336 of 2025-11-20) and the
+non-device figure from $296,508.59 to **$296,418.59** ($90.00). **2024 moves too, and by more**:
+device $4,917,452.96 → $4,896,463.66 ($20,989.30 over 22 lines on four invoices all dated
+2024-11-27). 2026 is unaffected.
+
+NOTHING IS SILENTLY DROPPED — the excluded money is REPORTED, per invoice, in `excluded_voided`,
+so "what we were billed" still reconciles to "what we count plus what we voided".
+
+THE SAME RULE BINDS THE DEVICE PAYABLE REPORT (§23z), which imports `VOID_STATUSES` and
+`voided_invoice_set` FROM HERE rather than keeping its own. Two finance reports disagreeing about
+voided invoices is the defect this shares a definition to prevent: someone reconciles them one day
+and both lose credibility. There is exactly one voided rule in the platform and this is it.
+
+The status is read from `commcalc.vip_invoices` — the HEADER is what a status means.
+`vip_invoice_lines.status` was checked against it and agrees on 12,536 of 12,536 rows, but this
+feed's column names have lied before, so the authoritative table is the one that is read.
+
 ═══════════════ STORE AND COMPANY COME FROM THE PLATFORM'S ONE RESOLVER ═══════════════════════════
 DUPLICATE CHECK (build gate): this module owns NO store→store or store→company derivation, and it
 CHANGES NEITHER. It calls `coa.store_resolver` (§13/§13a) and `coa.build_company_matcher` (§13b)
@@ -112,9 +134,30 @@ COMPANY_NOT_MAPPED = "(company not mapped)"
 RESOLUTION_KINDS = ("exact", "resolver", "unmapped")
 
 
+# WHICH INVOICE-HEADER STATUSES MEAN "this invoice was cancelled". House default; a tenant whose
+# distributor spells it differently overrides it in config rather than in code (RULE TWO). Matching
+# is case-folded, so spelling drift in the feed cannot silently start counting voided money again.
+#
+# THIS IS THE PLATFORM'S ONE VOIDED RULE. The Device Payable report (§23z) imports this name and
+# `voided_invoice_set` below instead of defining its own, so the two reports cannot drift apart on
+# what "voided" means — which is the whole reason the rule lives in one module.
+VOID_STATUSES = ("voided",)
+
+
 def _t(v):
     """Trimmed text, or ''. The feed's own `btrim` — the join key on both sides."""
     return str(v or "").strip()
+
+
+def voided_invoice_set(invoice_rows, void_statuses=VOID_STATUSES):
+    """PURE: the invoice numbers whose HEADER says the invoice was cancelled.
+
+    Header, not line: a status is a property of the invoice. (`vip_invoice_lines.status` was
+    measured against the header and agrees on 12,536 of 12,536 rows, but agreeing today is not the
+    same as being the authority, and this feed's column names have lied before.)"""
+    want = {str(v).strip().lower() for v in (void_statuses or ()) if str(v).strip()}
+    return {_t(r.get("invoice_number")) for r in (invoice_rows or [])
+            if _t(r.get("invoice_number")) and _t(r.get("status")).lower() in want}
 
 
 # ── WHAT IS A DEVICE (pure) ───────────────────────────────────────────────────────────────────────
@@ -226,7 +269,7 @@ def in_window(year, month, win):
 
 # ── THE AGGREGATION (pure) ────────────────────────────────────────────────────────────────────────
 def aggregate(line_rows, device_rows, win, place_store, company_if_assigned,
-              company_names=None, market_of=None):
+              company_names=None, market_of=None, voided_invoices=None):
     """PURE: the whole report payload from rows + the two RESOLVERS (passed in as functions, so this
     math is provable with no database and the resolvers stay the platform's shared ones).
 
@@ -240,6 +283,9 @@ def aggregate(line_rows, device_rows, win, place_store, company_if_assigned,
                       "assigned" and "fell back to the default" stay distinguishable)
       company_names — {company_id: name}
       market_of     — optional store -> market (core.scope.store_market_resolver, §13a)
+      voided_invoices — `voided_invoice_set(...)`: invoice numbers whose header says VOIDED. Their
+                      lines are EXCLUDED from every figure and REPORTED in `excluded_voided`, so the
+                      money is visible rather than merely absent. None ⇒ exclude nothing.
     """
     exact_names, ci_names = device_product_names(device_rows)
     names = company_names or {}
@@ -256,6 +302,8 @@ def aggregate(line_rows, device_rows, win, place_store, company_if_assigned,
     month_unknown = {"lines": 0, "amount": 0.0}
     case_drift = {"lines": 0, "amount": 0.0, "names": set()}
 
+    voided = set(voided_invoices or ())
+    excluded = {}                   # voided invoice number -> what it would have contributed
     for r in (line_rows or []):
         if not in_window(r.get("period_year"), r.get("period_month"), win):
             continue
@@ -264,6 +312,20 @@ def aggregate(line_rows, device_rows, win, place_store, company_if_assigned,
         name = _t(r.get("name"))
         kind = classify_line(name, exact_names, ci_names)
         inv = _t(r.get("invoice_number"))
+        # ── A VOIDED INVOICE IS NOT A PURCHASE. Excluded from every figure — and kept, with its
+        # money, so the exclusion is auditable instead of being a number that quietly went missing.
+        if inv and inv in voided:
+            e = excluded.setdefault(inv, {"invoice_number": inv,
+                                          "location": _t(r.get("location")),
+                                          "device_amount": 0.0, "non_device_amount": 0.0,
+                                          "lines": 0, "units": 0.0})
+            if kind == "non_device":
+                e["non_device_amount"] += amt
+            else:
+                e["device_amount"] += amt
+                e["units"] += qty
+            e["lines"] += 1
+            continue
         if inv:
             invoices.add(inv)
         if not r.get("period_month"):
@@ -338,15 +400,22 @@ def aggregate(line_rows, device_rows, win, place_store, company_if_assigned,
         b["stores"] += 1
 
     r2 = lambda v: round(v + 0.0, 2)                                            # noqa: E731
+    for d in list(excluded.values()):
+        d["device_amount"] = r2(d["device_amount"])
+        d["non_device_amount"] = r2(d["non_device_amount"])
+        d["units"] = r2(d["units"])
     for d in (list(rows) + list(by_company.values()) + list(products.values())
               + list(non_device.values()) + list(unmapped_locations.values())):
         d["amount"] = r2(d["amount"])
         if "units" in d:
             d["units"] = r2(d["units"])
 
+    # the serialised-unit count honours the SAME rule — a voided invoice's units are not purchases
+    # either, and a count that disagreed with the money would be its own defect
     serialised_units = sum(
         1 for d in (device_rows or [])
-        if in_window(d.get("period_year"), d.get("period_month"), win))
+        if in_window(d.get("period_year"), d.get("period_month"), win)
+        and _t(d.get("invoice_number")) not in voided)
 
     return {
         "window": {"from": "%04d-%02d" % win[0], "to": "%04d-%02d" % win[1]},
@@ -359,6 +428,17 @@ def aggregate(line_rows, device_rows, win, place_store, company_if_assigned,
             "non_device_lines": tot["non_device_lines"],
             "all_lines_amount": r2(tot["device_amount"] + tot["non_device_amount"]),
             "invoices": len(invoices),
+        },
+        # EXCLUDED, NOT MISSING. What the voided invoices in this window would have contributed had
+        # they been counted — so "billed" still reconciles to "counted + voided", per invoice.
+        "excluded_voided": {
+            "invoices": len(excluded),
+            "device_amount": r2(sum(e["device_amount"] for e in excluded.values())),
+            "non_device_amount": r2(sum(e["non_device_amount"] for e in excluded.values())),
+            "lines": sum(e["lines"] for e in excluded.values()),
+            "units": r2(sum(e["units"] for e in excluded.values())),
+            "detail": sorted(excluded.values(),
+                             key=lambda x: (-x["device_amount"], x["invoice_number"])),
         },
         "by_company": sorted(by_company.values(), key=lambda x: (-x["amount"], x["company"])),
         "by_store": rows,
@@ -415,7 +495,10 @@ def compute(client, org_id, win):
     # as non-device and under-report the very number this report exists to give. So the vocabulary
     # is read across every year (org-scoped), and only the UNIT COUNT is windowed, inside aggregate.
     devices = _page(client, "vip_invoice_devices",
-                    "id,product_name,period_year,period_month", org_id)
+                    "id,invoice_number,product_name,period_year,period_month", org_id)
+    # invoice HEADERS — the authoritative status. A voided invoice is not a purchase (see above).
+    invoice_rows = _page(client, "vip_invoices", "id,invoice_number,status,period_year", org_id)
+    voided = voided_invoice_set(invoice_rows)
 
     # ── the SHARED resolvers, called exactly as they are ────────────────────────────────────────
     # store: the org's real resolver + the address set its own contract says every match lands on.
@@ -454,7 +537,8 @@ def compute(client, org_id, win):
     except Exception as e:                                       # pragma: no cover - I/O guard
         print(f"WARN device_purchases market resolution unavailable: {e}")
 
-    out = aggregate(lines, devices, win, place_store, company_if_assigned, names, market_of)
+    out = aggregate(lines, devices, win, place_store, company_if_assigned, names, market_of,
+                    voided_invoices=voided)
     out["org_id"] = org_id
     # The distributor's NAME is never written in code or page copy (RULE TWO). It resolves through
     # the mig-953 `report_term` vocabulary — tenant override > house carrier preset > the neutral
@@ -471,5 +555,8 @@ def compute(client, org_id, win):
     out["distributor_label_source"] = source
     out["source"] = {"lines_table": "commcalc.vip_invoice_lines",
                      "devices_table": "commcalc.vip_invoice_devices",
-                     "lines_read": len(lines), "device_rows_read": len(devices)}
+                     "invoice_headers_table": "commcalc.vip_invoices",
+                     "lines_read": len(lines), "device_rows_read": len(devices),
+                     "invoice_headers_read": len(invoice_rows),
+                     "voided_invoices_in_feed": len(voided)}
     return out

@@ -48,6 +48,7 @@ Primary code homes:
 | 23 | **Marketing & Events** | "What outside-store events are planned, who is working one and who backs them up if they don't show, how is everyone getting there, what has to be packed, what was given away and what came back — and how did the stores do over the event window?" |
 | 23y | **Device Purchases from the distributor** | "What did the distributor bill us for phones and devices in this period, per company and per store — and why does it not equal device COGS?" |
 | 23z | **Device Payable as at a date** | "Standing on a given day — a year-end, a closing date — which devices had already been billed to us but not yet paid for, per company and per store? And which of the units billed in one year were actually paid in the next?" |
+| 23aa | **Distributor chargebacks** | "Two separate chargebacks billed to the master dealer account — a one-off and a recurring one — what are they, when did each really start, and where do they book?" |
 
 ---
 
@@ -5825,6 +5826,47 @@ the street NAME. The targeted fix is a `commcalc.store_aliases` row per address 
 has house precedent — `3 Palisade Ave Yonkers` from the POS feed); that is the owner's call, and the
 report's `resolver` bucket is where to find the rows worth one.
 
+### A VOIDED INVOICE IS NOT A PURCHASE (defect fixed 2026-09-11)
+
+`compute()` filtered lines by period only and never looked at the invoice header, so an invoice the
+distributor had marked **Voided** was counted as a purchase. It no longer is, and the **same rule was
+applied to §23z's Device Payable in the same change** — two finance reports disagreeing about voided
+invoices is a defect that survives until someone reconciles them, and then costs both their
+credibility.
+
+**ONE RULE, ONE DEFINITION.** `device_purchases.VOID_STATUSES` (config, house default `("voided",)`,
+case-folded) and `device_purchases.voided_invoice_set(invoice_rows)` are the platform's only voided
+rule; `device_payable` imports both rather than keeping its own. Status is read from
+`commcalc.vip_invoices` — the HEADER is what a status means. (`vip_invoice_lines.status` was measured
+against it and agrees on **12,536 of 12,536** rows, but agreeing today is not the same as being the
+authority, and this feed's column names have lied before.)
+
+**Before → after, measured live (house org, 2026-09-11).** Six voided invoices in the feed:
+
+| Figure | before | after |
+|---|---|---|
+| Device Purchases 2025 — device | $7,099,841.56 | **$7,090,741.82** |
+| Device Purchases 2025 — non-device | $296,508.59 | **$296,418.59** |
+| Device Purchases **2024** — device | $4,917,452.96 | **$4,896,463.66** |
+| Device Payable at 2025-12-31 | $489,136.63 | **$484,696.79** (1,608 → 1,592 units) |
+
+2025 moves by one invoice (1595336, 2025-11-20, $9,189.74 grand). **2024 moves by more** —
+$20,989.30 over 22 lines on four invoices all dated 2024-11-27 — worth knowing before anyone quotes
+a 2024 figure from memory. 2026 is unaffected. Only one company's payable moves: WIRELESS 2024 LLC,
+$82,487.47 → $78,047.63 (253 → 237 units); the other three are unchanged.
+
+**NOTHING IS SILENTLY DROPPED.** `excluded_voided` (purchases, per invoice, device + non-device +
+units) and `totals.excluded_voided_*` plus `payable_including_voided` (payable) report exactly what
+left, and both pages render it — so the numbers the owner has already seen in writing stay
+explainable rather than merely gone. Purchases still reconciles: counted + voided = billed
+($7,387,160.41 + $9,189.74 = $7,396,350.15).
+
+**Proof:** `harness_device_purchases.py` §I (10 checks, the $9,189.74 fixture) and
+`harness_device_payable.py` §K (10 checks), including that with NO invoice headers nothing is
+excluded (evidence-driven, never assumed), that non-device lines go with the device lines, that the
+serialised-unit count honours the same rule, and that the two modules share one definition.
+
+
 ### Files
 
 `backend/app/modules/account/device_purchases.py` (pure core + `compute`) ·
@@ -5969,20 +6011,21 @@ day. Read-only: books nothing, writes nothing, **no migration**.
 Guards re-pinned, additions only: `harness_db_resilience.py` route count **1580 → 1581** (the one new
 GET) and `harness_finance_sync_in_async.py` `ALLOWED_NEW` (`account/router.py` +`device_payable`).
 
-### VOIDED INVOICES — counted, and the question published rather than decided quietly
+### VOIDED INVOICES — EXCLUDED, under the platform's one shared rule (2026-09-11)
 
-Six house-org invoice headers carry `status='Voided'` (one in the 2025 window: 1595336, 2025-11-20,
-grand total $9,189.74). Their serialised units are still in the feed, and §23y counts them today.
-This report counts them **too, deliberately** — two finance reports disagreeing about voided invoices
-is a worse defect than either rule. It does not hide the question: `totals.voided_invoice_*` publishes
-what an exclude-voided rule would remove and `payable_excluding_voided` computes the alternative, so
-flipping BOTH reports together later is a one-line change. Measured as at 2025-12-31: **16 units /
-$4,439.84 in the payable** (it would read **$484,696.79**), 10 more already paid ($4,359.90), 10 not
-in the ledger. Status comes from `vip_invoices` (the header is what a status means);
-`vip_invoice_lines.status` was checked against it and agrees on **12,536 of 12,536** rows. The void
-vocabulary is config with a house default (`VOID_STATUSES`), case-folded — never a literal in a branch.
+A cancelled invoice is not something we owe. Voided invoices are excluded from every figure, and the
+SAME change excluded them from §23y's Device Purchases — `device_payable` imports
+`device_purchases.VOID_STATUSES` and `.voided_invoice_set` rather than keeping its own, so the two
+reports cannot drift on what "voided" means. Status comes from `commcalc.vip_invoices` (the header).
 
-**Proof:** `backend/harness_device_payable.py` (**90 checks**, stdlib-only, DB-free) — §A the join
+Measured as at 2025-12-31: the payable falls **$489,136.63 → $484,696.79** (1,608 → 1,592 units;
+16 units / $4,439.84 removed). 10 further units on voided invoices were already paid ($4,359.90) and
+10 are not in the unit ledger; all leave together. Only WIRELESS 2024 LLC moves ($82,487.47 →
+$78,047.63); the other three companies are unchanged. `totals.excluded_voided_*` and
+`payable_including_voided` report exactly what left, and the page renders it, so the figure the owner
+saw in writing stays explainable.
+
+**Proof:** `backend/harness_device_payable.py` (**93 checks**, stdlib-only, DB-free) — §A the join
 key, with the negative control that swapping to the column named `imei` collapses the match to zero
 **without erroring**; §B the definition, including that an absent payment date is never read as
 payment; §C the owner's 2025-12-31 numbers reproduced exactly, per company, from a cent-exact
@@ -5991,10 +6034,110 @@ baked in), `not_measured` returning `None` and emitting no rows; §E the `payg_d
 non-device items as a separate basis; §G the report declaring its own weaknesses; §H org scope,
 fail-closed on an unknown org; §I reuse with `coa.py` byte-identity asserted at git level; §J the
 page (including that it renders the licence, the not-measured state and the voided declaration);
-§K voided invoices counted and declared. §J also pins the **stale-response guard** — this
+§K voided invoices EXCLUDED, with what left reported. §J also pins the **stale-response guard** — this
 report takes the better part of a minute, so two requests in flight is the normal case, and a
 superseded response reaching `setData` would render a payable for a date the picker has already
 left. Third occurrence of that class (Cash/ePay Pickup 2026-09-10, Device Purchases 2026-09-11), so
 the `alive` flag, its teardown and each guarded setter are asserted, and a bare `.then(setData)` is
 asserted ABSENT. The live per-company figures are pinned as a **dated snapshot** — they are the report's
 definition made arithmetic.
+
+## 23aa. DISTRIBUTOR CHARGEBACKS — two separate charges, both P&L expense (owner directive 2026-09-11)
+
+**Owner, verbatim:** *"9663.75 is actually being mortised towards the chargeback - ttoal chargeback
+is 159106.76 +9663.75 x6 should be in the balance sheet as chargeback"*, then — shown what an
+amortisation model implies over time — *"159106.76 is a separate cjhargeback which it seems occured
+iun 4 instalments as per teh report but 9663.75 is a seaparate chargeback which started in 2025 and
+going to 2026"*, then, asked directly whether it belongs on the balance sheet: **"159106.76 is an
+expense"**.
+
+### Two separate charges. Nothing amortises anything. No balance-sheet asset.
+
+| | | |
+|---|---|---|
+| **A** | one-off chargeback | **$159,106.76** — Return Item Chargeback $159,056.76 + NSF Fee $50.00, invoice 1604147, 2025-12-29 |
+| **B** | recurring monthly chargeback | **$9,663.75** each, 6 so far = **$57,982.50**, still running |
+| | combined to date | **$217,089.26** |
+
+B does not reduce A. Both book to the **existing `chargebacks` opex line** in the month each was
+billed. No new COA line, no BS key, nothing cumulative — `balance_sheet.py` and
+`statement_engine.py` are untouched and needed no re-baseline. An earlier draft carried A as a
+balance-sheet asset; it was withdrawn because an asset implies future recovery and nothing ever
+reduced A. **The module contains no `amortisation`, `carrying_value` or `accumulated` identifier,
+and the harness §F3 asserts their absence from the code.**
+
+### ⚠ THIS IS THE ONE BOOKING IN THE PACKAGE THAT MOVES AN EXISTING FIGURE
+
+Everything else shipped here is additive and inert. This is not. Measured live by running the real
+`build_inputs` twice, config off then on (house org):
+
+| period | `chargebacks` before | after | delta |
+|---|---|---|---|
+| **2025-12** | $0.00 | **$159,106.76** | **+$159,106.76** |
+| 2025-11 | $0.00 | $0.00 | — |
+| **2026-02** | $0.00 | **$9,663.75** | **+$9,663.75** |
+| 2026-03 | $0.00 | $0.00 | — (no March charge) |
+| **2026-08** | $0.00 | **$9,663.75** | **+$9,663.75** |
+
+Every other period is unchanged. **The money is on no statement today**: `coa.build_inputs` reads
+invoice HEADERS only (`shipping + other_cost` → `vip_fees`; unpaid `grand_total` → `vip_ap`) and all
+seven invoices carry shipping $0.00, other_cost $0.00, status 'Paid In Full'. This is RECOGNITION of
+money that was never booked, not a reclassification.
+
+**Attribution:** the charge books at the account location, which `coa.store_resolver` canonicalises
+to `228 N Wood Ave, Syosset, NY 11791` and the shared company matcher assigns to the company
+**Cellular Services** — the master dealer account, not a store, and not the operating company whose
+payment bounced. Booked where the data says; **not** reallocated. Moving it is an owner decision.
+
+### Two things the owner said that the data does not support — published, not argued
+
+1. **A did NOT arrive in four instalments.** The "Return Item Chargeback ×4" is ONE charge of
+   $159,056.76 at the account plus **three unrelated $30.00 store-level chargebacks** (559 Broadway,
+   1598 Mt Ephraim Ave, 5619 N Broad St), all billed 2025-12-29.
+2. **B did NOT start in 2025.** Searching the whole feed for any line valued 9,663.75 under ANY name
+   in ANY year returns six hits, **every one in 2026** (Feb 23, Apr 3, May 2, Jun 2, Jul 2, Aug 2).
+   `recurring.first_seen` publishes **2026-02-23** from the data, so the discrepancy is visible
+   rather than settled by memory. `recurring.missing_months` surfaces the real **2026-03** gap.
+
+### The trap, and what is declared but not booked
+
+A name-only rule totals **$217,660.31** — **$571.05** too much. Scope is therefore account
+**LOCATION and** name vocabulary. That $571.05 is reported as `unbooked_watch` (total, count, and a
+per-location breakdown): in no total, in no P&L leg, visible with its money so the owner can decide
+whether any of it belongs. **Declared, never absorbed.**
+
+### RULE TWO, and how it ships
+
+No location, vendor or line name in the code. Vocabulary is per-org config with an **EMPTY house
+default** and `booking` defaulting to **`off`** — a tenant opts in twice, deliberately — so every
+org including the house org is byte-identical until the config row is seeded. **The migration is
+owner-run and NOT applied.**
+
+### The coa.py guards were re-baselined deliberately, and made stricter
+
+`harness_device_purchases.py` §B2 and `harness_device_payable.py` §I7 pinned `coa.py`
+byte-identical. That was a PROXY for "this work did not re-attribute booked money", and it became
+wrong the moment a sanctioned change landed. Rather than weaken or delete it, it now states the real
+claim via `harnesslib.coa_movement`: **every resolver and attribution function must be byte-identical**
+(`store_resolver`, `build_company_matcher`, `company_assignment`, `store_company_map`,
+`org_companies`, `store_code_to_address`, `_norm_store`, `_squash_key`, `_lead_num_key`) **and the
+only functions that changed at all must be the two sanctioned ones** (`build_inputs`,
+`_account_config`), with nothing removed. Anything unexplained still fails.
+
+### Where it lives
+
+`backend/app/modules/account/distributor_chargebacks.py` — PURE (`derive`, `expense_in_period`,
+`one_off_in_period`, `recurring_in_period`, `classify_line`, `normalise_config`); no client, no I/O,
+no writes, proven with a DEAD client installed. Booking leg in `coa.build_inputs` (period-scoped),
+config in `coa._account_config`. **Proof:** `backend/harness_distributor_chargebacks.py`
+(**55 checks**) — §A the three numbers; §B derived not frozen; §C the trap and the unbooked watch
+list; §D three states; §E RULE TWO; §F two separate charges and the amortisation vocabulary provably
+gone; §G both data corrections; §H as-of, purity, nothing wired without config; §I the P&L legs.
+
+### Duplicate check
+
+`chargebacks` (opex, store) REUSED for both legs. `chargeback_res` deliberately NOT reused — it
+means EXPECTED, UNDEDUCTED chargebacks (booked from `chargeback_items` with no `decided_at`), and
+these are decided, deducted and paid in full; a reserve would state the opposite and corrupt a line
+the P&L already uses. `chargeback_items` / `ops_chargeback` (migs 036/037/504) are INTERNAL
+store/employee chargebacks with their own lifecycle; a distributor chargeback is not one.
