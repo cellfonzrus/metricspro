@@ -7,6 +7,7 @@ import { useAuth } from '@/auth/AuthContext'
 import { getStatus } from '@/api/timeclock'
 import { getSummary } from '@/api/crm'
 import { ROADMAP_MODULES, visibleModules } from '@/modules/registry'
+import { visibleDashboards } from '@/modules/dashboards'
 import { Body, Card, H2, Screen } from '@/components/ui'
 import { OfflineBanner } from '@/components/OfflineBanner'
 import { colors, font, radius, spacing } from '@/theme'
@@ -15,6 +16,10 @@ export default function Home() {
   const { me } = useAuth()
   const router = useRouter()
   const modules = visibleModules(me)
+  const dashboards = visibleDashboards(me)
+  // Back-office areas now delivered natively (Commission Admin → the Dashboards tab) drop off the
+  // "coming soon" list so the home stops advertising something that already exists.
+  const roadmap = ROADMAP_MODULES.filter((m) => m.id !== 'commcalc')
 
   const clock = useQuery({ queryKey: ['timeclock', 'status'], queryFn: getStatus })
   const crm = useQuery({ queryKey: ['crm', 'summary'], queryFn: getSummary })
@@ -54,6 +59,19 @@ export default function Home() {
           </Card>
         </View>
 
+        {dashboards.length > 0 ? (
+          <Pressable style={styles.dashCard} onPress={() => router.push('/dashboards' as any)}>
+            <Text style={styles.tileIcon}>📊</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.tileTitle}>Dashboards</Text>
+              <Text style={styles.tileDesc}>
+                {dashboards.length} live report{dashboards.length === 1 ? '' : 's'} — sales, activations, P&amp;L and more.
+              </Text>
+            </View>
+            <Text style={styles.dashChevron}>›</Text>
+          </Pressable>
+        ) : null}
+
         <H2>Modules</H2>
         <View style={styles.grid}>
           {modules.map((m) => (
@@ -70,7 +88,7 @@ export default function Home() {
         <H2>Coming soon</H2>
         <Body dim>Back-office modules are being brought over from the web platform.</Body>
         <View style={styles.grid}>
-          {ROADMAP_MODULES.map((m) => (
+          {roadmap.map((m) => (
             <View key={m.id} style={[styles.tile, styles.tileDisabled]}>
               <Text style={[styles.tileIcon, { opacity: 0.5 }]}>{m.icon}</Text>
               <Text style={[styles.tileTitle, { color: colors.textDim }]}>{m.title}</Text>
@@ -93,6 +111,17 @@ const styles = StyleSheet.create({
   statLabel: { color: colors.textDim, fontSize: font.small },
   statValue: { color: colors.text, fontSize: font.h3, fontWeight: '700' },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
+  dashCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.primary,
+    padding: spacing.lg,
+  },
+  dashChevron: { color: colors.textDim, fontSize: 28, fontWeight: '300' },
   tile: {
     width: '47%',
     flexGrow: 1,

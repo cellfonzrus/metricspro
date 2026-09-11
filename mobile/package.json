@@ -16,7 +16,9 @@
     "build:android:prod": "eas build --platform android --profile production",
     "build:ios:prod": "eas build --platform ios --profile production",
     "submit:ios": "eas submit --platform ios --profile production",
-    "submit:android": "eas submit --platform android --profile production"
+    "submit:android": "eas submit --platform android --profile production",
+    "update:preview": "eas update --branch preview",
+    "update:production": "eas update --branch production"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.1.0",
@@ -38,6 +40,7 @@
     "expo-splash-screen": "~0.29.0",
     "expo-status-bar": "~2.0.0",
     "expo-system-ui": "~4.0.0",
+    "expo-updates": "~0.26.10",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-native": "0.76.5",
