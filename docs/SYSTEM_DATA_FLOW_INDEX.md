@@ -5982,7 +5982,7 @@ in the ledger. Status comes from `vip_invoices` (the header is what a status mea
 `vip_invoice_lines.status` was checked against it and agrees on **12,536 of 12,536** rows. The void
 vocabulary is config with a house default (`VOID_STATUSES`), case-folded — never a literal in a branch.
 
-**Proof:** `backend/harness_device_payable.py` (**87 checks**, stdlib-only, DB-free) — §A the join
+**Proof:** `backend/harness_device_payable.py` (**90 checks**, stdlib-only, DB-free) — §A the join
 key, with the negative control that swapping to the column named `imei` collapses the match to zero
 **without erroring**; §B the definition, including that an absent payment date is never read as
 payment; §C the owner's 2025-12-31 numbers reproduced exactly, per company, from a cent-exact
@@ -5991,5 +5991,10 @@ baked in), `not_measured` returning `None` and emitting no rows; §E the `payg_d
 non-device items as a separate basis; §G the report declaring its own weaknesses; §H org scope,
 fail-closed on an unknown org; §I reuse with `coa.py` byte-identity asserted at git level; §J the
 page (including that it renders the licence, the not-measured state and the voided declaration);
-§K voided invoices counted and declared. The live per-company figures are pinned as a **dated snapshot** — they are the report's
+§K voided invoices counted and declared. §J also pins the **stale-response guard** — this
+report takes the better part of a minute, so two requests in flight is the normal case, and a
+superseded response reaching `setData` would render a payable for a date the picker has already
+left. Third occurrence of that class (Cash/ePay Pickup 2026-09-10, Device Purchases 2026-09-11), so
+the `alive` flag, its teardown and each guarded setter are asserted, and a bare `.then(setData)` is
+asserted ABSENT. The live per-company figures are pinned as a **dated snapshot** — they are the report's
 definition made arithmetic.

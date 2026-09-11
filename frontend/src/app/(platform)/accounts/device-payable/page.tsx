@@ -56,13 +56,24 @@ export default function DevicePayablePage() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
 
+  // STALE-RESPONSE GUARD. Without this the response that RESOLVES LAST wins, not the one that was
+  // asked for last — so clicking through dates leaves the page showing a payable for a date the
+  // picker is no longer on, while the picker reads the new one. That is the worst shape a money bug
+  // takes: nothing on screen contradicts it. Not theoretical here — this report reads the whole
+  // device, ledger and invoice feeds and takes the better part of a minute, so two in-flight
+  // requests is the NORMAL case, not the edge one.
+  // Third occurrence of this defect class: Cash/ePay Pickup (2026-09-10) and Device Purchases
+  // (2026-09-11, where the owner saw two years of spend under a one-year window). `alive` is the
+  // pattern StandardFilterBar itself already uses, and §J pins it.
   useEffect(() => {
     if (!asAt) return
+    let alive = true
     setLoading(true); setErr('')
     api(`/api/v1/account/device-payable?as_at=${encodeURIComponent(asAt)}`)
-      .then(setData)
-      .catch(e => { setErr(e?.message || String(e)); setData(null) })
-      .finally(() => setLoading(false))
+      .then(d => { if (alive) setData(d) })
+      .catch(e => { if (!alive) return; setErr(e?.message || String(e)); setData(null) })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
   }, [asAt])
 
   const distributor = data?.distributor_label || 'distributor'

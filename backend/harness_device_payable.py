@@ -785,6 +785,20 @@ check("J7 it shows the derived coverage month by month, so the window is auditab
 check("J8 it uses the SHARED filter bar and the SHARED export bar (RULE FIVE §3d)",
       "StandardFilterBar" in pcode and "ReportExportBar" in pcode)
 
+# THE STALE-RESPONSE GUARD, pinned rather than merely written. Third occurrence of this class:
+# Cash/ePay Pickup (2026-09-10) and Device Purchases (2026-09-11, where the owner saw two years of
+# spend under a one-year window and nothing on screen contradicted it). This report takes the better
+# part of a minute, so two requests in flight is the NORMAL case — a superseded response reaching
+# setData would render a payable for a date the picker has already left.
+check("J9 the as-at fetch carries an `alive` flag AND tears it down, so a superseded response can "
+      "never reach the page",
+      "let alive = true" in pcode and "alive = false" in pcode and "return () =>" in pcode)
+check("J10 …and every setter is guarded by it — data, error and loading alike",
+      "if (alive) setData" in pcode and "if (!alive) return" in pcode
+      and "if (alive) setLoading" in pcode)
+check("J11 …and the exact shape of the shipped defect, a bare `.then(setData)`, is ABSENT",
+      ".then(setData)" not in pcode, ".then(setData) is present")
+
 print()
 print("=" * 78)
 print("RESULT: %d passed, %d failed" % (P, F))
