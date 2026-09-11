@@ -67,15 +67,24 @@ export default function DevicePurchasesPage() {
   const from = toMonth(filt.period || '')
   const to = toMonth(filt.periodTo || '')
 
+  // STALE-RESPONSE GUARD. Changing the From box and then the To box puts two requests in flight,
+  // and without this the one that RESOLVES LAST wins — which is routinely the earlier, WIDER window.
+  // Live defect 2026-09-11: the owner set 01/01/2025-12/31/2025 and the page rendered $11,243,145.03
+  // over 31,110 units, which is 2025 PLUS 2026 to the cent; the correct 2025 figure is $7,099,841.56
+  // over 19,235. The date boxes read right while the money was a year too wide — the worst shape of
+  // wrong, because nothing on screen contradicted it. Same defect class as the Cash/ePay Pickup
+  // filter (fixed 2026-09-10); `alive` is the pattern StandardFilterBar itself already uses.
   useEffect(() => {
+    let alive = true
     setLoading(true); setErr('')
     const qs = new URLSearchParams()
     if (from) qs.set('from_period', from)
     if (to) qs.set('to_period', to)
     api(`/api/v1/account/device-purchases?${qs.toString()}`)
-      .then(setData)
-      .catch(e => { setErr(e?.message || String(e)); setData(null) })
-      .finally(() => setLoading(false))
+      .then(d => { if (alive) setData(d) })
+      .catch(e => { if (!alive) return; setErr(e?.message || String(e)); setData(null) })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
   }, [from, to])
 
   const distributor = data?.distributor_label || 'distributor'
