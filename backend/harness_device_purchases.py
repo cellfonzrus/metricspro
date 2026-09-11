@@ -559,6 +559,28 @@ check("G5 the page uses the SHARED filter bar and the SHARED export bar (RULE FI
 check("G6 the unmapped buckets are RENDERED, not merely present in the payload",
       "store_not_mapped" in pcode and "company_not_mapped" in pcode)
 
+# ══ §H — the window on screen is the window in the money ═════════════════════════════════════════
+# LIVE DEFECT 2026-09-11, the reason this section exists. The owner set 01/01/2025-12/31/2025 and the
+# page reported $11,243,145.03 over 31,110 units. That is 2025 PLUS 2026 to the cent (2025 alone is
+# $7,099,841.56 over 19,235). The backend was right and the classifier was right: `period_year` /
+# `period_month` are clean in the feed, and replaying the window 2025-2026 offline reproduced the
+# owner's screen exactly. The fault was a RACE — changing From and then To puts two fetches in
+# flight, and the one that resolves LAST wins, which is routinely the earlier and WIDER window.
+#
+# This is the worst shape a money bug takes: the date boxes read 12/31/2025 while the total covered
+# two years, so nothing on screen contradicted the number. It is also the SECOND time this class
+# shipped (Cash/ePay Pickup, fixed 2026-09-10), which is why it is pinned here rather than fixed and
+# forgotten. `alive` is the pattern StandardFilterBar's own effect already uses.
+_fx = pcode.split("useEffect(", 1)[-1].split("}, [from, to])", 1)[0] if "}, [from, to])" in pcode else ""
+check("H1 the window fetch declares a staleness flag",
+      "let alive = true" in _fx, _fx[:160])
+check("H2 ... tears it down on re-run, so a superseded request is abandoned",
+      "return () => { alive = false }" in _fx)
+check("H3 ... and a superseded response can never reach setData — the bug was `.then(setData)`",
+      ".then(setData)" not in _fx and "if (alive) setData" in _fx)
+check("H4 ... nor overwrite the error/loading state after it was superseded",
+      "if (!alive) return" in _fx and "if (alive) setLoading(false)" in _fx)
+
 print()
 print("=" * 78)
 print("RESULT: %d passed, %d failed" % (P, F))
