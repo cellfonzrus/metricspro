@@ -774,6 +774,9 @@ check("J5 it renders the unmatched-device count, so the reader sees the match ra
 check("J6 it renders the non-device section as a SEPARATE basis and says so on the page",
       "non_device" in pcode and "different basis" in pcode.lower()
       and "must not be added to it" in pcode.lower())
+check("J7c the page renders the payg_date LICENCE — the ledger-vs-settled-batches measurement — so "
+      "the reader can see what the whole method rests on rather than taking it on trust",
+      "payment_date_evidence" in pcode and "settled_batches" in pcode)
 check("J7b the page renders the voided-invoice declaration, so the open rule question is visible to "
       "a reader rather than living only in the payload",
       "voided_invoice_payable_amount" in pcode and "payable_excluding_voided" in pcode)

@@ -104,6 +104,7 @@ export default function DevicePayablePage() {
   const ndItems: any[] = nd?.by_item || []
   const ndStores: any[] = nd?.by_store || []
   const covMonths: any[] = cov?.months || []
+  const evidence: any[] = data?.meta?.payment_date_evidence || []
 
   function sheets(): ExportSheet[] {
     return [
@@ -355,6 +356,32 @@ export default function DevicePayablePage() {
                 figure on this page — named here so they are not silently missing.
               </div>
             )}
+          </Card>
+
+          <Card title="What licenses the payment date — measured on this run, not claimed once"
+                note={<>The whole report rests on one column meaning &ldquo;the day this unit was paid
+                      for&rdquo;. That is not assumed: each year, what the per-unit ledger says was paid
+                      is measured against the {distributor}&rsquo;s own settled payment batches — a
+                      different feed, swept separately, which knows nothing about units. Close agreement
+                      is the licence. <strong>Reported, never enforced</strong>: a timing difference must
+                      not blank the page, so you are handed both numbers and can judge. Expect wide
+                      variance in the years the unit ledger was pruned — that is the same prune the
+                      coverage table below reads, showing up independently.</>}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead><tr><th style={th}>Year paid</th><th style={thr}>Per-unit ledger says paid</th><th style={thr}>Settled payment batches</th><th style={thr}>Difference</th><th style={thr}>Variance</th></tr></thead>
+                <tbody>{evidence.map((e: any) => (
+                  <tr key={e.year}>
+                    <td style={td}>{e.year}</td>
+                    <td style={tdr}>{money(e.ledger_paid)}</td>
+                    <td style={tdr}>{money(e.settled_batches)}</td>
+                    <td style={tdr}>{money(e.difference)}</td>
+                    <td style={tdr}>{e.variance_pct == null ? '—' : `${e.variance_pct}%`}</td>
+                  </tr>
+                ))}
+                {!evidence.length && <tr><td style={td} colSpan={5}>No settled payment batches to measure against.</td></tr>}</tbody>
+              </table>
+            </div>
           </Card>
 
           <Card title="Ledger coverage, month by month — how the measurable window was derived"

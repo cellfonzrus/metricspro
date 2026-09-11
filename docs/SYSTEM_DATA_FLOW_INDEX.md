@@ -5898,7 +5898,7 @@ matches **4** — and renders a confident, empty number rather than erroring. Bo
 (non-alphanumerics stripped, upper-cased); a ledger key with **no digit in it** is not a serial (the
 ledger carries per-invoice fee labels), a SHAPE test rather than a list of spellings (RULE TWO).
 
-**What licenses `payg_date`** (`payment_evidence`, re-measured on every run and shown on the page):
+**What licenses `payg_date`** (`payment_evidence`, re-measured on every run and rendered on the page):
 Σ `owed_to_vip` by `payg_date` year against the distributor's own settled payment batches
 (`vip_paygo_payments`) — a different feed, swept separately, knowing nothing about units. House org
 2026-09-11: **2025 $6,891,830.12 vs $6,712,367.33 (2.67%)**, **2026 $4,441,540.54 vs $4,326,473.83
@@ -5969,7 +5969,20 @@ day. Read-only: books nothing, writes nothing, **no migration**.
 Guards re-pinned, additions only: `harness_db_resilience.py` route count **1580 → 1581** (the one new
 GET) and `harness_finance_sync_in_async.py` `ALLOWED_NEW` (`account/router.py` +`device_payable`).
 
-**Proof:** `backend/harness_device_payable.py` (**78 checks**, stdlib-only, DB-free) — §A the join
+### VOIDED INVOICES — counted, and the question published rather than decided quietly
+
+Six house-org invoice headers carry `status='Voided'` (one in the 2025 window: 1595336, 2025-11-20,
+grand total $9,189.74). Their serialised units are still in the feed, and §23y counts them today.
+This report counts them **too, deliberately** — two finance reports disagreeing about voided invoices
+is a worse defect than either rule. It does not hide the question: `totals.voided_invoice_*` publishes
+what an exclude-voided rule would remove and `payable_excluding_voided` computes the alternative, so
+flipping BOTH reports together later is a one-line change. Measured as at 2025-12-31: **16 units /
+$4,439.84 in the payable** (it would read **$484,696.79**), 10 more already paid ($4,359.90), 10 not
+in the ledger. Status comes from `vip_invoices` (the header is what a status means);
+`vip_invoice_lines.status` was checked against it and agrees on **12,536 of 12,536** rows. The void
+vocabulary is config with a house default (`VOID_STATUSES`), case-folded — never a literal in a branch.
+
+**Proof:** `backend/harness_device_payable.py` (**87 checks**, stdlib-only, DB-free) — §A the join
 key, with the negative control that swapping to the column named `imei` collapses the match to zero
 **without erroring**; §B the definition, including that an absent payment date is never read as
 payment; §C the owner's 2025-12-31 numbers reproduced exactly, per company, from a cent-exact
@@ -5977,5 +5990,6 @@ synthetic population; §D coverage derived (and re-derived on a 2021/2022 shape,
 baked in), `not_measured` returning `None` and emitting no rows; §E the `payg_date` licence; §F
 non-device items as a separate basis; §G the report declaring its own weaknesses; §H org scope,
 fail-closed on an unknown org; §I reuse with `coa.py` byte-identity asserted at git level; §J the
-page. The live per-company figures are pinned as a **dated snapshot** — they are the report's
+page (including that it renders the licence, the not-measured state and the voided declaration);
+§K voided invoices counted and declared. The live per-company figures are pinned as a **dated snapshot** — they are the report's
 definition made arithmetic.
