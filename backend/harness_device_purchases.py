@@ -317,14 +317,17 @@ mods = [l[3:] for l in _git("status", "--porcelain").stdout.splitlines()
         if l[:2].strip() and l[3:].startswith("backend/app/modules/account/")]
 check("B3 …and the only account-module file this work touches at all, besides its own new module, "
       "is router.py — where it adds a NEW mount and changes no existing handler",
-      # ADDITIONS ONLY (2026-09-11). `device_payable.py` (index §23z) is a NEW module in this
+      # ADDITIONS ONLY (2026-09-11). `device_payable.py` (§23z) and `chargeback_asset.py`
+      # (capitalised chargeback, PURE — it has no client and books nothing on its own) are NEW
+      # modules in this
       # package, not an existing one: the claim B3 protects is that no EXISTING account module
       # moved, and B2 above still pins coa.py byte-identical, which is where the money lives.
       # Listing it makes the guard state what it means, instead of passing only because the file
       # happens to be committed at the moment CI runs.
       set(mods) <= {"backend/app/modules/account/router.py",
                     "backend/app/modules/account/device_purchases.py",
-                    "backend/app/modules/account/device_payable.py"}, mods)
+                    "backend/app/modules/account/device_payable.py",
+                    "backend/app/modules/account/chargeback_asset.py"}, mods)
 
 # The resolver contract this report leans on, exercised through coa AS SHIPPED.
 res = coa.store_resolver(FakeClient(TABLES), ORG)
