@@ -73,6 +73,25 @@ Classification reuses `device_purchases.device_product_names` / `.classify_line`
 data-driven "a line is a device when that product actually arrived serialised" rule the Device
 Purchases report (§23y) already proves. No second definition of what a device is.
 
+═══════════════ VOIDED INVOICES ARE COUNTED, AND SEPARATELY DECLARED (open question) ══════════════
+Six invoice headers on the house org carry `status = 'Voided'` (one in the 2025 window: invoice
+1595336, 2025-11-20, grand total $9,189.74). Their lines and their serialised units are still in the
+feed, and the sibling Device Purchases report (§23y) counts them today.
+
+This report counts them too — DELIBERATELY, for now, because the two reports disagreeing about
+voided invoices is a worse defect than either rule: someone will reconcile them one day and both
+will lose credibility. What it will NOT do is hide the question. `totals.voided_invoice_*` reports
+exactly what a voided-exclusion would remove, so the number is already published when the rule is
+decided, and flipping BOTH reports together is then a one-line change rather than an investigation.
+
+Measured house org as at 2025-12-31: 16 units on voided invoices sit in the payable, worth
+$4,439.84 — i.e. the payable would read $484,696.79 under an exclusion rule. Ten more are already
+paid ($4,359.90) and ten are not in the unit ledger at all.
+
+The invoice status is read from `vip_invoices` (the header, which is authoritative).
+`vip_invoice_lines.status` was checked against it and agrees on 12,536 of 12,536 rows, but the
+header is what a status means, and this feed's column names have lied before (see the join key).
+
 ═══════════════ DUPLICATE CHECK (CLAUDE.md build gate) ════════════════════════════════════════════
 Searched `docs/SYSTEM_DATA_FLOW_INDEX.md` before building. Nothing backdates a per-unit payable:
 
@@ -111,6 +130,11 @@ NOT_A_RETAIL_LOCATION = "(not a retail location)"
 #            (we cannot evidence that it was paid) and reported separately, so a reader can see
 #            exactly how much of the figure rests on an absent date rather than a later one.
 PAYMENT_STATES = ("paid", "unpaid", "unknown")
+
+# WHICH INVOICE STATUSES MEAN "this was voided". House default; a tenant whose distributor spells it
+# differently overrides it in config rather than in code (RULE TWO). Matching is case-folded, so
+# spelling drift in the feed does not silently stop the declaration.
+VOID_STATUSES = ("voided",)
 
 # COVERAGE. A month counts as covered when the ledger holds at least this share of the units
 # invoiced that month. Measured house org: the collapse is not subtle — 0.02-0.09 through 2024,
@@ -327,7 +351,8 @@ def _bucket(store, company, company_id, market, how):
 
 
 def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_of,
-              company_names=None, market_of=None, settled_rows=None):
+              company_names=None, market_of=None, settled_rows=None, invoice_rows=None,
+              void_statuses=VOID_STATUSES):
     """PURE: the whole report from rows + the two SHARED resolvers, passed in as functions.
 
       device_rows  — commcalc.vip_invoice_devices (serial, imei, location, created_on, product_name)
@@ -336,6 +361,8 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
       settled_rows — the distributor's own settled payment batches (amount, period_year) — the
                      SECOND, independent feed that `payment_evidence` measures `payg_date`
                      against, so the licence for the whole method is re-checked on every run
+      invoice_rows — commcalc.vip_invoices headers (invoice_number, status) — used ONLY to
+                     DECLARE what sits on a voided invoice, never to drop it (see the docstring)
       as_at        — 'YYYY-MM-DD'; the day we are standing on
       place_store  — dp.store_placer(coa.store_resolver(...), known) : location -> (store, how)
       company_of   — coa.build_company_matcher(rows, None)           : key -> company_id or None
@@ -364,6 +391,14 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
             return (NOT_A_RETAIL_LOCATION, company, cid, "", how)
         return (addr, company, cid, mk(addr) or "", how)
 
+    # Invoices whose header says voided. Their units are COUNTED (the sibling report counts them)
+    # and separately DECLARED, so the open rule question carries its own number.
+    void_set = {_t(i.get("invoice_number")) for i in (invoice_rows or [])
+                if _t(i.get("status")).lower() in {str(v).lower() for v in (void_statuses or ())}
+                and _t(i.get("invoice_number"))}
+    voided = {"payable_devices": 0, "payable_amount": 0.0, "paid_devices": 0, "paid_amount": 0.0,
+              "unmatched_devices": 0, "invoices": 0}
+
     cells, unmatched_units, unplaced = {}, [], {}
     tot = {"payable_amount": 0.0, "payable_devices": 0, "paid_amount": 0.0, "paid_devices": 0,
            "unknown_devices": 0, "unknown_amount": 0.0, "unmatched_devices": 0,
@@ -379,6 +414,7 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
                 tot["before_coverage_devices"] += 1     # billed, but outside what the ledger can
                 continue                                # evidence — declared, never counted as paid
             tot["invoiced_devices"] += 1
+            on_void = _t(d.get("invoice_number")) in void_set
             raw = _t(d.get("location"))
             store, company, cid, market, how = place(raw)
             key = (company, store)
@@ -394,6 +430,8 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
             if row is None:
                 tot["unmatched_devices"] += 1
                 c["unmatched_devices"] += 1
+                if on_void:
+                    voided["unmatched_devices"] += 1
                 if len(unmatched_units) < 500:
                     unmatched_units.append({"serial": _t(d.get("serial")), "location": raw,
                                             "invoiced": inv_date,
@@ -406,6 +444,9 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
                 tot["paid_devices"] += 1
                 c["paid_amount"] += amt
                 c["paid_devices"] += 1
+                if on_void:
+                    voided["paid_devices"] += 1
+                    voided["paid_amount"] += amt
                 continue
             # unpaid OR unknown — both are payable at this date; unknown is also counted apart
             if st == "unknown":
@@ -418,6 +459,9 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
             seen_payable.add(unit_key)
             tot["payable_amount"] += amt
             tot["payable_devices"] += 1
+            if on_void:
+                voided["payable_devices"] += 1
+                voided["payable_amount"] += amt
             c["payable_amount"] += amt
             c["payable_devices"] += 1
             if store == NOT_A_RETAIL_LOCATION and raw:
@@ -521,6 +565,14 @@ def aggregate(device_rows, line_rows, ledger_rows, as_at, place_store, company_o
                                                if measured else None),
             "distinct_device_payable_devices": (tot["payable_devices"] - repeat["rows"]
                                                 if measured else None),
+            # COUNTED ABOVE, and declared here: what an exclude-voided-invoices rule would remove.
+            # The sibling Device Purchases report counts these too; the two must move together.
+            "voided_invoice_payable_devices": voided["payable_devices"] if measured else None,
+            "voided_invoice_payable_amount": r2(voided["payable_amount"]) if measured else None,
+            "voided_invoice_paid_amount": r2(voided["paid_amount"]) if measured else None,
+            "voided_invoice_unmatched_devices": voided["unmatched_devices"] if measured else None,
+            "payable_excluding_voided": (r2(tot["payable_amount"] - voided["payable_amount"])
+                                         if measured else None),
         },
         "by_company": sorted(by_company.values(),
                              key=lambda x: (-x["payable_amount"], x["company"])) if measured else [],
@@ -569,6 +621,9 @@ def compute(client, org_id, as_at):
     ledger = dp._page(client, "asset_ledger",
                       "id,esn_imei,payg_date,owed_to_vip,acquired_date,store,status,device_model",
                       org_id)
+    # invoice HEADERS — the authoritative status. Read ONLY so the report can DECLARE what sits on a
+    # voided invoice; nothing is dropped on it (see the module docstring).
+    invoices = dp._page(client, "vip_invoices", "id,invoice_number,status,period_year", org_id)
     # the SECOND, independent payment feed — small (hundreds of rows), read whole, org-scoped. It is
     # never used to compute a payable; it exists only so `payment_evidence` can re-prove the licence.
     settled = dp._page(client, "vip_paygo_payments", "id,amount,period_year,created_on,status",
@@ -599,7 +654,7 @@ def compute(client, org_id, as_at):
         print(f"WARN device_payable market resolution unavailable: {e}")
 
     out = aggregate(devices, lines, ledger, as_at, place_store, company_of, names, market_of,
-                    settled_rows=settled)
+                    settled_rows=settled, invoice_rows=invoices)
     out["org_id"] = org_id
     # The distributor's NAME is never written in code or page copy (RULE TWO) — it resolves through
     # the mig-953 `report_term` vocabulary, tenant override > house carrier preset > the neutral
@@ -616,6 +671,8 @@ def compute(client, org_id, as_at):
                      "ledger_table": "commcalc.asset_ledger",
                      "lines_table": "commcalc.vip_invoice_lines",
                      "settled_batches_table": "commcalc.vip_paygo_payments",
+                     "invoice_headers_table": "commcalc.vip_invoices",
+                     "invoice_headers_read": len(invoices),
                      "devices_read": len(devices), "ledger_read": len(ledger),
                      "lines_read": len(lines), "settled_batches_read": len(settled)}
     return out

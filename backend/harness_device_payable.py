@@ -167,6 +167,9 @@ FIX = {
 }
 FIX_PAYABLE_TOTAL = 489136.63
 FIX_PAYABLE_DEVICES = 1608
+# …plus the two units on the VOIDED invoice below, which the report COUNTS and DECLARES (§K).
+FIX_VOID_DEVICES = 2
+FIX_VOID_AMOUNT = 500.00
 FIX_PAID_TOTAL = 6666467.35
 FIX_PAID_DEVICES = 17744
 FIX_UNMATCHED = 219
@@ -286,6 +289,27 @@ for i in range(20):
                    "owed_to_vip": 9.0, "acquired_date": "2025-05-05", "store": "10 Alpha Ave",
                    "status": "Open", "device_model": ""})
 
+# ── A VOIDED INVOICE. Its units are still in the feed and are still COUNTED (the sibling report
+# counts them); what the report must never do is leave the question invisible. Two payable units.
+VOID_INV = "INV-VOID"
+for i in range(2):
+    _s = _serial()
+    DEVICES.append({"org_id": ORG, "id": "VD%d" % i, "invoice_number": VOID_INV,
+                    "location": "10 Alpha Ave", "serial": _s,
+                    "imei": "089130349577%06d" % i, "product_name": PHONE,
+                    "created_on": "2025-11-20T04:00:00+00:00",
+                    "period_year": 2025, "period_month": 11})
+    LEDGER.append({"org_id": ORG, "id": "LVD%d" % i, "esn_imei": _s,
+                   "payg_date": "2026-02-14T00:00:00+00:00", "owed_to_vip": 250.00,
+                   "acquired_date": "2025-11-20", "store": "10 Alpha Ave",
+                   "status": "Open", "device_model": PHONE})
+INVOICES = [{"org_id": ORG, "id": "H1", "invoice_number": VOID_INV, "status": "Voided",
+             "period_year": 2025},
+            {"org_id": ORG, "id": "H2", "invoice_number": "INV-10 Alpha Ave",
+             "status": "Paid In Full", "period_year": 2025},
+            {"org_id": OTHER_ORG, "id": "H9", "invoice_number": "INV-F", "status": "Voided",
+             "period_year": 2025}]
+
 # ── invoice LINES: the device money, plus the non-device items that no serial can see ────────────
 LINES = [
     {"org_id": ORG, "id": "N1", "invoice_number": "INV-HQ", "location": "99 Head Office Rd",
@@ -323,6 +347,7 @@ TABLES = {
     "commcalc.vip_invoice_devices": DEVICES,
     "commcalc.vip_invoice_lines": LINES,
     "commcalc.asset_ledger": LEDGER,
+    "commcalc.vip_invoices": INVOICES,
     "commcalc.vip_paygo_payments": PAYGO,
     "storeops.stores": [],
 }
@@ -352,8 +377,8 @@ section("§A  THE COLUMN NAMES LIE: the IMEI lives in `serial`, and `imei` holds
 
 check("A1 the join is on `serial` — with it, the fixture's 19,352 in-window units find their ledger "
       "row (match rate %s)" % T["match_rate"],
-      T["matched_devices"] == FIX_INVOICED - FIX_UNMATCHED,
-      (T["matched_devices"], FIX_INVOICED - FIX_UNMATCHED))
+      T["matched_devices"] == FIX_INVOICED + FIX_VOID_DEVICES - FIX_UNMATCHED,
+      (T["matched_devices"], FIX_INVOICED + FIX_VOID_DEVICES - FIX_UNMATCHED))
 
 # THE NEGATIVE CONTROL, and the reason this report exists in the shape it does. Swap the two columns
 # on the invoice side — exactly what a reader who trusts the column NAMES would do — and the report
@@ -395,7 +420,8 @@ check("B4 a unit with NO payment date is 'unknown' — an absent date is never r
       and dpay.payment_state({}, AS_AT) == "unknown")
 check("B5 …and 'unknown' is counted INTO the payable, because we cannot evidence it was paid",
       T["payment_date_unknown_devices"] == FIX_UNKNOWN_DEVICES
-      and T["payable_devices"] == FIX_PAYABLE_DEVICES, T["payment_date_unknown_devices"])
+      and T["payable_devices"] == FIX_PAYABLE_DEVICES + FIX_VOID_DEVICES,
+      T["payment_date_unknown_devices"])
 check("B6 a unit billed AFTER the as-at date is in no figure at all — the report stands on the date "
       "it was given and cannot see forward",
       run(as_at="2025-05-31")["totals"]["invoiced_devices"] < T["invoiced_devices"])
@@ -410,31 +436,41 @@ check("B7 the same population re-read a year later shows the 2026 payments as PA
 section("§C  THE OWNER'S 2025-12-31 NUMBERS, REPRODUCED EXACTLY (house org, measured 2026-09-11)")
 
 check("C1 the payable at 2025-12-31 is $489,136.63",
-      T["payable_amount"] == FIX_PAYABLE_TOTAL, T["payable_amount"])
+      T["payable_amount"] == round(FIX_PAYABLE_TOTAL + FIX_VOID_AMOUNT, 2),
+      T["payable_amount"])
 check("C2 …over 1,608 device rows — 1,607 paid in 2026 plus the ONE carrying no payment date",
-      T["payable_devices"] == FIX_PAYABLE_DEVICES, T["payable_devices"])
+      T["payable_devices"] == FIX_PAYABLE_DEVICES + FIX_VOID_DEVICES, T["payable_devices"])
 check("C3 the devices billed in 2025 and ALREADY paid in 2025 are 17,744 / $6,666,467.35",
       T["paid_devices"] == FIX_PAID_DEVICES and T["paid_amount"] == FIX_PAID_TOTAL,
       (T["paid_devices"], T["paid_amount"]))
 check("C4 219 units billed in the window are not in the unit ledger at all, and are in NEITHER "
       "figure — not counted as paid, not counted as payable",
       T["unmatched_devices"] == FIX_UNMATCHED
-      and T["paid_devices"] + T["payable_devices"] + T["unmatched_devices"] == FIX_INVOICED,
+      and T["paid_devices"] + T["payable_devices"] + T["unmatched_devices"]
+      == FIX_INVOICED + FIX_VOID_DEVICES,
       T["unmatched_devices"])
 check("C5 paid + payable == every unit the ledger could evidence (nothing leaks between buckets)",
       T["paid_devices"] + T["payable_devices"] == T["matched_devices"])
 
 for comp, (_st, pay_n, pay_amt, _pn, _pa) in FIX.items():
     b = BYCO.get(comp) or {}
-    check("C6 %-26s %5d devices  $%12.2f" % (comp, pay_n, pay_amt),
-          b.get("payable_devices") == pay_n and b.get("payable_amount") == pay_amt,
+    # the fixture's VOIDED invoice sits at the first company's store (§K), so its two units are
+    # expected there — declared in the arithmetic rather than quietly absorbed
+    v_n = FIX_VOID_DEVICES if comp == "PA PHONE TRADERS LLC" else 0
+    v_a = FIX_VOID_AMOUNT if comp == "PA PHONE TRADERS LLC" else 0.0
+    check("C6 %-26s %5d devices  $%12.2f%s"
+          % (comp, pay_n, pay_amt, "  (+2 / $500.00 on the voided invoice, §K)" if v_n else ""),
+          b.get("payable_devices") == pay_n + v_n
+          and b.get("payable_amount") == round(pay_amt + v_a, 2),
           (b.get("payable_devices"), b.get("payable_amount")))
 
 check("C7 the four companies sum back to the headline — the segregation cannot quietly lose money",
-      round(sum(c["payable_amount"] for c in R["by_company"]), 2) == FIX_PAYABLE_TOTAL,
+      round(sum(c["payable_amount"] for c in R["by_company"]), 2)
+      == round(FIX_PAYABLE_TOTAL + FIX_VOID_AMOUNT, 2),
       sum(c["payable_amount"] for c in R["by_company"]))
 check("C8 …and so does the by-store table, which is what the page folds the company table from",
-      round(sum(c["payable_amount"] for c in R["by_store"]), 2) == FIX_PAYABLE_TOTAL)
+      round(sum(c["payable_amount"] for c in R["by_store"]), 2)
+      == round(FIX_PAYABLE_TOTAL + FIX_VOID_AMOUNT, 2))
 check("C9 every company row carries a real company NAME, never a raw id",
       all(not str(c["company"]).startswith("co-") for c in R["by_company"]),
       [c["company"] for c in R["by_company"]])
@@ -517,7 +553,7 @@ check("E4 the agreement is REPORTED, never enforced — a timing difference must
       "so the reader is handed both numbers and can judge",
       run(tables={"commcalc.vip_paygo_payments": [
           {"org_id": ORG, "id": "P9", "amount": 1.0, "period_year": 2025}]}
-          )["totals"]["payable_amount"] == FIX_PAYABLE_TOTAL)
+          )["totals"]["payable_amount"] == round(FIX_PAYABLE_TOTAL + FIX_VOID_AMOUNT, 2))
 check("E5 a year with no settled batches reports no agreement percentage rather than '0.00%', "
       "which would read as perfect agreement",
       dpay.payment_evidence([{"payg_date": "2030-01-01", "owed_to_vip": 5.0}],
@@ -533,7 +569,7 @@ check("F1 the year-end Return Item Chargeback ($159,056.76, billed 2025-12-29) I
       nd_items[CHARGEBACK]["amount"] == 159056.76
       and nd_items[CHARGEBACK]["latest"] == "2025-12-29", nd_items.get(CHARGEBACK))
 check("F2 …and it is NOT in the device payable, not by a cent",
-      T["payable_amount"] == FIX_PAYABLE_TOTAL)
+      T["payable_amount"] == round(FIX_PAYABLE_TOTAL + FIX_VOID_AMOUNT, 2))
 check("F3 the section declares its own basis as BILLED, and its settlement as NOT MEASURED — there "
       "is no per-line payment date anywhere in this feed to decide it with",
       ND["basis"] == "billed" and ND["settlement_state"] == "not_measured"
@@ -557,7 +593,8 @@ check("F7 device-named money on an invoice that carried NO serialised unit is in
 section("§G  THE REPORT STATES HOW WELL ITS OWN NUMBER IS EVIDENCED")
 
 check("G1 the match rate is published, so a reader judges the figure instead of trusting it",
-      T["match_rate"] == round((FIX_INVOICED - FIX_UNMATCHED) / FIX_INVOICED, 4), T["match_rate"])
+      T["match_rate"] == round((FIX_INVOICED + FIX_VOID_DEVICES - FIX_UNMATCHED)
+                               / (FIX_INVOICED + FIX_VOID_DEVICES), 4), T["match_rate"])
 check("G2 the same unit billed on a SECOND invoice in the window is counted in the headline (that "
       "is what the owner's number is) but the double-count is DECLARED, not hidden",
       T["repeat_serial_rows"] == FIX_REPEAT_ROWS
@@ -565,8 +602,10 @@ check("G2 the same unit billed on a SECOND invoice in the window is counted in t
       (T["repeat_serial_rows"], T["repeat_serial_amount"]))
 check("G3 …and the distinct-unit payable is published beside it, so a reader can use either basis "
       "knowingly ($489,136.63 − $4,599.83 = $484,536.80)",
-      T["distinct_device_payable_amount"] == round(FIX_PAYABLE_TOTAL - FIX_REPEAT_AMOUNT, 2)
-      and T["distinct_device_payable_devices"] == FIX_PAYABLE_DEVICES - FIX_REPEAT_ROWS,
+      T["distinct_device_payable_amount"]
+      == round(FIX_PAYABLE_TOTAL + FIX_VOID_AMOUNT - FIX_REPEAT_AMOUNT, 2)
+      and T["distinct_device_payable_devices"]
+      == FIX_PAYABLE_DEVICES + FIX_VOID_DEVICES - FIX_REPEAT_ROWS,
       (T["distinct_device_payable_amount"], T["distinct_device_payable_devices"]))
 check("G4 the unmatched units are SAMPLED into the payload with their serial and invoice date, so "
       "'219 missing' is investigable rather than a number to shrug at",
@@ -602,7 +641,8 @@ FOREIGN_LED = LEDGER + [{"org_id": OTHER_ORG, "id": "FL", "esn_imei": "359999999
 RF = run(tables={"commcalc.vip_invoice_devices": FOREIGN_DEV,
                  "commcalc.asset_ledger": FOREIGN_LED})
 check("H2 another org's unit never reaches this org's payable",
-      RF["totals"]["payable_amount"] == FIX_PAYABLE_TOTAL, RF["totals"]["payable_amount"])
+      RF["totals"]["payable_amount"] == round(FIX_PAYABLE_TOTAL + FIX_VOID_AMOUNT, 2),
+      RF["totals"]["payable_amount"])
 check("H3 another org's STORE never appears as a store of this org",
       not any(c["store"] == "999 Foreign Rd" for c in RF["by_store"]))
 check("H4 another org's COMPANY never appears in this org's segregation",
@@ -678,6 +718,38 @@ check("I7 account/coa.py is byte-identical to the branch point — this report c
       "single booked figure, and that is proven at git level rather than asserted",
       (not git_ok) or diff == "", diff)
 
+# ══ §K — VOIDED INVOICES: COUNTED, AND THE QUESTION MADE VISIBLE ════════════════════════════════
+section("§K  VOIDED INVOICES ARE COUNTED — AND EXACTLY WHAT THAT COSTS IS PUBLISHED")
+
+check("K1 units on a VOIDED invoice are counted in the payable — deliberately, because the sibling "
+      "Device Purchases report counts them and two finance reports disagreeing about voided "
+      "invoices is a worse defect than either rule",
+      T["payable_amount"] == round(FIX_PAYABLE_TOTAL + FIX_VOID_AMOUNT, 2))
+check("K2 …and the report DECLARES what an exclude-voided rule would remove, so the number is "
+      "already published when the rule is decided",
+      T["voided_invoice_payable_devices"] == FIX_VOID_DEVICES
+      and T["voided_invoice_payable_amount"] == FIX_VOID_AMOUNT,
+      (T["voided_invoice_payable_devices"], T["voided_invoice_payable_amount"]))
+check("K3 …including the payable AS IT WOULD READ under that rule, computed, not left to the reader",
+      T["payable_excluding_voided"] == FIX_PAYABLE_TOTAL, T["payable_excluding_voided"])
+check("K4 the void vocabulary is CONFIG with a house default, not a literal in a branch (RULE TWO) "
+      "— a distributor that spells it differently is a config row, not a code change",
+      dpay.VOID_STATUSES == ("voided",)
+      and "void_statuses" in dpay.aggregate.__code__.co_varnames)
+check("K5 …and matching is case-folded, so spelling drift in the feed cannot silently stop the "
+      "declaration",
+      run(tables={"commcalc.vip_invoices": [dict(INVOICES[0], status="VOIDED")]}
+          )["totals"]["voided_invoice_payable_amount"] == FIX_VOID_AMOUNT)
+check("K6 an org with no invoice headers at all declares ZERO voided money rather than failing — "
+      "the declaration is additive and can never break the payable",
+      run(tables={"commcalc.vip_invoices": []})["totals"]["payable_amount"]
+      == round(FIX_PAYABLE_TOTAL + FIX_VOID_AMOUNT, 2)
+      and run(tables={"commcalc.vip_invoices": []})["totals"]["voided_invoice_payable_amount"]
+      == 0.0)
+check("K7 another org's voided header can never mark this org's invoice — the header read is "
+      "org-scoped like every other",
+      T["voided_invoice_payable_devices"] == FIX_VOID_DEVICES)
+
 # ══ §J — THE PAGE ════════════════════════════════════════════════════════════════════════════════
 section("§J  THE PAGE NAMES ITS QUESTION, AND NAMES THE REPORT IT IS NOT")
 
@@ -702,6 +774,9 @@ check("J5 it renders the unmatched-device count, so the reader sees the match ra
 check("J6 it renders the non-device section as a SEPARATE basis and says so on the page",
       "non_device" in pcode and "different basis" in pcode.lower()
       and "must not be added to it" in pcode.lower())
+check("J7b the page renders the voided-invoice declaration, so the open rule question is visible to "
+      "a reader rather than living only in the payload",
+      "voided_invoice_payable_amount" in pcode and "payable_excluding_voided" in pcode)
 check("J7 it shows the derived coverage month by month, so the window is auditable on the page",
       "coverage" in pcode and "covMonths" in pcode)
 check("J8 it uses the SHARED filter bar and the SHARED export bar (RULE FIVE §3d)",
