@@ -47,6 +47,7 @@ Primary code homes:
 | 22 | **Platform OPERATOR console** | "Who operates the platform rather than a company in it, how does an operator enter a tenant without it being a secret, what is on the record afterwards, and how do we stop platform power from riding on somebody's employee row?" |
 | 23 | **Marketing & Events** | "What outside-store events are planned, who is working one and who backs them up if they don't show, how is everyone getting there, what has to be packed, what was given away and what came back — and how did the stores do over the event window?" |
 | 23y | **Device Purchases from the distributor** | "What did the distributor bill us for phones and devices in this period, per company and per store — and why does it not equal device COGS?" |
+| 23z | **Device Payable as at a date** | "Standing on a given day — a year-end, a closing date — which devices had already been billed to us but not yet paid for, per company and per store? And which of the units billed in one year were actually paid in the next?" |
 
 ---
 
@@ -2693,7 +2694,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | **Commission ledger (income tracking)** | mig `071_commission_ledger.sql` | `/commission-ledger/*` `3997-4602` |
 | **VIP / PayGo** | mig `008`,`011`,`014` | `vip_sweep.py`; `/vip/*` `2421-3078`, `/vip/paygo/*` `8336-8365` |
 | `commcalc.vip_invoice_lines` (distributor invoice LINE items; `location` is a STORE ADDRESS in the distributor's own spelling) | `vip_sweep.py` (portal scrape, mig `008`) | **Device Purchases report** (`account/device_purchases.compute` → `GET /account/device-purchases`, §23y — the money grain); `device_cost_recon` (source ② evidence); `asset/invoice_due` (per-invoice device list) |
-| `commcalc.vip_invoice_devices` (one row per SERIALISED unit: serial / IMEI / SIM) | `vip_sweep.py` (mig `008`) | **Device Purchases report** — this table IS the device DEFINITION (`device_purchases.device_product_names`: a line is a device when its `btrim(name)` appears here as a `btrim(product_name)`, §23y); `asset/invoice_due` (serial join); `device_cost_recon` |
+| `commcalc.vip_invoice_devices` (one row per SERIALISED unit: serial / IMEI / SIM) | `vip_sweep.py` (mig `008`) | **Device Purchases report** — this table IS the device DEFINITION (`device_purchases.device_product_names`: a line is a device when its `btrim(name)` appears here as a `btrim(product_name)`, §23y); `asset/invoice_due` (serial join); `device_cost_recon`  **Device Payable as at a date** (`account/device_payable`, §23z) — the BILLED-ON side of the two-date join. **ITS COLUMN NAMES LIE: `imei` holds the SIM/ICCID (18 chars on this feed); the 15-digit handset IMEI is in `serial`, which is what `asset_ledger.esn_imei` holds.** Joining on the column CALLED `imei` matches 4 of 19,571 units and still renders a confident total — pinned in `harness_device_payable.py` §A, negative control included |
 | `commcalc.vip_invoices` (invoice HEADERS — `grand_total`, `shipping`, `other_cost`, `due_date`, `status`) | `vip_sweep.py` (mig `008`) | `coa.build_inputs` (`vip_fees` P&L line = shipping + other_cost; `vip_ap` BS payable on unpaid invoices); `asset/invoice_due`. **NOT read by the Device Purchases report** — invoice-level shipping/tax is not device purchase price, and the P&L already books it |
 | **epay** | mig `020`,`025` | `epay_sweep.py`; `/epay/*` `8730-8811`, `/tax-collected` `2459` (the line reference here said `2106` until 2026-09-08; the endpoint had moved — see §17 for its own row) |
 | **epay** | mig `020`,`025` | `epay_sweep.py`; `/epay/*` `8730-8811`, `/tax-collected` `2106` |
@@ -2759,7 +2760,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview` (company scopes cross-checked against `coa.org_companies` via `coa.filter_org_scopes` — §13b), `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet` |
 | `commcalc.companies` | `POST/PATCH /account/companies` (org_id in payload/filter; mig `952` removed the two 2026-06-27 wrong-org LuxeLink rows) | ONLY `coa.org_companies` (§13b canonical fail-closed enumeration; CI-pinned by `harness_org_scope_guard.py`) → `list_companies`/`list_stores`/journal echo/`overview`/`analysis`/`finance_attention`/`store_company_map`⇒`company_assignment`; billing `per_entity` org-scoped count probe |
 | `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`/`938`/`941`/`954`) | `PUT /account/config` (incl. the mig-954 tenant mapping `distributor_payable_basis`/`distributor_payable_line`/`asset_ledger_open_statuses`); mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate; mig-941 columns (`projection_config`, `valuation_config` JSONB — display-only assumptions, org seeds gated) | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933/938 knobs, adaptive), `projection_engine.load_projection_config`, `valuation.load_valuation_config` (mig-941, adaptive); **mig-954 distributor-payable mapping** via `balance_sheet.load_bs_config` → `resolve_payable_basis`/`resolve_payable_line` (org column > carrier preset > declared mig-933 family > off) |
-| `commcalc.asset_ledger` (consignment / asset-lending ledger; wipe-and-reinsert CURRENT snapshot) | mod-asset upload `process_asset_ledger_bytes`, `vip_sweep.run_asset_ledger_sweep` | asset dashboard `GET /asset/summary` ("Open Balance Owed" = Σ `owed_to_vip` where `status='Open'`), `account/device_cogs` (consignment COGS), `coa.build_inputs` (`vip_reimb`/`vip_fees`, and the legacy `owed_vip`/`inventory` `status='on inventory'` predicate that matches NOTHING on the live feed), **BS distributor payable under `distributor_payable_basis='asset_ledger'`** (`balance_sheet.asset_ledger_open_bookings` via `statement_engine._fetch_asset_ledger_open`, mig `954`; money column `owed_to_vip` ONLY; as-of = `period_as_of`) and the SAME derivation behind `GET /account/liabilities-due`; statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`) |
+| `commcalc.asset_ledger` (consignment / asset-lending ledger; wipe-and-reinsert CURRENT snapshot) | mod-asset upload `process_asset_ledger_bytes`, `vip_sweep.run_asset_ledger_sweep` | asset dashboard `GET /asset/summary` ("Open Balance Owed" = Σ `owed_to_vip` where `status='Open'`), `account/device_cogs` (consignment COGS), `coa.build_inputs` (`vip_reimb`/`vip_fees`, and the legacy `owed_vip`/`inventory` `status='on inventory'` predicate that matches NOTHING on the live feed), **BS distributor payable under `distributor_payable_basis='asset_ledger'`** (`balance_sheet.asset_ledger_open_bookings` via `statement_engine._fetch_asset_ledger_open`, mig `954`; money column `owed_to_vip` ONLY; as-of = `period_as_of`) and the SAME derivation behind `GET /account/liabilities-due`; statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`) ; **Device Payable as at a date** (`account/device_payable`, §23z — the PAID-ON side: `payg_date` is the ONLY per-unit PAYMENT DATE in the platform and the only thing that can backdate a payable, licensed by agreeing to within 2.7% with the settled payment batches; `owed_to_vip` the money; `acquired_date` drives the DERIVED coverage window, because this snapshot has been PRUNED — 72 rows in 2023 and 1,391 in 2024 against 1,504 and 16,195 units actually invoiced, so a payable for a 2024 date returns "not measured" rather than a small confident wrong number) |
 | `core.system_check` (mig `970`; per-tenant OVERRIDES over the code-derived check registry — retune / disable / DECLARE a check) | `PUT`-less by design today: rows are written by SQL/console; the board never writes them | `control_box_api.effective_registry` (code defaults < HOUSE rows < org rows) → `GET /core/control-box` |
 | `core.system_check_run` (mig `970`; daily-run history — the PROOF the check ran + the baseline escalation compares against) | `control_box_api._persist_run` (from `POST /core/control-box/run` and `/run-due`) | `GET /core/control-box/history`; `_previous_results` → `control_box.escalations` (notify-once) |
 | `core.system_check_state` (mig `970`; per-org `enabled`/`cadence_hours`/`last_run_at`/`next_run_at`) | `control_box_api._persist_run` upsert | `control_box.due_orgs` (which tenants are due) + `control_box.selfcheck_row` (the board's row about ITSELF) |
@@ -2860,6 +2861,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `GET /commissions/{period}` | `10222` | §6 — the Rep Incentive Report read; market stamped per row via §13a (2026-09-03 fix) |
 | `GET /commcalc/processor-ledger` | `commcalc/processor_ledger_api.py` | §15 Processor Daily Debits & Credits — day × transaction type, DEBITS/CREDITS/NET; store-span gated; serves the canonical §13c `market_options` |
 | `GET /account/device-purchases` (`from_period`/`to_period` = 'YYYY-MM', inclusive; default = the current calendar year) | `account/router.device_purchases` → `account/device_purchases.compute` (pure core `aggregate`) | §23y Device Purchases from the distributor — device spend BILLED in a window, by company × store. PURCHASES, **not** COGS (`account/device_cogs`), and it books nothing |
+| `GET /account/device-payable` (`as_at` = 'YYYY-MM-DD', DAY granularity; default = today) | `account/router.device_payable` → `account/device_payable.compute` (pure core `aggregate`) | §23z Device Payable as at a date — of the units BILLED on or before `as_at`, those whose per-unit payment date falls after it or is absent, by company × store. A **backdated** payable, which `GET /account/liabilities-due` and the BS `owed_vip` (§4/§23n — current state off the ledger STATUS column, which cannot be backdated) structurally cannot answer. Coverage is derived from the data; an `as_at` outside it returns `coverage.state='not_measured'` with `payable_amount: null`, never $0.00. Non-device items are a separate, billed-basis section. Books nothing, writes nothing |
 | `GET /sales-report` | `15792` | §3 |
 | `GET /gp/{period}` (payload also carries `expenses_carried_from`, **`labour_coverage`** and **`labour_double_booked`** — the salary silent-zero / month-grain / double-book detectors, display-only — plus **`labour_commission_suppressed`**, the per-store record of which commission expense rows STOPPED booking and what `rep_commissions` books in their place; that one is NOT display-only, `exp_total`/`net_profit` move with it) | `14750` | §4 |
 | `GET/PUT /targets/{period}` | `19005/19071` | §5 |
@@ -5855,3 +5857,144 @@ over 2024/2025/2026; §F org scope; §G the page states its question and names t
 device/non-device split ($7,099,841.56 / $296,508.59 on 2025) is pinned as a **dated live snapshot**;
 every other figure is synthetic on purpose, because per-bucket store-resolution totals move whenever
 a store alias or address is edited and would read as a regression.
+
+## 23z. DEVICE PAYABLE AS AT A DATE — the backdated distributor payable (owner directive 2026-09-11)
+
+**Owner, verbatim:** *"I need the payable at the end of the year accounts. Payable on 12/31/2025
+company wise"*, then *"we need to check which of the imei a billed in 2025 got paid in 2025 and
+which ones were paid in 2026"*.
+
+That second sentence is the specification. The question is **backdated**: standing on 31 December,
+which already-billed units had not yet been paid for? Only a per-unit PAYMENT DATE can answer it.
+
+### DUPLICATE CHECK (build gate) — why none of the existing payables serves this
+
+| Existing mechanism | What it answers | Why it cannot answer this |
+|---|---|---|
+| `GET /account/liabilities-due` (§4) | the CURRENT open balance owed to the distributor, per store | its `date` param shifts the due-THIS-WEEK window; it does not move the as-of of the balance |
+| BS `owed_vip` / `vip_ap`, `balance_sheet.asset_ledger_open_bookings`, mig `954` (§23n) | Σ `owed_to_vip` where `status` is open, as-of today | **status is a snapshot**: a unit paid in 2026 reads "paid" when you ask about 2025. A status cannot be backdated; a payment DATE can |
+| `account/device_cogs` (§13/§13a) | what the units we SOLD cost us, at sale | a different question entirely |
+| `account/device_purchases` (§23y) | what was BILLED in a window | the natural sibling — **shared, not copied** (see below) |
+| `payables` module (`/payables`, `device_payable_ledger`, mig `095`) | a forward-looking per-IMEI FORECASTING ledger rebuilt by `POST /payables/rebuild`; `/owed-by-date` reads DUE dates going forward | holds no distributor payment date and is not an as-at historical statement. Nothing here writes to it |
+
+**What was REUSED rather than re-derived:** `coa.store_resolver` (§13/§13a) and
+`coa.build_company_matcher` (§13b) called exactly as they are, plus `device_purchases`'
+`store_placer` / `store_addresses` / `device_product_names` / `classify_line` / `_page`. There is no
+second resolver, no second definition of "device" and no second pager. `account/coa.py` is
+**byte-identical to the branch point** (`harness_device_payable.py` §I7, at git level), so no booked
+figure can move.
+
+### The mechanism: two dates per serialised unit
+
+`vip_invoice_devices` says when a unit was BILLED. `asset_ledger.payg_date` says when it was PAID.
+
+    payable as at D = units invoiced on or before D whose payment date is after D, or absent.
+
+**THE JOIN KEY — THE COLUMN NAMES LIE.** `vip_invoice_devices.imei` holds the **SIM/ICCID** (18 chars,
+43,357 of 49,196 rows). The 15-digit handset IMEI is in **`serial`** (49,164 of 49,196), which is what
+`asset_ledger.esn_imei` holds (32,705 of 32,709 distinct keys). Measured on the house org's 19,571
+units invoiced in 2025: joining on `serial` matches **19,352**; joining on the column CALLED `imei`
+matches **4** — and renders a confident, empty number rather than erroring. Both sides normalised
+(non-alphanumerics stripped, upper-cased); a ledger key with **no digit in it** is not a serial (the
+ledger carries per-invoice fee labels), a SHAPE test rather than a list of spellings (RULE TWO).
+
+**What licenses `payg_date`** (`payment_evidence`, re-measured on every run and rendered on the page):
+Σ `owed_to_vip` by `payg_date` year against the distributor's own settled payment batches
+(`vip_paygo_payments`) — a different feed, swept separately, knowing nothing about units. House org
+2026-09-11: **2025 $6,891,830.12 vs $6,712,367.33 (2.67%)**, **2026 $4,441,540.54 vs $4,326,473.83
+(2.66%)**. Reported, never enforced — a timing difference must not blank the page.
+
+### COVERAGE IS DERIVED FROM THE DATA, and "not measured" is a real answer
+
+`asset_ledger` is a wipe-and-reinsert CURRENT snapshot **pruned of old rows**: 72 rows acquired in
+2023 and 1,391 in 2024, against 1,504 and 16,195 units actually invoiced. A 2024 payable would come
+out small, confident and wrong.
+
+`coverage_scan` compares ledger rows against units invoiced **month by month**; coverage begins at
+the first judged, covered month after the last collapse (ratio ≥ `COVERAGE_RATIO` 0.70, months with
+< 20 invoiced units not judged). House org: **0.58 in 2024-12, 0.99 in 2025-01 → start 2025-01**,
+end = the ledger's last month (2026-08 on 2026-09-11). **No year, tenant or carrier is written in
+code** — an org whose ledger is complete from 2022 gets 2022; an org with no ledger measures nothing.
+
+An `as_at` outside the window returns `coverage.state='not_measured'` with the reason and the window;
+`payable_amount`/`payable_devices`/`paid_amount` come back **`null`, never $0.00**, and no company or
+store rows are emitted. A measured-and-genuinely-zero payable is a real `0.00`. Three states.
+
+### LIVE RESULT — as at 2025-12-31, house org, measured 2026-09-11
+
+| | devices | amount |
+|---|---|---|
+| billed in 2025 and **paid in 2025** | 17,744 | $6,666,467.35 |
+| billed in 2025 and **still unpaid at 31 Dec** (= the payable) | 1,608 | **$489,136.63** |
+| billed in 2025, **not in the unit ledger at all** (in neither figure) | 219 | — |
+
+| Company | devices | payable |
+|---|---|---|
+| PA PHONE TRADERS LLC | 770 | $203,514.90 |
+| PASSAIC WIRELESS 2022 LLC | 303 | $103,406.97 |
+| NY WIRELESS TRADERS LLC | 282 | $99,727.29 |
+| WIRELESS 2024 LLC | 253 | $82,487.47 |
+
+**The figure declares its own weaknesses**, all on the page: match rate 98.88%; **1 matched unit
+carries no payment date at all** ($0.00 — which is why the count reads 1,608 where "paid in 2026"
+reads 1,607); **17 units were billed on a second invoice in-window**, so $4,599.83 is counted twice
+and the distinct-unit basis ($484,536.80 over 1,591) is published beside the headline; and **17,699
+units billed before the window opened** are excluded rather than assumed settled — the real limit of
+the report.
+
+### NON-DEVICE ITEMS — a different basis, reported apart and never merged
+
+Chargebacks, loans/exchanges, managed services, SIM packs and activation fees are not serialised and
+are invisible to the join. They are **not small**: a **$159,056.76 Return Item Chargeback + $50 NSF
+fee invoiced 2025-12-29** sat on the very year-end date this report was asked about. They are shown
+in their own section on a **BILLED** basis with `settlement_state: 'not_measured'` — no per-line
+payment date exists anywhere in this feed, and the invoice STATUS column is a current snapshot that
+cannot be backdated. House 2025 total: **$296,508.59 over 981 lines** (ties exactly to §23y's
+non-device figure — the same `classify_line` rule). A further $20,319.52 of device-NAMED money on
+invoices carrying no serialised unit is named too, in neither figure.
+
+The distributor's **master / dealer account** (a head-office account, not a retail location) carries
+$170,561.81 of that and stays **its own named company row** — it is not absorbed into whichever store
+shares its street number, and not dropped.
+
+### Where it lives
+
+`backend/app/modules/account/device_payable.py` (pure core + `compute`) ·
+`GET /account/device-payable` (`account/router.device_payable`, `run_in_threadpool`) ·
+`frontend/src/app/(platform)/accounts/device-payable/page.tsx` (Finance menu, module `accounts`,
+scopes `['all','market']` — **zero RBAC change, no new grant key**, mirroring `/accounts/inventory`
+and `/accounts/device-purchases`). Day-granularity date picker, because a payable is asked for on a
+day. Read-only: books nothing, writes nothing, **no migration**.
+
+Guards re-pinned, additions only: `harness_db_resilience.py` route count **1580 → 1581** (the one new
+GET) and `harness_finance_sync_in_async.py` `ALLOWED_NEW` (`account/router.py` +`device_payable`).
+
+### VOIDED INVOICES — counted, and the question published rather than decided quietly
+
+Six house-org invoice headers carry `status='Voided'` (one in the 2025 window: 1595336, 2025-11-20,
+grand total $9,189.74). Their serialised units are still in the feed, and §23y counts them today.
+This report counts them **too, deliberately** — two finance reports disagreeing about voided invoices
+is a worse defect than either rule. It does not hide the question: `totals.voided_invoice_*` publishes
+what an exclude-voided rule would remove and `payable_excluding_voided` computes the alternative, so
+flipping BOTH reports together later is a one-line change. Measured as at 2025-12-31: **16 units /
+$4,439.84 in the payable** (it would read **$484,696.79**), 10 more already paid ($4,359.90), 10 not
+in the ledger. Status comes from `vip_invoices` (the header is what a status means);
+`vip_invoice_lines.status` was checked against it and agrees on **12,536 of 12,536** rows. The void
+vocabulary is config with a house default (`VOID_STATUSES`), case-folded — never a literal in a branch.
+
+**Proof:** `backend/harness_device_payable.py` (**90 checks**, stdlib-only, DB-free) — §A the join
+key, with the negative control that swapping to the column named `imei` collapses the match to zero
+**without erroring**; §B the definition, including that an absent payment date is never read as
+payment; §C the owner's 2025-12-31 numbers reproduced exactly, per company, from a cent-exact
+synthetic population; §D coverage derived (and re-derived on a 2021/2022 shape, so no year is
+baked in), `not_measured` returning `None` and emitting no rows; §E the `payg_date` licence; §F
+non-device items as a separate basis; §G the report declaring its own weaknesses; §H org scope,
+fail-closed on an unknown org; §I reuse with `coa.py` byte-identity asserted at git level; §J the
+page (including that it renders the licence, the not-measured state and the voided declaration);
+§K voided invoices counted and declared. §J also pins the **stale-response guard** — this
+report takes the better part of a minute, so two requests in flight is the normal case, and a
+superseded response reaching `setData` would render a payable for a date the picker has already
+left. Third occurrence of that class (Cash/ePay Pickup 2026-09-10, Device Purchases 2026-09-11), so
+the `alive` flag, its teardown and each guarded setter are asserted, and a bare `.then(setData)` is
+asserted ABSENT. The live per-company figures are pinned as a **dated snapshot** — they are the report's
+definition made arithmetic.

@@ -587,6 +587,7 @@ export const NAV: NavGroup[] = [
     // by company and by store. PURCHASES, deliberately not COGS — the page says so on itself.
     // Module + scopes are byte-identical to its Finance neighbours: ZERO RBAC change, no new grant.
     { href: '/accounts/device-purchases', label: 'Device Purchases', icon: '📱', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/accounts/device-payable', label: 'Device Payable as at a date', icon: '🧾', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
     { href: '/accounts/recon', label: 'Reconciliation', icon: '🔎', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
     { href: '/accounts/residual-per-sub', label: 'Residual per Subscriber', icon: '📉', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
     { href: '/accounts/journal', label: 'Journal', icon: '📒', module: 'accounts', scopes: ['all'], tileOnly: true },
@@ -1031,6 +1032,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/accounts/residual-per-sub', 'finance'], ['/accounts/journal', 'finance'],
   ['/accounts/liabilities-due', 'finance'],
   ['/accounts/device-purchases', 'finance'],
+  ['/accounts/device-payable', 'finance'],
   ['/commcalc/gp', 'finance'], ['/commcalc/expenses', 'finance'], ['/commcalc/tax-collected', 'finance'],
   // Payroll & HR
   ['/hr', 'payroll'], ['/hr/people', 'payroll'], ['/hr/onboarding', 'payroll'], ['/hr/compliance', 'payroll'],

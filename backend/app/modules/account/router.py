@@ -1217,6 +1217,42 @@ async def device_purchases(from_period: str = "", to_period: str = "",
         raise HTTPException(500, f"device purchases failed: {type(e).__name__}: {e}")
 
 
+# ── device payable AS AT a date (owner directive 2026-09-11) ──────────────────────────────────
+@router.get("/device-payable")
+async def device_payable(as_at: str = "", org_id: str = ORG_ID):
+    """Of the devices the distributor had BILLED us on or before `as_at`, which were still UNPAID on
+    that day — by COMPANY and by STORE (`account/device_payable.py`, proof
+    `harness_device_payable.py`).
+
+    Owner, verbatim: *"I need the payable at the end of the year accounts. Payable on 12/31/2025
+    company wise"* … *"we need to check which of the imei a billed in 2025 got paid in 2025 and
+    which ones were paid in 2026"*.
+
+    THIS IS A BACKDATED QUESTION, WHICH IS WHY IT IS A NEW REPORT. `/account/liabilities-due` and
+    the balance-sheet distributor payable both answer the CURRENT open balance off the ledger's
+    STATUS column, and a status is a snapshot: a unit paid in 2026 reads "paid" when you ask about
+    2025. Only the per-unit PAYMENT DATE can stand on 31 December, and this is the one reader of it.
+
+    COVERAGE IS NOT ASSUMED. The per-unit ledger is a pruned current snapshot; the coverage window
+    is derived from the data, and an `as_at` outside it comes back `coverage.state='not_measured'`
+    with the reason and the window — never a figure. Non-device items (chargebacks, fees, loans,
+    SIMs) have no serial and are reported as a separate, differently-based section.
+
+    `as_at`: 'YYYY-MM-DD'; omitted ⇒ today. Day granularity, deliberately — a payable is asked for
+    on a DAY (a year-end, a closing date), not a month.
+
+    PERMISSION: mirrors its Finance-menu neighbours (`/account/device-purchases`,
+    `/account/inventory-recon`) — module `accounts`, nav scopes ['all','market'], no new grant key.
+    Org-scoped on every read. Reads only; books nothing and writes nothing."""
+    require_org(org_id)
+    from app.modules.account import device_payable as dpay
+    d = dpay.as_date(as_at) or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        return await run_in_threadpool(dpay.compute, sb(), org_id, d)
+    except Exception as e:
+        raise HTTPException(500, f"device payable failed: {type(e).__name__}: {e}")
+
+
 # ── financial analysis (chart-ready series from the stored snapshots — roadmap Phase 3) ───────
 @router.get("/analysis")
 async def financial_analysis(months: int = 12, authorization: str = Header(default=""),
