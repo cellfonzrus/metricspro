@@ -6281,3 +6281,41 @@ missing. REPORTED, not auto-adjusted (a live-data defect is never "fixed" by cod
 Duplicate check for that PR: `asset/oninv_recon.py` is the SAME question on the Boost/VIP legs
 (`asset_ledger` × `raw_payment_detail`) — its classification posture (never collapse "not loaded"
 into "disagrees") is the precedent to reuse, on this POS's two legs.
+
+### 25.9 THE PER-ROW PERIOD WAS UNREACHABLE FROM THE UI (owner 2026-09-12: "i cannot see either")
+
+§25.3(3) derives each row's period from its own date **only when the caller names no period** — but the
+one UI that calls `/upload-mapped`, the **Implementation Wizard**
+(`commcalc/implementation/page.tsx`), REFUSED to import without one (`if (!period.trim()) … return`).
+So the multi-month fix could never fire from the app: a 20-month history file would have booked every
+row to a single label — the exact defect §25.3 exists to prevent.
+
+Two coupled repairs, because shipping the first without the second hands the user a footgun:
+
+1. **The wizard may now leave the period blank — driven by the REGISTRY, not a hardcoded list.**
+   `GET /column-mapping/readiness` gains `derives_period` per report =
+   `bool(column_mapping.period_source_field(rk))` — it asks the report whether it *declares a date
+   field*. No report key and no carrier is named in the frontend (RULE TWO); a report that later gains
+   a date field gets the blank-period affordance for free. The input's placeholder/tooltip explain
+   which spelling is correct for that report.
+2. **No period + a provable slice now REPLACES that slice instead of appending.** The replace was
+   gated `if mapped and period:`, so a period-less file fell to a pure append and a **re-upload
+   DOUBLED the data**. The gate is now `if mapped and (period or scope)`: when `ingest_slice.
+   replace_scope` proves the file's own slice (every row carries the partition value + a usable date
+   range — `raw_sales` = `store` ∩ `trans_date`), that slice is replaced and the import is
+   **idempotent**. The period filter is applied CONDITIONALLY in both `_select_replace_slice` and the
+   delete — they must never disagree, or a restore would cover a different slice than the delete.
+   **No scope ⇒ still a pure append, byte-identical to before**: a delete that cannot be proven is
+   never run (so snapshot feeds like `inventory_aging_device`, outside `INGEST_PARTITION`, are
+   unchanged). Naming a period keeps today's period-scoped behaviour exactly.
+
+Proof: `backend/harness_ingest_partition_replace.py` §5 (EXTENDED, not a sibling harness) — 13 checks
+on the real 20-month shape, including the regression (re-upload lands 20 rows, not 40), that another
+store's, another org's and the same store's out-of-range rows all survive, that an unprovable file
+still appends without deleting, and that the period path is unchanged. 33/33 green.
+
+Also corrected here: there is **no "Imports" page**. `report_definitions` rows supply a report's
+LABEL and its carrier scope; the wizard's report LIST comes from `column_mapping.known_report_keys`
+(= `TARGET_FIELDS` in code + the per-tenant registry), so a new report key appears only once the
+backend is deployed. `commcalc/upload/wizard/page.tsx` remains a HARDCODED `STEPS` list — a new
+carrier's reports can never appear there `⚠` (not addressed here).
