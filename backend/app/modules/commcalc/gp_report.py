@@ -677,6 +677,19 @@ def calc_gp_report(
         'total_rev': sum(r['total_rev'] for r in store_rows),
         'rep_pay': sum(r['rep_pay'] for r in store_rows),
         'exp_total': sum(r['exp_total'] for r in store_rows),
+        # OWNER-REPORTED 2026-09-12, "the numbers are totally off". `net_phone_cost` is one of the
+        # four terms of `net_profit` (total_rev - rep_pay - exp_total - net_phone_cost) and it was
+        # computed per store but NEVER summed into `totals`, so the summary could not be reconciled
+        # from what it showed: August 2026 displayed revenue 820,584.78 less rep_pay 10,723.40 less
+        # exp_total 178,577.58 = 631,283.80, against a stated net profit of 541,274.47 — a gap of
+        # exactly the 90,009.33 of phone cost nobody could see. A subtraction that moves the headline
+        # must never be invisible in the header it moves. `plan_gp` and `other_gp` were missing for
+        # the same reason (both are inside total_rev) and are summed here too.
+        # harness_gp_totals_reconcile.py pins BOTH the identity and the no-missing-column rule, so a
+        # column added to a store row in future cannot go un-totalled the same way.
+        'net_phone_cost': sum(r['net_phone_cost'] for r in store_rows),
+        'plan_gp': sum(r['plan_gp'] for r in store_rows),
+        'other_gp': sum(r['other_gp'] for r in store_rows),
         'net_profit': sum(r['net_profit'] for r in store_rows),
         'net_excl_mdf': sum(r['net_excl_mdf'] for r in store_rows),
     }

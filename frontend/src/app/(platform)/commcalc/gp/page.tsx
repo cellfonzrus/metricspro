@@ -331,12 +331,20 @@ export default function GPReportPage() {
       </div>
 
       {/* Summary cards. The two commission-leg tiles (owner 2026-08-04) sit alongside the originals —
-          nothing was removed, and they decompose the Commission column, not Total Revenue. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, marginBottom: 20 }}>
+          nothing was removed, and they decompose the Commission column, not Total Revenue.
+
+          THE HEADER RECONCILES (owner 2026-09-12, "the numbers are totally off"). Net profit is
+          revenue LESS phone cost, rep pay and store expenses. Phone cost was the one subtraction with
+          no tile, so a reader adding up what was on screen landed 90,009.33 away from the stated net
+          profit for August 2026 and reasonably concluded the report was wrong. It was not wrong — it
+          was incomplete, which reads the same and costs more trust. The red tiles are now exactly the
+          terms that subtract, so the row can be checked by eye. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(168px, 1fr))', gap: 12, marginBottom: 20 }}>
         {([
           { label: 'Total Revenue', val: totals.total_rev, icon: '💰' },
           { label: '1st Month Commission', val: totals.comm_m1, icon: '①', sub: 'received in the activation month' },
           { label: 'M2–M12 Commission', val: totals.comm_m2_12, icon: '🔁', sub: 'received for an already-active number' },
+          { label: 'Phone Cost', val: totals.net_phone_cost, icon: '📱', red: true, sub: 'net of rebates and reimbursement' },
           { label: 'Rep Incentives', val: totals.rep_pay, icon: '👥', red: true },
           { label: 'Store Expenses', val: totals.exp_total, icon: '🏪', red: true },
           { label: 'Net Profit', val: totals.net_profit, icon: '📊', highlight: true },
