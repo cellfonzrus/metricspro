@@ -624,6 +624,103 @@ check("I10 ONE RULE, NOT TWO: §23z's Device Payable imports this vocabulary and
       and "dp.voided_invoice_set" in open(
           os.path.join(HERE, "app/modules/account/device_payable.py"), encoding="utf-8").read())
 
+# ══ §J — UNITS COME FROM THE SERIALISED ROWS, AND THE GAP IS EXPLAINED ══════════════════════════
+section("§J  UNITS: the serialised basis, and every unit of the difference accounted for")
+
+# Live 2025, ex-voided (house org, 2026-09-12): device LINES declare 19,199; vip_invoice_devices
+# carries 19,535 serialised rows; the gap of 336 decomposes as +76 (26 invoices with NO LINES AT
+# ALL) +308 (42 invoices whose declared quantity is below the serials received) −48 (one invoice the
+# other way). THE MONEY IS UNAFFECTED — line amounts are untouched by any of this.
+UNIT_LINES = [line(PHONE, 1000.0, "200 Broadway", qty=10, inv="INV-A"),      # 10 serials, qty 10
+              line(PHONE, 500.0, "200 Broadway", qty=5, inv="INV-B"),        # 7 serials, qty 5
+              line(PHONE, 300.0, "200 Broadway", qty=9, inv="INV-C"),        # 6 serials, qty 9
+              line(SIMPACK, 50.0, "200 Broadway", qty=99, inv="INV-A")]      # non-device: no units
+
+
+def udev(inv, n, product=PHONE, loc="200 Broadway"):
+    return [{"org_id": ORG, "id": "%s-%d" % (inv, k), "invoice_number": inv, "location": loc,
+             "product_name": product, "period_year": 2025, "period_month": 6} for k in range(n)]
+
+
+UNIT_DEVICES = (udev("INV-A", 10) + udev("INV-B", 7) + udev("INV-C", 6)
+                + udev("INV-D", 4))            # INV-D: serialised units, and NO LINES AT ALL
+RU = run(lines=UNIT_LINES, devices=UNIT_DEVICES)
+UT, UR = RU["totals"], RU["unit_reconciliation"]
+
+check("J1 the headline unit count is the SERIALISED rows — what actually arrived with a serial on "
+      "it — not what the invoice line says (10+7+6+4 = 27)",
+      UT["serialised_units"] == 27, UT["serialised_units"])
+check("J2 …and the line-quantity figure is KEPT, not discarded, so the two bases stay comparable "
+      "(10+5+9 = 24; the SIM pack's quantity of 99 is not a device unit)",
+      UT["line_quantity_units"] == 24.0, UT["line_quantity_units"])
+check("J3 the gap is published as its own figure rather than left for a reader to subtract",
+      UT["unit_gap"] == 3.0 and UR["gap"] == 3.0, (UT["unit_gap"], UR["gap"]))
+check("J4 THE GAP IS EXPLAINED, NOT DISPLAYED: its three causes sum back to it exactly",
+      round(UR["invoices_without_lines"]["units"]
+            + UR["more_serials_than_quantity"]["units"]
+            + UR["fewer_serials_than_quantity"]["units"], 2) == UR["gap"], UR)
+check("J5 an invoice with serialised units and NO LINES AT ALL is identified and NAMED — a feed "
+      "defect reported, never smoothed over (INV-D, 4 units)",
+      UR["invoices_without_lines"]["invoices"] == 1
+      and UR["invoices_without_lines"]["units"] == 4
+      and UR["invoices_without_lines"]["invoice_numbers"] == ["INV-D"],
+      UR["invoices_without_lines"])
+check("J6 …and its units carry NO money, because there is no line to carry any — the device total "
+      "is the three real lines only",
+      UT["device_amount"] == 1800.0, UT["device_amount"])
+check("J7 an invoice with MORE serials than declared quantity is counted and separated (INV-B, +2)",
+      UR["more_serials_than_quantity"] == {"invoices": 1, "units": 2.0},
+      UR["more_serials_than_quantity"])
+check("J8 …and one with FEWER is too, with a negative sign rather than an absolute value that "
+      "would hide which way it went (INV-C, −3)",
+      UR["fewer_serials_than_quantity"] == {"invoices": 1, "units": -3.0},
+      UR["fewer_serials_than_quantity"])
+check("J9 THE MONEY IS UNAFFECTED by any of this — the 2025 device figure is what it was before "
+      "the unit basis changed",
+      R["totals"]["device_amount"] == 7099841.56, R["totals"]["device_amount"])
+check("J10 a voided invoice's serialised units stay out of BOTH bases",
+      run(lines=LINES_2025 + VOIDED_LINES,
+          devices=DEVICES_2025 + udev(VOID_INV, 5),
+          tables={"commcalc.vip_invoices": HEADERS})["totals"]["serialised_units"] == 3)
+
+# EVERY COLUMN A ROW CARRIES MUST EXIST IN TOTALS. This is the defect class that made the GP report's
+# header irreconcilable (PR #226): a money column computed per store with nowhere to appear.
+# Each NUMERIC column a store row carries must have a named home in `totals`, and the rows must
+# actually SUM to it. Presence alone is not the claim — the GP header had its figures computed and
+# still could not be reconciled.
+ROW_TO_TOTAL = {"amount": "device_amount", "units": "line_quantity_units",
+                "serialised_units": "serialised_units", "lines": "device_lines"}
+_numeric = [k for k, v in (RU["by_store"][0] if RU["by_store"] else {}).items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool)]
+check("J11 every NUMERIC column on a store row has a named home in totals — no figure is computed "
+      "per store with nowhere to appear (the defect that made the GP header irreconcilable)",
+      all(k in ROW_TO_TOTAL for k in _numeric),
+      [k for k in _numeric if k not in ROW_TO_TOTAL])
+check("J11b …and the rows SUM to that total, for every one of them. Presence is not reconciliation",
+      all(round(sum(r[k] for r in RU["by_store"]), 2) == round(UT[t], 2)
+          for k, t in ROW_TO_TOTAL.items() if k in _numeric),
+      {k: (round(sum(r[k] for r in RU["by_store"]), 2), UT[t])
+       for k, t in ROW_TO_TOTAL.items() if k in _numeric
+       and round(sum(r[k] for r in RU["by_store"]), 2) != round(UT[t], 2)})
+check("J12 …and the company rows sum to the totals on BOTH bases, which is what 'reconciles' means",
+      sum(c["serialised_units"] for c in RU["by_company"]) == UT["serialised_units"]
+      and round(sum(c["units"] for c in RU["by_company"]), 2) == UT["line_quantity_units"],
+      (sum(c["serialised_units"] for c in RU["by_company"]), UT["serialised_units"]))
+check("J13 units that arrived where NO line was billed still get a row, so they are visible per "
+      "store instead of appearing only in a total",
+      sum(c["serialised_units"] for c in RU["by_store"]) == UT["serialised_units"])
+
+# DEMO STOCK: no rule, deliberately. Demo products arrive serialised, so they are ALREADY in the
+# device vocabulary and a demo line ALREADY classifies as a device. There is no naming gap to close,
+# and a demo branch would be a product-naming convention in code (RULE TWO) with nothing to do.
+DEMO = "Demo Handset Model One 128GB"
+check("J14 a DEMO product that arrived serialised classifies as a DEVICE with no special rule — "
+      "the data already answers it, because demo stock is serialised like any other stock",
+      dp.classify_line(DEMO, *dp.device_product_names([{"product_name": DEMO}])) == "device")
+check("J15 …and the module contains NO demo vocabulary, config or branch — a rule with nothing to "
+      "do is still a product-naming convention in code",
+      "demo" not in body.lower(), [w for w in ("demo",) if w in body.lower()])
+
 # ══ §F — org scope ═══════════════════════════════════════════════════════════════════════════════
 section("§F  MULTI-TENANT: every read is org-scoped, and a foreign row can never arrive")
 
@@ -663,6 +760,12 @@ check("G5 the page uses the SHARED filter bar and the SHARED export bar (RULE FI
       "StandardFilterBar" in pcode and "ReportExportBar" in pcode)
 check("G6 the unmapped buckets are RENDERED, not merely present in the payload",
       "store_not_mapped" in pcode and "company_not_mapped" in pcode)
+check("G8 the page RENDERS both unit bases and the reconciliation, so the 336-unit difference is "
+      "explained on screen rather than living only in the payload",
+      "unit_reconciliation" in pcode and "serialised_units" in pcode
+      and "invoices_without_lines" in pcode)
+check("G9 …and it states plainly that the money is unaffected by the unit change",
+      "money is unaffected" in pcode.lower())
 check("G7 the page RENDERS the voided exclusion with its money, so a figure that moved between "
       "releases stays explainable to the reader who saw the old one",
       "excluded_voided" in pcode and "voided.detail" in pcode)
