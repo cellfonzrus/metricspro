@@ -33,6 +33,7 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/commcalc/accessory-flags', label: 'Accessory Flags', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', module: 'commissions', desc: 'Underpaid / unpaid activations per month — the carrier bounty gap engine, plus B2B activations verified against the payment processor\'s commission feeds: sold-but-unpaid rows attributed via uploadable business rules, or flagged "no business rule configured"' },
     { href: '/commcalc/imei-rebates', label: 'IMEI Rebate Reconciliation', module: 'commissions', scopes: ['all', 'market', 'store'] },
+    { href: '/commcalc/vendor-rebates', label: 'Vendor Rebate History (earned, per line)', module: 'commissions', scopes: ['all', 'market'], desc: 'Every rebate/commission line the carrier statement says it OWES, landed per component. Earned and Collected are reported separately and never summed — this feed proves no payment and books nothing to the P&L, GP or payout.' },
     { href: '/commcalc/ma-handsets', label: 'Marketplace Handset COGS', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/device-cost-recon', label: 'Device Cost Reconciliation', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', module: 'commissions', scopes: ['all', 'market'] },

@@ -82,6 +82,13 @@ INGEST_TABLES_BY_MODULE = {
         # cash/deposit recon reads. Two tables because they are two GRAINS — summing them
         # double-counts, which is exactly the confusion a lineage edge exists to prevent.
         "merchant_settlement_day", "merchant_settlement_batch",
+        # Per-line vendor rebate/commission history (mig 1005), landed by the mapped ingest
+        # (/commcalc/upload-mapped). A LANDING ZONE: earned_amount is what the carrier owes,
+        # collected_amount what it has paid, and no P&L / GP / payout / balance-sheet path reads it
+        # while "is an earned rebate a receivable?" is an open owner decision. Distinct from the
+        # `pos` module's activation_rebate_ledger below, which is the AGGREGATE that books — two
+        # edges because they answer two different questions, not two paths to one answer.
+        "raw_vendor_rebate",
     ),
     # pos — the in-house POS. Its builtin stream (commcalc.pos_builtin_daily_sales /
     # commcalc.pos_builtin_sales) promotes into the sales feed; receipt OCR and the carrier vendor-rebate

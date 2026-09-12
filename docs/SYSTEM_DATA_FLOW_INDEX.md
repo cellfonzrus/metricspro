@@ -49,6 +49,7 @@ Primary code homes:
 | 23y | **Device Purchases from the distributor** | "What did the distributor bill us for phones and devices in this period, per company and per store — and why does it not equal device COGS?" |
 | 23z | **Device Payable as at a date** | "Standing on a given day — a year-end, a closing date — which devices had already been billed to us but not yet paid for, per company and per store? And which of the units billed in one year were actually paid in the next?" |
 | 23aa | **Distributor chargebacks** | "Two separate chargebacks billed to the master dealer account — a one-off and a recurring one — what are they, when did each really start, and where do they book?" |
+| 27 | **Vendor rebate history (earned, per line)** | "A new tenant's carrier statement lists every rebate and commission it owes us per line — where does that file land, why is it not in the P&L, and what is the difference between what we have EARNED and what has actually been COLLECTED?" |
 
 ---
 
@@ -2711,6 +2712,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | **Custom reports** | mig `099`,`211` | `/custom-report*` `25771-25962` |
 | **Expected commission** | mig `258` | `expected_commission.py`; `/expected-commission/*` `11397-11579` |
 | **IMEI rebates** | mig `216` (aging) | `imei_rebate_report.py`; `/imei-rebates` `26448` |
+| **Vendor rebate history (earned, per line)** §27 | mig `1005` (`raw_vendor_rebate`) | `commcalc/vendor_rebate_feed.py` (PURE; `BOOKS_TO` = ()); `GET /commcalc/vendor-rebates`. Lands via `POST /commcalc/upload-mapped` (no new ingest route). **Books NOTHING** — earned ≠ collected, open owner decision. NOT `raw_ma_commission` (money reads it) and NOT `activation_rebate_ledger` (that one books). Proof `harness_vendor_rebate_landing.py` |
 | **Device Forecasting & Vendor Payables (module 095)** | `device_payable_ledger` + `payable_source_map` (mig `095_device_payables` — a NEW carrier is a config row: source_table/imei_field/store_field/owed_field/sold-match/reimbursement), `device_model_alias` (mig `096` — raw model → canonical + carrier, the forecast alignment) | `payables/engine.py` (`build_ledger` delete+insert per carrier; **`ma_store_resolution`/`resolve_ma_store` — Total/MA device→store attribution, 2026-09-04**: POS sale line → `inventory_aging_device` §11 device grain → mig-314 account index (`ma_store_pnl.load_store_index` + `coa.store_resolver` spelling collapse) → None, fills blanks only); `payables/router.py` `/api/v1/payables/*` — `/forecast` (phones-only velocity/on-hand/recommend, per carrier; Boost leg `raw_sales` device lines, Total leg `raw_ma_commission` + the attribution above), `/payables` (per-IMEI ledger read; read-time blank-store fill via the same attribution), `/filter-options` (canonical §13c roster+markets — the frontend bar's PLATFORM-WIDE gate source), `/owed-by-date` (ledger, else `raw_ma_daily_tx` vendor-feed fallback), `/due`, `/priority`, `/source-maps*`, `/phone-map*`, `/settings`, `POST /rebuild`. Frontend `commcalc/payables/page.tsx` (bar gated on roster ∪ rows — owner 2026-09-04 "need to be platform wide"). Proofs `harness_device_forecast_store_filter.py`, `harness_payables_market_filter.py` |
 | **ATU opportunity** | mig `295` | `atu_opportunity.py`; `/atu-opportunity` `28410` |
 | **Activation-Details basis (b2b activation TYPE buckets)** | `raw_custom_import` (signature-detected sheet: `Serial#`+`Contract Type`); config `accessory_config.activation_details_rules` — mig `313_activation_details_bucket_rules` (per-org token rules; RULE TWO) | `activation_bucketing.py` (PURE: `activation_details_bucket`/`resolve_rules`/`BUCKET_RANK`/`TOTAL_ACTIVATION_EXCLUDED`) ← delegated to by `router._activation_details_bucket`; rules loaded per-org by `_activation_details_rules` (defensive, mig-214 posture); resolver `_cr_resolve_activation_details` (serial-dedup by rank); consumers `_ad_cells_full` → `_apply_activation_basis` (Exec MTD + Sales Report), `_ad_activation_buckets` (metric recon), `GET /activation-counts/{period}`; proof `harness_activation_bucketing.py`. HOUSE DEFAULTS (2026-09-01 approved fix): Edge = whole-word `edge` in CONTRACT TYPE only (`edge_name_tokens` opts device-name matching back in per org — the Motorola-Edge over-match trade-off); `BYOD Upgrade` = its own hidden bucket (excluded from Total Activation exactly like Upgrade, NOT shown in the Upgrade column; `upgrade_hidden_contract_tokens: []` restores one family) |
@@ -2755,6 +2757,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `commcalc.sale_installment_ledger` | `compute_sale_installments(persist=True)` `9212` (mig `308` adds `order_number`/`account_id` MA TX provenance, adaptive write) | `/plan-installments/*` previews, `installment_comm_sale` |
 | `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx` (slice-scoped replace: org × day × `account_id`, `ingest_slice.py` §2), VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store(_day)` — since mig `944` FILTERED to bill-payment rows via `metric_recon.ma_billpay_predicate`, accounts via store_merchant_id → mig-314 index; §12 3-way Leg C), **residual-per-subscriber report §7a** (`residual_subs._aggregate_ma` — ONE sweep: residual = −`retail_cost` on the mig-309 `ma_residual_row_matcher` union, airtime margin = `merchant_discount`; stores via the mig-314 account index), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier), **P&L mig `309`** (`account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings`: `merchant_discount` → "Merchant discount" line (or legacy `atu_income` fold per `pl_merchant_discount_own_line`), −`retail_cost` → `mi_income` for the `'%residual%'` ∪ `pl_ma_residual_order_types` union, each row once), **P&L mig `314`** (`ma_store_pnl.ma_tx_bookings`: per-store via `account_id`→store index; MDF token rows → `mdf_income`; `'daily_tx'` month-spiff rows → `carrier_comm` `M<n>` detail), **BS mig `933`** (`balance_sheet.handset_payable_bookings` via `statement_engine._fetch_outstanding_tx`: configured `handset_payable_order_types` rows with `tx_date ≤ as-of < due_date` → the `handset_payable` liability; money column `retail_cost` ONLY), **liabilities-due 2026-09-03** (`GET /account/liabilities-due`: same fetch + same family predicate — outstanding today + `liabilities_due.payables_due_in_window` for the due-this-week rows, equivalence pinned in `harness_liabilities_due.py`; §4), **Processor Daily Debits & Credits** (`processor_ledger.assemble` — `retail_cost` sign = debit/credit to the dealer, §15) |
 | `commcalc.raw_ma_commission` | upload `/upload/ma_commission` (slice-scoped replace: org × day × `merchant_account_id`, `ingest_slice.py` §2 — 2026-09-02 two-portal wipe incident), VidaPay sweep | MA overview/recon, installment MA gate (`_read_ma_commission` spiffs), **mig `308` two-hop link** (`build_ma_link_index`: `imei|sim → activation_order`), **P&L mig `314`** (`ma_store_pnl.ma_commission_bookings`: component heads per-store via `merchant_account_id`→store index; sheet spiffs suppressed under `pl_ma_month_spiff_source='daily_tx'`; MA device COGS store slice `device_cogs._ma_sold_cost`), **residual-per-subscriber SUBSCRIBER count §7a** (`residual_subs._aggregate_ma` — one row = one activated line, keyed by `merchant_account_id` through the SAME mig-314 index the residual rows use) |
+| `commcalc.raw_vendor_rebate` | upload `/commcalc/upload-mapped` with report_key `vendor_rebate_history` (slice-scoped replace: org × `store` ∩ `sold_on` range, `ingest_slice.py` §2); mig `1005` | **READ BY NOTHING THAT BOOKS MONEY — deliberately.** Only `GET /commcalc/vendor-rebates` → `vendor_rebate_feed` (§27). One row per rebate COMPONENT per line (≈7 per device), so never treat it as one-row-per-activation; `device_cost` repeats per row (dedupe by `imei` — a per-row sum read 7.61x high on the first file) and `unit_amount` is UNSIGNED (sum `earned_amount`, which carries the reversal sign). `earned_amount` is what the carrier OWES, `collected_amount` what it PAID ($0.00 on every row of the first real file) |
 | `commcalc.raw_ma_fulfillment` | upload `/upload/ma_fulfillment` (slice-scoped replace, `ingest_slice.py` §2) | `device_cogs.ma_unit_price_map` (handset price list), MA overview/recon, **mig `314` account→store map source** (`tspid`+`business_address` → `ma_store_pnl.account_store_index`; canonical-spelling wrapper `ma_store_pnl.canonical_store_index` = index ∪ `coa.store_resolver`, the ONE account→store answer, consumed by `payables/engine.ma_store_resolution` — forecast/payables Total-side store attribution, 2026-09-04 §15 — and by `residual_subs.compute` for the §7a report's store names) |
 | `commcalc.ma_account_store_map` (mig `314`) | owner-pinned rows (SQL seed / future admin UI) | `ma_store_pnl.load_store_index` — wins over the fulfillment-derived map; covers accounts fulfillment never names (luxelink `170405`) |
 | `commcalc.payout_schedule(+_line)` | `/payout-schedule` POST `11965` | `installment_engine.compute_installments` |
@@ -2852,6 +2855,8 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `GET /core/onboarding/{module_key}` (wizard state; seeds + backfills the tenant registry) · `GET /core/onboarding/import-sources/{source}/preview` · `POST .../apply` | `core/onboarding.py` (`build_status`, `preview_import`/`apply_import`; plans via `resolve_service_plans` = `commcalc.product_mrc` + `commcalc.raw_mi`; dealer codes DELEGATE to `pos/router._dealer_sync`) | §23n — "bring it over" preview-then-apply. Every zero carries an `empty_reason`/`empty_next` naming the cause and the fix |
 | `GET /commcalc/onboarding` · `PUT /commcalc/onboarding/{step}` (now carries `implementation`: the carrier-scoped blocks + the ordered spine) | `router._onboarding_wizard` → `implementation_spine.build` (PURE); carrier pick-list from `commcalc.carrier` via `_onboarding_profile_step` | **§26 — THE implementation spine.** Not a sixth wizard: the flow extends the questionnaire that already existed |
 | `GET /commcalc/upload-registry` | `router.upload_registry` → `implementation_spine.upload_scope_map`; `report_definitions.carrier_id` (mig `291`) + `connector_instances.carrier_id` | §26.3 — the DATA that replaced `carrier?: 'boost' \| 'total'` on the Upload page. A tile ABSENT from `scope` is carrier-agnostic and must be SHOWN |
+| `GET /commcalc/upload-registry` → `reports` | same handler, EXTENDED §27.8 | The tenant's registered `report_definitions` rows, so a report that exists only as a ROW is REACHABLE from the Upload page — the §26.7-item-3 dead end. No new endpoint |
+| `GET /commcalc/vendor-rebates` | `router.vendor_rebates` → `commcalc/vendor_rebate_feed.py` (PURE); `commcalc.raw_vendor_rebate` (mig `1005`) | §27 — what the carrier statement says it OWES, per line. Read-only, org-scoped. Earned / collected / outstanding are reported SEPARATELY and never summed; carries `booked_to: []`. NOT a second rebate report: `/imei-rebates` answers the PAID side from feeds that prove payment |
 | `GET /commcalc/column-mapping/readiness` | `router._readiness_payload` (FACTORED 2026-09-12) | §26.1 — the endpoint AND the implementation flow call it, so "is this report mapped?" has one answer |
 | `POST /commcalc/column-mapping/detect` | `router.detect_column_mapping` → `column_mapping.suggest`; now also returns `samples` | §26.5 — the proposal ships its BASIS (confidence) and the column's actual VALUES. Nothing is auto-applied: a column's name is not proof of what is in it |
 | `POST /commcalc/carriers` · `POST /commcalc/report-definitions` · `PUT /commcalc/report-labels` | existing endpoints, no change | §26.1 — add-a-carrier, add-a-report-type and add-a-POS-system are UI over these. No new registry table was created for any of the three |
@@ -6463,3 +6468,178 @@ while `Balance` carries the full $13,496,716.18 — earned, never paid. Reported
    deliberately not done — `WorkflowNext` gates on RBAC via the shared `useCanOpen`, and adding a
    second, relevance-based gate would be the duplicate sequencing mechanism the brief forbids. If the
    owner meant the screens themselves, that is a design change worth making explicitly.
+
+---
+
+## 27. VENDOR REBATE HISTORY — earned is not collected (owner 2026-09-12)
+
+Owner: *"A new tenant onboards on a carrier whose POS exports a Vendor Rebate History Report and
+tries to upload it. Today it dead-ends… make that journey complete — upload, map, land, and be
+queryable."* And, on the money: *"The owner has NOT yet decided whether an earned-but-uncollected
+rebate books as a receivable or waits for a payment file. Until they do: land the data, book
+NOTHING."*
+
+### 27.1 WHAT THE FILE ACTUALLY IS — measured, not assumed
+
+A real 20-month export, one store, read in place (it carries customer names, account identifiers,
+phone numbers and ZIPs, so it is never copied into the repo and no fixture uses a real value):
+
+| | |
+|---|---|
+| parsed rows | **47,253** = 47,252 data rows **+ 1 grand-total FOOTER row** |
+| grain | one row per rebate **COMPONENT** per line per invoice — **not** one per activation |
+| invoices / devices / component types | 6,094 · 6,449 IMEIs · 258 distinct `Product Name` values (≈ **7 rows per device**) |
+| **EARNED** (`Total Rebate`) | **$6,748,358.09** |
+| **COLLECTED** (`Collected`) | **$0.00 — on every single row** |
+| **BALANCE** (`Balance`) | **$6,748,358.09** |
+| reversal lines (`Quantity` = −1) | 6,283, worth −$315,307.54 — already netted into earned |
+| covers | 2024-01-02 → 2026-08-31, one store |
+| `Vendor Account Name` | **5 distinct values** — the feed is NOT single-vendor |
+
+### 27.2 Duplicate check — what was searched, and what was REUSED rather than built
+
+Checked §2 (ingest routes + every `raw_*` table), §16 (by TABLE), §17 (by ENDPOINT), §25 (the POS
+feed shapes), §26 (the implementation spine) and `data_lineage_registry.INGEST_TABLES_BY_MODULE`.
+
+| Need | REUSED (not rebuilt) | Where |
+|------|----------------------|-------|
+| Ingest route | `POST /commcalc/upload-mapped` → `_ingest_mapped_df`. **No new ingest route, no new parser.** It already brings column pre-validation, snapshot/restore, `upload_log` + `upload_trace`, footer drop and per-row period derivation | §2 route A |
+| Header→column mapping | `commcalc.column_mapping` (mig 042) — already DATA | §2 |
+| Mapping PROPOSAL with its basis | `POST /column-mapping/detect` — confidence **+ sample values** (§26.5). **No second detector**; the human still confirms before anything is stored | §26.5 |
+| Footer / multi-month rules | `commcalc/feed_shape.py` (mig 1004) unchanged — `is_footer_row`, `period_fields` | §25.3 |
+| Idempotent re-upload | `ingest_slice.INGEST_PARTITION` — one new entry, `store ∩ sold_on` | §2 |
+| Carrier scoping | `report_definitions.carrier_id` (mig 291) — one seeded row decides who is offered it | §26.3 |
+| Upload discoverability | `GET /commcalc/upload-registry` — **extended** with the registered `reports` list, not a second endpoint | §26.6 |
+| Date parsing | `merchant_portals.iso_date` — **EXTENDED**, never forked (27.5) | §25.1 |
+
+### 27.3 WHY A NEW TABLE — the three existing candidates, and why each was rejected
+
+`commcalc.raw_vendor_rebate` (mig **1005**) is new. That was not the first choice; three existing
+tables were examined first and each fails for a reason worth recording:
+
+1. **`raw_ma_commission`** (mig 083) is the per-activation carrier commission detail — the closest
+   shape, and the one the brief expected to be reused. **It is read by MONEY.**
+   `account/device_cogs._ma_sold_cost` selects `imei,sku` from it and prices every distinct IMEI into
+   MA device COGS; `account/residual_subs._aggregate_ma` counts **one row = one activated line** as
+   the residual-per-subscriber denominator; `account/coa.py` books its component columns to the P&L.
+   This feed is ≈7 rows per device, so landing it there would move MA device COGS and divide residual
+   income by a denominator 7× too large. Gating all three on a discriminator column means a new
+   filter in seven money modules, where one missed filter silently moves money.
+2. **`activation_rebate_ledger`** (mig 867) was built for THIS report — and it **is the P&L booking**
+   (`commission_amount` → `carrier_comm` revenue, `device_rebate_amount` → `device_rebate`
+   contra-COGS, read by `coa.py`). Landing there books, which the money rule forbids. It is also an
+   AGGREGATE (one row per store/period/source) and cannot answer a per-line question.
+3. **`raw_custom_import`** is the generic JSONB capture a Custom Import falls back to. That IS the
+   dead end being fixed: nothing counts those rows.
+
+So the per-line detail has no existing home that does not either book money or corrupt an existing
+money path. **Migration 1005 is owner-run and was NOT applied by the agent.**
+
+### 27.4 THE DEAD END WAS NOT WHERE IT LOOKED — a complete ingest already existed, with no UI
+
+The brief's premise was that the upload page simply had no tile. It is worse and more interesting:
+**`backend/app/modules/pos/vendor_rebate_report.py` + `POST /pos/activation-report/{preview,import}`
+already ingest this exact report** (the module docstring names it), writing `pos.customers`,
+`pos.activations` and the `activation_rebate_ledger` P&L feed. It has a harness. It has **zero
+frontend references** — so no tenant can reach it. That is the real dead end.
+
+It is also, measured against this file, **wrong in four ways** — run in place, read-only:
+
+| | measured |
+|---|---|
+| would book to the P&L | **$7,378,973.17** (commission $2,191,771.92 → `carrier_comm`; device rebate $5,187,201.25 → `device_rebate`) across 32 store/period ledger rows |
+| overstatement vs the file's own net | **+$630,615.08** — it sums the UNSIGNED `Unit Rebate` and never reads `Quantity`, so all 6,283 reversal lines book as **positive income** |
+| `device_cost` booked | **$0.00** — its header map expects `related cost`, the file says `Related Unit Cost`, so nothing binds and `device_gp = rebate − 0`: **exactly the "phantom gross profit" its own docstring says booking-rebate-only would cause** |
+| activations created | **0** — it keys on `related sn` / `tracking #`, neither of which binds, so every row fails its `not (cell or imei)` guard |
+| `Collected` / `Balance` | **never read at all** — it books as received what the file says is 100% uncollected |
+
+Nine of its canonical columns do not bind to this file's headers. It also hardcodes `carrier:
+"Verizon"` (RULE TWO). **REPORTED, not fixed here** — CLAUDE.md: a defect is reported, never hidden
+by code written around it. The exposure is **latent, not realised**: with no UI, nothing has been
+booked. Correcting it is its own change, and it must not be wired to a surface before then.
+
+### 27.5 THE DATE PARSER SILENTLY UNDATED 47,148 OF 47,252 ROWS
+
+`Sold On` is a true datetime; through the ingest reader (`pd.read_excel(dtype=str)`) it renders as
+`'2024-03-16 12:39:07.243000'`. `merchant_portals._TIME_SUFFIX` matched a clock time but **not
+fractional seconds**, so `iso_date` returned `None` and only **104 of 47,252** rows got a date.
+
+That is not cosmetic. An undated row is invisible to every period-scoped read, and — worse —
+`ingest_slice.replace_scope` computes its date range from the dates it can see, so the slice replace
+would have covered 2024-01-15 → 2026-07-11 while the file actually spans 2024-01-02 → 2026-08-31:
+rows outside that window are never deleted, so **a re-upload would have DUPLICATED them** instead of
+replacing. Fixed by extending the EXISTING pattern with an optional `(?:\.\d+)?` — strictly additive
+(every spelling that parsed before parses identically; the only change is that one which returned
+`None` now returns its date), pinned by `harness_vendor_rebate_landing.py` §D. It benefits
+`pos_product_sales` (§25) too, which shares `date_auto`.
+
+### 27.6 THE MAPPER PROPOSES; IT NEVER ASSUMES — because three headers lie
+
+`Invoiced At` holds the **STORE** (name + code), not a timestamp. `Related Tracking Number` holds the
+**IMEI**; `Tracking Number` holds the **line's own 10-digit number** (it is an MDN, not a shipment
+id — 47,078/47,252 are exactly 10 digits). `Region` holds a **person's name**, hence the target field
+`region_label`, which cannot be confused with the §13 org-hierarchy region.
+
+The registry's `default_source_header` is a **proposal** rendered beside the sample VALUES that
+`/column-mapping/detect` already returns, and a human saves it. Those four fields declare **no
+aliases** on purpose (pinned by §J of the harness): a confidently-wrong name match is worse than no
+match, because the operator then has nothing prompting them to look. Once saved, the mapping is
+reusable for the next file of the same shape — the point of `column_mapping`.
+
+**STORE COMES FROM THE DATA, not from the upload form.** It is on 100% of rows (and embedded in the
+invoice prefix), whereas a store picked at upload is one mistake away from mis-attributing a whole
+file — and because `store` is the slice-replace partition, a wrong pick would also **delete the wrong
+store's rows** on re-upload. Reading it from the data makes the file self-describing, the import
+idempotent per store, and a multi-store tenant's per-store exports work with no extra step.
+
+### 27.7 THE MONEY RULE, AND HOW IT IS PROVEN RATHER THAN CLAIMED
+
+`vendor_rebate_feed.BOOKS_TO` is the **empty tuple**, asserted by the harness, and every summary the
+endpoint returns carries `booked_to: []`. No P&L, Balance-Sheet, GP, payout or accrual path reads
+`raw_vendor_rebate`; the module is asserted not to mention `carrier_comm`, `device_rebate_amount`,
+`activation_rebate_ledger` or `journal_entries`. `earned_amount` / `collected_amount` /
+`balance_amount` land as three separate columns so the owner's decision is later a config flip, not a
+re-ingest. `outstanding` is recomputed as `earned − collected` and compared against the feed's own
+Balance column, so a file that disagrees with itself is **surfaced** (`balance_disagrees_by`), not
+averaged away. `settlement_status` keeps **"not reported"** distinct from **"unpaid"** — the §25.8
+precedent that absence must never collapse into a finding.
+
+Two further traps are refused outright rather than presented carefully: **`Unit Rebate` is never
+summed** (unsigned; it ignores the reversals — +$630,615.08 on this file) and **`device_cost` is only
+ever counted once per IMEI** (it repeats on all ~7 of a device's rows — a per-row sum reads
+**$41,040,251.81** against a true **$5,393,764.59**, 7.61×).
+
+### 27.8 NEW — registered here
+
+| Thing | What it is |
+|---|---|
+| `commcalc.raw_vendor_rebate` | mig **1005** (owner-run, NOT applied). Per-line landing table. No unique constraint by design — the source holds 50 byte-identical duplicate rows and no unique natural key, so idempotence comes from the slice replace, never an upsert key that would collapse real rows |
+| `backend/app/modules/commcalc/vendor_rebate_feed.py` | **PURE**, stdlib-only. `BOOKS_TO` (empty), `settlement_status`, `device_cost_once`, `totals`, `group_by`, `status_counts` |
+| `GET /commcalc/vendor-rebates` | Read-only, org-scoped projection of the landed rows — **aggregates only**. Every landed row carries a customer name, account identifier, phone number and ZIP, so no row-level payload is returned: the counts, date range and per-month/store/program breakdowns answer "did my import land correctly?" without shipping PII to a page that renders none of it. Route count re-pinned **1582 → 1583** |
+| `GET /commcalc/upload-registry` → `reports` | EXTENDED (no new endpoint): the tenant's registered `report_definitions` rows, so a report that exists only as a ROW is reachable from the Upload page |
+| `column_mapping.TARGET_FIELDS['vendor_rebate_history']` + `TABLE_MAP` | 37 fields; report key names the SHAPE (RULE TWO), carrier decided by mig-291 rows |
+| `ingest_slice.INGEST_PARTITION['raw_vendor_rebate']` | `store ∩ sold_on` |
+| `frontend/.../commcalc/vendor-rebates/page.tsx` | The landing view. Earned and Collected side by side, never summed; the posture banner is the sentence that stops a reader assuming earned means received. Registered in `rbac.ts` NAV + `reports.ts` |
+| `backend/harness_vendor_rebate_landing.py` | **83 checks**, DB-free, synthetic fixtures. Includes the negative controls: the footer doubling (exactly 2×), the unsigned-unit overstatement, the repeated-device-cost multiplication, and the fractional-second regression |
+| lineage | `data_lineage_registry` `commcalc` + `925_data_lineage_seed.sql` seq 137; `harness_data_lineage_guard.py` green (60 checks) |
+
+### 27.9 OPEN — reported, not fixed
+
+1. **THE OWNER DECISION THIS FEED IS WAITING ON.** Does an earned-but-uncollected rebate book as a
+   **receivable** (asset + revenue when earned), or does it wait for a **payment file** (cash basis)?
+   The first real statement is $6,748,358.09 earned and $0.00 collected, so the answer is worth
+   whatever it is worth — and it should be made knowing that this feed *never* reports payment, so a
+   receivable booked from it can only be relieved by a settlement feed that does not exist yet.
+2. **`pos/vendor_rebate_report.py` is wrong on this file in four ways (27.4) and has no UI.** It must
+   be corrected before it is ever wired to a surface. When it is, the two paths should be collapsed:
+   the booking should aggregate from the LANDED rows rather than re-parsing the workbook, so the
+   detail and the P&L can never disagree about the same file.
+3. **There is no payment/settlement side to this feed.** `Collected` will presumably move when the
+   carrier remits, but nothing today tells us when — so "which earned rebates were actually paid" is
+   unanswerable, and this screen deliberately says so rather than implying otherwise.
+4. **`POST /column-mapping/detect` still reads `pd.read_excel` only** (carried from §26.7 item 2), so
+   a CSV export of this report 400s at the mapping step while the ingest itself handles CSV fine.
+   One-line reuse of `_read_upload_df`; deliberately not bundled here.
+5. **One row in the real file carries `Quantity` = 34,686** — it is the footer (the file's NET
+   quantity), correctly dropped by shape. Recorded because a reader meeting that value in isolation
+   would reasonably think the file was corrupt.

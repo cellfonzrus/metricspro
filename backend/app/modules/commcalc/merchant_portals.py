@@ -278,7 +278,15 @@ _MONTHS = {m: i + 1 for i, m in enumerate(
     ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
 
 
-_TIME_SUFFIX = re.compile(r"\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AaPp]\.?[Mm]\.?)?$")
+# A trailing clock time, optionally with FRACTIONAL SECONDS. The fraction was added 2026-09-12:
+# a POS whose date column is a true datetime renders through `pd.read_excel(dtype=str)` as
+# '2024-03-16 12:39:07.243000', which this pattern did not match, so iso_date returned None and the
+# row was left with NO date at all. MEASURED on a real 47,252-row carrier export: only 104 rows
+# parsed a date — the other 47,148 landed unstamped, which would have left every period-scoped read
+# blind to them AND broken the slice-replace date range (making a re-upload duplicate the file
+# instead of replacing it). Strictly ADDITIVE: every string that parsed before parses identically,
+# and the only change is that a spelling which previously returned None now returns its date.
+_TIME_SUFFIX = re.compile(r"\s+\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:\s*[AaPp]\.?[Mm]\.?)?$")
 
 
 def iso_date(value):

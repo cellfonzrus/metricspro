@@ -856,7 +856,16 @@ _all_routes = _flatten_routes(real_app.routes)
 # both this and the sweep ask. Proof backend/harness_tenant_implementation.py.
 # Leaving it stale would make the suite permanently red and train the next reader to ignore it,
 # which is the one thing a tripwire must never do.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1582"))
+# Re-pinned 1582 -> 1583 on 2026-09-12. The delta is exactly ONE endpoint and nothing was removed:
+#     + /commcalc/vendor-rebates                      GET
+# The per-line vendor rebate/commission history LANDING (owner 2026-09-12; index §27). READ-ONLY and
+# org-scoped over the new commcalc.raw_vendor_rebate (mig 1005). It adds NO ingest route — the feed
+# lands through the existing POST /commcalc/upload-mapped — and it books NOTHING: the feed is EARNED,
+# not collected ($0.00 collected on all 47,252 rows of the first real file), and whether an earned
+# rebate is a receivable is an open owner decision, so `vendor_rebate_feed.BOOKS_TO` is empty and no
+# P&L / Balance-Sheet / GP / payout path reads the table. Proof
+# backend/harness_vendor_rebate_landing.py (83 checks).
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1583"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
