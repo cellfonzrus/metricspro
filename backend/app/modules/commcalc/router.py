@@ -12,6 +12,9 @@ from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_contract_type
 from app.modules.commcalc import whatif
+# The tenant-implementation spine (owner 2026-09-12): the ONE ordered, carrier-scoped setup flow, and
+# the one `carrier_visible` predicate the sweep / Connectors / Imports all ask. PURE — no DB, no I/O.
+from app.modules.commcalc import implementation_spine
 from app.modules.commcalc import tax_collected as _tax_agg  # THE one per-(store, day) sales-tax pass
 from app.modules.commcalc import exec_metric_defs as _emd   # mig 962 — ONE bucket vocabulary + presets
 from app.modules.commcalc import whatif_gates
@@ -3851,13 +3854,15 @@ _DESIRED_OUTPUTS = {
 }
 
 
-@router.get("/column-mapping/readiness")
-def column_mapping_readiness(carrier_id: str = "", org_id: str = ORG_ID):
-    """Implementation-wizard summary: for each mappable SOURCE report (sales/payment_detail/mi/comp),
-    how many of its REQUIRED fields are mapped + is it ready; and for each DESIRED OUTPUT report,
-    whether all the source reports it needs are ready. Drives /commcalc/implementation."""
-    require_org(org_id)
-    client = sb()
+def _readiness_payload(client, org_id, carrier_id="", only_keys=None):
+    """THE mapping-readiness computation, factored out so the Implementation Wizard and the
+    tenant-implementation flow read the SAME numbers rather than each deriving "is this report
+    mapped?" its own way (two paths to one answer is the drift the house rules forbid).
+
+    Returns (reports, outputs, mapped_report_keys). `mapped_report_keys` is every report that has at
+    least one saved rule — i.e. a sample has been through its mapper. That is the honest,
+    no-new-schema answer to PHASE 3's "which sample reports did this carrier supply?"; the
+    required_mapped/required ratio beside it is how confidently it mapped."""
     rules = (client.schema("commcalc").table("column_mapping")
              .select("report_key,target_field,source_header,carrier_id").eq("org_id", org_id).execute().data) or []
     by_report: dict = {}
@@ -3868,7 +3873,16 @@ def column_mapping_readiness(carrier_id: str = "", org_id: str = ORG_ID):
         if r.get("source_header"):
             by_report.setdefault(r["report_key"], set()).add(r["target_field"])
     reports = {}
-    for rk in column_mapping.known_report_keys(client, org_id):
+    # `only_keys` bounds the per-report field-registry lookups (one query each) to the reports the
+    # caller can actually show. The Implementation Wizard wants every known key and passes nothing —
+    # byte-identical to before. The setup flow wants only the tenant's REGISTERED reports, which on a
+    # new tenant is a handful rather than the whole catalogue, so putting mapping status on that page
+    # does not turn one page load into twenty round-trips.
+    keys = column_mapping.known_report_keys(client, org_id)
+    if only_keys is not None:
+        wanted = set(only_keys)
+        keys = [k for k in keys if k in wanted]
+    for rk in keys:
         flds = column_mapping.target_fields(rk, client, org_id)
         req = [f["target_field"] for f in flds if f.get("required")]
         mapped = by_report.get(rk, set())
@@ -3878,7 +3892,7 @@ def column_mapping_readiness(carrier_id: str = "", org_id: str = ORG_ID):
                        "ready": bool(req) and len(req_mapped) == len(req)}
     # Custom display name (label) + report_definition id per report, so the wizard can show and
     # rename each report. def_id lets the frontend PATCH the existing row (vs creating a new one).
-    defs = (sb().schema("commcalc").table("report_definitions")
+    defs = (client.schema("commcalc").table("report_definitions")
             .select("id,report_key,label").eq("org_id", org_id).execute().data) or []
     def_by_key = {d.get("report_key"): d for d in defs}
     for rk, info in reports.items():
@@ -3894,6 +3908,16 @@ def column_mapping_readiness(carrier_id: str = "", org_id: str = ORG_ID):
     for name, needs in _DESIRED_OUTPUTS.items():
         missing = [s for s in needs if not reports.get(s, {}).get("ready")]
         outputs[name] = {"needs": needs, "missing": missing, "ready": not missing}
+    return reports, outputs, set(by_report.keys())
+
+
+@router.get("/column-mapping/readiness")
+def column_mapping_readiness(carrier_id: str = "", org_id: str = ORG_ID):
+    """Implementation-wizard summary: for each mappable SOURCE report (sales/payment_detail/mi/comp),
+    how many of its REQUIRED fields are mapped + is it ready; and for each DESIRED OUTPUT report,
+    whether all the source reports it needs are ready. Drives /commcalc/implementation."""
+    require_org(org_id)
+    reports, outputs, _ = _readiness_payload(sb(), org_id, carrier_id)
     return {"reports": reports, "outputs": outputs}
 
 
@@ -3983,7 +4007,35 @@ async def detect_column_mapping(report_key: str = Form(...), carrier_id: str = F
     headers = [str(c).strip() for c in df.columns]
     client = sb()
     rules = column_mapping.load_rules(client, org_id, report_key, carrier_id or None)
-    return {"headers": headers, "suggestions": column_mapping.suggest(headers, report_key, rules, client, org_id)}
+    # ── THE PROPOSAL MUST SHOW ITS BASIS (owner 2026-09-12) ─────────────────────────────────────
+    # `suggest` already returns a `confidence` — mapped > exact > alias > fuzzy — but a confidence is
+    # only half an answer: it says how the NAME matched, and a name is exactly what cannot be trusted
+    # here. Measured on a real carrier export (47,253 rows): `Invoiced At` holds a STORE NAME, not a
+    # timestamp; `Related Tracking Number` holds the IMEI while `Tracking Number` holds the line id;
+    # and `Region` holds a PERSON's name. A header-similarity match is confidently wrong on all
+    # three, and nothing about the header text could have revealed it.
+    #
+    # So the sample VALUES travel with the proposal. The file is already read (nrows=5) — this costs
+    # one pass over a frame we have and gives the human the one thing that distinguishes a good match
+    # from a plausible one. Nothing is auto-applied on the strength of a name, here or in the UI.
+    # Indexed POSITIONALLY, not by name: a real export can repeat a header, and `df[name]` then
+    # returns a DataFrame rather than a Series — which would 500 the one call the operator makes to
+    # find out what is in their file. Wrapped as well, because a sample is a nicety and must never be
+    # the reason a detect fails.
+    samples = {}
+    try:
+        for i, h in enumerate(headers):
+            vals = []
+            for v in df.iloc[:, i].tolist()[:5]:
+                s = "" if v is None else str(v).strip()
+                if s and s.lower() not in ("nan", "none", "nat"):
+                    vals.append(s[:60])
+            samples.setdefault(h, vals[:3])
+    except Exception as e:
+        print(f"WARN column-mapping/detect: sample values unavailable: {e}")
+        samples = {}
+    return {"headers": headers, "samples": samples,
+            "suggestions": column_mapping.suggest(headers, report_key, rules, client, org_id)}
 
 
 def _table_has_column(client, table, col):
@@ -7297,11 +7349,13 @@ def _tenant_carriers(client, org_id):
 def _carrier_visible(d, carriers):
     """A report is shown when it is carrier-agnostic (carrier_id NULL — VIP / B2B / closing) or its
     carrier is one this tenant runs. Unknown carrier_id with a populated carrier list ⇒ hidden: it
-    names a carrier the tenant does not run, which is exactly the clutter this removes."""
-    cid = d.get('carrier_id')
-    if not cid or not carriers:
-        return True
-    return cid in carriers
+    names a carrier the tenant does not run, which is exactly the clutter this removes.
+
+    ONE IMPLEMENTATION. The body moved to `implementation_spine.carrier_visible` (PURE, so it can be
+    proven DB-free) when the tenant-implementation flow needed the same question answered; this stays
+    as the name the sweep and the Connectors page already call. A second copy would let the flow, the
+    sweep and the Imports list disagree about whose report a row is."""
+    return implementation_spine.carrier_visible(d, carriers)
 
 
 @router.get("/connectors")
@@ -7349,6 +7403,54 @@ def list_connectors(org_id: str = ORG_ID, carrier: str = ""):
     return [{**c, 'status': _connector_status(client, org_id, c.get('config_table')),
              'creds': _connector_creds(client, org_id, c.get('config_table')),
              'reports': by_conn.get(c['id'], [])} for c in conns]
+
+
+@router.get("/upload-registry")
+def upload_registry(org_id: str = ORG_ID):
+    """WHICH UPLOAD TILES THIS TENANT IS OFFERED, and whose carrier each belongs to — as DATA.
+
+    Owner 2026-09-12: a Verizon tenant could not be offered a Verizon report, because the Upload page
+    typed its tiles `carrier?: 'boost' | 'total'`. This is the data that replaces that union, read
+    from the rows mig 291 added for exactly this purpose (`report_definitions.carrier_id`) plus the
+    connector registry's own `carrier_id` for the auto-import sources.
+
+    DUPLICATE CHECK: this is not a second carrier-scoping path. `_carrier_visible` (now
+    `implementation_spine.carrier_visible`) is still the ONE predicate, and `GET /connectors` still
+    owns the connector view; this endpoint is a projection of the same two tables into the shape one
+    page needs, with no third derivation of "whose report is this".
+
+    A tile whose key is ABSENT from `scope` is carrier-agnostic and must be shown. Read-only,
+    org-scoped, best-effort — never 500s the upload page."""
+    require_org(org_id)
+    client = sb()
+    try:
+        carriers = (client.schema("commcalc").table("carrier").select("id,name,code,is_default")
+                    .eq("org_id", org_id).order("name").execute().data) or []
+    except Exception:
+        carriers = []
+    try:
+        defs = (client.schema("commcalc").table("report_definitions")
+                .select("report_key,carrier_id,label,sort_order")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        defs = []
+    try:
+        conns = (client.schema("commcalc").table("connector_instances")
+                 .select("sweep_kind,carrier_id,vendor_name,label")
+                 .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        conns = []
+    from app.modules.commcalc import report_labels as _rl
+    scope = implementation_spine.upload_scope_map(defs, conns, carriers, _rl.normalize_carrier_code)
+    return {
+        "scope": scope,
+        "carriers": implementation_spine.carrier_options(carriers),
+        # Said plainly so the page can explain itself rather than silently showing everything: with no
+        # carrier rows there is nothing to scope BY, which is not the same as "everything applies".
+        "note": (None if carriers else
+                 "No carriers are registered for this tenant, so no upload is carrier-scoped yet. "
+                 "Add one under Onboarding → Carrier."),
+    }
 
 
 def _safe_portal_url(raw):
@@ -25777,14 +25879,45 @@ _ONBOARDING_PROFILE = {
     "check": "profile",
     "questions": [
         {"key": "company", "label": "Company / entity name", "type": "text"},
+        # OPTIONS COME FROM CONFIG (owner 2026-09-12). This used to read ["Boost", "Total", "Other"]
+        # — carrier names in code, i.e. a RULE TWO violation, and one that could never deliver "only
+        # the steps relevant to the carrier" because the answer was free text unrelated to any
+        # `commcalc.carrier` row. `_onboarding_profile_step` fills it from the tenant's own carrier
+        # rows, so the answer IS a carrier the rest of the flow can scope on and adding one is
+        # `POST /commcalc/carriers` rather than an edit to this file.
         {"key": "carriers", "label": "Carrier(s) you sell", "type": "multiselect",
-         "options": ["Boost", "Total", "Other"]},
+         "options": [], "options_from": "commcalc.carrier",
+         "add": {"endpoint": "/commcalc/carriers", "method": "POST", "label": "Add a carrier"}},
+        # KNOWN REMAINING RULE TWO DEBT, deliberately NOT changed here and REPORTED instead. These two
+        # lists are still literals, and `_onboarding_steps`' `applies_when` gates six live setup steps
+        # on their exact tokens ('b2b soft', 'epay', 'vidapay'). Sourcing them from the `pos_system` /
+        # `processor` report_term vocabulary would change those tokens and SILENTLY DROP setup steps
+        # from tenants mid-implementation — hiding work rather than surfacing it. The carrier-scoped
+        # feed block below supersedes what those steps do; retiring them belongs with Phase 2's intake
+        # questionnaire, which is where POS and processor are actually asked. Registered as open in
+        # docs/SYSTEM_DATA_FLOW_INDEX.md §26.
         {"key": "pos", "label": "Point of sale (POS)", "type": "select",
          "options": ["B2B Soft", "Other"]},
         {"key": "processor", "label": "Payment processor", "type": "select",
          "options": ["ePay (Boost)", "VidaPay (Total)", "Other"]},
     ],
 }
+
+
+def _onboarding_profile_step(carriers):
+    """The profile step with its carrier pick-list filled from `commcalc.carrier`.
+
+    A copy, never a mutation of the module constant: the constant is shared across every request and
+    every tenant, so stamping one org's carriers onto it would leak them into the next org's wizard."""
+    step = {k: v for k, v in _ONBOARDING_PROFILE.items()}
+    qs = []
+    for q in _ONBOARDING_PROFILE["questions"]:
+        if q.get("options_from") == "commcalc.carrier":
+            opts = implementation_spine.carrier_options(carriers)
+            q = {**q, "options": [o["label"] for o in opts], "carrier_options": opts}
+        qs.append(q)
+    step["questions"] = qs
+    return step
 # processor answer → normalized token used by applies_when + downstream config.
 _PROC_TOKEN = {"epay (boost)": "epay", "vidapay (total)": "vidapay"}
 
@@ -25934,8 +26067,46 @@ def _onboarding_wizard(client, org_id):
         if (e.get("kind") or "") != "ingest":
             powers.setdefault(e.get("source_key") or "", []).append(e.get("surface") or e.get("affected_label"))
 
+    # ── THE CARRIER-SCOPED HALF (owner 2026-09-12) ──────────────────────────────────────────────
+    # "the implementation wizard should only give options relevant to the carrier they are working
+    # with with an option to add a carrier and then surfacing their respective upload links and
+    # automation links, the automation links could be linked to the upload links."
+    #
+    # Every part of that is answered from config that already exists: `commcalc.carrier` (who they
+    # run), `report_definitions.carrier_id` (whose report it is, mig 291) and
+    # `report_definitions.connector_id` -> `connector_instances` (THE automation-to-upload binding,
+    # mig 039 — it has existed all along and had simply never been rendered). No new table.
+    #
+    # Best-effort throughout: a tenant whose registry is empty still gets the flow, with each empty
+    # carrier NAMED and told what to do, rather than a page that looks finished because it is blank.
+    try:
+        carrier_rows = (client.schema("commcalc").table("carrier")
+                        .select("id,name,code,is_default").eq("org_id", org_id)
+                        .order("name").execute().data) or []
+    except Exception:
+        carrier_rows = []
+    try:
+        reg_defs = (client.schema("commcalc").table("report_definitions").select("*")
+                    .eq("org_id", org_id).order("sort_order").execute().data) or []
+    except Exception:
+        reg_defs = []
+    try:
+        reg_conns = (client.schema("commcalc").table("connector_instances").select("*")
+                     .eq("org_id", org_id).order("sort_order").execute().data) or []
+    except Exception:
+        reg_conns = []
+    try:
+        _rep, _out, _mapped = _readiness_payload(
+            client, org_id, only_keys={d.get("report_key") for d in reg_defs if d.get("report_key")})
+    except Exception:
+        _rep, _mapped = {}, set()
+    implementation = implementation_spine.build(carrier_rows, reg_defs, reg_conns, _rep, _mapped)
+
+    filled_profile = _onboarding_profile_step(carrier_rows)
     steps, done_keys = [], set()
     for st in _onboarding_steps():
+        if st.get("key") == "profile":
+            st = filled_profile
         if not _wiz_applies(st.get("applies_when"), profile):
             continue
         stt = state.get(st["key"]) or {}
@@ -25960,6 +26131,7 @@ def _onboarding_wizard(client, org_id):
     total = len(steps)
     ready = sum(1 for s in steps if s["done"])
     return {"org_id": org_id, "profile": profile, "steps": steps, "ready": ready, "total": total,
+            "implementation": implementation,
             "note": (None if rows or True else None)}
 
 

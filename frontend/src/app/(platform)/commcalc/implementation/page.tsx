@@ -5,6 +5,8 @@ import { api, apiUpload, apiDownload, ORG_ID } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_lib/uploadGuard'
 import EntityPicker from '@/components/EntityPicker'
+import { WorkflowNext } from '@/components/WorkflowNext'
+import { useReportLabels } from '@/lib/report-labels'
 
 // Implementation Wizard — onboard a new company's data end-to-end: map EVERY source report they
 // upload (auto-detect columns from a sample) → see exactly which DESIRED OUTPUT reports (Commissions,
@@ -57,6 +59,7 @@ export default function ImplementationWizard() {
           {carriers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
         <span style={{ fontSize: 12, color: 'var(--text3)' }}>Pick a carrier to keep a separate column layout for it (one layout per carrier).</span>
+        <CarrierConfigBar carrierId={carrierId} onChanged={loadReadiness} setMsg={setMsg} />
         <span style={{ flex: 1 }} />
         {/* Employee-facing Payout Structure PDF — "how commission is earned", from the tenant's plan config.
             Hand it to new staff before they start selling. Read-only server-rendered document. */}
@@ -101,7 +104,106 @@ export default function ImplementationWizard() {
         ))}
       </div>
       {msg && <div style={{ marginTop: 12, fontSize: 13 }}>{msg}</div>}
+      {/* Ask the chart what comes next. This screen is stage 3 of the tenant-implementation runbook;
+          the prompt belongs to the PAGE, never to ReportMapper (which renders once per report and
+          would print the same question a dozen times). */}
+      <WorkflowNext here="/commcalc/implementation" />
     </div>
+  )
+}
+
+// ── ADD A POS SYSTEM · ADD A REPORT TYPE, FROM THE FRONT END ────────────────────────────────────
+// Owner 2026-09-12, verbatim: "we can add rq as another POS system without hardcoding it with an
+// option to add more POS systems, which can be done on the front end".
+//
+// NO NEW REGISTRY TABLE, because both already exist as config:
+//   · POS system  — the `pos_system` term in the mig-945/953 carrier-vocabulary preset system
+//     (`commcalc.ui_label_override`, resolved by report_labels.py). It is ALREADY how the platform
+//     says "this tenant's POS is called X", already per-carrier, and already seeded per carrier.
+//     Writing it is the EXISTING `PUT /report-labels`; there is no second place a POS name lives.
+//   · Report type — `commcalc.report_definitions`, via the EXISTING `POST /report-definitions`,
+//     which already accepts `carrier_id` (mig 291). So a newly added report is carrier-scoped from
+//     the moment it exists, and shows up in the Setup Wizard's flow and the Upload page by itself.
+//
+// AND IT SAYS WHAT IT HAS NOT DONE. Registering a report type does NOT by itself give it a field
+// registry — `column_mapping.known_report_keys` reads the TARGET-FIELD registry, not this table. So
+// the panel states that the next step is defining its fields on Column Mapping, rather than leaving
+// someone to discover that their new report has nothing to map.
+function CarrierConfigBar({ carrierId, onChanged, setMsg }:
+  { carrierId: string; onChanged: () => void; setMsg: (s: string) => void }) {
+  const { term, reload } = useReportLabels()
+  const [open, setOpen] = useState<'' | 'pos' | 'report'>('')
+  const [pos, setPos] = useState('')
+  const [label, setLabel] = useState('')
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const currentPos = term('pos_system', 'POS')
+
+  async function savePos() {
+    const v = pos.trim()
+    if (!v) return
+    setBusy(true)
+    try {
+      await api(`/api/v1/commcalc/report-labels?org_id=${ORG_ID}`,
+        { method: 'PUT', body: JSON.stringify({ terms: { pos_system: v } }) })
+      setMsg(`✅ POS system set to “${v}” for this tenant.`); setOpen(''); setPos(''); reload()
+    } catch (e: any) {
+      // A 403 here is a permissions fact, not a bug — say which permission, don't just fail.
+      setMsg('❌ ' + (e?.message || e))
+    } finally { setBusy(false) }
+  }
+
+  async function addReportType() {
+    const lbl = label.trim()
+    // The key is what every mapping and upload is filed under, so it is slug-shaped and derived from
+    // the label unless the operator names one. Never guessed from a file's contents.
+    const rk = (key.trim() || lbl).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+    if (!lbl || !rk) return
+    setBusy(true)
+    try {
+      await api(`/api/v1/commcalc/report-definitions?org_id=${ORG_ID}`, {
+        method: 'POST',
+        body: JSON.stringify({ report_key: rk, label: lbl, carrier_id: carrierId || undefined }),
+      })
+      setMsg(`✅ Report type “${lbl}” (${rk}) registered${carrierId ? ' for this carrier' : ' for every carrier'}. `
+        + 'Next: define its fields on Column Mapping — until it has a field registry there is nothing to map it to.')
+      setOpen(''); setLabel(''); setKey(''); onChanged()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
+  }
+
+  const chip: React.CSSProperties = { fontSize: 12, fontWeight: 700, padding: '5px 10px', borderRadius: 7,
+    border: '1px solid var(--border)', background: 'transparent', color: 'var(--text2)', cursor: 'pointer' }
+
+  return (
+    <>
+      <span style={{ fontSize: 12, color: 'var(--text3)' }}>POS: <b>{currentPos}</b></span>
+      <button style={chip} onClick={() => { setOpen(open === 'pos' ? '' : 'pos'); setPos(currentPos) }}>＋ POS system</button>
+      <button style={chip} onClick={() => setOpen(open === 'report' ? '' : 'report')}>＋ Report type</button>
+      {open === 'pos' && (
+        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexBasis: '100%', marginTop: 6 }}>
+          <input autoFocus value={pos} onChange={e => setPos(e.target.value)} placeholder="POS system name"
+            onKeyDown={e => { if (e.key === 'Enter') savePos(); if (e.key === 'Escape') setOpen('') }}
+            style={{ ...sel, width: 180 }} />
+          <button className="btn btn-primary" style={{ fontSize: 12 }} disabled={busy || !pos.trim()} onClick={savePos}>Save</button>
+          <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>
+            Stored as this tenant&rsquo;s POS vocabulary — screens that mention the POS use this name. No code changes.
+          </span>
+        </span>
+      )}
+      {open === 'report' && (
+        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexBasis: '100%', marginTop: 6, flexWrap: 'wrap' }}>
+          <input autoFocus value={label} onChange={e => setLabel(e.target.value)} placeholder="Report name (as the vendor calls it)"
+            onKeyDown={e => { if (e.key === 'Enter') addReportType(); if (e.key === 'Escape') setOpen('') }}
+            style={{ ...sel, width: 260 }} />
+          <input value={key} onChange={e => setKey(e.target.value)} placeholder="key (optional)" style={{ ...sel, width: 140 }} />
+          <button className="btn btn-primary" style={{ fontSize: 12 }} disabled={busy || !label.trim()} onClick={addReportType}>Add</button>
+          <span style={{ fontSize: 11.5, color: 'var(--text3)', flexBasis: '100%' }}>
+            Registers the report against {carrierId ? 'the selected carrier' : 'every carrier'}. Its columns are
+            defined next on Column Mapping — registering it does not by itself give it fields to map.
+          </span>
+        </span>
+      )}
+    </>
   )
 }
 
@@ -111,6 +213,8 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
   const [fields, setFields] = useState<any[]>([])
   const [src, setSrc] = useState<Record<string, string>>({})
   const [headers, setHeaders] = useState<string[]>([])
+  const [samples, setSamples] = useState<Record<string, string[]>>({})
+  const [basis, setBasis] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState(false)
   const [nameVal, setNameVal] = useState('')
@@ -149,9 +253,19 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
     try {
       const d: any = await apiUpload('/api/v1/commcalc/column-mapping/detect', fd)
       setHeaders(d?.headers || [])
-      const s: Record<string, string> = {}; for (const sg of d?.suggestions || []) if (sg.suggested_source) s[sg.target_field] = sg.suggested_source
+      setSamples(d?.samples || {})
+      // The BASIS of each proposal, kept so the table can show WHY a column was proposed. A match is
+      // pre-filled but NOT saved: saving still requires the human to press Save mappings.
+      const b: Record<string, string> = {}
+      const s: Record<string, string> = {}
+      for (const sg of d?.suggestions || []) {
+        if (sg.suggested_source) s[sg.target_field] = sg.suggested_source
+        if (sg.confidence) b[sg.target_field] = sg.confidence
+      }
+      setBasis(b)
       setSrc(prev => ({ ...prev, ...s }))
-      setMsg(`🔍 ${reportKey}: detected ${d?.headers?.length || 0} columns; matches pre-filled — review & Save.`)
+      setMsg(`🔍 ${reportKey}: detected ${d?.headers?.length || 0} columns — these are PROPOSALS matched on `
+        + `column names. Check the sample values before saving: a column's name is not proof of what is in it.`)
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
   }
   async function seed() {
@@ -251,7 +365,7 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
           {fields.length === 0
             ? <p style={{ fontSize: 13, color: 'var(--text3)' }}>No default field registry for this report — map it on the full Column Mapping page.</p>
             : <table style={{ width: '100%', borderCollapse: 'collapse', maxWidth: 620 }}>
-                <thead><tr style={{ background: 'var(--surface2)' }}>{['Our field', 'Your column'].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
+                <thead><tr style={{ background: 'var(--surface2)' }}>{['Our field', 'Your column', 'What is actually in it'].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
                 <tbody>
                   {fields.map(f => (
                     <tr key={f.target_field}>
@@ -264,6 +378,29 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
                           onChange={v => setSrc(p => ({ ...p, [f.target_field]: v || '' }))}
                           onCreate={v => setSrc(p => ({ ...p, [f.target_field]: v }))}
                           placeholder="(unmapped)" ariaLabel="Your column" />
+                      </td>
+                      {/* THE BASIS, AND THE EVIDENCE. `basis` says how the column NAME matched;
+                          the sample values say what the column actually holds. The second is the
+                          one that matters — on a real carrier export, three columns hold something
+                          other than what their names say, and only the values reveal it. */}
+                      <td style={{ ...cell, color: 'var(--text3)', fontSize: 11.5 }}>
+                        {src[f.target_field] ? (
+                          <>
+                            {basis[f.target_field] && (
+                              <span title={basis[f.target_field] === 'fuzzy'
+                                ? 'Matched only because the column name contains the field name — the weakest kind of match. Check the values.'
+                                : `Matched on: ${basis[f.target_field]}`}
+                                style={{ marginRight: 6, padding: '1px 6px', borderRadius: 6, fontSize: 10.5, fontWeight: 700,
+                                  background: basis[f.target_field] === 'fuzzy' ? '#fffbeb' : 'var(--surface2)',
+                                  color: basis[f.target_field] === 'fuzzy' ? '#b45309' : 'var(--text3)' }}>
+                                {basis[f.target_field]}
+                              </span>
+                            )}
+                            {(samples[src[f.target_field]] || []).length > 0
+                              ? <span style={{ fontFamily: 'ui-monospace, monospace' }}>{(samples[src[f.target_field]] || []).join(' · ')}</span>
+                              : <span style={{ opacity: .6 }}>upload a sample to see values</span>}
+                          </>
+                        ) : <span style={{ opacity: .5 }}>—</span>}
                       </td>
                     </tr>
                   ))}

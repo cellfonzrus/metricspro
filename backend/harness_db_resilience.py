@@ -845,9 +845,18 @@ _all_routes = _flatten_routes(real_app.routes)
 # new module account/device_payable.py. It answers a BACKDATED question the current-state payables
 # cannot (§4 liabilities-due, §23n owed_vip), books nothing, writes nothing, and leaves
 # account/coa.py byte-identical; proof backend/harness_device_payable.py (78 checks), §I7.
+# Re-pinned 1581 -> 1582 on 2026-09-12. The delta is exactly ONE endpoint and nothing was removed:
+#     + /commcalc/upload-registry                     GET
+# The tenant-implementation spine (owner 2026-09-12; index §26). READ-ONLY and org-scoped: it
+# projects `report_definitions.carrier_id` (mig 291) + `connector_instances.carrier_id` into the
+# "whose carrier owns this upload tile" map that replaces the literal `'boost' | 'total'` TypeScript
+# union on the Upload page — the union that made a third carrier unrepresentable. It books nothing,
+# writes nothing, adds no table, and introduces no second carrier-scoping path: the ONE predicate
+# `implementation_spine.carrier_visible` (which `router._carrier_visible` now delegates to) is what
+# both this and the sweep ask. Proof backend/harness_tenant_implementation.py.
 # Leaving it stale would make the suite permanently red and train the next reader to ignore it,
 # which is the one thing a tripwire must never do.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1581"))
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1582"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

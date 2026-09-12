@@ -571,10 +571,176 @@ const dmVerify: Runbook = {
   },
 }
 
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// 4 · TENANT IMPLEMENTATION
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// Owner 2026-09-12: "we need to organize the set up of a new tenant in an organized way, right now
+// we have too many modules which do not have a flow and one thing leads to the other by links on
+// their respective pages to a different module altogether".
+//
+// NOTE FOR THE NEXT READER: this runbook is defined AFTER the three above on purpose.
+// `harness_workflow_stacking.py` §A parses the FIRST `stages: [` block out of this file and pins it
+// against the closing tile in migration 1003. The three closing runbooks share one stage list, so
+// that parse is correct today — but a differently-shaped `stages` block placed earlier in the file
+// would silently become what that harness compares, and it would fail for a reason that has nothing
+// to do with the closing workflow.
+const implFigure = (
+  <svg viewBox="0 0 1020 430" role="img" style={{ minWidth: 760, maxWidth: 1020 }}
+    aria-label="How a carrier scopes the implementation. One carrier row fans out to the reports registered against it; each report carries both the place it is uploaded by hand and the connector that fetches it automatically, because the report row already names that connector. A carrier the tenant does not run matches no rows, so its reports never appear.">
+    <defs><Arrow id="im-a" /></defs>
+
+    <rect x="36" y="150" width="190" height="104" rx="3" fill="var(--rb-card)" stroke="var(--rb-own)" strokeWidth="1.8" />
+    <text x="131" y="130" textAnchor="middle" fontSize="11" fontWeight="600" fill="var(--rb-own)" letterSpacing="1">STEP 1 · THE CARRIER</text>
+    <text x="131" y="182" textAnchor="middle" fontSize="12.5" fontWeight="600" fill="currentColor">commcalc.carrier</text>
+    <text x="131" y="204" textAnchor="middle" fontSize="10.5" fill="currentColor" opacity=".72" fontFamily="ui-monospace, monospace">one row per carrier</text>
+    <text x="131" y="224" textAnchor="middle" fontSize="10.5" fill="currentColor" opacity=".72" fontFamily="ui-monospace, monospace">they actually sell</text>
+    <text x="131" y="274" textAnchor="middle" fontSize="10.5" fontWeight="600" fill="var(--rb-own)">adding one is a row, never code</text>
+
+    <rect x="330" y="60" width="250" height="92" rx="3" fill="var(--rb-card)" stroke="var(--rb-dm)" strokeWidth="1.6" />
+    <text x="455" y="42" textAnchor="middle" fontSize="11" fontWeight="600" fill="var(--rb-dm)" letterSpacing="1">STEP 2–3 · ITS REPORTS</text>
+    <g fontSize="10.5" fill="currentColor" opacity=".82" fontFamily="ui-monospace, monospace">
+      <text x="348" y="86">report_definitions</text>
+      <text x="348" y="108">carrier_id  → whose report it is</text>
+      <text x="348" y="130">connector_id → who fetches it</text>
+    </g>
+
+    <rect x="330" y="252" width="250" height="92" rx="3" fill="var(--rb-card)" stroke="currentColor" strokeWidth="1.2" opacity=".55" />
+    <text x="455" y="234" textAnchor="middle" fontSize="11" fontWeight="600" fill="currentColor" opacity=".6" letterSpacing="1">A CARRIER THEY DO NOT RUN</text>
+    <g fontSize="10.5" fill="currentColor" opacity=".5" fontFamily="ui-monospace, monospace">
+      <text x="348" y="278">its rows match nothing</text>
+      <text x="348" y="300">so its reports never render</text>
+      <text x="348" y="322">nothing is branched around</text>
+    </g>
+
+    <rect x="672" y="46" width="220" height="106" rx="3" fill="var(--rb-seal-dim)" stroke="var(--rb-seal)" strokeWidth="1.8" />
+    <text x="782" y="28" textAnchor="middle" fontSize="11" fontWeight="600" fill="var(--rb-seal)" letterSpacing="1">UPLOAD IT BY HAND</text>
+    <g fontSize="10.5" fill="var(--rb-seal)" fontFamily="ui-monospace, monospace">
+      <text x="690" y="74">upload_endpoint</text>
+      <text x="690" y="96">map the columns,</text>
+      <text x="690" y="118">load one file,</text>
+      <text x="690" y="140">prove it lands</text>
+    </g>
+
+    <rect x="672" y="196" width="220" height="106" rx="3" fill="var(--rb-card)" stroke="var(--rb-mm)" strokeWidth="1.8" />
+    <text x="782" y="178" textAnchor="middle" fontSize="11" fontWeight="600" fill="var(--rb-mm)" letterSpacing="1">OR LET IT ARRIVE</text>
+    <g fontSize="10.5" fill="currentColor" opacity=".82" fontFamily="ui-monospace, monospace">
+      <text x="690" y="224">connector_instances</text>
+      <text x="690" y="246">the portal / mailbox</text>
+      <text x="690" y="268">that fetches this</text>
+      <text x="690" y="290">same report</text>
+    </g>
+
+    <g stroke="currentColor" strokeWidth="1.4" fill="none" opacity=".7">
+      <path d="M 226 190 L 300 190 L 300 106 L 324 106" markerEnd="url(#im-a)" />
+      <path d="M 226 214 L 300 214 L 300 298 L 324 298" markerEnd="url(#im-a)" strokeDasharray="4 4" opacity=".4" />
+      <line x1="580" y1="92" x2="666" y2="92" markerEnd="url(#im-a)" />
+      <line x1="580" y1="122" x2="666" y2="232" markerEnd="url(#im-a)" />
+    </g>
+    <path d="M 782 152 L 782 190" stroke="var(--rb-mm)" strokeWidth="1.6" fill="none" markerEnd="url(#im-a)" />
+    <text x="798" y="176" fontSize="10" fill="var(--rb-mm)" fontWeight="600">then automate</text>
+    <g fontSize="9.6" fill="currentColor" opacity=".6" fontFamily="ui-monospace, monospace">
+      <text x="236" y="182">scopes</text><text x="586" y="84">manual</text><text x="586" y="150">automatic</text>
+    </g>
+    <text x="672" y="330" fontSize="10.5" fontWeight="600" fill="var(--rb-mm)">ONE row names both — that is why they sit together</text>
+  </svg>
+)
+
+const tenantImplementation: Runbook = {
+  // ONE DEFINITION OF THE ORDER, and it is pinned in BOTH directions:
+  //   · `WorkflowNext` at the foot of each screen below reads this array (via `stagesAfter`), and
+  //   · backend/app/modules/commcalc/implementation_spine.py `SPINE` carries the same sequence for
+  //     the wizard that emits the steps.
+  // Those two live in different LANGUAGES, so neither tsc nor a Python linter can see them drift.
+  // `backend/harness_tenant_implementation.py` §A parses both and requires them equal, in order —
+  // the same job `harness_workflow_stacking.py` §A does for the closing tile vs this file.
+  stages: [
+    { href: '/commcalc/onboarding', label: 'Setup Wizard', who: 'Implementation lead',
+      does: 'Say who this tenant is and which carriers they sell. Add a carrier here.',
+      handoff: 'the carrier list every step below is scoped to' },
+    { href: '/commcalc/connectors', label: 'Connectors', who: 'Implementation lead',
+      does: "Register each carrier's source portal and the reports it provides.",
+      handoff: 'a named source for each report, and which of them can be automated' },
+    { href: '/commcalc/implementation', label: 'Implementation Wizard', who: 'Implementation lead',
+      does: "Per carrier: map each report's columns, then load the first file by hand.",
+      handoff: 'mapped columns and one proven ingest per report' },
+    { href: '/commcalc/store-match', label: 'Store Matching', who: 'Implementation lead',
+      does: 'Attach the store names the feed uses to the tenant’s own stores.',
+      handoff: 'rows that land under a named store instead of nowhere' },
+    { href: '/commcalc/email-imports', label: 'Email & Portal Logins', who: 'Implementation lead',
+      does: 'Turn on the automation for each report you just proved, so the file arrives by itself.',
+      handoff: 'feeds that keep arriving without anyone uploading' },
+    { href: '/commcalc/commission-plans', label: 'Incentive Plans', who: 'Owner / Implementation lead',
+      does: 'Define how people are paid from the data that is now flowing.' },
+  ],
+
+  slug: 'tenant-implementation',
+  title: 'Tenant Implementation Runbook',
+  summary: 'Setting up a new tenant as one ordered flow, scoped to the carriers they actually sell.',
+  module: 'commissions', audience: 'admins', icon: '🧭',
+  chain: 'Implementation lead → Owner',
+  lede: 'Standing up a new tenant, in the order it can actually be done. Every step is scoped to the carriers that tenant sells, and each report shows both places it can come from — the upload you do by hand and the automation that does it for you afterwards.',
+  kin: <>The same shape as the <strong>Daily Closing Runbook</strong>: one sequence, each screen naming the next. That one is run every evening; this one is run once per tenant.</>,
+  figure: implFigure,
+  figcaption: <><strong>The carrier is the scope, and the report row is the binding.</strong> A report already records both whose carrier it belongs to and which connector fetches it, so &ldquo;where do I upload this&rdquo; and &ldquo;how do I stop uploading this&rdquo; are two fields on one row rather than two pages you have to know are related. A carrier the tenant does not sell simply matches nothing — there is no rule anywhere naming a carrier.</>,
+  levels: [
+    {
+      title: 'Start with who they sell', who: 'Step 1 · the scope', tone: 'own',
+      intro: 'Nothing below can be narrowed until the tenant says which carriers they run. This is the one answer the whole flow hangs on.',
+      steps: [
+        { title: 'Add each carrier the tenant actually sells', body: <p>Add a carrier from the Setup Wizard itself — it is a row, not a deployment. Until at least one exists there is nothing to scope by, and the flow will tell you so rather than showing you an empty page that looks finished.</p> },
+        { title: 'Do not add a carrier they might sell later', body: <p>Every carrier you add puts its reports in front of somebody. A speculative carrier is clutter on every screen below, which is the exact problem this flow exists to remove.</p> },
+        { title: 'Mark the one they mostly sell as default', body: <p>The default carrier is what single-carrier screens resolve to. A tenant with one carrier should have it marked, or downstream screens have to guess.</p> },
+      ],
+      done: <> every carrier the tenant sells exists as a row, and none that they do not.</>,
+    },
+    {
+      title: 'Register the sources, then map one file by hand', who: 'Steps 2–3 · the data', tone: 'dm',
+      intro: 'A report has to exist in the registry before it can be mapped, and has to be mapped before anything it feeds can be trusted.',
+      steps: [
+        { title: 'Register the source before the report', body: <p>A connector is the portal, mailbox or server the file comes from. Registering it first is what lets each report point at it — and that pointer is the whole reason the automation appears beside the upload later.</p> },
+        { title: 'Upload a sample and READ the proposal', body: <p>The mapper proposes a column match and shows what it matched on. It is a proposal, not an answer: on a real carrier export we measured a column called <code>Invoiced At</code> holding a store name, <code>Related Tracking Number</code> holding an IMEI, and <code>Region</code> holding a person&rsquo;s name. A name-similarity guess is confidently wrong on all three. Confirm each field against the sample values shown, not against the column&rsquo;s title.</p> },
+        { title: 'Load one real file before automating anything', body: <p>Mapping saved is not mapping proven. Import one file and look at what landed. Turning on a sweep over unmapped columns schedules a failure that then repeats nightly.</p> },
+      ],
+      done: <> every required field on every registered report is mapped, and at least one real file per report has landed and been looked at.</>,
+    },
+    {
+      title: 'Then stop doing it by hand', who: 'Steps 4–6 · the handover', tone: 'mm',
+      intro: 'Automation comes last on purpose. It is the step that makes every earlier step repeat without you.',
+      steps: [
+        { title: 'Match the store names the data uses', body: <p>Feeds name stores their own way. Until each name is attached to a store, rows land under nothing and every store-scoped report quietly under-reports.</p> },
+        { title: 'Turn on the automation for reports you proved', body: <p>Each report names its own connector, so the automation is offered next to the upload it replaces. A source that cannot be automated says so — that is usually a vendor instruction or a blocked second factor, not something to keep retrying.</p> },
+        { title: 'Only then define how people are paid', body: <p>An incentive plan built on data that is not arriving yet pays out on gaps. Get the feeds landing first.</p> },
+      ],
+    },
+  ],
+  rulesHeading: 'What this flow guarantees',
+  rules: [
+    { kind: 'ok', claim: 'No carrier name decides anything in this flow.', why: 'Which uploads and automations belong to a carrier is rows — commcalc.carrier, report_definitions.carrier_id, connector_instances.carrier_id — so a carrier nobody has built for works the same way as one we have. Where a carrier name still appears elsewhere it is a shipped DEFAULT that a row overrides, never a branch.' },
+    { kind: 'ok', claim: 'The automation sits with the upload it replaces.', why: 'A report row already names the connector that fetches it, so the two are one record. Nobody has to know that a page in one module relates to a page in another.' },
+    { kind: 'hold', claim: 'A carrier with nothing registered is shown, not hidden.', why: 'It is named, with the action that fixes it. Dropping it would make an unfinished implementation look complete.' },
+    { kind: 'bad', claim: 'A column match is never applied on your behalf.', why: 'The mapper proposes and shows its basis; a human confirms. Measured on a real export, three columns hold something other than what their names say.' },
+    { kind: 'hold', claim: 'An unclassified upload stays visible.', why: 'A tile whose report is not registered to any carrier is shown to everyone. Failing to classify something must never hide a report a tenant needs.' },
+    { kind: 'ok', claim: 'This is not a new wizard.', why: 'It is the Setup Wizard that already existed, put in order. The complaint was too many setup screens; another one would have been the same defect with a new name.' },
+  ],
+  table: {
+    heading: 'What a report row is telling you',
+    columns: ['Signal', 'Means', 'Your move'],
+    rows: [
+      { key: 'not registered', means: <>The carrier has no reports at all <Pill tone="amber">empty</Pill></>, move: 'Register them on Connectors' },
+      { key: 'unmapped', means: 'Registered, but required fields have no column', move: 'Upload a sample and confirm the mapping' },
+      { key: 'mapped', means: <>Every required field has a column <Pill tone="green">ready</Pill></>, move: 'Import one real file and check it' },
+      { key: 'manual only', means: 'The source cannot be automated', move: 'Nothing — keep uploading, or route it by email' },
+      { key: 'automation off', means: 'A connector exists but is not pulling this report', move: 'Turn it on once the file has landed once' },
+      { key: 'automation on', means: <>The file arrives by itself <Pill tone="green">done</Pill></>, move: '—' },
+    ],
+  },
+}
+
 // ── the registry ────────────────────────────────────────────────────────────────────────────────
 // Sort order is the order the work actually happens in, not alphabetical: close, verify, collect.
+// Tenant implementation sits last: it is run once, before any of the others can be run at all.
 // Scheduling joins this list when its runbook lands.
-export const FLOWCHARTS: Runbook[] = [dailyClosing, dmVerify, storeCash]
+export const FLOWCHARTS: Runbook[] = [dailyClosing, dmVerify, storeCash, tenantImplementation]
 
 // ── THE WORKFLOW, ASKED BY BOTH READERS ─────────────────────────────────────────────────────────
 // Owner directive 2026-09-10: "the modules for these should be stacked properly based on thr work
@@ -586,21 +752,39 @@ export const FLOWCHARTS: Runbook[] = [dailyClosing, dmVerify, storeCash]
 // through cannot drift from the order the runbook teaches.
 export const CLOSING_WORKFLOW = dailyClosing.stages
 
-/** The stage AFTER `href` in the closing workflow, or undefined at the end of the chain. */
+/** The runbook that teaches this screen — what "ask the chart" resolves to. */
+export function runbookForScreen(href: string) {
+  return FLOWCHARTS.find(f => f.stages.some(s => s.href === href))
+}
+
+// ── ONE SEQUENCER, N WORKFLOWS (2026-09-12) ─────────────────────────────────────────────────────
+// These two used to read `CLOSING_WORKFLOW` directly, which hard-bound every "what next" prompt in
+// the app to the closing workflow. That was invisible while closing was the only sequence — but it
+// meant a second workflow could never use the mechanism: `runbookForScreen` would find its runbook
+// while `stagesAfter` returned [], so `WorkflowNext` would render a heading with nothing under it.
+//
+// EXTENDED, NOT FORKED. Writing a second sequencer for the implementation flow would have been two
+// implementations of "what comes after this screen" — the drift the house rules forbid, and the
+// exact thing WorkflowNext's own header comment promises it does not do. So they now ask
+// `runbookForScreen` and walk THAT book's stages.
+//
+// BYTE-IDENTICAL FOR THE CLOSING SCREENS, provably: `runbookForScreen` returns the FIRST runbook in
+// FLOWCHARTS containing the href, FLOWCHARTS starts with `dailyClosing`, and `CLOSING_WORKFLOW` IS
+// `dailyClosing.stages`. Every closing href therefore resolves to the same array it did before.
+// Pinned by harness_tenant_implementation.py §B so a reorder of FLOWCHARTS cannot quietly change
+// which chain a closing screen is walked through.
+
+/** The stage AFTER `href` in the workflow that contains it, or undefined at the end of the chain. */
 export function nextStage(href: string) {
-  const i = CLOSING_WORKFLOW.findIndex(s => s.href === href)
-  return i >= 0 ? CLOSING_WORKFLOW[i + 1] : undefined
+  return stagesAfter(href)[0]
 }
 
 /** Every stage after `href`, so a caller who may not open the next one can be offered the one after. */
 export function stagesAfter(href: string) {
-  const i = CLOSING_WORKFLOW.findIndex(s => s.href === href)
-  return i >= 0 ? CLOSING_WORKFLOW.slice(i + 1) : []
-}
-
-/** The runbook that teaches this screen — what "ask the chart" resolves to. */
-export function runbookForScreen(href: string) {
-  return FLOWCHARTS.find(f => f.stages.some(s => s.href === href))
+  const book = runbookForScreen(href)
+  if (!book) return []
+  const i = book.stages.findIndex(s => s.href === href)
+  return i >= 0 ? book.stages.slice(i + 1) : []
 }
 
 export function flowchartBySlug(slug: string): Runbook | undefined {

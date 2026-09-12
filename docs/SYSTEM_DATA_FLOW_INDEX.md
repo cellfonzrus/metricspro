@@ -2720,6 +2720,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | Table | Written by | Read by |
 |-------|-----------|---------|
 | `core.module_onboarding_task` (mig `733`) | `onboarding.seed_tasks` (INSERTS missing task rows only) + `_backfill_import_sources` (fills a BLANK `import_source` from the shipped registry, nothing else, never overwriting an operator value) | `load_tasks_with_source` → `build_status`, the POS wizard (§23n). DB is truth, the in-code registry is the fallback — so a task that GAINS an import source after a tenant was seeded needs the backfill to reach it |
+| `commcalc.carrier` (mig `038`) · `commcalc.report_definitions.carrier_id` (mig `291`) · `commcalc.connector_instances.carrier_id` (mig `039`) | `implementation_spine.carrier_visible` — THE one predicate (`router._carrier_visible` delegates to it); `upload_scope_map`; `carrier_blocks` | **§26 — "which uploads and automations belong to a carrier" is these three columns and nothing else.** `report_definitions.connector_id` is the automation↔upload binding the owner asked for, and it has existed since mig `039`. NULL `carrier_id` = carrier-agnostic and ALWAYS shown |
 | `pos.service_plans` · `pos.dealer_codes` (mig `726`, `742`) | POS settings CRUD; `POST /pos/dealer-codes/sync-from-reports`; the wizard's `apply_import` (ADDITIVE — a name/code already present is SKIPPED, never overwritten) | the register, activations, and the wizard's `count` predicates (§23n) |
 | `commcalc.product_mrc` (mig `074`/`201`) — an MRC CATALOGUE keyed on `raw_mi.customer_plan`, NOT a plan list | `POST /commcalc/product-mrc` + the price-sheet import | `installment_engine._catalog_mrc` (payout MRC), `GET /commcalc/product-mrc/coverage`, `import_health._p_product_mrc`, and — with `commcalc.raw_mi` as its other half — `onboarding.resolve_service_plans` (§23n). Empty on a carrier that reports MRC per subscriber, which is WHY reading it alone showed the house tenant zero plans |
 | `core.marketing_option` (mig `986`) | `POST /marketing/options` (the owner's "+"), `DELETE /marketing/options` (deactivate, never delete) | `event_logic.resolve_options` — HOUSE seed rows (mig `987`) ∪ TENANT rows, tenant wins per (list_key,key); every picker in the module (§23). NO code branches on a value here |
@@ -2849,6 +2850,11 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `GET /marketing/events/{id}/actuals` | `marketing/actuals.event_actuals` → `commcalc.router._compute_feed_actuals_py` → `_sales_cell_agg` | §23 planned-vs-actual, DERIVED from the §3 shared pass. Carries a mandatory `attribution` block: store performance over the window, NOT sales caused by the event |
 | `GET /marketing/summary` | `marketing/router.py` | §23 dashboard — uses the SAME `event_logic.event_readiness` as the event page and the attention providers, so the three cannot disagree |
 | `GET /core/onboarding/{module_key}` (wizard state; seeds + backfills the tenant registry) · `GET /core/onboarding/import-sources/{source}/preview` · `POST .../apply` | `core/onboarding.py` (`build_status`, `preview_import`/`apply_import`; plans via `resolve_service_plans` = `commcalc.product_mrc` + `commcalc.raw_mi`; dealer codes DELEGATE to `pos/router._dealer_sync`) | §23n — "bring it over" preview-then-apply. Every zero carries an `empty_reason`/`empty_next` naming the cause and the fix |
+| `GET /commcalc/onboarding` · `PUT /commcalc/onboarding/{step}` (now carries `implementation`: the carrier-scoped blocks + the ordered spine) | `router._onboarding_wizard` → `implementation_spine.build` (PURE); carrier pick-list from `commcalc.carrier` via `_onboarding_profile_step` | **§26 — THE implementation spine.** Not a sixth wizard: the flow extends the questionnaire that already existed |
+| `GET /commcalc/upload-registry` | `router.upload_registry` → `implementation_spine.upload_scope_map`; `report_definitions.carrier_id` (mig `291`) + `connector_instances.carrier_id` | §26.3 — the DATA that replaced `carrier?: 'boost' \| 'total'` on the Upload page. A tile ABSENT from `scope` is carrier-agnostic and must be SHOWN |
+| `GET /commcalc/column-mapping/readiness` | `router._readiness_payload` (FACTORED 2026-09-12) | §26.1 — the endpoint AND the implementation flow call it, so "is this report mapped?" has one answer |
+| `POST /commcalc/column-mapping/detect` | `router.detect_column_mapping` → `column_mapping.suggest`; now also returns `samples` | §26.5 — the proposal ships its BASIS (confidence) and the column's actual VALUES. Nothing is auto-applied: a column's name is not proof of what is in it |
+| `POST /commcalc/carriers` · `POST /commcalc/report-definitions` · `PUT /commcalc/report-labels` | existing endpoints, no change | §26.1 — add-a-carrier, add-a-report-type and add-a-POS-system are UI over these. No new registry table was created for any of the three |
 | `GET /pos/dealer-codes/sync-preview` · `POST /pos/dealer-codes/sync-from-reports` | `pos/router.py:_dealer_sync` (per-carrier source table/column from `commcalc.carrier`, mig `293`; PAGED since 2026-09-08) | §23n — the ONE dealer-code harvest; the POS wizard calls it rather than deriving codes a second time |
 | `GET /core/control-box` (the red/green board; `deep=1` runs heavy providers) · `GET /core/control-box/checks` (effective registry) · `GET /core/control-box/history` · `GET /core/control-box/platform` (the ONE cross-org surface — lamps + counts ONLY, no tenant figures) | `core/control_box_api.py` | §20 super-admin control box |
 | `GET /billing/ai-usage` · `GET/PUT /billing/ai-margin` (append-only, effective-dated = its own audit) · `POST /billing/ai-usage/close` (freeze) | `billing/usage_api.py`; pure `billing/ai_usage.py` | §21 AI usage + margin (migs `972`/`973`) |
@@ -6319,3 +6325,128 @@ LABEL and its carrier scope; the wizard's report LIST comes from `column_mapping
 (= `TARGET_FIELDS` in code + the per-tenant registry), so a new report key appears only once the
 backend is deployed. `commcalc/upload/wizard/page.tsx` remains a HARDCODED `STEPS` list — a new
 carrier's reports can never appear there `⚠` (not addressed here).
+
+---
+
+## 26. THE TENANT IMPLEMENTATION SPINE — one ordered, carrier-scoped flow (owner 2026-09-12)
+
+Owner: *"Similar to the Cash Deposit Workflow, we need to organize the set up of a new tenant in an
+organized way, right now we have too many modules which do not have a flow and one thing leads to the
+other by links on their respective pages to a different module altogether, the implementation wizard
+should only give options relevant to the carrier they are working with with an option to add a
+carrier and then surfacing their respective upload links and automation links, the automation links
+could be linked to the upload links."*
+
+And, on a real carrier commission export (RQ, 47,253 rows): *"we can add rq as another POS system
+without hardcoding it with an option to add more POS systems, which can be done on the front end"*.
+
+### 26.1 Duplicate check — what was searched, and what was REUSED rather than built
+
+**The complaint IS the sibling wizards, so this adds none.** There were already five setup screens
+(`/pos/onboarding`, `/vision/onboarding`, `/commcalc/onboarding`, `/commcalc/upload/wizard`,
+`/hr/onboarding`) **plus** `/commcalc/implementation` — which §25.9 had just been working in and
+which this index did not list among them. A sixth would be the defect with a new name.
+
+| Need | REUSED (not rebuilt) | Where |
+|------|----------------------|-------|
+| The adaptive, persisted setup questionnaire | `GET/PUT /commcalc/onboarding` + `commcalc.onboarding_state` (mig 927) — already "answers TAILOR which later steps appear". **It is the spine; the others become stages in it.** | `router._onboarding_wizard`, §23n |
+| Which carriers a tenant runs | `commcalc.carrier` (mig 038) + the EXISTING `POST /commcalc/carriers` — add-a-carrier needed no new endpoint | §16 |
+| Whose report is this | `report_definitions.carrier_id` (mig 291, owner 2026-08-09: *"filter out the uploads and auto import based on what carrier is chosen"*) | mig 291 |
+| **Automation ↔ upload binding** | `report_definitions.connector_id` → `connector_instances` — **this has existed since mig 039 and had simply never been rendered.** No new table, no new join | mig 039 |
+| The one carrier-visibility predicate | `router._carrier_visible` — MOVED into `implementation_spine.carrier_visible` (pure) and delegated to, so the sweep, Connectors and the flow cannot disagree | §17 |
+| Mapping readiness | `column-mapping/readiness` — FACTORED into `router._readiness_payload`, called by both the endpoint and the flow, so "is this mapped?" has one answer | §17 |
+| Sequencing + "what next" | `frontend/src/lib/flowcharts.tsx` + `components/WorkflowNext.tsx` + the shared `useCanOpen` gate — **extended, not forked** (see 26.4) | §23o, harness_workflow_stacking |
+| "Add a POS system" | The `pos_system` term in the mig-945/953 preset vocabulary, written by the EXISTING `PUT /report-labels`. No new registry | `report_labels.LABELABLE_TERMS` |
+| "Add a report type" | The EXISTING `POST /report-definitions`, which already accepts `carrier_id` | §17 |
+
+**Nothing new was stored.** No migration is required by this change; the one new endpoint is a
+read-only projection.
+
+### 26.2 The sequence, and why it is that order
+
+`backend/app/modules/commcalc/implementation_spine.py` `SPINE` — the ONE backend definition:
+
+| # | Screen | What it hands over |
+|---|--------|--------------------|
+| 1 | `/commcalc/onboarding` — Setup Wizard | the carrier list every step below is scoped to |
+| 2 | `/commcalc/connectors` — Connectors | a named source per report, and which can be automated |
+| 3 | `/commcalc/implementation` — Implementation Wizard | mapped columns + one proven ingest per report |
+| 4 | `/commcalc/store-match` — Store Matching | rows that land under a named store instead of nowhere |
+| 5 | `/commcalc/email-imports` — Email & Portal Logins | feeds that keep arriving without anyone uploading |
+| 6 | `/commcalc/commission-plans` — Incentive Plans | — |
+
+Each step exists because the next cannot start without it. **Automation is step 5, deliberately after
+the first by-hand ingest (step 3):** turning on a sweep over unmapped columns schedules a failure that
+then repeats nightly. Prove it by hand once, then automate.
+
+### 26.3 RULE TWO — the carrier union that made a tenant unserviceable
+
+`commcalc/upload/page.tsx` typed its tiles `carrier?: 'boost' | 'total'` — a literal union of two
+carrier names across four registries (`FILE_TYPES`, `AUTO_SOURCES`, `MODULE_UPLOADS`,
+`MODULE_LINKS`). A third carrier was **unrepresentable**, so a tenant handed their own carrier's
+export could not be offered it. That union is gone. Carrier scope is read from
+`GET /commcalc/upload-registry`, which projects `report_definitions.carrier_id` and
+`connector_instances.carrier_id` (whose `sweep_kind` values ARE the auto-source tile ids).
+
+The shipped tag survives as an OPEN `string` FALLBACK the registry overrides — the same posture
+`core.module_onboarding_task` takes (§23n: DB is truth, the in-code registry is the fallback). It is
+kept because three tiles carry carrier vocabulary in their own LABELS, mig 291 deliberately DELETED
+the rows that would otherwise carry their scope, and dropping the tag would put one carrier's words
+on another carrier's side — an explicit owner directive (2026-09-04).
+
+**An unclassified tile stays VISIBLE**, by either route — the same refusal `_carrier_visible` makes:
+failing to classify must never hide a report a tenant needs to upload.
+
+### 26.4 ONE sequencer, N workflows — a latent block removed
+
+`stagesAfter`/`nextStage` read `CLOSING_WORKFLOW` (= `dailyClosing.stages`) **directly**, so every
+"what next" prompt in the app was hard-bound to the closing workflow. Invisible while closing was the
+only sequence, but it meant a second workflow could never use the mechanism: `runbookForScreen` would
+find its runbook while `stagesAfter` returned `[]`, rendering a heading with nothing under it. They
+now ask `runbookForScreen` and walk that book's stages — **extended, not forked.**
+
+Byte-identical for the closing screens *because* `dailyClosing` is first in `FLOWCHARTS`; a reorder of
+that array would silently re-route every closing prompt, so `harness_tenant_implementation.py` §B
+pins it.
+
+### 26.5 The mapper must show its basis — measured, not assumed
+
+On the real RQ export: **`Invoiced At` holds a STORE NAME** (not a timestamp), **`Related Tracking
+Number` holds the IMEI** (while `Tracking Number` is the line id), and **`Region` holds a PERSON's
+name**. A header-similarity match is confidently wrong three times on one file. `column_mapping.
+suggest` already returned a `confidence` (mapped > exact > alias > fuzzy) that the UI **discarded**.
+
+`POST /column-mapping/detect` now also returns `samples` (up to 3 values per header, from the 5 rows
+it already reads), and the mapper renders BOTH the basis and the values under "What is actually in
+it", marking `fuzzy` as the weakest match. Nothing is auto-applied; saving is still a separate human
+action. *(Also measured on that file and NOT acted on here: `Collected` is $0.00 on all 47,253 rows
+while `Balance` carries the full $13,496,716.18 — earned, never paid. Reported, not ingested.)*
+
+### 26.6 NEW — registered here
+
+| Thing | What it is |
+|---|---|
+| `backend/app/modules/commcalc/implementation_spine.py` | **PURE**, stdlib-only. `SPINE` (the order), `carrier_visible` (THE predicate), `upload_href`, `automation_for` (the binding), `feed_items`, `carrier_blocks`, `carrier_options`, `upload_scope_map`, `build` |
+| `GET /commcalc/upload-registry` | Read-only, org-scoped. `{scope: {tile_id → carrier}, carriers, note}`. The data that replaced the TypeScript carrier union. Route count re-pinned 1581 → 1582 |
+| `router._readiness_payload` | The factored mapping-readiness computation; `column_mapping_readiness` and the flow both call it |
+| `router._onboarding_profile_step` | Fills the carrier pick-list from `commcalc.carrier` (a COPY — the module constant is shared across tenants) |
+| `GET /commcalc/onboarding` → `implementation` | The carrier-scoped blocks, spine and progress the Setup Wizard renders |
+| `frontend/src/lib/flowcharts.tsx` → `tenantImplementation` | Runbook `tenant-implementation`, at `/training/flowcharts/tenant-implementation` |
+| `backend/harness_tenant_implementation.py` | 83 checks. **§A pins the backend `SPINE` against the TypeScript runbook stages, in order** — the cross-LANGUAGE drift neither `tsc` nor a Python linter can see, and the equivalent of `harness_workflow_stacking.py` §A |
+
+### 26.7 OPEN — reported, not fixed
+
+1. **`_ONBOARDING_PROFILE` still hardcodes `pos` and `processor` options** (`"B2B Soft"`,
+   `"ePay (Boost)"`, `"VidaPay (Total)"`) and `_onboarding_steps`' `applies_when` gates six live setup
+   steps on their exact tokens. Sourcing them from the `pos_system` / `processor` term vocabulary would
+   change those tokens and **silently drop setup steps from tenants mid-implementation** — hiding work
+   rather than surfacing it. Belongs with Phase 2's intake questionnaire, which is where POS and
+   processor are actually asked. The `carriers` option list — the one the flow scopes on — IS fixed.
+2. **`POST /column-mapping/detect` reads `pd.read_excel` only**, so a CSV sample 400s. The rest of the
+   ingest path uses `_read_upload_df`, which handles both. A one-line reuse, deliberately not bundled
+   into this change.
+3. **`commcalc/upload/wizard/page.tsx` remains a hardcoded `STEPS` list** (carried over from §25.9): a
+   new carrier's reports can never appear there. Not addressed here.
+4. **A registered report type has no field registry until one is defined** on Column Mapping —
+   `known_report_keys` reads the TARGET-FIELD registry, not `report_definitions`. The UI says so
+   rather than leaving it to be discovered.
