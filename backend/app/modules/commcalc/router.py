@@ -3885,6 +3885,11 @@ def column_mapping_readiness(carrier_id: str = "", org_id: str = ORG_ID):
         d = def_by_key.get(rk) or {}
         info["label"] = d.get("label")
         info["def_id"] = d.get("id")
+        # Whether this report can derive each row's period FROM ITS OWN DATE COLUMN, so the UI may
+        # offer "leave blank" instead of forcing one month label onto a file that spans many. Asked
+        # of the REGISTRY (does the report declare a date field?), never a hardcoded list of report
+        # keys or a carrier name — a report that gains a date field gets this for free.
+        info["derives_period"] = bool(column_mapping.period_source_field(rk, client, org_id))
     outputs = {}
     for name, needs in _DESIRED_OUTPUTS.items():
         missing = [s for s in needs if not reports.get(s, {}).get("ready")]
@@ -4041,8 +4046,13 @@ def _select_replace_slice(client, table, org_id, period, *, source_null_only=Fal
     to delete without a safety net."""
     rows, start = [], 0
     while True:
-        q = (client.schema("commcalc").table(table).select("*")
-             .eq("org_id", org_id).in_("period", _pvariants(period)))
+        q = (client.schema("commcalc").table(table).select("*").eq("org_id", org_id))
+        # A file that derives its period PER ROW names no period, so there is no period to filter on;
+        # `scope` (the file's own partition ∩ date range) is then the whole slice. Applied identically
+        # here and in the delete — a restore that covered a different slice than the delete would be
+        # worse than no restore at all.
+        if period:
+            q = q.in_("period", _pvariants(period))
         if source_null_only:
             q = q.is_("source_id", "null")
         q = _apply_scope(q, scope)
@@ -4180,7 +4190,12 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
     #     own date range) and never another company's. See _replace_scope. None ⇒ legacy period-wide.
     scope = _replace_scope(table, mapped)
     saved = 0
-    if mapped and period:
+    # A file that derives its period PER ROW (mig 1004) names NO period, so the period-keyed replace
+    # cannot fire — and a blind append makes a re-upload DOUBLE the data. When such a file proves its
+    # own slice (every row carries the partition value and a usable date range), replace THAT slice
+    # instead: the delete is narrower than the old period-wide one, and the import becomes idempotent.
+    # No scope ⇒ still a pure append, byte-identical to before: a delete we cannot prove is never run.
+    if mapped and (period or scope):
         try:
             snapshot = _select_replace_slice(client, table, org_id, period,
                                              source_null_only=source_aware, scope=scope)
@@ -4189,8 +4204,9 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
             raise HTTPException(500, f"Could not snapshot existing {table}/{period} rows for a safe replace; "
                                      f"aborted to avoid data loss: {e}")
         try:
-            d = (client.schema("commcalc").table(table).delete()
-                 .eq("org_id", org_id).in_("period", _pvariants(period)))
+            d = client.schema("commcalc").table(table).delete().eq("org_id", org_id)
+            if period:                      # see _select_replace_slice — same filter, same slice
+                d = d.in_("period", _pvariants(period))
             if source_aware:
                 d = d.is_("source_id", "null")
             d = _apply_scope(d, scope)
@@ -4236,10 +4252,10 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
     # for a week — the upload always reported success, and the rows it deleted belonged to someone else.
     note = (f"onboarding import: {saved} row(s) into {table}"
             + (f" (default layout)" if used_defaults else "")
-            + (f"; scoped to manual rows (source_id IS NULL) — portal-pulled rows preserved" if source_aware and period else "")
+            + (f"; scoped to manual rows (source_id IS NULL) — portal-pulled rows preserved" if source_aware and (period or scope) else "")
             + (f"; replaced ONLY this file's slice — {len(scope['values'])} {scope['partition_col']} "
-               f"value(s) between {scope['lo']} and {scope['hi']}; other companies'/stores' rows in "
-               f"{period} were left untouched" if scope and period else "")
+               f"value(s) between {scope['lo']} and {scope['hi']}; other companies'/stores' rows"
+               + (f" in {period}" if period else "") + " were left untouched" if scope else "")
             + ("; ⚠️ replaced the WHOLE period (this file carries no per-slice key, so a narrower "
                "replace could not be proven safe)" if period and not scope and table in _INGEST_PARTITION else "")
             + (f"; dropped {len(dropped_columns)} unknown column(s): {', '.join(dropped_columns)}" if dropped_columns else "")
@@ -4254,7 +4270,7 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
             "footer_rows_skipped": footer_rows, "undated_rows": undated_rows,
             "dropped_columns": dropped_columns, "source_scoped": bool(source_aware and period),
             "replace_scope": ({"column": scope["partition_col"], "values": len(scope["values"]),
-                               "from": scope["lo"], "to": scope["hi"]} if scope and period else None),
+                               "from": scope["lo"], "to": scope["hi"]} if scope else None),
             "note": note}
 
 

@@ -168,7 +168,13 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
   // Load the FULL file into the system using the saved mappings (the step that was missing — the
   // wizard only ever sampled + saved rules, so mapped files never actually ingested). Feeds GP/comm.
   async function importFile(file: File) {
-    if (!period.trim()) { setMsg('⚠️ Enter the period (e.g. “June 2026”) for this file before importing.'); return }
+    // A report that declares a DATE field derives each row's period from that date, so a blank period
+    // is the CORRECT input for a file spanning several months — naming one would book every row to it.
+    // Whether that is offered comes from the registry (`derives_period` on the readiness payload),
+    // never a hardcoded list of report keys here.
+    if (!period.trim() && !info?.derives_period) {
+      setMsg('⚠️ Enter the period (e.g. “June 2026”) for this file before importing.'); return
+    }
     setImporting(true); setOutcome(null)
     const fd = new FormData()
     fd.append('report_key', reportKey)
@@ -182,7 +188,7 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
       const o = readUploadOutcome(r, 'row(s)')
       setOutcome(o.tone === 'ok' ? null : o)
       setMsg(o.tone === 'ok'
-        ? `✅ ${reportKey}: imported ${o.saved} row(s) for ${period.trim()}. The reports above now compute from this data.`
+        ? `✅ ${reportKey}: imported ${o.saved} row(s)${period.trim() ? ` for ${period.trim()}` : ' — each row booked to the month of its own date'}. The reports above now compute from this data.`
         : `⚠️ ${reportKey}: ${o.text}`)
       onSaved()
     } catch (e: any) { setMsg('❌ Import failed: ' + (e?.message || e)) } finally { setImporting(false) }
@@ -224,7 +230,12 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
             <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={busy} onClick={() => fileRef.current?.click()}>📄 Upload sample to auto-detect</button>
             <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={busy} onClick={saveAll}>Save mappings</button>
             <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--border)', margin: '0 2px' }} />
-            <input style={{ ...sel, width: 130 }} placeholder="Period e.g. June 2026" value={period} onChange={e => setPeriod(e.target.value)} />
+            <input style={{ ...sel, width: info?.derives_period ? 190 : 130 }}
+              placeholder={info?.derives_period ? 'Period — blank = per row' : 'Period e.g. June 2026'}
+              title={info?.derives_period
+                ? 'This report carries its own date column. Leave blank and each row is booked to the month of its own date — correct for a file spanning several months. Naming a period books EVERY row to that one month.'
+                : 'This report carries no date column, so it needs the period naming the file.'}
+              value={period} onChange={e => setPeriod(e.target.value)} />
             <input ref={importRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) importFile(f); e.target.value = '' }} />
             <button className="btn" style={{ fontSize: 13, background: '#16a34a', color: '#fff' }} disabled={importing || busy}
               onClick={() => importRef.current?.click()}

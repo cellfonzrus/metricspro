@@ -214,6 +214,110 @@ ok(any(r["account_id"] == NOVA for r in st9["raw_ma_daily_tx"]), "Nova untouched
 ok(any(r["tx_date"] == "2026-07-20" for r in st9["raw_ma_daily_tx"]),
    "the same account's row OUTSIDE the file's date range also survives")
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# §5 · A FILE THAT DERIVES ITS PERIOD PER ROW NAMES NO PERIOD (mig 1004 follow-up)
+#
+# A POS history file spanning many months must NOT be given one period label — each row is booked to
+# the month of its own date. But the replace was gated on `if mapped and period:`, so such a file fell
+# to a PURE APPEND and a re-upload DOUBLED the data. When the file proves its own slice, the replace
+# now fires on the SCOPE ALONE. The period filter is applied conditionally in BOTH the snapshot and
+# the delete — if they ever disagreed, the restore would cover a different slice than the delete.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n§5 · no period + a provable slice ⇒ replace that slice (idempotent), not a blind append")
+
+STORE_A, STORE_B = "Wireless Zone Brooklyn WZ1321", "Some Other Store"
+
+
+def sale(store, day, org=ORG, period=None):
+    r = {"org_id": org, "store": store, "trans_date": day, "ext_price": "10", "trans_id": f"{store}-{day}"}
+    if period:
+        r["period"] = period
+    return r
+
+
+def store_with_sales(rows):
+    s = {"_seq": 2000, "_deleted": 0, "raw_sales": []}
+    for r in rows:
+        r = dict(r); r["id"] = s["_seq"]; s["_seq"] += 1
+        s["raw_sales"].append(r)
+    return s
+
+
+def do_replace_np(store, table, mapped, period, org=ORG):
+    """PRODUCTION SEQUENCE with the period filter applied CONDITIONALLY — mirrors _ingest_mapped_df
+    after the fix. Gate: replace when (period or scope); otherwise pure append."""
+    c = FakeClient(store)
+    scope = R._replace_scope(table, mapped)
+    if not (period or scope):
+        c.schema("commcalc").table(table).insert(mapped).execute()   # pure append, no delete
+        return scope, None, False
+    snap = R._select_replace_slice(c, table, org, period, scope=scope)
+    d = c.schema("commcalc").table(table).delete().eq("org_id", org)
+    if period:
+        d = d.in_("period", R._pvariants(period))
+    R._apply_scope(d, scope).execute()
+    c.schema("commcalc").table(table).insert(mapped).execute()
+    return scope, snap, True
+
+
+# the real shape: one store, 20 months, every row dated, NO period named
+hist = [sale(STORE_A, f"2025-{m:02d}-15") for m in range(1, 13)] + \
+       [sale(STORE_A, f"2026-{m:02d}-15") for m in range(1, 9)]
+ok(len(hist) == 20, "a 20-month history file, every row dated, no period named")
+scope = R._replace_scope("raw_sales", hist)
+ok(scope is not None, "the file proves its own slice even with NO period")
+ok(scope and scope["partition_col"] == "store", "partition column is store")
+ok(scope and scope["lo"] == "2025-01-15" and scope["hi"] == "2026-08-15",
+   f"date range is the file's own: {scope['lo']} .. {scope['hi']}")
+
+# FIRST load into an empty table
+st = store_with_sales([])
+_, _, replaced = do_replace_np(st, "raw_sales", hist, "")
+ok(len(st["raw_sales"]) == 20, f"first load lands 20 rows (got {len(st['raw_sales'])})")
+
+# RE-UPLOAD the identical file — the regression: this used to DOUBLE the data
+_, _, replaced2 = do_replace_np(st, "raw_sales", hist, "")
+ok(replaced2, "the re-upload took the REPLACE path, not the append path")
+ok(len(st["raw_sales"]) == 20,
+   f"POST-FIX re-upload is IDEMPOTENT — still 20 rows, not 40 (got {len(st['raw_sales'])})")
+
+# another store's rows, and another org's, are untouched by that replace
+st2 = store_with_sales([sale(STORE_A, "2025-06-15"), sale(STORE_B, "2025-06-15"),
+                        sale(STORE_A, "2025-06-15", org=OTHER)])
+do_replace_np(st2, "raw_sales", [sale(STORE_A, f"2025-{m:02d}-15") for m in range(1, 13)], "")
+ok(sum(1 for r in st2["raw_sales"] if r["store"] == STORE_B) == 1,
+   "another STORE's row in the same date range survives")
+ok(sum(1 for r in st2["raw_sales"] if r["org_id"] == OTHER) == 1,
+   "another ORG's row survives (org scoping still applies)")
+
+# a row of the SAME store OUTSIDE the file's date range survives
+st3 = store_with_sales([sale(STORE_A, "2024-01-15"), sale(STORE_A, "2025-06-15")])
+do_replace_np(st3, "raw_sales", [sale(STORE_A, "2025-06-15")], "")
+ok(any(r["trans_date"] == "2024-01-15" for r in st3["raw_sales"]),
+   "the same store's row OUTSIDE the file's date range survives")
+
+# NO period AND no provable slice ⇒ still a pure append (byte-identical to before the fix):
+# a delete that cannot be proven is never run.
+blind = [{"org_id": ORG, "store": "", "trans_date": "2025-06-15", "ext_price": "1", "trans_id": "x"}]
+ok(R._replace_scope("raw_sales", blind) is None,
+   "a file with a BLANK partition value proves no slice")
+st4 = store_with_sales([sale(STORE_A, "2025-06-15")])
+_, _, replaced4 = do_replace_np(st4, "raw_sales", blind, "")
+ok(not replaced4, "no period + no provable slice ⇒ PURE APPEND, nothing deleted")
+ok(len(st4["raw_sales"]) == 2, "the pre-existing row survives an unprovable append")
+
+# a table outside INGEST_PARTITION proves no slice either — snapshot feeds keep appending
+ok(R._replace_scope("inventory_aging_device", [{"org_id": ORG, "sku": "A"}]) is None,
+   "a table outside INGEST_PARTITION proves no slice (snapshot feeds stay append-only)")
+
+# and the PERIOD path is unchanged: naming a period still filters on it
+st5 = store_with_sales([sale(STORE_A, "2025-06-15", period="June 2025"),
+                        sale(STORE_A, "2025-06-16", period="July 2025")])
+do_replace_np(st5, "raw_sales", [sale(STORE_A, "2025-06-15", period="June 2025")], "June 2025")
+ok(any(r.get("period") == "July 2025" for r in st5["raw_sales"]),
+   "naming a period still scopes the delete to THAT period — other periods untouched")
+
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 for f_ in FAIL:
     print("  ✗ " + f_)
