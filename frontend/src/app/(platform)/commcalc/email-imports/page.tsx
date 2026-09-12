@@ -5,6 +5,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 import { SweepStatusCell, summarizeSweepRun } from '../_lib/sweepOutcome'
 import EntityPicker from '@/components/EntityPicker'
+import { WorkflowNext } from '@/components/WorkflowNext'
 
 // Generic email (IMAP) inbox sweep — sibling of the FTP sweep. Configure a mailbox (host/creds) and
 // attachment-filename → upload-type patterns; the backend polls the inbox on a schedule and routes
@@ -1561,6 +1562,9 @@ export default function EmailImportsPage() {
           </div>
         </div>
       )}
+      {/* Stage 5 of the tenant-implementation runbook: this is where a proven upload becomes an
+          automation. The prompt reads that same stage list — no second copy of the order here. */}
+      <WorkflowNext here="/commcalc/email-imports" />
     </div>
   )
 }

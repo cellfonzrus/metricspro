@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
+import { WorkflowNext } from '@/components/WorkflowNext'
 
 // Unified connector registry (SaaS framework Phase 2): every vendor portal + the reports it provides
 // + live sweep status, with a generic run-now. The single source of truth for the data pipeline.
@@ -212,6 +213,7 @@ export default function ConnectorsPage() {
           </div>
         )
       })}
+      <WorkflowNext here="/commcalc/connectors" />
     </div>
   )
 }

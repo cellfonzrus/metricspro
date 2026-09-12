@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { WorkflowNext } from '@/components/WorkflowNext'
 
 type Store = { store_code: string; store_address: string; market?: string }
 type Alias = { id: string; alias: string; store_code: string; note?: string; source?: string; confidence?: string }
@@ -218,6 +219,7 @@ export default function StoreMatchPage() {
           </div>
         </div>
       )}
+      <WorkflowNext here="/commcalc/store-match" />
     </div>
   )
 }

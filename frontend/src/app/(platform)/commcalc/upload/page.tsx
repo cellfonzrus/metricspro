@@ -33,10 +33,34 @@ const MODE_UI: Record<UploadMode, { verb: string; explain: string }> = {
 }
 const modeVerb = (mode: UploadMode, prior: boolean) => (prior ? MODE_UI[mode].verb : '📂 Choose File')
 
-// `carrier` (optional) tags a carrier-specific feed for the active-carrier lens: a dual-carrier tenant
-// sees only the active carrier's tiles (Boost/ePay vs MA/Total). Untagged feeds are carrier-neutral and
-// always show. Single-carrier tenants see every tile (unchanged).
-const FILE_TYPES: { id: string; label: string; icon: string; required: boolean; desc: string; mode: UploadMode; carrier?: 'boost' | 'total' }[] = [
+// ── WHICH TILES BELONG TO WHICH CARRIER IS DATA, NOT A TYPE (owner 2026-09-12) ──────────────────
+// These four arrays used to carry `carrier?: 'boost' | 'total'` — a literal union of two carrier
+// names. It was RULE TWO failing in the most concrete way there is: a Verizon tenant handed a real
+// commission export could not be OFFERED their own report, because a third carrier was
+// unrepresentable in the type. The union is gone; `carrier` below is now an open `string`.
+//
+// Carrier scope now comes from `GET /commcalc/upload-registry`, which projects the rows that already
+// answer this — `report_definitions.carrier_id` (mig 291, added for exactly this: "we need to filter
+// out the uploads and auto import based on what carrier is chosen") and `connector_instances.
+// carrier_id` for the auto-import sources, whose ids ARE `sweep_kind` values. A new carrier is rows,
+// so no edit here is ever needed again.
+//
+// THE SHIPPED TAG IS A FALLBACK DEFAULT, AND THE REGISTRY OVERRIDES IT. It is the last-resort
+// default for a tile the tenant's registry has no row for — the same posture `core.module_onboarding_
+// task` already takes and that the index states as a rule: DB is truth, the in-code registry is the
+// fallback. A row in `report_definitions` wins over the tag on the same id, always.
+//
+// WHY A FALLBACK AT ALL, rather than deleting the tags outright. Three of these tiles carry carrier
+// vocabulary in their own LABELS ("MA Commission Details (Total)"). Dropping the tag would make them
+// visible to a tenant whose registry simply has no row for them — and mig 291 deliberately DELETED
+// the inert rows that would otherwise have carried the scope, so "absent" is the normal state, not
+// an oversight. That would put one carrier's words on another carrier's side, which is an explicit
+// owner directive (2026-09-04), so it is not a trade worth making for tidiness.
+//
+// A TILE NEITHER THE REGISTRY NOR THE FALLBACK CLASSIFIES STAYS VISIBLE — the same refusal
+// `_carrier_visible` makes server-side: failing to classify a tile must never hide a report a tenant
+// needs to upload.
+const FILE_TYPES: { id: string; label: string; icon: string; required: boolean; desc: string; mode: UploadMode; carrier?: string }[] = [
   { id: 'sales',          label: 'Sales Transactions',    icon: '🛍️', required: true,  mode: 'replace_period', desc: 'POS Sales Transaction Details (78-col, all columns)' },
   { id: 'daily_sales',    label: 'Daily Sales Upload',      icon: '📅', required: false, mode: 'additive_daily', desc: 'Append daily transactions — no period wipe, deduped by Trans ID' },
   { id: 'payment_detail', label: 'Payment Detail',        icon: '💳', required: true,  mode: 'replace_period', desc: 'Payment Processor Commission Payment Detail', carrier: 'boost' },
@@ -73,13 +97,13 @@ const AUTO_SOURCES = [
     cfg: 'dlar/sweep/config', run: 'dlar/sweep/run-now', configure: '/commcalc/dlar/sweep',
     scopes: [{ v: 'mtd', l: 'Month-to-date' }, { v: 'full', l: 'Full month' }] },
   { id: 'epay', name: 'Payment Processor Portal', icon: '💰', desc: 'MI · ATU · Commission · Comprehensive · Reconciliation',
-    cfg: 'epay/sweep/config', run: 'epay/sweep/run-now', configure: '/commcalc/epay/sweep', carrier: 'boost' as const,
+    cfg: 'epay/sweep/config', run: 'epay/sweep/run-now', configure: '/commcalc/epay/sweep', carrier: 'boost',
     scopes: [{ v: 'daily', l: 'Daily' }, { v: 'mtd', l: 'Month-to-date' }, { v: 'full', l: 'Full month' }] },
   { id: 'b2b', name: 'POS (b2bsoft / RTPOS / RQ)', icon: '📦', desc: 'Sales Transaction · Inventory Aging — configure the portal login (2FA) under Data Sources',
     cfg: 'b2b/sweep/config', run: 'b2b/sweep/run-now', configure: '/commcalc/email-imports#portal-logins',
     scopes: [{ v: 'day', l: 'Single day' }, { v: 'month', l: 'Month' }, { v: 'custom', l: 'Custom range' }] },
   { id: 'vip', name: 'VIP Wireless portal', icon: '🧾', desc: 'Invoices · PayGo · Credit memos',
-    cfg: 'vip/sweep/config', run: 'vip/sweep/run-now', configure: '/commcalc/vip/sweep', carrier: 'boost' as const,
+    cfg: 'vip/sweep/config', run: 'vip/sweep/run-now', configure: '/commcalc/vip/sweep', carrier: 'boost',
     scopes: [{ v: 'recent', l: 'Recent (lookback)' }, { v: 'full', l: 'Full history' }] },
 ]
 
@@ -91,7 +115,7 @@ const AUTO_SOURCES = [
 // rather than a false "no data uploaded yet".
 const MODULE_UPLOADS: { id: string; label: string; icon: string; endpoint: string; needsDate: boolean;
                         desc: string; mode: UploadMode; traceKeys?: string[]; tracked?: boolean;
-                        carrier?: 'boost' | 'total' }[] = [
+                        carrier?: string }[] = [
   { id: 'hotsheet',      label: 'Pricing Hotsheet',     icon: '🏷️', endpoint: 'commcalc/hotsheet/upload', needsDate: true,
     mode: 'additive_keyed', traceKeys: ['hotsheet'],
     desc: 'Carrier promo pricing by device — powers the Hotsheet expected-vs-paid recon. Pick the effective date.' },
@@ -107,10 +131,9 @@ const MODULE_UPLOADS: { id: string; label: string; icon: string; endpoint: strin
 ]
 // Structured (non-file) uploads that live on their own page — linked, not inlined here.
 const MODULE_LINKS: { id: string; label: string; icon: string; href: string; desc: string;
-                      carrier?: 'boost' | 'total' }[] = [
-  { id: 'b2b_inventory', label: 'b2bsoft Inventory', icon: '📦', href: '/commcalc/asset/inventory-recon',
-    carrier: 'boost',
-    desc: 'On-hand inventory by store & category — structured entry/recon, not a single file. Opens its page.' },
+                      carrier?: string }[] = [
+  { id: 'b2b_inventory', label: 'b2bsoft Inventory', icon: '📦', href: '/commcalc/asset/inventory-recon', carrier: 'boost',
+       desc: 'On-hand inventory by store & category — structured entry/recon, not a single file. Opens its page.' },
 ]
 
 // Every report key the "last set of data" lookup should answer for — the manual tiles plus the module
@@ -135,9 +158,24 @@ export default function UploadPage() {
   // vocabulary on the Boost side and vice versa). No carrier chosen yet → hide nothing (unchanged).
   const { activeCarrier, multi, carrierList } = useActiveCarrier()
   const haveCarriers = (carrierList || []).map(c => carrierCode(c)).filter(Boolean)
-  const tileVisible = (tag?: 'boost' | 'total') => !tag
-    || haveCarriers.length === 0
-    || (haveCarriers.includes(tag) && (!multi || tag === activeCarrier))
+  // The registry's answer to "whose carrier owns this tile", keyed by the tile's own id (a
+  // report_key for the manual tiles, a sweep_kind for the auto sources). Best-effort: a failed load
+  // leaves the map empty, which shows everything rather than hiding an upload somebody needs.
+  const [carrierScope, setCarrierScope] = useState<Record<string, { carrier_code?: string }>>({})
+  useEffect(() => {
+    api('/api/v1/commcalc/upload-registry')
+      .then((r: any) => setCarrierScope(r?.scope || {}))
+      .catch(() => setCarrierScope({}))
+  }, [])
+  // REGISTRY FIRST, shipped tag second, show-it third. `fallback` is the tile's own default tag and
+  // is consulted only when the tenant's registry has no row for that id — so registering a report
+  // is always what decides, and a tenant can re-scope any tile without a deploy.
+  const tileVisible = (id: string, fallback?: string) => {
+    const code = carrierScope[id]?.carrier_code || fallback
+    if (!code) return true                       // unclassified either way ⇒ never hidden
+    if (haveCarriers.length === 0) return true   // nothing to scope BY ⇒ hide nothing
+    return haveCarriers.includes(code) && (!multi || code === activeCarrier)
+  }
   const [uploading, setUploading] = useState<string | null>(null)
   const [statuses, setStatuses] = useState<Record<string, 'idle'|'uploading'|'done'|'error'|'warn'>>({})
   const [messages, setMessages] = useState<Record<string, string>>({})
@@ -304,7 +342,7 @@ export default function UploadPage() {
         </div>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <tbody>
-            {AUTO_SOURCES.filter(s => tileVisible((s as any).carrier)).map(s => {
+            {AUTO_SOURCES.filter(s => tileVisible(s.id, s.carrier)).map(s => {
               const c = cfgs[s.id] || {}
               // ROUTE GATE (mig 998): a portal sweep whose login route is switched off by config must
               // not read as "pending" or as a fault, and must not offer Run now. `route_policy` is
@@ -391,7 +429,7 @@ export default function UploadPage() {
         </div>
       )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
-        {FILE_TYPES.filter(t => tileVisible(t.carrier)).map(({ id, label, icon, required, desc, mode }) => {
+        {FILE_TYPES.filter(t => tileVisible(t.id, t.carrier)).map(({ id, label, icon, required, desc, mode }) => {
           const status = statuses[id] || 'idle'; const msg = messages[id] || ''; const prior = lastUpload(id)
           // "has data already" for the BUTTON wording = anything this report ever ingested (not just the
           // selected period) — a day-grain feed has no period badge at all.
@@ -435,7 +473,7 @@ export default function UploadPage() {
         📦 Module uploads <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>— files that feed the asset, Distributor, hotsheet &amp; daily-closing modules</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
-        {MODULE_UPLOADS.filter(entry => tileVisible(entry.carrier)).map(entry => {
+        {MODULE_UPLOADS.filter(entry => tileVisible(entry.id, entry.carrier)).map(entry => {
           const status = statuses[entry.id] || 'idle'; const msg = messages[entry.id] || ''
           return (
             <div key={entry.id} className="card" style={{ border: status === 'done' ? '1px solid #86efac' : status === 'error' ? '1px solid #fca5a5' : undefined, background: status === 'done' ? '#f0fdf4' : status === 'error' ? '#fef2f2' : undefined }}>
@@ -466,7 +504,7 @@ export default function UploadPage() {
             </div>
           )
         })}
-        {MODULE_LINKS.filter(link => tileVisible(link.carrier)).map(link => (
+        {MODULE_LINKS.filter(link => tileVisible(link.id, link.carrier)).map(link => (
           <a key={link.id} href={link.href} className="card" style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
               <span style={{ fontSize: 28 }}>{link.icon}</span>
