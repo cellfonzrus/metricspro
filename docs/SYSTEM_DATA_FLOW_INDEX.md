@@ -6450,3 +6450,16 @@ while `Balance` carries the full $13,496,716.18 — earned, never paid. Reported
 4. **A registered report type has no field registry until one is defined** on Column Mapping —
    `known_report_keys` reads the TARGET-FIELD registry, not `report_definitions`. The UI says so
    rather than leaving it to be discovered.
+5. **The code and mig 291 CONTRADICT each other on three tiles.** `vip_workbook` / `asset_ledger` /
+   `b2b_inventory` are carrier-tagged in `commcalc/upload/page.tsx`, but mig 291's own header says the
+   opposite — *"sources that are not carrier-scoped at all (VIP distributor invoices, B2B POS
+   inventory, daily closing) stay NULL by design — do not force them under a carrier."* One of the two
+   is wrong and it is an owner decision, not an agent's: stamping them makes today's hiding permanent,
+   leaving them NULL shows them to every tenant. The fallback tag preserves TODAY's behaviour
+   meanwhile, so nothing changed while the question is open.
+6. **The six SPINE stages are the same screens for every tenant; what is carrier-scoped is the CONTENT
+   within them.** "Only steps relevant to the carrier appear" is delivered as: only that carrier's
+   reports, uploads and automations are listed. Making the SCREEN list itself carrier-conditional was
+   deliberately not done — `WorkflowNext` gates on RBAC via the shared `useCanOpen`, and adding a
+   second, relevance-based gate would be the duplicate sequencing mechanism the brief forbids. If the
+   owner meant the screens themselves, that is a design change worth making explicitly.
