@@ -15,6 +15,7 @@ from app.modules.commcalc import whatif
 # The tenant-implementation spine (owner 2026-09-12): the ONE ordered, carrier-scoped setup flow, and
 # the one `carrier_visible` predicate the sweep / Connectors / Imports all ask. PURE — no DB, no I/O.
 from app.modules.commcalc import implementation_spine
+from app.modules.commcalc import vendor_rebate_feed   # mig 1005 — earned-vs-collected, books nothing
 from app.modules.commcalc import tax_collected as _tax_agg  # THE one per-(store, day) sales-tax pass
 from app.modules.commcalc import exec_metric_defs as _emd   # mig 962 — ONE bucket vocabulary + presets
 from app.modules.commcalc import whatif_gates
@@ -7430,7 +7431,7 @@ def upload_registry(org_id: str = ORG_ID):
         carriers = []
     try:
         defs = (client.schema("commcalc").table("report_definitions")
-                .select("report_key,carrier_id,label,sort_order")
+                .select("report_key,carrier_id,label,sort_order,target_table,upload_endpoint")
                 .eq("org_id", org_id).execute().data) or []
     except Exception:
         defs = []
@@ -7442,14 +7443,96 @@ def upload_registry(org_id: str = ORG_ID):
         conns = []
     from app.modules.commcalc import report_labels as _rl
     scope = implementation_spine.upload_scope_map(defs, conns, carriers, _rl.normalize_carrier_code)
+    # THE REGISTERED REPORTS THEMSELVES, not just whose carrier owns each id (added 2026-09-12).
+    # `scope` answers "should this tile be shown?" for the tiles the page already SHIPS — which is
+    # why a newly-registered report was still invisible: the Upload page's FILE_TYPES list is
+    # hardcoded, so a report that exists only as a `report_definitions` row had no tile to be scoped.
+    # That is the dead end a tenant hits after onboarding on a new carrier (index §26.7 item 3).
+    # Returning the rows lets the page list them without a second endpoint and without a code edit
+    # per report — a new carrier's reports are ROWS, exactly as mig 291 intended.
+    reports = sorted(
+        [{"report_key": d.get("report_key"), "label": d.get("label"),
+          "target_table": d.get("target_table"), "upload_endpoint": d.get("upload_endpoint"),
+          "sort_order": d.get("sort_order") or 0,
+          "carrier_code": (scope.get(d.get("report_key")) or {}).get("carrier_code")}
+         for d in defs if d.get("report_key")],
+        key=lambda r: (r["sort_order"], r["report_key"]))
     return {
         "scope": scope,
+        "reports": reports,
         "carriers": implementation_spine.carrier_options(carriers),
         # Said plainly so the page can explain itself rather than silently showing everything: with no
         # carrier rows there is nothing to scope BY, which is not the same as "everything applies".
         "note": (None if carriers else
                  "No carriers are registered for this tenant, so no upload is carrier-scoped yet. "
                  "Add one under Onboarding → Carrier."),
+    }
+
+
+@router.get("/vendor-rebates")
+def vendor_rebates(period: str = "", store: str = "", status: str = "", org_id: str = ORG_ID):
+    """WHAT LANDED from the per-line vendor rebate/commission history feed (mig 1005) — and what it
+    does NOT mean. Read-only, org-scoped.
+
+    THE POINT OF THIS SCREEN IS THE DISTINCTION IT REFUSES TO COLLAPSE. The feed records what the
+    carrier OWES (`earned_amount`), not what it has paid (`collected_amount`). On the first real
+    export those are $6,748,358.09 and $0.00. So this endpoint reports them SEPARATELY, never summed
+    and never labelled income, and carries `booked_to: []` — the machine-readable statement that
+    nothing here reaches the P&L, the Balance Sheet, gross profit or commission payout while
+    "does an earned rebate book as a receivable?" is an open owner decision (§27).
+
+    DUPLICATE CHECK: this is not a second rebate report. `/imei-rebates` (§16) answers "which
+    activation got a rebate PAID against it" from the feeds that prove PAYMENT; this answers "what is
+    still owed on the statement we were sent". Folding this feed into that report would make it claim
+    rebates were received when the file says $0.00 was collected — the two must stay apart until the
+    payment side of this feed exists. The aggregate that BOOKS this export to the P&L is a different
+    path again (pos/vendor_rebate_report.import_report → activation_rebate_ledger), and is not read
+    or written here.
+
+    All arithmetic is in the PURE module so it is provable DB-free (harness_vendor_rebate_landing)."""
+    require_org(org_id)
+    client = sb()
+    rows, start, page = [], 0, 1000
+    try:
+        while True:
+            q = (client.schema("commcalc").table("raw_vendor_rebate").select("*")
+                 .eq("org_id", org_id))
+            if period:
+                q = q.in_("period", _pvariants(period))
+            if store:
+                q = q.eq("store", store)
+            chunk = (q.order("id").range(start, start + page - 1).execute().data) or []
+            rows.extend(chunk)
+            if len(chunk) < page:
+                break
+            start += page
+    except Exception as e:
+        # The table is created by mig 1005, which the owner runs. Until then this must say so plainly
+        # rather than 500 — the tenant's next step is "run the migration", not "file a bug".
+        return {"totals": vendor_rebate_feed.totals([]), "by_period": [], "by_store": [],
+                "by_vendor_account": [], "by_component": [], "status_counts": [], "device_cost": None,
+                "available": False,
+                "note": f"No landed rows yet — commcalc.raw_vendor_rebate is not readable ({e}). "
+                        f"Run migration 1005, then import the report from the Implementation Wizard."}
+    if status:
+        rows = [r for r in rows if vendor_rebate_feed.settlement_status(r) == status]
+    return {
+        "available": True,
+        "totals": vendor_rebate_feed.totals(rows),
+        "by_period": vendor_rebate_feed.group_by(rows, "period"),
+        "by_store": vendor_rebate_feed.group_by(rows, "store"),
+        "by_vendor_account": vendor_rebate_feed.group_by(rows, "vendor_account"),
+        "by_component": vendor_rebate_feed.group_by(rows, "rebate_name")[:25],
+        "status_counts": vendor_rebate_feed.status_counts(rows),
+        # Device cost counted ONCE PER DEVICE. The per-row sum is 7.6x high on the first real file
+        # ($41.0M vs $5.4M) because the cost repeats on all ~7 of a device's component rows, so the
+        # pure module will not return it at all. Reference only — this books nothing either.
+        "device_cost": vendor_rebate_feed.device_cost_once(rows),
+        # NO ROW-LEVEL PAYLOAD. Every landed row carries a customer name, an account identifier, a
+        # phone number and a ZIP. The aggregates above answer "did my import land correctly?" — row
+        # counts, invoice and device counts, the date range, the per-month breakdown — so shipping
+        # the raw rows to a page that renders none of them would be exposure bought for nothing.
+        "note": None,
     }
 
 

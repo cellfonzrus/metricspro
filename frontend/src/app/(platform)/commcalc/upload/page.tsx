@@ -145,6 +145,11 @@ const LAST_UPLOAD_KEYS = [
 
 type UploadRecord ={ id: string; file_type: string; period: string | null; filename: string | null; rows_saved: number; uploaded_at: string }
 
+// A report REGISTERED for this tenant in `report_definitions` (projected by GET /upload-registry).
+// Deliberately open types: the whole point is that a report this file has never heard of can appear.
+type RegistryReport = { report_key: string; label?: string | null; target_table?: string | null
+                        upload_endpoint?: string | null; sort_order?: number; carrier_code?: string | null }
+
 function fmtWhen(iso: string) {
   const d = new Date(iso)
   if (isNaN(d.getTime())) return iso
@@ -162,10 +167,14 @@ export default function UploadPage() {
   // report_key for the manual tiles, a sweep_kind for the auto sources). Best-effort: a failed load
   // leaves the map empty, which shows everything rather than hiding an upload somebody needs.
   const [carrierScope, setCarrierScope] = useState<Record<string, { carrier_code?: string }>>({})
+  // Every report REGISTERED for this tenant (report_definitions rows), whether or not this page
+  // ships a tile for it. See the section at the bottom: a report that exists only as a row had no
+  // way to be reached from here, which is where a new carrier's onboarding dead-ended.
+  const [registryReports, setRegistryReports] = useState<RegistryReport[]>([])
   useEffect(() => {
     api('/api/v1/commcalc/upload-registry')
-      .then((r: any) => setCarrierScope(r?.scope || {}))
-      .catch(() => setCarrierScope({}))
+      .then((r: any) => { setCarrierScope(r?.scope || {}); setRegistryReports(r?.reports || []) })
+      .catch(() => { setCarrierScope({}); setRegistryReports([]) })
   }, [])
   // REGISTRY FIRST, shipped tag second, show-it third. `fallback` is the tile's own default tag and
   // is consulted only when the tenant's registry has no row for that id — so registering a report
@@ -553,6 +562,51 @@ export default function UploadPage() {
           )
         })}
       </div>
+
+      {/* ── CARRIER REPORTS REGISTERED FOR THIS TENANT (owner 2026-09-12) ───────────────────────────
+          THE DEAD END THIS FIXES. Every tile above is a HARDCODED entry in this file, and each posts
+          to the legacy /upload/<file_type> capture. So a tenant who onboarded on a carrier whose
+          reports are registered as `report_definitions` ROWS — which is the whole mechanism mig 291
+          added, and what mig 1004/1005 seed — had no way to reach them from the Upload page. They
+          fell back to a Custom Import, the rows landed in the generic JSONB capture, and nothing
+          counted them. PR #230 made the tiles carrier-SCOPED; this makes a registered report
+          REACHABLE, which is the other half.
+
+          It is a LINK, not a fourth upload widget. These reports go through the mapped ingest
+          (/commcalc/upload-mapped), which requires a human-confirmed column mapping first — three
+          headers in a real carrier export lie about what they hold, so a file dropped here with no
+          mapping step would land confidently wrong. The Implementation Wizard already owns that
+          flow (detect → propose with sample values → confirm → import), so this points at it rather
+          than growing a second copy of it.
+
+          RULE TWO: nothing here names a carrier. The list, the labels and the ordering are all rows. */}
+      {registryReports.filter(r => !TYPE_META[r.report_key] && tileVisible(r.report_key, r.carrier_code || undefined)).length > 0 && (
+        <>
+          <div style={{ fontWeight: 700, fontSize: 14, margin: '24px 0 10px' }}>
+            🧾 Your carrier&apos;s reports <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>— registered for this tenant; mapped once, then imported</span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+            {registryReports
+              .filter(r => !TYPE_META[r.report_key] && tileVisible(r.report_key, r.carrier_code || undefined))
+              .map(r => (
+                <a key={r.report_key} href="/commcalc/implementation" className="card"
+                   style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                    <span style={{ fontSize: 28 }}>📑</span>
+                    <div style={{ flex: 1 }}>
+                      <span style={{ fontWeight: 600, fontSize: 14 }}>{r.label || r.report_key} <span style={{ fontSize: 11, color: 'var(--text3)' }}>↗</span></span>
+                      <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 0' }}>
+                        Map this report&apos;s columns once in the Implementation Wizard, then import the file there.
+                        {r.target_table ? <> Lands in <code style={{ fontSize: 11 }}>{r.target_table}</code>.</> : null}
+                      </div>
+                      <div style={{ color: 'var(--text3)', fontSize: 11, margin: '4px 0 0' }}>({r.report_key})</div>
+                    </div>
+                  </div>
+                </a>
+              ))}
+          </div>
+        </>
+      )}
     </div>
   )
 }

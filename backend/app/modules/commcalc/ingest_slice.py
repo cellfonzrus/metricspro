@@ -46,6 +46,13 @@ INGEST_PARTITION = {
     # the incident fix — same two-portal exposure as the other raw_ma_* tables.
     "raw_ma_fulfillment": {"partition": "tspid",               "date": "date_ordered"},
     "raw_sales":          {"partition": "store",               "date": "trans_date"},
+    # Per-line vendor rebate history (mig 1005). The store arrives IN THE DATA on 100% of rows (the
+    # feed's "Invoiced At" cell carries the store name + code), and a multi-store tenant exports one
+    # file per store — so store ∩ sold_on is exactly "this file's own slice". This is also the ONLY
+    # thing that makes the import idempotent: the source has 50 byte-identical duplicate rows and no
+    # unique natural key, so there is no upsert key to dedupe on (mig 1005 explains why forcing one
+    # would silently collapse real rows).
+    "raw_vendor_rebate":  {"partition": "store",               "date": "sold_on"},
 }
 
 

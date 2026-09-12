@@ -232,6 +232,77 @@ TARGET_FIELDS = {
         ("due_date", "Due date", "date10", False, "Date Due", ["Due Date"]),
         ("raw_amount", "Amount (signed; negative = payout)", "number", True, "Retail Cost", ["Amount", "Net Amount", "Payout"]),
     ],
+    # ── PER-LINE VENDOR REBATE / COMMISSION HISTORY (mig 1005) ───────────────────────────────────
+    # The FEED SHAPE, not a carrier: one row per rebate COMPONENT per line per invoice. Measured on
+    # the first real export — 47,252 data rows, 6,094 invoices, 6,449 device IMEIs, 258 distinct
+    # component names — a single activated device carries ~7 rows. WHICH tenant is offered it is
+    # decided by report_definitions.carrier_id (mig 291), never by a branch (RULE TWO).
+    #
+    # EARNED, NOT COLLECTED. earned/collected/balance are three SEPARATE fields on purpose: on the
+    # first file `Collected` is $0.00 on every row while `Balance` carries the whole $6,748,358.09.
+    # Landing them apart is what makes "does an earned rebate book as a receivable?" a later config
+    # decision instead of a re-ingest. Nothing reads these into money today.
+    #
+    # ⚠ THREE HEADERS IN THIS SHAPE LIE, AND A NAME MATCH GETS ALL THREE WRONG. The default_source_
+    # header below is therefore a PROPOSAL the human confirms against the sample VALUES that
+    # /column-mapping/detect returns beside it — never an auto-applied mapping:
+    #   · 'Invoiced At'             holds the STORE (name + code), not a timestamp.
+    #   · 'Related Tracking Number' holds the 15-digit IMEI; 'Tracking Number' holds the activated
+    #     line's 10-digit number. Only the VALUE tells them apart.
+    #   · 'Region'                  holds a PERSON's name, not a geography — hence `region_label`.
+    # Aliases are deliberately sparse for exactly these fields: a wrong confident match is worse than
+    # no match, because the operator then has nothing prompting them to look.
+    "vendor_rebate_history": [
+        # identity. invoice_no + rebate_name are the REQUIRED pair, which is also what makes the
+        # grand-total FOOTER row detectable by shape (feed_shape.is_footer_row): the footer leaves
+        # both blank while repeating every numeric column. Ingested it would DOUBLE the file's total —
+        # measured: $13,496,716.18 against a true $6,748,358.09, exactly 2x.
+        ("invoice_no", "Invoice number", "text", True, "Invoice Number", ["Invoice #", "Invoice No"]),
+        ("rebate_name", "Rebate / commission component", "text", True, "Product Name", []),
+        ("mdn", "Activated line number", "mdn", False, "Tracking Number", []),
+        ("original_invoice_no", "Original invoice number", "text", False, "Original Invoice Number", []),
+        # SOLD ON MUST STAY THE FIRST DATE-TYPED FIELD: period_source_field() returns the first one,
+        # and that is what books each row to the month of its own sale (the file spans 20 months).
+        ("sold_on", "Sold on", "date_auto", False, "Sold On", []),
+        # what was rebated
+        ("rebate_sku", "Rebate SKU", "text", False, "Product SKU", []),
+        ("quantity", "Quantity (-1 on a reversal)", "number", False, "Quantity", ["Qty"]),
+        ("unit_amount", "Unit rebate (unsigned rate)", "number", False, "Unit Rebate", []),
+        ("earned_amount", "Earned — what the carrier OWES", "number", False, "Total Rebate", []),
+        ("collected_amount", "Collected — what the carrier PAID", "number", False, "Collected", []),
+        ("balance_amount", "Balance — still outstanding", "number", False, "Balance", []),
+        ("tax_amount", "Tax amount", "number", False, "Tax Amount", []),
+        # the device the rebate is against (repeated on EVERY component row for that device)
+        ("device_sku", "Device SKU", "text", False, "Related Product SKU", []),
+        ("device_name", "Device", "text", False, "Related Product Name", []),
+        ("imei", "Device IMEI", "mdn", False, "Related Tracking Number", []),
+        ("device_cost", "Device cost (repeated per row)", "number", False, "Related Unit Cost", []),
+        ("device_price", "Device selling price (repeated per row)", "number", False, "Related Selling Price", []),
+        # the sale
+        ("rate_plan", "Rate plan", "text", False, "Rate Plan", []),
+        ("term_code", "Term code", "text", False, "Term Code", []),
+        ("customer_name", "Customer", "text", False, "Customer", []),
+        ("customer_ref", "Customer identifier", "text", False, "Customer Identifier", []),
+        ("postal_code", "ZIP / postal code", "text", False, "ZIP/Postal Code", ["Zip Code", "Postal Code"]),
+        ("port_number", "Ported-in number", "mdn", False, "Port Number", []),
+        ("contract_no", "Contract number", "text", False, "Contract Number", ["Contract #"]),
+        ("soc_code", "SOC code", "text", False, "SOC Code", []),
+        ("salesperson", "Sales person", "text", False, "Sales Person", []),
+        ("salesperson_id", "Sales person ID", "text", False, "Sales Person ID", []),
+        # where / whose. `store` is the slice-replace partition (ingest_slice), so mapping it wrong
+        # does not just mis-attribute the file — it makes the next upload delete the wrong store.
+        ("store", "Store (from the data)", "text", False, "Invoiced At", []),
+        ("invoiced_by", "Invoiced by", "text", False, "Invoiced By", []),
+        ("vendor_account", "Vendor account / rebate program", "text", False, "Vendor Account Name", []),
+        ("channel", "Channel", "text", False, "Channel", []),
+        ("district", "District", "text", False, "District", []),
+        ("region_label", "Region label (feed's own cell)", "text", False, "Region", []),
+        # statement state, as the feed spells it
+        ("charge_back", "Charge back", "text", False, "Charge Back", []),
+        ("adjusted", "Adjusted", "text", False, "Adjusted", []),
+        ("reconciled", "Reconciled", "text", False, "Reconciled", []),
+        ("flagged", "Flagged", "text", False, "Flagged", []),
+    ],
 }
 
 # Amount fields summed into carrier_commission.total_commission (the rep's statement commission).
@@ -261,6 +332,12 @@ TABLE_MAP = {
     # inventory_aging_device (mig 216) — rather than standing up sibling raw_* tables.
     "pos_product_sales": "raw_sales",
     "pos_inventory_listing": "inventory_aging_device",
+    # Per-line vendor rebate/commission history (mig 1005). A LANDING table read by no money path:
+    # this feed is EARNED, not collected, and whether an earned rebate books as a receivable is an
+    # open owner decision. Deliberately NOT raw_ma_commission (device_cogs prices its IMEIs into MA
+    # COGS and residual_subs counts its rows as subscribers — this feed's grain is ~7 rows per
+    # device) and deliberately NOT activation_rebate_ledger (that one BOOKS to the P&L).
+    "vendor_rebate_history": "raw_vendor_rebate",
 }
 
 

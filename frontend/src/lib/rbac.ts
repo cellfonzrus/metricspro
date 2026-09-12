@@ -506,6 +506,10 @@ export const NAV: NavGroup[] = [
     // org-wide unpaid ledger and appeal actions, same tier as its recon siblings above.
     { href: '/commcalc/commission-discrepancy', label: 'Commission Discrepancy', icon: '⚖️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/imei-rebates', label: 'IMEI Rebates', icon: '🔁', module: 'commissions', tileOnly: true },
+    // Vendor Rebate History (index §27, mig 1005) — what the carrier statement says it OWES, landed
+    // per line. A LANDING view: it books nothing, so it is not gated like the money reports; it is
+    // the sibling of IMEI Rebates above, which answers the PAID side from the feeds that prove payment.
+    { href: '/commcalc/vendor-rebates', label: 'Vendor Rebate History', icon: '🧾', module: 'commissions', tileOnly: true },
     { href: '/commcalc/recovery', label: 'Appeal Recovery', icon: '💰', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', icon: '🔁', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/epay-fee-recon', label: 'ePay Fee Recon', icon: '🧾', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
