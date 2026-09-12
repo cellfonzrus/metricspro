@@ -40,6 +40,43 @@ keeps working for the next distributor, the next carrier and next year's SKUs wi
   · Line money is the LINE total. Invoice-level shipping / other cost / tax are not device purchase
     price and are not here — the P&L already books them (`coa.build_inputs` → `vip_fees`).
 
+═══════════════ UNITS ARE COUNTED FROM THE SERIALISED ROWS, NOT FROM THE LINE QUANTITY ════════════
+"How many units did the distributor bill us?" has two answers on this feed and they do not agree.
+Measured 2025 (ex-voided): the device LINES declare a quantity of **19,199**, while
+`vip_invoice_devices` carries **19,535** serialised rows — a gap of **336**.
+
+The serialised rows are the better answer and are now the headline: a row there is a unit that
+actually arrived with a serial on it, whereas `quantity` is what the invoice line SAYS. It also makes
+this report and the Device Payable report (§23z) count the same population, instead of quietly
+differing by 336.
+
+**THE MONEY IS UNAFFECTED.** Line amounts tie to the invoice totals and are untouched by this; only
+the unit count changes. Nothing in the P&L or the Balance Sheet moves.
+
+NEITHER FIGURE IS DISCARDED, AND THE GAP IS EXPLAINED RATHER THAN DISPLAYED. `unit_reconciliation`
+carries both counts and decomposes the difference into its three real causes (2025, ex-voided):
+
+  · **+76 units on 26 invoices that have NO LINES AT ALL.** Not a classification failure — these
+    invoice numbers exist in `vip_invoices` and in `vip_invoice_devices` and have ZERO rows in
+    `vip_invoice_lines`. No line, no quantity, no money. They cannot be in the device total and are
+    not: this is a FEED DEFECT, reported (see below), never smoothed over.
+  · **+308 units on 42 invoices that do have lines** but whose declared quantity is lower than the
+    serials received (worst: invoice 1578852, 18 more serials than quantity).
+  · **−48 units on one invoice** (1545142) where the quantity exceeds the serials.
+  76 + 308 − 48 = 336.
+
+═══════════════ DEMO STOCK NEEDS NO SPECIAL RULE, AND DELIBERATELY HAS NONE ═══════════════════════
+It looked as though demo units were being missed because they are "named differently". They are not.
+Demo products ARRIVE SERIALISED — 35 distinct demo product names are in `vip_invoice_devices` — so
+they are already in the device vocabulary, and a demo LINE already classifies as a device and
+already carries its money into the device total (demo lines priced from $0.00 to $1,099.99 are
+counted today). There is no naming gap to close.
+
+Every one of the 76 unmatched units happens to be demo stock, but that is a property of WHICH
+invoices lost their lines, not of the word "demo". So this module contains no demo vocabulary, no
+demo config and no demo branch — adding one would be a rule with nothing to do, and it would be a
+product-naming convention in code besides (RULE TWO). The data already answers the question.
+
 ═══════════════ A VOIDED INVOICE IS NOT A PURCHASE ════════════════════════════════════════════════
 An invoice whose header `status` says VOIDED was cancelled. Its lines and its serialised units stay
 in the feed, and until 2026-09-11 this report counted them as purchases. It no longer does.
@@ -304,6 +341,7 @@ def aggregate(line_rows, device_rows, win, place_store, company_if_assigned,
 
     voided = set(voided_invoices or ())
     excluded = {}                   # voided invoice number -> what it would have contributed
+    line_qty_by_invoice = {}        # invoice -> declared quantity on its DEVICE lines
     for r in (line_rows or []):
         if not in_window(r.get("period_year"), r.get("period_month"), win):
             continue
@@ -349,6 +387,8 @@ def aggregate(line_rows, device_rows, win, place_store, company_if_assigned,
         tot["device_amount"] += amt
         tot["device_units"] += qty
         tot["device_lines"] += 1
+        if inv:
+            line_qty_by_invoice[inv] = round(line_qty_by_invoice.get(inv, 0.0) + qty, 4)
 
         raw_loc = _t(r.get("location"))
         addr, how = place_store(raw_loc)
@@ -388,14 +428,69 @@ def aggregate(line_rows, device_rows, win, place_store, company_if_assigned,
         p["units"] += qty
         p["lines"] += 1
 
+    # ── UNITS, from the serialised rows (the headline basis) ────────────────────────────────────
+    # A row here is a unit that ARRIVED with a serial; `quantity` is what the line SAYS. The same
+    # voided rule applies — a cancelled invoice's units are not purchases either.
+    serialised_units = 0
+    serial_by_cell, serial_by_invoice = {}, {}
+    line_invoices_seen = set()
+    for d in (device_rows or []):
+        if not in_window(d.get("period_year"), d.get("period_month"), win):
+            continue
+        inv_d = _t(d.get("invoice_number"))
+        if inv_d in voided:
+            continue
+        serialised_units += 1
+        serial_by_invoice[inv_d] = serial_by_invoice.get(inv_d, 0) + 1
+        addr_d, _how_d = place_store(_t(d.get("location")))
+        store_d = addr_d if addr_d is not None else STORE_NOT_MAPPED
+        cid_d = company_if_assigned(store_d) if addr_d is not None else None
+        comp_d = (names.get(cid_d) or names.get(str(cid_d)) or str(cid_d)) if cid_d else COMPANY_NOT_MAPPED
+        k_d = (comp_d, store_d)
+        serial_by_cell[k_d] = serial_by_cell.get(k_d, 0) + 1
+    for r in (line_rows or []):
+        if in_window(r.get("period_year"), r.get("period_month"), win):
+            inv_l = _t(r.get("invoice_number"))
+            if inv_l and inv_l not in voided:
+                line_invoices_seen.add(inv_l)
+
+    # ── THE RECONCILIATION: the gap EXPLAINED, not merely displayed ──────────────────────────────
+    # (A figure that is computed but has nowhere to appear is the defect class that made the GP
+    # header irreconcilable; every number below is carried into `totals` as well as shown here.)
+    no_line_invoices = sorted(i for i in serial_by_invoice if i and i not in line_invoices_seen)
+    no_line_units = sum(serial_by_invoice[i] for i in no_line_invoices)
+    over, over_units, under, under_units = 0, 0, 0, 0
+    for i in set(serial_by_invoice) | set(line_qty_by_invoice):
+        if i in no_line_invoices:
+            continue
+        ser, q = serial_by_invoice.get(i, 0), line_qty_by_invoice.get(i, 0.0)
+        if ser > q:
+            over += 1
+            over_units += ser - q
+        elif ser < q:
+            under += 1
+            under_units += ser - q
+
+    # every cell carries BOTH unit bases; a store row that showed one and a header that showed the
+    # other is exactly how a report stops reconciling
+    for k_c, c in cells.items():
+        c["serialised_units"] = serial_by_cell.get(k_c, 0)
+    for k_c, n_c in serial_by_cell.items():
+        if k_c not in cells:                       # units arrived where no LINE was billed
+            comp_c, store_c = k_c
+            cells[k_c] = {"company": comp_c, "company_id": None, "store": store_c,
+                          "market": (mk(store_c) or "") if store_c != STORE_NOT_MAPPED else "",
+                          "resolved_by": "exact", "amount": 0.0, "units": 0.0, "lines": 0,
+                          "serialised_units": n_c}
     rows = sorted(cells.values(), key=lambda x: (-x["amount"], x["company"], x["store"]))
     by_company = {}
     for c in rows:
         b = by_company.setdefault(c["company"], {
             "company": c["company"], "company_id": c["company_id"],
-            "amount": 0.0, "units": 0.0, "lines": 0, "stores": 0})
+            "amount": 0.0, "units": 0.0, "serialised_units": 0, "lines": 0, "stores": 0})
         b["amount"] += c["amount"]
         b["units"] += c["units"]
+        b["serialised_units"] += c.get("serialised_units", 0)
         b["lines"] += c["lines"]
         b["stores"] += 1
 
@@ -410,12 +505,6 @@ def aggregate(line_rows, device_rows, win, place_store, company_if_assigned,
         if "units" in d:
             d["units"] = r2(d["units"])
 
-    # the serialised-unit count honours the SAME rule — a voided invoice's units are not purchases
-    # either, and a count that disagreed with the money would be its own defect
-    serialised_units = sum(
-        1 for d in (device_rows or [])
-        if in_window(d.get("period_year"), d.get("period_month"), win)
-        and _t(d.get("invoice_number")) not in voided)
 
     return {
         "window": {"from": "%04d-%02d" % win[0], "to": "%04d-%02d" % win[1]},
@@ -428,6 +517,23 @@ def aggregate(line_rows, device_rows, win, place_store, company_if_assigned,
             "non_device_lines": tot["non_device_lines"],
             "all_lines_amount": r2(tot["device_amount"] + tot["non_device_amount"]),
             "invoices": len(invoices),
+            # BOTH unit bases in totals, so the header can always be reconciled to the rows.
+            "serialised_units": serialised_units,
+            "line_quantity_units": r2(tot["device_units"]),
+            "unit_gap": r2(serialised_units - tot["device_units"]),
+        },
+        # THE GAP, DECOMPOSED INTO ITS REAL CAUSES — explained, not merely displayed.
+        "unit_reconciliation": {
+            "serialised_units": serialised_units,
+            "line_quantity_units": r2(tot["device_units"]),
+            "gap": r2(serialised_units - tot["device_units"]),
+            # A FEED DEFECT, REPORTED: these invoice numbers exist as headers and carry serialised
+            # units, but `vip_invoice_lines` has NO rows for them — so no line, no quantity and no
+            # money. Never smoothed over, and never counted into the device total.
+            "invoices_without_lines": {"invoices": len(no_line_invoices), "units": no_line_units,
+                                       "invoice_numbers": no_line_invoices[:200]},
+            "more_serials_than_quantity": {"invoices": over, "units": r2(over_units)},
+            "fewer_serials_than_quantity": {"invoices": under, "units": r2(under_units)},
         },
         # EXCLUDED, NOT MISSING. What the voided invoices in this window would have contributed had
         # they been counted — so "billed" still reconciles to "counted + voided", per invoice.
@@ -495,7 +601,7 @@ def compute(client, org_id, win):
     # as non-device and under-report the very number this report exists to give. So the vocabulary
     # is read across every year (org-scoped), and only the UNIT COUNT is windowed, inside aggregate.
     devices = _page(client, "vip_invoice_devices",
-                    "id,invoice_number,product_name,period_year,period_month", org_id)
+                    "id,invoice_number,location,product_name,period_year,period_month", org_id)
     # invoice HEADERS — the authoritative status. A voided invoice is not a purchase (see above).
     invoice_rows = _page(client, "vip_invoices", "id,invoice_number,status,period_year", org_id)
     voided = voided_invoice_set(invoice_rows)

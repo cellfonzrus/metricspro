@@ -106,15 +106,16 @@ export default function DevicePurchasesPage() {
   const companies = useMemo(() => {
     const m = new Map<string, any>()
     for (const r of rows) {
-      const c = m.get(r.company) || { company: r.company, amount: 0, units: 0, lines: 0, stores: 0 }
-      c.amount += r.amount || 0; c.units += r.units || 0; c.lines += r.lines || 0; c.stores += 1
+      const c = m.get(r.company) || { company: r.company, amount: 0, units: 0, serialised_units: 0, lines: 0, stores: 0 }
+      c.amount += r.amount || 0; c.units += r.units || 0; c.serialised_units += r.serialised_units || 0; c.lines += r.lines || 0; c.stores += 1
       m.set(r.company, c)
     }
     return [...m.values()].sort((a, b) => b.amount - a.amount)
   }, [rows])
 
   const deviceTotal = rows.reduce((a, r) => a + (r.amount || 0), 0)
-  const unitTotal = rows.reduce((a, r) => a + (r.units || 0), 0)
+  const unitTotal = rows.reduce((a, r) => a + (r.serialised_units || 0), 0)
+  const qtyTotal = rows.reduce((a, r) => a + (r.units || 0), 0)
   const cascade = useMemo(() => [...new Map(stores
     .filter(r => r.store !== STORE_NOT_MAPPED)
     .map(r => [r.store, { id: r.store, label: r.store, market: r.market || '' }])).values()], [stores])
@@ -125,6 +126,7 @@ export default function DevicePurchasesPage() {
   const nonDevice: any[] = data?.non_device_lines || []
   const res = data?.meta?.resolution || {}
   const voided = data?.excluded_voided || null
+  const urec = data?.unit_reconciliation || null
   const byResolver = res.resolver || null
 
   function sheets(): ExportSheet[] {
@@ -132,7 +134,8 @@ export default function DevicePurchasesPage() {
       { name: 'By Company', rows: companies, columns: [
         { header: 'Company', get: (r: any) => r.company },
         { header: 'Stores', get: (r: any) => r.stores },
-        { header: 'Units', get: (r: any) => r.units },
+        { header: 'Units (serialised)', get: (r: any) => r.serialised_units },
+        { header: 'Units (line quantity)', get: (r: any) => r.units },
         { header: 'Device purchases', money: true, get: (r: any) => r.amount },
       ] },
       { name: 'By Store', rows, columns: [
@@ -205,7 +208,7 @@ export default function DevicePurchasesPage() {
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10, marginBottom: 14 }}>
             <StatTile label="Device purchases" value={money(deviceTotal)} />
-            <StatTile label="Units billed" value={num(unitTotal)} />
+            <StatTile label="Units billed (serialised)" value={num(unitTotal)} />
             <StatTile label="Invoices in window" value={narrowed ? '—' : num(data.totals?.invoices)} />
             <StatTile label="Not devices (reported, excluded)" value={narrowed ? '—' : money(data.totals?.non_device_amount)} />
             <StatTile label="Unresolved location spend" value={narrowed ? '—' : money(unmapped.reduce((a, r) => a + (r.amount || 0), 0))} />
@@ -218,17 +221,18 @@ export default function DevicePurchasesPage() {
                       the booking fallback would state a fact we do not have.</>}>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr><th style={th}>Company</th><th style={thr}>Stores</th><th style={thr}>Units</th><th style={thr}>Device purchases</th></tr></thead>
+                <thead><tr><th style={th}>Company</th><th style={thr}>Stores</th><th style={thr}>Units (serialised)</th><th style={thr}>Units (line qty)</th><th style={thr}>Device purchases</th></tr></thead>
                 <tbody>
                   {companies.map(c => (
                     <tr key={c.company}>
                       <td style={td}>{c.company}</td>
                       <td style={tdr}>{num(c.stores)}</td>
+                      <td style={tdr}><strong>{num(c.serialised_units)}</strong></td>
                       <td style={tdr}>{num(c.units)}</td>
                       <td style={tdr}><strong>{money(c.amount)}</strong></td>
                     </tr>
                   ))}
-                  {!companies.length && <tr><td style={td} colSpan={4}>No device purchases in this window.</td></tr>}
+                  {!companies.length && <tr><td style={td} colSpan={5}>No device purchases in this window.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -321,6 +325,34 @@ export default function DevicePurchasesPage() {
               </table>
             </div>
           </Card>
+
+          {urec && (
+            <Card title="Units — the two counts, and every unit of the difference"
+                  note={<>A <strong>serialised</strong> unit is one that actually arrived with a serial on it;
+                        <strong> line quantity</strong> is what the invoice line says. They disagree on this feed,
+                        so both are shown and the difference is broken down rather than left for you to subtract.
+                        The serialised count is the headline, and it is the same population the
+                        <strong> Device Payable</strong> report counts. <strong>The money is unaffected</strong> —
+                        line amounts tie to the invoice totals and nothing here changes them.</>}>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <tbody>
+                    <tr><td style={td}>Units that arrived serialised</td><td style={tdr}><strong>{num(urec.serialised_units)}</strong></td></tr>
+                    <tr><td style={td}>Units the invoice lines declare</td><td style={tdr}>{num(urec.line_quantity_units)}</td></tr>
+                    <tr><td style={td}><strong>Difference</strong></td><td style={tdr}><strong>{num(urec.gap)}</strong></td></tr>
+                    <tr><td style={td}>…units on invoices that have <strong>no lines at all</strong> — these carry no quantity and <strong>no money</strong>, so they are in no dollar figure on this page. A gap in the feed, reported rather than smoothed over</td><td style={tdr}>{num(urec.invoices_without_lines.units)} on {num(urec.invoices_without_lines.invoices)} invoice(s)</td></tr>
+                    <tr><td style={td}>…units on invoices that received <strong>more</strong> serials than the line declared</td><td style={tdr}>{num(urec.more_serials_than_quantity.units)} on {num(urec.more_serials_than_quantity.invoices)} invoice(s)</td></tr>
+                    <tr><td style={td}>…units on invoices that received <strong>fewer</strong></td><td style={tdr}>{num(urec.fewer_serials_than_quantity.units)} on {num(urec.fewer_serials_than_quantity.invoices)} invoice(s)</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              {urec.invoices_without_lines.invoices > 0 && (
+                <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 8 }}>
+                  Invoices with no lines: {(urec.invoices_without_lines.invoice_numbers || []).join(', ')}
+                </div>
+              )}
+            </Card>
+          )}
 
           {voided && voided.invoices > 0 && (
             <Card title="Voided invoices — excluded from every figure above"

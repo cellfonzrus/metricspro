@@ -83,6 +83,17 @@ figure rather than adding an inert one.
     and is not written into that lifecycle.
   · `vip_fees` / `vip_ap` — read the invoice HEADERS, which carry nothing here (see above).
 
+═══════════════ WHERE IT BOOKS: DECIDED, NOT OPEN ═════════════════════════════════════════════════
+The charge books at the ACCOUNT location, which the shared resolvers place on the master dealer
+entity rather than on the operating company whose payment actually bounced. That was raised with the
+owner as a question and has been ANSWERED, verbatim: **"stays on cellualr services as it is bounced
+payment"** — the payment was made from that account, so the reversal belongs there.
+
+This is recorded rather than left as a caveat on purpose: an open question in a comment invites the
+next reader to reopen it, and this one is closed. The behaviour needs no special rule — booking
+where the data says is what this module already does, and there is deliberately no reallocation
+step to remove.
+
 PURE. stdlib-only math over rows handed to it: no client, no I/O, no writes.
 Proof: backend/harness_distributor_chargebacks.py.
 """

@@ -5827,6 +5827,43 @@ the street NAME. The targeted fix is a `commcalc.store_aliases` row per address 
 has house precedent — `3 Palisade Ave Yonkers` from the POS feed); that is the owner's call, and the
 report's `resolver` bucket is where to find the rows worth one.
 
+### UNITS COME FROM THE SERIALISED ROWS (defect fixed 2026-09-12)
+
+"Units billed" summed the invoice line `quantity`. It now counts rows in `commcalc.vip_invoice_devices`
+— a unit that actually ARRIVED with a serial — which is the better answer and makes this report and
+§23z count the same population instead of quietly differing.
+
+**THE MONEY IS UNAFFECTED.** Line amounts tie to the invoice totals and are untouched; only the unit
+count changes. Nothing in the P&L or Balance Sheet moves. 2025 device spend stays $7,090,741.82.
+
+Measured live, 2025 ex-voided: serialised **19,535** vs line quantity **19,199**, gap **+336**,
+decomposed in `unit_reconciliation` and summing back exactly:
+
+| cause | invoices | units |
+|---|---|---|
+| invoices with **no lines at all** | 26 | **+76** |
+| more serials received than the line declared | 42 | +308 |
+| fewer serials than declared | 1 | −48 |
+| | | **+336** |
+
+**THE 26 LINE-LESS INVOICES ARE A FEED DEFECT, REPORTED NOT SMOOTHED.** Those invoice numbers exist
+in `vip_invoices` and carry rows in `vip_invoice_devices`, but `vip_invoice_lines` has **zero** rows
+for them — no line, no quantity, **no money**. They are named in the payload and on the page. (Feed-wide:
+56 such invoices, 125 units across 2025-2026.)
+
+**DEMO STOCK NEEDS NO RULE, AND HAS NONE.** It looked as though demo units were missed for being
+"named differently". They are not: 35 demo product names are in `vip_invoice_devices`, so demo
+products are already in the device vocabulary, a demo LINE already classifies as a device, and demo
+money (lines from $0.00 to $1,099.99) is already counted. Every one of the 76 unmatched units happens
+to be demo stock, but that is a property of WHICH invoices lost their lines, not of the word "demo" —
+so there is no demo config and no demo branch, and §J15 asserts the word appears nowhere in the code
+(RULE TWO).
+
+**EVERY ROW COLUMN HAS A HOME IN `totals`, AND THE ROWS SUM TO IT.** §J11/§J11b assert both, per
+column — the defect class that made the GP header irreconcilable (PR #226) is a build failure here.
+
+**Proof:** `harness_device_purchases.py` §J (17 checks, 100 total).
+
 ### A VOIDED INVOICE IS NOT A PURCHASE (defect fixed 2026-09-11)
 
 `compute()` filtered lines by period only and never looked at the invoice header, so an invoice the
