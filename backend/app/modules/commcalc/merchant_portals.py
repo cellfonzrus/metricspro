@@ -278,9 +278,13 @@ _MONTHS = {m: i + 1 for i, m in enumerate(
     ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
 
 
+_TIME_SUFFIX = re.compile(r"\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AaPp]\.?[Mm]\.?)?$")
+
+
 def iso_date(value):
     """Parse a portal date cell to 'YYYY-MM-DD'. PURE. Accepts YYYY-MM-DD, MM/DD/YYYY, M/D/YY,
-    MM-DD-YYYY, 'Aug 12, 2026', '12 Aug 2026', and a datetime/date object. Returns None when the cell
+    MM-DD-YYYY, 'Aug 12, 2026', '12 Aug 2026', any of those followed by a CLOCK TIME
+    ('06/27/2025 15:52:40', '8/3/26 4:04 PM'), and a datetime/date object. Returns None when the cell
     holds no date (a totals row, a blank) — the caller SKIPS such rows rather than guessing a day."""
     if isinstance(value, (datetime, date)):
         return (value.date() if isinstance(value, datetime) else value).isoformat()
@@ -288,6 +292,11 @@ def iso_date(value):
     if not s:
         return None
     s = s.split("T")[0].strip()
+    # Drop a TRAILING CLOCK TIME so a date-time cell parses as its date. Matched narrowly (h:mm[:ss]
+    # + optional am/pm) so the space inside '12 Aug 2026' is never touched — a POS that spells its
+    # date column as a timestamp (RQ: '06/27/2025 15:52:40') previously fell through to None here,
+    # and the caller then had to truncate the string itself and guess MM/DD vs DD/MM.
+    s = _TIME_SUFFIX.sub("", s).strip()
     m = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$", s)
     if m:
         y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
