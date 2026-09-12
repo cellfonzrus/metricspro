@@ -31,9 +31,37 @@ def _t_upper(v):  return _t_text(v).upper()
 def _t_lower(v):  return _t_text(v).lower()
 def _t_bool(v):   return str(v).strip().lower() in ("1", "true", "yes", "y", "t")
 
+
+def _t_date_auto(v):
+    """Any common date/datetime spelling → ISO 'YYYY-MM-DD', else None.
+
+    `date10` truncates to 10 characters, which is right only when the cell is ALREADY ISO. A POS that
+    spells its date column 'MM/DD/YYYY HH:MM:SS' stored '06/27/2025' — not ISO, and ambiguous with
+    DD/MM on every row whose day is <= 12. This delegates to merchant_portals.iso_date (the PURE
+    parser the merchant-portal feeds already use) rather than adding a second date parser that could
+    disagree with it. Returns None — never a guessed day — when the cell holds no date."""
+    from app.modules.commcalc.merchant_portals import iso_date
+    return iso_date(v)
+
+
+def _t_category_top(v):
+    """Top level of a hierarchical category cell (' >> A >> B >> C ' → 'A'). Lets one source column
+    feed BOTH the full-path `category` and the human `department` without a second upload."""
+    from app.modules.commcalc.feed_shape import category_path
+    return category_path(v)[0]
+
+
+def _t_category_leaf(v):
+    """Leaf of a hierarchical category cell (' >> A >> B >> C ' → 'C')."""
+    from app.modules.commcalc.feed_shape import category_path
+    return category_path(v)[1]
+
+
 TRANSFORMS = {
     "text": _t_text, "number": _t_number, "int": _t_int, "date10": _t_date10,
     "mdn": _t_mdn, "upper": _t_upper, "lower": _t_lower, "bool": _t_bool,
+    "date_auto": _t_date_auto, "category_top": _t_category_top,
+    "category_leaf": _t_category_leaf,
 }
 TRANSFORM_KEYS = list(TRANSFORMS.keys())
 
@@ -116,6 +144,50 @@ TARGET_FIELDS = {
         ("email", "Email", "text", False, "Email", []),
         ("customer_no", "Customer #", "mdn", False, "Customer #", ["Customer No"]),
     ],
+    # ── POS LINE-LEVEL SALES (→ raw_sales). The second shape a POS sells lines in: one row per
+    #    invoice LINE, a US date-time, a refund flag instead of a void flag, and a hierarchical
+    #    category path. Money columns in this shape are heavily redundant (Unit Price / Selling
+    #    Price / Adjusted Price / Net Sales / Sold For all carry the SAME number as Total Price, and
+    #    Net Profit the same as Gross Profit — verified equal to the cent across 48,875 rows), so
+    #    exactly ONE of each is mapped; mapping the aliases too would book the same money twice.
+    #    `voided` takes the refund flag: both mean "this line reverses a sale", and every downstream
+    #    reader already tests `voided`.
+    "pos_product_sales": [
+        ("trans_id", "Invoice #", "text", True, "Invoice #", ["Invoice No", "Invoice"]),
+        ("store", "Store / location", "text", False, "Invoiced At", ["Location", "Invoiced By", "Store"]),
+        ("salesperson", "Sold by", "text", False, "Sold By", ["Salesperson"]),
+        ("user_login", "Tendered by", "text", False, "Tendered By", []),
+        ("trans_date", "Sold on", "date_auto", False, "Sold On", ["Invoice Date", "Trans Date"]),
+        ("customer", "Customer", "text", False, "Customer", []),
+        ("sku", "Product SKU", "text", False, "Product SKU", ["SKU"]),
+        ("serial_1", "Serial / IMEI", "text", False, "Tracking #", ["IMEI", "Serial"]),
+        ("product_desc", "Product name", "text", False, "Product Name", ["Product Desc"]),
+        ("category", "Category (full path)", "text", False, "Category", []),
+        ("department", "Department (top of category path)", "category_top", False, "Category", []),
+        ("ext_price", "Total price", "number", False, "Total Price", ["Net Sales", "Sold For"]),
+        ("gp", "Gross profit", "number", False, "Gross Profit", ["Net Profit"]),
+        ("voided", "Refund flag", "text", False, "Refund", ["Voided"]),
+        ("quantity", "Quantity", "number", False, "Quantity", []),
+        ("total_cost", "Total cost", "number", False, "Total Cost", []),
+        ("pricing_discounts", "Pricing discounts", "number", False, "Pricing Discounts", ["Discounts"]),
+        ("contract_no", "Contract #", "text", False, "Contract #", ["Contract No"]),
+    ],
+    # ── POS ON-HAND INVENTORY (→ inventory_aging_device, mig 216 — the EXISTING per-device inventory
+    #    table, extended rather than duplicated). `sku` is the required identity (100% filled): a
+    #    serial is NOT required, because rows a dealer has ordered but not yet received legitimately
+    #    carry none, and they must not be mistaken for the file's totals row.
+    "pos_inventory_listing": [
+        ("sku", "Product SKU", "text", True, "Product SKU", ["SKU"]),
+        ("imei", "IMEI / tracking #", "text", False, "Tracking #", ["IMEI", "Serial"]),
+        ("serial", "Serial", "text", False, "Tracking #", ["Serial"]),
+        ("item", "Product name", "text", False, "Product Name", ["Item", "Product Desc"]),
+        ("store", "Location", "text", False, "Location", ["Store"]),
+        ("unit_cost", "Unit cost", "number", False, "Unit Cost", []),
+        ("total_cost", "Total cost", "number", False, "Total Cost", []),
+        ("quantity", "Quantity", "number", False, "Quantity", []),
+        ("status", "Status", "text", False, "Status", []),
+        ("category", "Category (full path)", "text", False, "Category", []),
+    ],
     # GENERIC carrier commission STATEMENT (Total Wireless / VidaPay, Cricket, …). Defaults match Total's
     # "MA - Commission Details"; any carrier maps the columns it has — unmapped amount fields stay 0.
     "carrier_commission": [
@@ -182,6 +254,13 @@ TABLE_MAP = {
     "ma_commission": "raw_ma_commission",
     "ma_daily_tx": "raw_ma_daily_tx",
     "ma_marketplace_orders": "raw_ma_fulfillment",
+    # POS line-level sales + on-hand inventory exports (the shape iQmetrix RQ emits, which is what a
+    # Wireless-Zone-style dealer runs). NOT carrier-named: any tenant whose POS exports these shapes
+    # maps to them, and which tenant is OFFERED them is decided by report_definitions.carrier_id
+    # (mig 291), never by a branch here. Both reuse EXISTING tables — raw_sales (§2) and
+    # inventory_aging_device (mig 216) — rather than standing up sibling raw_* tables.
+    "pos_product_sales": "raw_sales",
+    "pos_inventory_listing": "inventory_aging_device",
 }
 
 
@@ -365,3 +444,59 @@ def suggest(headers, report_key, existing_rules=None, client=None, org_id=None):
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
+
+
+# ── FEED-SHAPE post-steps (mig 1004) ─────────────────────────────────────────────────────────
+# Two properties of a FILE that the header→field map alone cannot express. Both are driven by the
+# report's OWN registry (its required fields, its date field) — never by a carrier branch (RULE TWO)
+# — and both are no-ops unless the shape is actually present, so every existing feed is unchanged.
+_DATE_TRANSFORMS = ("date_auto", "date10")
+
+
+def required_fields(report_key, client=None, org_id=None):
+    """The report's REQUIRED identity fields — a real record carries at least one."""
+    return [tf for (tf, _l, _t, req, _d, _a) in _registry_overlay(report_key, client, org_id) if req]
+
+
+def period_source_field(report_key, client=None, org_id=None):
+    """The target field a row's PERIOD is derived from: the report's first date-typed field, or None
+    when it has none (then per-row derivation cannot and does not fire)."""
+    for (tf, _l, transform, _r, _d, _a) in _registry_overlay(report_key, client, org_id):
+        if (transform or "") in _DATE_TRANSFORMS:
+            return tf
+    return None
+
+
+def drop_footer_rows(mapped, report_key, base=None, client=None, org_id=None):
+    """Remove FOOTER/TOTALS rows. Returns (kept, dropped_count).
+
+    A grand-total row repeats every numeric column while leaving the row's identity blank; ingested
+    as data it doubles every sum. Identified by shape via feed_shape.is_footer_row against the
+    report's declared required fields — a report that declares none is returned untouched."""
+    from app.modules.commcalc.feed_shape import is_footer_row
+    req = required_fields(report_key, client, org_id)
+    if not req or not mapped:
+        return mapped, 0
+    base_keys = set((base or {}).keys())
+    kept = [m for m in mapped if not is_footer_row(m, req, base_keys)]
+    return kept, len(mapped) - len(kept)
+
+
+def derive_row_periods(mapped, report_key, client=None, org_id=None):
+    """Stamp period/period_month/period_year on each row FROM ITS OWN DATE. Returns (rows, n_stamped).
+
+    Only called when the caller supplied NO period — a caller that names one keeps today's behaviour
+    byte-for-byte. Without this a history file spanning many months lands entirely under one label
+    and every period-scoped report reads it wrong. A row whose date will not parse is left unstamped
+    rather than booked to a guessed month; the caller reports those rather than silently dropping."""
+    from app.modules.commcalc.feed_shape import period_fields
+    src = period_source_field(report_key, client, org_id)
+    if not src or not mapped:
+        return mapped, 0
+    n = 0
+    for m in mapped:
+        pf = period_fields(m.get(src))
+        if pf:
+            m.update(pf)
+            n += 1
+    return mapped, n

@@ -15,3 +15,7 @@ _PENDING_MIGRATIONS_*.sql
 *.key
 .worktrees/
 .claude/worktrees/
+# Per-developer Claude Code overrides (permissions, env). The shared, team-wide
+# config belongs in .claude/settings.json; this one is personal and must not be
+# swept into a commit by the `git add -A` deploy habit noted above.
+.claude/settings.local.json

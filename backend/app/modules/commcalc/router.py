@@ -4101,6 +4101,22 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
         base["carrier_id"] = carrier_id.strip()
     mapped = column_mapping.map_records(df.to_dict("records"), rules, base)
 
+    # ── FEED-SHAPE post-steps (mig 1004). Both are driven by the report's OWN registry (its required
+    #    fields, its date field), never by a carrier branch (RULE TWO), and both are no-ops unless the
+    #    shape is actually present. (a) a grand-total FOOTER row repeats every numeric column while
+    #    leaving the row's identity columns blank; ingested as data it DOUBLES every sum — measured on
+    #    the first POS line-sales feed, whose 48,876-row sheet summed Total Price to 9,208,584.86
+    #    against a true 4,604,292.43. (b) when the caller names NO period, each row's period is
+    #    derived FROM ITS OWN DATE, so a history file spanning many months books to the months it
+    #    actually covers instead of landing entirely under one label; a caller that DOES name a period
+    #    keeps today's single-stamp behaviour byte-for-byte. Rows whose date will not parse are
+    #    COUNTED and reported, never booked to a guessed month.
+    mapped, footer_rows = column_mapping.drop_footer_rows(mapped, report_key, base, sb(), org_id)
+    undated_rows = 0
+    if not period:
+        mapped, dated_n = column_mapping.derive_row_periods(mapped, report_key, sb(), org_id)
+        undated_rows = len(mapped) - dated_n
+
     # carrier_commission: roll the mapped component amounts into total_commission (the rep's statement
     # commission) so the calc can sum per rep. Amount columns come from the per-tenant catalog (so
     # user-created categories are summed too); falls back to the hard-coded tuple pre-066. Any carrier
@@ -4226,10 +4242,16 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
                f"{period} were left untouched" if scope and period else "")
             + ("; ⚠️ replaced the WHOLE period (this file carries no per-slice key, so a narrower "
                "replace could not be proven safe)" if period and not scope and table in _INGEST_PARTITION else "")
-            + (f"; dropped {len(dropped_columns)} unknown column(s): {', '.join(dropped_columns)}" if dropped_columns else ""))
-    _trace("partial" if dropped_columns else "ok", saved, note)
+            + (f"; dropped {len(dropped_columns)} unknown column(s): {', '.join(dropped_columns)}" if dropped_columns else "")
+            + (f"; skipped {footer_rows} footer/totals row(s) (no identity column — would have "
+               f"double-counted every total)" if footer_rows else "")
+            + (f"; derived each row's period from its own date" if not period and mapped else "")
+            + (f"; ⚠️ {undated_rows} row(s) carry no parseable date and were left unstamped — "
+               f"they are NOT booked to a guessed month" if undated_rows else ""))
+    _trace("partial" if (dropped_columns or undated_rows) else "ok", saved, note)
     return {"saved": saved, "report_key": report_key, "target_table": table, "period": period,
             "rules_used": len(rules), "used_defaults": used_defaults, "mapped": len(mapped),
+            "footer_rows_skipped": footer_rows, "undated_rows": undated_rows,
             "dropped_columns": dropped_columns, "source_scoped": bool(source_aware and period),
             "replace_scope": ({"column": scope["partition_col"], "values": len(scope["values"]),
                                "from": scope["lo"], "to": scope["hi"]} if scope and period else None),

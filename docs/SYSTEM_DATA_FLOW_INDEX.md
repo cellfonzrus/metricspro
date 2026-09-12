@@ -104,6 +104,7 @@ email), (c) **RPC/manual entry**.
   `backend/harness_ma_slice_replace.py` (armed pre-fix negative control) +
   `backend/harness_ingest_partition_replace.py`; delete still runs insert-first via
   `safe_replace.py`. These are table-structure facts, not per-org policy → no config table.
+- **POS line-sales + on-hand inventory shapes (mig `1004`, §25):** report keys `pos_product_sales` → `raw_sales` and `pos_inventory_listing` → `inventory_aging_device`, both through this SAME endpoint (no new ingest route). Three feed-shape rules in `commcalc/feed_shape.py` (PURE, proof `harness_rq_ingest.py`) make them safe: a grand-total FOOTER row is dropped by shape (ingested it DOUBLES every total), a US `MM/DD/YYYY HH:MM:SS` date parses via transform `date_auto` → `merchant_portals.iso_date` (`date10` truncation stored a DD/MM-ambiguous string), and a file spanning many months derives each row's period FROM ITS OWN DATE when the caller names none. All three are no-ops unless the shape is present — existing feeds are byte-identical.
 - Column mapping config: migrations `042_column_mapping.sql`, `212_commission_manual_report_mapping.sql`;
   endpoints `/column-mapping*` `router.py:3333-3472`, `/manual-upload/mapping` `router.py:24125`.
 - Upload history/trace: `/upload/history` `router.py:2168`, `/upload-trace` `router.py:16256` (mig `202`,`241`).
@@ -2733,7 +2734,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `core.marketing_event_link` (mig `986`) | `POST/DELETE /marketing/events/{id}/links` | event workspace (§23). `asset_ref`/`asset_source` are the PHASE-2 SEAM — reserved, unread, always NULL today |
 | `core.marketing_event_giveaway` (mig `986`) | `POST/PATCH/DELETE .../giveaways` | `event_logic.giveaway_reconciliation` — out − returned − given = unaccounted, with un-counted items stated rather than assumed reconciled (§23) |
 | `storeops.store_document` **(EXTENDED, not forked — mig `986` adds `event_id` + doc kinds `event_vendor_contract`/`event_photo`/`event_permit`)** | `POST /marketing/events/{id}/doc` (reuses `store_lease.upload_store_doc` + the private `store-docs` bucket) | `GET /marketing/events/{id}/docs`, `GET /marketing/doc-url` (org-scoped id lookup + must be an EVENT doc; path never echoed). Per-store lease/COI readers filter `store_code` and are unaffected (§23) |
-| `commcalc.raw_sales` | upload `/upload-mapped` `3637`, sweeps, `sales/promote-feed` `22757`, **built-in POS promotion** (`commcalc.pos_promote_period`, mig `727`; carries `tax` since mig `991`) | `calc_rep_commissions`, `calc_gp_report`, `_compute_feed_actuals_py` `18678`, `_sales_cell_agg`, `_mi_resolve_numbers` edge/vhi `28843`, installment engines; **`tax` column (mig `105`)** read by `commcalc/tax_collected.py aggregate()` — the ONE pass behind `GET /commcalc/tax-collected` AND the `sales_tax_payable` BS liability (mig `991`, §4); NOTE `coa._sales_union_rows` deliberately does NOT select `tax` (P&L revenue is pre-tax) |
+| `commcalc.raw_sales` | upload `/upload-mapped` `3637`, sweeps, `sales/promote-feed` `22757`, **built-in POS promotion** (`commcalc.pos_promote_period`, mig `727`; carries `tax` since mig `991`) | `calc_rep_commissions`, `calc_gp_report`, `_compute_feed_actuals_py` `18678`, `_sales_cell_agg`, `_mi_resolve_numbers` edge/vhi `28843`, installment engines; **POS line-sales columns `quantity`/`total_cost`/`pricing_discounts`/`contract_no` (mig `1004`, §25)** — nullable, only the POS line-sales shape fills them; **`tax` column (mig `105`)** read by `commcalc/tax_collected.py aggregate()` — the ONE pass behind `GET /commcalc/tax-collected` AND the `sales_tax_payable` BS liability (mig `991`, §4); NOTE `coa._sales_union_rows` deliberately does NOT select `tax` (P&L revenue is pre-tax) |
 | `commcalc.raw_sales` | upload `/upload-mapped` `3637`, sweeps, `sales/promote-feed` `22757` | `calc_rep_commissions`, `calc_gp_report`, `_compute_feed_actuals_py` `18678`, `_sales_cell_agg`, `_mi_resolve_numbers` edge/vhi `28843`, installment engines |
 | `commcalc.daily_sales_feed` | B2B/email sweeps, upload | `_compute_feed_actuals_py` (primary source), sales report, fallback in calc |
 | `commcalc.merchant_settlement_day` | `merchant_portal_sweep.store_settlement` (daily portal scrape) | `closing/external_credit_recon` (declared-vs-settled card tally, §12a), resolved via `report_pull_map.merchant_settlement` |
@@ -2756,7 +2757,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `commcalc.raw_ma_fulfillment` | upload `/upload/ma_fulfillment` (slice-scoped replace, `ingest_slice.py` §2) | `device_cogs.ma_unit_price_map` (handset price list), MA overview/recon, **mig `314` account→store map source** (`tspid`+`business_address` → `ma_store_pnl.account_store_index`; canonical-spelling wrapper `ma_store_pnl.canonical_store_index` = index ∪ `coa.store_resolver`, the ONE account→store answer, consumed by `payables/engine.ma_store_resolution` — forecast/payables Total-side store attribution, 2026-09-04 §15 — and by `residual_subs.compute` for the §7a report's store names) |
 | `commcalc.ma_account_store_map` (mig `314`) | owner-pinned rows (SQL seed / future admin UI) | `ma_store_pnl.load_store_index` — wins over the fulfillment-derived map; covers accounts fulfillment never names (luxelink `170405`) |
 | `commcalc.payout_schedule(+_line)` | `/payout-schedule` POST `11965` | `installment_engine.compute_installments` |
-| `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus, **BS inventory under `inventory_basis='devices'` + `GET /account/inventory-recon`** (`balance_sheet.device_inventory_cells` via `statement_engine`, mig `933`); statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`); **device-grain store source for `payables/engine.ma_store_resolution`** (forecast/payables Total-side attribution, 2026-09-04 §15 — its `store` is the store_mapping vocabulary, measured 20/20) |
+| `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert; **upload via `/upload-mapped` report_key `pos_inventory_listing` (mig `1004`, §25)** — adds `status`/`quantity`/`total_cost`/`category` so an on-hand SNAPSHOT is fully representable and a valuation can be summed from the table | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus, **BS inventory under `inventory_basis='devices'` + `GET /account/inventory-recon`** (`balance_sheet.device_inventory_cells` via `statement_engine`, mig `933`); statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`); **device-grain store source for `payables/engine.ma_store_resolution`** (forecast/payables Total-side attribution, 2026-09-04 §15 — its `store` is the store_mapping vocabulary, measured 20/20) |
 | `commcalc.journal_entries` | `PUT /account/journal/{period}` (`account/router.py` — delete+insert per period; echoes `rejected`/`resolved`) | `statement_engine._journal_rows` (BOTH period spellings) → `balance_sheet.journal_scope_entries` (fixed company scoping, mig `933`) → **`balance_sheet.journal_grain_entries`** (mig `954` GRAIN rule: store / company / tenant-total entries, a coarser row booked NET of the finer rows inside it — no double count; conflicts surfaced in `bs['journal_grains']`); legacy `engine.compute_and_store` exact-period read; staleness probe |
 | `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview` (company scopes cross-checked against `coa.org_companies` via `coa.filter_org_scopes` — §13b), `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet` |
 | `commcalc.companies` | `POST/PATCH /account/companies` (org_id in payload/filter; mig `952` removed the two 2026-06-27 wrong-org LuxeLink rows) | ONLY `coa.org_companies` (§13b canonical fail-closed enumeration; CI-pinned by `harness_org_scope_guard.py`) → `list_companies`/`list_stores`/journal echo/`overview`/`analysis`/`finance_attention`/`store_company_map`⇒`company_assignment`; billing `per_entity` org-scoped count probe |
@@ -6141,3 +6142,105 @@ means EXPECTED, UNDEDUCTED chargebacks (booked from `chargeback_items` with no `
 these are decided, deducted and paid in full; a reserve would state the opposite and corrupt a line
 the P&L already uses. `chargeback_items` / `ops_chargeback` (migs 036/037/504) are INTERNAL
 store/employee chargebacks with their own lifecycle; a distributor chargeback is not one.
+
+---
+
+## 25. A SECOND POS SHAPE — line-level sales + on-hand inventory (owner request 2026-09-12)
+
+Owner: *"add fields to metricspro vzone tenant, check if we can use the existing columns and how can
+we map the same … for a new tenant who is onboarding for verizon they should be able to upload these
+reports and use them in our system so the onboarding will be carrier specific."*
+
+### 25.1 What was checked before building, and what is REUSED rather than rebuilt
+
+Duplicate-check gate. Checked §2 (ingest routes + `raw_*` tables), §11 (inventory & aging), §16 (by
+TABLE) and §17 (by ENDPOINT) first. **Nothing new was created that an existing mechanism served:**
+
+| Need | REUSED (not rebuilt) | Where |
+|------|----------------------|-------|
+| Line-level sales rows | `commcalc.raw_sales` — 13 of the export's columns map onto EXISTING columns | mig `002`, §2 |
+| On-hand inventory rows | `commcalc.inventory_aging_device` — the EXISTING per-device table, already upload-fed (`b2b_sweep.fetch_inventory_aging` is a stub, §2 "Known gaps") | mig `216`, §11 |
+| Header→column mapping | `commcalc.column_mapping` — already DATA, already carrier-scoped via `carrier_id` | mig `042` |
+| Showing a report only to tenants running that carrier | `report_definitions.carrier_id` — mig `291`'s own header already names "Verizon -> Vzone" as the intended case | mig `291` |
+| Carrier vocabulary | `ui_label_override` scope `report_term:<carrier>`; the resolver already slugifies ANY carrier code, so `verizon` needed **no code change** | migs `068`/`945`/`953` |
+| Date parsing | `merchant_portals.iso_date` — the existing PURE parser, EXTENDED to accept a trailing clock time rather than adding a second parser that could disagree | `merchant_portals.py` |
+| Ingest endpoint | `POST /commcalc/upload-mapped` — the documented any-carrier path. **No new endpoint.** | `router.upload_mapped`, §2 route A |
+| Safe replace | `raw_sales` is already in `ingest_slice.INGEST_PARTITION` (`partition=store`, `date=trans_date`), so a file replaces only its own store/date slice | `ingest_slice.py`, §2 |
+
+### 25.2 RULE TWO — the report keys name a SHAPE, never a carrier
+
+`pos_product_sales` / `pos_inventory_listing`. No carrier name appears in code; WHICH tenant is
+offered them is decided by the `report_definitions.carrier_id` rows mig `1004` seeds, never a branch.
+Any tenant whose POS exports these shapes maps to them.
+
+### 25.3 THREE FEED-SHAPE DEFECTS — each silently corrupts an import (`commcalc/feed_shape.py`)
+
+PURE, stdlib-only; proven DB-free by `backend/harness_rq_ingest.py` (46 checks). None is a carrier
+fact, so none is a carrier branch: each is driven by the report's OWN registry and is a **no-op
+unless the shape is present** — every existing feed is byte-identical.
+
+1. **FOOTER/TOTALS ROW** — `feed_shape.is_footer_row` / `column_mapping.drop_footer_rows`. A POS
+   export appends a grand-total row repeating every numeric column with its identity columns blank.
+   Ingested as data every total **DOUBLES**. Measured on the first such feed: `Total Price` summed
+   **9,208,584.86** against a true **4,604,292.43**; 48,876 parsed rows = 48,875 records + 1 footer.
+   Identified by SHAPE (all of the report's `required=True` fields blank), not "the last row", and a
+   report declaring no identity field is returned untouched. The count is REPORTED in the response
+   (`footer_rows_skipped`), never silently swallowed.
+2. **US DATETIME** — transform `date_auto`. `_t_date10` truncates to 10 characters, so
+   `'06/27/2025 15:52:40'` stored `'06/27/2025'` — not ISO, and ambiguous with DD/MM on the **39%**
+   of rows whose day is ≤ 12. `date_auto` delegates to `merchant_portals.iso_date`; an undatable
+   cell returns None, never a guessed day.
+3. **MULTI-MONTH FILE** — `feed_shape.period_fields` / `column_mapping.derive_row_periods`.
+   `_ingest_mapped_df` stamps ONE caller-supplied `period` on every row, so a 20-month history file
+   lands entirely under a single label and every period-scoped read is wrong. When the caller names
+   **no** period, each row's period is derived from its own date using the SAME `'%B %Y'` formula as
+   `report_pull.apply_column_map` (one spelling of the label, never a second that could drift). A
+   caller that DOES name a period keeps today's behaviour byte-for-byte. Undated rows are left
+   unstamped and REPORTED (`undated_rows`) — never booked to a guessed month.
+
+Also `category_top` / `category_leaf`: one hierarchical category cell (`' >> A >> B >> C '`) feeds
+BOTH the full-path `category` and the human `department` without a second upload.
+
+### 25.4 The money columns are heavily REDUNDANT — mapped once, never six times
+
+Verified equal to the cent across 48,875 rows: `Unit Price` = `Total Price` = `Selling Price` =
+`Adjusted Price` = `Net Sales` = `Sold For`, and `Net Profit` = `Gross Profit`. Exactly ONE of each
+is mapped (`ext_price`, `gp`); mapping the aliases would book the same money six times. Pinned by
+the harness. `Carrier Price` and `Total Product Coupons` are entirely zero on the first feed.
+
+### 25.5 NEW COLUMNS (mig `1004`) — only where nothing existed
+
+`raw_sales`: `quantity` (negative on a refund line), `total_cost` (the COGS leg of `gp`),
+`pricing_discounts` (never folded into price), `contract_no` (join key to a carrier statement).
+`inventory_aging_device`: `status` (only a physically-present status is reconcilable against sold
+units), `quantity`, `total_cost` (the table previously held only `unit_cost`, so a valuation could
+not be summed), `category`. All nullable + `IF NOT EXISTS`; no money moves.
+
+### 25.6 VERIFIED against the tenant's own summary
+
+The line file reproduces the companion "Sales By Location" summary **exactly** once the footer row is
+dropped — Gross Sales 4,604,292.43 · Total Cost 3,591,798.85 · Gross Profit 1,012,493.58 · Net
+Quantity 33,013 (= 40,944 sold − 7,931 refunded). The summary is therefore **fully derivable and is
+deliberately NOT ingested**: a second path to the same number is a defect (§ duplicate-check gate).
+
+### 25.7 FILES
+
+`commcalc/feed_shape.py` (new, PURE) · `commcalc/column_mapping.py` (transforms `date_auto` /
+`category_top` / `category_leaf`; `TABLE_MAP` + `TARGET_FIELDS` for both shapes; `required_fields`,
+`period_source_field`, `drop_footer_rows`, `derive_row_periods`) · `commcalc/merchant_portals.py`
+(`iso_date` accepts a trailing clock time) · `commcalc/router.py` (`_ingest_mapped_df` post-steps +
+`footer_rows_skipped` / `undated_rows` in the response) · mig `1004_pos_feed_shape_ingest.sql` ·
+proof `backend/harness_rq_ingest.py`.
+
+### 25.8 OPEN — inventory vs sold recon, and the live defect it already found
+
+A sold-unit vs on-hand reconciliation (owner: *"check against the sales by product to see if the item
+in inventory is already sold or not"*) is the **follow-up PR**. Run against the tenant's own two
+files it already reports, on live data: **10 devices ($7,360 at cost) marked `In Stock` that were
+sold and never returned** — 4 iPhones sold between 03/2025 and 03/2026, and 4 desk phones on one
+07/2026 invoice (a single un-decremented multi-quantity line). 8 further rows were sold **then
+refunded** and are legitimately back on hand — the recon must net refunds, or it reports them as
+missing. REPORTED, not auto-adjusted (a live-data defect is never "fixed" by code that hides it).
+Duplicate check for that PR: `asset/oninv_recon.py` is the SAME question on the Boost/VIP legs
+(`asset_ledger` × `raw_payment_detail`) — its classification posture (never collapse "not loaded"
+into "disagrees") is the precedent to reuse, on this POS's two legs.
