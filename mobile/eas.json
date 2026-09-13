@@ -15,7 +15,7 @@
     "preview": {
       "distribution": "internal",
       "channel": "preview",
-      "ios": { "simulator": false },
+      "ios": { "simulator": false, "image": "latest" },
       "android": { "buildType": "apk" },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://metricspro-production.up.railway.app",
@@ -26,6 +26,7 @@
     "production": {
       "autoIncrement": true,
       "channel": "production",
+      "ios": { "image": "latest" },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://metricspro-production.up.railway.app",
         "EXPO_PUBLIC_SUPABASE_URL": "https://etxdalernqqtwjcrtcuj.supabase.co",
