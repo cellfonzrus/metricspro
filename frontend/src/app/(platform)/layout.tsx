@@ -16,6 +16,7 @@ import HelpPanel from '@/components/HelpPanel'
 import AdminAttention from '@/components/AdminAttention'
 import ChatEnvelope from '@/components/ChatEnvelope'
 import PlatformBanners from '@/components/PlatformBanners'
+import FlowReturnBar from '@/components/FlowReturnBar'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -327,6 +328,13 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
         is stated at the top of every page and cannot be navigated away from. Renders nothing for an
         ordinary employee with no live notice, and never polls an endpoint that would 403 them. */}
     <PlatformBanners />
+    {/* THE WAY BACK (owner 2026-09-13) — "if im a new tenant i dont know how to navaagte … the
+        modules if they take you to the next module then they shoudl have the option of continuing
+        with thier original work". Generalises the ONE working instance of this (pos/layout.tsx's
+        "← Back to setup") to every hand-off, in one place, so no link site has to opt in and a flow
+        that ships later is covered the day it exists. Renders nothing until a setup flow has
+        actually been visited — it never invents a destination. */}
+    <FlowReturnBar />
     <div style={{ display: 'flex', flex: 1, minHeight: 0, background: 'var(--bg)' }}>
       <aside className="mp-sidebar" style={{ width: collapsed ? 60 : 248, flexShrink: 0,
         display: 'flex', flexDirection: 'column', transition: 'width 0.18s ease', overflow: 'hidden' }}>

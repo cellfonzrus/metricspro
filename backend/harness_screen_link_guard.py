@@ -47,6 +47,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FRONT = os.path.join(os.path.dirname(HERE), "frontend", "src")
 SCREEN_LINK = os.path.join(FRONT, "components", "ScreenLink.tsx")
 RBAC = os.path.join(FRONT, "lib", "rbac.ts")
+APP = os.path.join(FRONT, "app", "(platform)")
+ONBOARDING = os.path.join(os.path.dirname(HERE), "backend", "app", "modules", "core", "onboarding.py")
+FLOW_RETURN = os.path.join(FRONT, "lib", "flow-return.ts")
 
 P = F = 0
 
@@ -228,6 +231,60 @@ check("F5 inline links degrade to plain text, standalone signposts to nothing",
       "if (!allowed) return <b>{body}</b>" in SRC and "if (!allowed) return null" in SRC)
 check("F6 RULE TWO — no carrier/tenant branch in the registry",
       not re.search(r"\b(boost|verizon|at&t|t-?mobile|luxelink)\b", SRC, re.I))
+
+# ── G. EVERY ONBOARDING TASK HREF IS A REAL DESTINATION (owner bug report 2026-09-13) ────────────
+# §A pins ScreenLink's OWN registry. The onboarding task list is a SECOND producer of destinations
+# and nothing pinned it, which is exactly how `/configurations/carriers` shipped: neither a NAV entry
+# nor a route file, attached to a task that is is_required=True AND skippable=False. A tenant sent
+# there got a 404 with no way forward and no way round — POS onboarding could not be completed at all.
+# Same question as §A, one more producer, so the class cannot come back through the other door.
+print()
+print("G. every onboarding task href resolves to a real page")
+# STRIP COMMENTS FIRST. The fix for the dead href documents the dead href by name in a comment; a
+# guard that greps raw source would fail on its own explanation and, worse, would PASS on a defect
+# that had merely been commented out. Same lesson as harness_wizard_feedback_guard.
+_ONB = re.sub(r"(?m)^\s*#.*$", "", read(ONBOARDING))
+_task_hrefs = sorted(set(re.findall(r'href="([^"]+)"', _ONB)))
+check("G1 the onboarding task list declares hrefs at all (the parse still works)", len(_task_hrefs) >= 5,
+      "found %d" % len(_task_hrefs))
+_dead = []
+for h in _task_hrefs:
+    in_nav = h in NAV_HREFS
+    on_disk = os.path.exists(os.path.join(APP, *h.lstrip("/").split("/"), "page.tsx"))
+    if not (in_nav or on_disk):
+        _dead.append(h)
+check("G2 no onboarding task points at a page that does not exist", not _dead,
+      "dead href(s): %s" % ", ".join(_dead))
+check("G3 THE REPORTED DEFECT: /configurations/carriers is gone",
+      "/configurations/carriers" not in _ONB)
+check("G4 …and the carrier task points at the screen that actually creates a carrier",
+      "/commcalc/carrier-mapping" in _ONB and "/commcalc/carrier-mapping" in NAV_HREFS)
+
+# ── H. THE WAY BACK IS MOUNTED ONCE, FOR EVERY HAND-OFF ──────────────────────────────────────────
+# "if im a new tenant i dont know how to navaagte … the modules if they take you to the next module
+# then they shoudl have the option of continuing with thier original work." pos/layout.tsx solved
+# this for ONE module; a hand-off that LEAVES the module had nothing. The generalisation is only
+# worth anything if it is mounted at the platform level — per-page opt-in is the thing that failed.
+print()
+print("H. the way back is mounted once, at the platform level")
+_LAYOUT = read(os.path.join(APP, "layout.tsx"))
+check("H1 FlowReturnBar is mounted in the platform layout, not per page",
+      "<FlowReturnBar />" in _LAYOUT and "@/components/FlowReturnBar" in _LAYOUT)
+_FR = read(FLOW_RETURN)
+check("H2 what counts as a flow is a SHAPE, not a hardcoded list of routes",
+      "FLOW_SUFFIXES" in _FR and "endsWith" in _FR)
+check("H3 …and no module or tenant name appears in the rule (RULE TWO)",
+      not re.search(r"\b(boost|verizon|vzone|luxelink|b2bsoft)\b", _FR, re.I))
+check("H4 the bar renders NOTHING until a flow has actually been visited — it never invents a "
+      "destination", "if (!trail || !trail.path) return null" in _FR)
+check("H5 …and never offers a link to the page you are already on",
+      "if (!back || back === here) return null" in _FR)
+_BAR = read(os.path.join(FRONT, "components", "FlowReturnBar.tsx"))
+_guarded = all(
+    "catch" in _BAR[_BAR.index("function %s" % fn):_BAR.index("function %s" % fn) + 400]
+    for fn in ("readTrail", "writeTrail") if "function %s" % fn in _BAR)
+check("H6 EVERY sessionStorage access is guarded (private mode must not break a page)",
+      _guarded and "function readTrail" in _BAR and "function writeTrail" in _BAR)
 
 print()
 print("=" * 78)

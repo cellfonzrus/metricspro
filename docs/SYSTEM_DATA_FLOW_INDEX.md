@@ -6515,6 +6515,62 @@ true → 51/3; restored → 102/0 and 54/0.
 vocabulary would silently drop setup steps from tenants mid-implementation. This change gates what a
 tenant is OFFERED; it does not re-key the questionnaire.
 
+### 26.9 THE WAY BACK, AND A REQUIRED TASK THAT POINTED AT A 404 (owner bug report 2026-09-13)
+
+Owner: *"now since it brought me from the implementation wizard once im done here it shoudl take me
+back there, if im a new tenant i dont know how to navaagte … the modules if they take you to the next
+module then they shoudl have the option of continuing with thier original work."*
+
+**DEFECT 1 — a required, non-skippable task pointed at a page that never existed.** The `carrier`
+task in `core/onboarding.py` carried `href="/configurations/carriers"`, which is **neither a NAV entry
+in `lib/rbac.ts` nor a route file**. With `is_required=True, skippable=False` there was no way forward
+and no way round: POS onboarding could not be completed at all. Now `/commcalc/carrier-mapping` — the
+screen that actually POSTs `/commcalc/carriers`, which is exactly what the task's own predicate counts.
+A sweep of all 10 task hrefs found this was the only dead one.
+
+**DEFECT 2 — a hand-off had no way home.** `pos/layout.tsx` has solved this since it shipped, but only
+for ONE module, and only because the POS module has a layout wrapping every one of its pages plus a
+gate endpoint saying what is outstanding. A hand-off that LEAVES the module — the reported trail,
+`/commcalc/implementation` → `/commcalc/onboarding` → `/commcalc/email-imports` — had neither.
+
+### 26.9a What was REUSED rather than rebuilt
+
+**No second navigation mechanism.** NAV is untouched, no route is registered, nothing is added to
+`ScreenLink`'s registry, and **no link site opts in**: the platform layout already knows the current
+path on every render, so the flow you came from is simply REMEMBERED as you leave it. One mount point
+covers every hop that exists and every hop that ships later. The visual is deliberately the SAME amber
+bar with the SAME wording `pos/layout.tsx` already uses — a second, differently-styled way of saying
+the same thing is how a UI stops being learnable.
+
+**What counts as a flow is a SHAPE, not a list.** `FLOW_SUFFIXES` = `/onboarding`, `/implementation`,
+`/wizard`, `/setup`. A hardcoded set of the six wizards §26.1 names would go stale the first time a
+seventh shipped, and the owner has been explicit that nothing should be hardcoded.
+
+**It closes the loop with §28.** The trail records the ORG the flow was started for. The header
+company switcher reloads the whole app, so a trail outlives the switch; sending someone "back to
+setup" across it would drop them into one company's setup while the app acts as another — the exact
+confusion the 20:48 incident was made of. The offer stands down and says why. An unknown org on
+either side is read as "don't know", never as "you moved", so it can never raise a false alarm.
+
+### 26.9b NEW — registered here
+
+| Added | Where | Proof |
+|---|---|---|
+| `normalizePath` / `isFlowPath` / `nextTrail` / `returnOffer` / `offerIsStale` — PURE, storage-free | `frontend/src/lib/flow-return.ts` | `frontend/prove_flow_return.mjs` — **40 checks**, §2 replays the owner's exact three hops |
+| `FlowReturnBar` — mounted ONCE in `(platform)/layout.tsx` beside `PlatformBanners`; every sessionStorage access guarded (private mode must not break a page) | `frontend/src/components/FlowReturnBar.tsx` | guard §H below |
+| §G — every `core/onboarding.py` task href resolves to a real NAV entry or route file; §H — the way back is mounted at the platform level, is shape-driven, and never invents a destination | `backend/harness_screen_link_guard.py` (EXTENDED — §A already pinned `ScreenLink`'s registry; the task list was a SECOND producer of destinations that nothing pinned, which is how the 404 shipped) | 61 checks (was 47) |
+
+The guard **strips Python comments before asserting**: the fix documents the dead href by name, and a
+guard that grepped raw source would fail on its own explanation and — far worse — would PASS on a
+defect that had merely been commented out. Same lesson as `harness_wizard_feedback_guard`.
+
+Negative controls verified: restoring `/configurations/carriers` → 58/3 (G2, G3 and G4 all fire);
+making `nextTrail` forget the flow on leaving it → 35/5; restored → 61/0 and 40/0.
+
+**STILL OPEN:** `WorkflowNext`'s stage sequencing was NOT changed here. Whether it should refuse to
+advance past an incomplete stage is a design decision about the spine itself (§26.7 item 6), not a
+navigation bug, and is worth making explicitly rather than as a side effect of a dead-link fix.
+
 ---
 
 ## 27. VENDOR REBATE HISTORY — earned is not collected (owner 2026-09-12)
