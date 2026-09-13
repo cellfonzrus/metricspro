@@ -27,11 +27,22 @@ export default function ImplementationWizard() {
   const [carrierId, setCarrierId] = useState('')
   const [readiness, setReadiness] = useState<any>(null)
   const [msg, setMsg] = useState('')
+  // A page that cannot load must SAY so. Every loader here used to swallow its error
+  // (`.catch(() => {})`), so a failing readiness call left the list empty and the page rendered
+  // "Loading…" for ever — indistinguishable from a slow network, with no cause and nothing to click.
+  const [loading, setLoading] = useState(true)
+  const [loadErr, setLoadErr] = useState('')
 
-  useEffect(() => { apiCached('/api/v1/commcalc/carriers', LOOKUP).then((c: any) => setCarriers(c || [])).catch(() => {}) }, [])
+  useEffect(() => {
+    apiCached('/api/v1/commcalc/carriers', LOOKUP).then((c: any) => setCarriers(c || []))
+      .catch((e: any) => setMsg('❌ Could not load carriers: ' + (e?.message || e)))
+  }, [])
   const loadReadiness = useCallback(() => {
+    setLoading(true)
     api(`/api/v1/commcalc/column-mapping/readiness?org_id=${ORG_ID}${carrierId ? `&carrier_id=${carrierId}` : ''}`)
-      .then(setReadiness).catch(() => setReadiness(null))
+      .then((r: any) => { setReadiness(r); setLoadErr('') })
+      .catch((e: any) => { setReadiness(null); setLoadErr(e?.message || String(e)) })
+      .finally(() => setLoading(false))
   }, [carrierId])
   useEffect(() => { loadReadiness() }, [loadReadiness])
 
@@ -97,7 +108,20 @@ export default function ImplementationWizard() {
       <div className="card" style={{ padding: 16 }}>
         <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>🗂️ Map your source reports</div>
         <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 0 }}>Each report below feeds the outputs above. Expand one, upload a sample to auto-detect + Save the mappings, then set a period and Import the full file — the outputs above compute from it.</p>
-        {reportKeys.length === 0 && <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div>}
+        {loading && reportKeys.length === 0 && <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div>}
+        {!loading && loadErr && (
+          <div style={{ padding: 12, borderRadius: 8, background: '#fef2f2', border: '1px solid #fecaca', fontSize: 13 }}>
+            <b style={{ color: '#b91c1c' }}>❌ Could not load your reports.</b>
+            <div style={{ marginTop: 4, color: 'var(--text2)' }}>{loadErr}</div>
+            <div style={{ marginTop: 4, color: 'var(--text3)', fontSize: 12 }}>
+              This is the page failing to reach the server — nothing is wrong with your data.
+            </div>
+            <button className="btn btn-secondary" style={{ fontSize: 13, marginTop: 8 }} onClick={loadReadiness}>Retry</button>
+          </div>
+        )}
+        {!loading && !loadErr && reportKeys.length === 0 && (
+          <div style={{ color: 'var(--text3)', fontSize: 13 }}>No reports are configured for this carrier yet.</div>
+        )}
         {reportKeys.map(rk => (
           <ReportMapper key={rk} reportKey={rk} info={reports[rk]} carrierId={carrierId}
             onSaved={() => { loadReadiness(); setMsg('✅ Mappings saved.') }} setMsg={setMsg} />
@@ -222,6 +246,11 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
   const importRef = useRef<HTMLInputElement>(null)
   const [importing, setImporting] = useState(false)
   const [period, setPeriod] = useState('')
+  // Every result is shown HERE, beside the button that caused it, as well as at page level. The
+  // page-level line renders below the whole list, so acting on a row far down the page looked
+  // like nothing happened at all — the owner's "nothing happens after i hit import".
+  const [rowMsg, setRowMsg] = useState('')
+  const say = (m: string) => { setRowMsg(m); setMsg(m) }
   const [outcome, setOutcome] = useState<UploadOutcome | null>(null)
   const displayName = info?.label || REPORT_LABELS[reportKey] || reportKey
 
@@ -233,17 +262,19 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
     try {
       if (info?.def_id) await api(`/api/v1/commcalc/report-definitions/${info.def_id}`, { method: 'PATCH', body: JSON.stringify({ label: lbl }) })
       else await api('/api/v1/commcalc/report-definitions', { method: 'POST', body: JSON.stringify({ report_key: reportKey, label: lbl }) })
-      setEditing(false); setMsg(`✅ Report name saved: “${lbl || reportKey}”.`); onSaved()
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
+      setEditing(false); say(`✅ Report name saved: “${lbl || reportKey}”.`); onSaved()
+    } catch (e: any) { say('❌ ' + (e?.message || e)) } finally { setBusy(false) }
   }
 
   const load = useCallback(() => {
-    api(`/api/v1/commcalc/column-mapping/targets?report_key=${encodeURIComponent(reportKey)}`).then((t: any) => setFields(t?.fields || [])).catch(() => {})
+    api(`/api/v1/commcalc/column-mapping/targets?report_key=${encodeURIComponent(reportKey)}`)
+      .then((t: any) => setFields(t?.fields || []))
+      .catch((e: any) => setRowMsg('❌ Could not load this report\u2019s field list: ' + (e?.message || e)))
     api(`/api/v1/commcalc/column-mapping?report_key=${encodeURIComponent(reportKey)}${carrierId ? `&carrier_id=${carrierId}` : ''}`).then((rules: any) => {
       const s: Record<string, string> = {}
       for (const r of rules || []) if (carrierId ? r.carrier_id === carrierId : !r.carrier_id) s[r.target_field] = r.source_header
       setSrc(s)
-    }).catch(() => {})
+    }).catch((e: any) => setRowMsg('❌ Could not load the saved mappings: ' + (e?.message || e)))
   }, [reportKey, carrierId])
   useEffect(() => { if (open) load() }, [open, load])
 
@@ -264,12 +295,12 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
       }
       setBasis(b)
       setSrc(prev => ({ ...prev, ...s }))
-      setMsg(`🔍 ${reportKey}: detected ${d?.headers?.length || 0} columns — these are PROPOSALS matched on `
+      say(`🔍 ${reportKey}: detected ${d?.headers?.length || 0} columns — these are PROPOSALS matched on `
         + `column names. Check the sample values before saving: a column's name is not proof of what is in it.`)
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
+    } catch (e: any) { say('❌ ' + (e?.message || e)) } finally { setBusy(false) }
   }
   async function seed() {
-    try { const d: any = await api(`/api/v1/commcalc/column-mapping/seed?report_key=${encodeURIComponent(reportKey)}${carrierId ? `&carrier_id=${carrierId}` : ''}`, { method: 'POST' }); setMsg(`✅ Seeded ${d?.seeded ?? 0} defaults.`); load(); onSaved() } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    try { const d: any = await api(`/api/v1/commcalc/column-mapping/seed?report_key=${encodeURIComponent(reportKey)}${carrierId ? `&carrier_id=${carrierId}` : ''}`, { method: 'POST' }); say(`✅ Seeded ${d?.seeded ?? 0} defaults.`); load(); onSaved() } catch (e: any) { say('❌ ' + (e?.message || e)) }
   }
   async function saveAll() {
     setBusy(true); let n = 0
@@ -277,7 +308,7 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
       const sh = src[f.target_field]?.trim(); if (!sh) continue
       try { await api('/api/v1/commcalc/column-mapping', { method: 'POST', body: JSON.stringify({ report_key: reportKey, carrier_id: carrierId || undefined, target_field: f.target_field, source_header: sh, transform: f.transform }) }); n++ } catch { /* keep going */ }
     }
-    setBusy(false); setMsg(`✅ ${reportKey}: saved ${n} mapping(s).`); onSaved()
+    setBusy(false); say(`✅ ${reportKey}: saved ${n} mapping(s).`); onSaved()
   }
   // Load the FULL file into the system using the saved mappings (the step that was missing — the
   // wizard only ever sampled + saved rules, so mapped files never actually ingested). Feeds GP/comm.
@@ -287,9 +318,10 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
     // Whether that is offered comes from the registry (`derives_period` on the readiness payload),
     // never a hardcoded list of report keys here.
     if (!period.trim() && !info?.derives_period) {
-      setMsg('⚠️ Enter the period (e.g. “June 2026”) for this file before importing.'); return
+      say('⚠️ Enter the period (e.g. “June 2026”) for this file before importing.'); return
     }
     setImporting(true); setOutcome(null)
+    say(`⏳ Importing ${file.name} (${(file.size / 1048576).toFixed(1)} MB)… large files can take a minute.`)
     const fd = new FormData()
     fd.append('report_key', reportKey)
     if (carrierId) fd.append('carrier_id', carrierId)
@@ -301,11 +333,11 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
       // honestly instead of a green "✅ 0 row(s)" that looks identical to a broken upload.
       const o = readUploadOutcome(r, 'row(s)')
       setOutcome(o.tone === 'ok' ? null : o)
-      setMsg(o.tone === 'ok'
+      say(o.tone === 'ok'
         ? `✅ ${reportKey}: imported ${o.saved} row(s)${period.trim() ? ` for ${period.trim()}` : ' — each row booked to the month of its own date'}. The reports above now compute from this data.`
         : `⚠️ ${reportKey}: ${o.text}`)
       onSaved()
-    } catch (e: any) { setMsg('❌ Import failed: ' + (e?.message || e)) } finally { setImporting(false) }
+    } catch (e: any) { say('❌ Import failed: ' + (e?.message || e)) } finally { setImporting(false) }
   }
 
   const pct = info?.required ? Math.round(100 * info.required_mapped / info.required) : 0
@@ -338,6 +370,13 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
       </div>
       {open && (
         <div style={{ marginTop: 10, paddingLeft: 26 }}>
+          <ol style={{ margin: '0 0 10px', paddingLeft: 18, fontSize: 12, color: 'var(--text2)', lineHeight: 1.7 }}>
+            <li><b>Upload sample to auto-detect</b> — pick the real file; we read only its header row and pre-fill the matches below.</li>
+            <li>Check the matches, then <b>Save mappings</b>. (<b>Seed default layout</b> fills in our standard layout for this report if you would rather start there.)</li>
+            <li>{info?.derives_period
+              ? <>Leave <b>Period</b> empty, then <b>Import file → load data</b> — each row is booked to the month of its own date, so one file may span many months.</>
+              : <>Type the <b>Period</b> this file covers (e.g. “June 2026”), then <b>Import file → load data</b>.</>}</li>
+          </ol>
           <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
             <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={busy} onClick={seed}>Seed default layout</button>
             <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) detect(f); e.target.value = '' }} />
@@ -357,10 +396,16 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
               {importing ? '⏳ Importing…' : '⬆️ Import file → load data'}
             </button>
           </div>
-          <p style={{ fontSize: 11, color: 'var(--text3)', margin: '0 0 8px' }}>
-            Two steps: (1) upload a sample → confirm the columns → <b>Save mappings</b>; then (2) set the period and
-            <b> Import file → load data</b> to load the full file. {info?.ready ? '' : 'Map the required (*) fields first.'}
-          </p>
+          {!info?.ready && (
+            <p style={{ fontSize: 11, color: 'var(--text3)', margin: '0 0 8px' }}>Map the required (*) fields first.</p>
+          )}
+          {rowMsg && (
+            <div style={{ margin: '6px 0', padding: '8px 10px', borderRadius: 8, fontSize: 13, maxWidth: 620,
+              background: rowMsg.startsWith('❌') ? '#fef2f2' : rowMsg.startsWith('⚠️') ? '#fffbeb' : '#f0fdf4',
+              border: `1px solid ${rowMsg.startsWith('❌') ? '#fecaca' : rowMsg.startsWith('⚠️') ? '#fde68a' : '#bbf7d0'}` }}>
+              {rowMsg}
+            </div>
+          )}
           <UploadGuardBanner outcome={outcome} style={{ maxWidth: 620 }} />
           {fields.length === 0
             ? <p style={{ fontSize: 13, color: 'var(--text3)' }}>No default field registry for this report — map it on the full Column Mapping page.</p>

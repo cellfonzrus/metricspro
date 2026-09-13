@@ -6643,3 +6643,37 @@ ever counted once per IMEI** (it repeats on all ~7 of a device's rows — a per-
 5. **One row in the real file carries `Quantity` = 34,686** — it is the footer (the file's NET
    quantity), correctly dropped by shape. Recorded because a reader meeting that value in isolation
    would reasonably think the file was corrupt.
+
+### THE WIZARD FAILED SILENTLY (owner 2026-09-13: "nothing happens after i hit import")
+
+Owner, verbatim: *"nothing happens after i hit import on the green button - or seed default or upload
+sample to detect it does not give any error or confirmation or any directions what to do it should be
+self explanatory for the user"*.
+
+The page was not broken — it was **mute**. Three defects, each of which makes a working page look dead.
+Note these survived the §Tenant-implementation rewrite of `commcalc/implementation/page.tsx`: that PR
+reworked the flow around them, so the fix here is applied to the CURRENT page, not the older one.
+
+1. **SWALLOWED ERRORS.** Three loaders ended `.catch(() => {})` — carriers, the field registry, the
+   saved rules — and the readiness loader did `.catch(() => setReadiness(null))`. A failed readiness
+   call therefore left `reportKeys` empty and the page rendered **"Loading…" for ever**:
+   indistinguishable from a slow network, with no cause and nothing to click. The three list states
+   are now distinct — loading / **failed (error text, a plain-language note that it is the page failing
+   to reach the server rather than anything wrong with the data, and a Retry button)** / genuinely empty.
+2. **THE RESULT RENDERED OFF-SCREEN.** Every action called the PAGE-level `setMsg`, rendered once
+   BELOW the whole report list. Acting on a row several screens down produced a message the user could
+   not see — the literal complaint. Inside `ReportMapper` every result now goes through `say()`, which
+   sets the row's own message AND the page's; the row renders it inside the expanded panel, beside the
+   button that caused it, coloured by ❌ / ⚠️ / ✅. `CarrierConfigBar` is untouched (it sits at the top,
+   where the page-level line is already visible).
+3. **NO INSTRUCTIONS AT THE POINT OF USE.** The panel's only guidance was an 11px grey line AFTER the
+   buttons. It now opens with NUMBERED steps naming each button, and step 3 states which period
+   spelling THIS report wants — read from `derives_period`, so it stays registry-driven, never hardcoded.
+
+Guard: `backend/harness_wizard_feedback_guard.py` — 20 checks, SOURCE-PARSING like
+`harness_gp_totals_reconcile` §B. It strips comments before asserting (its own header quotes the defect
+it fixed), and it reads the panel's button labels **structurally** out of the markup rather than from a
+word list — a word list silently stops checking a button the moment it is renamed, which is the very
+failure this guard exists to prevent. Both negative controls verified: reintroducing one
+`.catch(() => {})` → 19/1, and renaming a button while leaving the steps stale → 19/1; restoring → 20/0.
+
