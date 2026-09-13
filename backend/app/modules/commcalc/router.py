@@ -29238,6 +29238,19 @@ def apply_pos_profile(pos_key: str, org_id: str = ORG_ID, account: str = "defaul
         have_defs = {r.get("report_key") for r in
                      ((client.schema("commcalc").table("report_definitions").select("report_key")
                        .eq("org_id", org_id).execute().data) or [])}
+        # STAMP THE CARRIER (owner 2026-09-13). Every row seeded here used to go in with a NULL
+        # carrier_id, and NULL is "carrier-agnostic — always shown" (implementation_spine.carrier_visible).
+        # So applying a POS standard offered its reports under EVERY carrier lens the tenant runs.
+        # A report_defs entry may now declare `carrier_code`; it is resolved against this org's OWN
+        # carrier rows. An entry that declares none still writes NULL, so the shipped profile — whose
+        # two entries are genuinely POS-level, not carrier-level — is byte-identical to today.
+        from app.modules.commcalc import report_labels as _rl   # local, as every other caller here does
+        _org_carriers = []
+        try:
+            _org_carriers = (client.schema("commcalc").table("carrier").select("id,name,code")
+                             .eq("org_id", org_id).execute().data) or []
+        except Exception:
+            _org_carriers = []
         for rd in (prof.get("report_defs") or []):
             rk = rd.get("report_key")
             if not rk or rk in have_defs:
@@ -29247,6 +29260,8 @@ def apply_pos_profile(pos_key: str, org_id: str = ORG_ID, account: str = "defaul
                 "label": rd.get("label"), "source_name": rd.get("source_name"),
                 "period_mode": rd.get("period_mode") or "current", "target_table": rd.get("target_table"),
                 "upload_endpoint": rd.get("upload_endpoint"), "source_url": "https://wsreports.b2bsoft.com",
+                "carrier_id": implementation_spine.carrier_id_by_code(
+                    _org_carriers, rd.get("carrier_code"), _rl.normalize_carrier_code),
                 "auto": bool(rd.get("auto")), "sort_order": rd.get("sort_order") or 100}).execute()
             reports_seeded += 1
     except Exception as e:

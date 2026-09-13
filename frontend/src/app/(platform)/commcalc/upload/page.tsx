@@ -7,6 +7,8 @@ import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 import { LastUploadLine, useLastUploads } from '../_lib/lastUpload'
 import { useActiveCarrier } from '@/lib/auth-context'
 import { carrierCode } from '@/lib/rbac'
+import { posVisible } from '@/lib/carrier-scope'
+import { useReportLabels } from '@/lib/report-labels'
 
 // ── WHAT AN UPLOAD ACTUALLY DOES, per file type (owner 2026-07-29) ──────────────────────────────
 // The tiles used to say "Replace File" on EVERY report, which is wrong for more than half of them: the
@@ -85,6 +87,13 @@ const TYPE_META = Object.fromEntries(FILE_TYPES.map(t => [t.id, t]))
 // owner ingests by email — given direct upload tiles here. Captured through the self-serve custom-import
 // path (the resolver detects each by its columns, not its key), and the tile auto-provisions the sheet on
 // first upload so there is no separate setup step.
+//
+// THESE ARE EXPORTS OF ONE POS, NOT OF A CARRIER. `CUSTOM_REPORTS_POS` is the shipped fallback tag —
+// same posture as the `carrier` tags above, "registry first, shipped tag second": it decides only
+// until the tenant's own `pos_system` term (mig 953) says otherwise. A tenant that has declared a
+// different POS no longer sees this block at all (owner 2026-09-13: "since we declared that the pos is
+// not b2b anymore it is rq that shoud not give the option for b2b any more").
+const CUSTOM_REPORTS_POS = 'b2bsoft'
 const CUSTOM_REPORTS: { label: string; icon: string; desc: string }[] = [
   { label: 'Activation Details', icon: '📲', desc: 'b2b Activation Details — one row per activation (Service Plan = the activation). Drives the store activation counts.' },
   { label: 'Bill Payments', icon: '💵', desc: 'b2b Bill Payment Transactions Processed — powers the bill-payment discounts report.' },
@@ -185,6 +194,12 @@ export default function UploadPage() {
     if (haveCarriers.length === 0) return true   // nothing to scope BY ⇒ hide nothing
     return haveCarriers.includes(code) && (!multi || code === activeCarrier)
   }
+  // THE TENANT'S OWN POS, from the one place it is already stored: the `pos_system` vocabulary term
+  // (mig 953 house preset + tenant override, resolved server-side by report_labels.py). The fallback
+  // is deliberately '' and NOT the neutral noun 'POS' — an unresolved term must read as "unknown", so
+  // posVisible hides nothing, rather than as a POS named "POS" that matches none of the tiles.
+  const { term } = useReportLabels()
+  const currentPos = term('pos_system', '')
   const [uploading, setUploading] = useState<string | null>(null)
   const [statuses, setStatuses] = useState<Record<string, 'idle'|'uploading'|'done'|'error'|'warn'>>({})
   const [messages, setMessages] = useState<Record<string, string>>({})
@@ -528,9 +543,15 @@ export default function UploadPage() {
 
       {/* ── The 3 b2b reports ingested by email — direct upload links here (owner 2026-08-26). Each posts
           through the SAME /upload/<report_key> capture as the built-in tiles (so it can't freeze differently),
-          auto-provisioning its sheet on first upload. Period-scoped (re-uploading a period replaces it). */}
+          auto-provisioning its sheet on first upload. Period-scoped (re-uploading a period replaces it).
+
+          GATED ON THE TENANT'S POS since 2026-09-13. This was the ONE tile block on this page with no
+          visibility filter at all — every other block already asks tileVisible — so a tenant that had
+          declared a different POS was still offered another POS's exports. The heading now names the
+          tenant's OWN system from the resolved term rather than a hardcoded brand. */}
+      {posVisible(CUSTOM_REPORTS_POS, currentPos) && (<>
       <div style={{ fontWeight: 700, fontSize: 14, margin: '24px 0 10px' }}>
-        📥 B2B email reports <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>— upload the Activation Details, Bill Payment &amp; Sales-by-Product exports here too</span>
+        📥 {term('pos_system', 'POS')} email reports <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>— upload the Activation Details, Bill Payment &amp; Sales-by-Product exports here too</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
         {CUSTOM_REPORTS.map(rep => {
@@ -562,6 +583,7 @@ export default function UploadPage() {
           )
         })}
       </div>
+      </>)}
 
       {/* ── CARRIER REPORTS REGISTERED FOR THIS TENANT (owner 2026-09-12) ───────────────────────────
           THE DEAD END THIS FIXES. Every tile above is a HARDCODED entry in this file, and each posts

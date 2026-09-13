@@ -36,10 +36,12 @@ const rbac = await loadModule('src/lib/rbac.ts')
 const cs = await loadModule('src/lib/carrier-scope.ts')
 
 const { defaultActiveCarrier, carrierOKActive, carrierCode, NAV_CARRIERS } = rbac
-const { financingVendorLabel, atuActiveCarry, textCarrier, presetVisibleForCarrier, vendorServesCarrier } = cs
+const { financingVendorLabel, atuActiveCarry, textCarrier, presetVisibleForCarrier, vendorServesCarrier,
+        posSquash, posVisible } = cs
 for (const [n, f] of Object.entries({ defaultActiveCarrier, carrierOKActive, carrierCode }))
   must(typeof f === 'function', `${n} did not export a function from rbac.ts`)
-for (const [n, f] of Object.entries({ financingVendorLabel, atuActiveCarry, presetVisibleForCarrier, vendorServesCarrier }))
+for (const [n, f] of Object.entries({ financingVendorLabel, atuActiveCarry, presetVisibleForCarrier, vendorServesCarrier,
+                                      posSquash, posVisible }))
   must(typeof f === 'function', `${n} did not export a function from carrier-scope.ts`)
 
 // Fixtures.
@@ -113,6 +115,39 @@ ck('"Total Wireless default" preset shown when active=total', presetVisibleForCa
 ck('carrier-neutral preset always shown', presetVisibleForCarrier('DM Standard Plan', 'boost', true) === true)
 ck('single-carrier tenant: every preset shown (multi=false)', presetVisibleForCarrier('Total Wireless default', 'boost', false) === true)
 ck('textCarrier detects total from "Total Wireless"', textCarrier('Total Wireless default') === 'total')
+
+// ── WHICH POS DOES THIS TENANT RUN (owner bug report 2026-09-13) ────────────────────────────────
+// "since we declared that the pos is not b2b anymore it is rq that shoud not give the option for b2b
+// any more … since the pos was never updated at the ground level it did not propogate to the other
+// attched modules." The upload page's email-reports block was the ONE tile block with no visibility
+// filter at all, so a tenant that had declared a different POS was still offered another POS's exports.
+console.log('\n— POS gate (owner 2026-09-13) —')
+
+// The spellings that actually occur: the mig-953 house preset writes 'b2bsoft', the mig-1004 preset
+// writes 'RQ', and an operator editing the term by hand types 'B2B Soft'. A gate that treated those
+// as different systems would hide a tenant's own imports.
+ck('posSquash folds case and punctuation', posSquash('B2B Soft') === 'b2bsoft')
+ck('  …and matches the house preset spelling', posSquash('b2bsoft') === posSquash('B2B Soft'))
+ck('  …and tolerates surrounding space', posSquash('  RQ ') === 'rq')
+ck('  …null/undefined squash to empty', posSquash(null) === '' && posSquash(undefined) === '')
+
+ck('THE REGRESSION: a b2bsoft block is HIDDEN from a tenant running RQ',
+   posVisible('b2bsoft', 'RQ') === false)
+ck('  …and hidden however the operator spelled the POS', posVisible('b2bsoft', 'rq') === false)
+ck('a b2bsoft block is SHOWN to a tenant running b2bsoft', posVisible('b2bsoft', 'b2bsoft') === true)
+ck('  …including the hand-typed spelling', posVisible('b2bsoft', 'B2B Soft') === true)
+
+ck('NEVER HIDES when the tenant POS is unresolved (a failed lookup withholds nothing)',
+   posVisible('b2bsoft', '') === true)
+ck('  …same for null and undefined', posVisible('b2bsoft', null) === true && posVisible('b2bsoft', undefined) === true)
+ck('a POS-AGNOSTIC surface (no tag) is always shown', posVisible('', 'RQ') === true)
+ck('  …and with a null tag', posVisible(null, 'RQ') === true)
+ck('both unknown ⇒ shown (never a blank page)', posVisible('', '') === true)
+
+// The neutral noun is the term resolver's DISPLAY fallback; it must never be passed in as a POS name
+// or every tagged block would hide. The page passes term('pos_system', '') for exactly this reason.
+ck("the neutral noun 'POS' is not treated as a POS that matches b2bsoft",
+   posVisible('b2bsoft', 'POS') === false)
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

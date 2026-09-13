@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harnesslib import js_code_only   # noqa: E402
 from app.modules.commcalc import implementation_spine as spine   # noqa: E402  (PURE — no DB import)
+from app.modules.commcalc import report_labels as rl             # noqa: E402  (PURE — the ONE slugifier)
 
 PASS, FAIL = [], []
 
@@ -194,6 +195,43 @@ check("D3 a row for a carrier the tenant does NOT run is hidden — this is the 
       "was complaining about", not spine.carrier_visible({"carrier_id": "c-other"}, have))
 check("D4 with NO carrier list, nothing is filtered — a failed carrier lookup must never hide a "
       "report somebody needs to upload", spine.carrier_visible({"carrier_id": "c-other"}, {}))
+
+# ── D4a. THE COMPANION: carrier_id_by_code (owner bug report 2026-09-13) ─────────────────────────
+# carrier_visible answers "may this row be seen"; something has to STAMP the carrier_id that gives
+# the question an answer. apply_pos_profile seeded every report_definitions row with a NULL
+# carrier_id, and NULL is carrier-agnostic (D1 above) — so applying a POS standard offered that POS's
+# reports under EVERY carrier lens the tenant runs. The two live beside each other on purpose: a
+# resolver that disagreed with the predicate would stamp rows the predicate then hides.
+_norm = rl.normalize_carrier_code
+check("D4a a declared carrier_code resolves to THIS org's own carrier id",
+      spine.carrier_id_by_code(carriers, "one", _norm) == C1)
+check("D4a2 …and the row it stamps is then visible to a tenant running that carrier",
+      spine.carrier_visible({"carrier_id": spine.carrier_id_by_code(carriers, "one", _norm)}, have))
+check("D4a3 …and HIDDEN from a tenant that does not run it",
+      not spine.carrier_visible({"carrier_id": spine.carrier_id_by_code(carriers, "one", _norm)},
+                                {C2: "Carrier Two"}))
+check("D4a4 matching is by the SAME slugifier the rest of the flow injects, not a second one",
+      spine.carrier_id_by_code([{"id": "cb", "name": "Boost Mobile", "code": None}], "boost", _norm) == "cb")
+check("D4a5 a code the tenant does not run resolves to None, never to some other carrier",
+      spine.carrier_id_by_code(carriers, "three", _norm) is None)
+check("D4a6 BYTE-IDENTICAL TO TODAY when no carrier_code is declared: None in, None out",
+      spine.carrier_id_by_code(carriers, None, _norm) is None
+      and spine.carrier_id_by_code(carriers, "", _norm) is None)
+check("D4a7 …and an empty carrier list resolves to None rather than raising",
+      spine.carrier_id_by_code([], "one", _norm) is None
+      and spine.carrier_id_by_code(None, "one", _norm) is None)
+check("D4a8 a carrier row with no id is never returned as an id",
+      spine.carrier_id_by_code([{"id": None, "code": "one"}], "one", _norm) is None)
+
+# The wiring itself: the seeder must actually pass a carrier_id through, or the pure resolver above
+# proves nothing about live behaviour.
+_rtr = open(os.path.join(ROOT, "backend/app/modules/commcalc/router.py"), encoding="utf-8").read()
+_apply = _rtr[_rtr.index("def apply_pos_profile("):]
+_apply = _apply[:_apply.index("@router.get(\"/email-sweep/ingest-health\")")]
+check("D4a9 apply_pos_profile STAMPS carrier_id on every report_definitions row it seeds",
+      '"carrier_id": implementation_spine.carrier_id_by_code(' in _apply)
+check("D4a10 …resolved against THIS org's carrier rows, org-scoped",
+      '.table("carrier").select("id,name,code")' in _apply and '.eq("org_id", org_id)' in _apply)
 
 # The upload route: only a rooted path is a destination.
 check("D5 a rooted upload_endpoint is used as-is",

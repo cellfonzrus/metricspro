@@ -102,3 +102,40 @@ export function carrierRowIds(
   }
   return out
 }
+
+// ── WHICH POS DOES THIS TENANT RUN (owner bug report 2026-09-13) ───────────────────────────────────
+// Owner: "since we declared that the pos is not b2b anymore it is rq that shoud not give the option
+// for b2b any more … since the pos was never updated at the ground level it did not propogate to the
+// other attched modules."
+//
+// The tenant's POS is ALREADY a single piece of config: the `pos_system` vocabulary term (mig 953
+// house presets + a tenant override, resolved by report_labels.py → useReportLabels().term). Nothing
+// new is stored here and no second POS record is introduced — these two helpers just let a surface
+// ASK that one answer, which is exactly what no surface was doing.
+//
+// The comparison must be tolerant because the value is operator-editable free text: the same POS is
+// spelled 'b2bsoft', 'B2B Soft' and 'B2BSoft' across the house presets and tenant overrides, and a
+// gate that treated those as three different systems would hide a tenant's own imports.
+
+/** Case- and punctuation-insensitive key for a POS system name ('B2B Soft' → 'b2bsoft'). */
+export function posSquash(name: string | undefined | null): string {
+  return (name || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
+/**
+ * Is a POS-SPECIFIC surface shown to a tenant running `currentPos`?
+ *
+ * Deliberately the same shape as `implementation_spine.carrier_visible`, one axis over, so the two
+ * gates can never drift into disagreeing about what a tenant sees:
+ *   · a surface with NO pos tag is POS-agnostic and always shows;
+ *   · a tenant whose `pos_system` is unresolved hides NOTHING — a lookup that fails must never
+ *     withhold an upload somebody needs;
+ *   · otherwise it shows only to the POS it belongs to.
+ */
+export function posVisible(tilePos: string | undefined | null, currentPos: string | undefined | null): boolean {
+  const want = posSquash(tilePos)
+  if (!want) return true
+  const have = posSquash(currentPos)
+  if (!have) return true
+  return want === have
+}

@@ -6472,6 +6472,49 @@ while `Balance` carries the full $13,496,716.18 — earned, never paid. Reported
    second, relevance-based gate would be the duplicate sequencing mechanism the brief forbids. If the
    owner meant the screens themselves, that is a design change worth making explicitly.
 
+### 26.8 THE POS WAS DECLARED AND NOTHING LISTENED (owner bug report 2026-09-13)
+
+Owner: *"since we declared that the pos is not b2b anymore it is rq that shoud not give the option for
+b2b any more, unless it is added as a second pos … since the pos was never updated at the ground level
+it did not propogate to the other attched modules."* And: *"since we declared this is verizon tenant it
+should not show the boost specific file upload options to the admin of that tenant."*
+
+**DUPLICATE CHECK — no new POS record was created.** The tenant's POS is ALREADY one piece of config:
+the `pos_system` vocabulary term (`commcalc.ui_label_override`, scope `report_term:<carrier>`, mig
+`953` house presets + mig `1004`'s `RQ`), resolved by `report_labels.py` → `useReportLabels().term`,
+and WRITTEN by the Implementation Wizard (`implementation/page.tsx` → `PUT /commcalc/report-labels`).
+Nothing consulted it. The fix is a predicate that ASKS that one answer, not a second POS field.
+
+**TWO DEFECTS, one per tier.**
+
+1. **The one ungated tile block.** Every block on `commcalc/upload/page.tsx` filters through
+   `tileVisible` — except the email-reports grid (`CUSTOM_REPORTS`), which had no filter of any kind,
+   so one POS's exports were offered to every tenant whatever POS they had declared. Now gated on
+   `posVisible(CUSTOM_REPORTS_POS, term('pos_system', ''))`, and its heading renders the tenant's OWN
+   resolved system instead of a hardcoded brand. The fallback is `''` and deliberately NOT the neutral
+   noun `'POS'` — an unresolved term must read as *unknown* (hide nothing), not as a POS named "POS".
+2. **`apply_pos_profile` stamped a NULL `carrier_id`** on every `report_definitions` row it seeded, and
+   NULL is *carrier-agnostic — always shown* (`carrier_visible`, §26.3). So applying a POS standard
+   offered that POS's reports under EVERY carrier lens the tenant runs. A `report_defs` entry may now
+   declare `carrier_code`, resolved against that org's OWN carrier rows. An entry declaring none still
+   writes NULL, so the shipped profile — whose two entries are genuinely POS-level, not carrier-level —
+   is byte-identical to today.
+
+**NEW — registered here:**
+
+| Added | Where | Proof |
+|---|---|---|
+| `posSquash` / `posVisible` — the POS axis of the visibility gate, deliberately the same shape as `carrier_visible` so the two can never drift | `frontend/src/lib/carrier-scope.ts` (EXTENDED, not a sibling module) | `prove_carrier_scope.mjs` §POS gate — 54 checks total (was 41) |
+| `implementation_spine.carrier_id_by_code` — the companion that STAMPS what `carrier_visible` reads; injects `report_labels.normalize_carrier_code` rather than slugifying again | `backend/app/modules/commcalc/implementation_spine.py` | `harness_tenant_implementation.py` D4a–D4a10 — 102 checks total (was 92) |
+
+Negative controls verified both: removing the `carrier_id` stamp → 101/1; making `posVisible` always
+true → 51/3; restored → 102/0 and 54/0.
+
+**STILL OPEN (unchanged):** §26.7 item 1 — `_ONBOARDING_PROFILE` still hardcodes its `pos` and
+`processor` option tokens and six `applies_when` gates depend on them, so sourcing THOSE from the term
+vocabulary would silently drop setup steps from tenants mid-implementation. This change gates what a
+tenant is OFFERED; it does not re-key the questionnaire.
+
 ---
 
 ## 27. VENDOR REBATE HISTORY — earned is not collected (owner 2026-09-12)
