@@ -14454,6 +14454,21 @@ def set_nav_label(body: NavLabelIn, org_id: str = ORG_ID,
     label = (body.label or '').strip()
     if not key:
         raise HTTPException(400, "key required")
+    # RE-GRANTING A GATED-OUT OPTION IS SUPER-ADMIN ONLY (owner directive 2026-09-13): "if they need
+    # them then the super admin should have a full role permission exclusiveluy for super admin to
+    # assign to the new or existing tenants which have been gated out due to carrier or pos settings."
+    #
+    # The rule is asymmetric ON PURPOSE, and the asymmetry is the whole safety property: NARROWING is a
+    # tenant's own business — hiding a surface, or resetting to the carrier/POS default, stays open to
+    # any menu-layout admin and can only ever show LESS. WIDENING past a carrier or POS gate is the
+    # platform's decision, because it re-grants a surface the tenant's own configuration says does not
+    # apply to them. So this can never lock anyone out of something they already had; the worst it can
+    # do is refuse to hand out something new.
+    if scope == 'cap' and label.lower() == 'show' and not gc["super_admin"] \
+            and (key.startswith('carrier:') or key.startswith('pos:')):
+        raise HTTPException(403, "Turning a carrier- or POS-gated option back on is reserved for a "
+                                 "platform super-admin. You can still hide it, or reset it to follow "
+                                 "your carrier and POS settings. Ask the platform team to re-grant it.")
     client = sb()
     try:
         if not label:

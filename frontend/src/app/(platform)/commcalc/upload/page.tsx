@@ -7,7 +7,7 @@ import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 import { LastUploadLine, useLastUploads } from '../_lib/lastUpload'
 import { useActiveCarrier } from '@/lib/auth-context'
 import { carrierCode } from '@/lib/rbac'
-import { posVisible } from '@/lib/carrier-scope'
+import { posOK, POS_GATED_SURFACES } from '@/lib/carrier-scope'
 import { useReportLabels } from '@/lib/report-labels'
 
 // ── WHAT AN UPLOAD ACTUALLY DOES, per file type (owner 2026-07-29) ──────────────────────────────
@@ -94,6 +94,9 @@ const TYPE_META = Object.fromEntries(FILE_TYPES.map(t => [t.id, t]))
 // different POS no longer sees this block at all (owner 2026-09-13: "since we declared that the pos is
 // not b2b anymore it is rq that shoud not give the option for b2b any more").
 const CUSTOM_REPORTS_POS = 'b2bsoft'
+// The override key for this block, from the shared registry — so a gated surface is always one a
+// super-admin can re-grant at /admin/labels (owner directive 2026-09-13).
+const CUSTOM_REPORTS_SURFACE = POS_GATED_SURFACES[0].key
 const CUSTOM_REPORTS: { label: string; icon: string; desc: string }[] = [
   { label: 'Activation Details', icon: '📲', desc: 'b2b Activation Details — one row per activation (Service Plan = the activation). Drives the store activation counts.' },
   { label: 'Bill Payments', icon: '💵', desc: 'b2b Bill Payment Transactions Processed — powers the bill-payment discounts report.' },
@@ -200,6 +203,14 @@ export default function UploadPage() {
   // posVisible hides nothing, rather than as a POS named "POS" that matches none of the tiles.
   const { term } = useReportLabels()
   const currentPos = term('pos_system', '')
+  // Per-tenant capability overrides — the SAME map the sidebar's carrier gate reads (ui_label_override
+  // scope 'cap' via GET /commcalc/nav-config). Fail-soft: an unreadable map leaves the gate alone.
+  const [navCaps, setNavCaps] = useState<Record<string, boolean | null>>({})
+  useEffect(() => {
+    api('/api/v1/commcalc/nav-config')
+      .then((r: { capabilities?: Record<string, boolean | null> }) => setNavCaps(r?.capabilities || {}))
+      .catch(() => setNavCaps({}))
+  }, [])
   const [uploading, setUploading] = useState<string | null>(null)
   const [statuses, setStatuses] = useState<Record<string, 'idle'|'uploading'|'done'|'error'|'warn'>>({})
   const [messages, setMessages] = useState<Record<string, string>>({})
@@ -549,7 +560,7 @@ export default function UploadPage() {
           visibility filter at all — every other block already asks tileVisible — so a tenant that had
           declared a different POS was still offered another POS's exports. The heading now names the
           tenant's OWN system from the resolved term rather than a hardcoded brand. */}
-      {posVisible(CUSTOM_REPORTS_POS, currentPos) && (<>
+      {posOK(CUSTOM_REPORTS_SURFACE, CUSTOM_REPORTS_POS, currentPos, navCaps) && (<>
       <div style={{ fontWeight: 700, fontSize: 14, margin: '24px 0 10px' }}>
         📥 {term('pos_system', 'POS')} email reports <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>— upload the Activation Details, Bill Payment &amp; Sales-by-Product exports here too</span>
       </div>

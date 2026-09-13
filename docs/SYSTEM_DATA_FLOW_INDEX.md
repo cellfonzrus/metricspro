@@ -6547,6 +6547,41 @@ Nothing consulted it. The fix is a predicate that ASKS that one answer, not a se
 Negative controls verified both: removing the `carrier_id` stamp → 101/1; making `posVisible` always
 true → 51/3; restored → 102/0 and 54/0.
 
+### 26.8a THE ESCAPE HATCH — re-granting a gated-out option (owner directive 2026-09-13)
+
+Owner: *"if they need them then the super admin should have a full role permission exclusiveluy for
+super admin to assign to the new or existing tenants which have been gated out due to carrier or pos
+settings."*
+
+**DUPLICATE CHECK — this override ALREADY EXISTED and was EXTENDED, not rebuilt.** `caps['carrier:<href>']`
+(`rbac.carrierOK`) has always let an admin force a carrier-hidden NAV item on or off: it is a
+per-tenant `commcalc.ui_label_override` row with `scope='cap'`, written by `POST /commcalc/nav-labels`
+and edited at `/admin/labels`. **The gap was that the new POS gate had no way out at all.** `pos:<surface>`
+is ONE MORE KEY NAMESPACE in that same mechanism — no second store, no second endpoint, no second admin
+screen, and `posOK` mirrors `carrierOK` clause for clause so an administrator has one ladder to learn,
+not two.
+
+**THE ASYMMETRY IS THE SAFETY PROPERTY.** Enforced SERVER-SIDE in `set_nav_label`, not in the UI:
+
+| Action | Who | Why |
+|---|---|---|
+| **Hide** a gated surface, or **reset** it to follow the tenant's own carrier/POS | any menu-layout admin | narrowing is a tenant's own business and can only ever show LESS |
+| **Show** — re-grant a surface the carrier or POS gate had hidden | **platform super-admin only** (403 otherwise) | it re-grants something the tenant's OWN configuration says does not apply to them |
+
+So the override can never lock anyone out of something they already had; the worst it can do is decline
+to hand out something new. The refusal names what the caller *can* still do rather than only saying no,
+and the admin screen offers "Always show" only to a super-admin — but keeps hide/auto for everyone, and
+says why.
+
+`POS_GATED_SURFACES` (`lib/carrier-scope.ts`) is the shared registry the admin screen lists from, so a
+surface cannot be gated without also being overridable — the check that would otherwise be remembered
+by hand.
+
+Proof: `prove_carrier_scope.mjs` — **64 checks** (was 54); `harness_screen_link_guard.py` §I — **71**
+(was 61), pinning both halves of the asymmetry and that the frontend never offers a control the server
+would refuse. Negative controls verified: dropping the super-admin check → 68/3; making `posOK` ignore
+the override → 62/2; restored → 71/0 and 64/0.
+
 **STILL OPEN (unchanged):** §26.7 item 1 — `_ONBOARDING_PROFILE` still hardcodes its `pos` and
 `processor` option tokens and six `applies_when` gates depend on them, so sourcing THOSE from the term
 vocabulary would silently drop setup steps from tenants mid-implementation. This change gates what a

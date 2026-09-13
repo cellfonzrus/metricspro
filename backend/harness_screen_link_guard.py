@@ -49,6 +49,7 @@ SCREEN_LINK = os.path.join(FRONT, "components", "ScreenLink.tsx")
 RBAC = os.path.join(FRONT, "lib", "rbac.ts")
 APP = os.path.join(FRONT, "app", "(platform)")
 ONBOARDING = os.path.join(os.path.dirname(HERE), "backend", "app", "modules", "core", "onboarding.py")
+CC_ROUTER = os.path.join(os.path.dirname(HERE), "backend", "app", "modules", "commcalc", "router.py")
 FLOW_RETURN = os.path.join(FRONT, "lib", "flow-return.ts")
 
 P = F = 0
@@ -285,6 +286,46 @@ _guarded = all(
     for fn in ("readTrail", "writeTrail") if "function %s" % fn in _BAR)
 check("H6 EVERY sessionStorage access is guarded (private mode must not break a page)",
       _guarded and "function readTrail" in _BAR and "function writeTrail" in _BAR)
+
+# ── I. RE-GRANTING A GATED-OUT OPTION IS SUPER-ADMIN ONLY, AND ONLY WIDENING IS ─────────────────
+# Owner 2026-09-13: "if they need them then the super admin should have a full role permission
+# exclusiveluy for super admin to assign to the new or existing tenants which have been gated out due
+# to carrier or pos settings."
+#
+# The asymmetry IS the safety property, and it is the thing worth pinning: NARROWING (hide, or reset
+# to the tenant's own carrier/POS default) stays open to any menu-layout admin, so this can never lock
+# someone out of something they already had. WIDENING past a gate is the platform's call. A future
+# edit that gates the whole cap scope would break tenants' ability to hide; one that drops the check
+# hands the re-grant to every tenant admin. Both fail here.
+print()
+print("I. only a super-admin may re-grant a carrier/POS-gated option")
+_CC = re.sub(r"(?m)^\s*#.*$", "", read(CC_ROUTER))          # comments stripped, per §G
+_i = _CC.index("def set_nav_label(")
+_setlab = _CC[_i:_i + 2600]
+check("I1 the write path checks for super-admin before re-granting",
+      'not gc["super_admin"]' in _setlab and "403" in _setlab)
+check("I2 …only in the capability scope, so a plain RENAME is untouched",
+      "scope == 'cap'" in _setlab)
+check("I3 …only when WIDENING — 'show' is named, and hide/auto are not gated",
+      "'show'" in _setlab and "'hide'" not in _setlab.split("super_admin")[-1][:400])
+check("I4 …and it covers BOTH gates, carrier and POS",
+      "'carrier:'" in _setlab and "'pos:'" in _setlab)
+check("I5 the refusal tells the reader what they CAN still do, rather than only saying no",
+      "hide it" in _setlab and "reset" in _setlab)
+
+# The frontend must not offer a control the server would refuse — and must not hide a tenant's own
+# ability to narrow while doing it.
+_LAB = read(os.path.join(FRONT, "app", "(platform)", "admin", "labels", "page.tsx"))
+check("I6 the admin screen offers 'Always show' only to a super-admin",
+      "{(isSuper || v === 'show') && <option value=\"show\">" in _LAB)
+check("I7 …while hide and auto stay available to everyone (narrowing is a tenant's own business)",
+      _LAB.count('<option value="hide">') >= 2 and _LAB.count('<option value="auto"') >= 2)
+check("I8 …and a non-super admin is told why, not left guessing",
+      "reserved for the platform team" in _LAB)
+check("I9 POS-gated surfaces are listed from the SHARED registry, not a second copy",
+      "POS_GATED_SURFACES" in _LAB and "@/lib/carrier-scope" in _LAB)
+check("I10 the override reuses the existing store and endpoint — no second mechanism",
+      "/api/v1/commcalc/nav-labels" in _LAB and "scope: 'cap'" in _LAB)
 
 print()
 print("=" * 78)

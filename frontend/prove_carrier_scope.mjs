@@ -37,11 +37,11 @@ const cs = await loadModule('src/lib/carrier-scope.ts')
 
 const { defaultActiveCarrier, carrierOKActive, carrierCode, NAV_CARRIERS } = rbac
 const { financingVendorLabel, atuActiveCarry, textCarrier, presetVisibleForCarrier, vendorServesCarrier,
-        posSquash, posVisible } = cs
+        posSquash, posVisible, posOK, POS_GATED_SURFACES } = cs
 for (const [n, f] of Object.entries({ defaultActiveCarrier, carrierOKActive, carrierCode }))
   must(typeof f === 'function', `${n} did not export a function from rbac.ts`)
 for (const [n, f] of Object.entries({ financingVendorLabel, atuActiveCarry, presetVisibleForCarrier, vendorServesCarrier,
-                                      posSquash, posVisible }))
+                                      posSquash, posVisible, posOK }))
   must(typeof f === 'function', `${n} did not export a function from carrier-scope.ts`)
 
 // Fixtures.
@@ -148,6 +148,40 @@ ck('both unknown ⇒ shown (never a blank page)', posVisible('', '') === true)
 // or every tagged block would hide. The page passes term('pos_system', '') for exactly this reason.
 ck("the neutral noun 'POS' is not treated as a POS that matches b2bsoft",
    posVisible('b2bsoft', 'POS') === false)
+
+// ── THE OVERRIDE — a gate with no way out is a support ticket (owner directive 2026-09-13) ───────
+// "if they need them then the super admin should have a full role permission exclusiveluy for super
+// admin to assign to the new or existing tenants which have been gated out due to carrier or pos
+// settings." posOK mirrors rbac.carrierOK clause for clause: two gates whose override ladders
+// differed would be two things for an administrator to learn, and one would be learned wrong.
+console.log('\n— POS override (owner 2026-09-13) —')
+const SFC = 'upload_email_reports'
+{
+  must(Array.isArray(POS_GATED_SURFACES) && POS_GATED_SURFACES.length > 0,
+       'POS_GATED_SURFACES must list the surfaces a super-admin can re-grant')
+  ck('every gated surface is listed, so one can never be gated without being overridable',
+     POS_GATED_SURFACES.every(s => s && s.key && s.label && s.why))
+  ck('the gated block is the one in the registry', POS_GATED_SURFACES[0].key === SFC)
+
+  // No override ⇒ the gate decides, exactly as before.
+  ck('no override ⇒ the POS gate still hides a foreign POS block',
+     posOK(SFC, 'b2bsoft', 'RQ', {}) === false)
+  ck('no override ⇒ the POS gate still shows its own', posOK(SFC, 'b2bsoft', 'b2bsoft', {}) === true)
+  ck('an undefined caps map is tolerated', posOK(SFC, 'b2bsoft', 'b2bsoft', undefined) === true)
+
+  // THE RE-GRANT: the owner's actual ask.
+  ck('THE RE-GRANT: an override of show re-opens a block the POS gate had hidden',
+     posOK(SFC, 'b2bsoft', 'RQ', { ['pos:' + SFC]: true }) === true)
+  ck('an override of hide closes one the gate would have shown',
+     posOK(SFC, 'b2bsoft', 'b2bsoft', { ['pos:' + SFC]: false }) === false)
+  ck('a null override means AUTO — fall through to the gate, not hide',
+     posOK(SFC, 'b2bsoft', 'RQ', { ['pos:' + SFC]: null }) === false
+     && posOK(SFC, 'b2bsoft', 'b2bsoft', { ['pos:' + SFC]: null }) === true)
+  ck('an override for a DIFFERENT surface does not leak across',
+     posOK(SFC, 'b2bsoft', 'RQ', { 'pos:something_else': true }) === false)
+  ck('a carrier override never reaches the POS gate (separate namespaces)',
+     posOK(SFC, 'b2bsoft', 'RQ', { 'carrier:/commcalc/upload': true }) === false)
+}
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)
