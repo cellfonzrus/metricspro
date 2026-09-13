@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
 import { invalidateApiCache } from '@/lib/cache'
 import { NAV, NAV_CARRIERS } from '@/lib/rbac'
+import { POS_GATED_SURFACES } from '@/lib/carrier-scope'
+import { useAuth } from '@/lib/auth-context'
 
 // Display Labels — per-tenant nicknames for the sidebar. Rename what you SEE ("Distributors"→"Suppliers",
 // "Payment Processor"→"VidaPay") without touching code or DB column names. Display-only: changing a label
@@ -16,7 +18,11 @@ export default function DisplayLabelsPage() {
   const [draft, setDraft] = useState<Record<string, string>>({})
   const [msg, setMsg] = useState('')
   const [loaded, setLoaded] = useState(false)
-  const [caps, setCaps] = useState<Record<string, boolean | null>>({})   // capability overrides (carrier:<href>)
+  const [caps, setCaps] = useState<Record<string, boolean | null>>({})   // capability overrides ('carrier:<href>' / 'pos:<surface>')
+  // RE-GRANTING is super-admin only (owner directive 2026-09-13). The SERVER is the enforcement — this
+  // only decides whether to offer a control that would 403, and explains why when it does not.
+  const { user } = useAuth()
+  const isSuper = !!user?.super_admin
 
   useEffect(() => {
     api('/api/v1/commcalc/nav-config')
@@ -28,13 +34,14 @@ export default function DisplayLabelsPage() {
       .finally(() => setLoaded(true))
   }, [])
 
-  async function setCap(href: string, val: 'auto' | 'show' | 'hide') {
-    const key = 'carrier:' + href
+  async function setCap(href: string, val: 'auto' | 'show' | 'hide', ns: 'carrier' | 'pos' = 'carrier') {
+    const key = ns + ':' + href
     try {
       await api('/api/v1/commcalc/nav-labels', { method: 'POST', body: JSON.stringify({ scope: 'cap', key, label: val === 'auto' ? '' : val }) })
       invalidateApiCache('nav-config')   // sidebar (layout) caches nav-config → refresh it after this write
       setCaps(p => { const n = { ...p }; if (val === 'auto') delete n[key]; else n[key] = val === 'show'; return n })
-      setMsg(val === 'auto' ? 'Reset to carrier default' : val === 'show' ? 'Always shown' : 'Always hidden')
+      setMsg(val === 'auto' ? (ns === 'pos' ? 'Reset to follow the POS setting' : 'Reset to carrier default')
+                            : val === 'show' ? 'Always shown' : 'Always hidden')
       setTimeout(() => setMsg(''), 3000)
     } catch (e: any) { setMsg(e?.message || 'Save failed') }
   }
@@ -74,6 +81,42 @@ export default function DisplayLabelsPage() {
       </p>
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 14 }}>{msg}</div>}
 
+      {/* POS-GATED SURFACES (owner directive 2026-09-13) — "the super admin should have a full role
+          permission exclusiveluy for super admin to assign to the new or existing tenants which have
+          been gated out due to carrier or pos settings". These are surfaces hidden by the tenant's own
+          POS setting rather than by a carrier. Same override store, same endpoint, one more key
+          namespace — and the same asymmetry: anyone here may HIDE or reset, only a platform
+          super-admin may turn one back ON. */}
+      {loaded && (
+        <div className="card" style={{ padding: 16, marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, textTransform: 'uppercase', letterSpacing: '0.05em',
+            color: 'var(--text2)', marginBottom: 4 }}>POS-gated options</div>
+          <div style={{ color: 'var(--text3)', fontSize: 12, marginBottom: 10 }}>
+            Hidden because they belong to a different POS than the one this company has declared.
+            {!isSuper && ' Turning one back on is reserved for the platform team — you can still hide it or reset it.'}
+          </div>
+          {POS_GATED_SURFACES.map(sfc => {
+            const cur = caps['pos:' + sfc.key]
+            const v = cur === true ? 'show' : cur === false ? 'hide' : 'auto'
+            return (
+              <div key={sfc.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '5px 0' }}>
+                <div style={{ fontSize: 13, color: 'var(--text)' }}>
+                  {sfc.label}
+                  <span style={{ color: 'var(--text3)', fontSize: 11, marginLeft: 8 }}>{sfc.why}</span>
+                </div>
+                <select value={v} onChange={e => setCap(sfc.key, e.target.value as 'auto' | 'show' | 'hide', 'pos')}
+                  title="POS visibility — Auto follows this company's declared POS"
+                  style={{ padding: '5px 7px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }}>
+                  <option value="auto">Auto (follow our POS)</option>
+                  {(isSuper || v === 'show') && <option value="show">Always show</option>}
+                  <option value="hide">Always hide</option>
+                </select>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
       {!loaded ? <div style={{ color: 'var(--text3)' }}>Loading…</div> : NAV.map(g => (
         <div key={g.group} className="card" style={{ padding: 16, marginBottom: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid var(--border)' }}>
@@ -93,7 +136,7 @@ export default function DisplayLabelsPage() {
                       title="Carrier visibility — Auto follows the tenant's carrier; override to always show or hide"
                       style={{ padding: '5px 7px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }}>
                       <option value="auto">Auto ({NAV_CARRIERS[it.href].join('/')})</option>
-                      <option value="show">Always show</option>
+                      {(isSuper || v === 'show') && <option value="show">Always show</option>}
                       <option value="hide">Always hide</option>
                     </select>
                   )

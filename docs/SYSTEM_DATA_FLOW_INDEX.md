@@ -49,8 +49,10 @@ Primary code homes:
 | 23y | **Device Purchases from the distributor** | "What did the distributor bill us for phones and devices in this period, per company and per store — and why does it not equal device COGS?" |
 | 23z | **Device Payable as at a date** | "Standing on a given day — a year-end, a closing date — which devices had already been billed to us but not yet paid for, per company and per store? And which of the units billed in one year were actually paid in the next?" |
 | 23aa | **Distributor chargebacks** | "Two separate chargebacks billed to the master dealer account — a one-off and a recurring one — what are they, when did each really start, and where do they book?" |
-| 28 | **Roster reach — who is in the employee picker** | "Whose names may this login pick from on the closing sheet? Why did a permission change empty the dropdown, and why does a rep with a market on their record still only see their own store?" |
 | 27 | **Vendor rebate history (earned, per line)** | "A new tenant's carrier statement lists every rebate and commission it owes us per line — where does that file land, why is it not in the P&L, and what is the difference between what we have EARNED and what has actually been COLLECTED?" |
+| 28 | **"Which company am I in"** | "My login belongs to more than one company — which one is every page on screen actually showing, how would I know if it changed under me, and why did another company's mailbox turn up in a new tenant's setup?" |
+| 29 | **Roster reach — who is in the employee picker** | "Whose names may this login pick from on the closing sheet? Why did a permission change empty the dropdown, and why does a rep with a market on their record still only see their own store?" |
+| 11a | **Inventory vs Sold** | "My snapshot says this phone is in stock — was it already sold? Which units do I clear out, which sales do I adjust, and why is a sold-then-refunded unit not on the list?" |
 
 ---
 
@@ -1279,6 +1281,41 @@ gates.
 
 **GAP:** `days_in_stock` is snapshot-as-of-file, not computed live; `store` is free text (not joined to
 `store_code`) so per-store rollups need resolution. Aging is currently upload-fed (sweep stub, §2). `⚠`
+
+### 11a. INVENTORY vs SOLD — is the unit still here? (owner request 2026-09-12)
+
+Owner: *"check against the sales by product to see if the item in inventory is already sold or not and
+if it is alsready sold then it should report those items whic are soled with imei to be adjusted and
+also those items which are in oventory to be cleared out of the inventory."*
+
+**DUPLICATE CHECK.** Two neighbours exist and NEITHER answers this. `GET /account/inventory-recon` (§4)
+is a balance-sheet tie-out in DOLLARS per store — it never looks at a device. `GET /device-cost-recon`
+(above) reconciles what a device COST across four sources and flags IMEI overlap between them — it
+answers *whose number is right*, not *is this unit still here*. **PRESENCE is the third question** and
+nothing answered it. REUSED: `device_cost_recon.device_key` (THE cross-source device key — INJECTED,
+so the pure module stays DB-free and the harness proves the real pairing) and `_dcr_paged` (the
+existing org-scoped paged read). No new table; the two sides are `raw_sales` and
+`inventory_aging_device`, both as extended by mig `1004`.
+
+**THE RULE THAT MAKES IT WORTH BUILDING — NET QUANTITY, NOT PRESENCE IN THE SALES FILE.** A refund line
+carries a NEGATIVE `quantity` (mig `1004` added the column for exactly this), so a unit sold and then
+returned nets to zero and is genuinely back on the shelf. **Measured on the owner's own first file: a
+naive "appears in sales ⇒ sold" reads 18 phantom units and $12,360; the true figures are 10 and
+$7,360.** Reporting all 18 would send someone to write off $5,000 of stock they can see. And a status
+naming an ORDER is not physically present, so an ordered-but-unreceived unit can never be reported as
+inventory to clear — recognised by SHAPE (`\b(?:back|re|pre)?[-\s]?order…`), not a vendor word list,
+so `backorder` as one word is caught while `recorder` and `disorder` are not.
+
+| Piece | Where |
+|---|---|
+| PURE logic — `status_is_present`, `net_sold`, `unkeyed_sales`, `on_hand_index`, `reconcile` | `backend/app/modules/commcalc/inventory_sold_recon.py` |
+| `GET /commcalc/inventory-sold-recon` — READ-ONLY, org-scoped both sides; returns `rows` + `totals` + a `basis` block saying whether either read was capped or failed (a capped read makes every number a FLOOR, and a report that does not say so is a number acted on without its basis) | `commcalc/router.py` |
+| `commcalc/inventory-sold-recon/page.tsx` — display only, NAV `Inventory vs Sold`. No "fix it" button: a one-click write-off of stock is exactly the action that must not be one click | frontend |
+| Proof `backend/harness_inventory_sold_recon.py` — **43 checks**, DB-free, pairing the REAL `device_key` | negative control: removing the refund netting → 37/6, and §D reports 18/$12,360 instead of 10/$7,360 |
+
+**LIVE DEFECT, REPORTED NOT FIXED (CLAUDE.md):** on the owner's first RQ files — 10 devices, $7,360 at
+cost, marked In Stock but sold and never returned, oldest since March 2025, including 4 desk phones on
+invoice `Z1321IN11280`. The report surfaces them; it writes no adjustment and clears no row.
 
 ---
 
@@ -2722,6 +2759,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `storeops.app_users` (ONE ROW PER `(auth_id, org_id)` since mig `706` — a login belonging to several companies has several rows; `is_default_org` declares its home company and is set on **0 of 112 rows** live) | provisioning / invite / `connect-tenant` | `core/membership.list_memberships` → `pick_membership` (handlers) and `tenant_middleware._resolve_identity` → `_pick_active_org` (the request's acting org, and the ONLY rule that decides it); surfaced to the browser by `GET /core/my-tenants` → `frontend/src/lib/tenant-scope.ts` (§28) |
 | `core.module_onboarding_task` (mig `733`) | `onboarding.seed_tasks` (INSERTS missing task rows only) + `_backfill_import_sources` (fills a BLANK `import_source` from the shipped registry, nothing else, never overwriting an operator value) | `load_tasks_with_source` → `build_status`, the POS wizard (§23n). DB is truth, the in-code registry is the fallback — so a task that GAINS an import source after a tenant was seeded needs the backfill to reach it |
 | `commcalc.carrier` (mig `038`) · `commcalc.report_definitions.carrier_id` (mig `291`) · `commcalc.connector_instances.carrier_id` (mig `039`) | `implementation_spine.carrier_visible` — THE one predicate (`router._carrier_visible` delegates to it); `upload_scope_map`; `carrier_blocks` | **§26 — "which uploads and automations belong to a carrier" is these three columns and nothing else.** `report_definitions.connector_id` is the automation↔upload binding the owner asked for, and it has existed since mig `039`. NULL `carrier_id` = carrier-agnostic and ALWAYS shown |
 | `pos.service_plans` · `pos.dealer_codes` (mig `726`, `742`) | POS settings CRUD; `POST /pos/dealer-codes/sync-from-reports`; the wizard's `apply_import` (ADDITIVE — a name/code already present is SKIPPED, never overwritten) | the register, activations, and the wizard's `count` predicates (§23n) |
@@ -2841,6 +2879,8 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `GET /commcalc/inventory-sold-recon` (is an on-hand unit already sold — READ-ONLY, books nothing, org-scoped both sides) | `router.inventory_sold_recon_endpoint` → PURE `commcalc/inventory_sold_recon.reconcile`, keyed by `device_cost_recon.device_key` | §11a — PRESENCE, distinct from `/device-cost-recon` (whose number is right) and `/account/inventory-recon` (dollars per store). Proof `harness_inventory_sold_recon.py` |
+| `GET /core/my-tenants` · `GET /core/bootstrap` (the login's membership list — the ONLY source of "which companies may I act as"; both exempt from mig-984 scope enforcement) | `core/router._my_tenants_payload` (names from `storeops.tenants`, never from `core.organizations`) | §28 which company am I in — `lib/tenant-scope.ts` `actingCompany`/`switcherOptions`, proof `prove_tenant_scope.mjs` |
 | _every endpoint filtering/grouping by MARKET_ | — | §13a canonical resolution (`core.scope.store_market_resolver`/`market_by_code`); inventory pinned in `harness_market_resolution_guard.py` |
 | _every endpoint OFFERING market options (dropdown/enumeration)_ | — | §13c canonical vocabulary (`core.scope.canonical_markets` composed via `merge_market_options`/`org_market_options`); inventory pinned in `harness_market_enumeration_guard.py`; B-1115/LI truth table `harness_market_vocabulary_truth.py` (owner 2026-09-04) |
 | `GET /commcalc/exec-mtd/{period}` (returns `metric_coverage` — the silent-zero detector) · `GET/PUT /commcalc/exec-metric-config` | `router.py` `exec_mtd` / `get_exec_metric_config` / `put_exec_metric_config` | §3 Exec-MTD metric definitions (carrier presets + detector, mig `962`) |
@@ -2908,9 +2948,9 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `GET /hr/compensation` (pay-gated: `pay_rate`/`base_salary`/`total_comp`/`annualized` stripped; commission stays — commcalc's own gate domain) | `hr/router.py:334` | §14 |
 | `GET /hr/employee-database` (pay-gated forward guard: pay-classified keys stripped from field registry + rows) | `hr/router.py:1384` | §14 |
 | `GET /storeops/employees` (roster; pay-gated 2026-09-10 — a `select("*")` that shipped every `pay_rate`/`pay_amount`; `pay_basis` kept) | `storeops/router.py:201` | §14 DM sweep |
-| `GET /storeops/employees?all_company=true` (**ROSTER REACH** 2026-09-13 — resolves `core.scope.roster_keyset`, not the reporting span; never returns an empty roster) | `storeops/router.py:201` → `_roster_keyset_for:7744` | §28 |
-| `GET /storeops/employees/visible` (dashboard picker; store/market resolution converged onto the SAME `roster_keyset` 2026-09-13 — reach ladder unchanged) | `storeops/router.py:8087` | §28 |
-| `GET /core/grant-universe` → `scheduling.roster_reach`/`roster_stores`/`roster_why` (why THIS login's employee picker is bounded) | `core/router.py` (`_grant_universe`) | §28 |
+| `GET /storeops/employees?all_company=true` (**ROSTER REACH** 2026-09-13 — resolves `core.scope.roster_keyset`, not the reporting span; never returns an empty roster) | `storeops/router.py:201` → `_roster_keyset_for:7744` | §29 |
+| `GET /storeops/employees/visible` (dashboard picker; store/market resolution converged onto the SAME `roster_keyset` 2026-09-13 — reach ladder unchanged) | `storeops/router.py:8087` | §29 |
+| `GET /core/grant-universe` → `scheduling.roster_reach`/`roster_stores`/`roster_why` (why THIS login's employee picker is bounded) | `core/router.py` (`_grant_universe`) | §29 |
 | `GET /storeops/payroll-change-log` (pay-gated 2026-09-10 — `before_value`/`after_value` redacted on `pay_rate`/`pay_amount` edits; the row + actor + timestamp stay) | `storeops/router.py:1119` | §14 DM sweep |
 | `PATCH /storeops/employees/{emp_id}` (pay-gated 2026-09-10 — the echoed row; the pay-field WRITE gate `_require_manager`/`_PAY_GATED_FIELDS` unchanged) | `storeops/router.py:2255` | §14 DM sweep |
 | `GET /storeops/pto-accrual/{period}` (pay-gated 2026-09-10 — per-employee `rate`/`cost` incl. `by_store`; the `stores[]` rollup and all hours KEPT) | `storeops/router.py:8380` | §14 DM sweep |
@@ -6473,6 +6513,140 @@ while `Balance` carries the full $13,496,716.18 — earned, never paid. Reported
    second, relevance-based gate would be the duplicate sequencing mechanism the brief forbids. If the
    owner meant the screens themselves, that is a design change worth making explicitly.
 
+### 26.8 THE POS WAS DECLARED AND NOTHING LISTENED (owner bug report 2026-09-13)
+
+Owner: *"since we declared that the pos is not b2b anymore it is rq that shoud not give the option for
+b2b any more, unless it is added as a second pos … since the pos was never updated at the ground level
+it did not propogate to the other attched modules."* And: *"since we declared this is verizon tenant it
+should not show the boost specific file upload options to the admin of that tenant."*
+
+**DUPLICATE CHECK — no new POS record was created.** The tenant's POS is ALREADY one piece of config:
+the `pos_system` vocabulary term (`commcalc.ui_label_override`, scope `report_term:<carrier>`, mig
+`953` house presets + mig `1004`'s `RQ`), resolved by `report_labels.py` → `useReportLabels().term`,
+and WRITTEN by the Implementation Wizard (`implementation/page.tsx` → `PUT /commcalc/report-labels`).
+Nothing consulted it. The fix is a predicate that ASKS that one answer, not a second POS field.
+
+**TWO DEFECTS, one per tier.**
+
+1. **The one ungated tile block.** Every block on `commcalc/upload/page.tsx` filters through
+   `tileVisible` — except the email-reports grid (`CUSTOM_REPORTS`), which had no filter of any kind,
+   so one POS's exports were offered to every tenant whatever POS they had declared. Now gated on
+   `posVisible(CUSTOM_REPORTS_POS, term('pos_system', ''))`, and its heading renders the tenant's OWN
+   resolved system instead of a hardcoded brand. The fallback is `''` and deliberately NOT the neutral
+   noun `'POS'` — an unresolved term must read as *unknown* (hide nothing), not as a POS named "POS".
+2. **`apply_pos_profile` stamped a NULL `carrier_id`** on every `report_definitions` row it seeded, and
+   NULL is *carrier-agnostic — always shown* (`carrier_visible`, §26.3). So applying a POS standard
+   offered that POS's reports under EVERY carrier lens the tenant runs. A `report_defs` entry may now
+   declare `carrier_code`, resolved against that org's OWN carrier rows. An entry declaring none still
+   writes NULL, so the shipped profile — whose two entries are genuinely POS-level, not carrier-level —
+   is byte-identical to today.
+
+**NEW — registered here:**
+
+| Added | Where | Proof |
+|---|---|---|
+| `posSquash` / `posVisible` — the POS axis of the visibility gate, deliberately the same shape as `carrier_visible` so the two can never drift | `frontend/src/lib/carrier-scope.ts` (EXTENDED, not a sibling module) | `prove_carrier_scope.mjs` §POS gate — 54 checks total (was 41) |
+| `implementation_spine.carrier_id_by_code` — the companion that STAMPS what `carrier_visible` reads; injects `report_labels.normalize_carrier_code` rather than slugifying again | `backend/app/modules/commcalc/implementation_spine.py` | `harness_tenant_implementation.py` D4a–D4a10 — 102 checks total (was 92) |
+
+Negative controls verified both: removing the `carrier_id` stamp → 101/1; making `posVisible` always
+true → 51/3; restored → 102/0 and 54/0.
+
+### 26.8a THE ESCAPE HATCH — re-granting a gated-out option (owner directive 2026-09-13)
+
+Owner: *"if they need them then the super admin should have a full role permission exclusiveluy for
+super admin to assign to the new or existing tenants which have been gated out due to carrier or pos
+settings."*
+
+**DUPLICATE CHECK — this override ALREADY EXISTED and was EXTENDED, not rebuilt.** `caps['carrier:<href>']`
+(`rbac.carrierOK`) has always let an admin force a carrier-hidden NAV item on or off: it is a
+per-tenant `commcalc.ui_label_override` row with `scope='cap'`, written by `POST /commcalc/nav-labels`
+and edited at `/admin/labels`. **The gap was that the new POS gate had no way out at all.** `pos:<surface>`
+is ONE MORE KEY NAMESPACE in that same mechanism — no second store, no second endpoint, no second admin
+screen, and `posOK` mirrors `carrierOK` clause for clause so an administrator has one ladder to learn,
+not two.
+
+**THE ASYMMETRY IS THE SAFETY PROPERTY.** Enforced SERVER-SIDE in `set_nav_label`, not in the UI:
+
+| Action | Who | Why |
+|---|---|---|
+| **Hide** a gated surface, or **reset** it to follow the tenant's own carrier/POS | any menu-layout admin | narrowing is a tenant's own business and can only ever show LESS |
+| **Show** — re-grant a surface the carrier or POS gate had hidden | **platform super-admin only** (403 otherwise) | it re-grants something the tenant's OWN configuration says does not apply to them |
+
+So the override can never lock anyone out of something they already had; the worst it can do is decline
+to hand out something new. The refusal names what the caller *can* still do rather than only saying no,
+and the admin screen offers "Always show" only to a super-admin — but keeps hide/auto for everyone, and
+says why.
+
+`POS_GATED_SURFACES` (`lib/carrier-scope.ts`) is the shared registry the admin screen lists from, so a
+surface cannot be gated without also being overridable — the check that would otherwise be remembered
+by hand.
+
+Proof: `prove_carrier_scope.mjs` — **64 checks** (was 54); `harness_screen_link_guard.py` §I — **71**
+(was 61), pinning both halves of the asymmetry and that the frontend never offers a control the server
+would refuse. Negative controls verified: dropping the super-admin check → 68/3; making `posOK` ignore
+the override → 62/2; restored → 71/0 and 64/0.
+
+**STILL OPEN (unchanged):** §26.7 item 1 — `_ONBOARDING_PROFILE` still hardcodes its `pos` and
+`processor` option tokens and six `applies_when` gates depend on them, so sourcing THOSE from the term
+vocabulary would silently drop setup steps from tenants mid-implementation. This change gates what a
+tenant is OFFERED; it does not re-key the questionnaire.
+
+### 26.9 THE WAY BACK, AND A REQUIRED TASK THAT POINTED AT A 404 (owner bug report 2026-09-13)
+
+Owner: *"now since it brought me from the implementation wizard once im done here it shoudl take me
+back there, if im a new tenant i dont know how to navaagte … the modules if they take you to the next
+module then they shoudl have the option of continuing with thier original work."*
+
+**DEFECT 1 — a required, non-skippable task pointed at a page that never existed.** The `carrier`
+task in `core/onboarding.py` carried `href="/configurations/carriers"`, which is **neither a NAV entry
+in `lib/rbac.ts` nor a route file**. With `is_required=True, skippable=False` there was no way forward
+and no way round: POS onboarding could not be completed at all. Now `/commcalc/carrier-mapping` — the
+screen that actually POSTs `/commcalc/carriers`, which is exactly what the task's own predicate counts.
+A sweep of all 10 task hrefs found this was the only dead one.
+
+**DEFECT 2 — a hand-off had no way home.** `pos/layout.tsx` has solved this since it shipped, but only
+for ONE module, and only because the POS module has a layout wrapping every one of its pages plus a
+gate endpoint saying what is outstanding. A hand-off that LEAVES the module — the reported trail,
+`/commcalc/implementation` → `/commcalc/onboarding` → `/commcalc/email-imports` — had neither.
+
+### 26.9a What was REUSED rather than rebuilt
+
+**No second navigation mechanism.** NAV is untouched, no route is registered, nothing is added to
+`ScreenLink`'s registry, and **no link site opts in**: the platform layout already knows the current
+path on every render, so the flow you came from is simply REMEMBERED as you leave it. One mount point
+covers every hop that exists and every hop that ships later. The visual is deliberately the SAME amber
+bar with the SAME wording `pos/layout.tsx` already uses — a second, differently-styled way of saying
+the same thing is how a UI stops being learnable.
+
+**What counts as a flow is a SHAPE, not a list.** `FLOW_SUFFIXES` = `/onboarding`, `/implementation`,
+`/wizard`, `/setup`. A hardcoded set of the six wizards §26.1 names would go stale the first time a
+seventh shipped, and the owner has been explicit that nothing should be hardcoded.
+
+**It closes the loop with §28.** The trail records the ORG the flow was started for. The header
+company switcher reloads the whole app, so a trail outlives the switch; sending someone "back to
+setup" across it would drop them into one company's setup while the app acts as another — the exact
+confusion the 20:48 incident was made of. The offer stands down and says why. An unknown org on
+either side is read as "don't know", never as "you moved", so it can never raise a false alarm.
+
+### 26.9b NEW — registered here
+
+| Added | Where | Proof |
+|---|---|---|
+| `normalizePath` / `isFlowPath` / `nextTrail` / `returnOffer` / `offerIsStale` — PURE, storage-free | `frontend/src/lib/flow-return.ts` | `frontend/prove_flow_return.mjs` — **40 checks**, §2 replays the owner's exact three hops |
+| `FlowReturnBar` — mounted ONCE in `(platform)/layout.tsx` beside `PlatformBanners`; every sessionStorage access guarded (private mode must not break a page) | `frontend/src/components/FlowReturnBar.tsx` | guard §H below |
+| §G — every `core/onboarding.py` task href resolves to a real NAV entry or route file; §H — the way back is mounted at the platform level, is shape-driven, and never invents a destination | `backend/harness_screen_link_guard.py` (EXTENDED — §A already pinned `ScreenLink`'s registry; the task list was a SECOND producer of destinations that nothing pinned, which is how the 404 shipped) | 61 checks (was 47) |
+
+The guard **strips Python comments before asserting**: the fix documents the dead href by name, and a
+guard that grepped raw source would fail on its own explanation and — far worse — would PASS on a
+defect that had merely been commented out. Same lesson as `harness_wizard_feedback_guard`.
+
+Negative controls verified: restoring `/configurations/carriers` → 58/3 (G2, G3 and G4 all fire);
+making `nextTrail` forget the flow on leaving it → 35/5; restored → 61/0 and 40/0.
+
+**STILL OPEN:** `WorkflowNext`'s stage sequencing was NOT changed here. Whether it should refuse to
+advance past an incomplete stage is a design decision about the spine itself (§26.7 item 6), not a
+navigation bug, and is worth making explicitly rather than as a side effect of a dead-link fix.
+
 ---
 
 ## 27. VENDOR REBATE HISTORY — earned is not collected (owner 2026-09-12)
@@ -6681,9 +6855,82 @@ word list — a word list silently stops checking a button the moment it is rena
 failure this guard exists to prevent. Both negative controls verified: reintroducing one
 `.catch(() => {})` → 19/1, and renaming a button while leaving the steps stale → 19/1; restoring → 20/0.
 
+
+## 28. "WHICH COMPANY AM I IN" — a login that belongs to several (owner bug report 2026-09-13)
+
+Owner, setting up a new tenant: *"my data for ss@1313global is already filled in — this should not be
+there it is tenants data not my data."*
+
+### THE INCIDENT, from `core.access_log` (not inferred — the platform's own record)
+
+Login `ss@1313global.us` (auth_id `ab08bb15…`) is an **admin in THREE companies**: the house org
+(2026-06-15), Luxelink (2026-07-14), Vzone (2026-08-09). Its own requests, 2026-09-13:
+
+| time | acting org | status | path |
+|---|---|---|---|
+| 20:27:50 | Vzone | 200 | `/commcalc/email-sweep/accounts` |
+| **20:48:25** | **HOUSE** | **200** | `/commcalc/email-sweep/accounts`, `/email-sweep/processed`, `/data-sources` |
+| 20:48:41 | HOUSE | 200 | `/core/employees`, `/core/roles`, `/core/impersonation/targets` |
+| 20:49–20:53 | HOUSE | 200 | `/core/roles/2`, `/roles/4`, `/roles/8`, `chat/unread` ×9 |
+| 20:53:18 | Vzone | 200 | `/core/employees` |
+
+**Nothing was broken server-side.** Every 200 is correct: that login really is a member of all three,
+so `_pick_active_org` honoured the `x-active-org` it was given. There is no 409 anywhere in this
+login's history, and no re-login in the window — the burst signature at 20:48:25 (a whole page bundle
+at once) is the header switcher's `setActiveOrg()` + `window.location.reload()`.
+
+**The defect is that the person could not TELL.** Five minutes inside another company's employees,
+roles and mailbox, with the only on-screen signal being an unlabelled `<select>` among a dozen header
+controls — and that control could itself display the WRONG company.
+
+### DUPLICATE CHECK (build gate)
+
+Checked §22 (operator console / cross-tenant entry), §16–18, and the middleware before writing a line.
+**REUSED, not rebuilt:** `x-active-org` + `localStorage mp_active_org` stay the one org selector
+(`client.ts` `getActiveOrg`/`setActiveOrg`); `_my_tenants_payload` stays the one membership list;
+`tenant_middleware._pick_active_org` stays the one server-side rule; `PlatformBanners` keeps the
+OPERATOR banner (§22) — this is the *tenant-persona* switcher, a different population (four
+non-super-admin logins), which had no indicator at all. **No second org source was created.**
+
+### THE TWO LATENT FALLBACKS (both removed)
+
+Memberships arrive **oldest-first** (`list_memberships` → `ORDER BY created_at`), and for all four
+multi-company logins on this platform the oldest is the HOUSE org. Two places therefore named the
+house org whenever the active org had not resolved:
+
+1. `(platform)/layout.tsx` sidebar — `… || tenants[0]?.name` — the most prominent label on screen.
+2. The header `<select value={activeOrg || ''}>` — a bound value matching no `<option>` does not
+   render blank; the browser **displays the first option**. So the control could read
+   "Cellfonz R Us" while the session acted as Vzone, or vice versa.
+
+### WHAT SHIPPED
+
+- `frontend/src/lib/tenant-scope.ts` — **PURE**, no carrier/tenant/product name (RULE TWO):
+  `actingCompany` (resolves ONLY from a real membership; an unknown or absent org is
+  `resolved: false`, never "probably the first one"), `switcherOptions` (prepends a placeholder
+  bound to `value: ''` whenever unresolved — byte-identical to the old list when resolved),
+  `switcherVisible`, `switchConfirmText` (names BOTH companies; leaving one is not a view filter),
+  `flowTenantMismatch` (a pinned setup flow can tell it is being rendered for another company across
+  a page load — the primitive for the onboarding hand-off, wired in a follow-up).
+- `(platform)/layout.tsx` — the sidebar name and the switcher both go through it; the switcher gains
+  an explicit **"Company:"** label, an amber unresolved state, and a `window.confirm` before leaving.
+
+### REGISTRATION
+
+- Harness: `frontend/prove_tenant_scope.mjs` — **41 checks**, DB-free/browser-free/React-free. Like
+  `prove_carrier_scope.mjs` it transpiles the REAL module with the project's own TypeScript and
+  executes it. §2 is the regression: the exact fixture (three memberships, house first, `activeOrg`
+  null). Both negative controls verified — removing the placeholder → 36/5, restoring `actingCompany`'s
+  first-membership fallback → 37/4; restored → 41/0.
+- **NOT a code defect, REPORTED as live data (CLAUDE.md):** `storeops.app_users.is_default_org` is set
+  on **0 of 112 rows** platform-wide, so no login has a declared home company; and four logins
+  (`ss@1313global.us`, `dc@luxelinkwireless.com`, `rajiv.jaggi@cellularservices.net`,
+  `ramosbonilla19@gmail.com`) hold a membership in the house org alongside a tenant. The owner
+  confirmed 2026-09-13 that the three memberships on `ss@1313global.us` are intended.
+
 ---
 
-## 28. THE CLOSING SHEET'S EMPLOYEE DROPDOWN CAME BACK EMPTY (owner bug report 2026-09-13)
+## 29. THE CLOSING SHEET'S EMPLOYEE DROPDOWN CAME BACK EMPTY (owner bug report 2026-09-13)
 
 > "employees were not able to close last night since on teh closing sheet it asks for teh employee
 > name which the user was not abel to pick from the drop down menu, i made a little change to
@@ -6694,7 +6941,7 @@ failure this guard exists to prevent. Both negative controls verified: reintrodu
 > store manager whocul dbe able to see all employee in thier store s, the dm shoudl see eveyrbody
 > int hier market and the market manager and above shoudl be abale to see all"
 
-### 28.1 Duplicate check (build gate)
+### 29.1 Duplicate check (build gate)
 
 Searched the index and the code for an existing "whom may this login pick" mechanism before writing
 anything. **Found, and reused rather than re-derived:** `core.scope.roster_span_exempt` /
@@ -6705,7 +6952,7 @@ anything. **Found, and reused rather than re-derived:** `core.scope.roster_span_
 since it was written. **No new table, no new endpoint, no migration.** The two picker endpoints that
 had drifted apart were converged onto one resolver.
 
-### 28.2 Root cause — a reporting span answering a scheduling question
+### 29.2 Root cause — a reporting span answering a scheduling question
 
 On 2026-09-12 the house org's `sales_rep` and `store_manager` roles were moved from
 `scheduling_reach = 'org'` to `'span'`. That change is wanted. What it fell through to was not:
@@ -6728,14 +6975,14 @@ resolved from `storeops.app_users` **alone**. Two consequences, opposite directi
    65 active reps carry a market on their login. A rep at one Chicago store was being offered **25
    colleagues across 13 stores** — the opposite of "view their own store as per their role".
 
-### 28.3 The fix — one resolver, and it never fails closed
+### 29.3 The fix — one resolver, and it never fails closed
 
 `app/core/scope.py` gains the roster-reach section next to `roster_span_exempt`:
 
 | helper | contract |
 |---|---|
 | `roster_reach(role_perms)` | The owner's matrix. `scheduling_reach='org'` (**the default, and every role that has not opted in**) → `ROSTER_ALL`, byte-identical to today. Only an explicit `'span'` narrows, and then by `scope`: `store`/`self` → `ROSTER_OWN_STORE`, `market`/`region` → `ROSTER_SPAN`, `all` → `ROSTER_ALL` |
-| `roster_keyset(...)` | `-> (keyset\|None, why)`. Own-store reach goes through `self_store_codes`, which reads the login pins **and `employees.home_store`** and **never reads market grants** — both halves of §28.2 in one call. **NEVER RETURNS AN EMPTY SET** |
+| `roster_keyset(...)` | `-> (keyset\|None, why)`. Own-store reach goes through `self_store_codes`, which reads the login pins **and `employees.home_store`** and **never reads market grants** — both halves of §29.2 in one call. **NEVER RETURNS AN EMPTY SET** |
 | `roster_visible(rows, keyset, ...)` | Filters a roster with the two exemptions a picker must always make: **the caller themselves** (a default the picker does not contain is not a default), and **an employee whose `home_store` is blank** |
 | `storeops/router._roster_keyset_for` | The single call site shared by `GET /employees?all_company=true` and `GET /employees/visible`, so the two can never drift again. Each I/O-bearing input is fetched only for the reach that reads it — no extra round trip |
 
@@ -6753,7 +7000,7 @@ Dropping them makes a real colleague silently unpickable and indistinguishable f
 exist — the silent-zero pattern (§25.8). They stay pickable and the picker **says** `no store
 assigned` on the row, so the data gets fixed instead of papered over.
 
-### 28.4 Verified against live rows
+### 29.4 Verified against live rows
 
 The real `roster_keyset`/`roster_visible` were run over live house-org rows for **all 48 logins**:
 **0 empty dropdowns** (was 4). Every rep now resolves to their own store(s) — `abdul.kakar178` goes
@@ -6761,7 +7008,7 @@ from 13 stores / 25 names to 2 stores / 11 — while admins, DMs and market mana
 roster. Neither LuxeLink nor Vzone moves: their roles have no explicit `scheduling_reach`, so
 `roster_reach` returns `ROSTER_ALL` exactly as before.
 
-### 28.5 Registered here
+### 29.5 Registered here
 
 | Thing | What it is |
 |---|---|
@@ -6773,13 +7020,13 @@ roster. Neither LuxeLink nor Vzone moves: their roles have no explicit `scheduli
 | `frontend/.../ClosingSubmitForm.tsx` | Roster fetch gains an `alive` guard + `empsLoaded`, so **empty** is told apart from **loading** and an empty picker says why instead of sitting blank. Unassigned rows render `no store assigned` |
 | `backend/harness_roster_reach.py` | **34 checks**, DB-free. Includes the four live logins as named regressions, the market-widening negative controls, and the blank-`home_store` / caller-survives exemptions |
 
-### 28.6 OPEN — reported, not fixed
+### 29.6 OPEN — reported, not fixed
 
 1. **8 active employees in the house org have no `home_store`** (E127, E130, E133, E136, E231, E233,
    E266, E267). Six look like admin/test records; **E266 `onteru, satish` and E267 `Miguel Ospina`
    look like real staff**. They appear in every store's picker until their home store is set. This is
    a DATA fix on Employee Setup, deliberately not written around in code.
-2. **Four logins carry no store pin at all** (the table in §28.2). They now resolve through their
+2. **Four logins carry no store pin at all** (the table in §29.2). They now resolve through their
    employee record, but pinning the store on the login is the durable fix.
 3. **One `app_users.email` is a malformed header string** — `"akberawais@icloud.com" <akberawais@icloud.com>`
    — a duplicate login for E252 alongside the clean `akberawais@icloud.com`. Reported, not deleted.

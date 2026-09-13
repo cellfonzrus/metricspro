@@ -83,7 +83,13 @@ POS_TASKS = [
          why="The carrier decides which plans, dealer codes and commission rules apply. Nothing in "
              "POS is carrier-specific in code — it all reads this list.",
          predicate={"type": "count", "schema": "commcalc", "table": "carrier", "min": 1},
-         is_required=True, skippable=False, href="/configurations/carriers"),
+         # /configurations/carriers NEVER EXISTED (owner bug report 2026-09-13). It is neither a NAV
+         # entry nor a route file, so this task — REQUIRED and NOT skippable — sent every tenant to a
+         # 404 with no way forward and no way round: POS onboarding could not be completed at all.
+         # /commcalc/carrier-mapping is the screen that actually creates a carrier (it POSTs
+         # /commcalc/carriers, which is exactly what this task's own predicate counts).
+         # harness_screen_link_guard §G now fails the build on any task href that does not resolve.
+         is_required=True, skippable=False, href="/commcalc/carrier-mapping"),
 
     # ── STEP GROUP: the catalog spine ─────────────────────────────────────────────────────────
     dict(task_key="departments", sort_order=40, step_group="Catalog",
