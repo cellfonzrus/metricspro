@@ -122,6 +122,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const [cdefs, setCdefs] = useState<any[] | null>(null)      // configured count fields (null = built-in 3, static)
   const [cv, setCv] = useState<Record<string, string>>({})    // value per configured field_key
   const [emps, setEmps] = useState<any[]>([])                 // employee roster (RULE THREE picker, see below)
+  const [empsLoaded, setEmpsLoaded] = useState(false)         // fetch landed — tells "empty" apart from "loading"
   const [cats, setCats] = useState<any[]>([])                 // expense categories (mig 506, lazy-seeded)
   const [coach, setCoach] = useState<any>(null)               // entry-quality coaching banner (mig 937)
   const [expLines, setExpLines] = useState<ExpLine[]>([])
@@ -231,7 +232,18 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   // Employee roster for the "Employee" picker (RULE THREE §3b — pick, don't type): company-wide,
   // same fetch/shape cash-config already uses for the store-closer picker. id === label = the
   // employee's name (daily_closing.employee_name stays a NAME STRING this wave — see handoff).
-  useEffect(() => { apiCached('/api/v1/storeops/employees?all_company=true', LOOKUP).then((r: any) => setEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {}) }, [])
+  // An EMPTY roster here is why nobody could close on 2026-09-12: the picker is required, so zero
+  // names means zero submissions. The backend no longer returns an empty roster (core.scope
+  // .roster_keyset degrades an unresolvable reach to the full roster rather than to a deny-all),
+  // but a failed fetch still can — so record that the fetch LANDED and say so on screen instead of
+  // showing an empty dropdown with no explanation. Loading and empty are not the same state.
+  useEffect(() => {
+    let alive = true
+    apiCached('/api/v1/storeops/employees?all_company=true', LOOKUP)
+      .then((r: any) => { if (alive) { setEmps(Array.isArray(r) ? r : (r?.employees || [])); setEmpsLoaded(true) } })
+      .catch(() => { if (alive) setEmpsLoaded(true) })
+    return () => { alive = false }
+  }, [])
   // Expense categories (mig 506, EEP) — lazy-seeded 5 presets on first call.
   useEffect(() => { api('/api/v1/closing/expense-categories').then((d: any) => setCats(d?.categories || [])).catch(() => setCats([])) }, [])
   // Entry-quality coaching (owner 2026-09-02, mig 937): once the rep's name is known, ask whether
@@ -372,8 +384,15 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
 
   // Employee options: id === label (the name) — matches the byte-identical daily_closing.employee_name
   // storage contract this wave. sublabel = email; EntityPicker auto-appends it only on a same-name clash.
+  // An employee with no `home_store` is UNASSIGNED, not "works at no store" — the backend keeps them
+  // pickable rather than silently dropping a real colleague (8 of the 52 active people in the house
+  // org are in this state). Saying so on the row is what makes that honest instead of noisy: the
+  // rep can tell a colleague apart from a record nobody has finished setting up.
   const empOptions: EntityOption[] = useMemo(
-    () => emps.filter((e: any) => (e.name || '').trim()).map((e: any) => ({ id: e.name, label: e.name, sublabel: e.email || undefined })),
+    () => emps.filter((e: any) => (e.name || '').trim()).map((e: any) => ({
+      id: e.name, label: e.name,
+      sublabel: (e.home_store || '').trim() ? (e.email || undefined) : 'no store assigned',
+    })),
     [emps])
   // Employee options keyed by the REAL id (for the payroll/commission expense-line picker — those
   // lines carry commcalc.closing_expense.employee_id, a real FK, unlike the name-string rep picker above).
@@ -429,6 +448,12 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           <Field label="Employee">
             <EntityPicker options={empOptions} value={f.employee_name || null}
               onChange={v => set({ employee_name: v || '' })} placeholder="Your name" width="100%" />
+            {empsLoaded && !empOptions.length && (
+              <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 4 }}>
+                No employees available to pick. Ask an admin to check your store assignment
+                (Admin → Roles) — the close cannot be submitted without a name.
+              </div>
+            )}
           </Field>
         </Row>
 

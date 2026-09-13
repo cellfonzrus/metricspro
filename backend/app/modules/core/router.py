@@ -2632,6 +2632,12 @@ def scope_preview(role: str = "", email: str = "", org_id: str = ORG_ID,
                     "self-scoped person" if own_store
                     else "NO resolvable store — this person's own-store scope is empty; pick their "
                          "store in the Store column")
+    # The employee PICKER bound for this login — resolved by the same helper the picker endpoint
+    # uses, so this page can answer "why is my dropdown empty / why can I see 25 people".
+    _roster = _scope.roster_keyset(
+        client, org_id, role_perms=perms, app_user=app_user,
+        employee_home_store=(_scope.employee_home_store(client, org_id, eid) if eid else ""),
+        org_unit_codes=unit_codes)
     grants = {
         "market": {"granted": brk["market"]["granted"],
                    "codes": sorted(brk["market"]["codes"]),
@@ -2655,6 +2661,14 @@ def scope_preview(role: str = "", email: str = "", org_id: str = ORG_ID,
         "reporting": reporting,
         "scheduling": {"reach": _scope.scheduling_reach(perms),
                        "roster_span_exempt": _scope.roster_span_exempt(perms),
+                       "roster_reach": _scope.roster_reach(perms),
+                       # The resolved picker bound, so a "nobody in my dropdown" report is
+                       # answerable from this page instead of by reading the span by hand. Mirrors
+                       # exactly what GET /storeops/employees?all_company=true will do for this
+                       # login — including the degrade-to-full-roster case, which names itself.
+                       "roster_stores": (lambda kw: ("(everyone)" if kw[0] is None
+                                                     else sorted(kw[0])))(_roster),
+                       "roster_why": _roster[1],
                        "why": ("'org' — may pick ANY employee in the tenant when scheduling "
                                "(reporting stays limited to the stores above)"
                                if _scope.roster_span_exempt(perms)
