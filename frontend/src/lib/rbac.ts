@@ -469,6 +469,10 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/device-history', label: 'Device History', icon: '📱', module: 'commissions', tileOnly: true },
     { href: '/commcalc/ma-handsets', label: 'Handset COGS', icon: '📦', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/device-cost-recon', label: 'Device Cost Recon', icon: '🧮', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // Inventory vs Sold answers PRESENCE ("is this unit still here"), which is a different question
+    // from Device Cost Recon's ("what did it cost, and whose number is right"). Carrier-agnostic: it
+    // compares an on-hand snapshot with sale lines, neither of which is a carrier concept.
+    { href: '/commcalc/inventory-sold-recon', label: 'Inventory vs Sold', icon: '🧹', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/productivity', label: 'Productivity & Reviews', icon: '🏅', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/productivity-insights', label: 'Productivity Insights', icon: '💡', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/coaching', label: 'Rep Coaching', icon: '🎓', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },

@@ -137,6 +137,29 @@ def _s(v):
     return ("" if v is None else str(v)).strip()
 
 
+def carrier_id_by_code(carriers, wanted_code, code=None):
+    """This tenant's OWN `commcalc.carrier.id` for a declared carrier code, else None.
+
+    The companion to `carrier_visible`: that one asks "may this row be seen", this one supplies the
+    `carrier_id` a row must be STAMPED with so the question has an answer at all. A seeder that omits
+    it writes NULL, and NULL means carrier-agnostic — i.e. shown under every carrier lens the tenant
+    runs, which is how one POS's reports ended up offered beside another carrier's (owner 2026-09-13).
+
+    `carriers` are that org's own rows; nothing is looked up across tenants. `code` is injected
+    (report_labels.normalize_carrier_code) exactly as `upload_scope_map` injects it, rather than
+    reimplemented here — two slugifiers that disagree would silently stamp the wrong carrier.
+    Returns None for an undeclared or unmatched code, which preserves today's behaviour exactly.
+    """
+    want = (code or (lambda v: _s(v).lower()))(_s(wanted_code))
+    if not want:
+        return None
+    norm = code or (lambda v: _s(v).lower())
+    for c in carriers or []:
+        if norm(_s(c.get("code")) or _s(c.get("name"))) == want and c.get("id"):
+            return c.get("id")
+    return None
+
+
 def carrier_visible(row, carriers):
     """Is this registry row shown to a tenant running `carriers`?
 

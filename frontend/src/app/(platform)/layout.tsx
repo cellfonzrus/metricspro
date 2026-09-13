@@ -11,10 +11,12 @@ import { setActiveOrg } from '@/lib/client'
 import { apiCached, CONFIG } from '@/lib/cache'
 import { NAV, canSeeItem, canAccessPath, carrierOKActive, safeHomeFor, applyNavLayout, carrierCode, REPORT_CATEGORIES, type NavItem, type NavLayout } from '@/lib/rbac'
 import { carrierDisplayName } from '@/lib/carrier-scope'
+import { actingCompany, switcherOptions, switcherVisible, switchConfirmText } from '@/lib/tenant-scope'
 import HelpPanel from '@/components/HelpPanel'
 import AdminAttention from '@/components/AdminAttention'
 import ChatEnvelope from '@/components/ChatEnvelope'
 import PlatformBanners from '@/components/PlatformBanners'
+import FlowReturnBar from '@/components/FlowReturnBar'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -326,6 +328,13 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
         is stated at the top of every page and cannot be navigated away from. Renders nothing for an
         ordinary employee with no live notice, and never polls an endpoint that would 403 them. */}
     <PlatformBanners />
+    {/* THE WAY BACK (owner 2026-09-13) — "if im a new tenant i dont know how to navaagte … the
+        modules if they take you to the next module then they shoudl have the option of continuing
+        with thier original work". Generalises the ONE working instance of this (pos/layout.tsx's
+        "← Back to setup") to every hand-off, in one place, so no link site has to opt in and a flow
+        that ships later is covered the day it exists. Renders nothing until a setup flow has
+        actually been visited — it never invents a destination. */}
+    <FlowReturnBar />
     <div style={{ display: 'flex', flex: 1, minHeight: 0, background: 'var(--bg)' }}>
       <aside className="mp-sidebar" style={{ width: collapsed ? 60 : 248, flexShrink: 0,
         display: 'flex', flexDirection: 'column', transition: 'width 0.18s ease', overflow: 'hidden' }}>
@@ -341,7 +350,12 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
               <div style={{ color: 'rgba(255,255,255,0.95)', fontWeight: 650, fontSize: 14, letterSpacing: '-0.01em' }}>MetricsPro</div>
               <div style={{ color: 'rgba(255,255,255,0.42)', fontSize: 10.5, whiteSpace: 'nowrap',
                 overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {tenants.find(t => t.org_id === activeOrg)?.name || tenants[0]?.name || 'Commission Intelligence'}
+                {/* NEVER `|| tenants[0]?.name`. Memberships arrive oldest-first, so that fallback made
+                    the rail name whichever company this login joined FIRST whenever the active org had
+                    not resolved — for every multi-company login on this platform, the house org. The
+                    most prominent label on screen must name the company being acted as or nothing.
+                    Proof: frontend/prove_tenant_scope.mjs §1. */}
+                {actingCompany(tenants, activeOrg).name || 'Commission Intelligence'}
               </div>
             </div>
           )}
@@ -545,14 +559,41 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
                 HIDDEN while viewing as an employee: the acting tenant is pinned by the impersonation
                 grant (the backend overrides both org_id and x-active-org from it), so offering a
                 switcher there would be a control that visibly does nothing. */}
-            {tenants.length > 1 && !impersonationInfo && (
-              <select value={activeOrg || ''} title="Switch company"
-                onChange={e => { setActiveOrg(e.target.value); window.location.reload() }}
-                style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', background: 'white',
-                  border: '1px solid var(--border)', borderRadius: 8, padding: '5px 10px', cursor: 'pointer' }}>
-                {tenants.map(t => <option key={t.org_id} value={t.org_id}>🏢 {t.name}</option>)}
-              </select>
-            )}
+            {switcherVisible(tenants, !!impersonationInfo) && (() => {
+              // WHICH COMPANY AM I IN — always on screen, never a guess. See lib/tenant-scope.ts for
+              // the live incident this answers: a login that belongs to three companies spent five
+              // minutes reading another one's employees and mailbox, and the only thing that could
+              // have said so was this control — unlabelled, and able to DISPLAY the wrong company
+              // (a <select> whose value matches no option shows the first one, and memberships
+              // arrive oldest-first). Now: an explicit "Company:" label, a placeholder option the
+              // empty value binds to, and a named confirmation before leaving.
+              const acting = actingCompany(tenants, activeOrg)
+              return (
+                <label title="The company every page on screen belongs to"
+                  style={{ fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6,
+                    border: `1px solid ${acting.resolved ? 'var(--border)' : '#f59e0b'}`,
+                    background: acting.resolved ? 'white' : '#fffbeb',
+                    borderRadius: 8, padding: '2px 4px 2px 9px' }}>
+                  <span style={{ color: acting.resolved ? 'var(--text3)' : '#92400e', fontWeight: 600 }}>Company:</span>
+                  <select value={acting.resolved ? (activeOrg || '') : ''} aria-label="Company you are working in"
+                    onChange={e => {
+                      const to = e.target.value
+                      if (!to || to === activeOrg) return
+                      const warn = switchConfirmText(acting.name, tenants.find(t => t.org_id === to)?.name)
+                      if (warn && !window.confirm(warn)) { e.target.value = acting.resolved ? (activeOrg || '') : ''; return }
+                      setActiveOrg(to); window.location.reload()
+                    }}
+                    style={{ fontSize: 13, fontWeight: 700, color: acting.resolved ? 'var(--text2)' : '#92400e',
+                      background: 'transparent', border: 'none', borderRadius: 6, padding: '3px 4px', cursor: 'pointer' }}>
+                    {switcherOptions(tenants, activeOrg).map(o => (
+                      <option key={o.value || 'choose'} value={o.value} disabled={o.placeholder}>
+                        {o.placeholder ? o.label : `🏢 ${o.label}`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )
+            })()}
           </div>
           {/* Ask bar — the always-visible natural-language query / report-jump entry on EVERY page.
               Opens the shared AskBar overlay (also reachable at ⌘/ or from the sidebar). Input-styled so

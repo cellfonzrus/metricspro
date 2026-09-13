@@ -14454,6 +14454,21 @@ def set_nav_label(body: NavLabelIn, org_id: str = ORG_ID,
     label = (body.label or '').strip()
     if not key:
         raise HTTPException(400, "key required")
+    # RE-GRANTING A GATED-OUT OPTION IS SUPER-ADMIN ONLY (owner directive 2026-09-13): "if they need
+    # them then the super admin should have a full role permission exclusiveluy for super admin to
+    # assign to the new or existing tenants which have been gated out due to carrier or pos settings."
+    #
+    # The rule is asymmetric ON PURPOSE, and the asymmetry is the whole safety property: NARROWING is a
+    # tenant's own business — hiding a surface, or resetting to the carrier/POS default, stays open to
+    # any menu-layout admin and can only ever show LESS. WIDENING past a carrier or POS gate is the
+    # platform's decision, because it re-grants a surface the tenant's own configuration says does not
+    # apply to them. So this can never lock anyone out of something they already had; the worst it can
+    # do is refuse to hand out something new.
+    if scope == 'cap' and label.lower() == 'show' and not gc["super_admin"] \
+            and (key.startswith('carrier:') or key.startswith('pos:')):
+        raise HTTPException(403, "Turning a carrier- or POS-gated option back on is reserved for a "
+                                 "platform super-admin. You can still hide it, or reset it to follow "
+                                 "your carrier and POS settings. Ask the platform team to re-grant it.")
     client = sb()
     try:
         if not label:
@@ -29238,6 +29253,19 @@ def apply_pos_profile(pos_key: str, org_id: str = ORG_ID, account: str = "defaul
         have_defs = {r.get("report_key") for r in
                      ((client.schema("commcalc").table("report_definitions").select("report_key")
                        .eq("org_id", org_id).execute().data) or [])}
+        # STAMP THE CARRIER (owner 2026-09-13). Every row seeded here used to go in with a NULL
+        # carrier_id, and NULL is "carrier-agnostic — always shown" (implementation_spine.carrier_visible).
+        # So applying a POS standard offered its reports under EVERY carrier lens the tenant runs.
+        # A report_defs entry may now declare `carrier_code`; it is resolved against this org's OWN
+        # carrier rows. An entry that declares none still writes NULL, so the shipped profile — whose
+        # two entries are genuinely POS-level, not carrier-level — is byte-identical to today.
+        from app.modules.commcalc import report_labels as _rl   # local, as every other caller here does
+        _org_carriers = []
+        try:
+            _org_carriers = (client.schema("commcalc").table("carrier").select("id,name,code")
+                             .eq("org_id", org_id).execute().data) or []
+        except Exception:
+            _org_carriers = []
         for rd in (prof.get("report_defs") or []):
             rk = rd.get("report_key")
             if not rk or rk in have_defs:
@@ -29247,6 +29275,8 @@ def apply_pos_profile(pos_key: str, org_id: str = ORG_ID, account: str = "defaul
                 "label": rd.get("label"), "source_name": rd.get("source_name"),
                 "period_mode": rd.get("period_mode") or "current", "target_table": rd.get("target_table"),
                 "upload_endpoint": rd.get("upload_endpoint"), "source_url": "https://wsreports.b2bsoft.com",
+                "carrier_id": implementation_spine.carrier_id_by_code(
+                    _org_carriers, rd.get("carrier_code"), _rl.normalize_carrier_code),
                 "auto": bool(rd.get("auto")), "sort_order": rd.get("sort_order") or 100}).execute()
             reports_seeded += 1
     except Exception as e:
@@ -35177,6 +35207,60 @@ def _require_payout_recorder(authorization, org_id, cfg=None):
     if not ok:
         raise HTTPException(403, why)
     return caller
+
+
+# ── INVENTORY vs SOLD (owner request 2026-09-12) ─────────────────────────────────────────────────
+@router.get("/inventory-sold-recon")
+def inventory_sold_recon_endpoint(limit: int = 500, org_id: str = ORG_ID):
+    """IS A DEVICE STILL ON THE SHELF, OR WAS IT ALREADY SOLD?
+
+    Owner: *"check against the sales by product to see if the item in inventory is already sold or not
+    and if it is alsready sold then it should report those items whic are soled with imei to be
+    adjusted and also those items which are in oventory to be cleared out of the inventory."*
+
+    Two findings, the owner's own two asks — `sold_not_cleared` (on the shelf but sold: stock to clear,
+    with what clearing it is worth) and `sold_no_inventory` (sold, but the snapshot never knew the
+    unit: an adjustment).
+
+    A REFUND NETS OFF. A unit sold and then returned is genuinely on hand and is NOT reported; on the
+    first real file a naive read called 18 units phantom when only 10 were, a $5,000 overstatement of
+    stock to write off. An ORDERED unit is not physically present and is never reported as stock to
+    clear. Both rules live in the PURE `inventory_sold_recon` (proof `harness_inventory_sold_recon.py`).
+
+    READ-ONLY AND ORG-SCOPED on both sides. It books nothing, clears no row and moves no money: what
+    it finds is REPORTED for a human to act on. Reuses `device_cost_recon.device_key` — the one
+    cross-source device key — and `_dcr_paged`, the existing org-scoped paged read."""
+    require_org(org_id)
+    # Local imports, as every other caller in this region does.
+    from app.modules.commcalc import device_cost_recon as _dcr
+    from app.modules.commcalc import inventory_sold_recon as _isr
+    client = sb()
+    cap = max(1, min(int(limit or 500), 5000))
+
+    def _org(q):
+        return q.eq("org_id", org_id)
+
+    sales, sales_ok, sales_cut = _dcr_paged(
+        client, "raw_sales", "serial_1,quantity,trans_date,store", _org, 200000, "sales")
+    inv, inv_ok, inv_cut = _dcr_paged(
+        client, "inventory_aging_device",
+        "imei,serial,sku,item,store,status,unit_cost,total_cost,received_date,as_of_date,on_hand",
+        _org, 200000, "inventory")
+
+    out = _isr.reconcile(sales, inv, _dcr.device_key)
+    rows = out["rows"][:cap]
+    return {
+        "rows": rows,
+        "totals": out["totals"],
+        "truncated": len(out["rows"]) > len(rows),
+        # STATED, NOT ASSUMED: a failed or capped read makes the answer a FLOOR, not a total. Saying so
+        # is the difference between a report and a number somebody acts on without knowing its basis.
+        "basis": {
+            "sales_read_ok": sales_ok, "sales_truncated": sales_cut,
+            "inventory_read_ok": inv_ok, "inventory_truncated": inv_cut,
+            "complete": sales_ok and inv_ok and not sales_cut and not inv_cut,
+        },
+    }
 
 
 def _accrual_day_param(v, label="date"):

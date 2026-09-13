@@ -102,3 +102,82 @@ export function carrierRowIds(
   }
   return out
 }
+
+// ── WHICH POS DOES THIS TENANT RUN (owner bug report 2026-09-13) ───────────────────────────────────
+// Owner: "since we declared that the pos is not b2b anymore it is rq that shoud not give the option
+// for b2b any more … since the pos was never updated at the ground level it did not propogate to the
+// other attched modules."
+//
+// The tenant's POS is ALREADY a single piece of config: the `pos_system` vocabulary term (mig 953
+// house presets + a tenant override, resolved by report_labels.py → useReportLabels().term). Nothing
+// new is stored here and no second POS record is introduced — these two helpers just let a surface
+// ASK that one answer, which is exactly what no surface was doing.
+//
+// The comparison must be tolerant because the value is operator-editable free text: the same POS is
+// spelled 'b2bsoft', 'B2B Soft' and 'B2BSoft' across the house presets and tenant overrides, and a
+// gate that treated those as three different systems would hide a tenant's own imports.
+
+/** Case- and punctuation-insensitive key for a POS system name ('B2B Soft' → 'b2bsoft'). */
+export function posSquash(name: string | undefined | null): string {
+  return (name || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
+/**
+ * Is a POS-SPECIFIC surface shown to a tenant running `currentPos`?
+ *
+ * Deliberately the same shape as `implementation_spine.carrier_visible`, one axis over, so the two
+ * gates can never drift into disagreeing about what a tenant sees:
+ *   · a surface with NO pos tag is POS-agnostic and always shows;
+ *   · a tenant whose `pos_system` is unresolved hides NOTHING — a lookup that fails must never
+ *     withhold an upload somebody needs;
+ *   · otherwise it shows only to the POS it belongs to.
+ */
+export function posVisible(tilePos: string | undefined | null, currentPos: string | undefined | null): boolean {
+  const want = posSquash(tilePos)
+  if (!want) return true
+  const have = posSquash(currentPos)
+  if (!have) return true
+  return want === have
+}
+
+// ── THE OVERRIDE (owner directive 2026-09-13) ─────────────────────────────────────────────────────
+// Owner: "if they need them then the super admin should have a full role permission exclusiveluy for
+// super admin to assign to the new or existing tenants which have been gated out due to carrier or
+// pos settings."
+//
+// A gate with no way out is a support ticket waiting to happen, and this one is new, so it gets the
+// escape hatch the carrier gate has always had — THE SAME ONE. `caps['carrier:<href>']` (rbac.carrierOK)
+// is per-tenant `ui_label_override` scope 'cap', written by POST /commcalc/nav-labels and edited at
+// /admin/labels. `pos:<surface>` is ONE MORE KEY NAMESPACE in that existing mechanism: no second
+// store, no second endpoint, no second admin screen.
+//
+// WHO MAY WIDEN is enforced SERVER-SIDE, in that endpoint, not here: hiding a surface or resetting it
+// to follow the tenant's own settings stays open to any menu-layout admin, while turning a gated-out
+// surface back ON is refused for anyone but a platform super-admin. The asymmetry is the safety
+// property — the override can never take away something a tenant already had, only decline to hand
+// out something new.
+
+/** The POS-gated surfaces that can be re-granted, for the admin screen to list. Same posture as
+ *  rbac.NAV_CARRIERS: a small registry, so a surface cannot be gated without being overridable. */
+export const POS_GATED_SURFACES: { key: string; label: string; why: string }[] = [
+  { key: 'upload_email_reports', label: 'Email-report upload tiles (Upload page)',
+    why: 'Exports of one POS. Hidden from a tenant that has declared a different POS.' },
+]
+
+/**
+ * Is a POS-gated surface shown — override first, gate second?
+ *
+ * Mirrors `rbac.carrierOK` clause for clause, deliberately: two gates whose override ladders differed
+ * would be two things for an administrator to learn, and one of them would be learned wrong.
+ */
+export function posOK(
+  surfaceKey: string,
+  tilePos: string | undefined | null,
+  currentPos: string | undefined | null,
+  caps: Record<string, boolean | null> | undefined,
+): boolean {
+  const ov = (caps || {})['pos:' + surfaceKey]
+  if (ov === true) return true
+  if (ov === false) return false
+  return posVisible(tilePos, currentPos)
+}
