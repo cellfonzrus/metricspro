@@ -51,6 +51,7 @@ Primary code homes:
 | 23aa | **Distributor chargebacks** | "Two separate chargebacks billed to the master dealer account — a one-off and a recurring one — what are they, when did each really start, and where do they book?" |
 | 27 | **Vendor rebate history (earned, per line)** | "A new tenant's carrier statement lists every rebate and commission it owes us per line — where does that file land, why is it not in the P&L, and what is the difference between what we have EARNED and what has actually been COLLECTED?" |
 | 28 | **"Which company am I in"** | "My login belongs to more than one company — which one is every page on screen actually showing, how would I know if it changed under me, and why did another company's mailbox turn up in a new tenant's setup?" |
+| 29 | **Roster reach — who is in the employee picker** | "Whose names may this login pick from on the closing sheet? Why did a permission change empty the dropdown, and why does a rep with a market on their record still only see their own store?" |
 | 11a | **Inventory vs Sold** | "My snapshot says this phone is in stock — was it already sold? Which units do I clear out, which sales do I adjust, and why is a sold-then-refunded unit not on the list?" |
 
 ---
@@ -2947,6 +2948,9 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `GET /hr/compensation` (pay-gated: `pay_rate`/`base_salary`/`total_comp`/`annualized` stripped; commission stays — commcalc's own gate domain) | `hr/router.py:334` | §14 |
 | `GET /hr/employee-database` (pay-gated forward guard: pay-classified keys stripped from field registry + rows) | `hr/router.py:1384` | §14 |
 | `GET /storeops/employees` (roster; pay-gated 2026-09-10 — a `select("*")` that shipped every `pay_rate`/`pay_amount`; `pay_basis` kept) | `storeops/router.py:201` | §14 DM sweep |
+| `GET /storeops/employees?all_company=true` (**ROSTER REACH** 2026-09-13 — resolves `core.scope.roster_keyset`, not the reporting span; never returns an empty roster) | `storeops/router.py:201` → `_roster_keyset_for:7744` | §29 |
+| `GET /storeops/employees/visible` (dashboard picker; store/market resolution converged onto the SAME `roster_keyset` 2026-09-13 — reach ladder unchanged) | `storeops/router.py:8087` | §29 |
+| `GET /core/grant-universe` → `scheduling.roster_reach`/`roster_stores`/`roster_why` (why THIS login's employee picker is bounded) | `core/router.py` (`_grant_universe`) | §29 |
 | `GET /storeops/payroll-change-log` (pay-gated 2026-09-10 — `before_value`/`after_value` redacted on `pay_rate`/`pay_amount` edits; the row + actor + timestamp stay) | `storeops/router.py:1119` | §14 DM sweep |
 | `PATCH /storeops/employees/{emp_id}` (pay-gated 2026-09-10 — the echoed row; the pay-field WRITE gate `_require_manager`/`_PAY_GATED_FIELDS` unchanged) | `storeops/router.py:2255` | §14 DM sweep |
 | `GET /storeops/pto-accrual/{period}` (pay-gated 2026-09-10 — per-employee `rate`/`cost` incl. `by_store`; the `stores[]` rollup and all hours KEPT) | `storeops/router.py:8380` | §14 DM sweep |
@@ -6923,3 +6927,106 @@ house org whenever the active org had not resolved:
   (`ss@1313global.us`, `dc@luxelinkwireless.com`, `rajiv.jaggi@cellularservices.net`,
   `ramosbonilla19@gmail.com`) hold a membership in the house org alongside a tenant. The owner
   confirmed 2026-09-13 that the three memberships on `ss@1313global.us` are intended.
+
+---
+
+## 29. THE CLOSING SHEET'S EMPLOYEE DROPDOWN CAME BACK EMPTY (owner bug report 2026-09-13)
+
+> "employees were not able to close last night since on teh closing sheet it asks for teh employee
+> name which the user was not abel to pick from the drop down menu, i made a little change to
+> permissions yesterday and swictched back to view thier won store as per thier role but i think
+> that interfered, all sales reps shoudl eb able to submit the sales for the store they worked in,
+> they shoudl be picking up aen employee name from the list, thier anme should default and if they
+> have to change the name they shoudl be on the register as we ahve already made the provision, the
+> store manager whocul dbe able to see all employee in thier store s, the dm shoudl see eveyrbody
+> int hier market and the market manager and above shoudl be abale to see all"
+
+### 29.1 Duplicate check (build gate)
+
+Searched the index and the code for an existing "whom may this login pick" mechanism before writing
+anything. **Found, and reused rather than re-derived:** `core.scope.roster_span_exempt` /
+`scheduling_reach` (§14, the reach-vs-reporting marker), `core.scope.self_store_codes` (ruling #7 —
+"their own store", and it ALREADY reads `employees.home_store`), `core.scope.login_grant_codes`,
+`core.scope.widen_codes_to_keys` (§13a/§13c — codes + addresses + Store-Matching synonyms), and
+`GET /storeops/employees/visible`, which had carried the correct "always keep the caller" exemption
+since it was written. **No new table, no new endpoint, no migration.** The two picker endpoints that
+had drifted apart were converged onto one resolver.
+
+### 29.2 Root cause — a reporting span answering a scheduling question
+
+On 2026-09-12 the house org's `sales_rep` and `store_manager` roles were moved from
+`scheduling_reach = 'org'` to `'span'`. That change is wanted. What it fell through to was not:
+`GET /storeops/employees?all_company=true` applied **`storeops.caller_scope`** — the REPORTING span,
+resolved from `storeops.app_users` **alone**. Two consequences, opposite directions, same cause:
+
+1. **THE OUTAGE.** Four active reps have no store pinned on their *login* but a real one on their
+   *employee record*. `caller_scope` never reads `employees.home_store`, so their span resolved
+   **empty** — and an empty span is a deny-all. The required picker returned zero names and those
+   stores could not close the night's business.
+
+   | login | `app_users.store_code` / `store_codes` | `employees.home_store` | span was |
+   |---|---|---|---|
+   | `ennio.rodas@gmail.com` (E253) | NULL / NULL | **B-117** | ∅ |
+   | `l2127martinez@gmail.com` (E170) | NULL / `[]` | **B-1800** | ∅ |
+   | `"akberawais@icloud.com" <…>` (E252) | NULL / NULL | **B-418** | ∅ |
+   | `junooshaik1@gmail.com` (E242) | NULL / NULL | **B-4712** | ∅ |
+
+2. **THE OVER-WIDE HALF.** `caller_scope` unions MARKET grants into a scope-`store` span, and 53 of
+   65 active reps carry a market on their login. A rep at one Chicago store was being offered **25
+   colleagues across 13 stores** — the opposite of "view their own store as per their role".
+
+### 29.3 The fix — one resolver, and it never fails closed
+
+`app/core/scope.py` gains the roster-reach section next to `roster_span_exempt`:
+
+| helper | contract |
+|---|---|
+| `roster_reach(role_perms)` | The owner's matrix. `scheduling_reach='org'` (**the default, and every role that has not opted in**) → `ROSTER_ALL`, byte-identical to today. Only an explicit `'span'` narrows, and then by `scope`: `store`/`self` → `ROSTER_OWN_STORE`, `market`/`region` → `ROSTER_SPAN`, `all` → `ROSTER_ALL` |
+| `roster_keyset(...)` | `-> (keyset\|None, why)`. Own-store reach goes through `self_store_codes`, which reads the login pins **and `employees.home_store`** and **never reads market grants** — both halves of §29.2 in one call. **NEVER RETURNS AN EMPTY SET** |
+| `roster_visible(rows, keyset, ...)` | Filters a roster with the two exemptions a picker must always make: **the caller themselves** (a default the picker does not contain is not a default), and **an employee whose `home_store` is blank** |
+| `storeops/router._roster_keyset_for` | The single call site shared by `GET /employees?all_company=true` and `GET /employees/visible`, so the two can never drift again. Each I/O-bearing input is fetched only for the reach that reads it — no extra round trip |
+
+**WHY A ROSTER DEGRADES OPEN WHERE A REPORT FAILS CLOSED.** `_rbac_scope_failclosed` is right for a
+reporting read: the cost of guessing wrong is somebody's pay on somebody else's screen. A *name
+picker* is not that — pay is already stripped by `storeops/pay_visibility` (§14 DM sweep) **before**
+scoping runs, so the picker carries names, not money. The cost of guessing wrong there is a store
+that cannot close. So an unresolvable reach returns the full roster **and names the misconfiguration
+in `why`**, which `GET /core/grant-universe` now reports per login (`scheduling.roster_reach`,
+`roster_stores`, `roster_why`) — surfaced, never a silent lockout. Callers that genuinely need a
+deny-all keyset still want `self_scope_keyset`.
+
+**A BLANK `home_store` IS NOT MEASURED.** 8 of the 52 active people in the house org have none.
+Dropping them makes a real colleague silently unpickable and indistinguishable from one who does not
+exist — the silent-zero pattern (§25.8). They stay pickable and the picker **says** `no store
+assigned` on the row, so the data gets fixed instead of papered over.
+
+### 29.4 Verified against live rows
+
+The real `roster_keyset`/`roster_visible` were run over live house-org rows for **all 48 logins**:
+**0 empty dropdowns** (was 4). Every rep now resolves to their own store(s) — `abdul.kakar178` goes
+from 13 stores / 25 names to 2 stores / 11 — while admins, DMs and market managers keep the whole
+roster. Neither LuxeLink nor Vzone moves: their roles have no explicit `scheduling_reach`, so
+`roster_reach` returns `ROSTER_ALL` exactly as before.
+
+### 29.5 Registered here
+
+| Thing | What it is |
+|---|---|
+| `core.scope.roster_reach` / `roster_keyset` / `roster_visible` + `ROSTER_ALL`/`ROSTER_OWN_STORE`/`ROSTER_SPAN` | The roster-reach contract. Pure except `roster_keyset`'s cached index reads |
+| `storeops/router._roster_keyset_for` | The shared call site for both picker endpoints |
+| `GET /storeops/employees` (`storeops/router.py:201`) | `all_company=true` now resolves ROSTER reach, not the reporting span. **No shape change** — still a bare list |
+| `GET /storeops/employees/visible` | Store/market resolution moved onto `roster_keyset` (it no longer re-scans `stores` per call and now honours Store-Matching synonyms). **Reach ladder deliberately unchanged, self-only branch included.** Adds `roster_why` |
+| `GET /core/grant-universe` → `scheduling` | EXTENDED: `roster_reach`, `roster_stores`, `roster_why` — so "why is my dropdown empty / why can I see 25 people" is answerable from the admin page |
+| `frontend/.../ClosingSubmitForm.tsx` | Roster fetch gains an `alive` guard + `empsLoaded`, so **empty** is told apart from **loading** and an empty picker says why instead of sitting blank. Unassigned rows render `no store assigned` |
+| `backend/harness_roster_reach.py` | **34 checks**, DB-free. Includes the four live logins as named regressions, the market-widening negative controls, and the blank-`home_store` / caller-survives exemptions |
+
+### 29.6 OPEN — reported, not fixed
+
+1. **8 active employees in the house org have no `home_store`** (E127, E130, E133, E136, E231, E233,
+   E266, E267). Six look like admin/test records; **E266 `onteru, satish` and E267 `Miguel Ospina`
+   look like real staff**. They appear in every store's picker until their home store is set. This is
+   a DATA fix on Employee Setup, deliberately not written around in code.
+2. **Four logins carry no store pin at all** (the table in §29.2). They now resolve through their
+   employee record, but pinning the store on the login is the durable fix.
+3. **One `app_users.email` is a malformed header string** — `"akberawais@icloud.com" <akberawais@icloud.com>`
+   — a duplicate login for E252 alongside the clean `akberawais@icloud.com`. Reported, not deleted.

@@ -217,11 +217,17 @@ def get_employees(include_inactive: bool = False, all_company: bool = False, aut
     if not _payvis.can_see_pay(authorization or "", org_id, client=get_supabase()):
         _payvis.strip_pay(rows)
     if all_company:
+        # ROSTER REACH, not reporting span (see app.core.scope.roster_keyset for the 2026-09-12
+        # outage this replaced). The old code fell through to `scope_keyset` — the REPORTING span,
+        # resolved from `app_users` alone — which (a) handed a scope-'store' rep their whole MARKET
+        # because `caller_scope` unions market grants, and (b) resolved EMPTY, i.e. a zero-name
+        # dropdown and a store that could not close, for the four reps whose store is recorded on
+        # their employee record instead of their login.
         au = _caller_app_user(authorization, org_id)
         perms = _role_permissions(org_id, (au.get("role") or "").strip()) if au else {}
-        if _cscope.roster_span_exempt(perms):
-            return rows
-        # scheduling_reach='span' — fall through and apply the reporting span below.
+        ks, _why = _roster_keyset_for(authorization, org_id, au, perms)
+        return _cscope.roster_visible(rows, ks,
+                                      my_employee_id=(au or {}).get("employee_id") or "")
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         rows = [e for e in rows if in_keyset(ks, e.get("home_store"))]
@@ -7735,6 +7741,23 @@ def _caller_span_codes(authorization: str, org_id: str = ORG_ID) -> list:
     return sorted(codes)
 
 
+def _roster_keyset_for(authorization: str, org_id: str, au: dict, perms: dict):
+    """-> (keyset|None, why) for an EMPLOYEE PICKER read. The single place the roster reach is
+    resolved, shared by GET /employees?all_company=true and GET /employees/visible so the two can
+    never drift (they did: /visible carried a hand-rolled address widening and its own 'scope'
+    ladder, /employees used the reporting span).
+
+    Each of the two I/O-bearing inputs is fetched ONLY for the reach that actually reads it — the
+    employee's home_store for an own-store reach, the org-unit subtree for a market/region reach —
+    so this costs no extra round trip on the hot path."""
+    reach = _cscope.roster_reach(perms)
+    hs = (_cscope.employee_home_store(get_supabase(), org_id, (au or {}).get("employee_id"))
+          if reach == _cscope.ROSTER_OWN_STORE else None)
+    units = _caller_span_codes(authorization, org_id) if reach == _cscope.ROSTER_SPAN else None
+    return _cscope.roster_keyset(get_supabase(), org_id, role_perms=perms, app_user=au,
+                                 employee_home_store=hs, org_unit_codes=units)
+
+
 def _unit_store_codes(org_id: str, unit_id: str) -> list:
     """store_codes under a chosen unit's subtree (for a manager/admin who picks a node)."""
     rows = sb().rpc("org_store_codes_for_unit", {"p_org_id": org_id, "p_unit_id": unit_id}).execute().data
@@ -8071,28 +8094,32 @@ def employees_visible(authorization: str = Header(default=""), org_id: str = ORG
     c = sb()
     au = _caller_app_user(authorization, org_id)
     my_eid = (au.get("employee_id") or "").strip()
-    scope = _role_scope(org_id, (au.get("role") or "").strip()) if au else "all"
+    role = (au.get("role") or "").strip()
+    scope = _role_scope(org_id, role) if au else "all"
     rows = (c.table("employees").select("employee_id,name,home_store,role,is_active")
             .eq("org_id", org_id).execute().data or [])
     rows = [r for r in rows if r.get("employee_id") and r.get("is_active", True)]
-    if au and scope != "all":
-        if scope == "self":
-            rows = [r for r in rows if str(r.get("employee_id")) == my_eid]
-        else:
-            codes = {x.strip().upper() for x in _caller_span_codes(authorization, org_id)}
-            keys = set(codes)
-            if codes:   # widen to each store's address too — home_store may be an address, not a code
-                meta = c.table("stores").select("store_code,address").eq("org_id", org_id).execute().data or []
-                for s in meta:
-                    if str(s.get("store_code") or "").strip().upper() in codes:
-                        ad = str(s.get("address") or "").strip().upper()
-                        if ad:
-                            keys.add(ad)
-            rows = [r for r in rows
-                    if str(r.get("home_store") or "").strip().upper() in keys
-                    or str(r.get("employee_id")) == my_eid]
+    # The store/market resolution now runs through `core.scope.roster_keyset`, the same helper
+    # GET /employees?all_company=true uses, so the two pickers cannot drift. It replaced a
+    # hand-rolled copy here that re-scanned `stores` for the address widening on every call and
+    # missed the Store-Matching SYNONYMS `widen_codes_to_keys` honours — a store whose sales files
+    # spell it differently was simply absent from this dropdown. The REACH LADDER below is
+    # deliberately unchanged, self-only branch included.
+    if not au or scope == "all":
+        why = "scope 'all' (or an unidentifiable caller) — the whole roster"
+    elif scope == "self":
+        # UNCHANGED reach: this dashboard picker has always meant "just me" for a self-scoped
+        # person, and widening it is a separate decision from tonight's closing-sheet fix.
+        rows, why = [r for r in rows if str(r.get("employee_id")) == my_eid], "scope 'self' — self only"
+    else:
+        ks, why = _cscope.roster_keyset(
+            get_supabase(), org_id, role_perms={"scope": scope, "scheduling_reach": _cscope.REACH_SPAN},
+            app_user=au,
+            employee_home_store=_cscope.employee_home_store(get_supabase(), org_id, my_eid),
+            org_unit_codes=_caller_span_codes(authorization, org_id))
+        rows = _cscope.roster_visible(rows, ks, my_employee_id=my_eid)
     rows.sort(key=lambda r: (str(r.get("home_store") or ""), str(r.get("name") or "")))
-    return {"employee_id": my_eid, "scope": scope,
+    return {"employee_id": my_eid, "scope": scope, "roster_why": why,
             "is_manager": scope not in ("self",), "employees": rows}
 
 

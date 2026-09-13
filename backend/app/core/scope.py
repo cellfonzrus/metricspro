@@ -151,6 +151,121 @@ def roster_span_exempt(role_perms) -> bool:
     return scheduling_reach(role_perms) == REACH_ORG
 
 
+# ── ROSTER REACH — "who may this login pick a name from?" (owner ruling, 2026-09-13) ─────────────
+#
+# THE OUTAGE THIS EXISTS TO PREVENT. On 2026-09-12 the house org's `sales_rep` and `store_manager`
+# roles were moved from `scheduling_reach = 'org'` to `'span'`. That is a legitimate, wanted change
+# — a rep should see their own store's register, not all 52 people in the tenant. But the span it
+# fell through to was the REPORTING span (`storeops.caller_scope`), and that span is resolved from
+# `storeops.app_users` ALONE. Four active reps have no store pinned on their LOGIN:
+#
+#     ennio.rodas@gmail.com     E253   store_code=NULL  store_codes=NULL   employees.home_store=B-117
+#     l2127martinez@gmail.com   E170   store_code=NULL  store_codes=[]     employees.home_store=B-1800
+#     "akberawais@icloud.com"   E252   store_code=NULL  store_codes=NULL   employees.home_store=B-418
+#     junooshaik1@gmail.com     E242   store_code=NULL  store_codes=NULL   employees.home_store=B-4712
+#
+# Every one of them HAS a real home store on the roster. The reporting span never reads it, so their
+# span resolved EMPTY, and an empty span is a deny-all: the closing sheet's employee dropdown came
+# back with zero names and those stores could not close the night's business. An employee PICKER is
+# not a security boundary (pay is already stripped by `payvisibility` before scoping runs) — but an
+# empty one stops money being counted, which is strictly worse than showing a name too many.
+#
+# The second half of the same defect points the other way. `caller_scope` unions MARKET grants into
+# a scope-'store' span, and 53 of 65 active reps carry a market on their login, so a rep at one
+# Chicago store was being offered 25 colleagues across 13 stores. `self_store_codes` already refuses
+# to read market grants for exactly this reason; the roster now goes through it.
+#
+# The matrix below is the owner's, verbatim: "all sales reps shoudl eb able to submit the sales for
+# the store they worked in ... the store manager whocul dbe able to see all employee in thier store
+# s, the dm shoudl see eveyrbody int hier market and the market manager and above shoudl be abale to
+# see all".
+
+ROSTER_ALL = "all"                 # no filtering — the whole tenant's roster
+ROSTER_OWN_STORE = "own_store"     # the store(s) this person actually works at
+ROSTER_SPAN = "span"               # the market(s)/unit(s) this person manages
+
+
+def roster_reach(role_perms) -> str:
+    """Which of the three roster reaches a role gets. Pure; never raises.
+
+    `scheduling_reach = 'org'` (the DEFAULT, and what every role that has not opted in still gets)
+    stays ROSTER_ALL, so this is byte-identical to today's behaviour for those roles. Only a role
+    that has explicitly opted into 'span' is narrowed, and then by its `scope`:
+
+        scope 'all'              -> ROSTER_ALL        market manager and above see everybody
+        scope 'market'/'region'  -> ROSTER_SPAN       a DM sees everybody in their market
+        scope 'store'/'self'     -> ROSTER_OWN_STORE  a rep/store manager sees their own store(s)
+    """
+    if roster_span_exempt(role_perms):
+        return ROSTER_ALL
+    try:
+        scope = str((role_perms or {}).get("scope") or "").strip().lower()
+    except Exception:
+        return ROSTER_ALL
+    if scope in ("store", "self"):
+        return ROSTER_OWN_STORE
+    if scope in ("market", "region", "regional"):
+        return ROSTER_SPAN
+    return ROSTER_ALL                                   # 'all', blank, or anything unrecognised
+
+
+def roster_keyset(client, org_id: str, *, role_perms, app_user, employee_home_store=None,
+                  org_unit_codes=None):
+    """-> (keyset, why). `keyset is None` means UNRESTRICTED (show the whole roster).
+
+    NEVER RETURNS AN EMPTY SET. That is the whole point: for a reporting read an unresolved scope
+    must fail closed (`_rbac_scope_failclosed`), because the cost of guessing wrong is somebody's
+    pay on somebody else's screen. For a NAME PICKER the cost of guessing wrong is a store that
+    cannot close. So a reach that resolves to nothing degrades to unrestricted and SAYS SO in
+    `why` — the misconfiguration is surfaced (GET /core/grant-universe reports it per login), not
+    silently turned into a lockout. Callers that need a deny-all keyset want `self_scope_keyset`.
+    """
+    reach = roster_reach(role_perms)
+    if reach == ROSTER_ALL:
+        return None, "role reach 'org' — may pick any employee in the tenant"
+    if reach == ROSTER_OWN_STORE:
+        codes = self_store_codes(client, org_id, app_user,
+                                 employee_home_store=employee_home_store)
+        why = "own store(s) only — market grants are deliberately not read for a store/self scope"
+    else:
+        codes = set(org_unit_codes or []) | login_grant_codes(client, org_id, app_user)
+        why = "the market(s)/org-unit(s) this login manages"
+    codes = {c for c in codes if c}
+    if not codes:
+        return None, ("NO RESOLVABLE STORE for this login — no store_code/store_codes pin and no "
+                      "employees.home_store. Showing the full roster so the store can still close; "
+                      "pin this person's store on their login or their employee record to narrow it")
+    return widen_codes_to_keys(client, org_id, codes), why
+
+
+def roster_visible(rows, keyset, *, my_employee_id="", store_field="home_store",
+                   employee_field="employee_id"):
+    """Filter a roster to what `keyset` allows, with the two exemptions a picker must always make.
+
+    1. THE CALLER THEMSELVES, always. The owner's requirement is "thier anme should default" — a
+       default the picker does not contain is not a default. `/employees/visible` has carried this
+       exemption since it was written; it now applies to every roster read.
+    2. AN EMPLOYEE WITH NO `home_store`, always. A blank home store is NOT "works at no store", it
+       is NOT MEASURED — 8 of the 52 active people in the house org are in this state. Dropping
+       them makes a real colleague silently unpickable and indistinguishable from one who does not
+       exist; that is the silent-zero pattern the house forbids. They stay visible, and the count
+       is reported so the data gets fixed rather than papered over.
+    """
+    if keyset is None:
+        return list(rows)
+    me = _norm(my_employee_id)
+    out = []
+    for r in rows:
+        store = _norm(r.get(store_field))
+        if not store:                                            # unassigned -> not measured
+            out.append(r)
+        elif store.upper() in keyset:
+            out.append(r)
+        elif me and _norm(r.get(employee_field)) == me:          # always keep the caller
+            out.append(r)
+    return out
+
+
 # ── Canonical market universe ───────────────────────────────────────────────────────────────────
 # Small config tables (stores ~10²), but these are read on every scoped request, so a short TTL
 # cache keyed on ORG_ID (never on the client object — `get_supabase()` is a process-wide singleton,
