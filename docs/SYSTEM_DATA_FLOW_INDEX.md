@@ -50,6 +50,7 @@ Primary code homes:
 | 23z | **Device Payable as at a date** | "Standing on a given day — a year-end, a closing date — which devices had already been billed to us but not yet paid for, per company and per store? And which of the units billed in one year were actually paid in the next?" |
 | 23aa | **Distributor chargebacks** | "Two separate chargebacks billed to the master dealer account — a one-off and a recurring one — what are they, when did each really start, and where do they book?" |
 | 27 | **Vendor rebate history (earned, per line)** | "A new tenant's carrier statement lists every rebate and commission it owes us per line — where does that file land, why is it not in the P&L, and what is the difference between what we have EARNED and what has actually been COLLECTED?" |
+| 28 | **"Which company am I in"** | "My login belongs to more than one company — which one is every page on screen actually showing, how would I know if it changed under me, and why did another company's mailbox turn up in a new tenant's setup?" |
 
 ---
 
@@ -2721,6 +2722,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `storeops.app_users` (ONE ROW PER `(auth_id, org_id)` since mig `706` — a login belonging to several companies has several rows; `is_default_org` declares its home company and is set on **0 of 112 rows** live) | provisioning / invite / `connect-tenant` | `core/membership.list_memberships` → `pick_membership` (handlers) and `tenant_middleware._resolve_identity` → `_pick_active_org` (the request's acting org, and the ONLY rule that decides it); surfaced to the browser by `GET /core/my-tenants` → `frontend/src/lib/tenant-scope.ts` (§28) |
 | `core.module_onboarding_task` (mig `733`) | `onboarding.seed_tasks` (INSERTS missing task rows only) + `_backfill_import_sources` (fills a BLANK `import_source` from the shipped registry, nothing else, never overwriting an operator value) | `load_tasks_with_source` → `build_status`, the POS wizard (§23n). DB is truth, the in-code registry is the fallback — so a task that GAINS an import source after a tenant was seeded needs the backfill to reach it |
 | `commcalc.carrier` (mig `038`) · `commcalc.report_definitions.carrier_id` (mig `291`) · `commcalc.connector_instances.carrier_id` (mig `039`) | `implementation_spine.carrier_visible` — THE one predicate (`router._carrier_visible` delegates to it); `upload_scope_map`; `carrier_blocks` | **§26 — "which uploads and automations belong to a carrier" is these three columns and nothing else.** `report_definitions.connector_id` is the automation↔upload binding the owner asked for, and it has existed since mig `039`. NULL `carrier_id` = carrier-agnostic and ALWAYS shown |
 | `pos.service_plans` · `pos.dealer_codes` (mig `726`, `742`) | POS settings CRUD; `POST /pos/dealer-codes/sync-from-reports`; the wizard's `apply_import` (ADDITIVE — a name/code already present is SKIPPED, never overwritten) | the register, activations, and the wizard's `count` predicates (§23n) |
@@ -2840,6 +2842,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `GET /core/my-tenants` · `GET /core/bootstrap` (the login's membership list — the ONLY source of "which companies may I act as"; both exempt from mig-984 scope enforcement) | `core/router._my_tenants_payload` (names from `storeops.tenants`, never from `core.organizations`) | §28 which company am I in — `lib/tenant-scope.ts` `actingCompany`/`switcherOptions`, proof `prove_tenant_scope.mjs` |
 | _every endpoint filtering/grouping by MARKET_ | — | §13a canonical resolution (`core.scope.store_market_resolver`/`market_by_code`); inventory pinned in `harness_market_resolution_guard.py` |
 | _every endpoint OFFERING market options (dropdown/enumeration)_ | — | §13c canonical vocabulary (`core.scope.canonical_markets` composed via `merge_market_options`/`org_market_options`); inventory pinned in `harness_market_enumeration_guard.py`; B-1115/LI truth table `harness_market_vocabulary_truth.py` (owner 2026-09-04) |
 | `GET /commcalc/exec-mtd/{period}` (returns `metric_coverage` — the silent-zero detector) · `GET/PUT /commcalc/exec-metric-config` | `router.py` `exec_mtd` / `get_exec_metric_config` / `put_exec_metric_config` | §3 Exec-MTD metric definitions (carrier presets + detector, mig `962`) |
@@ -6677,3 +6680,75 @@ word list — a word list silently stops checking a button the moment it is rena
 failure this guard exists to prevent. Both negative controls verified: reintroducing one
 `.catch(() => {})` → 19/1, and renaming a button while leaving the steps stale → 19/1; restoring → 20/0.
 
+
+## 28. "WHICH COMPANY AM I IN" — a login that belongs to several (owner bug report 2026-09-13)
+
+Owner, setting up a new tenant: *"my data for ss@1313global is already filled in — this should not be
+there it is tenants data not my data."*
+
+### THE INCIDENT, from `core.access_log` (not inferred — the platform's own record)
+
+Login `ss@1313global.us` (auth_id `ab08bb15…`) is an **admin in THREE companies**: the house org
+(2026-06-15), Luxelink (2026-07-14), Vzone (2026-08-09). Its own requests, 2026-09-13:
+
+| time | acting org | status | path |
+|---|---|---|---|
+| 20:27:50 | Vzone | 200 | `/commcalc/email-sweep/accounts` |
+| **20:48:25** | **HOUSE** | **200** | `/commcalc/email-sweep/accounts`, `/email-sweep/processed`, `/data-sources` |
+| 20:48:41 | HOUSE | 200 | `/core/employees`, `/core/roles`, `/core/impersonation/targets` |
+| 20:49–20:53 | HOUSE | 200 | `/core/roles/2`, `/roles/4`, `/roles/8`, `chat/unread` ×9 |
+| 20:53:18 | Vzone | 200 | `/core/employees` |
+
+**Nothing was broken server-side.** Every 200 is correct: that login really is a member of all three,
+so `_pick_active_org` honoured the `x-active-org` it was given. There is no 409 anywhere in this
+login's history, and no re-login in the window — the burst signature at 20:48:25 (a whole page bundle
+at once) is the header switcher's `setActiveOrg()` + `window.location.reload()`.
+
+**The defect is that the person could not TELL.** Five minutes inside another company's employees,
+roles and mailbox, with the only on-screen signal being an unlabelled `<select>` among a dozen header
+controls — and that control could itself display the WRONG company.
+
+### DUPLICATE CHECK (build gate)
+
+Checked §22 (operator console / cross-tenant entry), §16–18, and the middleware before writing a line.
+**REUSED, not rebuilt:** `x-active-org` + `localStorage mp_active_org` stay the one org selector
+(`client.ts` `getActiveOrg`/`setActiveOrg`); `_my_tenants_payload` stays the one membership list;
+`tenant_middleware._pick_active_org` stays the one server-side rule; `PlatformBanners` keeps the
+OPERATOR banner (§22) — this is the *tenant-persona* switcher, a different population (four
+non-super-admin logins), which had no indicator at all. **No second org source was created.**
+
+### THE TWO LATENT FALLBACKS (both removed)
+
+Memberships arrive **oldest-first** (`list_memberships` → `ORDER BY created_at`), and for all four
+multi-company logins on this platform the oldest is the HOUSE org. Two places therefore named the
+house org whenever the active org had not resolved:
+
+1. `(platform)/layout.tsx` sidebar — `… || tenants[0]?.name` — the most prominent label on screen.
+2. The header `<select value={activeOrg || ''}>` — a bound value matching no `<option>` does not
+   render blank; the browser **displays the first option**. So the control could read
+   "Cellfonz R Us" while the session acted as Vzone, or vice versa.
+
+### WHAT SHIPPED
+
+- `frontend/src/lib/tenant-scope.ts` — **PURE**, no carrier/tenant/product name (RULE TWO):
+  `actingCompany` (resolves ONLY from a real membership; an unknown or absent org is
+  `resolved: false`, never "probably the first one"), `switcherOptions` (prepends a placeholder
+  bound to `value: ''` whenever unresolved — byte-identical to the old list when resolved),
+  `switcherVisible`, `switchConfirmText` (names BOTH companies; leaving one is not a view filter),
+  `flowTenantMismatch` (a pinned setup flow can tell it is being rendered for another company across
+  a page load — the primitive for the onboarding hand-off, wired in a follow-up).
+- `(platform)/layout.tsx` — the sidebar name and the switcher both go through it; the switcher gains
+  an explicit **"Company:"** label, an amber unresolved state, and a `window.confirm` before leaving.
+
+### REGISTRATION
+
+- Harness: `frontend/prove_tenant_scope.mjs` — **41 checks**, DB-free/browser-free/React-free. Like
+  `prove_carrier_scope.mjs` it transpiles the REAL module with the project's own TypeScript and
+  executes it. §2 is the regression: the exact fixture (three memberships, house first, `activeOrg`
+  null). Both negative controls verified — removing the placeholder → 36/5, restoring `actingCompany`'s
+  first-membership fallback → 37/4; restored → 41/0.
+- **NOT a code defect, REPORTED as live data (CLAUDE.md):** `storeops.app_users.is_default_org` is set
+  on **0 of 112 rows** platform-wide, so no login has a declared home company; and four logins
+  (`ss@1313global.us`, `dc@luxelinkwireless.com`, `rajiv.jaggi@cellularservices.net`,
+  `ramosbonilla19@gmail.com`) hold a membership in the house org alongside a tenant. The owner
+  confirmed 2026-09-13 that the three memberships on `ss@1313global.us` are intended.
