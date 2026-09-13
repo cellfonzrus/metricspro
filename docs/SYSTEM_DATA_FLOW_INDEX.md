@@ -51,6 +51,7 @@ Primary code homes:
 | 23aa | **Distributor chargebacks** | "Two separate chargebacks billed to the master dealer account — a one-off and a recurring one — what are they, when did each really start, and where do they book?" |
 | 27 | **Vendor rebate history (earned, per line)** | "A new tenant's carrier statement lists every rebate and commission it owes us per line — where does that file land, why is it not in the P&L, and what is the difference between what we have EARNED and what has actually been COLLECTED?" |
 | 28 | **"Which company am I in"** | "My login belongs to more than one company — which one is every page on screen actually showing, how would I know if it changed under me, and why did another company's mailbox turn up in a new tenant's setup?" |
+| 11a | **Inventory vs Sold** | "My snapshot says this phone is in stock — was it already sold? Which units do I clear out, which sales do I adjust, and why is a sold-then-refunded unit not on the list?" |
 
 ---
 
@@ -1279,6 +1280,41 @@ gates.
 
 **GAP:** `days_in_stock` is snapshot-as-of-file, not computed live; `store` is free text (not joined to
 `store_code`) so per-store rollups need resolution. Aging is currently upload-fed (sweep stub, §2). `⚠`
+
+### 11a. INVENTORY vs SOLD — is the unit still here? (owner request 2026-09-12)
+
+Owner: *"check against the sales by product to see if the item in inventory is already sold or not and
+if it is alsready sold then it should report those items whic are soled with imei to be adjusted and
+also those items which are in oventory to be cleared out of the inventory."*
+
+**DUPLICATE CHECK.** Two neighbours exist and NEITHER answers this. `GET /account/inventory-recon` (§4)
+is a balance-sheet tie-out in DOLLARS per store — it never looks at a device. `GET /device-cost-recon`
+(above) reconciles what a device COST across four sources and flags IMEI overlap between them — it
+answers *whose number is right*, not *is this unit still here*. **PRESENCE is the third question** and
+nothing answered it. REUSED: `device_cost_recon.device_key` (THE cross-source device key — INJECTED,
+so the pure module stays DB-free and the harness proves the real pairing) and `_dcr_paged` (the
+existing org-scoped paged read). No new table; the two sides are `raw_sales` and
+`inventory_aging_device`, both as extended by mig `1004`.
+
+**THE RULE THAT MAKES IT WORTH BUILDING — NET QUANTITY, NOT PRESENCE IN THE SALES FILE.** A refund line
+carries a NEGATIVE `quantity` (mig `1004` added the column for exactly this), so a unit sold and then
+returned nets to zero and is genuinely back on the shelf. **Measured on the owner's own first file: a
+naive "appears in sales ⇒ sold" reads 18 phantom units and $12,360; the true figures are 10 and
+$7,360.** Reporting all 18 would send someone to write off $5,000 of stock they can see. And a status
+naming an ORDER is not physically present, so an ordered-but-unreceived unit can never be reported as
+inventory to clear — recognised by SHAPE (`\b(?:back|re|pre)?[-\s]?order…`), not a vendor word list,
+so `backorder` as one word is caught while `recorder` and `disorder` are not.
+
+| Piece | Where |
+|---|---|
+| PURE logic — `status_is_present`, `net_sold`, `unkeyed_sales`, `on_hand_index`, `reconcile` | `backend/app/modules/commcalc/inventory_sold_recon.py` |
+| `GET /commcalc/inventory-sold-recon` — READ-ONLY, org-scoped both sides; returns `rows` + `totals` + a `basis` block saying whether either read was capped or failed (a capped read makes every number a FLOOR, and a report that does not say so is a number acted on without its basis) | `commcalc/router.py` |
+| `commcalc/inventory-sold-recon/page.tsx` — display only, NAV `Inventory vs Sold`. No "fix it" button: a one-click write-off of stock is exactly the action that must not be one click | frontend |
+| Proof `backend/harness_inventory_sold_recon.py` — **43 checks**, DB-free, pairing the REAL `device_key` | negative control: removing the refund netting → 37/6, and §D reports 18/$12,360 instead of 10/$7,360 |
+
+**LIVE DEFECT, REPORTED NOT FIXED (CLAUDE.md):** on the owner's first RQ files — 10 devices, $7,360 at
+cost, marked In Stock but sold and never returned, oldest since March 2025, including 4 desk phones on
+invoice `Z1321IN11280`. The report surfaces them; it writes no adjustment and clears no row.
 
 ---
 
@@ -2842,6 +2878,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `GET /commcalc/inventory-sold-recon` (is an on-hand unit already sold — READ-ONLY, books nothing, org-scoped both sides) | `router.inventory_sold_recon_endpoint` → PURE `commcalc/inventory_sold_recon.reconcile`, keyed by `device_cost_recon.device_key` | §11a — PRESENCE, distinct from `/device-cost-recon` (whose number is right) and `/account/inventory-recon` (dollars per store). Proof `harness_inventory_sold_recon.py` |
 | `GET /core/my-tenants` · `GET /core/bootstrap` (the login's membership list — the ONLY source of "which companies may I act as"; both exempt from mig-984 scope enforcement) | `core/router._my_tenants_payload` (names from `storeops.tenants`, never from `core.organizations`) | §28 which company am I in — `lib/tenant-scope.ts` `actingCompany`/`switcherOptions`, proof `prove_tenant_scope.mjs` |
 | _every endpoint filtering/grouping by MARKET_ | — | §13a canonical resolution (`core.scope.store_market_resolver`/`market_by_code`); inventory pinned in `harness_market_resolution_guard.py` |
 | _every endpoint OFFERING market options (dropdown/enumeration)_ | — | §13c canonical vocabulary (`core.scope.canonical_markets` composed via `merge_market_options`/`org_market_options`); inventory pinned in `harness_market_enumeration_guard.py`; B-1115/LI truth table `harness_market_vocabulary_truth.py` (owner 2026-09-04) |

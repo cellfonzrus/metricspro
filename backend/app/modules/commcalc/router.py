@@ -35194,6 +35194,60 @@ def _require_payout_recorder(authorization, org_id, cfg=None):
     return caller
 
 
+# ── INVENTORY vs SOLD (owner request 2026-09-12) ─────────────────────────────────────────────────
+@router.get("/inventory-sold-recon")
+def inventory_sold_recon_endpoint(limit: int = 500, org_id: str = ORG_ID):
+    """IS A DEVICE STILL ON THE SHELF, OR WAS IT ALREADY SOLD?
+
+    Owner: *"check against the sales by product to see if the item in inventory is already sold or not
+    and if it is alsready sold then it should report those items whic are soled with imei to be
+    adjusted and also those items which are in oventory to be cleared out of the inventory."*
+
+    Two findings, the owner's own two asks — `sold_not_cleared` (on the shelf but sold: stock to clear,
+    with what clearing it is worth) and `sold_no_inventory` (sold, but the snapshot never knew the
+    unit: an adjustment).
+
+    A REFUND NETS OFF. A unit sold and then returned is genuinely on hand and is NOT reported; on the
+    first real file a naive read called 18 units phantom when only 10 were, a $5,000 overstatement of
+    stock to write off. An ORDERED unit is not physically present and is never reported as stock to
+    clear. Both rules live in the PURE `inventory_sold_recon` (proof `harness_inventory_sold_recon.py`).
+
+    READ-ONLY AND ORG-SCOPED on both sides. It books nothing, clears no row and moves no money: what
+    it finds is REPORTED for a human to act on. Reuses `device_cost_recon.device_key` — the one
+    cross-source device key — and `_dcr_paged`, the existing org-scoped paged read."""
+    require_org(org_id)
+    # Local imports, as every other caller in this region does.
+    from app.modules.commcalc import device_cost_recon as _dcr
+    from app.modules.commcalc import inventory_sold_recon as _isr
+    client = sb()
+    cap = max(1, min(int(limit or 500), 5000))
+
+    def _org(q):
+        return q.eq("org_id", org_id)
+
+    sales, sales_ok, sales_cut = _dcr_paged(
+        client, "raw_sales", "serial_1,quantity,trans_date,store", _org, 200000, "sales")
+    inv, inv_ok, inv_cut = _dcr_paged(
+        client, "inventory_aging_device",
+        "imei,serial,sku,item,store,status,unit_cost,total_cost,received_date,as_of_date,on_hand",
+        _org, 200000, "inventory")
+
+    out = _isr.reconcile(sales, inv, _dcr.device_key)
+    rows = out["rows"][:cap]
+    return {
+        "rows": rows,
+        "totals": out["totals"],
+        "truncated": len(out["rows"]) > len(rows),
+        # STATED, NOT ASSUMED: a failed or capped read makes the answer a FLOOR, not a total. Saying so
+        # is the difference between a report and a number somebody acts on without knowing its basis.
+        "basis": {
+            "sales_read_ok": sales_ok, "sales_truncated": sales_cut,
+            "inventory_read_ok": inv_ok, "inventory_truncated": inv_cut,
+            "complete": sales_ok and inv_ok and not sales_cut and not inv_cut,
+        },
+    }
+
+
 def _accrual_day_param(v, label="date"):
     d = payout_accrual.parse_day(v, None) if v else _date.today()
     if d is None:
