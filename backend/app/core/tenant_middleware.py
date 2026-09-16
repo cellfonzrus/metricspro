@@ -130,6 +130,18 @@ _PUBLIC_EXACT = frozenset({
                                           # token inside the handler (401 without a valid one), and it
                                           # must be reachable BEFORE the 2FA marker exists so a
                                           # 2FA-required login can learn it needs the OTP step.
+    "/api/v1/core/my-tenants",            # Post-login tenant PICKER source (GET-only, method-scoped
+                                          # below). SELF-GATES on the bearer token (401 without a
+                                          # valid one) and resolves purely from the token's auth_id,
+                                          # so it works BEFORE an active tenant is chosen — the exact
+                                          # rationale as /core/bootstrap above and the /core/me
+                                          # prefix, and it returns ONLY the caller's own memberships
+                                          # (the same payload /bootstrap already exposes). The native
+                                          # app calls this endpoint directly (the web uses /bootstrap);
+                                          # without the allowlist a multi-company login with no active
+                                          # org yet gets a 409 tenant_choice_required HERE, so it can
+                                          # never list its companies to pick one — the picker and the
+                                          # in-app company switcher both go dark and every screen 409s.
 })
 
 # Public path PREFIXES, matched at a SEGMENT BOUNDARY only (path == p or path.startswith(p + "/")),
@@ -479,6 +491,8 @@ def _is_public(path: str) -> bool:
 #     scoping it here means any future method on that same path authenticates normally.
 _PUBLIC_METHODS = {
     "/api/v1/core/auth-config": ("GET",),
+    "/api/v1/core/my-tenants": ("GET",),   # read-only tenant list; only GET is public, any other
+                                           # method on this path authenticates normally.
     "/api/v1/billing/public-pricing": ("GET",),
     # Pub/Sub only ever POSTs. Scoping it stops a future GET on the same path being public by
     # inheritance — the exact mistake the whatsapp entry below was widened by until 2026-08-05.
