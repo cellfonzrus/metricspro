@@ -79,3 +79,42 @@ def category_path(value, sep=">>"):
     if not parts:
         return ("", "")
     return (parts[0], parts[-1])
+
+
+# ── A BLANK IDENTIFIER IS NULL, NOT THE EMPTY STRING (owner bug report 2026-09-16) ────────────────
+# THE DEFECT, reproduced on the owner's own RQ inventory export: the file carries 455 rows, of which
+# 72 are ORDERED or BACK-ORDERED units. No handset has arrived for those, so their IMEI cell is blank
+# — and `apply_transform('', 'text')` yields the EMPTY STRING, not None. Postgres treats '' as a real
+# value, so all 72 collide on `inventory_aging_device_org_imei_uq` (UNIQUE on org_id, imei — mig 216)
+# and the whole import dies with 23505 on the second blank. The upload could never succeed.
+#
+# NULL is also what the data actually means: the feed left the cell blank, which is precisely what
+# NULL says, and NULLs are DISTINCT in a unique index so any number of them coexist.
+#
+# SCOPED TO UNIQUE-KEY FIELDS ON PURPOSE. Blanking every empty string platform-wide would change what
+# every existing feed stores, for a cosmetic gain; this touches only the columns where '' is actually
+# a bug, and the map below states a SCHEMA FACT (which index exists on which table), not a policy.
+# No carrier, tenant or product name appears — RULE TWO holds.
+UNIQUE_KEY_FIELDS = {
+    # table                        fields in a UNIQUE constraint      (the index that enforces it)
+    "inventory_aging_device":      ("imei",),                         # ..._org_imei_uq, mig 216
+}
+
+
+def blank_keys_to_null(mapped, table, key_fields=None):
+    """Turn a blank unique-key field into None, in place-ish. Returns (rows, n_changed).
+
+    A no-op for any table with no unique-key field registered, and for any row whose key is already
+    populated or already None — so every existing feed is byte-identical. `key_fields` is injectable
+    so a caller (and the harness) can state the columns directly rather than relying on the map.
+    """
+    fields = tuple(key_fields if key_fields is not None else UNIQUE_KEY_FIELDS.get(table, ()))
+    if not fields:
+        return mapped, 0
+    changed = 0
+    for row in mapped or []:
+        for f in fields:
+            if f in row and row[f] is not None and str(row[f]).strip() == "":
+                row[f] = None
+                changed += 1
+    return mapped, changed
