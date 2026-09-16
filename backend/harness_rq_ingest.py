@@ -158,5 +158,71 @@ ok(len([f for f in cm.TARGET_FIELDS["pos_product_sales"]
         if f[4] in ("Gross Profit", "Net Profit")]) == 1,
    "exactly ONE of the two identical profit columns is mapped")
 
+# ══ THE BLANK IDENTIFIER (owner bug report 2026-09-16) ═══════════════════════════════════════════
+# The upload could never succeed, and the reason was invisible from the screen. The RQ inventory
+# export carries 455 rows, 72 of them ORDERED or BACK-ORDERED units: no handset has arrived, so the
+# IMEI cell is blank. apply_transform yields the EMPTY STRING for a blank text cell, Postgres treats
+# '' as a real value, and inventory_aging_device_org_imei_uq is UNIQUE on (org_id, imei) — so the
+# SECOND such row raises 23505 and the whole import dies. Measured against the live database.
+print()
+print("— blank identifier -> NULL (owner 2026-09-16) —")
+from app.modules.commcalc import feed_shape as fs
+
+ok(apply := (cm.apply_transform("", "text") == ""),
+   "REPRODUCE THE CAUSE: a blank text cell maps to the EMPTY STRING, not None")
+ok("inventory_aging_device" in fs.UNIQUE_KEY_FIELDS
+   and "imei" in fs.UNIQUE_KEY_FIELDS["inventory_aging_device"],
+   "the table's unique-key column is registered (a schema fact, mig 216's index)")
+
+rows = [{"imei": "", "sku": "A"}, {"imei": "   ", "sku": "B"},
+        {"imei": "353915110000001", "sku": "C"}, {"imei": None, "sku": "D"}]
+out, n = fs.blank_keys_to_null(rows, "inventory_aging_device")
+ok(n == 2, f"THE FIX: both blank IMEIs become NULL (changed {n})")
+ok(out[0]["imei"] is None and out[1]["imei"] is None, "  …blank and whitespace-only both become NULL")
+ok(out[2]["imei"] == "353915110000001", "  …a real IMEI is never touched")
+ok(out[3]["imei"] is None, "  …an already-NULL key is left alone")
+ok(all(r["sku"] for r in out), "  …no other column is disturbed")
+
+# THE PROPERTY THAT MAKES THE INSERT SUCCEED: '' collides in a unique index, NULL does not.
+# NOTE: blank_keys_to_null mutates IN PLACE, so every assertion below builds a FRESH fixture. An
+# earlier draft of this harness snapshotted `rows` after the call and compared it to itself, which
+# is a check that can only ever pass or be meaningless. Caught by running it.
+def _fixture():
+    # MIRRORS THE REAL FILE: apply_transform returns "" for every blank IMEI cell, so the 72
+    # ordered units all carry the SAME value — which is exactly why they collide. ("   " is here
+    # to prove whitespace is handled too; it is not what the live rows looked like.)
+    return [{"imei": "", "sku": "A"}, {"imei": "", "sku": "B"}, {"imei": "   ", "sku": "C"},
+            {"imei": "353915110000001", "sku": "D"}, {"imei": None, "sku": "E"}]
+
+_unfixed = _fixture()
+_ukeys = [str(r["imei"]) for r in _unfixed if r["imei"] is not None]
+ok(len(_ukeys) != len(set(_ukeys)),
+   "WITHOUT the fix the keys COLLIDE — '' twice — which is the 23505 the upload died on")
+
+_fixed, _ = fs.blank_keys_to_null(_fixture(), "inventory_aging_device")
+_fkeys = [r["imei"] for r in _fixed if r["imei"] is not None]
+ok(len(_fkeys) == len(set(_fkeys)),
+   "  …WITH the fix every remaining key is distinct, so the unique index accepts the batch")
+ok(sum(1 for r in _fixed if r["imei"] is None) == 4,
+   "  …and the three keyless rows all coexist as NULL (NULLs are distinct in a unique index)")
+
+# BYTE-IDENTICAL EVERYWHERE ELSE — the scoping is the whole safety argument.
+ok(fs.blank_keys_to_null([{"imei": ""}], "raw_sales")[1] == 0,
+   "a table with no unique-key field registered is untouched")
+ok(fs.blank_keys_to_null([{"store": "", "sku": ""}], "inventory_aging_device")[1] == 0,
+   "a NON-key blank column keeps its empty string — this is not a blanket ''-to-NULL change")
+ok(fs.blank_keys_to_null([], "inventory_aging_device")[1] == 0, "empty input is a no-op")
+ok(fs.blank_keys_to_null(None, "inventory_aging_device")[1] == 0, "None input is a no-op, not a crash")
+ok(cm.blank_keys_to_null(_fixture(), "inventory_aging_device")[1] == 3,
+   "reached through column_mapping too, so router.py uses ONE module for every feed-shape rule")
+
+# AND THE WIRING: the pure rule proves nothing unless the ingest path actually calls it.
+_RTR = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "app/modules/commcalc/router.py"), encoding="utf-8").read()
+_fn = _RTR[_RTR.index("def _ingest_mapped_df("):]
+_fn = _fn[:_fn.index("def ", 100)]
+ok("column_mapping.blank_keys_to_null(mapped, table)" in _fn,
+   "_ingest_mapped_df APPLIES the rule — so a real upload of this file now succeeds")
+
 print(f"\nharness_rq_ingest: {len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

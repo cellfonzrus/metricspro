@@ -4179,6 +4179,14 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
     if not period:
         mapped, dated_n = column_mapping.derive_row_periods(mapped, report_key, sb(), org_id)
         undated_rows = len(mapped) - dated_n
+    # (c) A BLANK IDENTIFIER IS NULL, NOT '' (owner bug report 2026-09-16). apply_transform yields the
+    #     EMPTY STRING for a blank text cell, and Postgres treats '' as a real value — so on a feed
+    #     where the key column is legitimately blank for some rows, the SECOND such row violates that
+    #     table's unique index and the whole import dies. Measured on the first real inventory export:
+    #     72 of 455 rows are ordered/back-ordered units with no handset and therefore no IMEI, and the
+    #     upload failed with 23505 on inventory_aging_device_org_imei_uq every single time. Scoped to
+    #     the columns that are actually in a unique constraint, so every other feed is byte-identical.
+    mapped, blanked_keys = column_mapping.blank_keys_to_null(mapped, table)
 
     # carrier_commission: roll the mapped component amounts into total_commission (the rep's statement
     # commission) so the calc can sum per rep. Amount columns come from the per-tenant catalog (so

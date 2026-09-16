@@ -559,6 +559,19 @@ def drop_footer_rows(mapped, report_key, base=None, client=None, org_id=None):
     return kept, len(mapped) - len(kept)
 
 
+def blank_keys_to_null(mapped, table):
+    """Turn a blank unique-key column into NULL. Returns (rows, n_changed).
+
+    apply_transform yields the EMPTY STRING for a blank text cell, and Postgres treats '' as a real
+    value — so a feed where the key column is legitimately blank on several rows violates that
+    table's unique index on the SECOND one and the whole import dies. Delegates to
+    feed_shape.blank_keys_to_null, which holds the table -> unique-key-field map; a table with none
+    registered is returned untouched. Thin wrapper so router.py reaches every feed-shape rule through
+    THIS module, exactly as it does for the footer and period rules."""
+    from app.modules.commcalc.feed_shape import blank_keys_to_null as _bk
+    return _bk(mapped, table)
+
+
 def derive_row_periods(mapped, report_key, client=None, org_id=None):
     """Stamp period/period_month/period_year on each row FROM ITS OWN DATE. Returns (rows, n_stamped).
 
