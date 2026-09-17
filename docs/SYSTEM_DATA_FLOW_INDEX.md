@@ -1013,6 +1013,59 @@ by re-scanning the same sales universe (§9).
 
 ---
 
+### 6a. DEVICE SET-UP / ACTIVATION FEE as a pay item — recognition, market scope, and the two pay bases
+
+**One concept, many carrier names** (Boost "device set-up fee", Total/luxelink "activation fee"): a fee
+the store COLLECTS at point of sale, which the carrier shares with the dealer and the dealer may share
+with the employee. Owner directives 2026-08-01 (build it) and 2026-09-17 ("device set up fee … included
+while calculating the commission … set up as 10% as default", then "Create company wide but default
+allowed for NY and if need be a checkbox enabling for all markets if required").
+
+- **Recognition (which lines ARE the fee) — config, never code:** `commcalc.accessory_config.setup_fee_keywords`
+  (mig `217`), consumed by `router._is_setup_fee` → `_sales_cell_agg` `setup_fee_rev` (Sales Report,
+  Executive MTD `setup_fee` / `acc_plus_setup`, accessory-TARGET basis) and by
+  `setup_fee_pay.is_setup_fee` on the pay path. ONE list, both sides.
+- **⚠ A SECOND recognition of the same concept exists and they can disagree:** the Executive-MTD bucket
+  `activation_fee` in `commcalc.exec_metric_config` (mig `204`/`962`, default rule
+  `product_desc_contains: ['access charge']`, `exec_metric_defs.CODE_DEFAULTS`). Live 2026-09-17: for org
+  `854f6d7b` the `activation_fee` bucket saw **$23,225.00** Mar–Sep 2026 while `setup_fee_keywords`
+  (`['Device Setup Charge','Activation Fee']`) saw **$126.47** — the same money, two vocabularies, only
+  one of which pays. Before changing either, run `GET /commcalc/setup-fee/candidates/{period}` (pick-
+  don't-type) and `…/recognition-divergence/{period}`.
+- **Economics + who it applies to:** `commcalc.commission_org_config.setup_fee_pay` JSONB (mig `263`,
+  NO new migration for the market layer — the column is already JSONB):
+  `{"default": {...}, "by_carrier": {"<carrier.id>": {...}}, "by_market": {"<market>": {...}},
+  "all_markets": false}`. Settings keys: `include_in_commission`, `employee_pct_of_collected`
+  (fraction; NULL = *not stated* → pays $0 **and warns**, never guessed; an explicit 0 is a decision),
+  `dealer_share_pct` (informational — no employee payout reads it), `match_mode`,
+  `counts_toward_accessory_target`.
+- **Resolution (2026-09-17):** `setup_fee_pay.resolve_for_scope(cfg, carrier_id, market)` — **MARKET >
+  CARRIER > org default**. `all_markets` IS the owner's checkbox: with it false and `by_market`
+  non-empty, a rep in an unnamed market resolves to source `market_not_enabled` and pays $0 through the
+  ordinary `excluded` path (named, never silent). An **empty `by_market` is inert** — every tenant
+  before 2026-09-17, including the house/Boost org, is byte-identical. `resolve_for_carrier` is
+  deliberately NOT market-gated and still serves the DISPLAY surfaces. RULE TWO: no market, tenant or
+  carrier name in any module — the harness asserts it against executable code with docstrings stripped.
+- **THE TWO PAY BASES — a plan pays through exactly one of them:**
+  1. `commission_basis='rules'` → `commission_engine.preview` adds the fee as its OWN component after
+     the tier multiplier (`setup_fee_comm` / `setup_fee_collected` on the rep row, `setup_fee` block on
+     the result, `warnings[].setup_fee_pct_unconfigured`).
+  2. `commission_basis='exec_mtd'` (mig `298`) → `router._commission_mtd_result` computes it from the
+     Exec-MTD `setup_fee` cell (no second classifier) scoped to the plan's OWN market/carrier
+     assignment, and `_override_plan_by_rep_with_mtd` carries it to the pay writer.
+     **DEFECT FIXED 2026-09-17:** that function hard-coded `setup_fee_comm: 0.0`, so every rep on an
+     exec_mtd plan was paid $0 of a configured fee, silently — regression pinned in
+     `harness_setup_fee_market_scope.py` §J.
+- **Boost is a THIRD, older path and is untouched by all of the above:** `calculator.py` pays it from
+  `commcalc.payout_config.setup_fee_rate` (default 0.10). A tenant with no `payout_config` row (e.g.
+  org `854f6d7b`) never used it.
+- **Endpoints:** `GET/PUT /commcalc/setup-fee/config`, `GET /commcalc/setup-fee/candidates/{period}`,
+  `GET /commcalc/setup-fee/recognition-divergence/{period}`, `GET /commcalc/setup-fee/impact/{period}`.
+- **Proofs:** `backend/harness_setup_fee_market_scope.py` (market dimension + the exec-MTD leg, DB-free)
+  and `backend/scratchpad/setup_fee_monetization_proof.py` (the mig-263 package moves $0 on merge).
+
+---
+
 ## 7. Carrier residual installments (raw_mi path)
 
 **Purpose.** Multi-month carrier residual pay: each qualifying subscriber pays a FLAT or %-of-MRC amount
@@ -2746,7 +2799,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | **Agency (inter-dealer)** | mig `220-222` | `agency.py`; `/agency/*` `26021-26259` |
 | **Financing** | mig `272`,`273` | `financing_tiers.py`; `/financing/*` `28058-28313` |
 | **Accrual / payout ledger** | mig `267_daily_accrual_payout_ledger.sql`, `071` | `payout_accrual.py`; `/payout/*` `27772-28015` |
-| **Setup-fee pay** | mig `217`,`263` | `setup_fee_pay.py`; `/setup-fee/*` `13011-13172` |
+| **Setup-fee / activation-fee pay** (§6a) | mig `217` (recognition keywords), `263` (`commission_org_config.setup_fee_pay` JSONB — the 2026-09-17 `by_market`/`all_markets` layer needs NO migration), `204`/`962` (the SECOND recognition: the Exec-MTD `activation_fee` bucket, which can disagree with the keyword list) | `setup_fee_pay.py` (`resolve_for_scope` MARKET > CARRIER > default; `market_enabled`/`any_enabled`; `employee_pay` NULL≠0); consumed by `commission_engine` (rules basis) and `router._commission_mtd_result` + `_override_plan_by_rep_with_mtd` (exec_mtd basis — the hard-coded `0.0` defect, fixed 2026-09-17); Boost's own older path is `calculator.py` × `payout_config.setup_fee_rate`; `/setup-fee/*` `13011-13172`. Proofs `harness_setup_fee_market_scope.py`, `scratchpad/setup_fee_monetization_proof.py` |
 | **Custom reports** | mig `099`,`211` | `/custom-report*` `25771-25962` |
 | **Expected commission** | mig `258` | `expected_commission.py`; `/expected-commission/*` `11397-11579` |
 | **IMEI rebates** | mig `216` (aging) | `imei_rebate_report.py`; `/imei-rebates` `26448` |
@@ -2787,7 +2840,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `commcalc.raw_dlar_rep` | `dlar_sweep` (replace), upload | rep KPI, comp trend `15238` |
 | `commcalc.raw_catalog` | upload `/product-mrc/import` region, catalog | GP, device COGS, installment MRC |
 | `commcalc.payout_config` | `/config/{period}` `10474`, `/commission-settings` `10517` | `calc_rep_commissions` (spiffs/tiers), installment base rates |
-| `commcalc.commission_org_config` | `/commission-settings`, migrations (`209`,`306`,`308`,`309`,`314`,`934`,`939`,`992`,**`996`**) | THE per-org money-policy row (RULE TWO). Readers: `ma_store_pnl.load_config` (store attribution · month-spiff source/order types · MDF tokens · line labels · rebate presentation · **device-margin presentation**, mig 996 — column sets fall back newest-first 996→934→314 so a pre-996 DB keeps its seeds) · `ma_store_pnl.load_unbooked_reasons` (`pl_ma_unbooked_reasons`, mig 994) · `residual_subs.load_ma_pnl_config` (`pl_merchant_discount_own_line`, `pl_ma_residual_order_types`) · `residual_subs.load_residual_report_config` (`residual_report_components`, mig 994) · `billpay_pl` (`pl_billpay_presentation`/`pl_billpay_settlement`) · the installment/plan engines (`installment_mrc_basis`, `plan_pay_gate`, `sales_source`). EVERY reader is org-scoped and ADAPTIVE — a missing column/row degrades to the code defaults, never raises |
+| `commcalc.commission_org_config` | `/commission-settings`, migrations (`209`,`306`,`308`,`309`,`314`,`934`,`939`,`992`,**`996`**) | THE per-org money-policy row (RULE TWO). Readers: `ma_store_pnl.load_config` (store attribution · month-spiff source/order types · MDF tokens · line labels · rebate presentation · **device-margin presentation**, mig 996 — column sets fall back newest-first 996→934→314 so a pre-996 DB keeps its seeds) · `ma_store_pnl.load_unbooked_reasons` (`pl_ma_unbooked_reasons`, mig 994) · `residual_subs.load_ma_pnl_config` (`pl_merchant_discount_own_line`, `pl_ma_residual_order_types`) · `residual_subs.load_residual_report_config` (`residual_report_components`, mig 994) · `billpay_pl` (`pl_billpay_presentation`/`pl_billpay_settlement`) · the installment/plan engines (`installment_mrc_basis`, `plan_pay_gate`, `sales_source`) · `setup_fee_pay.load_pay_config` → `resolve_for_scope` (`setup_fee_pay`: `default` / `by_carrier` / `by_market` / `all_markets`, §6a). EVERY reader is org-scoped and ADAPTIVE — a missing column/row degrades to the code defaults, never raises |
 | `commcalc.rep_commissions` | `_run_calculation`/`_apply_new_engines` `9183` | `/commissions/{period}` `10222`, GP report, commission-by-store, statements, MI (indirect) |
 | `commcalc.store_kpis` | KPI ingest/snapshot | tiers, exec |
 | `commcalc.carrier_kpi_metric` | `/carrier-kpi-metrics` POST `19773` | KPI/tier config resolution |
@@ -2835,7 +2888,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `commcalc.management_incentive_*` | `/management-incentive/plans` `28534`, `/compute` `28613` | MI engine, payouts, resolve |
 | `commcalc.discrepancy_results` | Boost engine `discrepancy_engine.run_discrepancy` (`source='boost'`/NULL) + MA recon `ma_recon.run_ma_discrepancy` (`source='ma'`, `comp_type='MA_ACTIVATION'`) — each delete-then-inserts ONLY its own `(org, period, source)` slice; canonical DDL + attribution columns (`rule_id/rule_key/rule_reason/evidence/source/order_number`) in mig `312` (table pre-dates migrations, console-created); APPEAL columns (`appeal_status/appeal_note/appealed_by/appealed_at`) mig `947` — written ONLY by `PATCH /discrepancy-appeals/{row_id}` (pure state machine `discrepancy_appeals.py`), never by the engines | `GET /discrepancy/{period}` `router.py:19099` (selects `*`, optional `source` filter), Pay Discrepancy page; `GET /discrepancy-appeals` (period-range + filters) → Commission Discrepancy hub page (§15) |
 | `commcalc.ma_payment_rule` | `/ma-payment-rules` POST/PATCH/DELETE `router.py:19214-19270` (upsert by `org_id,rule_key`; mig `312`) | `ma_recon.load_rules` → `match_rules` (first match by ascending priority; case/trim-insensitive; `effective_from/to` windows; bad regex skipped) |
-| `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`) | `PUT /accessory-config` (Sales Report → Classification settings) | `_accessory_config(_uncached)` (accessory/billpay/blank-ct classification for `_sales_cell_agg`); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, own defensive read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, own defensive read, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`) |
+| `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`) | `PUT /accessory-config` (Sales Report → Classification settings) | `_accessory_config(_uncached)` (accessory/billpay/blank-ct classification for `_sales_cell_agg`); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, own defensive read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, own defensive read, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`); **`setup_fee_keywords` (mig `217`) is THE set-up/activation-fee recognition for BOTH the reports and the PAY path** (`_is_setup_fee` → `setup_fee_rev`; `setup_fee_pay.load_keywords`, §6a) — editing it moves Executive MTD, the accessory-TARGET basis AND somebody's commission in the same edit |
 | `commcalc.report_pull_map` (mig `207` — report_key → `target_table` + `column_map` + `param_spec`, org row over the house row) | `POST /commcalc/report-mappings` (`/commcalc/report-mappings`); mig `955` seeds `merchant_settlement` / `merchant_funding` | `report_pull` portal ingest; **card-settlement recon feed resolution** (`closing/router._settlement_feed_spec` → `external_credit_recon.SETTLEMENT_REPORT_KEY`, §12 — this is HOW the tally finds the scraped table without hardcoding it) |
 | `commcalc.metric_source_of_truth` (per-metric basis-of-truth config, mig `923`; columns added by `944` `processor_order_types`/`processor_product_tokens` — the bill-payment row filter for the daily-TX processor feed) | `PUT /metric-source-config` | `_metric_source` (consumed by Exec MTD activation override, `/metric-recon`, `/billpay-coverage`, `_pos_billpay_for_days`/`_billpay_processor_by_store(_day)` — §12 3-way Leg C; NULL columns = `metric_recon` house defaults) |
 | `commcalc.exec_metric_config` (per-org Exec-MTD metric DEFINITIONS, mig `204`; **`carrier` preset column mig `962`, `applicable` flag mig `963`**; seed fn `seed_exec_metric_config`) | `GET/PUT /exec-metric-config` `router.py` (upsert by `org_id,bucket`); 2026-09-02: LuxeLink `bill_payment` rules gained `product_desc_contains:["wallet funding"]`; **mig `962`** corrects the HOUSE `bill_payment` rules + seeds the boost carrier PRESET | `_exec_metric_config` → **`exec_metric_defs.resolve`** (tenant row > house carrier preset > built-in default) → `_sales_cell_agg` exec metrics via `exec_metric_defs.line_match` |
@@ -2995,6 +3048,10 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `GET /account/projection` (`?months=&horizon=` — deterministic linear/seasonal-naive P&L projection + cash runway, per-org `projection_config` mig `941`; rows flagged `projected:true`; `account_trends` grant) | `account/router.py` (`financial_projection` → pure `projection_engine.project`) | §4 projection engine |
 | `GET /account/valuation` (assumption-driven ESTIMATE range: TTM multiples + asset floor + projection-fed DCF w/ sensitivity grid; per-org `valuation_config` mig `941`; own default-closed `company_valuation` grant; disclaimer always in payload) | `account/router.py` (`company_valuation` → pure `valuation.valuation`) | §4 company valuation |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
+| `GET/PUT /commcalc/setup-fee/config` | `commcalc/router.py` (`get_setup_fee_config`/`save_setup_fee_config`) | §6a — the per-org set-up-fee economics: `default` / `by_carrier` / **`by_market`** / **`all_markets`** (the owner's all-markets checkbox). MONEY-TOUCHING: it applies on the next Calculate, nothing is recalculated on save |
+| `GET /commcalc/setup-fee/candidates/{period}` | `commcalc/router.py` (`setup_fee_candidates`) → `setup_fee_pay.candidates` | §6a — PICK-DON'T-TYPE: the tenant's own product descriptions that could BE the fee, ranked by the money they carry, each flagged `mapped_now`. **Use this before editing `setup_fee_keywords`** |
+| `GET /commcalc/setup-fee/recognition-divergence/{period}` | `commcalc/router.py` → `setup_fee_pay.divergence` | §6a — the two historic matchers measured against each other (case). Empty ⇒ switching `match_mode` moves $0 |
+| `GET /commcalc/setup-fee/impact/{period}` | `commcalc/router.py` (`setup_fee_impact`) → `commission_engine.preview` twice | §6a — per-rep dollars at a hypothetical percentage. READ-ONLY; no default percentage, so it can never quote a rate nobody entered |
 | `GET /report-labels` (resolved carrier-aware report column labels + banner on/off + VOCABULARY TERMS per carrier: tenant override > house carrier preset (migs 945/953) > built-in/neutral; consumed by Exec MTD + Activations headers/exports, the `unrecognized_ct_recon` banner gate, and the closing surfaces' processor/financing labels), `PUT /report-labels` (tenant overrides only, registry-validated keys incl. `terms`, ''=revert-to-inheritance; `classification` settings gate) | `commcalc/router.py` (`get_report_labels`/`put_report_labels` → `report_labels.py`, beside `/accessory-config`) | §3 carrier column labels + vocabulary terms |
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
 | `GET /closing/envelope-report`, `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`); `notify/closing_reports.py` | §12 Envelope report |

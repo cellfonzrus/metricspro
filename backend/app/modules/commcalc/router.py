@@ -16354,8 +16354,13 @@ def _override_plan_by_rep_with_mtd(plan_by_rep, mtd_plan_names, mtd_by_plan):
             rn = str(r.get("employee") or "").strip().upper()
             if not rn:
                 continue
+            # `commission` ALREADY includes the set-up-fee pay item (added in _commission_mtd_result,
+            # exactly as the rules engine adds it into total_payout), and setup_fee_comm records the
+            # component so it is visible instead of hidden inside the total. It was a hard-coded 0.0
+            # here until 2026-09-17, which paid every exec_mtd-basis rep $0 of a configured fee.
             plan_by_rep[rn] = {"amount": safe_float(r.get("commission")),
-                               "plan_name": pname, "setup_fee_comm": 0.0}
+                               "plan_name": pname,
+                               "setup_fee_comm": safe_float(r.get("setup_fee_comm"))}
     return plan_by_rep
 
 
@@ -16406,6 +16411,42 @@ def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", t
                      reps=emps_scope or None, today=_t)
     emp_rows = ((data.get("by_employee") or {}).get("rows")) or []
     rows = _commission_from_mtd_rows(emp_rows, rate_map, eff_acc_pct)
+    # ── SET-UP / ACTIVATION FEE ON THE EXEC-MTD BASIS (owner 2026-08-01 + 2026-09-17) ───────────────
+    # DEFECT FIXED HERE: this basis used to hand the pay writer a HARD-CODED setup_fee_comm of 0.0, so
+    # a tenant who configured the fee still paid $0 to every rep on an exec_mtd plan — silently. The
+    # collected dollars are NOT re-derived: they are the `setup_fee` cell Exec MTD already accumulated
+    # from the mig-217 keyword list (one recognition, ONE number). The scope is the plan's OWN market /
+    # carrier assignment, so no market or carrier name appears here.
+    _sf_market = markets[0] if len(markets) == 1 else None
+    try:
+        from app.modules.commcalc import setup_fee_pay as _sfp_mtd
+        _sf_cfg_mtd = _sfp_mtd.load_pay_config(client, org_id)
+        _sf_set_mtd, _sf_src_mtd = _sfp_mtd.resolve_for_scope(
+            _sf_cfg_mtd, plan.get("carrier_id"), _sf_market)
+    except Exception:
+        _sfp_mtd, _sf_set_mtd, _sf_src_mtd = None, None, None
+    _sf_collected_by_rep = {str(r.get("employee") or ""): safe_float(r.get("setup_fee"))
+                            for r in emp_rows}
+    _sf_warn_mtd = []
+    for r in rows:
+        coll = round(_sf_collected_by_rep.get(str(r.get("employee") or "") or "", 0.0), 2)
+        pay, status = (0.0, "excluded")
+        if _sfp_mtd is not None and _sf_set_mtd is not None:
+            pay, status = _sfp_mtd.employee_pay(coll, _sf_set_mtd)
+        r["setup_fee_collected"] = coll
+        r["setup_fee_comm"] = pay
+        r["setup_fee_status"] = status
+        r["setup_fee_scope"] = _sf_src_mtd
+        # the fee is its OWN pay item; it is ADDED to the rep's commission, never folded into the
+        # accessory number or the activation pay.
+        r["commission"] = round(r["commission"] + pay, 2)
+        if status == "unconfigured" and coll:
+            _sf_warn_mtd.append({"type": "setup_fee_pct_unconfigured", "rep": r.get("employee"),
+                                 "collected": coll, "plan": plan.get("name"),
+                                 "message": (f"{r.get('employee')} collected ${coll:,.2f} in set-up / "
+                                             "activation fees and the employee percentage has not been "
+                                             "entered, so it paid $0.")})
+    rows.sort(key=lambda x: -x["commission"])
     cat_totals = {c: {"count": sum(r["by_category"][c]["count"] for r in rows),
                       "pay": round(sum(r["by_category"][c]["pay"] for r in rows), 2),
                       "rate": rate_map.get(c, 0.0), "label": _MTD_CATEGORY_LABELS[c]}
@@ -16415,6 +16456,8 @@ def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", t
         "acc_sales": round(sum(r["acc_sales"] for r in rows), 2),
         "activation_pay": round(sum(r["activation_pay"] for r in rows), 2),
         "accessory_pay": round(sum(r["accessory_pay"] for r in rows), 2),
+        "setup_fee_collected": round(sum(r.get("setup_fee_collected") or 0.0 for r in rows), 2),
+        "setup_fee_comm": round(sum(r.get("setup_fee_comm") or 0.0 for r in rows), 2),
         "commission": round(sum(r["commission"] for r in rows), 2),
         "by_category": cat_totals,
     }
@@ -16424,6 +16467,7 @@ def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", t
         "rate_map": rate_map, "accessory_pct": eff_acc_pct,
         "scope": {"stores": stores, "markets": markets, "employees": emps_scope},
         "activation_source": data.get("activation_source"),
+        "setup_fee": {"scope": _sf_src_mtd, "settings": _sf_set_mtd, "warnings": _sf_warn_mtd},
         "by_rep": rows, "totals": totals,
     }
 

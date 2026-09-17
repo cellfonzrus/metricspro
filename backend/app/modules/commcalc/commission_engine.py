@@ -1635,8 +1635,9 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
         _sf_cfg = (_sfp.normalize_pay_config(setup_fee_override)
                    if isinstance(setup_fee_override, dict)
                    else _sfp.load_pay_config(client, org_id))
-        _sf_on = bool((_sf_cfg.get("default") or {}).get("include_in_commission")) or any(
-            bool(v.get("include_in_commission")) for v in (_sf_cfg.get("by_carrier") or {}).values())
+        # ANY scope (org default / carrier / market) switching it on arms the leg; the per-rep
+        # resolution below decides who is actually in scope.
+        _sf_on = _sfp.any_enabled(_sf_cfg)
         _sf_kws = _sfp.load_keywords(client, org_id) if _sf_on else None
     except Exception:
         _sfp, _sf_cfg, _sf_on, _sf_kws = None, None, False, None
@@ -2078,7 +2079,9 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
         # (mig 261) is not collected revenue for pay purposes either.
         _sf_pay = 0.0
         if _sf_on and _sfp is not None:
-            _sf_set, _sf_src = _sfp.resolve_for_carrier(_sf_cfg, plan.get("carrier_id"))
+            # MARKET > CARRIER > org default (owner 2026-09-17). `market` is the rep's own resolved
+            # market from store_mapping, computed above — no market name appears in this file.
+            _sf_set, _sf_src = _sfp.resolve_for_scope(_sf_cfg, plan.get("carrier_id"), market)
             _skip = None
             if _gate is not None and _excl_rules:
                 def _skip(_r, _rules=_excl_rules, _g=_gate):
@@ -2097,6 +2100,7 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                     "config_source": _sf_src}
                 _sf_guard["by_status"][_sf_status] = _sf_guard["by_status"].get(_sf_status, 0) + 1
                 _sf_guard["carriers"][str(plan.get("carrier_id") or "(none)")] = _sf_src
+                _sf_guard.setdefault("markets", {})[str(market or "(none)")] = _sf_src
                 if _sf_stated:
                     _sf_guard["dealer_share"] = round(_sf_guard["dealer_share"] + (_sf_dealer or 0), 2)
                     _sf_guard["dealer_share_stated"] = True
