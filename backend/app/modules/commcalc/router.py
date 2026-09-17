@@ -10969,6 +10969,32 @@ def _apply_engine_components_to_row(row, ks, inst_by_rep, sale_inst_by_rep, stmt
             # only written when the plan engine actually produced one, so a Boost row (pv is
             # None) and an unconfigured plan tenant are both untouched.
             row["setup_fee_comm"] = pv["setup_fee_comm"]
+        # ── ITEMISATION OF A PLAN-MODE ROW (owner 2026-09-17, "Did the gap") ────────────────────
+        # THE DEFECT: `calculator.calc_rep_commissions` emits a ZEROED skeleton row for every rep of a
+        # non-Boost (plan-mode) tenant — every component literally `0`, deliberately, because the
+        # Boost flat-spiff/KPI model does not apply and there is no payout_config to compute one from.
+        # This function then filled in `plan_comm` / `total_payout` and nothing else, so a correct
+        # total sat next to a breakdown of $0.00 for EVERY rep on EVERY plan (org 854f6d7b: 0 of 90
+        # rows with acc_comm > 0 across July + August, all three plans). A rep reading that breakdown
+        # is told they earned nothing on accessories. That is what this writes.
+        #
+        # `total_payout` IS NOT TOUCHED — it is still base + installments, exactly as below. These are
+        # DISPLAY columns being filled in for the first time.
+        #
+        # WHAT IS DELIBERATELY *NOT* WRITTEN, and why (no fudge row):
+        #   premium_comm / byod_comm / upgrade_comm stay 0. The activation money is real, but the
+        #   counts stored beside them (`premium_acts`/`byod_acts`/`upgrade_acts`) come from the
+        #   CALCULATOR's raw_sales classification while the paying basis may count from Activation
+        #   Details (per-plan `activation_source`). Measured live on org 854f6d7b the two disagree for
+        #   most reps on all three legs (Aug: 65/55, 19/17, 2/0 for one rep alone), so writing pay
+        #   beside those counts would make pay / count read as a rate nobody is paid. The activation
+        #   slice is therefore the ARITHMETIC COMPLEMENT — subtotal - acc_comm - setup_fee_comm - the
+        #   other named slices — and is documented as such rather than parked in a column that lies.
+        if "acc_comm" in pv:
+            row["acc_comm"] = safe_float(pv.get("acc_comm"))
+        # `subtotal` = this plan's own payout. In plan mode `tier` is stored as 1.0 / 'plan', so the
+        # row's identity total_payout = subtotal x tier + installments holds exactly.
+        row["subtotal"] = safe_float(pv["amount"])
         base = safe_float(pv["amount"])                       # a plan REPLACES the spiff subtotal
     else:
         base = safe_float(row.get("total_payout"))            # keep the standard calc
@@ -11071,7 +11097,11 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
                                        # on the existing rep_commissions column so the number is visible
                                        # in the Custom Report instead of hiding inside the plan total.
                                        # 0.0 for every tenant that has not switched it on.
-                                       "setup_fee_comm": safe_float(r.get("setup_fee_comm"))}
+                                       "setup_fee_comm": safe_float(r.get("setup_fee_comm")),
+                                       # ITEMISATION (owner 2026-09-17): the accessory slice of the
+                                       # plan total, so the stored breakdown stops reading $0.00
+                                       # beside a correct total.
+                                       "acc_comm": safe_float(r.get("acc_comm"))}
             # OPERATOR-VISIBLE NOTICE: fees were collected, the tenant said they should pay, and no
             # percentage has been entered. The engine never invents a rate — it says so instead.
             if notices is not None:
@@ -16360,7 +16390,8 @@ def _override_plan_by_rep_with_mtd(plan_by_rep, mtd_plan_names, mtd_by_plan):
             # here until 2026-09-17, which paid every exec_mtd-basis rep $0 of a configured fee.
             plan_by_rep[rn] = {"amount": safe_float(r.get("commission")),
                                "plan_name": pname,
-                               "setup_fee_comm": safe_float(r.get("setup_fee_comm"))}
+                               "setup_fee_comm": safe_float(r.get("setup_fee_comm")),
+                               "acc_comm": safe_float(r.get("acc_comm"))}
     return plan_by_rep
 
 
@@ -16435,6 +16466,10 @@ def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", t
             pay, status = _sfp_mtd.employee_pay(coll, _sf_set_mtd)
         r["setup_fee_collected"] = coll
         r["setup_fee_comm"] = pay
+        # ITEMISATION (owner 2026-09-17): the accessory slice, NAMED. On this basis it is exactly
+        # `acc_sales x accessory_pct`, which _commission_from_mtd_rows already computed — no second
+        # derivation, and nothing here recomputes the commission.
+        r["acc_comm"] = round(safe_float(r.get("accessory_pay")), 2)
         r["setup_fee_status"] = status
         r["setup_fee_scope"] = _sf_src_mtd
         # the fee is its OWN pay item; it is ADDED to the rep's commission, never folded into the
@@ -16887,7 +16922,8 @@ def recompute_rep(body: RecomputeRepIn, org_id: str = ORG_ID):
             if rn:
                 plan_by_rep[rn] = {"amount": safe_float(r.get("total_payout")),
                                    "plan_name": r.get("plan_name"),
-                                   "setup_fee_comm": safe_float(r.get("setup_fee_comm"))}
+                                   "setup_fee_comm": safe_float(r.get("setup_fee_comm")),
+                                   "acc_comm": safe_float(r.get("acc_comm"))}
     except Exception as e:
         raise HTTPException(500, f"recompute-rep preview failed: {e}")
 

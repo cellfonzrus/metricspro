@@ -357,7 +357,11 @@ def _drop(o):
     o.pop("pay_gate", None)
     o.pop("setup_fee", None)
     for r in o.get("by_rep") or []:
-        for k in ("setup_fee_comm", "setup_fee_collected"):
+        # `acc_comm` joined this list on 2026-09-17 (owner: "Did the gap"). It is the NAMED accessory
+        # slice of a payout this engine already computed — a display key, not a term of any total. The
+        # money claim this function exists to test is unaffected, and that total_payout does not move
+        # is proved directly in backend/harness_commission_itemisation.py §C.
+        for k in ("setup_fee_comm", "setup_fee_collected", "acc_comm"):
             r.pop(k, None)
     # NOTE: the pay-gate keys (unit_basis / scope_reason / suppressed_*) are NOT stripped — the BASE
     # for this package (ec9fe8b) already emits them. Only what THIS package adds is removed, which is

@@ -997,6 +997,8 @@ $ `premium_comm, byod_comm, upgrade_comm, acc_comm, setup_fee_comm, trade_in_com
 custom_comm, acc_target`; tier `tier, tier_source, kpis_met, total_kpis, kpi_values JSONB`;
 `subtotal, total_payout, boost_commission, boost_reimbursement`. **Added by later migrations:**
 `plan_comm` (mig `061_rep_commissions_plan_comm.sql`), `residual_installment_comm` (mig `057`),
+**⚠ on a PLAN-MODE row the component columns were all `0` until 2026-09-17 — see §6b for which are now
+filled, which cannot be, and why,** 
 `installment_comm_sale` (mig `201:` `ALTER TABLE … ADD COLUMN installment_comm_sale`),
 `carrier_statement_comm` (mig `065_carrier_commission.sql`). The `_apply_new_engines` writer sets
 `residual_installment_comm`/`installment_comm_sale` at `router.py:9322-9390` only when the column exists.
@@ -1010,6 +1012,66 @@ custom_comm, acc_target`; tier `tier, tier_source, kpis_met, total_kpis, kpi_val
 **KEY GAP (from seed, verified):** rep pay carries **no distinct Edge or VHI/FIOS count** — both fold into
 `premium_acts` in Boost. Plan-mode `home_internet` count is runtime-only (see §8). MI resolves these two
 by re-scanning the same sales universe (§9).
+
+---
+
+### 6b. WHAT A PLAN-MODE `rep_commissions` ROW CAN AND CANNOT ITEMISE (owner 2026-09-17, "Did the gap")
+
+**The defect.** `calculator.calc_rep_commissions` takes an early branch when `carrier_mode != 'boost'`
+and emits a **zeroed skeleton row** per rep — `premium_comm`/`byod_comm`/`upgrade_comm`/`acc_comm`/
+`setup_fee_comm`/`trade_in_comm`/`acima_comm`/`custom_comm`/`subtotal` all literally `0` — because the
+Boost flat-spiff + KPI model does not apply and there is no `payout_config` to compute one from (a
+plan-mode tenant typically has NO `payout_config` row at all). `_apply_engine_components_to_row` then
+filled in `plan_comm` / `plan_name` / `total_payout` **and nothing else**. Result: a CORRECT total
+beside a breakdown of $0.00, on every plan. Live 2026-09-17, org `854f6d7b`: **0 of 90 July+August
+rows had `acc_comm` > 0** — not on the `exec_mtd` plan, not on either `rules` plan. A rep read that
+breakdown, concluded he had not been paid for accessories, and opened a dispute over money the system
+had already paid him. **A blank itemisation on a correct total manufactures disputes.**
+
+**What is now written on a plan-covered row** (`_apply_engine_components_to_row`, both pay bases):
+- `acc_comm` — the accessory slice. `rules` basis: `commission_engine.accessory_slice(rules,
+  rule_breakdown, tier_multiplier)`, the payout of the rules **the plan itself** scopes to the
+  accessory predicate (`commission_engine.is_accessory_rule` — the ONE definition of that predicate,
+  reused by the `_uses_acc` stamp and the `accessory_rule_classifies_nothing` warning). A tiered
+  accessory rule is scaled by the same multiplier its dollars were. `exec_mtd` basis: the
+  `accessory_pay` already computed by `_commission_from_mtd_rows` (`acc_sales × accessory_pct`).
+- `setup_fee_comm` — §6a.
+- `subtotal` — the plan's own payout. Plan mode stores `tier = 1.0 / tier_source = 'plan'`, so the
+  row's identity **`subtotal × tier + installments == total_payout`** closes exactly (0 violations
+  across all 90 July+August rows).
+
+**⚠ WHAT IS UNREPRESENTABLE, AND IS DELIBERATELY LEFT AT 0.** `premium_comm` / `byod_comm` /
+`upgrade_comm` stay `0` on a plan-mode row. The activation money is real, but the counts stored beside
+them (`premium_acts`/`byod_acts`/`upgrade_acts`) come from the CALCULATOR's `raw_sales`
+classification, while the paying basis may count from **Activation Details** (per-plan
+`activation_source`, mig 296). Measured live these disagree for most reps on all three legs (August,
+one rep: 65/55 premium, 19/17 byod, 2/0 upgrade), so writing pay beside those counts would make
+`pay ÷ count` read as a rate nobody is paid. **The activation slice is therefore the ARITHMETIC
+COMPLEMENT** `subtotal − acc_comm − setup_fee_comm − trade_in_comm − custom_comm − acima_comm`, and it
+is rendered as one un-counted line ("Activations & plan rules") rather than parked in a column that
+lies. Giving those three columns real meaning needs the counts and the pay to come from ONE
+classifier — a money-visible change, not a display fix.
+
+**DISPLAY ONLY — `total_payout` does not move.** Proved A/B against live data over all 116 LuxeLink
+`rep_commissions` rows (5 periods): **0 differences**, Σ $24,339.65 before and after; `plan_comm`
+unchanged too. `acc_comm` goes 0 → 85 rows / $11,823.74 and `subtotal` 0 → 113 rows / $22,785.74.
+Boost rows are untouched because `pv is None` for a rep with no plan — the calculator already fills
+those columns.
+
+**Read surfaces that render it** (a populated column nobody renders fixes nothing):
+`frontend/src/components/EmployeeWidgets.impl.tsx` `COMP_LINES` (the EMPLOYEE-facing breakdown — the
+screen that caused the dispute; it now hides the three Boost legs for a plan rep and shows the
+complement line, and its `acc_comm` label no longer claims "(GP)", which was never the basis on either
+path) · `commcalc/reports/page.tsx` · `commcalc/daily-commission/page.tsx` ·
+`commcalc/_lib/commissionExport.ts` ("ACC GP" / "Accessories") · `custom_report.py` `_col("acc_comm",
+"Accessory $")` · `payout_accrual.py` · `core/router.py` `out["targets"]`.
+**NOT** `whatif.py`: its `acc_sales = acc_comm ÷ acc_rate` back-solve lives in `_boost_actuals`, which
+`activation_baseline` reaches only when `mode == 'boost'`; a plan-mode org goes to `_plan_template`,
+which reads the engine directly. Checked deliberately — that division would otherwise have
+back-solved a wrong accessory-sales figure for a plan whose rate is not `payout_config.acc_rate`.
+
+**Proof:** `backend/harness_commission_itemisation.py` (44 checks, DB-free; §A reproduces the blanked
+row, §C pins `total_payout`, §E pins the columns that must stay empty, §F pins the row identity).
 
 ---
 
