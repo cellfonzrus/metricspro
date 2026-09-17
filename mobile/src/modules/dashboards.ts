@@ -23,8 +23,8 @@ export const DASHBOARDS: DashboardDef[] = [
   {
     slug: 'me',
     route: '/dashboards/me',
-    title: 'My performance',
-    subtitle: 'Your commission, tier and KPI progress this period.',
+    title: 'Employee dashboard',
+    subtitle: 'Commission, hours, targets, flags and shifts — yours, or any rep in your scope.',
     icon: '🎯',
     minScope: 'self',
     group: 'personal',
