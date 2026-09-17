@@ -1,29 +1,48 @@
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { RefreshControl, ScrollView, StyleSheet } from 'react-native'
 import { useQuery } from '@tanstack/react-query'
 
 import { useAuth } from '@/auth/AuthContext'
 import { atLeast, scopeOf } from '@/lib/scope'
-import { getSalesReport } from '@/api/reports'
+import { getSalesReport, getFilterOptions } from '@/api/reports'
 import { money, count } from '@/lib/format'
-import { currentPeriod } from '@/lib/period'
+import { monthOf, inRange } from '@/lib/daterange'
 import { Screen, Loading, ErrorView, EmptyState, Body } from '@/components/ui'
-import { Kpi, KpiGrid, PeriodSwitcher, SectionTitle, StatRow } from '@/components/dash'
+import { Kpi, KpiGrid, SectionTitle, StatRow } from '@/components/dash'
+import { FilterBar, defaultFilter, type FilterState } from '@/components/FilterBar'
 import { colors, spacing } from '@/theme'
 
-// Sales report — transactions, revenue and gross profit for the period, from the shared sales
-// aggregation the web Sales Report uses (so numbers reconcile with Exec MTD).
+// Sales report — transactions, revenue and gross profit. The endpoint returns one row per
+// (store, rep, day) for the month; the date range, store, market and rep filters are applied
+// CLIENT-SIDE here and the KPI totals are recomputed from the filtered rows. Defaults to TODAY.
+const NUM = ['txns', 'lines', 'activations', 'byod', 'upgrades', 'swaps', 'accessory_rev', 'revenue', 'gp'] as const
+type SalesRow = Record<string, unknown>
+
 export default function SalesScreen() {
   const { me } = useAuth()
-  const [period, setPeriod] = useState(currentPeriod())
-  const q = useQuery({ queryKey: ['dash', 'sales', period], queryFn: () => getSalesReport(period),
-    enabled: atLeast(scopeOf(me), 'market') })
+  const allowed = atLeast(scopeOf(me), 'market')
+  const [filter, setFilter] = useState<FilterState>(() => defaultFilter('today'))
+  const period = monthOf(filter.range.to)
 
-  if (!atLeast(scopeOf(me), 'market')) {
+  const opts = useQuery({ queryKey: ['filter-options'], queryFn: getFilterOptions, enabled: allowed })
+  const q = useQuery({ queryKey: ['dash', 'sales', period], queryFn: () => getSalesReport(period), enabled: allowed })
+
+  // client-side filter + recompute totals from the visible rows
+  const { totals, shown } = useMemo(() => {
+    const rows = (q.data?.rows || []) as SalesRow[]
+    const f = rows.filter((r) =>
+      inRange(r.trans_date, filter.range) &&
+      (filter.stores.length === 0 || filter.stores.includes(String(r.store))) &&
+      (filter.markets.length === 0 || filter.markets.includes(String(r.market))) &&
+      (filter.reps.length === 0 || filter.reps.includes(String(r.salesperson))))
+    const t: Record<string, number> = {}
+    for (const k of NUM) t[k] = f.reduce((s, r) => s + (Number(r[k]) || 0), 0)
+    return { totals: t, shown: f.length }
+  }, [q.data, filter])
+
+  if (!allowed) {
     return <Screen><EmptyState title="No access" subtitle="The sales report needs company-wide reporting access." /></Screen>
   }
-
-  const t = q.data?.totals || {}
 
   return (
     <Screen>
@@ -31,7 +50,9 @@ export default function SalesScreen() {
         contentContainerStyle={styles.c}
         refreshControl={<RefreshControl refreshing={q.isFetching} onRefresh={q.refetch} tintColor={colors.primary} />}
       >
-        <PeriodSwitcher period={period} onChange={setPeriod} />
+        <FilterBar value={filter} onChange={setFilter} options={opts.data ?? null}
+          show={{ date: true, stores: true, markets: true, reps: true }} />
+
         {q.isLoading ? (
           <Loading label="Loading sales…" />
         ) : q.isError ? (
@@ -39,22 +60,26 @@ export default function SalesScreen() {
         ) : (
           <>
             <KpiGrid>
-              <Kpi label="Revenue" value={money(t.revenue)} tone="info" />
-              <Kpi label="Gross profit" value={money(t.gp)} tone="good" />
-              <Kpi label="Transactions" value={count(t.txns)} />
-              <Kpi label="Activations" value={count(t.activations)} />
+              <Kpi label="Revenue" value={money(totals.revenue)} tone="info" />
+              <Kpi label="Gross profit" value={money(totals.gp)} tone="good" />
+              <Kpi label="Transactions" value={count(totals.txns)} />
+              <Kpi label="Activations" value={count(totals.activations)} />
             </KpiGrid>
 
             <SectionTitle>Mix</SectionTitle>
-            <StatRow label="Line items" value={count(t.lines)} />
-            <StatRow label="BYOD" value={count(t.byod)} />
-            <StatRow label="Upgrades" value={count(t.upgrades)} />
-            <StatRow label="Swaps" value={count(t.swaps)} />
-            <StatRow label="Accessory revenue" value={money(t.accessory_rev)} />
-            <StatRow label="Revenue" value={money(t.revenue)} strong tone="info" />
-            <StatRow label="Gross profit" value={money(t.gp)} strong tone="good" />
+            <StatRow label="Line items" value={count(totals.lines)} />
+            <StatRow label="BYOD" value={count(totals.byod)} />
+            <StatRow label="Upgrades" value={count(totals.upgrades)} />
+            <StatRow label="Swaps" value={count(totals.swaps)} />
+            <StatRow label="Accessory revenue" value={money(totals.accessory_rev)} />
+            <StatRow label="Revenue" value={money(totals.revenue)} strong tone="info" />
+            <StatRow label="Gross profit" value={money(totals.gp)} strong tone="good" />
 
-            <Body dim>{count((q.data?.rows || []).length)} detail rows in this report.</Body>
+            <Body dim>
+              {shown === 0
+                ? 'No sales match this filter. Try a wider date range or clear a filter.'
+                : `${count(shown)} store/rep/day rows in this view.`}
+            </Body>
           </>
         )}
       </ScrollView>
