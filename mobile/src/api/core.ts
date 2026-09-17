@@ -24,8 +24,17 @@ export type MePayload = {
 
 export type TenantMembership = {
   org_id: string
+  // /core/my-tenants (and /bootstrap) return the company display name under `name`. `org_name` is
+  // kept as a tolerated alias so a future/other payload shape still resolves a name, never a raw id.
+  name?: string | null
   org_name?: string | null
   role?: string | null
+  role_display?: string | null
+}
+
+/** Company display name for a membership, falling back through aliases to the id as a last resort. */
+export function tenantName(t: TenantMembership): string {
+  return (t.name || t.org_name || t.org_id) as string
 }
 
 export function getMe() {
