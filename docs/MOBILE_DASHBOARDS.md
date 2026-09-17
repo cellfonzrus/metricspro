@@ -36,6 +36,20 @@ all read that one list.
 | Store P&L | `GET /commcalc/gp/{period}` | total revenue, net profit, commission; net profit + attainment by store |
 | Commission payouts | `GET /commcalc/commissions/{period}` | total payout, reps paid; top reps |
 
+## Filters & date range — `src/components/FilterBar.tsx`
+
+A shared filter bar (date-range presets **Today / Week / Month / Custom**, plus **Store / Market /
+Rep** multi-selects from `GET /core/filter-options`) sits on top of the reports that can filter.
+Each report shows only the controls its endpoint honours, so a filter never silently does nothing:
+
+| Report | Date range | Store | Market | Rep | How |
+| --- | --- | --- | --- | --- | --- |
+| Executive MTD | ✅ | ✅ | ✅ | ✅ | server-side (`date_from`/`date_to` + repeated `stores`/`markets`/`reps`) |
+| Sales report | ✅ (**default Today**) | ✅ | ✅ | ✅ | client-side over the month's `(store, rep, day)` rows; KPI totals recompute from the filtered rows |
+| Commission | month stepper | — | ✅ | ✅ | client-side (`market` server-resolved per row) |
+| Store P&L | month stepper | — | ✅ (one at a time) | — | server-side single `market` |
+| P&L / Accounts, Store KPIs, My performance | — | — | — | — | scope-based / RBAC-bucketed / personal — no filter params |
+
 ## Access / scope gate — `src/lib/scope.ts`
 
 These summary endpoints are authorised by tenant **membership** alone — they do not additionally

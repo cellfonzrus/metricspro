@@ -12,6 +12,35 @@ const enc = encodeURIComponent
 
 type Dict = Record<string, unknown>
 
+// Build a query string with optional scalars and repeated (multi-value) params, skipping empties.
+function qs(scalars: Record<string, string | undefined>, repeats: Record<string, string[] | undefined> = {}): string {
+  const out: string[] = []
+  for (const [k, v] of Object.entries(scalars)) if (v) out.push(`${enc(k)}=${enc(v)}`)
+  for (const [k, arr] of Object.entries(repeats)) for (const v of arr || []) if (v) out.push(`${enc(k)}=${enc(v)}`)
+  return out.length ? `?${out.join('&')}` : ''
+}
+
+// The shared filter-option lists (stores / markets / reps) for the signed-in org — one source for
+// every dashboard's filter bar. Best-effort on the server (never 500s).
+export type FilterOptions = {
+  stores: { store: string; market: string | null }[]
+  markets: string[]
+  reps: { id: string; label: string; sublabel?: string | null }[]
+}
+export function getFilterOptions() {
+  return api.get<FilterOptions>('/api/v1/core/filter-options')
+}
+
+// Filters the reports accept. Not every endpoint honours every field (see each getter) — the UI only
+// shows a control where it actually does something.
+export type ReportFilters = {
+  stores?: string[]
+  markets?: string[]
+  reps?: string[]
+  dateFrom?: string
+  dateTo?: string
+}
+
 // account/overview — P&L headline per scope (consolidated / company / store).
 export type OverviewScope = {
   scope_key: string
@@ -62,8 +91,13 @@ export type ExecMtd = {
   activation_source?: string
   [k: string]: unknown
 }
-export function getExecMtd(period: string) {
-  return api.get<ExecMtd>(`/api/v1/commcalc/exec-mtd/${enc(period)}?today=${enc(todayISO())}`)
+// Full SERVER-SIDE filtering: stores/markets/reps + an inclusive date window (clamped to the month).
+export function getExecMtd(period: string, f: ReportFilters = {}) {
+  const q = qs(
+    { today: todayISO(), date_from: f.dateFrom, date_to: f.dateTo },
+    { stores: f.stores, markets: f.markets, reps: f.reps },
+  )
+  return api.get<ExecMtd>(`/api/v1/commcalc/exec-mtd/${enc(period)}${q}`)
 }
 export function getExecMtdNarrative(period: string) {
   return api.get<Narrative>(`/api/v1/commcalc/exec-mtd/${enc(period)}/narrative?today=${enc(todayISO())}`)
@@ -126,8 +160,10 @@ export type GpReport = {
   rep_rows: Dict[]
   [k: string]: unknown
 }
-export function getGpReport(period: string) {
-  return api.get<GpReport>(`/api/v1/commcalc/gp/${enc(period)}?view=store`)
+// gp accepts a SINGLE `market` (server-side, exact match); store scoping is by the caller's RBAC span.
+export function getGpReport(period: string, market = '') {
+  const q = qs({ view: 'store', market: market || undefined })
+  return api.get<GpReport>(`/api/v1/commcalc/gp/${enc(period)}${q}`)
 }
 
 // commcalc/commissions — a bare LIST of per-rep rows (no totals object); we sum total_payout.
@@ -136,6 +172,7 @@ export type CommissionRow = {
   name?: string
   employee_id?: string
   store?: string
+  market?: string | null
   total_payout?: number
   tier?: string | number
   kpis_met?: number
