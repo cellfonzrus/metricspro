@@ -1075,6 +1075,50 @@ row, §C pins `total_payout`, §E pins the columns that must stay empty, §F pin
 
 ---
 
+### 6c. THE ONE PLAN RESOLUTION — `_resolve_plan_by_rep` (owner-reported class, 2026-09-17)
+
+**`router._resolve_plan_by_rep(client, org_id, period, only_rep=None, notices=None)`** is THE answer to
+"what does this rep's assigned plan pay them this period": `commission_engine.preview` (with the
+mig-306 `source_mode` and the POS→roster identity map) **plus** the mig-298 exec-MTD basis override.
+It returns `{REP(UPPER) -> {amount, plan_name, setup_fee_comm, acc_comm}}` and is called by **exactly
+two** places — `_apply_new_engines` (the full run) and `POST /commcalc/recompute-rep` (one rep).
+
+**WHY IT EXISTS: there were two copies, and the copy destroyed money.** `recompute_rep` built
+`plan_by_rep` from `preview(only_rep=rep)` alone. It therefore:
+1. **never applied `_override_plan_by_rep_with_mtd`** — so for a rep whose plan has
+   `commission_basis='exec_mtd'` the rules engine alone pays **$0.00**, and the endpoint would UPSERT
+   `total_payout = 0.00` over a correct figure, in a row that looks legitimately calculated; and
+2. **omitted `source_mode`** — so under `commission_org_config.sales_source='union'` (mig 306) it read
+   a *different sales basis* than the full run for the same rep, which in a month whose `raw_sales` is
+   partial silently halves the answer **for rules-basis reps too**.
+
+Measured live (org `854f6d7b`, what the endpoint *would have written*, before → after; 33 reps):
+
+| period | population | before | after |
+|---|---|---|---|
+| Jul 2026 | 13 `exec_mtd` reps | **$0.00** for 11 of them (one rep *over*-paid $243.60 vs $139.50) | = stored, all 13 |
+| Jul 2026 | 3 `rules` control reps | unchanged | unchanged |
+| Aug 2026 | 14 `exec_mtd` reps | $0.00–$85.60 against stored $27.34–$957.36 | = stored, all 14 |
+| Aug 2026 | 3 `rules` reps | **$246.64 / $178.28 / $144.04** against stored $468.83 / $444.03 / $436.41 | = stored, all 3 |
+
+**33 of 33 now equal the stored full-run figure**, so a recompute can only reproduce a row, never move
+it. The drift ran in BOTH directions (zeroing, halving, and one over-payment) and was **not** confined
+to the exec-MTD population — the `source_mode` half hit any rep in a month with a partial `raw_sales`.
+The full-run resolution is unchanged by the factoring: **0 differences** across all 44 July and 46
+August reps.
+
+Boost/house is byte-identical by construction: 0 commission plans ⇒ empty `plan_by_rep` ⇒ `pv is None`
+for every rep, and `sales_source='legacy'` there, which is what passing no `source_mode` already meant.
+
+**Proof:** `backend/harness_recompute_rep_parity.py` (23 checks, DB-free — the collaborators are
+substituted and the REAL resolver runs). §A reproduces the $0.00 and pins the repair, §B pins
+single-rep == full-run, §C pins the rules-basis and no-exec_mtd-plan controls, §D pins `source_mode`
+and `only_rep` threading on both paths, **§E pins the sharing structurally so the copy cannot come
+back** (one call site for the override; exactly one preview-sourced construction of `plan_by_rep`),
+§F pins RULE TWO — the only plan attribute branched on is `commission_basis`.
+
+---
+
 ### 6a. DEVICE SET-UP / ACTIVATION FEE as a pay item — recognition, market scope, and the two pay bases
 
 **One concept, many carrier names** (Boost "device set-up fee", Total/luxelink "activation fee"): a fee
@@ -3110,6 +3154,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `GET /account/projection` (`?months=&horizon=` — deterministic linear/seasonal-naive P&L projection + cash runway, per-org `projection_config` mig `941`; rows flagged `projected:true`; `account_trends` grant) | `account/router.py` (`financial_projection` → pure `projection_engine.project`) | §4 projection engine |
 | `GET /account/valuation` (assumption-driven ESTIMATE range: TTM multiples + asset floor + projection-fed DCF w/ sensitivity grid; per-org `valuation_config` mig `941`; own default-closed `company_valuation` grant; disclaimer always in payload) | `account/router.py` (`company_valuation` → pure `valuation.valuation`) | §4 company valuation |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
+| `POST /commcalc/recompute-rep` | `commcalc/router.py` (`recompute_rep`) → **`_resolve_plan_by_rep`** + `_apply_engine_components_to_row` | §6c — recompute + UPSERT ONE rep's `rep_commissions` row. **It carried its own shorter copy of the plan resolution until 2026-09-17 and would have written `total_payout = 0.00` over a correct figure for any rep on an `exec_mtd`-basis plan** (and a halved figure for any rep in a month with partial `raw_sales`). Both money paths now share one resolver; §E of `harness_recompute_rep_parity.py` keeps it that way |
 | `GET/PUT /commcalc/setup-fee/config` | `commcalc/router.py` (`get_setup_fee_config`/`save_setup_fee_config`) | §6a — the per-org set-up-fee economics: `default` / `by_carrier` / **`by_market`** / **`all_markets`** (the owner's all-markets checkbox). MONEY-TOUCHING: it applies on the next Calculate, nothing is recalculated on save |
 | `GET /commcalc/setup-fee/candidates/{period}` | `commcalc/router.py` (`setup_fee_candidates`) → `setup_fee_pay.candidates` | §6a — PICK-DON'T-TYPE: the tenant's own product descriptions that could BE the fee, ranked by the money they carry, each flagged `mapped_now`. **Use this before editing `setup_fee_keywords`** |
 | `GET /commcalc/setup-fee/recognition-divergence/{period}` | `commcalc/router.py` → `setup_fee_pay.divergence` | §6a — the two historic matchers measured against each other (case). Empty ⇒ switching `match_mode` moves $0 |
