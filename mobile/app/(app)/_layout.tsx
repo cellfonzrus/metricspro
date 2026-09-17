@@ -46,6 +46,10 @@ export default function AppLayout() {
       <Stack.Screen name="dashboards/pnl" options={{ title: 'P&L / Accounts' }} />
       <Stack.Screen name="dashboards/store-pnl" options={{ title: 'Store P&L' }} />
       <Stack.Screen name="dashboards/commission" options={{ title: 'Commission payouts' }} />
+      {/* DM tools: closing sign-off and store-visit checklist (gated to market scope in the screens). */}
+      <Stack.Screen name="dm/index" options={{ title: 'DM tools' }} />
+      <Stack.Screen name="dm/verify" options={{ title: 'DM Verify' }} />
+      <Stack.Screen name="dm/checklist" options={{ title: 'DM Checklist' }} />
     </Stack>
   )
 }
