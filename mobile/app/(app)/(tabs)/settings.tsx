@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native'
 
 import { useAuth } from '@/auth/AuthContext'
+import { tenantName } from '@/api/core'
 import {
   authenticate,
   getBiometricSupport,
@@ -55,7 +56,7 @@ export default function Settings() {
               {tenants.map((t) => (
                 <Button
                   key={t.org_id}
-                  title={`${t.org_name ?? t.org_id}${t.org_id === activeOrg ? '  ✓' : ''}`}
+                  title={`${tenantName(t)}${t.org_id === activeOrg ? '  ✓' : ''}`}
                   variant={t.org_id === activeOrg ? 'primary' : 'secondary'}
                   onPress={() => switchTenant(t.org_id)}
                 />

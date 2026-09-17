@@ -3,6 +3,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Redirect, useRouter } from 'expo-router'
 
 import { useAuth } from '@/auth/AuthContext'
+import { tenantName } from '@/api/core'
 import { Body, Button, H1, Loading, Screen } from '@/components/ui'
 import { colors, font, spacing } from '@/theme'
 
@@ -54,7 +55,7 @@ export default function ChooseCompany() {
           {tenants.map((t) => (
             <Button
               key={t.org_id}
-              title={t.org_name ?? t.org_id}
+              title={tenantName(t)}
               variant="secondary"
               loading={busy === t.org_id}
               onPress={() => pick(t.org_id)}
