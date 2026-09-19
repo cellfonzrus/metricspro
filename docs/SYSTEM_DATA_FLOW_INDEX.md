@@ -6576,6 +6576,51 @@ parser. `raw_sales`: **48,875 rows** (1 footer row dropped) across **20 months**
 gross sales $4,604,292.43, cost $3,591,798.85, gross profit $1,012,493.58, net quantity 33,013, every
 figure matching the source file to the cent. 28 `column_mapping` config rows written.
 
+### 25.11 SAVING A COLUMN MAPPING NEVER SAVED (owner bug report 2026-09-19)
+
+Owner: *"i tried to upload in the Commission Ledger — Setup, but it does not upload."* Six
+`POST /commission-ledger/import` attempts, every one a 400; the wizard's own preview read
+**$0.00 across 0 lines**.
+
+**ROOT CAUSE — `POST /commcalc/column-mapping` had never worked, for anyone.** It persisted with
+
+```python
+.upsert(row, on_conflict="org_id,report_key,carrier_id,target_field")
+```
+
+and Postgres refuses that with **42P10** — *"there is no unique or exclusion constraint matching the ON
+CONFLICT specification"* — because mig `042`'s uniqueness is an **expression** index:
+
+```sql
+CREATE UNIQUE INDEX column_mapping_uq ON commcalc.column_mapping
+  (org_id, report_key, COALESCE(carrier_id, '000…0'::uuid), target_field);
+```
+
+`carrier_id` is not `COALESCE(carrier_id, …)`, and ON CONFLICT requires an EXACT index match.
+**Measured, not inferred: `commcalc.column_mapping` was EMPTY platform-wide.**
+
+**THE CASCADE.** `_ledger_source_rules` falls back to the built-in MA Daily Tx layout when a tenant has
+no saved mapping. On a Verizon statement that layout matches **nothing** — file headers `Gross` /
+`Report Section` / `Report Heading` / `AgentSSOID` / `Master Service Date`; defaults want `Account ID` /
+`Product Name` / `Retail Cost` / `Order Type` / `Date of Transaction`, **zero overlap**. So every one of
+522 rows extracted to nothing, the preview showed $0.00, and the import 400'd "No usable rows". The
+wizard displayed the CORRECT mapping the whole time (it renders `column_mapping.suggest` output) while
+the importer used defaults — the screen showing one thing and the system using another.
+
+**WHY A READ-THEN-WRITE, NOT A NEW INDEX.** A plain unique index on the four BARE columns cannot replace
+the expression one: SQL NULLs are DISTINCT, so `carrier_id IS NULL` rows would stop colliding and a
+tenant could accumulate unlimited duplicate "global" mappings for one field — exactly what mig 042
+prevents. The look-up handles that NULL slot explicitly (`is_("carrier_id", "null")`) and needs **no
+migration**. An explicit `body.id` still takes the direct-update path, unchanged.
+
+Proof: `backend/harness_column_mapping_save.py` — **15 checks**. §A parses the real endpoint; §B
+round-trips against a THROWAWAY `report_key` and deletes it, and **B1 re-runs the old call to confirm it
+still raises 42P10**, so the fix is demonstrably not cosmetic. Skipped, never failed, without
+credentials. Negative control: restoring the original upsert → 7/8.
+
+**REGISTERED:** `POST /commcalc/column-mapping` is the ONE writer of `commcalc.column_mapping`; every
+mapping UI (Column Mapping, the Implementation wizard, Commission Ledger — Setup) goes through it.
+
 ---
 
 ## 26. THE TENANT IMPLEMENTATION SPINE — one ordered, carrier-scoped flow (owner 2026-09-12)

@@ -3953,8 +3953,29 @@ def upsert_column_mapping(body: ColumnMappingIn, org_id: str = ORG_ID):
     if body.id:
         client.schema("commcalc").table("column_mapping").update(row).eq("id", body.id).execute()
         return {"ok": True, "id": body.id}
-    r = client.schema("commcalc").table("column_mapping").upsert(
-        row, on_conflict="org_id,report_key,carrier_id,target_field").execute()
+    # SAVE BY LOOK-UP, NOT ON CONFLICT (owner bug report 2026-09-19). This used to be
+    #     .upsert(row, on_conflict="org_id,report_key,carrier_id,target_field")
+    # which Postgres REFUSES with 42P10 "there is no unique or exclusion constraint matching the ON
+    # CONFLICT specification" — because mig 042's uniqueness is an EXPRESSION index,
+    #     (org_id, report_key, COALESCE(carrier_id, '000…0'::uuid), target_field)
+    # and `carrier_id` is not `COALESCE(carrier_id, …)`. ON CONFLICT needs an exact index match, so
+    # EVERY save through this endpoint failed: `commcalc.column_mapping` was empty platform-wide, and
+    # the mapping UI's "Re-check"/"Save" appeared to work while persisting nothing.
+    #
+    # Matching that expression from here would mean either a migration or a sentinel UUID for "global".
+    # A read-then-write needs neither and is correct for the NULL case the expression exists to handle:
+    # `carrier_id IS NULL` is one slot, and a plain unique index could not express that (SQL NULLs are
+    # distinct, so it would allow unlimited duplicate global rows — exactly what mig 042 prevented).
+    q = (client.schema("commcalc").table("column_mapping").select("id")
+         .eq("org_id", org_id).eq("report_key", rk).eq("target_field", tf))
+    cid = body.carrier_id or None
+    q = q.is_("carrier_id", "null") if cid is None else q.eq("carrier_id", cid)
+    existing = (q.limit(1).execute().data) or []
+    if existing:
+        rid = existing[0]["id"]
+        client.schema("commcalc").table("column_mapping").update(row).eq("id", rid).execute()
+        return {**row, "id": rid}
+    r = client.schema("commcalc").table("column_mapping").insert(row).execute()
     return r.data[0] if r.data else row
 
 
