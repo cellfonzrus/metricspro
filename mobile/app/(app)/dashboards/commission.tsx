@@ -1,32 +1,43 @@
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { RefreshControl, ScrollView, StyleSheet } from 'react-native'
 import { useQuery } from '@tanstack/react-query'
 
 import { useAuth } from '@/auth/AuthContext'
 import { atLeast, scopeOf } from '@/lib/scope'
-import { getCommissions, type CommissionRow } from '@/api/reports'
+import { getCommissions, getFilterOptions, type CommissionRow } from '@/api/reports'
 import { money, count } from '@/lib/format'
 import { currentPeriod } from '@/lib/period'
 import { Screen, Loading, ErrorView, EmptyState, Body } from '@/components/ui'
 import { BarRow, Kpi, KpiGrid, PeriodSwitcher, SectionTitle } from '@/components/dash'
+import { FilterBar, defaultFilter, type FilterState } from '@/components/FilterBar'
 import { colors, spacing } from '@/theme'
 
 const repLabel = (r: CommissionRow) => r.rep || r.name || r.employee_id || '—'
 
-// Commission payouts — incentive payout by rep and the company total. commcalc/commissions returns a
-// bare list of per-rep rows (no totals object), so we sum total_payout for the headline.
+// Commission payouts — incentive payout by rep and the company total. The endpoint is month-only, so
+// the month stepper picks the period; Market / Rep filtering is applied CLIENT-SIDE (each row carries
+// a server-resolved `market`) and the totals recompute from the visible rows.
 export default function CommissionScreen() {
   const { me } = useAuth()
+  const allowed = atLeast(scopeOf(me), 'market')
   const [period, setPeriod] = useState(currentPeriod())
-  const q = useQuery({ queryKey: ['dash', 'commissions', period], queryFn: () => getCommissions(period),
-    enabled: atLeast(scopeOf(me), 'market') })
+  const [filter, setFilter] = useState<FilterState>(() => defaultFilter('month'))
 
-  if (!atLeast(scopeOf(me), 'market')) {
+  const opts = useQuery({ queryKey: ['filter-options'], queryFn: getFilterOptions, enabled: allowed })
+  const q = useQuery({ queryKey: ['dash', 'commissions', period], queryFn: () => getCommissions(period), enabled: allowed })
+
+  const { rows, totalPayout } = useMemo(() => {
+    const all = (q.data || []).filter((r) =>
+      (filter.markets.length === 0 || filter.markets.includes(String((r as CommissionRow).market ?? ''))) &&
+      (filter.reps.length === 0 || filter.reps.includes(String(repLabel(r)))))
+      .slice().sort((a, b) => (Number(b.total_payout) || 0) - (Number(a.total_payout) || 0))
+    return { rows: all, totalPayout: all.reduce((s, r) => s + (Number(r.total_payout) || 0), 0) }
+  }, [q.data, filter])
+
+  if (!allowed) {
     return <Screen><EmptyState title="No access" subtitle="Commission payouts need company-wide reporting access." /></Screen>
   }
 
-  const rows = (q.data || []).slice().sort((a, b) => (Number(b.total_payout) || 0) - (Number(a.total_payout) || 0))
-  const totalPayout = rows.reduce((s, r) => s + (Number(r.total_payout) || 0), 0)
   const top = rows.slice(0, 12)
   const maxPay = Math.max(1, ...top.map((r) => Number(r.total_payout) || 0))
 
@@ -37,6 +48,9 @@ export default function CommissionScreen() {
         refreshControl={<RefreshControl refreshing={q.isFetching} onRefresh={q.refetch} tintColor={colors.primary} />}
       >
         <PeriodSwitcher period={period} onChange={setPeriod} />
+        <FilterBar value={filter} onChange={setFilter} options={opts.data ?? null}
+          show={{ date: false, markets: true, reps: true }} />
+
         {q.isLoading ? (
           <Loading label="Loading commissions…" />
         ) : q.isError ? (
@@ -49,7 +63,7 @@ export default function CommissionScreen() {
             </KpiGrid>
 
             <SectionTitle>Top reps · payout</SectionTitle>
-            {top.length === 0 ? <Body dim>No commission rows for this period.</Body> :
+            {top.length === 0 ? <Body dim>No commission rows for this filter.</Body> :
               top.map((r, i) => {
                 const met = Number(r.kpis_met)
                 const tot = Number(r.total_kpis)

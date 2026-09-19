@@ -39,13 +39,17 @@ export default function AppLayout() {
       <Stack.Screen name="crm/new" options={{ title: 'New lead', presentation: 'modal' }} />
       <Stack.Screen name="earnings/targets" options={{ title: 'Targets' }} />
       {/* Native dashboards (drilled in from the Dashboards tab), each on its live report endpoint. */}
-      <Stack.Screen name="dashboards/me" options={{ title: 'My performance' }} />
+      <Stack.Screen name="dashboards/me" options={{ title: 'Employee dashboard' }} />
       <Stack.Screen name="dashboards/store-kpis" options={{ title: 'Store KPIs' }} />
       <Stack.Screen name="dashboards/exec-mtd" options={{ title: 'Executive MTD' }} />
       <Stack.Screen name="dashboards/sales" options={{ title: 'Sales report' }} />
       <Stack.Screen name="dashboards/pnl" options={{ title: 'P&L / Accounts' }} />
       <Stack.Screen name="dashboards/store-pnl" options={{ title: 'Store P&L' }} />
       <Stack.Screen name="dashboards/commission" options={{ title: 'Commission payouts' }} />
+      {/* DM tools: closing sign-off and store-visit checklist (gated to market scope in the screens). */}
+      <Stack.Screen name="dm/index" options={{ title: 'DM tools' }} />
+      <Stack.Screen name="dm/verify" options={{ title: 'DM Verify' }} />
+      <Stack.Screen name="dm/checklist" options={{ title: 'DM Checklist' }} />
     </Stack>
   )
 }

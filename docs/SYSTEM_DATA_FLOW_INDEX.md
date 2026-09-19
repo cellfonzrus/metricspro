@@ -6539,6 +6539,43 @@ LABEL and its carrier scope; the wizard's report LIST comes from `column_mapping
 backend is deployed. `commcalc/upload/wizard/page.tsx` remains a HARDCODED `STEPS` list — a new
 carrier's reports can never appear there `⚠` (not addressed here).
 
+### 25.10 THE UPLOAD COULD NEVER SUCCEED — a blank identifier is NULL, not '' (owner 2026-09-16)
+
+The owner's inventory upload failed every time, and the screen could not say why. Root cause, measured
+against the live database:
+
+`apply_transform("", "text")` returns the **EMPTY STRING**, not None. The RQ inventory export carries
+455 rows, **72 of them ORDERED or BACK-ORDERED units** — no handset has arrived, so the IMEI cell is
+blank, and all 72 map to the same `''`. Postgres treats `''` as a real value and
+`inventory_aging_device_org_imei_uq` is UNIQUE on `(org_id, imei)` (mig `216`), so the **second** such
+row raises `23505` and the entire import dies. Reproduced exactly: `duplicate key value violates
+unique constraint "inventory_aging_device_org_imei_uq" … Key (org_id, imei)=(…, ) already exists`.
+
+NULL is also what the data MEANS — the feed left the cell blank — and NULLs are DISTINCT in a unique
+index, so any number of keyless rows coexist.
+
+**SCOPED TO UNIQUE-KEY COLUMNS, deliberately.** Blanking every empty string platform-wide would change
+what every existing feed stores for a cosmetic gain. `feed_shape.UNIQUE_KEY_FIELDS` maps table →
+columns that are actually in a unique constraint; it states a SCHEMA FACT (which index exists), not a
+policy, and names no carrier, tenant or product (RULE TWO). A table with nothing registered, and every
+NON-key blank column, are returned untouched.
+
+| Added | Where |
+|---|---|
+| `UNIQUE_KEY_FIELDS` + `blank_keys_to_null` (PURE) | `backend/app/modules/commcalc/feed_shape.py` |
+| `column_mapping.blank_keys_to_null` — thin wrapper, so `router.py` reaches EVERY feed-shape rule through that one module, as it already does for the footer and period rules | `column_mapping.py` |
+| Applied as post-step **(c)** in `_ingest_mapped_df`, beside the footer drop and per-row period | `router.py` |
+
+Proof: `harness_rq_ingest.py` — **62 checks** (was 46), reproducing the cause (`""` from a blank cell),
+the collision without the fix, and that the wiring actually calls it. Negative controls verified:
+removing the call → 61/1; making the rule a no-op → 57/5; restored → 62/0.
+
+**LOADED (owner instruction 2026-09-16).** Vzone's two RQ exports are now in the database, transformed
+by the REAL ingest functions (`map_records` → `drop_footer_rows` → `derive_row_periods`), not a second
+parser. `raw_sales`: **48,875 rows** (1 footer row dropped) across **20 months** derived per row —
+gross sales $4,604,292.43, cost $3,591,798.85, gross profit $1,012,493.58, net quantity 33,013, every
+figure matching the source file to the cent. 28 `column_mapping` config rows written.
+
 ---
 
 ## 26. THE TENANT IMPLEMENTATION SPINE — one ordered, carrier-scoped flow (owner 2026-09-12)

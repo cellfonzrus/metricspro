@@ -8,6 +8,7 @@ import { getStatus } from '@/api/timeclock'
 import { getSummary } from '@/api/crm'
 import { ROADMAP_MODULES, visibleModules } from '@/modules/registry'
 import { visibleDashboards } from '@/modules/dashboards'
+import { atLeast, scopeOf } from '@/lib/scope'
 import { Body, Card, H2, Screen } from '@/components/ui'
 import { OfflineBanner } from '@/components/OfflineBanner'
 import { colors, font, radius, spacing } from '@/theme'
@@ -17,6 +18,7 @@ export default function Home() {
   const router = useRouter()
   const modules = visibleModules(me)
   const dashboards = visibleDashboards(me)
+  const isDm = atLeast(scopeOf(me), 'market')
   // Back-office areas now delivered natively (Commission Admin → the Dashboards tab) drop off the
   // "coming soon" list so the home stops advertising something that already exists.
   const roadmap = ROADMAP_MODULES.filter((m) => m.id !== 'commcalc')
@@ -67,6 +69,17 @@ export default function Home() {
               <Text style={styles.tileDesc}>
                 {dashboards.length} live report{dashboards.length === 1 ? '' : 's'} — sales, activations, P&amp;L and more.
               </Text>
+            </View>
+            <Text style={styles.dashChevron}>›</Text>
+          </Pressable>
+        ) : null}
+
+        {isDm ? (
+          <Pressable style={styles.dashCard} onPress={() => router.push('/dm' as any)}>
+            <Text style={styles.tileIcon}>🗂️</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.tileTitle}>DM Tools</Text>
+              <Text style={styles.tileDesc}>Verify daily closings and run store-visit checklists.</Text>
             </View>
             <Text style={styles.dashChevron}>›</Text>
           </Pressable>

@@ -31,15 +31,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // so bumping the app version correctly invalidates OTA against the old native binary.
   runtimeVersion: { policy: 'appVersion' },
   updates: { url: `https://u.expo.dev/${projectId}` },
-  // Disabled for now: the React Native "new architecture" is the most common cause of a first EAS
-  // Android build failing on this stack. Off = a more forgiving build; can be re-enabled later once
-  // the app is validated on devices. (No app behaviour depends on it.)
-  newArchEnabled: false,
-  splash: {
-    image: './assets/splash.png',
-    resizeMode: 'contain',
-    backgroundColor: '#0B1220',
-  },
+  // The New Architecture is the default (and only) architecture from React Native 0.81+ / Expo SDK
+  // 54+, so there is no `newArchEnabled` flag to set — the old-arch opt-out no longer exists.
+  // The splash screen is configured through the expo-splash-screen config plugin below (the
+  // top-level `splash` field was removed in SDK 54); keeping only the plugin avoids a duplicate.
   assetBundlePatterns: ['**/*'],
   ios: {
     supportsTablet: true,

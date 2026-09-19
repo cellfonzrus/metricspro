@@ -4,30 +4,35 @@ import { useQuery } from '@tanstack/react-query'
 
 import { useAuth } from '@/auth/AuthContext'
 import { atLeast, scopeOf } from '@/lib/scope'
-import { getGpReport, type GpStoreRow } from '@/api/reports'
+import { getGpReport, getFilterOptions, type GpStoreRow } from '@/api/reports'
 import { money, pct } from '@/lib/format'
 import { currentPeriod } from '@/lib/period'
 import { Screen, Loading, ErrorView, EmptyState, Body } from '@/components/ui'
 import { BarRow, Kpi, KpiGrid, PeriodSwitcher, SectionTitle } from '@/components/dash'
+import { FilterBar, defaultFilter, type FilterState } from '@/components/FilterBar'
 import { colors, spacing } from '@/theme'
 
 const storeLabel = (r: GpStoreRow) => r.store_name || r.store || r.store_code || '—'
-// attainment may arrive as a ratio (0.85) or a percent (85). Normalise small magnitudes to percent.
 const attainPct = (v: unknown) => {
   const n = Number(v)
   if (!Number.isFinite(n)) return undefined
   return Math.abs(n) <= 3 ? n * 100 : n
 }
 
-// Store P&L — net profit and target attainment, store by store (commcalc/gp). `totals` carries the
-// company roll-up; each store row has net_profit + net_profit_attainment.
+// Store P&L — net profit and target attainment, store by store (commcalc/gp). Month-only, so the
+// month stepper picks the period; the endpoint filters by a SINGLE market server-side (store scoping
+// is by the caller's RBAC span).
 export default function StorePnlScreen() {
   const { me } = useAuth()
+  const allowed = atLeast(scopeOf(me), 'market')
   const [period, setPeriod] = useState(currentPeriod())
-  const q = useQuery({ queryKey: ['dash', 'gp', period], queryFn: () => getGpReport(period),
-    enabled: atLeast(scopeOf(me), 'market') })
+  const [filter, setFilter] = useState<FilterState>(() => defaultFilter('month'))
+  const market = filter.markets[0] || ''
 
-  if (!atLeast(scopeOf(me), 'market')) {
+  const opts = useQuery({ queryKey: ['filter-options'], queryFn: getFilterOptions, enabled: allowed })
+  const q = useQuery({ queryKey: ['dash', 'gp', period, market], queryFn: () => getGpReport(period, market), enabled: allowed })
+
+  if (!allowed) {
     return <Screen><EmptyState title="No access" subtitle="Store P&L needs company-wide reporting access." /></Screen>
   }
 
@@ -43,6 +48,9 @@ export default function StorePnlScreen() {
         refreshControl={<RefreshControl refreshing={q.isFetching} onRefresh={q.refetch} tintColor={colors.primary} />}
       >
         <PeriodSwitcher period={period} onChange={setPeriod} />
+        <FilterBar value={filter} onChange={setFilter} options={opts.data ?? null}
+          show={{ date: false, markets: true }} />
+
         {q.isLoading ? (
           <Loading label="Loading store P&L…" />
         ) : q.isError ? (
@@ -57,7 +65,7 @@ export default function StorePnlScreen() {
             </KpiGrid>
 
             <SectionTitle>Net profit by store</SectionTitle>
-            {rows.length === 0 ? <Body dim>No store rows this period.</Body> :
+            {rows.length === 0 ? <Body dim>No store rows for this filter.</Body> :
               rows.map((r, i) => {
                 const att = attainPct(r.net_profit_attainment)
                 return (
@@ -67,6 +75,7 @@ export default function StorePnlScreen() {
                     right={att != null ? `${pct(att)} of target` : undefined} />
                 )
               })}
+            {filter.markets.length > 1 ? <Body dim>Showing market “{market}” — this report filters one market at a time.</Body> : null}
           </>
         )}
       </ScrollView>
