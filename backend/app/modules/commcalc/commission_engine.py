@@ -168,6 +168,40 @@ def _assignment_miss_reason(scope, val, rn_canon, rr, sv_store, sv_mkt, scope_va
     return f"scope '{scope}' did not match"
 
 
+# ── THE accessory-rule predicate, ONE definition ─────────────────────────────────────────────────
+# `accessory` is the SYNTHETIC match_field (migs 230/231) a plan rule uses to pay on the accessory
+# classification. This idiom was written out in two places already; the itemisation work (owner
+# 2026-09-17) needed a third, so it is factored here instead — RULE TWO is unaffected, `accessory` is
+# a schema field name, never a product, carrier or tenant name.
+ACCESSORY_MATCH_FIELD = "accessory"
+
+
+def is_accessory_rule(rule):
+    """Does this commission_rule pay on the ACCESSORY classification? PURE."""
+    return str((rule or {}).get("match_field") or "").strip().lower() == ACCESSORY_MATCH_FIELD
+
+
+def accessory_slice(rules, rule_breakdown, tier_multiplier=1.0):
+    """The ACCESSORY share of one rep's plan payout, in dollars. PURE.
+
+    The named slice of `total_payout` that answers "what was I paid for accessories?" — the question a
+    plan-mode `rep_commissions` row used to answer with $0.00 beside a correct total (owner 2026-09-17).
+    It is the payout of the rules THE PLAN ITSELF scopes to the accessory predicate, read from each
+    rule's own `match_field`; no product, department, carrier or tenant name is involved.
+
+    A TIERED accessory rule is scaled by the same multiplier its dollars were scaled by, so the slice
+    can never exceed the total it is a slice of. Recomputes nothing and moves nothing.
+    """
+    out = 0.0
+    for r in rules or []:
+        if not is_accessory_rule(r):
+            continue
+        rb = (rule_breakdown or {}).get((r or {}).get("id")) or {}
+        pay = safe_float(rb.get("payout"))
+        out += (pay * safe_float(tier_multiplier)) if rb.get("tiered") else pay
+    return round(out, 2)
+
+
 def _resolve_plan_for(rep_name, store, market, plans, rep_role=None, explain=False, store_keys=None,
                       identity_map=None):
     """Most-specific assignment wins: employee > role > store > market > default. Returns the plan or None.
@@ -1391,7 +1425,7 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
     # the loaded plans actually uses it — so for EVERY existing plan (none reference 'accessory') this is a
     # complete no-op (byte-identical, zero cost). MONEY-ADJACENT: pay moves only after an owner creates such
     # a rule AND runs a recalc.
-    _uses_acc = any((rule.get("match_field") or "").strip().lower() == "accessory"
+    _uses_acc = any(is_accessory_rule(rule)
                     for p in plans for rule in (p.get("rules") or []))
     _acc_stamp = None      # DIAGNOSTICS ONLY (detail/coverage) — how each line's `accessory` was decided
     _def_acc_fn = None     # the tenant's ACCESSORY DEFINITION as a predicate, when it drives pay (mig 276)
@@ -1635,8 +1669,9 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
         _sf_cfg = (_sfp.normalize_pay_config(setup_fee_override)
                    if isinstance(setup_fee_override, dict)
                    else _sfp.load_pay_config(client, org_id))
-        _sf_on = bool((_sf_cfg.get("default") or {}).get("include_in_commission")) or any(
-            bool(v.get("include_in_commission")) for v in (_sf_cfg.get("by_carrier") or {}).values())
+        # ANY scope (org default / carrier / market) switching it on arms the leg; the per-rep
+        # resolution below decides who is actually in scope.
+        _sf_on = _sfp.any_enabled(_sf_cfg)
         _sf_kws = _sfp.load_keywords(client, org_id) if _sf_on else None
     except Exception:
         _sfp, _sf_cfg, _sf_on, _sf_kws = None, None, False, None
@@ -2071,6 +2106,15 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
         tier_units = qualifying_units if _tier_n is None else _tier_n
         mult = _tier_multiplier(plan, tier_units)
         total = round(base_total + tiered_total * mult, 2)
+        # ── ITEMISATION: THE ACCESSORY SLICE, NAMED (owner 2026-09-17, "Did the gap") ───────────
+        # A plan-mode `rep_commissions` row stored acc_comm = 0.00 beside a CORRECT total_payout, so a
+        # rep reading their breakdown was told they earned nothing on accessories while the money sat
+        # inside the total. That blank is what manufactured the July/August dispute. The slice is the
+        # payout of the rules THIS PLAN scopes to the accessory predicate — read from each rule's own
+        # match_field, never from a product, department or carrier name. A tiered accessory rule is
+        # scaled by the SAME multiplier its dollars were scaled by, so the slice can never exceed the
+        # total it is a slice of. DISPLAY ONLY: not one term of `total` above is recomputed here.
+        _acc_comm = accessory_slice(rules, rule_breakdown, mult)
         # ── SET-UP / ACTIVATION FEE PAY ITEM (mig 263) ─────────────────────────────────────────
         # A SEPARATE component, added AFTER the tier multiplier on purpose: the fee is a straight
         # percentage of money the store actually collected, not a spiff whose value depends on how many
@@ -2078,7 +2122,9 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
         # (mig 261) is not collected revenue for pay purposes either.
         _sf_pay = 0.0
         if _sf_on and _sfp is not None:
-            _sf_set, _sf_src = _sfp.resolve_for_carrier(_sf_cfg, plan.get("carrier_id"))
+            # MARKET > CARRIER > org default (owner 2026-09-17). `market` is the rep's own resolved
+            # market from store_mapping, computed above — no market name appears in this file.
+            _sf_set, _sf_src = _sfp.resolve_for_scope(_sf_cfg, plan.get("carrier_id"), market)
             _skip = None
             if _gate is not None and _excl_rules:
                 def _skip(_r, _rules=_excl_rules, _g=_gate):
@@ -2097,6 +2143,7 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                     "config_source": _sf_src}
                 _sf_guard["by_status"][_sf_status] = _sf_guard["by_status"].get(_sf_status, 0) + 1
                 _sf_guard["carriers"][str(plan.get("carrier_id") or "(none)")] = _sf_src
+                _sf_guard.setdefault("markets", {})[str(market or "(none)")] = _sf_src
                 if _sf_stated:
                     _sf_guard["dealer_share"] = round(_sf_guard["dealer_share"] + (_sf_dealer or 0), 2)
                     _sf_guard["dealer_share_stated"] = True
@@ -2117,6 +2164,9 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
             "qualifying_units": qualifying_units, "tier_multiplier": mult,
             "base_payout": round(base_total, 2), "tiered_payout": round(tiered_total, 2),
             "total_payout": total,
+            # the NAMED slices of `total_payout` (see the itemisation note above). `acc_comm` is 0.0
+            # for a plan with no accessory rule, which is a true statement about that plan.
+            "acc_comm": _acc_comm,
             # default: only rules that matched ≥1 line. detail: EVERY rule (so a rule that matched
             # nothing is still shown, to explain why it paid $0).
             "rules": sorted([rb for rb in rule_breakdown.values() if (detail or rb["matched_lines"])],
@@ -2307,8 +2357,7 @@ def _coverage_block(plans, valid, out_rows, unassigned, pay_cfg, bucket_built, b
                             f"can never match, so they pay $0. Either key the rules on 'activation_bucket', "
                             f"or set Contract-type resolution to 'mapped' (Commission settings) after "
                             f"configuring the tenant's activation rules.")})
-        acc_rules = [r for r in rules
-                     if (r.get("match_field") or "").strip().lower() == "accessory"]
+        acc_rules = [r for r in rules if is_accessory_rule(r)]
         if acc_rules and isinstance(acc_stamp, dict) and not acc_stamp.get("yes"):
             warnings.append({
                 "plan": nm, "severity": "high", "code": "accessory_rule_classifies_nothing",

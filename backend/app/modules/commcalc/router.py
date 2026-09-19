@@ -10977,11 +10977,125 @@ def _apply_engine_components_to_row(row, ks, inst_by_rep, sale_inst_by_rep, stmt
             # only written when the plan engine actually produced one, so a Boost row (pv is
             # None) and an unconfigured plan tenant are both untouched.
             row["setup_fee_comm"] = pv["setup_fee_comm"]
+        # ── ITEMISATION OF A PLAN-MODE ROW (owner 2026-09-17, "Did the gap") ────────────────────
+        # THE DEFECT: `calculator.calc_rep_commissions` emits a ZEROED skeleton row for every rep of a
+        # non-Boost (plan-mode) tenant — every component literally `0`, deliberately, because the
+        # Boost flat-spiff/KPI model does not apply and there is no payout_config to compute one from.
+        # This function then filled in `plan_comm` / `total_payout` and nothing else, so a correct
+        # total sat next to a breakdown of $0.00 for EVERY rep on EVERY plan (org 854f6d7b: 0 of 90
+        # rows with acc_comm > 0 across July + August, all three plans). A rep reading that breakdown
+        # is told they earned nothing on accessories. That is what this writes.
+        #
+        # `total_payout` IS NOT TOUCHED — it is still base + installments, exactly as below. These are
+        # DISPLAY columns being filled in for the first time.
+        #
+        # WHAT IS DELIBERATELY *NOT* WRITTEN, and why (no fudge row):
+        #   premium_comm / byod_comm / upgrade_comm stay 0. The activation money is real, but the
+        #   counts stored beside them (`premium_acts`/`byod_acts`/`upgrade_acts`) come from the
+        #   CALCULATOR's raw_sales classification while the paying basis may count from Activation
+        #   Details (per-plan `activation_source`). Measured live on org 854f6d7b the two disagree for
+        #   most reps on all three legs (Aug: 65/55, 19/17, 2/0 for one rep alone), so writing pay
+        #   beside those counts would make pay / count read as a rate nobody is paid. The activation
+        #   slice is therefore the ARITHMETIC COMPLEMENT — subtotal - acc_comm - setup_fee_comm - the
+        #   other named slices — and is documented as such rather than parked in a column that lies.
+        if "acc_comm" in pv:
+            row["acc_comm"] = safe_float(pv.get("acc_comm"))
+        # `subtotal` = this plan's own payout. In plan mode `tier` is stored as 1.0 / 'plan', so the
+        # row's identity total_payout = subtotal x tier + installments holds exactly.
+        row["subtotal"] = safe_float(pv["amount"])
         base = safe_float(pv["amount"])                       # a plan REPLACES the spiff subtotal
     else:
         base = safe_float(row.get("total_payout"))            # keep the standard calc
     row["total_payout"] = round(base + inst + sale_inst, 2)   # plan + raw_mi + sale installments
     return matched
+
+
+def _resolve_plan_by_rep(client, org_id, period, only_rep=None, notices=None):
+    """{REP(UPPER) -> {amount, plan_name, setup_fee_comm, acc_comm}} — THE one resolution of "what does
+    this rep's assigned plan pay them this period".
+
+    WHY THIS EXISTS (owner-reported class, 2026-09-17). There were TWO copies of this resolution: the
+    full run inside `_apply_new_engines`, and a shorter one inside `POST /commcalc/recompute-rep`. They
+    had DRIFTED, and the drift destroyed money:
+
+      • the single-rep copy never applied `_override_plan_by_rep_with_mtd`, so for a rep whose plan has
+        `commission_basis='exec_mtd'` the rules engine alone pays $0.00 and the endpoint would UPSERT
+        `total_payout = 0.00` over a correct figure, in a row that looks legitimately calculated;
+      • the single-rep copy also omitted `source_mode`, so under `commission_org_config.sales_source
+        = 'union'` (mig 306) it read a DIFFERENT sales basis than the full run for the same rep.
+
+    Two paths answering the same question is a defect — they will drift (CLAUDE.md duplicate-check
+    build gate). So both callers now call THIS, and the single-rep write agrees with the full-run write
+    by construction rather than by coincidence.
+
+    `only_rep` narrows the rep GROUPING inside preview (after the org-wide sales read), which is what
+    makes one rep's amount identical to their slice of the full run. The exec-MTD override is still
+    resolved per PLAN — that basis is a per-plan computation, and asking for it plan-wide is exactly
+    what the full run does, so the two cannot diverge.
+
+    CARRIER/TENANT-AGNOSTIC (RULE TWO): the only thing consulted is each plan's own
+    `commission_basis` field. No org, market, carrier or tenant name appears here.
+    """
+    plan_by_rep = {}
+    try:
+        # DURABLE NAME-BRIDGE (money path): thread the SAME deterministic POS->roster identity map the
+        # calc loads (commcalc.name_map / rep_aliases) into the plan resolver so an employee-scope plan
+        # pinned under a rep's ROSTER name still attaches to their POS sales. Empty map => as before.
+        _id_map = _rep_canon_map(client, org_id)
+        # 💰 SALES SOURCE (mig 306). 'legacy' (default) = raw_sales-first. 'union' = the same
+        # feed∪raw_sales completeness the Sales Report / Exec MTD show, so a rules-plan rep is paid on
+        # the SAME sales their report is checked against.
+        kw = {"identity_map": _id_map, "source_mode": _sales_source_mode(client, org_id)}
+        if only_rep:
+            kw["only_rep"] = only_rep
+        pr = commission_engine.preview(client, org_id, period, **kw)
+        for r in (pr.get("by_rep") or []):
+            rn = str(r.get("rep") or "").strip().upper()
+            if rn:
+                plan_by_rep[rn] = {
+                    "amount": safe_float(r.get("total_payout")),
+                    "plan_name": r.get("plan_name"),
+                    # SET-UP / ACTIVATION FEE (mig 263): its OWN component, recorded on the existing
+                    # rep_commissions column so the number is visible in the Custom Report instead of
+                    # hiding inside the plan total. 0.0 for every tenant that has not switched it on.
+                    "setup_fee_comm": safe_float(r.get("setup_fee_comm")),
+                    # ITEMISATION (owner 2026-09-17): the accessory slice of the plan total, so the
+                    # stored breakdown stops reading $0.00 beside a correct total (§6b).
+                    "acc_comm": safe_float(r.get("acc_comm"))}
+        # OPERATOR-VISIBLE NOTICE: fees were collected, the tenant said they should pay, and no
+        # percentage has been entered. The engine never invents a rate — it says so instead.
+        if notices is not None:
+            for _w in ((pr.get("setup_fee") or {}).get("warnings") or [])[:20]:
+                notices.append({"type": "setup_fee_pct_unconfigured", "severity": "warning",
+                                "rep": _w.get("rep"), "collected": _w.get("collected"),
+                                "message": _w.get("message")})
+    except Exception:
+        plan_by_rep = {}
+    # EXEC-MTD BASIS LIVE PAY (opt-in, mig 298) — for plans whose commission_basis=='exec_mtd', pay
+    # their reps from the Executive MTD numbers (per-category rate + Acc.Sales×% + the set-up-fee item)
+    # INSTEAD of the rules. ADDITIVE + OPT-IN: a rules-based plan is never in this set, so a tenant with
+    # no exec_mtd plan is byte-identical. The override DROPS those plans' rules-based entries first (no
+    # double basis) then adds the exec-mtd amounts; a rep with no Exec MTD row is simply not paid by that
+    # plan. Reads the SAME _commission_mtd_result the Save/preview use, so live pay can never disagree
+    # with the saved record.
+    try:
+        _pall, _prdy = commission_engine._load_plans(client, org_id)
+        _mtd_plans = ([p for p in (_pall or [])
+                       if str(p.get("commission_basis") or "rules").strip().lower() == "exec_mtd"
+                       and p.get("is_active", True)] if _prdy else [])
+        if _mtd_plans:
+            _mtd_by_plan = []
+            for _mp in _mtd_plans:
+                try:
+                    _res = _commission_mtd_result(client, org_id, period, _mp)
+                    _mtd_by_plan.append((_mp.get("name"), _res.get("by_rep") or []))
+                except Exception as _e1:
+                    print(f"WARN exec_mtd plan {_mp.get('name')} skipped: {_e1}")
+            _override_plan_by_rep_with_mtd(
+                plan_by_rep, {p.get("name") for p in _mtd_plans}, _mtd_by_plan)
+    except Exception as _mtde:
+        print(f"WARN exec_mtd basis live pay skipped: {_mtde}")
+    return plan_by_rep
 
 
 def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', notices=None):
@@ -11058,60 +11172,9 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
                                     f"Plan Installments for a duplicate active schedule.")})
         except Exception:
             sale_inst_by_rep = {}
-        plan_by_rep = {}
-        try:
-            # DURABLE NAME-BRIDGE (luxelink money-path): thread the SAME deterministic POS->roster identity
-            # map the calc already loads (commcalc.name_map / rep_aliases) into the plan resolver so an
-            # employee-scope plan pinned under a rep's ROSTER name still attaches to their POS sales. Empty
-            # map (no name_map rows) => byte-identical to before.
-            _id_map = _rep_canon_map(client, org_id)
-            # 💰 SALES SOURCE (mig 306). 'legacy' (default) = raw_sales-first, byte-identical to
-            # before. 'union' = the same feed∪raw_sales completeness the Sales Report / Exec MTD show,
-            # so a rules-plan rep is paid on the SAME sales their report is checked against.
-            pr = commission_engine.preview(client, org_id, period, identity_map=_id_map,
-                                           source_mode=_sales_source_mode(client, org_id))
-            for r in (pr.get("by_rep") or []):
-                rn = str(r.get("rep") or "").strip().upper()
-                if rn:
-                    plan_by_rep[rn] = {"amount": safe_float(r.get("total_payout")),
-                                       "plan_name": r.get("plan_name"),
-                                       # SET-UP / ACTIVATION FEE (mig 263): its OWN component, recorded
-                                       # on the existing rep_commissions column so the number is visible
-                                       # in the Custom Report instead of hiding inside the plan total.
-                                       # 0.0 for every tenant that has not switched it on.
-                                       "setup_fee_comm": safe_float(r.get("setup_fee_comm"))}
-            # OPERATOR-VISIBLE NOTICE: fees were collected, the tenant said they should pay, and no
-            # percentage has been entered. The engine never invents a rate — it says so instead.
-            if notices is not None:
-                for _w in ((pr.get("setup_fee") or {}).get("warnings") or [])[:20]:
-                    notices.append({"type": "setup_fee_pct_unconfigured", "severity": "warning",
-                                    "rep": _w.get("rep"), "collected": _w.get("collected"),
-                                    "message": _w.get("message")})
-        except Exception:
-            plan_by_rep = {}
-        # EXEC-MTD BASIS LIVE PAY (opt-in, mig 298) — for plans whose commission_basis=='exec_mtd', pay
-        # their reps from the Executive MTD numbers (per-category rate + Acc.Sales×%) INSTEAD of the rules.
-        # ADDITIVE + OPT-IN: a rules-based plan is never in this set, so it is byte-identical. The override
-        # DROPS those plans' rules-based entries first (no double basis) then adds the exec-mtd amounts; a
-        # rep with no Exec MTD row is simply not paid by that plan. Reads the SAME _commission_mtd_result
-        # the Save/preview use, so live pay can never disagree with the saved record.
-        try:
-            _pall, _prdy = commission_engine._load_plans(client, org_id)
-            _mtd_plans = ([p for p in (_pall or [])
-                           if str(p.get("commission_basis") or "rules").strip().lower() == "exec_mtd"
-                           and p.get("is_active", True)] if _prdy else [])
-            if _mtd_plans:
-                _mtd_by_plan = []
-                for _mp in _mtd_plans:
-                    try:
-                        _res = _commission_mtd_result(client, org_id, period, _mp)
-                        _mtd_by_plan.append((_mp.get("name"), _res.get("by_rep") or []))
-                    except Exception as _e1:
-                        print(f"WARN exec_mtd plan {_mp.get('name')} skipped: {_e1}")
-                _override_plan_by_rep_with_mtd(
-                    plan_by_rep, {p.get("name") for p in _mtd_plans}, _mtd_by_plan)
-        except Exception as _mtde:
-            print(f"WARN exec_mtd basis live pay skipped: {_mtde}")
+        # THE ONE plan resolution (preview + the exec-MTD basis override), shared verbatim with
+        # POST /commcalc/recompute-rep so the single-rep write and this full-run write cannot drift.
+        plan_by_rep = _resolve_plan_by_rep(client, org_id, period, notices=notices)
         # carrier commission STATEMENT (Total/VidaPay etc.): sum total_commission per rep for the period.
         stmt_by_rep = {}
         try:
@@ -16362,8 +16425,14 @@ def _override_plan_by_rep_with_mtd(plan_by_rep, mtd_plan_names, mtd_by_plan):
             rn = str(r.get("employee") or "").strip().upper()
             if not rn:
                 continue
+            # `commission` ALREADY includes the set-up-fee pay item (added in _commission_mtd_result,
+            # exactly as the rules engine adds it into total_payout), and setup_fee_comm records the
+            # component so it is visible instead of hidden inside the total. It was a hard-coded 0.0
+            # here until 2026-09-17, which paid every exec_mtd-basis rep $0 of a configured fee.
             plan_by_rep[rn] = {"amount": safe_float(r.get("commission")),
-                               "plan_name": pname, "setup_fee_comm": 0.0}
+                               "plan_name": pname,
+                               "setup_fee_comm": safe_float(r.get("setup_fee_comm")),
+                               "acc_comm": safe_float(r.get("acc_comm"))}
     return plan_by_rep
 
 
@@ -16414,6 +16483,46 @@ def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", t
                      reps=emps_scope or None, today=_t)
     emp_rows = ((data.get("by_employee") or {}).get("rows")) or []
     rows = _commission_from_mtd_rows(emp_rows, rate_map, eff_acc_pct)
+    # ── SET-UP / ACTIVATION FEE ON THE EXEC-MTD BASIS (owner 2026-08-01 + 2026-09-17) ───────────────
+    # DEFECT FIXED HERE: this basis used to hand the pay writer a HARD-CODED setup_fee_comm of 0.0, so
+    # a tenant who configured the fee still paid $0 to every rep on an exec_mtd plan — silently. The
+    # collected dollars are NOT re-derived: they are the `setup_fee` cell Exec MTD already accumulated
+    # from the mig-217 keyword list (one recognition, ONE number). The scope is the plan's OWN market /
+    # carrier assignment, so no market or carrier name appears here.
+    _sf_market = markets[0] if len(markets) == 1 else None
+    try:
+        from app.modules.commcalc import setup_fee_pay as _sfp_mtd
+        _sf_cfg_mtd = _sfp_mtd.load_pay_config(client, org_id)
+        _sf_set_mtd, _sf_src_mtd = _sfp_mtd.resolve_for_scope(
+            _sf_cfg_mtd, plan.get("carrier_id"), _sf_market)
+    except Exception:
+        _sfp_mtd, _sf_set_mtd, _sf_src_mtd = None, None, None
+    _sf_collected_by_rep = {str(r.get("employee") or ""): safe_float(r.get("setup_fee"))
+                            for r in emp_rows}
+    _sf_warn_mtd = []
+    for r in rows:
+        coll = round(_sf_collected_by_rep.get(str(r.get("employee") or "") or "", 0.0), 2)
+        pay, status = (0.0, "excluded")
+        if _sfp_mtd is not None and _sf_set_mtd is not None:
+            pay, status = _sfp_mtd.employee_pay(coll, _sf_set_mtd)
+        r["setup_fee_collected"] = coll
+        r["setup_fee_comm"] = pay
+        # ITEMISATION (owner 2026-09-17): the accessory slice, NAMED. On this basis it is exactly
+        # `acc_sales x accessory_pct`, which _commission_from_mtd_rows already computed — no second
+        # derivation, and nothing here recomputes the commission.
+        r["acc_comm"] = round(safe_float(r.get("accessory_pay")), 2)
+        r["setup_fee_status"] = status
+        r["setup_fee_scope"] = _sf_src_mtd
+        # the fee is its OWN pay item; it is ADDED to the rep's commission, never folded into the
+        # accessory number or the activation pay.
+        r["commission"] = round(r["commission"] + pay, 2)
+        if status == "unconfigured" and coll:
+            _sf_warn_mtd.append({"type": "setup_fee_pct_unconfigured", "rep": r.get("employee"),
+                                 "collected": coll, "plan": plan.get("name"),
+                                 "message": (f"{r.get('employee')} collected ${coll:,.2f} in set-up / "
+                                             "activation fees and the employee percentage has not been "
+                                             "entered, so it paid $0.")})
+    rows.sort(key=lambda x: -x["commission"])
     cat_totals = {c: {"count": sum(r["by_category"][c]["count"] for r in rows),
                       "pay": round(sum(r["by_category"][c]["pay"] for r in rows), 2),
                       "rate": rate_map.get(c, 0.0), "label": _MTD_CATEGORY_LABELS[c]}
@@ -16423,6 +16532,8 @@ def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", t
         "acc_sales": round(sum(r["acc_sales"] for r in rows), 2),
         "activation_pay": round(sum(r["activation_pay"] for r in rows), 2),
         "accessory_pay": round(sum(r["accessory_pay"] for r in rows), 2),
+        "setup_fee_collected": round(sum(r.get("setup_fee_collected") or 0.0 for r in rows), 2),
+        "setup_fee_comm": round(sum(r.get("setup_fee_comm") or 0.0 for r in rows), 2),
         "commission": round(sum(r["commission"] for r in rows), 2),
         "by_category": cat_totals,
     }
@@ -16432,6 +16543,7 @@ def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", t
         "rate_map": rate_map, "accessory_pct": eff_acc_pct,
         "scope": {"stores": stores, "markets": markets, "employees": emps_scope},
         "activation_source": data.get("activation_source"),
+        "setup_fee": {"scope": _sf_src_mtd, "settings": _sf_set_mtd, "warnings": _sf_warn_mtd},
         "by_rep": rows, "totals": totals,
     }
 
@@ -16839,21 +16951,20 @@ def recompute_rep(body: RecomputeRepIn, org_id: str = ORG_ID):
         raise HTTPException(400, "period and rep are required")
     client = sb()
 
-    # SAME deterministic POS->roster identity map + plan resolver the full run (_apply_new_engines) uses,
+    # THE SAME plan resolution the full run uses — ONE helper, called by both (_resolve_plan_by_rep),
     # restricted to this ONE rep. only_rep filters the rep grouping AFTER the (org-wide) sales read and
     # store/financing context are built, so this rep's plan amount is identical to the full-run slice.
-    _id_map = _rep_canon_map(client, org_id)
-    plan_by_rep = {}
+    #
+    # ⚠ THIS USED TO BE A SECOND, SHORTER COPY, AND THE COPY DESTROYED MONEY (owner-reported class,
+    # 2026-09-17). It called preview() alone: no exec-MTD basis override and no `source_mode`. For a rep
+    # whose plan has `commission_basis='exec_mtd'` the rules engine alone pays $0.00, so this endpoint
+    # would UPSERT `total_payout = 0.00` over a correct figure — in a row that looks legitimately
+    # calculated. Live, org 854f6d7b July 2026: every one of the 13 reps on the exec_mtd plan would have
+    # been zeroed, e.g. $777.78 -> $0.00. Sharing the resolution is what makes that impossible again.
     try:
-        pr = commission_engine.preview(client, org_id, period, only_rep=rep, identity_map=_id_map)
-        for r in (pr.get("by_rep") or []):
-            rn = str(r.get("rep") or "").strip().upper()
-            if rn:
-                plan_by_rep[rn] = {"amount": safe_float(r.get("total_payout")),
-                                   "plan_name": r.get("plan_name"),
-                                   "setup_fee_comm": safe_float(r.get("setup_fee_comm"))}
+        plan_by_rep = _resolve_plan_by_rep(client, org_id, period, only_rep=rep)
     except Exception as e:
-        raise HTTPException(500, f"recompute-rep preview failed: {e}")
+        raise HTTPException(500, f"recompute-rep plan resolution failed: {e}")
 
     # this rep's installment / statement components — computed exactly as _apply_new_engines does (the
     # engines are org-wide; we only WRITE this rep's row, so we just index by this rep's keys below).

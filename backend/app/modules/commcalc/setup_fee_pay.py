@@ -67,6 +67,32 @@ PAY_DEFAULTS = {
     "counts_toward_accessory_target": True,
 }
 
+# ── MARKET SCOPING (owner answer 2026-09-17: "Create company wide but default allowed for NY and if
+#    need be a checkbox enabling for all markets if required") ──────────────────────────────────────
+# A GENERIC third dimension beside `default` and `by_carrier`. No market name, tenant name or carrier
+# name appears in this module — `by_market` keys are DATA the tenant types, exactly like `by_carrier`
+# keys are carrier ids (RULE TWO).
+#
+#   {"default": {...}, "by_carrier": {...},
+#    "by_market": {"<market>": { …same settings shape… }},
+#    "all_markets": false}
+#
+# `all_markets` IS the owner's checkbox:
+#   false (the default) + a NON-EMPTY `by_market`  -> the pay item applies ONLY in the named markets.
+#                                                     Every other market resolves to "not enabled here"
+#                                                     and pays $0 with a NAMED source, not a silent one.
+#   true                                            -> `default`/`by_carrier` apply everywhere, and a
+#                                                     `by_market` row still overrides its own market.
+#   EMPTY `by_market` (every tenant today)           -> this dimension is INERT and resolution is
+#                                                     byte-identical to the pre-2026-09-17 behaviour.
+MARKET_NOT_ENABLED = "market_not_enabled"
+
+
+def normalize_market(m):
+    """The canonical key for a market name. PURE. Case/whitespace-insensitive so the tenant's config
+    row matches the market string the engine resolved from store_mapping."""
+    return str(m or "").strip().upper()
+
 
 def _f(v):
     if v is None or (isinstance(v, str) and not v.strip()):
@@ -198,23 +224,79 @@ def normalize_pay_config(stored):
         return out
 
     if not isinstance(stored, dict):
-        return {"default": dict(PAY_DEFAULTS), "by_carrier": {}}
-    # a flat dict (no 'default'/'by_carrier' envelope) is read as the org default — tolerant of the
-    # shape a human would type into the SQL editor.
-    if "default" not in stored and "by_carrier" not in stored:
-        return {"default": one(stored), "by_carrier": {}}
+        return {"default": dict(PAY_DEFAULTS), "by_carrier": {}, "by_market": {}, "all_markets": False}
+    # a flat dict (no envelope key at all) is read as the org default — tolerant of the shape a human
+    # would type into the SQL editor.
+    if not any(k in stored for k in ("default", "by_carrier", "by_market", "all_markets")):
+        return {"default": one(stored), "by_carrier": {}, "by_market": {}, "all_markets": False}
     by = {}
     for k, v in (stored.get("by_carrier") or {}).items():
         if str(k or "").strip():
             by[str(k).strip()] = one(v)
-    return {"default": one(stored.get("default")), "by_carrier": by}
+    bym = {}
+    for k, v in (stored.get("by_market") or {}).items():
+        if normalize_market(k):
+            bym[normalize_market(k)] = one(v)
+    return {"default": one(stored.get("default")), "by_carrier": by, "by_market": bym,
+            "all_markets": bool(stored.get("all_markets"))}
 
 
 def resolve_for_carrier(cfg, carrier_id=None):
-    """(settings, source) for one carrier. Per-carrier row wins, else the org default. PURE."""
+    """(settings, source) for one carrier. Per-carrier row wins, else the org default. PURE.
+
+    UNCHANGED since mig 263 and deliberately NOT market-gated: it answers "what rate has this tenant
+    stated for this carrier", which is what the DISPLAY surfaces ask. A PAY path must call
+    `resolve_for_scope` instead — that is the one that honours the market switch."""
     if carrier_id and str(carrier_id).strip() in (cfg.get("by_carrier") or {}):
         return cfg["by_carrier"][str(carrier_id).strip()], "carrier"
     return cfg.get("default") or dict(PAY_DEFAULTS), "org_default"
+
+
+def market_enabled(cfg, market):
+    """Does the set-up-fee pay item apply in this market at all? PURE.
+
+    True when the tenant named the market, or when the all-markets switch is on, or when the tenant
+    has named NO markets (the inert case — every tenant before 2026-09-17, unchanged)."""
+    bym = cfg.get("by_market") or {}
+    if not bym:
+        return True
+    if cfg.get("all_markets"):
+        return True
+    return normalize_market(market) in bym
+
+
+def resolve_for_scope(cfg, carrier_id=None, market=None):
+    """(settings, source) for one rep. PURE. Most specific wins: MARKET > CARRIER > org default.
+
+    `source` is one of 'market', 'carrier', 'org_default' or MARKET_NOT_ENABLED. The last one is the
+    owner's checkbox saying no: the returned settings are the resolved ones with
+    include_in_commission forced False, so the rep pays $0 through the ORDINARY 'excluded' path and
+    NOTHING is guessed, zeroed elsewhere or silently dropped."""
+    cfg = cfg or {}
+    mkey = normalize_market(market)
+    bym = cfg.get("by_market") or {}
+    if mkey and mkey in bym:
+        return bym[mkey], "market"
+    if carrier_id and str(carrier_id).strip() in (cfg.get("by_carrier") or {}):
+        base, src = cfg["by_carrier"][str(carrier_id).strip()], "carrier"
+    else:
+        base, src = (cfg.get("default") or dict(PAY_DEFAULTS)), "org_default"
+    if not market_enabled(cfg, market):
+        return {**base, "include_in_commission": False}, MARKET_NOT_ENABLED
+    return base, src
+
+
+def any_enabled(cfg):
+    """True when ANY scope of this config switches the pay item on — the engine's cheap 'is this
+    tenant using it at all?' gate. PURE."""
+    cfg = cfg or {}
+    if bool((cfg.get("default") or {}).get("include_in_commission")):
+        return True
+    for bucket in ("by_carrier", "by_market"):
+        for v in (cfg.get(bucket) or {}).values():
+            if bool((v or {}).get("include_in_commission")):
+                return True
+    return False
 
 
 def load_pay_config(client, org_id):

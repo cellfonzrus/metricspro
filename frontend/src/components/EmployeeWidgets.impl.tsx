@@ -36,15 +36,24 @@ const KPIS = [
 
 // Commission earning components (what was earned, and for what).
 const COMP_LINES = [
+  // `acts` marks the three BOOST flat-spiff legs. A plan-mode rep has no such legs — their activation
+  // money comes from their Commission Plan's rules — so these three are hidden for them and replaced by
+  // the single PLAN_LINE below. Showing "48 activations · $0.00" to somebody who WAS paid for those
+  // activations is the itemisation defect this fix exists to end (owner 2026-09-17).
   { k: 'premium_comm', label: 'Premium activations', acts: 'premium_acts' },
   { k: 'upgrade_comm', label: 'Upgrades', acts: 'upgrade_acts' },
   { k: 'byod_comm', label: 'BYOD', acts: 'byod_acts' },
-  { k: 'acc_comm', label: 'Accessories (GP)' },
+  // NOT "(GP)": this is a commission on accessory SALES (ext price x the plan/config rate), never on GP
+  // — true on the Boost path too since 2026-06-17. The old label told every rep the wrong basis.
+  { k: 'acc_comm', label: 'Accessories' },
   { k: 'setup_fee_comm', label: 'Setup fees' },
   { k: 'trade_in_comm', label: 'Trade-in', optional: true },
   { k: 'custom_comm', label: 'Custom', optional: true },
   { k: 'acima_comm', label: 'Acima', optional: true },
 ]
+
+// The NAMED slices of a plan-mode subtotal. Anything left over is the plan's activation/rule money.
+const PLAN_NAMED_SLICES = ['acc_comm', 'setup_fee_comm', 'trade_in_comm', 'custom_comm', 'acima_comm']
 
 function Card({ title, icon, children, right }: any) {
   return (
@@ -148,6 +157,9 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
                   {COMP_LINES.map(line => {
                     const amt = Number(c[line.k] || 0)
                     if (line.optional && !amt) return null
+                    // plan mode: the Boost flat-spiff legs do not exist, so don't print $0.00 next to
+                    // a real activation count. The complement line below carries that money.
+                    if (c.plan_name && line.acts) return null
                     const acts = line.acts ? c[line.acts] : null
                     return (
                       <tr key={line.k} style={{ borderTop: '1px solid var(--border)' }}>
@@ -156,6 +168,22 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
                       </tr>
                     )
                   })}
+                  {c.plan_name ? (() => {
+                    // The activation / plan-rule slice, as the ARITHMETIC COMPLEMENT of the named
+                    // slices. It is deliberately shown WITHOUT a count: the counts stored on this row
+                    // come from a different classification than the one that paid, so a count here
+                    // would read as a per-unit rate nobody is paid on.
+                    const named = PLAN_NAMED_SLICES.reduce((t, k) => t + Number(c[k] || 0), 0)
+                    const rest = Math.round((Number(c.subtotal || 0) - named) * 100) / 100
+                    if (!rest) return null
+                    return (
+                      <tr style={{ borderTop: '1px solid var(--border)' }}>
+                        <td style={{ padding: '5px 4px' }}>Activations &amp; plan rules
+                          <span style={{ color: 'var(--text3)' }}> · {c.plan_name}</span></td>
+                        <td style={{ padding: '5px 4px', textAlign: 'right', fontWeight: 600 }}>{fmt(rest)}</td>
+                      </tr>
+                    )
+                  })() : null}
                   <tr style={{ borderTop: '2px solid var(--border)' }}>
                     <td style={{ padding: '6px 4px', color: 'var(--text2)' }}>Subtotal</td>
                     <td style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 700 }}>{fmt(c.subtotal ?? 0)}</td>

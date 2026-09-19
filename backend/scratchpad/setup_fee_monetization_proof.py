@@ -357,7 +357,11 @@ def _drop(o):
     o.pop("pay_gate", None)
     o.pop("setup_fee", None)
     for r in o.get("by_rep") or []:
-        for k in ("setup_fee_comm", "setup_fee_collected"):
+        # `acc_comm` joined this list on 2026-09-17 (owner: "Did the gap"). It is the NAMED accessory
+        # slice of a payout this engine already computed — a display key, not a term of any total. The
+        # money claim this function exists to test is unaffected, and that total_payout does not move
+        # is proved directly in backend/harness_commission_itemisation.py §C.
+        for k in ("setup_fee_comm", "setup_fee_collected", "acc_comm"):
             r.pop(k, None)
     # NOTE: the pay-gate keys (unit_basis / scope_reason / suppressed_*) are NOT stripped — the BASE
     # for this package (ec9fe8b) already emits them. Only what THIS package adds is removed, which is
@@ -520,10 +524,15 @@ check("H3  an unknown carrier falls back to the org default, never to nothing",
 check("H4  a flat dict with no envelope is read as the org default (tolerant of hand-written SQL)",
       SFP.normalize_pay_config({"employee_pct_of_collected": 0.25})["default"]
       ["employee_pct_of_collected"] == 0.25)
-check("H5  the engine resolves per carrier from the PLAN's carrier_id",
-      "resolve_for_carrier" in open(os.path.join(os.path.dirname(__file__), "..", "app", "modules",
-                                                 "commcalc", "commission_engine.py"),
-                                    encoding="utf-8").read())
+# 2026-09-17: the engine's resolution gained a MARKET layer (owner: "Create company wide but default
+# allowed for NY and if need be a checkbox enabling for all markets if required"), so it now calls
+# resolve_for_scope(cfg, plan.carrier_id, rep_market) — market > carrier > org default. The carrier leg
+# is unchanged and still comes from the PLAN's carrier_id; the market layer is proved in
+# backend/harness_setup_fee_market_scope.py.
+_ce_src = open(os.path.join(os.path.dirname(__file__), "..", "app", "modules",
+                            "commcalc", "commission_engine.py"), encoding="utf-8").read()
+check("H5  the engine resolves per SCOPE (market > carrier > default) from the PLAN's carrier_id",
+      "resolve_for_scope" in _ce_src and 'plan.get("carrier_id")' in _ce_src)
 _pay, _st = SFP.employee_pay(100.0, _d2)
 check("H6  the Total carrier's employee pay on $100 collected is $0.00, silently (0 is a decision)",
       _pay == 0.0 and _st == "zero_by_choice")
