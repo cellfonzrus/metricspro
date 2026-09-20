@@ -6049,13 +6049,19 @@ def _intake_merchant_portal_options(client, org_id):
 
 
 @router.get("/onboarding/intake/state")
-def onboarding_intake_state(instance_key: str = "", org_id: str = ORG_ID):
+def onboarding_intake_state(instance_key: str = "", links: str = "", org_id: str = ORG_ID):
     """The rail (design §0.2) — a projection of mig 1007's rows — plus this org's carriers for 3.1,
     its POS sources and layouts for 2.0, its store roster and employees for 2.4, and the intake's
-    vocabulary. Degrades honestly without the migration."""
+    vocabulary. Degrades honestly without the migration.
+
+    `links` (Stage D, §30.11): '' serves the cached report-links matrix (or says none is computed);
+    'all' RECOMPUTES it from the landed rows (through the kinds' own re-reads) and caches it on the
+    run's own stage-4 row; '<a>|<b>' (two instance keys — they carry colons themselves — the matrix
+    cell's own key) adds that pair's detail (samples, ambiguous keys)."""
     require_org(org_id)
     client = sb()
     out = _intake_state_payload(client, org_id, instance_key or None)
+    out["report_links"] = _intake_report_links(client, org_id, links)
     carriers = (client.schema("commcalc").table("carrier").select("id,name,code,is_default")
                 .eq("org_id", org_id).order("name").execute().data) or []
     pos_sources = []
@@ -6248,7 +6254,8 @@ def _intake_reread(client, org_id, source_report, period):
     rows, lo = [], 0
     while True:
         q = (client.schema("commcalc").table("commission_ledger")
-             .select("category,payout_total,raw_amount,product_name,order_type,is_payout")
+             .select("category,payout_total,raw_amount,product_name,order_type,is_payout,"
+                     "account_id,order_number,store,rep_user,trans_date")      # + the Stage-D link fields (§30.11)
              .eq("org_id", org_id).eq("source_report", source_report).eq("period", period))
         if origin_ok:
             q = q.eq("origin", ledger_ma_sync.ORIGIN_FILE)
@@ -6267,7 +6274,8 @@ def _intake_reread_sales(client, org_id, stores, lo, hi):
     while True:
         page = (client.schema("commcalc").table("raw_sales")
                 .select("store,salesperson,trans_id,trans_date,ext_price,gp,voided,"
-                        "department,category,product_desc,tender_type,trans_type")
+                        "department,category,product_desc,tender_type,trans_type,"
+                        "mdn,serial_1,user_login")                             # + the Stage-D link fields (§30.11)
                 .eq("org_id", org_id).in_("store", list(stores)).gte("trans_date", lo).lte("trans_date", hi)
                 .order("id").range(start, start + _INTAKE_REREAD_PAGE - 1).execute().data) or []
         rows.extend(page)
@@ -6329,7 +6337,7 @@ def _intake_reread_billpay(client, org_id, layout, accounts, lo, hi):
     kf = _intake.kind_fields("bill_payments", layout)
     rows, start = [], 0
     while True:
-        page = (client.schema("commcalc").table(table).select(f"{kf['store']},{kf['date']},{kf['amount']}")
+        page = (client.schema("commcalc").table(table).select(f"{kf['store']},{kf['date']},{kf['amount']},{kf['txn']}")
                 .eq("org_id", org_id).in_(kf["store"], list(accounts)).gte(kf["date"], lo).lte(kf["date"], hi)
                 .order("id").range(start, start + _INTAKE_REREAD_PAGE - 1).execute().data) or []
         rows.extend(page)
@@ -6424,6 +6432,250 @@ def _intake_activation_rows(client, org_id, period):
     except Exception as e:
         print(f"WARN activation feed read failed for the inventory check: {e}")
         return [], False
+
+
+# ── STAGE D — REPORT LINKS (owner 2026-09-20: "link the different reports automatically with each other
+# with common columns"; index §30.11). Read-only: every source's rows come through the kind's EXISTING
+# re-read; the pairing is `report_links` over `inventory_sold_recon.line_pairings` (the one rule) with
+# the three key normalisers from their homes; the only write is a cache of the result on the run's own
+# stage-4 row (`_LINKS_INSTANCE_KEY`), fingerprinted against the instances it was computed from.
+_LINKS_INSTANCE_KEY = "links:run:matrix"
+
+
+def _intake_link_normalisers():
+    """THE three key normalisers, from their homes — injected into the pure module (never re-spelled)."""
+    from app.modules.commcalc import device_cost_recon as _dcr
+    from app.modules.commcalc import inventory_sold_recon as _isr
+    return {"device_key": _dcr.device_key, "mobile_key": _isr.mobile_key, "norm_order": _dcr.norm_order}
+
+
+def _intake_link_label(inst, registry_rows):
+    """The layman label from the report-kind registry (the card the instance belongs to, resolved by
+    `report_kinds.kind_key_for` — no kind named here), with the source it came from; else the rail's
+    own label."""
+    p = inst.get("payload") or {}
+    kind = inst.get("kind")
+    try:
+        key = _report_kinds.kind_key_for(registry_rows, kind, layout=p.get("layout") or None,
+                                         statement_type=p.get("statement_type"), chosen=p.get("report_kind"))
+        row = next((r for r in registry_rows if r["key"] == key), None) if key else None
+    except Exception:
+        row = None
+    ref = p.get("source_ref") or p.get("carrier_name") or ""
+    if row:
+        return f"{row['label']}" + (f" ({ref})" if ref else "")
+    return inst.get("label") or inst.get("instance_key")
+
+
+def _intake_link_source(client, org_id, inst, registry_rows, store_resolve, rep_resolve):
+    """ONE loaded report as a link source: its landed rows RE-READ through the kind's existing re-read
+    (never a new query path), the columns that carry each link field (`report_links.columns_for` over
+    the intake's `kind_fields` + the layout's TARGET_FIELDS), and the store / rep key functions built
+    from the identity decisions confirmed at 2.4 / 3.7 (`lands_as` / `resolved_name`), else the shared
+    §13a resolvers. A source whose slice cannot be re-read is returned read_ok:false with the reason."""
+    from app.modules.commcalc import report_links as _rl
+    kind = inst.get("kind")
+    ik = inst.get("instance_key")
+    p = inst.get("payload") or {}
+    vn = inst.get("verified_numbers") or {}
+    ident = vn.get("identity") or {}
+    lands = {str(r.get("value")): r.get("lands_as") for r in (ident.get("stores") or []) if r.get("value")}
+    id_values = [str(r.get("value")) for r in (ident.get("stores") or [])
+                 if r.get("value") and str(r.get("action") or "") != "not_ours"]
+    reps = {str(r.get("value")).strip().lower(): r.get("resolved_name") for r in (ident.get("reps") or []) if r.get("value") and r.get("resolved_name")}
+
+    def store_key(raw):
+        v = str(raw or "").strip()
+        if not v:
+            return None
+        return lands.get(v) or store_resolve(v)[0]
+
+    def rep_key(raw):
+        v = str(raw or "").strip()
+        if not v:
+            return None
+        return reps.get(v.lower()) or rep_resolve(v)[0] or v.lower()
+
+    # the layout = the column-mapping key the rows were mapped through; a commission-family statement's
+    # is DERIVED per statement type by the one wrapper (index §30.10) — the residual layout is where the
+    # phone number is the line identity
+    if kind == "commission":
+        layout = _ledger_mapping_key(client, org_id, p.get("statement_type") or "", vn.get("source_report") or "")
+    else:
+        layout = p.get("layout") or _intake.REPORT_KEY_BY_KIND.get(kind)
+    src = {"instance_key": ik, "kind": kind, "label": _intake_link_label(inst, registry_rows), "rail_label": inst.get("label"),
+           "layout": layout, "rows": [], "columns": {}, "store_key": store_key, "rep_key": rep_key,
+           "read_ok": True, "note": None, "reread": None}
+    try:
+        if ik == _intake.INVENTORY_NONE_KEY:
+            return {**src, "read_ok": False, "note": "no inventory export — recorded, nothing to link"}
+        if kind == "other":
+            return {**src, "read_ok": False, "note": "recorded only — no destination table, nothing to link"}
+        if kind in ("sales", "pos"):
+            span = vn.get("date_span") or {}
+            if not (id_values and span.get("from") and span.get("to")):
+                return {**src, "read_ok": False, "note": "no landed slice recorded (stores × dates) — commit the export first"}
+            src["rows"] = _intake_reread_sales(client, org_id, id_values, span["from"], span["to"])
+            src["reread"] = "_intake_reread_sales"
+        elif kind == "inventory":
+            as_of = vn.get("as_of_date")
+            if not (id_values and as_of):
+                return {**src, "read_ok": False, "note": "no landed slice recorded (stores × as-of date) — commit the listing first"}
+            src["rows"] = _intake_reread_inventory(client, org_id, id_values, as_of)
+            src["reread"] = "_intake_reread_inventory"
+        elif kind == "commission":
+            if not (vn.get("source_report") and vn.get("period")):
+                return {**src, "read_ok": False, "note": "no landed statement recorded (source report × period) — confirm the statement first"}
+            src["rows"] = _intake_reread(client, org_id, vn["source_report"], vn["period"])
+            src["reread"] = "_intake_reread"
+        elif kind == "x_report":
+            close = vn.get("as_of_date") or (vn.get("numbers") or {}).get("close_date")
+            if not (id_values and close):
+                return {**src, "read_ok": False, "note": "no landed day recorded (stores × close date) — commit the X-report first"}
+            src["rows"] = [{"store": st, "close_date": d} for (st, d, _t, _a) in _intake_reread_xreport(client, org_id, id_values, close)]
+            src["reread"] = "_intake_reread_xreport"
+        elif kind == "merchant_payments":
+            dates = (vn.get("numbers") or {}).get("dates") or []
+            if not (p.get("source_id") and dates):
+                return {**src, "read_ok": False, "note": "no landed days recorded (source × business days) — commit the settlement first"}
+            src["rows"] = _intake_reread_merchant(client, org_id, p["source_id"], dates[0], dates[-1])
+            src["reread"] = "_intake_reread_merchant"
+        elif kind == "bill_payments":
+            span = (vn.get("numbers") or {}).get("date_span") or vn.get("date_span") or {}
+            if not (id_values and span.get("from") and span.get("to") and layout):
+                return {**src, "read_ok": False, "note": "no landed slice recorded (accounts × dates) — commit the report first"}
+            rows, _feed, _proc = _intake_reread_billpay(client, org_id, layout, id_values, span["from"], span["to"])
+            src["rows"] = rows
+            src["reread"] = "_intake_reread_billpay"
+        else:
+            return {**src, "read_ok": False, "note": f"no re-read for kind '{kind}'"}
+    except Exception as e:
+        return {**src, "read_ok": False, "note": f"re-read failed: {str(e)[:200]}"}
+    src["columns"] = _rl.columns_for(kind, layout, _intake.kind_fields(kind, layout), column_mapping.TARGET_FIELDS)
+    if not src["rows"]:
+        src["note"] = "the re-read returned no rows for the recorded slice"
+    return src
+
+
+def _intake_link_activations(client, org_id, registry_rows, store_resolve, rep_resolve):
+    """The activation feed as a link source when it is loaded (through the custom-import path, not this
+    intake) — the SAME read the inventory auto-check uses (`_intake_activation_rows`). None when no feed."""
+    from app.modules.commcalc import report_links as _rl
+    rows, ok = _intake_activation_rows(client, org_id, None)
+    if not ok or not rows:
+        return None
+    row = next((r for r in registry_rows if r.get("landing") == "custom_import" and "activation" in str(r.get("key") or "")), None)
+    return {"instance_key": _rl.ACTIVATIONS_INSTANCE_KEY, "kind": _rl.ACTIVATIONS_KIND,
+            "label": (row or {}).get("label") or "Activation details", "rail_label": None, "layout": None,
+            "rows": rows, "columns": _rl.columns_for(_rl.ACTIVATIONS_KIND, None, None, column_mapping.TARGET_FIELDS),
+            "store_key": lambda v: store_resolve(v)[0], "rep_key": lambda v: (rep_resolve(v)[0] or (str(v or "").strip().lower() or None)),
+            "read_ok": True, "note": "loaded through the activation-details import, not this intake", "reread": "_intake_activation_rows"}
+
+
+def _intake_links_cache(client, org_id, run_id):
+    """(row | None) — the run's cached report-links result (stage-4 row `_LINKS_INSTANCE_KEY`)."""
+    if not run_id:
+        return None
+    try:
+        rows = (client.schema("commcalc").table("onboarding_stage_state").select("*")
+                .eq("org_id", org_id).eq("run_id", run_id).eq("stage", "4").eq("instance_key", _LINKS_INSTANCE_KEY)
+                .limit(1).execute().data) or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def _intake_links_cache_put(client, org_id, run_id, payload):
+    """Cache the result on the run's own stage-4 row — the intake's state table, no new table. Never raises."""
+    try:
+        existing = _intake_links_cache(client, org_id, run_id)
+        row = {"org_id": org_id, "run_id": run_id, "stage": "4", "step": "4.1", "instance_key": _LINKS_INSTANCE_KEY,
+               "status": _intake.STATUS_VERIFIED, "payload": payload, "updated_at": _intake.now_iso()}
+        if existing:
+            client.schema("commcalc").table("onboarding_stage_state").update(row).eq("id", existing["id"]).eq("org_id", org_id).execute()
+        else:
+            client.schema("commcalc").table("onboarding_stage_state").insert(row).execute()
+        return True
+    except Exception:
+        return False
+
+
+def _intake_report_links_compute(client, org_id, stage_rows):
+    """The report over every loaded report of the run: sources through the re-reads, the pairing
+    through `report_links.report` with `inventory_sold_recon.line_pairings` / `sales_mobile_index`."""
+    from app.modules.commcalc import report_links as _rl
+    from app.modules.commcalc import inventory_sold_recon as _isr
+    registry_rows, _ready = _report_kinds.load_registry(client, org_id)
+    store_resolve = _intake_store_resolver(client, org_id)
+    rep_resolve = _intake_rep_resolver(client, org_id)
+    instances = _intake.rail(stage_rows)["instances"]
+    sources = []
+    for inst in instances:
+        vn = inst.get("verified_numbers") or {}
+        if not vn and inst["instance_key"] != _intake.INVENTORY_NONE_KEY:
+            sources.append({"instance_key": inst["instance_key"], "kind": inst["kind"], "label": inst["label"], "rows": [],
+                            "columns": {}, "read_ok": False, "note": "nothing landed yet"})
+            continue
+        sources.append(_intake_link_source(client, org_id, inst, registry_rows, store_resolve, rep_resolve))
+    acts = _intake_link_activations(client, org_id, registry_rows, store_resolve, rep_resolve)
+    if acts:
+        sources.append(acts)
+    rep = _rl.report(sources, _intake_link_normalisers(), _isr.line_pairings, _isr.sales_mobile_index)
+    rep["rereads"] = {s["instance_key"]: s.get("reread") for s in sources if s.get("read_ok", True)}
+    return rep
+
+
+def _intake_report_links(client, org_id, links=""):
+    """`report_links` on GET /onboarding/intake/state: the cached matrix (with `stale` when the
+    instances changed since), recomputed on `links=all`; `links=<a>|<b>` adds that pair's detail.
+    Degrades honestly without mig 1007 (no run → nothing to link)."""
+    from app.modules.commcalc import report_links as _rl
+    want = str(links or "").strip()
+    out = {"available": False, "computed": False, "cached": False, "stale": None, "computed_at": None,
+           "matrix": None, "detail": None, "fields": [{"field": f["field"], "label": f["label"]} for f in _rl.LINK_FIELDS],
+           "how": "?links=all recomputes from the landed rows; ?links=<a>|<b> adds that pair's detail", "note": None}
+    if not _intake_state_ready(client, org_id):
+        return {**out, "note": f"report links need the intake's state (migration {_INTAKE_STATE_MIGRATION})"}
+    run = _intake_run(client, org_id)
+    if not run:
+        return {**out, "available": True, "note": _rl.NOTE_NO_REPORTS}
+    rows = _intake_stage_rows(client, org_id, run.get("id"))
+    fp = _rl.fingerprint(rows)
+    cache = _intake_links_cache(client, org_id, run.get("id"))
+    cached = (cache or {}).get("payload") or {}
+    rep = None
+    if want in ("all", "recompute"):
+        rep = _intake_report_links_compute(client, org_id, rows)
+        computed_at = _intake.now_iso()
+        out["cached"] = _intake_links_cache_put(client, org_id, run.get("id"), {"report": rep, "fingerprint": fp, "computed_at": computed_at})
+        out.update({"computed": True, "computed_at": computed_at, "stale": False})
+    elif cached.get("report"):
+        rep = cached["report"]
+        out.update({"computed": True, "cached": True, "computed_at": cached.get("computed_at"),
+                    "stale": cached.get("fingerprint") != fp})
+        if want and "|" in want and out["stale"]:
+            rep = _intake_report_links_compute(client, org_id, rows)
+            computed_at = _intake.now_iso()
+            _intake_links_cache_put(client, org_id, run.get("id"), {"report": rep, "fingerprint": fp, "computed_at": computed_at})
+            out.update({"cached": False, "computed_at": computed_at, "stale": False})
+    elif want and "|" in want:
+        rep = _intake_report_links_compute(client, org_id, rows)
+        computed_at = _intake.now_iso()
+        out["cached"] = _intake_links_cache_put(client, org_id, run.get("id"), {"report": rep, "fingerprint": fp, "computed_at": computed_at})
+        out.update({"computed": True, "computed_at": computed_at, "stale": False})
+    out["available"] = True
+    if rep is None:
+        return {**out, "note": "not computed yet — open Stage 4 (or GET ?links=all)"}
+    out["matrix"] = _rl.matrix(rep)
+    out["note"] = rep.get("note")
+    out["notes"] = {s["instance_key"]: _rl.linked_note(s) for s in rep.get("sources") or []}
+    out["rereads"] = rep.get("rereads")
+    if want and "|" in want:
+        a, b = want.split("|", 1)
+        out["detail"] = _rl.detail(rep, a.strip(), b.strip())
+        if out["detail"] is None:
+            out["detail_note"] = f"no pair {a.strip()} × {b.strip()} in this run"
+    return out
 
 
 def _intake_land(client, org_id, kind, ctx, filename, who=None):

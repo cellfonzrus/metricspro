@@ -205,6 +205,54 @@ def sales_mobile_index(sale_rows, key_of, key_field="serial_1", mobile_field="md
     return out
 
 
+def line_pairings(rows, key_of, sale_rows=None, serial_field="serial", mobile_field="mdn", id_field="trans_id",
+                  sale_key_field="serial_1", sale_mobile_field="mdn", mobile_index=None):
+    """THE ONE device-pairing rule, per LINE (Stage D, owner 2026-09-20 — "link the different reports
+    automatically with each other with common columns"): pair every line of a report to a device key
+    by its own serial / IMEI (`PAIR_DEVICE_KEY`), else THROUGH a sale line that carries its mobile
+    number (`PAIR_MOBILE_VIA_SALES`, via 'same line' / 'same transaction' — `sales_mobile_index`), else
+    say why it cannot be paired (`UNPAIR_*`; an ambiguous number lists its candidates). Nothing is
+    guessed. `activation_index` (the inventory auto-check) and `report_links` (the Stage-4 report
+    links) both fold THIS list — a second copy of the rule would pair what this one refuses.
+
+    Returns one dict per input line, in input order:
+      {"line": <trans id / activation# / row n>, "key": device_key | None, "pairing": PAIR_* | None,
+       "via": 'same line' | 'same transaction' | None, "mobile": mobile_key | None, "serial": str | None,
+       "reason": UNPAIR_* | None, "candidates": [device keys] (ambiguous only)}
+    `mobile_index` = a prebuilt `sales_mobile_index` (else built lazily from `sale_rows` on first need)."""
+    out = []
+    mob_idx = mobile_index
+    for i, r in enumerate(rows or []):
+        r = r or {}
+        line = str(r.get(id_field) or r.get("activation_no") or f"row {i + 1}").strip()
+        serial = r.get(serial_field)
+        mob = mobile_key(r.get(mobile_field))
+        serial_txt = str(serial or "").strip() or None
+        k = key_of(serial)
+        if k:
+            out.append({"line": line, "key": k, "pairing": PAIR_DEVICE_KEY, "via": None, "mobile": mob,
+                        "serial": serial_txt, "reason": None})
+            continue
+        if not mob:
+            out.append({"line": line, "key": None, "pairing": None, "via": None, "mobile": None,
+                        "serial": serial_txt, "reason": UNPAIR_NO_KEY})
+            continue
+        if mob_idx is None:
+            mob_idx = sales_mobile_index(sale_rows, key_of, sale_key_field, sale_mobile_field)
+        keys = mob_idx.get(mob) or {}
+        if len(keys) == 1:
+            k, via = next(iter(keys.items()))
+            out.append({"line": line, "key": k, "pairing": PAIR_MOBILE_VIA_SALES, "via": via, "mobile": mob,
+                        "serial": None, "reason": None})
+        elif not keys:
+            out.append({"line": line, "key": None, "pairing": None, "via": None, "mobile": mob,
+                        "serial": None, "reason": UNPAIR_NO_SALE})
+        else:
+            out.append({"line": line, "key": None, "pairing": None, "via": None, "mobile": mob,
+                        "serial": None, "reason": UNPAIR_AMBIGUOUS, "candidates": sorted(keys)})
+    return out
+
+
 def activation_index(activation_rows, key_of, sale_rows=None, serial_field="serial", mobile_field="mdn",
                      id_field="trans_id", sale_key_field="serial_1", sale_mobile_field="mdn"):
     """Pair every activation line to a device key — by its own serial, else through a sale line that
@@ -212,45 +260,37 @@ def activation_index(activation_rows, key_of, sale_rows=None, serial_field="seri
       {"by_key": {device_key: evidence}, "unpairable": [...], "rows": n,
        "paired_by_key": n, "paired_by_mobile": n, "carries_device_key": bool, "carries_mobile": bool}
     An evidence dict is {"source": "activation", "line": <trans id / activation# / row>, "pairing": ...,
-    "mobile": ..., "date": ...}. First line per device wins (deterministic)."""
+    "mobile": ..., "date": ...}. First line per device wins (deterministic).
+
+    A FOLD of `line_pairings` (the one rule) — this function adds only the per-device evidence shape
+    the inventory reconciliation reads; it decides nothing about pairing itself."""
     by_key, unpairable = {}, []
     n_key = n_mob = 0
     has_serial = has_mobile = False
-    mob_idx = None
-    for i, r in enumerate(activation_rows or []):
+    rows = list(activation_rows or [])
+    pairs = line_pairings(rows, key_of, sale_rows, serial_field, mobile_field, id_field, sale_key_field, sale_mobile_field)
+    for r, p in zip(rows, pairs):
         r = r or {}
-        line = str(r.get(id_field) or r.get("activation_no") or f"row {i + 1}").strip()
-        serial = r.get(serial_field)
-        mob = mobile_key(r.get(mobile_field))
-        if str(serial or "").strip():
+        if p["serial"]:
             has_serial = True
-        if mob:
+        if p["mobile"]:
             has_mobile = True
-        k = key_of(serial)
-        if k:
+        if p["pairing"] == PAIR_DEVICE_KEY:
             n_key += 1
-            by_key.setdefault(k, {"source": SOURCE_ACTIVATION, "line": line, "pairing": PAIR_DEVICE_KEY,
-                                  "mobile": mob, "date": str(r.get("trans_date") or "")[:10] or None,
-                                  "bucket": r.get("bucket")})
-            continue
-        if not mob:
-            unpairable.append({"line": line, "reason": UNPAIR_NO_KEY, "mobile": None, "serial": str(serial or "").strip() or None})
-            continue
-        if mob_idx is None:
-            mob_idx = sales_mobile_index(sale_rows, key_of, sale_key_field, sale_mobile_field)
-        keys = mob_idx.get(mob) or {}
-        if len(keys) == 1:
+            by_key.setdefault(p["key"], {"source": SOURCE_ACTIVATION, "line": p["line"], "pairing": PAIR_DEVICE_KEY,
+                                         "mobile": p["mobile"], "date": str(r.get("trans_date") or "")[:10] or None,
+                                         "bucket": r.get("bucket")})
+        elif p["pairing"] == PAIR_MOBILE_VIA_SALES:
             n_mob += 1
-            k, via = next(iter(keys.items()))
-            by_key.setdefault(k, {"source": SOURCE_ACTIVATION, "line": line, "pairing": PAIR_MOBILE_VIA_SALES,
-                                  "via": via, "mobile": mob, "date": str(r.get("trans_date") or "")[:10] or None,
-                                  "bucket": r.get("bucket")})
-        elif not keys:
-            unpairable.append({"line": line, "reason": UNPAIR_NO_SALE, "mobile": mob, "serial": None})
+            by_key.setdefault(p["key"], {"source": SOURCE_ACTIVATION, "line": p["line"], "pairing": PAIR_MOBILE_VIA_SALES,
+                                         "via": p["via"], "mobile": p["mobile"], "date": str(r.get("trans_date") or "")[:10] or None,
+                                         "bucket": r.get("bucket")})
         else:
-            unpairable.append({"line": line, "reason": UNPAIR_AMBIGUOUS, "mobile": mob, "serial": None,
-                               "candidates": sorted(keys)})
-    return {"by_key": by_key, "unpairable": unpairable, "rows": len(activation_rows or []),
+            u = {"line": p["line"], "reason": p["reason"], "mobile": p["mobile"], "serial": p["serial"]}
+            if p.get("candidates") is not None:
+                u["candidates"] = p["candidates"]
+            unpairable.append(u)
+    return {"by_key": by_key, "unpairable": unpairable, "rows": len(rows),
             "paired_by_key": n_key, "paired_by_mobile": n_mob,
             "carries_device_key": has_serial, "carries_mobile": has_mobile}
 
