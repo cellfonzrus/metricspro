@@ -3830,7 +3830,13 @@ def column_mapping_targets(report_key: str = "", org_id: str = ORG_ID):
     fields = commission_catalog.merged_target_fields(client, org_id, report_key) if report_key else []
     return {"report_keys": column_mapping.known_report_keys(client, org_id),
             "transforms": column_mapping.TRANSFORM_KEYS,
-            "fields": fields}
+            "fields": fields,
+            # An AMOUNT column also declares WHICH SIGN IS MONEY EARNED (mig 1006). The wizard shows
+            # this on number fields only; a blank declaration reads as the first option.
+            "sign_conventions": [{"value": v, "label": commission_ledger.SIGN_CONVENTION_LABELS[v]}
+                                 for v in commission_ledger.SIGN_CONVENTIONS],
+            "sign_convention_default": commission_ledger.SIGN_CONVENTION_DEFAULT,
+            "sign_convention_field_transform": "number"}
 
 
 @router.get("/column-mapping")
@@ -3930,6 +3936,9 @@ class ColumnMappingIn(LaxModel):
     carrier_id: Any = None
     is_active: Any = True
     priority: Any = None
+    # WHICH SIGN IS MONEY EARNED, for an AMOUNT column (mig 1006). Absent/'' = not declared = the
+    # long-standing negative-is-payout reading, so every existing mapping is unchanged.
+    sign_convention: Any = None
     id: Any = None
 
 
@@ -3950,6 +3959,21 @@ def upsert_column_mapping(body: ColumnMappingIn, org_id: str = ORG_ID):
            "priority": int(body.priority or 100),
            "updated_at": column_mapping.now_iso()}
     client = sb()
+    # THE AMOUNT COLUMN'S SIGN CONVENTION (mig 1006, owner directive 2026-09-20). Declared here,
+    # beside the header and the transform, because it is a fact about THIS FILE's amount column —
+    # not about a carrier, a template or a category rule. Only written when the column exists, so
+    # this endpoint still saves normally pre-1006; only offered on a NUMBER field, because the
+    # question is meaningless for a text or date column.
+    if "sign_convention" in body.model_fields_set:
+        sc = str(body.sign_convention or "").strip().lower()
+        if sc and sc not in commission_ledger.SIGN_CONVENTIONS:
+            raise HTTPException(400, "sign_convention must be blank or one of "
+                                     + "|".join(commission_ledger.SIGN_CONVENTIONS))
+        if sc and transform != "number":
+            raise HTTPException(400, "sign_convention applies to an amount column — set the "
+                                     "transform to 'number' first")
+        if "sign_convention" in _known_columns(client, "column_mapping", ["sign_convention"]):
+            row["sign_convention"] = sc or None
     if body.id:
         client.schema("commcalc").table("column_mapping").update(row).eq("id", body.id).execute()
         return {"ok": True, "id": body.id}
@@ -4567,6 +4591,39 @@ def _ledger_source_rules(client, org_id, carrier_id=""):
             for d in column_mapping.default_mapping("commission_ledger")]
 
 
+def _ledger_convention(hdr_rules):
+    """(convention, meta) — WHICH SIGN IS MONEY EARNED for this tenant's file, read off the MAPPING it
+    already loaded: the `raw_amount` rule's `sign_convention` (mig 1006), per (org, report, carrier),
+    declared in the mapping wizard beside the header and the transform. No second lookup, no template
+    constant, no carrier branch. An undeclared mapping (or a pre-1006 database, where the column is
+    simply absent from the row) resolves to the long-standing negative-is-payout convention, so every
+    shipped feed is unchanged."""
+    return commission_ledger.convention_from_mapping(hdr_rules)
+
+
+def _ledger_convention_for(client, org_id, carrier_id=""):
+    """Same thing for a READ endpoint that has not loaded the mapping itself. Never raises: an
+    unreadable mapping table resolves to the default convention rather than 500-ing a report."""
+    try:
+        return _ledger_convention(_ledger_source_rules(client, org_id, carrier_id))
+    except Exception:
+        return commission_ledger.convention_from_mapping([])
+
+
+def _ledger_footer_drop(rows, client, org_id):
+    """Drop a statement's own GRAND-TOTAL row from a set of MAPPED ledger source rows. Returns
+    (kept, dropped). REUSES the mig-1004 feed-shape rule (column_mapping.drop_footer_rows ->
+    feed_shape.is_footer_row) — no second footer derivation — with the ledger's IDENTITY fields, i.e.
+    its required list minus the amount (column_mapping.identity_fields). A row is a total only when
+    EVERY identity field is blank, so it cannot fire on a real line that merely lacks one of them.
+    Measured on the statement that exposed it: 522 lines in, one of them the file's own net total
+    (86,970.34 = the other 521 lines' 94,366.61 earned less 7,396.27 charged back), which the ledger
+    counted a second time. The count is RETURNED, never swallowed — callers report it."""
+    return column_mapping.drop_footer_rows(
+        rows, "commission_ledger", None, client, org_id,
+        fields=column_mapping.identity_fields("commission_ledger", client, org_id))
+
+
 def _ledger_origin_ready(client, org_id):
     """True when migration 251 is applied (commission_ledger carries the `origin` column). Probed with a
     1-row read; never raises. Not cached — the process-wide singleton client makes object-keyed caches
@@ -4621,7 +4678,8 @@ async def commission_ledger_import(
         raise HTTPException(400, f"Could not read file: {e}")
     client = sb()
     hdr_rules = _ledger_source_rules(client, org_id, carrier_id)
-    cat_rules = commission_ledger.load_rules(client, org_id, source_report)
+    cat_rules, rules_source = commission_ledger.load_rules_meta(client, org_id, source_report)
+    conv, conv_meta = _ledger_convention(hdr_rules)
     # MA PRODUCT-CLASS WIRING (mig 265, default 'legacy'): in legacy mode this returns the rules
     # UNTOUCHED, so classification is byte-identical. In 'class' mode it attaches the tenant's CONFIRMED
     # product-class index to any product_class rule.
@@ -4629,12 +4687,14 @@ async def commission_ledger_import(
     base = {"org_id": org_id, "source_report": source_report}
     if period:
         base["period"] = period
-    rows = []
+    mapped = []
     for r in df.to_dict("records"):
         src = column_mapping.apply_mapping(r, hdr_rules, {})
         if not (src.get("product_name") or src.get("raw_amount") or src.get("order_type")):
             continue
-        rows.append(commission_ledger.build_row(src, base, cat_rules))
+        mapped.append(src)
+    mapped, footer_rows = _ledger_footer_drop(mapped, client, org_id)
+    rows = [commission_ledger.build_row(src, base, cat_rules, conv) for src in mapped]
     if not rows:
         raise HTTPException(400, "No usable rows — check the column mapping for this file.")
     # GUARD: only clear once we have rows; scope the wipe to this source_report + period — and, once
@@ -4667,8 +4727,10 @@ async def commission_ledger_import(
                         upload_type=source_report, period=period,
                         result={"saved": saved, "note": "classified into the canonical ledger",
                                 "_trace": {"rows_in": len(rows), "target_table": "commission_ledger"}})
-    summary = commission_ledger.summarize(rows)
-    return {"saved": saved, "source_report": source_report, "period": period, "summary": summary}
+    summary = commission_ledger.summarize(rows, rules=cat_rules, conv=conv)
+    return {"saved": saved, "source_report": source_report, "period": period, "summary": summary,
+            "rules_source": rules_source, "convention": conv, "convention_meta": conv_meta,
+            "footer_rows_dropped": footer_rows}
 
 
 @router.post("/commission-ledger/analyze")
@@ -4692,14 +4754,18 @@ async def commission_ledger_analyze(
     saved = column_mapping.load_rules(client, org_id, "commission_ledger", carrier_id or None)
     suggestions = column_mapping.suggest(headers, "commission_ledger", saved, client, org_id)
     hdr_rules = _ledger_source_rules(client, org_id, carrier_id)
-    cat_rules = commission_ledger.load_rules(client, org_id, source_report)
+    cat_rules, rules_source = commission_ledger.load_rules_meta(client, org_id, source_report)
+    conv, conv_meta = _ledger_convention(hdr_rules)
     cat_rules, class_meta = ma_class_wiring.ledger_rules_with_class(client, org_id, source_report, cat_rules)
-    rows = []
+    mapped = []
     for r in df.to_dict("records"):
         src = column_mapping.apply_mapping(r, hdr_rules, {})
         if not (src.get("product_name") or src.get("raw_amount") or src.get("order_type")):
             continue
-        rows.append(commission_ledger.build_row(src, {"org_id": org_id, "source_report": source_report}, cat_rules))
+        mapped.append(src)
+    mapped, footer_rows = _ledger_footer_drop(mapped, client, org_id)
+    rows = [commission_ledger.build_row(src, {"org_id": org_id, "source_report": source_report},
+                                        cat_rules, conv) for src in mapped]
     agg = {}
     for r in rows:
         key = (r.get("order_type") or "", r.get("product_name") or "")
@@ -4711,8 +4777,10 @@ async def commission_ledger_analyze(
     amount_src = next((s["suggested_source"] for s in suggestions if s["target_field"] == "raw_amount"), "")
     return {"headers": headers, "row_count": int(len(df)), "usable_rows": len(rows),
             "suggestions": suggestions, "amount_source": amount_src,
-            "summary": commission_ledger.summarize(rows), "observed": observed,
-            "class_wiring": class_meta,
+            "summary": commission_ledger.summarize(rows, rules=cat_rules, conv=conv),
+            "observed": observed, "class_wiring": class_meta,
+            "rules_source": rules_source, "convention": conv, "convention_meta": conv_meta,
+            "footer_rows_dropped": footer_rows,
             "categories": commission_ledger.CATEGORIES, "category_labels": commission_ledger.CATEGORY_LABELS}
 
 
@@ -4753,11 +4821,13 @@ def commission_ledger_summary(source_report: str = "ma_daily_tx", period: str = 
     # it classifies; without them the leg still derives from each line's payment month / label.
     _client = sb()
     try:
-        _rules = commission_ledger.load_rules(_client, org_id, source_report)
+        _rules, _rules_source = commission_ledger.load_rules_meta(_client, org_id, source_report)
     except Exception:
-        _rules = None
+        _rules, _rules_source = None, None
+    _conv, _conv_meta = _ledger_convention_for(_client, org_id)
     return {"source_report": source_report, "period": period, "origin": origin or None,
-            **commission_ledger.summarize(rows, rules=_rules,
+            "rules_source": _rules_source, "convention": _conv, "convention_meta": _conv_meta,
+            **commission_ledger.summarize(rows, rules=_rules, conv=_conv,
                                           legcls=_org_leg_classifier(_client, org_id))}
 
 
@@ -4811,15 +4881,20 @@ def commission_ledger_observed_types(source_report: str = "ma_daily_tx", period:
     # category gets, so an un-attributed label is visible instead of silently sitting in Unsplit.
     try:
         _rules = commission_ledger.load_rules(client, org_id, source_report)
+        _conv = _ledger_convention_for(client, org_id)[0]
     except Exception:
-        _rules = None
+        _rules, _conv = None, commission_ledger.DEFAULT_CONVENTION
     _lc = _org_leg_classifier(client, org_id)
+    # The probe amount is SIGNED BY THE TEMPLATE'S OWN CONVENTION, so "this label is a payout" points
+    # the way that template says money is earned. Under the default convention that is -1/+1 exactly
+    # as it has always been.
+    _sign = _conv.get("payout_sign") or commission_ledger.PAYOUT_SIGN_NEGATIVE
     for a in agg.values():
         b, lm, why = commission_ledger.leg_of(
             {"order_type": a["order_type"], "product_name": a["product_name"],
-             "raw_amount": -1 if a.get("is_payout") else 1,
+             "raw_amount": _sign * (1 if a.get("is_payout") else -1),
              "payment_month": commission_ledger.parse_payment_month(a["product_name"])},
-            _rules, _lc)
+            _rules, _lc, _conv)
         a["leg_bucket"], a["leg_month"], a["leg_why"] = b, lm, why
     out = sorted(agg.values(), key=lambda x: (-x["payout_total"], x["product_name"]))
     return {"types": out, "count": len(out),
@@ -5040,7 +5115,8 @@ def _ledger_ma_derive(client, org_id, source_report, period, carrier_id="", repo
                      for d in column_mapping.default_mapping("commission_ledger")]
         degraded.append(f"the saved ledger column mapping could not be read ({str(e)[:120]}) — the "
                         f"built-in default layout was used")
-    cat_rules = commission_ledger.load_rules(client, org_id, source_report)
+    cat_rules, rules_source = commission_ledger.load_rules_meta(client, org_id, source_report)
+    conv, conv_meta = _ledger_convention(hdr_rules)
     cat_rules, class_meta = ma_class_wiring.ledger_rules_with_class(client, org_id, source_report, cat_rules)
     field_defs = column_mapping.target_fields("commission_ledger", client, org_id)
     # the tenant's saved per-(carrier, report) MA column-map overrides (mig 212), keyed by report_key
@@ -5079,7 +5155,7 @@ def _ledger_ma_derive(client, org_id, source_report, period, carrier_id="", repo
         rows, diag = ledger_ma_sync.derive(
             raw, kind=sdef["kind"], resolved=resolved, hdr_rules=hdr_rules, cat_rules=cat_rules,
             base=base, components=comps, ceiling=ceiling, source_table=sdef["source_table"],
-            synced_at=synced_at, report_key=rk)
+            synced_at=synced_at, report_key=rk, conv=conv)
         all_rows.extend(rows)
         # On a COMPONENT source the amount and the product label are SYNTHESIZED per component (each
         # payout column becomes its own line, labelled with the report's own header) — so their absence
@@ -5105,7 +5181,8 @@ def _ledger_ma_derive(client, org_id, source_report, period, carrier_id="", repo
             warnings.append(f"{sdef['source_table']}: ledger field '{u['target_field']}' "
                             f"({u['label']}) has no column here — header '{u['header']}' is absent, so the "
                             f"field is left empty. Add it as an alias on Target Fields to fill it.")
-    return all_rows, sources, warnings
+    return all_rows, sources, warnings, {"rules_source": rules_source, "convention": conv,
+                                         "convention_meta": conv_meta, "cat_rules": cat_rules}
 
 
 def _ledger_observed(rows):
@@ -5126,10 +5203,11 @@ def _ledger_ma_payload(client, org_id, source_report, period, carrier_id="", rep
     """The shared preview payload — what a refresh WOULD write, plus every honesty surface. Read-only.
     Returns (payload, rows): the preview endpoint returns the payload and DROPS the rows; the refresh
     endpoint inserts them. One derivation serves both, so the preview and the write can never disagree."""
-    rows, sources, warnings = _ledger_ma_derive(client, org_id, source_report, period, carrier_id, report_key)
+    rows, sources, warnings, cmeta = _ledger_ma_derive(client, org_id, source_report, period,
+                                                       carrier_id, report_key)
     existing, ready = _ledger_existing_by_origin(client, org_id, source_report, period)
     observed = _ledger_observed(rows)
-    summary = commission_ledger.summarize(rows)
+    summary = commission_ledger.summarize(rows, rules=cmeta["cat_rules"], conv=cmeta["convention"])
     guard = ledger_ma_sync.merge_diags([s["diag"] for s in sources])
     note = ledger_ma_sync.overlap_note(existing, len(rows))
     payload = {
@@ -5140,6 +5218,8 @@ def _ledger_ma_payload(client, org_id, source_report, period, carrier_id="", rep
                          "origin": ledger_ma_sync.ORIGIN_SYNC},
         "sources": sources, "summary": summary, "observed": observed,
         "unmapped": [o for o in observed if o.get("category") == "other"],
+        "rules_source": cmeta["rules_source"], "convention": cmeta["convention"],
+        "convention_meta": cmeta["convention_meta"],
         "guard": guard, "existing_by_origin": list(existing.values()), "overlap_note": note,
         "warnings": warnings,
         # which classification mode this derivation ran in (mig 265; 'legacy' == keyword rules only)
@@ -5306,10 +5386,25 @@ def get_commission_category_map(source_report: str = "ma_daily_tx", org_id: str 
         ready = True
     except Exception:
         rows, ready = [], False
+    # WHICH DEFAULTS, IF ANY, THIS TEMPLATE HAS (owner bug report 2026-09-20). DEFAULT_RULES mirror the
+    # 071 seed, which seeds ONE rule-set — so they are shown for THAT template and no other. Returning
+    # them for every template is how a tenant-created rule-set with zero rows displayed, and silently
+    # classified with, another template's patterns.
+    defaults = commission_ledger.default_rules_for(source_report)
+    conv, conv_meta = _ledger_convention_for(client, org_id)
     return {"source_report": source_report, "rules": rows, "ready": ready,
-            "using_defaults": not rows,
-            "default_rules": [{"match_field": mf, "match_op": op, "pattern": pat, "category": cat,
-                               "sign_rule": sr, "priority": pr} for (mf, op, pat, cat, sr, pr) in commission_ledger.DEFAULT_RULES],
+            "using_defaults": bool(not rows and defaults),
+            "rules_source": (commission_ledger.RULES_TENANT if rows else
+                             (commission_ledger.RULES_BUILTIN if defaults else commission_ledger.RULES_NONE)),
+            "unclassified_note": (None if (rows or defaults) else
+                                  "This report has no classification rules yet, and it does not inherit "
+                                  "another report's. Every line will show as unmapped ('other') until "
+                                  "rules are added here — which is honest: borrowing another carrier's "
+                                  "patterns would report a confident wrong answer."),
+            # WHICH SIGN IS MONEY EARNED for this tenant's file — declared on the amount column in the
+            # mapping wizard (mig 1006), shown here because it decides what these rules DO with a line.
+            "convention": conv, "convention_meta": conv_meta,
+            "default_rules": defaults,
             "categories": commission_ledger.CATEGORIES, "category_labels": commission_ledger.CATEGORY_LABELS,
             "match_fields": commission_ledger.MATCH_FIELDS, "match_ops": commission_ledger.MATCH_OPS,
             "sign_rules": commission_ledger.SIGN_RULES,
@@ -5988,6 +6083,9 @@ def ma_class_wiring_ledger_delta(source_report: str = "ma_daily_tx", period: str
         rules = commission_ledger.load_rules(client, org_id, source_report)
     except Exception:
         rules = []
+    # BOTH sides of the delta run under the SAME convention, so the panel shows the class move and
+    # nothing else — the sign convention is not part of this comparison.
+    conv = _ledger_convention_for(client, org_id)[0]
     idx, idx_meta = ma_class_wiring.load_class_index(client, org_id, source_report)
     legacy_rules = [dict(r) for r in rules]
     for r in legacy_rules:
@@ -6001,8 +6099,8 @@ def ma_class_wiring_ledger_delta(source_report: str = "ma_daily_tx", period: str
         src = {"order_type": r.get("order_type"), "product_name": r.get("product_name"),
                "raw_amount": r.get("raw_amount")}
         base = {"org_id": org_id, "source_report": source_report, "period": p}
-        o = commission_ledger.build_row(src, base, legacy_rules)
-        n = commission_ledger.build_row(src, base, class_rules)
+        o = commission_ledger.build_row(src, base, legacy_rules, conv)
+        n = commission_ledger.build_row(src, base, class_rules, conv)
         old_all.append(o)
         new_all.append(n)
         m = by_month.setdefault(p, {"period": p, "lines": 0, "old": [], "new": [], "moved": 0,
@@ -6029,16 +6127,16 @@ def ma_class_wiring_ledger_delta(source_report: str = "ma_daily_tx", period: str
         m = by_month[p]
         months.append({"period": p, "lines": m["lines"], "moved_lines": m["moved"],
                        "moved_payout": m["moved_payout"],
-                       "legacy": commission_ledger.summarize(m["old"]),
-                       "class": commission_ledger.summarize(m["new"])})
+                       "legacy": commission_ledger.summarize(m["old"], conv=conv),
+                       "class": commission_ledger.summarize(m["new"], conv=conv)})
     return {
         "source_report": source_report, "period": period or None, "read": meta,
         "mode": ma_class_wiring.load_mode(client, org_id, ma_class_wiring.CONSUMER_LEDGER)[0],
         "class_rules": [r for r in rules if (r or {}).get("match_op") == ma_class_wiring.MATCH_OP],
         "class_status": idx_meta, "classified_names": len(idx),
         "totals": {"lines": len(rows),
-                   "legacy": commission_ledger.summarize(old_all),
-                   "class": commission_ledger.summarize(new_all),
+                   "legacy": commission_ledger.summarize(old_all, conv=conv),
+                   "class": commission_ledger.summarize(new_all, conv=conv),
                    "moved_lines": sum(m["moved_lines"] for m in months),
                    "moved_payout": round(sum(m["moved_payout"] for m in months), 2)},
         "by_month": months,

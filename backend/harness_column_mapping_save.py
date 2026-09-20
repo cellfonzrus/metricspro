@@ -49,7 +49,12 @@ def check(name, ok, detail=""):
 # ── A. THE DEFECT IS GONE FROM THE SOURCE ───────────────────────────────────────────────────────
 SRC = open(os.path.join(HERE, "app/modules/commcalc/router.py"), encoding="utf-8").read()
 _i = SRC.index("def upsert_column_mapping(")
-FN = SRC[_i:_i + 3000]
+# THE WHOLE FUNCTION, to the next top-level definition — not a fixed character window. A window
+# silently truncates the moment the function grows (it did, when the amount column's sign convention
+# was added on 2026-09-20), and a guard that stops reading half way through reports a defect that is
+# not there while being blind to one that is.
+_j = re.search(r"(?m)^(@router\.|def |class )", SRC[_i + 10:])
+FN = SRC[_i:_i + 10 + _j.start()] if _j else SRC[_i:]
 # Strip comments FIRST: the fix documents the broken call by name, and a guard that grepped raw
 # source would fail on its own explanation — and, far worse, would PASS on a defect merely commented
 # out. Same lesson as harness_wizard_feedback_guard and harness_screen_link_guard §G.
