@@ -174,7 +174,8 @@ def classify_sample_file(content: bytes, filename: str, leg: str = "auto"):
     import pandas as pd
     import io
     try:
-        df = (pd.read_excel(io.BytesIO(content)) if fn.lower().endswith((".xlsx", ".xls"))
+        from app.modules.commcalc.router import _xlsx_read   # the ONE tolerant workbook reader (2026-09-20)
+        df = (_xlsx_read(content, fn)[0] if fn.lower().endswith((".xlsx", ".xls"))
               else pd.read_csv(io.BytesIO(content)))
     except Exception as e:
         raise ValueError(f"could not read sample file: {e}")

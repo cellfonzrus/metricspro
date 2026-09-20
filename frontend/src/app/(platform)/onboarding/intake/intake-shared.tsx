@@ -23,9 +23,12 @@ export type VerifyRow = {
   our_total: number | null; file_total: number | null; difference: number | null; match: boolean | null
   rows_landed: number | null; status: string; red: boolean; verified_by: string | null; verified_at: string | null
   blocking_reason: string | null; basis: string | null; fix_step: string
+  // Stage C: the cross-check the commit ran (bill-pay lines extracted from a sales export; units activated but still on hand)
+  note?: string | null
 }
 export type Runbook = {
   links: { label: string; href: string; screen: string }[]
+  reports?: { label: string; href: string; screen: string; why: string }[]
   monthly: { instance_key: string; kind: string; label: string; filename_example: string | null; lands_in: string; mapping_saved: boolean; status: string }[]
   note: string
 }
@@ -35,8 +38,17 @@ export type Rail = {
   verify_table: VerifyRow[]; runbook: Runbook
   sign_off: { signed: boolean; by: string | null; at: string | null; on_behalf: boolean; all_verified: boolean }
 }
-export type Layout = { report_key: string; label: string; default: boolean }
-export type SourceKind = { value: string; label: string; built: boolean; target_table: string | null; layouts: Layout[] }
+export type Layout = { report_key: string; label: string; default: boolean; target_table?: string | null }
+// `matrix`: the file is read by its destination's own parser (an X-report tender matrix, a settlement export) — no column step.
+export type SourceKind = { value: string; label: string; built: boolean; target_table: string | null; layouts: Layout[]; matrix?: boolean; hint?: string | null }
+// Stage C — what the 2.0 "other reports" picker needs: the portal registry + this org's processor sources and the two
+// settlement roles (config rows, never named here), and which processor bill-pay feed this org's coverage recon reads.
+export type MerchantPortals = {
+  catalog: { key: string; label: string; settlement_role: string }[]
+  sources: { key: string; label: string; settlement_role: string; enabled: boolean }[]
+  roles: string[]; role_titles: Record<string, string>
+}
+export type BillpayFeed = { processor: string | null; default_layout: string; source: string; note: string | null }
 // THE BUCKET REGISTRY (commcalc.commission_bucket, mig 1009) — one row per bucket per org; `kind` decides
 // the sign a line books with. The page renders whatever the backend sends: no bucket key is named here.
 export type BucketRow = {
@@ -49,6 +61,7 @@ export type StateResp = {
   pos_sources: { pos_key: string; label: string }[]; stores: { store_code: string; address: string | null; market: string | null }[]
   employees: string[]; company: { companies: number; stores: number; carriers: number }
   source_kinds: SourceKind[]; inventory_none_key: string; statement_type_default: string
+  other_kinds?: string[]; merchant_portals?: MerchantPortals; billpay_feed?: BillpayFeed
   sign_question: string; buckets: string[]; bucket_labels: Record<string, string>; save?: { saved: boolean; reason?: string }
   bucket_rows?: BucketRow[]; bucket_meta?: BucketMeta
 }
@@ -68,6 +81,7 @@ export type Detect = {
 export type StoreRow = {
   value: string; count: number; sum_raw: number; resolved_code: string | null; how: string | null
   action: string | null; decision_code: string | null; reason: string | null; status: string; lands_as: string | null; needs?: string
+  label?: string | null      // a settlement export's DBA / store label beside its merchant id
 }
 export type RepRow = { value: string; count: number; sum_raw: number; resolved_name: string | null; how: string | null; action: string | null; decision_name: string | null; status: string }
 export type Tie = { our_total: number; file_total: number | null; file_total_source: string | null; difference: number | null; match: boolean | null }
@@ -260,9 +274,12 @@ export function ColumnsTable({ columns, headers, columnMap, setColumnMap }: {
 // rule (alias / address / code), and — for a string it does not know — the three answers: assign it to
 // one of your stores, create the store, or mark it not yours with a reason. Zero unresolved is the exit
 // gate (design §5.7): an unresolved string never lands as "Default".
-export function StoreResolver({ stores, reps, storeList, employees, decisions, setDecisions, allowCompanyLevel }: {
+export function StoreResolver({ stores, reps, storeList, employees, decisions, setDecisions, allowCompanyLevel, identityKind }: {
   stores: StoreRow[]; reps: RepRow[]; storeList: { store_code: string; address: string | null }[]; employees: string[]
   decisions: IdentityDecisions; setDecisions: (f: (d: IdentityDecisions) => IdentityDecisions) => void; allowCompanyLevel?: boolean
+  // 'store' (a store string the address resolver knows) or 'merchant_id' (a processor's merchant / terminal / account id,
+  // resolved and WRITTEN through the mig-902 per-store merchant-id map — Stage C)
+  identityKind?: 'store' | 'merchant_id'
 }) {
   const setStore = (raw: string, patch: Partial<StoreDecision> | null) => setDecisions(d => {
     const s = { ...(d.store || {}) }
@@ -277,7 +294,8 @@ export function StoreResolver({ stores, reps, storeList, employees, decisions, s
   const unresolved = stores.filter(s => s.status !== 'resolved').length
   return (
     <div>
-      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Store strings in this file · {stores.length} distinct {unresolved ? <span style={{ color: '#ef4444' }}>· {unresolved} unresolved</span> : <span style={{ color: '#16a34a' }}>· all resolved</span>}</div>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>{identityKind === 'merchant_id' ? 'Merchant / account ids in this file' : 'Store strings in this file'} · {stores.length} distinct {unresolved ? <span style={{ color: '#ef4444' }}>· {unresolved} unresolved</span> : <span style={{ color: '#16a34a' }}>· all resolved</span>}</div>
+      {identityKind === 'merchant_id' && <div style={{ ...note, marginBottom: 6 }}>Each id is the processor&apos;s own name for one of your stores. An assignment is saved to the per-store merchant-id map every feed resolves through — the scheduled pull will use it too.</div>}
       {stores.length === 0 && <div style={note}>No store column is mapped, or every store cell is blank.</div>}
       <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse', marginBottom: 14 }}>
         <thead><tr style={{ color: 'var(--text2)' }}><th align="left">As written in the file</th><th align="right">Rows</th><th align="right">Σ</th><th align="left">Resolves to</th><th align="left">Your decision</th></tr></thead>
@@ -286,7 +304,7 @@ export function StoreResolver({ stores, reps, storeList, employees, decisions, s
           const act = d?.action || (s.resolved_code ? 'auto' : '')
           return (
             <tr key={s.value} style={{ borderTop: '1px solid var(--border)', background: s.status !== 'resolved' ? 'rgba(239,68,68,.06)' : 'transparent' }}>
-              <td style={{ padding: '6px 4px', fontWeight: 600 }}>{s.value}</td>
+              <td style={{ padding: '6px 4px', fontWeight: 600 }}>{s.value}{s.label ? <span style={{ ...note, fontWeight: 400 }}> · {s.label}</span> : null}</td>
               <td style={mono}>{num(s.count)}</td><td style={mono}>{money(s.sum_raw)}</td>
               <td style={{ padding: '6px 4px' }}>{s.resolved_code ? <>{s.resolved_code} <span style={{ ...note, fontSize: 11 }}>by {s.how}</span></> : s.lands_as ? <>{s.lands_as} <span style={{ ...note, fontSize: 11 }}>(your decision)</span></> : s.action === 'not_ours' && s.reason ? <span style={note}>not yours — rows excluded</span> : s.action === 'company_level' ? <span style={note}>company-level</span> : <span style={{ color: '#ef4444' }}>unknown</span>}</td>
               <td style={{ padding: '6px 4px' }}>

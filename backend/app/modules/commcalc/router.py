@@ -28,6 +28,7 @@ from app.modules.commcalc import flag_store_resolver   # mig 285 — resolve a f
 from app.modules.commcalc import flag_persist          # mig 287 — ADDITIVE flag writes (DM review survives)
 from app.modules.commcalc.hotsheet_parser import parse_hotsheet
 from app.modules.commcalc import multisheet          # 2026-09-01 — continuation-worksheet stitching
+from app.modules.commcalc import xlsx_tolerant as _xlsx  # 2026-09-20 — an .xlsx whose string table is mis-cased / missing reads
 from app.modules.commcalc import activation_bucketing as _act_bucketing  # mig 313 — config-driven AD buckets
 from app.modules.commcalc.discrepancy_engine import run_discrepancy
 from app.modules.commcalc import targets_engine
@@ -76,7 +77,7 @@ from app.modules.commcalc import tile_layout as _tile_layout   # dashboard-build
 from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
-from uuid import uuid4 as _uuid4
+from uuid import uuid4 as _uuid4, uuid5 as _uuid5, NAMESPACE_URL as _UUID_NAMESPACE_URL
 # Plain names too: 45+ call sites across this router use bare datetime/timezone/timedelta (all the
 # classes — datetime.now/.fromisoformat, timezone.utc, timedelta(...)); without this they NameError
 # when their branch executes (most sat in swallowed try/except, so it went unnoticed).
@@ -305,7 +306,8 @@ def _read_excel_all_sheets(contents):
     sheet_names — summary/notes tabs with different columns are excluded, preserving the old
     behavior for them) and drops repeated header-echo rows (multisheet.is_header_echo). A
     single-sheet workbook returns byte-identically to the old path."""
-    book = pd.read_excel(io.BytesIO(contents), dtype=str, sheet_name=None)
+    book, _act = _xlsx_read(contents, "workbook", dtype=str, sheet_name=None)
+    _note_xlsx_repair("workbook", _act)
     frames = list(book.values())
     if not frames:
         return pd.DataFrame()
@@ -394,6 +396,42 @@ def _xr_tender_class(t) -> str:
     if set(re.split(r"[^a-z0-9]+", s)) & _XR_CARD_CODES:
         return "card"
     return "other"
+
+def _xreport_land_rows(client, org_id, xr, filename=None, source="x_report"):
+    """Land parsed X-report tuples [(store, date, tender, amount)] into commcalc.pos_tender_summary —
+    THE one writer for the multi-sheet path (the upload handler AND the onboarding intake call it).
+    Dedupes on (store, date, tender) first — the parser already keeps the first matrix row per label,
+    so nothing is lost — upserts on mig 062's natural key with the ONE class rule (_xr_tender_class),
+    and writes the upload_log row. Never raises on a row failure: every write failure is COUNTED and
+    the first real error kept, so a total failure can never read as a green zero."""
+    saved, save_failures, first_error, attempts = 0, 0, None, 0
+    for (store, d, tender), amount in {(s, dd, t): a for (s, dd, t, a) in (xr or [])}.items():
+        attempts += 1
+        try:
+            client.schema('commcalc').table('pos_tender_summary').upsert(
+                {"org_id": org_id, "close_date": d, "store": store, "tender_type": tender,
+                 # ONE class rule for both parser paths (_xr_tender_class) — this loop used
+                 # to inline its own ternary, which did not know 'cc'/'chip'/'emv'.
+                 "tender_class": _xr_tender_class(tender),
+                 "amount": amount, "source": source,
+                 "updated_at": datetime.now(timezone.utc).isoformat()},
+                on_conflict="org_id,close_date,store,tender_type").execute()
+            saved += 1
+        except Exception as _ue:
+            # WAS `except Exception: pass` — a TOTAL save failure still returned success with
+            # tenders:0. Count it and keep the FIRST real error so the caller can show it.
+            save_failures += 1
+            if first_error is None:
+                first_error = str(_ue)[:400]
+    try:
+        client.schema('commcalc').table('upload_log').insert(
+            {'org_id': org_id, 'file_type': 'x_report',
+             'period': (xr[0][1] if xr else None), 'filename': filename,
+             'rows_saved': saved}).execute()
+    except Exception:
+        pass
+    return {"saved": saved, "save_failures": save_failures, "first_error": first_error, "attempts": attempts}
+
 
 # The header cell that OPENS the tender matrix. B2B Soft writes the plural; other POS builds (and some
 # report-designer variants) write the singular — accepted ONLY when the same row also carries the
@@ -498,7 +536,8 @@ def _parse_xreport_detail(contents: bytes, filename: str, fallback_date: str = N
             known.add(n)
             diag["config_label_count"] += 1
     try:
-        sheets = pd.read_excel(io.BytesIO(contents), sheet_name=None, header=None, dtype=str)
+        sheets, _act = _xlsx_read(contents, filename, sheet_name=None, header=None, dtype=str)
+        _note_xlsx_repair(filename, _act)
     except Exception as e:
         diag["workbook_error"] = str(e)[:200]
         return [], diag
@@ -1149,6 +1188,9 @@ async def upload_file(
         _err = str(e)[:400]
         raise
     finally:
+        _rep = _take_xlsx_repair()
+        if _rep:                       # a workbook that needed repair to be read is on the record, never silent
+            _res = {**(_res if isinstance(_res, dict) else {}), "xlsx_repair": _rep}
         _write_upload_trace(org_id, source=trace_source, filename=_fname, upload_type=file_type,
                             period=period, result=_res,
                             duration_ms=int((_t_up.monotonic() - _t0) * 1000), error=_err)
@@ -1402,33 +1444,11 @@ async def _upload_file_impl(
         except ValueError as _e:
             raise HTTPException(400, str(_e))
         if xr:
-            saved, save_failures, first_error = 0, 0, None
-            attempts = 0
-            for (store, d, tender) , amount in {(s, dd, t): a for (s, dd, t, a) in xr}.items():
-                attempts += 1
-                try:
-                    client.schema('commcalc').table('pos_tender_summary').upsert(
-                        {"org_id": org_id, "close_date": d, "store": store, "tender_type": tender,
-                         # ONE class rule for both parser paths (_xr_tender_class) — this loop used
-                         # to inline its own ternary, which did not know 'cc'/'chip'/'emv'.
-                         "tender_class": _xr_tender_class(tender),
-                         "amount": amount, "source": "x_report",
-                         "updated_at": datetime.now(timezone.utc).isoformat()},
-                        on_conflict="org_id,close_date,store,tender_type").execute()
-                    saved += 1
-                except Exception as _ue:
-                    # WAS `except Exception: pass` — a TOTAL save failure still returned success with
-                    # tenders:0. Count it and keep the FIRST real error so the caller can show it.
-                    save_failures += 1
-                    if first_error is None:
-                        first_error = str(_ue)[:400]
-            try:
-                client.schema('commcalc').table('upload_log').insert(
-                    {'org_id': org_id, 'file_type': 'x_report',
-                     'period': (xr[0][1] if xr else None), 'filename': getattr(file, 'filename', None),
-                     'rows_saved': saved}).execute()
-            except Exception:
-                pass
+            # ONE landing helper for the multi-sheet path — shared with the onboarding intake's
+            # X-report kind (Stage C), so the two can never upsert a different row shape.
+            _lx = _xreport_land_rows(client, org_id, xr, getattr(file, 'filename', None))
+            saved, save_failures, first_error, attempts = (_lx["saved"], _lx["save_failures"],
+                                                           _lx["first_error"], _lx["attempts"])
             return _xreport_outcome(
                 saved=saved, path='multi_sheet', diag=xrdiag, flat_diag=None, attempts=attempts,
                 save_failures=save_failures, first_error=first_error, rows_read=len(xr),
@@ -2836,17 +2856,18 @@ async def upload_vip_invoices(file: UploadFile = File(...), org_id: str = ORG_ID
     require_org(org_id)
     contents = await file.read()
     try:
-        xls = pd.ExcelFile(io.BytesIO(contents))
+        _book, _act = _xlsx_read(contents, getattr(file, "filename", None), sheet_name=None, dtype=str)
+        _note_xlsx_repair(getattr(file, "filename", None), _act)
     except Exception as e:
         raise HTTPException(400, f"Could not read Excel file: {e}")
-    sheets = set(xls.sheet_names)
+    sheets = set(str(n) for n in _book.keys())
     if 'Invoices' not in sheets:
         raise HTTPException(400, f"Missing 'Invoices' sheet. Found: {sorted(sheets)}")
 
     def sheet(name):
         if name not in sheets:
             return []
-        return pd.read_excel(xls, sheet_name=name, dtype=str).fillna('').to_dict('records')
+        return _book[name].fillna('').to_dict('records')
 
     def numc(r, *names):
         for n in names:
@@ -4053,7 +4074,8 @@ async def detect_column_mapping(report_key: str = Form(...), carrier_id: str = F
     require_org(org_id)
     contents = await file.read()
     try:
-        df = pd.read_excel(io.BytesIO(contents), dtype=str, nrows=5)
+        df, _act = _xlsx_read(contents, getattr(file, "filename", None), dtype=str, nrows=5)
+        _note_xlsx_repair(getattr(file, "filename", None), _act)
     except Exception as e:
         raise HTTPException(400, f"Could not read Excel file: {e}")
     headers = [str(c).strip() for c in df.columns]
@@ -4439,13 +4461,62 @@ async def upload_mapped(
 # on carrier_commission via the RPC commcalc.add_commission_column (mig 067). All ADDITIVE + BOOST-SAFE:
 # only carrier_commission + the catalog table are touched; the live Boost calc is never involved.
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
+# ── A repaired workbook is VISIBLE, never silent (owner bug 2026-09-20: "There is no item named
+#    'xl/sharedStrings.xml' in the archive"). The two upload readers below go through xlsx_tolerant,
+#    which repairs only the archive member the stock reader named, only after it refused. The action
+#    is noted here (thread-local, read once by the caller that writes the upload trace / the intake
+#    payload) so a file that needed repair says so in the record instead of merely working.
+_XLSX_REPAIR = threading.local()
+
+
+def _note_xlsx_repair(filename, action):
+    if action and action != "ok":
+        print(f"WARN xlsx repaired ({action}) to read {filename!r}", flush=True)
+        _XLSX_REPAIR.last = {"filename": filename, "action": action}
+
+
+def _take_xlsx_repair():
+    """The last repair noted on this thread, or None — cleared on read."""
+    v = getattr(_XLSX_REPAIR, "last", None)
+    _XLSX_REPAIR.last = None
+    return v
+
+
+def _xlsx_read(contents, filename, **kw):
+    """The tolerant read, with ONE more honesty rule at the call site: pandas refuses a non-workbook
+    BEFORE openpyxl sees it ("Excel file format cannot be determined"), which is a stack-trace
+    sentence nobody can act on — an HTML / XML / text file saved with an .xlsx name gets the
+    module's own plain sentence instead (xlsx_tolerant.describe says what the bytes are)."""
+    try:
+        return _xlsx.read_excel(contents, **kw)
+    except ValueError as e:
+        if isinstance(e, _xlsx.UnreadableWorkbook):
+            raise
+        kind = _xlsx.describe(contents)
+        if "cannot be determined" in str(e) and kind not in ("xlsx", "xls"):
+            raise _xlsx.UnreadableWorkbook(
+                f"This file is named like an Excel workbook but its content is {kind}. Open it in Excel "
+                f"and save it as .xlsx, or export it as CSV, then upload that.") from e
+        raise
+
+
 def _read_upload_df(contents: bytes, filename: str):
     """Read an uploaded sheet into a string DataFrame, honoring .csv/.txt vs Excel by extension
-    (the wizard advertises CSV too — pd.read_excel alone throws on a CSV)."""
+    (the wizard advertises CSV too — pd.read_excel alone throws on a CSV). An .xlsx whose string
+    table is mis-cased or absent is repaired by xlsx_tolerant (the same pandas read, after the ZIP
+    is made to match what it declares) and the repair NOTED; a non-workbook named .xlsx raises
+    xlsx_tolerant.UnreadableWorkbook, a sentence the 400 carries verbatim."""
     fname = (filename or "").lower()
     if fname.endswith((".csv", ".txt")):
         return _read_upload_csv(contents).fillna("")
-    return pd.read_excel(io.BytesIO(contents), dtype=str).fillna("")
+    df, action = _xlsx_read(contents, filename, dtype=str)
+    _note_xlsx_repair(filename, action)
+    df = df.fillna("")
+    try:
+        df.attrs["xlsx_repair"] = action
+    except Exception:
+        pass
+    return df
 
 
 def _read_upload_csv(contents: bytes, **kw):
@@ -4476,7 +4547,8 @@ def _read_upload_grids(contents: bytes, filename: str):
         except UnicodeDecodeError:
             text = contents.decode("cp1252")
         return [("csv", [list(r) for r in _csv.reader(io.StringIO(text))])]
-    book = pd.read_excel(io.BytesIO(contents), dtype=str, sheet_name=None, header=None)
+    book, action = _xlsx_read(contents, filename, dtype=str, sheet_name=None, header=None)
+    _note_xlsx_repair(filename, action)
     return [(str(name), frame.fillna("").values.tolist()) for name, frame in book.items()]
 
 
@@ -5079,6 +5151,7 @@ def _intake_read_shape(contents, filename, sheet="", header_row=""):
         except ValueError:
             raise HTTPException(400, "header_row must be a row number (0-based)")
     shape = _intake.stitch_sheets(sheets, sheet_name=sheet or None, header_row=hr)
+    shape["xlsx_repair"] = _take_xlsx_repair()      # a repaired workbook is SAID on the analyze payload
     if not shape["records"]:
         raise HTTPException(400, "No header row found in any sheet — the file has no row where most cells "
                                  "are column names followed by a row of data.")
@@ -5274,24 +5347,35 @@ def _intake_rep_resolver(client, org_id):
     return resolve
 
 
-def _intake_apply_identity(client, org_id, stores, reps, who=None):
+def _intake_apply_identity(client, org_id, stores, reps, who=None, processor=None):
     """Write the person's 2.4 / 3.7 decisions through the EXISTING writers, then READ THEM BACK
     through a fresh resolver — the save guarantee applied to identity. assign → a store_aliases row
     (POST /store-aliases' function); create → a storeops store row (storeops' create_store) plus an
     alias when the raw spelling differs; rep assign → a rep_aliases row (POST /rep-aliases' shape).
-    Returns {aliases, stores_created, rep_aliases}; raises 400 naming the string that did not stick."""
+    With `processor` (Stage C: a merchant / processor account id, not a store name) the assign is a
+    storeops.store_merchant_id row (mig 902 — `merchant_ids.upsert`, the SAME map every feed reader
+    resolves through), read back through `merchant_ids.resolve_map`.
+    Returns {aliases, stores_created, rep_aliases, merchant_ids}; raises 400 naming the string that did not stick."""
     from app.modules.storeops import router as _storeops
-    written = {"aliases": [], "stores_created": [], "rep_aliases": []}
+    written = {"aliases": [], "stores_created": [], "rep_aliases": [], "merchant_ids": []}
     for r in stores or []:
         raw, action, code = r["value"], r.get("action"), r.get("decision_code")
         if action == "create" and code:
             try:
-                _storeops.create_store({"store_code": code, "address": r.get("address") or raw, "is_active": True}, org_id)
+                _storeops.create_store({"store_code": code, "address": r.get("address") or (r.get("label") if processor else raw), "is_active": True}, org_id)
                 written["stores_created"].append(code)
             except HTTPException:
                 raise
             except Exception as e:
                 raise HTTPException(400, f"Creating store '{code}' for '{raw}' failed: {str(e)[:200]} — nothing was imported.")
+        if action in ("assign", "create") and code and processor:
+            from app.modules.storeops import merchant_ids as _mids
+            try:
+                _mids.upsert(org_id, code, processor, merchant_id=raw, note=f"onboarding intake by {who or '?'}")
+                written["merchant_ids"].append((raw, code))
+            except Exception as e:
+                raise HTTPException(400, f"Saving the {processor} id '{raw}' → '{code}' failed: {str(e)[:200]} (migration 902) — nothing was imported.")
+            continue
         if action in ("assign", "create") and code and raw.strip().lower() != code.strip().lower():
             try:
                 add_store_alias(AddStoreAliasIn(alias=raw, store_code=code, source="onboarding-intake",
@@ -5311,8 +5395,8 @@ def _intake_apply_identity(client, org_id, stores, reps, who=None):
             except Exception as e:
                 raise HTTPException(400, f"Saving the rep alias '{r['value']}' failed: {str(e)[:200]} (migration 016) — nothing was imported.")
     # READ BACK: every assigned / created store must now resolve to the code that was chosen
-    if written["aliases"] or written["stores_created"]:
-        back = _intake_store_resolver(client, org_id)
+    if written["aliases"] or written["stores_created"] or written["merchant_ids"]:
+        back = _intake_merchant_resolver(client, org_id, processor) if processor else _intake_store_resolver(client, org_id)
         for r in stores or []:
             if r.get("action") in ("assign", "create") and r.get("decision_code"):
                 code, _how = back(r["value"])
@@ -5368,15 +5452,293 @@ def _intake_file_get(client, org_id, instance_key):
 
 
 # ── STAGE 2: sales / POS / inventory / other ────────────────────────────────────────────────────
+# ── STAGE C — the typed "other" kinds (owner 2026-09-20): every destination already existed ──────
+# "other reports land in their respective categories if such a report is present for that carrier …
+#  merchant payments are the merchant reports which are used to reconcile the credit card payments …
+#  X report has their own report where the data should be uploaded."
+# Each kind below is read by the EXISTING parser of its destination and landed by the EXISTING
+# writer (index §23b/§23h X-report import, §12a portal normalizers + mig 955, §4/§15 the mig-939
+# bill-pay feed readers); the intake adds only the spine: store identity through the shared resolver,
+# our numbers beside the file's, the save guarantee (land → RE-READ through the destination's own
+# reader). No new table, no new parser, no new store map.
+_XR_NO_DATE = "0000-00-00"        # the X-report parser's fallback when neither the filename nor the person dates the file
+_INTAKE_MERCHANT_REPORT_KEY = "intake_upload"   # merchant_settlement_day.report_key for a manual upload
+# Which column-mapping LAYOUT lands in which processor bill-pay feed — the SAME two processor keys
+# `_billpay_processor_name` / `_billpay_processor_by_store_day` (mig 939) already dispatch on. A
+# tenant's processor is config (metric_source_of_truth.processor / data_source); nothing new is named.
+_BILLPAY_FEED_LAYOUT = {"epay": "epay_daily_tx", "vidapay": "ma_daily_tx"}
+_BILLPAY_LAYOUT_PROCESSOR = {v: k for k, v in _BILLPAY_FEED_LAYOUT.items()}
+
+
+def _intake_billpay_feed(client, org_id):
+    """Which processor bill-pay feed THIS org's coverage recon reads — the mig-939 resolution
+    (`_metric_source` + `_billpay_processor_name`), so the intake's default layout for a carrier
+    bill-pay report is the table the recon will actually re-read. Never raises."""
+    try:
+        msrc = _metric_source(client, org_id, "bill_payments")
+        proc = _billpay_processor_name(client, org_id, msrc) or ""
+    except Exception:
+        msrc, proc = {}, ""
+    return {"processor": proc or None,
+            "default_layout": _BILLPAY_FEED_LAYOUT.get(proc) or _intake.REPORT_KEY_BY_KIND["bill_payments"],
+            "source": ("metric_source_of_truth" if (msrc or {}).get("processor") else "data_source" if proc else "none"),
+            "note": (None if proc else "no bill-pay processor is configured for this org (metric_source_of_truth / data_source) — "
+                                       "pick the layout that matches the report you have")}
+
+
+def _intake_merchant_resolver(client, org_id, processor):
+    """resolve(merchant / terminal / account id) → (store_code | None, how) — through the SAME map the
+    feed readers resolve through: storeops.store_merchant_id (mig 902, `merchant_ids.resolve_map`),
+    then (daily-tx feed) the mig-314 account→store index via `_vidapay_account_resolver`, whose store
+    STRING is then put through the shared store resolver. An id nobody mapped is unknown, never a
+    guess. `.labels` lets a settlement export's DBA / store label try the address resolver too."""
+    from app.modules.storeops import merchant_ids as _mids
+    try:
+        mmap = {str(k).strip(): v for k, v in (_mids.resolve_map(org_id, processor) or {}).items()}
+    except Exception:
+        mmap = {}
+    names = _intake_store_resolver(client, org_id)
+    valid = {s["store_code"].upper(): s["store_code"] for s in names.stores if s.get("store_code")}
+    acct = _vidapay_account_resolver(client, org_id) if processor == "vidapay" else (lambda a: "")
+    labels = {}
+
+    def resolve(raw):
+        v = str(raw or "").strip()
+        if not v:
+            return None, None
+        code = mmap.get(v) or mmap.get(v.upper())
+        if code and code.upper() in valid:
+            return valid[code.upper()], "merchant_id"
+        st = str(acct(v) or "").strip()
+        if st:
+            c2, how = names(st)
+            if c2:
+                return c2, f"account_index+{how}"
+        lab = labels.get(v)
+        if lab:
+            c3, how = names(lab)
+            if c3:
+                return c3, f"label+{how}"
+        return None, None
+    resolve.stores = names.stores
+    resolve.labels = labels
+    resolve.processor = processor
+    return resolve
+
+
+def _intake_merchant_table(contents, filename):
+    """A settlement export as the portal normalizer wants it: list-of-lists, header row FIRST, the
+    portal's title banner skipped by the SAME rule the sweep uses (`merchant_portal_sweep.read_table`);
+    a workbook goes through the platform's grid reader first."""
+    from app.modules.commcalc import merchant_portal_sweep as _mps
+    from app.modules.commcalc import merchant_portals as _mp
+    fname = (filename or "").lower()
+    if fname.endswith((".csv", ".txt", ".tsv")):
+        return _mps.read_table(contents, filename)
+    grids = _read_upload_grids(contents, filename)
+    rows = [[("" if c is None else str(c)) for c in r] for _n, g in grids[:1] for r in g]
+    for i, r in enumerate(rows[:12]):
+        if len(_mp.map_headers(r)) >= 2:
+            return rows[i:]
+    return rows
+
+
+def _intake_prepare_xreport(client, org_id, contents, filename, src_ref, ikey, decisions, as_of_date, typed_total):
+    """An X-report through the EXISTING parser (`_parse_xreport_detail`, with the tenant's own tender
+    vocabulary) → per store-day cash / card / other beside each sheet's own total → the sheet names
+    (store strings) through the shared resolver. The close date is the filename's, else the one the
+    person typed — never today's date by default (`_XR_NO_DATE` blocks the commit until it is known)."""
+    fd = _intake.xreport_file_date(filename)
+    if isinstance(fd, dict):
+        raise HTTPException(400, f"X-Report must be for a SINGLE day — this file covers {fd['from']} – {fd['to']}. "
+                                 "Re-run the X-Report for one day and upload that.")
+    close_date = fd or (_fstr(as_of_date)[:10] if _fstr(as_of_date) else "") or _XR_NO_DATE
+    cfg_labels = _xreport_config_labels(client, org_id)
+    try:
+        xr, diag = _parse_xreport_detail(contents, filename, fallback_date=close_date, extra_labels=cfg_labels)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not xr:
+        raise HTTPException(400, "No tender rows were read from this workbook — "
+                                 + (diag.get("workbook_error") or "no sheet carried the tender header (Tender Types / Net / Refunds)")
+                                 + ". The X-report import expects one sheet per store with the tender matrix.")
+    # each sheet's OWN total (the blank-label totals row that ends the tender block) — the file's number
+    sheet_totals = {}
+    try:
+        for name, rows in _read_upload_grids(contents, filename):
+            hdr_idx, net_col, _w, _c = _xr_header_scan(rows)
+            t = _intake.xreport_sheet_total(rows, hdr_idx, net_col)
+            if t is not None:
+                sheet_totals[str(name).strip()] = t
+    except Exception:
+        sheet_totals = {}
+    vn_all = _intake.xreport_verify(xr, _xr_tender_class, sheet_totals)
+    # 2.4 — the sheet names ARE the store strings; the shared resolver, the shared decisions
+    id_rows = [{"value": s["store"], "count": s["tenders"], "sum_raw": s["total"]} for s in vn_all["per_store_day"]]
+    store_rows = _intake.resolve_stores(id_rows, _intake_store_resolver(client, org_id), decisions.get("store") or {})
+    excluded = _intake.excluded_stores(store_rows)
+    land = [t for t in xr if str(t[0]).strip() not in excluded]
+    vn = _intake.xreport_verify(land, _xr_tender_class, sheet_totals)
+    vn["close_date"] = close_date if close_date != _XR_NO_DATE else None
+    vn["date_source"] = "filename" if fd else ("typed" if close_date != _XR_NO_DATE else None)
+    vn["parser"] = {"sheets_read": diag.get("sheets_read"), "headers_found": diag.get("headers_found"),
+                    "tender_rows_matched": diag.get("tender_rows_matched"), "tender_rows_skipped": diag.get("tender_rows_skipped"),
+                    "unmatched_labels": diag.get("unmatched_labels"), "canon_matched_labels": diag.get("canon_matched_labels"),
+                    "config_label_count": diag.get("config_label_count"),
+                    "sheets": [{"sheet": s.get("sheet"), "outcome": s.get("outcome"), "matched": s.get("matched"),
+                                "skipped_labels": s.get("skipped_labels")} for s in (diag.get("sheets") or [])[:40]]}
+    tie = _intake.simple_tie(vn["sum_total"], vn["file_total"], typed_total)
+    extra = []
+    if close_date == _XR_NO_DATE:
+        extra.append("The file name carries no date (X-Report_MMDDYYYY-MMDDYYYY) — enter the close date this X-report is for.")
+    if diag.get("unmatched_labels"):
+        extra.append(f"{len(diag['unmatched_labels'])} tender label(s) are not recognised and would be SKIPPED — their money would be "
+                     f"missing from every closing recon: {', '.join(diag['unmatched_labels'][:8])}. Map them under Closing → "
+                     "Tender Config (report 'x_report') and re-read, or attest.")
+    return {"kind": "x_report", "instance_key": ikey, "source_ref": src_ref, "layout": "", "name": "",
+            "target_table": _intake.SOURCE_KIND_TARGET["x_report"], "headers": [], "records": land, "kept": land, "land": land,
+            "shape": {"sheet": None, "header_row": None, "sheets": [{"name": s.get("sheet"), "rows": None, "header_row": None,
+                                                                    "data_rows": s.get("matched") or 0,
+                                                                    "used": s.get("outcome") == "rows", "role": s.get("outcome")}
+                                                                   for s in (diag.get("sheets") or [])]},
+            "fields": [], "proposal": [], "rules": [], "mapped": land, "mapped_fields": [], "footers": [],
+            "footer": {"detected": bool(sheet_totals), "rows": [], "file_total_raw": vn["file_total"],
+                       "lines_sum_raw": vn["sum_total"], "equals_lines_sum": (tie["match"] if tie["match"] is not None else None),
+                       "basis": ("each sheet's own totals row (blank label, Net column)" if sheet_totals else
+                                 "no sheet states a total — type the file's total or attest")},
+            "identity_fields": ["store"], "money_columns": [], "stores": store_rows, "reps": [],
+            "excluded_rows": len(xr) - len(land), "excluded": excluded, "typed_total": typed_total,
+            "identity_decisions": decisions, "verify_numbers": vn, "tie": tie, "as_of_date": vn["close_date"],
+            "period": {"months": [], "span_from": vn["close_date"], "span_to": vn["close_date"], "proposed": None,
+                       "spans_two_months": False, "dated_rows": len(land)},
+            "house_defaults": {"columns": 0}, "extra_refusals": extra, "xr_diag": diag}
+
+
+def _intake_prepare_merchant(client, org_id, contents, filename, portal_key, ikey, decisions, role, typed_total):
+    """A merchant settlement export through the EXISTING portal normalizer (`merchant_portals.
+    normalize_settlement` — the same shape the scheduled sweep produces), stamped as an UPLOAD
+    (`source_id` = a deterministic id per (org, portal, role), `report_key` = 'intake_upload'), the
+    role set the way the sweep sets it (the source row's override, else the portal's house default,
+    else the one the person picked) — settlement grain only, never the funding grain. Merchant ids
+    resolve through the mig-902 map; the DBA label may resolve through the address resolver."""
+    from app.modules.commcalc import merchant_portals as _mp
+    from app.modules.commcalc import merchant_portal_sweep as _mps
+    pk = _fstr(portal_key).lower().replace(" ", "_").replace("-", "_")
+    src_row = None
+    try:
+        for r in (client.schema("commcalc").table("data_source").select("id,processor,settlement_role,portal_calibration,account_id,label")
+                  .eq("org_id", org_id).execute().data) or []:
+            if str(r.get("processor") or "").strip().lower() == pk:
+                src_row = r
+                break
+    except Exception:
+        src_row = None
+    if not _mp.is_portal(pk) and not src_row:
+        raise HTTPException(400, "pos_source must name the card processor / portal this settlement export comes from — "
+                                 "one of " + ", ".join(_mp.PORTAL_KEYS) + " or a processor configured on your data sources")
+    role_pick = _fstr(role).lower()
+    if role_pick and role_pick not in _mp.ROLES:
+        raise HTTPException(400, "role must be one of " + " | ".join(_mp.ROLES))
+    role_eff = _mp.settlement_role(pk, role_pick or (src_row or {}).get("settlement_role"))
+    role_source = ("your pick" if role_pick else "the data-source row" if (src_row or {}).get("settlement_role") else "the portal's house default")
+    sid = str(_uuid5(_UUID_NAMESPACE_URL, f"metricspro:onboarding-intake:{org_id}:{pk}:{role_eff}"))
+    table = _intake_merchant_table(contents, filename)
+    if not table:
+        raise HTTPException(400, "Could not read a settlement table from this file — no header row maps to the portal's columns "
+                                 "(business date, merchant id, card type, gross / net / fees).")
+    cal = (src_row or {}).get("portal_calibration") or {}
+    parsed = _mp.normalize_settlement(pk, table, source_id=sid, org_id=org_id, role_override=role_eff,
+                                      calibration=cal if isinstance(cal, dict) else None,
+                                      report_key=_INTAKE_MERCHANT_REPORT_KEY,
+                                      merchant_id_default=(src_row or {}).get("account_id"))
+    rows = parsed["rows"]
+    if not rows:
+        raise HTTPException(400, "No settlement rows were read: " + "; ".join(parsed.get("warnings") or ["every row was skipped"])
+                                 + ". Check the header wording (calibrate column_synonyms on the data-source row).")
+    # 2.4 — merchant ids through the mig-902 map (the sweep's own resolution), else the DBA label
+    resolver = _intake_merchant_resolver(client, org_id, pk)
+    for r in rows:
+        mid = str(r.get("merchant_id") or r.get("terminal_id") or "").strip()
+        if mid and r.get("store_label") and mid not in resolver.labels:
+            resolver.labels[mid] = str(r.get("store_label")).strip()
+    agg = {}
+    for r in rows:
+        mid = str(r.get("merchant_id") or r.get("terminal_id") or "").strip() or "(no merchant id)"
+        a = agg.setdefault(mid, {"value": mid, "count": 0, "sum_raw": 0.0, "label": r.get("store_label")})
+        a["count"] += 1
+        a["sum_raw"] = _intake.money(a["sum_raw"] + _intake._sf(r.get("net_amount")))
+    store_rows = _intake.resolve_stores(sorted(agg.values(), key=lambda a: (-a["count"], a["value"])),
+                                        resolver, decisions.get("store") or {})
+    lands = {r["value"]: r.get("lands_as") for r in store_rows}
+    excluded = _intake.excluded_stores(store_rows)
+    land = []
+    for r in rows:
+        mid = str(r.get("merchant_id") or r.get("terminal_id") or "").strip() or "(no merchant id)"
+        if mid in excluded:
+            continue
+        r["store_code"] = lands.get(mid) or None
+        land.append(r)
+    totals_row = _intake.merchant_totals_row(table, parsed.get("fields") or {})
+    vn = _intake.merchant_verify(land, totals_row)
+    vn.update({"portal_key": pk, "settlement_role": role_eff, "role_source": role_source, "source_id": sid,
+               "report_key": _INTAKE_MERCHANT_REPORT_KEY, "fields": parsed.get("fields"),
+               "skipped": (parsed.get("skipped") or [])[:20], "warnings": parsed.get("warnings") or [],
+               "grain": "settlement (store × business day × card brand) — never summed with funding batches"})
+    tie = _intake.simple_tie(vn["sum_net"], (totals_row or {}).get("net") if totals_row else None, typed_total)
+    # a day the scheduled pull ALREADY landed for these merchants would be DOUBLED by an upload — refuse
+    extra = []
+    try:
+        dates = vn["dates"]
+        if dates:
+            others = (client.schema("commcalc").table("merchant_settlement_day")
+                      .select("source_id,merchant_id,business_date").eq("org_id", org_id)
+                      .gte("business_date", min(dates)).lte("business_date", max(dates)).limit(20000).execute().data) or []
+            mids = {str(r.get("merchant_id") or "") for r in land}
+            dup = sorted({(str(o.get("merchant_id") or ""), str(o.get("business_date") or "")[:10]) for o in others
+                          if str(o.get("source_id") or "") != sid and str(o.get("merchant_id") or "") in mids
+                          and str(o.get("business_date") or "")[:10] in set(dates)})
+            if dup:
+                extra.append(f"{len(dup)} merchant-day(s) in this file were ALREADY landed by another source (the scheduled portal "
+                             f"pull): {', '.join(f'{m} {d}' for m, d in dup[:6])}. An upload would count them twice in the card "
+                             "recon — remove those days from the file, or let the pull own them.")
+            vn["overlap_with_other_sources"] = len(dup)
+    except Exception:
+        vn["overlap_with_other_sources"] = None
+    return {"kind": "merchant_payments", "instance_key": ikey, "source_ref": pk, "layout": "", "name": "",
+            "target_table": _intake.SOURCE_KIND_TARGET["merchant_payments"], "headers": list(table[0]) if table else [],
+            "records": land, "kept": land, "land": land,
+            "shape": {"sheet": None, "header_row": 0, "sheets": [{"name": "settlement", "rows": len(table) - 1, "header_row": 0,
+                                                                 "data_rows": len(rows), "used": True, "role": "primary"}]},
+            "fields": [], "proposal": [], "rules": [], "mapped": land, "mapped_fields": [], "footers": [],
+            "footer": {"detected": totals_row is not None, "rows": [], "file_total_raw": (totals_row or {}).get("net"),
+                       "lines_sum_raw": vn["sum_net"], "equals_lines_sum": tie["match"],
+                       "basis": ("the export's own TOTAL row (net)" if totals_row else "no totals row — type the file's net total or attest")},
+            "identity_fields": ["merchant_id"], "money_columns": [], "stores": store_rows, "reps": [],
+            "excluded_rows": len(rows) - len(land), "excluded": excluded, "typed_total": typed_total,
+            "identity_decisions": decisions, "verify_numbers": vn, "tie": tie, "as_of_date": None,
+            "merchant_processor": pk, "settlement_role": role_eff, "source_id": sid,
+            "period": {"months": [], "span_from": (vn["dates"][0] if vn["dates"] else None),
+                       "span_to": (vn["dates"][-1] if vn["dates"] else None), "proposed": None,
+                       "spans_two_months": len({d[:7] for d in vn["dates"]}) > 1, "dated_rows": len(land)},
+            "house_defaults": {"columns": 0}, "extra_refusals": extra}
+
+
 def _intake_prepare_stage2(client, org_id, contents, filename, kind, column_map_json, typed_total,
                            sheet="", header_row="", footer="auto", pos_source="", layout="", name="",
-                           identity_json=None, as_of_date="", **_ignored):
+                           identity_json=None, as_of_date="", role="", **_ignored):
     """read → detect → propose (house default for the layout, then header heuristics, then the
     tenant's own saved rows) → map → footer → 2.4 stores / reps through the shared resolver → 2.5
-    verify numbers beside the file's total. `other` stops at the honest summary."""
+    verify numbers beside the file's total. `other` stops at the honest summary. Stage C: the
+    X-report and a merchant settlement are MATRIX kinds read by their destination's own parser; a
+    carrier bill-pay report maps through the layout of the processor feed it lands in."""
     src_ref = _fstr(pos_source)
     report_key = _fstr(layout) or _intake.REPORT_KEY_BY_KIND.get(kind) or ""
-    if kind != "other":
+    if kind in _intake.MATRIX_KINDS:
+        if not src_ref:
+            raise HTTPException(400, ("pos_source is required — which POS produced this X-report" if kind == "x_report" else
+                                      "pos_source is required — the card processor / portal this settlement export comes from"))
+        report_key = ""
+    elif kind != "other":
         if not src_ref:
             raise HTTPException(400, "pos_source is required — which POS (or system) this export comes from; a code you pick or type")
         offered = {l["report_key"] for l in _intake.layouts_for_kind(kind, column_mapping.TABLE_MAP)}
@@ -5385,18 +5747,26 @@ def _intake_prepare_stage2(client, org_id, contents, filename, kind, column_map_
     name = _fstr(name)
     if kind == "other" and not name:
         raise HTTPException(400, "name the report (e.g. 'bill payments', 'card payments', 'X report')")
-    ikey = _intake.stage2_instance_key(kind, src_ref, report_key if kind != "other" else name)
+    # the instance's third slot: the layout; the typed name for free text; a fixed word for a matrix
+    # kind (one X-report instance per POS, one settlement instance per portal) — mirrored by stage2.tsx
+    slot = name if kind == "other" else _intake.MATRIX_INSTANCE_SLOT.get(kind, report_key)
+    ikey = _intake.stage2_instance_key(kind, src_ref, slot)
+    decisions = _intake_json(identity_json, "identity", {}) or {}
+    if not isinstance(decisions, dict):
+        raise HTTPException(400, "identity must be a JSON object {store: {raw: {...}}, rep: {raw: {...}}}")
+    if kind == "x_report":
+        return _intake_prepare_xreport(client, org_id, contents, filename, src_ref, ikey, decisions, as_of_date, typed_total)
+    if kind == "merchant_payments":
+        return _intake_prepare_merchant(client, org_id, contents, filename, src_ref, ikey, decisions, role, typed_total)
     shape = _intake_read_shape(contents, filename, sheet, header_row)
     headers, records = shape["headers"], shape["records"]
     footer = _fstr(footer) or "auto"
     overrides = _intake_json(column_map_json, "column_map", {})
     if not isinstance(overrides, dict):
         raise HTTPException(400, "column_map must be a JSON object {target_field: header}")
-    decisions = _intake_json(identity_json, "identity", {}) or {}
-    if not isinstance(decisions, dict):
-        raise HTTPException(400, "identity must be a JSON object {store: {raw: {...}}, rep: {raw: {...}}}")
+    target_table = column_mapping.TABLE_MAP.get(report_key) if kind == "bill_payments" else _intake.SOURCE_KIND_TARGET.get(kind)
     base = {"kind": kind, "instance_key": ikey, "source_ref": src_ref, "layout": report_key, "name": name,
-            "target_table": _intake.SOURCE_KIND_TARGET.get(kind), "shape": shape, "headers": headers,
+            "target_table": target_table, "shape": shape, "headers": headers,
             "records": records, "typed_total": typed_total, "identity_decisions": decisions,
             "period": {"months": [], "span_from": None, "span_to": None, "proposed": None,
                        "spans_two_months": False, "dated_rows": 0}}
@@ -5408,7 +5778,7 @@ def _intake_prepare_stage2(client, org_id, contents, filename, kind, column_map_
                      "verify_numbers": _intake.other_summary(headers, records, mc), "tie": None,
                      "house_defaults": {"columns": 0}})
         return base
-    kf = _intake.KIND_FIELDS[kind]
+    kf = _intake.kind_fields(kind, report_key)
     fields = column_mapping.target_fields(report_key, client, org_id)
     # the tenant's OWN saved rows for this layout (carrier-NULL rows: a POS export has no carrier)
     saved = [r for r in column_mapping.load_rules(client, org_id, report_key, None) if not r.get("carrier_id")]
@@ -5430,9 +5800,17 @@ def _intake_prepare_stage2(client, org_id, contents, filename, kind, column_map_
     else:
         kept, footers = _intake.split_footer(mapped, ident, mapped_fields, amount_field=kf["amount"])
         footer_info = _intake.footer_summary(kept, footers, identity_mapped=ident_mapped, amount_field=kf["amount"])
-    # 2.4 — the store strings and rep strings, through the SHARED resolver
+    # 2.4 — the store strings and rep strings, through the SHARED resolver. A bill-pay report's
+    # "store" is the processor's account / terminal id → the mig-902 merchant map (the feed readers'
+    # own resolution), never the store-name chain.
+    if kind == "bill_payments":
+        processor = _BILLPAY_LAYOUT_PROCESSOR.get(report_key) or ""
+        resolver = _intake_merchant_resolver(client, org_id, processor)
+        base["merchant_processor"] = processor
+    else:
+        resolver = _intake_store_resolver(client, org_id)
     store_rows = _intake.resolve_stores(_intake.identity_rows(kept, kf["store"], kf["amount"]),
-                                        _intake_store_resolver(client, org_id), decisions.get("store") or {})
+                                        resolver, decisions.get("store") or {})
     rep_rows = (_intake.resolve_reps(_intake.identity_rows(kept, kf["rep"], kf["amount"]),
                                      _intake_rep_resolver(client, org_id), decisions.get("rep") or {})
                 if kf.get("rep") else [])
@@ -5440,10 +5818,27 @@ def _intake_prepare_stage2(client, org_id, contents, filename, kind, column_map_
     land = [m for m in kept if _intake._s(m.get(kf["store"])) not in excluded]
     excluded_rows = len(kept) - len(land)
     # 2.5 — our numbers beside the file's
+    extra = []
     if kind == "inventory":
         vn = _intake.inventory_verify(land, kf)
         our_total = vn["sum_cost"]
         vn["as_of_date"] = _fstr(as_of_date) or None
+    elif kind == "bill_payments":
+        lands = {r["value"]: r.get("lands_as") for r in store_rows}
+        vn = _intake.billpay_feed_verify(land, kf, _intake_billpay_row_pred(client, org_id, report_key),
+                                         resolve_store=lambda a: lands.get(a) or "")
+        vn["date_span"] = _intake.date_span(land, kf["date"])
+        vn["processor"] = base["merchant_processor"]
+        vn["feed"] = _intake_billpay_feed(client, org_id)
+        our_total = vn["sum_all_rows"]          # the file's own total is over ALL its rows; the bill-pay Σ is re-read separately
+        if vn["feed"].get("processor") and vn["feed"]["processor"] != base["merchant_processor"]:
+            extra.append(f"This org's bill-pay coverage recon reads the '{vn['feed']['processor']}' feed "
+                         f"(layout {vn['feed']['default_layout']}), not the layout you picked — the report would land "
+                         "where no recon reads it. Pick that layout, or change the processor under metric source of truth.")
+        if vn["billpay_rows"] == 0:
+            extra.append("Not one row in this file is a bill payment by this org's own rule (order type / product tokens, "
+                         "mig 944 metric source of truth; product list mig 214) — the file would land but the coverage recon "
+                         "would read $0.00 from it. Check the order-type / product columns, or the rule.")
     else:
         vn = _intake.sales_verify(land, kf)
         our_total = vn["sum_amount"]
@@ -5461,9 +5856,21 @@ def _intake_prepare_stage2(client, org_id, contents, filename, kind, column_map_
         "money_columns": _intake.money_columns(headers, data_records, amount_header, text_headers),
         "period": _intake.period_proposal(land, kf["date"]) if kf.get("date") else base["period"],
         "as_of_date": _fstr(as_of_date) or None,
-        "house_defaults": {"columns": len(house_cols)},
+        "house_defaults": {"columns": len(house_cols)}, "extra_refusals": extra,
     })
     return base
+
+
+def _intake_billpay_row_pred(client, org_id, report_key):
+    """row → is this a BILL PAYMENT row of the feed? — the SAME rule the mig-939 reader counts with:
+    the daily-tx feed's config-driven `_ma_billpay_pred` (mig 944 order types / product tokens + the
+    mig-214 product list); the transaction-detail feed's fee rule (`epay_ingest.is_fee_line`: a
+    payment is every non-fee line — `aggregate_store_day`'s own split)."""
+    if report_key == "epay_daily_tx":
+        from app.modules.commcalc import epay_ingest as _epi
+        return lambda m: not _epi.is_fee_line(str((m or {}).get("product_title") or ""))
+    msrc = _metric_source(client, org_id, "bill_payments")
+    return _ma_billpay_pred(client, org_id, msrc)
 
 
 def _intake_house_layout(client, org_id, report_key):
@@ -5490,6 +5897,7 @@ def _intake_payload(ctx):
         # 2.2 / 3.2
         "detect": {"sheet": ctx["shape"]["sheet"], "header_row": ctx["shape"]["header_row"],
                    "sheets": ctx["shape"]["sheets"], "headers": ctx["headers"],
+                   "xlsx_repair": ctx["shape"].get("xlsx_repair"),
                    "data_rows": len(ctx["records"]), "usable_rows": len(ctx["mapped"]),
                    "footer": ctx["footer"], "footer_rows_dropped": len(ctx["footers"]),
                    "identity_fields": ctx["identity_fields"]},
@@ -5531,6 +5939,13 @@ def _intake_payload(ctx):
         "source_ref": ctx["source_ref"], "layout": ctx["layout"], "name": ctx["name"],
         "layout_label": _intake.LAYOUT_LABELS.get(ctx.get("layout") or "", ctx.get("layout")),
         "as_of_date": ctx.get("as_of_date"),
+        # Stage C: a matrix kind has no column step; a merchant upload states its role; a bill-pay
+        # report names the processor feed its layout lands in
+        "target_table": ctx.get("target_table"),
+        "matrix": kind in _intake.MATRIX_KINDS,
+        "settlement_role": ctx.get("settlement_role"), "merchant_processor": ctx.get("merchant_processor"),
+        "source_id": ctx.get("source_id"),
+        "identity_kind": ("merchant_id" if ctx.get("merchant_processor") else "store"),
         "verify": {"basis": ("received — no destination" if kind == "other" else
                              "preview — computed from the parsed file; the commit re-reads the landed rows"),
                    "numbers": ctx["verify_numbers"], "tie": ctx["tie"],
@@ -5543,9 +5958,31 @@ def _intake_payload(ctx):
                        kind, ctx.get("mapped_fields"), ctx["stores"], ctx["tie"], None,
                        undated_rows=((ctx["verify_numbers"].get("date_span") or {}).get("undated_rows") or 0),
                        storeless_rows=ctx["verify_numbers"].get("storeless_rows") or 0,
-                       rows_to_land=len(ctx.get("land", []))) if kind != "other" else [])},
+                       rows_to_land=len(ctx.get("land", [])), layout=ctx.get("layout"),
+                       extra=ctx.get("extra_refusals")) if kind != "other" else [])},
     })
     return out
+
+
+def _intake_merchant_portal_options(client, org_id):
+    """What 2.0 offers for a merchant settlement upload: the portal registry (house descriptors —
+    `merchant_portals.public_catalog`, never a credential) and this org's own configured processor
+    sources (their key, label and role), plus the two settlement roles. Never raises."""
+    from app.modules.commcalc import merchant_portals as _mp
+    catalog = [{"key": p["key"], "label": p["label"], "settlement_role": p["settlement_role"]} for p in _mp.public_catalog()]
+    sources = []
+    try:
+        for r in (client.schema("commcalc").table("data_source").select("id,processor,label,settlement_role,enabled")
+                  .eq("org_id", org_id).execute().data) or []:
+            pk = str(r.get("processor") or "").strip().lower()
+            if pk and _mp.is_portal(pk):
+                sources.append({"key": pk, "label": r.get("label") or pk,
+                                "settlement_role": _mp.settlement_role(pk, r.get("settlement_role")),
+                                "enabled": bool(r.get("enabled"))})
+    except Exception:
+        pass
+    return {"catalog": catalog, "sources": sources, "roles": list(_mp.ROLES),
+            "role_titles": {"external_cc": "external card terminal (not in the POS)", "pos_merchant": "the POS's own card tender"}}
 
 
 @router.get("/onboarding/intake/state")
@@ -5578,8 +6015,13 @@ def onboarding_intake_state(instance_key: str = "", org_id: str = ORG_ID):
     out.update({"carriers": carriers, "pos_sources": pos_sources, "stores": stores, "employees": employees,
                 "source_kinds": [{"value": k, "label": _intake.SOURCE_KIND_LABELS[k],
                                   "built": True, "target_table": _intake.SOURCE_KIND_TARGET.get(k),
+                                  "matrix": k in _intake.MATRIX_KINDS, "hint": _intake.OTHER_KIND_HINTS.get(k),
                                   "layouts": _intake.layouts_for_kind(k, column_mapping.TABLE_MAP)}
                                  for k in _intake.SOURCE_KINDS],
+                # Stage C — the 2.0 "other reports" picker and what each known kind needs
+                "other_kinds": list(_intake.OTHER_KINDS),
+                "merchant_portals": _intake_merchant_portal_options(client, org_id),
+                "billpay_feed": _intake_billpay_feed(client, org_id),
                 "inventory_none_key": _intake.INVENTORY_NONE_KEY,
                 "statement_type_default": _intake.STATEMENT_TYPE_DEFAULT,
                 "sign_question": _intake.SIGN_QUESTION})
@@ -5703,6 +6145,7 @@ async def onboarding_intake_analyze(
     instance_key: str = Form(""),
     use_stored: str = Form(""),
     keep_file: str = Form("1"),
+    role: str = Form(""),
     org_id: str = ORG_ID,
 ):
     """READ-ONLY over the data tables: everything the steps need in one payload. Saves nothing but
@@ -5712,14 +6155,15 @@ async def onboarding_intake_analyze(
     require_org(org_id)
     client = sb()
     (source_kind, carrier_id, statement_type, pos_source, layout, name, column_map, sign_answer, assignments, identity,
-     typed_total, as_of_date, sheet, header_row, footer, instance_key, use_stored, keep_file) = map(_fstr, (
+     typed_total, as_of_date, sheet, header_row, footer, instance_key, use_stored, keep_file, role) = map(_fstr, (
         source_kind, carrier_id, statement_type, pos_source, layout, name, column_map, sign_answer, assignments, identity,
-        typed_total, as_of_date, sheet, header_row, footer, instance_key, use_stored, keep_file))
+        typed_total, as_of_date, sheet, header_row, footer, instance_key, use_stored, keep_file, role))
     contents, fname = await _intake_contents(client, org_id, file, source_kind, instance_key, use_stored)
     ctx = _intake_prepare(client, org_id, contents, fname, source_kind, carrier_id,
                           statement_type, column_map, sign_answer, assignments, typed_total,
                           sheet=sheet, header_row=header_row, footer=footer or "auto",
-                          pos_source=pos_source, layout=layout, name=name, identity_json=identity, as_of_date=as_of_date)
+                          pos_source=pos_source, layout=layout, name=name, identity_json=identity, as_of_date=as_of_date,
+                          role=role)
     out = _intake_payload(ctx)
     out["filename"] = fname
     if file is not None and getattr(file, "filename", None) is not None and keep_file not in ("0", "false", "no"):
@@ -5759,7 +6203,8 @@ def _intake_reread_sales(client, org_id, stores, lo, hi):
     rows, start = [], 0
     while True:
         page = (client.schema("commcalc").table("raw_sales")
-                .select("store,salesperson,trans_id,trans_date,ext_price,gp,voided")
+                .select("store,salesperson,trans_id,trans_date,ext_price,gp,voided,"
+                        "department,category,product_desc,tender_type,trans_type")
                 .eq("org_id", org_id).in_("store", list(stores)).gte("trans_date", lo).lte("trans_date", hi)
                 .order("id").range(start, start + _INTAKE_REREAD_PAGE - 1).execute().data) or []
         rows.extend(page)
@@ -5784,6 +6229,140 @@ def _intake_reread_inventory(client, org_id, stores, as_of):
     return rows
 
 
+def _intake_reread_xreport(client, org_id, stores, close_date):
+    """The pos_tender_summary rows this X-report owns — (org, its store strings, its close date) —
+    RE-READ after landing, as the parser's own tuples so the same verify shapes them."""
+    rows = (client.schema("commcalc").table("pos_tender_summary")
+            .select("store,close_date,tender_type,tender_class,amount").eq("org_id", org_id)
+            .eq("close_date", close_date).in_("store", list(stores)).limit(20000).execute().data) or []
+    return [(str(r.get("store") or ""), str(r.get("close_date") or "")[:10], str(r.get("tender_type") or ""),
+             float(r.get("amount") or 0.0)) for r in rows]
+
+
+def _intake_reread_merchant(client, org_id, source_id, lo, hi):
+    """The merchant_settlement_day rows this upload owns — (org, its source id, its business days) —
+    RE-READ after landing, in pages."""
+    rows, start = [], 0
+    while True:
+        page = (client.schema("commcalc").table("merchant_settlement_day")
+                .select("merchant_id,terminal_id,store_label,store_code,business_date,card_brand,gross_amount,"
+                        "refund_amount,net_amount,fee_amount,txn_count,settlement_role,report_key")
+                .eq("org_id", org_id).eq("source_id", source_id).gte("business_date", lo).lte("business_date", hi)
+                .order("id").range(start, start + _INTAKE_REREAD_PAGE - 1).execute().data) or []
+        rows.extend(page)
+        if len(page) < _INTAKE_REREAD_PAGE:
+            break
+        start += _INTAKE_REREAD_PAGE
+    return rows
+
+
+def _intake_reread_billpay(client, org_id, layout, accounts, lo, hi):
+    """A carrier bill-pay report RE-READ two ways after landing: (a) the feed table's own rows this
+    file owns — (org, its account / terminal ids, its date range) — for the row count; (b) the mig-939
+    reader itself (`_billpay_processor_by_store_day`, the function the coverage recon calls) for the
+    bill-pay Σ, restricted to the file's days — so 'verified' means the recon will read it."""
+    processor = _BILLPAY_LAYOUT_PROCESSOR.get(layout) or ""
+    table = column_mapping.TABLE_MAP.get(layout) or ""
+    kf = _intake.kind_fields("bill_payments", layout)
+    rows, start = [], 0
+    while True:
+        page = (client.schema("commcalc").table(table).select(f"{kf['store']},{kf['date']},{kf['amount']}")
+                .eq("org_id", org_id).in_(kf["store"], list(accounts)).gte(kf["date"], lo).lte(kf["date"], hi)
+                .order("id").range(start, start + _INTAKE_REREAD_PAGE - 1).execute().data) or []
+        rows.extend(page)
+        if len(page) < _INTAKE_REREAD_PAGE:
+            break
+        start += _INTAKE_REREAD_PAGE
+    ckey = _canonical_store_key_fn(client, org_id)
+    feed = {}
+    for ym in sorted({d[:7] for d in (lo, hi)} | {str(r.get(kf["date"]) or "")[:7] for r in rows}):
+        if not ym or len(ym) < 7:
+            continue
+        for (st, day), v in (_billpay_processor_by_store_day(client, org_id, ym, processor, ckey) or {}).items():
+            if lo <= day <= hi:
+                feed[(st, day)] = _intake.money(feed.get((st, day), 0.0) + float(v.get("amount") or 0.0))
+    return rows, feed, processor
+
+
+def _intake_billpay_extract_after_sales(client, org_id, stores, lo, hi, rows=None):
+    """After a sales / POS export lands: the EXISTING bill_payment predicate over the landed slice
+    (the Bill Payments report's derivation — `billpay_extract` over `exec_metric_defs.line_match` on
+    the org's resolved rule), beside the carrier's own bill-pay feed for the same days when one is
+    present. Stamped on the commit's verified_numbers; the Stage-4 row carries the count. Never
+    raises — a cross-check that fails says so, it does not fail the commit."""
+    from app.modules.commcalc import billpay_extract as _bpx
+    try:
+        rows = rows if rows is not None else _intake_reread_sales(client, org_id, stores, lo, hi)
+        cfg = _exec_metric_config(client, org_id, with_sources=True)
+        bucket = (cfg or {}).get("bill_payment") or {}
+        rule = bucket.get("rules") or {}
+        ckey = _canonical_store_key_fn(client, org_id)
+        ex = _bpx.extract_lines(rows, rule, line_match=_emd.line_match, store_key=ckey)
+        roll = _bpx.rollup(ex["lines"])
+        msrc = _metric_source(client, org_id, "bill_payments")
+        processor = _billpay_processor_name(client, org_id, msrc)
+        feed = {}
+        for ym in sorted({d[:7] for d in roll["dates"]} | {lo[:7], hi[:7]}):
+            for (st, day), v in (_billpay_processor_by_store_day(client, org_id, ym, processor, ckey) or {}).items():
+                if lo <= day <= hi and (not stores or st in {ckey(s) or s for s in stores}):
+                    feed[(st, day)] = _intake.money(feed.get((st, day), 0.0) + float(v.get("amount") or 0.0))
+        cmp_ = _bpx.compare_with_feed(roll["per_store_day"], feed)
+        return {"basis": "the org's bill_payment rule (exec metric definitions) over the landed slice, re-read from raw_sales",
+                "rule_source": bucket.get("source"), "lines": roll["count"], "sum": roll["sum"],
+                "rows_scanned": ex["rows_scanned"], "rows_skipped": ex["rows_skipped"],
+                "per_store_day": roll["per_store_day"][:200], "per_token": roll["per_token"],
+                "token_coverage": _bpx.token_coverage(rule, ex["lines"]),
+                "feed_present": cmp_["feed_present"], "feed_processor": processor or None,
+                "sum_feed": cmp_["sum_feed"], "difference": cmp_["difference"], "days_compared": cmp_["days_compared"],
+                "report": "/commcalc/bill-payments"}
+    except Exception as e:
+        return {"basis": None, "error": f"bill-pay extraction did not run: {str(e)[:200]}"}
+
+
+def _intake_sold_check_after_inventory(client, org_id, stores, as_of):
+    """After an inventory listing lands: the inventory-vs-sold reconciliation over the file's stores
+    (`inventory_sold_recon.reconcile`, the SAME pure module GET /inventory-sold-recon runs) with the
+    ACTIVATION feed as the second sold-source (owner 2026-09-20: "auto check itself with the
+    activation report"). Counts only, on the commit's verified_numbers; the report has the rows.
+    Never raises."""
+    from app.modules.commcalc import device_cost_recon as _dcr
+    from app.modules.commcalc import inventory_sold_recon as _isr
+    try:
+        inv = _intake_reread_inventory(client, org_id, stores, as_of)
+        sales, s_ok, s_cut = _dcr_paged(client, "raw_sales", "serial_1,quantity,trans_date,store,mdn,trans_id",
+                                        lambda q: q.eq("org_id", org_id), 200000, "sales")
+        acts, a_ok = _intake_activation_rows(client, org_id, None)
+        out = _isr.reconcile(sales, inv, _dcr.device_key, activation_rows=(acts if a_ok else None))
+        t = out["totals"]
+        return {"basis": "inventory_sold_recon.reconcile over the landed stores' on-hand rows × raw_sales × the activation feed",
+                "sold_not_cleared": t["to_clear"], "sold_not_cleared_cost": t["to_clear_cost"],
+                "activated_not_rung_out": t["activated_not_rung_out"], "activated_not_rung_out_cost": t["activated_not_rung_out_cost"],
+                "activated_by_mobile": t["activated_by_mobile"], "activations_unpairable": t["activations_unpairable"],
+                "activations_considered": t["activations_considered"], "activations_present": a_ok,
+                "on_hand_considered": t["on_hand_considered"], "sales_read_ok": s_ok, "sales_truncated": s_cut,
+                "activations_carry_device_key": out["activations"]["carries_device_key"],
+                "activations_carry_mobile": out["activations"]["carries_mobile"],
+                "report": "/commcalc/inventory-sold-recon"}
+    except Exception as e:
+        return {"basis": None, "error": f"inventory-vs-sold check did not run: {str(e)[:200]}"}
+
+
+def _intake_activation_rows(client, org_id, period):
+    """The activation feed as the platform already models it — `_cr_resolve_activation_details`
+    (raw_custom_import, one row per device, serial-deduped by bucket rank, mig 313 rules) — for the
+    inventory auto-check. (rows, ok): ok=False means the read FAILED, which the report states as
+    'no activation feed', never as zero activations."""
+    try:
+        # the resolver swallows a failed read (it degrades to [] for the display consumers), so the
+        # feed's PRESENCE is probed here: an unreadable capture table is 'no feed', never zero rows
+        (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE).select("id").eq("org_id", org_id).limit(1).execute())
+        rows = _cr_resolve_activation_details(client, org_id, period or "", {"market_for": (lambda s: "")})
+        return rows, True
+    except Exception as e:
+        print(f"WARN activation feed read failed for the inventory check: {e}")
+        return [], False
+
+
 def _intake_land(client, org_id, kind, ctx, filename, who=None):
     """THE one landing call per kind — each one an EXISTING path, never a new insert:
       · sales / pos  → `_ingest_mapped_df` (the /upload-mapped core: column pre-validation, the
@@ -5794,9 +6373,16 @@ def _intake_land(client, org_id, kind, ctx, filename, who=None):
                         semantics, mig 294: upsert per device, mark the file's stores' absent units
                         off-hand — never a cumulative pile, never a delete of cost history).
       · commission   → `_ledger_land_rows` (stage 3, unchanged).
+      · x_report     → `_xreport_land_rows` (the X-report import's own upsert into pos_tender_summary,
+                        mig 062 natural key, ONE tender-class rule — Stage C).
+      · merchant_payments → `merchant_portal_sweep.store_settlement` (mig 955 natural-key upsert,
+                        deduped per (merchant, day, brand) exactly as the scheduled pull — Stage C).
+      · bill_payments → the processor feed's own writer: `_ingest_mapped_df` for the daily-tx feed
+                        (slice replace on account × dates), `epay_ingest.ingest` for the transaction
+                        detail feed (idempotent on transaction id) — Stage C.
     Returns {saved, rows_built, detail, skipped}."""
-    if kind in ("sales", "pos"):
-        kf = _intake.KIND_FIELDS[kind]
+    if kind in ("sales", "pos") or (kind == "bill_payments" and ctx["target_table"] == "raw_ma_daily_tx"):
+        kf = _intake.kind_fields(kind, ctx.get("layout"))
         excluded = ctx.get("excluded") or {}
         # the RAW records that land: mapped, not a footer, not an excluded store — the same rows the
         # preview counted (the importer re-maps them through the SAME rules)
@@ -5814,6 +6400,60 @@ def _intake_land(client, org_id, kind, ctx, filename, who=None):
         res = _ingest_mapped_df(org_id, ctx["report_key"], ctx["target_table"], ctx["rules"], df,
                                 period="", fname=filename, trace_source="onboarding-intake")
         return {"saved": int(res.get("saved") or 0), "rows_built": len(raw_rows), "detail": res, "skipped": 0}
+    if kind == "bill_payments":
+        # the transaction-detail feed: its own idempotent ingest (parse → terminal → store via the
+        # mig-902 map → upsert on transaction id). Records are handed over in the feed's own column
+        # spelling (epay_ingest.COLUMNS) from the confirmed map — no second parser.
+        from app.modules.commcalc import epay_ingest as _epi
+        spelling = {"transaction_id": "TransactionID", "transaction_source_id": "TransactionSourceID",
+                    "invoice_id": "InvoiceID", "settlement_date": "SettlementDate", "terminal_id": "TerminalID",
+                    "user_name": "UserName", "product": "Product", "product_title": "ProductTitle", "tx_type": "Type",
+                    "host_timestamp": "HostTimeStamp", "control_number": "ControlNumber", "retail": "Retail",
+                    "discount": "Discount", "cost": "Cost", "commission": "Commission"}
+        records = [{spelling[k]: v for k, v in m.items() if k in spelling} for m in ctx["land"]]
+        res = _epi.ingest(org_id, records, source_batch=f"onboarding-intake:{filename}", client=client)
+        try:
+            client.schema("commcalc").table("upload_log").insert(
+                {"org_id": org_id, "file_type": ctx["report_key"], "period": None,
+                 "filename": filename, "rows_saved": res.get("saved") or 0}).execute()
+        except Exception as e:
+            print(f"WARN upload_log insert failed: {e}")
+        _write_upload_trace(org_id, source="onboarding-intake", filename=filename, upload_type=ctx["report_key"],
+                            period="", result={"saved": res.get("saved") or 0,
+                                               "note": f"{len(res.get('unresolved_terminals') or [])} terminal(s) unmapped",
+                                               "_trace": {"rows_in": len(ctx["records"]), "target_table": ctx["target_table"]}})
+        return {"saved": int(res.get("saved") or 0), "rows_built": len(records),
+                "detail": {"unresolved_terminals": res.get("unresolved_terminals")}, "skipped": 0}
+    if kind == "x_report":
+        if not ctx["verify_numbers"].get("close_date"):
+            raise HTTPException(400, "The X-report has no close date — enter one.")
+        lx = _xreport_land_rows(client, org_id, ctx["land"], filename)
+        if lx["attempts"] and lx["save_failures"] >= lx["attempts"]:
+            raise HTTPException(500, f"Landing the X-report failed on every row: {lx['first_error']} "
+                                     "(commcalc.pos_tender_summary needs migration 062's unique key)")
+        _write_upload_trace(org_id, source="onboarding-intake", filename=filename, upload_type="x_report",
+                            period=ctx["verify_numbers"]["close_date"],
+                            result={"saved": lx["saved"], "note": f"{lx['save_failures']} write(s) failed",
+                                    "_trace": {"rows_in": len(ctx["records"]), "target_table": "pos_tender_summary"}})
+        built = len({(s, d, t) for (s, d, t, _a) in ctx["land"]})
+        return {"saved": lx["saved"], "rows_built": built, "detail": lx, "skipped": 0}
+    if kind == "merchant_payments":
+        from app.modules.commcalc import merchant_portal_sweep as _mps
+        try:
+            saved = _mps.store_settlement(client, org_id, ctx["source_id"], ctx["land"])
+        except Exception as e:
+            raise HTTPException(500, f"Landing the settlement rows failed: {str(e)[:200]} — is migration 955 applied?")
+        try:
+            client.schema("commcalc").table("upload_log").insert(
+                {"org_id": org_id, "file_type": "merchant_settlement", "period": None,
+                 "filename": filename, "rows_saved": saved}).execute()
+        except Exception as e:
+            print(f"WARN upload_log insert failed: {e}")
+        _write_upload_trace(org_id, source="onboarding-intake", filename=filename, upload_type="merchant_settlement",
+                            period="", result={"saved": saved, "note": f"role {ctx['settlement_role']}, source {ctx['source_id']}",
+                                               "_trace": {"rows_in": len(ctx["records"]), "target_table": "merchant_settlement_day"}})
+        from app.modules.commcalc import merchant_portals as _mp
+        return {"saved": saved, "rows_built": len(_mp.dedupe_settlement(ctx["land"])), "detail": {"source_id": ctx["source_id"]}, "skipped": 0}
     if kind == "inventory":
         kf = _intake.KIND_FIELDS[kind]
         as_of = ctx.get("as_of_date") or _datetime.now(timezone.utc).date().isoformat()
@@ -5872,6 +6512,7 @@ async def onboarding_intake_commit(
     footer: str = Form("auto"),
     instance_key: str = Form(""),
     use_stored: str = Form(""),
+    role: str = Form(""),
     org_id: str = ORG_ID,
 ):
     """THE SAVE, for every kind, with the same guarantee: refuse (400, nothing written) while a gate
@@ -5881,15 +6522,16 @@ async def onboarding_intake_commit(
     require_org(org_id)
     client = sb()
     (source_kind, carrier_id, statement_type, pos_source, layout, name, period, column_map, sign_answer, assignments,
-     identity, attestation, typed_total, as_of_date, verified_by, sheet, header_row, footer, instance_key, use_stored) = map(_fstr, (
+     identity, attestation, typed_total, as_of_date, verified_by, sheet, header_row, footer, instance_key, use_stored, role) = map(_fstr, (
         source_kind, carrier_id, statement_type, pos_source, layout, name, period, column_map, sign_answer, assignments,
-        identity, attestation, typed_total, as_of_date, verified_by, sheet, header_row, footer, instance_key, use_stored))
+        identity, attestation, typed_total, as_of_date, verified_by, sheet, header_row, footer, instance_key, use_stored, role))
     contents, fname = await _intake_contents(client, org_id, file, source_kind, instance_key, use_stored)
     kind = (source_kind or "commission").strip().lower()
     ctx = _intake_prepare(client, org_id, contents, fname, source_kind, carrier_id,
                           statement_type, column_map, sign_answer, assignments, typed_total,
                           sheet=sheet, header_row=header_row, footer=footer or "auto",
-                          pos_source=pos_source, layout=layout, name=name, identity_json=identity, as_of_date=as_of_date)
+                          pos_source=pos_source, layout=layout, name=name, identity_json=identity, as_of_date=as_of_date,
+                          role=role)
     att = _intake_json(attestation, "attestation", {}) or {}
     if not isinstance(att, dict):
         raise HTTPException(400, "attestation must be a JSON object {reason}")
@@ -5921,20 +6563,23 @@ def _intake_commit_other(client, org_id, ctx, who, fname, contents, dropped):
 
 
 def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
-    kind, kf = ctx["kind"], _intake.KIND_FIELDS[ctx["kind"]]
+    kind = ctx["kind"]
+    kf = _intake.kind_fields(kind, ctx.get("layout")) or {"store": "store"}
     vn0 = ctx["verify_numbers"]
     refusals = _intake.stage2_refusals(
-        kind, ctx["mapped_fields"], ctx["stores"], ctx["tie"], att,
+        kind, ctx.get("mapped_fields"), ctx["stores"], ctx["tie"], att,
         undated_rows=((vn0.get("date_span") or {}).get("undated_rows") or 0),
-        storeless_rows=vn0.get("storeless_rows") or 0, rows_to_land=len(ctx["land"]))
+        storeless_rows=vn0.get("storeless_rows") or 0, rows_to_land=len(ctx["land"]),
+        layout=ctx.get("layout"), extra=ctx.get("extra_refusals"))
     if kind == "inventory" and not ctx.get("as_of_date"):
         refusals.append("as_of_date is required — the date this on-hand listing was taken.")
     if refusals:
         raise HTTPException(400, "Not committed — " + " | ".join(refusals))
-    report_key = ctx["report_key"]
-    # (a) THE MAPPING, through the one writer (carrier-NULL rows: a POS export has no carrier), read back
+    report_key = ctx.get("report_key") or ""
+    # (a) THE MAPPING, through the one writer (carrier-NULL rows: a POS export has no carrier), read back.
+    #     A matrix kind has no hand-made map (its parser's header rule IS the mapping) — nothing to save.
     saved_fields = []
-    for p in ctx["proposal"]:
+    for p in ctx.get("proposal") or []:
         if not p.get("column"):
             continue
         kw = {"report_key": report_key, "target_field": p["target_field"], "source_header": p["column"],
@@ -5946,20 +6591,23 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
         except Exception as e:
             raise HTTPException(400, f"Saving the column map for '{p['target_field']}' failed: {str(e)[:200]}")
         saved_fields.append(p["target_field"])
-    reloaded = [r for r in column_mapping.load_rules(client, org_id, report_key, None) if not r.get("carrier_id")]
-    back = {r["target_field"]: r for r in reloaded}
-    wrong = [tf for tf in saved_fields
-             if str((back.get(tf) or {}).get("source_header") or "").strip().lower()
-             != next(p["column"] for p in ctx["proposal"] if p["target_field"] == tf).strip().lower()]
-    if wrong:
-        raise HTTPException(400, "The column map did not save for: " + ", ".join(wrong) + " — nothing was imported.")
-    # (b) THE IDENTITY DECISIONS, through the alias / store writers, read back through the resolver
-    identity_written = _intake_apply_identity(client, org_id, ctx["stores"], ctx["reps"], who)
+    if saved_fields:
+        reloaded = [r for r in column_mapping.load_rules(client, org_id, report_key, None) if not r.get("carrier_id")]
+        back = {r["target_field"]: r for r in reloaded}
+        wrong = [tf for tf in saved_fields
+                 if str((back.get(tf) or {}).get("source_header") or "").strip().lower()
+                 != next(p["column"] for p in ctx["proposal"] if p["target_field"] == tf).strip().lower()]
+        if wrong:
+            raise HTTPException(400, "The column map did not save for: " + ", ".join(wrong) + " — nothing was imported.")
+    # (b) THE IDENTITY DECISIONS, through the alias / store / merchant-id writers, read back through the resolver
+    identity_written = _intake_apply_identity(client, org_id, ctx["stores"], ctx["reps"], who,
+                                              processor=ctx.get("merchant_processor"))
     # (c) LAND through the kind's existing path
     landed = _intake_land(client, org_id, kind, ctx, fname, who)
     # (d) RE-READ what landed. What we show is what is in the table, not what was in memory.
-    stores_landed = sorted({_intake._s(m.get(kf["store"])) for m in ctx["land"] if _intake._s(m.get(kf["store"]))})
+    cross = {}
     if kind == "inventory":
+        stores_landed = sorted({_intake._s(m.get(kf["store"])) for m in ctx["land"] if _intake._s(m.get(kf["store"]))})
         as_of = landed["detail"]["as_of_date"]
         rows = _intake_reread_inventory(client, org_id, stores_landed, as_of)
         vn = _intake.inventory_verify(rows, {**kf, "amount": "unit_cost", "qty": "quantity"})
@@ -5971,7 +6619,53 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
         same_as_shown = abs(_intake.money(our - shown)) < 0.005
         tie = ctx["tie"]          # the file's own total (Σ cost) beside what the preview computed
         tie_ok = bool(tie.get("match")) or bool(_intake._s(att.get("reason")))
+        # Stage C: the auto-check against sales AND the activation feed, on the landed stores
+        cross["sold_check"] = _intake_sold_check_after_inventory(client, org_id, stores_landed, as_of)
+    elif kind == "x_report":
+        stores_landed = sorted({str(t[0]).strip() for t in ctx["land"]})
+        close_date = vn0["close_date"]
+        tuples = _intake_reread_xreport(client, org_id, stores_landed, close_date)
+        vn = _intake.xreport_verify(tuples, _xr_tender_class, {s["store"]: s["file_total"] for s in vn0["per_store_day"] if s["file_total"] is not None})
+        vn.update({"close_date": close_date, "date_source": vn0.get("date_source"), "parser": vn0.get("parser")})
+        our = vn["sum_total"]
+        count_ok = vn["rows"] == landed["rows_built"] == landed["saved"]
+        tie = _intake.simple_tie(our, vn["file_total"], typed_total)
+        tie_ok = bool(tie.get("match")) or bool(_intake._s(att.get("reason")))
+        same_as_shown = abs(_intake.money(our - ctx["tie"]["our_total"])) < 0.005
+    elif kind == "merchant_payments":
+        stores_landed = sorted({str(r.get("store_code") or r.get("merchant_id") or "") for r in ctx["land"]})
+        lo, hi = vn0["dates"][0], vn0["dates"][-1]
+        rows = _intake_reread_merchant(client, org_id, ctx["source_id"], lo, hi)
+        vn = _intake.merchant_verify(rows, vn0.get("file_totals"))
+        vn.update({k: vn0.get(k) for k in ("portal_key", "settlement_role", "role_source", "source_id", "report_key", "grain", "fields")})
+        our = vn["sum_net"]
+        count_ok = vn["rows"] == landed["rows_built"] == landed["saved"]
+        role_ok = all(str(r.get("settlement_role")) == ctx["settlement_role"] for r in rows)
+        tie = _intake.simple_tie(our, (vn0.get("file_totals") or {}).get("net") if vn0.get("file_totals") else None, typed_total)
+        tie_ok = bool(tie.get("match")) or bool(_intake._s(att.get("reason")))
+        same_as_shown = (abs(_intake.money(our - ctx["tie"]["our_total"])) < 0.005
+                         and abs(_intake.money(vn["sum_gross"] - vn0["sum_gross"])) < 0.005
+                         and abs(_intake.money(vn["sum_fees"] - vn0["sum_fees"])) < 0.005
+                         and vn["txn_count"] == vn0["txn_count"] and role_ok)
+    elif kind == "bill_payments":
+        accounts = sorted({_intake._s(m.get(kf["store"])) for m in ctx["land"] if _intake._s(m.get(kf["store"]))})
+        span = vn0["date_span"]
+        stores_landed = accounts
+        rows, feed, processor = _intake_reread_billpay(client, org_id, ctx["layout"], accounts, span["from"], span["to"])
+        vn = {"rows": len(rows), "sum_all_rows": _intake.money(sum(_intake._sf(r.get(kf["amount"])) for r in rows)),
+              "feed_read": {"processor": processor, "per_store_day": [{"store": k[0], "date": k[1], "amount": v} for k, v in sorted(feed.items())],
+                            "sum_amount": _intake.money(sum(feed.values())), "reader": "_billpay_processor_by_store_day (mig 939)"},
+              "sum_amount": _intake.money(sum(feed.values())), "billpay_rows": vn0["billpay_rows"], "count": vn0["count"],
+              "date_span": span, "processor": processor, "layout": ctx["layout"]}
+        our = vn["sum_amount"]
+        count_ok = vn["rows"] == landed["rows_built"] == landed["saved"]
+        # the coverage recon's OWN reader must sum to what the preview counted as bill payments —
+        # else the file landed where the recon does not read it (an unmapped account, a stray rule)
+        same_as_shown = abs(_intake.money(our - vn0["sum_amount"])) < 0.005
+        tie = _intake.simple_tie(vn["sum_all_rows"], ctx["footer"]["file_total_raw"], typed_total)
+        tie_ok = bool(tie.get("match")) or bool(_intake._s(att.get("reason")))
     else:
+        stores_landed = sorted({_intake._s(m.get(kf["store"])) for m in ctx["land"] if _intake._s(m.get(kf["store"]))})
         span = vn0["date_span"]
         rows = _intake_reread_sales(client, org_id, stores_landed, span["from"], span["to"])
         vn = _intake.sales_verify(rows, kf)
@@ -5980,6 +6674,8 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
         tie = _intake.simple_tie(our, ctx["footer"]["file_total_raw"], typed_total)
         tie_ok = bool(tie.get("match")) or bool(_intake._s(att.get("reason")))
         same_as_shown = abs(_intake.money(our - ctx["tie"]["our_total"])) < 0.005
+        # Stage C: bill payments EXTRACTED from the landed slice (the derived Bill Payments report)
+        cross["billpay_extract"] = _intake_billpay_extract_after_sales(client, org_id, stores_landed, span["from"], span["to"], rows=rows)
     ok = count_ok and tie_ok and same_as_shown
     problems = []
     if not count_ok:
@@ -5987,16 +6683,19 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
     if not tie_ok:
         problems.append(f"re-read difference {tie.get('difference')}")
     if not same_as_shown:
-        problems.append(f"re-read total {our} ≠ shown {ctx['tie']['our_total']}")
+        problems.append(f"re-read total {our} ≠ shown {ctx['tie']['our_total']}"
+                        + (" (the coverage recon's reader does not sum to the bill-pay rows shown — an unmapped account, or the rule)"
+                           if kind == "bill_payments" else ""))
     verified_numbers = {
-        "basis": f"re-read from commcalc.{ctx['target_table']} after landing",
+        "basis": (f"re-read through the mig-939 bill-pay reader after landing in commcalc.{ctx['target_table']}" if kind == "bill_payments"
+                  else f"re-read from commcalc.{ctx['target_table']} after landing"),
         "rows_in_file": len(ctx["records"]), "rows_usable": len(ctx["mapped"]),
         "footer_rows_dropped": len(ctx["footers"]), "rows_excluded_not_ours": ctx.get("excluded_rows", 0),
         "rows_built": landed["rows_built"], "rows_landed": vn["rows"], "rows_inserted": landed["saved"],
         "rows_without_device_key": landed.get("skipped", 0),
         "numbers": vn, "tie": tie, "shown_before_commit": ctx["tie"],
-        "date_span": vn.get("date_span"), "as_of_date": vn.get("as_of_date"),
-        "ignored_money_columns": [m for m in ctx["money_columns"] if not m["is_amount"]],
+        "date_span": vn.get("date_span"), "as_of_date": vn.get("as_of_date") or vn.get("close_date"),
+        "ignored_money_columns": [m for m in ctx.get("money_columns") or [] if not m["is_amount"]],
         "attestation": ({"reason": att.get("reason"), "by": who, "at": _intake.now_iso()}
                         if _intake._s(att.get("reason")) else None),
         "identity": {"stores": [{"value": r["value"], "lands_as": r.get("lands_as"), "how": r.get("how"),
@@ -6004,17 +6703,22 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
                      "reps": [{"value": r["value"], "resolved_name": r.get("resolved_name") or r.get("decision_name"),
                                "action": r.get("action")} for r in ctx["reps"]],
                      "written": identity_written},
-        "replace_slice": (landed.get("detail") or {}).get("replace_scope"),
+        "replace_slice": (landed.get("detail") or {}).get("replace_scope") if isinstance(landed.get("detail"), dict) else None,
         "report_key": report_key, "target_table": ctx["target_table"],
         "confirmed_by": who, "confirmed_at": _intake.now_iso(),
+        **cross,
     }
+    period_label = (f"{vn0['date_span']['from']} – {vn0['date_span']['to']}" if vn0.get("date_span") else
+                    vn0.get("close_date") or (f"{vn0['dates'][0]} – {vn0['dates'][-1]}" if vn0.get("dates") else ctx.get("as_of_date")))
     state = _intake_save_state(
         client, org_id, ctx["instance_key"], step="2.6",
         status=_intake.STATUS_VERIFIED if ok else _intake.STATUS_NEEDS_INPUT,
         payload_patch={"kind": kind, "source_ref": ctx["source_ref"], "layout": report_key, "filename": fname,
-                       "column_map": {p["target_field"]: p["column"] for p in ctx["proposal"] if p.get("column")},
+                       "target_table": ctx["target_table"],
+                       "column_map": {p["target_field"]: p["column"] for p in ctx.get("proposal") or [] if p.get("column")},
                        "identity": ctx["identity_decisions"], "as_of_date": ctx.get("as_of_date"),
-                       "period": (f"{vn0['date_span']['from']} – {vn0['date_span']['to']}" if vn0.get("date_span") else ctx.get("as_of_date"))},
+                       "settlement_role": ctx.get("settlement_role"), "source_id": ctx.get("source_id"),
+                       "period": period_label},
         verified_numbers=verified_numbers, verified_by=who,
         blocking_reason=("; ".join(problems) if problems else ""), by=who)
     return {"ok": ok, "problems": problems, "saved": landed["saved"], "source_kind": kind,
@@ -8562,7 +9266,8 @@ async def carrier_comm_file_extract(file: UploadFile = File(...), org_id: str = 
         if name.endswith(".csv"):
             df = pd.read_csv(io.BytesIO(contents), header=None, dtype=str).fillna("")
             return {"sheets": [{"name": "CSV", "rows": df.astype(str).values.tolist()}]}
-        xls = pd.read_excel(io.BytesIO(contents), sheet_name=None, header=None, dtype=str)
+        xls, _act = _xlsx_read(contents, name, sheet_name=None, header=None, dtype=str)
+        _note_xlsx_repair(name, _act)
         sheets = [{"name": str(n), "rows": d.fillna("").astype(str).values.tolist()} for n, d in xls.items() if len(d)]
         return {"sheets": sheets}
     except Exception as e:
@@ -27742,6 +28447,61 @@ def billpay_coverage(period: str, org_id: str = ORG_ID, tolerance: float = 1.0):
     return result
 
 
+@router.get("/billpay-extract/{period}")
+def billpay_extract_report(period: str, org_id: str = ORG_ID, store: str = "", limit: int = 2000):
+    """THE BILL PAYMENTS REPORT — bill payments EXTRACTED from the sales export (owner 2026-09-20:
+    "otherwise bill payments should be extracted from their sales reports and then assigned a separate
+    report for themselves"). READ-ONLY, org-scoped.
+
+    ONE predicate, not a second: the org's resolved `bill_payment` rule (`_exec_metric_config` —
+    tenant row > house carrier preset > built-in, mig 962) applied by `exec_metric_defs.line_match`,
+    exactly what the Exec-MTD Bill Payment columns, /metric-recon and the 3-way recon ride. The
+    report adds the LINES with their provenance (which department / category / product token
+    matched), Σ + count per store-day, the configured tokens that matched nothing (the silent-zero
+    signal, never widened here — adjust the tokens under Executive MTD → Metric definitions), and,
+    when the carrier's own bill-pay report is present for the period (the mig-939 processor feed
+    `_billpay_processor_by_store_day` reads), both figures and the difference per store-day."""
+    require_org(org_id)
+    from app.modules.commcalc import billpay_extract as _bpx
+    client = sb()
+    cfg = _exec_metric_config(client, org_id, with_sources=True)
+    bucket = (cfg or {}).get("bill_payment") or {}
+    rule = bucket.get("rules") or {}
+    ckey = _canonical_store_key_fn(client, org_id)
+    rows, meta = _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS + ",tender_type")
+    ex = _bpx.extract_lines(rows, rule, line_match=_emd.line_match, store_key=ckey)
+    lines = ex["lines"]
+    if store:
+        want = ckey(store) or store
+        lines = [l for l in lines if l["store_key"] == want or l["store"] == store]
+    roll = _bpx.rollup(lines)
+    msrc = _metric_source(client, org_id, "bill_payments")
+    processor = _billpay_processor_name(client, org_id, msrc)
+    feed = _billpay_processor_by_store_day(client, org_id, period, processor, ckey) if processor else {}
+    if store:
+        want = ckey(store) or store
+        feed = {k: v for k, v in feed.items() if k[0] == want}
+    cmp_ = _bpx.compare_with_feed(roll["per_store_day"], feed)
+    cap = max(1, min(int(limit or 2000), 20000))
+    return {
+        "period": period, "org_id": org_id, "store": store or None,
+        "rule": {"bucket": "bill_payment", "rules": rule, "source": bucket.get("source"),
+                 "edit": "/commcalc/exec/mtd (Metric definitions → Bill Payment) · PUT /commcalc/exec-metric-config",
+                 "note": "exact department / category membership, substring on product description — the ONE "
+                         "predicate every bill-payment surface reads; not widened here"},
+        "basis": {"sales_rows": len(rows), "sales_meta": meta, "rows_scanned": ex["rows_scanned"],
+                  "rows_skipped": ex["rows_skipped"], "rows_unmatched": ex["rows_unmatched"],
+                  "feed_processor": processor or None, "feed_present": cmp_["feed_present"],
+                  "feed_reader": "_billpay_processor_by_store_day (mig 939 — the coverage recon's reader)"},
+        "totals": {"lines": roll["count"], "sum": roll["sum"], "sum_feed": cmp_["sum_feed"],
+                   "difference": cmp_["difference"], "days_compared": cmp_["days_compared"],
+                   "days_sales_only": cmp_["days_sales_only"], "days_feed_only": cmp_["days_feed_only"]},
+        "per_store_day": cmp_["rows"], "per_store": roll["per_store"], "per_token": roll["per_token"],
+        "token_coverage": _bpx.token_coverage(rule, lines),
+        "lines": lines[:cap], "truncated": len(lines) > cap,
+    }
+
+
 @router.get("/data-lineage")
 def get_data_lineage(org_id: str = ORG_ID, source_key: str = "", affected_key: str = "", kind: str = ""):
     """The system DATA-LINEAGE registry (mig 924/925) — the documented schematic of how ingested data and
@@ -34015,7 +34775,8 @@ async def _ingest_ma_overview(file, period, org_id):
                 except UnicodeDecodeError:
                     continue
         else:
-            df = pd.read_excel(io.BytesIO(contents), dtype=str)
+            df, _act = _xlsx_read(contents, fname, dtype=str)
+            _note_xlsx_repair(fname, _act)
     except Exception as e:
         raise HTTPException(400, f"Could not read file ({fname or 'upload'}): {e}")
     if df is None:
@@ -34866,6 +35627,11 @@ def _cr_resolve_activation_details(client, org_id, period, ctx):
             "activation_status": str(_get(d_low, "Activation Status")).strip(),
             "activations": 1,
             "mrc": _num(_get(d_low, "MRC")),
+            # The mobile number, when the export carries one (Stage C, 2026-09-20): the inventory
+            # auto-check pairs an activation line that has NO serial to a unit THROUGH the sale line
+            # with this number (inventory_sold_recon.PAIR_MOBILE_VIA_SALES) — stated, never guessed.
+            "mdn": str(_get(d_low, "MDN", "Mobile Number", "Mobile #", "Mobile", "Phone Number", "Phone #",
+                            "MTN", "CTN", "Wireless Number", "Activated Mobile Number", "Line Number")).strip(),
         }
         prev = by_key.get(key)
         # First line for this device wins its slot; a later line only replaces it when it classifies to a
@@ -37323,7 +38089,7 @@ def _require_payout_recorder(authorization, org_id, cfg=None):
 
 # ── INVENTORY vs SOLD (owner request 2026-09-12) ─────────────────────────────────────────────────
 @router.get("/inventory-sold-recon")
-def inventory_sold_recon_endpoint(limit: int = 500, org_id: str = ORG_ID):
+def inventory_sold_recon_endpoint(limit: int = 500, period: str = "", org_id: str = ORG_ID):
     """IS A DEVICE STILL ON THE SHELF, OR WAS IT ALREADY SOLD?
 
     Owner: *"check against the sales by product to see if the item in inventory is already sold or not
@@ -37353,13 +38119,17 @@ def inventory_sold_recon_endpoint(limit: int = 500, org_id: str = ORG_ID):
         return q.eq("org_id", org_id)
 
     sales, sales_ok, sales_cut = _dcr_paged(
-        client, "raw_sales", "serial_1,quantity,trans_date,store", _org, 200000, "sales")
+        client, "raw_sales", "serial_1,quantity,trans_date,store,mdn,trans_id", _org, 200000, "sales")
     inv, inv_ok, inv_cut = _dcr_paged(
         client, "inventory_aging_device",
         "imei,serial,sku,item,store,status,unit_cost,total_cost,received_date,as_of_date,on_hand",
         _org, 200000, "inventory")
+    # THE SECOND SOLD-SOURCE (owner 2026-09-20): the activation feed as the platform already models it
+    # — `_cr_resolve_activation_details` (raw_custom_import, one row per device, the mig-313 buckets),
+    # every period unless one is named. A read that fails is stated as 'no activation feed'.
+    acts, acts_ok = _intake_activation_rows(client, org_id, period or "")
 
-    out = _isr.reconcile(sales, inv, _dcr.device_key)
+    out = _isr.reconcile(sales, inv, _dcr.device_key, activation_rows=(acts if acts_ok else None))
     rows = out["rows"][:cap]
     return {
         "rows": rows,
@@ -37370,8 +38140,23 @@ def inventory_sold_recon_endpoint(limit: int = 500, org_id: str = ORG_ID):
         "basis": {
             "sales_read_ok": sales_ok, "sales_truncated": sales_cut,
             "inventory_read_ok": inv_ok, "inventory_truncated": inv_cut,
+            "activations_read_ok": acts_ok,
             "complete": sales_ok and inv_ok and not sales_cut and not inv_cut,
+            # per SOURCE — what each side is, and what it can and cannot pair on
+            "sources": {
+                "sales": {"table": "raw_sales", "read_ok": sales_ok, "truncated": sales_cut, "rows": len(sales),
+                          "pairs_on": "serial_1 (device key) · mdn (mobile number, for pairing unkeyed activations)"},
+                "inventory": {"table": "inventory_aging_device", "read_ok": inv_ok, "truncated": inv_cut, "rows": len(inv),
+                              "pairs_on": "imei, else serial"},
+                "activations": {"table": "raw_custom_import (Activation Details, per device)", "read_ok": acts_ok,
+                                "rows": len(acts), "period": period or "all periods",
+                                "carries_device_key": out["activations"]["carries_device_key"],
+                                "carries_mobile": out["activations"]["carries_mobile"],
+                                "pairs_on": "Serial# (device key); else the mobile number THROUGH a sale line that carries it — "
+                                            "stated on each row as `pairing`; anything else is listed as unpairable, never guessed"},
+            },
         },
+        "activations": out["activations"],
     }
 
 
@@ -38895,7 +39680,8 @@ async def epay_upload(file: UploadFile = File(...), authorization: str = Header(
                 except UnicodeDecodeError:
                     continue
         else:
-            df = pd.read_excel(io.BytesIO(contents), dtype=str)
+            df, _act = _xlsx_read(contents, fname, dtype=str)
+            _note_xlsx_repair(fname, _act)
     except Exception as e:
         raise HTTPException(400, f"Could not read file ({fname or 'upload'}): {e}")
     if df is None:

@@ -303,6 +303,29 @@ TARGET_FIELDS = {
         ("reconciled", "Reconciled", "text", False, "Reconciled", []),
         ("flagged", "Flagged", "text", False, "Flagged", []),
     ],
+    # ── PROCESSOR DAILY TRANSACTION DETAIL (→ raw_epay_daily_tx, mig 903). The other processor
+    #    bill-pay feed the mig-939 coverage recon resolves between (its sibling `ma_daily_tx` is derived
+    #    from report_pull above). Registered here so the onboarding intake can take a carrier bill-pay
+    #    report through the SAME column proposal + footer rules as every other layout and land it
+    #    through epay_ingest.ingest (idempotent on transaction id) — the feed's own writer, not a
+    #    second insert. Field spellings = epay_ingest.COLUMNS; nothing here names a carrier.
+    "epay_daily_tx": [
+        ("transaction_id", "Transaction ID", "text", True, "TransactionID", ["Transaction ID"]),
+        ("transaction_source_id", "Transaction source", "text", False, "TransactionSourceID", ["Transaction Source ID"]),
+        ("invoice_id", "Invoice ID", "text", False, "InvoiceID", ["Invoice ID"]),
+        ("settlement_date", "Settlement date", "date10", False, "SettlementDate", ["Settlement Date", "Settlement Day"]),
+        ("terminal_id", "Terminal ID", "text", False, "TerminalID", ["Terminal ID", "Terminal"]),
+        ("user_name", "User name", "text", False, "UserName", ["User Name", "User"]),
+        ("product", "Product code", "text", False, "Product", []),
+        ("product_title", "Product title", "text", False, "ProductTitle", ["Product Title", "Product Description"]),
+        ("tx_type", "Transaction type", "text", False, "Type", ["Transaction Type"]),
+        ("host_timestamp", "Host timestamp", "text", False, "HostTimeStamp", ["Host Time Stamp"]),
+        ("control_number", "Control number", "text", False, "ControlNumber", ["Control Number"]),
+        ("retail", "Retail", "number", False, "Retail", ["Retail Amount", "Amount"]),
+        ("discount", "Discount", "number", False, "Discount", []),
+        ("cost", "Cost", "number", False, "Cost", []),
+        ("commission", "Commission", "number", False, "Commission", []),
+    ],
 }
 
 # Amount fields summed into carrier_commission.total_commission (the rep's statement commission).
@@ -338,6 +361,9 @@ TABLE_MAP = {
     # COGS and residual_subs counts its rows as subscribers — this feed's grain is ~7 rows per
     # device) and deliberately NOT activation_rebate_ledger (that one BOOKS to the P&L).
     "vendor_rebate_history": "raw_vendor_rebate",
+    # Processor daily transaction detail (mig 903) — the ePay-shaped bill-pay feed the mig-939 coverage
+    # recon reads; landed by epay_ingest.ingest (idempotent upsert), NEVER by the slice replace.
+    "epay_daily_tx": "raw_epay_daily_tx",
 }
 
 
