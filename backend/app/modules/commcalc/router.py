@@ -759,7 +759,11 @@ SWEEP_RETRYABLE_ZERO = ('price_guard', 'inventory_no_stores') + XREPORT_ZERO_REA
 SWEEP_CAVEAT_MARKERS = ('price_guard_partial', 'inventory_devices_only',
                         'x_report_partial_save', 'x_report_unmapped_labels')
 # Statuses a sweep's dedup may treat as DONE even though 0 rows landed.
-SWEEP_TERMINAL_ZERO_STATUSES = ('empty', 'ignored', 'duplicate')
+SWEEP_TERMINAL_ZERO_STATUSES = ('empty', 'ignored', 'duplicate', 'superseded')
+# 'superseded' (2026-09-20, §19.19): a backlogged copy of a whole-period-replacing report that a
+# NEWER copy in the same month overwrites anyway. Terminal by construction — re-fetching it could
+# only rewrite what the newer file already wrote, and on an unlucky ordering would move the feed
+# BACKWARD. Journalled with rows_saved 0 and the winner's message-id, never silently dropped.
 
 # RETRY CAP (mailbox hygiene, 2026-09-01): a file whose every attempt ended NON-terminal ('skipped',
 # 'error', 'download_failed') is re-fetched on every sweep forever under the pure retry contract. On a
@@ -30370,7 +30374,12 @@ async def _run_email_sweep(org_id, account='default'):
         # even the capped hang off the loop.
         import asyncio as _asyncio
         _unrouted = []   # data-file attachments that matched NO rule (a renamed/unruled report) — surfaced below
-        files = await _asyncio.to_thread(_email.fetch_new_attachments, cfg, already, _unrouted)
+        # BACKLOG COLLAPSE (§19.19). After an outage a mailbox holds many hourly copies of the same report;
+        # for a whole-period-replacing type only the newest in each month can change the database, so the
+        # fetcher hands the older ones back here to be journalled terminally instead of re-imported. An
+        # upload type not DECLARED whole-period-replacing is untouched and every message still ingests.
+        _superseded = []
+        files = await _asyncio.to_thread(_email.fetch_new_attachments, cfg, already, _unrouted, _superseded)
     except Exception as e:
         em = str(e)
         # An AUTH rejection is routinely misread as "the password was erased" — it never is (nothing in
@@ -30389,6 +30398,26 @@ async def _run_email_sweep(org_id, account='default'):
     results = []
     shrinks = []   # row-count guardrail hits (a truncated/partial export) → alert after the loop
     journal_failures, journal_first_error, retried = 0, None, 0
+    # Journal the collapsed copies BEFORE the ingest loop, so a sweep interrupted mid-ingest still never
+    # re-fetches them. Same conflict target and the same failure accounting as the loop's own journal
+    # write: a LOST row here would put the message straight back in the next sweep's fetch, which is the
+    # exact re-import this collapse exists to stop — so it is counted and reported, never swallowed.
+    for _sup in _superseded:
+        try:
+            client.schema('commcalc').table('email_processed').upsert(
+                {'org_id': org_id, 'account': account, 'message_id': _sup.get('message_id'),
+                 'filename': _sup.get('name'), 'upload_type': _sup.get('upload_type'),
+                 'rows_saved': 0, 'status': 'superseded',
+                 'detail': (f"superseded by a newer copy of the same report in this mailbox "
+                            f"({_sup.get('superseded_by')}) — a whole-period-replacing ingest would have "
+                            f"rewritten it identically")[:300],
+                 'processed_at': _datetime.now(_timezone.utc).isoformat()},
+                on_conflict='org_id,account,message_id,filename').execute()
+        except Exception as _se:
+            journal_failures += 1
+            if journal_first_error is None:
+                journal_first_error = str(_se)[:300]
+            print(f"WARN email_processed superseded-upsert failed for {_sup.get('name')}: {_se}")
     just_ok_mids = set()   # message-ids ingested ok THIS run — the mailbox cleaner deletes these when enabled
     for f in files:
         name, size, ut, mid = f['name'], f['size'], f.get('upload_type'), f.get('message_id')
@@ -30461,6 +30490,9 @@ async def _run_email_sweep(org_id, account='default'):
     # A raise in the optional work now costs an alert, never the record of the ingest.
     status_msg = (f"{ok}/{len(results)} attachments ingested" if results
                   else "no new attachments to import — matched files already imported OK, or none match your rules (use Test connection)")
+    if _superseded:
+        status_msg += (f" · {len(_superseded)} older copy(ies) superseded by a newer one "
+                       f"(same report, same month — re-importing them changes nothing)")
     try:
         status_msg += _sweep_status_suffix(results, journal_failures=journal_failures,
                                            journal_first_error=journal_first_error, retried=retried,
