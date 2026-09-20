@@ -138,7 +138,8 @@ def run_chargeback_sweep(client, org_id, user, pw):
     ct = r.headers.get("Content-Type", "").lower()
     if not any(k in ct for k in ("sheet", "excel", "octet")) or len(data) < 1000:
         raise RuntimeError(f"Chargebacks download was not a valid Excel file (ct={ct[:40]})")
-    df = pd.read_excel(io.BytesIO(data), dtype=str).fillna("")
+    from app.modules.commcalc.router import _xlsx_read   # the ONE tolerant workbook reader (2026-09-20)
+    df = _xlsx_read(data, "chargebacks download", dtype=str)[0].fillna("")
     norm = {re.sub(r"[^a-z0-9]", "", c.lower()): c for c in df.columns}
 
     def col(*names):

@@ -606,7 +606,8 @@ def parse_csv_bytes(data):
     try:
         df = pd.read_csv(io.BytesIO(data))
     except Exception:
-        df = pd.read_excel(io.BytesIO(data))
+        from app.modules.commcalc.router import _xlsx_read   # the ONE tolerant workbook reader (2026-09-20)
+        df = _xlsx_read(data, "transfers upload")[0]
     df.columns = [str(c).strip().lower() for c in df.columns]
     alias = {"class": "equip_class_value", "equip_class": "equip_class_value", "product": "product_desc",
              "description": "product_desc", "quantity": "qty", "cost": "unit_cost", "unit cost": "unit_cost",

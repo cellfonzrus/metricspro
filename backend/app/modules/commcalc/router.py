@@ -306,7 +306,8 @@ def _read_excel_all_sheets(contents):
     sheet_names — summary/notes tabs with different columns are excluded, preserving the old
     behavior for them) and drops repeated header-echo rows (multisheet.is_header_echo). A
     single-sheet workbook returns byte-identically to the old path."""
-    book = pd.read_excel(io.BytesIO(contents), dtype=str, sheet_name=None)
+    book, _act = _xlsx_read(contents, "workbook", dtype=str, sheet_name=None)
+    _note_xlsx_repair("workbook", _act)
     frames = list(book.values())
     if not frames:
         return pd.DataFrame()
@@ -535,7 +536,8 @@ def _parse_xreport_detail(contents: bytes, filename: str, fallback_date: str = N
             known.add(n)
             diag["config_label_count"] += 1
     try:
-        sheets = pd.read_excel(io.BytesIO(contents), sheet_name=None, header=None, dtype=str)
+        sheets, _act = _xlsx_read(contents, filename, sheet_name=None, header=None, dtype=str)
+        _note_xlsx_repair(filename, _act)
     except Exception as e:
         diag["workbook_error"] = str(e)[:200]
         return [], diag
@@ -2850,17 +2852,18 @@ async def upload_vip_invoices(file: UploadFile = File(...), org_id: str = ORG_ID
     require_org(org_id)
     contents = await file.read()
     try:
-        xls = pd.ExcelFile(io.BytesIO(contents))
+        _book, _act = _xlsx_read(contents, getattr(file, "filename", None), sheet_name=None, dtype=str)
+        _note_xlsx_repair(getattr(file, "filename", None), _act)
     except Exception as e:
         raise HTTPException(400, f"Could not read Excel file: {e}")
-    sheets = set(xls.sheet_names)
+    sheets = set(str(n) for n in _book.keys())
     if 'Invoices' not in sheets:
         raise HTTPException(400, f"Missing 'Invoices' sheet. Found: {sorted(sheets)}")
 
     def sheet(name):
         if name not in sheets:
             return []
-        return pd.read_excel(xls, sheet_name=name, dtype=str).fillna('').to_dict('records')
+        return _book[name].fillna('').to_dict('records')
 
     def numc(r, *names):
         for n in names:
@@ -4067,7 +4070,8 @@ async def detect_column_mapping(report_key: str = Form(...), carrier_id: str = F
     require_org(org_id)
     contents = await file.read()
     try:
-        df = pd.read_excel(io.BytesIO(contents), dtype=str, nrows=5)
+        df, _act = _xlsx_read(contents, getattr(file, "filename", None), dtype=str, nrows=5)
+        _note_xlsx_repair(getattr(file, "filename", None), _act)
     except Exception as e:
         raise HTTPException(400, f"Could not read Excel file: {e}")
     headers = [str(c).strip() for c in df.columns]
@@ -9258,7 +9262,8 @@ async def carrier_comm_file_extract(file: UploadFile = File(...), org_id: str = 
         if name.endswith(".csv"):
             df = pd.read_csv(io.BytesIO(contents), header=None, dtype=str).fillna("")
             return {"sheets": [{"name": "CSV", "rows": df.astype(str).values.tolist()}]}
-        xls = pd.read_excel(io.BytesIO(contents), sheet_name=None, header=None, dtype=str)
+        xls, _act = _xlsx_read(contents, name, sheet_name=None, header=None, dtype=str)
+        _note_xlsx_repair(name, _act)
         sheets = [{"name": str(n), "rows": d.fillna("").astype(str).values.tolist()} for n, d in xls.items() if len(d)]
         return {"sheets": sheets}
     except Exception as e:
@@ -34621,7 +34626,8 @@ async def _ingest_ma_overview(file, period, org_id):
                 except UnicodeDecodeError:
                     continue
         else:
-            df = pd.read_excel(io.BytesIO(contents), dtype=str)
+            df, _act = _xlsx_read(contents, fname, dtype=str)
+            _note_xlsx_repair(fname, _act)
     except Exception as e:
         raise HTTPException(400, f"Could not read file ({fname or 'upload'}): {e}")
     if df is None:
@@ -39525,7 +39531,8 @@ async def epay_upload(file: UploadFile = File(...), authorization: str = Header(
                 except UnicodeDecodeError:
                     continue
         else:
-            df = pd.read_excel(io.BytesIO(contents), dtype=str)
+            df, _act = _xlsx_read(contents, fname, dtype=str)
+            _note_xlsx_repair(fname, _act)
     except Exception as e:
         raise HTTPException(400, f"Could not read file ({fname or 'upload'}): {e}")
     if df is None:

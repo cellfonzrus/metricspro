@@ -57,7 +57,8 @@ def parse_hotsheet(file_bytes: bytes, effective_date: date, org_id: str) -> list
         df = pd.read_csv(BytesIO(file_bytes))
     except Exception:
         try:
-            df = pd.read_excel(BytesIO(file_bytes))
+            from app.modules.commcalc.router import _xlsx_read   # the ONE tolerant workbook reader (2026-09-20)
+            df = _xlsx_read(file_bytes, "hotsheet upload")[0]
         except Exception as e:
             raise ValueError(f"Could not parse hotsheet file: {e}")
 

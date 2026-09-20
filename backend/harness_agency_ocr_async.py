@@ -487,9 +487,13 @@ imported = _imports(TREE)
 # `app.modules.billing[.ai_meter]` is the mig 972/973 AI-usage metering import, a registered feature
 # addition — ALLOWED here as an import. Whether it is CALLED safely is a different question, and a
 # failing one: see section H.
+# `app.modules.commcalc.router._xlsx_read` is the ONE tolerant workbook reader every upload payload rides
+# (2026-09-20, the xl/sharedStrings.xml blocker; locked by harness_xlsx_tolerant §H) — a lazy, in-function
+# import in parse_csv_bytes, ALLOWED here as an import.
 want = (_imports(BASE_TREE) - {"anthropic.Anthropic"}
         | {"anthropic.AsyncAnthropic", "os", "asyncio", "concurrent.futures"}
-        | {"app.modules.billing", "app.modules.billing.ai_meter"})
+        | {"app.modules.billing", "app.modules.billing.ai_meter"}
+        | {"app.modules.commcalc.router", "app.modules.commcalc.router._xlsx_read"})
 tbls = {getattr(c.args[0], "value", "") for c in ast.walk(TREE)
         if isinstance(c, ast.Call) and getattr(c.func, "attr", "") == "table" and c.args}
 check("G6a import surface == origin/main + {os, asyncio, concurrent.futures}, minus the sync client",

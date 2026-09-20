@@ -220,5 +220,62 @@ for p in PASS:
     print(f"  PASS  {p}")
 for f in FAIL:
     print(f"  FAIL  {f}")
+
+# ── H. THE LOCK (CLAUDE.md, #252: "a design fix ships with a check that FAILS THE BUILD if a caller stops
+#      dereferencing the shared fact, or if a second copy appears"). ONE tolerant reader — router._xlsx_read —
+#      is the only place in backend/app/modules that may call pandas' read_excel / ExcelFile on a payload.
+#      Every other call site is named here with its reason, or the build fails naming file:line.
+import ast
+APP = os.path.join(HERE, "app", "modules")
+ALLOWED = {
+    # (relative path, enclosing function) -> why a direct pandas call is legitimate there
+    ("commcalc/xlsx_tolerant.py", "read_excel"): "the tolerant reader itself — the ONE stock read, before and after the repair",
+    ("commcalc/router.py", "_xlsx_read"): "the shared entry point every upload / portal payload rides",
+    ("commcalc/epay_sweep.py", "_describe_workbook"): "a DIAGNOSTIC that runs only after _read_report_records (which rides _xlsx_read) "
+                                                       "has already failed — it describes the downloaded file's sheets in the error text",
+}
+found, unexpected = [], []
+for root, _dirs, files in os.walk(APP):
+    for fn in files:
+        if not fn.endswith(".py"):
+            continue
+        path = os.path.join(root, fn)
+        rel = os.path.relpath(path, APP).replace(os.sep, "/")
+        try:
+            tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
+        except SyntaxError as e:
+            unexpected.append(f"{rel}: unparseable ({e})")
+            continue
+        # enclosing function per call: walk with a stack
+        def visit(node, func):
+            for child in ast.iter_child_nodes(node):
+                name = func
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    name = child.name
+                if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute) \
+                        and child.func.attr in ("read_excel", "ExcelFile"):
+                    found.append((rel, child.lineno, name or "<module>"))
+                visit(child, name)
+        visit(tree, None)
+for rel, line, func in found:
+    if (rel, func) not in ALLOWED:
+        unexpected.append(f"{rel}:{line} in {func}() calls pandas read_excel/ExcelFile directly — route it through router._xlsx_read")
+check("H1 no module outside router._xlsx_read reads a workbook with pandas directly (every allowed site is named with its reason)",
+      not unexpected, "; ".join(unexpected))
+check("H2 every allowed site is still present (an allow-set entry that no longer matches is stale, not free)",
+      {(r, f) for r, _l, f in found} >= set(ALLOWED), sorted(set(ALLOWED) - {(r, f) for r, _l, f in found}))
+_router = open(os.path.join(APP, "commcalc", "router.py"), encoding="utf-8").read()
+import re as _re
+def _body(name):
+    m = _re.search(r"^(async )?def " + name + r"\(.*?(?=^(async )?def |^@router)", _router, _re.S | _re.M)
+    return m.group(0) if m else ""
+for fn in ("_read_upload_df", "_read_upload_grids", "_read_excel_all_sheets", "_parse_xreport_detail", "detect_column_mapping"):
+    check(f"H3 router.{fn} dereferences _xlsx_read (the shared fact), not a copy", "_xlsx_read(" in _body(fn), fn)
+for rel, fn_name in (("closing/router.py", "upload_closing"), ("closing/tender_config.py", None), ("asset/asset_parser.py", "_read_asset_df"),
+                     ("commcalc/hotsheet_parser.py", None), ("commcalc/agency.py", "parse_csv_bytes"), ("commcalc/report_pull.py", None),
+                     ("commcalc/vip_sweep.py", None), ("commcalc/epay_sweep.py", "_read_report_records")):
+    src = open(os.path.join(APP, rel), encoding="utf-8").read()
+    check(f"H4 {rel} rides _xlsx_read for its workbook payload", "_xlsx_read(" in src, rel)
+
 print(f"\nharness_xlsx_tolerant: {len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

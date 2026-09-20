@@ -40,8 +40,9 @@ def _read_asset_df(file_bytes: bytes):
     """Find the sheet + header row that actually holds the Asset_Lending data. Tolerant of a cover/summary
     sheet placed first and of title rows above the header (the common reasons a valid file 'fails to
     upload' when only the first sheet / row 1 is read). Raises a CLEAR error naming what was found."""
+    from app.modules.commcalc.router import _xlsx_read   # the ONE tolerant workbook reader (2026-09-20)
     try:
-        book = pd.read_excel(BytesIO(file_bytes), sheet_name=None, header=None, dtype=str)
+        book = _xlsx_read(file_bytes, "asset upload", sheet_name=None, header=None, dtype=str)[0]
     except Exception as e:
         raise ValueError(f"Could not open the Asset_Lending file as a spreadsheet: {e}")
     tried = []
@@ -51,7 +52,7 @@ def _read_asset_df(file_bytes: bytes):
             continue
         for hdr in range(min(15, len(raw))):   # scan leading rows for the header
             if any(_is_anchor(c) for c in raw.iloc[hdr].tolist()):
-                df = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet, header=hdr, dtype=str)
+                df = _xlsx_read(file_bytes, "asset upload", sheet_name=sheet, header=hdr, dtype=str)[0]
                 df.columns = df.columns.str.strip()
                 if len(df.dropna(how="all")) > 0:
                     return df
