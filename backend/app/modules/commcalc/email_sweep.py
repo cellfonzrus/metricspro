@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from email.header import decode_header
 
 from app.modules.commcalc.ftp_sweep import match_upload_type  # shared glob → upload_type logic
+from app.modules.commcalc import data_lineage_registry as _lineage  # replaces_whole_period (pure data)
 
 # Extensions the downstream /upload pipeline can actually read.
 _DATA_EXTS = (".xlsx", ".xlsm", ".xlsb", ".xls", ".csv", ".txt", ".tsv")
@@ -366,7 +367,68 @@ def list_messages(cfg, limit=50):
     return out
 
 
-def fetch_new_attachments(cfg, already, unrouted=None):
+def _msg_sent_at(msg):
+    """When the message was SENT, as an aware datetime — or None if the Date header is missing/unparseable.
+    None is meaningful: the backlog collapse below refuses to order a group it cannot date."""
+    try:
+        dt = email.utils.parsedate_to_datetime(msg.get("Date"))
+    except Exception:
+        return None
+    if dt is None:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _collapse_superseded(entries, superseded):
+    """BACKLOG COLLAPSE. Given this sweep's candidate attachments, drop the ones a NEWER copy of the same
+    report will overwrite anyway, and report them on `superseded` so the caller can journal them.
+
+    WHY (Boost, 2026-09-20). While the house mailbox's login was rejected, ~336 hourly copies of the same
+    b2bsoft sales report piled up. The sweep drained them in ARRIVAL ORDER and every `daily_sales` ingest
+    DELETES (org, period) and re-inserts — so it performed 336 full 1.1 MB imports to reach the state the
+    newest file alone describes, ~30 per sweep, showing a part-month for hours in between, and moving the
+    feed BACKWARD whenever an older message was processed after a newer one.
+
+    THE RULE, and it is narrow on purpose:
+      • only for an upload type DECLARED whole-period-replacing (`data_lineage_registry`). Anything
+        incremental, append-only, or replacing a slice narrower than the period is never collapsed — the
+        default for an unlisted type is to process every message.
+      • grouped by (upload_type, filename, YEAR-MONTH SENT). The month key keeps a month boundary honest:
+        the last August report and the first September report share a filename but are different periods,
+        so both survive.
+      • an UNDATEABLE message (no parseable Date header) has an unknown period, so it is never collapsed
+        away and never supersedes anything: it keys its own group and is always ingested. Its dateable
+        siblings still collapse among themselves — they are provably ordered. Keeping it costs one extra
+        import; dropping it could cost a period, so the asymmetry is deliberate.
+
+    The kept entry is the newest by sent_at. Superseded payloads are released immediately, so a 336-message
+    backlog costs one message's bytes at a time rather than ~370 MB."""
+    groups, passthrough = {}, []
+    for e in entries:
+        ut = e.get("upload_type")
+        if not _lineage.replaces_whole_period(ut):
+            passthrough.append(e)
+            continue
+        sent = e.get("sent_at")
+        key = (ut, (e.get("name") or "").lower(), sent.strftime("%Y-%m") if sent else None)
+        groups.setdefault(key, []).append(e)
+    kept = []
+    for (ut, _fname, month), members in groups.items():
+        # month is None <=> every member of this group is undateable (the key is built from sent_at).
+        if month is None or any(m.get("sent_at") is None for m in members) or len(members) == 1:
+            kept.extend(members)      # unknown period, or nothing to collapse — leave exactly as it was
+            continue
+        members.sort(key=lambda m: m["sent_at"])
+        winner = members[-1]
+        for loser in members[:-1]:
+            superseded.append({"message_id": loser.get("message_id"), "name": loser.get("name"),
+                               "upload_type": ut, "superseded_by": winner.get("message_id")})
+            loser["bytes"] = None     # release the payload the moment it is known to be redundant
+        kept.append(winner)
+    return passthrough + kept
+
+
+def fetch_new_attachments(cfg, already, unrouted=None, superseded=None):
     """Download every attachment matching a configured pattern that isn't already processed.
     `already` is a set of (message_id, filename). Returns [{message_id, name, size, upload_type, bytes}].
 
@@ -374,7 +436,12 @@ def fetch_new_attachments(cfg, already, unrouted=None):
     pattern is appended as {message_id, name, from, subject, date}. This is the "the email HAS the data but
     the system didn't import it" signal — a report that was renamed at the source (e.g. b2b recreating a
     report as 'My Sales Transaction Details Legacy New') stops matching an old glob and would otherwise be
-    dropped silently. The caller surfaces these as an alert + on the freshness banner instead."""
+    dropped silently. The caller surfaces these as an alert + on the freshness banner instead.
+
+    `superseded` (optional list): if provided, backlog collapse is ENABLED — see `_collapse_superseded`.
+    Older copies of a whole-period-replacing report, which a newer copy in the same month would overwrite
+    anyway, are removed from the result and appended here so the caller can journal them terminally instead
+    of re-importing them on every sweep forever. Omit it and the function behaves exactly as before."""
     patterns = cfg.get("patterns") or []
     M = _connect(cfg)
     out = []
@@ -383,6 +450,7 @@ def fetch_new_attachments(cfg, already, unrouted=None):
     unr_seen = set()
     try:
         for mid, msg in _iter_messages(M, cfg):
+            _sent = _msg_sent_at(msg)
             atts = list(_attachments(msg))
             # b2bsoft attaches BOTH an .xlsx (the good one) and a same-named .csv that ingests 0 rows and
             # errors on every hourly email — pure noise. When a .csv has a same-stem .xlsx/.xls sibling in
@@ -406,12 +474,14 @@ def fetch_new_attachments(cfg, already, unrouted=None):
                     continue
                 batch_seen.add((mid, fname))
                 out.append({"message_id": mid, "name": fname, "size": len(payload or b""),
-                            "upload_type": ut, "bytes": payload})
+                            "upload_type": ut, "bytes": payload, "sent_at": _sent})
     finally:
         try:
             M.logout()
         except Exception:
             pass
+    if superseded is not None:
+        out = _collapse_superseded(out, superseded)
     return out
 
 

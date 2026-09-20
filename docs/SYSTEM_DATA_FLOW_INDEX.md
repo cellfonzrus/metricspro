@@ -3185,6 +3185,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `commcalc.carrier_commission` (mig `065`) | **NOTHING WRITES IT for any live org — 0 rows house, 0 rows LuxeLink (measured 2026-09-20)**, which is why `rep_commissions.carrier_statement_comm` reads `$0.00` on every live row. `_apply_new_engines` reads it into `stmt_by_rep` (`router.py`, the statement block) and `/carrier-comm-file/extract` writes it. The live carrier statement for a master-agent tenant is `raw_ma_commission`, NOT this table — see §31.2 | §15 carrier statement commission; §31 carrier earned vs employee paid |
 | `commcalc.raw_ma_commission` — as the EARNED side | per-device statement money in `spiff_m1..m6` / `rebate` / `device_margin` / `consumer_margin` / `mrc_net_discount`, netted per device by `sale_installment_engine._ma_gate_index` (mig `308`, base + adjustment summed so a clawback nets out); which columns count as dealer earnings is `commission_catalog.amount_fields(org,'ma_commission')` with `_MA_NUMERIC_COLS` as the house default | §31 — `carrier_vs_pay.rollup_by_rep` via `GET /commcalc/carrier-vs-pay/{period}`. Also §15 MA commission, §8 installment gate |
 | `commcalc.rep_commissions.boost_commission` — as the EARNED side | the PRE-ATTRIBUTED dealer figure for a processor-payment tenant: `raw_payment_detail` rows in the `Commission` payment category, summed per `rep_username` by `calculator.calc_rep_commissions` (`pay_by_login`). Read as stored by the earned-vs-paid report, **never recomputed** | §6 rep commission (Boost); §31.5 the second feed shape |
+| `commcalc.email_processed.status` — the sweep's dedup journal, now including **`'superseded'`** | `router._run_email_sweep` — one row per processing attempt, plus one per backlogged copy that a NEWER copy of the same report (same `upload_type`+filename+month) makes redundant, carrying the winner's message-id in `detail` | `router._sweep_dedup_sets` via `SWEEP_TERMINAL_ZERO_STATUSES` — `superseded` is TERMINAL, so a collapsed message is never re-fetched. Which reports may be collapsed is declared ONCE in `data_lineage_registry.FULL_REPLACE_UPLOAD_TYPES` / `replaces_whole_period()`; an undeclared type is never collapsed. §19.19. Proof `harness_sweep_backlog_collapse.py` (33 checks) |
 | `commcalc.daily_sales_feed.uploaded_at` · `vip_paygo_payments.swept_at` · `vip_credit_memos.swept_at` — the ARRIVAL columns (as opposed to each table's DATA date) | the ingest that lands the row | `data_lineage_registry.FRESHNESS_COLUMN_BY_TABLE` / `freshness_column(table)` is the ONE declaration; `router._table_feed_freshness` dereferences it to fill `last_ingest_at`, and `account/autocompute._PERIOD_SOURCES` must agree with it. Consumed by `_data_freshness_monitor` to tell **"the report email stopped arriving"** (old ingest) from **"the file arrives, its CONTENT is frozen"** (recent ingest, old data date) — a distinction that was structurally impossible for every table-backed feed until 2026-09-20, see §19.18. Proof `harness_ingest_freshness.py` (31 checks) |
 | `commcalc.email_sweep_config` / `ftp_sweep_config` — the FRESHNESS columns `last_run_at` vs `last_attempt_at` (mig `241`) | `router._sweep_run_stamp(success)` is the SOLE decider, written through `_email_status_update` (mailbox, scoped `org_id`+`account`) / `_status_update` (FTP). **Only an ingest advances `last_run_at`** (`ok > 0` attachments); a rejected login, a mailbox with no filename rules, a connect error or a crash writes `last_attempt_at`. Both degrade to a status-only write on a pre-241 database | `router._scan_connector_health` → `GET /commcalc/connector-health` (ERRORED/STALE arms — the STALE arm was DEAD for these two tables until 2026-09-20, see §19), and `core.control_box_api._SCHEDULER_SPECS['sched_email_sweep']` → `control_box.heartbeat_lamp(last_success=…)`, whose parameter name this now actually honours. Scheduling reads NEITHER column — `/run-due` keys off `next_run_at`. Proof `harness_sweep_freshness.py` (28 checks) |
 
@@ -3443,6 +3444,60 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 ---
 
 ## 19. Known gaps & inert config
+
+§19.19 **A BACKLOG OF THE SAME REPORT COST ONE IMPORT PER EMAIL, NOT ONE PER PERIOD (fixed 2026-09-20).**
+
+**THE CORRECTION TO §19.17/§19.18 FIRST.** Both of those said Boost's b2bsoft export had stopped or gone
+stale at 2026-09-07. **Neither was true.** The export never stopped: b2bsoft emails it HOURLY and the
+owner's own inbox shows unbroken delivery through 2026-09-20 00:20. What the platform was displaying was
+the content of an OLD email.
+
+**WHAT ACTUALLY HAPPENED.** While the mailbox login was rejected (09-07 23:11 → 09-20 03:35) roughly
+**336 hourly copies** of the same report piled up unprocessed. `daily_sales` lands by DELETING
+(org, period) and re-inserting — it is not in `ingest_slice.INGEST_PARTITION`, so it takes the legacy
+wide delete. The sweep drained the backlog in **arrival order**, so each ingest deleted September and
+re-inserted a slightly larger file. From `upload_trace.date_counts`, measured:
+
+| time | rows_in | days | through |
+|---|---|---|---|
+| 03:38:00 | 6,602 | 7 | 2026-09-07 |
+| 04:05:12 | 7,570 | 8 | 2026-09-08 |
+
+31 emails in half an hour to advance the feed by **one day**, ~305 still queued, and the attachments
+grow monotonically (1,143,904 → 1,311,629 bytes) because the report is cumulative month-to-date. Three
+costs: ~336 full 1.1 MB imports to reach the state the newest file alone describes; a part-month feed for
+hours while every report reading it looks like real data rather than an outage; and the feed moving
+**backward** whenever an older message is processed after a newer one.
+
+**THE FIX — a property of the ingest, not of this mailbox.**
+- `data_lineage_registry.FULL_REPLACE_UPLOAD_TYPES` / `replaces_whole_period()` DECLARES which upload
+  types replace their whole (org, period) slice (`daily_sales`, `x_report`, `sales_trend`). The property
+  used is a consequence of the replace semantics, not an assumption that the report is cumulative: given
+  two files of the same report and period, ingesting the newer ALONE leaves the same database state as
+  ingesting both.
+- `email_sweep._collapse_superseded` groups this sweep's candidates by **(upload_type, filename,
+  year-month sent)** and keeps the newest per group, releasing the superseded payloads immediately (a
+  336-message backlog costs one message's bytes, not ~370 MB).
+- The rest are journalled `status='superseded'`, `rows_saved=0`, carrying the winning message-id, and
+  `'superseded'` joins `SWEEP_TERMINAL_ZERO_STATUSES` so they are never re-fetched. The status line says
+  how many — never a silent drop. A failed superseded-journal is counted like the ingest loop's own.
+- **The refusals are the design.** An upload type not declared is never collapsed (silence means "import
+  them all" — that covers every `INGEST_PARTITION` table, whose files replace a slice *narrower* than the
+  period). The month key keeps a month boundary honest. An **undateable** message has an unknown period,
+  so it is never collapsed away and never supersedes anything; its dateable siblings still collapse.
+
+**Proof:** `backend/harness_sweep_backlog_collapse.py` (33 checks) — §B replays the live 336-message
+backlog, §C the month boundary, §D every refusal, §F the wiring and terminality.
+
+**Stopgap applied in parallel (owner-run):** `email_sweep_config.since_days` 14 → 2 for the house org, so
+the already-queued backlog falls outside the search window and the newest email lands in one sweep. Once
+this change ships the window size stops mattering; the row can go back to 14.
+
+**A NOTE ON THE TWO EARLIER ENTRIES.** §19.17's fix (a failing sweep may not stamp `last_run_at`) and
+§19.18's (the arrival-vs-content discriminator) are both still correct and still needed. What was wrong
+was the CONCLUSION each was reported with — "the export is frozen". The evidence that settled it was
+`upload_trace.date_counts` + `email_processed.file_size`, which were there the whole time and which
+neither investigation read.
 
 §19.18 **"IS THE DATA STILL FLOWING?" — THE DISCRIMINATOR WAS DEAD FOR EVERY TABLE-BACKED FEED, AND
 THE SWEEP COULD LOSE THE RECORD OF A SUCCESSFUL RUN (fixed 2026-09-20, owner directive: no patchwork).**
