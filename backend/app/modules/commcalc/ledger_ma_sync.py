@@ -357,13 +357,17 @@ def _amount_state(raw, ceiling):
 
 
 def derive(raw_rows, *, kind, resolved, hdr_rules, cat_rules, base, components=None,
-           ceiling=AMOUNT_CEILING_DEFAULT, source_table=None, synced_at=None, report_key=""):
+           ceiling=AMOUNT_CEILING_DEFAULT, source_table=None, synced_at=None, report_key="",
+           conv=None):
     """Turn raw MA rows into canonical ledger rows through the FILE-IMPORT code path.
 
     Returns (rows, diag). `diag` carries every honesty counter the preview shows: excluded-by-ceiling
     lines (+ dollars + examples), skipped-empty amounts, per-component line counts, and the refusal
     reason when a source can't be read at all. NOTHING is dropped silently. PURE (no DB, no clock unless
-    `synced_at` is passed through)."""
+    `synced_at` is passed through).
+
+    `conv` is the template's sign convention (commission_ledger.load_convention); None = the MA
+    convention, which is what every MA source this path serves has always used."""
     from app.modules.commcalc import column_mapping
     from app.modules.commcalc import commission_ledger
 
@@ -417,7 +421,7 @@ def derive(raw_rows, *, kind, resolved, hdr_rules, cat_rules, base, components=N
         if not (src.get("product_name") or src.get("raw_amount") or src.get("order_type")):
             diag["skipped_no_content"] += 1
             return
-        row = commission_ledger.build_row(src, base, cat_rules)
+        row = commission_ledger.build_row(src, base, cat_rules, conv)
         if source_table:
             row["source_table"] = source_table
         if (raw_row or {}).get("id"):

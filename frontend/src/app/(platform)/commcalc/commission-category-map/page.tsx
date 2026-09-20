@@ -34,6 +34,12 @@ export default function CommissionCategoryMapPage() {
   const [src, setSrc] = useState('ma_daily_tx')
   const [rules, setRules] = useState<Rule[]>([])
   const [usingDefaults, setUsingDefaults] = useState(false)
+  // Said out loud when a report has NO rules and inherits none: it used to borrow another report's
+  // patterns silently and show a confident wrong answer.
+  const [noRules, setNoRules] = useState('')
+  // Which sign of this report's amount column is money earned — declared on the mapping, shown here
+  // because it decides what these rules DO with a line.
+  const [conv, setConv] = useState<{ label?: string; amount_header?: string; is_default?: boolean } | null>(null)
   const [ready, setReady] = useState(true)
   const [cats, setCats] = useState<string[]>([])
   const [labels, setLabels] = useState<Record<string, string>>({})
@@ -55,6 +61,7 @@ export default function CommissionCategoryMapPage() {
       const d = await api('/api/v1/commcalc/commission-category-map?source_report=' + encodeURIComponent(s))
       setRules(d?.rules?.length ? d.rules : (d?.default_rules || []))
       setUsingDefaults(!!d?.using_defaults); setReady(d?.ready !== false)
+      setNoRules(d?.unclassified_note || ''); setConv(d?.convention_meta || null)
       setCats(d?.categories || []); setLabels(d?.category_labels || {})
       setMeta({ match_fields: d?.match_fields || meta.match_fields, match_ops: d?.match_ops || meta.match_ops, sign_rules: d?.sign_rules || meta.sign_rules })
       setLegBuckets(d?.leg_buckets || ['m1', 'trailing', 'unsplit']); setLegHelp(d?.leg_help || '')
@@ -134,6 +141,19 @@ export default function CommissionCategoryMapPage() {
         </div>
       )}
       {usingDefaults && ready && <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>No saved rules for this template yet — showing built-in defaults. Save one to start a custom set.</div>}
+      {noRules && ready && (
+        <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
+          {noRules} Add your first rule below — the labels your own file uses are listed under “Observed”.
+        </div>
+      )}
+      {conv && (
+        <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 10 }}>
+          Amount column{conv.amount_header ? <> (<code>{conv.amount_header}</code>)</> : null}: <b>{conv.label}</b>.
+          {' '}Change it on{' '}
+          <a href="/commcalc/column-mapping" style={{ color: 'var(--accent,#2563eb)' }}>Column Mapping →</a>
+          {conv.is_default ? ' (not declared — reading it the long-standing way)' : ''}
+        </div>
+      )}
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>{msg}</div>}
 
       {/* How-to (plain-language, step by step) */}
