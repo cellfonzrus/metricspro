@@ -30,10 +30,11 @@ import {
   BASE, card, note, inp, btn, primary, ghost, mono, money, num, LAMP, Lamp, Badge, DetectPanel, ColumnsTable, StoreResolver, Dropzone,
   useAutoSave, SaveButton,
   type StateResp, type Column, type MoneyCol, type Detect, type StoreRow, type RepRow, type Tie, type FileRef, type IdentityDecisions,
-  type BucketRow, type BucketMeta, type SaveResult,
+  type BucketRow, type BucketMeta, type SaveResult, type ReportLinks, type LinkCell, type LinkDirection, type LinkField,
 } from './intake-shared'
 import { Stage2Flow, STAGE2_STEPS } from './stage2'
 import { useReportKinds } from '@/lib/report-kinds'
+import { STATEMENT_TYPE_DEFAULT, statementTypeToken } from '@/lib/statement-type'
 
 // ── stage-3 payload types (mirror onboarding_intake.py) ─────────────────────────────────────────
 type SignRow = { label: string; sub_label: string; store: string; amount: number }
@@ -104,7 +105,11 @@ export default function OnboardingIntakePage() {
   // along as `report_kind` so the confirmed layout is learned under it.
   const registry = useReportKinds()
   const statementKinds = useMemo(() => registry.visible.filter(k => k.landing === 'commission'), [registry.visible])
-  const statementReportKind = useMemo(() => statementKinds.find(k => (k.statement_type === 'residual') === /residual/i.test(statementType))?.key || '', [statementKinds, statementType])
+  // The typed text names a registry TOKEN the same way the backend's `statement_type_token` reads
+  // it (longest known token contained in the text; blank = the default). The mapping the commit
+  // saves is keyed by that token (index §30.10), so a residual statement keeps its own map and sign.
+  const statementToken = useMemo(() => statementTypeToken(statementType, statementKinds.map(k => k.statement_type || '')), [statementType, statementKinds])
+  const statementReportKind = useMemo(() => statementKinds.find(k => (k.statement_type || STATEMENT_TYPE_DEFAULT) === statementToken)?.key || '', [statementKinds, statementToken])
   const [file, setFile] = useState<File | null>(null)
   const [filename, setFilename] = useState('')
   const [kept, setKept] = useState<FileRef | null>(null)
@@ -129,6 +134,21 @@ export default function OnboardingIntakePage() {
   const [msg, setMsg] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const restored = useRef(false)
+  // Stage D — the report links: fetched on demand (?links=all re-reads every landed slice, so it is not
+  // part of an ordinary state read); a cached, fresh result on the state payload is used as-is
+  const [links, setLinks] = useState<ReportLinks | null>(null)
+  const [linksBusy, setLinksBusy] = useState(false)
+  const [pairKey, setPairKey] = useState<string | null>(null)
+  const linksRequested = useRef(false)
+  const loadLinks = useCallback(async (what: string) => {
+    setLinksBusy(true)
+    try {
+      const d: StateResp = await api(`${BASE}/state?links=${encodeURIComponent(what)}`)
+      if (d?.report_links) setLinks(d.report_links)
+      return d?.report_links || null
+    } catch (e: unknown) { setStateErr((e as Error)?.message || 'Could not compute the report links'); return null }
+    finally { setLinksBusy(false) }
+  }, [])
 
   const flash = useCallback((m: string) => { setMsg(m); setTimeout(() => setMsg(''), 7000) }, [])
   const carriers = state?.carriers || []
@@ -387,6 +407,17 @@ export default function OnboardingIntakePage() {
     }
   }
 
+  // the links shown: what was fetched here, else the fresh cache the state read carried (derived, not copied into state)
+  const cachedLinks = state?.report_links && state.report_links.computed && state.report_links.stale === false ? state.report_links : null
+  const shownLinks = links || cachedLinks
+  useEffect(() => {
+    if (stage !== '4' || !state) return
+    const rl = state.report_links
+    if (!rl?.available || linksRequested.current || (shownLinks && shownLinks.stale === false)) return
+    linksRequested.current = true
+    loadLinks('all')          // a fetch: its callback sets state once the backend has re-read the landed rows
+  }, [stage, state, shownLinks, loadLinks])
+
   const a = analysis
   const headers = a?.detect.headers || []
   const buckets = bucketRows.length ? bucketRows.map(b => b.key) : (a?.buckets || state?.buckets || [])
@@ -475,7 +506,9 @@ export default function OnboardingIntakePage() {
                     style={{ borderTop: '1px solid var(--border)', background: r.red ? 'rgba(239,68,68,.06)' : 'transparent', cursor: r.red ? 'pointer' : 'default' }}>
                     <td style={{ padding: '6px 4px', fontWeight: 600 }}>{r.label}{r.red && <div style={{ ...note, fontSize: 11, color: '#ef4444' }}>{r.blocking_reason || r.status} → step {r.fix_step}</div>}{!r.red && r.basis && <div style={{ ...note, fontSize: 11 }}>{r.basis}</div>}
                       {/* Stage C — the cross-check this commit ran (bill payments extracted / units activated but still on hand) */}
-                      {r.note && <div style={{ ...note, fontSize: 11, color: '#b45309', fontWeight: 600 }}>{r.note}</div>}</td>
+                      {r.note && <div style={{ ...note, fontSize: 11, color: '#b45309', fontWeight: 600 }}>{r.note}</div>}
+                      {/* Stage D — how many other loaded reports this one is linked to by a common column */}
+                      {shownLinks?.notes?.[r.instance_key] && <div style={{ ...note, fontSize: 11 }}>{shownLinks.notes[r.instance_key]}</div>}</td>
                     <td style={{ padding: '6px 4px' }}>{r.period || '—'}</td>
                     <td style={mono}>{money(r.our_total)}</td><td style={mono}>{money(r.file_total)}</td>
                     <td style={{ ...mono, color: r.match === false ? '#ef4444' : r.match ? '#16a34a' : 'inherit' }}>{r.difference === null ? '—' : money(r.difference)}</td>
@@ -485,6 +518,8 @@ export default function OnboardingIntakePage() {
                 ))}
               </tbody>
             </table>
+            {/* ═══ Stage D — REPORT LINKS: every loaded report linked to every other by the columns they share ═══ */}
+            <ReportLinksSection links={shownLinks} busy={linksBusy} pairKey={pairKey} setPairKey={setPairKey} loadLinks={loadLinks} />
             <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>4.2 — Sign-off</h2>
             {rail.sign_off.signed
               ? <div style={note}>Signed off by <b>{rail.sign_off.by}</b>{rail.sign_off.on_behalf ? ' on behalf of the tenant' : ''} at {rail.sign_off.at?.slice(0, 16).replace('T', ' ')}.{!rail.sign_off.all_verified && <span style={{ color: '#ef4444' }}> A source was added or changed since — its row above is red until re-verified.</span>}</div>
@@ -542,7 +577,7 @@ export default function OnboardingIntakePage() {
               <label style={{ fontSize: 13 }}>Statement type
                 <input list="statement-kinds" value={statementType} onChange={e => setStatementType(e.target.value)} style={{ ...inp, width: '100%', marginTop: 4 }} placeholder="commission statement" />
                 <datalist id="statement-kinds">
-                  {statementKinds.map(k => <option key={k.key} value={k.statement_type === 'residual' ? 'residual statement' : 'commission statement'}>{k.label}</option>)}
+                  {statementKinds.map(k => <option key={k.key} value={`${k.statement_type || STATEMENT_TYPE_DEFAULT} statement`}>{k.label}</option>)}
                 </datalist>
                 {statementKinds.length > 0 && <div style={{ ...note, fontSize: 11, marginTop: 2 }}>{statementKinds.map(k => `${k.label} (${k.provenance_text})`).join(' · ')}{registry.withheld ? ` · ${registry.withheld}` : ''}</div>}
               </label>
@@ -842,6 +877,135 @@ export default function OnboardingIntakePage() {
           </div>
         )}
       </main>
+    </div>
+  )
+}
+
+
+// ── Stage D — the "Report links" section of Stage 4 (index §30.11) ──────────────────────────────────
+// A matrix (rows / cols = the run's loaded reports, by their registry label): each cell the strongest
+// shared column and the match counts EACH WAY. Click a cell → the pair detail: per shared column the
+// counts, the pairing basis ("paired by IMEI / serial directly" / "paired by IMEI / serial through the
+// sales export: the phone number on the sale line names the unit"), the top unmatched keys and the
+// ambiguous keys — reported, never resolved. Everything here is what the backend computed from the
+// landed rows; the page pairs nothing.
+function rate(c: { matched: number; lines: number } | null | undefined) {
+  if (!c || !c.lines) return '—'
+  return `${num(c.matched)}/${num(c.lines)}`
+}
+
+function provenance(f: LinkField) {
+  if (f.basis === 'via_third_report' && f.via) return `paired by ${f.label} through ${f.via.through_label} — ${f.via.how}`
+  return `paired by ${f.label} directly`
+}
+
+function DirectionDetail({ d, from, to, label }: { d: LinkDirection; from: string; to: string; label: string }) {
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ fontSize: 13 }}><b>{num(d.matched)}</b> of {num(d.lines)} {from} lines match a {to} line by {label}
+        {d.unmatched > 0 && <span> · <span style={{ color: '#b45309' }}>{num(d.unmatched)} unmatched</span></span>}
+        {d.no_key > 0 && <span> · {num(d.no_key)} carry no {label}</span>}
+        {!!d.via_lines && <span> · {num(d.via_lines)} paired through {d.via_label}</span>}
+        {d.ambiguous > 0 && <span> · <span style={{ color: '#b45309' }}>{num(d.ambiguous)} match several {to} lines (ambiguous — listed, not resolved)</span></span>}
+      </div>
+      {!!d.via_reasons && Object.keys(d.via_reasons).length > 0 && (
+        <div style={{ ...note, fontSize: 11 }}>could not be paired through the third report: {Object.entries(d.via_reasons).map(([k, v]) => `${num(v)} — ${k}`).join(' · ')}</div>
+      )}
+      {d.unmatched_sample.length > 0 && (
+        <div style={{ ...note, fontSize: 11 }}>unmatched {label}s ({num(d.unmatched_distinct)} distinct; top {d.unmatched_sample.length}): {d.unmatched_sample.map(u => `${u.key}${u.lines > 1 ? ` ×${u.lines}` : ''}`).join(', ')}</div>
+      )}
+      {d.ambiguous_sample.length > 0 && (
+        <div style={{ ...note, fontSize: 11 }}>ambiguous {label}s ({num(d.ambiguous_distinct)} distinct; top {d.ambiguous_sample.length}): {d.ambiguous_sample.map(u => `${u.key} (on ${u.other_side_lines} ${to} lines)`).join(', ')}</div>
+      )}
+    </div>
+  )
+}
+
+function ReportLinksSection({ links, busy, pairKey, setPairKey, loadLinks }: {
+  links: ReportLinks | null; busy: boolean; pairKey: string | null; setPairKey: (k: string | null) => void
+  loadLinks: (what: string) => Promise<ReportLinks | null>
+}) {
+  const mx = links?.matrix || null
+  const sources = mx?.sources || []
+  const cellOf = (a: string, b: string): LinkCell | null => (mx?.cells[`${a}|${b}`] || mx?.cells[`${b}|${a}`] || null)
+  const detail = links?.detail && pairKey && `${links.detail.a}|${links.detail.b}` === pairKey ? links.detail : null
+  const openPair = async (a: string, b: string) => {
+    const c = cellOf(a, b)
+    if (!c) return
+    const key = `${c.a}|${c.b}`
+    setPairKey(key)
+    await loadLinks(key)
+  }
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Report links</h2>
+      <p style={{ ...note, marginBottom: 8 }}>
+        Every report you loaded, linked to every other by the columns they have in common — IMEI / serial, phone number, invoice / order number, store, rep, date —
+        with the match counts each way, computed from the rows in the tables. An unmatched line is unmatched; a key that fits several lines is listed as ambiguous, never picked.
+      </p>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+        <button style={ghost} disabled={busy} onClick={() => { setPairKey(null); loadLinks('all') }}>{busy ? 'Computing…' : links?.computed ? 'Recompute' : 'Compute the links'}</button>
+        {links?.computed_at && <span style={{ ...note, fontSize: 11 }}>computed {links.computed_at.slice(0, 16).replace('T', ' ')}{links.cached ? ' (cached)' : ''}</span>}
+        {links?.stale && <span style={{ ...note, fontSize: 11, color: '#b45309' }}>a report was added or re-verified since — recompute</span>}
+        {links && !links.available && <span style={{ ...note, fontSize: 11, color: '#b45309' }}>{links.note}</span>}
+      </div>
+      {links?.available && links.computed && mx && (
+        <>
+          {mx.note && <div style={{ ...note, marginBottom: 8 }}>{mx.note}</div>}
+          {mx.skipped.length > 0 && <div style={{ ...note, fontSize: 11, marginBottom: 8 }}>not linked (could not be re-read): {mx.skipped.map(s => `${s.label} — ${s.note || 'no rows'}`).join(' · ')}</div>}
+          {sources.length > 1 && (
+            <div style={{ overflowX: 'auto', marginBottom: 12 }}>
+              <table style={{ fontSize: 12, borderCollapse: 'collapse' }}>
+                <thead><tr style={{ color: 'var(--text2)' }}><th align="left" style={{ padding: '4px 6px' }}>rows ↓ / cols →</th>
+                  {sources.map(c => <th key={c.instance_key} align="left" style={{ padding: '4px 6px', maxWidth: 160 }}>{c.label}<div style={{ ...note, fontSize: 10, fontWeight: 400 }}>{num(c.lines)} lines · linked to {c.linked_to}</div></th>)}</tr></thead>
+                <tbody>
+                  {sources.map(r => (
+                    <tr key={r.instance_key} style={{ borderTop: '1px solid var(--border)' }}>
+                      <td style={{ padding: '4px 6px', fontWeight: 600, maxWidth: 160 }}>{r.label}</td>
+                      {sources.map(c => {
+                        if (c.instance_key === r.instance_key) return <td key={c.instance_key} style={{ padding: '4px 6px', ...note }}>—</td>
+                        const cell = cellOf(r.instance_key, c.instance_key)
+                        if (!cell) return <td key={c.instance_key} style={{ padding: '4px 6px', ...note }}>—</td>
+                        const fwd = cell.a === r.instance_key ? cell.a_to_b : cell.b_to_a       // this row → this column
+                        const back = cell.a === r.instance_key ? cell.b_to_a : cell.a_to_b
+                        const selected = pairKey === `${cell.a}|${cell.b}`
+                        return (
+                          <td key={c.instance_key} onClick={() => openPair(r.instance_key, c.instance_key)} title={cell.note || `${cell.shared.length} shared column(s): ${cell.shared.join(', ')}`}
+                            style={{ padding: '4px 6px', cursor: 'pointer', verticalAlign: 'top', background: selected ? 'rgba(37,99,235,.10)' : cell.linked ? 'rgba(22,163,74,.06)' : 'transparent' }}>
+                            {cell.note ? <span style={{ ...note, fontSize: 11 }}>{cell.note}</span> : (
+                              <>
+                                <div style={{ fontWeight: 600 }}>{cell.label}{cell.basis === 'via_third_report' ? ' (via)' : ''}{!cell.linked && <span style={{ ...note, fontSize: 10 }}> · shared, no line matched</span>}</div>
+                                <div style={{ ...note, fontSize: 11 }}>→ {rate(fwd)} · ← {rate(back)}</div>
+                              </>
+                            )}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {pairKey && !detail && <div style={{ ...note, fontSize: 12 }}>{busy ? 'Loading the pair…' : links.detail_note || ''}</div>}
+          {detail && (
+            <div style={{ ...card, padding: 12 }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>{detail.a_label} ↔ {detail.b_label}
+                <button style={{ ...ghost, marginLeft: 10, padding: '3px 8px', fontSize: 11 }} onClick={() => setPairKey(null)}>close</button></div>
+              {detail.note && <div style={note}>{detail.note}</div>}
+              {detail.fields.map(f => (
+                <div key={f.field} style={{ borderTop: '1px solid var(--border)', padding: '8px 0' }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>{f.label}
+                    <span style={{ ...note, fontSize: 11, fontWeight: 400, marginLeft: 8 }}>{provenance(f)}{f.field === 'date' ? ' — a day both reports have lines on, not a line match' : ''}</span>
+                    {f.field === detail.strongest && <span style={{ ...note, fontSize: 10, marginLeft: 8 }}>strongest</span>}</div>
+                  <DirectionDetail d={f.a_to_b} from={detail.a_label} to={detail.b_label} label={f.label} />
+                  <DirectionDetail d={f.b_to_a} from={detail.b_label} to={detail.a_label} label={f.label} />
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }

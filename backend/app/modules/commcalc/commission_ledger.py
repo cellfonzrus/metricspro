@@ -56,6 +56,50 @@ MAPPING_REPORT_KEY = "commission_ledger"    # the column_mapping report_key this
 AMOUNT_FIELD = "raw_amount"                 # the mapped column whose sign convention is being declared
 DEFAULT_SOURCE_REPORT = "ma_daily_tx"
 
+
+# ── THE ONE DERIVATION OF A COMMISSION-FAMILY MAPPING KEY (owner 2026-09-20; index §30.10) ────────
+# THE CLASS THIS CLOSES: the column-mapping key ignored the STATEMENT TYPE. Every reader and writer
+# keyed `commcalc.column_mapping` by (org, MAPPING_REPORT_KEY, carrier, field), so a residual
+# statement from the same carrier — a different layout, its own sign — would have OVERWRITTEN the
+# commission statement's column map and its `sign_convention` (which lives on that key's `raw_amount`
+# row). The RULES were already namespaced per statement (`commission_category_map.source_report =
+# <carrier>__<statement slug>`); the mapping was the one fact without its home. Now:
+#
+#     mapping key  =  MAPPING_REPORT_KEY                        for the default type ('commission')
+#                  =  MAPPING_REPORT_KEY + '__' + <token>       for every other statement type
+#
+# where <token> is the registry's statement-type vocabulary (report_kinds.statement_type_token: the
+# `statement_type` of the commission-landing report-kind rows — 'residual' today; a third type is a
+# registry ROW, not code). The default maps onto TODAY's key byte-for-byte, so every mapping row and
+# sign answer saved before this existed is read exactly as before — nothing is re-keyed.
+# `harness_mapping_key_lock.py` fails the build on any literal MAPPING_REPORT_KEY used as a mapping
+# key outside this function; `harness_statement_type_mapping.py` proves the behaviour.
+def mapping_report_key(statement_type="", registry_rows=None):
+    """THE column_mapping `report_key` for a commission-family statement of `statement_type` (free
+    text as the person typed it at 3.1, or the registry token, or blank = the default type).
+    `registry_rows` = the merged report-kind rows (report_kinds.load_registry) when the caller has
+    them; None reads the mirror, which always carries the house vocabulary. PURE."""
+    from app.modules.commcalc import column_mapping as _cm
+    from app.modules.commcalc import report_kinds as _rk
+    tok = _rk.statement_type_token(statement_type, registry_rows)
+    return _cm.variant_report_key(MAPPING_REPORT_KEY, "" if tok == _rk.STATEMENT_TYPE_DEFAULT else tok)
+
+
+def mapping_report_keys(registry_rows=None):
+    """One mapping key per statement type the registry names (default first) — what the Column
+    Mapping page's picker lists, so a type added as a registry row is editable with no code. PURE."""
+    from app.modules.commcalc import report_kinds as _rk
+    return [mapping_report_key(t, registry_rows) for t in _rk.statement_types(registry_rows)]
+
+
+def statement_type_of_source_report(source_report):
+    """The statement-type TEXT a ledger `source_report` carries — the part after the carrier code in
+    the intake's `<carrier>__<statement slug>` (onboarding_intake.source_report_key), '' for a
+    template key with no statement part ('ma_daily_tx'). What a READ endpoint that knows only the
+    source_report hands to mapping_report_key. PURE."""
+    from app.modules.commcalc import column_mapping as _cm
+    return _cm.split_report_key(source_report)[1]
+
 # THE COLUMN-BACKED buckets (the five amount columns on commission_ledger, mig 071) + non-payout
 # sentinels. Every OTHER bucket lives in the registry below and is read by (category, payout_total).
 CATEGORIES = ["commission", "spiff", "equipment_rebate", "residual_monthly", "autopay_residual"]

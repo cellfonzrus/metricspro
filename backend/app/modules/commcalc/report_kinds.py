@@ -60,7 +60,8 @@ MIGRATION = "1010_report_kind_registry.sql"
 TABLE = "report_kind"
 SIGNATURE_TABLE = "report_signature"
 DEFINED_BY = ("house", "tenant")
-STATEMENT_TYPES = ("commission", "residual")
+STATEMENT_TYPES = ("commission", "residual")     # the mig-1010 CHECK's vocabulary (a widening = a migration)
+STATEMENT_TYPE_DEFAULT = "commission"            # the blank / unstated type = today's behaviour everywhere
 # Where a kind LANDS = the intake's source kinds (onboarding_intake.SOURCE_KINDS) plus three the
 # intake does not take: a custom-import sheet (self-serve capture, mig 099), a report registered
 # through the connector registry (report_definitions, uploaded by its legacy route), a module page.
@@ -117,8 +118,8 @@ HOUSE_KINDS = [
     _k(key="residual_statement", label="Residual report from the carrier",
        what_in_it="The carrier's monthly residual statement — recurring pay per line or account for the service month.",
        recognisable_columns=["Residual", "Service Month", "MDN", "Plan", "Account"],
-       source_hint="from the carrier portal", landing="commission", layout="carrier_commission", statement_type="residual",
-       signature_fields=["residual", "mdn", "account_id"], requires_columns=["Residual"], sort_order=40),
+       source_hint="from the carrier portal", landing="commission", layout="commission_ledger__residual", statement_type="residual",
+       signature_fields=["raw_amount", "account_id", "product_name", "trans_date"], requires_columns=["Residual"], sort_order=40),
     _k(key="inventory_on_hand", label="Inventory on hand",
        what_in_it="What is in stock right now at each store: one row per unit with SKU, IMEI / serial and cost.",
        recognisable_columns=["Product SKU", "Tracking #", "Location", "Unit Cost", "Quantity", "Status"],
@@ -236,6 +237,45 @@ def code(v):
 def norm_header(h):
     """A header name normalised for matching: lower-case, punctuation collapsed to one space."""
     return re.sub(r"[^a-z0-9#]+", " ", _s(h).lower()).strip()
+
+
+# ── THE STATEMENT-TYPE VOCABULARY — rows, never a branch (owner 2026-09-20) ──────────────────────
+def _tok(v):
+    return re.sub(r"[^a-z0-9]+", "_", _s(v).lower()).strip("_")
+
+
+def statement_types(rows=None):
+    """The statement-type tokens the registry names on its commission-landing rows — the mirror's
+    always (so a key can never change because a registry row was edited or the table is absent),
+    plus any the given merged rows add (a tenant- or house-defined third type). Default first.
+    PURE."""
+    toks = []
+    for src in (house_mirror(), rows or []):
+        for r in src:
+            if (r.get("landing") or "") == "commission" and _tok(r.get("statement_type")):
+                t = _tok(r.get("statement_type"))
+                if t not in toks:
+                    toks.append(t)
+    rest = sorted(t for t in toks if t != STATEMENT_TYPE_DEFAULT)
+    return [STATEMENT_TYPE_DEFAULT] + rest
+
+
+def statement_type_token(text, rows=None):
+    """The registry token a free-text statement type names — 'residual statement' → 'residual',
+    'commission statement' / '' → 'commission' (the default), 'monthly residuals' → 'residual'. A
+    text naming NO known token keys as its own slug ('spiff file' → 'spiff_file'): an unknown type
+    never lands on the default's key, because that is exactly the overwrite this exists to prevent.
+    Longest known token wins when several match. PURE; the twin of the 3.1 datalist's choices."""
+    s = _tok(text)
+    if not s:
+        return STATEMENT_TYPE_DEFAULT
+    known = statement_types(rows)
+    for t in sorted((k for k in known if k != STATEMENT_TYPE_DEFAULT), key=len, reverse=True):
+        if t == s or t in s.split("_") or t in s:
+            return t
+    if STATEMENT_TYPE_DEFAULT in s:
+        return STATEMENT_TYPE_DEFAULT
+    return s
 
 
 def header_fingerprint(headers):
@@ -583,13 +623,16 @@ def kind_key_for(rows, landing, layout=None, statement_type=None, headers=None, 
     """The registry key a confirmed intake instance belongs to: the card the person chose if it is a
     row of that landing; else the row of that landing (+ statement type for commission; + layout;
     + requires/excludes over the headers for on-hand vs aging); else None (nothing learned)."""
-    rows = [r for r in rows or [] if r["landing"] == landing]
+    all_rows = list(rows or [])
+    rows = [r for r in all_rows if r["landing"] == landing]
     if chosen and any(r["key"] == chosen for r in rows):
         return chosen
-    st = _s(statement_type).lower()
     if landing == "commission":
-        want = "residual" if "residual" in st else "commission"
-        rows = [r for r in rows if (r.get("statement_type") or "commission") == want] or rows
+        # the statement type is a registry TOKEN, resolved by the one vocabulary function — no
+        # type is named here, so a third type is a row, not a branch
+        want = statement_type_token(statement_type, all_rows)
+        rows = [r for r in rows if _tok(r.get("statement_type")) == want
+                or (not _tok(r.get("statement_type")) and want == STATEMENT_TYPE_DEFAULT)] or rows
     if layout:
         rows = [r for r in rows if not r.get("layout") or r["layout"] == layout] or rows
     if headers and len(rows) > 1:

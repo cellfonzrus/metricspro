@@ -100,7 +100,7 @@ MATRIX_KINDS = ("x_report", "merchant_payments")
 MATRIX_INSTANCE_SLOT = {"x_report": "x_report", "merchant_payments": "settlement"}
 # The column-mapping REPORT KEY (column_mapping.TARGET_FIELDS / TABLE_MAP) each kind maps through —
 # the default LAYOUT; a kind may offer several layouts that land in the same table (layouts_for_kind).
-REPORT_KEY_BY_KIND = {"commission": CL.MAPPING_REPORT_KEY, "sales": "sales", "pos": "pos_product_sales",
+REPORT_KEY_BY_KIND = {"commission": CL.mapping_report_key(""), "sales": "sales", "pos": "pos_product_sales",
                       "inventory": "pos_inventory_listing", "bill_payments": "ma_daily_tx"}
 LAYOUT_LABELS = {
     "sales": "daily sales export (store / salesperson / product lines)",

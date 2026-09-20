@@ -232,6 +232,30 @@ TARGET_FIELDS = {
         ("due_date", "Due date", "date10", False, "Date Due", ["Due Date"]),
         ("raw_amount", "Amount (signed — declare which sign is money earned)", "number", True, "Retail Cost", ["Amount", "Net Amount", "Payout", "Gross"]),
     ],
+    # ── THE RESIDUAL STATEMENT — the same ledger, its OWN mapping key (owner 2026-09-20: "also add
+    # the residual mapping"). The key is `<commission_ledger>__<statement type>` = what
+    # `commission_ledger.mapping_report_key('residual statement')` derives (the ONE derivation); it is
+    # spelled here only because this dict IS the layout registry. A second statement type from the
+    # SAME carrier therefore keeps its own column map AND its own sign convention (the `raw_amount`
+    # row of THIS key) instead of overwriting the commission statement's. Lands in the same table
+    # (TABLE_MAP below) and classifies through the same rules under its own `source_report`.
+    # Generic English aliases only — no carrier's spelling (RULE TWO). The ledger has no mobile-number
+    # column, so the LINE identity (account or mobile number) maps to `account_id`.
+    "commission_ledger__residual": [
+        ("account_id", "Account / mobile number (the line the residual is for)", "text", False, "Account",
+         ["Account ID", "Account Number", "Subscriber ID", "Subscriber", "MDN", "Mobile Number", "Phone Number",
+          "CTN", "Line", "Wireless Number"]),
+        ("account_name", "Account / customer name", "text", False, "Account Name", ["Customer Name", "Customer", "Subscriber Name"]),
+        ("store", "Store / dealer", "text", False, "Store", ["Dealer", "Location", "Dealer Name", "Store Name", "Dealer Code", "Store Code"]),
+        ("rep_user", "Rep / user", "text", False, "Rep", ["Salesperson", "User", "Agent", "Sales Rep"]),
+        ("order_number", "Order / transaction id", "text", False, "Order Number", ["Order Id", "Order #", "Transaction ID", "Reference", "Reference Number"]),
+        ("order_type", "Residual type", "text", False, "Residual Type", ["Type", "Compensation Type", "Payment Type", "Category"]),
+        ("product_name", "Plan / product", "text", True, "Plan", ["Plan Name", "Product", "Product Name", "Rate Plan", "Price Plan", "Description", "Feature"]),
+        ("trans_date", "Service month / period", "date_auto", False, "Service Month",
+         ["Service Period", "Period", "Bill Month", "Billing Month", "Month", "Cycle Date", "Service Date"]),
+        ("raw_amount", "Residual amount (signed — declare which sign is money earned)", "number", True, "Residual",
+         ["Residual Amount", "Residual Payout", "Amount", "Net Amount", "Payout", "Commission", "Total"]),
+    ],
     # ── PER-LINE VENDOR REBATE / COMMISSION HISTORY (mig 1005) ───────────────────────────────────
     # The FEED SHAPE, not a carrier: one row per rebate COMPONENT per line per invoice. Measured on
     # the first real export — 47,252 data rows, 6,094 invoices, 6,449 device IMEIs, 258 distinct
@@ -342,6 +366,7 @@ TABLE_MAP = {
     "sales": "raw_sales",
     "carrier_commission": "carrier_commission",
     "commission_ledger": "commission_ledger",
+    "commission_ledger__residual": "commission_ledger",      # a statement TYPE of the same ledger
     # MA reports (Total/VidaPay). Seeds + target table are DERIVED from report_pull below so the
     # onboarding /upload-mapped path is pre-mapped for MA files (previously: NO seed → load_rules
     # returned [] → the onboarding import 400'd "No column mapping configured" = nothing uploaded).
@@ -407,14 +432,52 @@ def _ma_field_tuples(report_key):
     return out
 
 
+# ── VARIANT report keys: `<base>__<variant>` ──────────────────────────────────────────────────────
+# One layout, several STATEMENT TYPES (owner 2026-09-20). A commission-family statement type is a
+# VARIANT of the ledger's report key: `commission_ledger` for the default type, `commission_ledger__
+# residual` for the residual statement, `commission_ledger__<token>` for a type a registry row adds
+# later. The mapping table is keyed by report_key, so a variant key is what gives a second statement
+# type from the same carrier ITS OWN column map and ITS OWN sign convention (the `raw_amount` row of
+# the variant key) instead of overwriting the first's. The blank / default variant IS the base key —
+# byte-identical to every key saved before variants existed, so nothing is re-keyed.
+REPORT_KEY_VARIANT_SEP = "__"
+
+
+def variant_report_key(base_key, variant=""):
+    """`<base>` for a blank variant, else `<base>__<variant>`. PURE. Commission-family callers do
+    not call this directly: `commission_ledger.mapping_report_key` is the ONE derivation that maps a
+    statement type (free text) onto the variant token — this is the mechanism it uses."""
+    b = str(base_key or "").strip()
+    v = str(variant or "").strip()
+    return f"{b}{REPORT_KEY_VARIANT_SEP}{v}" if v else b
+
+
+def split_report_key(report_key):
+    """(base, variant) of a report key — ('commission_ledger', 'residual'); ('sales', '') for a key
+    with no variant. PURE."""
+    k = str(report_key or "").strip()
+    if REPORT_KEY_VARIANT_SEP in k:
+        b, v = k.split(REPORT_KEY_VARIANT_SEP, 1)
+        return b, v
+    return k, ""
+
+
 def _base_fields(report_key):
     """The seed field tuples for a report_key: the hard-coded TARGET_FIELDS entry, else the derived MA
-    seeds, else []. This is the ONE seed source _registry_overlay / default_mapping / known_report_keys /
+    seeds, else — for a VARIANT key with no entry of its own — the base key's fields (a statement type
+    a registry row adds later needs no code: it maps through the family's layout until someone gives
+    it one), else []. This is the ONE seed source _registry_overlay / default_mapping / known_report_keys /
     suggest all read, so MA reports become pre-mapped everywhere the wizard uses them."""
     base = TARGET_FIELDS.get(report_key)
     if base is not None:
         return list(base)
-    return _ma_field_tuples(report_key)
+    ma = _ma_field_tuples(report_key)
+    if ma:
+        return ma
+    b, v = split_report_key(report_key)
+    if v and b in TARGET_FIELDS:
+        return list(TARGET_FIELDS[b])
+    return []
 
 
 def _registry_overlay(report_key, client=None, org_id=None):
@@ -450,6 +513,15 @@ def known_report_keys(client=None, org_id=None):
         try:
             from app.modules.commcalc import target_registry
             for k in target_registry.registry_report_keys(client, org_id):
+                if k not in keys:
+                    keys.append(k)
+        except Exception:
+            pass
+        # one mapping key per commission-family STATEMENT TYPE the report-kind registry names (mig
+        # 1010; the mirror before it) — a type added as a registry row appears in the picker with no code
+        try:
+            from app.modules.commcalc import commission_ledger, report_kinds
+            for k in commission_ledger.mapping_report_keys(report_kinds.load_registry(client, org_id)[0]):
                 if k not in keys:
                     keys.append(k)
         except Exception:
