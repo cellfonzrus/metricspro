@@ -3978,6 +3978,44 @@ def _alert_recipients(client, org_id, scope, store_code=None):
                             "whatsapp": "", "via_email": True, "via_whatsapp": False, "is_dm": True})
         except Exception:
             pass
+    if not out:
+        out = _org_admin_recipients(client, org_id)
+    return out
+
+
+def _org_admin_recipients(client, org_id):
+    """LAST-RESORT recipients: this tenant's own ACTIVE admins.
+
+    WHY (owner directive 2026-09-20, audited across all tenants). A scope with no configured
+    `alert_recipient` row made `_send_alert` return "no recipients configured" and do nothing — no email,
+    no WhatsApp, and no `alert_log` row, so there was not even evidence that the platform had tried. The
+    connector scope was configured on ONE tenant and on no other: a feed dying on either of the others
+    would have been detected correctly, reported to nobody, and left no trace. Whether a tenant hears
+    about its own broken feed depended on somebody having remembered to add a row.
+
+    An alert nobody can receive is not an alert. Falling back to the tenant's admins makes "somebody is
+    told" a property of the platform rather than of a config row that may or may not exist. A tenant that
+    wants different people still adds `alert_recipient` rows — those win, and this never runs.
+
+    RULE TWO: the role name is data, not a tenant. Org-scoped, active users, real email only. Never
+    raises; an unreadable roster just yields no fallback, exactly as before."""
+    try:
+        rows = (client.schema("storeops").table("app_users")
+                .select("full_name,email,role,super_admin,is_active")
+                .eq("org_id", org_id).limit(500).execute().data) or []
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        if r.get("is_active") is False:
+            continue
+        if not (str(r.get("role") or "").strip().lower() == "admin" or r.get("super_admin")):
+            continue
+        em = (r.get("email") or "").strip()
+        if not em:
+            continue
+        out.append({"name": r.get("full_name") or "Administrator", "email": em, "whatsapp": "",
+                    "via_email": True, "via_whatsapp": False, "is_org_admin_fallback": True})
     return out
 
 
@@ -3986,15 +4024,33 @@ async def _send_alert(client, org_id, scope, subject, text, ref_key, store_code=
     storeops.alert_log so a cron doesn't re-alert every tick. Best-effort; returns a summary dict."""
     if not force:
         try:
-            seen = (client.schema("storeops").table("alert_log").select("id")
-                    .eq("org_id", org_id).eq("scope", scope).eq("ref_key", ref_key).limit(1).execute().data) or []
-            if seen:
+            seen = (client.schema("storeops").table("alert_log").select("id,recipients")
+                    .eq("org_id", org_id).eq("scope", scope).eq("ref_key", ref_key).limit(50).execute().data) or []
+            # AN ALERT THAT REACHED NOBODY IS NOT "ALREADY ALERTED" (2026-09-20). The dedup used to count
+            # ANY prior row, including one written when zero messages actually went out — no recipients
+            # configured, or every channel unconfigured/failing. The condition was then never re-reported
+            # for that ref_key, so the quietest possible failure (nobody heard, and the log says we told
+            # them) was also the stickiest. Only a row that actually DELIVERED suppresses a re-send.
+            if any((r.get("recipients") or "").strip() for r in seen):
                 return {"skipped": "already alerted", "ref_key": ref_key}
         except Exception:
             pass
     recips = _alert_recipients(client, org_id, scope, store_code)
     if not recips:
-        return {"sent": 0, "detail": "no recipients configured for scope " + scope}
+        # RECORD THE SILENCE. Previously this returned with no trace at all, so "this tenant has nobody
+        # to tell" was invisible everywhere — no row, no banner, no count. The row is written with an
+        # empty `recipients`, which the dedup above deliberately does NOT treat as delivered: the moment
+        # a recipient exists (or an admin is added), the next occurrence alerts for real.
+        try:
+            client.schema("storeops").table("alert_log").insert(
+                {"org_id": org_id, "scope": scope, "ref_key": ref_key, "recipients": "",
+                 "detail": {"subject": subject, "count": 0, "suppressed": "no_recipients",
+                            "note": ("nobody is configured to receive this scope, and the tenant has no "
+                                     "active admin with an email address to fall back to")}}).execute()
+        except Exception:
+            pass
+        return {"sent": 0, "suppressed": "no_recipients",
+                "detail": "no recipients configured for scope " + scope}
     html = "<p>" + text.replace("\n", "<br>") + "</p>"
     sent, tos = 0, []
     for r in recips:

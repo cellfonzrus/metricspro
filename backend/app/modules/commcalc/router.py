@@ -10726,6 +10726,81 @@ def _data_freshness_report(client, org_id):
             "any_stale": any(f.get("stale") for f in feeds if f.get("rows"))}
 
 
+AUTOFIX_MAX_CATCHUP_DAYS = 60   # never scan more than this much mail to close one gap
+
+
+async def _freshness_autofix(client, org_id, stale_feeds):
+    """AUTO-FIX a feed that is behind — don't just report it (owner directive 2026-09-20: *"most
+    importantly the system should be capable of autofix"*).
+
+    THE ONE FAILURE THIS REPAIRS, stated precisely. A sweep only ever sees mail inside its IMAP search
+    window (`email_sweep_config.since_days`). If a feed falls further behind than that window reaches,
+    the file that would close the gap is sitting in the mailbox and the sweep can no longer see it, so
+    every subsequent run is a correct no-op and the gap is permanent until a human widens the window.
+    That is exactly what happened to the house org: the feed ended 09-08, the window reached 2 days, and
+    nothing the platform did on its own could ever have recovered 09-09..09-19.
+
+    THE FIX: re-run the tenant's mailboxes ONCE with a window wide enough to reach the gap — as a
+    transient override, never written to the config — and re-measure. The saved setting is untouched.
+
+    WHY THIS IS SAFE NOW AND WAS NOT BEFORE. Widening the window used to be dangerous: the house mailbox
+    holds an hourly copy of every report, so a 14-day window meant ~336 full whole-period imports drained
+    in arrival order (§19.19). Since the backlog collapse, a wide window costs ONE import per report per
+    month. The autofix is a direct consequence of that change — it could not responsibly have existed
+    first.
+
+    IT IS SELF-LIMITING, WHICH IS WHY IT NEEDS NO COOLDOWN STATE. The catch-up runs only when the gap is
+    WIDER than the configured window (`needed > since_days`). Once a run succeeds the feed's latest date
+    moves up, `needed` drops inside the window, and the condition stops being true — so a healthy feed
+    never triggers it, and a feed whose data genuinely is not in the mailbox triggers it at most until
+    the window covers the gap, then stops and lets the alert through. Bounded by
+    AUTOFIX_MAX_CATCHUP_DAYS so a long-dead feed cannot make the platform scan a year of mail.
+
+    Returns [{key, label, before, after, widened_to, recovered}] — one entry per feed it acted on, for
+    the caller to report. NEVER raises: an autofix that fails must still leave the alert to be sent."""
+    acted = []
+    try:
+        accounts = _email_accounts(client, org_id) or []
+    except Exception:
+        accounts = []
+    if not accounts:
+        return acted          # no mailbox for this tenant — nothing this repair can do
+    try:
+        window = max(int(a.get('since_days') or 14) for a in accounts)
+    except Exception:
+        window = 14
+    today = _date.today()
+    for f in stale_feeds:
+        ld = str(f.get('latest_data_date') or '')[:10]
+        if not ld:
+            continue          # never had data: a wider window is a guess, not a repair
+        try:
+            needed = (today - _datetime.strptime(ld, "%Y-%m-%d").date()).days + 1
+        except Exception:
+            continue
+        if needed <= window:
+            continue          # the window ALREADY reaches the gap — widening cannot help, so alert
+        widen = min(needed + 1, AUTOFIX_MAX_CATCHUP_DAYS)
+        print(f"AUTOFIX {org_id} {f.get('key')}: data ends {ld}, window {window}d cannot reach it — "
+              f"one catch-up sweep at {widen}d")
+        try:
+            await _run_email_sweep_all(org_id, since_days_override=widen)
+        except Exception as e:
+            print(f"WARN autofix catch-up sweep failed for {org_id}: {e}")
+            continue
+        after = None
+        try:
+            after = next((g.get('latest_data_date') for g in _data_freshness_report(client, org_id)['feeds']
+                          if g.get('key') == f.get('key')), None)
+        except Exception:
+            pass
+        acted.append({"key": f.get('key'), "label": f.get('label'), "before": ld,
+                      "after": str(after or '')[:10] or None, "widened_to": widen,
+                      "recovered": bool(after and str(after)[:10] > ld)})
+        break                 # one mailbox catch-up per pass repairs every feed it can; re-measure next run
+    return acted
+
+
 async def _data_freshness_monitor(client, org_id):
     """AUTO self-heal check (owner 2026-08-28: "an auto check and an auto fix … before users complain"). Run
     right AFTER a sweep — the sweep IS the auto re-pull — and if a feed is STILL behind, escalate a
@@ -10741,9 +10816,28 @@ async def _data_freshness_monitor(client, org_id):
     stale = [f for f in rep["feeds"] if f.get("stale") and f.get("rows")]
     if not stale:
         return rep
+    # AUTO-FIX BEFORE AUTO-TELL. The sweep that just ran is the routine re-pull; if a feed is STILL
+    # behind, try the one repair the platform can actually perform — reach further back in the mailbox
+    # than the configured window allows — and re-measure before deciding there is anything to report.
+    # A human is only worth interrupting for what the platform could not fix itself.
+    fixed = []
+    try:
+        fixed = await _freshness_autofix(client, org_id, stale)
+    except Exception as e:
+        print(f"WARN freshness autofix failed for {org_id}: {e}")
+    if fixed:
+        try:
+            rep = _data_freshness_report(client, org_id)
+            stale = [f for f in rep["feeds"] if f.get("stale") and f.get("rows")]
+        except Exception:
+            pass
+        rep["autofix"] = fixed
+        if not stale:
+            print(f"AUTOFIX {org_id}: every stale feed recovered — no alert needed ({fixed})")
+            return rep
+    _fixed_by_key = {x.get("key"): x for x in fixed}
     try:
         from app.modules.closing.router import _send_alert   # lazy: avoids a commcalc<->closing cycle
-        today_s = _date.today().isoformat()
         for f in stale:
             ld = f.get("latest_data_date") or "unknown"
             li_full = f.get("last_ingest_at")
@@ -10773,7 +10867,18 @@ async def _data_freshness_monitor(client, org_id):
                     f"Run now; if the latest report file is not in the inbox, have the source re-send it. "
                     f"Reports that read this feed (Executive MTD, Activations) show stale numbers until it "
                     f"catches up.")
-            ref = f"freshness:{org_id}:{f['key']}:{today_s}"   # once per feed per day
+            # ONE ALERT PER EPISODE, NOT ONE PER DAY — same rule as the connector scan. The key used
+            # to carry today's date, so a feed that stays behind re-alerted daily forever: the house org
+            # received twelve identical "Data not updating" mails, 09-09 to 09-20, each correct and none
+            # actionable in a way the previous one wasn't. Keying on the feed's own stuck DATA DATE means
+            # one alert while it is stuck, and a fresh one the moment it moves and stops again.
+            ref = f"freshness:{org_id}:{f['key']}:stuck-at-{ld}"
+            _af = _fixed_by_key.get(f.get("key"))
+            if _af:
+                text += (f"\n\nAn automatic catch-up already ran for this feed: the search window was "
+                         f"widened to {_af['widened_to']} days to reach past {_af['before']}, and the "
+                         f"feed is now at {_af['after'] or 'the same date'}. It is still behind, so the "
+                         f"data for the missing days is not in the mailbox — ask the source to re-send.")
             await _send_alert(client, org_id, "connector", subject, text, ref)
     except Exception as e:
         print(f"WARN freshness alert failed for {org_id}: {e}")
@@ -31092,16 +31197,22 @@ _BUILTIN_FEED_FALLBACK_PATTERNS = [
 ]
 
 
-async def _run_email_sweep(org_id, account='default'):
+async def _run_email_sweep(org_id, account='default', since_days_override=None):
     """Connect to ONE tenant mailbox (org, account), download every NEW attachment matching a configured
     pattern, route each through the existing upload pipeline, and record what was processed (dedup by
-    account+message_id+name)."""
+    account+message_id+name).
+
+    `since_days_override` widens THIS RUN's IMAP search window without touching the saved config — the
+    catch-up the freshness autofix performs when a feed is behind by more than the configured window can
+    reach (see `_freshness_autofix`). Nothing is persisted, so the mailbox's own setting is unchanged."""
     from starlette.datastructures import UploadFile as _UF
     client = sb()
     cfg = _email_cfg(client, org_id, account)
     account = (cfg or {}).get('account') or account
     if not cfg or not (cfg.get('imap_host') or '').strip():
         return {"ok": False, "error": "Email/IMAP not configured", "account": account}
+    if since_days_override:
+        cfg = {**cfg, 'since_days': int(since_days_override)}
     # AUTO-MATCH new custom reports: append derived patterns for every registered custom sheet AFTER the
     # explicit rules (explicit wins first), so a report the tenant just added ingests without a hand-written
     # glob. This closes the "attachment is in the inbox but never imports because no rule matched it" gap.
@@ -31361,14 +31472,15 @@ async def _run_email_sweep(org_id, account='default'):
             "journal_first_error": journal_first_error}
 
 
-async def _run_email_sweep_all(org_id):
+async def _run_email_sweep_all(org_id, since_days_override=None):
     """Run EVERY configured mailbox for a tenant (used by run-now with no account). Returns a per-account
-    roll-up. Runs each account even if others fail."""
+    roll-up. Runs each account even if others fail. `since_days_override` is passed through unchanged —
+    see `_run_email_sweep`."""
     accounts = [a.get('account') or 'default' for a in _email_accounts(sb(), org_id)] or ['default']
     out = []
     for acct in accounts:
         try:
-            out.append(await _run_email_sweep(org_id, acct))
+            out.append(await _run_email_sweep(org_id, acct, since_days_override))
         except Exception as e:
             out.append({"ok": False, "account": acct, "error": str(e)})
     return {"ok": True, "accounts": len(out), "runs": out,
@@ -32318,10 +32430,23 @@ def _scan_connector_health(client):
                     stale = False
             if failed or stale:
                 kind = "errored" if failed else "stalled"
+                # ONE ALERT PER EPISODE, NOT ONE PER DAY (owner directive 2026-09-20). The ref_key used
+                # to carry TODAY's date, so a connector that stays broken re-alerted every single day
+                # forever. Measured on the house org: 7-8 connector alerts a day, six of them for
+                # connectors nobody uses any more (ePay last ran 08-24, FTP 06-26, B2B reporting
+                # "disabled") — so the ONE that mattered, the mailbox login, was one line in ~90 emails
+                # across twelve days. Every alert was correct and the noise made them worthless.
+                #
+                # The key now carries the episode's OWN start — the last successful run — instead of the
+                # calendar day. It is constant while the connector stays broken (one alert), and it
+                # CHANGES the moment the connector succeeds again, so the next failure is a new episode
+                # and alerts afresh. No new state table: `last_run_at` is the last success, which is
+                # exactly what §19.17 made true by moving failures to `last_attempt_at`.
+                since = str(lr or "")[:10] or "never"
                 out.append({
                     "org_id": r.get("org_id") or ORG_ID, "source": f"{label} — {name}", "kind": kind,
                     "detail": (r.get("last_status") or f"no successful run in {hrs:g}h+")[:180],
-                    "ref_key": f"connector:{table}:{r.get('id')}:{now.date()}:{kind}",
+                    "ref_key": f"connector:{table}:{r.get('id')}:since-{since}:{kind}",
                 })
     return out
 
