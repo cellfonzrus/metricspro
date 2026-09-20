@@ -137,8 +137,8 @@ email), (c) **RPC/manual entry**.
 | B2B (sales + inventory aging) | `b2b_sweep.py` | `raw_sales`/feed + `inventory_aging_device` upsert (`b2b_sweep.py:341`) | `/b2b/sweep/*` (`b2b_sweep_run_now`/`run_due`); `fetch_inventory_aging` is a **stub** (`b2b_sweep.py:77`) `⚠`. **Its portal-login route is CLOSED by config since mig `998`** (vendor instruction, owner 2026-09-09) — the supported route is the email sweep; see §12a.1 |
 | epay (payment detail) | `epay_sweep.py` | `raw_payment_detail` | `/epay/sweep/*` `router.py:8730-8811` (mig `020`,`025`) |
 | VIP invoices | `vip_sweep.py` | vip invoice tables (mig `008`,`011`,`014`) | `/vip/sweep/*` `router.py:3034-3078` |
-| FTP drop | `ftp_sweep.py` | per report-pull-map | `/ftp-sweep/*` `router.py:22175-22237` (mig `046`) |
-| Email inbox | `email_sweep.py` | routes attachments to report ingest | `/email-sweep/*` `router.py:22973-23407` (mig `049`,`075`); scheduler: pg_cron → `/email-sweep/run-due` (mig `921`,`922` — backend self-registers on boot; handler advances `next_run_at` up front and sweeps on a dedicated thread so the tick answers pg_net inside its 5 s timeout; per-mailbox in-progress lock `sweeping_since` (mig `932`) stops overlapping sweeps; non-terminal files stop re-fetching after `SWEEP_MAX_NONTERMINAL_ATTEMPTS` — surfaced in `last_status`, never silent) |
+| FTP drop | `ftp_sweep.py` | per report-pull-map | `/ftp-sweep/*` `router.py:22175-22237` (mig `046`); freshness stamp via `_sweep_run_stamp` — see the Email inbox row |
+| Email inbox | `email_sweep.py` | routes attachments to report ingest | `/email-sweep/*` `router.py:22973-23407` (mig `049`,`075`); scheduler: pg_cron → `/email-sweep/run-due` (mig `921`,`922` — backend self-registers on boot; handler advances `next_run_at` up front and sweeps on a dedicated thread so the tick answers pg_net inside its 5 s timeout; per-mailbox in-progress lock `sweeping_since` (mig `932`) stops overlapping sweeps; non-terminal files stop re-fetching after `SWEEP_MAX_NONTERMINAL_ATTEMPTS` — surfaced in `last_status`, never silent). **FRESHNESS STAMP (2026-09-20): `router._sweep_run_stamp(success)` is the ONE place a mailbox/FTP sweep decides which timestamp it may write** — only a run that actually ingested (`ok > 0`) advances `last_run_at`; a rejected login, a mailbox with no filename rules, a connect error or a crash records `last_attempt_at` instead (mig `241` column, the contract the portal sweeps already followed via `_sweep_set_status`). Scheduling is untouched — `/run-due` keys off `next_run_at`. Proof: `harness_sweep_freshness.py` (28 checks) |
 | Vidapay | `vidapay_sweep.py` | payment feed | (mig `083` total processor sources) |
 | Generic data-source portal login | `live_login.py` | any report | `/data-sources/*` `router.py:23760-24979`, `/data-sources/sweep/run-due` `24409` (cron path advances each due source's `next_run_at` up front and pulls on a dedicated thread — the email-sweep incident pattern; the secret-less org-scoped call still pulls inline; interactive login/2FA/live-login endpoints on the API service proxy transparently to the sweeps worker when `BROWSER_SERVICE_URL` is set — `service_role.BrowserWorkProxy` + handler in `main.py`) |
 
@@ -3185,6 +3185,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `commcalc.carrier_commission` (mig `065`) | **NOTHING WRITES IT for any live org — 0 rows house, 0 rows LuxeLink (measured 2026-09-20)**, which is why `rep_commissions.carrier_statement_comm` reads `$0.00` on every live row. `_apply_new_engines` reads it into `stmt_by_rep` (`router.py`, the statement block) and `/carrier-comm-file/extract` writes it. The live carrier statement for a master-agent tenant is `raw_ma_commission`, NOT this table — see §31.2 | §15 carrier statement commission; §31 carrier earned vs employee paid |
 | `commcalc.raw_ma_commission` — as the EARNED side | per-device statement money in `spiff_m1..m6` / `rebate` / `device_margin` / `consumer_margin` / `mrc_net_discount`, netted per device by `sale_installment_engine._ma_gate_index` (mig `308`, base + adjustment summed so a clawback nets out); which columns count as dealer earnings is `commission_catalog.amount_fields(org,'ma_commission')` with `_MA_NUMERIC_COLS` as the house default | §31 — `carrier_vs_pay.rollup_by_rep` via `GET /commcalc/carrier-vs-pay/{period}`. Also §15 MA commission, §8 installment gate |
 | `commcalc.rep_commissions.boost_commission` — as the EARNED side | the PRE-ATTRIBUTED dealer figure for a processor-payment tenant: `raw_payment_detail` rows in the `Commission` payment category, summed per `rep_username` by `calculator.calc_rep_commissions` (`pay_by_login`). Read as stored by the earned-vs-paid report, **never recomputed** | §6 rep commission (Boost); §31.5 the second feed shape |
+| `commcalc.email_sweep_config` / `ftp_sweep_config` — the FRESHNESS columns `last_run_at` vs `last_attempt_at` (mig `241`) | `router._sweep_run_stamp(success)` is the SOLE decider, written through `_email_status_update` (mailbox, scoped `org_id`+`account`) / `_status_update` (FTP). **Only an ingest advances `last_run_at`** (`ok > 0` attachments); a rejected login, a mailbox with no filename rules, a connect error or a crash writes `last_attempt_at`. Both degrade to a status-only write on a pre-241 database | `router._scan_connector_health` → `GET /commcalc/connector-health` (ERRORED/STALE arms — the STALE arm was DEAD for these two tables until 2026-09-20, see §19), and `core.control_box_api._SCHEDULER_SPECS['sched_email_sweep']` → `control_box.heartbeat_lamp(last_success=…)`, whose parameter name this now actually honours. Scheduling reads NEITHER column — `/run-due` keys off `next_run_at`. Proof `harness_sweep_freshness.py` (28 checks) |
 
 ## 17. Cross-reference: by ENDPOINT (high-value)
 
@@ -3441,6 +3442,37 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 ---
 
 ## 19. Known gaps & inert config
+
+§19.17 **THE BOOST MAILBOX LOGIN HAS BEEN REJECTED SINCE 2026-09-07 — REPORTED, NOT CODED AROUND
+(2026-09-20).** `commcalc.email_sweep_config` for the house org (`b2breports@metricspro.tech`,
+cs126.bluehost.com) carries `last_status = "login rejected: b'[AUTHENTICATIONFAILED] Authentication
+failed.'"`. The last attachment it ingested was **2026-09-07 23:11:35 UTC**; every hourly run since
+has failed at login. Consequence, measured: house `daily_sales_feed` for September holds **6,591 rows
+covering 09-01..09-07 ONLY, all stamped `uploaded_at = 2026-09-07`** — **09-08 through 09-19 (12 days)
+were never ingested**, and `raw_sales` for September is empty. August is COMPLETE and unaffected
+(24,890 rows, all 31 days, one upload on 09-01).
+
+- **It is the credential, not the host and not the sweep.** The LuxeLink mailbox authenticates on the
+  SAME IMAP host every hour (`last_status = "11/11 attachments ingested"`, 09-20 03:05), so cPHulk is
+  not blocking the IP; `cleanup_mode = 'off'`, so nothing was deleted from the inbox.
+- **RECOVERY IS ONE SWEEP, not a 12-day backfill.** The b2bsoft export is a FULL-PERIOD file, proven by
+  its own upload stamps: all 24,890 August rows arrived in one upload, all 6,591 September rows in
+  another. Re-enter the password (Data Imports → Email Imports → Test connection), then Run now; the
+  current month's file carries 09-01..today. `since_days = 14` reaches back to 09-06 — raise it if the
+  newest report email in the inbox is older than that.
+- **NOT self-healed in code.** A missing feed is a live-data defect; writing anything that papers over
+  it would hide exactly the days that are missing.
+
+**WHY NOBODY WAS TOLD FOR TWELVE DAYS — FIXED 2026-09-20.** Both the mailbox and FTP sweeps stamped
+`last_run_at` on FAILURE, so the connector had a three-minute-old "last run" while importing nothing.
+`_scan_connector_health`'s STALE arm ("no successful run in the window") could therefore NEVER fire for
+them, and `control_box.heartbeat_lamp` was fed a `last_success` that was not one. The mailbox escaped
+total silence only because `'Authentication failed'` happens to contain the substring `'fail'` that the
+ERRORED arm greps for — a differently-worded failure would have been invisible. `router._sweep_run_stamp`
+now decides: `ok > 0` ingested ⇒ `last_run_at`, every non-delivering attempt ⇒ `last_attempt_at` (mig
+`241`), which is the contract the portal sweeps already followed via `_sweep_set_status`. Scheduling is
+untouched (`/run-due` keys off `next_run_at`). Proof `harness_sweep_freshness.py` (28 checks) — §C is
+the Boost row replayed both ways, §D pins that nothing schedules off `last_run_at`.
 
 - **The back office's `Activation Spiff` line is UNRESOLVED (2026-09-08).** The master agent's own
   Aug-2026 P&L carries `Activation Spiff` $18,061.37 (Luxelink 13,589.71 / NovaWave 4,471.66,

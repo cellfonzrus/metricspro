@@ -29910,8 +29910,11 @@ async def _run_ftp_sweep(org_id):
     try:
         files = _ftp.fetch_new_files(cfg, already)
     except Exception as e:
-        client.schema('commcalc').table('ftp_sweep_config').update(
-            {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': f"connect error: {e}"}).eq('org_id', org_id).execute()
+        # An FTP connect failure is an ATTEMPT, never a run (see _sweep_run_stamp) — stamping
+        # last_run_at here made a dead FTP feed look freshly imported to the connector-health scan.
+        _status_update(client, 'ftp_sweep_config',
+                       {**_sweep_run_stamp(False), 'last_status': f"connect error: {e}"},
+                       lambda q: q.eq('org_id', org_id))
         return {"ok": False, "error": str(e)}
     results = []
     shrinks = []   # row-count guardrail hits (a truncated/partial export) → alert after the loop
@@ -29969,9 +29972,9 @@ async def _run_ftp_sweep(org_id):
     status_msg += _sweep_status_suffix(results, journal_failures=journal_failures,
                                        journal_first_error=journal_first_error, retried=retried,
                                        shrinks=shrinks, exhausted=len(_exhausted))
-    client.schema('commcalc').table('ftp_sweep_config').update(
-        {'last_run_at': _datetime.now(_timezone.utc).isoformat(),
-         'last_status': status_msg}).eq('org_id', org_id).execute()
+    _status_update(client, 'ftp_sweep_config',
+                   {**_sweep_run_stamp(ok > 0), 'last_status': status_msg},
+                   lambda q: q.eq('org_id', org_id))
     return {"ok": True, "ingested": ok, "files": results, "retried": retried,
             "journal_failures": journal_failures, "journal_first_error": journal_first_error}
 
@@ -30190,15 +30193,48 @@ def _email_accounts(client, org_id):
 
 def _email_status_update(client, org_id, account, upd):
     """Patch one mailbox's status columns, scoped to its account. Falls back to org-only pre-075
-    (no 'account' column) so the single-mailbox setup still updates. Best-effort."""
-    try:
-        client.schema('commcalc').table('email_sweep_config').update(upd) \
-            .eq('org_id', org_id).eq('account', account).execute()
-    except Exception:
+    (no 'account' column) so the single-mailbox setup still updates. Best-effort.
+
+    Tolerates a not-yet-migrated optional column the same way _status_update does: a write carrying
+    `last_attempt_at` (mig 241) is retried WITHOUT it rather than dropping the whole patch — otherwise
+    a pre-241 database would lose `last_status` too, which is the one thing a failed sweep must leave
+    behind."""
+    row = {k: v for k, v in (upd or {}).items()
+           if ('email_sweep_config', k) not in _MISSING_STATUS_COLS}
+
+    def _write(r):
         try:
-            client.schema('commcalc').table('email_sweep_config').update(upd).eq('org_id', org_id).execute()
+            client.schema('commcalc').table('email_sweep_config').update(r) \
+                .eq('org_id', org_id).eq('account', account).execute()
         except Exception:
-            pass
+            client.schema('commcalc').table('email_sweep_config').update(r).eq('org_id', org_id).execute()
+    try:
+        _write(row)
+        return
+    except Exception:
+        opt = [k for k in row if k in _OPTIONAL_STATUS_COLS]
+        if not opt:
+            return
+    for k in opt:
+        _MISSING_STATUS_COLS.add(('email_sweep_config', k))
+    try:
+        _write({k: v for k, v in row.items() if k not in opt})
+    except Exception:
+        pass
+
+
+def _sweep_run_stamp(success: bool):
+    """The ONE timestamp a mailbox / FTP sweep may stamp when a run ends (house freshness contract, see
+    _OPTIONAL_STATUS_COLS above): only a run that actually delivered advances `last_run_at`; every
+    non-delivering attempt — a rejected login, a mailbox with no filename rules, a crash — records
+    `last_attempt_at` instead.
+
+    Boost's mailbox is why this exists: from 2026-09-07 its IMAP login was rejected on every hourly
+    run for twelve days, yet each failure stamped `last_run_at`, so the connector-health scan could
+    never call it STALE (it only escaped silence because the words 'Authentication failed' happen to
+    contain 'fail'). Scheduling is untouched — /run-due keys off next_run_at, never last_run_at."""
+    return {('last_run_at' if success else 'last_attempt_at'):
+            _datetime.now(_timezone.utc).isoformat()}
 
 
 def _auto_custom_report_patterns(client, org_id):
@@ -30271,7 +30307,7 @@ async def _run_email_sweep(org_id, account='default'):
     # reports sit in the inbox (bit the Total/luxelink mailbox setup 2026-07-02).
     if not any((p.get('pattern') or '').strip() for p in (cfg.get('patterns') or []) if isinstance(p, dict)):
         _email_status_update(client, org_id, account,
-            {'last_run_at': _datetime.now(_timezone.utc).isoformat(),
+            {**_sweep_run_stamp(False),
              'last_status': "no filename rules configured — add patterns, nothing can match"})
         return {"ok": False, "account": account,
                 "error": "This mailbox has no filename rules — add a rule (e.g. *Sales*Transaction*Details* → daily sales) and Save."}
@@ -30305,7 +30341,7 @@ async def _run_email_sweep(org_id, account='default'):
         else:
             em = f"connect error: {em}"
         _email_status_update(client, org_id, account,
-            {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': em})
+            {**_sweep_run_stamp(False), 'last_status': em})
         return {"ok": False, "error": em, "account": account}
     results = []
     shrinks = []   # row-count guardrail hits (a truncated/partial export) → alert after the loop
@@ -30417,7 +30453,7 @@ async def _run_email_sweep(org_id, account='default'):
         except Exception as _ae:
             print(f"WARN unrouted alert failed for {account}: {_ae}")
     _email_status_update(client, org_id, account,
-        {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': status_msg})
+        {**_sweep_run_stamp(ok > 0), 'last_status': status_msg})
     # Auto-derive the monthly commission basis (raw_sales) from the feed — best-effort + guarded,
     # never breaks the sweep. DEFAULT ON when the registry has no 'sales' row: new tenants never had
     # the row the house has, so their raw_sales silently stayed empty and plan-mode pay was $0
@@ -31506,7 +31542,8 @@ async def _email_sweep_due_worker(due):
         except Exception as e:
             res = {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
             _email_status_update(client, oid, acct,
-                                 {'last_status': f"sweep crashed: {type(e).__name__}: {str(e)[:170]}"})
+                                 {**_sweep_run_stamp(False),
+                                  'last_status': f"sweep crashed: {type(e).__name__}: {str(e)[:170]}"})
         finally:
             _email_status_update(client, oid, acct, {'sweeping_since': None})
         ran.append({"org_id": oid, "account": acct, "result": res})
