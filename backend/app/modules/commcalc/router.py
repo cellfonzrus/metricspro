@@ -6,7 +6,10 @@ import pandas as pd
 import io
 import re
 from app.core.database import get_supabase
-from app.core.service_role import require_browser_service   # SERVICE_ROLE=api → clean 503 on browser endpoints
+from app.core.service_role import (require_browser_service,   # SERVICE_ROLE=api → clean 503 on browser endpoints
+                                    browser_allowed as _browser_allowed,
+                                    browser_service_url as _browser_service_url,
+                                    BrowserWorkProxy)          # scheduled browser work → the sweeps worker
 from app.core.schemas import LaxModel
 from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
@@ -3551,6 +3554,8 @@ def vip_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = 
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
+    require_browser_service()   # SERVICE_ROLE=api → this sweep launches Chromium; the API service
+                               # proxies the tick to the sweeps worker (see _BROWSER_SWEEP_KINDS)
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
     due = client.schema('commcalc').table('vip_sweep_config').select('*') \
@@ -11372,6 +11377,20 @@ async def data_freshness_run_now(org_id: str = ORG_ID):
 # puller, never dispatcher surgery.
 _SWEEP_BUILTINS = {'vip': '_do_vip_sweep', 'dlar': '_do_dlar_sweep',
                    'epay': '_do_epay_sweep', 'b2b': '_do_b2b_sweep'}
+# Sweep kinds that LAUNCH CHROMIUM. On a split deploy (SERVICE_ROLE=api) these cannot run in-process:
+# `service_role.assert_browser_allowed()` raises deep inside the sweep, and the connector is recorded
+# as a plain "error" that no amount of re-running will clear.
+#
+# WHY THIS EXISTS (owner directive 2026-09-20, "fix the epay connector"). The per-vendor
+# /epay/sweep/run-due was given `require_browser_service()` so the API service proxies it to the
+# sweeps worker — and then /connectors/run-due, THE ONE dispatcher that replaced the per-vendor crons,
+# was never given the same guard. So the generic tick invoked the puller in-process and ePay recorded
+# `Sweep failed: Browser/portal sweeps do not run on the user-facing API service (SERVICE_ROLE=api)`
+# every day from 2026-08-24. The fix existed; the caller that superseded it was not wired to it.
+#
+# An externally registered kind (register_sweep) is NOT assumed to need a browser — a third-party
+# puller must never be blocked by a guess about what it launches.
+_BROWSER_SWEEP_KINDS = frozenset({'vip', 'dlar', 'epay', 'b2b'})
 _SWEEP_EXTERNAL: dict = {}  # populated by register_sweep() from other modules / new providers
 
 
@@ -11480,13 +11499,32 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
     dispatch = _sweep_registry()
     conns = (client.schema('commcalc').table('connector_instances').select('*')
              .eq('enabled', True).execute().data) or []
-    triggered, checked = [], 0
+    triggered, checked, blocked = [], 0, []
     for c in conns:
         kind = (c.get('sweep_kind') or '').strip()
         tbl = (c.get('config_table') or '').strip()
         if kind not in dispatch or not tbl:
             continue
         oid = c.get('org_id') or org_id
+        # BROWSER WORK BELONGS ON THE SWEEPS WORKER (see _BROWSER_SWEEP_KINDS). Asked per connector, so
+        # a split deploy still runs the non-browser sweeps in this tick instead of losing the whole fan-out.
+        if kind in _BROWSER_SWEEP_KINDS and not _browser_allowed():
+            if _browser_service_url():
+                # BROWSER_SERVICE_URL is set: hand the WHOLE tick to the worker, exactly as every
+                # browser endpoint already does. main.py's BrowserWorkProxy handler forwards the
+                # original request, so the worker re-runs this fan-out with Chromium available.
+                raise BrowserWorkProxy()
+            # Nowhere to forward it. Say so on the connector's own row — an ATTEMPT, never a run — so
+            # the page names the deployment problem instead of blaming the portal. Advancing
+            # next_run_at is deliberately skipped: the schedule is not satisfied by a refusal.
+            _sweep_set_status(client, tbl, oid, 'error',
+                              "this service cannot launch a browser (SERVICE_ROLE=api) and "
+                              "BROWSER_SERVICE_URL is not set, so there is no sweeps worker to hand "
+                              "the portal login to. Point this cron at the sweeps worker, or set "
+                              "BROWSER_SERVICE_URL on the API service.",
+                              mark_run=True, success=False)
+            blocked.append({"org_id": oid, "kind": kind, "reason": "no_browser_service"})
+            continue
         try:
             cfg = (client.schema('commcalc').table(tbl)
                    .select('enabled,next_run_at,frequency,day_of_week,day_of_month,hour,timezone')
@@ -11532,7 +11570,9 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
             pass
         background_tasks.add_task(dispatch[kind], oid)
         triggered.append(c.get('vendor_name'))
-    return {"triggered": triggered, "checked": checked}
+    return {"triggered": triggered, "checked": checked,
+            # Never silent: a connector this service could not launch is named, with why.
+            **({"blocked": blocked} if blocked else {})}
 
 
 # ── Chargeback review bucket (VIP file + fraud) → assign to the rep → employee chargeback ────
@@ -13071,6 +13111,8 @@ def dlar_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
+    require_browser_service()   # SERVICE_ROLE=api → this sweep launches Chromium; the API service
+                               # proxies the tick to the sweeps worker (see _BROWSER_SWEEP_KINDS)
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
     due = client.schema('commcalc').table('dlar_sweep_config').select('*') \
@@ -13222,6 +13264,8 @@ def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = 
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
+    require_browser_service()   # SERVICE_ROLE=api → this sweep launches Chromium; the API service
+                               # proxies the tick to the sweeps worker (see _BROWSER_SWEEP_KINDS)
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
     due = client.schema('commcalc').table('b2b_sweep_config').select('*') \
@@ -32885,6 +32929,35 @@ def _connector_stale_hours_map(client):
     return out
 
 
+# frequency slug → how many hours between scheduled runs. The connector's OWN cadence, read off its
+# own row, so "late" means late FOR THIS CONNECTOR. Anything unrecognised falls through to the org
+# default, which is the previous behaviour exactly.
+_CONNECTOR_CADENCE_HOURS = {"hourly": 1, "daily": 24, "weekly": 168, "biweekly": 336, "monthly": 744}
+
+
+def _connector_stale_window(row, org_default):
+    """Hours this connector may go without a successful run before it is genuinely late.
+
+    WHY (owner directive 2026-09-20, "fix the vip connector"). The scan applied ONE 30-hour window to
+    every connector, so the VIP sweep — `frequency='weekly'`, which ran perfectly on 2026-09-18 with
+    "17 invoices, 55 lines, 175 devices" and is next due 09-25 — was reported STALLED every day in
+    between. It was never late; it is weekly, and 30 hours is not a week. `_connector_stale_hours_map`
+    already made the window per-TENANT config for exactly this reason (its own comment says "a weekly
+    distributor sweep is not late at 31h") — but one value per org cannot express two connectors on
+    different cadences, so a tenant with any weekly connector had to either accept the false alarm or
+    widen the window for its daily ones too and miss a real outage.
+
+    The cadence is DATA on the connector's own row, which the scheduler already reads to compute
+    `next_run_at`. Grace is one whole extra cadence, so a run that slips a cycle is amber-in-spirit,
+    not a page — and a connector that has genuinely stopped is still caught at 2x its own period.
+    A row with no frequency (the portal `data_source` registry) keeps the org default untouched."""
+    freq = str((row or {}).get("frequency") or "").strip().lower()
+    hours = _CONNECTOR_CADENCE_HOURS.get(freq)
+    if not hours:
+        return float(org_default), freq or "unscheduled"
+    return float(hours) * 2, freq          # one cadence + one cadence of grace
+
+
 def _connector_unrunnable(client, table, row, policy_rows, dispatchable, instance_kinds):
     """Why the platform would NEVER run this connector — or "" when it genuinely would. PURE-ish
     (no IO: every input is read once by the caller).
@@ -32986,7 +33059,9 @@ def _scan_connector_health(client):
                 })
                 continue
             failed = ("error" in status) or ("fail" in status) or ("403" in status)
-            hrs = stale_hours.get(str(r.get("org_id") or ORG_ID), _CONNECTOR_STALE_HOURS)
+            # LATE FOR THIS CONNECTOR, not late by one global number (see _connector_stale_window).
+            hrs, _freq = _connector_stale_window(
+                r, stale_hours.get(str(r.get("org_id") or ORG_ID), _CONNECTOR_STALE_HOURS))
             stale = False
             lr = r.get("last_run_at")
             if not failed and lr:
@@ -33014,7 +33089,8 @@ def _scan_connector_health(client):
                 since = str(lr or "")[:10] or "never"
                 out.append({
                     "org_id": r.get("org_id") or ORG_ID, "source": f"{label} — {name}", "kind": kind,
-                    "detail": (r.get("last_status") or f"no successful run in {hrs:g}h+")[:180],
+                    "detail": (r.get("last_status")
+                               or f"no successful run in {hrs:g}h+ (schedule: {_freq})")[:180],
                     "alertable": True,
                     "ref_key": f"connector:{table}:{r.get('id')}:since-{since}:{kind}",
                 })

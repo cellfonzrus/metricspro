@@ -3497,6 +3497,66 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 
 ## 19. Known gaps & inert config
 
+§19.23 **ePay AND VIP — ONE REAL BREAKAGE AND ONE FALSE ALARM (owner directive 2026-09-20: "fix the
+epay and vip connectors and also retire ftp for now").**
+
+**VIP WAS NEVER BROKEN. IT IS WEEKLY.** `frequency='weekly'`, it ran on 2026-09-18 with
+`OK — 17 invoices, 55 lines, 175 devices … 34,794 asset-ledger rows`, and its `next_run_at` is
+2026-09-25. The scan applied ONE 30-hour window to every connector, so a healthy weekly sweep was
+reported STALLED every day between its runs. `_connector_stale_hours_map` already made the window
+per-TENANT for exactly this reason — its own comment reads *"a weekly distributor sweep is not late at
+31h"* — but one value per org cannot express two connectors on different cadences: a tenant with any
+weekly connector had to accept the false alarm or widen the window for its daily ones and miss a real
+outage. `_connector_stale_window` now reads the cadence off the connector's OWN row (the same
+`frequency` the scheduler already uses to compute `next_run_at`) and allows one cadence plus one
+cadence of grace — weekly ⇒ 336h, daily ⇒ 48h, hourly ⇒ 2h. A row with no frequency (the portal
+`data_source` registry) keeps the org default untouched, and the reported detail now names the schedule
+it judged against.
+
+**ePay IS REAL, AND THE FIX ALREADY EXISTED FOR A CALLER THAT WAS SUPERSEDED.** Its own `last_detail`:
+
+> `Sweep failed: Browser/portal sweeps do not run on the user-facing API service (SERVICE_ROLE=api).`
+> `Trigger this on the sweeps worker.`
+
+`last_run_at` 2026-08-24, `last_attempt_at` 2026-09-20 20:05 — attempting daily, failing daily for
+four weeks. `/epay/sweep/run-due` HAS `require_browser_service()`, so on a split deploy the API service
+raises `BrowserWorkProxy` and `main.py` forwards the request to the sweeps worker. Then
+`/connectors/run-due` — *"ONE pg_cron entrypoint that fans out to every connector … replacing the
+per-vendor /{vendor}/sweep/run-due crons"* — was written WITHOUT that guard, so the generic tick
+invoked the puller in-process and `assert_browser_allowed()` raised deep inside the sweep.
+`/vip`, `/dlar` and `/b2b` run-due were unguarded too. **The fix existed; the caller that replaced it
+was never wired to it** — the fourth instance of §19.18's pattern in one day.
+
+**THE FIX:** `_BROWSER_SWEEP_KINDS` declares the four portal scrapers (an externally registered kind is
+never assumed to need a browser). `/connectors/run-due` asks per connector before dispatching: with
+`BROWSER_SERVICE_URL` set it forwards the WHOLE tick via the existing proxy; with nowhere to forward it
+the connector's own row records an ATTEMPT naming the deployment problem, `next_run_at` is NOT advanced
+(a refusal does not satisfy a schedule), the blocked connectors are named in the response, and the
+non-browser sweeps in the same tick still run. The three unguarded per-vendor run-dues got the same
+one-line guard, after their secret check.
+
+**MEASURED, house org — the alert list is now one line, and it is the true one:**
+
+```
+before this session  7 alerts/day        after §19.22   2/day       after §19.23   1/day
+                                           ePay  errored  <- real     ePay errored  <- real, and now
+                                           VIP   stalled  <- weekly                    it says WHERE
+```
+
+**Proof:** `backend/harness_connector_dispatch.py` (28 checks) — §A the live VIP row and that a daily
+connector is still caught at 49h, §B every unknown cadence keeping the org default, §C the dispatch
+decision including that the fan-out survives and a refusal never advances the schedule, §D every
+scheduled entry point that can launch Chromium.
+
+**⚠ ePay WILL STILL SHOW ERRORED UNTIL THE DEPLOYMENT IS RIGHT.** This change routes the work to a
+service that can do it; it does not conjure one. If `BROWSER_SERVICE_URL` is unset on the API service,
+the connector now says exactly that instead of blaming the portal. Setting it (or pointing the cron at
+the sweeps worker) is the owner's, and is the last step for ePay.
+
+**FTP retired on the owner's instruction** — `_PENDING_MIGRATIONS_retire_ftp_2026-09-20.sql`
+(`enabled=false`, owner-run). §19.22 has the reasoning; turning it back on remains a data decision
+because `daily_sales` is a whole-period replace.
+
 §19.22 **THE "DEAD" CONNECTORS WERE NOT BROKEN — `enabled=true` HAD STOPPED MEANING "THIS RUNS"
 (owner directive 2026-09-20: "fix the dead connectors for ftp and b2b").**
 
