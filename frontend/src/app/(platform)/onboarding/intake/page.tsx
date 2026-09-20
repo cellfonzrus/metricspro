@@ -34,6 +34,7 @@ import {
 } from './intake-shared'
 import { Stage2Flow, STAGE2_STEPS } from './stage2'
 import { useReportKinds } from '@/lib/report-kinds'
+import { STATEMENT_TYPE_DEFAULT, statementTypeToken } from '@/lib/statement-type'
 
 // ── stage-3 payload types (mirror onboarding_intake.py) ─────────────────────────────────────────
 type SignRow = { label: string; sub_label: string; store: string; amount: number }
@@ -104,7 +105,11 @@ export default function OnboardingIntakePage() {
   // along as `report_kind` so the confirmed layout is learned under it.
   const registry = useReportKinds()
   const statementKinds = useMemo(() => registry.visible.filter(k => k.landing === 'commission'), [registry.visible])
-  const statementReportKind = useMemo(() => statementKinds.find(k => (k.statement_type === 'residual') === /residual/i.test(statementType))?.key || '', [statementKinds, statementType])
+  // The typed text names a registry TOKEN the same way the backend's `statement_type_token` reads
+  // it (longest known token contained in the text; blank = the default). The mapping the commit
+  // saves is keyed by that token (index §30.10), so a residual statement keeps its own map and sign.
+  const statementToken = useMemo(() => statementTypeToken(statementType, statementKinds.map(k => k.statement_type || '')), [statementType, statementKinds])
+  const statementReportKind = useMemo(() => statementKinds.find(k => (k.statement_type || STATEMENT_TYPE_DEFAULT) === statementToken)?.key || '', [statementKinds, statementToken])
   const [file, setFile] = useState<File | null>(null)
   const [filename, setFilename] = useState('')
   const [kept, setKept] = useState<FileRef | null>(null)
@@ -542,7 +547,7 @@ export default function OnboardingIntakePage() {
               <label style={{ fontSize: 13 }}>Statement type
                 <input list="statement-kinds" value={statementType} onChange={e => setStatementType(e.target.value)} style={{ ...inp, width: '100%', marginTop: 4 }} placeholder="commission statement" />
                 <datalist id="statement-kinds">
-                  {statementKinds.map(k => <option key={k.key} value={k.statement_type === 'residual' ? 'residual statement' : 'commission statement'}>{k.label}</option>)}
+                  {statementKinds.map(k => <option key={k.key} value={`${k.statement_type || STATEMENT_TYPE_DEFAULT} statement`}>{k.label}</option>)}
                 </datalist>
                 {statementKinds.length > 0 && <div style={{ ...note, fontSize: 11, marginTop: 2 }}>{statementKinds.map(k => `${k.label} (${k.provenance_text})`).join(' · ')}{registry.withheld ? ` · ${registry.withheld}` : ''}</div>}
               </label>
