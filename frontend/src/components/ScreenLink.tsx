@@ -46,6 +46,8 @@ export type ScreenKey =
   | 'bill_payments' | 'tax_collected' | 'inventory_sold_recon' | 'imei_recon' | 'pl_statement' | 'device_history'
   | 'inventory_recon' | 'commission_ledger' | 'carrier_vs_pay' | 'whatif' | 'closing_recon' | 'vendor_rebates'
   | 'activations' | 'pay_discrepancy' | 'kpi' | 'ma_handsets'
+  // the two surfaces that present THE TWO WAYS to calculate employee commission (commcalc/_lib/commissionWays.ts, 2026-09-20)
+  | 'commission_structure' | 'incentive_plans'
 
 export type ScreenDest = {
   /** Where the reader is sent. May carry a #anchor; the gate uses the path half. */
@@ -177,6 +179,9 @@ export const SCREENS: Record<ScreenKey, ScreenDest> = {
   pay_discrepancy: { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', blurb: 'Pay Discrepancy: sold-but-unpaid activations', aliases: ['Pay Discrepancy'] },
   kpi: { href: '/commcalc/kpi', label: 'KPI Metrics', blurb: 'KPI Metrics: the carrier portal\'s rep and store figures', aliases: ['KPI Metrics'] },
   ma_handsets: { href: '/commcalc/ma-handsets', label: 'Marketplace Handset COGS', blurb: 'Marketplace Handset COGS: handset fulfillment orders', aliases: ['Marketplace Handset COGS'] },
+  // ── the two ways to calculate employee commission are presented on these two screens; each links the other ──
+  commission_structure: { href: '/commcalc/commission-structure', label: 'Employee Commission Structure', blurb: 'Employee Commission Structure: the two ways to calculate employee commission, set up step by step', aliases: ['Employee Commission Structure', 'Commission Structure'] },
+  incentive_plans: { href: '/commcalc/commission-plans', label: 'Incentive Plans', blurb: 'Incentive Plans: the plan editor — rules, tiers, assignments, and each plan\'s commission basis', aliases: ['Incentive Plans', 'plan editor'] },
   // NOT registered: "Metric Source of Truth". Copy on Cash Recon (Management) names it, but no such
   // page exists anywhere in NAV or under app/ — inventing an href would be worse than the gap. It is
   // reported to the owner as a named destination with nothing behind it.

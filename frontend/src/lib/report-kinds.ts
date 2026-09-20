@@ -48,6 +48,19 @@ export function showsInFor(visible: ReportKindRow[], keyOrUploadType: string): S
   const row = visible.find(r => r.key === keyOrUploadType) || visible.find(r => (r.upload_types || []).includes(keyOrUploadType)) || null
   return row?.shows_in || null
 }
+/**
+ * THE WAY BACK FROM A REPORT TO ITS UPLOADS — the inverse of `showsInFor` over the SAME rows: the visible
+ * kinds whose `shows_in.consumers` name `screen` (a ScreenLink key such as 'exec_mtd'), each with the page
+ * its upload belongs on (`where`, backend landing_identity.where_to_upload). Derived from the one consumers
+ * map the backend attached to every row — no page keeps a list of feeds (2026-09-20, the commission
+ * structure's "Option 1 pays from the Executive MTD; that report counts what is uploaded as …").
+ */
+export type FeedForScreen = { key: string; label: string; where: NonNullable<ReportKindRow['where']> | null }
+export function feedsForScreen(visible: ReportKindRow[], screen: string): FeedForScreen[] {
+  return visible
+    .filter(r => (r.shows_in?.consumers || []).some(c => c.screen === screen))
+    .map(r => ({ key: r.key, label: r.label, where: r.where || null }))
+}
 export type ReportSurface = 'intake' | 'upload' | 'wizard' | 'email_imports' | 'tiles'
 export const INTAKE_LANDINGS = ['sales', 'pos', 'inventory', 'commission', 'x_report', 'merchant_payments', 'bill_payments', 'other']
 
@@ -171,8 +184,10 @@ export function useReportKinds() {
   // showsIn: "this upload will show in …" for a registry key or an upload route key — the ONE way a
   // surface learns a kind's consumers (rendered by components/ShowsIn.tsx; the lock pins every surface).
   const showsIn = useCallback((keyOrUploadType: string): ShowsIn | null => showsInFor(visible, keyOrUploadType), [visible])
+  // feedsFor: the inverse — which visible kinds show in a given report screen, and where each is uploaded.
+  const feedsFor = useCallback((screen: string): FeedForScreen[] => feedsForScreen(visible, screen), [visible])
   return {
-    payload, loaded, error, reload, visible, uploadTypes, forSurface, allows, labelFor, byKey, feedFor, showsIn,
+    payload, loaded, error, reload, visible, uploadTypes, forSurface, allows, labelFor, byKey, feedFor, showsIn, feedsFor,
     consumers: payload?.consumers || {},
     declaration: payload?.declaration || null,
     filenameRules: payload?.filename_rules || [],
