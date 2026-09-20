@@ -132,9 +132,61 @@ INGEST_TABLES_BY_MODULE = {
 # (permanently empty) and the books-stale banner never fired. account/autocompute._PERIOD_SOURCES already
 # lists daily_sales_feed with uploaded_at first (fix dcb0807); this registry makes that rule the ONE place
 # it's written down, and the guard locks it so it can't silently regress.
+#
+# EVERY table whose arrival column is NOT created_at belongs here — that is the whole point of the map.
+# `harness_ingest_freshness.py` §C fails the build if `account/autocompute._PERIOD_SOURCES` names a
+# non-created_at arrival column for a table this dict does not declare, so the two copies of the fact
+# cannot drift apart again (they already did once: the registry held daily_sales_feed and nothing
+# dereferenced it, while autocompute carried its own copy).
 FRESHNESS_COLUMN_BY_TABLE = {
     "daily_sales_feed": "uploaded_at",
+    # VIP sweep landing tables: the sweep stamps `swept_at` when a row lands. `created_at` exists but
+    # moves on re-write, so it is the same trap as daily_sales_feed — declared here rather than left
+    # implicit in the one list that happened to know about it.
+    "vip_paygo_payments": "swept_at",
+    "vip_credit_memos": "swept_at",
 }
+
+# ── WHICH UPLOAD TYPES REPLACE THEIR WHOLE PERIOD ─────────────────────────────────────────────────
+# An upload type here lands by DELETING the (org, period) slice and inserting the file's rows. Two
+# consequences follow, and the second is why this list exists:
+#
+#   1. Re-ingesting the same report is idempotent — it rewrites what it already wrote.
+#   2. Given two files of the SAME report covering the SAME period, ingesting the newer one ALONE
+#      leaves the database in exactly the state that ingesting both in order would. The older file's
+#      entire contribution is erased by the newer one's delete. It is redundant work, not lost data.
+#
+# Property 2 is what lets a sweep collapse a BACKLOG. It is a consequence of the replace semantics,
+# not an assumption about the report being cumulative — nothing here needs to know that.
+#
+# WHY IT IS A DECLARED LIST AND NOT A GUESS (Boost, 2026-09-20). While the house mailbox's login was
+# rejected, ~336 hourly copies of the same b2bsoft sales report piled up. The sweep drained them in
+# ARRIVAL ORDER, each one deleting September and re-inserting a slightly larger file: 336 full 1.1 MB
+# imports to reach a state the newest file alone describes, ~30 per sweep, with the feed showing a
+# part-month for hours while it crawled — and going BACKWARD whenever an older message landed after a
+# newer one. §19.19.
+#
+# AN UPLOAD TYPE NOT LISTED HERE IS NEVER COLLAPSED. Anything incremental, append-only, or whose slice
+# is narrower than the period (the INGEST_PARTITION tables in `ingest_slice.py`, where a file replaces
+# only its own store/account slice) must process every message — dropping one there would lose rows.
+# Silence means "process them all", which is the safe answer for a type nobody has reasoned about.
+FULL_REPLACE_UPLOAD_TYPES = frozenset({
+    # The b2b daily sales export -> daily_sales_feed. Not in INGEST_PARTITION, so its ingest takes the
+    # legacy wide delete of (org, period) and re-inserts: the definition of a whole-period replace.
+    "daily_sales",
+    # POS X-report tender summary -> pos_tender_summary, and the sales-trend / key-stats summaries:
+    # each is a per-period SNAPSHOT of the same numbers, rewritten whole on every ingest.
+    "x_report",
+    "sales_trend",
+})
+
+
+def replaces_whole_period(upload_type: str) -> bool:
+    """True when ingesting the NEWEST file of this report makes older copies of the SAME report, for the
+    same period, redundant — because the ingest replaces the whole (org, period) slice. Unknown or
+    unlisted types return False: never collapse a report nobody has reasoned about."""
+    return (upload_type or "").strip() in FULL_REPLACE_UPLOAD_TYPES
+
 
 # ── MODULES AUDITED TO HAVE NO EXTERNAL FEED (owner 2026-08-30 census) ─────────────────────────────
 # These modules were checked and own NO external-feed ingest: either pure in-app CRUD, or a compute/

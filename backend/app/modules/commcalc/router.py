@@ -798,7 +798,11 @@ SWEEP_RETRYABLE_ZERO = ('price_guard', 'inventory_no_stores') + XREPORT_ZERO_REA
 SWEEP_CAVEAT_MARKERS = ('price_guard_partial', 'inventory_devices_only',
                         'x_report_partial_save', 'x_report_unmapped_labels')
 # Statuses a sweep's dedup may treat as DONE even though 0 rows landed.
-SWEEP_TERMINAL_ZERO_STATUSES = ('empty', 'ignored', 'duplicate')
+SWEEP_TERMINAL_ZERO_STATUSES = ('empty', 'ignored', 'duplicate', 'superseded')
+# 'superseded' (2026-09-20, §19.19): a backlogged copy of a whole-period-replacing report that a
+# NEWER copy in the same month overwrites anyway. Terminal by construction — re-fetching it could
+# only rewrite what the newer file already wrote, and on an unlucky ordering would move the feed
+# BACKWARD. Journalled with rows_saved 0 and the winner's message-id, never silently dropped.
 
 # RETRY CAP (mailbox hygiene, 2026-09-01): a file whose every attempt ended NON-terminal ('skipped',
 # 'error', 'download_failed') is re-fetched on every sweep forever under the pure retry contract. On a
@@ -10600,7 +10604,37 @@ def _custom_feed_freshness(client, org_id, report_key, label):
 
 
 def _table_feed_freshness(client, org_id, table, date_col, label):
-    """Freshness for a real table (e.g. raw_sales): row count + the latest value of its date column."""
+    """Freshness for a real table (e.g. raw_sales): row count, the latest value of its DATA date column,
+    and when a row last ARRIVED.
+
+    THE TWO DATES ARE NOT THE SAME QUESTION, and the whole diagnosis turns on having both:
+      • `latest_data_date` — the newest transaction the feed carries. Answers "how far behind are we?"
+      • `last_ingest_at`   — when a row last LANDED. Answers "is the file still arriving?"
+
+    `_data_freshness_monitor` subtracts one from the other to tell a tenant WHICH failure they have:
+    an old ingest means the report email stopped arriving (chase the sender); a RECENT ingest with an
+    old data date means the file still arrives but its CONTENT is frozen (the source's report is
+    stale — a different phone call entirely).
+
+    THIS FUNCTION USED TO RETURN `last_ingest_at: None` UNCONDITIONALLY — it was initialised and never
+    assigned. `_custom_feed_freshness` (the raw_custom_import sibling) sets it properly, so the
+    discriminator worked for Activation Details and Bill Payment and was DEAD for every table-backed
+    feed on every tenant: `arrival_stopped` reduces to `(not li_full) or ...`, which is always True, so
+    the monitor could only ever say "the report email appears to have STOPPED ARRIVING". Live proof,
+    Boost 2026-09-20: the mailbox ingested 6,601 rows at 03:41 that morning and the data still ended
+    2026-09-07, so the true diagnosis was "arriving, content frozen" and the only sentence the platform
+    could produce was the wrong one.
+
+    WHICH COLUMN MEANS "ARRIVED" IS NOT DECIDED HERE. It comes from
+    `data_lineage_registry.freshness_column(table)` — the registry that already records
+    `daily_sales_feed -> uploaded_at` (its rows are re-inserted and promoted, so `created_at` lies) and
+    defaults to `created_at` for everything else. That fact was written down for the autocompute path
+    and then never dereferenced by anyone; this is its first consumer. Reading it from the registry,
+    rather than repeating it, is what stops the two copies drifting — `harness_ingest_freshness.py`
+    fails the build if this call disappears or if a second copy of the fact appears beside it.
+
+    Never raises: a table without the declared arrival column simply leaves `last_ingest_at` None, and
+    the monitor degrades to the conservative "stopped arriving" wording it always used."""
     out = {"key": table, "label": label, "source": table, "rows": 0,
            "last_ingest_at": None, "latest_data_date": None, "recent_data_dates": [], "recent_files": []}
     try:
@@ -10617,6 +10651,14 @@ def _table_feed_freshness(client, org_id, table, date_col, label):
             out["latest_data_date"] = str(latest[0].get(date_col) or "")[:10] or None
     except Exception:
         pass
+    ing_col = _lineage.freshness_column(table)
+    try:
+        newest = (client.schema("commcalc").table(table).select(ing_col)
+                  .eq("org_id", org_id).order(ing_col, desc=True).limit(1).execute().data) or []
+        if newest:
+            out["last_ingest_at"] = newest[0].get(ing_col) or None
+    except Exception:
+        pass   # table has no such column on this database — stays None, wording degrades, never 500s
     return out
 
 
@@ -30670,8 +30712,11 @@ async def _run_ftp_sweep(org_id):
     try:
         files = _ftp.fetch_new_files(cfg, already)
     except Exception as e:
-        client.schema('commcalc').table('ftp_sweep_config').update(
-            {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': f"connect error: {e}"}).eq('org_id', org_id).execute()
+        # An FTP connect failure is an ATTEMPT, never a run (see _sweep_run_stamp) — stamping
+        # last_run_at here made a dead FTP feed look freshly imported to the connector-health scan.
+        _status_update(client, 'ftp_sweep_config',
+                       {**_sweep_run_stamp(False), 'last_status': f"connect error: {e}"},
+                       lambda q: q.eq('org_id', org_id))
         return {"ok": False, "error": str(e)}
     results = []
     shrinks = []   # row-count guardrail hits (a truncated/partial export) → alert after the loop
@@ -30723,15 +30768,20 @@ async def _run_ftp_sweep(org_id):
                         "detail": detail, "shrink": shrink, "skipped": skipped_flag,
                         "terminal": terminal})
     ok = sum(1 for r in results if r['status'] == 'ok')
-    await _sweep_shrink_alert(client, org_id, shrinks,
-                              source_line=f"FTP: {cfg.get('host')}{cfg.get('remote_dir') or '/'}")
+    # Same shape as the mailbox sweep, for the same reason: the optional post-ingest work runs inside a
+    # try and the outcome is stamped in the `finally`, so a raise in the alerting can never discard the
+    # record of an ingest that already landed. One rule, both sweeps — not a fix on whichever one broke.
     status_msg = f"{ok}/{len(results)} files ingested"
-    status_msg += _sweep_status_suffix(results, journal_failures=journal_failures,
-                                       journal_first_error=journal_first_error, retried=retried,
-                                       shrinks=shrinks, exhausted=len(_exhausted))
-    client.schema('commcalc').table('ftp_sweep_config').update(
-        {'last_run_at': _datetime.now(_timezone.utc).isoformat(),
-         'last_status': status_msg}).eq('org_id', org_id).execute()
+    try:
+        status_msg += _sweep_status_suffix(results, journal_failures=journal_failures,
+                                           journal_first_error=journal_first_error, retried=retried,
+                                           shrinks=shrinks, exhausted=len(_exhausted))
+        await _sweep_shrink_alert(client, org_id, shrinks,
+                                  source_line=f"FTP: {cfg.get('host')}{cfg.get('remote_dir') or '/'}")
+    finally:
+        _status_update(client, 'ftp_sweep_config',
+                       {**_sweep_run_stamp(ok > 0), 'last_status': status_msg},
+                       lambda q: q.eq('org_id', org_id))
     return {"ok": True, "ingested": ok, "files": results, "retried": retried,
             "journal_failures": journal_failures, "journal_first_error": journal_first_error}
 
@@ -30950,15 +31000,48 @@ def _email_accounts(client, org_id):
 
 def _email_status_update(client, org_id, account, upd):
     """Patch one mailbox's status columns, scoped to its account. Falls back to org-only pre-075
-    (no 'account' column) so the single-mailbox setup still updates. Best-effort."""
-    try:
-        client.schema('commcalc').table('email_sweep_config').update(upd) \
-            .eq('org_id', org_id).eq('account', account).execute()
-    except Exception:
+    (no 'account' column) so the single-mailbox setup still updates. Best-effort.
+
+    Tolerates a not-yet-migrated optional column the same way _status_update does: a write carrying
+    `last_attempt_at` (mig 241) is retried WITHOUT it rather than dropping the whole patch — otherwise
+    a pre-241 database would lose `last_status` too, which is the one thing a failed sweep must leave
+    behind."""
+    row = {k: v for k, v in (upd or {}).items()
+           if ('email_sweep_config', k) not in _MISSING_STATUS_COLS}
+
+    def _write(r):
         try:
-            client.schema('commcalc').table('email_sweep_config').update(upd).eq('org_id', org_id).execute()
+            client.schema('commcalc').table('email_sweep_config').update(r) \
+                .eq('org_id', org_id).eq('account', account).execute()
         except Exception:
-            pass
+            client.schema('commcalc').table('email_sweep_config').update(r).eq('org_id', org_id).execute()
+    try:
+        _write(row)
+        return
+    except Exception:
+        opt = [k for k in row if k in _OPTIONAL_STATUS_COLS]
+        if not opt:
+            return
+    for k in opt:
+        _MISSING_STATUS_COLS.add(('email_sweep_config', k))
+    try:
+        _write({k: v for k, v in row.items() if k not in opt})
+    except Exception:
+        pass
+
+
+def _sweep_run_stamp(success: bool):
+    """The ONE timestamp a mailbox / FTP sweep may stamp when a run ends (house freshness contract, see
+    _OPTIONAL_STATUS_COLS above): only a run that actually delivered advances `last_run_at`; every
+    non-delivering attempt — a rejected login, a mailbox with no filename rules, a crash — records
+    `last_attempt_at` instead.
+
+    Boost's mailbox is why this exists: from 2026-09-07 its IMAP login was rejected on every hourly
+    run for twelve days, yet each failure stamped `last_run_at`, so the connector-health scan could
+    never call it STALE (it only escaped silence because the words 'Authentication failed' happen to
+    contain 'fail'). Scheduling is untouched — /run-due keys off next_run_at, never last_run_at."""
+    return {('last_run_at' if success else 'last_attempt_at'):
+            _datetime.now(_timezone.utc).isoformat()}
 
 
 def _auto_custom_report_patterns(client, org_id):
@@ -31031,7 +31114,7 @@ async def _run_email_sweep(org_id, account='default'):
     # reports sit in the inbox (bit the Total/luxelink mailbox setup 2026-07-02).
     if not any((p.get('pattern') or '').strip() for p in (cfg.get('patterns') or []) if isinstance(p, dict)):
         _email_status_update(client, org_id, account,
-            {'last_run_at': _datetime.now(_timezone.utc).isoformat(),
+            {**_sweep_run_stamp(False),
              'last_status': "no filename rules configured — add patterns, nothing can match"})
         return {"ok": False, "account": account,
                 "error": "This mailbox has no filename rules — add a rule (e.g. *Sales*Transaction*Details* → daily sales) and Save."}
@@ -31051,7 +31134,12 @@ async def _run_email_sweep(org_id, account='default'):
         # even the capped hang off the loop.
         import asyncio as _asyncio
         _unrouted = []   # data-file attachments that matched NO rule (a renamed/unruled report) — surfaced below
-        files = await _asyncio.to_thread(_email.fetch_new_attachments, cfg, already, _unrouted)
+        # BACKLOG COLLAPSE (§19.19). After an outage a mailbox holds many hourly copies of the same report;
+        # for a whole-period-replacing type only the newest in each month can change the database, so the
+        # fetcher hands the older ones back here to be journalled terminally instead of re-imported. An
+        # upload type not DECLARED whole-period-replacing is untouched and every message still ingests.
+        _superseded = []
+        files = await _asyncio.to_thread(_email.fetch_new_attachments, cfg, already, _unrouted, _superseded)
     except Exception as e:
         em = str(e)
         # An AUTH rejection is routinely misread as "the password was erased" — it never is (nothing in
@@ -31065,11 +31153,31 @@ async def _run_email_sweep(org_id, account='default'):
         else:
             em = f"connect error: {em}"
         _email_status_update(client, org_id, account,
-            {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': em})
+            {**_sweep_run_stamp(False), 'last_status': em})
         return {"ok": False, "error": em, "account": account}
     results = []
     shrinks = []   # row-count guardrail hits (a truncated/partial export) → alert after the loop
     journal_failures, journal_first_error, retried = 0, None, 0
+    # Journal the collapsed copies BEFORE the ingest loop, so a sweep interrupted mid-ingest still never
+    # re-fetches them. Same conflict target and the same failure accounting as the loop's own journal
+    # write: a LOST row here would put the message straight back in the next sweep's fetch, which is the
+    # exact re-import this collapse exists to stop — so it is counted and reported, never swallowed.
+    for _sup in _superseded:
+        try:
+            client.schema('commcalc').table('email_processed').upsert(
+                {'org_id': org_id, 'account': account, 'message_id': _sup.get('message_id'),
+                 'filename': _sup.get('name'), 'upload_type': _sup.get('upload_type'),
+                 'rows_saved': 0, 'status': 'superseded',
+                 'detail': (f"superseded by a newer copy of the same report in this mailbox "
+                            f"({_sup.get('superseded_by')}) — a whole-period-replacing ingest would have "
+                            f"rewritten it identically")[:300],
+                 'processed_at': _datetime.now(_timezone.utc).isoformat()},
+                on_conflict='org_id,account,message_id,filename').execute()
+        except Exception as _se:
+            journal_failures += 1
+            if journal_first_error is None:
+                journal_first_error = str(_se)[:300]
+            print(f"WARN email_processed superseded-upsert failed for {_sup.get('name')}: {_se}")
     just_ok_mids = set()   # message-ids ingested ok THIS run — the mailbox cleaner deletes these when enabled
     for f in files:
         name, size, ut, mid = f['name'], f['size'], f.get('upload_type'), f.get('message_id')
@@ -31122,62 +31230,87 @@ async def _run_email_sweep(org_id, account='default'):
         if status == 'ok' and (rows_saved or 0) > 0 and mid:
             just_ok_mids.add(mid)
     ok = sum(1 for r in results if r['status'] == 'ok')
-    # A truncated/partial emailed export (far fewer rows than the day/period it replaced) would silently
-    # corrupt reports — alert the connector recipients (same scope as connector-health) so it's caught.
-    # Shared with the FTP sweep now (which raised no alert at all before).
-    await _sweep_shrink_alert(client, org_id, shrinks, source_line=f"Mailbox: {account}")
+    # ── THE OUTCOME IS RECORDED NO MATTER WHAT HAPPENS BELOW ────────────────────────────────────────
+    # Everything from here to the stamp is OPTIONAL post-ingest work: shrink alerts, the mailbox
+    # cleaner, the unrouted-report list and its alert. None of it can change what already landed in the
+    # database — the ingest is finished and journalled by now. But it used to run BEFORE the one write
+    # that records the outcome, un-wrapped, so a raise anywhere in it discarded the record of a sweep
+    # that had actually SUCCEEDED. `run-now` makes that silent: it dispatches through
+    # `background_tasks.add_task`, which has no crash handler (unlike the /run-due dispatcher), so the
+    # exception goes to the log and the mailbox row keeps advertising its PREVIOUS status forever.
+    #
+    # Live proof, Boost 2026-09-20: the owner re-entered the password at 03:35 and ran the sweep four
+    # times; all four ingested (6,601 daily-sales rows each, journalled in email_processed and
+    # upload_trace at 03:40:47 / 03:41:00 / 03:41:13 / 03:41:25) — and the config row still read
+    # `login rejected: [AUTHENTICATIONFAILED]` from 03:00 with last_run_at frozen there. The platform
+    # told the owner a working mailbox had "fizzled". That is the same false-status class as the
+    # last_run_at-on-failure defect (§19.17), pointing the other way: false RED instead of false GREEN.
+    #
+    # So: build the status line FIRST, do the optional work inside a try, and stamp in the `finally`.
+    # A raise in the optional work now costs an alert, never the record of the ingest.
     status_msg = (f"{ok}/{len(results)} attachments ingested" if results
                   else "no new attachments to import — matched files already imported OK, or none match your rules (use Test connection)")
-    status_msg += _sweep_status_suffix(results, journal_failures=journal_failures,
-                                       journal_first_error=journal_first_error, retried=retried,
-                                       shrinks=shrinks, exhausted=len(_exhausted))
-    # MAILBOX CLEANER (owner 2026-08-28: "clean the email so we don't overload it"). When this mailbox is set
-    # to delete-after-ingest, remove the report emails whose data is ALREADY captured. Runs on THIS sweep's
-    # own authenticated connection — no separate login, no shared password — and deletes ONLY messages
-    # recorded ok+rows (this run + prior), never a non-report or un-ingested email. Off the event loop
-    # (blocking imaplib), best-effort: a cleanup failure can never affect the ingest that just succeeded.
-    if str(cfg.get('cleanup_mode') or 'off').strip().lower() == 'delete':
-        _ok_mids = set(just_ok_mids) | {r.get('message_id') for r in seen
-                                        if r.get('status') == 'ok' and (r.get('rows_saved') or 0) > 0}
-        try:
-            import asyncio as _asyncio_cl
-            _cl = await _asyncio_cl.to_thread(_email.cleanup_ingested, cfg, _ok_mids)
-            if (_cl or {}).get('deleted'):
-                status_msg += f" · cleaned {_cl['deleted']} ingested email(s) from the mailbox"
-        except Exception as _ce:
-            print(f"WARN mailbox cleanup failed for {account}: {_ce}")
-    # UNROUTED REPORTS (owner 2026-08-29). Data-file attachments that arrived but matched NO import rule —
-    # the "the email HAS the data but the system didn't import it" failure, usually a report renamed at the
-    # source. Persist the list for the freshness banner (guarded — no-ops until the column exists; writing []
-    # clears it once the report gets a rule) and escalate a once-a-day-deduped alert, so a silent feed freeze
-    # becomes a visible, self-explaining prompt to add a rule. Best-effort: never affects the ingest above.
-    _unr_names, _seen_un = [], set()
-    for _u in (_unrouted or []):
-        _n = (_u.get('name') or '').strip()
-        if _n and _n.lower() not in _seen_un:
-            _seen_un.add(_n.lower()); _unr_names.append(_n)
-    if _table_has_column(client, 'email_sweep_config', 'last_unrouted'):
-        try:
-            import json as _json_un
-            _email_status_update(client, org_id, account, {'last_unrouted': _json_un.dumps(_unr_names[:25])})
-        except Exception as _ue:
-            print(f"WARN persist unrouted failed for {account}: {_ue}")
-    if _unr_names:
-        try:
-            from app.modules.closing.router import _send_alert
-            _subj = f"⚠️ {len(_unr_names)} report(s) arrived that no import rule matched"
-            _preview = "\n".join(f"  • {n}" for n in _unr_names[:12])
-            _txt = (f"MetricsPro found report attachment(s) in the '{account}' mailbox that were delivered but "
-                    f"matched NO filename import rule, so their data was NOT imported. A feed can silently go "
-                    f"stale this way — usually because a report was renamed at the source:\n\n{_preview}\n\n"
-                    f"What to do: open Data Imports → Email Imports and add or widen a rule so the filename "
-                    f"matches (e.g. *Sales*Transaction*Details* → daily sales). The next sweep imports it.")
-            _ref = f"unrouted:{org_id}:{account}:{_date.today().isoformat()}"   # once per mailbox per day
-            await _send_alert(client, org_id, "connector", _subj, _txt, _ref)
-        except Exception as _ae:
-            print(f"WARN unrouted alert failed for {account}: {_ae}")
-    _email_status_update(client, org_id, account,
-        {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': status_msg})
+    if _superseded:
+        status_msg += (f" · {len(_superseded)} older copy(ies) superseded by a newer one "
+                       f"(same report, same month — re-importing them changes nothing)")
+    try:
+        status_msg += _sweep_status_suffix(results, journal_failures=journal_failures,
+                                           journal_first_error=journal_first_error, retried=retried,
+                                           shrinks=shrinks, exhausted=len(_exhausted))
+        # A truncated/partial emailed export (far fewer rows than the day/period it replaced) would
+        # silently corrupt reports — alert the connector recipients (same scope as connector-health) so
+        # it's caught. Shared with the FTP sweep now (which raised no alert at all before).
+        await _sweep_shrink_alert(client, org_id, shrinks, source_line=f"Mailbox: {account}")
+        # MAILBOX CLEANER (owner 2026-08-28: "clean the email so we don't overload it"). When this mailbox is set
+        # to delete-after-ingest, remove the report emails whose data is ALREADY captured. Runs on THIS sweep's
+        # own authenticated connection — no separate login, no shared password — and deletes ONLY messages
+        # recorded ok+rows (this run + prior), never a non-report or un-ingested email. Off the event loop
+        # (blocking imaplib), best-effort: a cleanup failure can never affect the ingest that just succeeded.
+        if str(cfg.get('cleanup_mode') or 'off').strip().lower() == 'delete':
+            _ok_mids = set(just_ok_mids) | {r.get('message_id') for r in seen
+                                            if r.get('status') == 'ok' and (r.get('rows_saved') or 0) > 0}
+            try:
+                import asyncio as _asyncio_cl
+                _cl = await _asyncio_cl.to_thread(_email.cleanup_ingested, cfg, _ok_mids)
+                if (_cl or {}).get('deleted'):
+                    status_msg += f" · cleaned {_cl['deleted']} ingested email(s) from the mailbox"
+            except Exception as _ce:
+                print(f"WARN mailbox cleanup failed for {account}: {_ce}")
+        # UNROUTED REPORTS (owner 2026-08-29). Data-file attachments that arrived but matched NO import rule —
+        # the "the email HAS the data but the system didn't import it" failure, usually a report renamed at the
+        # source. Persist the list for the freshness banner (guarded — no-ops until the column exists; writing []
+        # clears it once the report gets a rule) and escalate a once-a-day-deduped alert, so a silent feed freeze
+        # becomes a visible, self-explaining prompt to add a rule. Best-effort: never affects the ingest above.
+        _unr_names, _seen_un = [], set()
+        for _u in (_unrouted or []):
+            _n = (_u.get('name') or '').strip()
+            if _n and _n.lower() not in _seen_un:
+                _seen_un.add(_n.lower()); _unr_names.append(_n)
+        if _table_has_column(client, 'email_sweep_config', 'last_unrouted'):
+            try:
+                import json as _json_un
+                _email_status_update(client, org_id, account, {'last_unrouted': _json_un.dumps(_unr_names[:25])})
+            except Exception as _ue:
+                print(f"WARN persist unrouted failed for {account}: {_ue}")
+        if _unr_names:
+            try:
+                from app.modules.closing.router import _send_alert
+                _subj = f"⚠️ {len(_unr_names)} report(s) arrived that no import rule matched"
+                _preview = "\n".join(f"  • {n}" for n in _unr_names[:12])
+                _txt = (f"MetricsPro found report attachment(s) in the '{account}' mailbox that were delivered but "
+                        f"matched NO filename import rule, so their data was NOT imported. A feed can silently go "
+                        f"stale this way — usually because a report was renamed at the source:\n\n{_preview}\n\n"
+                        f"What to do: open Data Imports → Email Imports and add or widen a rule so the filename "
+                        f"matches (e.g. *Sales*Transaction*Details* → daily sales). The next sweep imports it.")
+                _ref = f"unrouted:{org_id}:{account}:{_date.today().isoformat()}"   # once per mailbox per day
+                await _send_alert(client, org_id, "connector", _subj, _txt, _ref)
+            except Exception as _ae:
+                print(f"WARN unrouted alert failed for {account}: {_ae}")
+    finally:
+        # THE ONE WRITE THAT RECORDS THIS RUN. In `finally` on purpose (see above): an ingest that
+        # happened must be visible on the mailbox row even when the optional work above blew up.
+        _email_status_update(client, org_id, account,
+            {**_sweep_run_stamp(ok > 0), 'last_status': status_msg})
     # Auto-derive the monthly commission basis (raw_sales) from the feed — best-effort + guarded,
     # never breaks the sweep. DEFAULT ON when the registry has no 'sales' row: new tenants never had
     # the row the house has, so their raw_sales silently stayed empty and plan-mode pay was $0
@@ -31851,10 +31984,25 @@ async def email_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID,
     acct = account.strip()
     if wait:
         return await (_run_email_sweep(org_id, acct) if acct else _run_email_sweep_all(org_id))
+    # A BACKGROUND SWEEP THAT CRASHES MUST STILL SAY SO. `background_tasks.add_task` has no error
+    # handling — an exception inside is logged by the server and reaches nobody, so before this the
+    # mailbox row kept advertising its PREVIOUS status and the user was told nothing had happened.
+    # The /run-due dispatcher already stamped a crash on the row; run-now gets the same treatment, so
+    # the two entry points cannot report a sweep differently.
+    async def _run_and_record(fn, *a):
+        try:
+            return await fn(*a)
+        except Exception as e:
+            for _a in ([acct] if acct else [r.get('account') or 'default' for r in _email_accounts(sb(), org_id)]):
+                _email_status_update(sb(), org_id, _a,
+                                     {**_sweep_run_stamp(False),
+                                      'last_status': f"sweep crashed: {type(e).__name__}: {str(e)[:170]}"})
+            print(f"WARN run-now sweep crashed for {org_id}/{acct or 'all'}: {e}")
+            raise
     if acct:
-        background_tasks.add_task(_run_email_sweep, org_id, acct)
+        background_tasks.add_task(_run_and_record, _run_email_sweep, org_id, acct)
     else:
-        background_tasks.add_task(_run_email_sweep_all, org_id)
+        background_tasks.add_task(_run_and_record, _run_email_sweep_all, org_id)
     return {"ok": True, "started": True, "account": acct or "all",
             "message": "Sweep started — it runs in the background and imports reports one at a time. The "
                        "processed list below updates as it goes; you can leave this page."}
@@ -32266,7 +32414,8 @@ async def _email_sweep_due_worker(due):
         except Exception as e:
             res = {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
             _email_status_update(client, oid, acct,
-                                 {'last_status': f"sweep crashed: {type(e).__name__}: {str(e)[:170]}"})
+                                 {**_sweep_run_stamp(False),
+                                  'last_status': f"sweep crashed: {type(e).__name__}: {str(e)[:170]}"})
         finally:
             _email_status_update(client, oid, acct, {'sweeping_since': None})
         ran.append({"org_id": oid, "account": acct, "result": res})

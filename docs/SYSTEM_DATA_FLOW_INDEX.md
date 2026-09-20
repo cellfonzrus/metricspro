@@ -146,8 +146,8 @@ email), (c) **RPC/manual entry**.
 | B2B (sales + inventory aging) | `b2b_sweep.py` | `raw_sales`/feed + `inventory_aging_device` upsert (`b2b_sweep.py:341`) | `/b2b/sweep/*` (`b2b_sweep_run_now`/`run_due`); `fetch_inventory_aging` is a **stub** (`b2b_sweep.py:77`) `⚠`. **Its portal-login route is CLOSED by config since mig `998`** (vendor instruction, owner 2026-09-09) — the supported route is the email sweep; see §12a.1 |
 | epay (payment detail) | `epay_sweep.py` | `raw_payment_detail` | `/epay/sweep/*` `router.py:8730-8811` (mig `020`,`025`) |
 | VIP invoices | `vip_sweep.py` | vip invoice tables (mig `008`,`011`,`014`) | `/vip/sweep/*` `router.py:3034-3078` |
-| FTP drop | `ftp_sweep.py` | per report-pull-map | `/ftp-sweep/*` `router.py:22175-22237` (mig `046`) |
-| Email inbox | `email_sweep.py` | routes attachments to report ingest | `/email-sweep/*` `router.py:22973-23407` (mig `049`,`075`); scheduler: pg_cron → `/email-sweep/run-due` (mig `921`,`922` — backend self-registers on boot; handler advances `next_run_at` up front and sweeps on a dedicated thread so the tick answers pg_net inside its 5 s timeout; per-mailbox in-progress lock `sweeping_since` (mig `932`) stops overlapping sweeps; non-terminal files stop re-fetching after `SWEEP_MAX_NONTERMINAL_ATTEMPTS` — surfaced in `last_status`, never silent) |
+| FTP drop | `ftp_sweep.py` | per report-pull-map | `/ftp-sweep/*` `router.py:22175-22237` (mig `046`); freshness stamp via `_sweep_run_stamp` — see the Email inbox row |
+| Email inbox | `email_sweep.py` | routes attachments to report ingest | `/email-sweep/*` `router.py:22973-23407` (mig `049`,`075`); scheduler: pg_cron → `/email-sweep/run-due` (mig `921`,`922` — backend self-registers on boot; handler advances `next_run_at` up front and sweeps on a dedicated thread so the tick answers pg_net inside its 5 s timeout; per-mailbox in-progress lock `sweeping_since` (mig `932`) stops overlapping sweeps; non-terminal files stop re-fetching after `SWEEP_MAX_NONTERMINAL_ATTEMPTS` — surfaced in `last_status`, never silent). **FRESHNESS STAMP (2026-09-20): `router._sweep_run_stamp(success)` is the ONE place a mailbox/FTP sweep decides which timestamp it may write** — only a run that actually ingested (`ok > 0`) advances `last_run_at`; a rejected login, a mailbox with no filename rules, a connect error or a crash records `last_attempt_at` instead (mig `241` column, the contract the portal sweeps already followed via `_sweep_set_status`). Scheduling is untouched — `/run-due` keys off `next_run_at`. Proof: `harness_sweep_freshness.py` (28 checks) |
 | Vidapay | `vidapay_sweep.py` | payment feed | (mig `083` total processor sources) |
 | Generic data-source portal login | `live_login.py` | any report | `/data-sources/*` `router.py:23760-24979`, `/data-sources/sweep/run-due` `24409` (cron path advances each due source's `next_run_at` up front and pulls on a dedicated thread — the email-sweep incident pattern; the secret-less org-scoped call still pulls inline; interactive login/2FA/live-login endpoints on the API service proxy transparently to the sweeps worker when `BROWSER_SERVICE_URL` is set — `service_role.BrowserWorkProxy` + handler in `main.py`) |
 
@@ -3216,6 +3216,9 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `commcalc.carrier_commission` (mig `065`) | **NOTHING WRITES IT for any live org — 0 rows house, 0 rows LuxeLink (measured 2026-09-20)**, which is why `rep_commissions.carrier_statement_comm` reads `$0.00` on every live row. `_apply_new_engines` reads it into `stmt_by_rep` (`router.py`, the statement block) and `/carrier-comm-file/extract` writes it. The live carrier statement for a master-agent tenant is `raw_ma_commission`, NOT this table — see §31.2 | §15 carrier statement commission; §31 carrier earned vs employee paid |
 | `commcalc.raw_ma_commission` — as the EARNED side | per-device statement money in `spiff_m1..m6` / `rebate` / `device_margin` / `consumer_margin` / `mrc_net_discount`, netted per device by `sale_installment_engine._ma_gate_index` (mig `308`, base + adjustment summed so a clawback nets out); which columns count as dealer earnings is `commission_catalog.amount_fields(org,'ma_commission')` with `_MA_NUMERIC_COLS` as the house default | §31 — `carrier_vs_pay.rollup_by_rep` via `GET /commcalc/carrier-vs-pay/{period}`. Also §15 MA commission, §8 installment gate |
 | `commcalc.rep_commissions.boost_commission` — as the EARNED side | the PRE-ATTRIBUTED dealer figure for a processor-payment tenant: `raw_payment_detail` rows in the `Commission` payment category, summed per `rep_username` by `calculator.calc_rep_commissions` (`pay_by_login`). Read as stored by the earned-vs-paid report, **never recomputed** | §6 rep commission (Boost); §31.5 the second feed shape |
+| `commcalc.email_processed.status` — the sweep's dedup journal, now including **`'superseded'`** | `router._run_email_sweep` — one row per processing attempt, plus one per backlogged copy that a NEWER copy of the same report (same `upload_type`+filename+month) makes redundant, carrying the winner's message-id in `detail` | `router._sweep_dedup_sets` via `SWEEP_TERMINAL_ZERO_STATUSES` — `superseded` is TERMINAL, so a collapsed message is never re-fetched. Which reports may be collapsed is declared ONCE in `data_lineage_registry.FULL_REPLACE_UPLOAD_TYPES` / `replaces_whole_period()`; an undeclared type is never collapsed. §19.19. Proof `harness_sweep_backlog_collapse.py` (33 checks) |
+| `commcalc.daily_sales_feed.uploaded_at` · `vip_paygo_payments.swept_at` · `vip_credit_memos.swept_at` — the ARRIVAL columns (as opposed to each table's DATA date) | the ingest that lands the row | `data_lineage_registry.FRESHNESS_COLUMN_BY_TABLE` / `freshness_column(table)` is the ONE declaration; `router._table_feed_freshness` dereferences it to fill `last_ingest_at`, and `account/autocompute._PERIOD_SOURCES` must agree with it. Consumed by `_data_freshness_monitor` to tell **"the report email stopped arriving"** (old ingest) from **"the file arrives, its CONTENT is frozen"** (recent ingest, old data date) — a distinction that was structurally impossible for every table-backed feed until 2026-09-20, see §19.18. Proof `harness_ingest_freshness.py` (31 checks) |
+| `commcalc.email_sweep_config` / `ftp_sweep_config` — the FRESHNESS columns `last_run_at` vs `last_attempt_at` (mig `241`) | `router._sweep_run_stamp(success)` is the SOLE decider, written through `_email_status_update` (mailbox, scoped `org_id`+`account`) / `_status_update` (FTP). **Only an ingest advances `last_run_at`** (`ok > 0` attachments); a rejected login, a mailbox with no filename rules, a connect error or a crash writes `last_attempt_at`. Both degrade to a status-only write on a pre-241 database | `router._scan_connector_health` → `GET /commcalc/connector-health` (ERRORED/STALE arms — the STALE arm was DEAD for these two tables until 2026-09-20, see §19), and `core.control_box_api._SCHEDULER_SPECS['sched_email_sweep']` → `control_box.heartbeat_lamp(last_success=…)`, whose parameter name this now actually honours. Scheduling reads NEITHER column — `/run-due` keys off `next_run_at`. Proof `harness_sweep_freshness.py` (28 checks) |
 
 ## 17. Cross-reference: by ENDPOINT (high-value)
 
@@ -3477,6 +3480,149 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 ---
 
 ## 19. Known gaps & inert config
+
+§19.19 **A BACKLOG OF THE SAME REPORT COST ONE IMPORT PER EMAIL, NOT ONE PER PERIOD (fixed 2026-09-20).**
+
+**THE CORRECTION TO §19.17/§19.18 FIRST.** Both of those said Boost's b2bsoft export had stopped or gone
+stale at 2026-09-07. **Neither was true.** The export never stopped: b2bsoft emails it HOURLY and the
+owner's own inbox shows unbroken delivery through 2026-09-20 00:20. What the platform was displaying was
+the content of an OLD email.
+
+**WHAT ACTUALLY HAPPENED.** While the mailbox login was rejected (09-07 23:11 → 09-20 03:35) roughly
+**336 hourly copies** of the same report piled up unprocessed. `daily_sales` lands by DELETING
+(org, period) and re-inserting — it is not in `ingest_slice.INGEST_PARTITION`, so it takes the legacy
+wide delete. The sweep drained the backlog in **arrival order**, so each ingest deleted September and
+re-inserted a slightly larger file. From `upload_trace.date_counts`, measured:
+
+| time | rows_in | days | through |
+|---|---|---|---|
+| 03:38:00 | 6,602 | 7 | 2026-09-07 |
+| 04:05:12 | 7,570 | 8 | 2026-09-08 |
+
+31 emails in half an hour to advance the feed by **one day**, ~305 still queued, and the attachments
+grow monotonically (1,143,904 → 1,311,629 bytes) because the report is cumulative month-to-date. Three
+costs: ~336 full 1.1 MB imports to reach the state the newest file alone describes; a part-month feed for
+hours while every report reading it looks like real data rather than an outage; and the feed moving
+**backward** whenever an older message is processed after a newer one.
+
+**THE FIX — a property of the ingest, not of this mailbox.**
+- `data_lineage_registry.FULL_REPLACE_UPLOAD_TYPES` / `replaces_whole_period()` DECLARES which upload
+  types replace their whole (org, period) slice (`daily_sales`, `x_report`, `sales_trend`). The property
+  used is a consequence of the replace semantics, not an assumption that the report is cumulative: given
+  two files of the same report and period, ingesting the newer ALONE leaves the same database state as
+  ingesting both.
+- `email_sweep._collapse_superseded` groups this sweep's candidates by **(upload_type, filename,
+  year-month sent)** and keeps the newest per group, releasing the superseded payloads immediately (a
+  336-message backlog costs one message's bytes, not ~370 MB).
+- The rest are journalled `status='superseded'`, `rows_saved=0`, carrying the winning message-id, and
+  `'superseded'` joins `SWEEP_TERMINAL_ZERO_STATUSES` so they are never re-fetched. The status line says
+  how many — never a silent drop. A failed superseded-journal is counted like the ingest loop's own.
+- **The refusals are the design.** An upload type not declared is never collapsed (silence means "import
+  them all" — that covers every `INGEST_PARTITION` table, whose files replace a slice *narrower* than the
+  period). The month key keeps a month boundary honest. An **undateable** message has an unknown period,
+  so it is never collapsed away and never supersedes anything; its dateable siblings still collapse.
+
+**Proof:** `backend/harness_sweep_backlog_collapse.py` (33 checks) — §B replays the live 336-message
+backlog, §C the month boundary, §D every refusal, §F the wiring and terminality.
+
+**Stopgap applied in parallel (owner-run):** `email_sweep_config.since_days` 14 → 2 for the house org, so
+the already-queued backlog falls outside the search window and the newest email lands in one sweep. Once
+this change ships the window size stops mattering; the row can go back to 14.
+
+**A NOTE ON THE TWO EARLIER ENTRIES.** §19.17's fix (a failing sweep may not stamp `last_run_at`) and
+§19.18's (the arrival-vs-content discriminator) are both still correct and still needed. What was wrong
+was the CONCLUSION each was reported with — "the export is frozen". The evidence that settled it was
+`upload_trace.date_counts` + `email_processed.file_size`, which were there the whole time and which
+neither investigation read.
+
+§19.18 **"IS THE DATA STILL FLOWING?" — THE DISCRIMINATOR WAS DEAD FOR EVERY TABLE-BACKED FEED, AND
+THE SWEEP COULD LOSE THE RECORD OF A SUCCESSFUL RUN (fixed 2026-09-20, owner directive: no patchwork).**
+
+Owner: *"it was the same password but it fizzled out of the b2bimports — this happened in luxelink and
+was fixed, again it was a patchwork and i want no patchwork; if one thing is fixed for one tenant it
+should be a design fix not a temporary fix, this should be a requirement of the design."* The standing
+rule that came out of it is in `CLAUDE.md`; this is the defect that produced it.
+
+**THREE DEFECTS, ONE CLASS — a fact fixed on ONE path and never made a property of the design.**
+
+1. **`account/autocompute._PERIOD_SOURCES`** learned that `daily_sales_feed`'s arrival column is
+   `uploaded_at` (its rows are re-inserted and promoted, so `created_at` lies). Its own comment names
+   the pattern: *"the coa READ-path was universalized but this data-DETECTION list was never
+   mirrored"*. A feed-only tenant's P&L never computed.
+2. **`data_lineage_registry.FRESHNESS_COLUMN_BY_TABLE` + `freshness_column()`** were then written to
+   hold that fact ONCE — and `freshness_column()` had **zero callers** for its whole life. It was a
+   registry nobody dereferenced.
+3. So **`router._table_feed_freshness` returned `last_ingest_at: None` unconditionally** — initialised,
+   never assigned — for every table-backed feed on every tenant. The sibling `_custom_feed_freshness`
+   (raw_custom_import) sets it properly, so the diagnosis worked for Activation Details and Bill
+   Payment and was DEAD for the sales feed.
+
+**WHAT THAT COST.** `_data_freshness_monitor` tells a tenant WHICH failure they have: an old ingest
+means the report email stopped arriving (chase the sender); a RECENT ingest with an old data date means
+the file still arrives and its CONTENT is frozen (chase the source's report). With `last_ingest_at`
+always None, `arrival_stopped = (not li_full) or …` is always True, so only the first sentence could
+ever be produced. Boost 2026-09-20, measured: the mailbox ingested **6,601 rows at 03:41** and the
+newest transaction in the data was still **2026-09-07** — the true diagnosis was "arriving, content
+frozen" and the platform said "stopped arriving" for thirteen days.
+
+**A FOURTH, POINTING THE OTHER WAY.** `_run_email_sweep` ran its optional post-ingest work (shrink
+alert, mailbox cleaner, unrouted list + alert) BEFORE the one write that records the outcome, un-wrapped.
+A raise anywhere in it discarded the record of a sweep that had already succeeded — and `run-now`
+dispatches through `background_tasks.add_task`, which has no crash handler, so the exception reached
+nobody and the row kept its PREVIOUS status. Boost, same morning: the owner re-entered the password at
+03:35 and swept four times; all four ingested (journalled in `email_processed` + `upload_trace` at
+03:40:47 / 03:41:00 / 03:41:13 / 03:41:25) and the config row still read
+`login rejected: [AUTHENTICATIONFAILED]` from 03:00. The platform reported a working mailbox as
+"fizzled" — the false-RED mirror of §19.17's false-GREEN.
+
+**THE FIX, as a property of the design rather than of any tenant.**
+- `_table_feed_freshness` DEREFERENCES `_lineage.freshness_column(table)` and populates
+  `last_ingest_at`; it carries no copy of the fact. A table without the column degrades to None and the
+  wording falls back to the old conservative sentence — never a 500.
+- `FRESHNESS_COLUMN_BY_TABLE` gained the two VIP sweep tables (`vip_paygo_payments`,
+  `vip_credit_memos` → `swept_at`) that `_PERIOD_SOURCES` knew about and the registry did not. **The
+  guard found those, not a human.**
+- Both sweeps (mailbox AND FTP) build `status_msg` first, run the optional work inside a `try`, and
+  stamp the outcome in the `finally`. `POST /email-sweep/run-now` wraps its background task so a crash
+  is stamped on every affected mailbox and then re-raised — the same treatment `/run-due` already gave.
+- **Locked:** `backend/harness_ingest_freshness.py` (31 checks) fails the build if the probe stops
+  dereferencing the registry, if a second copy of the column name appears beside it, if the registry and
+  `_PERIOD_SOURCES` disagree about any table, or if either sweep's stamp leaves its `finally`.
+
+**STILL OPEN AND REPORTED, NOT FIXED:** Boost's b2bsoft export itself is frozen. The login works and the
+sweep ingests, but the newest data in the attachment is 2026-09-07, so 09-08..09-19 does not exist in
+the mailbox to be pulled (§19.17). With this change the platform now says that in the right words.
+
+§19.17 **THE BOOST MAILBOX LOGIN HAS BEEN REJECTED SINCE 2026-09-07 — REPORTED, NOT CODED AROUND
+(2026-09-20).** `commcalc.email_sweep_config` for the house org (`b2breports@metricspro.tech`,
+cs126.bluehost.com) carries `last_status = "login rejected: b'[AUTHENTICATIONFAILED] Authentication
+failed.'"`. The last attachment it ingested was **2026-09-07 23:11:35 UTC**; every hourly run since
+has failed at login. Consequence, measured: house `daily_sales_feed` for September holds **6,591 rows
+covering 09-01..09-07 ONLY, all stamped `uploaded_at = 2026-09-07`** — **09-08 through 09-19 (12 days)
+were never ingested**, and `raw_sales` for September is empty. August is COMPLETE and unaffected
+(24,890 rows, all 31 days, one upload on 09-01).
+
+- **It is the credential, not the host and not the sweep.** The LuxeLink mailbox authenticates on the
+  SAME IMAP host every hour (`last_status = "11/11 attachments ingested"`, 09-20 03:05), so cPHulk is
+  not blocking the IP; `cleanup_mode = 'off'`, so nothing was deleted from the inbox.
+- **RECOVERY IS ONE SWEEP, not a 12-day backfill.** The b2bsoft export is a FULL-PERIOD file, proven by
+  its own upload stamps: all 24,890 August rows arrived in one upload, all 6,591 September rows in
+  another. Re-enter the password (Data Imports → Email Imports → Test connection), then Run now; the
+  current month's file carries 09-01..today. `since_days = 14` reaches back to 09-06 — raise it if the
+  newest report email in the inbox is older than that.
+- **NOT self-healed in code.** A missing feed is a live-data defect; writing anything that papers over
+  it would hide exactly the days that are missing.
+
+**WHY NOBODY WAS TOLD FOR TWELVE DAYS — FIXED 2026-09-20.** Both the mailbox and FTP sweeps stamped
+`last_run_at` on FAILURE, so the connector had a three-minute-old "last run" while importing nothing.
+`_scan_connector_health`'s STALE arm ("no successful run in the window") could therefore NEVER fire for
+them, and `control_box.heartbeat_lamp` was fed a `last_success` that was not one. The mailbox escaped
+total silence only because `'Authentication failed'` happens to contain the substring `'fail'` that the
+ERRORED arm greps for — a differently-worded failure would have been invisible. `router._sweep_run_stamp`
+now decides: `ok > 0` ingested ⇒ `last_run_at`, every non-delivering attempt ⇒ `last_attempt_at` (mig
+`241`), which is the contract the portal sweeps already followed via `_sweep_set_status`. Scheduling is
+untouched (`/run-due` keys off `next_run_at`). Proof `harness_sweep_freshness.py` (28 checks) — §C is
+the Boost row replayed both ways, §D pins that nothing schedules off `last_run_at`.
 
 - **The back office's `Activation Spiff` line is UNRESOLVED (2026-09-08).** The master agent's own
   Aug-2026 P&L carries `Activation Spiff` $18,061.37 (Luxelink 13,589.71 / NovaWave 4,471.66,

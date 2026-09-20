@@ -337,16 +337,24 @@ def run_email(store, attachments, payloads, *, org=HOUSE, fail_writes_on=(), ale
     (or an HTTPException to raise)."""
     log = []
     R.sb = lambda: FakeClient(store, log, fail_writes_on)                       # noqa: E731
-    # The REAL signature is `fetch_new_attachments(cfg, already, unrouted=None)`, and the sweep calls
-    # it with all three (router.py: `await _asyncio.to_thread(_email.fetch_new_attachments, cfg,
-    # already, _unrouted)`). `unrouted` is a genuine later FEATURE — the list the fetcher appends
-    # "data file that matched no pattern" records to, so a report renamed at the source is surfaced
-    # instead of dropped silently. This stub still took two arguments, so every email sweep died
-    # inside the driver with "takes 2 positional arguments but 3 were given", the sweep recorded
-    # NOTHING, and section 3 then blew up on `email_processed[0]` — an IndexError standing in for
-    # what was really a stale test double. Mirrors the real contract now, including leaving
-    # `unrouted` untouched (every fixture attachment matches a pattern).
-    def _fetch(cfg, already, unrouted=None):
+    # The REAL signature is `fetch_new_attachments(cfg, already, unrouted=None, superseded=None)`, and
+    # the sweep calls it with all four (router.py: `await _asyncio.to_thread(
+    # _email.fetch_new_attachments, cfg, already, _unrouted, _superseded)`).
+    #
+    # BOTH trailing arguments are genuine later FEATURES, and this stub has now fallen behind the real
+    # one TWICE — each time with the same signature: every email sweep dies inside the driver with
+    # "takes N positional arguments but N+1 were given", the sweep records NOTHING, and a later section
+    # blows up on an empty table, so a stale test double masquerades as a product bug. Keep this
+    # mirroring the real contract.
+    #   `unrouted`   — data files that matched no pattern, so a report renamed at the source is
+    #                  surfaced instead of dropped silently. Left untouched here: every fixture
+    #                  attachment matches a pattern.
+    #   `superseded` — older copies of a whole-period-replacing report that a newer copy in the same
+    #                  month overwrites anyway (§19.19). Left EMPTY here on purpose: the fixtures are
+    #                  one attachment per sweep, so there is nothing to collapse, and these sections
+    #                  are about honest dedup/journalling rather than the collapse itself, which
+    #                  harness_sweep_backlog_collapse.py proves on its own.
+    def _fetch(cfg, already, unrouted=None, superseded=None):
         return [a for a in attachments if (a['message_id'], a['name']) not in already]
 
     R._email.fetch_new_attachments = _fetch
