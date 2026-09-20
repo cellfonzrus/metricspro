@@ -52,6 +52,7 @@ Primary code homes:
 | 27 | **Vendor rebate history (earned, per line)** | "A new tenant's carrier statement lists every rebate and commission it owes us per line — where does that file land, why is it not in the P&L, and what is the difference between what we have EARNED and what has actually been COLLECTED?" |
 | 28 | **"Which company am I in"** | "My login belongs to more than one company — which one is every page on screen actually showing, how would I know if it changed under me, and why did another company's mailbox turn up in a new tenant's setup?" |
 | 29 | **Roster reach — who is in the employee picker** | "Whose names may this login pick from on the closing sheet? Why did a permission change empty the dropdown, and why does a rep with a market on their record still only see their own store?" |
+| 30 | **Carrier earned vs employee paid** | "What did the carrier actually pay us on this rep's activations, against what we paid that rep? Is every tenant computing commission off the same kind of feed? What would this tenant report on the other one's configuration?" |
 | 11a | **Inventory vs Sold** | "My snapshot says this phone is in stock — was it already sold? Which units do I clear out, which sales do I adjust, and why is a sold-then-refunded unit not on the list?" |
 
 ---
@@ -3160,10 +3161,15 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `core.platform_notice` (mig `981` — operator→tenants status broadcast; audience by org_id, never by tenant name) | `POST /core/operator/notices`, `/notices/withdraw` | `GET /core/platform-notice` (tenant-facing; org resolved from the VERIFIED membership, `org_ids` stripped from the response) |
 | `core.restore_drill` (mig `981` — backup/restore ATTESTATION; `verified_at` is the heartbeat column) | `POST /core/operator/restore-drill` (refuses a record that is not evidence) | `GET /core/operator/restore-drill` → `operator.drill_lamp`; and the control box with NO code change via a `core.system_check` heartbeat row (COMMENTED OUT in mig 981) |
 
+| `commcalc.carrier_commission` (mig `065`) | **NOTHING WRITES IT for any live org — 0 rows house, 0 rows LuxeLink (measured 2026-09-20)**, which is why `rep_commissions.carrier_statement_comm` reads `$0.00` on every live row. `_apply_new_engines` reads it into `stmt_by_rep` (`router.py`, the statement block) and `/carrier-comm-file/extract` writes it. The live carrier statement for a master-agent tenant is `raw_ma_commission`, NOT this table — see §30.2 | §15 carrier statement commission; §30 carrier earned vs employee paid |
+| `commcalc.raw_ma_commission` — as the EARNED side | per-device statement money in `spiff_m1..m6` / `rebate` / `device_margin` / `consumer_margin` / `mrc_net_discount`, netted per device by `sale_installment_engine._ma_gate_index` (mig `308`, base + adjustment summed so a clawback nets out); which columns count as dealer earnings is `commission_catalog.amount_fields(org,'ma_commission')` with `_MA_NUMERIC_COLS` as the house default | §30 — `carrier_vs_pay.rollup_by_rep` via `GET /commcalc/carrier-vs-pay/{period}`. Also §15 MA commission, §8 installment gate |
+| `commcalc.rep_commissions.boost_commission` — as the EARNED side | the PRE-ATTRIBUTED dealer figure for a processor-payment tenant: `raw_payment_detail` rows in the `Commission` payment category, summed per `rep_username` by `calculator.calc_rep_commissions` (`pay_by_login`). Read as stored by the earned-vs-paid report, **never recomputed** | §6 rep commission (Boost); §30.5 the second feed shape |
+
 ## 17. Cross-reference: by ENDPOINT (high-value)
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `GET /commcalc/carrier-vs-pay/{period}` (`?market=`,`?store=`) — CARRIER EARNED vs EMPLOYEE PAID per rep. **READ-ONLY, `meta.books_to == []`**, org-scoped; runs `ma_recon` WITHOUT persisting | `router.carrier_vs_pay_report` → PURE `commcalc/carrier_vs_pay.rollup_by_rep`; reuses `ma_recon` (sold universe + evidence + rules), `sale_installment_engine._ma_gate_index` (money), `ma_recon.load_gate_cfg` (`ma_payout_sign`), `rep_commissions` (as stored), `_store_market_resolver` (market) | §30. Earned and paid are NEVER summed — the gap is the named `carrier_earned_minus_employee_paid`, computed only for reps where BOTH sides were measured. Absence is `null`/`not_reported`, never `$0.00`. Proof `harness_carrier_vs_pay.py` (54 checks) |
 | `GET /commcalc/inventory-sold-recon` (is an on-hand unit already sold — READ-ONLY, books nothing, org-scoped both sides) | `router.inventory_sold_recon_endpoint` → PURE `commcalc/inventory_sold_recon.reconcile`, keyed by `device_cost_recon.device_key` | §11a — PRESENCE, distinct from `/device-cost-recon` (whose number is right) and `/account/inventory-recon` (dollars per store). Proof `harness_inventory_sold_recon.py` |
 | `GET /core/my-tenants` · `GET /core/bootstrap` (the login's membership list — the ONLY source of "which companies may I act as"; both exempt from mig-984 scope enforcement) | `core/router._my_tenants_payload` (names from `storeops.tenants`, never from `core.organizations`) | §28 which company am I in — `lib/tenant-scope.ts` `actingCompany`/`switcherOptions`, proof `prove_tenant_scope.mjs` |
 | _every endpoint filtering/grouping by MARKET_ | — | §13a canonical resolution (`core.scope.store_market_resolver`/`market_by_code`); inventory pinned in `harness_market_resolution_guard.py` |
@@ -3316,6 +3322,10 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| Carrier commission EARNED on a rep's activations (dealer REVENUE) | shape A: `raw_ma_commission` money columns netted by `_ma_gate_index`, attributed device→sale→rep via `ma_recon`. shape B: `rep_commissions.boost_commission` (already per rep). Which shape is used is decided by WHICH FEED HAS ROWS, never a carrier name | `carrier_vs_pay.rollup_by_rep` → `GET /commcalc/carrier-vs-pay/{period}`; §30. Three states — `reported` / `measured_zero` / `not_reported`; a `not_reported` earned figure is `null` and yields NO margin, never `$0.00` |
+| Employee commission PAID (payroll EXPENSE) — beside the earned figure | `rep_commissions.total_payout` as stored | same report, a SEPARATE key. §30.3 — the two ledgers are never summed or netted; `difference_measured_reps` states how many reps the published gap actually covers |
+| Which sales universe the PAY engines read (`'legacy'` vs `'union'`) | `commission_org_config.sales_source` (mig `306`) → `router._sales_source_mode` → `commission_engine._read_sales` | §30.9 — measured live: the two universes are IDENTICAL on the house org (so its Exec MTD / Sales Report / back-office agreement proves nothing about the setting) and **3.3x apart** on LuxeLink in Aug 2026, worth **$6,480.98 of rep pay** |
+| Which source drives ACTIVATION counts — and the two axes that are NOT the same question | PAY: `commission_plan.activation_source` (mig `297`) > `commission_org_config.activation_source` (mig `296`) > `'raw_sales'`, resolved PER REP by `commission_engine._plan_activation_source`. DISPLAY: `metric_source_of_truth.activations` (mig `923`), org-wide, auto-enabled, **degrading to `sales_agg` when the report has no rows** | §30.8 — precedence IS defined; the pay delta measured on live data is **$0.00** in every month and mode. ⚠ the PAY path has NO rows-exist gate where the DISPLAY path does |
 | Event goal ATTAINMENT (activations / accessory $ / boxes / upgrades / BYOD over an event window) | `raw_sales`/`daily_sales_feed` → `_sales_cell_agg` → `_compute_feed_actuals_py` output fields (`prem_count`, `acc_gp`, `box_count`, `upg_count`, `byod_count`) — **read, never re-derived and never stored** | `marketing/actuals.aggregate_actual_rows` (filters the shared pass's rows to the event's stores × calendar days) → `compare_windows` (per-DAY vs the same weekday in the preceding 4 weeks) → `build_goal_lines`; `GET /marketing/events/{id}/actuals`; §23. A goal metric with no automatic source reports "no automatic actual", NEVER 0; a zero baseline yields `pct_change: null`, never an infinite lift |
 | Event staffing cover (is a slot actually filled?) | `marketing_event_staff.confirm_state` + `is_backup`/`backup_for_staff_id` | `event_logic.resolve_staffing` — a backup that has itself declined is NOT cover; `uncovered` is the list a manager acts on. The platform never infers `no_show` from a missing check-in (§23) |
 | Event GPS attendance verdict | `marketing_event_checkin.check_in_lat/lng/accuracy` (the storevisit mig-`027` capture contract) vs `marketing_event.geo_lat/lng` + radius | `core/geo.evaluate_checkin` — THE one geofence decision in the platform; judges the interval [distance−accuracy, distance+accuracy], so a coarse fix returns `unverified_accuracy` with `within_geofence = null` rather than being counted against anyone (§23) |
@@ -7357,3 +7367,203 @@ roster. Neither LuxeLink nor Vzone moves: their roles have no explicit `scheduli
    employee record, but pinning the store on the login is the durable fix.
 3. **One `app_users.email` is a malformed header string** — `"akberawais@icloud.com" <akberawais@icloud.com>`
    — a duplicate login for E252 alongside the clean `akberawais@icloud.com`. Reported, not deleted.
+
+---
+
+## 30. CARRIER EARNED vs EMPLOYEE PAID — the per-rep commission basis (owner directive 2026-09-20)
+
+> *"we also need to make sure that the basis for calculation for all carriers is a similar feed
+> source, considering that boost is paying out commissions perfectly fine and the executive mtd and
+> sales report are identical data to what the back office report"*
+
+**Answers questions like…** "What did the carrier actually pay us on this rep's activations, against
+what we paid that rep? Is every tenant's commission computed off the same kind of feed? If I moved
+this tenant onto the other tenant's configuration, what would the numbers do?"
+
+### 30.1 THE ANSWER, IN ONE PARAGRAPH (measured 2026-09-20, live)
+
+The **employee-pay** basis is ALREADY the same on both tenants: the b2b SALES feed, never the
+carrier/processor commission feed (`_apply_new_engines` — *"statement-only reps are captured in
+commcalc.carrier_commission for recon, not paid here"*). The **dealer-revenue** basis is NOT the
+same and cannot be made so by configuration, because the two carriers deliver it in different
+shapes: one sends a per-DEVICE master-agent statement (`raw_ma_commission`, money in `spiff_m1..m6`
+/ `rebate` / `device_margin` columns, keyed on IMEI), the other sends a processor PAYMENT feed
+(`raw_payment_detail` rows in the `Commission` payment category, keyed on the rep's ePay login,
+already aggregated per rep into `rep_commissions.boost_commission`). §30.4 is the report that reads
+BOTH shapes without naming either carrier.
+
+### 30.2 DUPLICATE CHECK (build gate) — what was searched, and what is REUSED
+
+| Candidate | Why it does not serve this, or what was taken from it |
+|---|---|
+| `commcalc.carrier_commission` (mig `065`) + `rep_commissions.carrier_statement_comm` | **REJECTED as the source.** The table holds **0 rows for every live org** (house 0, LuxeLink 0, measured 2026-09-20), so `carrier_statement_comm` reads `$0.00` on every live row. Building the carrier side on it would render a permanently empty column while the tenant's real statement sits fully ingested in `raw_ma_commission` (2,780 rows, LuxeLink). The column stays; it is simply not the feed |
+| `ma_recon.py` (§15 B2B ↔ MA activation recon) | **REUSED WHOLE.** The sold universe, the device→rep attribution, the paid/unpaid evidence gate and the business-rule attribution are `ma_recon`'s, called read-only (`persist_results` is never invoked). One sold universe, one definition of "paid" — the new report and the Pay Discrepancy report cannot disagree |
+| `sale_installment_engine._ma_gate_index` (mig `308`) | **REUSED** for the per-device money: it already nets a device's base + adjustment rows per column, so a clawback reduces the figure instead of being counted twice |
+| `installment_gate_source_config` ladder (mig `223`/`308`) via `ma_recon.load_gate_cfg` | **REUSED** for `ma_payout_sign` — the same knob the payout gate reads, so the recon and the payout agree about which sign means "paid to us" |
+| `calculator.calc_rep_commissions` → `rep_commissions.boost_commission` | **REUSED** as the pre-attributed earned side for the processor-payment shape. Read as stored, never recomputed |
+| `/commission-received-breakout` (§15) | **DOES NOT ANSWER IT.** Company/store grain, no rep dimension, and its own docstring states it never reads `rep_commissions`. It answers "what did we make by money stream"; this answers "what did we make on THIS REP, against what we paid them" |
+| `marketing/event_sales.py` (§23s.8) | **VOCABULARY REUSED VERBATIM** — the paid/measured-zero/unmatchable three-state idiom and its reason prose. Absence is never collapsed into a finding |
+| `_store_market_resolver` (§13a) | **REUSED** for store→market. No second resolver |
+
+### 30.3 THE ONE RULE THIS REPORT EXISTS TO ENFORCE
+
+Earned and paid are **two different ledgers** — dealer REVENUE against a payroll EXPENSE — on two
+different feeds. `carrier_vs_pay.py` never sums them and never nets them: they are separate keys in
+every row and separate keys in the totals, and the gap is published under the explicit name
+`carrier_earned_minus_employee_paid`, computed **only** for reps where BOTH sides were measured, with
+`difference_measured_reps` stating how many that was. The harness pins that no key anywhere in the
+payload holds their sum (`B2`/`B3`).
+
+An earned figure is one of **three states**, never a bare number:
+
+| State | Meaning |
+|---|---|
+| `reported` | the feed is loaded and carries money against this rep |
+| `measured_zero` | the feed IS loaded, this rep WAS looked up, it pays nothing. A real zero, stated as measured |
+| `not_reported` | nothing is known — no feed loaded, or no device key to look up. The value is `null`, **never `0.00`**, and no margin is computed |
+
+The negative control (`F8`) is the defect this prevents: collapsing `not_reported` into `$0.00` would
+print a confident **−$13,215.10** margin for the house org, whose statement feed is simply a
+different shape.
+
+### 30.4 NEW — registered here
+
+| Thing | What it is |
+|---|---|
+| `backend/app/modules/commcalc/carrier_vs_pay.py` | **PURE**, stdlib-only, ~330 lines. `EARNED_STATE_*` / `EARNED_REASON_*` / `EARNED_SHAPE_*`, `normalize_rep`, `earnings_columns` (RULE TWO), `device_earned`, `rollup_by_rep`. `meta.books_to == []` — books nothing, anywhere |
+| `GET /commcalc/carrier-vs-pay/{period}` (`?market=`, `?store=`) | Read-only, org-scoped. Runs `ma_recon` without persisting, indexes the statement money through mig-308, reads `rep_commissions` as stored, and returns per-rep rows + two SEPARATE totals + a meta block that states the basis, the columns summed, the payout sign, the feed shape and the sold-side summary |
+| `backend/harness_carrier_vs_pay.py` | **54 checks**, DB-free, synthetic fixtures. Includes the negative control (a missing statement yields NO margin figure), the clawback-goes-negative case, the RULE TWO literal scan, and the byte-identity regression for the second feed shape |
+| earnings columns | `commission_catalog.amount_fields(org, 'ma_commission')` with `sale_installment_engine._MA_NUMERIC_COLS` as the HOUSE DEFAULT. Live LuxeLink resolves 13 configured columns; the payload echoes which list was used |
+| lineage | **No new feed.** Every table read is already registered (`raw_ma_commission`, `raw_ma_daily_tx`, `raw_sales`/`daily_sales_feed`, `rep_commissions`, `raw_payment_detail` via `boost_commission`) → no `data_lineage_registry` / `925` entry, by the registry's own "don't duplicate" rule |
+
+### 30.5 THE TWO FEED SHAPES — config, never a carrier branch
+
+`EARNED_SHAPE_STATEMENT_DEVICE` — a per-device master-agent statement; attribution runs
+device → sale → rep through `ma_recon`. `EARNED_SHAPE_PREATTRIBUTED_REP` — a processor payment feed
+that is *already* per rep; there is nothing to attribute and the figure is read as stored. **The
+endpoint picks the shape by WHICH FEED HAS ROWS, never by a carrier name**, and echoes the choice in
+`meta.earned_shape` so a reader can see the basis instead of inferring it. A rep the pre-attributed
+feed does not name stays `not_reported` — omission is never a zero (`G4`).
+
+### 30.6 LIVE RESULT (measured 2026-09-20, read-only)
+
+| Org / period | Carrier earned | Employee paid | Measured reps |
+|---|---|---|---|
+| LuxeLink **July 2026** | **$94,031.74** (31 reported · 11 measured-zero · 2 not-reported) | $8,380.87 / 44 reps | 42 |
+| LuxeLink **August 2026** | **$245,054.42** (46 reported · 0 not-reported) | $11,118.78 / 46 reps | 46 |
+| LuxeLink **September 2026** | **$86,501.79** (27 reported · 12 measured-zero) | **$0.00 — the month has never been calculated** | 0 |
+| House org **July 2026** | **$54,151.66** (46 reported · 1 measured-zero · 2 not-reported) | $13,215.10 / 49 reps | 47 |
+| House org **August 2026** | **$76,330.01** (41 reported · 1 not-reported) | $10,723.41 / 42 reps | 41 |
+| House org **September 2026** | **not reported** (41 reps) — the ePay commission feed has not landed | $4,713.88 / 41 reps | 0 |
+
+Employee pay as a share of dealer commission: LuxeLink **8.9%** (Jul) / **4.5%** (Aug); house org
+**24.4%** (Jul) / **14.0%** (Aug). House org July by market — PA $29,270.80 earned vs $6,115.38 paid,
+NYC $11,168.23 vs $3,236.66, NJ $7,319.35 vs $1,721.28, LI $6,523.68 vs $2,141.78.
+
+**September on BOTH tenants is where the honesty rule earns its keep.** House: 41 reps
+`not_reported`, difference computed for **0** reps — because the ePay commission feed has not landed,
+not because the carrier paid nothing. LuxeLink: the carrier side IS there ($86,501.79) and the
+EMPLOYEE side is missing (no `rep_commissions` rows at all). Two opposite absences, both stated as
+absences, neither printed as `$0.00`.
+
+### 30.7 ⚠ WHAT THE REPORT FOUND ON ITS FIRST RUN — reported, not fixed
+
+1. **LuxeLink's own two portals do not land the same months.** `raw_ma_commission` is fed by BOTH
+   `Vidapay` and `Total Access` (the §2 two-portal org). Per-portal row counts swing four-fold month
+   to month — Jul **VidaPay 630 / Total Access 157**, Sep **VidaPay 23 / Total Access 442** — and the
+   report makes the consequence visible: **NY earned −$7.45 across 249 sold activations in July** and
+   **$0.00 across 245 in September**, while Chicago earned $94,039.19 and $86,501.79 in the same two
+   months. The carrier side for one market is effectively missing in two of three months. The feed
+   source is not uniform *inside* the tenant, before any comparison with another tenant. This is an
+   UPLOAD/DATA gap — it is reported, never written around.
+2. **September 2026 has no `rep_commissions` rows for LuxeLink at all** — 849 activations sold,
+   $86,501.79 of carrier commission earned, zero employee pay computed. The month has not been run.
+3. **`commcalc.carrier_commission` is dead across the fleet** (0 rows, both orgs), which is why
+   `rep_commissions.carrier_statement_comm` reads `$0.00` on every live row. Either retire the column
+   or point it at the feed that actually carries the statement.
+
+### 30.8 ⚠ THE ACTIVATION-SOURCE "CONTRADICTION" IS INERT FOR MONEY — measured, not argued
+
+LuxeLink states an activation basis in three places and they do not read the same:
+`commission_org_config.activation_source='raw_sales'`, `metric_source_of_truth.activations=
+'activation_details'`, and two of four `commission_plan.activation_source='activation_details'`.
+**The precedence IS well-defined** and this is not a contradiction — they are two different axes:
+
+- **PAY** (`commission_engine.py` `_plan_activation_source`): the rep's plan value wins, `'inherit'`
+  falls back to the org value, then `'raw_sales'`. Per-rep, by design (mig 297 exists precisely
+  because this org holds NY and Chicago in one tenant).
+- **DISPLAY** (`router._apply_activation_basis` + `_metric_source`, mig 923): org-wide, and
+  `activations` is AUTO-ENABLED fleet-wide with no config row — but the consumer **degrades to
+  `sales_agg` when the Activation Details report has no rows for the period**.
+
+Driving the real engine twice on live data (`commission_engine.preview`, read-only, plans forced to
+`'inherit'`): **the pay delta is $0.00 in every month and every source mode.** No LuxeLink plan rule
+matches on `activation_bucket`, and the appended Detail lines carry blank
+department/category/product/tender/contract-type, so nothing matches them either. **LuxeLink pays
+$0 on activations today**; its plans pay accessories, Edge (by `tender_type`), VHI, tablet and
+Protect+.
+
+⚠ **BUT THE SUPPRESSION IS ARMED.** The pay path has **no rows-exist gate**: for a rep on an
+`activation_details` plan the engine blanks their raw_sales `activation_bucket` unconditionally
+(`commission_engine.py`, the `_rep_ad` branch) and replaces it with Detail lines that may not exist —
+LuxeLink had **0 Activation-Details rows in July 2026**. The DISPLAY path has that gate and falls
+back; the PAY path does not. Today the asymmetry costs nothing because no rule reads the bucket. The
+moment anyone writes an `activation_bucket` rule — which is exactly what the parked set-up-fee /
+activation-fee work would do — a missing upload silently zeroes that rep's activation pay. Fixing it
+is a one-line symmetry with `_apply_activation_basis`; it is **not** applied here because it is
+money-touching and unasked.
+
+### 30.9 WHAT MOVES THE NUMBERS — `sales_source`, and it is NOT what the framing assumed
+
+`commission_org_config.sales_source`: house org `'legacy'`, LuxeLink `'union'`. Measured live:
+
+| | raw_sales | daily_sales_feed | legacy vs union |
+|---|---|---|---|
+| House Jul 2026 | 27,691 | 27,691 | identical |
+| House Aug 2026 | 24,890 | 24,890 | identical |
+| House Sep 2026 | 0 | 6,591 | legacy falls back to the feed → identical |
+| LuxeLink Jul 2026 | 10,013 | 10,009 | ~identical |
+| **LuxeLink Aug 2026** | **3,235** | **10,804** | **3.3× apart** |
+| LuxeLink Sep 2026 | 0 | 6,757 | legacy falls back → identical |
+
+**The house org's agreement between Exec MTD, the Sales Report and the back-office report is not
+evidence that `'legacy'` is the right setting.** For that tenant `raw_sales` and `daily_sales_feed`
+hold the same rows, so `'legacy'` and `'union'` are the same universe and the setting is moot. The
+agreement is a property of its DATA, not of its CONFIGURATION. See §19 on the 2026-09-03 partial
+closed-month defect that `'legacy'` causes when the two tables DO differ.
+
+Driving the pay engine twice (`commission_engine.preview`, read-only), LuxeLink plan payout:
+
+| Period | `'union'` (today) | `'legacy'` (the house setting) | Delta |
+|---|---|---|---|
+| July 2026 | $4,658.63 | $4,658.63 | $0.00 |
+| **August 2026** | **$8,727.17** | **$2,246.19** | **−$6,480.98 (−74.3%)** |
+| September 2026 | $6,481.12 | $6,481.12 | $0.00 |
+
+Moving LuxeLink onto the house setting would have **underpaid 46 reps by $6,480.98 in August** and
+changed nothing in the other two months. The correct unification therefore moves the HOUSE org
+FORWARD to `'union'` (byte-identical on its current data, and immune to the partial-month defect),
+never LuxeLink backward. That is a MONEY EVENT and is **surfaced for owner approval, not applied.**
+
+### 30.10 THE DISPLAY-SIDE BASIS, per market (LuxeLink, measured read-only)
+
+Activation counts under today's config vs the house org's posture (`sales_agg`):
+
+| Period | | Total acts | BYOD | Upgrades | CHICAGO acts | NY acts |
+|---|---|---|---|---|---|---|
+| Jul 2026 | today | 703 | 137 | 87 | 542 | 161 |
+| Jul 2026 | house posture | 703 | 137 | 87 | 542 | 161 |
+| Aug 2026 | today | 816 | 182 | 54 | 617 | 199 |
+| Aug 2026 | house posture | 812 | 205 | 92 | 588 | 224 |
+| Sep 2026 | today | 589 | 167 | 54 | 436 | 153 |
+| Sep 2026 | house posture | 484 | 164 | 57 | 346 | 138 |
+
+July does not move at all (LuxeLink had no Activation-Details rows, so today's config **already
+degrades to `sales_agg`** — `degraded: true`). August moves total activations by **+4 (+0.5%)** but
+upgrades by **−38 (−41%)** and BYOD by **−23 (−11%)**, and it moves Chicago **+29** while moving NY
+**−25**. September moves **+105 (+21.7%)**. Revenue and accessory dollars do not move at all — the
+basis only touches activation COUNTS.
+
+### 30.11 CROSS-REFERENCES
+
+Added to §16 (by TABLE), §17 (by ENDPOINT) and §18 (by METRIC) below.

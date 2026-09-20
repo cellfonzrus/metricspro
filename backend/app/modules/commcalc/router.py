@@ -20465,6 +20465,122 @@ def run_discrepancy_check(payload: dict, org_id: str = ORG_ID):
     return out
 
 
+@router.get("/carrier-vs-pay/{period}")
+def carrier_vs_pay_report(period: str, org_id: str = ORG_ID, market: str = "", store: str = ""):
+    """CARRIER STATEMENT EARNED vs EMPLOYEE PAID, per rep, for one month. READ-ONLY. BOOKS NOTHING.
+
+    Owner directive 2026-09-20 — the evidence surface for "is the basis for calculation the same feed
+    source for all carriers". Dealer REVENUE (what the carrier statement says was earned on this
+    rep's activations) sits beside the PAYROLL EXPENSE (what the rep was actually paid). The two are
+    never summed and never netted; the gap is reported as the NAMED
+    `carrier_earned_minus_employee_paid`, and only for reps where BOTH sides were measured.
+
+    DUPLICATE CHECK (CLAUDE.md build gate). Nothing here is a second derivation:
+      • sold universe, device→rep attribution, paid/unpaid evidence, business-rule attribution —
+        `ma_recon` (§15), the SAME engine POST /discrepancy/run persists for the Pay Discrepancy
+        report. This endpoint runs it read-only and never calls persist_results.
+      • per-device statement money — `sale_installment_engine._ma_gate_index` (mig 308), which
+        already nets a device's base + adjustment rows so a clawback reduces the figure.
+      • payout DIRECTION — the org's `installment_gate_source_config` ladder via
+        `ma_recon.load_gate_cfg`, the same knob the payout gate reads.
+      • employee side — `commcalc.rep_commissions` as stored. Never recomputed, never written.
+      • store→market — `_store_market_resolver`, the canonical union resolver (§13a).
+    `/commission-received-breakout` is the neighbouring report and does NOT answer this: it is
+    company/store grain, has no rep dimension, and never reads rep_commissions.
+
+    ABSENCE IS NOT A FINDING. When no carrier statement is loaded for the window, every earned
+    figure is `null` with state 'not_reported' — never $0.00 — and no margin is computed. See
+    `commcalc/carrier_vs_pay.py` for the three states and the reason vocabulary (shared with
+    marketing/event_sales.py, §23s.8).
+
+    RULE TWO: which statement columns count as dealer earnings is the org's own
+    `commission_catalog` amount-field list, with the mig-308 column tuple as the house default. No
+    carrier, tenant or market name appears in the logic.
+    """
+    require_org(org_id)
+    from app.modules.commcalc import ma_recon, carrier_vs_pay as _cvp
+    from app.modules.commcalc.sale_installment_engine import _ma_gate_index
+    client = sb()
+
+    # ── the SOLD side + the paid/unpaid evidence — ma_recon, read-only (no persist) ──────────────
+    cfg = ma_recon.load_gate_cfg(client, org_id)
+    rules = ma_recon.load_rules(client, org_id)
+    sold_rows = ma_recon.load_sold_sales(client, org_id, period)
+    sold_idx, sold_without_serial = ma_recon.build_sold_index(sold_rows)
+    ma_rows, tx_rows = ma_recon.load_ma_paid_rows(client, org_id, period)
+    paid_idx = ma_recon.build_paid_index(ma_rows, tx_rows, cfg)
+    recon_rows, recon_summary = ma_recon.reconcile_ma_activations(
+        sold_idx, paid_idx, rules, period, cfg)
+
+    # ── the statement MONEY — the mig-308 netted index over the SAME rows ma_recon loaded ────────
+    money_idx = _ma_gate_index(ma_rows)
+    try:
+        configured = commission_catalog.amount_fields(client, org_id, "ma_commission")
+    except Exception:
+        configured = None
+    from app.modules.commcalc.sale_installment_engine import _MA_NUMERIC_COLS as _house_cols
+    columns = _cvp.earnings_columns(configured, _house_cols)
+
+    # ── the EMPLOYEE side — rep_commissions as stored ────────────────────────────────────────────
+    try:
+        pay_rows = (client.schema("commcalc").table("rep_commissions").select("*")
+                    .eq("org_id", org_id).in_("period", _pvariants(period))
+                    .limit(100000).execute().data) or []
+    except Exception:
+        pay_rows = []
+
+    # ── THE SECOND FEED SHAPE ────────────────────────────────────────────────────────────────────
+    # A tenant with no master-agent statement may still have a per-rep dealer figure: the processor
+    # PAYMENT feed, already aggregated per rep by `calculator.calc_rep_commissions` into
+    # `rep_commissions.boost_commission` (raw_payment_detail rows in the 'Commission' payment
+    # CATEGORY, keyed on rep_username). Reading it here is not a second derivation — it is the SAME
+    # number the commission report already shows, and nothing recomputes it. Without this, such a
+    # tenant read 'not reported' for every rep while a measured figure sat one column away.
+    # Config, not a branch: the shape is chosen by WHICH FEED HAS ROWS, never by a carrier name.
+    _statement_loaded = bool(ma_rows or tx_rows)
+    _pre, _shape = None, _cvp.EARNED_SHAPE_STATEMENT_DEVICE
+    if not _statement_loaded:
+        _agg = {}
+        for _r in pay_rows:
+            _v = _r.get("boost_commission")
+            if _v is None:
+                continue
+            _k = _cvp.normalize_rep(_r.get("epay_salesperson") or _r.get("storeops_name"))
+            if _k:
+                _agg[_k] = round(safe_float(_agg.get(_k)) + safe_float(_v), 2)
+        if _agg:
+            _pre, _shape = _agg, _cvp.EARNED_SHAPE_PREATTRIBUTED_REP
+
+    _market_for, _all_markets = _store_market_resolver(client, org_id)
+    out = _cvp.rollup_by_rep(
+        recon_rows, money_idx, pay_rows,
+        columns=columns, payout_sign=cfg.get("ma_payout_sign"),
+        statement_loaded=_statement_loaded, market_for=_market_for,
+        preattributed_earned=_pre, earned_shape=_shape)
+
+    # RULE FIVE — the filters narrow the ROWS; the payload says what it dropped, never silently.
+    markets = {m.strip().upper() for m in (market or "").split(",") if m.strip()}
+    stores = {s.strip().lower() for s in (store or "").split(",") if s.strip()}
+    rows = out["rows"]
+    if markets or stores:
+        kept = [r for r in rows
+                if (not markets or (r.get("market") or "").upper() in markets)
+                and (not stores or (r.get("store") or "").lower() in stores)]
+        out["meta"]["filtered"] = {"markets": sorted(markets), "stores": sorted(stores),
+                                   "reps_shown": len(kept), "reps_total": len(rows)}
+        out["rows"] = kept
+    out["period"] = period
+    out["org_id"] = org_id
+    out["meta"]["sold_summary"] = recon_summary
+    out["meta"]["sold_without_serial"] = sold_without_serial
+    out["meta"]["statement_rows"] = {"ma_commission": len(ma_rows), "ma_daily_tx": len(tx_rows)}
+    out["meta"]["earnings_columns_source"] = ("org commission_catalog" if configured
+                                              else "house default (mig 308 column set)")
+    out["meta"]["writes"] = ("none — this endpoint reads ma_recon, the mig-308 money index and "
+                             "rep_commissions, and persists nothing")
+    return out
+
+
 @router.get("/discrepancy/{period}")
 async def get_discrepancy_results(period: str, org_id: str = ORG_ID, source: str = ""):
     """Get all discrepancy results for a period, grouped by store. Optional `source` filter narrows

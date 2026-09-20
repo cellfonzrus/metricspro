@@ -865,7 +865,17 @@ _all_routes = _flatten_routes(real_app.routes)
 # rebate is a receivable is an open owner decision, so `vendor_rebate_feed.BOOKS_TO` is empty and no
 # P&L / Balance-Sheet / GP / payout path reads the table. Proof
 # backend/harness_vendor_rebate_landing.py (83 checks).
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1583"))
+# Re-pinned 1584 -> 1585 on 2026-09-20. (The pin read 1583 while this branch already stood at 1584 —
+# an EARLIER package on the branch added a route without re-pinning, so the guard was already red
+# when this work started. Measured both ways with git stash: 1584 without this endpoint, 1585 with.) The delta is exactly ONE endpoint and nothing was removed:
+#     + /commcalc/carrier-vs-pay/{period}             GET
+# CARRIER EARNED vs EMPLOYEE PAID, per rep (owner directive 2026-09-20; index §30). READ-ONLY and
+# org-scoped. It adds NO table, NO ingest route and NO feed: it runs the EXISTING ma_recon engine
+# without persisting, indexes the statement money through the EXISTING mig-308 _ma_gate_index, and
+# reads rep_commissions as stored. It books NOTHING — carrier_vs_pay.BOOKS_TO (meta.books_to) is
+# empty and no P&L / payout / accrual path reads it. Dealer REVENUE and payroll EXPENSE are reported
+# side by side and never summed. Proof backend/harness_carrier_vs_pay.py (54 checks).
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1585"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
