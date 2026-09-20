@@ -743,14 +743,14 @@ def definition_note(sources, basis="both"):
     if "epay" in sources:
         legs = []
         if basis in ("both", "sales"):
-            legs.append("a device line in the period's B2B sales (raw_sales.serial_1)")
+            legs.append("a device line in the period's POS sales (raw_sales.serial_1)")
         if basis in ("both", "residual"):
             legs.append("a residual line whose MI activation date falls in the period "
                         "(raw_mi.mi_activation_date)")
         parts.append(" and/or ".join(legs))
     if not parts:
         return ("No activation source carries data for this org in this period — neither a master-agent "
-                "commission feed nor B2B sales / residual lines.")
+                "commission feed nor POS sales / residual lines.")
     return ("Activation = " + "; or ".join(parts) +
             ". These are the same sources the Device History lookup reads, so the two surfaces cannot "
             "disagree. A residual line with no activation date is EXCLUDED and counted, never guessed.")

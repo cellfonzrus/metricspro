@@ -95,7 +95,7 @@ DEFAULT_TERM_LABELS = dict(LABELABLE_TERMS)
 BANNERS = {
     "unrecognized_ct_recon": {
         "default": "on",
-        "title": "Unrecognized contract-type warning (b2bsoft MTD reconciliation)",
+        "title": "Unrecognized contract-type warning (POS MTD reconciliation)",
     },
 }
 DEFAULT_BANNER_STATES = {k: v["default"] for k, v in BANNERS.items()}
@@ -305,6 +305,15 @@ def term_from_payload(payload, key, neutral=None):
         if got:
             return got, ("report_term:override" if k == "_" else "report_term:" + k)
     return neutral, "neutral_default"
+
+
+def pos_term(client, org_id):
+    """The tenant's POS name for user-facing COPY — the `pos_system` term (tenant override > carrier
+    preset > the neutral noun 'POS'). Owner 2026-09-20: "it should customize the message based on what
+    POS is being used." Every payload string that names the POS calls this; none spells a vendor
+    (backend/harness_carrier_vocab_guard.py scans the payload modules). Twin of the frontend's
+    lib/report-labels.ts usePosTerm — same rows, same precedence."""
+    return carrier_term(client, org_id, "pos_system")[0] or DEFAULT_TERM_LABELS["pos_system"]
 
 
 def carrier_term(client, org_id, key, neutral=None):

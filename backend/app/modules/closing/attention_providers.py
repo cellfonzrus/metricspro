@@ -169,13 +169,15 @@ def _p_closing_stale_stores(client, org_id, ctx):
     if not stale:
         return []
     eg = ", ".join(stale[:5]) + (f" +{len(stale) - 5} more" if len(stale) > 5 else "")
+    from app.modules.commcalc import report_labels as _report_labels
+    pos = _report_labels.pos_term(client, org_id)   # the tenant's POS name in copy — never a vendor spelled here
     return [{
         "group": "other", "key": "closing_stale_stores", "severity": "warning",
         "label": "Stores selling but not submitting daily closings",
-        "detail": (f"{len(stale)} store(s) had B2B sales in the last {n_days} day(s) but no "
+        "detail": (f"{len(stale)} store(s) had {pos} sales in the last {n_days} day(s) but no "
                   f"daily_closing submission in that window — cash/tender recon has been blind for "
                   f"them: {eg}. Check that the store is actually able to close (kiosk/app access, an "
-                  f"assigned closer) or that its store_code matches what the B2B sales feed uses "
+                  f"assigned closer) or that its store_code matches what the {pos} sales feed uses "
                   f"(commcalc.store_mapping)."),
         "count": len(stale), "deep_link": "/closing/management",
         "deep_link_label": "Open Management Review",

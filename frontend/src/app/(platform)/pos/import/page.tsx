@@ -122,7 +122,7 @@ const ENTITIES: EntityDef[] = [
     ],
     examples: [
       ['Mobile Distributors Inc', 'MobileDist', 'Vendor', 'BAN-10021', 'Dan Reyes', '555-300-2000', '', 'orders@mobiledist.example.com', 'https://mobiledist.example.com', '400 Industrial Pkwy', 'Suite 12', 'Edison', 'NJ', '08817', 'USA', '22-1234567', 'yes'],
-      ['Samsung Electronics America', 'Samsung', 'Manufacturer', '', 'Support Desk', '555-410-8800', '', 'b2b@samsung.example.com', '', '85 Challenger Rd', '', 'Ridgefield Park', 'NJ', '07660', 'USA', '', 'yes'],
+      ['Samsung Electronics America', 'Samsung', 'Manufacturer', '', 'Support Desk', '555-410-8800', '', 'sales@samsung.example.com', '', '85 Challenger Rd', '', 'Ridgefield Park', 'NJ', '07660', 'USA', '', 'yes'],
     ],
   },
   {

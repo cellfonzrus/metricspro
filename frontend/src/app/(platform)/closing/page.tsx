@@ -100,7 +100,7 @@ export default function ClosingDashboard() {
       .finally(() => { if (reqRef.current === myReq) setLoading(false) })
   }, [filt.period, filt.periodTo, filt.stores, filt.markets, filt.reps])
   useEffect(() => { load() }, [load])
-  // Surface config/data gaps (no stores mapped, no B2B sales source, no X-report ever, module not
+  // Surface config/data gaps (no stores mapped, no POS sales source, no X-report ever, module not
   // entitled) right on the dashboard instead of letting empty tiles/recon speak for themselves.
   useEffect(() => { api('/api/v1/closing/readiness').then(setReadiness).catch(() => {}) }, [])
 
@@ -123,7 +123,7 @@ export default function ClosingDashboard() {
 
   // Carrier vocabulary (owner 2026-09-04): the bill-pay processor name is per-carrier preset DATA
   // (mig 953 — boost renders 'ePay' byte-identical to today).
-  const { term } = useReportLabels()
+  const { term, pos } = useReportLabels()
   const ep = term('processor', 'Bill-pay')
   const storeColumns: ExportColumn[] = useMemo(() => [
     { header: 'Store', field: 'store_address', role: 'store', get: (r: any) => r.store_address || r.store_name || '—' },
@@ -237,7 +237,7 @@ export default function ClosingDashboard() {
                 /closing/submissions' cash_short_amount/cash_over_amount, never re-derived here) —
                 summed but never NETTED against each other (the whole point of two separate tiles). */}
             <Tile label="Cash short" value={canReviewMoney ? fmt(cashShortTotal) : '—'}
-                  sub={canReviewMoney ? 'block — vs B2B sales' : 'company-wide roles only'}
+                  sub={canReviewMoney ? `block — vs ${pos} sales` : 'company-wide roles only'}
                   tone={cashShortTotal > 0 ? '#b42318' : undefined} onClick={() => drillTo('cash_short')} />
             <Tile label="Cash over" value={canReviewMoney ? fmt(cashOverTotal) : '—'}
                   sub={canReviewMoney ? 'flag — investigate' : 'company-wide roles only'}

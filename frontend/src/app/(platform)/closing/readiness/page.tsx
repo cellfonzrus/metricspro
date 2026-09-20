@@ -5,7 +5,7 @@ import { api } from '@/lib/client'
 
 // Closing readiness — self-diagnostic (2026-07-16 luxelink-parity audit). Surfaces the exact
 // config/data gaps Daily Closing already degrades around SAFELY but SILENTLY (no stores mapped, no
-// B2B sales source, no X-report ever imported, module not entitled, …) so an admin can see in one
+// POS sales source, no X-report ever imported, module not entitled, …) so an admin can see in one
 // place why recon/gates look empty instead of discovering it one broken report at a time. Universal —
 // the SAME checks run for every tenant; a fully-wired tenant (house/Boost today) just shows all green.
 const SEV_STYLE: Record<string, { bg: string; fg: string; label: string }> = {

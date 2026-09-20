@@ -455,7 +455,7 @@ export default function CashPickupPage() {
 
       {/* Stores that did NOT submit a daily closing for the selected day (single-day only — ambiguous over a range).
           OWNER REQUEST 2026-08-06 ("it should also show the sales rep who worked that day"): each chip now names
-          who to actually chase — reusing the backend's shared who-worked signal (clocked-in ∪ B2B-sold), the SAME
+          who to actually chase — reusing the backend's shared who-worked signal (clocked-in ∪ POS-sold), the SAME
           one DM-Verify's missing-rep check uses. `worked_source` distinguishes real signal from a scheduled-only
           fallback (labeled, never presented as fact) and "no worked-signal recorded" (data gap, not an empty store). */}
       {data && !rangeMode && date && (

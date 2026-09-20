@@ -96,7 +96,7 @@ export default function UploadPage() {
   }
   // The tenant's POS vocabulary term (mig 953) — for COPY only ("<POS> email reports"); which tiles
   // show is the registry's answer below, never a comparison against this string.
-  const { term } = useReportLabels()
+  const { term, pos } = useReportLabels()
   // THE REGISTRY: which report kinds this tenant may upload, with provenance — the one visibility
   // function, run in the hook. `allows(routeKey)` gates every tile block on this page.
   const kinds = useReportKinds()
@@ -125,7 +125,7 @@ export default function UploadPage() {
   const [running, setRunning] = useState<Record<string, boolean>>({})
   const [autoMsg, setAutoMsg] = useState<Record<string, string>>({})
   const [modDate, setModDate] = useState<Record<string, string>>({})
-  // Self-serve custom import sheets (mig 099) — the b2b reports added on Email Imports (Activation Details,
+  // Self-serve custom import sheets (mig 099) — the POS email reports added on Email Imports (Activation Details,
   // Bill Payments, Sales by Product). Uploadable here too so the owner isn't forced onto the Email Imports
   // page. Each uses the SAME proven handleUpload → /upload/<report_key> capture as the built-in reports.
   const [customTypes, setCustomTypes] = useState<any[]>([])
@@ -184,7 +184,7 @@ export default function UploadPage() {
       // A price-guard refusal (saved:0, skipped:'price_guard'), an X-report that parsed nothing
       // (saved:0, skipped:'header_not_found'|…), or a shrink warning all come back HTTP-200 — surface
       // them honestly instead of a green "✅ 0 rows saved" that looks (or lies) like a clean upload.
-      const o = readUploadOutcome(data, fileType === 'x_report' ? 'tender row(s)' : 'rows')
+      const o = readUploadOutcome(data, fileType === 'x_report' ? 'tender row(s)' : 'rows', pos)
       setStatuses(s => ({ ...s, [fileType]: o.tone === 'ok' ? 'done' : 'warn' }))
       setMessages(m => ({ ...m, [fileType]: (o.tone === 'ok' ? '✅ ' : '⚠️ ') + o.text }))
       setOutcomes(p => ({ ...p, [fileType]: o }))
@@ -231,7 +231,7 @@ export default function UploadPage() {
       }
       const form = new FormData(); form.append('file', file)
       const data = await apiUpload(`/api/v1/commcalc/upload/${encodeURIComponent(key)}?period=${encodeURIComponent(period)}&org_id=${ORG_ID}`, form)
-      const o = readUploadOutcome(data, 'rows')
+      const o = readUploadOutcome(data, 'rows', pos)
       setStatuses(s => ({ ...s, [label]: o.tone === 'ok' ? 'done' : 'warn' }))
       setMessages(m => ({ ...m, [label]: (o.tone === 'ok' ? '✅ ' : '⚠️ ') + o.text }))
       loadHistory(); reloadLast(); loadCustomTypes()

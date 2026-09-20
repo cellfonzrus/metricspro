@@ -5,6 +5,8 @@ import { api, localToday } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { usePosTerm } from '@/lib/report-labels'
+import { useReportKinds, notApplicableCopy } from '@/lib/report-kinds'
 
 type Cat = { asset: number; b2b: number; diff: number }
 type Row = { store: string; market: string | null; categories: Record<string, Cat>; total_abs_diff: number; in_asset: boolean; in_b2b: boolean }
@@ -15,6 +17,8 @@ const td: React.CSSProperties = { padding: '6px 8px', borderBottom: '1px solid v
 const CAT_LABEL: Record<string, string> = { iphone: 'iPhone', android: 'Android', tablet: 'Tablet', watch: 'Watch', hotspot: 'Hotspot' }
 
 export default function InventoryReconPage() {
+  const { pos, posDeclared } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
+  const invRecon = useReportKinds().feedFor('pos_inventory_recon')   // applies? — registry §30.9
   const [data, setData] = useState<any>(null)
   const [buckets, setBuckets] = useState<string[]>(['iphone', 'android', 'tablet', 'watch', 'hotspot'])
   const [markets, setMarkets] = useState<string[]>([])
@@ -49,7 +53,7 @@ export default function InventoryReconPage() {
       const wb = XLSX.read(await file.arrayBuffer())
       const raw: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
       const pick = (r: any, keys: string[]) => { for (const k of Object.keys(r)) if (keys.includes(k.trim().toLowerCase())) return String(r[k]).trim(); return '' }
-      // `value` is optional: most b2bsoft/POS "Inventory Aging" exports carry a $ cost/retail
+      // `value` is optional: most POS "Inventory Aging" exports carry a $ cost/retail
       // column alongside qty. When present, it's aggregated per store (canonicalized against
       // store_mapping on the backend) and written into commcalc.inventory_value — the Balance
       // Sheet inventory line (see Inventory Values) — in the SAME upload, independent of
@@ -81,14 +85,14 @@ export default function InventoryReconPage() {
     setBusy(true); setMsg('Syncing flags…')
     try {
       const res = await api('/api/v1/asset/sync-inventory-flags', { method: 'POST' })
-      setMsg(res.b2b_loaded ? `Wrote ${res.flagged} mismatch flags (as of ${res.as_of}).` : 'No b2bsoft data loaded yet — upload a snapshot first.')
+      setMsg(res.b2b_loaded ? `Wrote ${res.flagged} mismatch flags (as of ${res.as_of}).` : `No ${pos} data loaded yet — upload a snapshot first.`)
     } catch (e: any) { setMsg('Sync failed: ' + (e?.message || e)) }
     setBusy(false)
   }
 
   const rows: Row[] = data?.rows || []
   const buildPayload = (): ExportPayload => ({
-    title: 'On-Inventory ↔ b2bsoft Reconciliation',
+    title: `On-Inventory ↔ ${pos} Reconciliation`,
     subtitle: `As of ${data?.as_of || '—'}${fMarket ? ` · ${fMarket}` : ''}${fStore ? ` · ${fStore}` : ''}`,
     filename: 'inventory-recon',
     sheets: [{
@@ -98,7 +102,7 @@ export default function InventoryReconPage() {
         { header: 'Market', get: (r: Row) => r.market || '' },
         ...buckets.flatMap(b => [
           { header: `${CAT_LABEL[b]} asset`, get: (r: Row) => r.categories[b]?.asset ?? 0, align: 'right' as const },
-          { header: `${CAT_LABEL[b]} b2b`, get: (r: Row) => r.categories[b]?.b2b ?? 0, align: 'right' as const },
+          { header: `${CAT_LABEL[b]} ${pos}`, get: (r: Row) => r.categories[b]?.b2b ?? 0, align: 'right' as const },
           { header: `${CAT_LABEL[b]} diff`, get: (r: Row) => r.categories[b]?.diff ?? 0, align: 'right' as const },
         ]),
         { header: 'Total |diff|', get: (r: Row) => r.total_abs_diff, align: 'right' as const },
@@ -123,14 +127,14 @@ export default function InventoryReconPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📦 On-Inventory ↔ b2bsoft Recon</h1>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📦 On-Inventory ↔ {pos} Recon</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            Asset On-Inventory vs b2bsoft inventory, per store · iPhone / Android / Tablet / Watch / Hotspot. Each cell = <b>asset / b2b</b>; mismatches highlighted.
+            Asset On-Inventory vs {pos} inventory, per store · iPhone / Android / Tablet / Watch / Hotspot. Each cell = <b>asset / {pos}</b>; mismatches highlighted.
           </p>
           {/* PURPOSE LINE (owner 2026-08-10) — see the twin note on /accounts/inventory. */}
           <p style={{ color: 'var(--text3)', fontSize: 12.5, margin: '6px 0 0', maxWidth: 780 }}>
             <b>Purpose — UNITS.</b> Do the device COUNTS agree? It compares the VIP asset ledger’s unsold
-            On-Inventory devices against b2bsoft’s snapshot, per store and per device type, to surface
+            On-Inventory devices against the {pos} snapshot, per store and per device type, to surface
             missing/extra handsets. It says nothing about value. For “what is the stock WORTH” (the
             Balance Sheet line), use <Link href="/accounts/inventory">Inventory Values</Link>.
           </p>
@@ -141,9 +145,14 @@ export default function InventoryReconPage() {
         </div>
       </div>
 
+      {invRecon.applies === 'not_defined' && (
+        <div role="status" className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e40af', fontSize: 13 }}>
+          {notApplicableCopy({ pos, posDeclared, feedNoun: 'inventory snapshot', kindNoun: 'inventory-recon', purpose: 'reconcile the asset ledger against' })}
+        </div>
+      )}
       <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>
-        ⚙️ Auto-import from <b>wsreports.b2bsoft.com</b> is pending the live b2bsoft portal sweep. Until it's wired,
-        upload a b2bsoft <b>Inventory Aging</b> export below (columns: <code>store</code>, <code>category</code>, <code>qty</code> —
+        ⚙️ Auto-import from the {pos} portal is pending the live portal sweep. Until it's wired,
+        upload a {pos} <b>Inventory Aging</b> export below (columns: <code>store</code>, <code>category</code>, <code>qty</code> —
         plus an optional $ <code>value</code>/<code>cost</code> column). If the file has a $ column, this same upload also
         populates the <Link href="/accounts/inventory" style={{ color: 'inherit', textDecoration: 'underline' }}>Balance Sheet inventory value</Link> per store —
         no separate step needed.
@@ -151,7 +160,7 @@ export default function InventoryReconPage() {
 
       {/* Upload + filters */}
       <div className="card" style={{ padding: 14, marginBottom: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, fontWeight: 700 }}>⬆️ Upload b2bsoft inventory:</span>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>⬆️ Upload {pos} inventory:</span>
         <label style={{ fontSize: 13 }}>as of <input style={{ ...sel, width: 150 }} type="date" value={upDate} onChange={e => setUpDate(e.target.value)} /></label>
         <label className="btn" style={{ cursor: busy ? 'default' : 'pointer', margin: 0 }}>
           {busy ? '⏳ Working…' : '📄 Choose file'}
@@ -178,12 +187,12 @@ export default function InventoryReconPage() {
       <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
         <div className="card" style={{ padding: '12px 16px' }}><div style={{ fontSize: 12, color: 'var(--text2)' }}>Mismatched stores</div><div style={{ fontSize: 20, fontWeight: 700, color: (data?.mismatch_stores || 0) ? '#dc2626' : '#059669' }}>{data?.mismatch_stores ?? 0}</div></div>
         <div className="card" style={{ padding: '12px 16px' }}><div style={{ fontSize: 12, color: 'var(--text2)' }}>Total |diff| units</div><div style={{ fontSize: 20, fontWeight: 700 }}>{data?.total_abs_diff ?? 0}</div></div>
-        <div className="card" style={{ padding: '12px 16px' }}><div style={{ fontSize: 12, color: 'var(--text2)' }}>b2bsoft snapshot</div><div style={{ fontSize: 16, fontWeight: 700 }}>{data?.b2b_loaded ? (data?.as_of || '—') : 'none yet'}</div></div>
+        <div className="card" style={{ padding: '12px 16px' }}><div style={{ fontSize: 12, color: 'var(--text2)' }}>{pos} snapshot</div><div style={{ fontSize: 16, fontWeight: 700 }}>{data?.b2b_loaded ? (data?.as_of || '—') : 'none yet'}</div></div>
       </div>
 
       {loading ? <div style={{ padding: 40, color: 'var(--text3)' }}>Loading…</div> : !data?.b2b_loaded ? (
         <div className="card" style={{ padding: 24, color: 'var(--text2)', fontSize: 14 }}>
-          No b2bsoft inventory loaded yet. Asset On-Inventory is classified and ready — upload a b2bsoft
+          No {pos} inventory loaded yet. Asset On-Inventory is classified and ready — upload a {pos}
           snapshot below to reconcile.
           {/* Owner report 2026-08-10: "inventory aging is being pulled in ... but it is not updating the
               relevant tables". It is landing — just not HERE. Say so, instead of leaving an empty page
@@ -207,7 +216,7 @@ export default function InventoryReconPage() {
             <tbody>
               {rows.map(r => (
                 <tr key={r.store} style={{ background: r.total_abs_diff > 0 ? '#fff7f7' : undefined }}>
-                  <td style={{ ...td, textAlign: 'left', fontWeight: 600 }}>{r.store}{!r.in_asset && <span className="badge" style={{ fontSize: 10, marginLeft: 6 }}>b2b only</span>}<div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400 }}>{r.market || ''}</div></td>
+                  <td style={{ ...td, textAlign: 'left', fontWeight: 600 }}>{r.store}{!r.in_asset && <span className="badge" style={{ fontSize: 10, marginLeft: 6 }}>{pos} only</span>}<div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400 }}>{r.market || ''}</div></td>
                   {buckets.map(b => diffCell(r.categories[b], b))}
                   <td style={{ ...td, fontWeight: 700, color: r.total_abs_diff > 0 ? '#dc2626' : '#059669' }}>{r.total_abs_diff}</td>
                 </tr>

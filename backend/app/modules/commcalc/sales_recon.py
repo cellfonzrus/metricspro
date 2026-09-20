@@ -17,6 +17,7 @@ net sales. Read-only — no flags/writes (a deliberate v1; flagging is a later i
 """
 from datetime import date
 from app.core.database import get_supabase
+from app.modules.commcalc import report_labels as _report_labels
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 TOLERANCE = 0.01          # $ difference per trans_id treated as a match
@@ -261,6 +262,7 @@ def sync_recon_flags(period: str, include_mismatch: bool = True, org_id: str = O
     plabel = res["period"]
     pm, py = _period_my(plabel)
     client = get_supabase()
+    pos = _report_labels.pos_term(client, org_id)   # the tenant's POS name in copy — never a vendor spelled here
 
     flags = []
     for r in res["rows"]:
@@ -274,7 +276,7 @@ def sync_recon_flags(period: str, include_mismatch: bool = True, org_id: str = O
                 # that move between runs, so it can never be the key.
                 "source_ref": str(r.get("trans_id") or "").strip(),
                 "amount": r.get("daily_total"),
-                "description": (f"Trans {r['trans_id']} is in the daily B2B feed "
+                "description": (f"Trans {r['trans_id']} is in the daily {pos} feed "
                                 f"(${(r.get('daily_total') or 0):,.2f}, {r.get('trans_date') or 'n/a'}) "
                                 f"but NOT in the authoritative monthly sales file — revenue/commission "
                                 f"leak or an unrecorded void."),

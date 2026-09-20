@@ -227,5 +227,31 @@ check("payload lists editable TERMS for the settings panel (registry, pick-don't
       [t["key"] for t in p_empty["editable_terms"]] == [k for k, _ in rl.LABELABLE_TERMS])
 check("term registry keys unique", len(dict(rl.LABELABLE_TERMS)) == len(rl.LABELABLE_TERMS))
 
+# ── pos_term — the ONE backend way payload copy names the tenant's POS (owner 2026-09-20) ────────
+class _TermClient:
+    """Minimal fake: carrier rows + ui_label_override rows, the two reads load_report_labels makes."""
+    def __init__(self, carriers, labels): self._c, self._l = carriers, labels
+    def schema(self, _s): return self
+    def table(self, name): self._t = name; return self
+    def select(self, *_a): return self
+    def eq(self, *_a): return self
+    def in_(self, *_a): return self
+    def execute(self):
+        class R: pass
+        r = R(); r.data = self._c if self._t == "carrier" else self._l; return r
+
+_verizon = _TermClient([{"name": "Verizon", "code": "verizon", "is_default": True}],
+                       [{"org_id": rl.HOUSE_ORG, "scope": "report_term:verizon", "key": "pos_system", "label": "RQ"}])
+check("pos_term: the Verizon tenant's declared POS (house preset report_term:verizon) → 'RQ'",
+      rl.pos_term(_verizon, "f4f1c16e-0000-0000-0000-000000000000") == "RQ")
+_over = _TermClient([{"name": "Cricket", "code": "cricket", "is_default": True}],
+                    [{"org_id": "org-x", "scope": "report_term", "key": "pos_system", "label": "Lightspeed"}])
+check("pos_term: a tenant override wins for that org", rl.pos_term(_over, "org-x") == "Lightspeed")
+check("pos_term: undeclared → the registry's NEUTRAL noun, never another tenant's vendor",
+      rl.pos_term(_TermClient([], []), "org-y") == rl.DEFAULT_TERM_LABELS["pos_system"] == "POS")
+class _Boom:
+    def schema(self, _s): raise RuntimeError("db down")
+check("pos_term: a label-service failure degrades to the neutral noun", rl.pos_term(_Boom(), "org-z") == "POS")
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

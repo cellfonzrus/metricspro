@@ -85,7 +85,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   // Carrier vocabulary (owner 2026-09-04): the bill-pay processor and financing-program names are
   // preset DATA per carrier (mig 953 — boost: ePay/ACIMA = byte-identical to today; total:
   // VidaPay/Edge), never hardcoded to one carrier's brand on this shared form.
-  const { term, colLabel } = useReportLabels()
+  const { term, colLabel, pos } = useReportLabels()
   const procName = term('processor', 'Bill-pay')
   const finName = term('financing', 'Financing')
   // EXTERNAL CREDIT MACHINE (owner 2026-09-04): the standalone third-party card terminal the POS
@@ -369,7 +369,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
       const auto = r?.recon?.auto_accepted
       setMsg(auto ? `✅ Submitted — your report does not match the system and has been sent for management review.`
         : flags.length ? `⚠️ Submitted — ${flags.join('; ')}`
-        : pending ? '✅ Submitted (B2B not loaded yet — will reconcile once it lands).'
+        : pending ? `✅ Submitted (${pos} sales not loaded yet — will reconcile once they land).`
         : '✅ Closing submitted and tallies with the system. You can enter another below.')
       setF(p => ({ ...p, t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', t_acima: '', epay_on_cash: '', epay_on_credit: '', epay_on_acima: '', acc_sale: '',
         upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '' }))

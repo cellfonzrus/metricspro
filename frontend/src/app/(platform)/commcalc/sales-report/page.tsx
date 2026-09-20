@@ -11,6 +11,7 @@ import EntityPicker from '@/components/EntityPicker'
 import { optionsFromRows } from '@/lib/standard-filters'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 import { useActiveCarrier } from '@/lib/auth-context'
+import { usePosTerm } from '@/lib/report-labels'
 import ScreenLink from '@/components/ScreenLink'
 
 // Targeted super-admin org-resolution mitigation (see NEEDS CORE): the sales-report reads carry NO org_id
@@ -45,6 +46,7 @@ const hasCI = (arr: string[], v: string) => arr.some(x => x.toLowerCase() === v.
 const toggleCI = (arr: string[], v: string) => hasCI(arr, v) ? arr.filter(x => x.toLowerCase() !== v.toLowerCase()) : [...arr, v]
 
 export default function SalesReportPage() {
+  const { pos } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
   // Active-carrier lens: department/bill-payment help copy is neutralized (no carrier names) for a
   // dual-carrier tenant AND for any non-Boost tenant. Boost-branded default wording ("Boost XP",
   // "Boost RTR") is shown ONLY to a single-carrier Boost tenant (showBoost), so a non-Boost store
@@ -102,7 +104,7 @@ export default function SalesReportPage() {
   function openAccCfg() {
     setAccOpen(true); setAccFields(null); setAccMsg(''); setKwInput(''); setSetupInput('')
     // Owner 2026-08-26: the accessory departments must NOT be hard-coded — they are an OPTION pulled from the
-    // b2b "Sales by Product" report (that is where 'Accessories' / 'C2Wireless' live, not the sales upload).
+    // the POS "Sales by Product" report (that is where 'Accessories' / 'C2Wireless' live, not the sales upload).
     // Fetch that report's observed departments alongside the sales-field distincts and MERGE them into the
     // Department pick-list, so the tenant ticks them here and they save to the SAME accessory-config the
     // Sales Report + the Sales-by-Product resolver both read. Non-fatal: if the report isn't present the
@@ -305,12 +307,12 @@ export default function SalesReportPage() {
       )}
 
       {/* SOURCE OF TRUTH (mig 923): activations/BYOD/upgrades on this report come from the Activation Details
-          basis (matches Exec MTD + the b2b figure), not the sales feed. Shown only when that basis is active. */}
+          basis (matches Exec MTD + the POS figure), not the sales feed. Shown only when that basis is active. */}
       {data?.activation_source?.active && (
         <div style={{ fontSize: 12.5, background: '#ecfdf5', color: '#065f46', border: '1px solid #6ee7b7',
                       borderRadius: 8, padding: '8px 12px', marginBottom: 14 }}>
           ✓ Activations, BYOD and Upgrades on this report come from the <b>Activation Details</b> basis of truth
-          (matches Executive MTD &amp; the b2b figure). Other columns come from the sales feed.{' '}
+          (matches Executive MTD &amp; the {pos} figure). Other columns come from the sales feed.{' '}
           <Link href="/commcalc/activations" style={{ color: '#065f46', fontWeight: 700, textDecoration: 'underline' }}>
             Activations report &amp; reconciliation →
           </Link>
@@ -625,7 +627,7 @@ export default function SalesReportPage() {
                     </div>
                   ))}
                 </div>
-                {/* Product-keyword matching — for feeds (like the B2B daily feed) with NO Department/Category */}
+                {/* Product-keyword matching — for feeds (like the POS daily feed) with NO Department/Category */}
                 <div style={{ marginTop: 14 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Product name contains… <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(use when Department/Category are blank — a non-phone line is an accessory if its product description contains any of these)</span></div>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>

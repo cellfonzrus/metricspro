@@ -849,7 +849,7 @@ IMPORT_SOURCES = {
     "inventory_from_metricspro": dict(
         title="Inventory MetricsPro already holds for you",
         detail="Two sources, pick one: your VIP consignment ledger (unsold, on-inventory units) or "
-               "your latest B2B inventory-aging snapshot. Both are serialised units.",
+               "your latest POS inventory-aging snapshot. Both are serialised units.",
         creates="pos.inventory_serial"),
 }
 
@@ -1194,7 +1194,7 @@ def preview_import(source: str, org_id: str, variant: str = "") -> dict:
                       "cost": r.get("unit_cost"),
                       "date_received": r.get("received_date")}
                      for r in rows if (r.get("serial") or r.get("imei") or "").strip()]
-            meta["detail"] = ("Latest B2B inventory-aging snapshot — what your existing POS reported "
+            meta["detail"] = ("Latest POS inventory-aging snapshot — what your existing POS reported "
                               "as on-hand. Use this when you are MOVING an existing store over.")
         else:
             raise HTTPException(400, "variant must be 'asset_ledger' or 'inventory_aging'")
