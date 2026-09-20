@@ -473,6 +473,9 @@ export const NAV: NavGroup[] = [
     // from Device Cost Recon's ("what did it cost, and whose number is right"). Carrier-agnostic: it
     // compares an on-hand snapshot with sale lines, neither of which is a carrier concept.
     { href: '/commcalc/inventory-sold-recon', label: 'Inventory vs Sold', icon: '🧹', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // Bill Payments — the bill-pay lines EXTRACTED from the sales export by the ONE bill_payment rule, beside the
+    // carrier's own bill-pay report when one is present (owner 2026-09-20). Carrier-agnostic: the rule is config.
+    { href: '/commcalc/bill-payments', label: 'Bill Payments', icon: '🧾', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/productivity', label: 'Productivity & Reviews', icon: '🏅', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/productivity-insights', label: 'Productivity Insights', icon: '💡', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/coaching', label: 'Rep Coaching', icon: '🎓', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
@@ -1010,6 +1013,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/sales-report', 'sales'], ['/commcalc/custom-report', 'sales'],
   ['/commcalc/sales-comparison', 'sales'],
   ['/commcalc/sales-analyzer', 'sales'], ['/commcalc/sales-recon', 'sales'],
+  ['/commcalc/bill-payments', 'sales'],
   ['/crm/reports', 'sales'],
   // Commissions & Pay
   ['/commcalc', 'comm'], ['/commcalc/exec', 'comm'], ['/commcalc/exec/mtd', 'comm'], ['/commcalc/activations', 'comm'], ['/commcalc/schematic', 'comm'], ['/commcalc/onboarding', 'comm'],

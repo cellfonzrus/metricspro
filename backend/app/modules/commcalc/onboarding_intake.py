@@ -49,27 +49,65 @@ from app.modules.commcalc import multisheet
 from app.modules.commcalc.feed_shape import is_footer_row, period_fields
 
 # ── vocabulary ──────────────────────────────────────────────────────────────────────────────────
-SOURCE_KINDS = ("commission", "sales", "inventory", "pos", "other")
+SOURCE_KINDS = ("commission", "sales", "inventory", "pos", "x_report", "merchant_payments", "bill_payments", "other")
 SOURCE_KIND_LABELS = {
     "commission": "Commission statement", "sales": "Sales report", "inventory": "Inventory report",
-    "pos": "POS report", "other": "Other report (bill payments, card payments, X-reports…)",
+    "pos": "POS report",
+    "x_report": "X-report (POS daily takings by tender, per store)",
+    "merchant_payments": "Merchant / card-processor settlement report",
+    "bill_payments": "Bill-payment report from the carrier's processor",
+    "other": "Other report (anything else)",
 }
-# WHERE EACH KIND LANDS (Stage B, 2026-09-20) — the EXISTING destination tables (index §2), never a
-# sibling raw_* table: a sales / POS export → raw_sales through the mapped importer, an inventory
-# listing → inventory_aging_device through the snapshot writer, a commission statement → the ledger.
-# 'other' (bill payments, card / merchant payments, X-reports, anything else) has NO destination table
-# on the platform today; it is recorded as RECEIVED with its headers and row count, never faked into
-# a table and never dropped (see other_summary / the router's commit).
+# THE 2.0 "OTHER REPORTS" PICKER (Stage C, owner 2026-09-20: "other reports land in their respective
+# categories if such a report is present for that carrier"): the KNOWN kinds each have a destination
+# that already exists on the platform; free-text `other` stays RECORDED + red. The picker is this
+# tuple; a kind's hint says what the report is, never who sends it (RULE TWO).
+OTHER_KINDS = ("x_report", "merchant_payments", "bill_payments", "other")
+OTHER_KIND_HINTS = {
+    "x_report": "the POS's end-of-day tender matrix (cash / card / other per store) — one file per day; "
+                "lands where every closing cash / card recon already reads",
+    "merchant_payments": "the card processor's settlement export (per merchant, per business day, per card "
+                         "brand, with fees) — the processor side of the daily card tally",
+    "bill_payments": "the carrier processor's bill-payment transactions — the feed the bill-pay coverage "
+                     "recon and the P&L carve-out read. If your carrier sends none, the intake EXTRACTS bill "
+                     "payments from your sales export instead (see the Bill Payments report)",
+    "other": "anything else — recorded as received with its columns, row count and money totals; the file "
+             "is kept; nothing is written into a table until an owner names one",
+}
+# WHERE EACH KIND LANDS (Stage B, 2026-09-20; Stage C adds the three typed 'other' kinds) — the EXISTING
+# destination tables (index §2, §11a, §12a, §23b), never a sibling raw_* table: a sales / POS export →
+# raw_sales through the mapped importer, an inventory listing → inventory_aging_device through the
+# snapshot writer, a commission statement → the ledger, an X-report → pos_tender_summary through the
+# X-report import, a merchant settlement → merchant_settlement_day (mig 955) through the portal
+# normalizers, a carrier bill-pay report → the processor daily-tx feed the coverage recon reads (the
+# layout names WHICH feed table — see BILLPAY_FEED_TABLES). Free-text 'other' has NO destination
+# table; it is recorded as RECEIVED with its headers and row count, never faked into a table and never
+# dropped (see other_summary / the router's commit).
 SOURCE_KIND_TARGET = {"commission": CL.LEDGER_TABLE, "sales": "raw_sales", "pos": "raw_sales",
-                      "inventory": "inventory_aging_device"}
+                      "inventory": "inventory_aging_device",
+                      "x_report": "pos_tender_summary", "merchant_payments": "merchant_settlement_day",
+                      "bill_payments": "raw_ma_daily_tx"}
+# The processor bill-pay feed tables the mig-939 coverage recon resolves between
+# (router._billpay_processor_by_store_day). A bill-pay report lands in the one its LAYOUT targets;
+# the org's configured processor picks the default layout (config, never a carrier branch here).
+BILLPAY_FEED_TABLES = ("raw_ma_daily_tx", "raw_epay_daily_tx")
+# Kinds whose file is NOT a header + records table mapped through column_mapping: the X-report is a
+# per-store tender MATRIX read by the existing X-report parser; a merchant settlement is read by the
+# portal normalizers' own header-synonym map. Both skip 2.3 (nothing to map by hand).
+MATRIX_KINDS = ("x_report", "merchant_payments")
+# a matrix kind has no layout, so its instance key's third slot is a fixed word: one X-report instance
+# per POS source, one settlement instance per portal (mirrored by stage2.tsx's ikey())
+MATRIX_INSTANCE_SLOT = {"x_report": "x_report", "merchant_payments": "settlement"}
 # The column-mapping REPORT KEY (column_mapping.TARGET_FIELDS / TABLE_MAP) each kind maps through —
 # the default LAYOUT; a kind may offer several layouts that land in the same table (layouts_for_kind).
 REPORT_KEY_BY_KIND = {"commission": CL.MAPPING_REPORT_KEY, "sales": "sales", "pos": "pos_product_sales",
-                      "inventory": "pos_inventory_listing"}
+                      "inventory": "pos_inventory_listing", "bill_payments": "ma_daily_tx"}
 LAYOUT_LABELS = {
     "sales": "daily sales export (store / salesperson / product lines)",
     "pos_product_sales": "POS product-sales export (one row per invoice line)",
     "pos_inventory_listing": "POS on-hand inventory listing (one row per unit)",
+    "ma_daily_tx": "processor daily-transaction report (account / order type / product / retail cost)",
+    "epay_daily_tx": "processor daily transaction detail (terminal / product title / retail)",
 }
 # The field each kind SUMS for its tie-out, its date, its store, its rep, its transaction id.
 KIND_FIELDS = {
@@ -81,17 +119,46 @@ KIND_FIELDS = {
                   "key": "imei", "key2": "serial", "sku": "sku"},
     "commission": {"amount": CL.AMOUNT_FIELD, "store": "store", "rep": "rep_user", "date": "trans_date"},
 }
+# A bill-pay report's fields depend on its LAYOUT (which processor feed table it lands in): the
+# "store" is the processor's own account / terminal id, resolved through storeops.store_merchant_id
+# (mig 902) — the SAME map the feed readers resolve through — never through the store-name resolver.
+BILLPAY_LAYOUT_FIELDS = {
+    "ma_daily_tx":   {"amount": "retail_cost", "date": "tx_date", "store": "account_id", "txn": "order_number",
+                      "product": "product_name", "order_type": "order_type"},
+    "epay_daily_tx": {"amount": "retail", "date": "settlement_date", "store": "terminal_id", "txn": "transaction_id",
+                      "product": "product_title", "order_type": "tx_type"},
+}
 # The columns a kind MUST have before it may land — what the slice-scoped replace and the tie-out need
 # (design §2: period from each row's own date; replace only the slice the file owns = store × dates).
 KIND_REQUIRED = {"sales": ("store", "trans_date", "ext_price"), "pos": ("store", "trans_date", "ext_price"),
-                 "inventory": ("store", "sku"), "commission": (CL.AMOUNT_FIELD, "product_name"), "other": ()}
+                 "inventory": ("store", "sku"), "commission": (CL.AMOUNT_FIELD, "product_name"), "other": (),
+                 "x_report": (), "merchant_payments": ()}
+BILLPAY_LAYOUT_REQUIRED = {"ma_daily_tx": ("account_id", "tx_date", "retail_cost", "product_name"),
+                           "epay_daily_tx": ("terminal_id", "settlement_date", "retail", "transaction_id")}
 STATEMENT_TYPE_DEFAULT = "commission statement"
 INVENTORY_NONE_KEY = "inventory:none:none"          # the explicit "no inventory export" choice (design §6.6)
 
 STAGE_COMMISSION = "3"
 STAGE_SALES = "2"
 KIND_STAGE = {"commission": STAGE_COMMISSION, "sales": STAGE_SALES, "pos": STAGE_SALES,
-              "inventory": STAGE_SALES, "other": STAGE_SALES}
+              "inventory": STAGE_SALES, "other": STAGE_SALES,
+              "x_report": STAGE_SALES, "merchant_payments": STAGE_SALES, "bill_payments": STAGE_SALES}
+
+
+def kind_fields(kind, layout=None):
+    """The KIND_FIELDS entry, or the layout's entry for a bill-pay report (its fields depend on which
+    processor feed table the layout lands in). None for a kind with no mapped fields."""
+    k = _s(kind).lower()
+    if k == "bill_payments":
+        return BILLPAY_LAYOUT_FIELDS.get(_s(layout)) or BILLPAY_LAYOUT_FIELDS[REPORT_KEY_BY_KIND["bill_payments"]]
+    return KIND_FIELDS.get(k)
+
+
+def kind_required(kind, layout=None):
+    k = _s(kind).lower()
+    if k == "bill_payments":
+        return BILLPAY_LAYOUT_REQUIRED.get(_s(layout)) or BILLPAY_LAYOUT_REQUIRED[REPORT_KEY_BY_KIND["bill_payments"]]
+    return KIND_REQUIRED.get(k, ())
 STEPS = [
     ("3.1", "Upload the statement"),
     ("3.2", "Sheet, header row, footer"),
@@ -242,7 +309,7 @@ def stage2_instance_key(source_kind, source_ref, layout_or_name):
     instance, prefilled from nothing of the first."""
     kind = _s(source_kind).lower()
     if kind not in KIND_STAGE or kind == "commission":
-        raise ValueError("stage-2 kinds are sales | pos | inventory | other")
+        raise ValueError("stage-2 kinds are sales | pos | inventory | x_report | merchant_payments | bill_payments | other")
     return f"{kind}:{slug(source_ref) or 'file'}:{slug(layout_or_name) or 'report'}"
 
 
@@ -260,12 +327,15 @@ def layouts_for_kind(kind, table_map):
     POS). The kind's default layout comes first."""
     kind = _s(kind).lower()
     tgt = SOURCE_KIND_TARGET.get(kind)
-    if not tgt:
-        return []
+    if not tgt or kind in MATRIX_KINDS:
+        return []          # a matrix kind is read by its own parser; nothing to map through a layout
+    # a bill-pay report may land in EITHER processor feed table — every layout targeting one is offered
+    targets = set(BILLPAY_FEED_TABLES) if kind == "bill_payments" else {tgt}
     default = REPORT_KEY_BY_KIND.get(kind)
-    keys = [k for k, t in (table_map or {}).items() if t == tgt]
+    keys = [k for k, t in (table_map or {}).items() if t in targets]
     keys.sort(key=lambda k: (k != default, k))
-    return [{"report_key": k, "label": LAYOUT_LABELS.get(k, k.replace("_", " ")), "default": k == default}
+    return [{"report_key": k, "label": LAYOUT_LABELS.get(k, k.replace("_", " ")), "default": k == default,
+             "target_table": (table_map or {}).get(k)}
             for k in keys]
 
 
@@ -1151,6 +1221,188 @@ def other_summary(headers, records, money_cols):
             "basis": "received — no destination table on the platform for this report yet; kept with its headers and row count"}
 
 
+# ── STAGE C — the typed "other" kinds: X-report, merchant settlement, carrier bill-pay (2026-09-20) ──
+# Owner: "other reports land in their respective categories if such a report is present for that
+# carrier … merchant payments are the merchant reports which are used to reconcile the credit card
+# payments received in the store … X report has their own report where the data should be uploaded."
+# Everything below is pure over what the EXISTING parsers produce: the X-report parser's
+# (store, date, tender, amount) tuples, the portal normalizer's settlement rows, the mapped bill-pay
+# feed rows. The router lands them through the existing writers and RE-READS through the existing
+# readers; these helpers only shape the numbers shown beside the file's own.
+XR_FILENAME_DATE_RE = re.compile(r"(\d{2})(\d{2})(\d{4})\s*-\s*(\d{2})(\d{2})(\d{4})")
+TENDER_CLASSES = ("cash", "card", "other")
+
+
+def xreport_file_date(filename):
+    """The close date an X-report's FILENAME states (MMDDYYYY-MMDDYYYY, a single day), else None.
+    A multi-day range is returned as {"range": True} so the caller can refuse it as the parser does —
+    an X-report reconciles ONE day's drawer. Never guesses today's date: the person types one."""
+    m = XR_FILENAME_DATE_RE.search(str(filename or ""))
+    if not m:
+        return None
+    if (m.group(1), m.group(2), m.group(3)) != (m.group(4), m.group(5), m.group(6)):
+        return {"range": True, "from": f"{m.group(3)}-{m.group(1)}-{m.group(2)}",
+                "to": f"{m.group(6)}-{m.group(4)}-{m.group(5)}"}
+    return f"{m.group(3)}-{m.group(1)}-{m.group(2)}"
+
+
+def xreport_sheet_total(rows, hdr_idx, net_col):
+    """The sheet's OWN total for the tender block: the first row after the header whose label cell is
+    blank or says total / grand total and whose Net cell is an amount (the shape both POS builds
+    write — the blank-label totals row ends the tender block for the parser). None when the sheet
+    states no total."""
+    if hdr_idx is None or net_col is None:
+        return None
+    for r in list(rows or [])[hdr_idx + 1:]:
+        cells = [str(c).strip() for c in r]
+        label = cells[0] if cells else ""
+        if label and not TOTAL_WORDS_RE.match(label):
+            continue
+        net = cells[net_col] if net_col < len(cells) else ""
+        if is_number_text(net):
+            return money(_sf(net))
+    return None
+
+
+def xreport_verify(rows, class_of, sheet_totals=None):
+    """Per store-day cash / card / other / total from the parser's (store, date, tender, amount)
+    tuples — the SAME tender class rule the import stamps (`class_of` = router._xr_tender_class,
+    injected so this stays pure). `sheet_totals` = {store: the sheet's own total} beside ours."""
+    per, tenders = {}, {}
+    for (store, day, tender, amt) in rows or []:
+        k = (_s(store), _s(day)[:10])
+        slot = per.setdefault(k, {"store": k[0], "date": k[1], "cash": 0.0, "card": 0.0, "other": 0.0, "total": 0.0,
+                                  "tenders": 0, "file_total": None, "difference": None})
+        cls = class_of(tender)
+        cls = cls if cls in TENDER_CLASSES else "other"
+        slot[cls] = money(slot[cls] + _sf(amt))
+        slot["total"] = money(slot["total"] + _sf(amt))
+        slot["tenders"] += 1
+        tenders[_s(tender)] = tenders.get(_s(tender), 0) + 1
+    for slot in per.values():
+        ft = (sheet_totals or {}).get(slot["store"])
+        if ft is not None:
+            slot["file_total"] = money(ft)
+            slot["difference"] = money(slot["total"] - money(ft))
+    out_rows = sorted(per.values(), key=lambda s: (s["date"], s["store"]))
+    tot = {c: money(sum(s[c] for s in out_rows)) for c in TENDER_CLASSES}
+    return {"rows": len(rows or []), "stores": len({s["store"] for s in out_rows}),
+            "dates": sorted({s["date"] for s in out_rows}),
+            "per_store_day": out_rows, "sum_cash": tot["cash"], "sum_card": tot["card"], "sum_other": tot["other"],
+            "sum_total": money(sum(s["total"] for s in out_rows)),
+            "file_total": (money(sum(s["file_total"] for s in out_rows if s["file_total"] is not None))
+                           if any(s["file_total"] is not None for s in out_rows) else None),
+            "tenders_seen": sorted(tenders), "storeless_rows": sum(1 for s in out_rows if not s["store"])}
+
+
+def merchant_totals_row(table, fields):
+    """The export's own TOTALS row (the normalizer skips it — correctly — so read it here for the
+    tie-out): {gross, net, fees, count} or None. `fields` is the normalizer's header map."""
+    words = ("total", "totals", "grand total", "subtotal", "sub total", "summary", "report total")
+    for raw in list(table or [])[1:]:
+        head = " ".join(str(c or "").strip().lower() for c in list(raw)[:3])
+        if not head or not any(w in head for w in words):
+            continue
+
+        def cell(f):
+            i = (fields or {}).get(f)
+            return raw[i] if i is not None and i < len(raw) else None
+        return {"gross": money(_sf(cell("gross_amount"))), "net": money(_sf(cell("net_amount"))),
+                "fees": money(_sf(cell("fee_amount"))), "count": int(_sf(cell("txn_count")) or 0)}
+    return None
+
+
+def merchant_verify(norm_rows, totals_row=None):
+    """Σ gross / Σ net / Σ fees / txn count per merchant per business day from the normalizer's rows,
+    beside the file's own totals row. `store_code` per row is whatever the resolver stamped (None =
+    unmapped merchant id — REPORTED, never counted as a store's $0)."""
+    per, brands = {}, {}
+    for r in norm_rows or []:
+        k = (_s(r.get("merchant_id")) or _s(r.get("terminal_id")) or "(no merchant id)", _s(r.get("business_date"))[:10])
+        slot = per.setdefault(k, {"merchant_id": k[0], "date": k[1], "store_label": r.get("store_label"),
+                                  "store_code": r.get("store_code"), "gross": 0.0, "net": 0.0, "fees": 0.0,
+                                  "refunds": 0.0, "count": 0, "lines": 0})
+        slot["gross"] = money(slot["gross"] + _sf(r.get("gross_amount")))
+        slot["net"] = money(slot["net"] + _sf(r.get("net_amount")))
+        slot["fees"] = money(slot["fees"] + _sf(r.get("fee_amount")))
+        slot["refunds"] = money(slot["refunds"] + _sf(r.get("refund_amount")))
+        slot["count"] += int(_sf(r.get("txn_count")) or 0)
+        slot["lines"] += 1
+        if not slot["store_code"] and r.get("store_code"):
+            slot["store_code"] = r.get("store_code")
+        b = _s(r.get("card_brand")) or "unknown"
+        brands[b] = money(brands.get(b, 0.0) + _sf(r.get("net_amount")))
+    rows = sorted(per.values(), key=lambda s: (s["date"], s["merchant_id"]))
+    out = {"rows": len(norm_rows or []), "merchants": sorted({s["merchant_id"] for s in rows}),
+           "dates": sorted({s["date"] for s in rows}), "per_merchant_day": rows,
+           "sum_gross": money(sum(s["gross"] for s in rows)), "sum_net": money(sum(s["net"] for s in rows)),
+           "sum_fees": money(sum(s["fees"] for s in rows)), "sum_refunds": money(sum(s["refunds"] for s in rows)),
+           "txn_count": sum(s["count"] for s in rows), "by_brand": brands,
+           "unmapped_merchants": sorted({s["merchant_id"] for s in rows if not s["store_code"]}),
+           "file_totals": totals_row}
+    if totals_row:
+        out["difference"] = {"gross": money(out["sum_gross"] - totals_row["gross"]),
+                             "net": money(out["sum_net"] - totals_row["net"]),
+                             "fees": money(out["sum_fees"] - totals_row["fees"]),
+                             "count": out["txn_count"] - int(totals_row.get("count") or 0)}
+    return out
+
+
+def billpay_feed_verify(kept, fields, is_billpay, resolve_store=None):
+    """A carrier bill-pay report beside itself: every row in the file, the rows the org's OWN bill-pay
+    predicate counts (the same `_ma_billpay_pred` / fee rule the coverage recon reads with), Σ amount
+    + count per store-day of THOSE rows, and the account / terminal ids the processor map resolves.
+    `is_billpay(row)` and `resolve_store(id) -> code|''` are injected (config-driven, DB-backed)."""
+    amt, dt, st, txn = fields["amount"], fields["date"], fields["store"], fields.get("txn")
+    per, ids = {}, {}
+    n_bill, sum_all = 0, 0.0
+    for m in kept or []:
+        sum_all += _sf(m.get(amt))
+        acct = _s(m.get(st))
+        code = (resolve_store(acct) if (resolve_store and acct) else "") or ""
+        a = ids.setdefault(acct or "(blank)", {"value": acct or "(blank)", "count": 0, "sum_raw": 0.0, "store_code": code or None})
+        a["count"] += 1
+        a["sum_raw"] = money(a["sum_raw"] + _sf(m.get(amt)))
+        if not is_billpay(m):
+            continue
+        n_bill += 1
+        k = (code or acct or "—", _s(m.get(dt))[:10])
+        slot = per.setdefault(k, {"store": k[0], "account_id": acct, "date": k[1], "amount": 0.0, "count": 0})
+        slot["amount"] = money(slot["amount"] + _sf(m.get(amt)))
+        slot["count"] += 1
+    rows = sorted(per.values(), key=lambda s: (s["date"], s["store"]))
+    return {"rows": len(kept or []), "billpay_rows": n_bill, "non_billpay_rows": len(kept or []) - n_bill,
+            "sum_all_rows": money(sum_all), "sum_amount": money(sum(s["amount"] for s in rows)),
+            "count": sum(s["count"] for s in rows), "per_store_day": rows,
+            "dates": sorted({s["date"] for s in rows}),
+            "accounts": sorted(ids.values(), key=lambda a: -a["count"]),
+            "unmapped_accounts": sorted(a["value"] for a in ids.values() if not a["store_code"]),
+            "storeless_rows": sum(1 for m in kept or [] if not _s(m.get(st))),
+            "distinct_txns": len({_s(m.get(txn)) for m in kept or [] if txn and _s(m.get(txn))}) if txn else None}
+
+
+def stage4_note(vn):
+    """The one-line cross-check a Stage-4 row carries beside its totals (Stage C): the bill-pay lines
+    EXTRACTED from a sales export, or the units the inventory check found activated but still on hand.
+    None when the commit ran no cross-check."""
+    vn = vn or {}
+    bx = vn.get("billpay_extract") or {}
+    if bx and bx.get("basis"):
+        return (f"{int(bx.get('lines') or 0)} bill-pay line(s) extracted, {money(bx.get('sum') or 0):,.2f}"
+                + (f" — carrier bill-pay report present, difference {money(bx.get('difference') or 0):,.2f}"
+                   if bx.get("feed_present") else " — no carrier bill-pay report for these days; see the Bill Payments report"))
+    sc = vn.get("sold_check") or {}
+    if sc and sc.get("basis"):
+        parts = [f"{int(sc.get('activated_not_rung_out') or 0)} unit(s) activated but still on hand",
+                 f"{int(sc.get('sold_not_cleared') or 0)} sold but still on hand"]
+        if sc.get("activations_unpairable"):
+            parts.append(f"{int(sc['activations_unpairable'])} activation(s) could not be paired to a unit")
+        if not sc.get("activations_present"):
+            parts.append("no activation report loaded — checked against sales only")
+        return "; ".join(parts)
+    return None
+
+
 def simple_tie(our_total, file_total_raw, typed_total=None):
     """Σ ours beside the file's own total (footer, else typed — recorded as such), to the cent."""
     src, ft = None, None
@@ -1165,11 +1417,13 @@ def simple_tie(our_total, file_total_raw, typed_total=None):
 
 
 def stage2_refusals(kind, mapped_fields, stores, tie, attestation=None, undated_rows=0,
-                    storeless_rows=0, rows_to_land=0):
-    """Why a Stage-2 commit is REFUSED (design §0.1, §2 exit, §5.3, §5.7). An empty list = proceed."""
+                    storeless_rows=0, rows_to_land=0, layout=None, extra=None):
+    """Why a Stage-2 commit is REFUSED (design §0.1, §2 exit, §5.3, §5.7). An empty list = proceed.
+    `extra` = kind-specific refusals the router computed (an X-report with no close date, a merchant
+    upload that would double days the scheduled pull already landed) — appended verbatim."""
     out = []
     kind = _s(kind).lower()
-    missing = [f for f in KIND_REQUIRED.get(kind, ()) if f not in set(mapped_fields or [])]
+    missing = [f for f in kind_required(kind, layout) if f not in set(mapped_fields or [])]
     if missing:
         out.append("Map these columns first: " + ", ".join(missing) + " — they identify the slice this file owns.")
     unresolved = unresolved_stores(stores)
@@ -1191,6 +1445,9 @@ def stage2_refusals(kind, mapped_fields, stores, tie, attestation=None, undated_
                        f"by {tie.get('difference'):,.2f} — fix the columns or the stores, or attest the difference with a reason.")
         if tie.get("file_total") == 0.0 and tie.get("our_total") == 0.0 and not att_ok:
             out.append("Both totals are $0.00 — a zero file is verified only with an attestation and a reason.")
+    for e in extra or []:
+        if _s(e):
+            out.append(_s(e))
     return out
 
 
@@ -1215,6 +1472,9 @@ def _instance_label(r):
         return f"{p.get('carrier_name') or 'carrier ' + (parts[1][:8] if len(parts) > 1 else '')} — {(parts[2] if len(parts) > 2 else '').replace('_', ' ')}"
     if kind == "other":
         return f"{p.get('name') or (parts[2] if len(parts) > 2 else 'other report').replace('_', ' ')} (other report)"
+    if kind in OTHER_KINDS:
+        short = {"x_report": "X-report", "merchant_payments": "Merchant settlement", "bill_payments": "Carrier bill-pay report"}
+        return f"{short.get(kind, kind)} — {p.get('source_ref') or (parts[1] if len(parts) > 1 else '')}"
     return f"{SOURCE_KIND_LABELS.get(kind, kind)} — {p.get('source_ref') or (parts[1] if len(parts) > 1 else '')}"
 
 
@@ -1326,8 +1586,20 @@ def verify_table(instances):
                      "our_total": our, "file_total": ft, "difference": diff, "match": match,
                      "rows_landed": vn.get("rows_landed"), "status": i["status"], "red": red,
                      "verified_by": i.get("verified_by"), "verified_at": i.get("verified_at"),
-                     "blocking_reason": i.get("blocking_reason"), "basis": basis, "fix_step": fix_step})
+                     "blocking_reason": i.get("blocking_reason"), "basis": basis, "fix_step": fix_step,
+                     # Stage C: the cross-check this commit ran (bill-pay extraction / inventory-vs-activations)
+                     "note": stage4_note(vn), "billpay_extract": vn.get("billpay_extract"),
+                     "sold_check": vn.get("sold_check")})
     return rows
+
+
+def lands_in(kind, payload=None):
+    """Where an instance's rows land — the kind's destination, or for a bill-pay report the table its
+    LAYOUT targets (recorded on the payload at commit). Free-text 'other' has none."""
+    p = payload or {}
+    if _s(p.get("target_table")):
+        return _s(p.get("target_table"))
+    return SOURCE_KIND_TARGET.get(_s(kind).lower()) or "(no destination yet — recorded only)"
 
 
 def runbook(instances):
@@ -1341,11 +1613,22 @@ def runbook(instances):
         kind = i["kind"]
         monthly.append({"instance_key": i["instance_key"], "kind": kind, "label": i["label"],
                         "filename_example": p.get("filename"),
-                        "lands_in": SOURCE_KIND_TARGET.get(kind) or "(no destination yet — recorded only)",
-                        "mapping_saved": bool(p.get("column_map")),
+                        "lands_in": lands_in(kind, p),
+                        # a matrix kind has no hand-made column map: its parser's own header rule is the mapping
+                        "mapping_saved": bool(p.get("column_map")) or (kind in MATRIX_KINDS and i["status"] == STATUS_VERIFIED),
                         "status": i["status"]})
-    return {"links": [{"label": "Sales report", "href": "/commcalc/sales-report", "screen": "sales_report"},
-                      {"label": "Commissions", "href": "/commcalc/commission-ledger", "screen": "commission_ledger"}],
+    links = [{"label": "Sales report", "href": "/commcalc/sales-report", "screen": "sales_report"},
+             {"label": "Commissions", "href": "/commcalc/commission-ledger", "screen": "commission_ledger"}]
+    # Stage C: the cross-check reports the intake feeds — listed beside the two links, never in them
+    kinds = {i["kind"] for i in instances or []}
+    reports = []
+    if kinds & {"sales", "pos", "bill_payments"}:
+        reports.append({"label": "Bill Payments report", "href": "/commcalc/bill-payments", "screen": "bill_payments",
+                        "why": "bill payments extracted from the sales export beside the carrier's report, per store-day"})
+    if "inventory" in kinds:
+        reports.append({"label": "Inventory vs Sold", "href": "/commcalc/inventory-sold-recon", "screen": "inventory_sold_recon",
+                        "why": "on-hand units that were sold, or activated but never rung out"})
+    return {"links": links, "reports": reports,
             "monthly": monthly,
             "note": "Each month: drop the same exports here (stages 2–3 only). A file whose columns match the saved mapping is pre-mapped; the stores and reps you resolved are remembered."}
 

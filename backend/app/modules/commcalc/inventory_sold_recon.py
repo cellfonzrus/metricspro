@@ -131,37 +131,189 @@ def on_hand_index(inv_rows, key_of):
     return out
 
 
-def reconcile(sale_rows, inv_rows, key_of, qty_field="quantity", sale_key_field="serial_1"):
-    """The report. Returns `{"rows": [...], "totals": {...}}` — and books nothing.
+# ── THE SECOND SOLD-SOURCE: the ACTIVATION feed (owner directive 2026-09-20) ────────────────────
+# Owner: "inventory report should also auto check itself with the activation report to see which item
+# has been sold but not rung out properly from the inventory."
+#
+# The activation feed is the platform's existing b2b Activation Details capture (raw_custom_import,
+# resolved per DEVICE by router._cr_resolve_activation_details — reused, never a sibling read). Its
+# device key is `Serial#` (the IMEI), the SAME cross-source key the sales side pairs on. A row that
+# carries NO serial but a mobile number is paired THROUGH THE SALES LINE for that number, and the row
+# says so (`pairing`) — it is never guessed. A row with neither, or whose number maps to several devices
+# or to no sale line at all, is reported UNPAIRABLE with the reason; it counts toward nothing.
+#
+# The finding this adds is the owner's own sentence: ACTIVATED_NOT_RUNG_OUT — a unit on the shelf that
+# appears in the activation feed and in NO sale line at all. A unit that is also in sales is already
+# SOLD_NOT_CLEARED (the activation is added as evidence on that row, never a second row — a device is
+# one finding). A unit sold and REFUNDED is genuinely on hand when nothing else says otherwise — but
+# an activation on it says it went to a customer, so that case IS reported as activated-not-rung-out
+# with `sale_state` = sold_then_refunded (and counted, `activated_then_refunded`).
+ACTIVATED_NOT_RUNG_OUT = "activated_not_rung_out"   # "sold but not rung out properly from the inventory"
+SOURCE_SALES = "sales"
+SOURCE_ACTIVATION = "activation"
+PAIR_DEVICE_KEY = "device_key"                      # the feed carried the serial / IMEI
+PAIR_MOBILE_VIA_SALES = "mobile_number_via_sales"   # no serial; paired through a sale line with that number
+UNPAIR_NO_KEY = "no device key and no mobile number on the activation line"
+UNPAIR_NO_SALE = "no sale line carries this mobile number, so no unit can be named"
+UNPAIR_AMBIGUOUS = "the mobile number appears on sale lines for several devices"
+EVIDENCE_CAP = 5
 
-    Two findings, the owner's own two asks:
+
+def mobile_key(v):
+    """A comparable mobile number: the last 10 digits, or None when fewer than 10 are present. A
+    country code or formatting never splits one number into two keys."""
+    d = "".join(ch for ch in str(v or "") if ch.isdigit())
+    return d[-10:] if len(d) >= 10 else None
+
+
+def sales_evidence(sale_rows, key_of, key_field="serial_1", id_field="trans_id"):
+    """`{device_key: [trans ids]}` — the sale lines that name a device (capped), so a finding can cite
+    its lines instead of asserting them."""
+    out = {}
+    for r in sale_rows or []:
+        k = key_of((r or {}).get(key_field))
+        if not k:
+            continue
+        lst = out.setdefault(k, [])
+        tid = str((r or {}).get(id_field) or "").strip()
+        if tid and tid not in lst and len(lst) < EVIDENCE_CAP:
+            lst.append(tid)
+    return out
+
+
+def sales_mobile_index(sale_rows, key_of, key_field="serial_1", mobile_field="mdn", id_field="trans_id"):
+    """`{mobile_key: {device_key: via}}` — the units a mobile number can name through the sales file:
+    a sale line that carries BOTH the number and a device key (via 'same line'), else the device
+    lines of the SAME TRANSACTION as a line that carries the number (via 'same transaction' — the
+    plan line names the number, the handset line names the serial). Nothing else pairs."""
+    out = {}
+    by_txn_keys, by_txn_mobiles = {}, {}
+    for r in sale_rows or []:
+        r = r or {}
+        k, m = key_of(r.get(key_field)), mobile_key(r.get(mobile_field))
+        tid = str(r.get(id_field) or "").strip()
+        if k and m:
+            out.setdefault(m, {}).setdefault(k, "same line")
+        if tid and k:
+            by_txn_keys.setdefault(tid, set()).add(k)
+        if tid and m:
+            by_txn_mobiles.setdefault(tid, set()).add(m)
+    for tid, mobiles in by_txn_mobiles.items():
+        for m in mobiles:
+            for k in by_txn_keys.get(tid, ()):
+                out.setdefault(m, {}).setdefault(k, "same transaction")
+    return out
+
+
+def activation_index(activation_rows, key_of, sale_rows=None, serial_field="serial", mobile_field="mdn",
+                     id_field="trans_id", sale_key_field="serial_1", sale_mobile_field="mdn"):
+    """Pair every activation line to a device key — by its own serial, else through a sale line that
+    carries its mobile number — and say how. Returns
+      {"by_key": {device_key: evidence}, "unpairable": [...], "rows": n,
+       "paired_by_key": n, "paired_by_mobile": n, "carries_device_key": bool, "carries_mobile": bool}
+    An evidence dict is {"source": "activation", "line": <trans id / activation# / row>, "pairing": ...,
+    "mobile": ..., "date": ...}. First line per device wins (deterministic)."""
+    by_key, unpairable = {}, []
+    n_key = n_mob = 0
+    has_serial = has_mobile = False
+    mob_idx = None
+    for i, r in enumerate(activation_rows or []):
+        r = r or {}
+        line = str(r.get(id_field) or r.get("activation_no") or f"row {i + 1}").strip()
+        serial = r.get(serial_field)
+        mob = mobile_key(r.get(mobile_field))
+        if str(serial or "").strip():
+            has_serial = True
+        if mob:
+            has_mobile = True
+        k = key_of(serial)
+        if k:
+            n_key += 1
+            by_key.setdefault(k, {"source": SOURCE_ACTIVATION, "line": line, "pairing": PAIR_DEVICE_KEY,
+                                  "mobile": mob, "date": str(r.get("trans_date") or "")[:10] or None,
+                                  "bucket": r.get("bucket")})
+            continue
+        if not mob:
+            unpairable.append({"line": line, "reason": UNPAIR_NO_KEY, "mobile": None, "serial": str(serial or "").strip() or None})
+            continue
+        if mob_idx is None:
+            mob_idx = sales_mobile_index(sale_rows, key_of, sale_key_field, sale_mobile_field)
+        keys = mob_idx.get(mob) or {}
+        if len(keys) == 1:
+            n_mob += 1
+            k, via = next(iter(keys.items()))
+            by_key.setdefault(k, {"source": SOURCE_ACTIVATION, "line": line, "pairing": PAIR_MOBILE_VIA_SALES,
+                                  "via": via, "mobile": mob, "date": str(r.get("trans_date") or "")[:10] or None,
+                                  "bucket": r.get("bucket")})
+        elif not keys:
+            unpairable.append({"line": line, "reason": UNPAIR_NO_SALE, "mobile": mob, "serial": None})
+        else:
+            unpairable.append({"line": line, "reason": UNPAIR_AMBIGUOUS, "mobile": mob, "serial": None,
+                               "candidates": sorted(keys)})
+    return {"by_key": by_key, "unpairable": unpairable, "rows": len(activation_rows or []),
+            "paired_by_key": n_key, "paired_by_mobile": n_mob,
+            "carries_device_key": has_serial, "carries_mobile": has_mobile}
+
+
+def reconcile(sale_rows, inv_rows, key_of, qty_field="quantity", sale_key_field="serial_1",
+              activation_rows=None, mobile_field="mdn"):
+    """The report. Returns `{"rows": [...], "totals": {...}, "activations": {...}}` — and books nothing.
+
+    Three findings — the owner's two asks of 2026-09-12 and the auto-check of 2026-09-20:
 
     · SOLD_NOT_CLEARED — the unit is on the shelf according to the snapshot AND nets out as sold. This
       is stock to clear, and `cost` is what clearing it is worth. THE PHANTOM.
     · SOLD_NO_INVENTORY — the unit nets out as sold but the snapshot has no present row for it. This
       is the "sold with imei to be adjusted" side: nothing to clear, but the sale exists and the
       inventory never knew about the unit.
+    · ACTIVATED_NOT_RUNG_OUT — the unit is on the shelf, the ACTIVATION feed names it, and either NO
+      sale line does or its sale was REFUNDED back into stock (`sale_state`): activated, never rung
+      out of inventory properly. Each such row carries its evidence (which activation line, and
+      whether it was paired by IMEI or through a sale line's mobile number).
 
     A unit on the shelf that nets to ZERO is NOT reported. That is the sold-then-refunded case and it
     is the difference between a usable report and one that tells someone to write off stock they can
-    see. `net_units` is carried on every row so the reader can check that themselves.
+    see. `net_units` is carried on every row so the reader can check that themselves. `activation_rows`
+    is None when no feed was read (the report says so) and [] when the feed is loaded and empty.
     """
     sold = net_sold(sale_rows, key_of, qty_field, sale_key_field)
     present = on_hand_index(inv_rows, key_of)
+    cites = sales_evidence(sale_rows, key_of, sale_key_field)
+    act = activation_index(activation_rows or [], key_of, sale_rows, mobile_field=mobile_field,
+                           sale_mobile_field=mobile_field)
+    by_act = act["by_key"]
     rows = []
+    activated_then_refunded = 0
 
     for k, row in present.items():
         n = sold.get(k, 0.0)
-        if n <= 0:
-            continue                       # never sold, or sold and returned — genuinely on hand
-        rows.append({
-            "finding": SOLD_NOT_CLEARED, "device_key": k,
+        base = {
+            "device_key": k,
             "sku": row.get("sku"), "item": row.get("item"), "store": row.get("store"),
             "status": row.get("status"), "received_date": row.get("received_date"),
             "as_of_date": row.get("as_of_date"),
-            "net_units": n,
             "cost": _num(row.get("total_cost")) or _num(row.get("unit_cost")),
-        })
+        }
+        if n > 0:
+            ev = [{"source": SOURCE_SALES, "line": t, "pairing": PAIR_DEVICE_KEY} for t in cites.get(k, [])]
+            if k in by_act:
+                ev.append(by_act[k])      # the activation is EVIDENCE on the one finding, never a second row
+            rows.append({**base, "finding": SOLD_NOT_CLEARED, "net_units": n, "evidence": ev,
+                         "also_activated": k in by_act})
+            continue
+        if k in by_act:
+            # activated, and either NO sale line names the unit or its sale was refunded back into
+            # stock: either way the feed says it went to a customer and the shelf says it is here
+            refunded = k in sold
+            if refunded:
+                activated_then_refunded += 1
+            ev = [{"source": SOURCE_SALES, "line": t, "pairing": PAIR_DEVICE_KEY, "note": "sold and refunded (net 0)"}
+                  for t in cites.get(k, [])] + [by_act[k]]
+            rows.append({**base, "finding": ACTIVATED_NOT_RUNG_OUT, "net_units": n if refunded else 0.0,
+                         "evidence": ev, "also_activated": True, "pairing": by_act[k]["pairing"],
+                         "sale_state": "sold_then_refunded" if refunded else "no_sale_line"})
+            continue
+        # else: never sold (or sold and returned) and never activated — genuinely on hand
 
     for k, n in sold.items():
         if n <= 0 or k in present:
@@ -171,6 +323,8 @@ def reconcile(sale_rows, inv_rows, key_of, qty_field="quantity", sale_key_field=
             "sku": None, "item": None, "store": None, "status": None,
             "received_date": None, "as_of_date": None,
             "net_units": n, "cost": 0.0,
+            "evidence": [{"source": SOURCE_SALES, "line": t, "pairing": PAIR_DEVICE_KEY} for t in cites.get(k, [])],
+            "also_activated": k in by_act,
         })
 
     # Deterministic order: biggest exposure first, then by key so two runs of the same data agree.
@@ -178,6 +332,7 @@ def reconcile(sale_rows, inv_rows, key_of, qty_field="quantity", sale_key_field=
 
     clear = [r for r in rows if r["finding"] == SOLD_NOT_CLEARED]
     adjust = [r for r in rows if r["finding"] == SOLD_NO_INVENTORY]
+    activated = [r for r in rows if r["finding"] == ACTIVATED_NOT_RUNG_OUT]
     return {
         "rows": rows,
         "totals": {
@@ -187,5 +342,21 @@ def reconcile(sale_rows, inv_rows, key_of, qty_field="quantity", sale_key_field=
             "on_hand_considered": len(present),
             "devices_sold": sum(1 for n in sold.values() if n > 0),
             "unkeyed_sale_lines": unkeyed_sales(sale_rows, key_of, sale_key_field),
+            # the activation auto-check (owner 2026-09-20)
+            "activated_not_rung_out": len(activated),
+            "activated_not_rung_out_cost": round(sum(r["cost"] for r in activated), 2),
+            "activated_by_mobile": sum(1 for r in activated if r["pairing"] == PAIR_MOBILE_VIA_SALES),
+            "activated_then_refunded": activated_then_refunded,
+            "activations_considered": act["rows"],
+            "activations_paired_by_key": act["paired_by_key"],
+            "activations_paired_by_mobile": act["paired_by_mobile"],
+            "activations_unpairable": len(act["unpairable"]),
+        },
+        "activations": {
+            "present": activation_rows is not None,
+            "rows": act["rows"],
+            "carries_device_key": act["carries_device_key"],
+            "carries_mobile": act["carries_mobile"],
+            "unpairable": act["unpairable"][:200],
         },
     }
