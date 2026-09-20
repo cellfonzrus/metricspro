@@ -3482,6 +3482,53 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 
 ## 19. Known gaps & inert config
 
+§19.21 **A SKIPPED SWEEP WAS COMPLETELY SILENT (fixed 2026-09-20).**
+
+**Found by watching the very fix that caused it.** Deploying §19.20 restarted the API while the house
+org's 04:00 mailbox sweep was mid-flight. The sweep had already stamped its per-mailbox in-progress lock
+(`email_sweep_config.sweeping_since`, mig 930) and ingested — the 04:05/04:06 `upload_trace` rows are
+its work — and was killed before the `finally` that clears the stamp.
+
+From then on every tick SKIPPED that mailbox, because `_email_sweep_in_progress` saw a stamp inside
+`EMAIL_SWEEP_LOCK_STALE_MINUTES = 180`. Measured at 05:05:
+
+| | HOUSE/Boost | LuxeLink (the control) |
+|---|---|---|
+| `sweeping_since` | **2026-09-20T04:00:00 — stuck, 65 min old** | 2026-09-20T05:00:03 (current) |
+| `last_run_at` | 03:00:04, unchanged | 03:05:50 |
+| `next_run_at` | advanced 05:00 → 06:00 (the tick fired) | advanced normally |
+| ingests since 04:40 | **0** | 8, all `ok` |
+
+Same tick, same code, same cron: LuxeLink swept fine. Nothing was wrong with the mailbox or the new
+code — the tick was declined, and would be declined again at 06:00, unblocking only at 07:00.
+
+**THE DEFECT IS NOT THE LOCK. IT IS THAT THE SKIP SAID NOTHING.** The handler returned
+`{"ok": True, "skipped": "sweep_in_progress"}` into its own response and **left the config row
+untouched**, so the Email Imports page went on showing the 03:00 login error while the actual reason
+nothing was happening was a stale lock. Three hours of a platform quietly declining to do the work, and
+no surface anywhere said so — the same class §19.17 and §19.20 closed everywhere else, surviving on the
+one path nobody had looked at.
+
+**FIXED:** the skip now records an ATTEMPT (`last_attempt_at` via `_sweep_run_stamp(False)`, never
+`last_run_at`) with a status naming the cause, when the lock clears, and the way out:
+
+> *skipped: a sweep started 2026-09-20T04:00:00Z never finished, so this mailbox is locked against a
+> second concurrent run until 07:00:00Z. Usually a redeploy or a worker restart killed the previous run;
+> 'Run now' bypasses the lock.*
+
+The lock itself is unchanged — the tick is still skipped, never double-swept — and `POST
+/email-sweep/run-now` genuinely does bypass it, which the harness pins so the status cannot promise an
+escape hatch that does not exist.
+
+**Proof:** `backend/harness_sweep_freshness.py` §F (now 35 checks).
+
+**⚠ OPEN, with the owner:** `EMAIL_SWEEP_LOCK_STALE_MINUTES = 180` was chosen as "longer than any
+observed backlog sweep". Since §19.19 a sweep is one import per report per month rather than ~336, so
+sweeps are fast again and 180 minutes is far longer than the lock needs — it turns a redeploy landing
+during a sweep into a three-hour ingest gap. Shortening it trades that against the risk of
+double-starting a genuinely long sweep. **Not changed unilaterally: the number is a judgement about
+concurrency, and it is the owner's to make.**
+
 §19.20 **DETECT, THEN FIX, THEN TELL SOMEBODY WHO HEARS IT — the alerting audit and the autofix
 (owner directives 2026-09-20: "check if that was set up for boost and all tenants or that was patchwork
 also" → "build all for all tenants" → "most importantly the system should be capable of autofix").**

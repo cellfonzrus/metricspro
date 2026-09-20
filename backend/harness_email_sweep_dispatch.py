@@ -213,9 +213,29 @@ def run():
     check("locked mailbox skipped, free mailbox still swept", swept2 == [(TEN, 'default')])
     lock_writes = [u for u in fake2.log if u[0] == 'update' and 'sweeping_since' in u[2]]
     lock_orgs = {v for u in fake2.log if u[0] == 'eq' and u[2] == 'org_id' for v in [u[3]]}
-    check("only the swept mailbox's row is stamped (stamp + clear), never the locked one's",
+    # THE LOCK ITSELF is still only ever taken and released on the mailbox that actually sweeps —
+    # a skipped tick must never take, clear or refresh somebody else's lock.
+    check("the sweeping_since lock is stamped + cleared exactly once, on the SWEPT mailbox only",
           len(lock_writes) == 2 and lock_writes[0][2]['sweeping_since']
-          and lock_writes[1][2]['sweeping_since'] is None and lock_orgs == {TEN})
+          and lock_writes[1][2]['sweeping_since'] is None)
+    # …but the SKIP is no longer silent (§19.21). This assertion used to read `lock_orgs == {TEN}`,
+    # i.e. "the locked mailbox's row is never written at all" — which pinned exactly the silence that
+    # let a redeploy-killed sweep leave a mailbox declining every tick for three hours while its page
+    # still showed a stale login error. A skipped tick is a non-delivering ATTEMPT and says so, under
+    # the same contract as every other outcome (§19.17).
+    _upd = [u[2] for u in fake2.log if u[0] == 'update']
+    _skip = [u for u in _upd if 'skipped:' in str(u.get('last_status') or '')]
+    check("the LOCKED mailbox is written too — the skip is recorded, not swallowed", len(_skip) == 1)
+    check("…as an ATTEMPT (last_attempt_at), never as a run",
+          'last_attempt_at' in _skip[0] and 'last_run_at' not in _skip[0])
+    check("…naming the lock, when it clears, and the way out",
+          'never finished' in _skip[0]['last_status']
+          and 'locked against a second concurrent run' in _skip[0]['last_status']
+          and 'Run now' in _skip[0]['last_status'])
+    check("…and the skip write does NOT touch sweeping_since (it must not release the lock)",
+          'sweeping_since' not in _skip[0])
+    check("both mailboxes' rows were touched this tick — one swept, one explained",
+          lock_orgs == {TEN, HOUSE})
 
     print("── 7. retry cap: exhausted files stop being re-fetched — visibly, never silently ──")
     K = R.SWEEP_MAX_NONTERMINAL_ATTEMPTS

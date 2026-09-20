@@ -212,5 +212,27 @@ esu(c2, "org-1", "default", {**stamp(True), "last_status": "11/11 attachments in
 ok("E4 a migrated database writes the stamp and the status in ONE patch",
    len(c2.writes) == 1 and set(c2.writes[0][0]) == {"last_run_at", "last_status"}, c2.writes)
 
+print("\n\u00a7F  a SKIPPED tick is an attempt too — the lock must not make the platform go quiet")
+DUE = _func_src(ROUTER, "_email_sweep_due_worker")
+ok("F1 the in-progress skip stamps an ATTEMPT, not nothing",
+   "_sweep_run_stamp(False)" in DUE.split("_email_sweep_in_progress", 1)[1][:1600],
+   "before this the config row was left untouched and the skip was invisible")
+ok("F2 …and never last_run_at (a skipped tick delivered nothing)",
+   "'last_run_at'" not in DUE and '"last_run_at"' not in DUE)
+ok("F3 the status NAMES the lock as the cause, not the mailbox",
+   "never finished" in DUE and "locked against a second concurrent run" in DUE)
+ok("F4 …says when it clears, so the wait is bounded and visible",
+   "EMAIL_SWEEP_LOCK_STALE_MINUTES" in DUE and "lock_clears_at" in DUE)
+ok("F5 …and tells the operator the way out", "'Run now' bypasses the lock" in DUE)
+# the skip block runs from the lock test to its `continue`; the sweep call must be OUTSIDE it
+_blk = DUE.split("if _email_sweep_in_progress(cfg):", 1)[1]
+_blk = _blk[:_blk.index("continue") + len("continue")]
+ok("F6 the lock still does its job — the tick still ends in `continue`, never a second sweep",
+   _blk.rstrip().endswith("continue") and "_run_email_sweep(" not in _blk,
+   _blk[-120:])
+RN2 = _func_src(ROUTER, "email_run_now")
+ok("F7 Run now genuinely does bypass the lock (the escape hatch the status promises)",
+   "_email_sweep_in_progress" not in RN2)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
