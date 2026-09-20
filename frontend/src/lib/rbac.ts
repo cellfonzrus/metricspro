@@ -513,6 +513,7 @@ export const NAV: NavGroup[] = [
     // Vendor Rebate History (index §27, mig 1005) — what the carrier statement says it OWES, landed
     // per line. A LANDING view: it books nothing, so it is not gated like the money reports; it is
     // the sibling of IMEI Rebates above, which answers the PAID side from the feeds that prove payment.
+    { href: '/commcalc/carrier-vs-pay', label: 'Carrier Earned vs Employee Paid', icon: '⚖️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/vendor-rebates', label: 'Vendor Rebate History', icon: '🧾', module: 'commissions', tileOnly: true },
     { href: '/commcalc/recovery', label: 'Appeal Recovery', icon: '💰', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', icon: '🔁', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
@@ -1016,7 +1017,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/ma-commission', 'comm'], ['/commcalc/ma-overview-recon', 'comm'], ['/commcalc/financing', 'comm'],
   ['/commcalc/commission-legs', 'comm'],
   ['/commcalc/device-history', 'comm'], ['/commcalc/whatif', 'comm'],
-  ['/commcalc/discrepancy', 'comm'], ['/commcalc/commission-discrepancy', 'comm'],
+  ['/commcalc/discrepancy', 'comm'], ['/commcalc/commission-discrepancy', 'comm'], ['/commcalc/carrier-vs-pay', 'comm'],
   ['/commcalc/recovery', 'comm'], ['/commcalc/flags', 'comm'],
   ['/commcalc/epay-fee-recon', 'comm'],
   ['/commcalc/chargebacks', 'comm'], ['/commcalc/accessory-flags', 'comm'],

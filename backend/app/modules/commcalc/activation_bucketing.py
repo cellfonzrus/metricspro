@@ -133,3 +133,180 @@ def activation_details_bucket(contract_type, sp_name, product, category, rules=N
     if "activation" in ct:
         return "New Activation"
     return "Other"
+
+
+# ── CROSS-BUCKET TRANSACTION DIAGNOSTIC (owner question 2026-09-20) ─────────────────────────────
+# Owner: "the total activations should still match for every month as they are coming from b2b data".
+#
+# TOTAL ACTIVATION is the sum of four DISTINCT-transaction counts (Activation+Port / BYOD / Upgrade).
+# `router._sales_cell_agg` assigns a transaction to a bucket PER LINE, so a single ticket carrying two
+# differently-classified activation lines — e.g. a tablet 'Activation AAL' line and a 'BYOD Activation'
+# line on the same sale — is added to TWO bucket sets and counted TWICE in the total. It is one sale.
+#
+# This function MEASURES that, per transaction, so the gap between our number and b2bsoft's can be
+# reconciled ticket by ticket instead of guessed at. It is a DIAGNOSTIC: it classifies nothing, changes
+# no bucket and moves no money. Deciding which bucket such a ticket belongs to is a money decision
+# (on an exec-MTD-basis plan each extra bucket membership is another paid unit) and belongs to the
+# owner, so nothing here resolves it.
+#
+# PURE, stdlib-only. Takes the cells `_sales_cell_agg` already produced — it does not re-classify, so it
+# can never disagree with the classifier it is reporting on.
+ACTIVATION_BUCKET_SETS = (("_prem", "Activation"), ("_byod", "BYOD"), ("_upg", "Upgrade"))
+
+
+def mixed_bucket_transactions(cells, per_rep=False):
+    """Transactions counted in MORE THAN ONE activation bucket. PURE.
+
+    `cells` is `router._sales_cell_agg(...)` output: {(store, rep, date) -> cell}, each cell carrying the
+    distinct-transaction sets `_prem` / `_byod` / `_upg`.
+
+    Returns {"transactions": {trans_id: {"buckets": [...], "rep": str, "store": str, "extra": int}},
+             "count": int, "extra_units": int, "by_rep": {rep: extra_units}}
+    where `extra` is how many times that ONE sale is counted beyond the first, and `extra_units` is the
+    total inflation of TOTAL ACTIVATION. On a per-unit pay basis `extra_units` is also the number of
+    units paid more than once.
+    """
+    seen = {}
+    for key, cell in (cells or {}).items():
+        store = (cell or {}).get("store") or (key[0] if isinstance(key, tuple) else "")
+        rep = (cell or {}).get("salesperson") or (key[1] if isinstance(key, tuple) and len(key) > 1 else "")
+        for attr, label in ACTIVATION_BUCKET_SETS:
+            for tid in ((cell or {}).get(attr) or ()):
+                t = str(tid).strip()
+                if not t:
+                    continue
+                e = seen.setdefault(t, {"buckets": [], "rep": rep, "store": store})
+                if label not in e["buckets"]:
+                    e["buckets"].append(label)
+    out, by_rep, extra_units = {}, {}, 0
+    for t, e in seen.items():
+        if len(e["buckets"]) < 2:
+            continue
+        extra = len(e["buckets"]) - 1
+        extra_units += extra
+        by_rep[e["rep"]] = by_rep.get(e["rep"], 0) + extra
+        out[t] = {"buckets": sorted(e["buckets"]), "rep": e["rep"], "store": e["store"], "extra": extra}
+    return {"transactions": out, "count": len(out), "extra_units": extra_units,
+            "by_rep": dict(sorted(by_rep.items(), key=lambda kv: -kv[1]))}
+
+
+# ── ACTIVATION BASIS POLICY — make the implicit flip an explicit, stated choice ──────────────────
+# Owner ruling 2026-09-20: "tablets pay in ny same as the phones for the month of july august and
+# sept, but it should be configurable in settings not hard coded".
+#
+# THE THING THAT WAS IMPLICIT. Whether `tablet` / `home_internet` / `edge` exist as their OWN paid
+# categories, or stay FOLDED inside `activation`, depends on whether an Activation-Details file happens
+# to have rows for that period. `router._apply_activation_basis` degrades to the sales aggregation when
+# `ad_rows == 0` — silently. The tenant had already STATED their basis (mig 923/939
+# `metric_source_of_truth`); a missing upload quietly substituted a different one, at a different price.
+# Measured live (org 854f6d7b): ad_rows 0 / 0 / 0 / 1,078 / 813 for May-Sep 2026, so the SAME tablet
+# activation paid $10 folded in July and $0 split in August.
+#
+# THE EXPOSURE IS NOT "THE BASIS CHANGED", IT IS "A SPLIT CATEGORY IS PRICED DIFFERENTLY FROM THE
+# CATEGORY IT FOLDS INTO". `basis_flip_exposure` measures exactly that, in dollars, so a tenant is told
+# what an upload would move BEFORE it moves it. Where every split category carries the activation rate
+# the exposure is $0 and the flip is genuinely harmless.
+#
+# PURE, stdlib-only. No org, market, carrier or tenant name appears here; the policy is read from
+# per-plan config (`commission_plan.mtd_rates.activation_basis`, already JSONB — no migration).
+BASIS_POLICIES = ("auto", "require_split", "folded")
+BASIS_POLICY_DEFAULT = "auto"
+# The categories that EXIST ONLY on the Activation-Details basis. On the sales aggregation they are not
+# absent — they are folded into FOLD_TARGET and paid at ITS rate.
+SPLIT_ONLY_CATEGORIES = ("tablet", "home_internet", "edge")
+FOLD_TARGET = "activation"
+
+
+def resolve_basis_policy(mtd_rates):
+    """The plan's stated activation-basis policy. PURE. Anything unrecognised -> the default, which is
+    today's behaviour, so an un-migrated / un-edited plan is byte-identical."""
+    if not isinstance(mtd_rates, dict):
+        return BASIS_POLICY_DEFAULT
+    v = str(mtd_rates.get("activation_basis") or "").strip().lower()
+    return v if v in BASIS_POLICIES else BASIS_POLICY_DEFAULT
+
+
+def basis_decision(policy, ad_rows, stated_source=None):
+    """What basis to use, and whether the answer is a DEGRADED one. PURE.
+
+    Returns {basis, degraded, policy, stated_source, ad_rows, reason}. `degraded` is True only when the
+    tenant asked for split counts and the period cannot supply them — the case that used to be silent.
+
+      auto           today's behaviour: split when the file has rows, fold when it does not. The fold is
+                     now REPORTED (degraded=True) instead of being inferable only from ad_rows.
+      require_split  the same NUMBERS as auto, but the gap is stated as an operator-facing condition:
+                     the period is being paid on a basis the tenant did not choose.
+      folded         never split. The split-only categories always fold into FOLD_TARGET, so uploading a
+                     file can no longer re-price a sale. Costs the per-category granularity; buys
+                     month-to-month stability.
+    """
+    pol = policy if policy in BASIS_POLICIES else BASIS_POLICY_DEFAULT
+    n = int(ad_rows or 0)
+    stated = str(stated_source or "").strip().lower() or None
+    if pol == "folded":
+        return {"basis": "sales_agg", "degraded": False, "policy": pol, "stated_source": stated,
+                "ad_rows": n,
+                "reason": "policy 'folded': split categories always fold into "
+                          f"'{FOLD_TARGET}', so an upload cannot re-price a sale."}
+    if n > 0:
+        return {"basis": "activation_details", "degraded": False, "policy": pol,
+                "stated_source": stated, "ad_rows": n,
+                "reason": f"Activation Details supplied {n} row(s) for this period."}
+    return {"basis": "sales_agg", "degraded": True, "policy": pol, "stated_source": stated,
+            "ad_rows": 0,
+            "reason": ("Activation Details has NO rows for this period, so "
+                       + ", ".join(SPLIT_ONLY_CATEGORIES)
+                       + f" are folded into '{FOLD_TARGET}' and paid at its rate. This is not the "
+                         "basis the tenant stated — upload the period's file, or set the plan's "
+                         "activation_basis to 'folded' to make the fold deliberate.")}
+
+
+def fold_counts(counts):
+    """Fold the split-only categories into FOLD_TARGET. PURE, returns a NEW dict.
+
+    This is what the sales aggregation already does implicitly; naming it lets a plan choose it."""
+    out = dict(counts or {})
+    moved = 0
+    for c in SPLIT_ONLY_CATEGORIES:
+        moved += int(out.get(c) or 0)
+        out[c] = 0
+    out[FOLD_TARGET] = int(out.get(FOLD_TARGET) or 0) + moved
+    return out
+
+
+def basis_flip_exposure(counts, rate_map):
+    """$ pay difference between the SPLIT and the FOLDED reading of the same sales. PURE.
+
+    > 0 means the split basis pays MORE; < 0 means folding pays more (the live case: a tablet priced 0
+    against an activation priced 10). ZERO means the flip is harmless for this plan, which is the state
+    a tenant should be steered to. Returns {delta, split_pay, folded_pay, by_category}.
+    """
+    counts = counts or {}
+    rates = rate_map or {}
+
+    def _n(k):
+        try:
+            return int(counts.get(k) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _r(k):
+        try:
+            return float(rates.get(k) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    by_cat, split_extra, folded_extra = {}, 0.0, 0.0
+    for c in SPLIT_ONLY_CATEGORIES:
+        n, rs, rf = _n(c), _r(c), _r(FOLD_TARGET)
+        split_extra += n * rs
+        folded_extra += n * rf
+        if n:
+            by_cat[c] = {"units": n, "split_rate": rs, "fold_rate": rf,
+                         "delta": round(n * (rs - rf), 2)}
+    base = sum(_n(c) * _r(c) for c in rates
+               if c not in SPLIT_ONLY_CATEGORIES and isinstance(counts.get(c), (int, float)))
+    return {"delta": round(split_extra - folded_extra, 2),
+            "split_pay": round(base + split_extra, 2),
+            "folded_pay": round(base + folded_extra, 2),
+            "by_category": by_cat}
