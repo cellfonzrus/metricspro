@@ -58,6 +58,8 @@ from app.modules.commcalc import commission_catalog
 from app.modules.commcalc import ma_upload
 from app.modules.commcalc import target_registry
 from app.modules.commcalc import commission_ledger
+from app.modules.commcalc import onboarding_intake as _intake   # the NEW tenant onboarding flow (stage 3 slice), PURE
+from app.modules.commcalc import report_labels as _report_labels
 from app.modules.commcalc import ledger_ma_sync
 from app.modules.commcalc import ma_product_class
 from app.modules.commcalc import ma_class_wiring
@@ -4438,15 +4440,40 @@ def _read_upload_df(contents: bytes, filename: str):
     (the wizard advertises CSV too — pd.read_excel alone throws on a CSV)."""
     fname = (filename or "").lower()
     if fname.endswith((".csv", ".txt")):
-        # b2bsoft exports CSVs in Windows cp1252 (0xa0 non-breaking spaces etc.) — a strict-utf-8 read
-        # hard-failed those ("'utf-8' codec can't decode byte 0xa0") and the sweep retried the same
-        # attachment every run forever. utf-8-sig first (also eats a BOM), then cp1252. Only the
-        # previously-failing case reaches the fallback, so working files read byte-identically.
-        try:
-            return pd.read_csv(io.BytesIO(contents), dtype=str, encoding="utf-8-sig").fillna("")
-        except UnicodeDecodeError:
-            return pd.read_csv(io.BytesIO(contents), dtype=str, encoding="cp1252").fillna("")
+        return _read_upload_csv(contents).fillna("")
     return pd.read_excel(io.BytesIO(contents), dtype=str).fillna("")
+
+
+def _read_upload_csv(contents: bytes, **kw):
+    """THE CSV read every upload shares. b2bsoft exports CSVs in Windows cp1252 (0xa0 non-breaking
+    spaces etc.) — a strict-utf-8 read hard-failed those ("'utf-8' codec can't decode byte 0xa0") and
+    the sweep retried the same attachment every run forever. utf-8-sig first (also eats a BOM), then
+    cp1252. Only the previously-failing case reaches the fallback, so working files read
+    byte-identically. `kw` passes through (the onboarding intake reads header=None)."""
+    try:
+        return pd.read_csv(io.BytesIO(contents), dtype=str, encoding="utf-8-sig", **kw)
+    except UnicodeDecodeError:
+        return pd.read_csv(io.BytesIO(contents), dtype=str, encoding="cp1252", **kw)
+
+
+def _read_upload_grids(contents: bytes, filename: str):
+    """Every sheet of an upload as a RAW grid — [(sheet_name, [[cell, …], …])], every cell a string,
+    NO header inferred — so the onboarding intake can find the header row itself (a statement often
+    carries a title block above it) and list continuation sheets (onboarding_intake.stitch_sheets,
+    which reuses multisheet.same_header / is_header_echo). Same CSV encoding rule as _read_upload_df."""
+    fname = (filename or "").lower()
+    if fname.endswith((".csv", ".txt")):
+        # csv.reader, not pd.read_csv: a title block above the header has FEWER fields than the data
+        # rows, and pandas' C engine sizes every row by the first line and refuses the file. Same
+        # two-encoding rule as _read_upload_csv (utf-8-sig, then cp1252).
+        import csv as _csv
+        try:
+            text = contents.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = contents.decode("cp1252")
+        return [("csv", [list(r) for r in _csv.reader(io.StringIO(text))])]
+    book = pd.read_excel(io.BytesIO(contents), dtype=str, sheet_name=None, header=None)
+    return [(str(name), frame.fillna("").values.tolist()) for name, frame in book.items()]
 
 
 @router.get("/commission-fields")
@@ -4658,6 +4685,60 @@ def _ledger_delete_scoped(client, org_id, source_report, period, origin):
     return "unscoped_pre_251"
 
 
+def _ledger_map_records(records, hdr_rules):
+    """Source rows -> MAPPED ledger source rows (column_mapping.apply_mapping), keeping only rows that
+    carry a label, a sub-label or an amount. THE one 'is this a line at all' test — shared by
+    /commission-ledger/import, /commission-ledger/analyze and the onboarding intake, so the preview
+    and the import can never disagree about which rows exist."""
+    mapped = []
+    for r in records:
+        src = column_mapping.apply_mapping(r, hdr_rules, {})
+        if not (src.get("product_name") or src.get("raw_amount") or src.get("order_type")):
+            continue
+        mapped.append(src)
+    return mapped
+
+
+def _ledger_land_rows(client, org_id, rows, source_report, period, filename=None, source="ledger-import"):
+    """THE one landing path for built ledger rows: the slice-scoped wipe, the chunked insert, the
+    upload_log row and the mig-202 trace. Returns the number of rows inserted. Factored out of
+    /commission-ledger/import (2026-09-20) so the onboarding intake commits through exactly the same
+    code — a second landing path would be the drift the house rules forbid."""
+    # GUARD: only clear once we have rows; scope the wipe to this source_report + period — and, once
+    # migration 251 is applied, to THIS ORIGIN ('file'), so re-uploading a file can never delete the rows
+    # a MA-data refresh derived (and vice-versa). Pre-251 there is no origin column: the delete falls back
+    # to today's exact statement, so behaviour is byte-identical until the migration runs.
+    if not rows:
+        raise HTTPException(400, "No usable rows — check the column mapping for this file.")
+    if period:
+        try:
+            _ledger_delete_scoped(client, org_id, source_report, period, ledger_ma_sync.ORIGIN_FILE)
+        except HTTPException:
+            raise                                   # keep an explicit 4xx refusal as itself, not a 500
+        except Exception as e:
+            raise HTTPException(500, f"Failed to clear existing ledger for {source_report}/{period}: {e}")
+    saved = 0
+    for i in range(0, len(rows), 500):
+        try:
+            client.schema("commcalc").table("commission_ledger").insert(rows[i:i + 500]).execute()
+            saved += len(rows[i:i + 500])
+        except Exception as e:
+            raise HTTPException(500, f"Insert into commission_ledger failed at row {i}: {e} — is migration 071 applied?")
+    try:
+        client.schema("commcalc").table("upload_log").insert(
+            {"org_id": org_id, "file_type": "commission_ledger", "period": period or None,
+             "filename": filename, "rows_saved": saved}).execute()
+    except Exception as e:
+        print(f"WARN upload_log insert failed: {e}")
+    # mig-202 upload_trace keyed on the SOURCE report (e.g. ma_daily_tx), which is the feed an admin is
+    # actually satisfying by hand when they upload here — see the note on /vip/upload.
+    _write_upload_trace(org_id, source=source, filename=filename,
+                        upload_type=source_report, period=period,
+                        result={"saved": saved, "note": "classified into the canonical ledger",
+                                "_trace": {"rows_in": len(rows), "target_table": "commission_ledger"}})
+    return saved
+
+
 @router.post("/commission-ledger/import")
 async def commission_ledger_import(
     file: UploadFile = File(...),
@@ -4687,46 +4768,13 @@ async def commission_ledger_import(
     base = {"org_id": org_id, "source_report": source_report}
     if period:
         base["period"] = period
-    mapped = []
-    for r in df.to_dict("records"):
-        src = column_mapping.apply_mapping(r, hdr_rules, {})
-        if not (src.get("product_name") or src.get("raw_amount") or src.get("order_type")):
-            continue
-        mapped.append(src)
+    mapped = _ledger_map_records(df.to_dict("records"), hdr_rules)
     mapped, footer_rows = _ledger_footer_drop(mapped, client, org_id)
     rows = [commission_ledger.build_row(src, base, cat_rules, conv) for src in mapped]
     if not rows:
         raise HTTPException(400, "No usable rows — check the column mapping for this file.")
-    # GUARD: only clear once we have rows; scope the wipe to this source_report + period — and, once
-    # migration 251 is applied, to THIS ORIGIN ('file'), so re-uploading a file can never delete the rows
-    # a MA-data refresh derived (and vice-versa). Pre-251 there is no origin column: the delete falls back
-    # to today's exact statement, so behaviour is byte-identical until the migration runs.
-    if period:
-        try:
-            _ledger_delete_scoped(client, org_id, source_report, period, ledger_ma_sync.ORIGIN_FILE)
-        except HTTPException:
-            raise                                   # keep an explicit 4xx refusal as itself, not a 500
-        except Exception as e:
-            raise HTTPException(500, f"Failed to clear existing ledger for {source_report}/{period}: {e}")
-    saved = 0
-    for i in range(0, len(rows), 500):
-        try:
-            client.schema("commcalc").table("commission_ledger").insert(rows[i:i + 500]).execute()
-            saved += len(rows[i:i + 500])
-        except Exception as e:
-            raise HTTPException(500, f"Insert into commission_ledger failed at row {i}: {e} — is migration 071 applied?")
-    try:
-        client.schema("commcalc").table("upload_log").insert(
-            {"org_id": org_id, "file_type": "commission_ledger", "period": period or None,
-             "filename": getattr(file, "filename", None), "rows_saved": saved}).execute()
-    except Exception as e:
-        print(f"WARN upload_log insert failed: {e}")
-    # mig-202 upload_trace keyed on the SOURCE report (e.g. ma_daily_tx), which is the feed an admin is
-    # actually satisfying by hand when they upload here — see the note on /vip/upload.
-    _write_upload_trace(org_id, source="ledger-import", filename=getattr(file, "filename", None),
-                        upload_type=source_report, period=period,
-                        result={"saved": saved, "note": "classified into the canonical ledger",
-                                "_trace": {"rows_in": len(rows), "target_table": "commission_ledger"}})
+    saved = _ledger_land_rows(client, org_id, rows, source_report, period,
+                              filename=getattr(file, "filename", None), source="ledger-import")
     summary = commission_ledger.summarize(rows, rules=cat_rules, conv=conv)
     return {"saved": saved, "source_report": source_report, "period": period, "summary": summary,
             "rules_source": rules_source, "convention": conv, "convention_meta": conv_meta,
@@ -4757,12 +4805,7 @@ async def commission_ledger_analyze(
     cat_rules, rules_source = commission_ledger.load_rules_meta(client, org_id, source_report)
     conv, conv_meta = _ledger_convention(hdr_rules)
     cat_rules, class_meta = ma_class_wiring.ledger_rules_with_class(client, org_id, source_report, cat_rules)
-    mapped = []
-    for r in df.to_dict("records"):
-        src = column_mapping.apply_mapping(r, hdr_rules, {})
-        if not (src.get("product_name") or src.get("raw_amount") or src.get("order_type")):
-            continue
-        mapped.append(src)
+    mapped = _ledger_map_records(df.to_dict("records"), hdr_rules)
     mapped, footer_rows = _ledger_footer_drop(mapped, client, org_id)
     rows = [commission_ledger.build_row(src, {"org_id": org_id, "source_report": source_report},
                                         cat_rules, conv) for src in mapped]
@@ -4782,6 +4825,567 @@ async def commission_ledger_analyze(
             "rules_source": rules_source, "convention": conv, "convention_meta": conv_meta,
             "footer_rows_dropped": footer_rows,
             "categories": commission_ledger.CATEGORIES, "category_labels": commission_ledger.CATEGORY_LABELS}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# TENANT ONBOARDING — COMMISSION-STATEMENT INTAKE (design stage 3, steps 3.1–3.9; owner 2026-09-20)
+#
+# Owner: "I will not do anything manually — the system should ask me while onboarding under 3.4 what
+# is considered commission positive or negative … assign the existing fields to the uploaded data and
+# SAVE that, use the intelligence to assign the categories to the fields and ask the user to confirm.
+# Whatever is being uploaded should be able to save is most important."
+#
+# The FLOW is new (frontend/src/app/(platform)/onboarding/intake/page.tsx). The PLUMBING is not:
+#   · file reading         _read_upload_grids (the _read_upload_df CSV rule) + multisheet
+#   · header→field         column_mapping.suggest / target_fields; PROVENANCE attached in
+#                          onboarding_intake.propose_columns
+#   · the footer           feed_shape.is_footer_row via onboarding_intake.split_footer with
+#                          column_mapping.identity_fields (the mig-1004 rule, §25.12 C)
+#   · the mapping SAVE     upsert_column_mapping — POST /commcalc/column-mapping, the ONE writer
+#                          (§25.11), incl. the amount column's sign_convention (mig 1006/1008)
+#   · sign semantics       commission_ledger.CONVENTIONS / direction / booked_amount (§25.12)
+#   · bucket rules         upsert_commission_category_map — commcalc.commission_category_map
+#   · classify + land      commission_ledger.build_row → _ledger_land_rows (the import's own path)
+#   · the verify           onboarding_intake.bucket_totals + tie_out over rows RE-READ from the DB
+# Every read and write below is org-scoped. No carrier, tenant or product is named. The resumable
+# state (mig 1007) is optional: absent, every payload says so and nothing 500s.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+_INTAKE_STATE_MIGRATION = "1007_onboarding_intake_state.sql"
+_INTAKE_SIGN_MIGRATION = "1008_sign_convention_netted.sql"
+_INTAKE_REPORT_KEY = commission_ledger.MAPPING_REPORT_KEY      # 'commission_ledger'
+_INTAKE_REREAD_PAGE = 1000
+
+
+def _fstr(v):
+    """A Form(...) string as a plain stripped str — '' for anything that is not a string (a harness
+    calling the endpoint function directly receives the Form default object, not its value)."""
+    return v.strip() if isinstance(v, str) else ""
+
+
+def _intake_json(text, what, default):
+    """A JSON form field, or a 400 that names the field — never a 500 on a malformed body."""
+    if text in (None, ""):
+        return default
+    try:
+        import json as _json
+        return _json.loads(text)
+    except Exception as e:
+        raise HTTPException(400, f"{what} must be JSON: {e}")
+
+
+def _intake_state_ready(client, org_id):
+    """True when migration 1007 is applied. Probed with an org-scoped 1-row read; never raises."""
+    try:
+        (client.schema("commcalc").table("onboarding_stage_state").select("id")
+         .eq("org_id", org_id).limit(1).execute())
+        return True
+    except Exception:
+        return False
+
+
+def _intake_run(client, org_id, create=False, started_by=None):
+    """The org's open onboarding run (newest in-progress), created on first write when asked."""
+    rows = (client.schema("commcalc").table("onboarding_run").select("*")
+            .eq("org_id", org_id).eq("status", "in_progress")
+            .order("started_at", desc=True).limit(1).execute().data) or []
+    if rows:
+        return rows[0]
+    if not create:
+        return None
+    r = client.schema("commcalc").table("onboarding_run").insert(
+        {"org_id": org_id, "run_kind": "initial", "status": "in_progress",
+         "started_by": started_by or None}).execute()
+    return (r.data or [{}])[0]
+
+
+def _intake_stage_rows(client, org_id, run_id):
+    if not run_id:
+        return []
+    return (client.schema("commcalc").table("onboarding_stage_state").select("*")
+            .eq("org_id", org_id).eq("run_id", run_id).execute().data) or []
+
+
+def _intake_state_payload(client, org_id, current_instance=None):
+    """{state_ready, migration, run, rail} — the rail is a PROJECTION of the persisted rows
+    (onboarding_intake.rail). Without mig 1007 it is the empty rail, and the payload says why."""
+    if not _intake_state_ready(client, org_id):
+        return {"state_ready": False, "migration": _INTAKE_STATE_MIGRATION,
+                "note": ("Resumable state is not available until migration "
+                         f"{_INTAKE_STATE_MIGRATION} is applied — the flow still works; leaving the "
+                         "page loses your place."),
+                "run": None, "rail": _intake.rail([], current_instance)}
+    run = _intake_run(client, org_id)
+    rows = _intake_stage_rows(client, org_id, (run or {}).get("id"))
+    return {"state_ready": True, "migration": _INTAKE_STATE_MIGRATION, "run": run,
+            "rail": _intake.rail(rows, current_instance)}
+
+
+def _intake_save_state(client, org_id, instance_key, step=None, status=None, payload_patch=None,
+                       verified_numbers=None, verified_by=None, blocking_reason=None, by=None):
+    """Upsert ONE stage-state row (run, stage 3, instance) and move the run's current_step. Returns
+    {saved, reason?}. Degrades to saved=False (never raises) when mig 1007 is absent, so a commit
+    that landed rows is still reported as landed."""
+    if not _intake_state_ready(client, org_id):
+        return {"saved": False, "reason": f"migration {_INTAKE_STATE_MIGRATION} not applied"}
+    try:
+        run = _intake_run(client, org_id, create=True, started_by=by)
+        existing = (client.schema("commcalc").table("onboarding_stage_state").select("*")
+                    .eq("org_id", org_id).eq("run_id", run["id"]).eq("stage", _intake.STAGE_COMMISSION)
+                    .eq("instance_key", instance_key).limit(1).execute().data) or []
+        payload = dict((existing[0].get("payload") if existing else None) or {})
+        for k, v in (payload_patch or {}).items():
+            payload[k] = v
+        row = {"org_id": org_id, "run_id": run["id"], "stage": _intake.STAGE_COMMISSION,
+               "instance_key": instance_key, "payload": payload, "updated_at": _intake.now_iso()}
+        if step:
+            row["step"] = step
+        if status in _intake.STATUSES:
+            row["status"] = status
+        if verified_numbers is not None:
+            row["verified_numbers"] = verified_numbers
+            row["verified_by"] = verified_by or by
+            row["verified_at"] = _intake.now_iso()
+        if blocking_reason is not None:
+            row["blocking_reason"] = blocking_reason or None
+        if existing:
+            client.schema("commcalc").table("onboarding_stage_state").update(row).eq("id", existing[0]["id"]).eq("org_id", org_id).execute()
+        else:
+            row.setdefault("step", step or _intake.STEP_KEYS[0])
+            row.setdefault("status", _intake.STATUS_IN_PROGRESS)
+            client.schema("commcalc").table("onboarding_stage_state").insert(row).execute()
+        if step:
+            client.schema("commcalc").table("onboarding_run").update(
+                {"current_step": step, "updated_at": _intake.now_iso()}).eq("id", run["id"]).eq("org_id", org_id).execute()
+        return {"saved": True, "run_id": run["id"]}
+    except Exception as e:
+        return {"saved": False, "reason": str(e)[:300]}
+
+
+def _intake_carrier(client, org_id, carrier_id):
+    """(carrier row, normalised code) for ONE of this org's own carriers — a carrier is a row (design
+    §0.4); nothing here knows any carrier's name."""
+    cid = (carrier_id or "").strip()
+    if not cid:
+        raise HTTPException(400, "carrier_id is required — pick the carrier this statement is from")
+    rows = (client.schema("commcalc").table("carrier").select("id,name,code")
+            .eq("org_id", org_id).eq("id", cid).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(400, "carrier_id must be one of this company's carriers")
+    c = rows[0]
+    code = _report_labels.normalize_carrier_code(c.get("code") or c.get("name"))
+    if not code:
+        raise HTTPException(400, "this carrier has neither a code nor a name")
+    return c, code
+
+
+def _intake_house_defaults(client, org_id, code, source_report):
+    """The house org's presets for THIS carrier code only (design §0.3: never a prefill from a carrier
+    the tenant did not select): the house's column_mapping rows stamped with the house carrier of the
+    same code, and the house's commission_category_map rows under the same source_report key.
+    Explicitly HOUSE-scoped reads; [] when the house has no such carrier or the tenant IS the house."""
+    if org_id == ORG_ID:
+        return [], []
+    try:
+        hc = (client.schema("commcalc").table("carrier").select("id,name,code")
+              .eq("org_id", ORG_ID).execute().data) or []
+        hid = implementation_spine.carrier_id_by_code(hc, code, code=_report_labels.normalize_carrier_code)
+        if not hid:
+            return [], []
+        cols = [r for r in column_mapping.load_rules(client, ORG_ID, _INTAKE_REPORT_KEY, hid)
+                if r.get("carrier_id") == hid]
+        cats = (client.schema("commcalc").table("commission_category_map").select("*")
+                .eq("org_id", ORG_ID).eq("source_report", source_report).execute().data) or []
+        return cols, cats
+    except Exception:
+        return [], []
+
+
+def _intake_prepare(client, org_id, contents, filename, source_kind, carrier_id, statement_type,
+                    column_map_json, sign_answer, assignments_json, typed_total,
+                    sheet="", header_row="", footer="auto"):
+    """Everything analyze and commit share: read → detect → propose → map → footer → sign → labels →
+    bucket suggestions → preview totals. One function so the preview the person confirmed and the
+    rows the commit builds come from the SAME parse and the SAME rules (design §0.5)."""
+    kind = (source_kind or "commission").strip().lower()
+    if kind not in _intake.SOURCE_KINDS:
+        raise HTTPException(400, "source_kind must be one of " + "|".join(_intake.SOURCE_KINDS))
+    if kind != "commission":
+        raise HTTPException(400, f"'{kind}' intake is Stage B (sales / inventory / POS / other reports) "
+                                 "and is not built yet — only the commission statement lands in this build.")
+    stype = (statement_type or "").strip() or _intake.STATEMENT_TYPE_DEFAULT
+    carrier, code = _intake_carrier(client, org_id, carrier_id)
+    try:
+        sheets = _read_upload_grids(contents, filename)
+    except Exception as e:
+        raise HTTPException(400, f"Could not read file: {e}")
+    sheet, header_row, footer = _fstr(sheet), _fstr(header_row), _fstr(footer) or "auto"
+    hr = None
+    if header_row != "":
+        try:
+            hr = int(header_row)
+        except ValueError:
+            raise HTTPException(400, "header_row must be a row number (0-based)")
+    shape = _intake.stitch_sheets(sheets, sheet_name=sheet or None, header_row=hr)
+    if not shape["records"]:
+        raise HTTPException(400, "No header row found in any sheet — the file has no row where most cells "
+                                 "are column names followed by a row of data.")
+    headers, records = shape["headers"], shape["records"]
+    source_report = _intake.source_report_key(code, stype)
+    ikey = _intake.instance_key(kind, carrier["id"], stype)
+    fields = column_mapping.target_fields(_INTAKE_REPORT_KEY, client, org_id)
+    # the tenant's OWN saved rows for THIS carrier — a row saved for another carrier never prefills
+    saved = [r for r in column_mapping.load_rules(client, org_id, _INTAKE_REPORT_KEY, carrier["id"])
+             if r.get("carrier_id") == carrier["id"]]
+    house_cols, house_cats = _intake_house_defaults(client, org_id, code, source_report)
+    suggestions = column_mapping.suggest(headers, _INTAKE_REPORT_KEY, saved, client, org_id)
+    overrides = _intake_json(column_map_json, "column_map", {})
+    if not isinstance(overrides, dict):
+        raise HTTPException(400, "column_map must be a JSON object {target_field: header}")
+    proposal = _intake.propose_columns(fields, suggestions, saved, house_cols, headers, records,
+                                       carrier_label=carrier.get("name") or code, overrides=overrides)
+    rules = _intake.mapping_rules(proposal)
+    mapped = _ledger_map_records(records, rules)
+    ident = column_mapping.identity_fields(_INTAKE_REPORT_KEY, client, org_id)
+    mapped_fields = [p["target_field"] for p in proposal if p.get("column")]
+    ident_mapped = any(f in mapped_fields for f in ident)
+    if str(footer or "auto").strip().lower() == "none":
+        # the person says the file has NO total row: nothing is dropped, and the total must be typed
+        kept, footers = list(mapped), []
+        footer_info = _intake.footer_summary(kept, [], identity_mapped=True)
+        footer_info["basis"] = "overridden: you said this file has no total row"
+    else:
+        kept, footers = _intake.split_footer(mapped, ident, mapped_fields)
+        footer_info = _intake.footer_summary(kept, footers, identity_mapped=ident_mapped)
+    footer = footer_info
+    # 3.4 — what is stored on the amount column's row (mig 1006), and what the person answered now
+    stored_conv, stored_meta = commission_ledger.convention_from_mapping(saved)
+    stored_answer = _intake.answer_for_convention(stored_meta.get("declared")) if stored_meta.get("declared") else None
+    answer = (sign_answer or "").strip().lower() or stored_answer
+    conv_name = _intake.convention_for_answer(answer)
+    conv = commission_ledger.convention_named(conv_name) if conv_name else None
+    labels = _intake.label_summary(kept, conv)
+    cat_rules, rules_source = commission_ledger.load_rules_meta(client, org_id, source_report)
+    tenant_rules = cat_rules if rules_source == commission_ledger.RULES_TENANT else []
+    labels = _intake.suggest_buckets(labels, tenant_rules, house_cats, carrier.get("name") or code)
+    assignments = _intake_json(assignments_json, "assignments", None)
+    if assignments is None:
+        assignments = [{"label": a["label"], "match_field": a.get("match_field"), "bucket": a["bucket"],
+                        "is_reversal": bool(a.get("reversal_flag"))} for a in labels if a["bucket"] in _intake.BUCKETS]
+    elif not isinstance(assignments, list):
+        raise HTTPException(400, "assignments must be a JSON list of {label, bucket, is_reversal}")
+    by_label = {a["label"]: a for a in labels}
+    for a in assignments:
+        src = by_label.get(str(a.get("label") or ""))
+        if src:
+            a.setdefault("match_field", src.get("match_field"))
+            a["sum_raw"] = src.get("sum_raw")
+    # 3.8 preview — IN MEMORY, from the same rows the commit would build; the commit re-reads the DB
+    preview_rules = _intake.rules_for_assignments(source_report, assignments)
+    built = [commission_ledger.build_row(src, {"org_id": org_id, "source_report": source_report},
+                                         preview_rules, conv) for src in kept] if conv else []
+    totals = _intake.bucket_totals(built) if conv else None
+    tie = (_intake.tie_out(totals, footer["file_total_raw"], conv["payout_sign"], typed_total)
+           if conv else None)
+    banners = _intake.sanity_banners(assignments, totals, conv["payout_sign"]) if conv else []
+    amount_header = next((p["column"] for p in proposal if p["target_field"] == _intake.AMOUNT_FIELD), "")
+    text_headers = [p["column"] for p in proposal if p["column"] and (p.get("transform") or "text") != "number"]
+    return {
+        "kind": kind, "statement_type": stype, "carrier": carrier, "carrier_code": code,
+        "source_report": source_report, "instance_key": ikey, "shape": shape, "headers": headers,
+        "records": records, "fields": fields, "proposal": proposal, "rules": rules, "mapped": mapped,
+        "kept": kept, "footers": footers, "footer": footer, "identity_fields": ident,
+        "stored_meta": stored_meta, "stored_answer": stored_answer, "answer": answer,
+        "conv_name": conv_name, "conv": conv, "labels": labels, "rules_source": rules_source,
+        "assignments": assignments, "preview_rules": preview_rules, "built": built, "totals": totals,
+        "tie": tie, "banners": banners, "typed_total": typed_total,
+        "money_columns": _intake.money_columns(headers, records, amount_header, text_headers),
+        "period": _intake.period_proposal(kept), "identity": _intake.identity_strings(kept),
+        "house_defaults": {"columns": len(house_cols), "bucket_rules": len(house_cats)},
+    }
+
+
+def _intake_payload(ctx):
+    """The analyze response — everything §3.2–§3.8 need in ONE payload, shaped to generalise to
+    Stage B (source_kind / target_table / identity_fields / verify)."""
+    proposal = ctx["proposal"]
+    return {
+        "source_kind": ctx["kind"], "target_table": _intake.SOURCE_KIND_TARGET.get(ctx["kind"]),
+        "report_key": _INTAKE_REPORT_KEY, "statement_type": ctx["statement_type"],
+        "carrier": {"id": ctx["carrier"]["id"], "name": ctx["carrier"].get("name"), "code": ctx["carrier_code"]},
+        "source_report": ctx["source_report"], "instance_key": ctx["instance_key"],
+        # 3.2
+        "detect": {"sheet": ctx["shape"]["sheet"], "header_row": ctx["shape"]["header_row"],
+                   "sheets": ctx["shape"]["sheets"], "headers": ctx["headers"],
+                   "data_rows": len(ctx["records"]), "usable_rows": len(ctx["mapped"]),
+                   "footer": ctx["footer"], "footer_rows_dropped": len(ctx["footers"]),
+                   "identity_fields": ctx["identity_fields"]},
+        # 3.3
+        "columns": proposal, "money_columns": ctx["money_columns"],
+        "provenances": list(_intake.PROVENANCES),
+        # 3.4
+        "sign": {**_intake.sign_panels(ctx["kept"]), "answer": ctx["answer"],
+                 "stored_answer": ctx["stored_answer"], "stored": ctx["stored_meta"],
+                 "convention": ctx["conv_name"], "answered": bool(ctx["conv_name"])},
+        # 3.5 / 3.6
+        "labels": ctx["labels"], "buckets": _intake.BUCKETS, "bucket_labels": _intake.BUCKET_LABELS,
+        "unassigned": _intake.unassigned_labels(ctx["labels"], ctx["assignments"]),
+        "assignments": ctx["assignments"], "rules_source": ctx["rules_source"],
+        "house_defaults": ctx["house_defaults"],
+        # 3.7 (surfaced; resolution is the shared resolver's job — see index §30)
+        "identity": ctx["identity"],
+        # period
+        "period": ctx["period"],
+        # 3.8 preview (in memory; the commit re-reads the landed rows)
+        "verify": {"basis": "preview — computed from the parsed file; the commit re-reads the landed rows",
+                   "totals": ctx["totals"], "tie": ctx["tie"], "banners": ctx["banners"],
+                   "rows_in_file": len(ctx["records"]), "rows_usable": len(ctx["mapped"]),
+                   "footer_rows": len(ctx["footers"]),
+                   "rows_to_land": len(ctx["kept"]), "ignored_money_columns":
+                       [m for m in ctx["money_columns"] if not m["is_amount"]]},
+    }
+
+
+@router.get("/onboarding/intake/state")
+def onboarding_intake_state(instance_key: str = "", org_id: str = ORG_ID):
+    """The rail (design §0.2) — a projection of mig 1007's rows — plus this org's carriers for the
+    3.1 picker and the intake's vocabulary. Degrades honestly without the migration."""
+    require_org(org_id)
+    client = sb()
+    out = _intake_state_payload(client, org_id, instance_key or None)
+    carriers = (client.schema("commcalc").table("carrier").select("id,name,code,is_default")
+                .eq("org_id", org_id).order("name").execute().data) or []
+    out.update({"carriers": carriers, "source_kinds": [{"value": k, "label": _intake.SOURCE_KIND_LABELS[k],
+                                                        "built": k in _intake.SOURCE_KIND_TARGET}
+                                                       for k in _intake.SOURCE_KINDS],
+                "statement_type_default": _intake.STATEMENT_TYPE_DEFAULT,
+                "sign_question": _intake.SIGN_QUESTION,
+                "buckets": _intake.BUCKETS, "bucket_labels": _intake.BUCKET_LABELS})
+    return out
+
+
+class OnboardingIntakeStateIn(LaxModel):
+    instance_key: str = ""
+    step: Any = None
+    status: Any = None
+    payload: Any = None
+    by: Any = None
+
+
+@router.put("/onboarding/intake/state")
+def onboarding_intake_put_state(body: OnboardingIntakeStateIn, org_id: str = ORG_ID):
+    """Every screen writes its payload on change and the step on navigation (design §4). The
+    payload is MERGED per key, never replaced wholesale, so one step cannot erase another's."""
+    require_org(org_id)
+    ik = (body.instance_key or "").strip()
+    if not ik:
+        raise HTTPException(400, "instance_key is required")
+    step = str(body.step or "").strip() or None
+    if step and step not in _intake.STEP_KEYS:
+        raise HTTPException(400, "step must be one of " + ", ".join(_intake.STEP_KEYS))
+    status = str(body.status or "").strip() or None
+    if status and status not in _intake.STATUSES:
+        raise HTTPException(400, "status must be one of " + ", ".join(_intake.STATUSES))
+    patch = body.payload if isinstance(body.payload, dict) else None
+    client = sb()
+    res = _intake_save_state(client, org_id, ik, step=step, status=status, payload_patch=patch,
+                             by=str(body.by or "") or None)
+    out = _intake_state_payload(client, org_id, ik)
+    out["save"] = res
+    return out
+
+
+@router.post("/onboarding/intake/analyze")
+async def onboarding_intake_analyze(
+    file: UploadFile = File(...),
+    source_kind: str = Form("commission"),
+    carrier_id: str = Form(""),
+    statement_type: str = Form(""),
+    column_map: str = Form(""),
+    sign_answer: str = Form(""),
+    assignments: str = Form(""),
+    typed_total: str = Form(""),
+    sheet: str = Form(""),
+    header_row: str = Form(""),
+    footer: str = Form("auto"),
+    org_id: str = ORG_ID,
+):
+    """READ-ONLY: everything steps 3.2–3.8 need in one payload. Saves nothing (the page persists its
+    own choices through PUT /state). `column_map`, `sign_answer`, `assignments` and `typed_total`
+    are what the person has chosen so far; each re-call re-derives the preview from them."""
+    require_org(org_id)
+    contents = await file.read()
+    client = sb()
+    ctx = _intake_prepare(client, org_id, contents, getattr(file, "filename", ""), source_kind, carrier_id,
+                          statement_type, column_map, sign_answer, assignments, typed_total,
+                          sheet=sheet, header_row=header_row, footer=footer)
+    out = _intake_payload(ctx)
+    out["state"] = _intake_state_payload(client, org_id, ctx["instance_key"])
+    out["filename"] = getattr(file, "filename", None)
+    return out
+
+
+def _intake_reread(client, org_id, source_report, period):
+    """Every ledger row this commit owns, RE-READ from the database in pages (the client caps a
+    single read at 1000 rows — a 1,203-line statement would otherwise 'verify' short). Origin-scoped
+    to 'file' once mig 251 is present, exactly as the landing wipe is."""
+    origin_ok = _ledger_origin_ready(client, org_id)
+    rows, lo = [], 0
+    while True:
+        q = (client.schema("commcalc").table("commission_ledger")
+             .select("category,payout_total,raw_amount,product_name,order_type")
+             .eq("org_id", org_id).eq("source_report", source_report).eq("period", period))
+        if origin_ok:
+            q = q.eq("origin", ledger_ma_sync.ORIGIN_FILE)
+        page = (q.range(lo, lo + _INTAKE_REREAD_PAGE - 1).execute().data) or []
+        rows.extend(page)
+        if len(page) < _INTAKE_REREAD_PAGE:
+            break
+        lo += _INTAKE_REREAD_PAGE
+    return rows
+
+
+@router.post("/onboarding/intake/commit")
+async def onboarding_intake_commit(
+    file: UploadFile = File(...),
+    source_kind: str = Form("commission"),
+    carrier_id: str = Form(""),
+    statement_type: str = Form(""),
+    period: str = Form(""),
+    column_map: str = Form(""),
+    sign_answer: str = Form(""),
+    assignments: str = Form(""),
+    attestation: str = Form(""),
+    typed_total: str = Form(""),
+    verified_by: str = Form(""),
+    sheet: str = Form(""),
+    header_row: str = Form(""),
+    footer: str = Form("auto"),
+    org_id: str = ORG_ID,
+):
+    """3.9 — the SAVE. In order: (a) the confirmed column map through POST /column-mapping's own
+    function, carrier-scoped; (b) the 3.4 answer as `sign_convention` on the amount row; (c) the
+    label→bucket rules to commission_category_map under this tenant's source_report; (d) the import
+    through the ledger's own landing path; (e) the landed rows RE-READ and re-totalled. REFUSED (400)
+    with the reason when 3.4 is unanswered, a label is unassigned, or the difference is non-zero
+    without an attestation carrying a reason. Never reports success unless the re-read count and the
+    re-read totals match what was shown."""
+    require_org(org_id)
+    per = (period or "").strip()
+    if not per:
+        raise HTTPException(400, "period is required (e.g. 'August 2026') — it is the slice this statement owns")
+    contents = await file.read()
+    client = sb()
+    ctx = _intake_prepare(client, org_id, contents, getattr(file, "filename", ""), source_kind, carrier_id,
+                          statement_type, column_map, sign_answer, assignments, typed_total,
+                          sheet=sheet, header_row=header_row, footer=footer)
+    att = _intake_json(attestation, "attestation", {}) or {}
+    if not isinstance(att, dict):
+        raise HTTPException(400, "attestation must be a JSON object {reason}")
+    refusals = _intake.commit_refusals(ctx["answer"], ctx["labels"], ctx["assignments"], ctx["tie"], att)
+    if refusals:
+        raise HTTPException(400, "Not committed — " + " | ".join(refusals))
+    carrier, conv_name, source_report = ctx["carrier"], ctx["conv_name"], ctx["source_report"]
+    who = (verified_by or "").strip() or None
+    # (a)+(b) THE MAPPING, through the one writer. The raw_amount row carries the 3.4 answer.
+    saved_fields = []
+    for p in ctx["proposal"]:
+        if not p.get("column"):
+            continue
+        kw = {"report_key": _INTAKE_REPORT_KEY, "target_field": p["target_field"], "source_header": p["column"],
+              "transform": p.get("transform") or "text", "carrier_id": carrier["id"], "is_active": True}
+        if p["target_field"] == _intake.AMOUNT_FIELD:
+            kw["sign_convention"] = conv_name
+        try:
+            upsert_column_mapping(ColumnMappingIn(**kw), org_id)
+        except HTTPException:
+            raise
+        except Exception as e:
+            msg = str(e)
+            if "sign_convention" in msg and p["target_field"] == _intake.AMOUNT_FIELD:
+                raise HTTPException(400, f"The sign answer '{ctx['answer']}' could not be saved as "
+                                         f"'{conv_name}' — apply migration {_INTAKE_SIGN_MIGRATION} first. [{msg[:160]}]")
+            raise HTTPException(400, f"Saving the column map for '{p['target_field']}' failed: {msg[:200]}")
+        saved_fields.append(p["target_field"])
+    # the save guarantee for the mapping: read it back and check it says what was confirmed
+    reloaded = [r for r in column_mapping.load_rules(client, org_id, _INTAKE_REPORT_KEY, carrier["id"])
+                if r.get("carrier_id") == carrier["id"]]
+    back = {r["target_field"]: r for r in reloaded}
+    wrong = [tf for tf in saved_fields
+             if str((back.get(tf) or {}).get("source_header") or "").strip().lower()
+             != next(p["column"] for p in ctx["proposal"] if p["target_field"] == tf).strip().lower()]
+    if wrong:
+        raise HTTPException(400, "The column map did not save for: " + ", ".join(wrong)
+                                 + " — nothing was imported.")
+    conv, conv_meta = commission_ledger.convention_from_mapping(reloaded)
+    if conv_meta.get("declared") != conv_name:
+        raise HTTPException(400, f"The sign answer did not save on the amount column (stored: "
+                                 f"{conv_meta.get('declared') or 'nothing'}; wanted {conv_name}). Apply "
+                                 f"migrations 1006 and {_INTAKE_SIGN_MIGRATION}, then commit again. Nothing was imported.")
+    # (c) THE BUCKET RULES, through the Category Map's own writer, under this tenant's source_report
+    for rule in ctx["preview_rules"]:
+        try:
+            upsert_commission_category_map(CommissionCategoryMapIn(**rule), org_id)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(400, f"Saving the bucket rule for '{rule['pattern']}' failed: {str(e)[:200]}")
+    cat_rules, rules_source = commission_ledger.load_rules_meta(client, org_id, source_report)
+    if rules_source != commission_ledger.RULES_TENANT:
+        raise HTTPException(400, "The bucket rules did not save (the rule-set reads back empty) — nothing was imported.")
+    cat_rules, _class_meta = ma_class_wiring.ledger_rules_with_class(client, org_id, source_report, cat_rules)
+    # (d) BUILD from the confirmed map + the rules READ BACK, land through the import's own path
+    base = {"org_id": org_id, "source_report": source_report, "period": per}
+    rows = [commission_ledger.build_row(src, base, cat_rules, conv) for src in ctx["kept"]]
+    expected = _intake.bucket_totals(rows)
+    expected_tie = _intake.tie_out(expected, ctx["footer"]["file_total_raw"], conv["payout_sign"], typed_total)
+    if expected_tie.get("match") is False and not str(att.get("reason") or "").strip():
+        raise HTTPException(400, f"With the rules as saved, our total {expected_tie['our_total']:,.2f} differs "
+                                 f"from the file's {expected_tie['file_total']:,.2f} by {expected_tie['difference']:,.2f} "
+                                 "— nothing was imported.")
+    saved = _ledger_land_rows(client, org_id, rows, source_report, per,
+                              filename=getattr(file, "filename", None), source="onboarding-intake")
+    # (e) RE-READ what landed. What we show is what is in the table, not what was in memory.
+    landed = _intake_reread(client, org_id, source_report, per)
+    totals = _intake.bucket_totals(landed)
+    tie = _intake.tie_out(totals, ctx["footer"]["file_total_raw"], conv["payout_sign"], typed_total)
+    count_ok = len(landed) == len(rows) == saved
+    tie_ok = bool(tie.get("match")) or bool(str(att.get("reason") or "").strip())
+    same_as_shown = abs(_intake.money(tie["our_total"] - expected_tie["our_total"])) < 0.005
+    ok = count_ok and tie_ok and same_as_shown
+    verified_numbers = {
+        "basis": "re-read from commcalc.commission_ledger after landing",
+        "rows_in_file": len(ctx["records"]), "rows_usable": len(ctx["mapped"]),
+        "footer_rows_dropped": len(ctx["footers"]), "rows_built": len(rows), "rows_landed": len(landed),
+        "rows_inserted": saved, "totals": totals, "tie": tie, "shown_before_commit": expected_tie,
+        "ignored_money_columns": [m for m in ctx["money_columns"] if not m["is_amount"]],
+        "attestation": ({"reason": att.get("reason"), "by": who, "at": _intake.now_iso()}
+                        if str(att.get("reason") or "").strip() else None),
+        "sign_convention": conv_name, "source_report": source_report, "period": per,
+        "confirmed_by": who, "confirmed_at": _intake.now_iso(),
+    }
+    problems = []
+    if not count_ok:
+        problems.append(f"rows landed {len(landed)} ≠ rows built {len(rows)} (inserted {saved})")
+    if not tie_ok:
+        problems.append(f"re-read difference {tie.get('difference')}")
+    if not same_as_shown:
+        problems.append(f"re-read total {tie['our_total']} ≠ shown {expected_tie['our_total']}")
+    state = _intake_save_state(
+        client, org_id, ctx["instance_key"], step=_intake.STEP_KEYS[-1],
+        status=_intake.STATUS_VERIFIED if ok else _intake.STATUS_NEEDS_INPUT,
+        payload_patch={"period": per, "sign_answer": ctx["answer"], "column_map":
+                       {p["target_field"]: p["column"] for p in ctx["proposal"] if p.get("column")},
+                       "assignments": ctx["assignments"], "statement_type": ctx["statement_type"],
+                       "filename": getattr(file, "filename", None)},
+        verified_numbers=verified_numbers, verified_by=who,
+        blocking_reason=("; ".join(problems) if problems else ""), by=who)
+    return {"ok": ok, "problems": problems, "saved": saved, "source_report": source_report, "period": per,
+            "carrier": {"id": carrier["id"], "name": carrier.get("name"), "code": ctx["carrier_code"]},
+            "instance_key": ctx["instance_key"], "mapping_saved": saved_fields,
+            "sign_convention": conv_name, "convention_meta": conv_meta,
+            "rules_saved": len(ctx["preview_rules"]), "rules_source": rules_source,
+            "verified_numbers": verified_numbers, "state": state,
+            "summary": commission_ledger.summarize(rows, rules=cat_rules, conv=conv)}
 
 
 def _ledger_class_wiring_meta(client, org_id, source_report):
