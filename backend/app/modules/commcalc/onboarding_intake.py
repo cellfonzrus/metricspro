@@ -145,15 +145,36 @@ CONVENTION_TO_SIGN_ANSWER = {
     CL.SIGN_PAYOUT_NEGATIVE: SIGN_NEGATIVE,
 }
 
-BUCKETS = list(CL.CATEGORIES)
-BUCKET_LABELS = {c: CL.CATEGORY_LABELS[c] for c in CL.CATEGORIES}
+# THE BUCKETS ARE THE REGISTRY (commcalc.commission_bucket, mig 1009; owner 2026-09-20 "the user should
+# be able to define the buckets"). Every function below that needs them takes `buckets` — the org's
+# merged list from commission_ledger.load_buckets — and falls back to the built-in house defaults
+# (the mirror of the 1009 seed) only when none is passed. Nothing here names a bucket key.
+BUCKETS = CL.bucket_keys()                       # house-default keys — the FALLBACK, never the truth
+BUCKET_LABELS = {b["key"]: b["label"] for b in CL.builtin_buckets()}
 UNASSIGNED = "unassigned"
 # A label whose TEXT says it is money coming back (design §3.6). Neutral words, no carrier vocabulary.
 REVERSAL_WORDS = ("chargeback", "charge back", "charge-back", "deact", "reversal", "clawback",
                   "claw back", "claw-back")
-# The neutral keyword hints — the SAME patterns commission_ledger ships as its built-in defaults, so
-# the guess vocabulary lives in one place. They are offered as a 'guess', never applied silently.
-KEYWORD_HINTS = [(pat, cat) for (_mf, _op, pat, cat, _sr, _pr) in CL.DEFAULT_RULES]
+# The neutral keyword hints are the registry's own `hint_words` per bucket (house defaults seeded by
+# mig 1009, editable per tenant) — never a dict keyed by bucket in code. Offered as a 'guess', never
+# applied silently. This is the house default rendered in the old (pattern, category) shape for any
+# caller that still reads it.
+KEYWORD_HINTS = [(w, b["key"]) for b in CL.builtin_buckets() for w in b["hint_words"]]
+# What a footer's LABEL cell may say (design §3.2: "last row whose label contains total/grand"): the
+# WHOLE cell is the word — "Total", "Grand total", "Totals:", "Sub-total" — case-insensitive. Deliberately
+# not a substring test: a carrier or product whose NAME contains the word must never be dropped as a
+# footer (RULE TWO: no vocabulary of theirs is assumed here). A section SUBTOTAL is a footer too but
+# never the file's total.
+TOTAL_WORDS_RE = re.compile(r"^\s*(grand\s+)?(sub[- ]?)?totals?\s*[:.]?\s*$", re.I)
+SUBTOTAL_RE = re.compile(r"^\s*sub[- ]?totals?\s*[:.]?\s*$", re.I)
+
+
+def bucket_keys(buckets=None):
+    return CL.bucket_keys(buckets)
+
+
+def bucket_labels(buckets=None):
+    return {b["key"]: b["label"] for b in CL.active_buckets(buckets)}
 
 LABEL_FIELD, SUBLABEL_FIELD, AMOUNT_FIELD = "product_name", "order_type", CL.AMOUNT_FIELD
 BLANK_LABEL = "(blank)"
@@ -454,26 +475,71 @@ def usable(src):
     return bool(src.get(LABEL_FIELD) or src.get(AMOUNT_FIELD) or src.get(SUBLABEL_FIELD))
 
 
+FOOTER_BLANK_IDENTITY = "blank_identity"      # rule 1 — mig 1004: every identity field blank
+FOOTER_SUM_MATCH = "sum_match"                # rule 2 — design §3.2: no label, amount = Σ of every other row
+FOOTER_TOTAL_WORD = "total_word"              # rule 3 — design §3.2: the label cell says total / grand total
+FOOTER_SUBTOTAL_WORD = "subtotal_word"        # rule 3b — a section subtotal: a footer, never the file's total
+
+
+def _label_says_total(m):
+    """'grand_total' | 'subtotal' | None from the label / sub-label cells (whole words, any case)."""
+    for f in (LABEL_FIELD, SUBLABEL_FIELD):
+        t = _s(m.get(f))
+        if t and TOTAL_WORDS_RE.search(t):
+            return "subtotal" if SUBTOTAL_RE.search(t) else "grand_total"
+    return None
+
+
 def split_footer(mapped, identity_fields, mapped_fields=None, amount_field=AMOUNT_FIELD):
-    """(kept, footers) — the file's own TOTAL rows, found by the mig-1004 shape rule
-    (`feed_shape.is_footer_row`: every identity field blank, money present) with the identity list
-    the router takes from `column_mapping.identity_fields`. Not a second derivation: the same
-    predicate `column_mapping.drop_footer_rows` applies, except the rows are RETURNED so the value
-    the file claims can be shown and compared (design §3.2 / §3.8).
+    """(kept, footers) — the file's own TOTAL rows, by THREE rules, in order (design §3.2):
+
+      1. the mig-1004 shape rule (`feed_shape.is_footer_row`: every identity field blank, money
+         present) with the identity list the router takes from `column_mapping.identity_fields` — the
+         same predicate `column_mapping.drop_footer_rows` applies, except the rows are RETURNED so the
+         value the file claims can be shown and compared;
+      2. a label / sub-label cell that says `total` / `grand total` (or `subtotal` — a section
+         subtotal is a footer too, flagged so it is never taken for the file's total);
+      3. a row with NO label at all whose amount equals the sum of EVERY other remaining row to the
+         cent — the file's total, whatever else the row carries (a statement that stamps the store or
+         the run date on its total line defeated rule 1: owner 2026-09-20, the total appeared in 3.6 as
+         a "(blank)" label).
+
+    Each footer says which rule caught it (`rule`) and whether it is the grand total or a subtotal.
 
     `mapped_fields` (the target fields that actually have a column) narrows the identity list to
     the fields the file CAN populate: before the person has confirmed a label/store/date column,
-    every row's identity is blank and the rule would call the whole file a footer. With no mapped
-    identity field the rule cannot fire and nothing is dropped — the summary says so."""
-    kept, footers = [], []
+    every row's identity is blank and rule 1 would call the whole file a footer; rule 3 likewise
+    needs the LABEL column mapped (else every label is blank). With nothing mapped no rule can fire
+    and nothing is dropped — the summary says so."""
     ident = list(identity_fields or [])
+    label_mapped = True
     if mapped_fields is not None:
-        ident = [f for f in ident if f in set(mapped_fields)]
+        mf = set(mapped_fields)
+        ident = [f for f in ident if f in mf]
+        label_mapped = LABEL_FIELD in mf or SUBLABEL_FIELD in mf
+    footers, candidates = [], []
     for i, m in enumerate(mapped or []):
+        amt = money(_sf(m.get(amount_field)))
         if ident and is_footer_row(m, ident, ()):
-            footers.append({"row": i, "raw_amount": money(_sf(m.get(amount_field)))})
-        else:
-            kept.append(m)
+            footers.append({"row": i, "raw_amount": amt, "rule": FOOTER_BLANK_IDENTITY, "kind": "grand_total"})
+            continue
+        said = _label_says_total(m) if label_mapped else None
+        if said:
+            footers.append({"row": i, "raw_amount": amt, "kind": said,
+                            "rule": FOOTER_SUBTOTAL_WORD if said == "subtotal" else FOOTER_TOTAL_WORD})
+            continue
+        candidates.append((i, m, amt))
+    kept = []
+    if label_mapped:
+        total_all = money(sum(a for (_i, _m, a) in candidates))
+        for (i, m, amt) in candidates:
+            if label_of(m) == BLANK_LABEL and amt != 0.0 and money(total_all - amt) == amt:
+                footers.append({"row": i, "raw_amount": amt, "rule": FOOTER_SUM_MATCH, "kind": "grand_total"})
+            else:
+                kept.append(m)
+    else:
+        kept = [m for (_i, m, _a) in candidates]
+    footers.sort(key=lambda f: f["row"])
     return kept, footers
 
 
@@ -481,7 +547,8 @@ def footer_summary(kept, footers, identity_mapped=True, amount_field=AMOUNT_FIEL
     """What the footer says, and whether it equals the other lines' own sum — the number the verify
     step compares against. `file_total_raw` is None when the file states no total (the tenant may
     then type one; recorded as 'typed'), or when no identity column is mapped yet (the rule cannot
-    tell a total from a line until it knows which columns identify a line)."""
+    tell a total from a line until it knows which columns identify a line). Section subtotals are
+    listed but never summed into the file's total when a grand-total row exists."""
     lines_sum = money(sum(_sf(m.get(amount_field)) for m in kept or []))
     if not identity_mapped:
         return {"detected": False, "rows": [], "file_total_raw": None, "lines_sum_raw": lines_sum,
@@ -489,10 +556,17 @@ def footer_summary(kept, footers, identity_mapped=True, amount_field=AMOUNT_FIEL
     if not footers:
         return {"detected": False, "rows": [], "file_total_raw": None, "lines_sum_raw": lines_sum,
                 "equals_lines_sum": None, "basis": "no total row detected — every identity field blank on no row"}
-    total = money(sum(f["raw_amount"] for f in footers))
+    grand = [f for f in footers if f.get("kind", "grand_total") != "subtotal"]
+    basis_rows = grand or footers
+    total = money(sum(f["raw_amount"] for f in basis_rows))
+    rules = sorted({f.get("rule", FOOTER_BLANK_IDENTITY) for f in basis_rows})
+    basis = {FOOTER_BLANK_IDENTITY: "every identity field blank and an amount (mig-1004 shape rule)",
+             FOOTER_SUM_MATCH: "no label, and the amount equals the sum of every other row to the cent",
+             FOOTER_TOTAL_WORD: "the label cell says total / grand total",
+             FOOTER_SUBTOTAL_WORD: "section subtotal rows (no grand-total row found; their sum is the file's total)"}
     return {"detected": True, "rows": footers, "file_total_raw": total, "lines_sum_raw": lines_sum,
             "equals_lines_sum": money(total - lines_sum) == 0.0,
-            "basis": "row(s) with every identity field blank and an amount (mig-1004 shape rule)"}
+            "basis": "row(s) found by: " + "; ".join(basis[r] for r in rules)}
 
 
 # ── 3.4 the sign question ───────────────────────────────────────────────────────────────────────
@@ -584,12 +658,13 @@ def reversal_preflag(label_row, payout_sign=None):
 
 
 # ── 3.6 bucket suggestions ──────────────────────────────────────────────────────────────────────
-def _rule_hits(label, sub_labels, rules, label_field=LABEL_FIELD):
+def _rule_hits(label, sub_labels, rules, label_field=LABEL_FIELD, keys=None):
     """The category of the first rule (ascending priority) that matches this label under the
     ledger's own matcher semantics (equals / contains on product_name or order_type)."""
+    keys = set(keys if keys is not None else BUCKETS)
     for r in sorted(rules or [], key=lambda r: (r.get("priority") if r.get("priority") is not None else 100)):
         cat = _s(r.get("category")).lower()
-        if cat not in BUCKETS:
+        if cat not in keys:
             continue
         pat = _s(r.get("pattern")).lower()
         op = _s(r.get("match_op")) or "contains"
@@ -607,39 +682,81 @@ def _rule_hits(label, sub_labels, rules, label_field=LABEL_FIELD):
     return None
 
 
-def _hint(text):
+def _hint_hits(text, buckets):
+    """Every (bucket key, kind, matched word) a text's words hit across the ACTIVE registry buckets'
+    `hint_words`. Whole-word-ish containment, lower-cased; the longest matched word is the most
+    specific hit."""
     t = _s(text).lower()
-    for pat, cat in KEYWORD_HINTS:
-        if pat.lower() in t and cat in BUCKETS:
-            return cat
-    return None
+    hits = []
+    for b in CL.active_buckets(buckets):
+        for w in b.get("hint_words") or []:
+            toks = [x for x in re.split(r"[^a-z0-9]+", _s(w).lower()) if x]
+            if not toks:
+                continue
+            # a hint starts on a word boundary and may be a STEM: 'upgrade' hits 'Upgrades', 'deact'
+            # hits 'Deactivations', 'add-a-line' hits 'Add-A-Line' — but 'fee' never hits 'coffee'
+            pat = r"(?<![a-z0-9])" + r"[^a-z0-9]+".join(re.escape(x) for x in toks)
+            if re.search(pat, t):
+                hits.append((b["key"], b.get("kind"), " ".join(toks)))
+    return hits
 
 
-def keyword_guess(label, sub_labels=()):
-    """The neutral keyword hint for a label — the ledger's own built-in vocabulary — or None. When
+def _best_hit(hits, prefer_deduction=False):
+    """The bucket a set of hits elects: the LONGEST matched word wins (most specific); on a tie a
+    deduction-kind bucket wins (money going out is the rarer, more telling signal), then registry
+    order as given. `prefer_deduction` (the sign-mix tiebreak: a label pointing AGAINST the earned
+    direction, or whose text says reversal) elects the best DEDUCTION hit when there is one."""
+    if not hits:
+        return None
+    if prefer_deduction:
+        ded = [h for h in hits if h[1] == CL.KIND_DEDUCTION]
+        if ded:
+            hits = ded
+    ranked = sorted(enumerate(hits), key=lambda ih: (-len(ih[1][2]), ih[1][1] != CL.KIND_DEDUCTION, ih[0]))
+    return ranked[0][1][0]
+
+
+def _hint(text, buckets=None, prefer_deduction=False):
+    return _best_hit(_hint_hits(text, buckets), prefer_deduction)
+
+
+def keyword_guess(label, sub_labels=(), buckets=None, prefer_deduction=False):
+    """The neutral keyword hint for a label — the registry buckets' own hint words — or None. When
     the label itself says nothing, its sub-labels are consulted and a hint is offered only when
     every hinted sub-label agrees (a section that mixes 'Commission' and 'Spiff' lines is nobody's
     guess to make)."""
-    b = _hint(label)
+    b = _hint(label, buckets, prefer_deduction)
     if b:
         return b
-    hints = {h for h in (_hint(s) for s in sub_labels or ()) if h}
+    hints = {h for h in (_hint(s, buckets, prefer_deduction) for s in sub_labels or ()) if h}
     return hints.pop() if len(hints) == 1 else None
 
 
-def suggest_buckets(labels, tenant_rules=None, house_rules=None, carrier_label=""):
+def suggest_buckets(labels, tenant_rules=None, house_rules=None, carrier_label="", buckets=None):
     """Attach {bucket, provenance} to each label row: the tenant's own earlier rules for THIS
     source_report ('your earlier choice') → the house org's rules for THIS carrier code ('house
-    default for <carrier>') → a keyword hint ('guess') → none (stays in the Unassigned tray)."""
+    default for <carrier>') → a keyword hint from the registry's hint words ('guess') → none (stays in
+    the Unassigned tray). The sign-mix tiebreak: a label flagged as a reversal (its text, or every
+    line pointing against the earned direction) whose words match an EARNED bucket is instead
+    offered the deduction bucket its words hit, else the first active deduction bucket — as a guess
+    the person confirms, never applied. A label that reads as the footer's "(blank)" is never
+    offered a bucket."""
+    keys = bucket_keys(buckets)
+    ded_first = next((b["key"] for b in CL.active_buckets(buckets) if b.get("kind") == CL.KIND_DEDUCTION), None)
     out = []
     for a in labels or []:
         subs = [s["sub_label"] for s in a.get("sub_labels") or []]
         lf = a.get("match_field") or LABEL_FIELD
-        b, prov = _rule_hits(a["label"], subs, tenant_rules, lf), PROV_EARLIER
-        if not b:
-            b, prov = _rule_hits(a["label"], subs, house_rules, lf), PROV_HOUSE
-        if not b:
-            b, prov = keyword_guess(a["label"], subs), PROV_GUESS
+        b, prov = None, None
+        if a.get("label") != BLANK_LABEL:
+            b, prov = _rule_hits(a["label"], subs, tenant_rules, lf, keys), PROV_EARLIER
+            if not b:
+                b, prov = _rule_hits(a["label"], subs, house_rules, lf, keys), PROV_HOUSE
+            if not b:
+                rev = bool(a.get("reversal_flag"))
+                b, prov = keyword_guess(a["label"], subs, buckets, prefer_deduction=rev), PROV_GUESS
+                if rev and b and CL.bucket_kind(b, buckets) == CL.KIND_EARNED and ded_first:
+                    b = ded_first
         row = dict(a)
         row["bucket"] = b or UNASSIGNED
         row["provenance"] = prov if b else None
@@ -649,15 +766,29 @@ def suggest_buckets(labels, tenant_rules=None, house_rules=None, carrier_label="
     return out
 
 
-def rules_for_assignments(source_report, assignments):
+def blank_label_issue(labels):
+    """The lines that carry NO label and money (not the footer — split_footer already took that):
+    {count, sum_raw} or None. Surfaced as a red banner at 3.6 ('check the label column at 3.3'),
+    never as an assignable card."""
+    for a in labels or []:
+        if a.get("label") == BLANK_LABEL and (a.get("count") or 0) - (a.get("zeros") or 0) > 0:
+            return {"count": (a.get("count") or 0) - (a.get("zeros") or 0), "sum_raw": money(a.get("sum_raw")),
+                    "message": (f"{(a.get('count') or 0) - (a.get('zeros') or 0)} line(s) carry no label "
+                                f"({money(a.get('sum_raw')):,.2f}) — check the label column at 3.3; they cannot be bucketed.")}
+    return None
+
+
+def rules_for_assignments(source_report, assignments, buckets=None):
     """The commission_category_map rows an assignment list becomes — one `equals` rule per label on
     the field the label came from, ascending priority in tray order. `sign_rule` stays the default:
     under a NETTING convention a reversal is offered to the rules by direction, so it books −|amt|
-    into the bucket it reverses; 'any' would be the abs() inflation the sign proof forbids."""
+    into the bucket it reverses; 'any' would be the abs() inflation the sign proof forbids. A rule
+    targeting a DEDUCTION bucket is offered a line either way by the classifier itself."""
+    keys = set(bucket_keys(buckets))
     rules, seen = [], set()
     for i, a in enumerate(assignments or []):
         label, bucket = _s(a.get("label")), _s(a.get("bucket")).lower()
-        if not label or label == BLANK_LABEL or bucket not in BUCKETS:
+        if not label or label == BLANK_LABEL or bucket not in keys:
             continue
         field = _s(a.get("match_field")) or LABEL_FIELD
         key = (field, label.lower())
@@ -670,10 +801,13 @@ def rules_for_assignments(source_report, assignments):
     return rules
 
 
-def unassigned_labels(labels, assignments):
-    """Every label in the file that the assignment list does not put in one of the five buckets."""
+def unassigned_labels(labels, assignments, buckets=None):
+    """Every label in the file that the assignment list does not put in an ACTIVE registry bucket.
+    The footer's "(blank)" is not a label and is never listed here — `blank_label_issue` reports it."""
+    keys = set(bucket_keys(buckets))
     placed = {_s(a.get("label")): _s(a.get("bucket")).lower() for a in assignments or []}
-    return [a["label"] for a in labels or [] if placed.get(a["label"]) not in BUCKETS]
+    return [a["label"] for a in labels or []
+            if a["label"] != BLANK_LABEL and placed.get(a["label"]) not in keys]
 
 
 # ── 3.7 identity strings (surfaced; resolution is the shared resolver's job) ────────────────────
@@ -718,34 +852,53 @@ def period_proposal(kept, date_field="trans_date"):
 
 
 # ── 3.8 totals + tie-out ────────────────────────────────────────────────────────────────────────
-def bucket_totals(ledger_rows):
-    """gross / chargebacks / net per bucket from LEDGER rows (built or re-read — the same shape), plus
-    the unmapped ('other') and charge lines that keep a tie-out from closing. Never abs(): gross is
-    the Σ of positive bookings, chargebacks the Σ of negative bookings, net their sum."""
-    b = {c: {"gross": 0.0, "chargebacks": 0.0, "net": 0.0, "count": 0} for c in BUCKETS}
+def bucket_totals(ledger_rows, buckets=None):
+    """gross / chargebacks / net per ACTIVE registry bucket from LEDGER rows (built or re-read — the
+    same shape), plus the unmapped ('other') and charge lines that keep a tie-out from closing, and
+    the roll-up the owner asked for: `earned_total` (Σ net of the earned-kind buckets),
+    `deductions_total` (Σ net of the deduction-kind buckets, signed), `net_total` = their sum.
+    Never abs(): gross is the Σ of positive bookings, chargebacks the Σ of negative bookings, net
+    their sum — for a deduction bucket 'chargebacks' IS the deduction and 'gross' a refund of one.
+    A row filed under a key the registry no longer lists is summed under `unlisted` and counted in
+    net_total, so editing the registry can never make money vanish from the tie-out."""
+    reg = CL.active_buckets(buckets)
+    b = {x["key"]: {"gross": 0.0, "chargebacks": 0.0, "net": 0.0, "count": 0, "kind": x.get("kind"),
+                    "label": x["label"]} for x in reg}
     other = {"gross": 0.0, "chargebacks": 0.0, "net": 0.0, "count": 0}
+    unlisted = {"gross": 0.0, "chargebacks": 0.0, "net": 0.0, "count": 0, "keys": {}}
     charge_total, charge_count = 0.0, 0
     for r in ledger_rows or []:
         cat = _s(r.get("category"))
         amt = _sf(r.get("payout_total"))
-        tgt = b.get(cat) if cat in b else (other if cat == "other" else None)
-        if tgt is None:
+        if cat in b:
+            tgt = b[cat]
+        elif cat == "other":
+            tgt = other
+        elif cat == "charge" or not cat or cat == "exclude" or not r.get("is_payout", True):
             if cat == "charge":
                 charge_total += _sf(r.get("raw_amount"))
                 charge_count += 1
             continue
+        else:
+            tgt = unlisted
+            unlisted["keys"][cat] = unlisted["keys"].get(cat, 0) + 1
         tgt["count"] += 1
         tgt["net"] += amt
         if amt > 0:
             tgt["gross"] += amt
         elif amt < 0:
             tgt["chargebacks"] += amt
-    for d in list(b.values()) + [other]:
+    for d in list(b.values()) + [other, unlisted]:
         for k in ("gross", "chargebacks", "net"):
             d[k] = money(d[k])
-    net_total = money(sum(d["net"] for d in b.values()))
-    return {"buckets": b, "bucket_labels": BUCKET_LABELS, "net_total": net_total,
-            "other": other, "charges": {"total": money(charge_total), "count": charge_count},
+    earned_total = money(sum(d["net"] for d in b.values() if d["kind"] == CL.KIND_EARNED))
+    deductions_total = money(sum(d["net"] for d in b.values() if d["kind"] == CL.KIND_DEDUCTION))
+    net_total = money(sum(d["net"] for d in b.values()) + unlisted["net"])
+    return {"buckets": b, "bucket_labels": {k: v["label"] for k, v in b.items()},
+            "bucket_order": [x["key"] for x in reg],
+            "earned_total": earned_total, "deductions_total": deductions_total, "net_total": net_total,
+            "other": other, "unlisted": unlisted,
+            "charges": {"total": money(charge_total), "count": charge_count},
             "rows": len(ledger_rows or [])}
 
 
@@ -766,13 +919,19 @@ def tie_out(totals, file_total_raw, payout_sign, typed_total=None):
             "other_count": int(((totals or {}).get("other") or {}).get("count") or 0)}
 
 
-def sanity_banners(labels_assigned, totals, payout_sign):
-    """The yellow banners of design §3.4: the commission bucket netting negative, or a reversal-flagged
-    label netting POSITIVE, both mean the sign answer is probably the wrong way round."""
+def sanity_banners(labels_assigned, totals, payout_sign, buckets=None):
+    """The yellow banners of design §3.4: an EARNED bucket netting negative, a DEDUCTION bucket
+    netting positive, or a reversal-flagged label netting POSITIVE — each means the sign answer (or
+    the bucket's kind) is probably the wrong way round."""
     out = []
-    comm = ((totals or {}).get("buckets") or {}).get("commission") or {}
-    if comm.get("count") and comm.get("net", 0) < 0:
-        out.append("Your commission bucket nets NEGATIVE — re-check 3.4: your sign choice makes chargebacks positive.")
+    for key, b in ((totals or {}).get("buckets") or {}).items():
+        if not b.get("count"):
+            continue
+        if b.get("kind", CL.KIND_EARNED) == CL.KIND_EARNED and b.get("net", 0) < 0:
+            out.append(f"Your {b.get('label') or key} bucket nets NEGATIVE — re-check 3.4: your sign choice makes chargebacks positive.")
+        elif b.get("kind") == CL.KIND_DEDUCTION and b.get("net", 0) > 0:
+            out.append(f"Your {b.get('label') or key} bucket nets POSITIVE — a deduction should take money off the "
+                       "statement; re-check 3.4, or the bucket's kind on the Category → Bucket Map page.")
     for a in labels_assigned or []:
         if a.get("is_reversal") and payout_sign and a.get("sum_raw") is not None:
             if money(_sf(a.get("sum_raw")) * payout_sign) > 0:
@@ -781,17 +940,21 @@ def sanity_banners(labels_assigned, totals, payout_sign):
 
 
 # ── 3.9 commit gate ─────────────────────────────────────────────────────────────────────────────
-def commit_refusals(sign_answer, labels, assignments, tie, attestation=None):
-    """Why a commit is REFUSED (design §0.1, §5.3, §5.11): 3.4 unanswered; any label unassigned; a
-    non-zero difference (or nothing to compare against) without an explicit attestation carrying a
-    reason. An empty list means the commit may proceed."""
+def commit_refusals(sign_answer, labels, assignments, tie, attestation=None, buckets=None):
+    """Why a commit is REFUSED (design §0.1, §5.3, §5.11): 3.4 unanswered; any label unassigned;
+    lines that carry no label (they can never be bucketed — the label column is wrong); a non-zero
+    difference (or nothing to compare against) without an explicit attestation carrying a reason. An
+    empty list means the commit may proceed."""
     out = []
     if not convention_for_answer(sign_answer):
         out.append("3.4 is unanswered — say whether money you EARNED is positive or negative in this file.")
-    missing = unassigned_labels(labels, assignments)
+    missing = unassigned_labels(labels, assignments, buckets)
     if missing:
         out.append(f"{len(missing)} label(s) are still Unassigned: " + ", ".join(missing[:8])
                    + (" …" if len(missing) > 8 else ""))
+    blank = blank_label_issue(labels)
+    if blank:
+        out.append("3.6: " + blank["message"])
     att = attestation or {}
     att_ok = bool(_s(att.get("reason")))
     if tie is not None:
