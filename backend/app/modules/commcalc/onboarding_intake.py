@@ -45,6 +45,7 @@ import re
 from datetime import datetime
 
 from app.modules.commcalc import commission_ledger as CL
+from app.modules.commcalc import column_mapping as CM      # the layout → table registry (dereferenced, never copied)
 from app.modules.commcalc import multisheet
 from app.modules.commcalc.feed_shape import is_footer_row, period_fields
 
@@ -83,8 +84,12 @@ OTHER_KIND_HINTS = {
 # layout names WHICH feed table — see BILLPAY_FEED_TABLES). Free-text 'other' has NO destination
 # table; it is recorded as RECEIVED with its headers and row count, never faked into a table and never
 # dropped (see other_summary / the router's commit).
-SOURCE_KIND_TARGET = {"commission": CL.LEDGER_TABLE, "sales": "raw_sales", "pos": "raw_sales",
-                      "inventory": "inventory_aging_device",
+# The mapped kinds DEREFERENCE the layout registry (column_mapping.TABLE_MAP, the one home of "which
+# table a layout lands in" — 2026-09-20): a sales export → the line-level table, a POS by-product
+# export → its OWN product-level table (owner decision; mig 1011), inventory → the snapshot table.
+# Spelling a table here again was the second copy that let the two drift.
+SOURCE_KIND_TARGET = {"commission": CL.LEDGER_TABLE, "sales": CM.TABLE_MAP["sales"], "pos": CM.TABLE_MAP["pos_product_sales"],
+                      "inventory": CM.TABLE_MAP["pos_inventory_listing"],
                       "x_report": "pos_tender_summary", "merchant_payments": "merchant_settlement_day",
                       "bill_payments": "raw_ma_daily_tx"}
 # The processor bill-pay feed tables the mig-939 coverage recon resolves between
@@ -1617,16 +1622,22 @@ def runbook(instances):
                         # a matrix kind has no hand-made column map: its parser's own header rule is the mapping
                         "mapping_saved": bool(p.get("column_map")) or (kind in MATRIX_KINDS and i["status"] == STATUS_VERIFIED),
                         "status": i["status"]})
-    links = [{"label": "Sales report", "href": "/commcalc/sales-report", "screen": "sales_report"},
-             {"label": "Commissions", "href": "/commcalc/commission-ledger", "screen": "commission_ledger"}]
+    # the two links the owner asked for (design §2 Stage 5) — DEREFERENCED from the one consumers map
+    # (landing_identity.CONSUMERS, 2026-09-20): the Sales Report is the line-level table's reader, the
+    # Commission Ledger the ledger's. Each monthly line also carries "shows in" from the same map.
+    from app.modules.commcalc import landing_identity as _li
+    links = [{"label": "Sales report", "screen": "sales_report"}, {"label": "Commissions", "screen": "commission_ledger"}]
+    for m in monthly:
+        m["shows_in"] = [{"screen": c["screen"], "label": c["label"], "needs": list(c.get("needs") or []), "gate": bool(c.get("gate")), "why": c.get("why")}
+                         for c in _li.consumers_for_table(m["lands_in"])]
     # Stage C: the cross-check reports the intake feeds — listed beside the two links, never in them
     kinds = {i["kind"] for i in instances or []}
     reports = []
     if kinds & {"sales", "pos", "bill_payments"}:
-        reports.append({"label": "Bill Payments report", "href": "/commcalc/bill-payments", "screen": "bill_payments",
+        reports.append({"label": "Bill Payments report", "screen": "bill_payments",
                         "why": "bill payments extracted from the sales export beside the carrier's report, per store-day"})
     if "inventory" in kinds:
-        reports.append({"label": "Inventory vs Sold", "href": "/commcalc/inventory-sold-recon", "screen": "inventory_sold_recon",
+        reports.append({"label": "Inventory vs Sold", "screen": "inventory_sold_recon",
                         "why": "on-hand units that were sold, or activated but never rung out"})
     return {"links": links, "reports": reports,
             "monthly": monthly,

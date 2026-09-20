@@ -20,6 +20,9 @@ import { api, getActiveOrg } from '@/lib/client'
 import { reportKindsVisible, type ReportDeclaration, type ReportKindRow } from '@/lib/carrier-scope'
 
 export type FilenameRule = { pattern: string; upload_type: string; note?: string | null }
+/** One reader of a landing table — a ScreenLink screen key + the fields it needs (backend landing_identity.CONSUMERS). */
+export type Consumer = { screen: string; label: string; needs: string[]; gate: boolean; why?: string | null }
+export type ShowsIn = { table: string | null; consumers: Consumer[]; note: string | null }
 export type ReportKindsPayload = {
   registry_ready: boolean; migration: string
   declaration: ReportDeclaration
@@ -31,6 +34,19 @@ export type ReportKindsPayload = {
   standard: { pos_key: string; label: string; source: string; note?: string } | null
   caps: Record<string, boolean | null>
   all_keys: { key: string; label: string; applies_to_pos: string[]; applies_to_carrier: string[] }[]
+  /** the ONE consumers map, per landing table (landing_identity.CONSUMERS) — for a surface that knows a table, not a kind */
+  consumers?: Record<string, Consumer[]>
+}
+
+/**
+ * WHERE AN UPLOAD SHOWS UP (owner 2026-09-20: "it should be mentioned on the upload page where this
+ * upload will be reflected, with a link"). The answer rides the registry row (`shows_in`, derived by
+ * the backend from the row's landing table and the one consumers map); this selector finds the row
+ * for a registry key OR the upload route key a tile is posted through. Null = nothing known yet.
+ */
+export function showsInFor(visible: ReportKindRow[], keyOrUploadType: string): ShowsIn | null {
+  const row = visible.find(r => r.key === keyOrUploadType) || visible.find(r => (r.upload_types || []).includes(keyOrUploadType)) || null
+  return row?.shows_in || null
 }
 export type ReportSurface = 'intake' | 'upload' | 'wizard' | 'email_imports' | 'tiles'
 export const INTAKE_LANDINGS = ['sales', 'pos', 'inventory', 'commission', 'x_report', 'merchant_payments', 'bill_payments', 'other']
@@ -152,8 +168,12 @@ export function useReportKinds() {
     const kind = feedKindFor(visible, keyOrUploadType)
     return { kind, applies: feedApplies(loaded, error, kind) }
   }, [visible, loaded, error])
+  // showsIn: "this upload will show in …" for a registry key or an upload route key — the ONE way a
+  // surface learns a kind's consumers (rendered by components/ShowsIn.tsx; the lock pins every surface).
+  const showsIn = useCallback((keyOrUploadType: string): ShowsIn | null => showsInFor(visible, keyOrUploadType), [visible])
   return {
-    payload, loaded, error, reload, visible, uploadTypes, forSurface, allows, labelFor, byKey, feedFor,
+    payload, loaded, error, reload, visible, uploadTypes, forSurface, allows, labelFor, byKey, feedFor, showsIn,
+    consumers: payload?.consumers || {},
     declaration: payload?.declaration || null,
     filenameRules: payload?.filename_rules || [],
     standard: payload?.standard || null,

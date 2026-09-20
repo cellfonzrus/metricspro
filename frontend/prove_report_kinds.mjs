@@ -42,7 +42,7 @@ const cs = await loadModule('src/lib/carrier-scope.ts', 'carrier-scope.mjs')
 const rk = await loadModule('src/lib/report-kinds.ts', 'report-kinds.mjs', { "from '@/lib/carrier-scope'": "from './carrier-scope.mjs'" })
 const routes = await loadModule('src/app/(platform)/commcalc/_lib/uploadRoutes.ts', 'uploadRoutes.mjs')
 const { reportKindsVisible, kindApplies, kindCapOverride, posSquash } = cs
-const { kindsForSurface, uploadTypesOf, labelForUploadType, suggestRuleFrom, globToRegex, withheldSummary } = rk
+const { kindsForSurface, uploadTypesOf, labelForUploadType, suggestRuleFrom, globToRegex, withheldSummary, showsInFor } = rk
 for (const [n, f] of Object.entries({ reportKindsVisible, kindApplies, kindCapOverride, kindsForSurface, uploadTypesOf, labelForUploadType, suggestRuleFrom, globToRegex, withheldSummary }))
   must(typeof f === 'function', `${n} did not export a function`)
 
@@ -135,6 +135,14 @@ ck('uploadTypesOf keeps registry order and dedupes', uploadTypesOf(b2).indexOf('
 const ws = withheldSummary({ hidden: [{ key: 'a', label: 'A', why: 'x' }, { key: 'b', label: 'B', why: 'y' }], declaration: { pos: ['rq'], carriers: ['verizon'], reasons: [] } })
 ck('withheldSummary says what is withheld and what was declared', /2 report kinds not offered — you declared POS rq · carrier verizon/.test(ws), ws)
 ck('withheldSummary is empty when nothing is withheld', withheldSummary({ hidden: [], declaration: { pos: ['rq'], carriers: ['verizon'], reasons: [] } }) === '' && withheldSummary(null) === '')
+
+console.log('\nH. WHERE AN UPLOAD SHOWS UP — the one selector over rows the backend decorated (landing identity, 2026-09-20)')
+const decorated = vz.map(r => ({ ...r, shows_in: r.key === 'sales_imei_phone'
+  ? { table: 'raw_sales', consumers: [{ screen: 'exec_mtd', label: 'Executive MTD', needs: ['department'], gate: true }], note: null }
+  : r.key === 'x_report' ? { table: 'pos_tender_summary', consumers: [{ screen: 'closing_recon', label: 'Closing Reconciliation', needs: [], gate: false }], note: null } : undefined }))
+ck('showsInFor by registry key → that row\'s consumers', showsInFor(decorated, 'sales_imei_phone')?.consumers?.[0]?.screen === 'exec_mtd')
+ck('showsInFor by the upload route key a tile posts through (x_report) → the same row', showsInFor(decorated, 'x_report')?.table === 'pos_tender_summary')
+ck('showsInFor for an undecorated / unknown key → null (never a guessed list)', showsInFor(decorated, 'commission_statement') === null && showsInFor(decorated, 'nope') === null)
 
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`)
 process.exit(fail ? 1 : 0)

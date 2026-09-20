@@ -364,11 +364,18 @@ class FakeDB:
             "carrier": ["id", "org_id", "name", "code", "is_default"],
             "column_mapping": ["id", "org_id", "report_key", "carrier_id", "target_field", "source_header",
                                "transform", "is_active", "priority", "updated_at", "sign_convention"],
+            # `source` = mig 727 (writer provenance) — since 2026-09-20 also the report KIND that wrote the row
+            # (landing_identity.KIND_STAMP); `raw_sales_product` = mig 1011, the by-product aggregate's OWN table
             "raw_sales": ["id", "org_id", "period", "period_month", "period_year", "store", "salesperson", "user_login",
                           "department", "category", "product_desc", "product_id", "gp", "ext_price", "trans_id",
                           "trans_date", "contract_type", "mdn", "serial_1", "register", "tender_type", "voided",
                           "trans_type", "sku", "customer", "email", "customer_no", "quantity", "total_cost",
-                          "pricing_discounts", "contract_no", "created_at"],
+                          "pricing_discounts", "contract_no", "source", "created_at"],
+            "raw_sales_product": ["id", "org_id", "period", "period_month", "period_year", "store", "salesperson", "user_login",
+                                  "department", "category", "product_desc", "product_id", "gp", "ext_price", "trans_id",
+                                  "trans_date", "contract_type", "mdn", "serial_1", "register", "tender_type", "voided",
+                                  "trans_type", "sku", "customer", "email", "customer_no", "quantity", "total_cost",
+                                  "pricing_discounts", "contract_no", "source", "created_at"],
             "inventory_aging_device": ["id", "org_id", "imei", "serial", "sku", "item", "store", "unit_cost",
                                        "received_date", "days_in_stock", "as_of_date", "source", "raw_row",
                                        "on_hand", "off_hand_as_of", "status", "quantity", "total_cost", "category",
@@ -395,7 +402,7 @@ class FakeDB:
                 bad = [k for k in r if k not in self.declared[table]]
                 if bad:
                     raise RuntimeError(f'42703 column "{bad[0]}" of {table} does not exist')
-        if table == "raw_sales":
+        if table in ("raw_sales", "raw_sales_product"):
             for r in rows:
                 if not r.get("period"):
                     raise RuntimeError('23502 null value in column "period" of raw_sales violates not-null constraint')
@@ -488,9 +495,13 @@ section("A. THE VOCABULARY — every kind has a destination that already exists,
 # table written by its own existing importer (index §23b X-report → pos_tender_summary mig 062, §12a merchant
 # settlement → merchant_settlement_day mig 955, §4/§15 carrier bill-pay → the mig-939 processor feed table);
 # free-text 'other' still has NONE. The Stage-B destinations are byte-identical.
-check("sales and pos land in raw_sales, inventory in inventory_aging_device, commission in the ledger — free-text 'other' has NO destination",
+# PIN UPDATED 2026-09-20 (landing identity): the POS by-product export lands in its OWN table (owner decision —
+# summed beside line-level rows it double-counts; its slice replace deleted 48,875 line-level rows on org f4f1c16e…).
+# SOURCE_KIND_TARGET DEREFERENCES column_mapping.TABLE_MAP (one home) instead of spelling the tables again.
+check("sales lands in raw_sales, pos in ITS OWN table (raw_sales_product, mig 1011), inventory in inventory_aging_device, commission in the ledger — free-text 'other' has NO destination; every mapped kind's table is TABLE_MAP's",
       {k: OI.SOURCE_KIND_TARGET[k] for k in ("commission", "sales", "pos", "inventory")}
-      == {"commission": "commission_ledger", "sales": "raw_sales", "pos": "raw_sales", "inventory": "inventory_aging_device"}
+      == {"commission": "commission_ledger", "sales": "raw_sales", "pos": "raw_sales_product", "inventory": "inventory_aging_device"}
+      and OI.SOURCE_KIND_TARGET["pos"] == CM.TABLE_MAP["pos_product_sales"] and OI.SOURCE_KIND_TARGET["sales"] == CM.TABLE_MAP["sales"]
       and "other" not in OI.SOURCE_KIND_TARGET
       and OI.SOURCE_KIND_TARGET["x_report"] == "pos_tender_summary" and OI.SOURCE_KIND_TARGET["merchant_payments"] == "merchant_settlement_day"
       and OI.SOURCE_KIND_TARGET["bill_payments"] in OI.BILLPAY_FEED_TABLES)
@@ -501,8 +512,9 @@ check("every destination is an EXISTING table — a column_mapping.TABLE_MAP tar
 check("the default layouts are registered report keys with those targets",
       all(CM.TABLE_MAP.get(OI.REPORT_KEY_BY_KIND[k]) == OI.SOURCE_KIND_TARGET[k] for k in OI.REPORT_KEY_BY_KIND))
 lay = OI.layouts_for_kind("pos", CM.TABLE_MAP)
-check("a kind offers every layout that lands in its table, its default first",
-      [l["report_key"] for l in lay][:1] == ["pos_product_sales"] and {l["report_key"] for l in lay} == {"sales", "pos_product_sales"}
+check("a kind offers every layout that lands in its table, its default first (the product table has ONE layout; the line-level table's `sales` layout is the sales kind's)",
+      [l["report_key"] for l in lay][:1] == ["pos_product_sales"] and {l["report_key"] for l in lay} == {"pos_product_sales"}
+      and {l["report_key"] for l in OI.layouts_for_kind("sales", CM.TABLE_MAP)} == {"sales"}
       and OI.layouts_for_kind("other", CM.TABLE_MAP) == [])
 check("stage-2 instance keys: kind:source:layout; a second POS is a second instance",
       OI.stage2_instance_key("pos", "RQ", "pos_product_sales") == "pos:rq:pos_product_sales"
@@ -587,7 +599,9 @@ rb = rl["runbook"]
 check("Stage-5 runbook: the two links + what to upload each month, generated from the instances (the declined inventory is not an upload)",
       [l["label"] for l in rb["links"]] == ["Sales report", "Commissions"]
       and [m["instance_key"] for m in rb["monthly"]] == ["pos:rq:pos_product_sales", "other:file:bill_payments", "commission:c1:commission_statement"]
-      and rb["monthly"][1]["lands_in"].startswith("(no destination") and rb["monthly"][0]["lands_in"] == "raw_sales")
+      and rb["monthly"][1]["lands_in"].startswith("(no destination") and rb["monthly"][0]["lands_in"] == "raw_sales_product"
+      and [l["screen"] for l in rb["links"]] == ["sales_report", "commission_ledger"]
+      and any(c["screen"] == "onboarding_intake" for c in rb["monthly"][0]["shows_in"]))
 check("labels: kind + source for stage 2, carrier + type for stage 3, 'none (recorded)' for the declined inventory",
       "POS report" in vt["pos:rq:pos_product_sales"]["label"] and "rq" in vt["pos:rq:pos_product_sales"]["label"]
       and vt["commission:c1:commission_statement"]["label"].startswith("Northwind") and "none" in vt[OI.INVENTORY_NONE_KEY]["label"])
@@ -610,9 +624,9 @@ check("2.3: the layout's defaults propose the columns FROM THE FILE with samples
       all(cols[f]["column"] == h and cols[f]["provenance"] == OI.PROV_FILE for f, h in
           (("trans_id", "Invoice #"), ("store", "Invoiced At"), ("trans_date", "Sold On"), ("ext_price", "Total Price"), ("gp", "Gross Profit"), ("voided", "Refund")))
       and cols["store"]["samples"][0] in (STORE_ADDR, STORE_CODE, STORE_NEW) and len(cols["ext_price"]["samples"]) == 3, {k: (v["column"], v["provenance"]) for k, v in cols.items()})
-check("the identity fields are the layout's non-money fields (the mig-1004 rule), the target is raw_sales, the instance is pos:rq:pos_product_sales",
+check("the identity fields are the layout's non-money fields (the mig-1004 rule), the target is raw_sales_product (the product layout's OWN table), the instance is pos:rq:pos_product_sales",
       "trans_id" in a1["detect"]["identity_fields"] and "ext_price" not in a1["detect"]["identity_fields"]
-      and a1["target_table"] == "raw_sales" and a1["instance_key"] == "pos:rq:pos_product_sales")
+      and a1["target_table"] == "raw_sales_product" and a1["instance_key"] == "pos:rq:pos_product_sales")
 st = {r["value"]: r for r in a1["stores"]}
 check("2.4: the shared resolver — the address spelling → B-100 (address), the code → B-200 (code), the kiosk UNRESOLVED",
       st[STORE_ADDR]["lands_as"] == "B-100" and st[STORE_ADDR]["how"] == "address"
@@ -632,13 +646,13 @@ check("2.5: the preview names the open gate — the unresolved kiosk — as a re
 check("the file is KEPT (private bucket, org-prefixed path) and its reference is in the stage row; nothing else was written",
       a1["file"]["stored"] is True and a1["file"]["path"].startswith(f"{ORG}/") and (R._INTAKE_BUCKET, a1["file"]["path"]) in db.storage.files
       and db.tables["onboarding_stage_state"][0]["payload"]["file"]["path"] == a1["file"]["path"]
-      and not db.tables.get("column_mapping") and not db.tables.get("raw_sales") and not db.tables.get("store_aliases"), a1.get("file"))
+      and not db.tables.get("column_mapping") and not db.tables.get("raw_sales_product") and not db.tables.get("store_aliases"), a1.get("file"))
 check("a money column not picked as the amount is RECORDED with its Σ (Gross Profit)",
       any(m["header"] == "Gross Profit" and m["sum"] == SALES_GP for m in a1["verify"]["ignored_money_columns"]))
 # the gate
 s_, d_ = http_error(commit, db, column_map=json.dumps(SALES_MAP))
 check("commit with the kiosk unresolved → 400 naming it; NOTHING written (no mapping, no alias, no raw_sales)",
-      s_ == 400 and STORE_NEW in str(d_) and not db.tables.get("column_mapping") and not db.tables.get("store_aliases") and not db.tables.get("raw_sales"), (s_, str(d_)[:160]))
+      s_ == 400 and STORE_NEW in str(d_) and not db.tables.get("column_mapping") and not db.tables.get("store_aliases") and not db.tables.get("raw_sales_product"), (s_, str(d_)[:160]))
 s_, d_ = http_error(commit, db, column_map=json.dumps(SALES_MAP), identity=json.dumps({"store": {STORE_NEW: {"action": "not_ours"}}}))
 check("not-ours WITHOUT a reason → still refused", s_ == 400 and STORE_NEW in str(d_))
 # assign the kiosk to B-100 → commit
@@ -650,18 +664,20 @@ check("COMMIT ok: the map saved (carrier-NULL rows for the layout) and READ BACK
       and db.tables["store_aliases"][0]["alias"] == STORE_NEW and db.tables["store_aliases"][0]["store_code"] == "B-100"
       and db.tables["store_aliases"][0]["source"] == "onboarding-intake"
       and db.tables["rep_aliases"][0]["alias"] == "bob.s" and db.tables["rep_aliases"][0]["canonical"] == "Bob Smith", c1.get("problems"))
-check("…the rows LANDED through the existing mapped importer: raw_sales holds every line, period derived from each row's OWN date, the footer never landed",
-      len(db.tables["raw_sales"]) == len(LINES) and all(r["period"] == "August 2026" and r["period_month"] == 8 for r in db.tables["raw_sales"])
-      and all(r["trans_id"] for r in db.tables["raw_sales"]) and c1["landing"]["footer_rows_skipped"] == 0
-      and c1["landing"]["replace_scope"] == {"column": "store", "values": 3, "from": SPAN_LO, "to": SPAN_HI}, c1.get("landing"))
+check("…the rows LANDED through the existing mapped importer: raw_sales_product (the product layout's OWN table) holds every line, period derived from each row's OWN date, the footer never landed",
+      len(db.tables["raw_sales_product"]) == len(LINES) and all(r["period"] == "August 2026" and r["period_month"] == 8 for r in db.tables["raw_sales_product"])
+      and all(r["trans_id"] for r in db.tables["raw_sales_product"]) and c1["landing"]["footer_rows_skipped"] == 0
+      and c1["landing"]["replace_scope"] == {"column": "store", "values": 3, "from": SPAN_LO, "to": SPAN_HI,
+                                             "kind_column": "source", "kind": "pos_product_sales"}   # + the KIND dimension (landing identity)
+      and all(r["source"] == "pos_product_sales" for r in db.tables["raw_sales_product"]), c1.get("landing"))
 check("…the store strings land AS THE POS WROTE THEM (the alias resolves them everywhere, §13a) — the kiosk rows are in the table under its own spelling",
-      sum(1 for r in db.tables["raw_sales"] if r["store"] == STORE_NEW) == len(NEW_STORE_LINES))
+      sum(1 for r in db.tables["raw_sales_product"] if r["store"] == STORE_NEW) == len(NEW_STORE_LINES))
 check("…RE-READ: rows re-read = rows built = rows inserted; Σ re-read = Σ shown = the footer; the stage row is VERIFIED with the numbers",
       c1["verified_numbers"]["rows_landed"] == len(LINES) == c1["verified_numbers"]["rows_built"] == c1["verified_numbers"]["rows_inserted"]
       and c1["verified_numbers"]["tie"]["match"] is True and c1["verified_numbers"]["tie"]["our_total"] == SALES_TOTAL
       and c1["verified_numbers"]["numbers"]["sum_gp"] == SALES_GP
       and next(r for r in db.tables["onboarding_stage_state"] if r["instance_key"] == "pos:rq:pos_product_sales")["status"] == "verified"
-      and c1["verified_numbers"]["basis"].startswith("re-read from commcalc.raw_sales"), c1.get("verified_numbers", {}).get("tie"))
+      and c1["verified_numbers"]["basis"].startswith("re-read from commcalc.raw_sales_product"), c1.get("verified_numbers", {}).get("tie"))
 check("…the identity decisions are on the record: what each store string lands as, how, and what was written",
       {i["value"]: i["lands_as"] for i in c1["verified_numbers"]["identity"]["stores"]} == {STORE_ADDR: "B-100", STORE_CODE: "B-200", STORE_NEW: "B-100"}
       and c1["identity_written"]["aliases"] == [(STORE_NEW, "B-100")] and c1["identity_written"]["rep_aliases"] == [("bob.s", "Bob Smith")])
@@ -673,12 +689,12 @@ check("a later visit re-analyzes from the KEPT file (no re-drop): same rows, the
       and {r["value"]: r.get("how") for r in a2["stores"]}[STORE_NEW] == "alias" and a2["unresolved_stores"] == [], [(r["value"], r.get("how")) for r in a2["stores"]])
 c2 = commit(db, file=False, use_stored="1", instance_key="pos:rq:pos_product_sales", column_map=json.dumps(SALES_MAP))
 check("re-committing the same file REPLACES its slice (stores × dates) — still exactly one row per line, never doubled; still ties",
-      c2["ok"] is True and len(db.tables["raw_sales"]) == len(LINES) and c2["verified_numbers"]["tie"]["match"] is True)
-db.seed("raw_sales", [{"org_id": ORG, "period": "July 2026", "period_month": 7, "period_year": 2026, "store": STORE_ADDR,
+      c2["ok"] is True and len(db.tables["raw_sales_product"]) == len(LINES) and c2["verified_numbers"]["tie"]["match"] is True)
+db.seed("raw_sales_product", [{"org_id": ORG, "period": "July 2026", "period_month": 7, "period_year": 2026, "store": STORE_ADDR,
                        "trans_id": "OLD-1", "trans_date": "2026-07-15", "ext_price": 99.0, "gp": 1.0}])
 c3 = commit(db, file=False, use_stored="1", instance_key="pos:rq:pos_product_sales", column_map=json.dumps(SALES_MAP))
 check("a row of the same store OUTSIDE the file's date range survives the replace (the slice is store × dates, never the whole store)",
-      c3["ok"] is True and any(r["trans_id"] == "OLD-1" for r in db.tables["raw_sales"]) and len(db.tables["raw_sales"]) == len(LINES) + 1)
+      c3["ok"] is True and any(r["trans_id"] == "OLD-1" for r in db.tables["raw_sales_product"]) and len(db.tables["raw_sales_product"]) == len(LINES) + 1)
 # not ours: the kiosk's rows are EXCLUDED and counted
 s_, d_ = http_error(commit, fresh_db(), column_map=json.dumps(SALES_MAP), identity=json.dumps({"store": {STORE_NEW: {"action": "not_ours", "reason": "sister company's kiosk"}}}))
 check("'not ours' with a reason, no attestation: refused — the file's total includes the excluded rows, so the difference is named",
@@ -688,7 +704,7 @@ c4 = commit(db, column_map=json.dumps(SALES_MAP), identity=json.dumps({"store": 
             attestation=json.dumps({"reason": "the kiosk's lines belong to the sister company"}))
 check("…with the attestation: the kiosk's rows are EXCLUDED (counted), no alias written, the rest lands and re-reads",
       c4["ok"] is True and c4["verified_numbers"]["rows_excluded_not_ours"] == len(NEW_STORE_LINES)
-      and len(db.tables["raw_sales"]) == len(LINES) - len(NEW_STORE_LINES) and not db.tables.get("store_aliases")
+      and len(db.tables["raw_sales_product"]) == len(LINES) - len(NEW_STORE_LINES) and not db.tables.get("store_aliases")
       and c4["verified_numbers"]["attestation"]["by"] == "tester", c4.get("problems"))
 # create a store
 db = fresh_db()
@@ -741,7 +757,7 @@ row = next(r for r in db.tables["onboarding_stage_state"] if r["instance_key"] =
 check("commit: RECORDED — ok:false, recorded:true, the stage row NEEDS_INPUT naming 'no destination', the numbers + the kept file on the record; NO table touched",
       o2["ok"] is False and o2["recorded"] is True and row["status"] == "needs_input" and "no destination" in row["blocking_reason"]
       and row["verified_numbers"]["rows"] == 12 and row["verified_numbers"]["file"]["stored"] is True
-      and not db.tables.get("raw_sales") and not db.tables.get("column_mapping"), (o2.get("problems"), row.get("blocking_reason")))
+      and not db.tables.get("raw_sales_product") and not db.tables.get("column_mapping"), (o2.get("problems"), row.get("blocking_reason")))
 st_ = R.onboarding_intake_state(org_id=ORG)
 check("GET /state: the Stage-4 table carries the 'other' row red with its reason, the runbook says it has no destination",
       any(r["instance_key"] == "other:file:bill_payments" and r["red"] and "no destination" in r["blocking_reason"] for r in st_["rail"]["verify_table"])
@@ -775,7 +791,8 @@ check("…after every source is verified: signed off (name, role, on-behalf flag
       and so["rail"]["sign_off"]["signed"] is True)
 sx = R.onboarding_intake_state(org_id=ORG)
 check("GET /state offers the 2.0 vocabulary: every kind built with its layouts, the org's stores and employees for 2.4, the inventory-none key",
-      all(k["built"] for k in sx["source_kinds"]) and {l["report_key"] for k in sx["source_kinds"] if k["value"] == "pos" for l in k["layouts"]} == {"sales", "pos_product_sales"}
+      all(k["built"] for k in sx["source_kinds"]) and {l["report_key"] for k in sx["source_kinds"] if k["value"] == "pos" for l in k["layouts"]} == {"pos_product_sales"}
+      and {l["report_key"] for k in sx["source_kinds"] if k["value"] == "sales" for l in k["layouts"]} == {"sales"}
       and {s["store_code"] for s in sx["stores"]} == {"B-100", "B-200"} and sx["employees"] == ["Alice Rep", "Bob Smith"]
       and sx["inventory_none_key"] == OI.INVENTORY_NONE_KEY and sx["company"] == {"companies": 0, "stores": 2, "carriers": 1})
 
@@ -783,7 +800,7 @@ check("GET /state offers the 2.0 vocabulary: every kind built with its layouts, 
 section("H. NEGATIVE CONTROLS — the save guarantee, the gates, honest degradation")
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 db = fresh_db()
-db.drop_inserts["raw_sales"] = True
+db.drop_inserts["raw_sales_product"] = True
 c8 = commit(db, column_map=json.dumps(SALES_MAP), identity=json.dumps(IDENTITY_OK))
 check("a landing that silently loses every row: ok=False, 'rows landed 0 ≠ rows built', stage NEEDS_INPUT — never 'success'",
       c8["ok"] is False and any("rows landed 0" in p for p in c8["problems"])
@@ -792,7 +809,7 @@ db = fresh_db()
 db.drop_inserts["store_aliases"] = True
 s_, d_ = http_error(commit, db, column_map=json.dumps(SALES_MAP), identity=json.dumps(IDENTITY_OK))
 check("an alias write that does not stick: the read-back through the resolver catches it → 400, NOTHING imported",
-      s_ == 400 and "does not resolve" in str(d_) and not db.tables.get("raw_sales"), (s_, str(d_)[:160]))
+      s_ == 400 and "does not resolve" in str(d_) and not db.tables.get("raw_sales_product"), (s_, str(d_)[:160]))
 s_, d_ = http_error(commit, fresh_db(), data=sales_xlsx(footer_value=SALES_TOTAL + 250.0), column_map=json.dumps(SALES_MAP), identity=json.dumps(IDENTITY_OK))
 check("a footer that disagrees with the lines by 250.00 → refused with the difference; nothing written",
       s_ == 400 and "250.00" in str(d_), (s_, str(d_)[:200]))
@@ -823,7 +840,7 @@ c11 = commit(db, column_map=json.dumps(SALES_MAP), identity=json.dumps(IDENTITY_
 check("without mig 1007: the commit still LANDS and ties out; state.saved=False names the migration",
       c11["ok"] is True and c11["state"]["saved"] is False and "1007" in c11["state"]["reason"])
 db = fresh_db()
-db.drop_every_other["raw_sales"] = True
+db.drop_every_other["raw_sales_product"] = True
 c12 = commit(db, column_map=json.dumps(SALES_MAP), identity=json.dumps(IDENTITY_OK))
 check("a landing that drops HALF the rows: the re-read count disagrees AND the re-read Σ disagrees → ok=False with both problems",
       c12["ok"] is False and len(c12["problems"]) >= 2 and c12["verified_numbers"]["rows_landed"] < len(LINES), c12["problems"])

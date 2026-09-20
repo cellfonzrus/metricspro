@@ -89,6 +89,11 @@ INGEST_TABLES_BY_MODULE = {
         # `pos` module's activation_rebate_ledger below, which is the AGGREGATE that books — two
         # edges because they answer two different questions, not two paths to one answer.
         "raw_vendor_rebate",
+        # The POS by-product sales aggregate's OWN table (mig 1011, landing identity 2026-09-20) —
+        # layout pos_product_sales through the mapped ingest / the intake's `pos` kind. Product-level
+        # rows (SKU, cost, selling price); never summed beside raw_sales (double count). Read by the
+        # onboarding verify + report links only; no money path.
+        "raw_sales_product",
     ),
     # pos — the in-house POS. Its builtin stream (commcalc.pos_builtin_daily_sales /
     # commcalc.pos_builtin_sales) promotes into the sales feed; receipt OCR and the carrier vendor-rebate

@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
 import { SweepStatusCell, summarizeSweepRun } from '../_lib/sweepOutcome'
 import { useReportKinds } from '@/lib/report-kinds'
+import ShowsIn from '@/components/ShowsIn'
 
 // Generic FTP-pull sweep (Theme 6). Configure a vendor's FTP (host/creds/folder) and filename →
 // upload-type patterns; the backend pulls new files on a schedule and routes each to the right parser.
@@ -114,7 +115,9 @@ export default function FtpImportsPage() {
                     <optgroup label="Custom sheets">{customTypes.map((c: any) => <option key={c.report_key} value={c.report_key}>{c.label + ' (' + c.report_key + ')'}</option>)}</optgroup>
                   )}
                   {p.upload_type && !knownTypeKeys.has(p.upload_type) && <option value={p.upload_type}>{p.upload_type}</option>}
-                </select></td>
+                </select>
+                  {/* where a file routed here SHOWS UP — the registry row's consumers (owner 2026-09-20) */}
+                  {p.upload_type && <ShowsIn info={kinds.showsIn(p.upload_type)} loaded={kinds.loaded} compact lead="Shows in" style={{ margin: '4px 0 0' }} />}</td>
                 <td style={cell}><input style={{ ...sel, width: '100%' }} placeholder="optional" value={p.note || ''} onChange={e => setPat(i, { note: e.target.value })} /></td>
                 <td style={cell}><button className="btn btn-secondary" style={{ fontSize: 12, color: '#dc2626' }} onClick={() => delPat(i)}>✕</button></td>
               </tr>

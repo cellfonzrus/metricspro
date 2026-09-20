@@ -56,6 +56,7 @@ from app.modules.commcalc import sales_recon
 from app.modules.commcalc import sales_derive
 from app.modules.commcalc import ingest_store_guard as _isg
 from app.modules.commcalc import ingest_slice as _ingest_slice   # pure slice-scoped replace rules (2026-09-02)
+from app.modules.commcalc import landing_identity as _landing    # 2026-09-20 — which KIND wrote a row; who reads it (ONE home)
 from app.modules.commcalc import comp_trend
 from app.modules.commcalc import carrier_map
 from app.modules.commcalc import column_mapping
@@ -1328,9 +1329,14 @@ async def _upload_file_impl(
         expected = SIGNATURES.get(file_type, [])
         missing = [col for col in expected if col not in cols]
         if missing:
+            # A WRONG FILE NAMES THE RIGHT PAGE (owner 2026-09-20: a tender-summary workbook dropped on
+            # the daily-sales tile was refused with a column list). The registry's own detection runs
+            # over the header row first; the column list stays as the second line.
+            hint = _looks_like_sentence(get_supabase(), org_id, sorted(cols))
             raise HTTPException(
                 400,
-                f"This doesn't look like the right file for '{file_type}'. "
+                (hint + " " if hint else "")
+                + f"This doesn't look like the right file for '{file_type}'. "
                 f"Missing expected column(s): {', '.join(missing)}. "
                 f"Found columns: {', '.join(sorted(cols))[:200]}"
             )
@@ -1977,6 +1983,13 @@ async def _upload_file_impl(
     # WHAT the replaced scope is, and keep the existing shrink guardrails (which only warn).
     _replace_scope = None
     _day_slice = None
+    # LANDING IDENTITY (2026-09-20): a legacy route that writes a STAMPED table (raw_sales) says which
+    # report kind its rows are — the route's layout key (`sales` → the line-level default) — so a later
+    # landing of another kind can tell its rows from these. Stamped only when the column exists.
+    _upload_kind = None
+    if mapped and _landing.stamp_column(table) and _table_has_column(client, table, _landing.stamp_column(table)):
+        _upload_kind = file_type if file_type in column_mapping.TABLE_MAP else _landing.default_kind(table)
+        _landing.stamp(mapped, table, _upload_kind)
     if mapped:
         if file_type in DATE_KEYED:
             # Date-grain feeds are keyed by DAY, not month: a re-pull of the same day(s) replaces
@@ -2030,8 +2043,12 @@ async def _upload_file_impl(
                     shrink.append({'key': period, 'prior': int(prior), 'new': len(mapped)})
             except Exception as e:
                 print(f'WARN row-count guardrail (period) skipped: {e}')
-            _replace_scope = (lambda q, _pv=_pvariants(period):
-                              q.eq('org_id', org_id).in_('period', _pv))
+            # LANDING IDENTITY (2026-09-20): a stamped table's period replace is scoped to THIS kind's
+            # rows (landing_identity.apply_kind_filter — a no-op until a second layout targets the
+            # table, so the legacy replace is byte-identical today).
+            _replace_scope = (lambda q, _pv=_pvariants(period), _t=table, _k=_upload_kind:
+                              _landing.apply_kind_filter(q.eq('org_id', org_id).in_('period', _pv), _t, _k, column_mapping.TABLE_MAP)
+                              if _k else q.eq('org_id', org_id).in_('period', _pv))
         elif not has_period:
             # Snapshot tables (catalog): the upload replaces the org's whole set.
             _replace_scope = lambda q: q.eq('org_id', org_id)
@@ -4170,7 +4187,7 @@ _apply_scope = _ingest_slice.apply_scope
 
 
 def _select_replace_slice(client, table, org_id, period, *, source_null_only=False, chunk=1000,
-                          scope=None):
+                          scope=None, keep_ids=False):
     """SELECT the (org, period[, source_id IS NULL][, partition ∩ date-range]) slice that a manual
     replace is about to delete, so a failed insert can restore it. Chunked + id-ordered (stable
     pagination); serial/default cols stripped for clean re-insert. MEMORY BOUND: at most ONE such slice
@@ -4205,6 +4222,10 @@ def _select_replace_slice(client, table, org_id, period, *, source_null_only=Fal
         if len(page) < chunk:
             break
         start += chunk
+    if keep_ids:
+        # the kind-scoped replace (landing_identity) deletes EXACTLY the snapshot's own rows by id, so
+        # the delete and the restore can never disagree about which rows were removed
+        return [{k: v for k, v in r.items() if k not in _RESTORE_STRIP_COLS or k == "id"} for r in rows]
     return [{k: v for k, v in r.items() if k not in _RESTORE_STRIP_COLS} for r in rows]
 
 
@@ -4213,6 +4234,7 @@ def _restore_rows(client, table, rows, chunk=500):
     (restored_count, error_or_None) — a partial restore reports how many made it back so the caller can
     surface exactly what may have been lost. Never raises."""
     restored = 0
+    rows = [{k: v for k, v in r.items() if k not in _RESTORE_STRIP_COLS} for r in rows]
     for i in range(0, len(rows), chunk):
         part = rows[i:i + chunk]
         try:
@@ -4224,7 +4246,8 @@ def _restore_rows(client, table, rows, chunk=500):
 
 
 def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrier_id="",
-                      fname=None, used_defaults=False, trace_source="onboarding-import"):
+                      fname=None, used_defaults=False, trace_source="onboarding-import",
+                      replace_other_kinds=False):
     """Config-driven mapper CORE — shared by /upload-mapped and the custom-report→dataset binding.
     Given already-loaded `rules` and a read `df`, maps rows into `table` with the FULL safety guard set
     (column pre-validation so a stray field can't 42703 the insert; partition-scoped + source-aware
@@ -4279,6 +4302,31 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
     client = sb()
     started = _datetime.now(timezone.utc)
     parsed_n = len(df)
+    # ── LANDING IDENTITY (owner 2026-09-20; landing_identity — ONE home). (i) the target table must
+    #    EXIST: a layout whose table a migration has not created yet is refused naming the file, never
+    #    redirected into a sibling table. (ii) every row is STAMPED with the report kind that wrote it
+    #    (KIND_STAMP: the column per multi-kind table), so the replace below is store × dates × KIND.
+    #    (iii) a frame every gating CONSUMER of the table would read as blank is refused BEFORE a row
+    #    is written — a landing nobody can read is not a landing (the Vzone July rows: department /
+    #    category / product name 0 of 238 filled, and the Executive MTD had nothing to count).
+    kind_col = _landing.stamp_column(table)
+    if not _table_has_column(client, table, "org_id"):
+        mig = _landing.TABLE_MIGRATION.get(table)
+        raise HTTPException(400, f"commcalc.{table} does not exist yet"
+                            + (f" — run migration {mig} first" if mig else "")
+                            + f". Nothing was written; the '{report_key}' file was not landed anywhere else.")
+    kind_scoped = bool(kind_col) and _table_has_column(client, table, kind_col)
+    if kind_scoped:
+        _landing.stamp(mapped, table, report_key)
+    blank_consumers = _landing.blank_consumer_fields(mapped, table) if mapped else []
+    if blank_consumers:
+        _reg_rows, _ = _report_kinds.load_registry(client, org_id)
+        msg = _landing.consumer_refusal(blank_consumers, table, report_key, _reg_rows)
+        _write_upload_trace(org_id, source=trace_source, filename=fname, upload_type=report_key, period=period,
+                            result={"saved": 0, "note": msg, "guard": {"blank_consumer_fields": blank_consumers},
+                                    "_trace": {"rows_in": parsed_n, "target_table": table}},
+                            error=msg, status="error")
+        raise HTTPException(400, msg)
 
     def _trace(status, rows_saved, note, error=None):
         # mig-202 upload_trace (source='onboarding-import') so 🩺 Ingest health sees these imports too.
@@ -4335,25 +4383,51 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
     # own slice (every row carries the partition value and a usable date range), replace THAT slice
     # instead: the delete is narrower than the old period-wide one, and the import becomes idempotent.
     # No scope ⇒ still a pure append, byte-identical to before: a delete we cannot prove is never run.
+    others_by_kind, cross_kind_note = {}, ""
     if mapped and (period or scope):
         try:
             snapshot = _select_replace_slice(client, table, org_id, period,
-                                             source_null_only=source_aware, scope=scope)
+                                             source_null_only=source_aware, scope=scope, keep_ids=kind_scoped)
         except Exception as e:
             _trace("error", 0, "aborted before delete — could not snapshot existing rows", error=str(e))
             raise HTTPException(500, f"Could not snapshot existing {table}/{period} rows for a safe replace; "
                                      f"aborted to avoid data loss: {e}")
-        try:
-            d = client.schema("commcalc").table(table).delete().eq("org_id", org_id)
-            if period:                      # see _select_replace_slice — same filter, same slice
-                d = d.in_("period", _pvariants(period))
-            if source_aware:
-                d = d.is_("source_id", "null")
-            d = _apply_scope(d, scope)
-            d.execute()
-        except Exception as e:
-            _trace("error", 0, "delete failed — nothing deleted", error=str(e))
-            raise HTTPException(500, f"Failed to clear existing data for {table}/{period}: {e}")
+        if kind_scoped:
+            # ── THE KIND DIMENSION OF THE SLICE. The slice (store × dates) is split into the rows of THIS
+            #    kind — replaced — and the rows of OTHER kinds, which are NEVER deleted silently: the
+            #    landing is refused naming the loss in plain words, unless the caller confirmed it. The
+            #    delete is by the snapshot's own ids, so what is removed is exactly what was counted.
+            part = _landing.partition_slice(table, snapshot, report_key, column_mapping.TABLE_MAP)
+            others_by_kind = part["others_by_kind"]
+            if part["others"] and not replace_other_kinds:
+                _reg_rows, _ = _report_kinds.load_registry(client, org_id)
+                msg = _landing.cross_kind_refusal(table, report_key, len(mapped), others_by_kind, scope, _reg_rows)
+                _trace("error", 0, msg, error="cross-kind replace refused (not confirmed)")
+                raise HTTPException(400, msg)
+            to_delete = part["mine"] + (part["others"] if replace_other_kinds else [])
+            if part["others"] and replace_other_kinds:
+                cross_kind_note = ("; ⚠️ REPLACED (confirmed) " + ", ".join(f"{n:,} row(s) of '{k}'" for k, n in sorted(others_by_kind.items()))
+                                   + " that sat in the same slice")
+            snapshot = to_delete
+            try:
+                ids = [r["id"] for r in to_delete if r.get("id")]
+                for i in range(0, len(ids), 500):
+                    client.schema("commcalc").table(table).delete().eq("org_id", org_id).in_("id", ids[i:i + 500]).execute()
+            except Exception as e:
+                _trace("error", 0, "delete failed — nothing deleted", error=str(e))
+                raise HTTPException(500, f"Failed to clear existing data for {table}/{period}: {e}")
+        else:
+            try:
+                d = client.schema("commcalc").table(table).delete().eq("org_id", org_id)
+                if period:                      # see _select_replace_slice — same filter, same slice
+                    d = d.in_("period", _pvariants(period))
+                if source_aware:
+                    d = d.is_("source_id", "null")
+                d = _apply_scope(d, scope)
+                d.execute()
+            except Exception as e:
+                _trace("error", 0, "delete failed — nothing deleted", error=str(e))
+                raise HTTPException(500, f"Failed to clear existing data for {table}/{period}: {e}")
         try:
             for i in range(0, len(mapped), 500):
                 client.schema("commcalc").table(table).insert(mapped[i:i + 500]).execute()
@@ -4396,6 +4470,10 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
             + (f"; replaced ONLY this file's slice — {len(scope['values'])} {scope['partition_col']} "
                f"value(s) between {scope['lo']} and {scope['hi']}; other companies'/stores' rows"
                + (f" in {period}" if period else "") + " were left untouched" if scope else "")
+            + (f"; rows stamped {kind_col}='{report_key}' and only that kind's rows were replaced"
+               + (f" ({sum(others_by_kind.values()):,} row(s) of another kind in the slice were kept)" if others_by_kind and not replace_other_kinds else "")
+               if kind_scoped and (period or scope) else "")
+            + cross_kind_note
             + ("; ⚠️ replaced the WHOLE period (this file carries no per-slice key, so a narrower "
                "replace could not be proven safe)" if period and not scope and table in _INGEST_PARTITION else "")
             + (f"; dropped {len(dropped_columns)} unknown column(s): {', '.join(dropped_columns)}" if dropped_columns else "")
@@ -4410,7 +4488,10 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
             "footer_rows_skipped": footer_rows, "undated_rows": undated_rows,
             "dropped_columns": dropped_columns, "source_scoped": bool(source_aware and period),
             "replace_scope": ({"column": scope["partition_col"], "values": len(scope["values"]),
-                               "from": scope["lo"], "to": scope["hi"]} if scope else None),
+                               "from": scope["lo"], "to": scope["hi"],
+                               **({"kind_column": kind_col, "kind": report_key} if kind_scoped else {})} if scope else None),
+            "kind": report_key if kind_scoped else None, "kind_scoped": kind_scoped,
+            "others_in_slice": others_by_kind, "replaced_other_kinds": bool(others_by_kind and replace_other_kinds),
             "note": note}
 
 
@@ -4421,14 +4502,24 @@ async def upload_mapped(
     carrier_id: str = Form(""),
     period: str = Form(""),
     file: UploadFile = File(...),
+    replace_other_kinds: str = Form(""),
     org_id: str = ORG_ID,
 ):
     """Generic, config-driven ingest for a NEW carrier's report. Maps the sheet via
     commcalc.column_mapping into the report's target_table, applying the SAME safety guards as the
     legacy upload (defer-delete, never-wipe-on-empty, batched insert, upload_log). The legacy
-    /upload/{file_type} path is untouched — this is the additive any-carrier path."""
+    /upload/{file_type} path is untouched — this is the additive any-carrier path.
+
+    `replace_other_kinds` ('1' | 'true'): confirm deleting rows of a DIFFERENT report kind that sit in
+    this file's slice (landing_identity, 2026-09-20) — without it such a landing is refused naming
+    the loss. A `target_table` that contradicts the layout's registered table is refused: TABLE_MAP is
+    the one home of that fact and a caller cannot point a layout at another table."""
     require_org(org_id)
-    table = (target_table or column_mapping.TABLE_MAP.get(report_key) or "").strip()
+    registered = (column_mapping.TABLE_MAP.get(report_key) or "").strip()
+    if registered and (target_table or "").strip() and (target_table or "").strip() != registered:
+        raise HTTPException(400, f"'{report_key}' lands in commcalc.{registered} (column_mapping.TABLE_MAP); "
+                                 f"target_table='{target_table.strip()}' contradicts it and was refused — nothing was written.")
+    table = (target_table or registered or "").strip()
     if not table:
         # resolve from report_definitions if the caller didn't pass it
         rd = (sb().schema("commcalc").table("report_definitions").select("target_table")
@@ -4458,7 +4549,8 @@ async def upload_mapped(
 
     return _ingest_mapped_df(org_id, report_key, table, rules, df, period=period,
                              carrier_id=carrier_id, fname=getattr(file, "filename", None),
-                             used_defaults=used_defaults, trace_source="onboarding-import")
+                             used_defaults=used_defaults, trace_source="onboarding-import",
+                             replace_other_kinds=_fstr(replace_other_kinds).strip().lower() in ("1", "true", "yes"))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -6272,21 +6364,32 @@ def _intake_reread(client, org_id, source_report, period):
     return rows
 
 
-def _intake_reread_sales(client, org_id, stores, lo, hi):
-    """The raw_sales rows this file owns — (org, its stores, its date range): exactly the slice the
-    mapped importer replaced — RE-READ in pages after landing."""
+def _intake_reread_sales(client, org_id, stores, lo, hi, table=None, kind=None):
+    """The sales rows this file owns — (org, its stores, its date range, ITS KIND) in the table its
+    layout lands in: exactly the slice the mapped importer replaced — RE-READ in pages after landing.
+    `table` defaults to the line-level table; `kind` (the layout key) filters the stamped column
+    through landing_identity.kind_of_row, so a re-read never counts another kind's rows as its own."""
+    table = table or _intake.SOURCE_KIND_TARGET["sales"]
+    kind_col = _landing.stamp_column(table)
+    cols = ("store,salesperson,trans_id,trans_date,ext_price,gp,voided,"
+            "department,category,product_desc,tender_type,trans_type,"
+            "mdn,serial_1,user_login")                             # + the Stage-D link fields (§30.11)
+    if table != _intake.SOURCE_KIND_TARGET["sales"]:
+        cols = "store,salesperson,trans_id,trans_date,ext_price,gp,voided,product_desc,sku,quantity,total_cost,serial_1,user_login"
+    if kind_col and kind:
+        cols += "," + kind_col
     rows, start = [], 0
     while True:
-        page = (client.schema("commcalc").table("raw_sales")
-                .select("store,salesperson,trans_id,trans_date,ext_price,gp,voided,"
-                        "department,category,product_desc,tender_type,trans_type,"
-                        "mdn,serial_1,user_login")                             # + the Stage-D link fields (§30.11)
+        page = (client.schema("commcalc").table(table)
+                .select(cols)
                 .eq("org_id", org_id).in_("store", list(stores)).gte("trans_date", lo).lte("trans_date", hi)
                 .order("id").range(start, start + _INTAKE_REREAD_PAGE - 1).execute().data) or []
         rows.extend(page)
         if len(page) < _INTAKE_REREAD_PAGE:
             break
         start += _INTAKE_REREAD_PAGE
+    if kind_col and kind:
+        rows = [r for r in rows if _landing.kind_of_row(table, r, column_mapping.TABLE_MAP) == kind]
     return rows
 
 
@@ -6520,7 +6623,9 @@ def _intake_link_source(client, org_id, inst, registry_rows, store_resolve, rep_
             span = vn.get("date_span") or {}
             if not (id_values and span.get("from") and span.get("to")):
                 return {**src, "read_ok": False, "note": "no landed slice recorded (stores × dates) — commit the export first"}
-            src["rows"] = _intake_reread_sales(client, org_id, id_values, span["from"], span["to"])
+            src["rows"] = _intake_reread_sales(client, org_id, id_values, span["from"], span["to"],
+                                               table=p.get("target_table") or _intake.SOURCE_KIND_TARGET.get(kind),
+                                               kind=p.get("layout") or None)
             src["reread"] = "_intake_reread_sales"
         elif kind == "inventory":
             as_of = vn.get("as_of_date")
@@ -6717,8 +6822,11 @@ def _intake_land(client, org_id, kind, ctx, filename, who=None):
                 continue
             raw_rows.append(r)
         df = pd.DataFrame(raw_rows) if raw_rows else pd.DataFrame(columns=ctx["headers"])
+        # the kind-scoped replace (landing_identity): rows of ANOTHER kind in this file's slice are
+        # never deleted silently — refused unless the person confirmed it at 2.6
         res = _ingest_mapped_df(org_id, ctx["report_key"], ctx["target_table"], ctx["rules"], df,
-                                period="", fname=filename, trace_source="onboarding-intake")
+                                period="", fname=filename, trace_source="onboarding-intake",
+                                replace_other_kinds=bool(ctx.get("replace_other_kinds")))
         return {"saved": int(res.get("saved") or 0), "rows_built": len(raw_rows), "detail": res, "skipped": 0}
     if kind == "bill_payments":
         # the transaction-detail feed: its own idempotent ingest (parse → terminal → store via the
@@ -6834,6 +6942,7 @@ async def onboarding_intake_commit(
     use_stored: str = Form(""),
     role: str = Form(""),
     report_kind: str = Form(""),
+    confirm_replace_other_kinds: str = Form(""),
     org_id: str = ORG_ID,
 ):
     """THE SAVE, for every kind, with the same guarantee: refuse (400, nothing written) while a gate
@@ -6860,6 +6969,9 @@ async def onboarding_intake_commit(
     # the registry card the person picked at 2.0 / 3.1 (mig 1010) — the kind the confirmed layout is
     # learned under; blank → derived from landing + layout + statement type + headers (kind_key_for)
     ctx["report_kind"] = _fstr(report_kind).strip().lower()
+    # 2.6 confirmation: delete rows of a DIFFERENT report kind sitting in this file's slice (landing
+    # identity, 2026-09-20). Absent → such a landing is refused naming the loss; never silent.
+    ctx["replace_other_kinds"] = _fstr(confirm_replace_other_kinds).strip().lower() in ("1", "true", "yes")
     if kind == "commission":
         return _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who, fname)
     if kind == "other":
@@ -7042,15 +7154,21 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
     else:
         stores_landed = sorted({_intake._s(m.get(kf["store"])) for m in ctx["land"] if _intake._s(m.get(kf["store"]))})
         span = vn0["date_span"]
-        rows = _intake_reread_sales(client, org_id, stores_landed, span["from"], span["to"])
+        # re-read the slice in the table THIS layout lands in, and only THIS kind's rows (landing identity)
+        rows = _intake_reread_sales(client, org_id, stores_landed, span["from"], span["to"],
+                                    table=ctx["target_table"], kind=report_key)
         vn = _intake.sales_verify(rows, kf)
         our = vn["sum_amount"]
         count_ok = vn["rows"] == landed["rows_built"] == landed["saved"]
         tie = _intake.simple_tie(our, ctx["footer"]["file_total_raw"], typed_total)
         tie_ok = bool(tie.get("match")) or bool(_intake._s(att.get("reason")))
         same_as_shown = abs(_intake.money(our - ctx["tie"]["our_total"])) < 0.005
-        # Stage C: bill payments EXTRACTED from the landed slice (the derived Bill Payments report)
-        cross["billpay_extract"] = _intake_billpay_extract_after_sales(client, org_id, stores_landed, span["from"], span["to"], rows=rows)
+        # Stage C: bill payments EXTRACTED from the landed slice (the derived Bill Payments report) —
+        # a line-level table only; product-level rows carry no department / category to match on
+        if ctx["target_table"] == _intake.SOURCE_KIND_TARGET["sales"]:
+            cross["billpay_extract"] = _intake_billpay_extract_after_sales(client, org_id, stores_landed, span["from"], span["to"], rows=rows)
+        cross["shows_in"] = _landing.shows_in({"layout": report_key, "landing": kind}, column_mapping.TABLE_MAP,
+                                              _TRACE_TARGET_TABLE, _intake.SOURCE_KIND_TARGET)
     ok = count_ok and tie_ok and same_as_shown
     problems = []
     if not count_ok:
@@ -10208,7 +10326,30 @@ def report_kinds_endpoint(org_id: str = ORG_ID):
                         "source": "your row" if prof.get("org_id") == org_id and not prof.get("inherited_from") else "house default"}
         else:
             standard = {"pos_key": pk, "label": pk, "source": "none", "note": "no filename standard is defined for this POS yet"}
-    return _report_kinds.payload(rows, ready, decl, caps, sigs, org_id, profile_rules=profile_rules, standard=standard)
+    out = _report_kinds.payload(rows, ready, decl, caps, sigs, org_id, profile_rules=profile_rules, standard=standard)
+    # WHERE EACH UPLOAD SHOWS UP (owner 2026-09-20) — derived per visible row from ONE home:
+    # landing_identity.shows_in (registry row → landing table → CONSUMERS). Every surface renders
+    # THIS; no page keeps a list of consumers (harness_landing_identity_lock.py).
+    for r in out["kinds"]:
+        r["shows_in"] = _landing.shows_in(r, column_mapping.TABLE_MAP, _TRACE_TARGET_TABLE, _intake.SOURCE_KIND_TARGET)
+        r["where"] = _landing.where_to_upload(r)
+    out["consumers"] = {t: [{"screen": c["screen"], "label": c["label"], "needs": c.get("needs") or [], "gate": bool(c.get("gate"))}
+                            for c in cons] for t, cons in _landing.CONSUMERS.items()}
+    return out
+
+
+def _looks_like_sentence(client, org_id, headers):
+    """'This looks like a <card>. Upload it under <page>.' — the registry's detection over a header
+    row (landing_identity.looks_like), for a route that is about to refuse a wrong file. '' when
+    detection cannot say; never raises (a refusal must never turn into a 500)."""
+    try:
+        rows, ready = _report_kinds.load_registry(client, org_id)
+        decl = _report_kinds.tenant_declaration(client, org_id)
+        vis = _report_kinds.visible_kinds(rows, decl, _intake_caps(client, org_id), org_id)
+        sigs = _report_kinds.load_signatures(client, org_id) if ready else []
+        return _landing.looks_like_sentence(_landing.looks_like(headers, vis, sigs))
+    except Exception:
+        return ""
 
 
 @router.post("/report-kinds/detect")
@@ -28150,9 +28291,31 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     except Exception:
         _metric_cov_ex = {'scanned': 0, 'gaps': [], 'matched': {}, 'note': None}
 
+    # ── THE WAY BACK TO THE UPLOAD (owner 2026-09-20: "the data is not flowing into the exec mtd from
+    #    wherever it is uploaded — need to know where the data is uploaded"). From ONE home
+    #    (landing_identity): which fields THIS page needs, whether the period's rows are blank on all
+    #    of them (rows exist but nothing to count — the Vzone July case), and which report kinds FEED
+    #    the tables this page reads, each with the page to upload it on. DISPLAY-ONLY, never raises.
+    try:
+        _ex_needs = next((c["needs"] for c in _landing.consumers_for_table(_intake.SOURCE_KIND_TARGET["sales"])
+                          if c["screen"] == "exec_mtd"), [])
+        _ex_tables = [_intake.SOURCE_KIND_TARGET["sales"], _TRACE_TARGET_TABLE["daily_sales"]]
+        _ex_reg, _ = _report_kinds.load_registry(client, org_id)
+        _ex_feeds, _seen_f = [], set()
+        for _t in _ex_tables:
+            for f in _landing.feeds_for_table(_t, _ex_reg, column_mapping.TABLE_MAP, _TRACE_TARGET_TABLE, _intake.SOURCE_KIND_TARGET):
+                if f["key"] not in _seen_f:
+                    _seen_f.add(f["key"])
+                    _ex_feeds.append({**f, "table": _t})
+        _landing_ex = {"tables": _ex_tables, "rows": len(rows), "needs": _ex_needs,
+                       "blank_fields": _landing.blank_fields_over(rows, _ex_needs), "feeds": _ex_feeds}
+    except Exception:
+        _landing_ex = {"tables": [], "rows": 0, "needs": [], "blank_fields": [], "feeds": []}
+
     return {'period': period, 'source': meta,
             'classification_gaps': _cls_gaps_ex,
             'metric_coverage': _metric_cov_ex,
+            'landing': _landing_ex,
             # SOURCE OF TRUTH (mig 923): tells the UI which basis drove Total Activation and whether Upgrade
             # is excluded from it, so the number is never silently redefined. Sales basis (the default) →
             # active:false, byte-identical response otherwise.
@@ -32104,6 +32267,13 @@ def _promote_feed_impl(client, org_id, pv, canon, dry_run, force, retain, grace=
         row['org_id'] = org_id
         row['period'] = canon
         new_rows.append(row)
+    # LANDING IDENTITY (2026-09-20): the promotion writes LINE-LEVEL rows — the table's default kind
+    # — and says so on every row it builds (the `source` column, mig 727) when the column exists.
+    # Carried-over monthly-only rows keep whatever they carried (NULL reads as the default kind).
+    _promo_kind = _landing.default_kind('raw_sales')
+    _promo_stamped = _table_has_column(client, 'raw_sales', _landing.stamp_column('raw_sales'))
+    if _promo_stamped:
+        _landing.stamp(new_rows, 'raw_sales', _promo_kind)
     # DEFECT 2 — the feed-less-day rows (in raw_sales but NOT the feed) are carried over VERBATIM, so any
     # read-skew / previously-persisted duplicate compounds run-over-run (the feed-covered days don't,
     # because they're rebuilt from the feed each run). Content-dedupe them (signature drops id + created_at)
@@ -32185,7 +32355,13 @@ def _promote_feed_impl(client, org_id, pv, canon, dry_run, force, retain, grace=
         print(f'WARN promotion ingest guard skipped: {_ge}')
 
     try:
-        client.schema('commcalc').table('raw_sales').delete().eq('org_id', org_id).in_('period', pv).execute()
+        # the period replace is KIND-SCOPED (landing_identity.apply_kind_filter): rows another report
+        # kind stamped in this period are not this writer's to delete. A no-op — byte-identical to
+        # before — while no second layout targets raw_sales (today), so no fake client sees a new verb.
+        _pd = client.schema('commcalc').table('raw_sales').delete().eq('org_id', org_id).in_('period', pv)
+        if _promo_stamped:
+            _pd = _landing.apply_kind_filter(_pd, 'raw_sales', _promo_kind, column_mapping.TABLE_MAP)
+        _pd.execute()
         for i in range(0, len(new_rows), 500):
             client.schema('commcalc').table('raw_sales').insert(new_rows[i:i + 500]).execute()
     except Exception as e:

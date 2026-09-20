@@ -40,6 +40,12 @@ export type ScreenKey =
   | 'employees' | 'store_setup' | 'sales_report_settings' | 'connectors' | 'vision_settings'
   | 'comm_onboarding' | 'onboarding_intake' | 'menu_layout' | 'dashboard_designer' | 'target_settings'
   | 'org_structure' | 'billing_usage'
+  // the CONSUMERS of a landing table (backend landing_identity.CONSUMERS names these keys — "this upload
+  // will show in …" on every upload surface, and the way back from an empty report; 2026-09-20)
+  | 'upload_files' | 'exec_mtd' | 'sales_report' | 'gp_report' | 'daily_targets' | 'rep_commissions' | 'sales_recon'
+  | 'bill_payments' | 'tax_collected' | 'inventory_sold_recon' | 'imei_recon' | 'pl_statement' | 'device_history'
+  | 'inventory_recon' | 'commission_ledger' | 'carrier_vs_pay' | 'whatif' | 'closing_recon' | 'vendor_rebates'
+  | 'activations' | 'pay_discrepancy' | 'kpi' | 'ma_handsets'
 
 export type ScreenDest = {
   /** Where the reader is sent. May carry a #anchor; the gate uses the path half. */
@@ -147,6 +153,30 @@ export const SCREENS: Record<ScreenKey, ScreenDest> = {
     blurb: 'Billing — Usage & Pricing: your company\'s plan, metered usage and statements',
     aliases: ['Billing — Usage & Pricing', 'Billing Usage & Pricing'],
   },
+  // ── the landing tables' CONSUMERS (backend landing_identity.CONSUMERS → these keys; hrefs are NAV's) ──
+  upload_files: { href: '/commcalc/upload', label: 'Upload Files', blurb: 'Upload Files: every report tile this company may upload', aliases: ['Upload Files', 'Upload page'] },
+  exec_mtd: { href: '/commcalc/exec/mtd', label: 'Executive MTD', blurb: 'Executive MTD: activations, phones, bill payments, accessories per store / employee', aliases: ['Executive MTD', 'Exec MTD'] },
+  sales_report: { href: '/commcalc/sales-report', label: 'Sales Report', blurb: 'Sales Report: classified sales lines per store, rep and day', aliases: ['Sales Report'] },
+  gp_report: { href: '/commcalc/gp', label: 'Gross Profit', blurb: 'Gross Profit: revenue and GP per store from the sales lines', aliases: ['Gross Profit report', 'Gross Profit'] },
+  daily_targets: { href: '/commcalc/targets', label: 'Daily Targets', blurb: 'Daily Targets: actuals against target from the classified sales lines', aliases: ['Daily Targets'] },
+  rep_commissions: { href: '/commcalc', label: 'Rep commissions', blurb: 'Commissions dashboard: each rep\'s pay from their sales lines', aliases: ['Rep commissions', 'Commissions Dashboard'] },
+  sales_recon: { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', blurb: 'Sales Feed Recon: the monthly file against the daily feed at transaction grain', aliases: ['Sales Feed Recon'] },
+  bill_payments: { href: '/commcalc/bill-payments', label: 'Bill Payments', blurb: 'Bill Payments: extracted from the sales lines beside the processor feed', aliases: ['Bill Payments report', 'Bill Payments'] },
+  tax_collected: { href: '/commcalc/tax-collected', label: 'Tax Collected', blurb: 'Tax Collected: sales tax summed from the tax column', aliases: ['Tax Collected'] },
+  inventory_sold_recon: { href: '/commcalc/inventory-sold-recon', label: 'Inventory vs Sold', blurb: 'Inventory vs Sold: on-hand units checked against sales and activations', aliases: ['Inventory vs Sold'] },
+  imei_recon: { href: '/commcalc/imei-recon', label: 'IMEI Reconciliation', blurb: 'IMEI Reconciliation: sold IMEIs against inventory and the carrier feeds', aliases: ['IMEI Reconciliation'] },
+  pl_statement: { href: '/accounts/pl', label: 'P&L Statement', blurb: 'P&L Statement: revenue, COGS and expenses per period', aliases: ['P&L Statement'] },
+  device_history: { href: '/commcalc/device-history', label: 'Device History', blurb: 'Device History: each unit\'s timeline', aliases: ['Device History'] },
+  inventory_recon: { href: '/commcalc/asset/inventory-recon', label: 'Inventory Recon', blurb: 'Inventory Recon: on-hand value by store', aliases: ['Inventory Recon'] },
+  commission_ledger: { href: '/commcalc/commission-ledger', label: 'Commission Ledger', blurb: 'Commission Ledger: the carrier statement in five buckets', aliases: ['Commission Ledger'] },
+  carrier_vs_pay: { href: '/commcalc/carrier-vs-pay', label: 'Carrier Earned vs Employee Paid', blurb: 'Carrier Earned vs Employee Paid: per rep, per month', aliases: ['Carrier Earned vs Employee Paid'] },
+  whatif: { href: '/commcalc/whatif', label: 'What-If Analysis', blurb: 'What-If Analysis: carrier income headings under a changed plan', aliases: ['What-If Analysis'] },
+  closing_recon: { href: '/closing/recon', label: 'Closing Reconciliation', blurb: 'Closing Reconciliation: register tenders and settlements beside the closing sheet', aliases: ['Closing Reconciliation'] },
+  vendor_rebates: { href: '/commcalc/vendor-rebates', label: 'Vendor Rebate History', blurb: 'Vendor Rebate History: earned per line, beside collected', aliases: ['Vendor Rebate History'] },
+  activations: { href: '/commcalc/activations', label: 'Activations', blurb: 'Activations: the POS activation-details basis', aliases: ['Activations'] },
+  pay_discrepancy: { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', blurb: 'Pay Discrepancy: sold-but-unpaid activations', aliases: ['Pay Discrepancy'] },
+  kpi: { href: '/commcalc/kpi', label: 'KPI Metrics', blurb: 'KPI Metrics: the carrier portal\'s rep and store figures', aliases: ['KPI Metrics'] },
+  ma_handsets: { href: '/commcalc/ma-handsets', label: 'Marketplace Handset COGS', blurb: 'Marketplace Handset COGS: handset fulfillment orders', aliases: ['Marketplace Handset COGS'] },
   // NOT registered: "Metric Source of Truth". Copy on Cash Recon (Management) names it, but no such
   // page exists anywhere in NAV or under app/ — inventing an href would be worse than the gap. It is
   // reported to the owner as a named destination with nothing behind it.

@@ -10,6 +10,8 @@ import { useActiveCarrier } from '@/lib/auth-context'
 import { carrierCode } from '@/lib/rbac'
 import { useReportLabels } from '@/lib/report-labels'
 import { useReportKinds } from '@/lib/report-kinds'
+import ShowsIn from '@/components/ShowsIn'
+import { LinkedText } from '@/components/ScreenLink'
 import type { ReportKindRow } from '@/lib/carrier-scope'
 
 // ── WHAT THIS PAGE OFFERS IS COMPUTED, NEVER LISTED (owner directives 2026-09-20; design §7) ──────
@@ -391,7 +393,9 @@ export default function UploadPage() {
                   </div>
                   <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 6px' }}>{desc}</div>
                   {/* What THIS report's upload does to stored data — mirrors the backend's write path. */}
-                  <div style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 10px' }}>{MODE_UI[mode].explain}</div>
+                  <div style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 6px' }}>{MODE_UI[mode].explain}</div>
+                  {/* WHERE THIS UPLOAD SHOWS UP — derived from the registry row's landing table (owner 2026-09-20). */}
+                  <ShowsIn info={kinds.showsIn(id)} loaded={kinds.loaded} compact />
                   {status === 'uploading' ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text2)', fontSize: 13 }}><div className="spinner" />Uploading...</div>
                   ) : (
@@ -402,7 +406,8 @@ export default function UploadPage() {
                   )}
                   {/* When the last SET OF DATA landed (any path: manual, email sweep, portal pull). */}
                   <LastUploadLine rec={lastData[id]} loaded={lastLoaded} />
-                  {msg && <div style={{ marginTop: 8, fontSize: 12, color: status === 'done' ? '#16a34a' : status === 'warn' ? '#b45309' : '#dc2626' }}>{msg}</div>}
+                  {/* a refusal that names a page ("Upload it under Upload Files / Onboarding — Commission Intake") is a LINK */}
+                  {msg && <div style={{ marginTop: 8, fontSize: 12, color: status === 'done' ? '#16a34a' : status === 'warn' ? '#b45309' : '#dc2626' }}><LinkedText text={msg} /></div>}
                   {/* Honest amber panel: WHY an upload saved 0 rows (X-report parser forensics,
                       price-guard refusal, shrink warning). Renders nothing on a clean save. */}
                   <UploadGuardBanner outcome={outcomes[id] || null} />
@@ -427,7 +432,8 @@ export default function UploadPage() {
                 <div style={{ flex: 1 }}>
                   <span style={{ fontWeight: 600, fontSize: 14 }}>{kinds.labelFor(entry.id, entry.label)}</span>
                   <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 6px' }}>{entry.desc}</div>
-                  <div style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 10px' }}>{MODE_UI[entry.mode].explain}</div>
+                  <div style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 6px' }}>{MODE_UI[entry.mode].explain}</div>
+                  <ShowsIn info={kinds.showsIn(entry.id)} loaded={kinds.loaded} compact />
                   {entry.needsDate && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                       <label style={{ fontSize: 12, color: 'var(--text2)' }}>Effective date:</label>
@@ -486,7 +492,8 @@ export default function UploadPage() {
                     <span style={{ fontSize: 10, color: 'var(--text3)' }}>{rep.provenance_text}</span>
                   </div>
                   <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 6px' }}>{rep.what_in_it}{rep.source_hint ? ` — ${rep.source_hint}` : ''}</div>
-                  <div style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 10px' }}>Captured as-is; re-uploading a period replaces it (a cumulative MTD export is safe to re-upload).</div>
+                  <div style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 6px' }}>Captured as-is; re-uploading a period replaces it (a cumulative MTD export is safe to re-upload).</div>
+                  <ShowsIn info={rep.shows_in} loaded={kinds.loaded} compact />
                   {status === 'uploading' ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text2)', fontSize: 13 }}><div className="spinner" />Uploading...</div>
                   ) : (
