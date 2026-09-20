@@ -57,6 +57,37 @@ export type BucketRow = {
   hint_words: string[]; pl_line_key: string | null; is_builtin: boolean; column_backed: boolean; source?: string
 }
 export type BucketMeta = { ready: boolean; migration: string; source: string; tenant_rows?: number; house_rows?: number }
+// ── Stage D — REPORT LINKS (index §30.11): every loaded report linked to every other by the columns they
+// share, the match counts EACH WAY. Computed by the backend from the LANDED rows (the kinds' own re-reads)
+// through ONE pairing implementation (inventory_sold_recon.line_pairings); the page renders, never pairs.
+export type LinkCounts = { matched: number; lines: number; no_key: number }
+export type LinkDirection = LinkCounts & {
+  with_key: number; unmatched: number; ambiguous: number; distinct_keys: number; unmatched_distinct: number; ambiguous_distinct: number
+  unmatched_sample: { key: string; lines: number; sample_line?: string }[]
+  ambiguous_sample: { key: string; lines: number; other_side_lines: number }[]
+  via_lines?: number; via_label?: string; via_reasons?: Record<string, number>
+}
+export type LinkField = {
+  field: string; label: string; basis: 'direct' | 'via_third_report' | string
+  via: { through: string[]; through_label: string; how: string } | null
+  a_column: string | string[] | null; b_column: string | string[] | null
+  a_to_b: LinkDirection; b_to_a: LinkDirection; sentence_a_to_b: string; sentence_b_to_a: string; any_match: boolean
+}
+export type LinkPair = { a: string; b: string; a_label: string; b_label: string; shared: string[]; strongest: string | null; linked: boolean; note: string | null; fields: LinkField[] }
+export type LinkCell = {
+  a: string; b: string; shared: string[]; strongest: string | null; linked: boolean; note: string | null
+  field: string | null; label: string | null; basis: string | null; a_to_b: LinkCounts | null; b_to_a: LinkCounts | null
+}
+export type LinkSource = { instance_key: string; label: string; kind: string; lines: number; linked_to: number; shared_with: number; fields: string[] }
+export type LinkMatrix = {
+  sources: LinkSource[]; skipped: { instance_key: string; label: string; note: string | null }[]
+  cells: Record<string, LinkCell>; note: string | null; fields: { field: string; label: string }[]; bridges: string[]
+}
+export type ReportLinks = {
+  available: boolean; computed: boolean; cached: boolean; stale: boolean | null; computed_at: string | null
+  matrix: LinkMatrix | null; detail: LinkPair | null; detail_note?: string
+  notes?: Record<string, string>; rereads?: Record<string, string>; how: string; note: string | null
+}
 export type StateResp = {
   state_ready: boolean; migration: string; note?: string; rail: Rail; carriers: Carrier[]
   pos_sources: { pos_key: string; label: string }[]; stores: { store_code: string; address: string | null; market: string | null }[]
@@ -65,6 +96,7 @@ export type StateResp = {
   other_kinds?: string[]; merchant_portals?: MerchantPortals; billpay_feed?: BillpayFeed
   sign_question: string; buckets: string[]; bucket_labels: Record<string, string>; save?: { saved: boolean; reason?: string }
   bucket_rows?: BucketRow[]; bucket_meta?: BucketMeta
+  report_links?: ReportLinks
 }
 export type SaveResult = { saved: boolean; reason?: string }
 export type Column = {

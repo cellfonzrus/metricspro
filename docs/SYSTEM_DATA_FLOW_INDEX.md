@@ -1639,6 +1639,12 @@ the feed carries a device key / a mobile number); the page's second section list
 and the unpairable lines. The onboarding intake runs it after every inventory commit (Stage-4 note). Proof:
 `harness_onboarding_intake_c.py` §F; `harness_inventory_sold_recon.py` (43) byte-identical.
 
+**THE PAIRING RULE HAS ONE HOME (Stage D, §30.11):** `inventory_sold_recon.line_pairings` is the per-line rule (own
+serial → `device_key`; else through a sale line carrying the phone number, `sales_mobile_index`; else unpairable
+with the reason). `activation_index` is a FOLD of it (output byte-identical, the 43 checks unchanged) and the
+Stage-4 report links (`report_links.py`) call it for the device field — so the inventory auto-check and the
+report links can never pair differently. Locked by `harness_report_links_lock.py` (CI).
+
 ---
 
 ## 12. Cash / deposit reconciliation
@@ -3229,6 +3235,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 |----------|-------------|---------|
 | `GET /commcalc/report-kinds` — WHICH REPORT KINDS THIS TENANT MAY UPLOAD, computed never listed: `declaration` (+ reasons), `kinds` (visible, provenance per row), `hidden` (with why), `surfaces`, `upload_types`, `filename_rules` (the declared POS standard restricted to visible kinds), `standard`, `caps`, `registry_ready`. READ-ONLY, org-scoped `{org, house}` | `router.report_kinds_endpoint` → `report_kinds.load_registry` / `tenant_declaration` (THE one reader) / `_intake_caps` / `load_signatures` / `_pos_profile` → `report_kinds.payload` (`visible_kinds`) | §30.9; every upload surface renders from it through `lib/report-kinds.useReportKinds` (locked by `harness_report_kind_lock.py`). Proof `harness_report_kinds.py` §G |
 | `POST /commcalc/report-kinds/detect` (multipart file) — "This looks like your <kind> — right?": header names only, nothing stored; `mode` confirm\|ask\|none + candidates with confidence and evidence | `router.report_kinds_detect` → `_read_upload_grids` → `onboarding_intake.stitch_sheets` → `report_kinds.detect_report_kind` over `visible_kinds` + the confirmed signatures → `decide` | §30.9; the intake's `KindDetectZone`. Proof `harness_report_kinds.py` §E/§G |
+| `GET /commcalc/onboarding/intake/state?links=` — STAGE D REPORT LINKS (§30.11): `report_links` on the state payload. `''` = the cached matrix (with `stale` when an instance's key / verified_at / rows_landed changed since — `report_links.fingerprint`) or `computed:false`; `all` = RECOMPUTE from the landed rows (every source through its kind's OWN re-read: `_intake_reread_sales` / `_intake_reread_inventory` / `_intake_reread` / `_intake_reread_xreport` / `_intake_reread_merchant` / `_intake_reread_billpay`, the activation feed through `_intake_activation_rows`) and cache on the run's stage-4 row `links:run:matrix`; `<a>\|<b>` (two instance keys — they carry colons) = that pair's detail (counts each way, basis, unmatched / ambiguous samples). Read-only; the cache is the only write | `router.onboarding_intake_state` → `_intake_report_links` → `_intake_report_links_compute` → `_intake_link_source` / `_intake_link_activations` → `report_links.report` (`inventory_sold_recon.line_pairings` + `sales_mobile_index`; `device_cost_recon.device_key` / `norm_order`, `inventory_sold_recon.mobile_key` injected) | §30.11 |
 | `POST /commcalc/onboarding/intake/commit` — now also takes `report_kind` (the registry card picked at 2.0 / 3.1) and, on a CONFIRMED save, learns the layout (`report_kind` in the response: `learned` / `kind` / `defined`) | `router.onboarding_intake_commit` → `_intake_commit_*` → `_intake_learn_signature` | §30.9 (additive to §30.2–30.8) |
 | `POST /commcalc/pos-profiles/{pos_key}/apply` — now REFUSES (400) for a POS with no standard (`_pos_profile` → None) instead of applying another POS's rules; `_pos_profile` inherits the HOUSE row for the same `pos_key` | `router.apply_pos_profile` / `_pos_profile` | §30.9; mig 200 |
 | `GET /commcalc/carrier-vs-pay/{period}` (`?market=`,`?store=`) — CARRIER EARNED vs EMPLOYEE PAID per rep. **READ-ONLY, `meta.books_to == []`**, org-scoped; runs `ma_recon` WITHOUT persisting | `router.carrier_vs_pay_report` → PURE `commcalc/carrier_vs_pay.rollup_by_rep`; reuses `ma_recon` (sold universe + evidence + rules), `sale_installment_engine._ma_gate_index` (money), `ma_recon.load_gate_cfg` (`ma_payout_sign`), `rep_commissions` (as stored), `_store_market_resolver` (market) | §31. Earned and paid are NEVER summed — the gap is the named `carrier_earned_minus_employee_paid`, computed only for reps where BOTH sides were measured. Absence is `null`/`not_reported`, never `$0.00`. Proof `harness_carrier_vs_pay.py` (54 checks) |
@@ -3433,6 +3440,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | Onboarding intake, Stage 2 verify numbers — sales/POS: rows, distinct transaction ids, Σ amount, Σ GP, date span (+ undated rows), voided rows, per-store and per-rep counts with Σ; inventory: units, Σ cost, per-store units, rows with / without a device key, as-of date; other: rows, headers, every money column's Σ — beside the file's own total (footer, else typed — recorded as 'typed') | `raw_sales.{ext_price,gp,trans_id,trans_date,store,salesperson,voided}` / `inventory_aging_device.{unit_cost,store,imei,serial,as_of_date}` RE-READ after landing over exactly the slice the file owns (store-set × date range; store-set × as_of) | `onboarding_intake.sales_verify` / `inventory_verify` / `other_summary` → `simple_tie` (difference to the cent; `match` None when nothing to compare) → `stage2_refusals` (§30.6). The commit's `ok` needs rows re-read = rows built = rows inserted AND the re-read Σ = the Σ shown |
 | Onboarding intake, Stage C verify numbers — X-report: cash / card / other / total per store-day (the import's `_xr_tender_class`) beside each sheet's totals row; merchant settlement: Σ gross / net / fees / refunds / txn count per merchant-day, by card brand, beside the export's TOTAL row; carrier bill-pay: every row, the rows the org's bill-pay rule counts, Σ per store-day, unmapped accounts | `pos_tender_summary` re-read (org × close_date × the sheet names); `merchant_settlement_day` re-read (org × the upload `source_id` × business days); the processor feed re-read THROUGH `_billpay_processor_by_store_day` (mig 939) | `onboarding_intake.xreport_verify` / `merchant_verify` / `billpay_feed_verify` → `simple_tie` → `stage2_refusals(extra=)` (§30.8) |
 | Bill payments EXTRACTED from the sales export (the Bill Payments report): lines, Σ, per store-day, per matched token, tokens that matched nothing; difference vs the carrier feed | `raw_sales` ∪ `daily_sales_feed` lines matched by the org's `bill_payment` rule (`exec_metric_defs.line_match` — the same predicate as the Exec-MTD Bill Payment columns), vs the mig-939 processor feed | `billpay_extract.extract_lines` / `rollup` / `token_coverage` / `compare_with_feed` → `GET /commcalc/billpay-extract/{period}`; stamped on a sales commit as `verified_numbers.billpay_extract` (§30.8) |
+| REPORT LINKS (Stage D, §30.11) — per pair of loaded reports, per shared column (IMEI / serial, phone number, invoice / order number, store, rep, date): lines / with key / no key / matched / unmatched / ambiguous EACH WAY, the basis (direct / via a third report), the strongest field per cell, `linked_to` per report | the landed rows of each instance (raw_sales `serial_1` / `mdn` / `trans_id` / `store` / `salesperson` / `trans_date`; commission_ledger `order_number` / `store` / `rep_user` / `trans_date` (+ `account_id` as the phone number on the residual layout only); inventory_aging_device `imei` / `serial` / `store`; pos_tender_summary `store` / `close_date`; merchant_settlement_day `store_code` / `business_date`; the bill-pay feed's store / date / txn; the activation feed's `serial` / `mdn` / `trans_id` / `trans_date`) × the identity decisions on `verified_numbers.identity` (`lands_as` / `resolved_name`) | `report_links.report` / `matrix` / `detail` / `linked_note` → `GET /onboarding/intake/state?links=` → the Stage-4 "Report links" section |
 | Activated but still on hand (`activated_not_rung_out`), activations paired by key / by mobile / unpairable | `inventory_aging_device` on-hand rows × `raw_sales` (`serial_1`, `mdn`, `trans_id`, `quantity`) × the Activation Details capture (`Serial#`, mobile number) | `inventory_sold_recon.reconcile(activation_rows=)` → `GET /commcalc/inventory-sold-recon`; stamped on an inventory commit as `verified_numbers.sold_check` (§11a, §30.8) |
 | Onboarding intake tie-out — Σ canonical (every ACTIVE registry bucket: earned +, deductions signed; `earned_total` / `deductions_total` / `net_total`) vs the statement's OWN total | `commcalc.commission_ledger.{payout_total, category}` RE-READ after landing; the file's total = the footer row's `raw_amount` × the declared earned sign (or a typed total, recorded as 'typed') | `onboarding_intake.bucket_totals(rows, buckets)` → `tie_out` (difference to the cent; `match` None when nothing to compare) → `commit_refusals` (§30). Never abs(): gross = Σ positive bookings, chargebacks = Σ negative, net = their sum; a key the registry no longer lists is summed under `unlisted`, never dropped (§30.7) |
 | MA-TX month-n paid evidence | `raw_ma_daily_tx.retail_cost` net of the `'MONTH n'`-worded rows (`product_name` via `commission_ledger.parse_payment_month`) | `sale_installment_engine.ma_tx_month_evidence` / `_gate_met_ma_tx` — UNION with `raw_ma_commission.spiff_m{n}` (n ≤ 6); direction `ma_payout_sign`, floor `ma_min_amount`, horizon `ma_max_month` ≤ 16 (mig `308`) |
@@ -8156,7 +8164,8 @@ section, the per-source basis, evidence), `lib/rbac.ts`. **No new table, no new 
 
 **OPEN — reported, not built here (each is its own PR; designs recorded so the next hand starts from them):**
 (a) **Report links (owner: "link the different reports automatically with each other with common columns").**
-Design: a PURE `report_links.py` — for every pair of landed reports in the run, the canonical fields they share
+**CLOSED — built in §30.11 (Stage D: pure `report_links.py` over `inventory_sold_recon.line_pairings`, `GET /onboarding/intake/state?links=`, the Stage-4 "Report links" matrix, the lock `harness_report_links_lock.py`).** The design as it stood:
+a PURE `report_links.py` — for every pair of landed reports in the run, the canonical fields they share
 (`device_key` / IMEI-serial, `mdn` / mobile number, order or transaction id, store, rep, date) and the match
 counts EACH WAY ("412 of 521 commission lines match a sales line by mobile number; 109 unmatched"), the pairing
 basis stated per field; the key columns per landed slice read through the destinations' own readers (sales:
@@ -8332,6 +8341,96 @@ column — an owner decision. (3) A statement type typed at 3.1 that names no re
 guessing. (4) The read endpoints (`/commission-ledger/summary` …) resolve the carrier from an intake-written
 `source_report`'s prefix; a hand-typed template key with no carrier part (`ma_daily_tx`, `boost`) reads the global
 (carrier-NULL) mapping as it always did.
+
+### 30.11 STAGE D — REPORT LINKS: every report a tenant loaded, linked to every other by the columns they share, with the match counts EACH WAY (owner 2026-09-20)
+
+Owner, verbatim: *"we need to link the different reports automatically with each other with common columns."*
+
+**THE CLASS (CLAUDE.md "A fix is a DESIGN fix").** *A pairing rule spelled per consumer.* Before this, ONE consumer paired
+lines to devices (the inventory auto-check of §30.8, `inventory_sold_recon.activation_index`); the report links would be a
+second consumer of the same rule (serial, else the phone number through a sale line, else unpairable with a reason), and the
+platform already carried siblings of its normalisers (`whatif._norm_mdn` ≡ `mobile_key`; `device_history.norm_order` ≡
+`device_cost_recon.norm_order`). Fixed as a mechanism: the rule is factored ONCE (`line_pairings`), `activation_index`
+FOLDS it (output byte-identical — the 43 checks unchanged), the links CALL it, the normalisers are INJECTED from their
+homes, and a lock fails the build on a second copy.
+
+**DUPLICATE CHECK (build gate) — searched §11 (`device_cost_recon.device_key` / `norm_order` / `order_imei_index`), §11a
+(`inventory_sold_recon`: `activation_index`, `sales_mobile_index`, `mobile_key`, `sales_evidence`), §13a (`_store_maps` /
+`_store_code_resolver`, `_intake_store_resolver` / `_intake_rep_resolver`), §2 (`column_mapping.TARGET_FIELDS` — the one
+vocabulary of canonical field names), §30.6–30.8 (the intake's re-reads per kind, `KIND_FIELDS` / `kind_fields`, the
+identity decisions on `verified_numbers`), §30.9 (`report_kinds.kind_key_for`, the cards' `signature_fields`), §30.10
+(`_ledger_mapping_key` — the residual layout is where the phone number is the line identity), §15 (`ma_recon` — a
+device→rep attribution for ONE feed shape, not a generic pairing), §17 (`GET /onboarding/intake/state`). NOT rebuilt: no
+new table, no new query path, no second normaliser, no second pairing, no second column vocabulary, no second label.**
+
+| Need | REUSED (not rebuilt) | New |
+|------|----------------------|-----|
+| The pairing | `inventory_sold_recon.sales_mobile_index` (the bridge: a phone number → the units a sale line names, same line / same transaction) | **`inventory_sold_recon.line_pairings`** — THE per-line rule (own serial → `device_key`; else through the bridge, `PAIR_MOBILE_VIA_SALES`; else `UNPAIR_NO_KEY` / `UNPAIR_NO_SALE` / `UNPAIR_AMBIGUOUS` with candidates). `activation_index` now folds it |
+| The keys | `device_cost_recon.device_key` (device), `inventory_sold_recon.mobile_key` (phone number), `device_cost_recon.norm_order` (invoice / order / transaction id) — INJECTED (`normalisers`), the pure module defines none | `report_links.date_key` (the day; a date is the weakest link and the page says so) |
+| The column vocabulary | `column_mapping.TARGET_FIELDS` (every spelling a link field names must be a field of a layout — `link_vocabulary` drops and lists any other; the harness pins `unknown == []`); `onboarding_intake.kind_fields` (store / date / txn / rep / key per kind — dereferenced, not copied); the layout per commission instance through `_ledger_mapping_key` (§30.10) | **`report_links.LINK_FIELDS`** — six link fields, each = its TARGET_FIELDS spellings + a layman label + a strength (device › phone › order › store › rep › date); `account_id` counts as the phone number ONLY on `commission_ledger__residual` (the registry's own labelling); `DESTINATION_COLUMNS` for the matrix kinds and the activation feed (their re-read rows are not a layout); `columns_for(kind, layout, kind_fields, target_fields)` |
+| The rows | the kinds' EXISTING re-reads — `_intake_reread_sales` (+ `mdn,serial_1,user_login`, additive), `_intake_reread` (+ `account_id,order_number,store,rep_user,trans_date`), `_intake_reread_inventory`, `_intake_reread_xreport`, `_intake_reread_merchant`, `_intake_reread_billpay` (+ the txn column); the activation feed through `_intake_activation_rows` (the §30.8 read) | `_intake_link_source` (the slice keys off `verified_numbers` — `identity.stores[].value` (not 'not ours') × `date_span` / `as_of_date` / `source_report` + `period` / `numbers.dates` / `payload.source_id`; a slice that cannot be re-read is `read_ok:false` with the reason and LISTED as skipped, never paired as empty), `_intake_link_activations` |
+| Store / rep as keys | the identity decisions confirmed at 2.4 / 3.7 (`lands_as`, `resolved_name`), else `_intake_store_resolver` / `_intake_rep_resolver` (§13a; the roster's `epay_salesperson` makes 'arep' and 'Alice Rep' one person) | `store_key` / `rep_key` per source (an unresolved rep string keys as its own lower-cased text — a direct text equality, never a guess; an unresolved store string has NO key) |
+| The layman labels | the report-kind registry card each instance belongs to (`report_kinds.kind_key_for` over landing + layout + statement type + the card picked) | `_intake_link_label` → "Sales report with IMEI and phone number (rq)", "Residual report from the carrier (Northwind Cellular)" … |
+| The report | — | **`report_links.py`** (PURE): `line_keys`, `pair` (per shared field: counts each way — lines / with_key / no_key / matched / unmatched / ambiguous, `unmatched_sample` / `ambiguous_sample` capped at 25 with counts, the basis DIRECT / VIA + `via` {through, how}, the sentence each way; `strongest` = a DIRECT pairing before one made through a third report, then by strength; `linked`), `bridges_for` (a sales-kind source carrying device + phone), `report` (per-pair bridges exclude the pair itself; a merged `sales_mobile_index` per pair), `matrix` (cells without samples), `detail`, `fingerprint`, `linked_note` |
+| The surface | `GET /onboarding/intake/state` (§17) — one more field; the cache on the intake's OWN state table (`onboarding_stage_state`, stage 4, `links:run:matrix`; `rail` ignores stage-4 rows) — no new table, no migration | `?links=` ('' cached-or-not-computed, `all` recompute, `<a>|<b>` the pair — instance keys carry colons, so the pair separator is the matrix cell's own `|`); `report_links` = {available, computed, cached, stale, computed_at, matrix, detail, notes (per instance: "linked to N other reports"), rereads (which re-read served each source), how, note} |
+| Stage 4 | `verify_table` rows | the **"Report links"** section of `onboarding/intake/page.tsx` (`ReportLinksSection`): the matrix (rows / cols = the run's reports by registry label; a cell = the strongest shared column + "→ 412/521 · ← 402/48,875"; "(via)" when paired through a third report; "shared, no line matched"), click → the pair detail (per column: "paired by IMEI / serial directly" / "paired by IMEI / serial through Sales report… — the phone number on the sale line names the unit", the sentence each way, the unmatched keys, the ambiguous keys), the per-row note "linked to N other reports"; fetched on demand (Stage 4 open → the fresh cache, else `?links=all` once; Recompute; STALE flagged) — `intake-shared.tsx` types `ReportLinks` / `LinkMatrix` / `LinkPair` … |
+| THE LOCK | the carrier-vocab guard's posture (stdlib static scan, one CI job — `carrier-vocab-guard.yml`) | **`backend/harness_report_links_lock.py`** (14 checks): (a) `line_pairings` / `activation_index` / `sales_mobile_index` / `mobile_key` / `device_key` each defined ONCE in backend/app, `activation_index` folds `line_pairings`; (b) `report_links.py` spells no normaliser (no `isdigit` / `.upper()` / `'.0'` trim / regex) and calls the core; (c) the router injects the three homes, passes `_isr.line_pairings` / `_isr.sales_mobile_index`, the link readers make no `.table(` of their own, the inventory check still rides `reconcile`; (d) a second phone-number (digits → last ten) or device-key (trim → '.0' → upper) normaliser anywhere in commcalc outside the ALLOW set (the two homes + `whatif._norm_mdn`, a PRE-EXISTING sibling allowed with its reason — a seam, below); a stale entry fails; (e) nine negative controls |
+
+**What "never guess" means here.** A line with no usable key is counted as "carries no <column>", never matched. A key that
+fits SEVERAL lines on the other side is counted as matched AND flagged ambiguous with the count (a store key is ambiguous by
+nature and the page says so); it is never resolved to one line. A phone-number-only line is paired to a device ONLY through a
+sale line that carries that number, and only when the number names exactly one unit — several → `UNPAIR_AMBIGUOUS` with the
+candidates listed (the negative control: a sibling that resolves the ambiguous number to its first candidate reports 3 matched
+where the honest core reports 2 — the pin goes RED). Every direction reconciles: matched + unmatched + no key = lines.
+
+**Money surfaced, not moved.** Read-only: the only write is the cache row on the intake's own state table. Nothing is
+recomputed for anyone; no row of any report changes (pinned §C: sales 10 / ledger 11 / inventory 5 / tender 5 before = after).
+
+**Proof: `backend/harness_report_links.py` — 77 checks, DB-free, the intake fake-client pattern with the Stage-B/C
+destination tables, driving the REAL router functions.** §A the vocabulary is DERIVED (unknown = [], ≥2 layouts per field,
+`columns_for` per kind, the residual-only phone number); §B the pure report over hand rows with every count RE-DERIVED here
+by hand (`expect`): sales ↔ commission by order 5/10 · 4/6 with T1001 ambiguous and T9999 unmatched, by store through the
+resolution, by rep through the roster ('arep' = 'Alice Rep'), by date; sales ↔ residual by phone number 6/10 · 4/5 (M1 on
+three lines → ambiguous); inventory ↔ sales by IMEI direct 4/5 · 5/10; activations ↔ inventory by IMEI VIA the sales line
+(A2's number → D2) 2/5 · 2/5 with A3 (ambiguous) and A5 (nothing) unpairable for §11a's own reasons; X-report ↔ sales by
+store (the 2.4 assignment) and date; a pair with no common column SAYS so; one report → no links; nothing loaded → said; a
+source that could not be re-read → skipped with its reason; the matrix vs the detail; §C END TO END — five real commits (sales
+`sales` layout, commission, residual, inventory, X-report) + the activation feed → `?links=all` (six sources, 15 cells, the
+same counts from the LANDED rows, the registry labels, every re-read named), `?links=<a>|<b>` (the detail from the fresh
+cache), the notes, the cache row, STALE after a new commit, honest without mig 1007, no feed → no pseudo-source; §D the FIRST
+CONSUMER — the inventory commit's `sold_check` and the links agree on the same activation lines, `activation_index` folds
+`line_pairings`, the router injects the homes; §E negative controls (a guess → RED; counts that do not reconcile → RED; a
+second normaliser in the pure module → RED; RULE TWO; no query of their own); §F wiring, the page, this registration, the lock
+in CI. **Unchanged and green:** intake 164 / B 87 / C 92, `inventory_sold_recon` 43 (byte-identical), statement_type_mapping
+62, report_kinds 119, sign 125, carrier_vs_pay 54, report-kind lock 20, mapping-key lock 17, org-scope 25, lineage 60, the
+vocab guard; `tsc --noEmit` clean; eslint clean on the two touched pages.
+
+**What the Verizon tenant's Stage 4 now shows (from its landed rows — the real counts are in the DB; the harness uses
+fixtures).** Its three loaded reports — the sales export (48,875 lines: IMEI, phone number, invoice, store, rep, date), the
+commission statement (521 lines: store, rep, date; an order number only if its layout mapped one; NO phone number — the
+default commission layout has no mobile column, §30.10 seam 2) and the inventory listing (455 units: IMEI, store) — become a
+3 × 3 matrix: sales ↔ inventory by **IMEI / serial** (each way: units on a sale line / sale lines naming an on-hand unit,
+the sold-then-refunded unit on two lines flagged ambiguous), sales ↔ commission by **store** and **rep** and **date** (the
+strongest with a match, direct), commission ↔ inventory by **store** only. Every row carries "linked to 2 other reports".
+A residual statement, once loaded, links to the sales export by **phone number**; an activation-details import, once loaded,
+links to the inventory by IMEI through the sales line's phone number — the same pairing the inventory auto-check reports.
+
+**Files.** `report_links.py` (NEW, pure), `inventory_sold_recon.py` (`line_pairings`; `activation_index` folds it),
+`router.py` (`_LINKS_INSTANCE_KEY`, `_intake_link_normalisers`, `_intake_link_label`, `_intake_link_source`,
+`_intake_link_activations`, `_intake_links_cache` / `_put`, `_intake_report_links_compute`, `_intake_report_links`, the
+`links` query param on `onboarding_intake_state`, the three additive re-read selects), `harness_report_links.py` (NEW),
+`harness_report_links_lock.py` (NEW, in `carrier-vocab-guard.yml`), frontend `onboarding/intake/page.tsx`
+(`ReportLinksSection`, the per-row note), `intake-shared.tsx` (the types). **No new table, no migration, nothing recomputed.**
+
+**Seams left (reported, not hidden).** (1) `whatif._norm_mdn` is a pre-existing copy of `mobile_key` and
+`device_history.norm_order` a pre-existing copy of `device_cost_recon.norm_order` — outside the link family, allowed in the
+lock with their reasons; routing them through the homes is its own PR (the lock's (d) would then have an empty allow set
+beyond the homes). (2) The commission statement's mobile number has no ledger column (§30.10 seam 2), so a commission ↔
+sales link by phone number exists only for the residual layout; the owner decision that adds the column makes it appear with
+no code here. (3) A run's links are computed on demand and cached (a 48,875-line re-read is 49 paged reads); the cache is
+keyed on the stage rows' fingerprint, so a change to the activation feed (loaded outside the intake) is not detected until a
+Recompute — the page's `computed_at` says when. (4) The X-report and merchant kinds link by store + date only, by nature of a
+tender row; the bill-pay feed by store (account → mig-902 map through the 2.4 decisions) + date + its transaction id.
 
 ---
 
