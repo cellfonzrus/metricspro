@@ -4685,14 +4685,50 @@ def delete_target_field(target_field: str, report_key: str, org_id: str = ORG_ID
 # per-tenant rule map. A multi-month payout stays one category but keeps its payment_month. Negative =
 # payout; positive = a bill/activation payment (stored, kept out of the buckets). Tables: mig 071.
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
-def _ledger_source_rules(client, org_id, carrier_id=""):
+def _ledger_mapping_key(client, org_id, statement_type="", source_report=""):
+    """THE mapping report_key for a commission-family statement, per STATEMENT TYPE (index §30.10) —
+    the I/O wrapper around the ONE derivation `commission_ledger.mapping_report_key`: it hands the
+    derivation the org's merged report-kind rows (mig 1010; the mirror before it) so a statement type
+    a registry row adds later keys its own mapping with no code. `statement_type` is the text the
+    person typed at 3.1; a READ endpoint that only knows the ledger `source_report` passes that instead
+    and the type is read off its `<carrier>__<statement slug>` suffix. Blank = the default type =
+    TODAY's key, byte-for-byte."""
+    st = (statement_type or "").strip() or commission_ledger.statement_type_of_source_report(source_report)
+    if not st:
+        return commission_ledger.mapping_report_key("")
+    try:
+        rows, _ready = _report_kinds.load_registry(client, org_id)
+    except Exception:
+        rows = None
+    return commission_ledger.mapping_report_key(st, rows)
+
+
+def _ledger_carrier_of_source_report(client, org_id, source_report):
+    """The org's carrier row whose normalised code is the `<carrier>` prefix of an intake-written
+    `source_report`, or '' — so a READ endpoint reads the CARRIER-scoped mapping (the intake saves
+    carrier rows) instead of the global slot. Org-scoped; never raises."""
+    code, _st = column_mapping.split_report_key(source_report or "")
+    if not _st or not code:
+        return ""
+    try:
+        rows = (client.schema("commcalc").table("carrier").select("id,name,code")
+                .eq("org_id", org_id).execute().data) or []
+        return implementation_spine.carrier_id_by_code(rows, code, code=_report_labels.normalize_carrier_code) or ""
+    except Exception:
+        return ""
+
+
+def _ledger_source_rules(client, org_id, carrier_id="", report_key=""):
     """Header→field rules for the commission_ledger source: saved column_mapping if present, else the
-    built-in MA Daily Tx default layout — so a fresh tenant's MA file imports with zero configuration."""
-    rules = column_mapping.load_rules(client, org_id, "commission_ledger", carrier_id or None)
+    built-in MA Daily Tx default layout — so a fresh tenant's MA file imports with zero configuration.
+    `report_key` = the statement type's mapping key from `_ledger_mapping_key`; blank = the default
+    type (today's key)."""
+    rk = report_key or commission_ledger.mapping_report_key("")
+    rules = column_mapping.load_rules(client, org_id, rk, carrier_id or None)
     if rules:
         return rules
     return [{"target_field": d["target_field"], "source_header": d["source_header"], "transform": d["transform"]}
-            for d in column_mapping.default_mapping("commission_ledger")]
+            for d in column_mapping.default_mapping(rk)]
 
 
 def _ledger_convention(hdr_rules):
@@ -4705,11 +4741,16 @@ def _ledger_convention(hdr_rules):
     return commission_ledger.convention_from_mapping(hdr_rules)
 
 
-def _ledger_convention_for(client, org_id, carrier_id=""):
+def _ledger_convention_for(client, org_id, carrier_id="", source_report=""):
     """Same thing for a READ endpoint that has not loaded the mapping itself. Never raises: an
-    unreadable mapping table resolves to the default convention rather than 500-ing a report."""
+    unreadable mapping table resolves to the default convention rather than 500-ing a report.
+    `source_report` (the ledger template being read) picks the STATEMENT TYPE's mapping key and, for
+    an intake-written `<carrier>__<statement>` key, the carrier's own mapping rows — so a residual
+    statement's summary reports the residual mapping's sign, not the commission statement's."""
     try:
-        return _ledger_convention(_ledger_source_rules(client, org_id, carrier_id))
+        cid = carrier_id or _ledger_carrier_of_source_report(client, org_id, source_report)
+        rk = _ledger_mapping_key(client, org_id, source_report=source_report)
+        return _ledger_convention(_ledger_source_rules(client, org_id, cid, report_key=rk))
     except Exception:
         return commission_ledger.convention_from_mapping([])
 
@@ -4741,7 +4782,7 @@ def _ledger_bucket_guard(client, org_id, rows, buckets_meta=None):
                                  "was re-bucketed.")
 
 
-def _ledger_footer_drop(rows, client, org_id):
+def _ledger_footer_drop(rows, client, org_id, report_key=""):
     """Drop a statement's own GRAND-TOTAL row from a set of MAPPED ledger source rows. Returns
     (kept, dropped). REUSES the mig-1004 feed-shape rule (column_mapping.drop_footer_rows ->
     feed_shape.is_footer_row) — no second footer derivation — with the ledger's IDENTITY fields, i.e.
@@ -4749,10 +4790,12 @@ def _ledger_footer_drop(rows, client, org_id):
     EVERY identity field is blank, so it cannot fire on a real line that merely lacks one of them.
     Measured on the statement that exposed it: 522 lines in, one of them the file's own net total
     (86,970.34 = the other 521 lines' 94,366.61 earned less 7,396.27 charged back), which the ledger
-    counted a second time. The count is RETURNED, never swallowed — callers report it."""
+    counted a second time. The count is RETURNED, never swallowed — callers report it.
+    `report_key` = the statement type's mapping key (its identity fields); blank = the default type."""
+    rk = report_key or commission_ledger.mapping_report_key("")
     return column_mapping.drop_footer_rows(
-        rows, "commission_ledger", None, client, org_id,
-        fields=column_mapping.identity_fields("commission_ledger", client, org_id))
+        rows, rk, None, client, org_id,
+        fields=column_mapping.identity_fields(rk, client, org_id))
 
 
 def _ledger_origin_ready(client, org_id):
@@ -4850,6 +4893,7 @@ async def commission_ledger_import(
     source_report: str = Form("ma_daily_tx"),
     period: str = Form(""),
     carrier_id: str = Form(""),
+    statement_type: str = Form(""),
     org_id: str = ORG_ID,
 ):
     """Upload a commission/tx file → map its headers → CLASSIFY each line into the five canonical buckets
@@ -4863,7 +4907,10 @@ async def commission_ledger_import(
     except Exception as e:
         raise HTTPException(400, f"Could not read file: {e}")
     client = sb()
-    hdr_rules = _ledger_source_rules(client, org_id, carrier_id)
+    # THE MAPPING KEY IS PER STATEMENT TYPE (index §30.10): the type the caller states, else the type
+    # the template's `source_report` carries, else the default — the same derivation the intake uses
+    rk = _ledger_mapping_key(client, org_id, statement_type, source_report)
+    hdr_rules = _ledger_source_rules(client, org_id, carrier_id, report_key=rk)
     cat_rules, rules_source = commission_ledger.load_rules_meta(client, org_id, source_report)
     conv, conv_meta = _ledger_convention(hdr_rules)
     # MA PRODUCT-CLASS WIRING (mig 265, default 'legacy'): in legacy mode this returns the rules
@@ -4875,7 +4922,7 @@ async def commission_ledger_import(
     if period:
         base["period"] = period
     mapped = _ledger_map_records(df.to_dict("records"), hdr_rules)
-    mapped, footer_rows = _ledger_footer_drop(mapped, client, org_id)
+    mapped, footer_rows = _ledger_footer_drop(mapped, client, org_id, report_key=rk)
     rows = [commission_ledger.build_row(src, base, cat_rules, conv, buckets) for src in mapped]
     if not rows:
         raise HTTPException(400, "No usable rows — check the column mapping for this file.")
@@ -4883,6 +4930,7 @@ async def commission_ledger_import(
                               filename=getattr(file, "filename", None), source="ledger-import")
     summary = commission_ledger.summarize(rows, rules=cat_rules, conv=conv, buckets=buckets, buckets_meta=bmeta)
     return {"saved": saved, "source_report": source_report, "period": period, "summary": summary,
+            "report_key": rk, "statement_type": (statement_type or "").strip() or None,
             "rules_source": rules_source, "convention": conv, "convention_meta": conv_meta,
             "footer_rows_dropped": footer_rows,
             "categories": commission_ledger.bucket_keys(buckets), "category_labels": commission_ledger.bucket_labels(buckets),
@@ -4894,6 +4942,7 @@ async def commission_ledger_analyze(
     file: UploadFile = File(...),
     source_report: str = Form("ma_daily_tx"),
     carrier_id: str = Form(""),
+    statement_type: str = Form(""),
     org_id: str = ORG_ID,
 ):
     """READ-ONLY preview for the setup wizard — reads the uploaded file, shows which columns it detected
@@ -4907,15 +4956,17 @@ async def commission_ledger_analyze(
         raise HTTPException(400, f"Could not read file: {e}")
     client = sb()
     headers = [str(h).strip() for h in df.columns if str(h).strip()]
-    saved = column_mapping.load_rules(client, org_id, "commission_ledger", carrier_id or None)
-    suggestions = column_mapping.suggest(headers, "commission_ledger", saved, client, org_id)
-    hdr_rules = _ledger_source_rules(client, org_id, carrier_id)
+    # the same per-statement-type mapping key the import and the intake derive (index §30.10)
+    rk = _ledger_mapping_key(client, org_id, statement_type, source_report)
+    saved = column_mapping.load_rules(client, org_id, rk, carrier_id or None)
+    suggestions = column_mapping.suggest(headers, rk, saved, client, org_id)
+    hdr_rules = _ledger_source_rules(client, org_id, carrier_id, report_key=rk)
     cat_rules, rules_source = commission_ledger.load_rules_meta(client, org_id, source_report)
     conv, conv_meta = _ledger_convention(hdr_rules)
     cat_rules, class_meta = ma_class_wiring.ledger_rules_with_class(client, org_id, source_report, cat_rules)
     buckets, bmeta = _ledger_buckets(client, org_id)
     mapped = _ledger_map_records(df.to_dict("records"), hdr_rules)
-    mapped, footer_rows = _ledger_footer_drop(mapped, client, org_id)
+    mapped, footer_rows = _ledger_footer_drop(mapped, client, org_id, report_key=rk)
     rows = [commission_ledger.build_row(src, {"org_id": org_id, "source_report": source_report},
                                         cat_rules, conv, buckets) for src in mapped]
     agg = {}
@@ -4929,6 +4980,9 @@ async def commission_ledger_analyze(
     amount_src = next((s["suggested_source"] for s in suggestions if s["target_field"] == "raw_amount"), "")
     return {"headers": headers, "row_count": int(len(df)), "usable_rows": len(rows),
             "suggestions": suggestions, "amount_source": amount_src,
+            # the key the wizard must SAVE its column choices under (the page never spells it)
+            "report_key": rk, "statement_type": (statement_type or "").strip() or None,
+            "carrier_id": carrier_id or None,
             "summary": commission_ledger.summarize(rows, rules=cat_rules, conv=conv, buckets=buckets, buckets_meta=bmeta),
             "observed": observed, "class_wiring": class_meta,
             "rules_source": rules_source, "convention": conv, "convention_meta": conv_meta,
@@ -4962,7 +5016,9 @@ async def commission_ledger_analyze(
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 _INTAKE_STATE_MIGRATION = "1007_onboarding_intake_state.sql"
 _INTAKE_SIGN_MIGRATION = "1008_sign_convention_netted.sql"
-_INTAKE_REPORT_KEY = commission_ledger.MAPPING_REPORT_KEY      # 'commission_ledger'
+# The intake's mapping key is DERIVED PER STATEMENT TYPE (`_ledger_mapping_key` →
+# `commission_ledger.mapping_report_key`) and carried on the analyze context as `ctx['report_key']`;
+# there is deliberately no module constant for it (index §30.10 — the constant WAS the defect).
 _INTAKE_REREAD_PAGE = 1000
 
 
@@ -5115,11 +5171,12 @@ def _intake_carrier(client, org_id, carrier_id):
     return c, code
 
 
-def _intake_house_defaults(client, org_id, code, source_report):
+def _intake_house_defaults(client, org_id, code, source_report, report_key):
     """The house org's presets for THIS carrier code only (design §0.3: never a prefill from a carrier
     the tenant did not select): the house's column_mapping rows stamped with the house carrier of the
-    same code, and the house's commission_category_map rows under the same source_report key.
-    Explicitly HOUSE-scoped reads; [] when the house has no such carrier or the tenant IS the house."""
+    same code UNDER THE SAME STATEMENT TYPE's mapping key, and the house's commission_category_map rows
+    under the same source_report key. Explicitly HOUSE-scoped reads; [] when the house has no such
+    carrier or the tenant IS the house."""
     if org_id == ORG_ID:
         return [], []
     try:
@@ -5128,7 +5185,7 @@ def _intake_house_defaults(client, org_id, code, source_report):
         hid = implementation_spine.carrier_id_by_code(hc, code, code=_report_labels.normalize_carrier_code)
         if not hid:
             return [], []
-        cols = [r for r in column_mapping.load_rules(client, ORG_ID, _INTAKE_REPORT_KEY, hid)
+        cols = [r for r in column_mapping.load_rules(client, ORG_ID, report_key, hid)
                 if r.get("carrier_id") == hid]
         cats = (client.schema("commcalc").table("commission_category_map").select("*")
                 .eq("org_id", ORG_ID).eq("source_report", source_report).execute().data) or []
@@ -5192,12 +5249,16 @@ def _intake_prepare_commission(client, org_id, contents, filename, carrier_id, s
     headers, records = shape["headers"], shape["records"]
     source_report = _intake.source_report_key(code, stype)
     ikey = _intake.instance_key(kind, carrier["id"], stype)
-    fields = column_mapping.target_fields(_INTAKE_REPORT_KEY, client, org_id)
-    # the tenant's OWN saved rows for THIS carrier — a row saved for another carrier never prefills
-    saved = [r for r in column_mapping.load_rules(client, org_id, _INTAKE_REPORT_KEY, carrier["id"])
+    # THE MAPPING KEY IS PER STATEMENT TYPE (index §30.10): a residual statement from this carrier
+    # keeps its own column map and its own 3.4 answer; the default type IS today's key
+    report_key = _ledger_mapping_key(client, org_id, stype)
+    fields = column_mapping.target_fields(report_key, client, org_id)
+    # the tenant's OWN saved rows for THIS carrier and THIS statement type — a row saved for another
+    # carrier, or for another statement type of this carrier, never prefills
+    saved = [r for r in column_mapping.load_rules(client, org_id, report_key, carrier["id"])
              if r.get("carrier_id") == carrier["id"]]
-    house_cols, house_cats = _intake_house_defaults(client, org_id, code, source_report)
-    suggestions = column_mapping.suggest(headers, _INTAKE_REPORT_KEY, saved, client, org_id)
+    house_cols, house_cats = _intake_house_defaults(client, org_id, code, source_report, report_key)
+    suggestions = column_mapping.suggest(headers, report_key, saved, client, org_id)
     overrides = _intake_json(column_map_json, "column_map", {})
     if not isinstance(overrides, dict):
         raise HTTPException(400, "column_map must be a JSON object {target_field: header}")
@@ -5205,7 +5266,7 @@ def _intake_prepare_commission(client, org_id, contents, filename, carrier_id, s
                                        carrier_label=carrier.get("name") or code, overrides=overrides)
     rules = _intake.mapping_rules(proposal)
     mapped = _ledger_map_records(records, rules)
-    ident = column_mapping.identity_fields(_INTAKE_REPORT_KEY, client, org_id)
+    ident = column_mapping.identity_fields(report_key, client, org_id)
     mapped_fields = [p["target_field"] for p in proposal if p.get("column")]
     ident_mapped = any(f in mapped_fields for f in ident)
     if str(footer or "auto").strip().lower() == "none":
@@ -5265,6 +5326,7 @@ def _intake_prepare_commission(client, org_id, contents, filename, carrier_id, s
     text_headers = [p["column"] for p in proposal if p["column"] and (p.get("transform") or "text") != "number"]
     return {
         "kind": kind, "statement_type": stype, "carrier": carrier, "carrier_code": code,
+        "report_key": report_key,
         "source_report": source_report, "instance_key": ikey, "shape": shape, "headers": headers,
         "records": records, "fields": fields, "proposal": proposal, "rules": rules, "mapped": mapped,
         "kept": kept, "footers": footers, "footer": footer, "identity_fields": ident,
@@ -5893,7 +5955,7 @@ def _intake_payload(ctx):
     proposal = ctx["proposal"]
     out = {
         "source_kind": kind, "target_table": _intake.SOURCE_KIND_TARGET.get(kind),
-        "report_key": ctx.get("report_key") or (_INTAKE_REPORT_KEY if kind == "commission" else None),
+        "report_key": ctx.get("report_key"),      # commission: derived per statement type (§30.10)
         "instance_key": ctx["instance_key"],
         # 2.2 / 3.2
         "detect": {"sheet": ctx["shape"]["sheet"], "header_row": ctx["shape"]["header_row"],
@@ -6813,12 +6875,13 @@ def _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who
     if refusals:
         raise HTTPException(400, "Not committed — " + " | ".join(refusals))
     carrier, conv_name, source_report = ctx["carrier"], ctx["conv_name"], ctx["source_report"]
+    report_key = ctx["report_key"]           # per (carrier, STATEMENT TYPE) — derived at analyze (§30.10)
     # (a)+(b) THE MAPPING, through the one writer. The raw_amount row carries the 3.4 answer.
     saved_fields = []
     for p in ctx["proposal"]:
         if not p.get("column"):
             continue
-        kw = {"report_key": _INTAKE_REPORT_KEY, "target_field": p["target_field"], "source_header": p["column"],
+        kw = {"report_key": report_key, "target_field": p["target_field"], "source_header": p["column"],
               "transform": p.get("transform") or "text", "carrier_id": carrier["id"], "is_active": True}
         if p["target_field"] == _intake.AMOUNT_FIELD:
             kw["sign_convention"] = conv_name
@@ -6834,7 +6897,7 @@ def _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who
             raise HTTPException(400, f"Saving the column map for '{p['target_field']}' failed: {msg[:200]}")
         saved_fields.append(p["target_field"])
     # the save guarantee for the mapping: read it back and check it says what was confirmed
-    reloaded = [r for r in column_mapping.load_rules(client, org_id, _INTAKE_REPORT_KEY, carrier["id"])
+    reloaded = [r for r in column_mapping.load_rules(client, org_id, report_key, carrier["id"])
                 if r.get("carrier_id") == carrier["id"]]
     back = {r["target_field"]: r for r in reloaded}
     wrong = [tf for tf in saved_fields
@@ -6914,7 +6977,7 @@ def _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who
         blocking_reason=("; ".join(problems) if problems else ""), by=who)
     # a CONFIRMED statement layout is learned under its statement type (mig 1010; header names only)
     learned = (_intake_learn_signature(client, org_id, ctx, "commission", statement_type=ctx.get("statement_type"),
-                                       layout=commission_ledger.MAPPING_REPORT_KEY)
+                                       layout=report_key)
                if ok else {"learned": False, "reason": "not confirmed"})
     return {"ok": ok, "problems": problems, "saved": saved, "source_report": source_report, "period": per,
             "report_kind": learned,
@@ -6969,7 +7032,7 @@ def commission_ledger_summary(source_report: str = "ma_daily_tx", period: str = 
         _rules, _rules_source = commission_ledger.load_rules_meta(_client, org_id, source_report)
     except Exception:
         _rules, _rules_source = None, None
-    _conv, _conv_meta = _ledger_convention_for(_client, org_id)
+    _conv, _conv_meta = _ledger_convention_for(_client, org_id, source_report=source_report)
     _buckets, _bmeta = _ledger_buckets(_client, org_id)
     return {"source_report": source_report, "period": period, "origin": origin or None,
             "rules_source": _rules_source, "convention": _conv, "convention_meta": _conv_meta,
@@ -7028,7 +7091,7 @@ def commission_ledger_observed_types(source_report: str = "ma_daily_tx", period:
     # category gets, so an un-attributed label is visible instead of silently sitting in Unsplit.
     try:
         _rules = commission_ledger.load_rules(client, org_id, source_report)
-        _conv = _ledger_convention_for(client, org_id)[0]
+        _conv = _ledger_convention_for(client, org_id, source_report=source_report)[0]
     except Exception:
         _rules, _conv = None, commission_ledger.DEFAULT_CONVENTION
     _lc = _org_leg_classifier(client, org_id)
@@ -7262,21 +7325,24 @@ def _ledger_ma_derive(client, org_id, source_report, period, carrier_id="", repo
     cfg_rows = _ledger_sync_config_rows(client, org_id)
     keys = [report_key] if report_key else ledger_ma_sync.template_sources(source_report, cfg_rows)
     degraded = []
+    # The MA refresh reads the raw MA tables that feed the COMMISSION statement type — its mapping key
+    # is the default type's (today's key, byte-for-byte), derived like every other reader (§30.10)
+    ledger_rk = commission_ledger.mapping_report_key("")
     try:
-        hdr_rules = _ledger_source_rules(client, org_id, carrier_id)
+        hdr_rules = _ledger_source_rules(client, org_id, carrier_id, report_key=ledger_rk)
     except Exception as e:
         # A READ-ONLY preview must never 500 because a config table is unreachable — fall back to the
         # built-in ledger layout (the same list _ledger_source_rules returns when nothing is saved) and
         # SAY that a saved override could not be consulted.
         hdr_rules = [{"target_field": d["target_field"], "source_header": d["source_header"],
                       "transform": d["transform"]}
-                     for d in column_mapping.default_mapping("commission_ledger")]
+                     for d in column_mapping.default_mapping(ledger_rk)]
         degraded.append(f"the saved ledger column mapping could not be read ({str(e)[:120]}) — the "
                         f"built-in default layout was used")
     cat_rules, rules_source = commission_ledger.load_rules_meta(client, org_id, source_report)
     conv, conv_meta = _ledger_convention(hdr_rules)
     cat_rules, class_meta = ma_class_wiring.ledger_rules_with_class(client, org_id, source_report, cat_rules)
-    field_defs = column_mapping.target_fields("commission_ledger", client, org_id)
+    field_defs = column_mapping.target_fields(ledger_rk, client, org_id)
     # the tenant's saved per-(carrier, report) MA column-map overrides (mig 212), keyed by report_key
     saved_maps = {}
     try:
@@ -7553,7 +7619,7 @@ def get_commission_category_map(source_report: str = "ma_daily_tx", org_id: str 
     # them for every template is how a tenant-created rule-set with zero rows displayed, and silently
     # classified with, another template's patterns.
     defaults = commission_ledger.default_rules_for(source_report)
-    conv, conv_meta = _ledger_convention_for(client, org_id)
+    conv, conv_meta = _ledger_convention_for(client, org_id, source_report=source_report)
     _b, _bm = _ledger_buckets(client, org_id)
     return {"source_report": source_report, "rules": rows, "ready": ready,
             "using_defaults": bool(not rows and defaults),
@@ -8398,7 +8464,7 @@ def ma_class_wiring_ledger_delta(source_report: str = "ma_daily_tx", period: str
         rules = []
     # BOTH sides of the delta run under the SAME convention, so the panel shows the class move and
     # nothing else — the sign convention is not part of this comparison.
-    conv = _ledger_convention_for(client, org_id)[0]
+    conv = _ledger_convention_for(client, org_id, source_report=source_report)[0]
     idx, idx_meta = ma_class_wiring.load_class_index(client, org_id, source_report)
     legacy_rules = [dict(r) for r in rules]
     for r in legacy_rules:

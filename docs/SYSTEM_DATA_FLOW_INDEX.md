@@ -3090,7 +3090,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `storeops.app_users` (ONE ROW PER `(auth_id, org_id)` since mig `706` — a login belonging to several companies has several rows; `is_default_org` declares its home company and is set on **0 of 112 rows** live) | provisioning / invite / `connect-tenant` | `core/membership.list_memberships` → `pick_membership` (handlers) and `tenant_middleware._resolve_identity` → `_pick_active_org` (the request's acting org, and the ONLY rule that decides it); surfaced to the browser by `GET /core/my-tenants` → `frontend/src/lib/tenant-scope.ts` (§28) |
 | `core.module_onboarding_task` (mig `733`) | `onboarding.seed_tasks` (INSERTS missing task rows only) + `_backfill_import_sources` (fills a BLANK `import_source` from the shipped registry, nothing else, never overwriting an operator value) | `load_tasks_with_source` → `build_status`, the POS wizard (§23n). DB is truth, the in-code registry is the fallback — so a task that GAINS an import source after a tenant was seeded needs the backfill to reach it |
 | `commcalc.carrier` (mig `038`) · `commcalc.report_definitions.carrier_id` (mig `291`) · `commcalc.connector_instances.carrier_id` (mig `039`) | `implementation_spine.carrier_visible` — THE one predicate (`router._carrier_visible` delegates to it); `upload_scope_map`; `carrier_blocks` | **§26 — "which uploads and automations belong to a carrier" is these three columns and nothing else.** `report_definitions.connector_id` is the automation↔upload binding the owner asked for, and it has existed since mig `039`. NULL `carrier_id` = carrier-agnostic and ALWAYS shown |
-| `commcalc.column_mapping` (mig `042`; **`sign_convention` mig `1006`**) | `POST /commcalc/column-mapping` — THE one writer (§25.11) | `column_mapping.load_rules` → `apply_mapping` (every mapped ingest); **`commission_ledger.convention_from_mapping`** reads the `raw_amount` row's `sign_convention` = which sign of that column is money EARNED, per (org, report, carrier) — `payout_negative` (NULL = this = unchanged) \| `payout_positive` \| **`payout_negative_netted` (mig `1008`, NOT applied — the onboarding intake's 'earned is negative' answer: negative earned AND a positive is a chargeback that nets off, §30)**. Declared in the mapping wizard on `number` fields only, or by the intake's 3.4 answer; nothing is backfilled (§25.12) |
+| `commcalc.column_mapping` (mig `042`; **`sign_convention` mig `1006`**) | `POST /commcalc/column-mapping` — THE one writer (§25.11); **for a commission-family statement the `report_key` is DERIVED per statement type by `commission_ledger.mapping_report_key` (`commission_ledger` \| `commission_ledger__residual` \| `commission_ledger__<registry token>`, §30.10) — never spelled; lock `harness_mapping_key_lock.py`** | `column_mapping.load_rules` → `apply_mapping` (every mapped ingest); **`commission_ledger.convention_from_mapping`** reads the `raw_amount` row's `sign_convention` = which sign of that column is money EARNED, per (org, report, carrier) — `payout_negative` (NULL = this = unchanged) \| `payout_positive` \| **`payout_negative_netted` (mig `1008`, NOT applied — the onboarding intake's 'earned is negative' answer: negative earned AND a positive is a chargeback that nets off, §30)**. Declared in the mapping wizard on `number` fields only, or by the intake's 3.4 answer; nothing is backfilled (§25.12) |
 | `commcalc.onboarding_run` (mig `1007`, NOT applied) | `router._intake_save_state` (one in-progress run per org, created on the first PUT /onboarding/intake/state) | `router._intake_state_payload` → `onboarding_intake.rail` — the left rail of `/onboarding/intake`. State only; nothing in payout/P&L reads it (§30) |
 | `commcalc.onboarding_stage_state` (mig `1007`, NOT applied) | `router._intake_save_state` — one row per (run, stage, instance_key): stage 3 `commission:<carrier_id>:<statement slug>`; stage 2 `sales|pos|inventory:<pos source>:<layout>`, `other:<pos source or file>:<name slug>`, and the explicit `inventory:none:none` "no inventory export" choice (PUT /state with a reason); `payload` merged per key on every step (incl. `file` = the KEPT upload's storage reference, bucket `onboarding-intake`); `verified_numbers` written by `/onboarding/intake/commit` from the RE-READ rows of the kind's table | `onboarding_intake.rail` (projection: lamps, resume step, the Stage-4 `verify_table`, the Stage-5 `runbook`). Sibling of mig-927 `onboarding_state` by design — that one is (org, step) navigator meta with no instance/run dimension (§30) |
 | `commcalc.onboarding_run.signed_off_by / _on_behalf / _at` (mig `1007`) | `POST /commcalc/onboarding/intake/sign-off` (4.2; refused while any source is red) | `onboarding_intake.rail` → `sign_off` block; stages 4/5 read verified only when every instance is verified AND the run is signed off (§30.6) |
@@ -3240,7 +3240,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | _every endpoint OFFERING market options (dropdown/enumeration)_ | — | §13c canonical vocabulary (`core.scope.canonical_markets` composed via `merge_market_options`/`org_market_options`); inventory pinned in `harness_market_enumeration_guard.py`; B-1115/LI truth table `harness_market_vocabulary_truth.py` (owner 2026-09-04) |
 | `POST /commcalc/column-mapping` (the ONE writer of `commcalc.column_mapping`; also where an AMOUNT column declares **which sign is money earned**) | `router.upsert_column_mapping` — read-then-write over the mig-042 expression index; `sign_convention` validated against `commission_ledger.SIGN_CONVENTIONS`, written only on a `number` transform and only when the mig-1006 column exists | §25.11 (the save that never saved) + §25.12 (the convention). Proof `harness_column_mapping_save.py`, `harness_commission_ledger_sign.py` |
 | `GET /commcalc/commission-buckets` · `POST /commcalc/commission-buckets` · `DELETE /commcalc/commission-buckets/{key}` (THE BUCKET REGISTRY, mig 1009: the org's merged buckets with kind / hint words / P&L line, the P&L chart to pick from (`_pl_lines` = `coa.PL_SPEC` + the org's `pl_line_labels`), usage counts; write admin-gated, refused pre-1009 naming the migration) | `router.get_commission_buckets` / `upsert_commission_bucket` / `delete_commission_bucket` → `commission_ledger.load_buckets_meta` / `normalise_bucket`; `_ledger_buckets` (the one reader every ledger endpoint calls) + `_ledger_bucket_guard` (the landing refusal) | §30.7, §15 |
-| `POST /commcalc/commission-ledger/import` · `POST /commcalc/commission-ledger/analyze` (classify a statement into the org's registry buckets — the five column-backed + every registry bucket) | `router.commission_ledger_import` / `commission_ledger_analyze` → `_ledger_source_rules` → `_ledger_convention(hdr_rules)` → `_ledger_footer_drop` → `commission_ledger.build_row`/`summarize`. Payloads carry `rules_source`, `convention`, `convention_meta`, `footer_rows_dropped` | §15 canonical ledger, §25.12 |
+| `POST /commcalc/commission-ledger/import` · `POST /commcalc/commission-ledger/analyze` (classify a statement into the org's registry buckets — the five column-backed + every registry bucket; **optional `statement_type` Form — else the type is read off the template's `source_report`**) | `router.commission_ledger_import` / `commission_ledger_analyze` → **`_ledger_mapping_key`** (§30.10) → `_ledger_source_rules(report_key=)` → `_ledger_convention(hdr_rules)` → `_ledger_footer_drop(report_key=)` → `commission_ledger.build_row`/`summarize`. Payloads carry `report_key`, `statement_type`, `rules_source`, `convention`, `convention_meta`, `footer_rows_dropped` | §15 canonical ledger, §25.12, §30.10. Proof `harness_statement_type_mapping.py` §D |
 | `POST /commcalc/onboarding/intake/analyze` (READ-ONLY over the data tables — every kind: sheet/header/footer detection, column proposal WITH provenance + 3 samples, the shared store/rep resolution rows + decisions, the kind's verify numbers beside the file's total; stage 3 adds the 3.4 sign panels, labels + bucket suggestions, the 3.8 preview. `file` optional: `use_stored=1` + `instance_key` re-reads the KEPT upload; a dropped file is kept (`_intake_file_put`, the only write) | `router.onboarding_intake_analyze` → `_intake_prepare` → `_intake_prepare_commission` (as before) or `_intake_prepare_stage2` (`_intake_read_shape` → `column_mapping.suggest` → `propose_columns` → `apply_mapping` → `split_footer(amount_field)` → `identity_rows` → `resolve_stores` / `resolve_reps` over `_intake_store_resolver` / `_intake_rep_resolver` → `sales_verify` / `inventory_verify` / `other_summary` → `simple_tie` → `stage2_refusals`) → `_intake_payload` | §30 / §30.6. Proofs `harness_onboarding_intake.py`, `harness_onboarding_intake_b.py` |
 | `POST /commcalc/onboarding/intake/commit` (THE SAVE, every kind: refuse while a gate is open; map → `upsert_column_mapping` + read back; identity decisions → `_intake_apply_identity` + read back through the resolver; land → `_intake_land` (commission `_ledger_land_rows`; sales/pos `_ingest_mapped_df`; inventory `b2b_sweep.write_inventory_devices`; other: recorded, nothing landed); RE-READ → `_intake_reread` / `_intake_reread_sales` / `_intake_reread_inventory`; `ok` only when re-read count and totals equal what was shown, else `ok:false` + `problems`, stage row `needs_input`) | `router.onboarding_intake_commit` → `_intake_commit_commission` / `_intake_commit_stage2` / `_intake_commit_other` | §30 / §30.6. Never reports success unless rows re-read = rows built and the re-read total equals what was shown |
 | `GET /commcalc/onboarding/intake/state` · `PUT /commcalc/onboarding/intake/state` (the rail — a projection of mig-1007 rows: instances of stages 2 and 3, the Stage-4 verify table, the Stage-5 runbook, the sign-off; GET also serves the 2.0 vocabulary — every kind with its layouts (`layouts_for_kind` over `column_mapping.TABLE_MAP`), the org's `pos_profile` sources, its store roster and employees for 2.4, the company lamp counts; the PUT merges one step's payload, admits every stage's step keys, records `inventory:none:none` as verified only with a reason, and refuses to mark any other source verified — only the commit's re-read does) | `router.onboarding_intake_state` / `onboarding_intake_put_state` → `_intake_state_payload` / `_intake_save_state` → `onboarding_intake.rail`. Degrade honestly without mig 1007 (`state_ready:false`, migration named) | §30 / §30.6 |
@@ -7033,6 +7033,16 @@ credentials. Negative control: restoring the original upsert → 7/8.
 **REGISTERED:** `POST /commcalc/column-mapping` is the ONE writer of `commcalc.column_mapping`; every
 mapping UI (Column Mapping, the Implementation wizard, Commission Ledger — Setup) goes through it.
 
+**THE KEY IT IS CALLED WITH, for a commission-family statement, is DERIVED — never spelled (2026-09-20, §30.10).**
+`commission_ledger.mapping_report_key(statement_type, registry_rows)` is the ONE derivation:
+`commission_ledger` for the default type (today's key, byte-for-byte — nothing existing is re-keyed) and
+`commission_ledger__<statement token>` for every other statement type (`commission_ledger__residual`), the
+token being the report-kind registry's statement-type vocabulary (`report_kinds.statement_type_token`; a third
+type is a registry ROW). The router reaches it through `_ledger_mapping_key(client, org, statement_type,
+source_report)`; every reader (`_ledger_source_rules`, `_ledger_convention_for`, `_ledger_footer_drop`, the
+intake's analyze / commit, `/commission-ledger/analyze` + `/import`, the MA refresh) is keyed by it. The lock
+`harness_mapping_key_lock.py` fails the build on a literal `'commission_ledger'` used as a mapping key.
+
 ### 25.12 WHICH SIGN IS MONEY EARNED IS PART OF THE MAPPING (owner directive 2026-09-20)
 
 Owner: *"the inverted sign should not be hard coded, it should be a part of mapping — we should not be
@@ -8123,7 +8133,9 @@ something else. (d) **§7 availability gating** (`docs/ONBOARDING_FLOW_DESIGN.md
 wizard, email-imports patterns + the "apply standard" preset, intake 2.0 cards, nav tiles) through the ONE visibility
 function with a build-failing lock; today only the upload page gates, and it hardcodes a POS vendor name.
 (c) **Residual mapping — a CONFIRMED collision, and the CLASS is "a column-mapping key that ignores the statement
-type"** (not "residual is missing"): the next PR fixes it for every statement type at once. Stage A keys `commcalc.column_mapping` by
+type"** (not "residual is missing"). **CLOSED — built in §30.10 (the ONE derivation `commission_ledger.mapping_report_key`,
+the residual layout `commission_ledger__residual`, the lock `harness_mapping_key_lock.py`, proof `harness_statement_type_mapping.py`).**
+As it stood: the next PR fixes it for every statement type at once. Stage A keys `commcalc.column_mapping` by
 (org, `commission_ledger`, carrier_id, target_field) (`_intake_commit_commission`, `_INTAKE_REPORT_KEY`): a
 residual statement from the same carrier with a different layout would OVERWRITE the commission statement's
 map for `raw_amount` / label / date, and its sign answer. Fix: key the map through the statement type the way
@@ -8205,6 +8217,74 @@ reasons (x_report is POS-agnostic, so the registry answers "shown" for every ten
 Upload page (the portal sweeps) keep their connector-registry carrier scope — they are automations, not upload
 choices. (4) A filename standard for a POS other than the house one is a `pos_profile` row nobody has written yet: the
 Verizon tenant is told so instead of being handed another POS's rules.
+
+### 30.10 THE COLUMN-MAPPING KEY IS DERIVED PER STATEMENT TYPE — the residual mapping, and the class it belonged to (owner 2026-09-20)
+
+Owner: *"residual report … also add the residual mapping."* House rule: fix the mechanism for every caller, find the
+siblings, one fact one home, lock it.
+
+**THE CLASS (confirmed in the PR #254 review, §30.8 OPEN (c)) — "a column-mapping key that ignores the statement type",
+not "residual is missing".** Stage A keyed `commcalc.column_mapping` for the intake by (org, `commission_ledger`,
+carrier_id, target_field) — `_intake_commit_commission` through the module constant `_INTAKE_REPORT_KEY`; the older
+wizard, `_ledger_source_rules`, `_ledger_footer_drop`, `_ledger_convention_for` and the MA refresh spelled the same
+literal. A second statement type from the SAME carrier (the residual statement — a different layout, its own sign)
+would therefore have OVERWRITTEN the commission statement's column map AND its `sign_convention` (mig 1006 lives on
+that key's `raw_amount` row). The RULES were already namespaced per statement (`commission_category_map.source_report
+= <carrier>__<statement slug>`, §30); the mapping was the one fact without its home. Measured before building:
+`harness_statement_type_mapping.py` §F re-keys through the literal and shows the residual commit rewriting the
+commission statement's amount header to `Residual` and its sign to `payout_negative_netted` — the pin goes RED.
+
+**DUPLICATE CHECK (build gate) — searched §16 `column_mapping` (042/1006/1008), §17 `/column-mapping*`,
+`/commission-ledger/analyze|import|summary|templates`, `/onboarding/intake/*`, §25.11–25.12, §30.1–30.9 (the registry's
+`statement_type`, `kind_key_for`, `source_report_key`), the design's §4 `source_mapping` (one row per (org, carrier,
+statement type) — the INTENT, now met by the key rather than a new table). NOT rebuilt: no new table, no second writer,
+no second alias list, no second footer rule.**
+
+| Need | REUSED (not rebuilt) | New |
+|------|----------------------|-----|
+| The key | the ONE writer `upsert_column_mapping` (§25.11) and `column_mapping.load_rules` — behaviour unchanged, called with the derived key | **`commission_ledger.mapping_report_key(statement_type, registry_rows)`** — THE derivation: `commission_ledger` for the default type (today's key, byte-for-byte), `commission_ledger__<token>` otherwise; `mapping_report_keys` (one per registry statement type, for the picker); `statement_type_of_source_report` (a read endpoint recovers the type from `<carrier>__<slug>`); generic mechanism `column_mapping.variant_report_key` / `split_report_key` (`REPORT_KEY_VARIANT_SEP = '__'`) |
+| The vocabulary | the report-kind registry's commission-family rows and their `statement_type` (mig 1010; `HOUSE_KINDS` before it — §30.9) | **`report_kinds.statement_types(rows)`** (mirror ∪ rows, default first — a key never changes because a row was edited) and **`statement_type_token(text, rows)`** ('residual statement' → `residual`; blank / 'commission statement' → the default; a text naming NO known token keys as its own slug, never onto the default's key); `kind_key_for` now resolves through it (no type named in code); `STATEMENT_TYPE_DEFAULT` |
+| The residual layout | `column_mapping.TARGET_FIELDS` + `TABLE_MAP` (the layout registry), the alias mechanism `suggest`, the footer rule through `identity_fields` | **`TARGET_FIELDS['commission_ledger__residual']`**: line identity (account / mobile number → `account_id`, generic aliases incl. MDN / Mobile Number / CTN), account name, store, rep, order id, residual type, plan or product (`product_name`, required), service month (`trans_date`, `date_auto`), residual amount (`raw_amount`, number, required — the 3.4 sign question applies per type). Lands in the SAME ledger table. `_base_fields`: a variant key with no entry inherits the base key's fields, so a third type maps with no code |
+| The registry card | the residual card of §30.9 | its `layout` is now `commission_ledger__residual` with `signature_fields` through it (mirror + 1010 seed, pinned equal by `harness_report_kinds` §A; 1010 NOT applied) |
+| The I/O | `_report_kinds.load_registry` (rows, else the mirror) | **`router._ledger_mapping_key(client, org, statement_type, source_report)`** — the wrapper every endpoint calls; `_ledger_carrier_of_source_report` resolves the CARRIER of an intake-written `source_report` through `implementation_spine.carrier_id_by_code` so the read endpoints read the carrier-scoped rows |
+| The callers routed | `_intake_prepare_commission` (derives once → `ctx['report_key']`, the analyze payload's `report_key`), `_intake_house_defaults` (house rows under the SAME type's key), `_intake_commit_commission` (saves and reads back under it; the layout learned under it), `/commission-ledger/analyze` + `/import` (new optional `statement_type` Form; else the type off the template's `source_report`; payload `report_key`), `_ledger_source_rules` / `_ledger_footer_drop` (`report_key=`), `_ledger_convention_for(..., source_report=)` for `/commission-ledger/summary`, `/observed-types`, `/commission-category-map`, `/ma-class-wiring/ledger-delta`, `_ledger_ma_derive` (the MA refresh = the default type, derived), `onboarding_intake.REPORT_KEY_BY_KIND`; `column_mapping.known_report_keys` lists one key per registry statement type (the Column Mapping picker) | `_INTAKE_REPORT_KEY` DELETED (the constant was the defect) |
+| Frontend | `useReportKinds` (the one hook, §30.9) on both pages | `lib/statement-type.ts::statementTypeToken` (the token's twin, so the highlighted card and the saved key agree); intake 3.1 offers `<token> statement` per registry row (no type named); **Commission Ledger — Setup** offers the registry's statement types, sends `statement_type`, and saves its column choices under the `report_key` the analyze payload names (it spelled `'commission_ledger'` before — a sibling); `carrier-scope.ts` `statement_type` widened to `string` |
+| THE LOCK | the carrier-vocab guard's posture (stdlib static scan, one CI job — `carrier-vocab-guard.yml`) | **`backend/harness_mapping_key_lock.py`**: (a) a literal `'commission_ledger'` on a line that reads or writes the mapping, anywhere in backend/app, the harnesses, the scratchpad or frontend/src, outside an ALLOW entry with its reason (stale entry fails); (b) the old constant, or `MAPPING_REPORT_KEY` referenced outside the deriving module; (c) the derivation defined once, the wrapper present, the setup page saving under the payload's key; (d) nine negative controls |
+
+**What is unchanged for every existing tenant: nothing moves.** The default statement type derives TODAY's key, so every
+`column_mapping` row and every sign answer saved before this (§25.11–25.12, Stage A) is read exactly as before — proven
+by §C of the harness (rows seeded under the pre-change key load byte-identically through `_ledger_source_rules` with no
+key passed, through the intake with no type stated, and a commit UPDATES those rows in place). The ledger's
+`source_report` (`<carrier>__<slug>`) and the rule namespace are untouched. No migration; no row rewritten.
+
+**What a residual upload now does (the Verizon tenant, or any).** 3.1 offers "Residual report from the carrier" from the
+registry; the intake derives `commission_ledger__residual`, proposes the residual layout's columns (amount ← Residual,
+label ← Plan, line ← Account / MDN, period ← Service Month) with NO prefill from the commission statement's map, asks
+3.4 afresh for THIS type, buckets the labels through the mig-1009 hint words (`residual`, the auto-pay spellings — already
+present, nothing added), lands under `verizon__residual_statement`, ties out to its own total, and Stage 4 shows one row
+per (carrier, statement type). The commission statement's map and sign answer are byte-identical afterwards. The
+Commission Ledger page's template picker lists both `source_report` values from the data.
+
+**Proof:** `backend/harness_statement_type_mapping.py` — **62 checks**, DB-free, the intake fake-client pattern over the
+REAL router: §A the derivation; §B one carrier, two statement types → two independent maps, two independent sign answers
+(`payout_positive` / `payout_negative_netted`), each landing and tying to its own total, Stage 4 one row per type, the
+read endpoints reporting each type's own convention; §C the migration-free compatibility pin; §D the older wizard reads
+the same key (incl. the type read off the template's `source_report`, and the untouched `ma_daily_tx` path); §E a third
+statement type as a registry row only (its own key, fields inherited, learned under its card); §F negative controls
+(re-key through the literal → RED; the lock scanner red on a literal); §G wiring, RULE TWO, registration.
+`harness_mapping_key_lock.py` — 17 checks. Unchanged and green: intake 164 / B 87 / C 92, sign 125, mapping_save 15,
+report_kinds 119, report-kind lock 20, ma_sync 113, prove_report_kinds 45, the three CI guards.
+
+**Seams left (reported, not hidden).** (1) mig 1010's `report_kind.statement_type` CHECK admits `commission | residual`
+only: a third statement type's registry row needs that CHECK widened — a migration, not code (the harness proves the
+code path; the database would refuse the row today). (2) The ledger has no mobile-number column, so a residual line's
+MDN maps to `account_id` (the line identity); linking a reversal to its original line by MDN (design §3.6) needs a
+column — an owner decision. (3) A statement type typed at 3.1 that names no registry token keys as its own slug
+(`commission_ledger__spiff_file`); if that token is later added as a registry row the key changes to
+`commission_ledger__spiff` and the earlier map must be re-confirmed — the intake shows it as unmapped rather than
+guessing. (4) The read endpoints (`/commission-ledger/summary` …) resolve the carrier from an intake-written
+`source_report`'s prefix; a hand-typed template key with no carrier part (`ma_daily_tx`, `boost`) reads the global
+(carrier-NULL) mapping as it always did.
 
 ---
 

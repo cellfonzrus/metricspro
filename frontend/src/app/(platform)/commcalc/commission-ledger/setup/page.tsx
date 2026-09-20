@@ -1,6 +1,8 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, apiUpload } from '@/lib/client'
+import { useReportKinds } from '@/lib/report-kinds'
+import { STATEMENT_TYPE_DEFAULT } from '@/lib/statement-type'
 
 // Guided SETUP WIZARD for the Commission Ledger. Walks a non-technical user through: pick a carrier
 // template → upload a commission file → confirm the columns we detected + preview how each line buckets
@@ -10,6 +12,8 @@ import { api, apiUpload } from '@/lib/client'
 type Tmpl = { key: string; label: string; builtin: boolean; rule_count: number }
 type Analysis = {
   row_count: number; usable_rows: number; headers: string[]; amount_source: string
+  // THE MAPPING KEY IS PER STATEMENT TYPE (index §30.10) — the backend derives it; this page saves under it, never spells it
+  report_key: string; statement_type?: string | null
   suggestions: { target_field: string; label: string; suggested_source: string; confidence: string }[]
   summary: { payout_total: number; charge_total: number; other_total: number; other_count: number; line_count: number
     categories: Record<string, { total: number; count: number; kind?: string }>; earned_total?: number; deductions_total?: number }
@@ -35,12 +39,17 @@ export default function CommissionLedgerSetupPage() {
   const [step, setStep] = useState(0)
   const [tmpls, setTmpls] = useState<Tmpl[]>([])
   const [src, setSrc] = useState('ma_daily_tx')
+  // The statement types on offer are the registry's commission-family kinds (design §7) — a carrier
+  // that sends a separate residual file picks it here and gets its OWN column map + sign convention.
+  const registry = useReportKinds()
+  const statementKinds = useMemo(() => registry.visible.filter(k => k.landing === 'commission'), [registry.visible])
+  const [statementType, setStatementType] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [fieldMap, setFieldMap] = useState<Record<string, string>>({})
   const [period, setPeriod] = useState('')
   const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState<any>(null)
+  const [result, setResult] = useState<{ saved?: number; summary?: Analysis['summary'] } | null>(null)
   const [msg, setMsg] = useState('')
 
   useEffect(() => { api('/api/v1/commcalc/commission-ledger/templates').then(d => setTmpls(d?.templates || [])).catch(() => {}) }, [])
@@ -49,14 +58,14 @@ export default function CommissionLedgerSetupPage() {
   async function analyze(f: File) {
     setBusy(true); setMsg('')
     try {
-      const fd = new FormData(); fd.append('file', f); fd.append('source_report', src)
+      const fd = new FormData(); fd.append('file', f); fd.append('source_report', src); fd.append('statement_type', statementType)
       const a: Analysis = await apiUpload('/api/v1/commcalc/commission-ledger/analyze', fd)
       setAnalysis(a)
       const fm: Record<string, string> = {}
       a.suggestions?.forEach(s => { fm[s.target_field] = s.suggested_source })
       setFieldMap(fm)
       setStep(2)
-    } catch (e: any) { flash(e?.message || 'Could not read the file') }
+    } catch (e) { flash((e as Error)?.message || 'Could not read the file') }
     setBusy(false)
   }
   async function recheck() {
@@ -64,14 +73,17 @@ export default function CommissionLedgerSetupPage() {
     setBusy(true)
     try {
       // save the key field mappings the user chose, then re-preview
+      // under the key the analyze payload named for THIS statement type — never a literal here
+      const rk = analysis?.report_key
+      if (!rk) { flash('Re-check the file first — the mapping key comes from the preview'); setBusy(false); return }
       for (const k of KEY_FIELDS) {
         const sh = fieldMap[k.tf]
-        if (sh) await api('/api/v1/commcalc/column-mapping', { method: 'POST', body: JSON.stringify({ report_key: 'commission_ledger', target_field: k.tf, source_header: sh, transform: k.transform }) })
+        if (sh) await api('/api/v1/commcalc/column-mapping', { method: 'POST', body: JSON.stringify({ report_key: rk, target_field: k.tf, source_header: sh, transform: k.transform }) })
       }
-      const fd = new FormData(); fd.append('file', file); fd.append('source_report', src)
+      const fd = new FormData(); fd.append('file', file); fd.append('source_report', src); fd.append('statement_type', statementType)
       const a: Analysis = await apiUpload('/api/v1/commcalc/commission-ledger/analyze', fd)
       setAnalysis(a); flash('Updated the preview with your column choices')
-    } catch (e: any) { flash(e?.message || 'Re-check failed') }
+    } catch (e) { flash((e as Error)?.message || 'Re-check failed') }
     setBusy(false)
   }
   async function doImport() {
@@ -79,10 +91,10 @@ export default function CommissionLedgerSetupPage() {
     if (!period.trim()) { flash('Enter a period first (e.g. June 2026)'); return }
     setBusy(true)
     try {
-      const fd = new FormData(); fd.append('file', file); fd.append('source_report', src); fd.append('period', period)
+      const fd = new FormData(); fd.append('file', file); fd.append('source_report', src); fd.append('period', period); fd.append('statement_type', statementType)
       const r = await apiUpload('/api/v1/commcalc/commission-ledger/import', fd)
       setResult(r); setStep(3)
-    } catch (e: any) { flash(e?.message || 'Import failed — is migration 071 applied?') }
+    } catch (e) { flash((e as Error)?.message || 'Import failed — is migration 071 applied?') }
     setBusy(false)
   }
 
@@ -93,7 +105,7 @@ export default function CommissionLedgerSetupPage() {
     <div style={{ padding: 24, maxWidth: 880 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 2 }}>🧭 Commission Ledger — Setup</h1>
       <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 16 }}>
-        Turn a carrier's commission file into five standard buckets. Do this once per carrier; afterwards
+        Turn a carrier&apos;s commission file into five standard buckets. Do this once per carrier; afterwards
         you just import each month. Nothing is saved until the final step.
       </p>
 
@@ -132,6 +144,18 @@ export default function CommissionLedgerSetupPage() {
               <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 3 }}>Start a blank template you build yourself</div>
             </div>
           </div>
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 3 }}>Statement type</div>
+            <select style={{ ...inp, minWidth: 260 }} value={statementType} onChange={e => setStatementType(e.target.value)}>
+              <option value="">{`${STATEMENT_TYPE_DEFAULT} statement (default)`}</option>
+              {statementKinds.filter(k => (k.statement_type || STATEMENT_TYPE_DEFAULT) !== STATEMENT_TYPE_DEFAULT)
+                .map(k => <option key={k.key} value={`${k.statement_type} statement`}>{k.label}</option>)}
+            </select>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
+              A carrier that sends a separate residual file gets its own column map and its own sign answer under that type — the commission statement&apos;s are not touched.
+              {registry.withheld ? ` ${registry.withheld}` : ''}
+            </div>
+          </div>
           <button style={primary} onClick={() => setStep(1)}>Next → Upload a file</button>
         </div>
       )}
@@ -141,8 +165,8 @@ export default function CommissionLedgerSetupPage() {
         <div style={card}>
           <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Step 2 — Upload one commission file</h2>
           <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 6 }}>
-            Carrier: <b>{tmplLabel}</b>. Upload the carrier's commission / transaction export (Excel or
-            CSV) — the processor's daily transaction file. We'll just <i>read</i> it to preview the
+            Carrier: <b>{tmplLabel}</b>. Upload the carrier&apos;s commission / transaction export (Excel or
+            CSV) — the processor&apos;s daily transaction file. We&apos;ll just <i>read</i> it to preview the
             result; <b>nothing is saved yet</b>.
           </p>
           <label style={{ ...primary, display: 'inline-block', marginTop: 8 }}>
@@ -204,13 +228,13 @@ export default function CommissionLedgerSetupPage() {
             </div>
             {a.summary.other_count > 0 ? (
               <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '10px 12px', fontSize: 13 }}>
-                ⚠️ <b>{a.summary.other_count} payout line(s)</b> ({money(a.summary.other_total)}) didn't match any rule. Open the{' '}
+                ⚠️ <b>{a.summary.other_count} payout line(s)</b> ({money(a.summary.other_total)}) didn&apos;t match any rule. Open the{' '}
                 <a href={`/commcalc/commission-category-map?source_report=${src}`} target="_blank" rel="noreferrer" style={{ color: '#9a3412', fontWeight: 700 }}>Category Map</a>{' '}
                 in a new tab, add a rule for the highlighted labels, then come back and press <b>Re-check</b>.
               </div>
             ) : (
               <div style={{ background: '#ecfdf5', border: '1px solid #6ee7b7', color: '#047857', borderRadius: 8, padding: '10px 12px', fontSize: 13 }}>
-                ✓ Every payout line matched a bucket. You're good to import.
+                ✓ Every payout line matched a bucket. You&apos;re good to import.
               </div>
             )}
           </div>
@@ -241,7 +265,7 @@ export default function CommissionLedgerSetupPage() {
           ) : (
             <>
               <div style={{ background: '#ecfdf5', border: '1px solid #6ee7b7', color: '#047857', borderRadius: 8, padding: '12px 14px', fontSize: 14, marginBottom: 14 }}>
-                ✅ Imported <b>{result.saved}</b> lines for <b>{period}</b> — {money(result.summary?.payout_total)} in payouts
+                ✅ Imported <b>{result.saved}</b> lines for <b>{period}</b> — {money(result.summary?.payout_total || 0)} in payouts
                 {result.summary?.other_count ? `, ${result.summary.other_count} still unmapped` : ', all classified'}.
               </div>
               <div style={{ display: 'flex', gap: 10 }}>

@@ -201,7 +201,7 @@ export function posOK(
 export type ReportKindRow = {
   key: string; label: string; what_in_it?: string | null; recognisable_columns?: string[]; source_hint?: string | null
   applies_to_pos?: string[]; applies_to_carrier?: string[]; defined_by?: 'house' | 'tenant'; defined_by_org?: string | null
-  statement_type?: 'commission' | 'residual' | null; landing: string; layout?: string | null
+  statement_type?: string | null; landing: string; layout?: string | null   // a registry token ('commission' | 'residual' | one a row adds)
   signature_fields?: string[]; upload_types?: string[]; custom_sheet_label?: string | null
   sort_order?: number; is_active?: boolean
   provenance?: string; provenance_text?: string; confirmations?: number

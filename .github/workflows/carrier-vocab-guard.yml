@@ -13,6 +13,11 @@ name: carrier-vocab-guard
 # THE REPORT-KIND LOCK (design §7, 2026-09-20) runs in the same job: every upload surface must read
 # the report-kind registry through the one hook, and no second list of report kinds / filename
 # patterns / POS vendor names may exist in code (backend/harness_report_kind_lock.py; stdlib only).
+#
+# THE MAPPING-KEY LOCK (index §30.10, 2026-09-20) runs here too: a commission-family column-mapping
+# key is DERIVED per statement type by ONE function (commission_ledger.mapping_report_key); a literal
+# 'commission_ledger' used as a mapping key anywhere outside the allow set fails the build
+# (backend/harness_mapping_key_lock.py; stdlib only).
 
 on:
   pull_request:
@@ -20,7 +25,10 @@ on:
       - "frontend/src/**"
       - "backend/harness_carrier_vocab_guard.py"
       - "backend/harness_report_kind_lock.py"
+      - "backend/harness_mapping_key_lock.py"
       - "backend/app/modules/commcalc/report_kinds.py"
+      - "backend/app/modules/commcalc/column_mapping.py"
+      - "backend/app/modules/commcalc/commission_ledger.py"
       - "backend/app/modules/commcalc/onboarding_intake.py"
       - "backend/app/modules/commcalc/implementation_spine.py"
       - "backend/app/modules/commcalc/router.py"
@@ -54,3 +62,6 @@ jobs:
       - name: Run the report-kind lock (every upload surface reads the registry; no second list)
         working-directory: backend
         run: python3 harness_report_kind_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the mapping-key lock (one derivation per statement type; no literal mapping key)
+        working-directory: backend
+        run: python3 harness_mapping_key_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
