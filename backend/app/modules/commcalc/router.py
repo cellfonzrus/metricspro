@@ -32680,8 +32680,33 @@ async def _email_sweep_due_worker(due):
         # own. Missing column (mig 930 not applied) reads as unlocked and the stamp writes no-op —
         # sweeps behave exactly as before.
         if _email_sweep_in_progress(cfg):
+            # A SKIPPED TICK IS AN ATTEMPT, AND IT MUST SAY SO (§19.21). This used to return silently:
+            # the config row was left untouched, so the mailbox went on advertising whatever status it
+            # last had while the platform quietly declined to sweep it, hour after hour. Live on
+            # 2026-09-20: a redeploy killed the house org's 04:00 sweep mid-flight, so its
+            # `sweeping_since` stamp was never cleared; every tick from 05:00 was skipped, and the page
+            # still showed the 03:00 login error with no hint that a lock — not the mailbox — was the
+            # reason nothing was happening. Same contract as every other non-delivering outcome: stamp
+            # `last_attempt_at`, never `last_run_at`, and name the cause and when it clears.
+            _held = str(cfg.get('sweeping_since') or '')[:19]
+            _until = ''
+            try:
+                _st = _datetime.fromisoformat(str(cfg.get('sweeping_since')).replace('Z', '+00:00'))
+                if _st.tzinfo is None:
+                    _st = _st.replace(tzinfo=_timezone.utc)
+                _until = (_st + _timedelta(minutes=EMAIL_SWEEP_LOCK_STALE_MINUTES)).isoformat()[:19]
+            except Exception:
+                pass
+            _email_status_update(client, oid, acct,
+                {**_sweep_run_stamp(False),
+                 'last_status': (f"skipped: a sweep started {_held}Z never finished, so this mailbox is "
+                                 f"locked against a second concurrent run"
+                                 + (f" until {_until}Z" if _until else "")
+                                 + ". Usually a redeploy or a worker restart killed the previous run; "
+                                   "'Run now' bypasses the lock.")[:600]})
             ran.append({"org_id": oid, "account": acct,
-                        "result": {"ok": True, "skipped": "sweep_in_progress"}})
+                        "result": {"ok": True, "skipped": "sweep_in_progress",
+                                   "lock_held_since": _held, "lock_clears_at": _until}})
             continue
         _email_status_update(client, oid, acct,
                              {'sweeping_since': _datetime.now(_timezone.utc).isoformat()})
