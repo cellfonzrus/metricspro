@@ -160,8 +160,11 @@ export function posVisible(tilePos: string | undefined | null, currentPos: strin
 /** The POS-gated surfaces that can be re-granted, for the admin screen to list. Same posture as
  *  rbac.NAV_CARRIERS: a small registry, so a surface cannot be gated without being overridable. */
 export const POS_GATED_SURFACES: { key: string; label: string; why: string }[] = [
-  { key: 'upload_email_reports', label: 'Email-report upload tiles (Upload page)',
-    why: 'Exports of one POS. Hidden from a tenant that has declared a different POS.' },
+  // Since 2026-09-20 the Upload page's email-report tiles are registry rows gated per kind
+  // (`kind:<key>` caps, reportKindsVisible below); this surface-level key stays as the documented
+  // legacy namespace so an existing 'pos:' override row still resolves through posOK unchanged.
+  { key: 'upload_email_reports', label: 'Email-report upload tiles (Upload page) — legacy surface key',
+    why: 'Superseded by the per-kind overrides in the report-kind registry (Admin → Labels → report kinds).' },
 ]
 
 /**
@@ -180,4 +183,75 @@ export function posOK(
   if (ov === true) return true
   if (ov === false) return false
   return posVisible(tilePos, currentPos)
+}
+
+// ── REPORT KINDS — the visibility family, extended (owner directives 2026-09-20; design §7) ──────
+// Owner: "it is very important that we don't have extra file upload paths for a new tenant who does
+// not need those based on the carrier they pick … no patchwork, it should work as a design."
+//
+// THE ONE VISIBILITY FUNCTION for report kinds. `reportKindsVisible` is the clause-for-clause twin
+// of backend `report_kinds.visible_kinds` (both harnesses run the same cases): a registry row shows
+// iff it is active AND its POS applies-to intersects the declared POS (or is any) AND its carrier
+// applies-to intersects the declared carriers (or is any) — with the super-admin `cap` override
+// (`kind:<key>` show|hide, the SAME ui_label_override mechanism as carrier:/pos:) applied first and
+// RECORDED as provenance. Every upload surface renders from this through lib/report-kinds.ts; no
+// page keeps a list of kinds, patterns, tables or presets of its own (locked by
+// backend/harness_report_kind_lock.py). Nothing here names a POS or a carrier: codes are data.
+
+export type ReportKindRow = {
+  key: string; label: string; what_in_it?: string | null; recognisable_columns?: string[]; source_hint?: string | null
+  applies_to_pos?: string[]; applies_to_carrier?: string[]; defined_by?: 'house' | 'tenant'; defined_by_org?: string | null
+  statement_type?: 'commission' | 'residual' | null; landing: string; layout?: string | null
+  signature_fields?: string[]; upload_types?: string[]; custom_sheet_label?: string | null
+  sort_order?: number; is_active?: boolean
+  provenance?: string; provenance_text?: string; confirmations?: number
+}
+export type ReportDeclaration = { pos: string[]; pos_source?: string; carriers: string[]; carrier_source?: string; reasons?: string[] }
+
+export const KIND_CAP_PREFIX = 'kind:'
+export const KIND_PROVENANCE = {
+  house: 'house default', override: 'your override', widened: 'widened by super-admin',
+  tenant: 'defined by a tenant on this carrier',
+} as const
+
+/** The rows a kind's applies-to and a declaration intersect on (empty applies-to = any). Same squash as posSquash. */
+export function kindApplies(row: Pick<ReportKindRow, 'applies_to_pos' | 'applies_to_carrier'>, decl: ReportDeclaration | null | undefined): boolean {
+  const pos = new Set((decl?.pos || []).map(posSquash))
+  const car = new Set((decl?.carriers || []).map(posSquash))
+  const ap = (row.applies_to_pos || []).map(posSquash).filter(Boolean)
+  const ac = (row.applies_to_carrier || []).map(posSquash).filter(Boolean)
+  const posOk = ap.length === 0 || ap.some(c => pos.has(c))
+  const carOk = ac.length === 0 || ac.some(c => car.has(c))
+  return posOk && carOk
+}
+
+/** The `kind:<key>` cap override: true = show, false = hide, null = auto (follow the declaration). */
+export function kindCapOverride(caps: Record<string, boolean | null> | undefined, key: string): boolean | null {
+  const v = (caps || {})[KIND_CAP_PREFIX + key]
+  return v === true ? true : v === false ? false : null
+}
+
+/**
+ * THE rule (design §7): registry rows visible to a tenant, each with its provenance. Inactive rows
+ * never show; a hide override wins; a show override widens and is recorded; else the declaration
+ * decides. An UNKNOWN declaration (no POS / no carrier declared) shows LESS, never more — the
+ * POS-specific and carrier-specific rows stay hidden and the payload's `reasons` say why.
+ */
+export function reportKindsVisible(
+  rows: ReportKindRow[] | null | undefined,
+  decl: ReportDeclaration | null | undefined,
+  caps?: Record<string, boolean | null>,
+): ReportKindRow[] {
+  const out: ReportKindRow[] = []
+  for (const r of rows || []) {
+    if (r.is_active === false) continue
+    const ov = kindCapOverride(caps, r.key)
+    if (ov === false) continue
+    const byRule = kindApplies(r, decl)
+    if (!byRule && ov !== true) continue
+    const prov = ov === true && !byRule ? KIND_PROVENANCE.widened
+      : r.provenance || (r.defined_by === 'tenant' ? KIND_PROVENANCE.tenant : KIND_PROVENANCE.house)
+    out.push({ ...r, provenance: prov, provenance_text: r.provenance_text || prov })
+  }
+  return out.sort((a, b) => (a.sort_order ?? 100) - (b.sort_order ?? 100) || a.key.localeCompare(b.key))
 }

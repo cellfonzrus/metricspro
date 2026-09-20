@@ -10,6 +10,7 @@
 // (the sales-report incident: a no-org_id read silently defaults to the HOUSE org).
 import { useState, useEffect, useCallback } from 'react'
 import { api, getActiveOrg } from '@/lib/client'
+import { PERIOD_ROUTES } from './uploadRoutes'
 
 const tones: Record<string, { bg: string; fg: string; label: string }> = {
   ok:      { bg: '#dcfce7', fg: '#166534', label: 'ok' },
@@ -55,7 +56,7 @@ export function UploadTracePanel({ period, uploadType, onClose }:
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
           <select value={ut} onChange={e => setUt(e.target.value)} style={{ padding: '4px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }}>
             <option value="">All types</option>
-            {['daily_sales', 'sales', 'inventory_aging', 'mi_report', 'payment_detail', 'dlar_rep', 'dlar_store', 'x_report', 'comp_report'].map(t => <option key={t} value={t}>{t}</option>)}
+            {Object.keys(PERIOD_ROUTES).map(t => <option key={t} value={t}>{t}</option>)}
           </select>
           <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={load}>↻ Refresh</button>
           {period && <span style={{ fontSize: 12, color: 'var(--text3)' }}>period: {period}</span>}

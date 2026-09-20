@@ -1,5 +1,6 @@
 'use client'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { apiUpload } from '@/lib/client'
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 // TENANT ONBOARDING — what every stage of the intake shares (design 2026-09-20, §0 "one shape for
 // every data stage"): the payload types that mirror onboarding_intake.py, the styles, the lamps and
@@ -373,6 +374,83 @@ export function Dropzone({ file, filename, onFiles, dragOver, setDragOver, hint 
       <div style={{ fontWeight: 600, marginBottom: 6 }}>{file ? file.name : filename ? `${filename} (kept — drop again only to replace it)` : hint}</div>
       <div style={{ ...note, marginBottom: 10 }}>.xlsx, .xls or .csv — every sheet is read</div>
       <input type="file" accept=".xlsx,.xls,.csv" onChange={e => onFiles(e.target.files)} />
+    </div>
+  )
+}
+
+// ── "DROP ANY REPORT HERE" — detection against the report-kind registry (design §7; index §30.8 (b)) ──
+// Owner: "the system to check against what report it matches using intelligence gained by using all
+// the reports." The backend (POST /commcalc/report-kinds/detect) reads the HEADER NAMES the way the
+// intake does and ranks the tenant's VISIBLE registry kinds — a confirmed fingerprint first ("seen
+// before as …, confirmed N times"), then header overlap, then the kind's signature fields. Nothing is
+// stored. This zone only shows the answer and lets the person CONFIRM it — "This looks like your
+// <label> — right?" [Yes] [No, it's …] — never assigns silently, and never offers a candidate that
+// is not in the visible set it is handed (`visible` = the one visibility function's output).
+export type DetectCandidate = { key: string; label: string; confidence: number; evidence: string[]; landing: string; layout?: string | null; statement_type?: string | null }
+export type DetectResult = { mode: 'confirm' | 'ask' | 'none'; candidates: DetectCandidate[]; header_count: number; sheet?: string | null; registry_ready: boolean; fallback_key: string | null }
+
+export function KindDetectZone({ visible, onPick, fallbackKey }: {
+  visible: { key: string; label: string }[]; onPick: (c: DetectCandidate | null, filename: string) => void; fallbackKey?: string | null
+}) {
+  const [over, setOver] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [res, setRes] = useState<DetectResult | null>(null)
+  const [fname, setFname] = useState('')
+  const [err, setErr] = useState('')
+  const allowed = new Set(visible.map(v => v.key))
+  async function detect(fl: FileList | null) {
+    const f = fl?.[0]; if (!f) return
+    if (!/\.(xlsx|xls|csv)$/i.test(f.name)) { setErr('Drop an .xlsx, .xls or .csv file.'); return }
+    setBusy(true); setErr(''); setRes(null); setFname(f.name)
+    try {
+      const fd = new FormData(); fd.append('file', f)
+      const r: DetectResult = await apiUpload('/api/v1/commcalc/report-kinds/detect', fd)
+      setRes({ ...r, candidates: (r.candidates || []).filter(c => allowed.has(c.key)) })
+    } catch (e: unknown) { setErr((e as Error)?.message || 'Could not read the file') }
+    finally { setBusy(false) }
+  }
+  const cands = res?.candidates || []
+  return (
+    <div onDragOver={e => { e.preventDefault(); setOver(true) }} onDragLeave={() => setOver(false)}
+      onDrop={e => { e.preventDefault(); setOver(false); detect(e.dataTransfer.files) }}
+      style={{ border: `2px dashed ${over ? 'var(--accent,#2563eb)' : 'var(--border)'}`, borderRadius: 12, padding: 16, marginBottom: 12, background: over ? 'rgba(37,99,235,.06)' : 'transparent' }}>
+      <div style={{ fontWeight: 600 }}>Not sure which report you have? Drop any report here</div>
+      <div style={{ ...note, marginBottom: 8 }}>We read only the column names and say what it looks like — you confirm. Nothing is imported or stored from this drop.</div>
+      <input type="file" accept=".xlsx,.xls,.csv" onChange={e => detect(e.target.files)} disabled={busy} />
+      {busy && <div style={{ ...note, marginTop: 6 }}>Reading the column names…</div>}
+      {err && <div style={{ ...note, color: '#ef4444', marginTop: 6 }}>{err}</div>}
+      {res && !busy && (
+        <div style={{ marginTop: 10 }}>
+          {res.mode === 'confirm' && cands[0] && (
+            <div>
+              <div style={{ fontSize: 14 }}>This looks like your <b>{cands[0].label}</b> — right? <span style={note}>({Math.round(cands[0].confidence * 100)}% · {cands[0].evidence[0]})</span></div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                <button style={primary} onClick={() => onPick(cands[0], fname)}>Yes, it is</button>
+                <button style={ghost} onClick={() => { setRes({ ...res, mode: 'ask', candidates: [] }) }}>No, it&apos;s something else…</button>
+              </div>
+            </div>
+          )}
+          {res.mode === 'ask' && (
+            <div>
+              <div style={{ fontSize: 14 }}>{cands.length ? 'It could be one of these — which is it?' : 'Pick what it is from the cards below, or record it as something else.'}</div>
+              {cands.map(c => (
+                <div key={c.key} style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
+                  <button style={btn} onClick={() => onPick(c, fname)}>{c.label}</button>
+                  <span style={note}>{Math.round(c.confidence * 100)}% · {c.evidence.join(' · ')}</span>
+                </div>
+              ))}
+              {(fallbackKey || res.fallback_key) && <div style={{ marginTop: 8 }}><button style={ghost} onClick={() => onPick(null, fname)}>Record it as something else</button></div>}
+            </div>
+          )}
+          {res.mode === 'none' && (
+            <div>
+              <div style={{ fontSize: 14 }}>We don&apos;t recognise these {res.header_count} column names as any report kind you can upload.</div>
+              <div style={{ marginTop: 8 }}><button style={ghost} onClick={() => onPick(null, fname)}>Record it as something else</button></div>
+            </div>
+          )}
+          {!res.registry_ready && <div style={{ ...note, marginTop: 6 }}>Detection is running on the shipped defaults — confirmed layouts are not remembered until the registry migration is applied.</div>}
+        </div>
+      )}
     </div>
   )
 }
