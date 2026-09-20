@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { usePosTerm } from '@/lib/report-labels'
 import EntityPicker from '@/components/EntityPicker'
 
 const DEFAULTS = {
@@ -37,6 +38,7 @@ function parsePromoPrice(sampleDesc: string): string {
 
 export default function SettingsPage() {
   const { period } = usePeriod()
+  const { pos } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
   const apiPeriod = toApiPeriod(period)
 
   const [cfg, setCfg] = useState<any>(DEFAULTS)
@@ -629,7 +631,7 @@ export default function SettingsPage() {
             Alternate store names ({aliases.length}) — sales-file aliases
           </div>
           <div style={{ padding: '10px 18px', fontSize: 12, color: 'var(--text3)' }}>
-            When the B2B daily-sales file spells a store differently than its mapping above
+            When the {pos} daily-sales file spells a store differently than its mapping above
             (e.g. <em>“3 Palisade Ave Yonkers”</em> vs <em>“3 Palisade Ave”</em>), its Daily-Targets sales
             won’t attach and the store reads 0 achieved. Map that exact sales-file spelling to the store’s
             code here. <strong>Needs migration 023_store_aliases.sql.</strong>

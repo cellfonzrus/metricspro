@@ -281,7 +281,10 @@ disagain (owner directive 2026-07-16, 2026-07-25).
   are NEUTRAL nouns; mig `953` seeds boost (`ePay`/`VIP Wireless`/`ACIMA`/`b2bsoft` — byte-identical
   wording for Boost tenants) and total (`VidaPay`/`VidaPay / T-CETRA`/`Edge`/the marketplace-feed
   name). Same GET/PUT `/report-labels` payload (`terms`, `editable_terms`); frontend
-  `lib/report-labels.ts` `pickTermMap` + `useReportLabels().term(key, neutralFallback)` — consumers:
+  `lib/report-labels.ts` `pickTermMap` + `useReportLabels().term(key, neutralFallback)`; **the POS name in
+  copy is `usePosTerm()` / `useReportLabels().pos` (`pickPosTerm`, §26.10 — declared label else the
+  registry's neutral noun; backend twin `report_labels.pos_term`), locked by the carrier-vocab guard's
+  POS axis** — consumers:
   `ClosingSubmitForm`/`DailyClosingVerify`/`closing/page`/`closing/_lib/SubmissionsTable` (bill-pay
   processor + financing labels), settings editor `ReportLabelSettings.tsx` ("Carrier vocabulary"
   section). Whole-feature gating rides the EXISTING `NAV_CARRIERS` registry (`lib/rbac.ts`,
@@ -3370,7 +3373,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `GET /commcalc/setup-fee/candidates/{period}` | `commcalc/router.py` (`setup_fee_candidates`) → `setup_fee_pay.candidates` | §6a — PICK-DON'T-TYPE: the tenant's own product descriptions that could BE the fee, ranked by the money they carry, each flagged `mapped_now`. **Use this before editing `setup_fee_keywords`** |
 | `GET /commcalc/setup-fee/recognition-divergence/{period}` | `commcalc/router.py` → `setup_fee_pay.divergence` | §6a — the two historic matchers measured against each other (case). Empty ⇒ switching `match_mode` moves $0 |
 | `GET /commcalc/setup-fee/impact/{period}` | `commcalc/router.py` (`setup_fee_impact`) → `commission_engine.preview` twice | §6a — per-rep dollars at a hypothetical percentage. READ-ONLY; no default percentage, so it can never quote a rate nobody entered |
-| `GET /report-labels` (resolved carrier-aware report column labels + banner on/off + VOCABULARY TERMS per carrier: tenant override > house carrier preset (migs 945/953) > built-in/neutral; consumed by Exec MTD + Activations headers/exports, the `unrecognized_ct_recon` banner gate, and the closing surfaces' processor/financing labels), `PUT /report-labels` (tenant overrides only, registry-validated keys incl. `terms`, ''=revert-to-inheritance; `classification` settings gate) | `commcalc/router.py` (`get_report_labels`/`put_report_labels` → `report_labels.py`, beside `/accessory-config`) | §3 carrier column labels + vocabulary terms |
+| `GET /report-labels` (resolved carrier-aware report column labels + banner on/off + VOCABULARY TERMS per carrier: tenant override > house carrier preset (migs 945/953) > built-in/neutral; **the `pos_system` term is the POS name every page prints — `usePosTerm()` / `pickPosTerm` (§26.10)**; consumed by Exec MTD + Activations headers/exports, the `unrecognized_ct_recon` banner gate, and the closing surfaces' processor/financing labels), `PUT /report-labels` (tenant overrides only, registry-validated keys incl. `terms`, ''=revert-to-inheritance; `classification` settings gate) | `commcalc/router.py` (`get_report_labels`/`put_report_labels` → `report_labels.py`, beside `/accessory-config`) | §3 carrier column labels + vocabulary terms |
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
 | `GET /closing/envelope-report`, `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`); `notify/closing_reports.py` | §12 Envelope report |
 | `GET /closing/external-credit-recon` (CARD SETTLEMENT RECON — declared closing card figures, incl. the external credit machine, vs each processor's scraped daily settlement; RULE FIVE filters + `role`/`status`; GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403, plus the manager keyset); W3 report key `closing_external_credit_recon` | `closing/router.py` (`external_credit_recon`; feed resolution `_settlement_feed_spec`/`_settlement_rows_for_days` through mig-207 `report_pull_map`, tolerance `_settlement_tolerance` through mig-923 `metric_source_of_truth`); pure `closing/external_credit_recon.py`; `notify/closing_reports.py` | §12 external credit machine + card settlement recon |
@@ -7575,6 +7578,100 @@ navigation bug, and is worth making explicitly rather than as a side effect of a
 
 ---
 
+### 26.10 THE POS NAME IN PAGE COPY — dereferenced from the term, never spelled; a page says whether it APPLIES before it says "nothing loaded" (owner 2026-09-20)
+
+Owner, verbatim, on the Verizon tenant's Sales Feed Recon page (POS declared RQ): *"if we have declared there is no b2b
+in verizon why does this message show — it should customize the message based on what POS is being used."* The page
+read "Monthly authoritative upload vs the daily B2B feed … No daily B2B feed loaded for August 2026 yet. Once the daily
+feed lands (via FTP Auto-Import or a manual 'daily_sales' upload) …".
+
+**THE CLASS (measured).** *Page copy names the POS vendor instead of dereferencing the tenant's declaration.* `grep
+-rniE "\bb2b\b|b2bsoft|\brq\b" frontend/src/app` → 30 files (accounts/balance-sheet, accounts/inventory, ten closing
+pages/components, and eighteen commcalc pages incl. sales-recon, sales-derive, activations, imei-recon, asset/inventory-
+recon, exec/mtd, uploadGuard, settings), plus `lib/reports.ts` and eleven backend payload strings (`note` / `reason` /
+`message` / `detail` in `commcalc/router.py`, `sales_recon.py`, `closing/router.py`, `closing/attention_providers.py`,
+`asset/router.py`, `account/finance_attention.py`, `core/onboarding.py`, `imei_rebate_report.py`). #257's lock scanned
+only its allow-set of upload surfaces for a vendor name; the carrier-vocab guard banned CARRIER names in copy but not
+POS names. A second class rode along: *a page whose purpose depends on a feed kind the tenant does not have invited
+the wrong upload instead of saying so.*
+
+**DUPLICATE CHECK — nothing new stores the POS.** Searched §2 (the `pos_system` term, mig 953 + 1004), §26.8 (the
+term as THE declaration, `posVisible`), §30.9 (`GET /report-kinds`, `useReportKinds`, `visible_kinds`), §16
+`ui_label_override`, §17 `/report-labels`, `report_labels.term_from_payload` / `carrier_term`. REUSED, not rebuilt:
+
+| Need | REUSED | New (thin, on the same home) |
+|------|--------|------------------------------|
+| The POS name a sentence prints | the `pos_system` term: `report_labels.load_report_labels` → `term_from_payload` (tenant override > carrier preset > the registry's neutral noun 'POS'); `lib/report-labels.ts` `pickTermMap` / `useReportLabels` | **`pickPosTerm` / `neutralTerm`** (PURE) + **`usePosTerm()`** → `{ pos, posDeclared, posLoaded }`; `useReportLabels()` now also returns `pos` / `posDeclared` (same fetch, same ladder — a wrapper, not a second path). `pos` is the declared label ('RQ', 'b2bsoft') else the neutral noun the payload ships in `editable_terms` (never copied into a page). Backend twin **`report_labels.pos_term(client, org_id)`** for payload copy |
+| Does this page's feed even exist for this POS? | `useReportKinds()` (the one hook) over `reportKindsVisible` — the registry's answer | **`feedKindFor` / `feedApplies` / `notApplicableCopy`** (PURE, `lib/report-kinds.ts`) + the hook's **`feedFor(keyOrUploadType)`** → `{ kind, applies: 'checking' \| 'unknown' \| 'not_defined' \| 'defined' }`. 'unknown' (fetch failed) never hides a page; 'checking' never renders a verdict |
+| The Sales Feed Recon copy | the page's own payload (`has_feed`) for step 2 | **`commcalc/sales-recon/copy.ts`** — `salesReconEmptyState` (step 1 wins: `not_applicable` → the owner's sentence with the term; else `not_loaded` → the original message with the term), `salesReconTabs`, `dailyFeedLabel` |
+
+**What the Verizon tenant sees now (declared RQ).** Header: "Monthly authoritative upload vs the daily **RQ** feed —
+August 2026"; tile "Daily RQ feed". With the seed as shipped, `sales_imei_phone` (the daily feed's kind, route
+`daily_sales`) applies to ANY POS, so the registry says the kind IS defined for RQ and the empty state is step 2: *"No
+daily RQ feed loaded for August 2026 yet. Once the daily feed lands (via FTP Auto-Import or a manual 'daily_sales'
+upload), every transaction is reconciled here against the monthly file."* If that row is ever scoped to a POS other
+than RQ (a registry edit, no code), the same page reads step 1: *"You declared **RQ** as your POS. No daily-feed report
+kind is defined for RQ yet, so there is nothing to reconcile the monthly file against. When RQ exports a daily feed,
+add it under Onboarding → Intake and this page will use it."* An undeclared tenant reads the neutral noun ("the daily
+POS feed") and, for step 1, is told to declare a POS in the Implementation wizard. The "Flag leaks" button is disabled
+when the page does not apply.
+
+**The two-step, everywhere its subject is one feed kind (empty state changed — registered here as the reports rows):**
+
+| Page | Feed kind asked of the registry | What changed |
+|------|-------------------------------|--------------|
+| `commcalc/sales-recon` (Sales Feed Recon) | route `daily_sales` | copy from the term; step 1 / step 2 as above |
+| `commcalc/sales-derive` (Monthly sales basis) | route `daily_sales` | "No daily-feed rows" now preceded by step 1 when no daily-feed kind is defined for the POS |
+| `commcalc/activations` | key `pos_activation_details` (a b2bsoft row in the seed) | header "{pos} Activation Details"; on RQ the page now says the Activation Details kind is not defined for RQ instead of "upload the b2b report" |
+| `commcalc/imei-recon` | keys `inventory_aging` + `sales_imei_phone` | "{pos} inventory vs {pos} sales"; step 1 names whichever kind is missing |
+| `commcalc/asset/inventory-recon` | key `pos_inventory_recon` (b2bsoft + boost row) | every "b2bsoft" → the term; step 1 banner when the kind is not defined |
+| `closing/tender-config` Step 2 · `DailyClosingVerify` money caption | key `x_report` (POS-agnostic today → 'defined' for every tenant) | the term in copy; step 1 wired so a future POS-scoped X-report row is honoured without a code change |
+| `accounts/inventory`, `accounts/balance-sheet`, `closing/{page,recon,management,cash-config,count-config}`, `ClosingSubmitForm`, `commcalc/{exec/mtd,sales-report,settings,commission-discrepancy,device-history,uploadGuard (a `pos` parameter, neutral default)}` | — (copy only) | the vendor name → `pos`; `lib/reports.ts` descriptions → the neutral noun (a static registry cannot call a hook) |
+| `crm/settings` ('B2B' = business-to-business, not the POS), `ftp-imports` placeholders, `pos/import` fixture e-mail, `failures` (a variable named `rq`) | — | reworded / renamed so the word is not there to be mistaken |
+| **Excused, by name:** `commcalc/upload` (`id: 'b2b'` connector id + sweep route paths), `commcalc/connectors` (sweep-kind ids), `commcalc/expenses` ('B2B Platform Fee' is a STORED expense-category name — renaming the default would split tenants' history) | — | data values; pinned in the guard's `POS_REVIEWED_EXCEPTIONS` with the reason; a stale entry fails |
+
+Backend payload copy now reads `report_labels.pos_term`: the activation / dealer-code / sales-by-product / metric-recon
+`note`s, the price-guard `reason`s and the catalog-shape 400 (`commcalc/router.py`), the sales-leak flag description
+(`sales_recon.py`), the closing `_money_issues` reasons (a `pos` parameter; every caller passes the term), the
+readiness `message`s and the X-report schedule hint (`closing/router.py`), the stale-store attention item, the asset
+mismatch flag, the finance-attention inventory item; `core/onboarding` and `imei_rebate_report` (pure, no client) use
+the neutral noun. The `_ONBOARDING_ITEMS` labels, the connector-health source label and the `unrecognized_ct_recon`
+banner title lost their vendor name.
+
+**THE LOCK — one lock for this fact.** `backend/harness_carrier_vocab_guard.py` (the existing CI job) gains the POS
+axis: the vocabulary is DERIVED (`pos_vocabulary()`) from the `report_term:*`/`pos_system` seeds, the `pos_profile`
+seed's key + label and `HOUSE_KINDS[].applies_to_pos` — every spelling ('b2bsoft', 'B2B Soft', 'B2B', 'RQ'), no list in
+code (`--print-pos-vocab` prints it; the frontend proof asks for it over the wire). It fails on a spelling in a display
+segment or a pure JSX text line anywhere in `frontend/src`, on a BARE literal equal to a spelling in a page/component
+(the `term('pos_system', 'b2bsoft')` fallback), on a spelling in a whitespace-bearing string literal of the backend
+payload modules (`POS_BACKEND_COPY`, tokenized — docstrings, comments and `print()` lines excluded; f-string
+expressions stripped) and on ANY spelling in the registry / intake / spine logic (`POS_BACKEND_LOGIC` — the class #257's
+`harness_report_kind_lock.py` carried as `pos_vendor`, now folded here; that lock keeps its eight other controls).
+Allow sets carry reasons; a stale entry fails. Nine negative controls: vendor in copy → RED; term-with-vendor-fallback →
+RED; neutral fallback / template → GREEN; a comment → GREEN; stale exception → RED; backend payload string → RED;
+logic → RED; backend f-string with the term → GREEN; stale backend entry → RED.
+
+**Proof.** `frontend/prove_pos_term_copy.mjs` (36, the REAL transpiled `report-labels.ts` + `report-kinds.ts` +
+`sales-recon/copy.ts` over payloads shaped like the two endpoints and the seed parsed from mig 1010: the term for
+Verizon/RQ, Boost/b2bsoft, an override, undeclared, no payload; `feedFor` on the real seed — RQ has the daily feed,
+not Activation Details; the four Sales Feed Recon states + checking/unknown; no vendor spelling reachable from the 30
+files' code using the guard's derived vocabulary). `harness_report_labels.py` +4 (`pos_term`: RQ / override / neutral /
+degraded) = 58. `harness_tender_recon_3way.py` F3 re-pinned to the term (it had pinned the vendor). Unchanged and green:
+prove_report_kinds 45, prove_carrier_scope 64, report_kinds 119, report_kind_lock 20, mapping-key 17, report-links 14,
+closing_submissions 34, sales_leak_placement 24, imei_rebates 143, dmverify_parity 93, xreport_tender_vocab 63. `tsc
+--noEmit` clean; eslint: no new finding on any touched file (684 = 684 pre-existing).
+
+**Nothing stored changes.** Copy and applicability only — no migration, no money row, no recompute.
+
+**Seams left (reported, not hidden).** (1) The portal-sweep connection form on `accounts/inventory` (the `b2b` sweep
+connector) is a CONNECTOR, not a report kind — its applicability rides the connector registry's scope, not §30.9. (2)
+Backend modules outside `POS_BACKEND_COPY` (`vidapay_sweep.py`, `b2b_sweep.py`, `pos/receipt_formats/*`, the closing
+`print()` diagnostics) still spell vendors in non-payload strings; widening the scan is a pinned-list edit. (3)
+`commcalc/imei-rebates` names no feed kind: its source is "whichever data exists" (carrier/POS-agnostic), so the
+two-step was not applied — only its comment changed. (4) A JSX text line inside a `{cond && (` block that is pure
+prose is now scanned for POS names; the CARRIER scan keeps its original extractor (widening it is a separate sweep).
+
+
 ## 27. VENDOR REBATE HISTORY — earned is not collected (owner 2026-09-12)
 
 Owner: *"A new tenant onboards on a carrier whose POS exports a Vendor Rebate History Report and
@@ -8353,7 +8450,7 @@ imports/page.tsx` (the same mechanism; found by the lock's first run, not by the
 | The six surfaces | the pages' upload handlers, the connector registry's carrier scope (`tileVisible`, still ANDed) | route metadata moved to **`commcalc/_lib/uploadRoutes.ts`** (HOW a route posts, keyed by route key — no carrier tag, no vendor); Upload page: tiles = routes a VISIBLE kind names; the POS email-report block = registry kinds with a `custom_sheet_label`; wizard: connector steps gated by `allows(report_key)`, the visible kinds' routes when the connector registry is empty, no vendor fallback; Email + FTP imports: "Routes to" = `upload_types`, a new mailbox's rules = `filename_rules`, `suggestRuleFrom` (registry rules, else a token glob with NO guessed type), "Apply the <declared POS> standard" from `standard`; intake 2.0: the cards ARE the rows (label, what's in it, source hint, recognisable columns, provenance) + the **"drop any report here"** zone (`KindDetectZone`); Stage 3.1: statement types = the commission-family kinds; `/admin/labels`: the gated kinds with their `kind:` override |
 | Detection | `_read_upload_grids` + `onboarding_intake.stitch_sheets` (the intake's own header detection), TARGET_FIELDS aliases | **`report_kinds.detect_report_kind(headers, registry, signatures)`** PURE → ranked `[(key, confidence, evidence)]`: exact confirmed fingerprint (1.0, "seen before as …, confirmed N times"; the same fingerprint under two kinds = AMBIGUOUS), ≥80% header overlap with a confirmed layout (0.8–0.99), the kind's signals (signature fields via the layout's aliases + recognisable columns, `requires` / `excludes` honoured; ≥50% present); `decide` → confirm \| ask (two within 0.15) \| none. **`POST /commcalc/report-kinds/detect`** (header names only; nothing stored) → "This looks like your **<label>** — right?" [Yes] [No, it's …] |
 | Learning | the intake's CONFIRMED commits (`_intake_commit_stage2` / `_commission` on `ok`; `_intake_commit_other` on recorded) | **`commcalc.report_signature`** (mig 1010: `org_id`, `fingerprint` = `header_fingerprint` — the normalised ORDERED header list, `report_kind_key`, `statement_type`, `layout`, `header_count`, `confirmations`, `first/last_confirmed_at`, `house_copy`); `router._intake_learn_signature` → `kind_key_for` (the card picked = `report_kind` form field, else landing + layout + statement type + headers) → `learn_signature` (org row + house copy, +1 per confirm; the exact-hit count is the MAX over copies, never a sum). **HEADER NAMES ONLY — pinned against tainted fixtures.** A 'something else' confirmed as received → `define_kind`: a house row `defined_by='tenant'` under the tenant's carriers, so the NEXT tenant on that carrier is offered it |
-| THE LOCK | the carrier-vocab guard's posture (stdlib static scan, one CI job) | **`backend/harness_report_kind_lock.py`** (in `carrier-vocab-guard.yml`): (a) every surface — the six pinned + any file importing an intake upload primitive or rendering a file input beside kind / route keys — imports `useReportKinds`; the shared primitive takes the visible set as a prop; one fetch, one caller of `reportKindsVisible`; (b) no POS vendor name, filename glob or ≥3-key string list in `frontend/src/{app,components,lib}` or the backend registry / intake / spine logic outside an ALLOW entry with its reason (stale entry fails); (c) `tenant_declaration` defined once, the router reads only through it, no page re-derives the gate through `posOK` / `posVisible` or a `term('pos_system') ===`; (d) nine negative controls (reintroduce a list → RED; bypass the hook on one surface → RED; …) |
+| THE LOCK | the carrier-vocab guard's posture (stdlib static scan, one CI job) | **`backend/harness_report_kind_lock.py`** (in `carrier-vocab-guard.yml`; its `pos_vendor` class was FOLDED into the guard's derived POS vocabulary on 2026-09-20 — §26.10 — so one lock owns "no vendor name in code"): (a) every surface — the six pinned + any file importing an intake upload primitive or rendering a file input beside kind / route keys — imports `useReportKinds`; the shared primitive takes the visible set as a prop; one fetch, one caller of `reportKindsVisible`; (b) no POS vendor name, filename glob or ≥3-key string list in `frontend/src/{app,components,lib}` or the backend registry / intake / spine logic outside an ALLOW entry with its reason (stale entry fails); (c) `tenant_declaration` defined once, the router reads only through it, no page re-derives the gate through `posOK` / `posVisible` or a `term('pos_system') ===`; (d) nine negative controls (reintroduce a list → RED; bypass the hook on one surface → RED; …) |
 
 **What the Verizon tenant sees after mig 1010 (declaration POS `rq`, carrier `verizon`).** Upload page: the POS-agnostic
 tiles (sales transactions, daily sales, rep / store KPI, catalog, payment categories, inventory aging, X-report,

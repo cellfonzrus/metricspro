@@ -88,6 +88,44 @@ export function withheldSummary(p: ReportKindsPayload | null): string {
   return `${n} report kind${n === 1 ? '' : 's'} not offered — you declared ${decl}.${why ? ' ' + why : ''}`
 }
 
+// ── APPLIES? / LOADED? — the two-step every feed-dependent page asks (owner 2026-09-20) ─────────
+// A page whose purpose depends on a feed kind the tenant does not have must SAY SO instead of inviting
+// the wrong upload ("if we have declared there is no b2b in verizon why does this message show").
+// Step 1 (here): is the feed's report kind visible for the declared POS / carrier? Step 2 (the page's
+// own payload): has a file landed? The copy for step 1 is authored ONCE below; the POS name in it is
+// the tenant's term (lib/report-labels.ts usePosTerm), never a vendor spelled in code.
+
+/** 'checking' until the registry payload arrives; 'unknown' when it failed (never hide a page on a
+ *  lookup failure); 'not_defined' when no visible kind matches; 'defined' when one does. */
+export type FeedApplies = 'checking' | 'unknown' | 'not_defined' | 'defined'
+
+/** The visible kind for a feed, by registry key OR by the upload route key it is uploaded through. */
+export function feedKindFor(visible: ReportKindRow[], keyOrUploadType: string): ReportKindRow | null {
+  return visible.find(r => r.key === keyOrUploadType) || visible.find(r => (r.upload_types || []).includes(keyOrUploadType)) || null
+}
+
+/** Step 1 as a state, from the hook's own loaded / error flags and the matched kind. */
+export function feedApplies(loaded: boolean, error: string | null, kind: ReportKindRow | null): FeedApplies {
+  if (!loaded) return 'checking'
+  if (error) return 'unknown'
+  return kind ? 'defined' : 'not_defined'
+}
+
+/**
+ * The ONE "this page does not apply to your POS" sentence. `feedNoun` names the feed in the page's
+ * words ('daily sales feed', 'Activation Details report'); `purpose` completes "there is nothing to …".
+ */
+export function notApplicableCopy(a: { pos: string; posDeclared: boolean; feedNoun: string; purpose: string; kindNoun?: string }): string {
+  const kind = a.kindNoun || a.feedNoun
+  if (a.posDeclared) {
+    return `You declared ${a.pos} as your POS. No ${kind} report kind is defined for ${a.pos} yet, so there is ` +
+      `nothing to ${a.purpose}. When ${a.pos} exports a ${a.feedNoun}, add it under Onboarding → Intake and this page will use it.`
+  }
+  return `No POS is declared for this tenant yet, and no ${kind} report kind is offered, so there is nothing to ` +
+    `${a.purpose}. Declare your POS in the Implementation wizard, then add the ${a.feedNoun} under Onboarding → Intake ` +
+    `and this page will use it.`
+}
+
 const orgQS = () => { const o = getActiveOrg(); return o ? `?org_id=${encodeURIComponent(o)}` : '' }
 
 /** Fetch-once hook. See the header: nothing is offered until it loads, and a failure says so. */
@@ -109,8 +147,13 @@ export function useReportKinds() {
   const allows = useCallback((uploadType: string) => uploadTypes.includes(uploadType), [uploadTypes])
   const labelFor = useCallback((uploadType: string, fallback: string) => labelForUploadType(visible, uploadType) || fallback, [visible])
   const byKey = useCallback((key: string) => visible.find(r => r.key === key) || null, [visible])
+  // feedFor: step 1 of the applies?/loaded? two-step for a page whose subject is one feed kind.
+  const feedFor = useCallback((keyOrUploadType: string): { kind: ReportKindRow | null; applies: FeedApplies } => {
+    const kind = feedKindFor(visible, keyOrUploadType)
+    return { kind, applies: feedApplies(loaded, error, kind) }
+  }, [visible, loaded, error])
   return {
-    payload, loaded, error, reload, visible, uploadTypes, forSurface, allows, labelFor, byKey,
+    payload, loaded, error, reload, visible, uploadTypes, forSurface, allows, labelFor, byKey, feedFor,
     declaration: payload?.declaration || null,
     filenameRules: payload?.filename_rules || [],
     standard: payload?.standard || null,

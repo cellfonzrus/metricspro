@@ -18,7 +18,7 @@ import { useReportLabels } from '@/lib/report-labels'
 // coarse gate_status badge (ok/flagged/blocked/recon_pending) is visible to everyone who can see this
 // dashboard; the DOLLAR reasons (`gate_reasons`) are populated by the backend ONLY for a company-wide
 // caller (same _can_mgmt_review boundary /closing/management already enforces) — a market/store-scope
-// viewer here sees the same badge with an empty reasons list, never the true B2B figure.
+// viewer here sees the same badge with an empty reasons list, never the true POS figure.
 //
 // retail-ops-14 (OWNER DIRECTIVE 2026-07-28, same-day follow-up): the Daily Closing dashboard's
 // By-store/By-rep tabs had NO date-range/store/rep filters at all (month + market only) while this

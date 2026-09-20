@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
+import { usePosTerm } from '@/lib/report-labels'
 
 // Cash-management configuration (mig 089): the daily-closing deadline + gate, the assigned closer
 // per store (only they are blocked from clocking out until the store closing is in), the cash-aging
@@ -22,6 +23,7 @@ const MATCH_TARGETS = [
 ]
 
 export default function CashConfigPage() {
+  const { pos } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
   const [cfg, setCfg] = useState<any>(null)
   const [emps, setEmps] = useState<any[]>([])
   const [stores, setStores] = useState<any[]>([])
@@ -123,7 +125,7 @@ export default function CashConfigPage() {
             <input type="number" min={0} style={{ ...inp, marginTop: 4, width: 90 }} defaultValue={cfg.closing_stale_alert_days ?? 3} onBlur={e => saveCfg({ closing_stale_alert_days: e.target.value })} /></label>
         </div>
         <p style={{ fontSize: 11, color: 'var(--text3)', margin: '6px 0 0' }}>
-          A store that keeps having B2B sales but no daily closing for this many days shows up in the admin attention popup (login notification) pointing at Management Review.
+          A store that keeps having {pos} sales but no daily closing for this many days shows up in the admin attention popup (login notification) pointing at Management Review.
         </p>
         <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Who closes the store each day?</div>
@@ -136,7 +138,7 @@ export default function CashConfigPage() {
             <b>One closing per store</b> — only the assigned closer submits; they tally the whole store&apos;s cash (the onus is on the closer).
           </label>
           <p style={{ fontSize: 11, color: 'var(--text3)', margin: '6px 0 0' }}>
-            The DM verify view checks who <i>actually worked</i> (clock-in ∪ B2B sales), so a scheduled rep who never showed isn&apos;t dunned, and a rep who sold under someone else&apos;s login is flagged.
+            The DM verify view checks who <i>actually worked</i> (clock-in ∪ {pos} sales), so a scheduled rep who never showed isn&apos;t dunned, and a rep who sold under someone else&apos;s login is flagged.
           </p>
         </div>
       </div>

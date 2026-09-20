@@ -1370,9 +1370,11 @@ def upload_b2b_inventory(body: UploadB2bInventoryIn, org_id: str = ORG_ID):
 
 @router.post("/sync-inventory-flags")
 async def sync_inventory_flags(org_id: str = ORG_ID):
-    """Flag stores whose asset On-Inventory disagrees with b2bsoft, per category."""
+    """Flag stores whose asset On-Inventory disagrees with the POS snapshot, per category."""
     recon = await inventory_recon(org_id=org_id)
     client = sb()
+    from app.modules.commcalc import report_labels as _report_labels
+    pos = _report_labels.pos_term(client, org_id)   # the tenant's POS name in copy — never a vendor spelled here
     as_of = recon.get("as_of") or ""
     period, pm, py = "Inventory", None, None
     if as_of:
@@ -1395,7 +1397,7 @@ async def sync_inventory_flags(org_id: str = ORG_ID):
                 "flag_type": f"Inventory mismatch — {k}", "source": "inventory_recon",
                 "severity": "warning", "store_address": r["store"],
                 "amount": abs(diff),
-                "description": f"{r['store']} {k}: asset on-inventory {a} vs b2bsoft {b} "
+                "description": f"{r['store']} {k}: asset on-inventory {a} vs {pos} {b} "
                                f"({'+' if diff > 0 else ''}{diff}) as of {as_of}"
                                + (f" [{r['market']}]" if r.get("market") else ""),
             })

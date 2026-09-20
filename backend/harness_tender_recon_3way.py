@@ -268,8 +268,11 @@ resp5 = cr.tender_recon_3way(date=DATE, org_id=HOUSE)
 check("F1. LIVE STATE: empty pos_tender_summary -> x_report_ever is False", resp5["x_report_ever"] is False)
 check("F2. LIVE STATE: sources_present.x_report is False (honest — no data at all)",
       resp5["sources_present"]["x_report"] is False)
-check("F3. note names BOTH concrete setup steps (mailbox rule + b2bsoft schedule)",
-      "x_report rule" in resp5["note"] and "b2bsoft is actually scheduled" in resp5["note"], resp5["note"])
+# The POS in that sentence is the tenant's `pos_system` term (report_labels.pos_term — owner 2026-09-20);
+# the fake client holds no label rows, so the neutral noun renders. A vendor name here would be the defect.
+check("F3. note names BOTH concrete setup steps (mailbox rule + the POS's X-report schedule, POS = the term)",
+      "x_report rule" in resp5["note"] and "POS is actually scheduled to email an X-Report" in resp5["note"]
+      and "b2bsoft" not in resp5["note"].lower(), resp5["note"])
 
 st6 = fresh_store(); fake6 = wire(st6)
 st6["store_mapping"] = [sm_row()]

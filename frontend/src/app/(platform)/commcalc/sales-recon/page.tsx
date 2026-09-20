@@ -3,7 +3,10 @@
 import { useEffect, useState, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { usePosTerm } from '@/lib/report-labels'
+import { useReportKinds } from '@/lib/report-kinds'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import { DAILY_FEED_ROUTE, dailyFeedLabel, salesReconEmptyState, salesReconTabs } from './copy'
 
 type Row = {
   bucket: string; trans_id: string; store: string; salesperson: string; trans_date: string
@@ -22,17 +25,14 @@ type Summary = {
 }
 type Resp = { period: string; has_feed: boolean; summary: Summary; by_store: StoreSummary[]; rows: Row[] }
 
-const TABS = [
-  { key: 'missing_in_monthly', label: 'Missing in Monthly', color: '#dc2626',
-    blurb: "In the daily B2B feed but NOT in the authoritative monthly file — a real revenue / commission leak, or a same-day void. Investigate first." },
-  { key: 'amount_mismatch', label: 'Amount Mismatch', color: '#d97706',
-    blurb: 'Same transaction in both, but the totals differ (price change, partial line, or a tender/return delta).' },
-  { key: 'missing_in_daily', label: 'Missing in Daily', color: '#2563eb',
-    blurb: 'In the monthly file but the daily feed never captured it — usually a feed-coverage gap (feed down that day), lower severity.' },
-]
-
 export default function SalesReconPage() {
   const { period } = usePeriod()
+  // THE POS NAME (the tenant's term) + WHETHER A DAILY-FEED KIND EXISTS FOR IT (the registry) — the
+  // two facts every sentence below is built from; neither is spelled here (owner 2026-09-20).
+  const { pos, posDeclared } = usePosTerm()
+  const kinds = useReportKinds()
+  const dailyFeed = kinds.feedFor(DAILY_FEED_ROUTE)
+  const TABS = useMemo(() => salesReconTabs(pos), [pos])
   const [data, setData] = useState<Resp | null>(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
@@ -119,6 +119,8 @@ export default function SalesReconPage() {
 
   const s = data?.summary
   const tabMeta = TABS.find(t => t.key === tab)!
+  const empty = data ? salesReconEmptyState({ applies: dailyFeed.applies, hasFeed: !!data.has_feed, pos, posDeclared, period }) : null
+  const canFlag = !!data?.has_feed && dailyFeed.applies !== 'not_defined'
   const tabCount = (k: string) => (s ? (s as any)[k] as number : 0)
   const tabAmount =
     tab === 'missing_in_monthly' ? s?.missing_in_monthly_total
@@ -131,13 +133,13 @@ export default function SalesReconPage() {
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>Sales Feed Recon</h1>
           <p style={{ color: '#6b7280', margin: '4px 0 0', fontSize: 14 }}>
-            Monthly authoritative upload vs the daily B2B feed — {period}
+            Monthly authoritative upload vs the daily {pos} feed — {period}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={flagAndNotify} disabled={syncing || loading || !data?.has_feed}
-            title={data?.has_feed ? 'Write leaks/mismatches to the Flags page and notify the designated recipient' : 'No daily feed loaded yet — nothing to flag'}
-            style={{ background: (syncing || !data?.has_feed) ? '#9ca3af' : '#b91c1c', color: 'white', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, cursor: (syncing || loading || !data?.has_feed) ? 'default' : 'pointer', fontSize: 14 }}>
+          <button onClick={flagAndNotify} disabled={syncing || loading || !canFlag}
+            title={canFlag ? 'Write leaks/mismatches to the Flags page and notify the designated recipient' : 'No daily feed loaded yet — nothing to flag'}
+            style={{ background: (syncing || !canFlag) ? '#9ca3af' : '#b91c1c', color: 'white', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, cursor: (syncing || loading || !canFlag) ? 'default' : 'pointer', fontSize: 14 }}>
             {syncing ? 'Flagging…' : 'Flag leaks & notify'}
           </button>
           <button onClick={load} disabled={loading}
@@ -150,11 +152,12 @@ export default function SalesReconPage() {
       {err && <div style={{ background: '#fef2f2', color: '#991b1b', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 14 }}>{err}</div>}
       {syncMsg && <div style={{ background: '#eff6ff', color: '#1e40af', border: '1px solid #bfdbfe', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 14 }}>{syncMsg}</div>}
 
-      {data && !data.has_feed && (
-        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13, color: '#92400e' }}>
-          No daily B2B feed loaded for {period} yet. Once the daily feed lands (via FTP Auto-Import or a manual
-          “daily_sales” upload), every transaction is reconciled here against the monthly file. The monthly totals
-          below are shown for reference.
+      {/* APPLIES? then LOADED? (copy.ts) — a POS with no daily-feed kind is told so, never invited to upload one. */}
+      {empty && (
+        <div role="status" data-empty-state={empty.kind}
+          style={{ background: empty.kind === 'not_applicable' ? '#eff6ff' : '#fffbeb', border: `1px solid ${empty.kind === 'not_applicable' ? '#bfdbfe' : '#fde68a'}`,
+            borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13, color: empty.kind === 'not_applicable' ? '#1e40af' : '#92400e' }}>
+          {empty.text}
         </div>
       )}
 
@@ -166,7 +169,7 @@ export default function SalesReconPage() {
           <div style={{ fontSize: 12, color: '#9ca3af' }}>{s?.monthly_trans || 0} transactions · {s?.monthly_lines || 0} lines</div>
         </div>
         <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, flex: 1, minWidth: 200 }}>
-          <div style={{ fontSize: 13, color: '#6b7280' }}>Daily B2B feed</div>
+          <div style={{ fontSize: 13, color: '#6b7280' }}>{dailyFeedLabel(pos)}</div>
           <div style={{ fontSize: 24, fontWeight: 700 }}>{fmt(s?.daily_total || 0)}</div>
           <div style={{ fontSize: 12, color: '#9ca3af' }}>{s?.daily_trans || 0} transactions · {s?.daily_lines || 0} lines</div>
         </div>
@@ -299,7 +302,7 @@ export default function SalesReconPage() {
             )}
             {rows.length === 0 && (
               <div style={{ padding: 20, textAlign: 'center', color: '#6b7280' }}>
-                {data.has_feed ? 'No transactions in this bucket — clean.' : 'No daily feed loaded yet.'}
+                {data.has_feed ? 'No transactions in this bucket — clean.' : empty?.kind === 'not_applicable' ? `No daily feed is defined for ${pos}.` : 'No daily feed loaded yet.'}
               </div>
             )}
           </div>
@@ -325,7 +328,7 @@ export default function SalesReconPage() {
                 </div>
                 <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
                   <ReconLines title="Monthly (authoritative file)" lines={drill.monthly} />
-                  <ReconLines title="Daily B2B feed" lines={drill.daily} />
+                  <ReconLines title={dailyFeedLabel(pos)} lines={drill.daily} />
                 </div>
                 <p style={{ fontSize: 12, color: '#6b7280', marginTop: 10 }}>
                   Compare the two sides — a line present on one side only, a price change, or a void explains the discrepancy.

@@ -219,13 +219,15 @@ def _p_finance_inventory(client, org_id, ctx):
         why = f"The last POS inventory sync ended in \"{cfg.get('last_status')}\". "
     elif cfg and not cfg.get("last_run_at"):
         why = "The POS inventory sync has never completed a run. "
+    from app.modules.commcalc import report_labels as _report_labels
+    _pos = _report_labels.pos_term(client, org_id)   # the tenant's POS name in copy — never a vendor spelled here
     return [_item(
         "other", "finance_inventory_unsourced", "warning" if intends_sweep else "info",
         "Inventory reads $0 on the Balance Sheet",
         why + "No on-hand inventory value has ever been swept from the POS or entered by hand, so the "
         "Balance Sheet's \"Inventory — on-hand device value\" line is $0 and total assets are "
         "understated. Fix (either one): enter the value per store on Accounting → Inventory Values, or "
-        "save the POS (B2B Soft) portal username + password on the connectors page so the nightly sync "
+        f"save the {_pos} portal username + password on the connectors page so the nightly sync "
         "can fill it in. Recompute the period afterwards so the stored Balance Sheet picks it up.",
         1, "/accounts/inventory", "Enter inventory values")]
 

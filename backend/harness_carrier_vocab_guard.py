@@ -19,15 +19,31 @@ This static scan keeps NEW hardcoded carrier vocabulary out of rendered frontend
           deliberate decision with its reason (term-is-data config vocabularies, active-carrier
           lens-gated copy, data-conditional strings that only render on data of that carrier, the
           carrier-selection onboarding screen itself, other agents' surfaces).
-  · b2bsoft/RTPOS/RQ (POS vendor names) are NOT scanned: they are POS vocabulary, absent from the
-    owner's banned list (the POS brand is the same on both sides today).
+  · POS VENDOR NAMES (owner 2026-09-20: "it should customize the message based on what POS is being
+    used") are scanned by the SAME posture, one axis over. The vocabulary is DERIVED — never listed
+    here — from the homes that declare a POS: the `report_term:*` / `pos_system` seeds in
+    database/migrations (mig 953 'b2bsoft', mig 1004 'RQ'), the `commcalc.pos_profile` seed's
+    pos_key + label (mig 200), and `report_kinds.HOUSE_KINDS[].applies_to_pos`. Each name yields its
+    spellings (the code, the label's words, the brand stem: 'b2bsoft' / 'B2B Soft' / 'B2B'; 'RQ').
+    A spelling in a DISPLAY segment of frontend/src/**, or as a BARE string literal in a page or
+    component (the `term('pos_system', 'b2bsoft')` fallback that would print a vendor when the term
+    is unresolved), FAILS unless the file is in POS_REVIEWED_EXCEPTIONS with its reason — and an entry
+    whose file no longer carries a spelling FAILS as stale. Pages name the POS through
+    lib/report-labels.ts usePosTerm() (the declared term, else the registry's neutral noun) and NEVER
+    spell one. The backend payload modules that feed those pages (POS_BACKEND_COPY) are held to the
+    same rule for whitespace-bearing string literals (report_labels.pos_term is their home), and the
+    registry / intake / spine logic (POS_BACKEND_LOGIC) may not name a vendor at all — the check that
+    #257's harness_report_kind_lock.py carried as its `pos_vendor` class, folded here so ONE lock
+    owns this fact. Negative controls prove every rule can go red.
 
 Adding a new carrier-branded string to shared copy → add a preset term (report_labels.LABELABLE_TERMS
 + a mig ≥953 seed) and render it via useReportLabels().term(), or gate the page in NAV_CARRIERS —
-never extend REVIEWED_EXCEPTIONS as a shortcut.
+never extend REVIEWED_EXCEPTIONS as a shortcut. A sentence that names the POS → usePosTerm().pos.
 
   python3 backend/harness_carrier_vocab_guard.py
+  python3 backend/harness_carrier_vocab_guard.py --print-pos-vocab   # the derived spellings, as JSON
 """
+import json
 import os
 import re
 import sys
@@ -35,6 +51,9 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FE = os.path.join(ROOT, "frontend", "src")
 RBAC = os.path.join(FE, "lib", "rbac.ts")
+MIGRATIONS = os.path.join(ROOT, "database", "migrations")
+BE = os.path.join(ROOT, "backend", "app", "modules")
+sys.path.insert(0, os.path.join(ROOT, "backend"))
 
 TOTAL_TERMS = re.compile(
     r"vidapay|t-?cetra|tettra|total\s+wireless|ma\s+handset|ma\s+commission|ma\s+daily\s+tx"
@@ -108,6 +127,225 @@ REVIEWED_EXCEPTIONS = {
     "app/(platform)/admin/roles/page.tsx": {"boost": "module key labels (data)"},
     "app/(platform)/admin/labels/page.tsx": {"both": "the label-editor itself documents example labels"},
 }
+
+# ══ POS VENDOR VOCABULARY — derived from the seeds, never listed ═══════════════════════════════════
+_TERM_SEED = re.compile(r"'report_term:[a-z0-9_-]+'\s*,\s*'pos_system'\s*,\s*'([^']+)'", re.I)
+_PROFILE_SEED = re.compile(r"commcalc\.pos_profile\s*\([^)]*\)\s*VALUES\s*\(\s*\w+\s*,\s*'([^']+)'\s*,\s*'([^']+)'", re.I)
+_GENERIC_WORDS = {"standard", "default", "pos", "system", "the", "and"}
+
+
+def pos_vocabulary():
+    """{spelling: origin} for every POS vendor name the seeds declare, in every spelling it is written.
+    Origins: report_term seed (mig 953/1004), pos_profile seed (mig 200), report_kinds.HOUSE_KINDS."""
+    names = {}
+    for f in sorted(os.listdir(MIGRATIONS)):
+        if not f.endswith(".sql"):
+            continue
+        src = open(os.path.join(MIGRATIONS, f), encoding="utf-8").read()
+        for v in _TERM_SEED.findall(src):
+            names.setdefault(v.strip(), f + " report_term pos_system")
+        for key, label in _PROFILE_SEED.findall(src):
+            names.setdefault(key.strip(), f + " pos_profile.pos_key")
+            names.setdefault(label.strip(), f + " pos_profile.label")
+    try:
+        from app.modules.commcalc import report_kinds as _rk
+        for r in _rk.HOUSE_KINDS:
+            for c in r.get("applies_to_pos") or []:
+                names.setdefault(str(c).strip(), "report_kinds.HOUSE_KINDS applies_to_pos")
+    except Exception as e:      # pragma: no cover
+        print("WARN could not read report_kinds.HOUSE_KINDS:", e)
+    spellings = {}
+    for name, origin in names.items():
+        base = re.sub(r"\(.*?\)", "", name).strip()             # 'B2B Soft (standard)' → 'B2B Soft'
+        words = [w for w in re.split(r"[^A-Za-z0-9]+", base) if w]
+        squashed = "".join(words).lower()                       # 'b2bsoft' / 'rq'
+        if squashed and squashed not in _GENERIC_WORDS:
+            spellings.setdefault(squashed, origin)
+        if len(words) > 1:
+            spellings.setdefault(" ".join(w.lower() for w in words), origin)   # 'b2b soft'
+            stem = words[0].lower()                                             # the brand stem 'b2b'
+            if len(stem) >= 2 and stem not in _GENERIC_WORDS:
+                spellings.setdefault(stem, origin)
+    return spellings
+
+
+def pos_regex(spellings):
+    """One case-insensitive pattern over every spelling, whole-word; a space in a spelling tolerates
+    '-' / '_' / nothing ('b2b soft' ~ 'B2B-Soft' ~ 'b2bsoft')."""
+    alts = sorted({re.escape(sp).replace(r"\ ", r"[\s_-]*") for sp in spellings}, key=len, reverse=True)
+    # identifier context (`g.b2b?.cash`, `recon.b2b_acc_gp`, `b2b_loaded`) is a FIELD NAME, not copy
+    return re.compile(r"(?<![a-z0-9_.])(?:" + "|".join(alts) + r")(?![a-z0-9_.?])", re.I)
+
+
+# ── POS REVIEWED EXCEPTIONS — (relative frontend file) -> reason. Only DATA homes: a connector id, a
+#    stored category name. A stale entry (file no longer carries a spelling) FAILS, so this can only shrink.
+POS_REVIEWED_EXCEPTIONS = {
+    "app/(platform)/commcalc/upload/page.tsx": "AUTO_SOURCES connector id 'b2b' + its sweep route paths (data keys, rendered as 'POS portal')",
+    "app/(platform)/commcalc/connectors/page.tsx": "connector sweep-kind ids (data)",
+    "app/(platform)/commcalc/expenses/page.tsx": "'B2B Platform Fee' is a STORED expense-category name (tenant rows already carry it; renaming the default would split their history) + its matrix-upload alias key",
+}
+
+# ── BACKEND. LOGIC files may not name a vendor at all (folded from harness_report_kind_lock.py's
+#    pos_vendor class); COPY files may not carry one in a whitespace-bearing string literal (a payload
+#    `note` / `reason` / `message` / `detail`) — they call report_labels.pos_term. Allow = (file, a
+#    signature substring of the literal) -> reason; stale FAILS.
+POS_BACKEND_LOGIC = ["commcalc/report_kinds.py", "commcalc/onboarding_intake.py", "commcalc/implementation_spine.py"]
+POS_BACKEND_COPY = [
+    "commcalc/router.py", "commcalc/sales_recon.py", "commcalc/imei_rebate_report.py", "commcalc/report_labels.py",
+    "closing/router.py", "closing/attention_providers.py", "asset/router.py", "account/finance_attention.py",
+    "core/onboarding.py",
+]
+POS_BACKEND_ALLOW = {
+    ("commcalc/router.py", "B2B Soft (standard)"): "the mig-200 pos_profile seed mirrored in code (the house standard's own label — data for its OWN pos_key)",
+    ("commcalc/router.py", "daily B2B sales export"): "mig-200 filename-rule note in the same mirror (data)",
+    ("commcalc/router.py", "b2bsoft inventory aging"): "mig-200 filename-rule note in the same mirror (data)",
+    ("commcalc/router.py", "B2B Soft wsreports"): "connector_vendor row written for the portal sweep (vendor_name is the row's key, data)",
+    ("commcalc/router.py", "Upload the b2b Activation Details report"): "onboarding task rendered only when applies_when.pos matches that POS (data-conditional)",
+    ("commcalc/router.py", "Upload the b2b Bill Payment Transactions report"): "onboarding task rendered only when applies_when.pos matches that POS (data-conditional)",
+    ("commcalc/router.py", "Upload the b2b Store Performance scorecard"): "onboarding task rendered only when applies_when.pos matches that POS (data-conditional)",
+    ("commcalc/router.py", "b2b soft"): "applies_when.pos tokens of those onboarding tasks (the gate's data value)",
+    ("commcalc/router.py", "B2B Soft"): "the onboarding POS pick-list option + the connector_vendor row key written for the portal sweep (data values)",
+}
+
+
+_bare_lit_res = [re.compile(r"'((?:[^'\\]|\\.)*)'"), re.compile(r'"((?:[^"\\]|\\.)*)"'), re.compile(r"`([^`$]*)`")]
+
+
+_prose_bad = re.compile(r"[<>=;'\"`]")
+
+
+def jsx_prose_line(rel, ln):
+    """A .tsx line that is pure JSX TEXT continuing a paragraph — no tag, no operator, no quote — is
+    display copy the string/tag extractor cannot see ('No daily B2B feed loaded for {period} yet.')."""
+    s = ln.strip()
+    if not rel.endswith(".tsx") or " " not in s or _prose_bad.search(s) or s.startswith(("//", "*", "/*", "{/*")):
+        return []
+    return [s]
+
+
+def pos_scan_frontend(files, rx, allow):
+    """files: {rel: [lines]}. A spelling in a display segment anywhere, or a BARE literal equal to a
+    spelling in app/ or components/ (the vendor-as-fallback case), fails outside `allow`. Returns
+    (fails, stale)."""
+    fails, seen = [], set()
+    whole = re.compile(r"^\s*" + rx.pattern + r"\s*$", re.I)
+    for rel, lines in sorted(files.items()):
+        for i, (ln, is_cmt) in enumerate(comment_lines(lines), 1):
+            if is_cmt:
+                continue
+            hit = None
+            for seg in display_segments(ln) + jsx_prose_line(rel, ln):
+                m = rx.search(seg)
+                if m:
+                    hit = (m.group(0), seg[:110])
+                    break
+            if not hit and (rel.startswith("app/") or rel.startswith("components/")):
+                for lrx in _bare_lit_res:
+                    for lit in lrx.findall(ln):
+                        if whole.match(lit):
+                            hit = (lit, "bare literal " + repr(lit))
+                            break
+                    if hit:
+                        break
+            if not hit:
+                continue
+            seen.add(rel)
+            if rel in allow:
+                continue
+            fails.append((rel, i, hit[0], hit[1]))
+    stale = [k for k in allow if k not in seen]
+    return fails, stale
+
+
+_DOCSTRING = re.compile(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'')
+_LOG_LINE = re.compile(r"\bprint\s*\(|\blog(?:ger)?\.(?:info|warning|warn|error|debug|exception)\s*\(")
+
+
+def _py_code(src):
+    """Python source with docstrings and # comments removed (they are prose, not copy)."""
+    src = _DOCSTRING.sub('""', src)
+    return "\n".join(l for l in src.split("\n") if not l.strip().startswith("#"))
+
+
+def _strip_braces(text):
+    """'{a} vs {f((b or {}))}' → '{} vs {}' — brace-depth aware, so a nested expression is dropped whole."""
+    out, depth = [], 0
+    for ch in text:
+        if ch == "{":
+            if depth == 0:
+                out.append("{")
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                out.append("}")
+        elif depth == 0:
+            out.append(ch)
+    return "".join(out)
+
+
+def _py_string_literals(src):
+    """The STRING literals of a Python source (tokenize — never a regex across lines), excluding
+    docstrings (a STRING that is a whole statement) and the strings of print()/log lines (operator
+    output, not tenant-facing copy). f-strings yield their literal parts. Yields (line_no, text)."""
+    import io
+    import tokenize
+    out = []
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
+    except (tokenize.TokenError, SyntaxError):
+        return out
+    lines = src.split("\n")
+    prev_sig = None
+    for t in toks:
+        if t.type in (tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.COMMENT):
+            if t.type == tokenize.NEWLINE:
+                prev_sig = None
+            continue
+        text = None
+        if t.type == tokenize.STRING:
+            if prev_sig is None and t.string.lstrip("rRbBuUfF").startswith(('"""', "\'\'\'")):
+                prev_sig = t; continue                       # a docstring
+            body = t.string.lstrip("rRbBuUfF")
+            text = body[3:-3] if body[:3] in ('"""', "\'\'\'") else body[1:-1]
+            if "f" in t.string[:2].lower():                  # an f-string's {expressions} are code, not copy
+                text = _strip_braces(text)
+        elif getattr(tokenize, "FSTRING_MIDDLE", None) is not None and t.type == tokenize.FSTRING_MIDDLE:
+            text = t.string
+        if text is not None:
+            ln = lines[t.start[0] - 1] if t.start[0] - 1 < len(lines) else ""
+            if not _LOG_LINE.search(ln):
+                out.append((t.start[0], text))
+        prev_sig = t
+    return out
+
+
+def pos_scan_backend(sources, rx, allow, logic=POS_BACKEND_LOGIC, copy=POS_BACKEND_COPY):
+    """sources: {rel: src}. LOGIC files: no spelling in code at all (the registry mirror's data rows
+    after HOUSE_KEYS excepted; onboarding_intake's string keys blanked). COPY files: no spelling inside
+    a whitespace-bearing string literal outside `allow`. Returns (fails, stale)."""
+    fails, seen = [], set()
+    for rel in logic:
+        body = _py_code(sources.get(rel, ""))
+        if rel.endswith("report_kinds.py") and "HOUSE_KEYS = " in body:
+            body = body.split("HOUSE_KEYS = ", 1)[1]
+        if rel.endswith("onboarding_intake.py"):
+            body = re.sub(r'"[^"\n]*"', '""', body)
+        m = rx.search(body)
+        if m:
+            fails.append((rel, "logic", m.group(0), body[max(0, m.start() - 40):m.end() + 40].replace("\n", " ")))
+    for rel in copy:
+        for ln, lit in _py_string_literals(sources.get(rel, "")):
+            if " " not in lit or not rx.search(lit):
+                continue
+            key = next((k for k in allow if k[0] == rel and k[1] in lit), None)
+            if key:
+                seen.add(key)
+                continue
+            fails.append((rel + ":" + str(ln), "copy", rx.search(lit).group(0), lit[:110]))
+    stale = [k for k in allow if k not in seen]
+    return fails, stale
+
 
 _page_re = re.compile(r"app/\(platform\)(/.*)/page\.tsx$")
 
@@ -196,16 +434,117 @@ def main():
                         fails.append((rel, i, side, mm.group(0), seg[:110]))
     print(f"scanned {scanned} frontend files; NAV gates: "
           f"{sum(1 for v in nav.values() if v)} hrefs; exceptions pinned: {len(REVIEWED_EXCEPTIONS)}")
+    bad = False
     if fails:
+        bad = True
         print(f"\nFAIL — {len(fails)} hardcoded cross-side carrier term(s) in display copy:")
         for rel, i, side, term, seg in fails:
             print(f"  {rel}:{i}  [{side}:{term}]  {seg}")
         print("\nFix: resolve the name via useReportLabels().term() (preset data, mig 953), reword "
               "neutrally, or carrier-gate the page in NAV_CARRIERS — see this file's docstring.")
-        sys.exit(1)
-    print("OK — no hardcoded cross-side carrier vocabulary in rendered frontend copy.")
-    sys.exit(0)
+    else:
+        print("OK — no hardcoded cross-side carrier vocabulary in rendered frontend copy.")
+    if not pos_guard():
+        bad = True
+    sys.exit(1 if bad else 0)
+
+
+def _fe_files():
+    out = {}
+    for dirpath, _dirs, files in os.walk(FE):
+        for f in files:
+            if f.endswith((".ts", ".tsx")):
+                path = os.path.join(dirpath, f)
+                out[os.path.relpath(path, FE).replace(os.sep, "/")] = open(path, encoding="utf-8").read().splitlines()
+    return out
+
+
+def _be_sources():
+    out = {}
+    for rel in POS_BACKEND_LOGIC + POS_BACKEND_COPY:
+        p = os.path.join(BE, rel)
+        out[rel] = open(p, encoding="utf-8").read() if os.path.exists(p) else ""
+    return out
+
+
+def _ctl(label, cond):
+    print(f"  {'PASS' if cond else 'FAIL'}  {label}")
+    return bool(cond)
+
+
+def pos_guard():
+    """THE POS LOCK. Returns True when green; prints its own report."""
+    print("\n— POS vendor vocabulary (derived from the seeds; owner 2026-09-20) —")
+    vocab = pos_vocabulary()
+    rx = pos_regex(vocab)
+    ok = True
+    print("  spellings: " + ", ".join(f"{k} ← {v}" for k, v in sorted(vocab.items())))
+    if not vocab or not rx.search("b2bsoft") or not rx.search("RQ"):
+        print("  FAIL  the derived vocabulary must cover the seeds' own values (b2bsoft, RQ) — is a seed regex stale?")
+        ok = False
+    fe = _fe_files()
+    fails, stale = pos_scan_frontend(fe, rx, POS_REVIEWED_EXCEPTIONS)
+    if fails:
+        ok = False
+        print(f"  FAIL  {len(fails)} POS vendor name(s) in frontend copy / bare literals:")
+        for rel, i, term, seg in fails:
+            print(f"        {rel}:{i}  [{term}]  {seg}")
+        print("        Fix: usePosTerm().pos (lib/report-labels.ts) — the declared POS, else the registry's neutral noun.")
+    else:
+        print(f"  OK    no POS vendor name in frontend copy; exceptions pinned: {len(POS_REVIEWED_EXCEPTIONS)}")
+    if stale:
+        ok = False
+        print(f"  FAIL  stale POS exception(s) (file no longer carries a spelling — remove them): {stale}")
+    be = _be_sources()
+    bfails, bstale = pos_scan_backend(be, rx, POS_BACKEND_ALLOW)
+    if bfails:
+        ok = False
+        print(f"  FAIL  {len(bfails)} POS vendor name(s) in backend logic / payload copy:")
+        for rel, cls, term, seg in bfails:
+            print(f"        {rel}  [{cls}:{term}]  {seg}")
+        print("        Fix: report_labels.pos_term(client, org_id) in copy; registry data for logic.")
+    else:
+        print(f"  OK    backend: no vendor in registry/intake/spine logic, none in payload copy outside {len(POS_BACKEND_ALLOW)} allowed data literals")
+    if bstale:
+        ok = False
+        print(f"  FAIL  stale backend allow entr(ies): {bstale}")
+
+    # negative controls — a lock that cannot go red proves nothing
+    print("  — negative controls —")
+    page = "app/(platform)/commcalc/sales-recon/page.tsx"
+    base = fe.get(page, [])
+    f1, _ = pos_scan_frontend({page: base + ["          No daily B2B feed loaded for {period} yet."]}, rx, POS_REVIEWED_EXCEPTIONS)
+    ok &= _ctl("reintroduce a vendor name in a page's copy → RED", bool(f1))
+    f2, _ = pos_scan_frontend({page: base + ["  const label = term('pos_system', 'b2bsoft')"]}, rx, POS_REVIEWED_EXCEPTIONS)
+    ok &= _ctl("a page reading the term but spelling the vendor as its fallback → RED", bool(f2))
+    f0, _ = pos_scan_frontend({page: base}, rx, POS_REVIEWED_EXCEPTIONS)
+    f3, _ = pos_scan_frontend({page: base + ["  const label = term('pos_system', 'POS')", "  const t = `the daily ${pos} feed`"]}, rx, POS_REVIEWED_EXCEPTIONS)
+    ok &= _ctl("the neutral fallback / the term in a template → GREEN", len(f3) == len(f0))
+    f4, _ = pos_scan_frontend({page: base + ["  // the daily b2bsoft feed (a comment is prose, not copy)"]}, rx, POS_REVIEWED_EXCEPTIONS)
+    ok &= _ctl("a vendor name in a comment → GREEN", len(f4) == len(f0))
+    _, s5 = pos_scan_frontend({page: base}, rx, {**POS_REVIEWED_EXCEPTIONS, page: "stale on purpose"})
+    ok &= _ctl("a stale POS exception → RED", page in s5)
+    bctl = dict(be)
+    bctl["commcalc/sales_recon.py"] = be.get("commcalc/sales_recon.py", "") + '\nX = "is in the daily B2B feed"\n'
+    f6, _ = pos_scan_backend(bctl, rx, POS_BACKEND_ALLOW)
+    ok &= _ctl("a vendor name in a backend payload string → RED", any(c == "copy" for _, c, _, _ in f6))
+    bctl = dict(be)
+    bctl["commcalc/implementation_spine.py"] = be.get("commcalc/implementation_spine.py", "") + "\nPOS = 'b2bsoft'\n"
+    f7, _ = pos_scan_backend(bctl, rx, POS_BACKEND_ALLOW)
+    ok &= _ctl("a vendor name in registry/intake/spine logic → RED (the folded #257 class)", any(c == "logic" for _, c, _, _ in f7))
+    bctl = dict(be)
+    bctl["commcalc/sales_recon.py"] = be.get("commcalc/sales_recon.py", "") + '\nX = f"is in the daily {pos} feed"\n'
+    f8, _ = pos_scan_backend(bctl, rx, POS_BACKEND_ALLOW)
+    ok &= _ctl("the term in a backend f-string → GREEN", len(f8) == len(bfails))
+    _, s9 = pos_scan_backend(be, rx, {**POS_BACKEND_ALLOW, ("commcalc/sales_recon.py", "nowhere"): "stale on purpose"})
+    ok &= _ctl("a stale backend allow entry → RED", ("commcalc/sales_recon.py", "nowhere") in s9)
+    print("  " + ("OK — the POS vocabulary lock holds." if ok else "FAIL — the POS vocabulary lock is open."))
+    return ok
 
 
 if __name__ == "__main__":
+    if "--print-pos-vocab" in sys.argv:
+        v = pos_vocabulary()
+        print(json.dumps({"spellings": v, "regex": pos_regex(v).pattern}, indent=1))
+        sys.exit(0)
     main()

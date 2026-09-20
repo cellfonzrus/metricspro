@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import { usePosTerm } from '@/lib/report-labels'
 
 // Configurable closing-sheet activation-count fields (mig 501): choose the standard 3 fields
 // (Upgrades / New Lines / Postpaid) OR define your own, mirroring /closing/tender-config (mig 111).
@@ -10,10 +11,10 @@ import { api } from '@/lib/client'
 // it never touches the cash/credit close gate (block/flag), which is a separate money-recon path.
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
-const RECON_CLASSES = [
+const reconClasses = (pos: string) => [
   ['activation', 'Activation (New/Postpaid)'],
   ['upgrade', 'Upgrade'],
-  ['other', 'Other (not compared to B2B)'],
+  ['other', `Other (not compared to ${pos})`],
 ]
 
 type Def = { field_key: string; label: string; recon_class: string; is_standard?: boolean }
@@ -21,6 +22,8 @@ type Def = { field_key: string; label: string; recon_class: string; is_standard?
 function slug(s: string) { return (s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') }
 
 export default function CountConfigPage() {
+  const { pos } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
+  const RECON_CLASSES = reconClasses(pos)
   const [defs, setDefs] = useState<Def[]>([])
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
@@ -69,7 +72,7 @@ export default function CountConfigPage() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔢 Closing Count-Field Configuration</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             Define the activation-count fields on your daily closing sheet — the built-in 3 (Upgrades / New Lines / Postpaid), or your own.
-            Recon class drives which B2B count (activations vs upgrades) a field is compared against; it&apos;s a flag only, never part of the cash/credit close gate.
+            Recon class drives which {pos} count (activations vs upgrades) a field is compared against; it&apos;s a flag only, never part of the cash/credit close gate.
             Leave it unconfigured to use the built-in 3.
           </p>
         </div>

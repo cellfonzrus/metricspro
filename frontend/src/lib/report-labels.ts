@@ -46,6 +46,33 @@ export function pickTermMap(data: ReportLabelsData | null, activeCarrier: string
   return data.terms[activeCarrier] || data.terms[data.default_carrier] || data.terms['_'] || {}
 }
 
+// ── THE POS NAME IN PAGE COPY (owner 2026-09-20: "it should customize the message based on what POS
+//    is being used"). The tenant's POS is ONE piece of config — the `pos_system` term (mig 953 house
+//    presets, mig 1004's 'RQ', a tenant override) — and every sentence that names the POS dereferences
+//    it here. `pos` is the declared label ('RQ', 'b2bsoft') or the registry's own NEUTRAL noun (the
+//    `editable_terms` default the backend ships, 'POS'); `posDeclared` says which. No page spells a
+//    vendor: backend/harness_carrier_vocab_guard.py fails the build when one does.
+export const POS_TERM_KEY = 'pos_system'
+const POS_LAST_RESORT = 'POS'   // only when the label payload has not arrived / failed — the registry default is the real neutral noun
+
+export type PosTerm = {
+  pos: string            // the word to put in copy: the declared POS label, else the neutral noun
+  posDeclared: boolean   // true when a preset / override names the POS (false = neutral noun in use)
+  posLoaded: boolean     // false until the label payload has been read (or failed)
+}
+
+/** The registry's neutral noun for a term key (shipped as `editable_terms[].default`), else the last resort. */
+export function neutralTerm(data: ReportLabelsData | null, key: string, lastResort: string): string {
+  const hit = (data?.editable_terms || []).find(t => t.key === key)
+  return (hit?.default || '').trim() || lastResort
+}
+
+/** PURE: the POS term for the active carrier out of a report-labels payload (proven by prove_pos_term_copy.mjs). */
+export function pickPosTerm(data: ReportLabelsData | null, activeCarrier: string, loaded = true): PosTerm {
+  const declared = (pickTermMap(data, activeCarrier)[POS_TERM_KEY] || '').trim()
+  return { pos: declared || neutralTerm(data, POS_TERM_KEY, POS_LAST_RESORT), posDeclared: !!declared, posLoaded: loaded }
+}
+
 const orgQS = () => { const o = getActiveOrg(); return o ? `?org_id=${encodeURIComponent(o)}` : '' }
 
 // Fetch-once hook. Degrades to built-in labels (empty maps) on any error — a label service
@@ -53,8 +80,9 @@ const orgQS = () => { const o = getActiveOrg(); return o ? `?org_id=${encodeURIC
 export function useReportLabels() {
   const { activeCarrier } = useActiveCarrier()
   const [data, setData] = useState<ReportLabelsData | null>(null)
+  const [loaded, setLoaded] = useState(false)
   const reload = useCallback(() => {
-    api(`/api/v1/commcalc/report-labels${orgQS()}`).then(setData).catch(() => setData(null))
+    api(`/api/v1/commcalc/report-labels${orgQS()}`).then(setData).catch(() => setData(null)).finally(() => setLoaded(true))
   }, [])
   useEffect(() => { reload() }, [reload])
   const labels = useMemo(() => pickLabelMap(data, activeCarrier), [data, activeCarrier])
@@ -67,5 +95,17 @@ export function useReportLabels() {
   // term: the active carrier's vocabulary for a term key, with the NEUTRAL noun as fallback —
   // shared copy never hardcodes a carrier brand (owner directive 2026-09-04, mig 953).
   const term = useCallback((key: string, fallback: string) => terms[key] || fallback, [terms])
-  return { data, reload, colLabel, bannerOn, term, activeCarrier }
+  // pos / posDeclared: the ONE way copy names the tenant's POS (see pickPosTerm above).
+  const posTerm = useMemo(() => pickPosTerm(data, activeCarrier, loaded), [data, activeCarrier, loaded])
+  return { data, reload, colLabel, bannerOn, term, activeCarrier, ...posTerm }
+}
+
+/**
+ * The POS term alone, for a page whose only vocabulary need is the POS name:
+ * `const { pos, posDeclared } = usePosTerm()` → "the daily {pos} feed", "Swept ({pos})".
+ * Same fetch, same resolution as useReportLabels — a wrapper, not a second path.
+ */
+export function usePosTerm(): PosTerm {
+  const { pos, posDeclared, posLoaded } = useReportLabels()
+  return { pos, posDeclared, posLoaded }
 }

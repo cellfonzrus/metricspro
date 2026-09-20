@@ -10,8 +10,9 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import EnvelopeViewLink from '@/components/EnvelopeViewLink'
 import { LinkedText } from '@/components/ScreenLink'
 import { useReportLabels } from '@/lib/report-labels'
+import { useReportKinds, notApplicableCopy } from '@/lib/report-kinds'
 
-// DM evening verification view — per-store totals, missing-rep check, B2B reconciliation, and
+// DM evening verification view — per-store totals, missing-rep check, POS reconciliation, and
 // the DM's confirm/adjust+sign-off. Shared by /closing/verify (Daily Closing module) and the
 // legacy /storeops/closing route. Source of truth is GET /closing/summary.
 //
@@ -49,7 +50,7 @@ const GATE_COLOR: Record<string, React.CSSProperties> = {
 }
 // `resolved` (OWNER BUG REPORT 2026-07-29, "management removed block still showing on dm verify" +
 // senior-review RC-2): gate_status itself is NEVER changed here — it's still the live, unmodified
-// re-derivation of declared-vs-B2B (_money_issues, untouched) — but a Blocked/Flagged row that's
+// re-derivation of declared-vs-POS (_money_issues, untouched) — but a Blocked/Flagged row that's
 // already been DM-verified, auto-accepted (3rd try), or released for correction no longer reads as an
 // UNADDRESSED alarm: same status, muted styling + an explicit "(reviewed)" qualifier. Display-layer
 // only — never fed back into the gate classification/thresholds.
@@ -193,7 +194,8 @@ export default function DailyClosingVerify() {
   const { user, permissions } = useAuth()
   // Carrier vocabulary (owner 2026-09-04): the bill-pay processor / financing-program names are
   // per-carrier preset DATA (mig 953 — boost renders 'ePay'/'ACIMA' byte-identical to today).
-  const { term, colLabel } = useReportLabels()
+  const { term, colLabel, pos, posDeclared } = useReportLabels()
+  const xReport = useReportKinds().feedFor('x_report')   // applies? — is an X-report kind defined for this POS (registry §30.9)
   const ep = term('processor', 'Bill-pay')
   const fin = term('financing', 'Financing')
   // The external credit machine's tenant-facing name — mig-960 carrier label preset (owner
@@ -319,7 +321,7 @@ export default function DailyClosingVerify() {
   // out for over 3-4 minutes"): verify()/approveExpense() used to call the full load() — a fast
   // upsert (POST /closing/verify or /closing/expense/approve) followed by a reload of the ENTIRE
   // active filter/date-range via /closing/summary. In range mode that's up to
-  // _SUMMARY_MAX_RANGE_DATES=14 dates, each running 10+ queries (schedules, timelog/B2B money+counts,
+  // _SUMMARY_MAX_RANGE_DATES=14 dates, each running 10+ queries (schedules, timelog/POS money+counts,
   // X-report, verifications, the gate replay) — a single-card action paid for re-deriving every OTHER
   // card too. This refetches ONLY the one (store, close_date) that actually changed and merges it
   // into the existing `data.stores` array in place — never touches the rest of the loaded range. Best
@@ -507,7 +509,7 @@ export default function DailyClosingVerify() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>✅ DM Closing Verification</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            Verify every evening that each store's closing sheet was submitted, confirm the totals, and reconcile against B2B actual sales.
+            Verify every evening that each store's closing sheet was submitted, confirm the totals, and reconcile against {pos} actual sales.
           </p>
         </div>
         {!loading && stores.length > 0 && (
@@ -588,7 +590,7 @@ export default function DailyClosingVerify() {
         const countCols: { key: string; label: string }[] = (t.counts || []).map((c: any) => ({ key: c.field_key, label: c.label }))
         const customTenderCols: { key: string; label: string }[] = (t.custom_tenders || []).map((c: any) => ({ key: c.key, label: c.label }))
         // OWNER BUG REPORT 2026-07-29 ("management removed block still showing on dm verify"): the
-        // gate_status badge is a live re-derivation of cash/credit vs B2B (never redefined here) — it
+        // gate_status badge is a live re-derivation of cash/credit vs POS (never redefined here) — it
         // was already correct, but gave NO indication of two things a DM/management could have already
         // done about a "⛔ Blocked"/"⚠️ Flagged" row: (1) the 3-try submit flow itself auto-accepted the
         // rep's 3rd attempt (letting them finish closing — the "block" on the REP was already lifted,
@@ -711,15 +713,15 @@ export default function DailyClosingVerify() {
               </div>
             )}
 
-            {/* B2B reconciliation */}
+            {/* POS reconciliation */}
             {recon && (
               <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8, background: recon.discrepancy ? '#fef3e2' : '#e6f7ec', fontSize: 13 }}>
-                <strong>B2B reconciliation:</strong>{' '}
-                Activations closing {recon.closing_activations} vs B2B {recon.b2b_activations}{' '}
+                <strong>{pos} reconciliation:</strong>{' '}
+                Activations closing {recon.closing_activations} vs {pos} {recon.b2b_activations}{' '}
                 {recon.act_var !== 0 ? <b style={{ color: 'var(--amber, #b45309)' }}>(Δ{recon.act_var > 0 ? '+' : ''}{recon.act_var})</b> : '✓'}
-                {' · '}Upgrades closing {recon.closing_upgrades} vs B2B {recon.b2b_upgrades}{' '}
+                {' · '}Upgrades closing {recon.closing_upgrades} vs {pos} {recon.b2b_upgrades}{' '}
                 {recon.upg_var !== 0 ? <b style={{ color: 'var(--amber, #b45309)' }}>(Δ{recon.upg_var > 0 ? '+' : ''}{recon.upg_var})</b> : '✓'}
-                <span style={{ color: 'var(--text3)' }}>{' · '}Acc GP (B2B) {fmt(recon.b2b_acc_gp)}</span>
+                <span style={{ color: 'var(--text3)' }}>{' · '}Acc GP ({pos}) {fmt(recon.b2b_acc_gp)}</span>
               </div>
             )}
 
@@ -732,7 +734,7 @@ export default function DailyClosingVerify() {
                 <strong>Money reconciliation</strong>
                 <span style={{ color: 'var(--text3)', fontSize: 11, marginLeft: 6 }}>
                   declared{s.dm_corrected ? ' (DM-corrected)' : ''} vs {s.money_recon.tender_source === 'x_report' ? 'POS X-report' : 'sales feed'}
-                  {s.money_recon.tenders_available === false ? ' — no X-report tender data for this day (recon pending)' : ''}
+                  {s.money_recon.tenders_available === false ? (xReport.applies === 'not_defined' ? ` — ${notApplicableCopy({ pos, posDeclared, feedNoun: 'cash register / X-report', purpose: 'reconcile the tenders against' })}` : ' — no X-report tender data for this day (recon pending)') : ''}
                 </span>
                 <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginTop: 6 }}>
                   {(['cash', 'credit'] as const).map((leg) => {

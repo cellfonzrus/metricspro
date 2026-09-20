@@ -10,6 +10,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import type { EntityOption } from '@/components/EntityPicker'
 import type { ExportSheet } from '@/lib/export'
+import { usePosTerm } from '@/lib/report-labels'
 import { StalenessBanner } from '../_components/StalenessBanner'
 import { statementInfoSheet, statementSubtitle, type StatementMeta } from '../_components/statementExport'
 
@@ -17,6 +18,7 @@ const SEC: Record<string, string> = { asset: 'Assets', liability: 'Liabilities',
 
 function BSInner() {
   const { period } = usePeriod()
+  const { pos } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
   const sp = useSearchParams()
   const [scope, setScope] = useState(sp.get('scope') || 'consolidated')
   const [scopes, setScopes] = useState<any[]>([])
@@ -93,7 +95,7 @@ function BSInner() {
       ] },
     ]
     // Multi-sheet: the per-store inventory backing the BS inventory line (effective = manual override
-    // if set, else swept b2bsoft value). Narrowed to the selected store(s) — the standard store/market
+    // if set, else the swept POS value). Narrowed to the selected store(s) — the standard store/market
     // filter (§3d) when active, else the single store scope — so the export mirrors what's on screen.
     const invRows = data?.filtered
       ? inv.filter((r: any) => (data.filtered_stores || []).includes(r.store))
@@ -103,7 +105,7 @@ function BSInner() {
     if (invRows.length > 0) {
       sheets.push({ name: 'Inventory detail', rows: invRows, columns: [
         { header: 'Store', get: (r: any) => r.store },
-        { header: 'Swept (b2bsoft)', get: (r: any) => r.swept_value, money: true },
+        { header: `Swept (${pos})`, get: (r: any) => r.swept_value, money: true },
         { header: 'Manual override', get: (r: any) => r.manual_value, money: true },
         { header: 'Effective (on BS)', get: (r: any) => r.effective, money: true },
         { header: 'Source', get: (r: any) => r.effective_source },

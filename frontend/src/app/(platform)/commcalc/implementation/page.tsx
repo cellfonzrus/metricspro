@@ -6,7 +6,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_lib/uploadGuard'
 import EntityPicker from '@/components/EntityPicker'
 import { WorkflowNext } from '@/components/WorkflowNext'
-import { useReportLabels } from '@/lib/report-labels'
+import { useReportLabels, usePosTerm } from '@/lib/report-labels'
 
 // Implementation Wizard — onboard a new company's data end-to-end: map EVERY source report they
 // upload (auto-detect columns from a sample) → see exactly which DESIRED OUTPUT reports (Commissions,
@@ -233,6 +233,7 @@ function CarrierConfigBar({ carrierId, onChanged, setMsg }:
 
 function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
   { reportKey: string; info: any; carrierId: string; onSaved: () => void; setMsg: (s: string) => void }) {
+  const { pos: posTerm } = usePosTerm()   // the tenant's POS name in the upload-guard copy (lib/report-labels.ts)
   const [open, setOpen] = useState(false)
   const [fields, setFields] = useState<any[]>([])
   const [src, setSrc] = useState<Record<string, string>>({})
@@ -331,7 +332,7 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
       const r: any = await apiUpload('/api/v1/commcalc/upload-mapped', fd)
       // The ingest guards (price-coverage refusal / row-count shrink) return HTTP-200; render them
       // honestly instead of a green "✅ 0 row(s)" that looks identical to a broken upload.
-      const o = readUploadOutcome(r, 'row(s)')
+      const o = readUploadOutcome(r, 'row(s)', posTerm)
       setOutcome(o.tone === 'ok' ? null : o)
       say(o.tone === 'ok'
         ? `✅ ${reportKey}: imported ${o.saved} row(s)${period.trim() ? ` for ${period.trim()}` : ' — each row booked to the month of its own date'}. The reports above now compute from this data.`

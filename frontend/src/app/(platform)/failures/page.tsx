@@ -59,10 +59,10 @@ export default function FailureLogsPage() {
 
   const load = useCallback(() => {
     setLoading(true); setErr(''); setSel(new Set())
-    const rq = reviewedFilter ? `?reviewed=${reviewedFilter}` : ''
+    const qs = reviewedFilter ? `?reviewed=${reviewedFilter}` : ''
     Promise.all([
-      api(`/api/v1/core/failures/grouped${rq}`).catch((e: any) => { throw e }),
-      api(`/api/v1/core/failures${rq}${rq ? '&' : '?'}limit=1000`).catch(() => ({ failures: [] })),
+      api(`/api/v1/core/failures/grouped${qs}`).catch((e: any) => { throw e }),
+      api(`/api/v1/core/failures${qs}${qs ? '&' : '?'}limit=1000`).catch(() => ({ failures: [] })),
     ]).then(([g, f]: any[]) => {
       const gs: Group[] = g.groups || []
       setGroups(gs); setRows(f.failures || [])

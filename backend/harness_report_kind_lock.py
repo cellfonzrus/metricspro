@@ -13,16 +13,20 @@ WHAT FAILS THE BUILD
       keys. Each must import `useReportKinds` from '@/lib/report-kinds' (the ONE hook, which is the
       ONE caller of `reportKindsVisible`, which fetches the ONE endpoint) — or, for the shared
       primitive itself, take the visible set as a prop and fetch nothing.
-  (b) a SECOND COPY of the fact: a POS vendor name, a filename-pattern glob, or a string-literal list
-      of ≥3 report-kind / upload-route keys in frontend/src/{app,components,lib}/** or in the backend
-      registry / intake / spine modules — outside the registry seed and the ALLOW set below, where
-      every entry carries its reason and a STALE entry (token no longer present) fails too.
+  (b) a SECOND COPY of the fact: a filename-pattern glob, or a string-literal list of ≥3 report-kind /
+      upload-route keys in frontend/src/{app,components,lib}/** — outside the ALLOW set below, where
+      every entry carries its reason and a STALE entry (token no longer present) fails too. (POS VENDOR
+      NAMES — in page copy, as a bare literal, or in the backend registry / intake / spine logic — are
+      the carrier-vocab guard's job since 2026-09-20: harness_carrier_vocab_guard.py derives the
+      vocabulary from the seeds and owns the ONE allow set. The `pos_vendor` class this lock carried
+      was folded there so one lock owns that fact.)
   (c) the backend reads the declaration through ONE function (`report_kinds.tenant_declaration`);
       no page re-derives POS visibility through the legacy `posOK` / `posVisible` gate or by comparing
       the `pos_system` term against a literal.
   (d) NEGATIVE CONTROLS run the same scanner over synthetic files: a hardcoded kind list → RED; a
       surface that bypasses the hook → RED; a glob → RED; a legacy gate call in a page → RED; a stale
-      allow entry → RED. A lock that cannot go red proves nothing.
+      allow entry → RED. A lock that cannot go red proves nothing. (Eight controls here; the vendor-name
+      control moved to the guard with its class.)
 
 Extends the carrier-vocab guard's posture (a dependency-free static scan on bare Python, one CI job)
 rather than adding a sibling workflow: .github/workflows/carrier-vocab-guard.yml runs both.
@@ -58,7 +62,6 @@ BACKEND_FILES = ["report_kinds.py", "onboarding_intake.py", "implementation_spin
 KIND_KEYS = set(RK.HOUSE_KEYS)
 ROUTE_KEYS = {u for r in RK.HOUSE_KINDS for u in r["upload_types"]}
 LIST_KEYS = KIND_KEYS | ROUTE_KEYS
-POS_VENDOR = re.compile(r"b2bsoft|b2b\s+soft|rtpos|\brq\b", re.I)
 GLOB_LITERAL = re.compile(r"""['"](\*[^'"\n]*\*)['"]""")
 STR_ARRAY = re.compile(r"\[((?:\s*['\"][A-Za-z0-9_]+['\"]\s*,?)+)\s*\]")
 LEGACY_GATE = re.compile(r"\b(posOK|posVisible)\s*\(")
@@ -72,15 +75,6 @@ ALLOW = {
     # a generic placeholder shown when the registry has no rule yet — not a report pattern
     ("app/(platform)/commcalc/email-imports/page.tsx", "glob"):
         "'*Report*Name*' is the input placeholder when the declared POS has no filename standard; the real examples come from kinds.filenameRules",
-    # legacy pages outside the five, each a reviewed decision (not upload-choice surfaces)
-    ("app/(platform)/commcalc/asset/inventory-recon/page.tsx", "pos_vendor"):
-        "the structured inventory-recon page of one POS; reached only through the registry-gated tile (pos_inventory_recon)",
-    ("app/(platform)/commcalc/exec/mtd/page.tsx", "pos_vendor"): "copy on a report page, not an upload surface",
-    ("app/(platform)/commcalc/_lib/uploadGuard.tsx", "pos_vendor"): "explains a price-guard refusal of one POS's degraded export (data-conditional)",
-    ("app/(platform)/closing/tender-config/page.tsx", "pos_vendor"): "tender-config example labels (data)",
-    ("app/(platform)/failures/page.tsx", "pos_vendor"): "failure-code glossary (data)",
-    ("app/(platform)/accounts/balance-sheet/page.tsx", "pos_vendor"): "inventory-basis caption on a finance page",
-    ("app/(platform)/accounts/inventory/page.tsx", "pos_vendor"): "inventory-source caption on a finance page",
     ("app/(platform)/commcalc/ftp-imports/page.tsx", "glob"):
         "'*Report*Name*' is the input placeholder when the declared POS has no filename standard (same as email imports)",
     # closing-module files the surface heuristic catches (a file input beside 'sales' / 'x_report'):
@@ -93,10 +87,6 @@ ALLOW = {
         "the DM verify's X-report attach for ONE closing day — the x_report kind is POS-agnostic ({} applies-to) so the registry answer is 'shown' for every tenant; routing it is the closing agent's PR",
 }
 assert all(v for v in ALLOW.values()), "every allow entry carries a reason"
-
-BACKEND_ALLOW = {
-    ("router.py", "pos_vendor"): "_B2BSOFT_POS_DEFAULT is the mig-200 code default for its OWN pos_key (harness_report_kinds §G pins _pos_profile answers None for any other key); vendor-named legacy routes are pre-existing",
-}
 
 P = F = 0
 
@@ -164,13 +154,7 @@ def scan(files, allow):
     for rel, src in sorted(files.items()):
         lines = code_lines(src)
         body = "\n".join(lines)
-        # (b) second copies
-        if rel != VIS_FILE:
-            for m in POS_VENDOR.finditer(body):
-                seen.add((rel, "pos_vendor"))
-                if (rel, "pos_vendor") not in allow:
-                    v.append((rel, "pos_vendor", m.group(0)))
-                    break
+        # (b) second copies (POS vendor names: harness_carrier_vocab_guard.py, the one lock for that fact)
         for m in GLOB_LITERAL.finditer(body):
             seen.add((rel, "glob"))
             if (rel, "glob") not in allow:
@@ -232,22 +216,9 @@ def main():
     for k, why in sorted(ALLOW.items()):
         print("      allow %-62s [%s] — %s" % (k[0], k[1], why[:70]))
 
-    # backend
-    bv, bseen = [], set()
-    for f in BACKEND_FILES + ["router.py"]:
-        src = re.sub(r'"""[\s\S]*?"""', '""', read(os.path.join(BE, f)))   # docstrings are prose
-        body = "\n".join(code_lines(src))
-        if f == "report_kinds.py":
-            body = body.split("HOUSE_KEYS = ", 1)[1]        # the seed mirror carries codes as data
-        if f == "onboarding_intake.py":
-            body = re.sub(r'"[^"\n]*"', '""', body)          # its copy names no vendor; keys are data
-        m = POS_VENDOR.search(body)
-        if m:
-            bseen.add((f, "pos_vendor"))
-            if (f, "pos_vendor") not in BACKEND_ALLOW:
-                bv.append((f, m.group(0)))
-    check("(b) backend: no POS vendor name in the registry / intake / spine logic (router's mig-200 default allowed with reason)", not bv, bv)
-    check("no stale backend allow entry", not [k for k in BACKEND_ALLOW if k not in bseen], [k for k in BACKEND_ALLOW if k not in bseen])
+    # backend (the vendor-name scan of these files lives in harness_carrier_vocab_guard.py since 2026-09-20)
+    for f in BACKEND_FILES:
+        check("backend registry/intake/spine module present for the guard's logic scan: " + f, os.path.exists(os.path.join(BE, f)))
     n_decl = 0
     for dp, _d, fs in os.walk(os.path.join(ROOT, "backend", "app")):
         for f in fs:
@@ -275,16 +246,12 @@ def main():
     v3, _ = scan(ctl, ALLOW)
     check("a filename glob literal on a surface → RED", any(c == "glob" for _, c, _ in v3), v3)
     ctl = dict(base)
-    ctl["app/(platform)/commcalc/upload/page.tsx"] += "\nconst CUSTOM_REPORTS_POS = 'b2bsoft'\n"
-    v4, _ = scan(ctl, ALLOW)
-    check("a POS vendor name on a surface (the original defect) → RED", any(c == "pos_vendor" for _, c, _ in v4), v4)
-    ctl = dict(base)
     ctl["app/(platform)/commcalc/email-imports/page.tsx"] += "\nconst shown = posOK('x', 'a', 'b', {})\n"
     v5, _ = scan(ctl, ALLOW)
     check("a page re-deriving the gate through the legacy posOK → RED", any(c == "legacy_gate" for _, c, _ in v5), v5)
     ctl = dict(base)
     ctl["app/(platform)/commcalc/email-imports/page.tsx"] += "\nconst gate = term('pos_system', '') === 'b2bsoft'\n"
-    v6, _ = scan(ctl, {**ALLOW, ("app/(platform)/commcalc/email-imports/page.tsx", "pos_vendor"): "control"})
+    v6, _ = scan(ctl, ALLOW)
     check("a page comparing the pos_system term against a literal → RED", any(c == "term_compare" for _, c, _ in v6), v6)
     ctl = dict(base)
     ctl["app/(platform)/onboarding/intake/page.tsx"] += "\napi('/api/v1/commcalc/report-kinds').then(() => 0)\n"
