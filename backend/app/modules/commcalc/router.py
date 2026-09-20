@@ -6,7 +6,10 @@ import pandas as pd
 import io
 import re
 from app.core.database import get_supabase
-from app.core.service_role import require_browser_service   # SERVICE_ROLE=api → clean 503 on browser endpoints
+from app.core.service_role import (require_browser_service,   # SERVICE_ROLE=api → clean 503 on browser endpoints
+                                    browser_allowed as _browser_allowed,
+                                    browser_service_url as _browser_service_url,
+                                    BrowserWorkProxy)          # scheduled browser work → the sweeps worker
 from app.core.schemas import LaxModel
 from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
@@ -3551,6 +3554,8 @@ def vip_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = 
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
+    require_browser_service()   # SERVICE_ROLE=api → this sweep launches Chromium; the API service
+                               # proxies the tick to the sweeps worker (see _BROWSER_SWEEP_KINDS)
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
     due = client.schema('commcalc').table('vip_sweep_config').select('*') \
@@ -11372,6 +11377,20 @@ async def data_freshness_run_now(org_id: str = ORG_ID):
 # puller, never dispatcher surgery.
 _SWEEP_BUILTINS = {'vip': '_do_vip_sweep', 'dlar': '_do_dlar_sweep',
                    'epay': '_do_epay_sweep', 'b2b': '_do_b2b_sweep'}
+# Sweep kinds that LAUNCH CHROMIUM. On a split deploy (SERVICE_ROLE=api) these cannot run in-process:
+# `service_role.assert_browser_allowed()` raises deep inside the sweep, and the connector is recorded
+# as a plain "error" that no amount of re-running will clear.
+#
+# WHY THIS EXISTS (owner directive 2026-09-20, "fix the epay connector"). The per-vendor
+# /epay/sweep/run-due was given `require_browser_service()` so the API service proxies it to the
+# sweeps worker — and then /connectors/run-due, THE ONE dispatcher that replaced the per-vendor crons,
+# was never given the same guard. So the generic tick invoked the puller in-process and ePay recorded
+# `Sweep failed: Browser/portal sweeps do not run on the user-facing API service (SERVICE_ROLE=api)`
+# every day from 2026-08-24. The fix existed; the caller that superseded it was not wired to it.
+#
+# An externally registered kind (register_sweep) is NOT assumed to need a browser — a third-party
+# puller must never be blocked by a guess about what it launches.
+_BROWSER_SWEEP_KINDS = frozenset({'vip', 'dlar', 'epay', 'b2b'})
 _SWEEP_EXTERNAL: dict = {}  # populated by register_sweep() from other modules / new providers
 
 
@@ -11480,13 +11499,32 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
     dispatch = _sweep_registry()
     conns = (client.schema('commcalc').table('connector_instances').select('*')
              .eq('enabled', True).execute().data) or []
-    triggered, checked = [], 0
+    triggered, checked, blocked = [], 0, []
     for c in conns:
         kind = (c.get('sweep_kind') or '').strip()
         tbl = (c.get('config_table') or '').strip()
         if kind not in dispatch or not tbl:
             continue
         oid = c.get('org_id') or org_id
+        # BROWSER WORK BELONGS ON THE SWEEPS WORKER (see _BROWSER_SWEEP_KINDS). Asked per connector, so
+        # a split deploy still runs the non-browser sweeps in this tick instead of losing the whole fan-out.
+        if kind in _BROWSER_SWEEP_KINDS and not _browser_allowed():
+            if _browser_service_url():
+                # BROWSER_SERVICE_URL is set: hand the WHOLE tick to the worker, exactly as every
+                # browser endpoint already does. main.py's BrowserWorkProxy handler forwards the
+                # original request, so the worker re-runs this fan-out with Chromium available.
+                raise BrowserWorkProxy()
+            # Nowhere to forward it. Say so on the connector's own row — an ATTEMPT, never a run — so
+            # the page names the deployment problem instead of blaming the portal. Advancing
+            # next_run_at is deliberately skipped: the schedule is not satisfied by a refusal.
+            _sweep_set_status(client, tbl, oid, 'error',
+                              "this service cannot launch a browser (SERVICE_ROLE=api) and "
+                              "BROWSER_SERVICE_URL is not set, so there is no sweeps worker to hand "
+                              "the portal login to. Point this cron at the sweeps worker, or set "
+                              "BROWSER_SERVICE_URL on the API service.",
+                              mark_run=True, success=False)
+            blocked.append({"org_id": oid, "kind": kind, "reason": "no_browser_service"})
+            continue
         try:
             cfg = (client.schema('commcalc').table(tbl)
                    .select('enabled,next_run_at,frequency,day_of_week,day_of_month,hour,timezone')
@@ -11532,7 +11570,9 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
             pass
         background_tasks.add_task(dispatch[kind], oid)
         triggered.append(c.get('vendor_name'))
-    return {"triggered": triggered, "checked": checked}
+    return {"triggered": triggered, "checked": checked,
+            # Never silent: a connector this service could not launch is named, with why.
+            **({"blocked": blocked} if blocked else {})}
 
 
 # ── Chargeback review bucket (VIP file + fraud) → assign to the rep → employee chargeback ────
@@ -13071,6 +13111,8 @@ def dlar_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
+    require_browser_service()   # SERVICE_ROLE=api → this sweep launches Chromium; the API service
+                               # proxies the tick to the sweeps worker (see _BROWSER_SWEEP_KINDS)
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
     due = client.schema('commcalc').table('dlar_sweep_config').select('*') \
@@ -13222,6 +13264,8 @@ def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = 
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
+    require_browser_service()   # SERVICE_ROLE=api → this sweep launches Chromium; the API service
+                               # proxies the tick to the sweeps worker (see _BROWSER_SWEEP_KINDS)
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
     due = client.schema('commcalc').table('b2b_sweep_config').select('*') \
@@ -32839,6 +32883,26 @@ _CONNECTOR_HEALTH_SOURCES = [
     ("vip_sweep_config", "VIP sweep"), ("b2b_sweep_config", "B2B sweep"),
     ("ftp_sweep_config", "FTP import"),
 ]
+# Which CONNECTOR SLUG each health source speaks for, so the route policy (mig 998) can be asked
+# whether that connector's route is open. `None` = the table is not a portal-pull connector, so no
+# policy applies. The b2b row carries its slug in a column (`connector`), the rest are implied by the
+# table; `data_source` names it in `processor`. RULE TWO: slugs are DATA read off the row wherever a
+# column exists — the constant only says WHICH column to read.
+_CONNECTOR_SLUG_SOURCE = {
+    "data_source": ("processor", None),
+    "b2b_sweep_config": ("connector", "b2b"),
+    "epay_sweep_config": (None, "epay"),
+    "dlar_sweep_config": (None, "dlar"),
+    "vip_sweep_config": (None, "vip"),
+    "email_sweep_config": (None, None),   # the mailbox is not a portal pull — no route to close
+    "ftp_sweep_config": (None, None),
+}
+# Sweep kinds that /connectors/run-due can actually DISPATCH come from `_sweep_registry()` — the one
+# place that knows. A *_sweep_config table whose kind has no puller, or that no `connector_instances`
+# row registers, is not "late": nothing in the platform will ever run it. Listed here so the health
+# scan can say WHICH tables are driven by that dispatcher at all.
+_DISPATCHED_SWEEP_TABLES = {"epay_sweep_config": "epay", "dlar_sweep_config": "dlar",
+                            "vip_sweep_config": "vip", "b2b_sweep_config": "b2b"}
 _CONNECTOR_STALE_HOURS = 30  # DEFAULT only — per tenant: commission_org_config.connector_stale_hours
 
 
@@ -32865,6 +32929,85 @@ def _connector_stale_hours_map(client):
     return out
 
 
+# frequency slug → how many hours between scheduled runs. The connector's OWN cadence, read off its
+# own row, so "late" means late FOR THIS CONNECTOR. Anything unrecognised falls through to the org
+# default, which is the previous behaviour exactly.
+_CONNECTOR_CADENCE_HOURS = {"hourly": 1, "daily": 24, "weekly": 168, "biweekly": 336, "monthly": 744}
+
+
+def _connector_stale_window(row, org_default):
+    """Hours this connector may go without a successful run before it is genuinely late.
+
+    WHY (owner directive 2026-09-20, "fix the vip connector"). The scan applied ONE 30-hour window to
+    every connector, so the VIP sweep — `frequency='weekly'`, which ran perfectly on 2026-09-18 with
+    "17 invoices, 55 lines, 175 devices" and is next due 09-25 — was reported STALLED every day in
+    between. It was never late; it is weekly, and 30 hours is not a week. `_connector_stale_hours_map`
+    already made the window per-TENANT config for exactly this reason (its own comment says "a weekly
+    distributor sweep is not late at 31h") — but one value per org cannot express two connectors on
+    different cadences, so a tenant with any weekly connector had to either accept the false alarm or
+    widen the window for its daily ones too and miss a real outage.
+
+    The cadence is DATA on the connector's own row, which the scheduler already reads to compute
+    `next_run_at`. Grace is one whole extra cadence, so a run that slips a cycle is amber-in-spirit,
+    not a page — and a connector that has genuinely stopped is still caught at 2x its own period.
+    A row with no frequency (the portal `data_source` registry) keeps the org default untouched."""
+    freq = str((row or {}).get("frequency") or "").strip().lower()
+    hours = _CONNECTOR_CADENCE_HOURS.get(freq)
+    if not hours:
+        return float(org_default), freq or "unscheduled"
+    return float(hours) * 2, freq          # one cadence + one cadence of grace
+
+
+def _connector_unrunnable(client, table, row, policy_rows, dispatchable, instance_kinds):
+    """Why the platform would NEVER run this connector — or "" when it genuinely would. PURE-ish
+    (no IO: every input is read once by the caller).
+
+    WHY THIS EXISTS (owner directive 2026-09-20: "fix the dead connectors for ftp and b2b"). The
+    health scan judged a connector on `enabled` + `last_run_at` + `last_status` alone. It had no idea
+    whether the platform would ever actually run the thing, so two connectors that CANNOT run were
+    reported every day as if they were broken:
+
+      • B2B — `enabled=true`, but `connector_route_policy` (mig 998) closes its `pull` route: the
+        vendor emailed us not to use their 2FA login, so the platform deliberately does not attempt
+        it (owner directive 2026-09-09). Its own `last_detail` says so in full. The policy module
+        already existed and four other call sites already honoured it; this scan never did.
+      • FTP — `enabled=true` with credentials from 2026-06-26, and NOTHING dispatches it: no
+        `connector_instances` row, no `sweep_kind`, no puller in `_sweep_registry()`, no cron. It has
+        no scheduler at all, so "no successful run in 30h" was never going to change.
+
+    Both are the same fact: **`enabled=true` stopped meaning "this runs"**, and the scan had no way to
+    ask. Neither is a fault, so neither is an alert — they are UNMONITORED, which is the control box's
+    own word for "declared, not checked, never folded into a green headline" (§23d honesty rules). The
+    coverage stays visible on GET /commcalc/connector-health; what stops is the daily false alarm.
+
+    Returns the reason string for an unrunnable connector, "" otherwise. Never raises."""
+    try:
+        col, implied = _CONNECTOR_SLUG_SOURCE.get(table, (None, None))
+        slug = (str(row.get(col) or "").strip() if col else "") or (implied or "")
+        # (a) the ROUTE this connector pulls over is closed by config — the owner's recorded decision.
+        if slug:
+            pol = _crp().resolve(policy_rows, row.get("org_id") or ORG_ID, slug)
+            if _crp().is_closed(pol):
+                return _crp().headline(pol) or "this connector's pull route is closed by configuration"
+        # (b) nothing can DISPATCH it. A *_sweep_config driven by /connectors/run-due needs both a
+        #     registered puller and a connector_instances row; without either, no tick will ever pick
+        #     it up. A table outside that dispatcher (the mailbox, which has its own cron) is exempt.
+        kind = _DISPATCHED_SWEEP_TABLES.get(table)
+        if kind:
+            if kind not in dispatchable:
+                return (f"no puller is registered for sweep kind '{kind}', so no schedule can run this "
+                        f"connector")
+            if (str(row.get("org_id") or ORG_ID), kind) not in instance_kinds:
+                return ("this tenant has no enabled connector registration for it, so the scheduler "
+                        "never dispatches it")
+        elif table.endswith("_sweep_config") and table not in ("email_sweep_config",):
+            return ("nothing in the platform dispatches this connector — it has no sweep kind, no "
+                    "puller and no scheduled job")
+    except Exception:
+        return ""       # never let the runnability question itself break the health scan
+    return ""
+
+
 def _scan_connector_health(client):
     """Enabled data sources across the sweep + portal registries that have ERRORED or gone STALE.
 
@@ -32873,6 +33016,25 @@ def _scan_connector_health(client):
     every 30 minutes is correctly reported instead of looking busy."""
     now = _datetime.now(_timezone.utc)
     stale_hours = _connector_stale_hours_map(client)
+    # Read the two "can this even run?" registries ONCE for the whole cross-tenant pass (see
+    # _connector_unrunnable). Both degrade to empty, which restores the previous behaviour exactly.
+    try:
+        policy_rows = (client.schema("commcalc").table("connector_route_policy")
+                       .select("org_id,connector,route,allowed,reason,remedy_route,remedy_label,"
+                               "remedy_href").limit(2000).execute().data) or []
+    except Exception:
+        policy_rows = []
+    try:
+        dispatchable = set(_sweep_registry().keys())
+    except Exception:
+        dispatchable = set()
+    try:
+        instance_kinds = {(str(c.get("org_id") or ORG_ID), str(c.get("sweep_kind") or "").strip())
+                          for c in ((client.schema("commcalc").table("connector_instances")
+                                     .select("org_id,sweep_kind,enabled").limit(2000)
+                                     .execute().data) or []) if c.get("enabled") is not False}
+    except Exception:
+        instance_kinds = set()
     out = []
     for table, label in _CONNECTOR_HEALTH_SOURCES:
         try:
@@ -32885,8 +33047,21 @@ def _scan_connector_health(client):
             status = (r.get("last_status") or "").lower()
             name = (r.get("label") or r.get("source_name") or r.get("account")
                     or r.get("vendor_name") or label)
+            # CAN THE PLATFORM EVEN RUN THIS? Asked BEFORE health, because a connector nothing will
+            # ever dispatch, or whose route the owner closed on purpose, is not failing — it is
+            # unmonitored. Reported (so the coverage is visible) and never alerted.
+            _un = _connector_unrunnable(client, table, r, policy_rows, dispatchable, instance_kinds)
+            if _un:
+                out.append({
+                    "org_id": r.get("org_id") or ORG_ID, "source": f"{label} — {name}",
+                    "kind": "unmonitored", "detail": _un[:180], "alertable": False,
+                    "ref_key": f"connector:{table}:{r.get('id')}:unmonitored",
+                })
+                continue
             failed = ("error" in status) or ("fail" in status) or ("403" in status)
-            hrs = stale_hours.get(str(r.get("org_id") or ORG_ID), _CONNECTOR_STALE_HOURS)
+            # LATE FOR THIS CONNECTOR, not late by one global number (see _connector_stale_window).
+            hrs, _freq = _connector_stale_window(
+                r, stale_hours.get(str(r.get("org_id") or ORG_ID), _CONNECTOR_STALE_HOURS))
             stale = False
             lr = r.get("last_run_at")
             if not failed and lr:
@@ -32914,7 +33089,9 @@ def _scan_connector_health(client):
                 since = str(lr or "")[:10] or "never"
                 out.append({
                     "org_id": r.get("org_id") or ORG_ID, "source": f"{label} — {name}", "kind": kind,
-                    "detail": (r.get("last_status") or f"no successful run in {hrs:g}h+")[:180],
+                    "detail": (r.get("last_status")
+                               or f"no successful run in {hrs:g}h+ (schedule: {_freq})")[:180],
+                    "alertable": True,
                     "ref_key": f"connector:{table}:{r.get('id')}:since-{since}:{kind}",
                 })
     return out
@@ -32934,7 +33111,12 @@ async def connector_health_run_due(x_notify_secret: str = Header(default="")):
     if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
-    failures = _scan_connector_health(client)
+    scanned = _scan_connector_health(client)
+    # UNMONITORED IS NOT A FAILURE. A connector whose route the owner closed by config, or that nothing
+    # in the platform dispatches, is reported on GET /connector-health so the coverage stays visible —
+    # and is never mailed to anyone. Alerting it was the daily false alarm that buried the real one.
+    failures = [f for f in scanned if f.get("alertable")]
+    unmonitored = [f for f in scanned if not f.get("alertable")]
     from app.modules.closing.router import _send_alert  # lazy import: avoids a commcalc↔closing cycle
     sent = []
     for f in failures:
@@ -32946,7 +33128,9 @@ async def connector_health_run_due(x_notify_secret: str = Header(default="")):
             sent.append({"source": f["source"], "kind": f["kind"], "result": res})
         except Exception as e:
             sent.append({"source": f["source"], "kind": f["kind"], "error": str(e)[:160]})
-    return {"checked_sources": len(_CONNECTOR_HEALTH_SOURCES), "failing": len(failures), "sent": sent}
+    return {"checked_sources": len(_CONNECTOR_HEALTH_SOURCES), "failing": len(failures), "sent": sent,
+            "unmonitored": [{"org_id": u["org_id"], "source": u["source"], "detail": u["detail"]}
+                            for u in unmonitored]}
 
 
 # How long a sweeping_since stamp holds the per-mailbox lock before it is considered stale (a crashed
