@@ -21,11 +21,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, apiUpload } from '@/lib/client'
 import {
-  BASE, card, note, inp, btn, primary, ghost, mono, money, num, Lamp, DetectPanel, ColumnsTable, StoreResolver, Dropzone,
+  BASE, card, note, inp, btn, primary, ghost, mono, money, num, Lamp, DetectPanel, ColumnsTable, StoreResolver, Dropzone, KindDetectZone,
   useAutoSave, SaveButton,
   type StateResp, type Instance, type Column, type MoneyCol, type Detect, type StoreRow, type RepRow, type Tie, type FileRef, type IdentityDecisions,
-  type SaveResult, type SourceKind,
+  type SaveResult, type SourceKind, type DetectCandidate,
 } from './intake-shared'
+import { useReportKinds } from '@/lib/report-kinds'
+import type { ReportKindRow } from '@/lib/carrier-scope'
 
 type SalesNumbers = {
   rows: number; distinct_txns: number; sum_amount: number; sum_gp: number | null
@@ -83,10 +85,10 @@ export const STAGE2_STEPS: [string, string][] = [
   ['2.4', 'Stores and reps'], ['2.5', 'Our numbers beside the file\'s'], ['2.6', 'Confirm this export'],
 ]
 const KEYS = STAGE2_STEPS.map(s => s[0])
-const KIND_LABEL: Record<string, string> = {
-  sales: 'Sales export', pos: 'POS report', inventory: 'Inventory export', other: 'Other report',
-  x_report: 'X-report', merchant_payments: 'Merchant settlement', bill_payments: 'Carrier bill-pay report',
-}
+// THE 2.0 CARDS ARE THE REGISTRY (design §7, 2026-09-20): what this tenant can upload is read from
+// GET /commcalc/report-kinds through lib/report-kinds.ts (the one visibility function) — the layman
+// label, "what's in it", where it comes from, and the provenance per card. No list of kinds lives here;
+// a landing's display name falls back to the backend's own vocabulary (state.source_kinds).
 // A matrix kind has no layout: its instance's third slot is a fixed word (mirrors onboarding_intake.MATRIX_INSTANCE_SLOT)
 const MATRIX_SLOT: Record<string, string> = { x_report: 'x_report', merchant_payments: 'settlement' }
 const MATRIX_KINDS = Object.keys(MATRIX_SLOT)
@@ -104,16 +106,16 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
   const inst: Instance | undefined = instances.find(i => i.instance_key === instanceKey)
   const kinds = state?.source_kinds || []
   const layoutsOf = (k: string) => kinds.find(x => x.value === k)?.layouts || []
+  const registry = useReportKinds()
+  const intakeCards = useMemo(() => registry.forSurface('intake'), [registry])
+  const cardLabel = (key: string, landing: string) => registry.byKey(key)?.label || kinds.find(x => x.value === landing)?.label || landing
 
   // ── 2.0 checklist inputs ──────────────────────────────────────────────────────────────────────
   const [posRef, setPosRef] = useState('')
-  const [salesKind, setSalesKind] = useState<'pos' | 'sales'>('pos')
   const [salesLayout, setSalesLayout] = useState('')
   const [invLayout, setInvLayout] = useState('')
   const [noInvReason, setNoInvReason] = useState('')
   const [otherName, setOtherName] = useState('')
-  // Stage C — the "other reports" picker: a KNOWN kind (lands in its real destination) or free text
-  const [otherKind, setOtherKind] = useState('x_report')
   const [portalKey, setPortalKey] = useState('')
   const [portalRole, setPortalRole] = useState('')
   const [bpSource, setBpSource] = useState('')
@@ -192,18 +194,19 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
   const sourceRef = typeof p.source_ref === 'string' ? p.source_ref : ''
   const layout = typeof p.layout === 'string' ? p.layout : ''
   const otherNameOf = typeof p.name === 'string' ? p.name : ''
+  const reportKindOf = typeof p.report_kind === 'string' ? p.report_kind : ''
   const canUseKept = !file && !!kept?.stored
   const isMatrix = MATRIX_KINDS.includes(kind)
   const knownKinds: SourceKind[] = (state?.other_kinds || ['other']).map(k => kinds.find(x => x.value === k) || { value: k, label: k, built: true, target_table: null, layouts: [] })
   const portals = state?.merchant_portals
   const feed = state?.billpay_feed
 
-  // ── 2.0: add instances ────────────────────────────────────────────────────────────────────────
-  async function addInstance(k: string, ref: string, lay: string, name: string) {
+  // ── 2.0: add instances — `reportKind` = the registry card picked, learned under on confirm ─────
+  async function addInstance(k: string, ref: string, lay: string, name: string, reportKind = '') {
     const key = ikey(k, ref, k === 'other' ? name : lay)
     setBusy(true)
     try {
-      await api(`${BASE}/state`, { method: 'PUT', body: JSON.stringify({ instance_key: key, step: '2.1', payload: { kind: k, source_ref: ref, layout: lay, name }, by: who }) })
+      await api(`${BASE}/state`, { method: 'PUT', body: JSON.stringify({ instance_key: key, step: '2.1', payload: { kind: k, source_ref: ref, layout: lay, name, report_kind: reportKind || null }, by: who }) })
       await reloadState(key)
       setInstanceKey(key); setStep('2.1')
     } catch (e: unknown) { flash((e as Error)?.message || 'Could not add') }
@@ -226,6 +229,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
     if (file) fd.append('file', file); else if (kept?.stored) { fd.append('use_stored', '1') }
     fd.append('instance_key', instanceKey); fd.append('source_kind', kind); fd.append('pos_source', sourceRef)
     if (kind === 'other') fd.append('name', otherNameOf); else if (!isMatrix) fd.append('layout', layout)
+    if (reportKindOf) fd.append('report_kind', reportKindOf)
     if (kind === 'merchant_payments' && role) fd.append('role', role)
     if (Object.keys(columnMap).length) fd.append('column_map', JSON.stringify(columnMap))
     if (decisions.store || decisions.rep) fd.append('identity', JSON.stringify(decisions))
@@ -236,7 +240,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
     fd.append('footer', footerMode)
     for (const [k, v] of Object.entries(extra)) fd.set(k, v)
     return fd
-  }, [file, kept, instanceKey, kind, sourceRef, otherNameOf, layout, isMatrix, role, columnMap, decisions, typedTotal, asOf, sheet, headerRow, footerMode])
+  }, [file, kept, instanceKey, kind, sourceRef, otherNameOf, reportKindOf, layout, isMatrix, role, columnMap, decisions, typedTotal, asOf, sheet, headerRow, footerMode])
 
   const analyze = useCallback(async (opts: { keepStep?: boolean; cm?: Record<string, string>; dec?: IdentityDecisions } = {}) => {
     if (!inst) return null
@@ -295,96 +299,121 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
   if (step === '2.0' || !inst) {
     const have = (k: string) => instances.filter(i => i.kind === k)
     const noInv = instances.find(i => i.instance_key === state?.inventory_none_key)
+    const openInst = (i: Instance) => { setInstanceKey(i.instance_key); setStep(i.status === 'verified' ? '2.6' : i.step === '2.0' ? '2.1' : i.step) }
+    const instLines = (landing: string) => have(landing).map(i => <div key={i.instance_key} style={{ fontSize: 12, marginTop: 6 }}><Lamp status={i.status} />{i.label} · step {i.step} <button style={{ ...ghost, padding: '2px 8px', fontSize: 12 }} onClick={() => openInst(i)}>open</button></div>)
+    const defaultLayout = (c: ReportKindRow) => c.layout || layoutsOf(c.landing).find(l => l.default)?.report_key || ''
+    // what a detected candidate becomes: the same add as its card
+    const pickDetected = (c: DetectCandidate | null, fname: string) => {
+      if (!c) { setOtherName(fname.replace(/\.[a-z0-9]+$/i, '')); flash('Name it below and add it as something else.'); return }
+      const card = registry.byKey(c.key)
+      if (!card) return
+      if (card.landing === 'commission') { flash(`A ${card.label} is taken in under Stage 3 — pick Stage 3 in the rail.`); return }
+      if (card.landing === 'other') { setOtherName(fname.replace(/\.[a-z0-9]+$/i, '')); return }
+      if (['sales', 'pos', 'inventory', 'x_report'].includes(card.landing)) {
+        if (!posRef.trim()) { flash(`This looks like your ${card.label} — name the POS it comes from, then add it.`); return }
+        addInstance(card.landing, posRef.trim(), defaultLayout(card), '', card.key); return
+      }
+      flash(`This looks like your ${card.label} — fill in where it comes from below and add it.`)
+    }
+    const actionFor = (c: ReportKindRow) => {
+      const l = c.landing
+      if (l === 'sales' || l === 'pos') return (
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <select value={salesLayout} onChange={e => setSalesLayout(e.target.value)} style={inp}>
+            <option value="">layout: {c.layout ? c.layout.replace(/_/g, ' ') : 'default'}</option>
+            {layoutsOf(l).map(x => <option key={x.report_key} value={x.report_key}>{x.label}</option>)}
+          </select>
+          <button style={btn} disabled={busy || !posRef.trim()} title={posRef.trim() ? '' : 'name the POS source above first'} onClick={() => addInstance(l, posRef.trim(), salesLayout || defaultLayout(c), '', c.key)}>Add</button>
+        </div>)
+      if (l === 'inventory') return (
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <select value={invLayout} onChange={e => setInvLayout(e.target.value)} style={inp}>
+            <option value="">layout: {c.layout ? c.layout.replace(/_/g, ' ') : 'default'}</option>
+            {layoutsOf('inventory').map(x => <option key={x.report_key} value={x.report_key}>{x.label}</option>)}
+          </select>
+          <button style={btn} disabled={busy || !posRef.trim()} title={posRef.trim() ? '' : 'name the POS source above first'} onClick={() => addInstance('inventory', posRef.trim(), invLayout || defaultLayout(c), '', c.key)}>Add</button>
+        </div>)
+      if (l === 'commission') return <div style={{ ...note, marginTop: 6 }}>Taken in under Stage 3 in the rail — one statement per carrier and statement type.</div>
+      if (l === 'x_report') return (
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={note}>from the POS named above ({posRef.trim() || 'name it first'})</span>
+          <button style={btn} disabled={busy || !posRef.trim()} title={posRef.trim() ? '' : 'name the POS source above first'} onClick={() => addInstance('x_report', posRef.trim(), '', '', c.key)}>Add</button>
+        </div>)
+      if (l === 'merchant_payments') return (
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input list="portal-keys" value={portalKey} onChange={e => setPortalKey(e.target.value)} placeholder="card processor / portal" style={{ ...inp, width: 220 }} />
+          <datalist id="portal-keys">
+            {(portals?.sources || []).map(s2 => <option key={`src-${s2.key}`} value={s2.key}>{s2.label} (your data source · {s2.settlement_role})</option>)}
+            {(portals?.catalog || []).map(c2 => <option key={`cat-${c2.key}`} value={c2.key}>{c2.label}</option>)}
+          </datalist>
+          <select value={portalRole} onChange={e => setPortalRole(e.target.value)} style={inp} title="settlement role — which side of the daily card tally this export answers">
+            <option value="">role: the portal&apos;s default</option>
+            {(portals?.roles || []).map(r => <option key={r} value={r}>{portals?.role_titles?.[r] || r}</option>)}
+          </select>
+          <button style={btn} disabled={busy || !portalKey.trim()} onClick={() => { setRole(portalRole); addInstance('merchant_payments', portalKey.trim(), '', '', c.key) }}>Add</button>
+        </div>)
+      if (l === 'bill_payments') return (
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input value={bpSource} onChange={e => setBpSource(e.target.value)} placeholder="the processor / portal it comes from" style={{ ...inp, width: 220 }} />
+          <select value={bpLayout} onChange={e => setBpLayout(e.target.value)} style={inp}>
+            <option value="">layout: {feed?.default_layout ? `default (${feed.default_layout})` : 'default'}</option>
+            {layoutsOf('bill_payments').map(x => <option key={x.report_key} value={x.report_key}>{x.label}</option>)}
+          </select>
+          <button style={btn} disabled={busy || !bpSource.trim()} onClick={() => addInstance('bill_payments', bpSource.trim(), bpLayout || feed?.default_layout || defaultLayout(c), '', c.key)}>Add</button>
+          {feed && <span style={{ ...note, width: '100%' }}>{feed.processor ? `Your bill-pay coverage recon reads the "${feed.processor}" feed (${feed.source}) — the default layout is the one it re-reads.` : feed.note}</span>}
+        </div>)
+      return (
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input value={otherName} onChange={e => setOtherName(e.target.value)} placeholder="name the report" style={{ ...inp, width: 300 }} />
+          <button style={btn} disabled={busy || !otherName.trim()} onClick={() => addInstance('other', posRef.trim(), '', otherName.trim(), c.key)}>Add</button>
+        </div>)
+    }
+    const hint = (landing: string) => knownKinds.find(k => k.value === landing)?.hint || kinds.find(k => k.value === landing)?.hint
     return (
       <div style={card}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>2.0 — What do you have?</h2>
-        <p style={{ ...note, marginBottom: 14 }}>You only need the exports you already pull from your systems. Tick what you have; each one becomes a line in the rail you can come back to. Nothing is imported until its own confirm step.</p>
-        {/* Sales / POS export, per POS */}
-        <div style={{ ...card, background: 'var(--bg,transparent)', marginBottom: 10 }}>
-          <div style={{ fontWeight: 700, fontSize: 13 }}>Sales export (one per POS)</div>
-          <div style={note}>The line-level or daily sales export your POS produces. Name the POS it comes from — a code you pick or type; a second POS is a second line.</div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <input list="pos-sources" value={posRef} onChange={e => setPosRef(e.target.value)} placeholder="POS source (e.g. its name or code)" style={{ ...inp, width: 220 }} />
-            <datalist id="pos-sources">{(state?.pos_sources || []).map(s => <option key={s.pos_key} value={s.pos_key}>{s.label}</option>)}</datalist>
-            <select value={salesKind} onChange={e => setSalesKind(e.target.value as 'pos' | 'sales')} style={inp}>
-              <option value="pos">POS report (line-level export)</option>
-              <option value="sales">Sales report (daily sales export)</option>
-            </select>
-            <select value={salesLayout} onChange={e => setSalesLayout(e.target.value)} style={inp}>
-              <option value="">layout: default</option>
-              {layoutsOf(salesKind).map(l => <option key={l.report_key} value={l.report_key}>{l.label}</option>)}
-            </select>
-            <button style={btn} disabled={busy || !posRef.trim()} onClick={() => addInstance(salesKind, posRef.trim(), salesLayout || (layoutsOf(salesKind).find(l => l.default)?.report_key || ''), '')}>Add</button>
+        <p style={{ ...note, marginBottom: 10 }}>You only need the exports you already pull from your systems. Each card is a report kind; add the ones you have and each becomes a line in the rail you can come back to. Nothing is imported until its own confirm step.</p>
+        {/* WHAT DECIDES THE CARDS — said out loud (design §7). */}
+        <div style={{ ...note, marginBottom: 10, fontSize: 12 }}>
+          {!registry.loaded ? 'Reading which report kinds this company may upload…'
+            : registry.error ? <span style={{ color: '#ef4444' }}>⚠️ The report-kind registry could not be read ({registry.error}) — the cards are withheld rather than guessed.</span>
+            : <>Offered for {registry.declaration?.pos?.length ? <>POS <b>{registry.declaration.pos.join(' / ')}</b></> : 'no declared POS'} · {registry.declaration?.carriers?.length ? <>carrier <b>{registry.declaration.carriers.join(' / ')}</b></> : 'no declared carrier'}{!registry.ready && <> · registry table not applied yet — house defaults ({registry.payload?.migration})</>}{registry.withheld && <> · {registry.withheld}</>}</>}
+        </div>
+        <KindDetectZone visible={intakeCards} onPick={pickDetected} fallbackKey={intakeCards.find(c => c.landing === 'other')?.key} />
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ fontWeight: 600, fontSize: 13 }}>Your POS source</span>
+          <input list="pos-sources" value={posRef} onChange={e => setPosRef(e.target.value)} placeholder="POS source (e.g. its name or code)" style={{ ...inp, width: 240 }} />
+          <datalist id="pos-sources">{(state?.pos_sources || []).map(s2 => <option key={s2.pos_key} value={s2.pos_key}>{s2.label}</option>)}</datalist>
+          <span style={note}>the POS exports below are filed under it — a second POS is a second line</span>
+        </div>
+        {intakeCards.map(c => (
+          <div key={c.key} style={{ ...card, background: 'var(--bg,transparent)', marginBottom: 10 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+              <div style={{ fontWeight: 700, fontSize: 13 }}>{c.label}</div>
+              {c.source_hint && <span style={{ ...note, fontSize: 12 }}>— {c.source_hint}</span>}
+              <span style={{ ...note, fontSize: 11, marginLeft: 'auto' }}>{c.provenance_text}</span>
+            </div>
+            {c.what_in_it && <div style={note}>{c.what_in_it}</div>}
+            {(c.recognisable_columns || []).length > 0 && <div style={{ ...note, fontSize: 11 }}>You&apos;ll recognise it by columns like {c.recognisable_columns!.slice(0, 5).join(', ')}.</div>}
+            {hint(c.landing) && c.landing !== 'sales' && c.landing !== 'pos' && c.landing !== 'inventory' && <div style={{ ...note, fontSize: 11, marginTop: 2 }}>{hint(c.landing)}{knownKinds.find(k => k.value === c.landing)?.target_table ? <> · lands in <code>{knownKinds.find(k => k.value === c.landing)?.target_table}</code></> : null}</div>}
+            {actionFor(c)}
+            {c.landing === 'inventory' && c.key === intakeCards.find(x => x.landing === 'inventory')?.key && (
+              <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <span style={note}>or</span>
+                <input value={noInvReason} onChange={e => setNoInvReason(e.target.value)} placeholder="No inventory export — because…" style={{ ...inp, width: 260 }} />
+                <button style={btn} disabled={busy || !noInvReason.trim()} onClick={recordNoInventory}>Record: no inventory export</button>
+                {noInv && <div style={{ fontSize: 12, width: '100%' }}><Lamp status={noInv.status} />No inventory export — recorded by {noInv.verified_by || '?'}: &quot;{String((noInv.verified_numbers as Record<string, unknown> | null)?.reason || '')}&quot;</div>}
+              </div>
+            )}
+            {instLines(c.landing).filter((_, idx, arr) => c.key === intakeCards.find(x => x.landing === c.landing)?.key || arr.length === 0)}
           </div>
-          {[...have('pos'), ...have('sales')].map(i => <div key={i.instance_key} style={{ fontSize: 12, marginTop: 6 }}><Lamp status={i.status} />{i.label} · step {i.step} <button style={{ ...ghost, padding: '2px 8px', fontSize: 12 }} onClick={() => { setInstanceKey(i.instance_key); setStep(i.status === 'verified' ? '2.6' : i.step === '2.0' ? '2.1' : i.step) }}>open</button></div>)}
-        </div>
-        {/* Inventory */}
-        <div style={{ ...card, background: 'var(--bg,transparent)', marginBottom: 10 }}>
-          <div style={{ fontWeight: 700, fontSize: 13 }}>Inventory export (on-hand listing)</div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <select value={invLayout} onChange={e => setInvLayout(e.target.value)} style={inp}>
-              <option value="">layout: default</option>
-              {layoutsOf('inventory').map(l => <option key={l.report_key} value={l.report_key}>{l.label}</option>)}
-            </select>
-            <button style={btn} disabled={busy || !posRef.trim()} title={posRef.trim() ? '' : 'name the POS source above first'} onClick={() => addInstance('inventory', posRef.trim(), invLayout || (layoutsOf('inventory').find(l => l.default)?.report_key || ''), '')}>Add inventory export</button>
-            <span style={note}>or</span>
-            <input value={noInvReason} onChange={e => setNoInvReason(e.target.value)} placeholder="No inventory export — because…" style={{ ...inp, width: 260 }} />
-            <button style={btn} disabled={busy || !noInvReason.trim()} onClick={recordNoInventory}>Record: no inventory export</button>
-          </div>
-          {noInv && <div style={{ fontSize: 12, marginTop: 6 }}><Lamp status={noInv.status} />No inventory export — recorded by {noInv.verified_by || '?'}: &quot;{String((noInv.verified_numbers as Record<string, unknown> | null)?.reason || '')}&quot;</div>}
-          {have('inventory').map(i => <div key={i.instance_key} style={{ fontSize: 12, marginTop: 6 }}><Lamp status={i.status} />{i.label} · step {i.step} <button style={{ ...ghost, padding: '2px 8px', fontSize: 12 }} onClick={() => { setInstanceKey(i.instance_key); setStep(i.status === 'verified' ? '2.6' : i.step === '2.0' ? '2.1' : i.step) }}>open</button></div>)}
-        </div>
-        {/* Commission — stage 3 */}
-        <div style={{ ...card, background: 'var(--bg,transparent)', marginBottom: 10 }}>
-          <div style={{ fontWeight: 700, fontSize: 13 }}>Commission statement (one per carrier)</div>
-          <div style={note}>Taken in under Stage 3 in the rail — one statement per carrier and statement type.</div>
-        </div>
-        {/* Other reports — a PICKER of known kinds (each lands where the platform already reads it) + free text (recorded, red) */}
-        <div style={{ ...card, background: 'var(--bg,transparent)' }}>
-          <div style={{ fontWeight: 700, fontSize: 13 }}>Other reports: X-reports, merchant / card-processor settlements, the carrier&apos;s bill-payment report, anything else</div>
-          <div style={note}>Have you uploaded any other report? Pick what it is. A known kind lands in the table the platform already reads it from; anything else is recorded as received — with its columns and row count, and the file is kept — never dropped and never faked into a table. If your carrier sends no bill-payment report, bill payments are extracted from your sales export instead (the Bill Payments report).</div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <select value={otherKind} onChange={e => setOtherKind(e.target.value)} style={inp}>
-              {knownKinds.map(k => <option key={k.value} value={k.value}>{k.label}</option>)}
-            </select>
-            {otherKind === 'x_report' && <>
-              <span style={note}>from the POS named above ({posRef.trim() || 'name it first'})</span>
-              <button style={btn} disabled={busy || !posRef.trim()} title={posRef.trim() ? '' : 'name the POS source above first'} onClick={() => addInstance('x_report', posRef.trim(), '', '')}>Add X-report</button>
-            </>}
-            {otherKind === 'merchant_payments' && <>
-              <input list="portal-keys" value={portalKey} onChange={e => setPortalKey(e.target.value)} placeholder="card processor / portal" style={{ ...inp, width: 220 }} />
-              <datalist id="portal-keys">
-                {(portals?.sources || []).map(s => <option key={`src-${s.key}`} value={s.key}>{s.label} (your data source · {s.settlement_role})</option>)}
-                {(portals?.catalog || []).map(c => <option key={`cat-${c.key}`} value={c.key}>{c.label}</option>)}
-              </datalist>
-              <select value={portalRole} onChange={e => setPortalRole(e.target.value)} style={inp} title="settlement role — which side of the daily card tally this export answers">
-                <option value="">role: the portal&apos;s default</option>
-                {(portals?.roles || []).map(r => <option key={r} value={r}>{portals?.role_titles?.[r] || r}</option>)}
-              </select>
-              <button style={btn} disabled={busy || !portalKey.trim()} onClick={() => { setRole(portalRole); addInstance('merchant_payments', portalKey.trim(), '', '') }}>Add settlement report</button>
-            </>}
-            {otherKind === 'bill_payments' && <>
-              <input value={bpSource} onChange={e => setBpSource(e.target.value)} placeholder="the processor / portal it comes from" style={{ ...inp, width: 220 }} />
-              <select value={bpLayout} onChange={e => setBpLayout(e.target.value)} style={inp}>
-                <option value="">layout: {feed?.default_layout ? `default (${feed.default_layout})` : 'default'}</option>
-                {layoutsOf('bill_payments').map(l => <option key={l.report_key} value={l.report_key}>{l.label}</option>)}
-              </select>
-              <button style={btn} disabled={busy || !bpSource.trim()} onClick={() => addInstance('bill_payments', bpSource.trim(), bpLayout || feed?.default_layout || (layoutsOf('bill_payments').find(l => l.default)?.report_key || ''), '')}>Add bill-pay report</button>
-              {feed && <span style={{ ...note, width: '100%' }}>{feed.processor ? `Your bill-pay coverage recon reads the "${feed.processor}" feed (${feed.source}) — the default layout is the one it re-reads.` : feed.note}</span>}
-            </>}
-            {otherKind === 'other' && <>
-              <input value={otherName} onChange={e => setOtherName(e.target.value)} placeholder="name the report" style={{ ...inp, width: 300 }} />
-              <button style={btn} disabled={busy || !otherName.trim()} onClick={() => addInstance('other', posRef.trim(), '', otherName.trim())}>Add</button>
-            </>}
-          </div>
-          {!!knownKinds.find(k => k.value === otherKind)?.hint && <div style={{ ...note, marginTop: 6 }}>{knownKinds.find(k => k.value === otherKind)?.hint}{knownKinds.find(k => k.value === otherKind)?.target_table ? <> · lands in <code>{knownKinds.find(k => k.value === otherKind)?.target_table}</code></> : null}</div>}
-          {[...have('x_report'), ...have('merchant_payments'), ...have('bill_payments'), ...have('other')].map(i => <div key={i.instance_key} style={{ fontSize: 12, marginTop: 6 }}><Lamp status={i.status} />{i.label} · step {i.step} <button style={{ ...ghost, padding: '2px 8px', fontSize: 12 }} onClick={() => { setInstanceKey(i.instance_key); setStep(i.status === 'verified' ? '2.6' : i.step === '2.0' ? '2.1' : i.step) }}>open</button></div>)}
-        </div>
+        ))}
+        {registry.loaded && !registry.error && intakeCards.length === 0 && <div style={{ ...note, color: '#b45309' }}>No report kinds are offered for this company yet — declare its POS and carrier in Stage 1 (or ask the platform team to widen the set).</div>}
       </div>
     )
   }
 
-  const title = `${KIND_LABEL[kind] || kind} — ${kind === 'other' ? otherNameOf : sourceRef}${layout ? ` · ${layout.replace(/_/g, ' ')}` : ''}${kind === 'merchant_payments' && (a?.settlement_role || role) ? ` · ${a?.settlement_role || role}` : ''}`
+  const title = `${cardLabel(reportKindOf, kind)} — ${kind === 'other' ? otherNameOf : sourceRef}${layout ? ` · ${layout.replace(/_/g, ' ')}` : ''}${kind === 'merchant_payments' && (a?.settlement_role || role) ? ` · ${a?.settlement_role || role}` : ''}`
   return (
     <div>
       <div style={{ ...note, marginBottom: 12 }}><b>{title}</b>{filename ? ` · ${filename}` : ''}{kept?.stored && !file ? <span style={{ color: '#15803d' }}> · file kept — no need to drop it again</span> : !file && !kept?.stored && a ? <span style={{ color: '#b45309' }}> · file not kept — drop it again in 2.1 to re-check or commit</span> : null}

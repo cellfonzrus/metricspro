@@ -6,25 +6,34 @@ import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 import { SweepStatusCell, summarizeSweepRun } from '../_lib/sweepOutcome'
 import EntityPicker from '@/components/EntityPicker'
 import { WorkflowNext } from '@/components/WorkflowNext'
+import { useReportKinds, suggestRuleFrom } from '@/lib/report-kinds'
+import { useReportLabels } from '@/lib/report-labels'
+import { posSquash } from '@/lib/carrier-scope'
 
 // Generic email (IMAP) inbox sweep — sibling of the FTP sweep. Configure a mailbox (host/creds) and
 // attachment-filename → upload-type patterns; the backend polls the inbox on a schedule and routes
-// each matching attachment to the right parser. For B2B Soft (or any vendor) that EMAILS report files.
-const BUILTIN_TYPES = ['sales', 'daily_sales', 'payment_detail', 'mi_report', 'dlar_rep', 'dlar_store', 'comp_report', 'catalog', 'inventory_aging', 'x_report', 'ma_commission', 'ma_daily_tx', 'ma_fulfillment']
+// each matching attachment to the right parser. For any POS or vendor that EMAILS report files.
+//
+// WHAT THIS PAGE OFFERS IS COMPUTED, NEVER LISTED (design §7, 2026-09-20). The upload types a rule may
+// route to, the rules a new mailbox starts with, the rule suggested for an attachment name, and the
+// "Apply the <POS> standard" preset all come from GET /commcalc/report-kinds (lib/report-kinds.ts →
+// the one visibility function): the DECLARED POS standard's filename rules (pos_profile, mig 200,
+// house row inherited), restricted to the kinds this tenant may upload. No filename pattern, upload-
+// type list or POS vendor name lives in this file any more — the owner's Verizon tenant (declared POS
+// RQ) was offered another POS's patterns and preset from exactly such a list.
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
 const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 2 }
 
 // Merchant-processor portals (owner 2026-09-04, mig 955). Display labels + default portal URLs only —
-// WHICH portal a tenant runs is a data_source row, never a branch in code (RULE TWO). b2bsoft keeps its
-// existing default here so the picker has ONE table instead of a special case.
+// WHICH portal a tenant runs is a data_source row, never a branch in code (RULE TWO). The POS's own
+// login row is keyed by the DECLARED POS code (GET /report-kinds), so no POS default lives here.
 const PROCESSOR_LABELS: Record<string, string> = {
   payanywhere: 'payanywhere — PayAnywhere / Payments Hub (external credit card)',
   transfirst: 'transfirst — TransFirst TransLink (POS merchant)',
   businesstrack: 'businesstrack — ClientLine / BusinessTrack (POS merchant)',
 }
 const PROCESSOR_URLS: Record<string, string> = {
-  b2bsoft: 'https://wsreports.b2bsoft.com',
   payanywhere: 'https://www.paymentshub.com/',
   transfirst: 'https://translink.transfirst.com/login.aspx',
   businesstrack: 'https://cl.businesstrack.com/',
@@ -45,14 +54,18 @@ const providerOf = (host: string) =>
   Object.keys(PROVIDERS).find(k => PROVIDERS[k].imap_host && PROVIDERS[k].imap_host === (host || '')) || 'custom'
 
 export default function EmailImportsPage() {
-  // A brand-new mailbox starts with the standard b2bsoft rules — an empty rules list silently
-  // matches NOTHING ("0/0 ingested" with reports sitting in the inbox), which bit the Total setup.
-  const DEFAULT_RULES = [
-    { pattern: '*Sales*Transaction*Details*', upload_type: 'daily_sales', note: 'daily B2B sales export (use the "for Metrics pro" custom report — full columns)' },
-    { pattern: '*Inventory*Aging*', upload_type: 'inventory_aging', note: 'b2bsoft inventory aging → Asset / Inventory Recon' },
-    { pattern: '*X-Report*', upload_type: 'x_report', note: 'POS X-report tender summary → Daily Closing cash/credit recon' },
-  ]
-  const BLANK = { imap_port: 993, use_ssl: true, mailbox: 'INBOX', since_days: 14, patterns: DEFAULT_RULES as any[], frequency: 'daily', hour: 7 }
+  // THE REGISTRY (design §7): the declared POS standard's filename rules restricted to the kinds this
+  // tenant may upload, the upload types a rule may route to, and the standard the preset applies.
+  const kinds = useReportKinds()
+  const { term } = useReportLabels()
+  const declaredPos = kinds.declaration?.pos?.[0] || ''
+  const posWord = term('pos_system', 'POS')
+  // A brand-new mailbox starts with the DECLARED POS standard's rules — an empty rules list silently
+  // matches NOTHING ("0/0 ingested" with reports sitting in the inbox). A tenant with no declared POS
+  // starts with none, and the page says why, rather than another POS's rules.
+  const DEFAULT_RULES = kinds.filenameRules
+  const examplePattern = DEFAULT_RULES[0]?.pattern || '*Report*Name*'
+  const BLANK = { imap_port: 993, use_ssl: true, mailbox: 'INBOX', since_days: 14, patterns: [] as any[], frequency: 'daily', hour: 7 }
   const [cfg, setCfg] = useState<any>({ account: 'default', ...BLANK })
   const [accounts, setAccounts] = useState<any[]>([])
   const [pwd, setPwd] = useState('')
@@ -134,9 +147,9 @@ export default function EmailImportsPage() {
 
   const set = (patch: any) => setCfg((c: any) => ({ ...c, ...patch }))
   const setPat = (i: number, patch: any) => setCfg((c: any) => ({ ...c, patterns: c.patterns.map((p: any, j: number) => j === i ? { ...p, ...patch } : p) }))
-  const addPat = () => setCfg((c: any) => ({ ...c, patterns: [...(c.patterns || []), { pattern: '', upload_type: 'daily_sales', note: '' }] }))
+  const addPat = () => setCfg((c: any) => ({ ...c, patterns: [...(c.patterns || []), { pattern: '', upload_type: kinds.uploadTypes[0] || '', note: '' }] }))
   const delPat = (i: number) => setCfg((c: any) => ({ ...c, patterns: c.patterns.filter((_: any, j: number) => j !== i) }))
-  const knownTypeKeys = new Set([...BUILTIN_TYPES, ...customTypes.map((c: any) => c.report_key)])
+  const knownTypeKeys = new Set([...kinds.uploadTypes, ...customTypes.map((c: any) => c.report_key)])
 
   const body = () => ({ ...cfg, password: pwd || undefined })
 
@@ -178,7 +191,7 @@ export default function EmailImportsPage() {
     if (!key) return
     if (accounts.some(a => a.account === key)) { setMsg('That mailbox key already exists — pick it from the list.'); return }
     setPwd(''); setTest(null); setMsg('New mailbox — fill in the details and Save.')
-    setCfg({ account: key, label: '', ...BLANK, enabled: false })
+    setCfg({ account: key, label: '', ...BLANK, patterns: [...DEFAULT_RULES], enabled: false })
   }
   async function delMailbox() {
     if (!cfg.account || cfg.account === 'default') return
@@ -204,15 +217,18 @@ export default function EmailImportsPage() {
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
   }
 
-  // One-click: bring this mailbox's filename rules + schedule to the b2bsoft POS standard (mig 200).
-  // Strictly additive on the backend — adds any missing standard rule, fills blank defaults, seeds the
-  // report registry; never clobbers creds or an existing rule. The tenant still enters host + password.
+  // One-click: bring this mailbox's filename rules + schedule to the DECLARED POS's standard (mig 200,
+  // the house row inherited). Strictly additive on the backend — adds any missing standard rule, fills
+  // blank defaults, seeds the report registry; never clobbers creds or an existing rule. The tenant
+  // still enters host + password. Which POS: the registry's `standard`, never a name in this file.
   async function applyStandard() {
+    const pk = kinds.standard?.pos_key
+    if (!pk || kinds.standard?.source === 'none') { setMsg(`❌ No filename standard is defined for your ${posWord} yet.`); return }
     setBusy('apply')
     try {
-      const r: any = await api(`/api/v1/commcalc/pos-profiles/b2bsoft/apply?account=${encodeURIComponent(cfg.account || 'default')}`, { method: 'POST', body: '{}' })
+      const r: any = await api(`/api/v1/commcalc/pos-profiles/${encodeURIComponent(pk)}/apply?account=${encodeURIComponent(cfg.account || 'default')}`, { method: 'POST', body: '{}' })
       setMsg(r?.ok
-        ? `✅ Applied the b2bsoft standard — ${r.rules_added} rule(s) added (${r.rules_total} total)${r.reports_seeded ? `, ${r.reports_seeded} report(s) registered` : ''}.${r.needs_credentials ? ' Now enter the IMAP host + password below and enable it.' : ''}`
+        ? `✅ Applied the ${posWord} standard — ${r.rules_added} rule(s) added (${r.rules_total} total)${r.reports_seeded ? `, ${r.reports_seeded} report(s) registered` : ''}.${r.needs_credentials ? ' Now enter the IMAP host + password below and enable it.' : ''}`
         : `❌ ${r?.error || 'could not apply the standard profile'}`)
       refresh(cfg.account)
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
@@ -221,7 +237,7 @@ export default function EmailImportsPage() {
     setBusy('test'); setTest(null)
     try {
       const r: any = await api('/api/v1/commcalc/email-sweep/test', { method: 'POST', body: JSON.stringify(body()) }); setTest(r)
-      if (!(cfg.patterns || []).some((p: any) => (p.pattern || '').trim())) setMsg(`⚠️ Connected (${r.count} message(s)) — but NO filename rules are configured below, so nothing will ever import. Add a rule like *Sales*Transaction*Details* → daily sales, then Save.`)
+      if (!(cfg.patterns || []).some((p: any) => (p.pattern || '').trim())) setMsg(`⚠️ Connected (${r.count} message(s)) — but NO filename rules are configured below, so nothing will ever import. Add a rule like ${examplePattern}, then Save.`)
       else if (r.count > 0 && r.matched_attachments === 0) setMsg(`⚠️ Connected — ${r.count} message(s) found but 0 attachments match your rules. Check the attachment names listed below and adjust the rule patterns.`)
       else setMsg(`✅ Connected — ${r.count} recent message(s), ${r.matched_attachments} matching attachment(s).`)
     }
@@ -260,24 +276,11 @@ export default function EmailImportsPage() {
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
   }
 
-  // Suggest a filename rule from an attachment name — recognizes the standard b2bsoft/portal reports,
-  // else builds a glob from the distinctive tokens. Turns a "no pattern" attachment into a saved rule
-  // in ONE click (no hand-typed globs), then re-tests so the user sees it match immediately.
-  function suggestRule(name: string): { pattern: string; upload_type: string } {
-    const low = (name || '').toLowerCase()
-    const known: [RegExp, string, string][] = [
-      [/sales.*transaction.*details/, '*Sales*Transaction*Details*', 'daily_sales'],
-      [/inventory.*aging/, '*Inventory*Aging*', 'inventory_aging'],
-      [/x.?report/, '*X-Report*', 'x_report'],
-      [/commission.*detail/, '*Commission*Details*', 'ma_commission'],
-      [/daily.*tx/, '*Daily*Tx*', 'ma_daily_tx'],
-      [/fulfillment/, '*Fulfillment*', 'ma_fulfillment'],
-      [/payment.*detail/, '*Payment*Detail*', 'payment_detail'],
-    ]
-    for (const [re, pat, ut] of known) if (re.test(low)) return { pattern: pat, upload_type: ut }
-    const base = (name || '').replace(/\.[a-z0-9]+$/i, '')
-    const toks = base.split(/[^a-zA-Z0-9]+/).filter(t => t.length > 2).slice(0, 3)
-    return { pattern: toks.length ? '*' + toks.join('*') + '*' : '*' + base + '*', upload_type: 'daily_sales' }
+  // Suggest a filename rule from an attachment name — FROM THE REGISTRY'S RULES (the declared POS
+  // standard, restricted to the kinds this tenant may upload), else a glob from the distinctive
+  // tokens with no upload type: the person picks one; the page never guesses a type it may not offer.
+  function suggestRule(name: string): { pattern: string; upload_type: string; matched: boolean } {
+    return suggestRuleFrom(name, kinds.filenameRules)
   }
   async function addRuleFor(name: string) {
     const s = suggestRule(name)
@@ -288,7 +291,9 @@ export default function EmailImportsPage() {
       await api('/api/v1/commcalc/email-sweep/config', { method: 'PUT', body: JSON.stringify({ ...body(), patterns: next }) })
       const r: any = await api('/api/v1/commcalc/email-sweep/test', { method: 'POST', body: JSON.stringify({ ...body(), patterns: next }) })
       setTest(r)
-      setMsg(`✅ Rule added: ${s.pattern} → ${s.upload_type}. ${r.matched_attachments || 0} attachment(s) now match — click “Run now” to import.`)
+      setMsg(s.upload_type
+        ? `✅ Rule added: ${s.pattern} → ${s.upload_type}. ${r.matched_attachments || 0} attachment(s) now match — click “Run now” to import.`
+        : `✅ Rule added: ${s.pattern} — no standard rule matched this name, so pick what it routes to in the table above, then Save.`)
     } catch (e: any) { setMsg('Could not add rule: ' + (e?.message || e)) }
     finally { setBusy('') }
   }
@@ -375,7 +380,7 @@ export default function EmailImportsPage() {
   // Manual upload for a custom sheet — for the MTD file (and daily files) when you don't want to wait for
   // the email sweep. POSTs straight to /upload/<report_key>, the SAME capture the sweep uses, so the row
   // lands in raw_custom_import and the report's dataset (Activations / Bill Payments / Sales by Product)
-  // lights up. `period` scopes the capture: a re-upload of the same period REPLACES it (the b2b MTD export
+  // lights up. `period` scopes the capture: a re-upload of the same period REPLACES it (a cumulative MTD export
   // is cumulative, so re-uploading the latest MTD file is correct); leave it blank to capture by filename.
   async function uploadCustom(rk: string, label: string, file: File | null | undefined) {
     if (!file) return
@@ -717,7 +722,7 @@ export default function EmailImportsPage() {
           <WhereAreMyRowsButton />
         </div>
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Poll a mailbox a vendor (e.g. B2B Soft) emails reports to, and route each attachment to its upload parser.
+          Poll a mailbox a vendor (e.g. your {posWord}) emails reports to, and route each attachment to its upload parser.
           Add <strong>more than one mailbox</strong> when reports arrive in different inboxes (e.g. the POS feed at one
           address, the carrier's reports at another) — each has its own creds, patterns and schedule.
           Swept a file but a page shows nothing? <strong>Where are my rows?</strong> traces every ingest (incl. which org it landed in).
@@ -733,7 +738,11 @@ export default function EmailImportsPage() {
             {cfg.account && !accounts.some(a => a.account === cfg.account) && <option value={cfg.account}>{(cfg.label || cfg.account)} — new (unsaved)</option>}
           </select>
           <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={addMailbox}>＋ Add mailbox</button>
-          <button className="btn btn-secondary" style={{ fontSize: 12 }} disabled={busy === 'apply'} onClick={applyStandard} title="Set this mailbox's filename rules + schedule to the standard b2bsoft profile. Adds any missing rule and fills blank defaults; never clobbers your host/credentials or an existing rule.">{busy === 'apply' ? 'Applying…' : '✨ Apply b2bsoft standard'}</button>
+          {kinds.standard && kinds.standard.source !== 'none' ? (
+            <button className="btn btn-secondary" style={{ fontSize: 12 }} disabled={busy === 'apply'} onClick={applyStandard} title={`Set this mailbox's filename rules + schedule to the ${posWord} standard (${kinds.standard.source}). Adds any missing rule and fills blank defaults; never clobbers your host/credentials or an existing rule.`}>{busy === 'apply' ? 'Applying…' : `✨ Apply the ${posWord} standard`}</button>
+          ) : kinds.loaded && (
+            <span style={{ fontSize: 11, color: 'var(--text3)' }} title={kinds.standard?.note || (kinds.declaration?.reasons || []).join('; ')}>{declaredPos ? `no filename standard defined for ${posWord} yet` : 'declare your POS to get its filename standard'}</span>
+          )}
           {cfg.account && cfg.account !== 'default' && <button className="btn btn-secondary" style={{ fontSize: 12, color: '#dc2626' }} onClick={delMailbox}>Delete this mailbox</button>}
           <span style={{ fontSize: 11, color: 'var(--text3)' }}>key: <code>{cfg.account || 'default'}</code></span>
         </div>
@@ -756,7 +765,7 @@ export default function EmailImportsPage() {
           <div><label style={lbl}>Password {cfg.has_password && <span style={{ color: '#16794a' }}>✓ saved</span>}</label><input id="imap_pass" name="imap_pass" type="password" autoComplete="new-password" style={{ ...sel, width: '100%' }} placeholder={cfg.has_password ? 'saved — leave blank to keep' : 'mailbox password'} value={pwd} onChange={e => setPwd(e.target.value)} />
             {cfg.has_password && !pwd && <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2 }}>The password stays saved — this field is blank for security, not because it was lost.</div>}</div>
           <div><label style={lbl}>Mailbox</label><input style={{ ...sel, width: '100%' }} placeholder="INBOX" value={cfg.mailbox || ''} onChange={e => set({ mailbox: e.target.value })} /></div>
-          <div><label style={lbl}>From filter (optional)</label><input style={{ ...sel, width: '100%' }} placeholder="b2bsoft.com" value={cfg.from_filter || ''} onChange={e => set({ from_filter: e.target.value })} /></div>
+          <div><label style={lbl}>From filter (optional)</label><input style={{ ...sel, width: '100%' }} placeholder="vendor.com" value={cfg.from_filter || ''} onChange={e => set({ from_filter: e.target.value })} /></div>
           <div><label style={lbl}>Security</label>
             <label style={{ fontSize: 12, display: 'block' }}><input type="checkbox" checked={cfg.use_ssl !== false} onChange={e => set({ use_ssl: e.target.checked })} /> SSL (993)</label>
             <span style={{ fontSize: 11, color: 'var(--text3)' }}>off = STARTTLS (143)</span>
@@ -785,14 +794,21 @@ export default function EmailImportsPage() {
         )}
 
         <div style={{ marginTop: 14, fontWeight: 600, fontSize: 13 }}>Attachment filename → upload type</div>
+        {/* What the "Routes to" list is made of — said out loud (design §7). */}
+        <div style={{ fontSize: 11, color: 'var(--text3)', margin: '2px 0 4px' }}>
+          {!kinds.loaded ? 'Reading which report kinds this company may upload…'
+            : kinds.error ? `⚠️ The report-kind registry could not be read (${kinds.error}) — no upload types are offered rather than guessed.`
+            : <>Routes offered for {kinds.declaration?.pos?.length ? <>POS <b>{kinds.declaration.pos.join(' / ')}</b></> : 'no declared POS'} · {kinds.declaration?.carriers?.length ? <>carrier <b>{kinds.declaration.carriers.join(' / ')}</b></> : 'no declared carrier'}{!kinds.ready && <> · registry table not applied yet — house defaults</>}{kinds.withheld && <> · {kinds.withheld}</>}</>}
+        </div>
         <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 4 }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>{['Filename pattern (glob)', 'Routes to', 'Note', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
           <tbody>
             {(cfg.patterns || []).map((p: any, i: number) => (
               <tr key={i}>
-                <td style={cell}><input style={{ ...sel, width: '100%' }} placeholder="*Sales*Transaction*Details*" value={p.pattern || ''} onChange={e => setPat(i, { pattern: e.target.value })} /></td>
+                <td style={cell}><input style={{ ...sel, width: '100%' }} placeholder={examplePattern} value={p.pattern || ''} onChange={e => setPat(i, { pattern: e.target.value })} /></td>
                 <td style={cell}><select style={sel} value={p.upload_type} onChange={e => setPat(i, { upload_type: e.target.value })}>
-                  <optgroup label="Built-in">{BUILTIN_TYPES.map((u: string) => <option key={u} value={u}>{u}</option>)}</optgroup>
+                  {!p.upload_type && <option value="">— pick what it routes to —</option>}
+                  <optgroup label="Built-in">{kinds.uploadTypes.map((u: string) => <option key={u} value={u}>{kinds.labelFor(u, u)} ({u})</option>)}</optgroup>
                   {customTypes.length > 0 && (
                     <optgroup label="Custom sheets">{customTypes.map((c: any) => <option key={c.report_key} value={c.report_key}>{c.label + ' (' + c.report_key + ')'}</option>)}</optgroup>
                   )}
@@ -818,7 +834,7 @@ export default function EmailImportsPage() {
       <div className="card" style={{ padding: 16, marginBottom: 14 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>🧩 Custom import sheets</div>
         <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 10px' }}>
-          Add your own report (e.g. B2B <b>Sales Trend</b>) with no code. Name it here, then add a filename pattern above
+          Add your own report (e.g. a <b>Sales Trend</b> export) with no code. Name it here, then add a filename pattern above
           that routes to its key — every matching attachment is captured as-is and viewable below. Needs migration <b>099_custom_import.sql</b>.
         </p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
@@ -828,7 +844,7 @@ export default function EmailImportsPage() {
         </div>
         {/* Manual upload — for the MTD file (and daily files) when you don't want to wait for the email sweep.
             Set the period this file is FOR, then Upload on the sheet's row. Re-uploading the same period
-            replaces it (the b2b MTD export is cumulative, so re-uploading the latest MTD is correct). */}
+            replaces it (a cumulative MTD export is safe to re-upload — the latest MTD wins). */}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
           <span style={{ fontSize: 12, color: 'var(--text2)' }}>Manual upload period:</span>
           <input style={{ ...sel, minWidth: 160 }} placeholder="e.g. August 2026" value={upPeriod}
@@ -911,7 +927,7 @@ export default function EmailImportsPage() {
           <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 10px' }}>
             Per-day sales-feed coverage for this mailbox. <b style={{ color: '#16794a' }}>ingested</b> = priced rows landed ·{' '}
             <b style={{ color: '#b45309' }}>zero-priced</b> = rows landed but every Ext Price is $0 (a degraded/price-less export) ·{' '}
-            <b style={{ color: '#dc2626' }}>missing</b> = no file delivered/ingested that day (b2bsoft didn’t send it, or the guard refused it).
+            <b style={{ color: '#dc2626' }}>missing</b> = no file delivered/ingested that day (the {posWord} didn’t send it, or the guard refused it).
           </p>
           {health.cross_org_warning && (
             <div style={{ padding: 10, marginBottom: 10, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, fontSize: 12.5 }}>
@@ -939,7 +955,7 @@ export default function EmailImportsPage() {
           </div>
           {(health.days || []).every((d: any) => d.state === 'missing') && (
             <div style={{ marginTop: 8, fontSize: 12, color: '#b45309' }}>
-              No sales ingested for any day in the window. Check: mailbox Enabled, the connection works (use <b>Test connection</b> — a saved password is kept even though the field shows blank), a rule for <code>*Sales*Transaction*Details*</code>, and that b2bsoft is actually delivering the report to this address.
+              No sales ingested for any day in the window. Check: mailbox Enabled, the connection works (use <b>Test connection</b> — a saved password is kept even though the field shows blank), a sales rule (e.g. <code>{examplePattern}</code>), and that the {posWord} is actually delivering the report to this address.
             </div>
           )}
         </div>
@@ -974,7 +990,7 @@ export default function EmailImportsPage() {
           <div style={{ flex: 1 }} />
           <a href="/commcalc/report-mappings" className="btn btn-secondary" style={{ fontSize: 12 }} title="Which portal report lands in which table + column mapping — configurable, not hard-coded">🗺️ Report mapping</a>
           <a href="/commcalc/ma-upload" className="btn btn-secondary" style={{ fontSize: 12 }} title="Upload processor report files by hand, per carrier — the parallel track to the live portal pull">⬆️ Manual upload</a>
-          <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft({ processor: 'b2bsoft', portal_url: 'https://wsreports.b2bsoft.com', enabled: false })}>＋ Add POS sales login</button>
+          <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft({ processor: declaredPos, portal_url: '', enabled: false })} title={declaredPos ? `processor = your declared POS (${declaredPos})` : 'declare your POS first — the login row is keyed by its code'} disabled={!declaredPos}>＋ Add {posWord} sales login</button>
           <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft({ processor: 'vidapay', enabled: false })}>＋ Add login</button>
         </div>
         <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 10px' }}>
@@ -1019,7 +1035,7 @@ export default function EmailImportsPage() {
                         📨 Use {s.route_policy?.remedy_label || 'the supported route'}
                       </a>
                     ) : (<>
-                    {['vidapay', 'total_access', 'b2bsoft', 'b2b', 'payanywhere', 'transfirst', 'businesstrack'].includes((s.processor || '').toLowerCase()) && (
+                    {(['vidapay', 'total_access', 'payanywhere', 'transfirst', 'businesstrack'].includes((s.processor || '').toLowerCase()) || (!!declaredPos && posSquash(s.processor) === posSquash(declaredPos))) && (
                       <><button className="btn btn-secondary" title="Watchable LIVE login: one browser stays open from login through the 2FA code — the code is sent ONCE (no re-send). Best for portals that send a single-use code." style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626', fontWeight: 700 }} onClick={() => startLive(s)}>🔴 Live login</button>{' '}</>
                     )}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} disabled={authBusy === s.id} onClick={() => startLogin(s)}>{authBusy === s.id ? '…' : (s.auth_status === 'authenticated' ? '🔁 Re-auth' : '🔐 Log in')}</button>{' '}
@@ -1046,7 +1062,7 @@ export default function EmailImportsPage() {
                     a genuinely new processor stays available via the explicit create affordance. */}
                 <div style={{ marginTop: 4 }}>
                   <EntityPicker
-                    options={(() => { const o = ['vidapay', 'total_access', 'b2bsoft', 'epay', 'payanywhere', 'transfirst', 'businesstrack', 'other'].map(p => ({ id: p, label: PROCESSOR_LABELS[p] || p })); if (srcDraft.processor && !o.some(x => x.id === srcDraft.processor)) o.unshift({ id: srcDraft.processor, label: srcDraft.processor }); return o })()}
+                    options={(() => { const o = [...(declaredPos ? [declaredPos] : []), 'vidapay', 'total_access', 'epay', 'payanywhere', 'transfirst', 'businesstrack', 'other'].map(p => ({ id: p, label: p === declaredPos ? `${p} — your ${posWord} (sales & inventory exports)` : (PROCESSOR_LABELS[p] || p) })); if (srcDraft.processor && !o.some(x => x.id === srcDraft.processor)) o.unshift({ id: srcDraft.processor, label: srcDraft.processor }); return o })()}
                     value={srcDraft.processor || null} allowCreate width="100%"
                     onChange={proc => { const patch: any = { processor: proc || '' }; const d = PROCESSOR_URLS[proc || '']; if (d && !srcDraft.portal_url) patch.portal_url = d; setSrcDraft({ ...srcDraft, ...patch }) }}
                     onCreate={proc => { const patch: any = { processor: proc }; const d = PROCESSOR_URLS[proc]; if (d && !srcDraft.portal_url) patch.portal_url = d; setSrcDraft({ ...srcDraft, ...patch }) }}
@@ -1139,7 +1155,7 @@ export default function EmailImportsPage() {
                   switched off, so the two variants are chosen by `route_policy`, never by the vendor
                   name (mig 998). The sign-in instructions are kept verbatim for the day the route is
                   re-opened — the config row is the switch, not this copy. */}
-              {sources.some((s: any) => ['b2bsoft', 'b2b'].includes((s.processor || '').toLowerCase()) && routeOff(s)) ? <>
+              {sources.some((s: any) => !!declaredPos && posSquash(s.processor) === posSquash(declaredPos) && routeOff(s)) ? <>
                 <b>POS sales reports (daily Sales Transaction Details):</b> the automatic portal login for this
                 connector is <b>switched off</b> — {sources.find((s: any) => routeOff(s))?.route_policy?.reason}
                 {' '}Do not try to sign in or re-authenticate it; nothing is broken. These reports arrive through
@@ -1147,10 +1163,10 @@ export default function EmailImportsPage() {
                 configured at the top of this page, and they import automatically (→ daily feed + Sales Feed
                 Recon). If the vendor re-opens the login later, one config row switches it back on and the
                 instructions below apply again.<br /><br /></>
-              : sources.some((s: any) => ['b2bsoft', 'b2b'].includes((s.processor || '').toLowerCase())) && <>
-                <b>b2bsoft (daily Sales Transaction Details):</b> processor <code>b2bsoft</code>, Portal URL
-                <code>https://wsreports.b2bsoft.com</code>, fill User ID + Password (Account ID optional), Save, then
-                click <b>🔐 Log in</b> in the table above and enter the 2-factor code when prompted. b2bsoft usually
+              : sources.some((s: any) => !!declaredPos && posSquash(s.processor) === posSquash(declaredPos)) && <>
+                <b>{posWord} (daily sales export):</b> processor <code>{declaredPos}</code>, the portal URL your {posWord}
+                reports site uses, fill User ID + Password (Account ID optional), Save, then
+                click <b>🔐 Log in</b> in the table above and enter the 2-factor code when prompted. A POS portal often
                 blocks the server&apos;s datacenter IP, so set a <b>residential / allow-listed proxy</b> above first —
                 otherwise Log in returns an anti-bot page. The signed-in session is saved and reused (~90 days) so
                 sales stops relying on the email feed.<br /><br /></>}

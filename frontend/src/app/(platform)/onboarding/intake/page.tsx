@@ -33,6 +33,7 @@ import {
   type BucketRow, type BucketMeta, type SaveResult,
 } from './intake-shared'
 import { Stage2Flow, STAGE2_STEPS } from './stage2'
+import { useReportKinds } from '@/lib/report-kinds'
 
 // ── stage-3 payload types (mirror onboarding_intake.py) ─────────────────────────────────────────
 type SignRow = { label: string; sub_label: string; store: string; amount: number }
@@ -97,6 +98,13 @@ export default function OnboardingIntakePage() {
   const [carrierId, setCarrierId] = useState('')
   const [newCarrier, setNewCarrier] = useState('')
   const [statementType, setStatementType] = useState('commission statement')
+  // THE STATEMENT TYPES OFFERED AT 3.1 ARE THE REGISTRY'S commission-family kinds (design §7): a
+  // carrier that sends a separate residual file gets the residual card — a row, not a branch. The
+  // input stays free text (a type nobody has defined is still allowed); the matching card's key rides
+  // along as `report_kind` so the confirmed layout is learned under it.
+  const registry = useReportKinds()
+  const statementKinds = useMemo(() => registry.visible.filter(k => k.landing === 'commission'), [registry.visible])
+  const statementReportKind = useMemo(() => statementKinds.find(k => (k.statement_type === 'residual') === /residual/i.test(statementType))?.key || '', [statementKinds, statementType])
   const [file, setFile] = useState<File | null>(null)
   const [filename, setFilename] = useState('')
   const [kept, setKept] = useState<FileRef | null>(null)
@@ -250,6 +258,7 @@ export default function OnboardingIntakePage() {
       if (file) fd.append('file', file); else { fd.append('use_stored', '1'); fd.append('instance_key', instanceKey) }
       fd.append('source_kind', 'commission'); fd.append('carrier_id', carrierId)
       fd.append('statement_type', statementType)
+      if (statementReportKind) fd.append('report_kind', statementReportKind)
       const cm = opts.cm ?? columnMap
       if (Object.keys(cm).length) fd.append('column_map', JSON.stringify(cm))
       const sa = opts.sign === undefined ? signAnswer : opts.sign
@@ -288,7 +297,7 @@ export default function OnboardingIntakePage() {
       return a
     } catch (e: unknown) { flash((e as Error)?.message || 'Could not read the file'); return null }
     finally { setBusy(false) }
-  }, [file, kept, carrierId, instanceKey, statementType, columnMap, signAnswer, assignments, decisions, typedTotal, sheet, headerRow, footerMode, period, persist, step, filename, flash])
+  }, [file, kept, carrierId, instanceKey, statementType, statementReportKind, columnMap, signAnswer, assignments, decisions, typedTotal, sheet, headerRow, footerMode, period, persist, step, filename, flash])
 
   // ── 3.9 commit (the SAVE) ────────────────────────────────────────────────────────────────────
   const commit = useCallback(async () => {
@@ -302,6 +311,7 @@ export default function OnboardingIntakePage() {
       if (file) fd.append('file', file); else { fd.append('use_stored', '1'); fd.append('instance_key', instanceKey) }
       fd.append('source_kind', 'commission'); fd.append('carrier_id', carrierId)
       fd.append('statement_type', statementType); fd.append('period', period.trim())
+      if (statementReportKind) fd.append('report_kind', statementReportKind)
       fd.append('column_map', JSON.stringify(columnMap)); fd.append('sign_answer', signAnswer)
       fd.append('assignments', JSON.stringify(assignments.filter(a => a.bucket !== UNASSIGNED)))
       if (decisions.store || decisions.rep) fd.append('identity', JSON.stringify(decisions))
@@ -317,7 +327,7 @@ export default function OnboardingIntakePage() {
       if (!r.ok) flash('Committed with problems — see the red panel. Nothing here is reported as verified until the re-read matches.')
     } catch (e: unknown) { flash((e as Error)?.message || 'Commit refused') }
     finally { setBusy(false) }
-  }, [file, kept, signAnswer, unassigned, period, carrierId, instanceKey, statementType, columnMap, assignments, decisions, attest, typedTotal, sheet, headerRow, footerMode, who, loadState, flash])
+  }, [file, kept, signAnswer, unassigned, period, carrierId, instanceKey, statementType, statementReportKind, columnMap, assignments, decisions, attest, typedTotal, sheet, headerRow, footerMode, who, loadState, flash])
 
   // ── carrier creation (a carrier is a ROW — design §0.4) ──────────────────────────────────────
   async function addCarrier() {
@@ -530,7 +540,11 @@ export default function OnboardingIntakePage() {
                 </select>
               </label>
               <label style={{ fontSize: 13 }}>Statement type
-                <input value={statementType} onChange={e => setStatementType(e.target.value)} style={{ ...inp, width: '100%', marginTop: 4 }} placeholder="commission statement" />
+                <input list="statement-kinds" value={statementType} onChange={e => setStatementType(e.target.value)} style={{ ...inp, width: '100%', marginTop: 4 }} placeholder="commission statement" />
+                <datalist id="statement-kinds">
+                  {statementKinds.map(k => <option key={k.key} value={k.statement_type === 'residual' ? 'residual statement' : 'commission statement'}>{k.label}</option>)}
+                </datalist>
+                {statementKinds.length > 0 && <div style={{ ...note, fontSize: 11, marginTop: 2 }}>{statementKinds.map(k => `${k.label} (${k.provenance_text})`).join(' · ')}{registry.withheld ? ` · ${registry.withheld}` : ''}</div>}
               </label>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14 }}>

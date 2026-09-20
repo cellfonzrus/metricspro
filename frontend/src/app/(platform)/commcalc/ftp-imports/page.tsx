@@ -2,11 +2,16 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
 import { SweepStatusCell, summarizeSweepRun } from '../_lib/sweepOutcome'
+import { useReportKinds } from '@/lib/report-kinds'
 
 // Generic FTP-pull sweep (Theme 6). Configure a vendor's FTP (host/creds/folder) and filename →
 // upload-type patterns; the backend pulls new files on a schedule and routes each to the right parser.
-// Nothing hard-coded — works for B2B Soft or any vendor that FTP-pushes report files.
-const BUILTIN_TYPES = ['sales', 'daily_sales', 'payment_detail', 'mi_report', 'dlar_rep', 'dlar_store', 'comp_report', 'catalog', 'inventory_aging', 'x_report', 'ma_commission', 'ma_daily_tx', 'ma_fulfillment']
+// Works for any POS or vendor that FTP-pushes report files.
+//
+// THE SIBLING OF EMAIL IMPORTS (design §7, 2026-09-20 — found by the report-kind lock): the same
+// "filename pattern → upload type" mechanism, so the same rule. The upload types a rule may route to
+// come from GET /commcalc/report-kinds (lib/report-kinds.ts → the one visibility function), never a
+// list in this file; the pattern placeholder is the declared POS standard's first rule.
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
 const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 2 }
@@ -19,6 +24,8 @@ export default function FtpImportsPage() {
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
   const [customTypes, setCustomTypes] = useState<any[]>([])   // self-serve custom sheets (mig 099); managed on Email Imports
+  const kinds = useReportKinds()
+  const examplePattern = kinds.filenameRules[0]?.pattern || '*Report*Name*'
 
   const load = useCallback(() => {
     api('/api/v1/commcalc/ftp-sweep/config').then((c: any) => setCfg({ ...c, patterns: c.patterns || [] })).catch(() => {})
@@ -29,9 +36,9 @@ export default function FtpImportsPage() {
 
   const set = (patch: any) => setCfg((c: any) => ({ ...c, ...patch }))
   const setPat = (i: number, patch: any) => setCfg((c: any) => ({ ...c, patterns: c.patterns.map((p: any, j: number) => j === i ? { ...p, ...patch } : p) }))
-  const addPat = () => setCfg((c: any) => ({ ...c, patterns: [...(c.patterns || []), { pattern: '', upload_type: 'sales', note: '' }] }))
+  const addPat = () => setCfg((c: any) => ({ ...c, patterns: [...(c.patterns || []), { pattern: '', upload_type: kinds.uploadTypes[0] || '', note: '' }] }))
   const delPat = (i: number) => setCfg((c: any) => ({ ...c, patterns: c.patterns.filter((_: any, j: number) => j !== i) }))
-  const knownTypeKeys = new Set([...BUILTIN_TYPES, ...customTypes.map((c: any) => c.report_key)])
+  const knownTypeKeys = new Set([...kinds.uploadTypes, ...customTypes.map((c: any) => c.report_key)])
 
   const body = () => ({ ...cfg, password: pwd || undefined })
 
@@ -66,7 +73,7 @@ export default function FtpImportsPage() {
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔁 FTP Auto-Import</h1>
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Pull report files a vendor (e.g. B2B Soft) FTP-pushes, and route each filename to its upload parser. All configured here — nothing hard-coded.
+          Pull report files a vendor (e.g. your POS) FTP-pushes, and route each filename to its upload parser. All configured here — nothing hard-coded.
         </p>
       </div>
 
@@ -89,14 +96,20 @@ export default function FtpImportsPage() {
         </div>
 
         <div style={{ marginTop: 14, fontWeight: 600, fontSize: 13 }}>Filename → upload type</div>
+        <div style={{ fontSize: 11, color: 'var(--text3)', margin: '2px 0 4px' }}>
+          {!kinds.loaded ? 'Reading which report kinds this company may upload…'
+            : kinds.error ? `⚠️ The report-kind registry could not be read (${kinds.error}) — no upload types are offered rather than guessed.`
+            : <>Routes offered for {kinds.declaration?.pos?.length ? <>POS <b>{kinds.declaration.pos.join(' / ')}</b></> : 'no declared POS'} · {kinds.declaration?.carriers?.length ? <>carrier <b>{kinds.declaration.carriers.join(' / ')}</b></> : 'no declared carrier'}{kinds.withheld && <> · {kinds.withheld}</>}</>}
+        </div>
         <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 4 }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>{['Filename pattern (glob)', 'Routes to', 'Note', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
           <tbody>
             {(cfg.patterns || []).map((p: any, i: number) => (
               <tr key={i}>
-                <td style={cell}><input style={{ ...sel, width: '100%' }} placeholder="*Sales-Transaction-Details*" value={p.pattern || ''} onChange={e => setPat(i, { pattern: e.target.value })} /></td>
+                <td style={cell}><input style={{ ...sel, width: '100%' }} placeholder={examplePattern} value={p.pattern || ''} onChange={e => setPat(i, { pattern: e.target.value })} /></td>
                 <td style={cell}><select style={sel} value={p.upload_type} onChange={e => setPat(i, { upload_type: e.target.value })}>
-                  <optgroup label="Built-in">{BUILTIN_TYPES.map((u: string) => <option key={u} value={u}>{u}</option>)}</optgroup>
+                  {!p.upload_type && <option value="">— pick what it routes to —</option>}
+                  <optgroup label="Built-in">{kinds.uploadTypes.map((u: string) => <option key={u} value={u}>{kinds.labelFor(u, u)} ({u})</option>)}</optgroup>
                   {customTypes.length > 0 && (
                     <optgroup label="Custom sheets">{customTypes.map((c: any) => <option key={c.report_key} value={c.report_key}>{c.label + ' (' + c.report_key + ')'}</option>)}</optgroup>
                   )}
