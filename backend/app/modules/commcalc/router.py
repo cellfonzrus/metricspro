@@ -16479,8 +16479,15 @@ def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", t
             _t = _date.fromisoformat(str(today)[:10])
         except Exception:
             _t = None
+    # ── THE PLAN STATES ITS ACTIVATION BASIS (owner 2026-09-20, "configurable in settings not hard
+    #    coded") ───────────────────────────────────────────────────────────────────────────────────
+    # `mtd_rates.activation_basis` — the SAME already-JSONB, already-UI-editable blob the per-category
+    # rates live in, so no migration and no new editor. Absent / unrecognised -> 'auto' -> today's
+    # behaviour, byte-identical for every existing plan.
+    from app.modules.commcalc import activation_bucketing as _ab_pol
+    _basis_policy = _ab_pol.resolve_basis_policy(_stored)
     data = _exec_mtd(client, org_id, period, stores=stores or None, markets=markets or None,
-                     reps=emps_scope or None, today=_t)
+                     reps=emps_scope or None, today=_t, activation_basis_policy=_basis_policy)
     emp_rows = ((data.get("by_employee") or {}).get("rows")) or []
     rows = _commission_from_mtd_rows(emp_rows, rate_map, eff_acc_pct)
     # ── SET-UP / ACTIVATION FEE ON THE EXEC-MTD BASIS (owner 2026-08-01 + 2026-09-17) ───────────────
@@ -16527,6 +16534,10 @@ def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", t
                       "pay": round(sum(r["by_category"][c]["pay"] for r in rows), 2),
                       "rate": rate_map.get(c, 0.0), "label": _MTD_CATEGORY_LABELS[c]}
                   for c in _MTD_ACT_CATEGORIES}
+    _src_meta = data.get("activation_source") or {}
+    _counts = {c: cat_totals[c]["count"] for c in _MTD_ACT_CATEGORIES}
+    _basis_meta = dict(_src_meta)
+    _basis_meta["exposure"] = _ab_pol.basis_flip_exposure(_counts, rate_map)
     totals = {
         "activations": sum(r["activations"] for r in rows),
         "acc_sales": round(sum(r["acc_sales"] for r in rows), 2),
@@ -16543,6 +16554,11 @@ def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", t
         "rate_map": rate_map, "accessory_pct": eff_acc_pct,
         "scope": {"stores": stores, "markets": markets, "employees": emps_scope},
         "activation_source": data.get("activation_source"),
+        # WHAT BASIS PAID THIS, AND WHAT AN UPLOAD WOULD MOVE. `exposure.delta` is the dollars between
+        # the SPLIT and the FOLDED reading of the same sales: it is non-zero only when a split-only
+        # category is priced differently from the category it folds into, which is the whole mechanism
+        # behind "the same tablet paid $10 in July and $0 in August". $0 = the flip is harmless here.
+        "activation_basis": _basis_meta,
         "setup_fee": {"scope": _sf_src_mtd, "settings": _sf_set_mtd, "warnings": _sf_warn_mtd},
         "by_rep": rows, "totals": totals,
     }
@@ -24527,7 +24543,8 @@ def _blank_sales_cell(store, rep, date):
             "act_tablet": 0, "act_home_internet": 0, "act_edge": 0}
 
 
-def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_stores=None):
+def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_stores=None,
+                            policy=None):
     """THE single place that decides the activation BASIS for every display consumer (owner 2026-08-26:
     "wire once, applies everywhere — no per-surface wiring"). Sets explicit activation COUNT fields
     (act_new / act_port / act_byod / act_upg) on every shared cell; the Sales Report and Exec MTD both read
@@ -24547,12 +24564,27 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
         # The sales feed does not distinguish tablet / home-internet / edge → 0 (they stay folded inside the
         # feed's own `new` sense). An INACTIVE basis is therefore byte-identical to before this split.
         a["act_tablet"] = a["act_home_internet"] = a["act_edge"] = 0
+    # ── THE BASIS IS NOW STATED, NOT INFERRED (owner 2026-09-20) ────────────────────────────────
+    # `policy` is the caller's explicit choice (activation_bucketing.BASIS_POLICIES); None/'auto' is
+    # today's behaviour and every number below is byte-identical. What changes unconditionally is that
+    # the returned meta NAMES the basis, whether it is a DEGRADED one, and why — previously a silent
+    # fold was inferable only from `ad_rows == 0`, and it re-priced sales (a split category whose rate
+    # differs from the category it folds into).
+    from app.modules.commcalc import activation_bucketing as _ab
+    _pol = _ab.resolve_basis_policy({"activation_basis": policy}) if policy else _ab.BASIS_POLICY_DEFAULT
     msrc = _metric_source(client, org_id, "activations")
+    _stated = msrc.get("source") if msrc.get("enabled") else None
     if not (msrc.get("enabled") and msrc.get("source") == "activation_details"):
-        return {"active": False, "basis": "sales_agg", "ad_rows": 0}
+        # The tenant has not stated Activation Details as their activation source, so folding is the
+        # stated behaviour and nothing is degraded.
+        return {"active": False, "basis": "sales_agg", "ad_rows": 0, "policy": _pol,
+                "stated_source": _stated, "degraded": False,
+                "reason": "the activation source of truth is not Activation Details."}
     ad_cells, ad_n = _ad_cells_full(client, org_id, period, ckey_fn)
     if not ad_n:
-        return {"active": False, "basis": "sales_agg", "ad_rows": 0}
+        _d = _ab.basis_decision(_pol, 0, _stated)
+        return {"active": False, "basis": "sales_agg", "ad_rows": 0, "policy": _pol,
+                "stated_source": _stated, "degraded": True, "reason": _d["reason"]}
     for a in cells.values():
         a["act_new"] = a["act_port"] = a["act_byod"] = a["act_upg"] = 0   # AD authoritative
         a["act_tablet"] = a["act_home_internet"] = a["act_edge"] = 0
@@ -24568,7 +24600,26 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
         a["act_tablet"], a["act_home_internet"], a["act_edge"] = ad["tablet"], ad["home_internet"], ad["edge"]
         a["act_new"] = ad["new"] + ad["tablet"] + ad["home_internet"] + ad["edge"]
         a["act_port"], a["act_byod"], a["act_upg"] = ad["port"], ad["byod"], ad["upgrade"]
-    return {"active": True, "basis": "activation_details", "ad_rows": ad_n}
+    if _pol == "folded":
+        # A DELIBERATE FOLD, and a NARROW one. It folds ONLY the split-only sub-counts back into
+        # `act_new` — which already contains them by construction (`new + tablet + home_internet +
+        # edge` above), so zeroing the three is the whole operation. Every other count keeps the
+        # Activation-Details basis the tenant stated.
+        #
+        # An earlier draft of this made 'folded' mean "use the sales aggregation instead", and that was
+        # WRONG: measured live it moved August by +$890 and September by −$120 against the +$550/+$380
+        # the ruling asks for, because re-basing changes EVERY category's counts, not just the split
+        # ones. Folding must not be a basis change — it is a presentation choice about three counts.
+        for a in cells.values():
+            a["act_tablet"] = a["act_home_internet"] = a["act_edge"] = 0
+        return {"active": True, "basis": "activation_details", "ad_rows": ad_n, "policy": _pol,
+                "stated_source": _stated, "degraded": False, "folded_split_categories": True,
+                "reason": (f"Activation Details supplied {ad_n} row(s); policy 'folded' folds "
+                           + ", ".join(_ab.SPLIT_ONLY_CATEGORIES)
+                           + f" into '{_ab.FOLD_TARGET}' so an upload cannot re-price those sales.")}
+    return {"active": True, "basis": "activation_details", "ad_rows": ad_n, "policy": _pol,
+            "stated_source": _stated, "degraded": False,
+            "reason": f"Activation Details supplied {ad_n} row(s) for this period."}
 
 
 # THE line predicate lives in exec_metric_defs (mig 962) so the report, the coverage detector and the
@@ -24596,7 +24647,7 @@ def _exec_act_class(ct, rules):
 
 
 def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, today=None,
-              date_from=None, date_to=None, authorization=""):
+              date_from=None, date_to=None, authorization="", activation_basis_policy=None):
     """Executive Month-To-Date summary — the b2bsoft 'Month To Date Location/Employee Sales Report',
     now DERIVED FROM the EXACT SAME aggregation the Sales Report uses (owner directive 2026-07-16: "the
     Sales Report is correct — Exec MTD should take its cumulative numbers from there"). Reads the SAME
@@ -24798,7 +24849,11 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     # stores (incl. AD-only) appear. The MTD cut / date-range below then windows both bases identically.
     _flt_active = bool(store_sel or rep_sel or market_sel)
     _restrict = {k[0] for k in cells} if _flt_active else None
-    _act_src = _apply_activation_basis(client, org_id, period, cells, _ckey_ex, restrict_stores=_restrict)
+    # `activation_basis_policy` is the CALLER's explicit basis choice (owner 2026-09-20). None = the
+    # report's own default = today's behaviour, byte-identical. The PAY path passes the plan's stated
+    # policy so a plan can choose folded counts and stop an upload re-pricing a sale.
+    _act_src = _apply_activation_basis(client, org_id, period, cells, _ckey_ex,
+                                       restrict_stores=_restrict, policy=activation_basis_policy)
     _act_override, _ad_n = bool(_act_src.get('active')), _act_src.get('ad_rows') or 0
     _msrc_act = _metric_source(client, org_id, 'activations')
 
@@ -24969,11 +25024,19 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
             # SOURCE OF TRUTH (mig 923): tells the UI which basis drove Total Activation and whether Upgrade
             # is excluded from it, so the number is never silently redefined. Sales basis (the default) →
             # active:false, byte-identical response otherwise.
+            # The FOUR pre-2026-09-20 keys are unchanged; the rest NAME the decision that used to be
+            # inferable only from `ad_rows == 0` — which policy was in force, what the tenant had
+            # STATED, whether this period is being paid on a basis they did not choose, and why.
             'activation_source': {'source': _msrc_act.get('source'),
                                   'active': bool(_act_override),
                                   'basis': 'activation_details' if _act_override else 'sales_agg',
                                   'ad_rows': (_ad_n if _act_override else 0),
-                                  'total_activation_excludes_upgrade': bool(_act_override)},
+                                  'total_activation_excludes_upgrade': bool(_act_override),
+                                  'policy': _act_src.get('policy'),
+                                  'stated_source': _act_src.get('stated_source'),
+                                  'degraded': bool(_act_src.get('degraded')),
+                                  'folded_split_categories': bool(_act_src.get('folded_split_categories')),
+                                  'reason': _act_src.get('reason')},
             'filters': filters, 'applied': applied,
             'date_range': {'active': rng_on, 'from': rng_from_s, 'to': rng_to_s,
                            'requested_from': (str(date_from)[:10] or None) if date_from else None,

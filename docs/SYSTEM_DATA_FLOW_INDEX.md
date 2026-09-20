@@ -1139,6 +1139,66 @@ entry"*). No system accessory figure for those months — including the `$577.82
 **Proof:** `backend/harness_activation_cross_bucket.py` (27 checks, DB-free — §A reproduces the
 double-count, §B negative controls, §D pins the AAL classification, §E purity + RULE TWO).
 
+#### 6d-i. THE ACTIVATION BASIS IS NOW A STATED CHOICE (owner ruling 2026-09-20)
+
+Owner: *"tablets pay in ny same as the phones for the month of july august and sept, but it should be
+configurable in settings not hard coded"*.
+
+**The rate half needed no code.** `commission_plan.mtd_rates.tablet` is already per-plan JSONB with an
+existing editor (`commission-plans/page.tsx` `MTD_CATS`), and the stored `tablet: 0` was typed there.
+
+**What was genuinely implicit was the BASIS.** `tablet` / `home_internet` / `edge` exist as their own
+paid categories ONLY on the Activation-Details basis; on the sales aggregation they fold into
+`activation` and are paid at ITS rate. `_apply_activation_basis` degraded to the fold whenever the
+period's file had no rows — **silently**, even though the tenant had already STATED Activation Details
+as their activation source of truth (migs `923`/`939` `metric_source_of_truth`). Live `ad_rows`:
+**0 / 0 / 0 / 1,078 / 813** for May–Sep 2026.
+
+- **The decision is now named, always.** `_apply_activation_basis` returns `policy`, `stated_source`,
+  `degraded` and a `reason`; `_exec_mtd` carries them on `activation_source` (the four pre-existing
+  keys are unchanged) and `_commission_mtd_result` returns them as `activation_basis`. July 2026 now
+  reports `degraded: true` with a reason naming the folded categories and both ways out.
+- **The choice is config, no migration.** `mtd_rates.activation_basis` ∈ `auto` (default = today,
+  byte-identical) · `require_split` · `folded`, resolved by the pure
+  `activation_bucketing.resolve_basis_policy`. `folded` keeps the Activation-Details basis and folds
+  ONLY the three split-only sub-counts back into `activation` — **it is not a basis change.** An
+  earlier draft made it mean "use the sales aggregation instead", which measured **+$890 August /
+  −$120 September** against the ruling's +$550/+$380, because re-basing moves every category's counts.
+  That draft was wrong and is pinned against in the harness.
+- **The exposure is measurable before it bites.** Pure `basis_flip_exposure(counts, rate_map)` returns
+  the dollars between the split and folded readings. It is non-zero **only when a split-only category
+  is priced differently from `activation`** — so the real invariant is not "don't flip the basis", it
+  is "keep the split rates equal to the fold target's rate unless you mean otherwise".
+
+**THE RULING, MEASURED** (NY plan, per-rep verified):
+
+| | as-is | `tablet: 10` | `activation_basis: 'folded'` |
+|---|---|---|---|
+| Jul 2026 | $2,456.09 | $2,456.09 (**+$0**) | $2,456.09 |
+| Aug 2026 | $3,664.54 | $4,214.54 (**+$550**, 55 units) | $4,214.54 |
+| Sep 2026 | $3,028.34 | $3,408.34 (**+$380**, 38 units) | $3,408.34 |
+
+**July is +$0 and that is the correct outcome, not a miss** — its tablet bucket is structurally empty
+(no AD file), so tablets are already inside `activation` at $10 and July already satisfies the ruling.
+**It cannot double-pay**: the tablet rate multiplies a count of 0. Setting the rate also makes July
+robust if a July file is ever uploaded.
+
+**⚠ A LIMIT OF THE GUARD, STATED:** for a DEGRADED period the exposure is structurally $0, because the
+split counts do not exist to be priced. The guard cannot warn about a month whose file is missing —
+that is what `degraded: true` is for.
+
+**SIBLINGS — MEASURED, NOT CHANGED** (the owner ruled on tablets only). `home_internet` and `edge`
+already carry the activation rate ($10), so their present flip exposure is **$0** (Aug/Sep HI units
+13/13, edge 0/0). The exposure returns the moment either rate is edited away — e.g. `home_internet: 0`
+would be **−$130** in August. No rate was touched.
+
+**Money guarantee:** the default `auto` path is inert — A/B over all 116 LuxeLink `rep_commissions`
+rows: **0 rows differ in any field**, Σ $24,339.65 before and after.
+
+**Proof:** `backend/harness_activation_basis_policy.py` (38 checks, DB-free — §A is the regression
+"same sale, $10 folded and $0 split", §B the steer-to state, §D the degraded decision, §F the two
+routes to the ruling agreeing).
+
 ---
 
 ### 6c. THE ONE PLAN RESOLUTION — `_resolve_plan_by_rep` (owner-reported class, 2026-09-17)
