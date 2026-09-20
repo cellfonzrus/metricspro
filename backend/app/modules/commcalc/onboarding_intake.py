@@ -32,9 +32,14 @@ WHAT IT DELIBERATELY DOES NOT DO (duplicate-check, CLAUDE.md build gate):
     as `carrier_code` + `carrier_label`; the "house default" provenance is the house org's rows for
     that code, never a branch.
 
-The payloads are shaped to generalise to Stage B (sales / inventory / POS / other) on the same spine:
-`source_kind` names the kind, `target_table` the landing table, `identity_fields` the report's own
-identity list, and the verify block always carries our numbers beside the file's.
+STAGE B (2026-09-20) — sales / POS / inventory / "other" reports on the SAME spine (design §2, 2.0–2.6):
+`source_kind` names the kind, `target_table` the landing table (an EXISTING one, or none for 'other'),
+`identity_fields` the report's own identity list, and the verify block always carries our numbers beside
+the file's. The Stage-2 section below adds: the shared store / rep RESOLUTION shape (`resolve_stores`,
+`resolve_reps` — the router hands in the §13a chain; zero unresolved is the exit gate), the verify numbers
+per kind (`sales_verify`, `inventory_verify`, `other_summary`, `simple_tie`), the gate (`stage2_refusals`),
+and the rail's Stage-4 `verify_table` + Stage-5 `runbook`. Nothing here lands a row: the router's
+`_intake_land` calls the existing importer / snapshot writer per kind.
 """
 import re
 from datetime import datetime
@@ -49,12 +54,44 @@ SOURCE_KIND_LABELS = {
     "commission": "Commission statement", "sales": "Sales report", "inventory": "Inventory report",
     "pos": "POS report", "other": "Other report (bill payments, card payments, X-reports…)",
 }
-# Only the commission slice lands today; Stage B keys are admitted so the payloads generalise.
-SOURCE_KIND_TARGET = {"commission": CL.LEDGER_TABLE}
-REPORT_KEY_BY_KIND = {"commission": CL.MAPPING_REPORT_KEY}
+# WHERE EACH KIND LANDS (Stage B, 2026-09-20) — the EXISTING destination tables (index §2), never a
+# sibling raw_* table: a sales / POS export → raw_sales through the mapped importer, an inventory
+# listing → inventory_aging_device through the snapshot writer, a commission statement → the ledger.
+# 'other' (bill payments, card / merchant payments, X-reports, anything else) has NO destination table
+# on the platform today; it is recorded as RECEIVED with its headers and row count, never faked into
+# a table and never dropped (see other_summary / the router's commit).
+SOURCE_KIND_TARGET = {"commission": CL.LEDGER_TABLE, "sales": "raw_sales", "pos": "raw_sales",
+                      "inventory": "inventory_aging_device"}
+# The column-mapping REPORT KEY (column_mapping.TARGET_FIELDS / TABLE_MAP) each kind maps through —
+# the default LAYOUT; a kind may offer several layouts that land in the same table (layouts_for_kind).
+REPORT_KEY_BY_KIND = {"commission": CL.MAPPING_REPORT_KEY, "sales": "sales", "pos": "pos_product_sales",
+                      "inventory": "pos_inventory_listing"}
+LAYOUT_LABELS = {
+    "sales": "daily sales export (store / salesperson / product lines)",
+    "pos_product_sales": "POS product-sales export (one row per invoice line)",
+    "pos_inventory_listing": "POS on-hand inventory listing (one row per unit)",
+}
+# The field each kind SUMS for its tie-out, its date, its store, its rep, its transaction id.
+KIND_FIELDS = {
+    "sales":     {"amount": "ext_price", "gp": "gp", "date": "trans_date", "store": "store",
+                  "rep": "salesperson", "txn": "trans_id", "void": "voided"},
+    "pos":       {"amount": "ext_price", "gp": "gp", "date": "trans_date", "store": "store",
+                  "rep": "salesperson", "txn": "trans_id", "void": "voided"},
+    "inventory": {"amount": "total_cost", "unit_cost": "unit_cost", "qty": "quantity", "store": "store",
+                  "key": "imei", "key2": "serial", "sku": "sku"},
+    "commission": {"amount": CL.AMOUNT_FIELD, "store": "store", "rep": "rep_user", "date": "trans_date"},
+}
+# The columns a kind MUST have before it may land — what the slice-scoped replace and the tie-out need
+# (design §2: period from each row's own date; replace only the slice the file owns = store × dates).
+KIND_REQUIRED = {"sales": ("store", "trans_date", "ext_price"), "pos": ("store", "trans_date", "ext_price"),
+                 "inventory": ("store", "sku"), "commission": (CL.AMOUNT_FIELD, "product_name"), "other": ()}
 STATEMENT_TYPE_DEFAULT = "commission statement"
+INVENTORY_NONE_KEY = "inventory:none:none"          # the explicit "no inventory export" choice (design §6.6)
 
 STAGE_COMMISSION = "3"
+STAGE_SALES = "2"
+KIND_STAGE = {"commission": STAGE_COMMISSION, "sales": STAGE_SALES, "pos": STAGE_SALES,
+              "inventory": STAGE_SALES, "other": STAGE_SALES}
 STEPS = [
     ("3.1", "Upload the statement"),
     ("3.2", "Sheet, header row, footer"),
@@ -66,7 +103,21 @@ STEPS = [
     ("3.8", "Our totals beside the file's"),
     ("3.9", "Confirm this statement"),
 ]
+STEPS_STAGE2 = [
+    ("2.0", "What do you have?"),
+    ("2.1", "Upload the export"),
+    ("2.2", "Sheet, header row, footer"),
+    ("2.3", "Confirm the columns"),
+    ("2.4", "Stores and reps"),
+    ("2.5", "Our numbers beside the file's"),
+    ("2.6", "Confirm this export"),
+]
+STEPS_STAGE4 = [("4.1", "Every source, verified"), ("4.2", "Sign-off")]
+STEPS_STAGE5 = [("5.1", "Monthly runbook")]
+STEPS_BY_STAGE = {"2": STEPS_STAGE2, "3": STEPS, "4": STEPS_STAGE4, "5": STEPS_STAGE5}
 STEP_KEYS = [k for k, _ in STEPS]
+STEP_KEYS_STAGE2 = [k for k, _ in STEPS_STAGE2]
+ALL_STEP_KEYS = [k for st in ("2", "3", "4", "5") for k, _ in STEPS_BY_STAGE[st]]
 STATUS_NOT_STARTED, STATUS_IN_PROGRESS, STATUS_NEEDS_INPUT, STATUS_VERIFIED = (
     "not_started", "in_progress", "needs_input", "verified")
 STATUSES = (STATUS_NOT_STARTED, STATUS_IN_PROGRESS, STATUS_NEEDS_INPUT, STATUS_VERIFIED)
@@ -161,6 +212,40 @@ def instance_key(source_kind, carrier_id, statement_type=STATEMENT_TYPE_DEFAULT)
     """The Stage-3 instance a stage_state row is keyed by (design §4): one per carrier × statement
     type. Nothing from one instance prefills another."""
     return f"{source_kind}:{_s(carrier_id)}:{slug(statement_type or STATEMENT_TYPE_DEFAULT)}"
+
+
+def stage2_instance_key(source_kind, source_ref, layout_or_name):
+    """The Stage-2 instance key: `sales:<pos source>:<layout>` / `inventory:<pos source>:<layout>` /
+    `other:<pos source or 'file'>:<the name the person typed>`. The POS source is a code the person
+    picked or typed (a row, never a branch); one file per (source, layout) — a second POS is a second
+    instance, prefilled from nothing of the first."""
+    kind = _s(source_kind).lower()
+    if kind not in KIND_STAGE or kind == "commission":
+        raise ValueError("stage-2 kinds are sales | pos | inventory | other")
+    return f"{kind}:{slug(source_ref) or 'file'}:{slug(layout_or_name) or 'report'}"
+
+
+def kind_of_instance(ikey):
+    return _s(ikey).split(":", 1)[0]
+
+
+def stage_of_kind(kind):
+    return KIND_STAGE.get(_s(kind).lower(), STAGE_SALES)
+
+
+def layouts_for_kind(kind, table_map):
+    """The column-mapping report keys a kind may map through — every registered key whose target is
+    the kind's destination table (column_mapping.TABLE_MAP is the registry; nothing here names a
+    POS). The kind's default layout comes first."""
+    kind = _s(kind).lower()
+    tgt = SOURCE_KIND_TARGET.get(kind)
+    if not tgt:
+        return []
+    default = REPORT_KEY_BY_KIND.get(kind)
+    keys = [k for k, t in (table_map or {}).items() if t == tgt]
+    keys.sort(key=lambda k: (k != default, k))
+    return [{"report_key": k, "label": LAYOUT_LABELS.get(k, k.replace("_", " ")), "default": k == default}
+            for k in keys]
 
 
 # ── 3.2 detect: sheet, header row, records ──────────────────────────────────────────────────────
@@ -369,7 +454,7 @@ def usable(src):
     return bool(src.get(LABEL_FIELD) or src.get(AMOUNT_FIELD) or src.get(SUBLABEL_FIELD))
 
 
-def split_footer(mapped, identity_fields, mapped_fields=None):
+def split_footer(mapped, identity_fields, mapped_fields=None, amount_field=AMOUNT_FIELD):
     """(kept, footers) — the file's own TOTAL rows, found by the mig-1004 shape rule
     (`feed_shape.is_footer_row`: every identity field blank, money present) with the identity list
     the router takes from `column_mapping.identity_fields`. Not a second derivation: the same
@@ -386,18 +471,18 @@ def split_footer(mapped, identity_fields, mapped_fields=None):
         ident = [f for f in ident if f in set(mapped_fields)]
     for i, m in enumerate(mapped or []):
         if ident and is_footer_row(m, ident, ()):
-            footers.append({"row": i, "raw_amount": money(_sf(m.get(AMOUNT_FIELD)))})
+            footers.append({"row": i, "raw_amount": money(_sf(m.get(amount_field)))})
         else:
             kept.append(m)
     return kept, footers
 
 
-def footer_summary(kept, footers, identity_mapped=True):
+def footer_summary(kept, footers, identity_mapped=True, amount_field=AMOUNT_FIELD):
     """What the footer says, and whether it equals the other lines' own sum — the number the verify
     step compares against. `file_total_raw` is None when the file states no total (the tenant may
     then type one; recorded as 'typed'), or when no identity column is mapped yet (the rule cannot
     tell a total from a line until it knows which columns identify a line)."""
-    lines_sum = money(sum(_sf(m.get(AMOUNT_FIELD)) for m in kept or []))
+    lines_sum = money(sum(_sf(m.get(amount_field)) for m in kept or []))
     if not identity_mapped:
         return {"detected": False, "rows": [], "file_total_raw": None, "lines_sum_raw": lines_sum,
                 "equals_lines_sum": None, "basis": "not detectable yet — confirm the label / store / date columns first"}
@@ -720,54 +805,395 @@ def commit_refusals(sign_answer, labels, assignments, tie, attestation=None):
     return out
 
 
+# ── STAGE 2 (sales / POS / inventory / other) — identity resolution, verify numbers, the gate ─────
+# The SAME spine as stage 3: the file is read the same way, the columns are proposed with the same
+# provenance, the footer is found by the same rule; what differs is the NUMBERS shown beside the file's
+# (design §2 verify: rows, distinct txns, Σ amount, Σ GP, date span, voided, per-store, per-rep) and
+# the exit gate (zero unresolved store strings). Everything below is pure over mapped rows.
+IDENTITY_ACTIONS = ("assign", "create", "not_ours", "company_level")
+ID_RESOLVED, ID_UNRESOLVED = "resolved", "unresolved"
+
+
+def identity_rows(kept, field, amount_field, cap=500):
+    """Distinct values of ONE identity column with count and Σ — what the resolver is handed."""
+    agg = {}
+    for m in kept or []:
+        v = _s(m.get(field))
+        if not v:
+            continue
+        a = agg.setdefault(v, {"value": v, "count": 0, "sum_raw": 0.0})
+        a["count"] += 1
+        a["sum_raw"] += _sf(m.get(amount_field))
+    return sorted(({**a, "sum_raw": money(a["sum_raw"])} for a in agg.values()),
+                  key=lambda a: (-a["count"], a["value"]))[:cap]
+
+
+def resolve_stores(rows, resolve, decisions=None, allow_company_level=False):
+    """Attach the resolver's answer and the person's decision to each store string.
+
+    `resolve(raw)` → (store_code or None, how) is the SHARED resolver (index §13a: aliases →
+    store_mapping → the storeops roster; the router builds it from the existing `_store_maps`).
+    `decisions` = {raw: {action: assign|create|not_ours|company_level, store_code, reason}} is what the
+    person chose on 2.4 / 3.7. A string's `status` is 'resolved' when the resolver knows it or a
+    decision covers it, else 'unresolved' — and zero unresolved is the exit gate (design §5.7: an
+    unresolved store string never lands as 'Default'). `not_ours` needs a reason; it is recorded and
+    its rows are EXCLUDED from the landing, never silently kept."""
+    out = []
+    for r in rows or []:
+        raw = r["value"]
+        code, how = resolve(raw) if resolve else (None, None)
+        d = dict((decisions or {}).get(raw) or {})
+        action = _s(d.get("action")).lower() or None
+        row = {**r, "resolved_code": code or None, "how": how if code else None, "action": action,
+               "decision_code": _s(d.get("store_code")) or None, "reason": _s(d.get("reason")) or None,
+               "address": _s(d.get("address")) or None}
+        if action == "assign" and row["decision_code"]:
+            row["status"], row["lands_as"] = ID_RESOLVED, row["decision_code"]
+        elif action == "create" and row["decision_code"]:
+            row["status"], row["lands_as"] = ID_RESOLVED, row["decision_code"]
+        elif action == "not_ours":
+            row["status"] = ID_RESOLVED if row["reason"] else ID_UNRESOLVED
+            row["lands_as"] = None
+            if not row["reason"]:
+                row["needs"] = "a reason is required to mark a store as not yours"
+        elif action == "company_level" and allow_company_level:
+            row["status"], row["lands_as"] = ID_RESOLVED, None
+        elif code:
+            row["status"], row["lands_as"] = ID_RESOLVED, code
+        else:
+            row["status"], row["lands_as"] = ID_UNRESOLVED, None
+        out.append(row)
+    return out
+
+
+def unresolved_stores(rows):
+    return [r["value"] for r in rows or [] if r.get("status") != ID_RESOLVED]
+
+
+def excluded_stores(rows):
+    """The strings the person marked 'not ours' (with a reason): their rows do not land."""
+    return {r["value"]: r.get("reason") for r in rows or [] if r.get("action") == "not_ours" and r.get("reason")}
+
+
+def resolve_reps(rows, resolve, decisions=None):
+    """Rep strings → employees. `resolve(raw)` → (canonical employee name or None, how) over the
+    roster + rep_aliases. A rep the roster does not know is SURFACED, not a gate (design §2 gates on
+    stores; a rep's pay attaches later through the same aliases). Decision: assign → a rep_aliases row
+    alias → canonical; leave → recorded as-is."""
+    out = []
+    for r in rows or []:
+        raw = r["value"]
+        name, how = resolve(raw) if resolve else (None, None)
+        d = dict((decisions or {}).get(raw) or {})
+        action = _s(d.get("action")).lower() or None
+        row = {**r, "resolved_name": name or None, "how": how if name else None, "action": action,
+               "decision_name": _s(d.get("canonical")) or None}
+        if action == "assign" and row["decision_name"]:
+            row["status"] = ID_RESOLVED
+        elif name:
+            row["status"] = ID_RESOLVED
+        else:
+            row["status"] = "leave" if action == "leave" else ID_UNRESOLVED
+        out.append(row)
+    return out
+
+
+def date_span(kept, date_field):
+    lo = hi = None
+    undated = 0
+    for m in kept or []:
+        d = _s(m.get(date_field))[:10]
+        if not period_fields(d):
+            undated += 1
+            continue
+        lo = d if lo is None or d < lo else lo
+        hi = d if hi is None or d > hi else hi
+    return {"from": lo, "to": hi, "undated_rows": undated}
+
+
+def _per(kept, field, amount_field, cap=300):
+    agg = {}
+    for m in kept or []:
+        k = _s(m.get(field)) or "(blank)"
+        a = agg.setdefault(k, {"value": k, "count": 0, "sum": 0.0})
+        a["count"] += 1
+        a["sum"] += _sf(m.get(amount_field))
+    return sorted(({**a, "sum": money(a["sum"])} for a in agg.values()), key=lambda a: -a["count"])[:cap]
+
+
+def is_voided(v):
+    return _s(v).lower() in ("yes", "y", "true", "1", "t", "voided", "void", "refund", "refunded")
+
+
+def sales_verify(kept, fields=None):
+    """The design-§2 verify numbers for a sales / POS export over mapped rows (built OR re-read — the
+    same shape, so the commit compares like with like): rows, distinct transaction ids, Σ amount,
+    Σ GP, date span, voided count, per-store and per-rep counts with Σ."""
+    f = fields or KIND_FIELDS["sales"]
+    amt, gp, dt, st, rep, txn, vd = (f["amount"], f.get("gp"), f["date"], f["store"], f.get("rep"),
+                                     f.get("txn"), f.get("void"))
+    kept = list(kept or [])
+    txns = {_s(m.get(txn)) for m in kept if txn and _s(m.get(txn))}
+    return {
+        "rows": len(kept),
+        "distinct_txns": len(txns),
+        "sum_amount": money(sum(_sf(m.get(amt)) for m in kept)),
+        "sum_gp": money(sum(_sf(m.get(gp)) for m in kept)) if gp else None,
+        "date_span": date_span(kept, dt),
+        "voided_rows": sum(1 for m in kept if vd and is_voided(m.get(vd))),
+        "per_store": _per(kept, st, amt),
+        "per_rep": _per(kept, rep, amt) if rep else [],
+        "storeless_rows": sum(1 for m in kept if not _s(m.get(st))),
+    }
+
+
+def inventory_verify(kept, fields=None):
+    """Units, Σ cost, per-store units, rows with / without a device key (an ordered unit legitimately
+    has no IMEI yet — reported, never mistaken for a total)."""
+    f = fields or KIND_FIELDS["inventory"]
+    amt, uc, qty, st, k1, k2 = f["amount"], f["unit_cost"], f["qty"], f["store"], f["key"], f["key2"]
+    kept = list(kept or [])
+
+    def units(m):
+        q = _sf(m.get(qty)) if _s(m.get(qty)) else 1.0
+        return q if q else 1.0
+
+    def cost(m):
+        return _sf(m.get(amt)) if _s(m.get(amt)) else _sf(m.get(uc)) * units(m)
+    per = {}
+    for m in kept:
+        k = _s(m.get(st)) or "(blank)"
+        a = per.setdefault(k, {"value": k, "count": 0, "units": 0.0, "sum": 0.0})
+        a["count"] += 1
+        a["units"] += units(m)
+        a["sum"] += cost(m)
+    keyed = sum(1 for m in kept if _s(m.get(k1)) or _s(m.get(k2)))
+    return {
+        "rows": len(kept), "units": round(sum(units(m) for m in kept), 2),
+        "sum_cost": money(sum(cost(m) for m in kept)),
+        "sum_unit_cost": money(sum(_sf(m.get(uc)) for m in kept)),
+        "rows_with_device_key": keyed, "rows_without_device_key": len(kept) - keyed,
+        "per_store": sorted(({**a, "units": round(a["units"], 2), "sum": money(a["sum"])} for a in per.values()),
+                            key=lambda a: -a["count"])[:300],
+        "storeless_rows": sum(1 for m in kept if not _s(m.get(st))),
+    }
+
+
+def other_summary(headers, records, money_cols):
+    """What we can honestly say about a report with NO destination: its headers, row count and
+    every money column's Σ. Recorded as 'received', shown as such, never faked into a table."""
+    return {"rows": len(records or []), "headers": list(headers or []),
+            "money_columns": [{"header": m["header"], "sum": m["sum"], "cells": m["cells"]} for m in money_cols or []],
+            "destination": None,
+            "basis": "received — no destination table on the platform for this report yet; kept with its headers and row count"}
+
+
+def simple_tie(our_total, file_total_raw, typed_total=None):
+    """Σ ours beside the file's own total (footer, else typed — recorded as such), to the cent."""
+    src, ft = None, None
+    if file_total_raw is not None:
+        src, ft = "footer", money(_sf(file_total_raw))
+    elif typed_total not in (None, ""):
+        src, ft = "typed", money(_sf(typed_total))
+    ours = money(our_total)
+    diff = money(ours - ft) if ft is not None else None
+    return {"our_total": ours, "file_total": ft, "file_total_source": src, "difference": diff,
+            "match": (diff == 0.0) if diff is not None else None}
+
+
+def stage2_refusals(kind, mapped_fields, stores, tie, attestation=None, undated_rows=0,
+                    storeless_rows=0, rows_to_land=0):
+    """Why a Stage-2 commit is REFUSED (design §0.1, §2 exit, §5.3, §5.7). An empty list = proceed."""
+    out = []
+    kind = _s(kind).lower()
+    missing = [f for f in KIND_REQUIRED.get(kind, ()) if f not in set(mapped_fields or [])]
+    if missing:
+        out.append("Map these columns first: " + ", ".join(missing) + " — they identify the slice this file owns.")
+    unresolved = unresolved_stores(stores)
+    if unresolved:
+        out.append(f"{len(unresolved)} store string(s) are unresolved: " + ", ".join(unresolved[:8])
+                   + (" …" if len(unresolved) > 8 else "") + " — assign each to one of your stores, create the store, or mark it not yours with a reason.")
+    if kind in ("sales", "pos") and undated_rows:
+        out.append(f"{undated_rows} row(s) carry no parseable date — a row without a date cannot be booked to a month; fix the date column or the file.")
+    if storeless_rows:
+        out.append(f"{storeless_rows} row(s) carry no store — the file cannot prove which slice it owns; fix the store column or the file.")
+    if rows_to_land == 0 and kind != "other":
+        out.append("Nothing would land — every row is a footer, excluded, or empty.")
+    att_ok = bool(_s((attestation or {}).get("reason")))
+    if tie is not None and kind != "other":
+        if tie.get("match") is None and not att_ok:
+            out.append("The file states no total and none was typed — enter the file's total, or attest why there is none.")
+        elif tie.get("match") is False and not att_ok:
+            out.append(f"Our total {tie.get('our_total'):,.2f} differs from the file's {tie.get('file_total'):,.2f} "
+                       f"by {tie.get('difference'):,.2f} — fix the columns or the stores, or attest the difference with a reason.")
+        if tie.get("file_total") == 0.0 and tie.get("our_total") == 0.0 and not att_ok:
+            out.append("Both totals are $0.00 — a zero file is verified only with an attestation and a reason.")
+    return out
+
+
 # ── §4 state: the rail ──────────────────────────────────────────────────────────────────────────
 def default_stage_rows():
     return []
 
 
-def rail(stage_rows, current_instance=None):
-    """The left rail as a projection of the persisted stage rows (design §0.2): one Stage-3 entry per
-    instance with its step and lamp, plus the stage list. Reopening lands on the first non-verified
-    step of the current instance."""
-    stages = [
-        {"stage": "1", "label": "Company setup", "status": STATUS_NOT_STARTED, "built": False},
-        {"stage": "2", "label": "Sales & inventory", "status": STATUS_NOT_STARTED, "built": False},
-        {"stage": "3", "label": "Commission statements", "status": STATUS_NOT_STARTED, "built": True},
-        {"stage": "4", "label": "Verify everything", "status": STATUS_NOT_STARTED, "built": False},
-        {"stage": "5", "label": "Done", "status": STATUS_NOT_STARTED, "built": False},
-    ]
+STAGE_LABELS = {"1": "Company setup", "2": "Sales & inventory", "3": "Commission statements",
+                "4": "Verify everything", "5": "Done"}
+
+
+def _instance_label(r):
+    """A human label for a stage row from its key and payload — no lookups."""
+    p = r.get("payload") or {}
+    ik = _s(r.get("instance_key"))
+    kind = kind_of_instance(ik)
+    parts = ik.split(":")
+    if ik == INVENTORY_NONE_KEY:
+        return "Inventory export — none (recorded)"
+    if kind == "commission":
+        return f"{p.get('carrier_name') or 'carrier ' + (parts[1][:8] if len(parts) > 1 else '')} — {(parts[2] if len(parts) > 2 else '').replace('_', ' ')}"
+    if kind == "other":
+        return f"{p.get('name') or (parts[2] if len(parts) > 2 else 'other report').replace('_', ' ')} (other report)"
+    return f"{SOURCE_KIND_LABELS.get(kind, kind)} — {p.get('source_ref') or (parts[1] if len(parts) > 1 else '')}"
+
+
+def _stage_lamp(instances):
+    if not instances:
+        return STATUS_NOT_STARTED
+    if all(i["status"] == STATUS_VERIFIED for i in instances):
+        return STATUS_VERIFIED
+    if any(i["status"] == STATUS_NEEDS_INPUT for i in instances):
+        return STATUS_NEEDS_INPUT
+    return STATUS_IN_PROGRESS
+
+
+def company_lamp(company):
+    """Stage 1 is NOT built in this flow: its lamp READS the existing company / store / carrier rows
+    (design: the roster confirmed elsewhere). Verified = at least one store and one carrier."""
+    c = company or {}
+    n = lambda k: int(c.get(k) or 0)
+    if n("stores") and n("carriers"):
+        return STATUS_VERIFIED
+    if n("stores") or n("carriers") or n("companies"):
+        return STATUS_IN_PROGRESS
+    return STATUS_NOT_STARTED
+
+
+def rail(stage_rows, current_instance=None, company=None, run=None):
+    """The left rail as a projection of the persisted stage rows (design §0.2): every instance of
+    stages 2 and 3 with its step and lamp, the stage lamps, the Stage-4 verify table and the Stage-5
+    runbook. Reopening lands on the first non-verified step of the current instance."""
     instances = []
     for r in stage_rows or []:
-        if _s(r.get("stage")) != STAGE_COMMISSION:
+        st_no = _s(r.get("stage"))
+        if st_no not in ("2", "3"):
             continue
         st = _s(r.get("status")) if _s(r.get("status")) in STATUSES else STATUS_IN_PROGRESS
-        instances.append({"instance_key": r.get("instance_key"), "step": r.get("step") or STEP_KEYS[0],
+        keys = [k for k, _ in STEPS_BY_STAGE[st_no]]
+        instances.append({"instance_key": r.get("instance_key"), "stage": st_no,
+                          "kind": kind_of_instance(r.get("instance_key")),
+                          "label": _instance_label(r),
+                          "step": r.get("step") or keys[0],
                           "status": st, "payload": r.get("payload") or {},
                           "verified_numbers": r.get("verified_numbers"),
                           "verified_by": r.get("verified_by"), "verified_at": r.get("verified_at"),
                           "blocking_reason": r.get("blocking_reason"), "updated_at": r.get("updated_at"),
                           "current": r.get("instance_key") == current_instance})
-    s3 = stages[2]
-    if instances:
-        if all(i["status"] == STATUS_VERIFIED for i in instances):
-            s3["status"] = STATUS_VERIFIED
-        elif any(i["status"] == STATUS_NEEDS_INPUT for i in instances):
-            s3["status"] = STATUS_NEEDS_INPUT
-        else:
-            s3["status"] = STATUS_IN_PROGRESS
+    s2 = [i for i in instances if i["stage"] == "2"]
+    s3 = [i for i in instances if i["stage"] == "3"]
+    signed = bool((run or {}).get("signed_off_at"))
+    all_verified = bool(instances) and all(i["status"] == STATUS_VERIFIED for i in instances)
+    stages = [
+        {"stage": "1", "label": STAGE_LABELS["1"], "status": company_lamp(company), "built": False,
+         "note": "reads your company, store and carrier rows — set up on the company / store screens"},
+        {"stage": "2", "label": STAGE_LABELS["2"], "status": _stage_lamp(s2), "built": True},
+        {"stage": "3", "label": STAGE_LABELS["3"], "status": _stage_lamp(s3), "built": True},
+        {"stage": "4", "label": STAGE_LABELS["4"], "built": True,
+         "status": (STATUS_VERIFIED if (all_verified and signed) else
+                    STATUS_IN_PROGRESS if instances else STATUS_NOT_STARTED)},
+        {"stage": "5", "label": STAGE_LABELS["5"], "built": True,
+         "status": STATUS_VERIFIED if (all_verified and signed) else STATUS_NOT_STARTED},
+    ]
     cur = next((i for i in instances if i["current"]), None) or \
         next((i for i in instances if i["status"] != STATUS_VERIFIED), None)
-    return {"stages": stages, "steps": [{"key": k, "label": l} for k, l in STEPS],
+    return {"stages": stages,
+            "steps": [{"key": k, "label": l} for k, l in STEPS],
+            "steps_by_stage": {st: [{"key": k, "label": l} for k, l in steps] for st, steps in STEPS_BY_STAGE.items()},
             "instances": instances,
-            "resume": {"instance_key": cur["instance_key"], "step": cur["step"]} if cur else None}
+            "resume": {"instance_key": cur["instance_key"], "step": cur["step"], "stage": cur["stage"]} if cur else None,
+            "verify_table": verify_table(instances),
+            "runbook": runbook(instances),
+            "sign_off": {"signed": signed, "by": (run or {}).get("signed_off_by"),
+                         "at": (run or {}).get("signed_off_at"),
+                         "on_behalf": bool((run or {}).get("signed_off_on_behalf")),
+                         "all_verified": all_verified}}
+
+
+def _tie_of(vn):
+    t = (vn or {}).get("tie") or {}
+    return t.get("our_total"), t.get("file_total"), t.get("difference"), t.get("match")
+
+
+def verify_table(instances):
+    """Stage 4.1 — one row per source: our total, the file's total, the difference, status, who,
+    when; a red row links to the step that fixes it. Numbers come from `verified_numbers` (what was
+    RE-READ after landing), never from a screen."""
+    rows = []
+    for i in instances or []:
+        vn = i.get("verified_numbers") or {}
+        our, ft, diff, match = _tie_of(vn)
+        p = i.get("payload") or {}
+        kind = i["kind"]
+        declined = i["instance_key"] == INVENTORY_NONE_KEY
+        if kind == "other":
+            our = None
+            basis = vn.get("basis") or "received"
+        elif declined:
+            basis = "no inventory export — recorded by " + _s(i.get("verified_by") or "?")
+        else:
+            basis = vn.get("basis")
+        red = i["status"] != STATUS_VERIFIED
+        # the step that fixes a red row: the identity gate first, then the totals, else where it stopped
+        fix_step = i["step"]
+        if red and i["stage"] == "2":
+            fix_step = "2.4" if "unresolved" in _s(i.get("blocking_reason")) else "2.5" if vn else i["step"]
+        elif red and i["stage"] == "3":
+            fix_step = "3.8" if vn else i["step"]
+        rows.append({"instance_key": i["instance_key"], "stage": i["stage"], "kind": kind, "label": i["label"],
+                     "period": p.get("period") or vn.get("period") or (
+                         "–".join(x for x in ((vn.get("date_span") or {}).get("from"), (vn.get("date_span") or {}).get("to")) if x) or None),
+                     "our_total": our, "file_total": ft, "difference": diff, "match": match,
+                     "rows_landed": vn.get("rows_landed"), "status": i["status"], "red": red,
+                     "verified_by": i.get("verified_by"), "verified_at": i.get("verified_at"),
+                     "blocking_reason": i.get("blocking_reason"), "basis": basis, "fix_step": fix_step})
+    return rows
+
+
+def runbook(instances):
+    """Stage 5 — what to upload each month, generated from the instances that were configured, plus
+    the two links the owner asked for (design §2 Stage 5)."""
+    monthly = []
+    for i in instances or []:
+        if i["instance_key"] == INVENTORY_NONE_KEY:
+            continue
+        p = i.get("payload") or {}
+        kind = i["kind"]
+        monthly.append({"instance_key": i["instance_key"], "kind": kind, "label": i["label"],
+                        "filename_example": p.get("filename"),
+                        "lands_in": SOURCE_KIND_TARGET.get(kind) or "(no destination yet — recorded only)",
+                        "mapping_saved": bool(p.get("column_map")),
+                        "status": i["status"]})
+    return {"links": [{"label": "Sales report", "href": "/commcalc/sales-report", "screen": "sales_report"},
+                      {"label": "Commissions", "href": "/commcalc/commission-ledger", "screen": "commission_ledger"}],
+            "monthly": monthly,
+            "note": "Each month: drop the same exports here (stages 2–3 only). A file whose columns match the saved mapping is pre-mapped; the stores and reps you resolved are remembered."}
 
 
 def next_step(step):
+    keys = STEP_KEYS_STAGE2 if _s(step).startswith("2.") else STEP_KEYS
     try:
-        i = STEP_KEYS.index(step)
+        i = keys.index(step)
     except ValueError:
-        return STEP_KEYS[0]
-    return STEP_KEYS[min(i + 1, len(STEP_KEYS) - 1)]
+        return keys[0]
+    return keys[min(i + 1, len(keys) - 1)]
 
 
 def now_iso():

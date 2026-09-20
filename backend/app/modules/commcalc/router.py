@@ -4864,8 +4864,8 @@ def _fstr(v):
 
 def _intake_json(text, what, default):
     """A JSON form field, or a 400 that names the field — never a 500 on a malformed body."""
-    if text in (None, ""):
-        return default
+    if not isinstance(text, str) or text == "":
+        return default          # '' / None / a Form default object (a harness calling the function directly)
     try:
         import json as _json
         return _json.loads(text)
@@ -4884,9 +4884,11 @@ def _intake_state_ready(client, org_id):
 
 
 def _intake_run(client, org_id, create=False, started_by=None):
-    """The org's open onboarding run (newest in-progress), created on first write when asked."""
+    """The org's onboarding run: the newest that is not abandoned (a signed-off run is still THE run —
+    Stage 5 reads it, and a source added after sign-off reopens its Stage-4 row honestly), created
+    on first write when asked."""
     rows = (client.schema("commcalc").table("onboarding_run").select("*")
-            .eq("org_id", org_id).eq("status", "in_progress")
+            .eq("org_id", org_id).neq("status", "abandoned")
             .order("started_at", desc=True).limit(1).execute().data) or []
     if rows:
         return rows[0]
@@ -4905,37 +4907,62 @@ def _intake_stage_rows(client, org_id, run_id):
             .eq("org_id", org_id).eq("run_id", run_id).execute().data) or []
 
 
+def _intake_company(client, org_id):
+    """Stage 1's lamp READS the existing rows — companies (through the ONE canonical enumeration,
+    §13b), the store roster (the union `_store_maps` reads, §13a) and the carriers. Counts only;
+    nothing here is written by this flow. Never raises."""
+    out = {"companies": 0, "stores": 0, "carriers": 0}
+    try:
+        from app.modules.account import coa as _coa
+        out["companies"] = len(_coa.org_companies(client, org_id, "id") or [])
+    except Exception:
+        pass
+    try:
+        out["stores"] = len(_store_maps(client, org_id)["stores"])
+    except Exception:
+        pass
+    try:
+        out["carriers"] = len((client.schema("commcalc").table("carrier").select("id")
+                               .eq("org_id", org_id).execute().data) or [])
+    except Exception:
+        pass
+    return out
+
+
 def _intake_state_payload(client, org_id, current_instance=None):
-    """{state_ready, migration, run, rail} — the rail is a PROJECTION of the persisted rows
+    """{state_ready, migration, run, rail, company} — the rail is a PROJECTION of the persisted rows
     (onboarding_intake.rail). Without mig 1007 it is the empty rail, and the payload says why."""
+    company = _intake_company(client, org_id)
     if not _intake_state_ready(client, org_id):
         return {"state_ready": False, "migration": _INTAKE_STATE_MIGRATION,
                 "note": ("Resumable state is not available until migration "
                          f"{_INTAKE_STATE_MIGRATION} is applied — the flow still works; leaving the "
                          "page loses your place."),
-                "run": None, "rail": _intake.rail([], current_instance)}
+                "run": None, "company": company, "rail": _intake.rail([], current_instance, company)}
     run = _intake_run(client, org_id)
     rows = _intake_stage_rows(client, org_id, (run or {}).get("id"))
-    return {"state_ready": True, "migration": _INTAKE_STATE_MIGRATION, "run": run,
-            "rail": _intake.rail(rows, current_instance)}
+    return {"state_ready": True, "migration": _INTAKE_STATE_MIGRATION, "run": run, "company": company,
+            "rail": _intake.rail(rows, current_instance, company, run)}
 
 
 def _intake_save_state(client, org_id, instance_key, step=None, status=None, payload_patch=None,
                        verified_numbers=None, verified_by=None, blocking_reason=None, by=None):
-    """Upsert ONE stage-state row (run, stage 3, instance) and move the run's current_step. Returns
-    {saved, reason?}. Degrades to saved=False (never raises) when mig 1007 is absent, so a commit
-    that landed rows is still reported as landed."""
+    """Upsert ONE stage-state row (run, stage, instance) and move the run's current_step. The STAGE is
+    read off the instance key's kind (`commission:` → 3, `sales:` / `pos:` / `inventory:` / `other:` →
+    2). Returns {saved, reason?}. Degrades to saved=False (never raises) when mig 1007 is absent, so a
+    commit that landed rows is still reported as landed."""
     if not _intake_state_ready(client, org_id):
         return {"saved": False, "reason": f"migration {_INTAKE_STATE_MIGRATION} not applied"}
+    stage = _intake.stage_of_kind(_intake.kind_of_instance(instance_key))
     try:
         run = _intake_run(client, org_id, create=True, started_by=by)
         existing = (client.schema("commcalc").table("onboarding_stage_state").select("*")
-                    .eq("org_id", org_id).eq("run_id", run["id"]).eq("stage", _intake.STAGE_COMMISSION)
+                    .eq("org_id", org_id).eq("run_id", run["id"]).eq("stage", stage)
                     .eq("instance_key", instance_key).limit(1).execute().data) or []
         payload = dict((existing[0].get("payload") if existing else None) or {})
         for k, v in (payload_patch or {}).items():
             payload[k] = v
-        row = {"org_id": org_id, "run_id": run["id"], "stage": _intake.STAGE_COMMISSION,
+        row = {"org_id": org_id, "run_id": run["id"], "stage": stage,
                "instance_key": instance_key, "payload": payload, "updated_at": _intake.now_iso()}
         if step:
             row["step"] = step
@@ -4950,7 +4977,7 @@ def _intake_save_state(client, org_id, instance_key, step=None, status=None, pay
         if existing:
             client.schema("commcalc").table("onboarding_stage_state").update(row).eq("id", existing[0]["id"]).eq("org_id", org_id).execute()
         else:
-            row.setdefault("step", step or _intake.STEP_KEYS[0])
+            row.setdefault("step", step or [k for k, _ in _intake.STEPS_BY_STAGE[stage]][0])
             row.setdefault("status", _intake.STATUS_IN_PROGRESS)
             client.schema("commcalc").table("onboarding_stage_state").insert(row).execute()
         if step:
@@ -5000,25 +5027,14 @@ def _intake_house_defaults(client, org_id, code, source_report):
         return [], []
 
 
-def _intake_prepare(client, org_id, contents, filename, source_kind, carrier_id, statement_type,
-                    column_map_json, sign_answer, assignments_json, typed_total,
-                    sheet="", header_row="", footer="auto"):
-    """Everything analyze and commit share: read → detect → propose → map → footer → sign → labels →
-    bucket suggestions → preview totals. One function so the preview the person confirmed and the
-    rows the commit builds come from the SAME parse and the SAME rules (design §0.5)."""
-    kind = (source_kind or "commission").strip().lower()
-    if kind not in _intake.SOURCE_KINDS:
-        raise HTTPException(400, "source_kind must be one of " + "|".join(_intake.SOURCE_KINDS))
-    if kind != "commission":
-        raise HTTPException(400, f"'{kind}' intake is Stage B (sales / inventory / POS / other reports) "
-                                 "and is not built yet — only the commission statement lands in this build.")
-    stype = (statement_type or "").strip() or _intake.STATEMENT_TYPE_DEFAULT
-    carrier, code = _intake_carrier(client, org_id, carrier_id)
+def _intake_read_shape(contents, filename, sheet="", header_row=""):
+    """Read → detect, shared by EVERY kind: the raw grids (title block kept so the header row can be
+    FOUND), the primary sheet, continuation sheets, header echoes, the person's overrides."""
     try:
         sheets = _read_upload_grids(contents, filename)
     except Exception as e:
         raise HTTPException(400, f"Could not read file: {e}")
-    sheet, header_row, footer = _fstr(sheet), _fstr(header_row), _fstr(footer) or "auto"
+    sheet, header_row = _fstr(sheet), _fstr(header_row)
     hr = None
     if header_row != "":
         try:
@@ -5029,6 +5045,39 @@ def _intake_prepare(client, org_id, contents, filename, source_kind, carrier_id,
     if not shape["records"]:
         raise HTTPException(400, "No header row found in any sheet — the file has no row where most cells "
                                  "are column names followed by a row of data.")
+    return shape
+
+
+def _intake_prepare(client, org_id, contents, filename, source_kind, carrier_id, statement_type,
+                    column_map_json, sign_answer, assignments_json, typed_total,
+                    sheet="", header_row="", footer="auto", **stage2):
+    """Everything analyze and commit share: read → detect → propose → map → footer → (sign → labels →
+    buckets | stores → verify) → preview. One function so the preview the person confirmed and the
+    rows the commit builds come from the SAME parse and the SAME rules (design §0.5). Dispatches on
+    the kind: the commission statement (stage 3) and the Stage-2 kinds share the read, the column
+    proposal and the footer rule, and differ only in what is confirmed and what is verified."""
+    kind = (source_kind or "commission").strip().lower()
+    if kind not in _intake.SOURCE_KINDS:
+        raise HTTPException(400, "source_kind must be one of " + "|".join(_intake.SOURCE_KINDS))
+    if kind == "commission":
+        return _intake_prepare_commission(client, org_id, contents, filename, carrier_id, statement_type,
+                                          column_map_json, sign_answer, assignments_json, typed_total,
+                                          sheet=sheet, header_row=header_row, footer=footer,
+                                          identity_json=stage2.get("identity_json"))
+    return _intake_prepare_stage2(client, org_id, contents, filename, kind, column_map_json, typed_total,
+                                  sheet=sheet, header_row=header_row, footer=footer, **stage2)
+
+
+def _intake_prepare_commission(client, org_id, contents, filename, carrier_id, statement_type,
+                               column_map_json, sign_answer, assignments_json, typed_total,
+                               sheet="", header_row="", footer="auto", identity_json=None):
+    """Stage 3: read → detect → propose → map → footer → sign → labels → bucket suggestions →
+    3.7 store strings through the SHARED resolver → preview totals."""
+    kind = "commission"
+    stype = (statement_type or "").strip() or _intake.STATEMENT_TYPE_DEFAULT
+    carrier, code = _intake_carrier(client, org_id, carrier_id)
+    shape = _intake_read_shape(contents, filename, sheet, header_row)
+    footer = _fstr(footer) or "auto"
     headers, records = shape["headers"], shape["records"]
     source_report = _intake.source_report_key(code, stype)
     ikey = _intake.instance_key(kind, carrier["id"], stype)
@@ -5079,6 +5128,14 @@ def _intake_prepare(client, org_id, contents, filename, source_kind, carrier_id,
         if src:
             a.setdefault("match_field", src.get("match_field"))
             a["sum_raw"] = src.get("sum_raw")
+    # 3.7 — store strings through the SHARED resolver (index §13a; the same one 2.4 uses). Account ids
+    # may be marked company-level (design §3.7). Reps are surfaced, not gated.
+    identity = _intake.identity_strings(kept)
+    decisions = _intake_json(identity_json, "identity", {}) or {}
+    if not isinstance(decisions, dict):
+        raise HTTPException(400, "identity must be a JSON object {raw string: {action, store_code, reason}}")
+    store_rows = _intake.resolve_stores(identity.get("store") or [], _intake_store_resolver(client, org_id),
+                                        decisions.get("store") or {}, allow_company_level=True)
     # 3.8 preview — IN MEMORY, from the same rows the commit would build; the commit re-reads the DB
     preview_rules = _intake.rules_for_assignments(source_report, assignments)
     built = [commission_ledger.build_row(src, {"org_id": org_id, "source_report": source_report},
@@ -5099,64 +5156,383 @@ def _intake_prepare(client, org_id, contents, filename, source_kind, carrier_id,
         "assignments": assignments, "preview_rules": preview_rules, "built": built, "totals": totals,
         "tie": tie, "banners": banners, "typed_total": typed_total,
         "money_columns": _intake.money_columns(headers, records, amount_header, text_headers),
-        "period": _intake.period_proposal(kept), "identity": _intake.identity_strings(kept),
+        "period": _intake.period_proposal(kept), "identity": identity,
+        "stores": store_rows, "reps": [], "identity_decisions": decisions,
         "house_defaults": {"columns": len(house_cols), "bucket_rules": len(house_cats)},
     }
 
 
+# ── THE SHARED STORE / REP RESOLVER (index §13a; design 2.4 + 3.7) ──────────────────────────────
+# Not a new mechanism: `_store_maps` is the org's ONE union roster (store_mapping ∪ storeops.stores ∪
+# store_aliases) and `_store_code_resolver` the ONE precedence chain over it (alias → mapping →
+# roster). What the intake adds is the ANSWER SHAPE a person needs — resolved to WHICH code, by WHICH
+# rule, or genuinely unknown — and the writes go through the existing alias / store writers.
+def _intake_store_resolver(client, org_id):
+    """resolve(raw) → (store_code | None, how). A code is returned only when it is one of the org's
+    own stores; the chain's 'return the raw string' fallback reads as None here — an unknown store
+    is unknown, never 'Default' (design §5.7)."""
+    M = _store_maps(client, org_id)
+    valid = {s["store_code"].upper(): s["store_code"] for s in M["stores"] if s.get("store_code")}
+    chain = _store_code_resolver(client, org_id)
+
+    def resolve(raw):
+        v = str(raw or "").strip()
+        if not v:
+            return None, None
+        low = v.lower()
+        if low in M["alias_to_code"]:
+            return M["alias_to_code"][low], "alias"
+        got = str(chain(v) or "").strip()
+        if got and got.upper() in valid:
+            if low in M["addr_to_code"] or low in M["so_addr_to_code"]:
+                return valid[got.upper()], "address"
+            if v.upper() in valid:
+                return valid[v.upper()], "code"
+            return valid[got.upper()], "canonical"
+        return None, None
+    resolve.stores = M["stores"]
+    return resolve
+
+
+def _intake_rep_resolver(client, org_id):
+    """resolve(raw) → (canonical employee name | None, how) over the org's roster
+    (storeops.employees: name / epay_salesperson / employee_id) and commcalc.rep_aliases."""
+    names, aliases = {}, {}
+    try:
+        for e in (client.schema("storeops").table("employees").select("employee_id,name,epay_salesperson,is_active")
+                  .eq("org_id", org_id).execute().data) or []:
+            nm = str(e.get("name") or "").strip()
+            for k in (nm, e.get("epay_salesperson"), e.get("employee_id")):
+                k = str(k or "").strip().lower()
+                if k and nm:
+                    names.setdefault(k, nm)
+    except Exception:
+        pass
+    try:
+        for a in (client.schema("commcalc").table("rep_aliases").select("alias,canonical")
+                  .eq("org_id", org_id).execute().data) or []:
+            k = str(a.get("alias") or "").strip().lower()
+            if k and a.get("canonical"):
+                aliases[k] = str(a["canonical"]).strip()
+    except Exception:
+        pass
+
+    def resolve(raw):
+        v = str(raw or "").strip().lower()
+        if not v:
+            return None, None
+        if v in aliases:
+            return aliases[v], "alias"
+        if v in names:
+            return names[v], "roster"
+        return None, None
+    resolve.employees = sorted(set(names.values()))
+    return resolve
+
+
+def _intake_apply_identity(client, org_id, stores, reps, who=None):
+    """Write the person's 2.4 / 3.7 decisions through the EXISTING writers, then READ THEM BACK
+    through a fresh resolver — the save guarantee applied to identity. assign → a store_aliases row
+    (POST /store-aliases' function); create → a storeops store row (storeops' create_store) plus an
+    alias when the raw spelling differs; rep assign → a rep_aliases row (POST /rep-aliases' shape).
+    Returns {aliases, stores_created, rep_aliases}; raises 400 naming the string that did not stick."""
+    from app.modules.storeops import router as _storeops
+    written = {"aliases": [], "stores_created": [], "rep_aliases": []}
+    for r in stores or []:
+        raw, action, code = r["value"], r.get("action"), r.get("decision_code")
+        if action == "create" and code:
+            try:
+                _storeops.create_store({"store_code": code, "address": r.get("address") or raw, "is_active": True}, org_id)
+                written["stores_created"].append(code)
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(400, f"Creating store '{code}' for '{raw}' failed: {str(e)[:200]} — nothing was imported.")
+        if action in ("assign", "create") and code and raw.strip().lower() != code.strip().lower():
+            try:
+                add_store_alias(AddStoreAliasIn(alias=raw, store_code=code, source="onboarding-intake",
+                                                note=f"onboarding intake by {who or '?'}"), org_id)
+                written["aliases"].append((raw, code))
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(400, f"Saving the store alias '{raw}' → '{code}' failed: {str(e)[:200]} — nothing was imported.")
+    for r in reps or []:
+        if r.get("action") == "assign" and r.get("decision_name"):
+            try:
+                client.schema("commcalc").table("rep_aliases").upsert(
+                    {"org_id": org_id, "alias": r["value"], "canonical": r["decision_name"]},
+                    on_conflict="org_id,alias").execute()
+                written["rep_aliases"].append((r["value"], r["decision_name"]))
+            except Exception as e:
+                raise HTTPException(400, f"Saving the rep alias '{r['value']}' failed: {str(e)[:200]} (migration 016) — nothing was imported.")
+    # READ BACK: every assigned / created store must now resolve to the code that was chosen
+    if written["aliases"] or written["stores_created"]:
+        back = _intake_store_resolver(client, org_id)
+        for r in stores or []:
+            if r.get("action") in ("assign", "create") and r.get("decision_code"):
+                code, _how = back(r["value"])
+                if not code or code.upper() != r["decision_code"].upper():
+                    raise HTTPException(400, f"'{r['value']}' does not resolve to '{r['decision_code']}' after saving "
+                                             f"(reads back as {code or 'nothing'}) — nothing was imported.")
+    return written
+
+
+# ── THE FILE, KEPT BETWEEN VISITS (Stage A open item 3) ─────────────────────────────────────────
+# The platform's existing pattern for a tenant's private files is a Supabase storage bucket with the
+# path recorded on the row (closing-envelopes, store-docs, timeclock selfies). Same here: one private
+# bucket, path = org / instance / filename, the reference kept in the stage row's payload — no new
+# table, no migration. Degrades honestly: when the store is unavailable the payload says so and the
+# person re-drops the file, exactly as before.
+_INTAKE_BUCKET = "onboarding-intake"
+
+
+def _intake_file_put(client, org_id, instance_key, contents, filename):
+    """Keep the dropped file so re-checking / committing later needs no re-drop. Never raises."""
+    import hashlib
+    try:
+        try:
+            client.storage.get_bucket(_INTAKE_BUCKET)
+        except Exception:
+            client.storage.create_bucket(_INTAKE_BUCKET)
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(filename or "upload"))[:120]
+        path = f"{org_id}/{_intake.slug(instance_key)}/{safe}"
+        client.storage.from_(_INTAKE_BUCKET).upload(path, contents, {"content-type": "application/octet-stream", "upsert": "true"})
+        return {"stored": True, "bucket": _INTAKE_BUCKET, "path": path, "filename": filename,
+                "size": len(contents or b""), "sha256": hashlib.sha256(contents or b"").hexdigest(),
+                "stored_at": _intake.now_iso()}
+    except Exception as e:
+        return {"stored": False, "reason": str(e)[:200], "filename": filename}
+
+
+def _intake_file_get(client, org_id, instance_key):
+    """The bytes of the file kept for this instance, from the reference in its stage row. 400 when
+    there is none — the person is told to drop the file again, never handed someone else's."""
+    if not _intake_state_ready(client, org_id):
+        raise HTTPException(400, "No file is kept for this step (resumable state is not available — "
+                                 f"migration {_INTAKE_STATE_MIGRATION}); drop the file again.")
+    run = _intake_run(client, org_id)
+    rows = [r for r in _intake_stage_rows(client, org_id, (run or {}).get("id")) if r.get("instance_key") == instance_key]
+    ref = ((rows[0].get("payload") if rows else None) or {}).get("file") or {}
+    if not ref.get("stored") or not str(ref.get("path") or "").startswith(f"{org_id}/"):
+        raise HTTPException(400, "No file is kept for this step — drop the file again.")
+    try:
+        data = client.storage.from_(ref.get("bucket") or _INTAKE_BUCKET).download(ref["path"])
+    except Exception as e:
+        raise HTTPException(400, f"The kept file could not be read back ({str(e)[:120]}) — drop the file again.")
+    return data, ref.get("filename") or "upload"
+
+
+# ── STAGE 2: sales / POS / inventory / other ────────────────────────────────────────────────────
+def _intake_prepare_stage2(client, org_id, contents, filename, kind, column_map_json, typed_total,
+                           sheet="", header_row="", footer="auto", pos_source="", layout="", name="",
+                           identity_json=None, as_of_date="", **_ignored):
+    """read → detect → propose (house default for the layout, then header heuristics, then the
+    tenant's own saved rows) → map → footer → 2.4 stores / reps through the shared resolver → 2.5
+    verify numbers beside the file's total. `other` stops at the honest summary."""
+    src_ref = _fstr(pos_source)
+    report_key = _fstr(layout) or _intake.REPORT_KEY_BY_KIND.get(kind) or ""
+    if kind != "other":
+        if not src_ref:
+            raise HTTPException(400, "pos_source is required — which POS (or system) this export comes from; a code you pick or type")
+        offered = {l["report_key"] for l in _intake.layouts_for_kind(kind, column_mapping.TABLE_MAP)}
+        if report_key not in offered:
+            raise HTTPException(400, f"layout must be one of {', '.join(sorted(offered))} for a {kind} export")
+    name = _fstr(name)
+    if kind == "other" and not name:
+        raise HTTPException(400, "name the report (e.g. 'bill payments', 'card payments', 'X report')")
+    ikey = _intake.stage2_instance_key(kind, src_ref, report_key if kind != "other" else name)
+    shape = _intake_read_shape(contents, filename, sheet, header_row)
+    headers, records = shape["headers"], shape["records"]
+    footer = _fstr(footer) or "auto"
+    overrides = _intake_json(column_map_json, "column_map", {})
+    if not isinstance(overrides, dict):
+        raise HTTPException(400, "column_map must be a JSON object {target_field: header}")
+    decisions = _intake_json(identity_json, "identity", {}) or {}
+    if not isinstance(decisions, dict):
+        raise HTTPException(400, "identity must be a JSON object {store: {raw: {...}}, rep: {raw: {...}}}")
+    base = {"kind": kind, "instance_key": ikey, "source_ref": src_ref, "layout": report_key, "name": name,
+            "target_table": _intake.SOURCE_KIND_TARGET.get(kind), "shape": shape, "headers": headers,
+            "records": records, "typed_total": typed_total, "identity_decisions": decisions,
+            "period": {"months": [], "span_from": None, "span_to": None, "proposed": None,
+                       "spans_two_months": False, "dated_rows": 0}}
+    if kind == "other":
+        mc = _intake.money_columns(headers, records, "", ())
+        base.update({"fields": [], "proposal": [], "rules": [], "mapped": [], "kept": [], "footers": [],
+                     "footer": _intake.footer_summary([], [], identity_mapped=False),
+                     "identity_fields": [], "money_columns": mc, "stores": [], "reps": [],
+                     "verify_numbers": _intake.other_summary(headers, records, mc), "tie": None,
+                     "house_defaults": {"columns": 0}})
+        return base
+    kf = _intake.KIND_FIELDS[kind]
+    fields = column_mapping.target_fields(report_key, client, org_id)
+    # the tenant's OWN saved rows for this layout (carrier-NULL rows: a POS export has no carrier)
+    saved = [r for r in column_mapping.load_rules(client, org_id, report_key, None) if not r.get("carrier_id")]
+    house_cols = _intake_house_layout(client, org_id, report_key)
+    suggestions = column_mapping.suggest(headers, report_key, saved, client, org_id)
+    proposal = _intake.propose_columns(fields, suggestions, saved, house_cols, headers, records,
+                                       carrier_label=_intake.LAYOUT_LABELS.get(report_key, report_key),
+                                       overrides=overrides)
+    rules = _intake.mapping_rules(proposal)
+    mapped_fields = [p["target_field"] for p in proposal if p.get("column")]
+    pairs = [(r, column_mapping.apply_mapping(r, rules, {})) for r in records]
+    mapped = [m for _r, m in pairs if any(v not in (None, "", 0, 0.0) for v in m.values())]
+    ident = column_mapping.identity_fields(report_key, client, org_id)
+    ident_mapped = any(f in mapped_fields for f in ident)
+    if str(footer or "auto").strip().lower() == "none":
+        kept, footers = list(mapped), []
+        footer_info = _intake.footer_summary(kept, [], identity_mapped=True, amount_field=kf["amount"])
+        footer_info["basis"] = "overridden: you said this file has no total row"
+    else:
+        kept, footers = _intake.split_footer(mapped, ident, mapped_fields, amount_field=kf["amount"])
+        footer_info = _intake.footer_summary(kept, footers, identity_mapped=ident_mapped, amount_field=kf["amount"])
+    # 2.4 — the store strings and rep strings, through the SHARED resolver
+    store_rows = _intake.resolve_stores(_intake.identity_rows(kept, kf["store"], kf["amount"]),
+                                        _intake_store_resolver(client, org_id), decisions.get("store") or {})
+    rep_rows = (_intake.resolve_reps(_intake.identity_rows(kept, kf["rep"], kf["amount"]),
+                                     _intake_rep_resolver(client, org_id), decisions.get("rep") or {})
+                if kf.get("rep") else [])
+    excluded = _intake.excluded_stores(store_rows)
+    land = [m for m in kept if _intake._s(m.get(kf["store"])) not in excluded]
+    excluded_rows = len(kept) - len(land)
+    # 2.5 — our numbers beside the file's
+    if kind == "inventory":
+        vn = _intake.inventory_verify(land, kf)
+        our_total = vn["sum_cost"]
+        vn["as_of_date"] = _fstr(as_of_date) or None
+    else:
+        vn = _intake.sales_verify(land, kf)
+        our_total = vn["sum_amount"]
+    tie = _intake.simple_tie(our_total, footer_info["file_total_raw"], typed_total)
+    amount_header = next((p["column"] for p in proposal if p["target_field"] == kf["amount"]), "")
+    text_headers = [p["column"] for p in proposal if p["column"] and (p.get("transform") or "text") != "number"]
+    # the money columns are summed over the DATA rows — a footer's own totals would double every Σ
+    footer_ids = {id(ctx_m) for i, ctx_m in enumerate(mapped) if i in {f["row"] for f in footers}}
+    data_records = [r for r, m in pairs if id(m) not in footer_ids]
+    base.update({
+        "report_key": report_key, "fields": fields, "proposal": proposal, "rules": rules, "mapped": mapped,
+        "mapped_fields": mapped_fields, "pairs": pairs, "kept": kept, "land": land, "footers": footers,
+        "footer": footer_info, "identity_fields": ident, "stores": store_rows, "reps": rep_rows,
+        "excluded_rows": excluded_rows, "excluded": excluded, "verify_numbers": vn, "tie": tie,
+        "money_columns": _intake.money_columns(headers, data_records, amount_header, text_headers),
+        "period": _intake.period_proposal(land, kf["date"]) if kf.get("date") else base["period"],
+        "as_of_date": _fstr(as_of_date) or None,
+        "house_defaults": {"columns": len(house_cols)},
+    })
+    return base
+
+
+def _intake_house_layout(client, org_id, report_key):
+    """The HOUSE org's saved column rows for this layout (carrier-NULL) — the 'house default for
+    <layout>' provenance. The layout's seeded defaults are what column_mapping.suggest already
+    proposes ('from your file' when the header matches). [] for the house itself."""
+    if org_id == ORG_ID:
+        return []
+    try:
+        return [r for r in column_mapping.load_rules(client, ORG_ID, report_key, None) if not r.get("carrier_id")]
+    except Exception:
+        return []
+
+
 def _intake_payload(ctx):
-    """The analyze response — everything §3.2–§3.8 need in ONE payload, shaped to generalise to
-    Stage B (source_kind / target_table / identity_fields / verify)."""
+    """The analyze response — everything the steps need in ONE payload, one shape for every kind
+    (source_kind / target_table / identity_fields / verify)."""
+    kind = ctx["kind"]
     proposal = ctx["proposal"]
-    return {
-        "source_kind": ctx["kind"], "target_table": _intake.SOURCE_KIND_TARGET.get(ctx["kind"]),
-        "report_key": _INTAKE_REPORT_KEY, "statement_type": ctx["statement_type"],
-        "carrier": {"id": ctx["carrier"]["id"], "name": ctx["carrier"].get("name"), "code": ctx["carrier_code"]},
-        "source_report": ctx["source_report"], "instance_key": ctx["instance_key"],
-        # 3.2
+    out = {
+        "source_kind": kind, "target_table": _intake.SOURCE_KIND_TARGET.get(kind),
+        "report_key": ctx.get("report_key") or (_INTAKE_REPORT_KEY if kind == "commission" else None),
+        "instance_key": ctx["instance_key"],
+        # 2.2 / 3.2
         "detect": {"sheet": ctx["shape"]["sheet"], "header_row": ctx["shape"]["header_row"],
                    "sheets": ctx["shape"]["sheets"], "headers": ctx["headers"],
                    "data_rows": len(ctx["records"]), "usable_rows": len(ctx["mapped"]),
                    "footer": ctx["footer"], "footer_rows_dropped": len(ctx["footers"]),
                    "identity_fields": ctx["identity_fields"]},
-        # 3.3
+        # 2.3 / 3.3
         "columns": proposal, "money_columns": ctx["money_columns"],
         "provenances": list(_intake.PROVENANCES),
-        # 3.4
-        "sign": {**_intake.sign_panels(ctx["kept"]), "answer": ctx["answer"],
-                 "stored_answer": ctx["stored_answer"], "stored": ctx["stored_meta"],
-                 "convention": ctx["conv_name"], "answered": bool(ctx["conv_name"])},
-        # 3.5 / 3.6
-        "labels": ctx["labels"], "buckets": _intake.BUCKETS, "bucket_labels": _intake.BUCKET_LABELS,
-        "unassigned": _intake.unassigned_labels(ctx["labels"], ctx["assignments"]),
-        "assignments": ctx["assignments"], "rules_source": ctx["rules_source"],
         "house_defaults": ctx["house_defaults"],
-        # 3.7 (surfaced; resolution is the shared resolver's job — see index §30)
-        "identity": ctx["identity"],
-        # period
+        # 2.4 / 3.7 — the shared resolver's answer + the person's decisions
+        "stores": ctx["stores"], "reps": ctx["reps"],
+        "unresolved_stores": _intake.unresolved_stores(ctx["stores"]),
+        "identity_decisions": ctx["identity_decisions"],
         "period": ctx["period"],
-        # 3.8 preview (in memory; the commit re-reads the landed rows)
-        "verify": {"basis": "preview — computed from the parsed file; the commit re-reads the landed rows",
-                   "totals": ctx["totals"], "tie": ctx["tie"], "banners": ctx["banners"],
+    }
+    if kind == "commission":
+        out.update({
+            "statement_type": ctx["statement_type"],
+            "carrier": {"id": ctx["carrier"]["id"], "name": ctx["carrier"].get("name"), "code": ctx["carrier_code"]},
+            "source_report": ctx["source_report"],
+            "sign": {**_intake.sign_panels(ctx["kept"]), "answer": ctx["answer"],
+                     "stored_answer": ctx["stored_answer"], "stored": ctx["stored_meta"],
+                     "convention": ctx["conv_name"], "answered": bool(ctx["conv_name"])},
+            "labels": ctx["labels"], "buckets": _intake.BUCKETS, "bucket_labels": _intake.BUCKET_LABELS,
+            "unassigned": _intake.unassigned_labels(ctx["labels"], ctx["assignments"]),
+            "assignments": ctx["assignments"], "rules_source": ctx["rules_source"],
+            "identity": ctx["identity"],
+            "verify": {"basis": "preview — computed from the parsed file; the commit re-reads the landed rows",
+                       "totals": ctx["totals"], "tie": ctx["tie"], "banners": ctx["banners"],
+                       "rows_in_file": len(ctx["records"]), "rows_usable": len(ctx["mapped"]),
+                       "footer_rows": len(ctx["footers"]),
+                       "rows_to_land": len(ctx["kept"]), "ignored_money_columns":
+                           [m for m in ctx["money_columns"] if not m["is_amount"]]},
+        })
+        return out
+    out.update({
+        "source_ref": ctx["source_ref"], "layout": ctx["layout"], "name": ctx["name"],
+        "layout_label": _intake.LAYOUT_LABELS.get(ctx.get("layout") or "", ctx.get("layout")),
+        "as_of_date": ctx.get("as_of_date"),
+        "verify": {"basis": ("received — no destination" if kind == "other" else
+                             "preview — computed from the parsed file; the commit re-reads the landed rows"),
+                   "numbers": ctx["verify_numbers"], "tie": ctx["tie"],
                    "rows_in_file": len(ctx["records"]), "rows_usable": len(ctx["mapped"]),
                    "footer_rows": len(ctx["footers"]),
-                   "rows_to_land": len(ctx["kept"]), "ignored_money_columns":
-                       [m for m in ctx["money_columns"] if not m["is_amount"]]},
-    }
+                   "rows_excluded_not_ours": ctx.get("excluded_rows", 0), "excluded": ctx.get("excluded", {}),
+                   "rows_to_land": len(ctx.get("land", [])),
+                   "ignored_money_columns": [m for m in ctx["money_columns"] if not m["is_amount"]],
+                   "refusals": (_intake.stage2_refusals(
+                       kind, ctx.get("mapped_fields"), ctx["stores"], ctx["tie"], None,
+                       undated_rows=((ctx["verify_numbers"].get("date_span") or {}).get("undated_rows") or 0),
+                       storeless_rows=ctx["verify_numbers"].get("storeless_rows") or 0,
+                       rows_to_land=len(ctx.get("land", []))) if kind != "other" else [])},
+    })
+    return out
 
 
 @router.get("/onboarding/intake/state")
 def onboarding_intake_state(instance_key: str = "", org_id: str = ORG_ID):
-    """The rail (design §0.2) — a projection of mig 1007's rows — plus this org's carriers for the
-    3.1 picker and the intake's vocabulary. Degrades honestly without the migration."""
+    """The rail (design §0.2) — a projection of mig 1007's rows — plus this org's carriers for 3.1,
+    its POS sources and layouts for 2.0, its store roster and employees for 2.4, and the intake's
+    vocabulary. Degrades honestly without the migration."""
     require_org(org_id)
     client = sb()
     out = _intake_state_payload(client, org_id, instance_key or None)
     carriers = (client.schema("commcalc").table("carrier").select("id,name,code,is_default")
                 .eq("org_id", org_id).order("name").execute().data) or []
-    out.update({"carriers": carriers, "source_kinds": [{"value": k, "label": _intake.SOURCE_KIND_LABELS[k],
-                                                        "built": k in _intake.SOURCE_KIND_TARGET}
-                                                       for k in _intake.SOURCE_KINDS],
+    pos_sources = []
+    try:
+        for r in (client.schema("commcalc").table("pos_profile").select("pos_key,label,is_active")
+                  .eq("org_id", org_id).execute().data) or []:
+            if r.get("pos_key") and r.get("is_active", True):
+                pos_sources.append({"pos_key": r["pos_key"], "label": r.get("label") or r["pos_key"]})
+    except Exception:
+        pass
+    try:
+        resolver = _intake_store_resolver(client, org_id)
+        stores = [{"store_code": s["store_code"], "address": s.get("address"), "market": s.get("market")} for s in resolver.stores]
+    except Exception:
+        stores = []
+    try:
+        employees = _intake_rep_resolver(client, org_id).employees
+    except Exception:
+        employees = []
+    out.update({"carriers": carriers, "pos_sources": pos_sources, "stores": stores, "employees": employees,
+                "source_kinds": [{"value": k, "label": _intake.SOURCE_KIND_LABELS[k],
+                                  "built": True, "target_table": _intake.SOURCE_KIND_TARGET.get(k),
+                                  "layouts": _intake.layouts_for_kind(k, column_mapping.TABLE_MAP)}
+                                 for k in _intake.SOURCE_KINDS],
+                "inventory_none_key": _intake.INVENTORY_NONE_KEY,
                 "statement_type_default": _intake.STATEMENT_TYPE_DEFAULT,
                 "sign_question": _intake.SIGN_QUESTION,
                 "buckets": _intake.BUCKETS, "bucket_labels": _intake.BUCKET_LABELS})
@@ -5174,53 +5550,136 @@ class OnboardingIntakeStateIn(LaxModel):
 @router.put("/onboarding/intake/state")
 def onboarding_intake_put_state(body: OnboardingIntakeStateIn, org_id: str = ORG_ID):
     """Every screen writes its payload on change and the step on navigation (design §4). The
-    payload is MERGED per key, never replaced wholesale, so one step cannot erase another's."""
+    payload is MERGED per key, never replaced wholesale, so one step cannot erase another's. The
+    2.0 checklist is a PUT per ticked item (one instance row each); 'no inventory export' is the
+    explicit `inventory:none:none` row, verified with a reason and a name (design §6.6)."""
     require_org(org_id)
     ik = (body.instance_key or "").strip()
     if not ik:
         raise HTTPException(400, "instance_key is required")
+    if _intake.kind_of_instance(ik) not in _intake.SOURCE_KINDS:
+        raise HTTPException(400, "instance_key must start with one of " + "|".join(_intake.SOURCE_KINDS))
     step = str(body.step or "").strip() or None
-    if step and step not in _intake.STEP_KEYS:
-        raise HTTPException(400, "step must be one of " + ", ".join(_intake.STEP_KEYS))
+    if step and step not in _intake.ALL_STEP_KEYS:
+        raise HTTPException(400, "step must be one of " + ", ".join(_intake.ALL_STEP_KEYS))
     status = str(body.status or "").strip() or None
     if status and status not in _intake.STATUSES:
         raise HTTPException(400, "status must be one of " + ", ".join(_intake.STATUSES))
     patch = body.payload if isinstance(body.payload, dict) else None
     client = sb()
+    who = str(body.by or "") or None
+    verified = None
+    if ik == _intake.INVENTORY_NONE_KEY:
+        # the explicit "no inventory export" choice — recorded with a reason and who said so
+        reason = str((patch or {}).get("reason") or "").strip()
+        if status == _intake.STATUS_VERIFIED and not reason:
+            raise HTTPException(400, "Say why there is no inventory export (recorded with your name).")
+        if status == _intake.STATUS_VERIFIED:
+            verified = {"basis": "no inventory export — recorded", "reason": reason, "by": who,
+                        "at": _intake.now_iso(), "declined": True}
+    elif status == _intake.STATUS_VERIFIED:
+        raise HTTPException(400, "A source is verified only by /onboarding/intake/commit, after its rows were re-read.")
     res = _intake_save_state(client, org_id, ik, step=step, status=status, payload_patch=patch,
-                             by=str(body.by or "") or None)
+                             verified_numbers=verified, verified_by=who, by=who)
     out = _intake_state_payload(client, org_id, ik)
     out["save"] = res
     return out
 
 
+class OnboardingSignOffIn(LaxModel):
+    name: str = ""
+    role: Any = None
+    on_behalf: Any = None
+
+
+@router.post("/onboarding/intake/sign-off")
+def onboarding_intake_sign_off(body: OnboardingSignOffIn, org_id: str = ORG_ID):
+    """4.2 — the sign-off (design: name, role, on-behalf flag). Refused while any source in the run
+    is not verified: the Stage-4 table names the red rows. Writes only the run row."""
+    require_org(org_id)
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(400, "name is required — the sign-off records who")
+    client = sb()
+    if not _intake_state_ready(client, org_id):
+        raise HTTPException(400, f"Sign-off needs migration {_INTAKE_STATE_MIGRATION}.")
+    run = _intake_run(client, org_id)
+    if not run:
+        raise HTTPException(400, "Nothing to sign off — no onboarding run is in progress.")
+    rows = _intake_stage_rows(client, org_id, run["id"])
+    proj = _intake.rail(rows, None, None, run)
+    red = [r for r in proj["verify_table"] if r["red"]]
+    if not proj["instances"]:
+        raise HTTPException(400, "Nothing to sign off — no source has been taken in.")
+    if red:
+        raise HTTPException(400, "Not signed off — these sources are not verified: "
+                                 + "; ".join(f"{r['label']} ({r['blocking_reason'] or r['status']})" for r in red[:6]))
+    patch = {"signed_off_by": f"{name}{(' (' + str(body.role) + ')') if body.role else ''}",
+             "signed_off_on_behalf": bool(body.on_behalf), "signed_off_at": _intake.now_iso(),
+             "status": "signed_off", "current_step": "5.1", "updated_at": _intake.now_iso()}
+    client.schema("commcalc").table("onboarding_run").update(patch).eq("id", run["id"]).eq("org_id", org_id).execute()
+    out = _intake_state_payload(client, org_id, None)
+    out["signed_off"] = patch
+    return out
+
+
+async def _intake_contents(client, org_id, file, source_kind, instance_key_hint, use_stored):
+    """The bytes to analyze / commit: the dropped file, else the file KEPT for this instance."""
+    if file is not None and getattr(file, "filename", None) is not None:
+        return await file.read(), getattr(file, "filename", "") or ""
+    if not use_stored or not instance_key_hint:
+        raise HTTPException(400, "Drop the file (or pass use_stored=1 with the instance_key of a step whose file was kept).")
+    return _intake_file_get(client, org_id, instance_key_hint)
+
+
 @router.post("/onboarding/intake/analyze")
 async def onboarding_intake_analyze(
-    file: UploadFile = File(...),
+    file: UploadFile = File(None),
     source_kind: str = Form("commission"),
     carrier_id: str = Form(""),
     statement_type: str = Form(""),
+    pos_source: str = Form(""),
+    layout: str = Form(""),
+    name: str = Form(""),
     column_map: str = Form(""),
     sign_answer: str = Form(""),
     assignments: str = Form(""),
+    identity: str = Form(""),
     typed_total: str = Form(""),
+    as_of_date: str = Form(""),
     sheet: str = Form(""),
     header_row: str = Form(""),
     footer: str = Form("auto"),
+    instance_key: str = Form(""),
+    use_stored: str = Form(""),
+    keep_file: str = Form("1"),
     org_id: str = ORG_ID,
 ):
-    """READ-ONLY: everything steps 3.2–3.8 need in one payload. Saves nothing (the page persists its
-    own choices through PUT /state). `column_map`, `sign_answer`, `assignments` and `typed_total`
-    are what the person has chosen so far; each re-call re-derives the preview from them."""
+    """READ-ONLY over the data tables: everything the steps need in one payload. Saves nothing but
+    (when asked, the default) the dropped FILE itself, kept for this instance so re-checking and the
+    commit do not need a re-drop. `column_map`, `sign_answer`, `assignments`, `identity` and
+    `typed_total` are what the person has chosen so far; each re-call re-derives the preview."""
     require_org(org_id)
-    contents = await file.read()
     client = sb()
-    ctx = _intake_prepare(client, org_id, contents, getattr(file, "filename", ""), source_kind, carrier_id,
+    (source_kind, carrier_id, statement_type, pos_source, layout, name, column_map, sign_answer, assignments, identity,
+     typed_total, as_of_date, sheet, header_row, footer, instance_key, use_stored, keep_file) = map(_fstr, (
+        source_kind, carrier_id, statement_type, pos_source, layout, name, column_map, sign_answer, assignments, identity,
+        typed_total, as_of_date, sheet, header_row, footer, instance_key, use_stored, keep_file))
+    contents, fname = await _intake_contents(client, org_id, file, source_kind, instance_key, use_stored)
+    ctx = _intake_prepare(client, org_id, contents, fname, source_kind, carrier_id,
                           statement_type, column_map, sign_answer, assignments, typed_total,
-                          sheet=sheet, header_row=header_row, footer=footer)
+                          sheet=sheet, header_row=header_row, footer=footer or "auto",
+                          pos_source=pos_source, layout=layout, name=name, identity_json=identity, as_of_date=as_of_date)
     out = _intake_payload(ctx)
+    out["filename"] = fname
+    if file is not None and getattr(file, "filename", None) is not None and keep_file not in ("0", "false", "no"):
+        # the ONLY thing analyze writes: the reference to the KEPT file (nothing else — no mapping, no
+        # rule, no row, and no stage row at all when the store was unavailable)
+        ref = _intake_file_put(client, org_id, ctx["instance_key"], contents, fname)
+        out["file"] = ref
+        if ref.get("stored"):
+            _intake_save_state(client, org_id, ctx["instance_key"], payload_patch={"file": ref, "filename": fname, "kind": ctx["kind"]})
     out["state"] = _intake_state_payload(client, org_id, ctx["instance_key"])
-    out["filename"] = getattr(file, "filename", None)
     return out
 
 
@@ -5244,48 +5703,296 @@ def _intake_reread(client, org_id, source_report, period):
     return rows
 
 
+def _intake_reread_sales(client, org_id, stores, lo, hi):
+    """The raw_sales rows this file owns — (org, its stores, its date range): exactly the slice the
+    mapped importer replaced — RE-READ in pages after landing."""
+    rows, start = [], 0
+    while True:
+        page = (client.schema("commcalc").table("raw_sales")
+                .select("store,salesperson,trans_id,trans_date,ext_price,gp,voided")
+                .eq("org_id", org_id).in_("store", list(stores)).gte("trans_date", lo).lte("trans_date", hi)
+                .order("id").range(start, start + _INTAKE_REREAD_PAGE - 1).execute().data) or []
+        rows.extend(page)
+        if len(page) < _INTAKE_REREAD_PAGE:
+            break
+        start += _INTAKE_REREAD_PAGE
+    return rows
+
+
+def _intake_reread_inventory(client, org_id, stores, as_of):
+    """The on-hand rows this listing owns — (org, its stores, its as-of date) — RE-READ in pages."""
+    rows, start = [], 0
+    while True:
+        page = (client.schema("commcalc").table("inventory_aging_device")
+                .select("store,imei,serial,sku,unit_cost,as_of_date")
+                .eq("org_id", org_id).in_("store", list(stores)).eq("as_of_date", as_of)
+                .order("id").range(start, start + _INTAKE_REREAD_PAGE - 1).execute().data) or []
+        rows.extend(page)
+        if len(page) < _INTAKE_REREAD_PAGE:
+            break
+        start += _INTAKE_REREAD_PAGE
+    return rows
+
+
+def _intake_land(client, org_id, kind, ctx, filename, who=None):
+    """THE one landing call per kind — each one an EXISTING path, never a new insert:
+      · sales / pos  → `_ingest_mapped_df` (the /upload-mapped core: column pre-validation, the
+                        mig-1004 footer / per-row-period / blank-key rules, the slice-scoped replace
+                        with snapshot + restore, upload_log, upload_trace). No period is named, so
+                        each row books to the month of ITS OWN date and the replace is (stores × dates).
+      · inventory    → `b2b_sweep.write_inventory_devices` (the platform's inventory SNAPSHOT
+                        semantics, mig 294: upsert per device, mark the file's stores' absent units
+                        off-hand — never a cumulative pile, never a delete of cost history).
+      · commission   → `_ledger_land_rows` (stage 3, unchanged).
+    Returns {saved, rows_built, detail, skipped}."""
+    if kind in ("sales", "pos"):
+        kf = _intake.KIND_FIELDS[kind]
+        excluded = ctx.get("excluded") or {}
+        # the RAW records that land: mapped, not a footer, not an excluded store — the same rows the
+        # preview counted (the importer re-maps them through the SAME rules)
+        footer_idx = {f["row"] for f in ctx["footers"]}
+        mapped_index = {id(m): i for i, m in enumerate(ctx["mapped"])}
+        raw_rows = []
+        for r, m in ctx["pairs"]:
+            i = mapped_index.get(id(m))
+            if i is None or i in footer_idx:
+                continue
+            if _intake._s(m.get(kf["store"])) in excluded:
+                continue
+            raw_rows.append(r)
+        df = pd.DataFrame(raw_rows) if raw_rows else pd.DataFrame(columns=ctx["headers"])
+        res = _ingest_mapped_df(org_id, ctx["report_key"], ctx["target_table"], ctx["rules"], df,
+                                period="", fname=filename, trace_source="onboarding-intake")
+        return {"saved": int(res.get("saved") or 0), "rows_built": len(raw_rows), "detail": res, "skipped": 0}
+    if kind == "inventory":
+        kf = _intake.KIND_FIELDS[kind]
+        as_of = ctx.get("as_of_date") or _datetime.now(timezone.utc).date().isoformat()
+        rows, _n = column_mapping.blank_keys_to_null([dict(m) for m in ctx["land"]], ctx["target_table"])
+        devices, skipped = [], 0
+        for m in rows:
+            key = _intake._s(m.get(kf["key"])) or _intake._s(m.get(kf["key2"]))
+            if not key:
+                skipped += 1              # an ordered / back-ordered unit: no device key yet — reported, not landed
+                continue
+            devices.append({"imei": key, "serial": _intake._s(m.get(kf["key2"])) or None,
+                            "sku": _intake._s(m.get(kf["sku"])) or None, "item": _intake._s(m.get("item")) or None,
+                            "store": _intake._s(m.get(kf["store"])) or None,
+                            "unit_cost": _intake._sf(m.get(kf["unit_cost"])) if _intake._s(m.get(kf["unit_cost"])) else None,
+                            "received_date": None, "days_in_stock": None, "as_of_date": as_of,
+                            "raw_row": {k: v for k, v in m.items() if v not in (None, "")}})
+        if not devices:
+            raise HTTPException(400, "No unit in this listing carries a device key (IMEI / serial) — nothing would land.")
+        try:
+            saved = b2b_sweep.write_inventory_devices(client, org_id, devices, as_of)
+        except Exception as e:
+            raise HTTPException(500, f"Landing the inventory listing failed: {str(e)[:200]} — is migration 216/294 applied?")
+        try:
+            client.schema("commcalc").table("upload_log").insert(
+                {"org_id": org_id, "file_type": ctx["report_key"], "period": None,
+                 "filename": filename, "rows_saved": saved}).execute()
+        except Exception as e:
+            print(f"WARN upload_log insert failed: {e}")
+        _write_upload_trace(org_id, source="onboarding-intake", filename=filename, upload_type=ctx["report_key"],
+                            period="", result={"saved": saved, "note": f"inventory snapshot as of {as_of}; {skipped} unit(s) without a device key not landed",
+                                               "_trace": {"rows_in": len(ctx["records"]), "target_table": ctx["target_table"]}})
+        return {"saved": saved, "rows_built": len(devices), "detail": {"as_of_date": as_of}, "skipped": skipped}
+    raise HTTPException(400, f"'{kind}' has no landing path")
+
+
 @router.post("/onboarding/intake/commit")
 async def onboarding_intake_commit(
-    file: UploadFile = File(...),
+    file: UploadFile = File(None),
     source_kind: str = Form("commission"),
     carrier_id: str = Form(""),
     statement_type: str = Form(""),
+    pos_source: str = Form(""),
+    layout: str = Form(""),
+    name: str = Form(""),
     period: str = Form(""),
     column_map: str = Form(""),
     sign_answer: str = Form(""),
     assignments: str = Form(""),
+    identity: str = Form(""),
     attestation: str = Form(""),
     typed_total: str = Form(""),
+    as_of_date: str = Form(""),
     verified_by: str = Form(""),
     sheet: str = Form(""),
     header_row: str = Form(""),
     footer: str = Form("auto"),
+    instance_key: str = Form(""),
+    use_stored: str = Form(""),
     org_id: str = ORG_ID,
 ):
-    """3.9 — the SAVE. In order: (a) the confirmed column map through POST /column-mapping's own
-    function, carrier-scoped; (b) the 3.4 answer as `sign_convention` on the amount row; (c) the
-    label→bucket rules to commission_category_map under this tenant's source_report; (d) the import
-    through the ledger's own landing path; (e) the landed rows RE-READ and re-totalled. REFUSED (400)
-    with the reason when 3.4 is unanswered, a label is unassigned, or the difference is non-zero
-    without an attestation carrying a reason. Never reports success unless the re-read count and the
-    re-read totals match what was shown."""
+    """THE SAVE, for every kind, with the same guarantee: refuse (400, nothing written) while a gate
+    is open; save the map and READ IT BACK; write the identity decisions and READ THEM BACK; land
+    through the kind's existing path; RE-READ what landed; `ok` only when the re-read count and totals
+    equal what was shown — else `ok:false` + `problems` and the stage row `needs_input`."""
     require_org(org_id)
-    per = (period or "").strip()
-    if not per:
-        raise HTTPException(400, "period is required (e.g. 'August 2026') — it is the slice this statement owns")
-    contents = await file.read()
     client = sb()
-    ctx = _intake_prepare(client, org_id, contents, getattr(file, "filename", ""), source_kind, carrier_id,
+    (source_kind, carrier_id, statement_type, pos_source, layout, name, period, column_map, sign_answer, assignments,
+     identity, attestation, typed_total, as_of_date, verified_by, sheet, header_row, footer, instance_key, use_stored) = map(_fstr, (
+        source_kind, carrier_id, statement_type, pos_source, layout, name, period, column_map, sign_answer, assignments,
+        identity, attestation, typed_total, as_of_date, verified_by, sheet, header_row, footer, instance_key, use_stored))
+    contents, fname = await _intake_contents(client, org_id, file, source_kind, instance_key, use_stored)
+    kind = (source_kind or "commission").strip().lower()
+    ctx = _intake_prepare(client, org_id, contents, fname, source_kind, carrier_id,
                           statement_type, column_map, sign_answer, assignments, typed_total,
-                          sheet=sheet, header_row=header_row, footer=footer)
+                          sheet=sheet, header_row=header_row, footer=footer or "auto",
+                          pos_source=pos_source, layout=layout, name=name, identity_json=identity, as_of_date=as_of_date)
     att = _intake_json(attestation, "attestation", {}) or {}
     if not isinstance(att, dict):
         raise HTTPException(400, "attestation must be a JSON object {reason}")
+    who = (verified_by or "").strip() or None
+    if kind == "commission":
+        return _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who, fname)
+    if kind == "other":
+        return _intake_commit_other(client, org_id, ctx, who, fname, contents, file is not None)
+    return _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname)
+
+
+def _intake_commit_other(client, org_id, ctx, who, fname, contents, dropped):
+    """An 'other' report has NO destination table on the platform today (index §2 lists none): it is
+    RECORDED as received — its headers, row count, money columns and the kept file — shown as such,
+    never faked into a table and never dropped. The stage row is `needs_input` with the reason, so
+    the Stage-4 table says exactly what happened to it."""
+    ref = _intake_file_put(client, org_id, ctx["instance_key"], contents, fname) if dropped else None
+    vn = {**ctx["verify_numbers"], "basis": "received — no destination table on the platform for this report yet",
+          "rows_landed": 0, "file": ref, "confirmed_by": who, "confirmed_at": _intake.now_iso()}
+    reason = f"no destination for '{ctx['name']}' yet — recorded with {vn['rows']} row(s) and {len(vn['headers'])} column(s); an owner decision names the table"
+    patch = {"name": ctx["name"], "source_ref": ctx["source_ref"], "filename": fname, "kind": "other",
+             "headers": ctx["headers"][:200]}
+    if ref:
+        patch["file"] = ref
+    state = _intake_save_state(client, org_id, ctx["instance_key"], step="2.6", status=_intake.STATUS_NEEDS_INPUT,
+                               payload_patch=patch, verified_numbers=vn, verified_by=who, blocking_reason=reason, by=who)
+    return {"ok": False, "recorded": True, "problems": [reason], "saved": 0, "instance_key": ctx["instance_key"],
+            "source_kind": "other", "verified_numbers": vn, "state": state}
+
+
+def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
+    kind, kf = ctx["kind"], _intake.KIND_FIELDS[ctx["kind"]]
+    vn0 = ctx["verify_numbers"]
+    refusals = _intake.stage2_refusals(
+        kind, ctx["mapped_fields"], ctx["stores"], ctx["tie"], att,
+        undated_rows=((vn0.get("date_span") or {}).get("undated_rows") or 0),
+        storeless_rows=vn0.get("storeless_rows") or 0, rows_to_land=len(ctx["land"]))
+    if kind == "inventory" and not ctx.get("as_of_date"):
+        refusals.append("as_of_date is required — the date this on-hand listing was taken.")
+    if refusals:
+        raise HTTPException(400, "Not committed — " + " | ".join(refusals))
+    report_key = ctx["report_key"]
+    # (a) THE MAPPING, through the one writer (carrier-NULL rows: a POS export has no carrier), read back
+    saved_fields = []
+    for p in ctx["proposal"]:
+        if not p.get("column"):
+            continue
+        kw = {"report_key": report_key, "target_field": p["target_field"], "source_header": p["column"],
+              "transform": p.get("transform") or "text", "carrier_id": None, "is_active": True}
+        try:
+            upsert_column_mapping(ColumnMappingIn(**kw), org_id)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(400, f"Saving the column map for '{p['target_field']}' failed: {str(e)[:200]}")
+        saved_fields.append(p["target_field"])
+    reloaded = [r for r in column_mapping.load_rules(client, org_id, report_key, None) if not r.get("carrier_id")]
+    back = {r["target_field"]: r for r in reloaded}
+    wrong = [tf for tf in saved_fields
+             if str((back.get(tf) or {}).get("source_header") or "").strip().lower()
+             != next(p["column"] for p in ctx["proposal"] if p["target_field"] == tf).strip().lower()]
+    if wrong:
+        raise HTTPException(400, "The column map did not save for: " + ", ".join(wrong) + " — nothing was imported.")
+    # (b) THE IDENTITY DECISIONS, through the alias / store writers, read back through the resolver
+    identity_written = _intake_apply_identity(client, org_id, ctx["stores"], ctx["reps"], who)
+    # (c) LAND through the kind's existing path
+    landed = _intake_land(client, org_id, kind, ctx, fname, who)
+    # (d) RE-READ what landed. What we show is what is in the table, not what was in memory.
+    stores_landed = sorted({_intake._s(m.get(kf["store"])) for m in ctx["land"] if _intake._s(m.get(kf["store"]))})
+    if kind == "inventory":
+        as_of = landed["detail"]["as_of_date"]
+        rows = _intake_reread_inventory(client, org_id, stores_landed, as_of)
+        vn = _intake.inventory_verify(rows, {**kf, "amount": "unit_cost", "qty": "quantity"})
+        vn["as_of_date"] = as_of
+        our = vn["sum_unit_cost"]
+        shown = _intake.money(sum(_intake._sf(m.get(kf["unit_cost"])) for m in ctx["land"]
+                                  if _intake._s(m.get(kf["key"])) or _intake._s(m.get(kf["key2"]))))
+        count_ok = vn["rows"] == landed["rows_built"] == landed["saved"]
+        same_as_shown = abs(_intake.money(our - shown)) < 0.005
+        tie = ctx["tie"]          # the file's own total (Σ cost) beside what the preview computed
+        tie_ok = bool(tie.get("match")) or bool(_intake._s(att.get("reason")))
+    else:
+        span = vn0["date_span"]
+        rows = _intake_reread_sales(client, org_id, stores_landed, span["from"], span["to"])
+        vn = _intake.sales_verify(rows, kf)
+        our = vn["sum_amount"]
+        count_ok = vn["rows"] == landed["rows_built"] == landed["saved"]
+        tie = _intake.simple_tie(our, ctx["footer"]["file_total_raw"], typed_total)
+        tie_ok = bool(tie.get("match")) or bool(_intake._s(att.get("reason")))
+        same_as_shown = abs(_intake.money(our - ctx["tie"]["our_total"])) < 0.005
+    ok = count_ok and tie_ok and same_as_shown
+    problems = []
+    if not count_ok:
+        problems.append(f"rows landed {vn['rows']} ≠ rows built {landed['rows_built']} (inserted {landed['saved']})")
+    if not tie_ok:
+        problems.append(f"re-read difference {tie.get('difference')}")
+    if not same_as_shown:
+        problems.append(f"re-read total {our} ≠ shown {ctx['tie']['our_total']}")
+    verified_numbers = {
+        "basis": f"re-read from commcalc.{ctx['target_table']} after landing",
+        "rows_in_file": len(ctx["records"]), "rows_usable": len(ctx["mapped"]),
+        "footer_rows_dropped": len(ctx["footers"]), "rows_excluded_not_ours": ctx.get("excluded_rows", 0),
+        "rows_built": landed["rows_built"], "rows_landed": vn["rows"], "rows_inserted": landed["saved"],
+        "rows_without_device_key": landed.get("skipped", 0),
+        "numbers": vn, "tie": tie, "shown_before_commit": ctx["tie"],
+        "date_span": vn.get("date_span"), "as_of_date": vn.get("as_of_date"),
+        "ignored_money_columns": [m for m in ctx["money_columns"] if not m["is_amount"]],
+        "attestation": ({"reason": att.get("reason"), "by": who, "at": _intake.now_iso()}
+                        if _intake._s(att.get("reason")) else None),
+        "identity": {"stores": [{"value": r["value"], "lands_as": r.get("lands_as"), "how": r.get("how"),
+                                 "action": r.get("action"), "reason": r.get("reason")} for r in ctx["stores"]],
+                     "reps": [{"value": r["value"], "resolved_name": r.get("resolved_name") or r.get("decision_name"),
+                               "action": r.get("action")} for r in ctx["reps"]],
+                     "written": identity_written},
+        "replace_slice": (landed.get("detail") or {}).get("replace_scope"),
+        "report_key": report_key, "target_table": ctx["target_table"],
+        "confirmed_by": who, "confirmed_at": _intake.now_iso(),
+    }
+    state = _intake_save_state(
+        client, org_id, ctx["instance_key"], step="2.6",
+        status=_intake.STATUS_VERIFIED if ok else _intake.STATUS_NEEDS_INPUT,
+        payload_patch={"kind": kind, "source_ref": ctx["source_ref"], "layout": report_key, "filename": fname,
+                       "column_map": {p["target_field"]: p["column"] for p in ctx["proposal"] if p.get("column")},
+                       "identity": ctx["identity_decisions"], "as_of_date": ctx.get("as_of_date"),
+                       "period": (f"{vn0['date_span']['from']} – {vn0['date_span']['to']}" if vn0.get("date_span") else ctx.get("as_of_date"))},
+        verified_numbers=verified_numbers, verified_by=who,
+        blocking_reason=("; ".join(problems) if problems else ""), by=who)
+    return {"ok": ok, "problems": problems, "saved": landed["saved"], "source_kind": kind,
+            "instance_key": ctx["instance_key"], "report_key": report_key, "target_table": ctx["target_table"],
+            "mapping_saved": saved_fields, "identity_written": identity_written,
+            "verified_numbers": verified_numbers, "state": state, "landing": landed.get("detail")}
+
+
+def _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who, fname):
+    """3.9 — the SAVE. In order: (a) the confirmed column map through POST /column-mapping's own
+    function, carrier-scoped; (b) the 3.4 answer as `sign_convention` on the amount row; (c) the
+    label→bucket rules to commission_category_map under this tenant's source_report; (c') the 3.7
+    store decisions through the alias / store writers; (d) the import through the ledger's own
+    landing path; (e) the landed rows RE-READ and re-totalled. REFUSED (400) with the reason when
+    3.4 is unanswered, a label is unassigned, a store string is unresolved, or the difference is
+    non-zero without an attestation carrying a reason. Never reports success unless the re-read
+    count and the re-read totals match what was shown."""
+    per = (period or "").strip()
+    if not per:
+        raise HTTPException(400, "period is required (e.g. 'August 2026') — it is the slice this statement owns")
     refusals = _intake.commit_refusals(ctx["answer"], ctx["labels"], ctx["assignments"], ctx["tie"], att)
+    unresolved = _intake.unresolved_stores(ctx["stores"])
+    if unresolved:
+        refusals.append(f"3.7: {len(unresolved)} store string(s) are unresolved: " + ", ".join(unresolved[:8])
+                        + (" …" if len(unresolved) > 8 else "") + " — assign, create, mark company-level, or not yours with a reason.")
     if refusals:
         raise HTTPException(400, "Not committed — " + " | ".join(refusals))
     carrier, conv_name, source_report = ctx["carrier"], ctx["conv_name"], ctx["source_report"]
-    who = (verified_by or "").strip() or None
     # (a)+(b) THE MAPPING, through the one writer. The raw_amount row carries the 3.4 answer.
     saved_fields = []
     for p in ctx["proposal"]:
@@ -5333,6 +6040,8 @@ async def onboarding_intake_commit(
     if rules_source != commission_ledger.RULES_TENANT:
         raise HTTPException(400, "The bucket rules did not save (the rule-set reads back empty) — nothing was imported.")
     cat_rules, _class_meta = ma_class_wiring.ledger_rules_with_class(client, org_id, source_report, cat_rules)
+    # (c') THE 3.7 STORE DECISIONS, through the shared resolver's writers, read back
+    identity_written = _intake_apply_identity(client, org_id, ctx["stores"], [], who)
     # (d) BUILD from the confirmed map + the rules READ BACK, land through the import's own path
     base = {"org_id": org_id, "source_report": source_report, "period": per}
     rows = [commission_ledger.build_row(src, base, cat_rules, conv) for src in ctx["kept"]]
@@ -5343,7 +6052,7 @@ async def onboarding_intake_commit(
                                  f"from the file's {expected_tie['file_total']:,.2f} by {expected_tie['difference']:,.2f} "
                                  "— nothing was imported.")
     saved = _ledger_land_rows(client, org_id, rows, source_report, per,
-                              filename=getattr(file, "filename", None), source="onboarding-intake")
+                              filename=fname, source="onboarding-intake")
     # (e) RE-READ what landed. What we show is what is in the table, not what was in memory.
     landed = _intake_reread(client, org_id, source_report, per)
     totals = _intake.bucket_totals(landed)
@@ -5360,6 +6069,9 @@ async def onboarding_intake_commit(
         "ignored_money_columns": [m for m in ctx["money_columns"] if not m["is_amount"]],
         "attestation": ({"reason": att.get("reason"), "by": who, "at": _intake.now_iso()}
                         if str(att.get("reason") or "").strip() else None),
+        "identity": {"stores": [{"value": r["value"], "lands_as": r.get("lands_as"), "how": r.get("how"),
+                                 "action": r.get("action"), "reason": r.get("reason")} for r in ctx["stores"]],
+                     "written": identity_written},
         "sign_convention": conv_name, "source_report": source_report, "period": per,
         "confirmed_by": who, "confirmed_at": _intake.now_iso(),
     }
@@ -5376,7 +6088,8 @@ async def onboarding_intake_commit(
         payload_patch={"period": per, "sign_answer": ctx["answer"], "column_map":
                        {p["target_field"]: p["column"] for p in ctx["proposal"] if p.get("column")},
                        "assignments": ctx["assignments"], "statement_type": ctx["statement_type"],
-                       "filename": getattr(file, "filename", None)},
+                       "carrier_id": carrier["id"], "carrier_name": carrier.get("name"),
+                       "identity": ctx["identity_decisions"], "filename": fname, "kind": "commission"},
         verified_numbers=verified_numbers, verified_by=who,
         blocking_reason=("; ".join(problems) if problems else ""), by=who)
     return {"ok": ok, "problems": problems, "saved": saved, "source_report": source_report, "period": per,
@@ -5384,6 +6097,7 @@ async def onboarding_intake_commit(
             "instance_key": ctx["instance_key"], "mapping_saved": saved_fields,
             "sign_convention": conv_name, "convention_meta": conv_meta,
             "rules_saved": len(ctx["preview_rules"]), "rules_source": rules_source,
+            "identity_written": identity_written,
             "verified_numbers": verified_numbers, "state": state,
             "summary": commission_ledger.summarize(rows, rules=cat_rules, conv=conv)}
 
@@ -17911,6 +18625,9 @@ def store_resolution(period: str = "", org_id: str = ORG_ID):
 class AddStoreAliasIn(LaxModel):
     alias: str = ""
     store_code: str = ""
+    note: Any = None
+    source: Any = None
+    confidence: Any = None
 
 
 @router.post("/store-aliases")
@@ -17933,12 +18650,14 @@ def add_store_alias(body: AddStoreAliasIn, org_id: str = ORG_ID):
     for r in existing:
         if (r.get('alias') or '').strip().lower() == alias.lower():
             client.schema('commcalc').table('store_aliases').delete().eq('id', r['id']).execute()
+    # (2026-09-20) `body.get(...)` on a pydantic model raised AttributeError on every call — the alias
+    # writer could not save a note or its provenance. Attribute access; the three fields are declared.
     row = {'org_id': org_id, 'alias': alias, 'store_code': code,
-           'note': (body.get('note') or '').strip() or None}
+           'note': str(body.note or '').strip() or None}
     # provenance (mig 219) — how the mapping was made (manual / suggested / fallback-confirmed) + the
     # suggestion confidence, for the audit trail. Included only if the columns exist → pre-mig-219 graceful.
-    extra = {'source': (body.get('source') or 'manual').strip() or 'manual',
-             'confidence': (body.get('confidence') or '').strip() or None}
+    extra = {'source': str(body.source or 'manual').strip() or 'manual',
+             'confidence': str(body.confidence or '').strip() or None}
     present = _known_columns(client, 'store_aliases', ['source', 'confidence'])
     for k, v in extra.items():
         if k in present:
