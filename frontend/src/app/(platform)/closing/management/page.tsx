@@ -2,13 +2,15 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
+import { usePosTerm } from '@/lib/report-labels'
 import ScreenLink from '@/components/ScreenLink'
 
 // Management Review (permission-gated: super-admin / company-wide scope / explicit /closing/management
 // grant — DMs excluded). Shows the 3-try close-attempt log: every value a rep entered before a close
-// was accepted, with the true B2B variance the rep never saw. Reads GET /api/v1/closing/attempts.
+// was accepted, with the true POS variance the rep never saw. Reads GET /api/v1/closing/attempts.
 
 export default function ClosingManagementPage() {
+  const { pos } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
   const [mode, setMode] = useState<'date' | 'period'>('period')
   const [date, setDate] = useState(() => localToday())
   const [period, setPeriod] = useState(() => localToday().slice(0, 7))
@@ -122,7 +124,7 @@ export default function ClosingManagementPage() {
                 {isOpen && (
                   <div style={{ borderTop: '1px solid var(--border)', padding: '10px 14px' }}>
                     <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>
-                      System (B2B) target: <b>cash {g.b2b?.cash != null ? fmt(g.b2b.cash) : '—'}</b> · <b>credit {g.b2b?.credit != null ? fmt(g.b2b.credit) : '—'}</b>
+                      System ({pos}) target: <b>cash {g.b2b?.cash != null ? fmt(g.b2b.cash) : '—'}</b> · <b>credit {g.b2b?.credit != null ? fmt(g.b2b.credit) : '—'}</b>
                     </div>
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                       <thead><tr style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>

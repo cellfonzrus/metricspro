@@ -81,9 +81,9 @@ export default function FtpImportsPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12 }}>
           <div><label style={lbl}>Host</label><input style={{ ...sel, width: '100%' }} placeholder="boxNNNN.bluehost.com" value={cfg.host || ''} onChange={e => set({ host: e.target.value })} /></div>
           <div><label style={lbl}>Port</label><input style={{ ...sel, width: '100%' }} value={cfg.port || 21} onChange={e => set({ port: Number(e.target.value) || 21 })} /></div>
-          <div><label style={lbl}>Username</label><input style={{ ...sel, width: '100%' }} placeholder="b2b@metricspro.tech" value={cfg.username || ''} onChange={e => set({ username: e.target.value })} /></div>
+          <div><label style={lbl}>Username</label><input style={{ ...sel, width: '100%' }} placeholder="reports@yourdomain.com" value={cfg.username || ''} onChange={e => set({ username: e.target.value })} /></div>
           <div><label style={lbl}>Password {cfg.has_password && <span style={{ color: '#16794a' }}>(set)</span>}</label><input type="password" style={{ ...sel, width: '100%' }} placeholder={cfg.has_password ? '•••• keep' : 'password'} value={pwd} onChange={e => setPwd(e.target.value)} /></div>
-          <div><label style={lbl}>Remote folder</label><input style={{ ...sel, width: '100%' }} placeholder="/b2b-reports/" value={cfg.remote_dir || ''} onChange={e => set({ remote_dir: e.target.value })} /></div>
+          <div><label style={lbl}>Remote folder</label><input style={{ ...sel, width: '100%' }} placeholder="/reports/" value={cfg.remote_dir || ''} onChange={e => set({ remote_dir: e.target.value })} /></div>
           <div><label style={lbl}>Security</label>
             <label style={{ fontSize: 12, display: 'block' }}><input type="checkbox" checked={!!cfg.use_tls} onChange={e => set({ use_tls: e.target.checked })} /> FTP_TLS</label>
             <label style={{ fontSize: 12, display: 'block' }}><input type="checkbox" checked={cfg.passive !== false} onChange={e => set({ passive: e.target.checked })} /> Passive</label>

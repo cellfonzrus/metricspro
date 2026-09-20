@@ -3,10 +3,17 @@ import { useState, useEffect } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { apiCached } from '@/lib/cache'
 import { usePeriod } from '@/lib/period-context'
+import { usePosTerm } from '@/lib/report-labels'
+import { useReportKinds, notApplicableCopy } from '@/lib/report-kinds'
 
-// IMEI/serial reconciliation: B2B inventory (inventory_aging_device) vs B2B sales (raw_sales.serial_1).
+// IMEI/serial reconciliation: POS inventory (inventory_aging_device) vs POS sales (raw_sales.serial_1).
 export default function ImeiReconPage() {
   const { period } = usePeriod()
+  const { pos, posDeclared } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
+  // APPLIES? — both feeds are registry kinds (§30.9): the aging listing and the serialized sales report.
+  const kinds = useReportKinds()
+  const aging = kinds.feedFor('inventory_aging'), sales = kinds.feedFor('sales_imei_phone')
+  const missing = [aging.applies === 'not_defined' ? 'inventory aging' : '', sales.applies === 'not_defined' ? 'serialized sales' : ''].filter(Boolean)
   const [stores, setStores] = useState<any[]>([])
   const [storeCode, setStoreCode] = useState('')
   const [maxDays, setMaxDays] = useState(10)
@@ -65,7 +72,7 @@ export default function ImeiReconPage() {
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>IMEI Reconciliation</h1>
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          {period} · B2B inventory vs B2B sales — is every IMEI accounted for, and sold within {maxDays} days of receiving?
+          {period} · {pos} inventory vs {pos} sales — is every IMEI accounted for, and sold within {maxDays} days of receiving?
         </p>
       </div>
 
@@ -82,6 +89,11 @@ export default function ImeiReconPage() {
         <button className="btn" disabled={loading} onClick={load}>{loading ? '…' : 'Refresh'}</button>
       </div>
 
+      {missing.length > 0 && (
+        <div role="status" style={{ fontSize: 12.5, color: '#1e40af', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '9px 12px', marginBottom: 10 }}>
+          {notApplicableCopy({ pos, posDeclared, feedNoun: missing.join(' + ') + ' report', purpose: 'reconcile IMEIs from' })}
+        </div>
+      )}
       {msg && <div style={{ fontSize: 12.5, color: 'var(--text2)', background: 'var(--surface2)', borderRadius: 8, padding: '8px 12px', marginBottom: 12 }}>{msg}</div>}
 
       {data && (

@@ -11,7 +11,7 @@ type ListName = 'pipelines' | 'stages' | 'sources' | 'interests' | 'dispositions
 
 const TABS: { key: ListName; label: string; cols: string[]; hint: string }[] = [
   { key: 'pipelines', label: 'Pipelines', cols: ['key', 'name', 'description', 'is_default', 'sort_order'],
-    hint: 'A sales process. Most tenants need one; add another when B2B or FWA is genuinely worked differently.' },
+    hint: 'A sales process. Most tenants need one; add another when business accounts or FWA are genuinely worked differently.' },
   { key: 'stages', label: 'Stages', cols: ['pipeline_id', 'key', 'name', 'sort_order', 'probability', 'is_won', 'is_lost', 'sla_hours', 'requires_disposition'],
     hint: 'The columns on the board. `probability` drives the weighted forecast; `sla_hours` is how long a lead may sit here before it escalates.' },
   { key: 'sources', label: 'Lead sources', cols: ['key', 'name', 'category', 'sort_order'],

@@ -3,7 +3,7 @@
 // query for the commission not received and the appeals which need to be done."
 //
 // WHAT IT SHOWS (reuse, never re-derive — duplicate-check gate):
-//   · The EXISTING discrepancy_results rows (both engines: Boost discrepancy_engine + B2B↔MA
+//   · The EXISTING discrepancy_results rows (both engines: Boost discrepancy_engine + POS↔MA
 //     ma_recon source='ma') over a PERIOD RANGE — via GET /commcalc/discrepancy-appeals. This page
 //     runs no recon of its own; "Run Detection" stays on the Pay Discrepancy page.
 //   · A per-row APPEAL workflow — appeal filed / appeal won / appeal denied / written off, with
@@ -27,6 +27,7 @@ import { usePeriod } from '@/lib/period-context'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, matchesStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { usePosTerm } from '@/lib/report-labels'
 
 type Row = {
   id: number; period: string; imei: string; mdn: string; store: string; rep_username: string
@@ -74,6 +75,7 @@ function monthsBack(ym: string, n: number): string {
 
 export default function CommissionDiscrepancyHub() {
   const { period } = usePeriod()
+  const { pos } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
   const cur = toMonth(period)
 
   const [from, setFrom] = useState(cur)
@@ -198,7 +200,7 @@ export default function CommissionDiscrepancyHub() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>⚖️ Commission Discrepancy</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13.5, margin: '4px 0 0', maxWidth: 860, lineHeight: 1.55 }}>
             Commission <b>not received</b> from the carrier, and the <b>appeals</b> that need to be done.
-            Rows come from the existing discrepancy engines (carrier bounty + B2B↔processor) — run detection on{' '}
+            Rows come from the existing discrepancy engines (carrier bounty + {pos}↔processor) — run detection on{' '}
             <a href="/commcalc/discrepancy" style={{ color: 'var(--accent)' }}>Pay Discrepancy</a>; mark each
             row&apos;s appeal here (who/when is recorded).
           </p>
@@ -255,7 +257,7 @@ export default function CommissionDiscrepancyHub() {
             <select value={srcFilter} onChange={e => setSrcFilter(e.target.value)} style={selStyle} aria-label="Engine source">
               <option value="">All sources</option>
               <option value="boost">Carrier engine</option>
-              <option value="ma">B2B ↔ MA recon</option>
+              <option value="ma">{pos} ↔ MA recon</option>
             </select>
             <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={selStyle} aria-label="Row status">
               <option value="">All statuses</option>

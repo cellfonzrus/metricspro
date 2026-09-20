@@ -418,6 +418,7 @@ def closing_submissions(date_from: str = None, date_to: str = None,
     the current month), with ALL submitted columns + resolved market + DM-verify status + a re-derived
     close-gate status badge. Powers the Daily Closing dashboard's detail table."""
     client = sb()
+    _pos = _pos_term(client, org_id)   # the tenant's POS name in copy (report_labels.pos_term)
     today = _biz_today_iso()
     if not date_from and not date_to:
         date_from, date_to = today[:8] + "01", today
@@ -534,7 +535,7 @@ def closing_submissions(date_from: str = None, date_to: str = None,
                 if repb is None or not repb.get("tenders_available", True):
                     gate_status = "recon_pending"
                 else:
-                    issues = _money_issues(declared_cash, declared_credit, repb["cash"], repb["card"])
+                    issues = _money_issues(declared_cash, declared_credit, repb["cash"], repb["card"], pos=_pos)
                     blocks = [i["reason"] for i in issues if i["severity"] == "block"]
                     flags = [i["reason"] for i in issues if i["severity"] == "flag"]
                     gate_status = "blocked" if blocks else ("flagged" if flags else "ok")
@@ -1013,6 +1014,7 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
     _closing_summary_org_ctx) lets a multi-date range caller compute the date-independent lookups
     ONCE instead of once per date; omitted (any other/future caller) computes it inline exactly as
     before — byte-identical either way."""
+    _pos = _pos_term(client, org_id)   # the tenant's POS name in copy (report_labels.pos_term)
     rows = (client.schema("commcalc").table("daily_closing").select("*")
             .eq("org_id", org_id).eq("close_date", date).execute().data) or []
 
@@ -1134,7 +1136,7 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
                 if repb is None or not repb.get("tenders_available", True):
                     gate_status = "recon_pending"
                 else:
-                    issues = _money_issues(d_cash, d_credit, repb["cash"], repb["card"], tolerance)
+                    issues = _money_issues(d_cash, d_credit, repb["cash"], repb["card"], tolerance, pos=_pos)
                     blocks = [i["reason"] for i in issues if i["severity"] == "block"]
                     flags = [i["reason"] for i in issues if i["severity"] == "flag"]
                     gate_status = "blocked" if blocks else ("flagged" if flags else "ok")
@@ -1385,7 +1387,7 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
                     money_recon["note"] = ("This tenant has NEVER had a POS X-report imported (and the sales "
                                            "feed has no Tender Type), so cash & credit can't be reconciled — "
                                            "check (1) the mailbox has an *X-Report* -> x_report rule and "
-                                           "(2) b2bsoft is actually scheduled to email an X-Report for this "
+                                           f"(2) {_pos_term(client, org_id)} is actually scheduled to email an X-Report for this "
                                            "tenant. Shown as pending, not flagged.")
             money_recon["any_flag"] = any(money_recon[k].get("flag") for k in ("accessory", "cash", "credit"))
 
@@ -2011,7 +2013,7 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
     gate = _gate_row(client, org_id, body.get("store_code"), d, body.get("employee_name") or "",
                      declared_cash, declared_credit, tol)
     b2b = gate.get("b2b")
-    issues = _money_issues(declared_cash, declared_credit, b2b["cash"], b2b["card"], tol) if b2b else []
+    issues = _money_issues(declared_cash, declared_credit, b2b["cash"], b2b["card"], tol, pos=_pos_term(client, org_id)) if b2b else []
     dirs = _variance_dirs(issues)
     is_blocking = any(i["severity"] == "block" for i in issues)
 
@@ -2083,7 +2085,7 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
             summary = (f"Envelope OCR mismatch — {body.get('store_name') or body.get('store_code') or '—'}, "
                        f"{body.get('employee_name') or '—'} on {d}: photo reads {_usd(ocr_cash)} but "
                        f"{_usd(declared_cash)} was entered (off by {_usd(diff)}). "
-                       f"B2B cash: {_usd((b2b or {}).get('cash'))}.")
+                       f"{_pos_term(client, org_id)} cash: {_usd((b2b or {}).get('cash'))}.")
             try:
                 await _notify_envelope_mismatch(client, org_id, summary)
             except Exception:
@@ -2625,7 +2627,7 @@ def _tender_recon_3way_day(client, org_id, d, store, keys, tlabel, resolve_x, re
             f"against the tenant's configured basis ({dep_cfg['match_target'].replace('_', ' ')}).")
     if not x_report_ever:
         note += (" This tenant has NEVER had a POS X-report imported — check (1) the mailbox has an "
-                 "*X-Report* -> x_report rule and (2) b2bsoft is actually scheduled to email an "
+                 f"*X-Report* -> x_report rule and (2) {_pos_term(client, org_id)} is actually scheduled to email an "
                  "X-Report for this tenant.")
     if x_report_unmapped_total:
         note += (f" ⚠ ${x_report_unmapped_total:,.2f} of X-report tenders used a raw label this "
@@ -3777,6 +3779,7 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, autho
     if not period:
         raise HTTPException(400, "period required (YYYY-MM)")
     client = sb()
+    _pos = _pos_term(client, org_id)   # the tenant's POS name in copy (report_labels.pos_term)
     closing = (client.schema("commcalc").table("daily_closing").select("*")
                .eq("org_id", org_id).eq("period", period).limit(50000).execute().data) or []
     stores = _overlay_canonical_market(client, org_id,
@@ -3838,13 +3841,13 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, autho
                     errors.append({"date": date, "store_code": code, "store_address": addr, "rep": emp or "—",
                                    "metric": "recon", "severity": "pending",
                                    "status": "recon_pending" if day is not None else "not_computed",
-                                   "reason": "B2B not loaded / rep not matched yet" if day is not None else
+                                   "reason": f"{_pos} sales not loaded / rep not matched yet" if day is not None else
                                              f"Not recomputed this request — beyond the most recent {_RECON_MAX_DATES} "
                                              "closing dates for this period (recon_capped).",
                                    "declared": round(dcash + dcred, 2),
                                    "b2b": None, "variance": None})
                     continue
-                for it in _money_issues(dcash, dcred, repb["cash"], repb["card"], tolerance):
+                for it in _money_issues(dcash, dcred, repb["cash"], repb["card"], tolerance, pos=_pos):
                     blocks += it["severity"] == "block"
                     flags += it["severity"] == "flag"
                     errors.append({"date": date, "store_code": code, "store_address": addr, "rep": emp or "—",
@@ -3859,7 +3862,7 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, autho
                         flags += 1
                         errors.append({"date": date, "store_code": code, "store_address": addr, "rep": None,
                                        "metric": metric, "declared": dv, "b2b": bv, "variance": dv - bv,
-                                       "severity": "flag", "status": "flag", "reason": f"{metric.title()} count mismatch (closing {dv} vs B2B {bv})"})
+                                       "severity": "flag", "status": "flag", "reason": f"{metric.title()} count mismatch (closing {dv} vs {_pos} {bv})"})
 
     errors.sort(key=lambda e: (str(e.get("date")), 0 if e["severity"] == "block" else 1 if e["severity"] == "flag" else 2), reverse=True)
     from app.modules.storeops.router import scope_keyset, in_keyset
@@ -7305,6 +7308,7 @@ def closing_readiness(org_id: str = ORG_ID):
     no gate/money-math touched."""
     require_org(org_id)
     client = sb()
+    _pos = _pos_term(client, org_id)   # the tenant's POS name in copy (report_labels.pos_term)
     issues = []
 
     module_on = True
@@ -7331,7 +7335,7 @@ def closing_readiness(org_id: str = ORG_ID):
     elif sm_n == 0 and (so_n or 0) > 0:
         issues.append({"code": "no_store_mapping", "severity": "warning",
                        "message": f"{so_n} store(s) in StoreOps but none yet mirrored into "
-                                  "commcalc.store_mapping (the table B2B/X-report recon resolves stores "
+                                  "commcalc.store_mapping (the table the sales/X-report recon resolves stores "
                                   "against) \u2014 this self-heals the next time each store is saved in "
                                   "StoreOps Admin; re-save a store if this persists."})
 
@@ -7339,7 +7343,7 @@ def closing_readiness(org_id: str = ORG_ID):
     feed_n = _rc_count(client, "commcalc", "daily_sales_feed", org_id)
     if raw_n == 0 and feed_n == 0:
         issues.append({"code": "no_sales_source", "severity": "critical",
-                       "message": "No B2B sales data has ever landed in raw_sales or daily_sales_feed \u2014 "
+                       "message": f"No {_pos} sales data has ever landed in raw_sales or daily_sales_feed \u2014 "
                                   "money/count recon and the \u2018who worked\u2019 check will stay "
                                   "recon-pending for every day. Check the daily email-import mapping (a "
                                   "*Sales* \u2192 sales rule on this tenant's mailbox under Email Imports) "
@@ -7351,7 +7355,7 @@ def closing_readiness(org_id: str = ORG_ID):
                        "message": "No POS X-report has ever been imported \u2014 cash & credit recon will "
                                   "stay \u2018pending\u2019 (never falsely flagged/blocked, but never "
                                   "verified either). Check (1) the mailbox has an *X-Report* \u2192 "
-                                  "x_report rule under Email Imports and (2) b2bsoft is actually scheduled "
+                                  f"x_report rule under Email Imports and (2) {_pos} is actually scheduled "
                                   "to email an X-Report for this tenant (a separate subscription from the "
                                   "mailbox rule)."})
 
@@ -8142,29 +8146,36 @@ def _who_worked_display_by_store(client, org_id: str, date: str) -> dict:
     return out
 
 
-def _money_issues(declared_cash, declared_credit, b2b_cash, b2b_card, tol=1.0) -> list:
-    """Apply the close rules: CASH short → block / over → flag; CREDIT over → block / under → flag."""
+def _pos_term(client, org_id):
+    """The tenant's POS name for copy (report_labels.pos_term — the one home; never a vendor spelled here)."""
+    from app.modules.commcalc import report_labels as _report_labels
+    return _report_labels.pos_term(client, org_id)
+
+
+def _money_issues(declared_cash, declared_credit, b2b_cash, b2b_card, tol=1.0, pos="POS") -> list:
+    """Apply the close rules: CASH short → block / over → flag; CREDIT over → block / under → flag.
+    `pos` is the tenant's POS name for the reason copy (the neutral noun when the caller has none)."""
     out = []
     cv = round(_f(declared_cash) - _f(b2b_cash), 2)
     if cv < -tol:
         out.append({"metric": "cash", "declared": round(_f(declared_cash), 2), "b2b": round(_f(b2b_cash), 2),
-                    "variance": cv, "severity": "block", "reason": f"Cash short {_usd(-cv)} vs B2B sales"})
+                    "variance": cv, "severity": "block", "reason": f"Cash short {_usd(-cv)} vs {pos} sales"})
     elif cv > tol:
         out.append({"metric": "cash", "declared": round(_f(declared_cash), 2), "b2b": round(_f(b2b_cash), 2),
-                    "variance": cv, "severity": "flag", "reason": f"Cash over {_usd(cv)} vs B2B — investigate"})
+                    "variance": cv, "severity": "flag", "reason": f"Cash over {_usd(cv)} vs {pos} — investigate"})
     rv = round(_f(declared_credit) - _f(b2b_card), 2)
     if rv > tol:
         out.append({"metric": "credit", "declared": round(_f(declared_credit), 2), "b2b": round(_f(b2b_card), 2),
-                    "variance": rv, "severity": "block", "reason": f"Credit {_usd(rv)} OVER B2B card sales"})
+                    "variance": rv, "severity": "block", "reason": f"Credit {_usd(rv)} OVER {pos} card sales"})
     elif rv < -tol:
         out.append({"metric": "credit", "declared": round(_f(declared_credit), 2), "b2b": round(_f(b2b_card), 2),
-                    "variance": rv, "severity": "flag", "reason": f"Credit under {_usd(-rv)} vs B2B"})
+                    "variance": rv, "severity": "flag", "reason": f"Credit under {_usd(-rv)} vs {pos}"})
     return out
 
 
 def _gate_row(client, org_id, store_code, date, emp_name, declared_cash, declared_credit, tol=1.0) -> dict:
-    """Recon a single rep's close vs B2B. Returns {status, block_reasons[], flags[], b2b}. status:
-    ok | flagged | blocked | recon_pending (B2B not loaded / rep not matched → never blocks)."""
+    """Recon a single rep's close vs the POS feed. Returns {status, block_reasons[], flags[], b2b}. status:
+    ok | flagged | blocked | recon_pending (POS sales not loaded / rep not matched → never blocks)."""
     if not store_code:
         return {"status": "recon_pending", "block_reasons": [], "flags": [], "b2b": None}
     day = _b2b_day(client, org_id, date)
@@ -8176,8 +8187,8 @@ def _gate_row(client, org_id, store_code, date, emp_name, declared_cash, declare
     if not repb.get("tenders_available", True):
         # The daily feed has no cash/card split for this rep → don't block on a fabricated $0.
         return {"status": "recon_pending", "block_reasons": [], "flags": [], "b2b": None,
-                "note": "B2B tender split not in the daily feed"}
-    issues = _money_issues(declared_cash, declared_credit, repb["cash"], repb["card"], tol)
+                "note": "POS tender split not in the daily feed"}
+    issues = _money_issues(declared_cash, declared_credit, repb["cash"], repb["card"], tol, pos=_pos_term(client, org_id))
     blocks = [i["reason"] for i in issues if i["severity"] == "block"]
     flags = [i["reason"] for i in issues if i["severity"] == "flag"]
     return {"status": "blocked" if blocks else ("flagged" if flags else "ok"),

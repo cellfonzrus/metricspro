@@ -4,11 +4,12 @@ import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
+import { usePosTerm } from '@/lib/report-labels'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 
-// Reconciliation sheet — every day's closing-vs-B2B discrepancies for the month.
+// Reconciliation sheet — every day's closing-vs-POS discrepancies for the month.
 // BLOCK = cash short or credit over (these stop a rep from closing). FLAG = cash over / credit
-// under / count mismatch (allowed but flagged). PENDING = B2B not loaded / rep unmatched yet.
+// under / count mismatch (allowed but flagged). PENDING = POS sales not loaded / rep unmatched yet.
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const th: React.CSSProperties = { textAlign: 'left', padding: '7px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }
 const td: React.CSSProperties = { padding: '7px 10px', borderTop: '1px solid var(--border)', fontSize: 13, whiteSpace: 'nowrap' }
@@ -22,6 +23,7 @@ const SEV: Record<string, { bg: string; fg: string; label: string }> = {
 
 export default function ClosingReconPage() {
   const { user, permissions } = useAuth()
+  const { pos } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
   const [period, setPeriod] = useState(thisMonth())
   const [market, setMarket] = useState('')
   const [tol, setTol] = useState('1')
@@ -118,7 +120,7 @@ export default function ClosingReconPage() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔎 Closing Reconciliation</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            Declared closing vs B2B daily sales — every day's errors. <b>Block</b> = cash short / credit over (stops the rep closing); <b>Flag</b> = cash over / credit under / count mismatch.
+            Declared closing vs {pos} daily sales — every day's errors. <b>Block</b> = cash short / credit over (stops the rep closing); <b>Flag</b> = cash over / credit under / count mismatch.
           </p>
         </div>
         <Link href="/closing" className="btn btn-secondary" style={{ fontSize: 13 }}>← Dashboard</Link>
@@ -169,7 +171,7 @@ export default function ClosingReconPage() {
             <div className="card table-wrapper" style={{ padding: 0 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead><tr style={{ background: 'var(--surface2)' }}>
-                  {['Date', 'Store', 'Rep', 'Issue', 'Metric', 'Declared', 'B2B', 'Variance', ''].map((h, i) =>
+                  {['Date', 'Store', 'Rep', 'Issue', 'Metric', 'Declared', pos, 'Variance', ''].map((h, i) =>
                     <th key={i} style={th}>{h}</th>)}
                 </tr></thead>
                 <tbody>

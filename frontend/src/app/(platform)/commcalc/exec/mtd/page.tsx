@@ -11,7 +11,7 @@ import type { StoreOpt } from '@/lib/market-store-cascade'
 import DataGrid from '@/components/DataGrid'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import { useActiveCarrier } from '@/lib/auth-context'
-import { useReportLabels } from '@/lib/report-labels'
+import { useReportLabels, usePosTerm } from '@/lib/report-labels'
 import ReportLabelSettings from '@/components/ReportLabelSettings'
 
 // Super-admin org-resolution mitigation (same as the Sales Report page): reads carry the active tenant
@@ -22,7 +22,7 @@ import ReportLabelSettings from '@/components/ReportLabelSettings'
 // looks and behaves like every other report instead of carrying its own hand-rolled picker row.
 const orgParam = () => { const o = getActiveOrg(); return o ? `&org_id=${encodeURIComponent(o)}` : '' }
 
-// Executive MTD summary — replicates b2bsoft's "Month To Date Location / Employee Sales Report".
+// Executive MTD summary — replicates the POS "Month To Date Location / Employee Sales Report".
 // Reads the org-corrected sales source (feed for the open month, raw_sales for a closed one) so it works
 // for luxelink AND the house org with NO monthly upload. DISPLAY-ONLY.
 
@@ -44,7 +44,7 @@ export default function ExecMtdPage() {
   // Carrier-aware column labels + banner terminology (owner 2026-09-02, mig 945): resolved server-side
   // as tenant override > house carrier preset > built-in default. colLabel falls back to the built-in
   // header below, so an org with no preset/override renders byte-identical to before.
-  const { colLabel, bannerOn, reload: reloadLabels } = useReportLabels()
+  const { colLabel, bannerOn, reload: reloadLabels, pos } = useReportLabels()
   const [fresh, setFresh] = useState<any>(null)   // per-feed data freshness — surfaces a stalled ingest
   // RULE FIVE standardized filters — one StandardFilterValue (store(s) / market(s) / rep(s)), applied
   // SERVER-SIDE. `period` is NOT part of it here: this page follows the global period selector in the
@@ -129,7 +129,7 @@ export default function ExecMtdPage() {
   // ACTIVATION-CLASSIFICATION GAP (mig 213/224). Total Activation counts only transactions whose Contract
   // Type resolves to an activation bucket; a Contract Type the tenant's map doesn't cover (e.g. Home
   // Internet / FiOS / Tablet activation labels) is silently EXCLUDED — the usual reason this total reads
-  // LOWER than the b2bsoft MTD number. The backend returns the unrecognized labels + a human note; a
+  // LOWER than the POS MTD number. The backend returns the unrecognized labels + a human note; a
   // backend that predates this simply omits it -> {} -> the banner never renders. Fully-mapped tenant or
   // the house org -> note null -> hidden.
   const gaps = data?.classification_gaps || {}
@@ -149,7 +149,7 @@ export default function ExecMtdPage() {
   // columns (the spreadsheet's own order is preserved). Conv. exported as the raw ratio (as the file
   // stores it); money columns flagged so Excel/PDF format + subtotal correctly.
   // WHY the two extra columns (2026-07-30): "Acc. Sales" here is the PURE accessory$ — the same number
-  // the Sales Report shows and the same one this b2bsoft report has always meant. The Accessory Targets
+  // the Sales Report shows and the same one this POS report has always meant. The Accessory Targets
   // page measures achieved/target on accessory$ + the device SET-UP FEE (owner directive 2026-07-17:
   // the set-up fee is a separate PAY item, never folded into accessory$, but it DOES count toward the
   // accessory TARGET). Both come from the one shared classifier; showing the bridge (Set-up Fee) and
@@ -197,7 +197,7 @@ export default function ExecMtdPage() {
     { name: 'By employee', columns: cols('employee'), rows: withTotal(data?.by_employee?.rows || [], data?.by_employee?.total || {}, 'employee') },
   ]
 
-  // Tooltips only on the appended reconciliation columns (the b2bsoft 15 are unchanged). Keyed by
+  // Tooltips only on the appended reconciliation columns (the POS report's 15 are unchanged). Keyed by
   // FIELD (not header text) so a relabeled column (mig 945 carrier presets / tenant overrides)
   // keeps its tooltip.
   const HEADER_TIPS: Record<string, string> = {
@@ -214,7 +214,7 @@ export default function ExecMtdPage() {
   // cannot be read as "the dealer gets nothing".
   const dash = (v: any) => (v === null || v === undefined ? '—' : fmt(v))
   // Grid columns = the export columns, plus a DISPLAY-ONLY `render` per column that reproduces the exact
-  // b2bsoft formatting (int / $ / % / 2-dp / em-dash) and the reconciliation-column tooltips. <DataGrid>
+  // POS-report formatting (int / $ / % / 2-dp / em-dash) and the reconciliation-column tooltips. <DataGrid>
   // handles the sticky header, the pinned Store/Employee column, click-sort and resize; the numbers still
   // come from each column's own `get`, so this stays byte-identical to what the report always showed.
   const gridCols: ExportColumn[] = useMemo(() => cols(labelKey).map((c) => {
@@ -334,14 +334,14 @@ export default function ExecMtdPage() {
         </div>
       )}
 
-      {/* ACTIVATION-CLASSIFICATION GAP (owner 2026-08-13, "luxelink activations don't match b2bsoft").
+      {/* ACTIVATION-CLASSIFICATION GAP (owner 2026-08-13, "luxelink activations don't match [the POS]").
           Total Activation = distinct transactions whose Contract Type resolves to an activation bucket
           (Activation/Port/BYOD/Upgrade). A Contract Type the tenant's map doesn't cover — a Total-carrier
           tenant's Home Internet / FiOS / Tablet activation labels are the usual culprits — resolves to None
-          and is EXCLUDED, so this total reads lower than the b2bsoft MTD count that includes them. Naming the
+          and is EXCLUDED, so this total reads lower than the POS MTD count that includes them. Naming the
           uncounted labels (and how many transactions each hides) turns a silent low number into a one-click
           fix in Classification settings. Hidden when nothing is unmapped (note null).
-          TERMINOLOGY GATE (owner 2026-09-02, mig 945): the paragraph names the b2bsoft MTD reconciliation,
+          TERMINOLOGY GATE (owner 2026-09-02, mig 945): the paragraph names the POS MTD reconciliation,
           which is meaningless terminology where the carrier preset turns it off (Boost preset: off; Total
           preset / no preset: on — today's behavior, byte-identical). bannerOn is CONFIG resolution (tenant
           override > carrier preset > default on) — never a carrier branch in code. */}
@@ -352,7 +352,7 @@ export default function ExecMtdPage() {
           <div style={{ marginBottom: unrecCts.length ? 6 : 0 }}>
             Home Internet, FiOS, FWA and Tablet activations are now counted automatically. These remaining
             Contract Type labels still aren’t recognized, so their transactions fall out of the activation
-            count (this is why the total can read lower than the b2bsoft MTD report, which counts them).
+            count (this is why the total can read lower than the {pos} MTD report, which counts them).
           </div>
           {unrecCts.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
@@ -371,7 +371,7 @@ export default function ExecMtdPage() {
             <Link href="/commcalc/sales-report" style={{ color: '#92400e', fontWeight: 700, textDecoration: 'underline' }}>
               Sales Report → ⚙ Classification settings
             </Link>{' '}
-            and this total will reconcile to b2bsoft. This changes reporting only — no commission pay is affected.
+            and this total will reconcile to {pos}. This changes reporting only — no commission pay is affected.
           </div>
         </div>
       )}
@@ -423,13 +423,13 @@ export default function ExecMtdPage() {
 
       {/* SOURCE OF TRUTH (mig 923). When the tenant names Activation Details the activation basis, Total
           Activation on this page comes from that report (distinct Serial#) and EXCLUDES Upgrade — the
-          b2b-consistent definition that matches /activation-counts. Says so plainly so the number is never
+          POS-consistent definition that matches /activation-counts. Says so plainly so the number is never
           silently redefined. Hidden on the default sales basis (active:false). */}
       {data?.activation_source?.active && (
         <div style={{ fontSize: 12.5, marginBottom: 10, background: '#ecfdf5', border: '1px solid #6ee7b7',
           color: '#065f46', borderRadius: 8, padding: '9px 12px' }}>
           <span style={{ fontWeight: 700 }}>✓ Activations from the Activation Details report (basis of truth).</span>{' '}
-          Total Activation counts distinct devices and <b>excludes Upgrade</b> (b2b-consistent); Upgrade is shown
+          Total Activation counts distinct devices and <b>excludes Upgrade</b> ({pos}-consistent); Upgrade is shown
           in its own column. {int(data.activation_source.ad_rows || 0)} activation rows for this window.{' '}
           <Link href="/commcalc/activations" style={{ color: '#065f46', fontWeight: 700, textDecoration: 'underline' }}>
             Open the Activations report &amp; reconciliation →
@@ -500,6 +500,7 @@ export default function ExecMtdPage() {
 
 // ── Admin-editable metric definitions (SAP-configurable; no hard-coded classifier) ──────────────────
 function MetricConfigPanel({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const { pos } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
   const [cfg, setCfg] = useState<any>(null)
   const [saving, setSaving] = useState<string | null>(null)
   useEffect(() => { api('/api/v1/commcalc/exec-metric-config').then(setCfg).catch(console.error) }, [])
@@ -531,7 +532,7 @@ function MetricConfigPanel({ onClose, onSaved }: { onClose: () => void; onSaved:
       </div>
       <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 10px' }}>
         These map raw sales lines to the MTD buckets. Tokens match the stored <code>department</code> /
-        <code>category</code> (a b2bsoft export stores either the Category or the System Category column) or
+        <code>category</code> (a {pos} export stores either the Category or the System Category column) or
         a substring of <code>product_desc</code>. Editing here does NOT touch commission pay.
       </p>
       <p style={{ fontSize: 12, color: 'var(--text2)', margin: '0 0 10px', padding: '7px 9px', background: 'var(--surface2)', borderRadius: 6 }}>

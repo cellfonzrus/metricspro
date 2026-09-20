@@ -1321,7 +1321,7 @@ async def _upload_file_impl(
         if not (_has_cost and _has_key):
             raise HTTPException(
                 400,
-                "This doesn't look like a product catalog. Expected the b2bsoft 'Product Update' export "
+                f"This doesn't look like a product catalog. Expected the {_report_labels.pos_term(get_supabase(), org_id)} 'Product Update' export "
                 "(needs 'Cost' plus a product key — 'Product ID', or the TOTAL variant's 'UPC'/'SKU'/"
                 f"'Product Desc'). Found columns: {', '.join(sorted(cols))[:220]}")
     else:
@@ -1948,7 +1948,7 @@ async def _upload_file_impl(
                         "shrink": [{"key": "price-guard", "prior": int(_g_ex), "new": int(_g_inc),
                                     "reason": "refused: far fewer priced (Ext Price) rows than already stored — "
                                               "a degraded/price-less export. Kept existing dollars. Ensure the "
-                                              "scheduled b2bsoft report keeps the Ext Price + GP columns."}],
+                                              f"scheduled {_report_labels.pos_term(get_supabase(), org_id)} report keeps the Ext Price + GP columns."}],
                         "_trace": {"rows_in": len(mapped), "target_table": table, "periods": {},
                                    "date_counts": {str(d): int(_inc_by_date.get(d, 0)) for d in _pg_dates}}}
             # SOME days degraded, others fresh/better → PARTIAL. Drop the degraded days' rows so the per-date
@@ -1966,7 +1966,7 @@ async def _upload_file_impl(
                            "reason": (f"kept existing data for {_g_list} — a degraded/price-less export carried "
                                       f"far fewer priced (Ext Price) rows for those day(s) than already stored, "
                                       f"so those day(s) were left as-is; ingested the file's fresh day(s) only. "
-                                      f"Ensure the scheduled b2bsoft report keeps the Ext Price + GP columns.")},
+                                      f"Ensure the scheduled {_report_labels.pos_term(get_supabase(), org_id)} report keeps the Ext Price + GP columns.")},
             }
     # WHAT THIS BLOCK USED TO DO, AND WHY IT NO LONGER DOES IT (2026-08-09).
     # It DELETED the target period/day(s) right here, and the insert happened further down. A file
@@ -13195,7 +13195,7 @@ def _do_b2b_sweep(org_id):
         _b2b_set_status(client, org_id, 'disabled', _crp().status_line(pol))
         return
     if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
-        _b2b_set_status(client, org_id, 'error', 'No b2bsoft credentials set in the admin area', mark_run=True)
+        _b2b_set_status(client, org_id, 'error', f'No {_report_labels.pos_term(client, org_id)} portal credentials set in the admin area', mark_run=True)
         return
     _b2b_set_status(client, org_id, 'running', 'Sweep in progress…')
     try:
@@ -28502,7 +28502,7 @@ def activation_counts(period: str, org_id: str = ORG_ID, as_of: str = "", includ
         "default_total": ("total_with_upgrade" if include_upgrade else "total_activation"),
         "counted": counted, "stores": stores, "markets": markets, "total": grand,
         "note": (None if rows else
-                 "No Activation Details rows found for this period. Upload or register the b2b "
+                 f"No Activation Details rows found for this period. Upload or register the {_report_labels.pos_term(client, org_id)} "
                  "'Activation Details' report as a Custom Import (Data Imports → Custom Reports), or route "
                  "it to the email import, then re-check."),
     }
@@ -28544,7 +28544,7 @@ def dealer_code_map(period: str, org_id: str = ORG_ID):
         "period": period, "org_id": org_id, "codes": codes, "stores": stores,
         "unmapped": sum(1 for c in codes if not c["mapped"]),
         "note": (None if codes else
-                 "No Dealer Codes found in Activation Details for this period. Upload/route the b2b "
+                 f"No Dealer Codes found in Activation Details for this period. Upload/route the {_report_labels.pos_term(client, org_id)} "
                  "'Activation Details' report, then re-check."),
     }
 
@@ -28580,7 +28580,7 @@ def product_sales_departments(period: str, org_id: str = ORG_ID):
         "period": period, "org_id": org_id, "departments": departments,
         "accessory_departments": sorted([d["department"] for d in departments if d["is_accessory"]]),
         "note": (None if departments else
-                 "No Sales by Product rows found for this period. Upload or route the b2b 'Sales by Product' "
+                 f"No Sales by Product rows found for this period. Upload or route the {_report_labels.pos_term(client, org_id)} 'Sales by Product' "
                  "report (Data Imports → Custom Reports / Email Imports), then re-check."),
     }
 
@@ -28886,7 +28886,7 @@ def metric_recon(period: str, org_id: str = ORG_ID, metric: str = "activations")
                                   "source": msrc.get("source"), "processor": msrc.get("processor")},
                        "primary_rows": ad_n,
                        "note": (None if ad_n else
-                                "No Activation Details rows for this period — upload or route the b2b "
+                                f"No Activation Details rows for this period — upload or route the {_report_labels.pos_term(client, org_id)} "
                                 "'Activation Details' report so the activation basis of truth is present.")})
         return result
 
@@ -28914,7 +28914,7 @@ def metric_recon(period: str, org_id: str = ORG_ID, metric: str = "activations")
                        "primary_rows": rep_n,
                        "daily_cash": daily_cash,
                        "note": (None if rep_n else
-                                "No Bill Payment Transactions rows for this period — upload or route the b2b "
+                                f"No Bill Payment Transactions rows for this period — upload or route the {_report_labels.pos_term(client, org_id)} "
                                 "'Bill Payment Transactions' report so the bill-payment basis is present.")})
         return result
 
@@ -29152,10 +29152,10 @@ def get_data_lineage(org_id: str = ORG_ID, source_key: str = "", affected_key: s
 #   config:X   → a per-org config is set (accessory depts / store mapping / activation basis)
 _ONBOARDING_ITEMS = [
     ("sales_transactions",       "Sales Transaction Details", "table:commcalc.raw_sales|commcalc.daily_sales_feed"),
-    ("activation_details_report","b2b Activation Details",     "custom:serial#,contract type"),
-    ("bill_payments_report",     "b2b Bill Payment Transactions", "custom:discounts,bill pay system"),
-    ("product_sales_report",     "b2b Sales by Product",       "custom:product gp,total exp comm"),
-    ("store_performance_report", "b2b Store Performance",      "custom:acc ext price,bill payment qty"),
+    ("activation_details_report","POS Activation Details",     "custom:serial#,contract type"),
+    ("bill_payments_report",     "POS Bill Payment Transactions", "custom:discounts,bill pay system"),
+    ("product_sales_report",     "POS Sales by Product",       "custom:product gp,total exp comm"),
+    ("store_performance_report", "POS Store Performance",      "custom:acc ext price,bill payment qty"),
     ("processor_epay",           "ePay processor feed (Boost)", "table:commcalc.raw_epay_daily_tx"),
     ("processor_vidapay",        "VidaPay processor feed (Total)", "table:commcalc.raw_ma_daily_tx"),
     ("residual_report",          "Residual / MA commission (drives Retention Analysis)", "table:commcalc.raw_ma_commission"),
@@ -32890,7 +32890,7 @@ def email_ingest_health(org_id: str = ORG_ID, account: str = "", days: int = 14)
 _CONNECTOR_HEALTH_SOURCES = [
     ("data_source", "Portal login"), ("email_sweep_config", "Email import"),
     ("epay_sweep_config", "ePay sweep"), ("dlar_sweep_config", "DLAR sweep"),
-    ("vip_sweep_config", "VIP sweep"), ("b2b_sweep_config", "B2B sweep"),
+    ("vip_sweep_config", "VIP sweep"), ("b2b_sweep_config", "POS portal sweep"),
     ("ftp_sweep_config", "FTP import"),
 ]
 # Which CONNECTOR SLUG each health source speaks for, so the route policy (mig 998) can be asked
@@ -38690,7 +38690,7 @@ def device_cost_recon_endpoint(period: str = "", window_months: int = 1, group_b
                      "sources. If the page times out, narrow the window — a recompute is NOT involved "
                      "here (nothing on this page writes or recalculates anything).")
     if feed_only:
-        notes.append(f"{feed_only:,} sale line(s) came from the hourly B2B feed rather than raw_sales "
+        notes.append(f"{feed_only:,} sale line(s) came from the hourly POS feed rather than raw_sales "
                      "(the month is not promoted yet) and are counted once — raw_sales wins on a shared "
                      "trans_id, the same union rule the P&L and the commission engine use.")
 

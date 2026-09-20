@@ -23,7 +23,7 @@ export interface UploadOutcome {
 }
 
 // ── X-REPORT (POS tenders) ──────────────────────────────────────────────────────────────────────
-// Owner live bug 2026-07-28: a real B2B Soft X-Report uploaded through Data Imports rendered
+// Owner live bug 2026-07-28: a real POS X-Report uploaded through Data Imports rendered
 // "✅ Saved 0 rows." — green, zero rows, zero explanation. The backend now returns a machine-readable
 // `skipped` reason + a human `note` + `xreport_diag`; this maps them to an amber banner that names
 // the reason, the per-sheet outcome and the tender labels it did not recognize.
@@ -84,8 +84,10 @@ function xreportDetails(r: any): string[] {
   return out
 }
 
-/** Interpret a raw /upload* response into a display outcome. Safe on any shape (defensive). */
-export function readUploadOutcome(r: any, unit = 'row(s)'): UploadOutcome {
+/** Interpret a raw /upload* response into a display outcome. Safe on any shape (defensive).
+ *  `pos` is the tenant's POS term (useReportLabels().pos) for the copy that names the scheduled
+ *  export; the neutral noun is the default — no vendor is spelled here (owner 2026-09-20). */
+export function readUploadOutcome(r: any, unit = 'row(s)', pos = 'POS'): UploadOutcome {
   const shrink: any[] = Array.isArray(r?.shrink) ? r.shrink : []
   // `tenders` is the X-report's own count — it never returned `saved`, so a GOOD X-report upload
   // still printed "Saved 0 rows" (the backend now sends both; the fallback keeps older payloads honest).
@@ -111,7 +113,7 @@ export function readUploadOutcome(r: any, unit = 'row(s)'): UploadOutcome {
     const reason = (shrink[0]?.reason as string) ||
       'Refused to protect existing data: this file carries far fewer priced (Ext Price) rows than are ' +
       'already stored for that day — a degraded / price-less export. The existing dollars were kept ' +
-      'unchanged. Ensure the scheduled b2bsoft report keeps the Ext Price + GP columns.'
+      `unchanged. Ensure the scheduled ${pos} report keeps the Ext Price + GP columns.`
     return { tone: 'guard', reason, saved: 0, text: 'Upload refused to protect existing data. ' + reason }
   }
   if (r?.skipped === 'price_guard_partial') {
@@ -121,7 +123,7 @@ export function readUploadOutcome(r: any, unit = 'row(s)'): UploadOutcome {
     const reason = (shrink[0]?.reason as string) ||
       (`Kept existing data for ${guarded.join(', ') || 'some day(s)'} — a degraded / price-less export carried ` +
        'far fewer priced (Ext Price) rows for those day(s) than already stored. The file\'s fresh day(s) were ' +
-       'ingested. Ensure the scheduled b2bsoft report keeps the Ext Price + GP columns.')
+       `ingested. Ensure the scheduled ${pos} report keeps the Ext Price + GP columns.`)
     return {
       tone: 'warn', reason, saved,
       text: `Ingested ${saved.toLocaleString()} ${unit} for the file's fresh day(s); kept existing data for ` +

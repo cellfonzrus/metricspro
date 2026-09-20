@@ -3,7 +3,7 @@
 /**
  * MONTHLY SALES BASIS — derive console (mod-commission, 2026-08-01).
  *
- * The daily B2B email feed lands in `daily_sales_feed`. The month a closed period is PAID from is
+ * The daily POS email feed lands in `daily_sales_feed`. The month a closed period is PAID from is
  * `raw_sales`, which is DERIVED from that feed. Until now the derivation asked the wall clock for its
  * period, so at 00:00 on the 1st it moved to the new month and never looked back — while the feed kept
  * finalizing the old one for hours (luxelink, 2026-08-01: 45 July transactions delivered after midnight,
@@ -15,6 +15,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { usePosTerm } from '@/lib/report-labels'
+import { useReportKinds, notApplicableCopy } from '@/lib/report-kinds'
 import ScreenLink from '@/components/ScreenLink'
 
 type Cfg = { enabled: boolean; days: number; retain: number | null }
@@ -48,6 +50,8 @@ function Tile({ label, value, tone }: { label: string; value: React.ReactNode; t
 
 export default function SalesDerivePage() {
   const { period, setPeriod, periods } = usePeriod()
+  const { pos, posDeclared } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
+  const dailyFeed = useReportKinds().feedFor('daily_sales')   // applies? — is a daily-feed kind defined for this POS (registry §30.9)
   const [cfg, setCfg] = useState<CfgResp | null>(null)
   const [draft, setDraft] = useState<Cfg | null>(null)
   const [status, setStatus] = useState<Status | null>(null)
@@ -150,7 +154,12 @@ export default function SalesDerivePage() {
               <Tile label="In feed, not in basis" value={gap.toLocaleString()} tone={behind ? '#b42318' : '#16794a'} />
               <Tile label="In basis, not in feed" value={status.missing_in_daily.toLocaleString()} />
             </div>
-            {!status.has_feed && (
+            {!status.has_feed && dailyFeed.applies === 'not_defined' && (
+              <div role="status" style={{ fontSize: 12.5, color: '#1e40af', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '9px 12px', marginBottom: 10 }}>
+                {notApplicableCopy({ pos, posDeclared, feedNoun: 'daily feed', kindNoun: 'daily-feed', purpose: 'derive the monthly basis from' })}
+              </div>
+            )}
+            {!status.has_feed && dailyFeed.applies !== 'not_defined' && (
               <div style={{ fontSize: 13, color: 'var(--text2)' }}>
                 No daily-feed rows for {period}. There is nothing to derive from, so the basis is left exactly as it is —
                 a month with no feed is never rebuilt from an empty one.

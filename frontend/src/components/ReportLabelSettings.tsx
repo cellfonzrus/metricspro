@@ -6,7 +6,7 @@
 // the built-in default, the carrier preset the org inherits (house data rows, mig 945 — what a
 // new tenant gets automatically when it picks its carrier), and the org's own override input.
 // Clearing an override reverts to inheritance (carrier preset, then built-in) — never to blank.
-// Also hosts the banner terminology toggle (e.g. the b2bsoft-MTD unrecognized-contract-type
+// Also hosts the banner terminology toggle (e.g. the POS-MTD unrecognized-contract-type
 // warning): Auto = follow the carrier preset; Always / Never = tenant override. DISPLAY-ONLY —
 // no data path, bucket rule, or pay number changes when a label changes.
 import { useMemo, useState } from 'react'

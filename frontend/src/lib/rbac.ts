@@ -1270,7 +1270,7 @@ export const NAV_CARRIERS: Record<string, string[]> = {
   '/commcalc/asset/missing-phones': ['boost'], '/commcalc/asset/aging-rebate': ['boost'],
   '/commcalc/asset/on-inventory': ['boost'], '/commcalc/asset/charges/rma': ['boost'],
   // Vocabulary sweep (owner 2026-09-04): the remaining VIP/Boost-fed asset surfaces — the Asset
-  // Ledger landing itself, the VIP invoice-due report, and the b2bsoft/VIP inventory recons — are
+  // Ledger landing itself, the VIP invoice-due report, and the POS/VIP inventory recons — are
   // whole-feature Boost-side pages; a Total tenant must never see their vocabulary at all.
   '/commcalc/asset': ['boost'], '/commcalc/asset/invoice-due': ['boost'],
   '/commcalc/asset/inventory-recon': ['boost'], '/commcalc/asset/oninv-3way-recon': ['boost'],

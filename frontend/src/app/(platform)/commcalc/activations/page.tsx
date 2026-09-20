@@ -4,9 +4,10 @@ import Link from 'next/link'
 import { api, getActiveOrg } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { useReportLabels } from '@/lib/report-labels'
+import { useReportKinds, notApplicableCopy } from '@/lib/report-kinds'
 
-// Activations report — the b2b "Activation Details" basis of truth (owner 2026-08-26). One row per distinct
-// device (Serial#); Total Activation EXCLUDES Upgrade (b2b-consistent, LuxeLink 687 / Nova 250), with a
+// Activations report — the POS "Activation Details" basis of truth (owner 2026-08-26). One row per distinct
+// device (Serial#); Total Activation EXCLUDES Upgrade (POS-consistent, LuxeLink 687 / Nova 250), with a
 // toggle to include it. The real export has no Store column — geography is Division / Region / District /
 // Dealer Code — so this page rolls up by MARKET (LuxeLink vs Nova) and by STORE, and shows the automatic
 // reconciliation against the sales-derived count. DISPLAY-ONLY.
@@ -36,7 +37,9 @@ export default function ActivationsPage() {
   const [dmap, setDmap] = useState<any>(null)       // dealer-code → store mapping status
   const [mapBusy, setMapBusy] = useState('')        // dealer_code currently being saved
   // Carrier-aware column labels (mig 945): tenant override > carrier preset > this page's built-ins.
-  const { colLabel } = useReportLabels()
+  const { colLabel, pos, posDeclared } = useReportLabels()
+  // APPLIES? — the Activation Details kind is registry data (§30.9); a POS without it is told so (owner 2026-09-20).
+  const actDetails = useReportKinds().feedFor('pos_activation_details')
 
   const load = useCallback(() => {
     if (!period) return
@@ -109,11 +112,11 @@ export default function ActivationsPage() {
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
         <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0 }}>Activations</h1>
         <span style={{ fontSize: 12.5, color: 'var(--text3)' }}>
-          b2b Activation Details — distinct devices (Serial#), {period || '—'}
+          {pos} Activation Details — distinct devices (Serial#), {period || '—'}
         </span>
       </div>
       <p className="pg-note" style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 6, marginBottom: 12, maxWidth: 820 }}>
-        Total Activation counts one row per device and excludes Upgrade (the b2b-consistent definition). The
+        Total Activation counts one row per device and excludes Upgrade (the {pos}-consistent definition). The
         export has no Store column, so activations roll up by <b>Market</b> (e.g. LuxeLink vs Nova) and by
         <b> Store</b> (Dealer Code / District). Toggle Upgrade in or out below.
       </p>
@@ -138,7 +141,12 @@ export default function ActivationsPage() {
 
       {err && <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, marginBottom: 10 }}>❌ {err}</div>}
       {loading && <div style={{ color: 'var(--text3)', fontSize: 13, padding: 20 }}>Loading…</div>}
-      {!loading && data?.note && (
+      {actDetails.applies === 'not_defined' && (
+        <div role="status" style={{ fontSize: 12.5, color: '#1e40af', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '9px 12px', marginBottom: 10 }}>
+          {notApplicableCopy({ pos, posDeclared, feedNoun: 'Activation Details report', purpose: 'count activations from' })}
+        </div>
+      )}
+      {!loading && data?.note && actDetails.applies !== 'not_defined' && (
         <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, marginBottom: 10 }}>{data.note}</div>
       )}
 
@@ -193,7 +201,7 @@ export default function ActivationsPage() {
         </div>
       )}
 
-      {/* Dealer Code → Store mapping: link the b2b numeric Dealer Codes to stores so activations merge onto
+      {/* Dealer Code → Store mapping: link the POS export's numeric Dealer Codes to stores so activations merge onto
           the named store row instead of showing as a numeric ID. Only shows when there are unmapped codes. */}
       {dmap && (dmap.unmapped > 0) && (
         <div style={{ marginTop: 18 }}>

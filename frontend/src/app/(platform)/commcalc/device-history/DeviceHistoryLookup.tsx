@@ -1,6 +1,6 @@
 'use client'
 // DEVICE HISTORY LOOKUP (commission-16) — reusable, self-contained widget.
-// Enter an IMEI or phone number → device + sale (B2B sales), activation + tenure (residual/MI),
+// Enter an IMEI or phone number → device + sale (POS sales), activation + tenure (residual/MI),
 // a sell-NEW vs offer-UPGRADE prompt (ALWAYS shown — the salesperson-facing core), and an admin-only
 // per-period money table (COMMISSION + REBATE shown as SEPARATE categories). DISPLAY only, org-scoped.
 //
@@ -13,6 +13,7 @@ import { Fragment, useState } from 'react'
 import { api, fmt } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import { hasDataGrant } from '@/lib/rbac'
+import { usePosTerm } from '@/lib/report-labels'
 import ReportExportBar from '@/components/ReportExportBar'
 import { buildDeviceHistoryExport } from './deviceHistoryExport'
 
@@ -161,6 +162,7 @@ function MoneySection({ title, section }: { title: string; section: any }) {
 }
 
 export default function DeviceHistoryLookup() {
+  const { pos } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
   const { permissions } = useAuth()
   const grantedClientHint = hasDataGrant(permissions, 'device_commission')
   const [q, setQ] = useState('')
@@ -252,7 +254,7 @@ export default function DeviceHistoryLookup() {
                   </tbody>
                 </table>
               ) : (
-                <div style={{ fontSize: 13, color: 'var(--text3)' }}>Not sold by us — no B2B sale on file for this line.</div>
+                <div style={{ fontSize: 13, color: 'var(--text3)' }}>Not sold by us — no {pos} sale on file for this line.</div>
               )}
               {res.device?.sale_source === 'daily_sales_feed' && (
                 <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Sale from the daily feed (current month — not yet promoted to the monthly basis).</div>

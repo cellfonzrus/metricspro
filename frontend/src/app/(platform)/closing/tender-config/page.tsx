@@ -1,6 +1,8 @@
 'use client'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { api, apiUpload } from '@/lib/client'
+import { usePosTerm } from '@/lib/report-labels'
+import { useReportKinds, notApplicableCopy } from '@/lib/report-kinds'
 
 // Configurable closing tenders (mig 111): choose the standard 7 tenders OR create your own, then map
 // each POS report's raw Tender Type values to them (smart-suggested) for the 3-way / regular recon.
@@ -20,6 +22,8 @@ type Sug = { raw_label: string; suggested_tender?: string; confidence?: string }
 function slug(s: string) { return (s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') }
 
 export default function TenderConfigPage() {
+  const { pos, posDeclared } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
+  const xReport = useReportKinds().feedFor('x_report')   // applies? — is an X-report kind defined for this POS (registry §30.9)
   const [defs, setDefs] = useState<Def[]>([])
   const [reconMode, setReconMode] = useState<'3way' | '2way'>('3way')
   const [custom, setCustom] = useState(false)
@@ -74,7 +78,7 @@ export default function TenderConfigPage() {
 
   // ── detect (smart map): from an uploaded sample, or from already-ingested data ──
   // `leg` ('sales'|'x_report'|'auto', default 'auto') lets the caller force which leg an uploaded
-  // sample belongs to; the backend auto-detects the file's own shape (real B2B multi-sheet X-Report vs
+  // sample belongs to; the backend auto-detects the file's own shape (a real multi-sheet POS X-Report vs
   // a Sales Transaction Details export) when left on auto, and reports back which leg it landed the
   // values in (`detected_leg`/`detect_detail`) so a sample that has no ingested data yet — the case an
   // upload-only leg needs — still gets mapped.
@@ -198,7 +202,12 @@ export default function TenderConfigPage() {
       <button className="btn btn-secondary" style={{ fontSize: 13, marginTop: 8 }} onClick={addDef}>＋ Add tender</button>
 
       {/* Step 2 — detect */}
-      <StepHead n={2} title="Find your POS tender values" sub="Upload a sample Sales Transaction report or a sample X-Report (auto-detected by shape, or pick which leg it is), or pull the distinct Tender Types from data you've already ingested. On the Total side both reports come from b2bsoft." />
+      <StepHead n={2} title="Find your POS tender values" sub={`Upload a sample Sales Transaction report or a sample X-Report (auto-detected by shape, or pick which leg it is), or pull the distinct Tender Types from data you've already ingested. Both reports come from ${pos}.`} />
+      {xReport.applies === 'not_defined' && (
+        <div role="status" style={{ fontSize: 12.5, color: '#1e40af', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '8px 12px', margin: '6px 0 10px' }}>
+          {notApplicableCopy({ pos, posDeclared, feedNoun: 'cash register / X-report', purpose: 'detect X-report tender values from' })}
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
         <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
           onChange={e => { const f = e.target.files?.[0]; if (f) detect(f, uploadLeg); e.target.value = '' }} />

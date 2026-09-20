@@ -14,7 +14,7 @@ import ScreenLink from '@/components/ScreenLink'
 // activated and the rebate received against it").
 //
 // CARRIER- AND TENANT-AGNOSTIC: the backend resolves the source by WHICH DATA EXISTS for the org — the
-// master-agent / VidaPay per-activation feed, or the ePay payment-detail rebate classes against B2B sales
+// master-agent / VidaPay per-activation feed, or the ePay payment-detail rebate classes against POS sales
 // / residual activations — never by a tenant or carrier name. An org with both gets the union, tagged.
 //
 // The point of the report is the GAPS: an activation with NO rebate against it is a first-class row with
