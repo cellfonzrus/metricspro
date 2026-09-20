@@ -3489,6 +3489,62 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 
 ## 19. Known gaps & inert config
 
+§19.22 **THE "DEAD" CONNECTORS WERE NOT BROKEN — `enabled=true` HAD STOPPED MEANING "THIS RUNS"
+(owner directive 2026-09-20: "fix the dead connectors for ftp and b2b").**
+
+Neither could ever have recovered, and neither was a fault:
+
+| Connector | State | Why the platform would never run it |
+|---|---|---|
+| **B2B** (`b2b_sweep_config` **and** its `data_source` portal row) | `enabled=true`, last run 2026-07-27, status `disabled` | `connector_route_policy` (mig 998) CLOSES its `pull` route — the vendor emailed us not to use their 2FA login, so the platform deliberately does not attempt it (owner directive 2026-09-09). Its own `last_detail` says so in full |
+| **FTP** (`ftp_sweep_config`) | `enabled=true` with credentials from 2026-06-26, status `0/0 files ingested` | **Nothing dispatches it**: no `connector_instances` row, no `sweep_kind`, no puller in `_sweep_registry()`, no cron. "No successful run in 30h" was never going to change |
+
+**ONE FACT UNDERNEATH BOTH.** `_scan_connector_health` judged on `enabled` + `last_run_at` +
+`last_status` alone. It had no way to ask *whether the platform would actually run this*, so two
+connectors that CANNOT run were reported as failing, every day, for months. The route-policy module
+already existed and **four other call sites already honoured it** — this scan never did. Third
+instance of the §19.18 pattern: a registry written, and a caller left unwired.
+
+**THE FIX — `router._connector_unrunnable`, asked BEFORE health is judged.** Two independent reasons,
+both read from registries that already exist (`connector_route_policy`, `_sweep_registry()`,
+`connector_instances`), all three read ONCE per cross-tenant pass and each degrading to empty:
+- the connector's route is CLOSED by config → the policy module's own `headline()`, verbatim, so the
+  wording matches every other surface that speaks for that route;
+- nothing can DISPATCH it — no registered puller, or no enabled `connector_instances` row for this
+  tenant (another tenant's registration does not count).
+
+Either way the connector is reported `kind: "unmonitored"`, `alertable: False` — the control box's own
+word for *declared, not checked, never folded into a green headline* (§23d). Coverage stays visible on
+`GET /commcalc/connector-health`; the daily false alarm is what stops.
+
+**MEASURED, house org, 2026-09-20 20:23 — and nothing real is silenced:**
+
+```
+BEFORE: 7 alerts/day                    AFTER: 2 alerts/day
+  Portal login (b2bsoft) 1581h error      ePay sweep   658h error   <- real, still alerts
+  B2B sweep              1330h disabled   VIP sweep     54h stale   <- real, still alerts
+  FTP import             2080h 0/0 files
+  ePay sweep              658h error    UNMONITORED (reported, never mailed)
+  VIP sweep                54h stale      Portal login (b2bsoft) — route closed by config
+  DLAR sweep                              B2B sweep              — route closed by config
+  (+ the mailbox while it was down)       FTP import             — nothing dispatches it
+```
+
+The two survivors are exactly the two that mattered and were buried: **ePay erroring for 658h, VIP 54h
+stale.** Both remain the owner's to act on.
+
+**Proof:** `backend/harness_connector_runnable.py` (27 checks) — §A the two named connectors (including
+B2B's *second* surface, the `data_source` row, which a per-table fix would have missed), §B that every
+real failure is still health-judged, §C the two unrunnable reasons independently, §D the refusals (a
+pre-mig-998 database mutes nothing), §E reported-never-mailed.
+
+**⚠ STILL THE OWNER'S, NOT DECIDED HERE — should FTP run at all?** It is configured
+(`ftp.gsmunlockhost.com`) but has delivered nothing since 2026-06-26, and its patterns duplicate the
+email sweep's `daily_sales`. Turning it on is a DATA decision, not a cleanup: `daily_sales` is a
+whole-period replace (§19.19), so a stale or empty FTP file would overwrite a good feed and move it
+BACKWARD. Retiring it is one config row; wiring it a dispatcher is the alternative. Neither was done
+unilaterally.
+
 §19.21 **A SKIPPED SWEEP WAS COMPLETELY SILENT (fixed 2026-09-20).**
 
 **Found by watching the very fix that caused it.** Deploying §19.20 restarted the API while the house

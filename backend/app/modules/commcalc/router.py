@@ -32521,6 +32521,26 @@ _CONNECTOR_HEALTH_SOURCES = [
     ("vip_sweep_config", "VIP sweep"), ("b2b_sweep_config", "B2B sweep"),
     ("ftp_sweep_config", "FTP import"),
 ]
+# Which CONNECTOR SLUG each health source speaks for, so the route policy (mig 998) can be asked
+# whether that connector's route is open. `None` = the table is not a portal-pull connector, so no
+# policy applies. The b2b row carries its slug in a column (`connector`), the rest are implied by the
+# table; `data_source` names it in `processor`. RULE TWO: slugs are DATA read off the row wherever a
+# column exists — the constant only says WHICH column to read.
+_CONNECTOR_SLUG_SOURCE = {
+    "data_source": ("processor", None),
+    "b2b_sweep_config": ("connector", "b2b"),
+    "epay_sweep_config": (None, "epay"),
+    "dlar_sweep_config": (None, "dlar"),
+    "vip_sweep_config": (None, "vip"),
+    "email_sweep_config": (None, None),   # the mailbox is not a portal pull — no route to close
+    "ftp_sweep_config": (None, None),
+}
+# Sweep kinds that /connectors/run-due can actually DISPATCH come from `_sweep_registry()` — the one
+# place that knows. A *_sweep_config table whose kind has no puller, or that no `connector_instances`
+# row registers, is not "late": nothing in the platform will ever run it. Listed here so the health
+# scan can say WHICH tables are driven by that dispatcher at all.
+_DISPATCHED_SWEEP_TABLES = {"epay_sweep_config": "epay", "dlar_sweep_config": "dlar",
+                            "vip_sweep_config": "vip", "b2b_sweep_config": "b2b"}
 _CONNECTOR_STALE_HOURS = 30  # DEFAULT only — per tenant: commission_org_config.connector_stale_hours
 
 
@@ -32547,6 +32567,56 @@ def _connector_stale_hours_map(client):
     return out
 
 
+def _connector_unrunnable(client, table, row, policy_rows, dispatchable, instance_kinds):
+    """Why the platform would NEVER run this connector — or "" when it genuinely would. PURE-ish
+    (no IO: every input is read once by the caller).
+
+    WHY THIS EXISTS (owner directive 2026-09-20: "fix the dead connectors for ftp and b2b"). The
+    health scan judged a connector on `enabled` + `last_run_at` + `last_status` alone. It had no idea
+    whether the platform would ever actually run the thing, so two connectors that CANNOT run were
+    reported every day as if they were broken:
+
+      • B2B — `enabled=true`, but `connector_route_policy` (mig 998) closes its `pull` route: the
+        vendor emailed us not to use their 2FA login, so the platform deliberately does not attempt
+        it (owner directive 2026-09-09). Its own `last_detail` says so in full. The policy module
+        already existed and four other call sites already honoured it; this scan never did.
+      • FTP — `enabled=true` with credentials from 2026-06-26, and NOTHING dispatches it: no
+        `connector_instances` row, no `sweep_kind`, no puller in `_sweep_registry()`, no cron. It has
+        no scheduler at all, so "no successful run in 30h" was never going to change.
+
+    Both are the same fact: **`enabled=true` stopped meaning "this runs"**, and the scan had no way to
+    ask. Neither is a fault, so neither is an alert — they are UNMONITORED, which is the control box's
+    own word for "declared, not checked, never folded into a green headline" (§23d honesty rules). The
+    coverage stays visible on GET /commcalc/connector-health; what stops is the daily false alarm.
+
+    Returns the reason string for an unrunnable connector, "" otherwise. Never raises."""
+    try:
+        col, implied = _CONNECTOR_SLUG_SOURCE.get(table, (None, None))
+        slug = (str(row.get(col) or "").strip() if col else "") or (implied or "")
+        # (a) the ROUTE this connector pulls over is closed by config — the owner's recorded decision.
+        if slug:
+            pol = _crp().resolve(policy_rows, row.get("org_id") or ORG_ID, slug)
+            if _crp().is_closed(pol):
+                return _crp().headline(pol) or "this connector's pull route is closed by configuration"
+        # (b) nothing can DISPATCH it. A *_sweep_config driven by /connectors/run-due needs both a
+        #     registered puller and a connector_instances row; without either, no tick will ever pick
+        #     it up. A table outside that dispatcher (the mailbox, which has its own cron) is exempt.
+        kind = _DISPATCHED_SWEEP_TABLES.get(table)
+        if kind:
+            if kind not in dispatchable:
+                return (f"no puller is registered for sweep kind '{kind}', so no schedule can run this "
+                        f"connector")
+            if (str(row.get("org_id") or ORG_ID), kind) not in instance_kinds:
+                return ("this tenant has no enabled connector registration for it, so the scheduler "
+                        "never dispatches it")
+        elif table.endswith("_sweep_config") and table not in ("email_sweep_config",):
+            return ("nothing in the platform dispatches this connector — it has no sweep kind, no "
+                    "puller and no scheduled job")
+    except Exception:
+        return ""       # never let the runnability question itself break the health scan
+    return ""
+
+
 def _scan_connector_health(client):
     """Enabled data sources across the sweep + portal registries that have ERRORED or gone STALE.
 
@@ -32555,6 +32625,25 @@ def _scan_connector_health(client):
     every 30 minutes is correctly reported instead of looking busy."""
     now = _datetime.now(_timezone.utc)
     stale_hours = _connector_stale_hours_map(client)
+    # Read the two "can this even run?" registries ONCE for the whole cross-tenant pass (see
+    # _connector_unrunnable). Both degrade to empty, which restores the previous behaviour exactly.
+    try:
+        policy_rows = (client.schema("commcalc").table("connector_route_policy")
+                       .select("org_id,connector,route,allowed,reason,remedy_route,remedy_label,"
+                               "remedy_href").limit(2000).execute().data) or []
+    except Exception:
+        policy_rows = []
+    try:
+        dispatchable = set(_sweep_registry().keys())
+    except Exception:
+        dispatchable = set()
+    try:
+        instance_kinds = {(str(c.get("org_id") or ORG_ID), str(c.get("sweep_kind") or "").strip())
+                          for c in ((client.schema("commcalc").table("connector_instances")
+                                     .select("org_id,sweep_kind,enabled").limit(2000)
+                                     .execute().data) or []) if c.get("enabled") is not False}
+    except Exception:
+        instance_kinds = set()
     out = []
     for table, label in _CONNECTOR_HEALTH_SOURCES:
         try:
@@ -32567,6 +32656,17 @@ def _scan_connector_health(client):
             status = (r.get("last_status") or "").lower()
             name = (r.get("label") or r.get("source_name") or r.get("account")
                     or r.get("vendor_name") or label)
+            # CAN THE PLATFORM EVEN RUN THIS? Asked BEFORE health, because a connector nothing will
+            # ever dispatch, or whose route the owner closed on purpose, is not failing — it is
+            # unmonitored. Reported (so the coverage is visible) and never alerted.
+            _un = _connector_unrunnable(client, table, r, policy_rows, dispatchable, instance_kinds)
+            if _un:
+                out.append({
+                    "org_id": r.get("org_id") or ORG_ID, "source": f"{label} — {name}",
+                    "kind": "unmonitored", "detail": _un[:180], "alertable": False,
+                    "ref_key": f"connector:{table}:{r.get('id')}:unmonitored",
+                })
+                continue
             failed = ("error" in status) or ("fail" in status) or ("403" in status)
             hrs = stale_hours.get(str(r.get("org_id") or ORG_ID), _CONNECTOR_STALE_HOURS)
             stale = False
@@ -32597,6 +32697,7 @@ def _scan_connector_health(client):
                 out.append({
                     "org_id": r.get("org_id") or ORG_ID, "source": f"{label} — {name}", "kind": kind,
                     "detail": (r.get("last_status") or f"no successful run in {hrs:g}h+")[:180],
+                    "alertable": True,
                     "ref_key": f"connector:{table}:{r.get('id')}:since-{since}:{kind}",
                 })
     return out
@@ -32616,7 +32717,12 @@ async def connector_health_run_due(x_notify_secret: str = Header(default="")):
     if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
-    failures = _scan_connector_health(client)
+    scanned = _scan_connector_health(client)
+    # UNMONITORED IS NOT A FAILURE. A connector whose route the owner closed by config, or that nothing
+    # in the platform dispatches, is reported on GET /connector-health so the coverage stays visible —
+    # and is never mailed to anyone. Alerting it was the daily false alarm that buried the real one.
+    failures = [f for f in scanned if f.get("alertable")]
+    unmonitored = [f for f in scanned if not f.get("alertable")]
     from app.modules.closing.router import _send_alert  # lazy import: avoids a commcalc↔closing cycle
     sent = []
     for f in failures:
@@ -32628,7 +32734,9 @@ async def connector_health_run_due(x_notify_secret: str = Header(default="")):
             sent.append({"source": f["source"], "kind": f["kind"], "result": res})
         except Exception as e:
             sent.append({"source": f["source"], "kind": f["kind"], "error": str(e)[:160]})
-    return {"checked_sources": len(_CONNECTOR_HEALTH_SOURCES), "failing": len(failures), "sent": sent}
+    return {"checked_sources": len(_CONNECTOR_HEALTH_SOURCES), "failing": len(failures), "sent": sent,
+            "unmonitored": [{"org_id": u["org_id"], "source": u["source"], "detail": u["detail"]}
+                            for u in unmonitored]}
 
 
 # How long a sweeping_since stamp holds the per-mailbox lock before it is considered stale (a crashed
