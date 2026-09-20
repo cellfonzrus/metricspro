@@ -230,7 +230,7 @@ TARGET_FIELDS = {
         ("product_name", "Product / description", "text", True, "Product Name", ["Description", "Product Desc"]),
         ("trans_date", "Transaction date", "date10", False, "Date of Transaction", ["Trans Date", "Date"]),
         ("due_date", "Due date", "date10", False, "Date Due", ["Due Date"]),
-        ("raw_amount", "Amount (signed; negative = payout)", "number", True, "Retail Cost", ["Amount", "Net Amount", "Payout"]),
+        ("raw_amount", "Amount (signed — declare which sign is money earned)", "number", True, "Retail Cost", ["Amount", "Net Amount", "Payout", "Gross"]),
     ],
     # ── PER-LINE VENDOR REBATE / COMMISSION HISTORY (mig 1005) ───────────────────────────────────
     # The FEED SHAPE, not a carrier: one row per rebate COMPONENT per line per invoice. Measured on
@@ -514,8 +514,15 @@ def suggest(headers, report_key, existing_rules=None, client=None, org_id=None):
                     if token and token in low.replace(" ", "").replace("_", ""):
                         suggested, conf = orig, "fuzzy"
                         break
-        out.append({"target_field": tf, "label": label, "transform": transform, "required": required,
-                    "suggested_source": suggested, "confidence": conf})
+        row = {"target_field": tf, "label": label, "transform": transform, "required": required,
+               "suggested_source": suggested, "confidence": conf}
+        # AN AMOUNT COLUMN ALSO CARRIES A SIGN CONVENTION (mig 1006): which sign of this column is
+        # money EARNED. Echoed back so the wizard renders what is already declared instead of
+        # silently defaulting. Blank/absent = not declared = the long-standing negative-is-payout
+        # reading; no other field type is asked the question.
+        if (transform or "") == "number":
+            row["sign_convention"] = (existing.get(tf) or {}).get("sign_convention") or ""
+        out.append(row)
     return out
 
 
@@ -544,14 +551,35 @@ def period_source_field(report_key, client=None, org_id=None):
     return None
 
 
-def drop_footer_rows(mapped, report_key, base=None, client=None, org_id=None):
+def identity_fields(report_key, client=None, org_id=None):
+    """The report's required fields MINUS its money columns — i.e. what actually identifies a RECORD.
+
+    `required` carries two meanings at once: "the wizard must not let you leave this unmapped" and
+    "a real row carries one of these". For most reports they coincide. For a report that declares its
+    AMOUNT required (the canonical ledger declares raw_amount, because a line with no amount is not a
+    line), they do not: a grand-total footer row carries exactly the amount and nothing else, so
+    testing it against a list that INCLUDES the amount can never identify it — which is how a
+    statement's own total row was ingested as a 522nd data line (owner bug report 2026-09-20).
+    So: every NON-NUMERIC target field the report declares. Deliberately the WIDEST such list, not
+    the required ones only — `is_footer_row` fires only when EVERY listed field is blank, so naming
+    more fields makes the test STRICTER, and a real line that happens to leave one identifier blank
+    can never be mistaken for a total. Falls back to the required list for a report whose fields are
+    all numeric, so this can never return nothing and silently disable the rule."""
+    defs = _registry_overlay(report_key, client, org_id)
+    ident = [tf for (tf, _l, transform, _r, _d, _a) in defs if (transform or "") != "number"]
+    return ident or [tf for (tf, _l, _t, req, _d, _a) in defs if req]
+
+
+def drop_footer_rows(mapped, report_key, base=None, client=None, org_id=None, fields=None):
     """Remove FOOTER/TOTALS rows. Returns (kept, dropped_count).
 
     A grand-total row repeats every numeric column while leaving the row's identity blank; ingested
     as data it doubles every sum. Identified by shape via feed_shape.is_footer_row against the
-    report's declared required fields — a report that declares none is returned untouched."""
+    report's declared required fields — a report that declares none is returned untouched.
+    `fields` names the identity list explicitly (see identity_fields); omitted, the required list is
+    used, which is byte-identical to every call this function has ever served."""
     from app.modules.commcalc.feed_shape import is_footer_row
-    req = required_fields(report_key, client, org_id)
+    req = list(fields) if fields is not None else required_fields(report_key, client, org_id)
     if not req or not mapped:
         return mapped, 0
     base_keys = set((base or {}).keys())

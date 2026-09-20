@@ -12,11 +12,16 @@ const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: 
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
 const CONF_COLOR: Record<string, string> = { mapped: '#16794a', exact: '#16794a', alias: '#b45309', fuzzy: '#b42318', '': 'var(--text3)' }
 
-type Draft = { id?: string; source_header: string; transform: string; is_active: boolean; required?: boolean; label?: string; confidence?: string }
+type Draft = { id?: string; source_header: string; transform: string; is_active: boolean; required?: boolean; label?: string; confidence?: string; sign_convention?: string }
+type SignOption = { value: string; label: string }
 
 export default function ColumnMappingPage() {
   const [reportKeys, setReportKeys] = useState<string[]>([])
   const [transforms, setTransforms] = useState<string[]>([])
+  // An AMOUNT column also declares WHICH SIGN IS MONEY EARNED. Every statement states the same money
+  // its own way up, so this is a fact about THIS file's amount column — asked here, beside the header
+  // and the transform, instead of being assumed in code.
+  const [signOptions, setSignOptions] = useState<SignOption[]>([])
   const [fields, setFields] = useState<any[]>([])
   const [carriers, setCarriers] = useState<any[]>([])
   const [rk, setRk] = useState('')
@@ -29,6 +34,7 @@ export default function ColumnMappingPage() {
   useEffect(() => {
     api('/api/v1/commcalc/column-mapping/targets').then((d: any) => {
       setReportKeys(d?.report_keys || []); setTransforms(d?.transforms || [])
+      setSignOptions(d?.sign_conventions || [])
       if (d?.report_keys?.length) setRk(prev => prev || d.report_keys[0])
     }).catch(() => {})
     apiCached('/api/v1/commcalc/carriers', LOOKUP).then((c: any) => setCarriers(c || [])).catch(() => {})
@@ -51,13 +57,13 @@ export default function ColumnMappingPage() {
       const d: Record<string, Draft> = {}
       for (const f of flds) {
         const r = ruleByTf[f.target_field]
-        d[f.target_field] = { id: r?.id, source_header: r?.source_header || '', transform: r?.transform || f.transform || 'text', is_active: r ? r.is_active !== false : true, required: f.required, label: f.label }
+        d[f.target_field] = { id: r?.id, source_header: r?.source_header || '', transform: r?.transform || f.transform || 'text', is_active: r ? r.is_active !== false : true, required: f.required, label: f.label, sign_convention: r?.sign_convention || '' }
         delete ruleByTf[f.target_field]
       }
       // custom rules (target fields not in the registry — e.g. a brand-new report_key)
       for (const tf of Object.keys(ruleByTf)) {
         const r = ruleByTf[tf]
-        d[tf] = { id: r.id, source_header: r.source_header || '', transform: r.transform || 'text', is_active: r.is_active !== false, required: false, label: tf }
+        d[tf] = { id: r.id, source_header: r.source_header || '', transform: r.transform || 'text', is_active: r.is_active !== false, required: false, label: tf, sign_convention: r.sign_convention || '' }
       }
       setDraft(d)
     }).catch((e: any) => setMsg('❌ ' + (e?.message || e)))
@@ -70,7 +76,7 @@ export default function ColumnMappingPage() {
     const r = draft[tf]
     if (!r?.source_header?.trim()) { setMsg('Enter a source header first.'); return }
     try {
-      const saved: any = await api('/api/v1/commcalc/column-mapping', { method: 'POST', body: JSON.stringify({ id: r.id, report_key: rk, carrier_id: cid || undefined, target_field: tf, source_header: r.source_header.trim(), transform: r.transform, is_active: r.is_active }) })
+      const saved: any = await api('/api/v1/commcalc/column-mapping', { method: 'POST', body: JSON.stringify({ id: r.id, report_key: rk, carrier_id: cid || undefined, target_field: tf, source_header: r.source_header.trim(), transform: r.transform, is_active: r.is_active, sign_convention: r.transform === 'number' ? (r.sign_convention || '') : '' }) })
       if (saved?.id) setRow(tf, { id: saved.id })
       setMsg('✅ Saved ' + tf)
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
@@ -79,7 +85,7 @@ export default function ColumnMappingPage() {
     const toSave = Object.entries(draft).filter(([, r]) => r.source_header?.trim())
     let n = 0
     for (const [tf, r] of toSave) {
-      try { const saved: any = await api('/api/v1/commcalc/column-mapping', { method: 'POST', body: JSON.stringify({ id: r.id, report_key: rk, carrier_id: cid || undefined, target_field: tf, source_header: r.source_header.trim(), transform: r.transform, is_active: r.is_active }) }); if (saved?.id) draft[tf].id = saved.id; n++ } catch { /* keep going */ }
+      try { const saved: any = await api('/api/v1/commcalc/column-mapping', { method: 'POST', body: JSON.stringify({ id: r.id, report_key: rk, carrier_id: cid || undefined, target_field: tf, source_header: r.source_header.trim(), transform: r.transform, is_active: r.is_active, sign_convention: r.transform === 'number' ? (r.sign_convention || '') : '' }) }); if (saved?.id) draft[tf].id = saved.id; n++ } catch { /* keep going */ }
     }
     setMsg(`✅ Saved ${n} mapping${n === 1 ? '' : 's'}.`); load()
   }
@@ -170,6 +176,17 @@ export default function ColumnMappingPage() {
                     <select style={sel} value={r.transform} onChange={e => setRow(tf, { transform: e.target.value })}>
                       {transforms.map(t => <option key={t} value={t}>{t}</option>)}
                     </select>
+                    {/* An amount column carries one more fact: which sign of it is money EARNED by us.
+                        Left as the first option, it reads the way it always has. */}
+                    {r.transform === 'number' && signOptions.length > 0 && (
+                      <div style={{ marginTop: 4 }}>
+                        <select style={{ ...sel, fontSize: 12, maxWidth: 320 }} value={r.sign_convention || ''}
+                          aria-label="Which sign of this amount is money earned"
+                          onChange={e => setRow(tf, { sign_convention: e.target.value })}>
+                          {signOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </select>
+                      </div>
+                    )}
                   </td>
                   <td style={cell}><input type="checkbox" checked={r.is_active} onChange={e => setRow(tf, { is_active: e.target.checked })} /></td>
                   <td style={cell}>
@@ -184,6 +201,7 @@ export default function ColumnMappingPage() {
       </div>
       <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>
         * required field. Scope a mapping to one carrier, or leave &quot;All carriers&quot; for the org default (a carrier-specific rule overrides the default for that field). Transforms: text · number · int · date10 (first 10 chars) · mdn (strip trailing .0) · upper · lower · bool.
+        <br />An <b>amount</b> column also says <b>which sign is money earned</b>. Statements differ: some write what is owed to you as a negative (a credit) and your own purchases as positives; others write what is owed as a positive and a deactivation clawback as a negative. Set it once here and every commission-ledger bucket follows — a clawback then reduces the bucket it reverses instead of being added to it. Leave it unset and it reads the long-standing way (negative = earned).
       </p>
     </div>
   )

@@ -27,7 +27,7 @@
  */
 
 /** The path endings that mark a setup flow. Shape, not identity — a seventh wizard needs no edit. */
-export const FLOW_SUFFIXES = ['/onboarding', '/implementation', '/wizard', '/setup'] as const
+export const FLOW_SUFFIXES = ['/onboarding', '/implementation', '/wizard', '/setup', '/intake'] as const
 
 /** What is remembered about the flow a person left. `org` pins the company it was started for. */
 export type FlowTrail = { path: string; org: string | null } | null
