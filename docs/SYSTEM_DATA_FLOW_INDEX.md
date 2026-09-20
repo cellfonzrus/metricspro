@@ -110,6 +110,7 @@ email), (c) **RPC/manual entry**.
   `backend/harness_ma_slice_replace.py` (armed pre-fix negative control) +
   `backend/harness_ingest_partition_replace.py`; delete still runs insert-first via
   `safe_replace.py`. These are table-structure facts, not per-org policy → no config table.
+- **LANDING IDENTITY (2026-09-20, §32):** `pos_product_sales` now lands in ITS OWN table `raw_sales_product` (mig `1011`, NOT applied); every writer to `raw_sales` / `raw_sales_product` stamps the report kind in `source` (`landing_identity.KIND_STAMP`) and the slice replace is store × dates × KIND; a landing that would delete another kind's rows is refused naming the loss; a frame blank on every field a gating reader needs is refused before a row is written.
 - **POS line-sales + on-hand inventory shapes (mig `1004`, §25):** report keys `pos_product_sales` → `raw_sales` and `pos_inventory_listing` → `inventory_aging_device`, both through this SAME endpoint (no new ingest route). Three feed-shape rules in `commcalc/feed_shape.py` (PURE, proof `harness_rq_ingest.py`) make them safe: a grand-total FOOTER row is dropped by shape (ingested it DOUBLES every total), a US `MM/DD/YYYY HH:MM:SS` date parses via transform `date_auto` → `merchant_portals.iso_date` (`date10` truncation stored a DD/MM-ambiguous string), and a file spanning many months derives each row's period FROM ITS OWN DATE when the caller names none. All three are no-ops unless the shape is present — existing feeds are byte-identical.
 - **Tolerant .xlsx reading (owner blocker 2026-09-20, `commcalc/xlsx_tolerant.py`):** both upload readers —
   `_read_upload_df` (every upload) and `_read_upload_grids` (the intake) — read workbooks through
@@ -1034,7 +1035,8 @@ filled, which cannot be, and why,**
 `/commission-drill` `16640`; `/commission-explain` `16721`; `/commission-device` `16742`;
 `/commission-by-store/{period}` `22013`; `/commission-statement(s)` `12656,12750`; `/pay-simulator/*`
 `1954,1967`. **Frontend:** `commcalc/commission-explain/page.tsx`, `pay-simulator/page.tsx`,
-`daily-commission/page.tsx`, `commission-plans/page.tsx`.
+`daily-commission/page.tsx`, `commission-plans/page.tsx`, **`commission-structure/page.tsx`** (the front
+door — the two ways to calculate employee commission, §6e).
 
 **KEY GAP (from seed, verified):** rep pay carries **no distinct Edge or VHI/FIOS count** — both fold into
 `premium_acts` in Boost. Plan-mode `home_internet` count is runtime-only (see §8). MI resolves these two
@@ -1322,6 +1324,64 @@ allowed for NY and if need be a checkbox enabling for all markets if required").
   `GET /commcalc/setup-fee/recognition-divergence/{period}`, `GET /commcalc/setup-fee/impact/{period}`.
 - **Proofs:** `backend/harness_setup_fee_market_scope.py` (market dimension + the exec-MTD leg, DB-free)
   and `backend/scratchpad/setup_fee_monetization_proof.py` (the mig-263 package moves $0 on merge).
+
+---
+
+### 6e. THE TWO WAYS TO CALCULATE EMPLOYEE COMMISSION — the front door's header and order (owner 2026-09-20)
+
+Owner, verbatim: *"for employe commissioin structure it shows 2 options… move the one from executive mtd on
+top and the other one at the bottom and show on top that there are 2 ways to calculate employee commission:
+from the reporting on Executive MTD to get paid flat or set up a customized commission payout using the
+following steps — this should be a platform wide fix not just from verizon"*.
+
+**The two ways ARE the two values of `commcalc.commission_plan.commission_basis` (mig `298`)** — nothing
+new is stored, no money computation changed, no migration:
+
+| Option | Basis | What pays | Where it is set |
+|---|---|---|---|
+| **1 (top)** — *Pay flat from Executive MTD reporting* | `'exec_mtd'` | per-activation-type $ rates (`commission_plan.mtd_rates`) + accessory % over the Exec MTD numbers — `router._commission_mtd_result` / `GET /commcalc/commission-mtd/{period}` (read-only preview), carried to live pay by `_override_plan_by_rep_with_mtd` (§6c) | the plan editor's "Make Executive MTD this plan's commission basis" box (`commission-plans/page.tsx`, unchanged) |
+| **2 (bottom)** — *Set up a customised commission payout using the following steps* | `'rules'` (column default) | the rule engine (`commission_engine.preview`) — the structure page's steps 1–6 | the same plan editor's rules / tiers / assignments |
+
+**ONE home for the header and the order — `frontend/src/app/(platform)/commcalc/_lib/commissionWays.ts`:**
+`COMMISSION_WAYS_HEADER` ("There are 2 ways to calculate employee commission"), `COMMISSION_WAYS` (ordered:
+`exec_mtd_flat` n=1 → `custom_steps` n=2; each with `basis`, `title`, one layman sentence, its page `anchor`, and
+`reads` = the ScreenLink key of the report it pays from), `wayForBasis(basis)` (READS a plan's persisted basis —
+NULL/''/unknown → Option 2, the column default — never writes one), `optionHeading(way)`. **Rendered by
+`_lib/CommissionWaysHeader.tsx`** on BOTH surfaces that present the choice: the Employee Commission Structure
+page (full: header → Option 1 card (the former bottom "Commission from Executive MTD" card, behaviour
+unchanged, with a `PlanPicker` — the ONE plan select, also mounted in Step 1, bound to the same state) → Option 2
+heading → steps 1–6 → Apply) and the Incentive Plans editor (compact, above the plan form; Option 1 anchors
+`#exec-mtd-basis`, Option 2 `#plan-rules`). Neither page spells the header or an option title itself — the proof
+walks `src/` and fails on a second copy. The header shows the selected plan's persisted basis read-only
+("*<plan>* currently pays through Option N").
+
+**Where the data feeding Option 1 is uploaded — derived, not listed:** `lib/report-kinds.ts`
+**`feedsForScreen(visible, screen)`** (+ the hook's `feedsFor(screen)`) is the INVERSE of `showsInFor` over the
+same `GET /commcalc/report-kinds` rows: the visible kinds whose `shows_in.consumers` name `'exec_mtd'`, each
+with its `where` (backend `landing_identity.where_to_upload`). Equivalent by construction to the Executive
+MTD page's own `landing.feeds` (`feeds_for_table`, §32) — both dereference the one `CONSUMERS` map; the
+structure page reads the registry payload instead of running `_exec_mtd`. `ExecMtdFeeds` renders *"The
+Executive MTD counts what is uploaded as: <kind> under <page> · …"* through ScreenLink (two keys ADDED to
+`SCREENS`: `commission_structure`, `incentive_plans` — NAV hrefs, RBAC self-gated).
+
+**Siblings checked (every surface that presents the choice, or excused by name):** `commission-plans/page.tsx`
+— presents it → mounts the same header; `payout-schedules/page.tsx` — multi-month installment schedules, not
+this choice (excused); `_lib/RunCommissionButton.tsx` — the shared Run control, no choice copy (excused);
+`commcalc/implementation/page.tsx` + `implementation_spine.py` + `flowcharts.tsx` tenant-implementation step 6
+— name Incentive Plans, present no choice (excused); onboarding intake Stage 5 runbook (`onboarding_intake.py`)
+— no commission-structure copy (excused); `exec/mtd/page.tsx` — the report itself, not the choice (excused);
+`lib/reports.ts` report directory — the structure page is a setup page (`tileOnly`), not a report; docs/README —
+no help copy names the two options.
+
+**RULE TWO / platform-wide:** no carrier, POS or tenant in the module, the component or the copy (the proof
+runs the carrier-vocab guard's derived POS vocabulary + a carrier/tenant regex over both, and the guard itself).
+
+**Proof:** `frontend/prove_commission_structure_order.mjs` (51 checks, DB-free, real transpiled TS): the header
+sentence and order; `wayForBasis` over every basis value incl. the mig-298 CHECK set; every linked screen key
+registered AND NAV-backed (incl. every `where.screen` `where_to_upload` can emit); `feedsForScreen` ≡ inverse of
+`showsInFor`; the page order header → Option 1 → Option 2 → Step 1…6 → Apply; the editor mounts the same
+header and still owns the write; one home for the sentence and the titles across `src/`; no vendor / carrier
+spelling; five negative controls.
 
 ---
 
@@ -3079,7 +3139,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | **B2B ↔ MA activation recon (Pay Discrepancy, MA source)** | `discrepancy_results` (`source='ma'`), `ma_payment_rule` — mig `312_ma_payment_rules_and_discrepancy_attribution` | `ma_recon.py` (pure: `build_sold_index`/`build_paid_index`/`match_rules`/`reconcile_ma_activations`; reuses mig-308 `_gate_met_ma_tx` + the two-hop link); ran by `POST /discrepancy/run` `router.py:19056` for plan-mode orgs; rules CRUD `/ma-payment-rules*` `19200-19270`; proof `harness_ma_recon.py`. Sold-but-unpaid → status `open` + literal `'no business rule configured'`, or rule-attributed `info`/`lagged` |
 | **Commission Discrepancy hub + APPEALS (owner directive 2026-09-03)** | appeal columns ON `discrepancy_results` (`appeal_status/appeal_note/appealed_by/appealed_at`) — mig `947_commission_discrepancy_hub` (NO new table: rows stay the two engines' output, the hub only ANNOTATES; the mig-098 denied-appeal claw-back pipeline `/recovery/*` is a DIFFERENT lifecycle, linked not re-derived). Mig 947 also seeds the HOUSE Incentives tile layout (§14 D1) + the `nav_default` label preset | pure state machine `discrepancy_appeals.py` (`validate_transition`/`apply_appeal`/`period_range_variants`/`summarize_appeals`; states `appeal_filed→appeal_won\|appeal_denied\|written_off`, NULL = none, clear = full reset); `GET /discrepancy-appeals` (period-RANGE query, spelling-agnostic; filters source/status/appeal_status/store/activation-date; degrades `appeals_ready=false` pre-947) + `PATCH /discrepancy-appeals/{row_id}` (org-scoped read-validate-update, who/when via `_caller_uid`) beside the discrepancy block; page `commcalc/commission-discrepancy` (StandardFilterBar + appeal buttons + `/recovery/claims` chase list); proof `harness_discrepancy_appeals.py` |
 | **Carrier statement commission** | mig `065_carrier_commission.sql` → `rep_commissions.carrier_statement_comm` | `/carrier-comm-file/extract` `6216`, `/commission-received-breakout` `15488` |
-| **Commission plans (rule engine)** | mig `059_commission_plans.sql`, `066`,`067`,`232`,`260`,`262` | `commission_engine.py`; `/commission-plans*` `12557-14246` (coverage, pay-gate, exclusions, bulk-assign) |
+| **Commission plans (rule engine)** | mig `059_commission_plans.sql`, `066`,`067`,`232`,`260`,`262`; **`commission_basis` + `mtd_rates` mig `298`** (`'rules'` default \| `'exec_mtd'` — THE two ways, §6e) | `commission_engine.py`; `/commission-plans*` `12557-14246` (coverage, pay-gate, exclusions, bulk-assign); `commission_basis` READ by `commission-structure/page.tsx` + `commission-plans/page.tsx` through `_lib/commissionWays.wayForBasis` (written only by the plan editor's save) |
 | **Commission ledger (income tracking)** | mig `071_commission_ledger.sql`; provenance mig `251`; leg mig `274`; **sign convention mig `1006` (on `commcalc.column_mapping.sign_convention`, §25.12)**; **THE BUCKET REGISTRY mig `1009_commission_bucket_registry.sql` (`commcalc.commission_bucket`, §30.7 — NOT applied)** | `/commission-ledger/*` `3997-4602`. Engine `commcalc/commission_ledger.py` — `load_rules_meta` (rules + `rules_source` `tenant`\|`builtin_default`\|`none`; **the built-in MA defaults belong to `DEFAULT_RULES_BY_TEMPLATE` and no longer leak into a tenant-created rule-set**), `convention_from_mapping` → `direction` → `classify_line` → `booked_amount` (WHICH SIGN IS MONEY EARNED, declared on the amount column's mapping row; a reversal books NEGATIVE into the bucket it reverses, never `abs()`), `build_row`, `summarize`, `leg_of`, `list_templates` (also lists a template the tenant's own ledger rows name, so a brand-new carrier's first rule can be written in the UI). Footer/total rows dropped through the EXISTING `column_mapping.drop_footer_rows` + `identity_fields` (mig 1004 rule, reported as `footer_rows_dropped`). Proof `harness_commission_ledger_sign.py` (85 checks, armed negative controls). **THE BUCKETS ARE CONFIG (§30.7, owner 2026-09-20):** `load_buckets_meta` (house rows + this org's rows merged PER KEY, `merge_buckets`; pre-1009 → `builtin_buckets()` = `HOUSE_BUCKETS`, the seed's mirror, DISPLAY only), `bucket_keys` / `bucket_labels` / `deduction_keys` / `bucket_kind`; every bucket has a KIND — `earned` books +|amt| (a netted reversal −|amt|), `deduction` books the canonical SIGNED amount either way (`_booking_for`, never abs()). The five mig-071 keys stay COLUMN-BACKED (`COLUMN_BACKED`); every other bucket is read by (`category`, `payout_total`) — no column per bucket. `summarize` reports one entry per registry bucket + `earned_total` / `deductions_total` / `net_total` / `unlisted` (a key the registry no longer lists is summed, never dropped); `payout_total` = the NET the statement pays. `unbookable_categories` + `router._ledger_bucket_guard` REFUSE a landing to a column-less bucket while 1009 is absent, naming it. Registry endpoints `GET/POST/DELETE /commcalc/commission-buckets`; settings panel on the Category → Bucket Map page. Proof: `harness_commission_ledger_sign.py` §I–K (125 checks) |
 | **VIP / PayGo** | mig `008`,`011`,`014` | `vip_sweep.py`; `/vip/*` `2421-3078`, `/vip/paygo/*` `8336-8365` |
 | `commcalc.vip_invoice_lines` (distributor invoice LINE items; `location` is a STORE ADDRESS in the distributor's own spelling) | `vip_sweep.py` (portal scrape, mig `008`) | **Device Purchases report** (`account/device_purchases.compute` → `GET /account/device-purchases`, §23y — the money grain); `device_cost_recon` (source ② evidence); `asset/invoice_due` (per-invoice device list) |
@@ -3135,6 +3195,8 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `storeops.store_document` **(EXTENDED, not forked — mig `986` adds `event_id` + doc kinds `event_vendor_contract`/`event_photo`/`event_permit`)** | `POST /marketing/events/{id}/doc` (reuses `store_lease.upload_store_doc` + the private `store-docs` bucket) | `GET /marketing/events/{id}/docs`, `GET /marketing/doc-url` (org-scoped id lookup + must be an EVENT doc; path never echoed). Per-store lease/COI readers filter `store_code` and are unaffected (§23) |
 | `commcalc.raw_sales` | upload `/upload-mapped` `3637`, sweeps, `sales/promote-feed` `22757`, **built-in POS promotion** (`commcalc.pos_promote_period`, mig `727`; carries `tax` since mig `991`) | `calc_rep_commissions`, `calc_gp_report`, `_compute_feed_actuals_py` `18678`, `_sales_cell_agg`, `_mi_resolve_numbers` edge/vhi `28843`, installment engines; **POS line-sales columns `quantity`/`total_cost`/`pricing_discounts`/`contract_no` (mig `1004`, §25)** — nullable, only the POS line-sales shape fills them; **`tax` column (mig `105`)** read by `commcalc/tax_collected.py aggregate()` — the ONE pass behind `GET /commcalc/tax-collected` AND the `sales_tax_payable` BS liability (mig `991`, §4); NOTE `coa._sales_union_rows` deliberately does NOT select `tax` (P&L revenue is pre-tax) |
 | `commcalc.raw_sales` | upload `/upload-mapped` `3637`, sweeps, `sales/promote-feed` `22757` | `calc_rep_commissions`, `calc_gp_report`, `_compute_feed_actuals_py` `18678`, `_sales_cell_agg`, `_mi_resolve_numbers` edge/vhi `28843`, installment engines |
+| `commcalc.raw_sales.source` — THE REPORT-KIND STAMP (§32, 2026-09-20; column from mig `727`, vocabulary widened by mig `1011`'s COMMENT) | every writer: `_ingest_mapped_df` (stamps the layout key, e.g. `sales`), `_upload_file_impl` (`/upload/sales` — the route's layout key), `_promote_feed_impl` (the default kind), `pos_promote_period` (`'pos_builtin'`, unchanged) — all through `landing_identity.stamp` | `landing_identity.kind_of_row` (NULL / `pos_builtin` / any non-layout value = the DEFAULT kind `sales`, so every pre-existing row keeps its meaning) → `partition_slice` (the kind dimension of the slice replace) · `apply_kind_filter` (the period-keyed writers' delete) · `_intake_reread_sales(table, kind)` |
+| `commcalc.raw_sales_product` (mig `1011`, **NOT applied**) — the POS BY-PRODUCT aggregate's OWN table (layout `pos_product_sales`; owner decision 2026-09-20, §32): raw_sales's columns + `source` (the kind stamp, default `pos_product_sales`) + `import_batch_id` | `_ingest_mapped_df` via `/upload-mapped` (`report_key=pos_product_sales`) and the intake's `pos` kind (`_intake_land` → `SOURCE_KIND_TARGET['pos']` = `TABLE_MAP['pos_product_sales']`); slice-replaced per store × `trans_date` × kind (`ingest_slice.INGEST_PARTITION`) | `_intake_reread_sales(table='raw_sales_product')` → the Stage-4 verify + report links (`_intake_link_source`). **Summed by NO money report** (it double-counts against line-level rows) — `landing_identity.CONSUMERS['raw_sales_product']` says so; before the migration a landing to it is REFUSED naming the file |
 | `commcalc.daily_sales_feed` | B2B/email sweeps, upload | `_compute_feed_actuals_py` (primary source), sales report, fallback in calc |
 | `commcalc.merchant_settlement_day` | `merchant_portal_sweep.store_settlement` (daily portal scrape) | `closing/external_credit_recon` (declared-vs-settled card tally, §12a), resolved via `report_pull_map.merchant_settlement` |
 | `commcalc.merchant_settlement_batch` | `merchant_portal_sweep.store_batches` | cash/deposit recon (§12); NEVER summed into the closing card tally (different grain) |
@@ -3248,6 +3310,10 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
 | `GET /commcalc/report-kinds` — WHICH REPORT KINDS THIS TENANT MAY UPLOAD, computed never listed: `declaration` (+ reasons), `kinds` (visible, provenance per row), `hidden` (with why), `surfaces`, `upload_types`, `filename_rules` (the declared POS standard restricted to visible kinds), `standard`, `caps`, `registry_ready`. READ-ONLY, org-scoped `{org, house}` | `router.report_kinds_endpoint` → `report_kinds.load_registry` / `tenant_declaration` (THE one reader) / `_intake_caps` / `load_signatures` / `_pos_profile` → `report_kinds.payload` (`visible_kinds`) | §30.9; every upload surface renders from it through `lib/report-kinds.useReportKinds` (locked by `harness_report_kind_lock.py`). Proof `harness_report_kinds.py` §G |
+| `GET /commcalc/report-kinds` **`kinds[].shows_in` + `kinds[].where` + `consumers`** (§32, 2026-09-20) — per visible kind: the table its upload lands in and that table's readers (ScreenLink screen keys + the fields each needs), the page to upload it on; the ONE consumers map by table | `router.py` `report_kinds_endpoint` → `landing_identity.shows_in` / `where_to_upload` / `CONSUMERS` | every upload surface renders it through `components/ShowsIn.tsx` via `useReportKinds().showsIn(key \| upload_type)` — Upload page tiles, Upload wizard steps, Email / FTP import routes, intake 2.0 cards + 2.1 + the 2.6 result, Stage 5 runbook lines; pinned by `harness_landing_identity_lock.py` |
+| `GET /commcalc/report-kinds` **read the other way round — `lib/report-kinds.feedsForScreen(visible, screen)` / `useReportKinds().feedsFor(screen)`** (§6e, 2026-09-20): the visible kinds whose `shows_in.consumers` name a report screen, each with its `where` — the inverse of `showsInFor` over the same payload, no second link map | (frontend selector over the same endpoint; backend twin by construction = `landing_identity.feeds_for_table`) | `commcalc/_lib/CommissionWaysHeader.tsx` `ExecMtdFeeds` ("The Executive MTD counts what is uploaded as: <kind> under <page>") on the Employee Commission Structure page. Proof `frontend/prove_commission_structure_order.mjs` §C |
+| `GET /commcalc/commission-mtd/{period}` (`?plan_id=&rates=<cat:$,…>&acc_pct=`) — Option 1's READ-ONLY preview: each rep's flat $ per activation type + accessory % over the Exec MTD numbers for the plan's stores (`_commission_mtd_result`); `POST …/save` records it (plan editor only), `GET …/saved` reads the record | `router.commission_mtd` `19739` / `19778` / `19816` → `_commission_mtd_result` `19603` → `_exec_mtd` | §6e — the Employee Commission Structure page's **Option 1** card (top; formerly the bottom card, unchanged call) and the plan editor's "Calculate from Executive MTD" box |
+| **`/commcalc/commission-structure`** — Employee Commission Structure (the front door, `tileOnly`): "There are 2 ways to calculate employee commission" → Option 1 (Exec MTD flat) → Option 2 (custom steps 1–6) → Apply | reads `GET /commission-plans`, `/accessory-config`, `/accessory-definition`, `/commission-plans/preview`, `/commission-mtd/{period}`, `/report-kinds`; writes ONLY `POST /commission-plans` (activation_source) + `PUT /accessory-config` — as before | §6e; header + order from `_lib/commissionWays.ts` via `_lib/CommissionWaysHeader.tsx` (also mounted on `/commcalc/commission-plans`). Proof `frontend/prove_commission_structure_order.mjs` |
 | `POST /commcalc/report-kinds/detect` (multipart file) — "This looks like your <kind> — right?": header names only, nothing stored; `mode` confirm\|ask\|none + candidates with confidence and evidence | `router.report_kinds_detect` → `_read_upload_grids` → `onboarding_intake.stitch_sheets` → `report_kinds.detect_report_kind` over `visible_kinds` + the confirmed signatures → `decide` | §30.9; the intake's `KindDetectZone`. Proof `harness_report_kinds.py` §E/§G |
 | `GET /commcalc/onboarding/intake/state?links=` — STAGE D REPORT LINKS (§30.11): `report_links` on the state payload. `''` = the cached matrix (with `stale` when an instance's key / verified_at / rows_landed changed since — `report_links.fingerprint`) or `computed:false`; `all` = RECOMPUTE from the landed rows (every source through its kind's OWN re-read: `_intake_reread_sales` / `_intake_reread_inventory` / `_intake_reread` / `_intake_reread_xreport` / `_intake_reread_merchant` / `_intake_reread_billpay`, the activation feed through `_intake_activation_rows`) and cache on the run's stage-4 row `links:run:matrix`; `<a>\|<b>` (two instance keys — they carry colons) = that pair's detail (counts each way, basis, unmatched / ambiguous samples). Read-only; the cache is the only write | `router.onboarding_intake_state` → `_intake_report_links` → `_intake_report_links_compute` → `_intake_link_source` / `_intake_link_activations` → `report_links.report` (`inventory_sold_recon.line_pairings` + `sales_mobile_index`; `device_cost_recon.device_key` / `norm_order`, `inventory_sold_recon.mobile_key` injected) | §30.11 |
 | `POST /commcalc/onboarding/intake/commit` — now also takes `report_kind` (the registry card picked at 2.0 / 3.1) and, on a CONFIRMED save, learns the layout (`report_kind` in the response: `learned` / `kind` / `defined`) | `router.onboarding_intake_commit` → `_intake_commit_*` → `_intake_learn_signature` | §30.9 (additive to §30.2–30.8) |
@@ -3268,6 +3334,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `POST /commcalc/onboarding/intake/sign-off` (4.2: name, role, on-behalf flag → `onboarding_run.signed_off_*`; refused while any source in the run is red, naming them) | `router.onboarding_intake_sign_off` → `onboarding_intake.rail` → `verify_table` | §30.6 |
 | `GET /commcalc/commission-category-map` · `GET /commcalc/commission-ledger/templates` | `router.get_commission_category_map` (returns `default_rules` for the templates that HAVE them, `unclassified_note` when a report inherits none, and the amount column's convention) / `commission_ledger_templates` → `list_templates` | §15, §25.12 — the Category Map editor and its template picker |
 | `GET /commcalc/exec-mtd/{period}` (returns `metric_coverage` — the silent-zero detector) · `GET/PUT /commcalc/exec-metric-config` | `router.py` `exec_mtd` / `get_exec_metric_config` / `put_exec_metric_config` | §3 Exec-MTD metric definitions (carrier presets + detector, mig `962`) |
+| `GET /commcalc/exec-mtd/{period}` **`landing`** (§32, 2026-09-20) — THE WAY BACK TO THE UPLOAD: the tables this page reads, the fields it needs (`CONSUMERS['raw_sales'].exec_mtd.needs`), `blank_fields` (blank on EVERY row of the period — rows exist but nothing to count), `feeds` (the registry kinds whose upload lands in those tables, each with the page to upload it on) | `router.py` `_exec_mtd` → `landing_identity.blank_fields_over` / `feeds_for_table` | `commcalc/exec/mtd/page.tsx` amber banner ("N sales lines carry none of the columns this page counts … upload it as <kind> under <page>", links through ScreenLink) |
 | `POST /commcalc/data-sources/sweep/run-due` | `router.py:data_sources_run_due` | §12a — the ONE portal-pull scheduler (VidaPay, b2bsoft, and the three merchant portals); cron self-registered by mig `956`; since mig `998` a connector whose `pull` route is closed is dropped BEFORE `next_run_at` is advanced and reported as `route_disabled` in the tick's answer — §12a.1 |
 | `GET /commcalc/merchant-portals/catalog` | `router.py:merchant_portal_catalog` | §12a portal descriptors for the connector settings page |
 | `GET /commcalc/merchant-portals/health` | `router.py:merchant_portal_health` | §12a durable-session health roll-up |
@@ -3322,7 +3389,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `POST /management-incentive/resolve` | `28912` | §9 |
 | `GET /management-incentive/payouts` | `28668` | §9 |
 | `POST /upload/{file_type}` | `844` | §2 |
-| `POST /upload-mapped` | `3637` | §2 |
+| `POST /upload-mapped` | `3637` | §2; **§32:** form `replace_other_kinds` (confirm deleting another kind's rows in the file's slice — else refused naming the loss); a `target_table` contradicting `column_mapping.TABLE_MAP` is refused |
 | `GET /store-resolution` | `14296` | §13 |
 | `GET /flags/{period}` | `10299` | §15 |
 | `GET /storeops/payroll` (pay-gated, mig 434 — money keys stripped for callers below market manager; `X-Can-See-Pay-Rates` header) | `storeops/router.py:1390` | §14 |
@@ -3432,6 +3499,9 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | External credit-card settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='external_cc'` | `merchant_portals.totals_by_store_day`; tallied against `daily_closing.t_ext_cc` by `closing/external_credit_recon` (§12a) |
 | POS-merchant settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='pos_merchant'` | same reader, `pos_merchant` role (§12a) |
 | Exec-MTD LINE metrics (Bill Payment Qty/$ · Total Phones · Activation Fee · Total Protect) | `raw_sales.department` / `.category` / `.product_desc` matched against `commcalc.exec_metric_config.rules` (EXACT membership for dept/cat, substring for `product_desc_contains`) | `exec_metric_defs.resolve` (tenant row > house `carrier` PRESET > `CODE_DEFAULTS`, mig `962`) → `exec_metric_defs.line_match` inside `_sales_cell_agg`; silent-zero detector `bucket_coverage` → `GET /exec-mtd/*` key `metric_coverage` → Exec-MTD banner. Also the SECONDARY basis for `/metric-recon` and Leg B of the mig-`944` 3-way bill-pay recon; the mig-`939` P&L carve-out does NOT read it. Proof `harness_exec_metric_defs.py` (§3) |
+| Which of THE TWO WAYS a plan pays employee commission through (Option 1 flat from Executive MTD \| Option 2 customised rules) — and the order every surface presents them in | `commcalc.commission_plan.commission_basis` (mig `298`: `'exec_mtd'` \| `'rules'` default) | `_lib/commissionWays.wayForBasis` (READ-ONLY on the structure page + plan editor header; the plan editor's checkbox is the only writer); order + header = `COMMISSION_WAYS` (one home, §6e); pay path unchanged: `_resolve_plan_by_rep` → `_override_plan_by_rep_with_mtd` (§6c) |
+| Which uploads FEED a given report screen (the way back from a report to its upload pages, frontend) | `GET /commcalc/report-kinds` `kinds[].shows_in.consumers[].screen` + `kinds[].where` (from the one `landing_identity.CONSUMERS` map) | `lib/report-kinds.feedsForScreen` / `useReportKinds().feedsFor('exec_mtd')` → `CommissionWaysHeader.ExecMtdFeeds` (§6e); the Executive MTD page itself uses the backend twin `feeds_for_table` on its own `landing` payload (§32) |
+| Exec-MTD "rows exist but nothing to count" / "no rows" — WHICH UPLOAD FEEDS THIS PAGE (§32) | `raw_sales` ∪ `daily_sales_feed` rows of the period × the fields `landing_identity.CONSUMERS['raw_sales']` says the Executive MTD classifies on (department / category / product_desc); the report-kind registry rows whose landing table is one of those (`feeds_for_table`) | `_exec_mtd` → payload `landing` → the page's amber banner with the kind's layman label and its upload page (ScreenLink). Measured instance: org `f4f1c16e…` July 2026 — 238 rows, all three fields blank on every row (the by-product aggregate had replaced the line-level rows) |
 | Activation counts (premium/byod/upgrade) | `raw_sales.contract_type` | `classify_contract_type` `calculator.py:40`; display via `_sales_cell_agg` `router.py:17842` |
 | Accessory $ ("acc_gp") | `raw_sales.ext_price` (+ device set-up fee; NOT gp, NOT Ondigo) | `_compute_feed_actuals_py` `router.py:18678` |
 | GP report accessory column ("Acc Sales" / legacy "Acc GP") | `raw_sales.ext_price` of accessory lines (`accessory_config.gp_acc_basis='sales'` — house default, mig 932) or `raw_sales.gp` (`'gp'` opt-back) | `calc_gp_report(acc_basis=…)` `gp_report.py`; label from payload `acc_label` (§4) |
@@ -8924,3 +8994,111 @@ Registered in §16 (by TABLE — `carrier_commission`, `raw_ma_commission` as th
 `rep_commissions.boost_commission` as the earned side), §17 (by ENDPOINT —
 `GET /commcalc/carrier-vs-pay/{period}`) and §18 (by METRIC — carrier earned, employee paid,
 `sales_source`, and the two activation-basis axes).
+
+## 32. LANDING IDENTITY — a landed row says which report KIND wrote it; a replace is store × dates × kind; every upload says where it shows (owner 2026-09-20)
+
+Owner, verbatim: *"the data is not flowing into the exec mtd from wherever it is uploaded — need to know where the data
+is uploaded and it should be mentioned on the upload page where this upload will be reflected, with a link. If the user
+does not know and uploads the data it does no good."*
+
+**THE INSTANCE (org `f4f1c16e…`, measured from `upload_trace`).** 2026-09-13: the line-level "Sales report with IMEI and
+phone number" landed **48,875** rows in `commcalc.raw_sales`. 2026-09-20 04:07: the onboarding intake committed report kind
+`pos_product_sales` (the "Sales report with cost and selling price" BY-PRODUCT aggregate) → `raw_sales`, in=10,823 saved=10,823,
+trace text *"replaced ONLY this file's slice — 1 store value(s) between 2024-01-02 and 2026-08-31"*. Same store × same date
+span as the line-level rows → **the 48,875 line-level rows are GONE**; `raw_sales` rows with a serial for that org: 0; the
+surviving July rows are 0/238 filled on department / category / trans_type / contract_type / product_desc / sku, so the
+Executive MTD read rows and had nothing to count. `raw_sales.source` (mig 727) and `import_batch_id` (mig 732) existed and
+were NULL on every intake row. 04:34: a manual `daily_sales` upload of a tender-summary workbook (X-report family) was
+refused with *"Missing expected column(s): Salesperson, Trans ID. Found columns: Adjustments, AmEx, Cash…"* — a column
+list instead of the page it belonged to.
+
+**THE CLASS (CLAUDE.md "A fix is a DESIGN fix" — five facts, each fixed for every caller, one home each):**
+
+| # | The class | The mechanism (ONE home: `backend/app/modules/commcalc/landing_identity.py`) |
+|---|-----------|------------------------------------------------------------------------------|
+| 1 | **A landing did not record which report kind wrote its rows, and the replace scope ignored it.** `_ingest_mapped_df` slice-replaced by store × date range only, so two kinds landing in one table clobbered each other | **`KIND_STAMP`** — per table, the column that records the kind (`raw_sales.source`, `raw_sales_product.source`) and its DEFAULT (what NULL means). Every writer STAMPS through `landing_identity.stamp`: `_ingest_mapped_df` (the layout key), `_upload_file_impl` (`/upload/sales` → its route's layout key), `_promote_feed_impl` (the default kind). The slice a file replaces is **store × dates × KIND**: `_ingest_mapped_df` snapshots the slice (ids kept), **`partition_slice`** splits it into this kind's rows and OTHER kinds', deletes THIS kind's by the snapshot's own ids, and **REFUSES** (400, nothing written, traced) when other kinds' rows sit in the slice — *"Not landed — this would replace 48,875 rows of 'Sales report with IMEI and phone number' with 10,823 rows of 'Sales report with cost and selling price' in the same 1 store value(s) between … in commcalc.raw_sales …"* — unless the caller confirms (`replace_other_kinds` on `/upload-mapped`; `confirm_replace_other_kinds` on the intake commit = the 2.6 checkbox), in which case the loss is deleted on purpose and RECORDED in the trace note. The period-keyed writers (`/upload/sales`, the promotion) scope their delete through **`apply_kind_filter`** (PostgREST `or=(source.is.null,source.not.in.(…))` for the default kind; a NO-OP while one layout targets the table — byte-identical today). **COMPATIBILITY: NULL, `'pos_builtin'` and any non-layout value read as the table's DEFAULT kind** (`kind_of_row`), so every row landed before this keeps exactly its meaning and a line-level re-upload replaces them as before |
+| 2 | **Two report kinds that answer different questions shared one table.** Summed beside line-level rows the by-product aggregate double-counts; landed in their slice it replaces them | Owner decision: **`pos_product_sales` lands in ITS OWN table `commcalc.raw_sales_product`** (mig **`1011_raw_sales_product.sql`**, written, **NOT applied**: raw_sales's columns + `source` + `import_batch_id`; re-points the mig-1004 `report_definitions` copies; touches no `raw_sales` row). The fact lives in `column_mapping.TABLE_MAP` and is DEREFERENCED: `onboarding_intake.SOURCE_KIND_TARGET` reads `CM.TABLE_MAP[...]` (it spelled the tables before — the second copy), `ingest_slice.INGEST_PARTITION['raw_sales_product']` (store × `trans_date`), `_intake_reread_sales(table, kind)`, `_intake_link_source`, `layouts_for_kind` (`pos` → `[pos_product_sales]`, `sales` → `[sales]`). Until 1011 runs a landing to it is **REFUSED naming the file** — never redirected into `raw_sales`. `/upload-mapped` refuses a `target_table` that contradicts TABLE_MAP. The line-level layout **`sales`** gains the second POS shape's spellings as ALIASES (Invoice # / Invoiced At / Sold By / Sold On / Tracking # / Product Name / Total Price / Gross Profit / Refund), the three optional fields `raw_sales` has carried since mig 1004 (`sku` / `quantity` / `total_cost`), `trans_date` through `date_auto` and `department` through `category_top` (both supersets of the old transforms on the old inputs; a saved `column_mapping` row keeps its own transform) — so ANY POS's line-level export maps to `raw_sales` under the "Sales report with IMEI and phone number" card: the owner's re-upload path |
+| 3 | **A landing whose consumers cannot use it was accepted silently** | **`CONSUMERS`** — the ONE map: per landing table, who reads it (ScreenLink screen key + label), the fields each needs, whether it GATES, and why. `blank_consumer_fields(mapped, table)` runs in `_ingest_mapped_df` BEFORE the snapshot: a frame blank on EVERY field a gating reader needs (Executive MTD: department / category / product_desc; Sales Report: + contract_type; Gross Profit: ext_price / gp) is refused (400, traced with `guard.blank_consumer_fields`) naming the reader and its fields — *"a landing nobody can read is not a landing"*. One filled cell anywhere satisfies the reader; the gate is on ALL-blank, never on some-blank |
+| 4 | **The person was not told where an upload shows up** | **`shows_in(row)`** — registry row → landing table (`TABLE_MAP[layout]`, else the route's table `_TRACE_TARGET_TABLE`, else `SOURCE_KIND_TARGET[landing]`, else the custom-import table) → `CONSUMERS[table]`; **`where_to_upload(row)`** (the intake for an intake landing, Upload Files + its tile / sheet otherwise). `GET /commcalc/report-kinds` attaches `kinds[].shows_in` + `kinds[].where` + `consumers`; `useReportKinds().showsIn(key | upload_type)` is the ONE caller of the ONE selector `showsInFor`; **`components/ShowsIn.tsx`** renders *"This upload will show in: [Executive MTD] [Sales Report] [Gross Profit] … · lands in raw_sales"* through **ScreenLink** (23 consumer screen keys ADDED to `SCREENS`; hrefs are NAV's, RBAC-gated) on EVERY surface: Upload page (period / module / custom tiles), Upload wizard steps, Email + FTP import routes, intake 2.0 cards, 2.1, the 2.6 result (`verified_numbers.shows_in`), Stage 5 runbook lines (`runbook.monthly[].shows_in`; its two links + cross-check reports are now screen KEYS, no hrefs). **The Executive MTD's way back:** `_exec_mtd` payload `landing` = the tables it reads, the fields it needs, `blank_fields` (blank on every row), `feeds` (`feeds_for_table`: the kinds whose upload lands there — the line-level card, NOT the by-product card — each with its page) → the amber banner *"238 sales lines for this period carry none of the columns this page counts … Upload it as Sales report with IMEI and phone number — under Onboarding — Commission Intake"* |
+| 5 | **A wrong file was refused with a column list instead of the right page** | `_upload_file_impl`'s signature refusal now runs **`looks_like(headers)`** — the registry's own `detect_report_kind` over the header row (visible kinds + confirmed signatures) — and prefixes *"This looks like a 'Cash register / X-report'. Upload it under Onboarding — Commission Intake."* (the ask form when two candidates are close; nothing when detection cannot say); the column list stays as the second line; the Upload page renders the message through `LinkedText` so the page name is a link |
+
+**DUPLICATE CHECK (build gate) — searched** §2 (`_ingest_mapped_df`, `_select_replace_slice`, `ingest_slice.replace_scope` /
+`INGEST_PARTITION`, the mig-1004 shape rules, `/upload/{file_type}`'s `SIGNATURES`), §16 `raw_sales` / `daily_sales_feed`
+(`source`, mig 727), `core.import_batches` (732), `report_definitions` (039/291/1004), §17 `/upload-mapped`, `/report-kinds`,
+`/exec-mtd`, §18 the Exec-MTD line metrics + `bucket_coverage`, §23o (ScreenLink — the ONE screen → href mechanism), §25
+(the second POS shape), §26.10 (`feedFor` — applies? / loaded?), §30.6 (`_intake_land`, `SOURCE_KIND_TARGET`, the re-reads),
+§30.8 (`lands_in`, the runbook), §30.9 (the registry, `detect_report_kind`, `useReportKinds`, the six surfaces, the lock),
+§30.11 (`_intake_link_source`). **REUSED, not rebuilt:** `raw_sales.source` (no new column on raw_sales), `_ingest_mapped_df`
+(the ONE landing path — no new ingest route), `_select_replace_slice` / `_restore_rows` (ids kept for the by-id delete),
+`ingest_slice.INGEST_PARTITION` (one more row), `column_mapping.TABLE_MAP` (one entry re-pointed; the `sales` layout extended
+additively), `report_kinds.detect_report_kind` / `decide` (the wrong-file sentence), `ScreenLink` (`SCREENS` + `LinkedText`),
+`useReportKinds` (the one hook), the mig-202 `upload_trace`. **NEW:** `landing_identity.py` (PURE), `components/ShowsIn.tsx`,
+`raw_sales_product` (mig 1011), the lock. **Not a sibling:** no second replace rule, no second consumers list (the runbook's
+literal `href`s were one — removed), no second detection, no second screen → href map.
+
+**SIBLINGS — every writer / reader of a multi-kind table, fixed or excused by name.**
+
+| Path | Table(s) | Verdict |
+|------|----------|---------|
+| `_ingest_mapped_df` (`/upload-mapped`, the intake's sales / pos / bill-pay kinds, the custom-report dataset binding) | raw_sales, raw_sales_product (+ every TABLE_MAP target) | **FIXED** — stamps, consumer gate, kind-partitioned by-id replace, cross-kind refusal / confirmation, missing-table refusal |
+| `_upload_file_impl` — `/upload/sales` (manual + the email and FTP sweeps call it) | raw_sales | **FIXED** — stamps the route's layout key; the period replace goes through `apply_kind_filter` (no-op today) |
+| `_promote_feed_impl` (`sales/promote-feed`, the hourly derive) | raw_sales | **FIXED** — stamps the default kind; the period delete goes through `apply_kind_filter` (no-op today) |
+| `commcalc.pos_promote_period` (mig 727, SQL) | raw_sales, daily_sales_feed | **EXCUSED** — writes `source='pos_builtin'` and deletes only its own rows; `'pos_builtin'` reads as the default kind (line-level), which is what it writes. Unchanged |
+| `/upload/daily_sales` (manual, email, FTP) → `daily_sales_feed` | daily_sales_feed | **EXCUSED** — ONE kind lands there (`daily_sales`); its per-day replace has no second kind to collide with. The lock's rule (b) turns it into a build failure the day a second layout targets it |
+| `_ledger_land_rows` → `_ledger_delete_scoped` | commission_ledger (two statement types = two layouts) | **EXCUSED (verified by the lock)** — rows carry `source_report = <carrier>__<statement type>` and the wipe filters on it (§30, §30.10): the kind is already on every row |
+| `b2b_sweep.write_inventory_devices` / `pos_inventory_listing` via `/upload-mapped` | inventory_aging_device | **EXCUSED** — a SNAPSHOT table (upsert per device, off-hand marking; outside `INGEST_PARTITION`, pinned by `harness_ingest_partition_replace.py`); on-hand and aging describe the same units, so an upsert merges rather than clobbers. The §30.6 (b) open item (two semantics for one table) stands |
+| `_xreport_land_rows`, `merchant_portal_sweep.store_settlement`, `epay_ingest.ingest`, `raw_ma_*` (day × account slices) | pos_tender_summary, merchant_settlement_day, raw_epay_daily_tx, raw_ma_* | **EXCUSED** — one kind each, natural-key upserts or account-sliced replaces |
+| `raw_custom_import` (the self-serve sheets) | raw_custom_import | **EXCUSED** — rows carry their `report_key` (the sheet); each kind is its own key |
+| Readers: `_intake_reread_sales`, `_intake_link_source`, `_intake_billpay_extract_after_sales` | raw_sales / raw_sales_product | **FIXED** — table + kind; the bill-pay extraction runs on the line-level table only (product rows carry nothing to match on) |
+| Readers of the product-level columns (`sku` / `quantity` / `total_cost` / `pricing_discounts` / `contract_no` on raw_sales) | raw_sales | **MEASURED: none sums them** — `inventory_sold_recon` reads `quantity` on a sale LINE (still there: the `sales` layout now carries it), `device_cost_recon` / payables read the inventory table. The product table's consumer is the intake verify + report links, stated in `CONSUMERS` |
+
+**THE LOCK — `backend/harness_landing_identity_lock.py` (31 checks; in `carrier-vocab-guard.yml` beside the report-kind, mapping-key
+and report-links locks).** (a) `KIND_STAMP` / `CONSUMERS` defined once; a second screen-naming consumers map in backend/app or a
+≥3-key list of consumer screens in frontend/src → RED (ALLOW with reasons; stale → RED); (b) every table ≥2 `TABLE_MAP` layouts
+target is in `KIND_STAMP` or excused with a reason that is re-verified (`_ledger_delete_scoped` filters by `source_report`);
+`SOURCE_KIND_TARGET` dereferences `TABLE_MAP`; both sales tables are in `INGEST_PARTITION`; (c) every router function that inserts
+into a stamped table by name calls `_landing.stamp(`; `_ingest_mapped_df` stamps → gates → partitions → deletes by id → refuses;
+the legacy route and the promotion stamp + `apply_kind_filter`; the re-read filters through `kind_of_row`; `/upload-mapped` refuses
+a contradicting table; the wrong-file sentence is wired; (d) every consumer screen key exists in `ScreenLink.SCREENS`; (e) the six
+upload surfaces import AND render `ShowsIn`, `showsInFor` has one caller, the endpoint attaches `shows_in`, the runbook derives its
+lines, the Executive MTD renders `landing`; (f) eight negative controls (an unstamped writer, a second map, a surface without ShowsIn,
+a second caller, a key without a SCREENS entry, a second layout on an unstamped table, a stale allow entry → RED).
+
+**PROOF — `backend/harness_landing_identity.py` (54 checks, DB-free, an in-memory client driving the REAL `_ingest_mapped_df`,
+`_intake_reread_sales`, `upload_mapped`, `report_kinds_endpoint`, `_looks_like_sentence`).** §A the pure rules over the real mig-1010
+seed mirror (the refusal sentence with the owner's numbers: *"48,875 rows of 'Sales report with IMEI and phone number' with 10,823
+rows of 'Sales report with cost and selling price'"*; `feeds_for_table('raw_sales')` = the line-level card only; the tender-summary
+header → the X-report card + the intake). §B **THE REGRESSION, in the PRE-FIX map (both layouts → raw_sales):** 48 line-level rows land
+stamped; the aggregate for the same store × dates is REFUSED naming the 32 rows in its slice, the 48 survive byte for byte, the
+refusal is traced; a same-kind re-upload replaces only its own; the confirmed replacement deletes the 32 on purpose and records it;
+NULL-source rows read as the default kind (refused to a product landing, replaced by a line-level one); disjoint spans never collide.
+§C the fix: two tables, `raw_sales` untouched, the kind-scoped re-read (49 = 48 stamped + 1 foreign-provenance row), the `sales`
+layout maps the second shape's headers, layouts per kind derived. §D the consumer gate before any write, traced. §E pre-migration
+refusal naming 1011; `/upload-mapped` refuses the contradicting table. §F the endpoint payload; the sentence through the router;
+every consumer key in `SCREENS`. §G wiring, RULE TWO, the migration's contents, the lineage row (925 seq 138 + `INGEST_TABLES_BY_MODULE`),
+this registration, CI. **Pins CHANGED (stated):** `harness_onboarding_intake_b` (pos → `raw_sales_product`; layouts per kind; the
+replace scope carries `kind_column` / `kind`; the runbook links are screen keys), `harness_onboarding_intake_c` (§E commits the
+line-level export under kind `sales` / layout `sales` — the bill-pay extraction is a line-level reading; runbook reports by screen),
+`harness_rq_ingest` (the product layout targets `raw_sales_product`), `harness_vendor_rebate_landing` (the consumers map may name the
+table), the three fakes declare `source` + `raw_sales_product`. **Unchanged and green:** intake 164 / B 87 / C 92, report_kinds 119,
+report-kind lock 20, mapping-key 17, report-links 77 + lock 14, statement_type_mapping 62, rq_ingest 62, ingest_partition_replace 33,
+vendor_rebate_landing 83, column_mapping_save 15, multisheet 25, xlsx_tolerant 38, exec_metric_defs 81, commission_ledger_sign 125,
+org-scope 25, lineage 61, carrier-vocab guard; `prove_report_kinds.mjs` 45, `prove_pos_term_copy.mjs` 36; `tsc --noEmit` clean.
+
+**MONEY SURFACED, NOT MOVED. LIVE-DATA DEFECT REPORTED, NOT REPAIRED.** No row anywhere is deleted, moved or restamped by this PR; mig
+1011 creates an empty table and re-points two config rows. The 10,823 misplaced product-level rows of org `f4f1c16e…` remain in
+`raw_sales` (NULL source = the default kind) until the owner acts — the recovery plan (PR body): (1) apply 1011; (2) re-land the kept
+intake file (bucket `onboarding-intake`, the `pos:<source>:pos_product_sales` instance) → it now lands in `raw_sales_product`; (3)
+re-upload the line-level export under "Sales report with IMEI and phone number" (kind `sales`, layout `sales`) — its store × date
+slice REPLACES the misplaced NULL-source rows in `raw_sales` (the default kind owns them), which is exactly the pre-existing replace
+behaviour and the reason NULL must read as the default; the Executive MTD then counts again.
+
+**SEAMS LEFT (reported, not hidden).** (1) `CONSUMERS` is a code registry (one home, locked) mirroring index §16/§18 — a config-row
+registry (per-org consumer labels) would be the next step if tenants need to rename readers; not needed for the fact to be single.
+(2) The `sales` layout's `trans_date` now parses through `date_auto`; a saved mapping row keeps `date10`. `column_mapping` was
+measured EMPTY platform-wide on 2026-09-19 (§25.11), so no tenant re-parses; a tenant who later saves `date10` keeps it.
+(3) `daily_sales_feed` is single-kind and unstamped by the new writers (its `source` keeps mig-727 semantics); the lock makes a second
+layout there a build failure, not a silent collision. (4) The cross-kind confirmation on `/upload-mapped` is a form field with no UI
+control on the Implementation wizard's import (its 400 says how to proceed; the intake has the 2.6 checkbox). (5) `where_to_upload`
+sends every intake-landing kind to the intake even when a legacy tile also exists (`daily_sales` for `sales_imei_phone`): the intake
+is the flow of record; the tile is named in the same payload (`where.upload_types`).

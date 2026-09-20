@@ -212,7 +212,10 @@ for banned in ("carrier_comm", "device_rebate_amount", "activation_rebate_ledger
 # lineage registry, and the one read-only endpoint.
 _ALLOWED = {"app/modules/commcalc/column_mapping.py", "app/modules/commcalc/ingest_slice.py",
             "app/modules/commcalc/data_lineage_registry.py", "app/modules/commcalc/router.py",
-            "app/modules/commcalc/vendor_rebate_feed.py"}
+            "app/modules/commcalc/vendor_rebate_feed.py",
+            # 2026-09-20: the ONE consumers map names the table so an upload can say where it shows
+            # (the read-only Vendor Rebate History page) — a label, not a reader; it queries nothing
+            "app/modules/commcalc/landing_identity.py"}
 _readers = []
 for base, dirs, files in os.walk(os.path.join(os.path.dirname(__file__), "app")):
     dirs[:] = [d for d in dirs if d != "__pycache__"]

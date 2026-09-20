@@ -13,6 +13,7 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import { useActiveCarrier } from '@/lib/auth-context'
 import { useReportLabels, usePosTerm } from '@/lib/report-labels'
 import ReportLabelSettings from '@/components/ReportLabelSettings'
+import ScreenLink, { SCREENS, type ScreenKey } from '@/components/ScreenLink'
 
 // Super-admin org-resolution mitigation (same as the Sales Report page): reads carry the active tenant
 // so a super-admin (whom the tenant middleware does NOT rewrite) reads the selected tenant, not the house
@@ -144,6 +145,14 @@ export default function ExecMtdPage() {
   const cov = data?.metric_coverage || {}
   const covGaps: { bucket: string; source: string; unmatched_departments: [string, number][];
     unmatched_categories: [string, number][] }[] = cov.gaps || []
+  // THE WAY BACK TO THE UPLOAD (owner 2026-09-20: "the data is not flowing into the exec mtd from wherever
+  // it is uploaded — need to know where the data is uploaded"). The backend derives, from ONE home
+  // (landing_identity), which fields this page needs, whether the period's rows are blank on ALL of them
+  // (rows exist but nothing to count), and which report kinds FEED the tables it reads — each with the
+  // page to upload it on. Rendered as links through ScreenLink; no href and no kind is spelled here.
+  const landing: { tables: string[]; rows: number; needs: string[]; blank_fields: string[];
+    feeds: { key: string; label: string; table: string; where: { screen: string; label: string; upload_types: string[] } }[] } | null = data?.landing || null
+  const landingEmpty = !!landing && (landing.rows === 0 || (landing.blank_fields || []).length === (landing.needs || []).length) && (landing.needs || []).length > 0
 
   // 16-column layout, in the exact order of the owner's spreadsheet, THEN two appended reconciliation
   // columns (the spreadsheet's own order is preserved). Conv. exported as the raw ratio (as the file
@@ -376,11 +385,39 @@ export default function ExecMtdPage() {
         </div>
       )}
 
+      {/* ROWS EXIST BUT NOTHING TO COUNT / NO ROWS — name the upload that feeds this page, with the link
+          (the Vzone July 2026 case: 238 rows, department / category / product name blank on every one,
+          because the file that landed was the by-product aggregate, not the line-level export). */}
+      {landingEmpty && landing && (
+        <div style={{ fontSize: 12.5, marginBottom: 10, background: '#fffbeb', border: '1px solid #fcd34d',
+          color: '#92400e', borderRadius: 8, padding: '9px 12px' }}>
+          <div style={{ fontWeight: 700, marginBottom: 3 }}>
+            {landing.rows === 0 ? 'No sales lines for this period yet' : `${landing.rows.toLocaleString()} sales lines for this period carry none of the columns this page counts`}
+          </div>
+          <div style={{ marginBottom: 6 }}>
+            {landing.rows === 0
+              ? <>Nothing has landed in {landing.tables.map((t, i) => <span key={t}>{i ? ' / ' : ''}<code>{t}</code></span>)} for this period.</>
+              : <>Every row is blank on <b>{(landing.blank_fields || []).join(' / ')}</b> — the file that fed this period did not carry them (a product-level or summary export instead of the line-level one), so there is nothing to classify.</>}
+            {' '}This page reads the <b>line-level</b> sales export. Upload it as:
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {(landing.feeds || []).map(f => (
+              <span key={f.key} style={{ background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 6, padding: '2px 8px' }}>
+                <b>{f.label}</b>{' — under '}
+                {f.where?.screen && f.where.screen in SCREENS ? <ScreenLink to={f.where.screen as ScreenKey}>{f.where.label}</ScreenLink> : f.where?.label}
+                {f.where?.upload_types?.length ? <> (the &apos;{f.where.upload_types[0]}&apos; tile)</> : null}
+              </span>
+            ))}
+            {!(landing.feeds || []).length && <span>no report kind feeds these tables for your declared POS / carrier — define one under <ScreenLink to="onboarding_intake" /></span>}
+          </div>
+        </div>
+      )}
+
       {/* METRIC-DEFINITION COVERAGE (mig 962). A column reading 0 because its definition describes some
           other tenant's POS vocabulary is indistinguishable from a genuine 0 — that is the whole defect.
           This says which bucket matched nothing and what the data actually contains. No carrier or
           tenant name appears here: the values shown are read from the tenant's own rows (RULE TWO). */}
-      {covGaps.length > 0 && (
+      {covGaps.length > 0 && !landingEmpty && (
         <div style={{ fontSize: 12.5, marginBottom: 10, background: '#fef2f2', border: '1px solid #fecaca',
           color: '#991b1b', borderRadius: 8, padding: '9px 12px' }}>
           <div style={{ fontWeight: 700, marginBottom: 3 }}>

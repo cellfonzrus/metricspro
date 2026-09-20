@@ -205,6 +205,10 @@ export type ReportKindRow = {
   signature_fields?: string[]; upload_types?: string[]; custom_sheet_label?: string | null
   sort_order?: number; is_active?: boolean
   provenance?: string; provenance_text?: string; confirmations?: number
+  // WHERE THIS UPLOAD SHOWS UP — derived by the backend from ONE home (landing_identity.shows_in:
+  // registry row → landing table → CONSUMERS); a page renders it, never a list of its own (2026-09-20)
+  shows_in?: { table: string | null; consumers: { screen: string; label: string; needs: string[]; gate: boolean; why?: string | null }[]; note: string | null }
+  where?: { screen: string; label: string; upload_types: string[]; custom_sheet_label?: string }
 }
 export type ReportDeclaration = { pos: string[]; pos_source?: string; carriers: string[]; carrier_source?: string; reasons?: string[] }
 
