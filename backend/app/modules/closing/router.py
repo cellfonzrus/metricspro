@@ -255,7 +255,10 @@ async def upload_closing(file: UploadFile = File(...), org_id: str = ORG_ID):
         if (file.filename or "").lower().endswith(".csv"):
             df = pd.read_csv(io.BytesIO(contents), dtype=str)
         else:
-            df = pd.read_excel(io.BytesIO(contents), dtype=str)
+            # the ONE tolerant workbook reader every upload rides (commcalc.router._xlsx_read, 2026-09-20)
+            from app.modules.commcalc.router import _xlsx_read, _note_xlsx_repair
+            df, _act = _xlsx_read(contents, file.filename, dtype=str)
+            _note_xlsx_repair(file.filename, _act)
     except Exception as e:
         raise HTTPException(400, f"Could not read the file: {e}")
     return _ingest_dataframe(sb(), org_id, df)

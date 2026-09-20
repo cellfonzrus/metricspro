@@ -879,13 +879,19 @@ _all_routes = _flatten_routes(real_app.routes)
 # bucket REGISTRY (mig 1009), which adds three decorators and removes none:
 #     1590  this branch before the merge          (measured, and green at that pin)
 #     1593  + the 3 routes origin/main #250 brought in with commcalc.commission_bucket
+# Re-pinned to 1594 on 2026-09-20 after merging origin/main again. The alert/autofix package on this
+# branch adds NO route either (measured: `git diff 3281954 bd058898 -- '*.py'` contains not one added or
+# removed @router/@app method decorator). The +1 is origin/main's #254, the onboarding-intake Stage C
+# work, which adds one decorator and removes none:
+#     1593  this branch before the merge          (measured, and green at that pin)
+#     1594  + the 1 route origin/main #254 brought in
 # CARRIER EARNED vs EMPLOYEE PAID, per rep (owner directive 2026-09-20; index §31). READ-ONLY and
 # org-scoped. It adds NO table, NO ingest route and NO feed: it runs the EXISTING ma_recon engine
 # without persisting, indexes the statement money through the EXISTING mig-308 _ma_gate_index, and
 # reads rep_commissions as stored. It books NOTHING — meta.books_to is empty and no P&L / payout /
 # accrual path reads it. Dealer REVENUE and payroll EXPENSE are reported side by side and never
 # summed. Proof backend/harness_carrier_vs_pay.py (54 checks).
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1593"))
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1594"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

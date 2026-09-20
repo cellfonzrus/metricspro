@@ -853,9 +853,11 @@ def _describe_workbook(path):
 def _read_report_records(xlsx_path, label):
     """Parse a downloaded report into records, distinguishing 'unparseable' from 'legitimately
     empty'. Returns (records, columns). Raises EpayPortalError for (b), EpayEmptyReport for (a)."""
-    import pandas as pd
     try:
-        df = pd.read_excel(xlsx_path, dtype=str).fillna("")
+        from app.modules.commcalc.router import _xlsx_read   # the ONE tolerant workbook reader (2026-09-20)
+        with open(xlsx_path, "rb") as _fh:
+            _bytes = _fh.read()
+        df = _xlsx_read(_bytes, str(xlsx_path), dtype=str)[0].fillna("")
     except Exception as e:
         raise EpayPortalError(
             f"{label}: downloaded a file we could NOT PARSE as Excel "

@@ -463,7 +463,9 @@ export default function OnboardingIntakePage() {
                 {rail.verify_table.map(r => (
                   <tr key={r.instance_key} onClick={() => r.red && openRow(r.instance_key, r.stage, r.fix_step)}
                     style={{ borderTop: '1px solid var(--border)', background: r.red ? 'rgba(239,68,68,.06)' : 'transparent', cursor: r.red ? 'pointer' : 'default' }}>
-                    <td style={{ padding: '6px 4px', fontWeight: 600 }}>{r.label}{r.red && <div style={{ ...note, fontSize: 11, color: '#ef4444' }}>{r.blocking_reason || r.status} → step {r.fix_step}</div>}{!r.red && r.basis && <div style={{ ...note, fontSize: 11 }}>{r.basis}</div>}</td>
+                    <td style={{ padding: '6px 4px', fontWeight: 600 }}>{r.label}{r.red && <div style={{ ...note, fontSize: 11, color: '#ef4444' }}>{r.blocking_reason || r.status} → step {r.fix_step}</div>}{!r.red && r.basis && <div style={{ ...note, fontSize: 11 }}>{r.basis}</div>}
+                      {/* Stage C — the cross-check this commit ran (bill payments extracted / units activated but still on hand) */}
+                      {r.note && <div style={{ ...note, fontSize: 11, color: '#b45309', fontWeight: 600 }}>{r.note}</div>}</td>
                     <td style={{ padding: '6px 4px' }}>{r.period || '—'}</td>
                     <td style={mono}>{money(r.our_total)}</td><td style={mono}>{money(r.file_total)}</td>
                     <td style={{ ...mono, color: r.match === false ? '#ef4444' : r.match ? '#16a34a' : 'inherit' }}>{r.difference === null ? '—' : money(r.difference)}</td>
@@ -491,8 +493,9 @@ export default function OnboardingIntakePage() {
           <div style={card}>
             <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>5.1 — Monthly runbook</h2>
             <p style={{ ...note, marginBottom: 12 }}>{rail.runbook.note}</p>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
               {rail.runbook.links.map(l => <a key={l.href} href={l.href} style={{ ...primary, textDecoration: 'none', display: 'inline-block' }}>{l.label}</a>)}
+              {(rail.runbook.reports || []).map(l => <a key={l.href} href={l.href} title={l.why} style={{ ...ghost, textDecoration: 'none', display: 'inline-block' }}>{l.label}</a>)}
             </div>
             <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
               <thead><tr style={{ color: 'var(--text2)' }}><th align="left">What to upload each month</th><th align="left">Example file</th><th align="left">Lands in</th><th align="left">Mapping saved</th><th align="left">Status</th></tr></thead>

@@ -484,11 +484,20 @@ INV_MAP = {"sku": "Product SKU", "imei": "Tracking #", "serial": "Tracking #", "
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("A. THE VOCABULARY — every kind has a destination that already exists, or honestly none")
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-check("sales and pos land in raw_sales, inventory in inventory_aging_device, commission in the ledger — 'other' has NO destination",
-      OI.SOURCE_KIND_TARGET == {"commission": "commission_ledger", "sales": "raw_sales", "pos": "raw_sales", "inventory": "inventory_aging_device"}
-      and "other" not in OI.SOURCE_KIND_TARGET)
-check("every destination is an EXISTING table of column_mapping.TABLE_MAP (no sibling raw_* table)",
-      set(OI.SOURCE_KIND_TARGET.values()) <= set(CM.TABLE_MAP.values()))
+# PIN UPDATED 2026-09-20 (Stage C): the three TYPED 'other' kinds now have destinations — each an EXISTING
+# table written by its own existing importer (index §23b X-report → pos_tender_summary mig 062, §12a merchant
+# settlement → merchant_settlement_day mig 955, §4/§15 carrier bill-pay → the mig-939 processor feed table);
+# free-text 'other' still has NONE. The Stage-B destinations are byte-identical.
+check("sales and pos land in raw_sales, inventory in inventory_aging_device, commission in the ledger — free-text 'other' has NO destination",
+      {k: OI.SOURCE_KIND_TARGET[k] for k in ("commission", "sales", "pos", "inventory")}
+      == {"commission": "commission_ledger", "sales": "raw_sales", "pos": "raw_sales", "inventory": "inventory_aging_device"}
+      and "other" not in OI.SOURCE_KIND_TARGET
+      and OI.SOURCE_KIND_TARGET["x_report"] == "pos_tender_summary" and OI.SOURCE_KIND_TARGET["merchant_payments"] == "merchant_settlement_day"
+      and OI.SOURCE_KIND_TARGET["bill_payments"] in OI.BILLPAY_FEED_TABLES)
+_migs = "".join(open(os.path.join(MIG_DIR, f), encoding="utf-8").read() for f in os.listdir(MIG_DIR) if f.startswith(("062_", "955_", "903_", "083_")))
+check("every destination is an EXISTING table — a column_mapping.TABLE_MAP target, or a table an existing migration creates (062 / 955 / 903 / 083); no sibling raw_* table",
+      all(t in set(CM.TABLE_MAP.values()) or f"commcalc.{t}" in _migs for t in OI.SOURCE_KIND_TARGET.values())
+      and all(t in set(CM.TABLE_MAP.values()) for t in OI.BILLPAY_FEED_TABLES))
 check("the default layouts are registered report keys with those targets",
       all(CM.TABLE_MAP.get(OI.REPORT_KEY_BY_KIND[k]) == OI.SOURCE_KIND_TARGET[k] for k in OI.REPORT_KEY_BY_KIND))
 lay = OI.layouts_for_kind("pos", CM.TABLE_MAP)

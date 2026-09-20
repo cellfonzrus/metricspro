@@ -146,7 +146,8 @@ def parse_export_bytes(content, filename_or_ext=""):
     import pandas as pd
     is_excel = ext.endswith(".xlsx") or ext.endswith(".xls") or content[:4] == b"PK\x03\x04" or content[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
     if is_excel:
-        df = pd.read_excel(io.BytesIO(content))
+        from app.modules.commcalc.router import _xlsx_read   # the ONE tolerant workbook reader (2026-09-20)
+        df = _xlsx_read(content, filename_or_ext)[0]
     else:
         df = pd.read_csv(io.BytesIO(content), dtype=str, keep_default_na=False)
     df.columns = [str(c).strip() for c in df.columns]
