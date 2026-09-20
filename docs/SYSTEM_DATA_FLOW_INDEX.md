@@ -3185,6 +3185,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `commcalc.carrier_commission` (mig `065`) | **NOTHING WRITES IT for any live org — 0 rows house, 0 rows LuxeLink (measured 2026-09-20)**, which is why `rep_commissions.carrier_statement_comm` reads `$0.00` on every live row. `_apply_new_engines` reads it into `stmt_by_rep` (`router.py`, the statement block) and `/carrier-comm-file/extract` writes it. The live carrier statement for a master-agent tenant is `raw_ma_commission`, NOT this table — see §31.2 | §15 carrier statement commission; §31 carrier earned vs employee paid |
 | `commcalc.raw_ma_commission` — as the EARNED side | per-device statement money in `spiff_m1..m6` / `rebate` / `device_margin` / `consumer_margin` / `mrc_net_discount`, netted per device by `sale_installment_engine._ma_gate_index` (mig `308`, base + adjustment summed so a clawback nets out); which columns count as dealer earnings is `commission_catalog.amount_fields(org,'ma_commission')` with `_MA_NUMERIC_COLS` as the house default | §31 — `carrier_vs_pay.rollup_by_rep` via `GET /commcalc/carrier-vs-pay/{period}`. Also §15 MA commission, §8 installment gate |
 | `commcalc.rep_commissions.boost_commission` — as the EARNED side | the PRE-ATTRIBUTED dealer figure for a processor-payment tenant: `raw_payment_detail` rows in the `Commission` payment category, summed per `rep_username` by `calculator.calc_rep_commissions` (`pay_by_login`). Read as stored by the earned-vs-paid report, **never recomputed** | §6 rep commission (Boost); §31.5 the second feed shape |
+| `storeops.alert_recipient` · `storeops.alert_log` — WHO hears an alert, and the proof one was tried | `closing/router._send_alert` — one row per alert, INCLUDING a suppressed one (empty `recipients`, `detail.suppressed='no_recipients'`) | `_alert_recipients` resolves configured rows for the scope (or `all`), then the store's DM, then **`_org_admin_recipients`** — the tenant's own active admins — so a tenant with no configured row is still told. The dedup requires a row that actually DELIVERED, so an unheard alert never suppresses the next one, and every ref_key is keyed on the EPISODE (`since-<last success>` / `stuck-at-<data date>`) rather than the day. §19.20. Proof `harness_alert_autofix.py` (38 checks) |
 | `commcalc.email_processed.status` — the sweep's dedup journal, now including **`'superseded'`** | `router._run_email_sweep` — one row per processing attempt, plus one per backlogged copy that a NEWER copy of the same report (same `upload_type`+filename+month) makes redundant, carrying the winner's message-id in `detail` | `router._sweep_dedup_sets` via `SWEEP_TERMINAL_ZERO_STATUSES` — `superseded` is TERMINAL, so a collapsed message is never re-fetched. Which reports may be collapsed is declared ONCE in `data_lineage_registry.FULL_REPLACE_UPLOAD_TYPES` / `replaces_whole_period()`; an undeclared type is never collapsed. §19.19. Proof `harness_sweep_backlog_collapse.py` (33 checks) |
 | `commcalc.daily_sales_feed.uploaded_at` · `vip_paygo_payments.swept_at` · `vip_credit_memos.swept_at` — the ARRIVAL columns (as opposed to each table's DATA date) | the ingest that lands the row | `data_lineage_registry.FRESHNESS_COLUMN_BY_TABLE` / `freshness_column(table)` is the ONE declaration; `router._table_feed_freshness` dereferences it to fill `last_ingest_at`, and `account/autocompute._PERIOD_SOURCES` must agree with it. Consumed by `_data_freshness_monitor` to tell **"the report email stopped arriving"** (old ingest) from **"the file arrives, its CONTENT is frozen"** (recent ingest, old data date) — a distinction that was structurally impossible for every table-backed feed until 2026-09-20, see §19.18. Proof `harness_ingest_freshness.py` (31 checks) |
 | `commcalc.email_sweep_config` / `ftp_sweep_config` — the FRESHNESS columns `last_run_at` vs `last_attempt_at` (mig `241`) | `router._sweep_run_stamp(success)` is the SOLE decider, written through `_email_status_update` (mailbox, scoped `org_id`+`account`) / `_status_update` (FTP). **Only an ingest advances `last_run_at`** (`ok > 0` attachments); a rejected login, a mailbox with no filename rules, a connect error or a crash writes `last_attempt_at`. Both degrade to a status-only write on a pre-241 database | `router._scan_connector_health` → `GET /commcalc/connector-health` (ERRORED/STALE arms — the STALE arm was DEAD for these two tables until 2026-09-20, see §19), and `core.control_box_api._SCHEDULER_SPECS['sched_email_sweep']` → `control_box.heartbeat_lamp(last_success=…)`, whose parameter name this now actually honours. Scheduling reads NEITHER column — `/run-due` keys off `next_run_at`. Proof `harness_sweep_freshness.py` (28 checks) |
@@ -3444,6 +3445,60 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 ---
 
 ## 19. Known gaps & inert config
+
+§19.20 **DETECT, THEN FIX, THEN TELL SOMEBODY WHO HEARS IT — the alerting audit and the autofix
+(owner directives 2026-09-20: "check if that was set up for boost and all tenants or that was patchwork
+also" → "build all for all tenants" → "most importantly the system should be capable of autofix").**
+
+**THE AUDIT'S ANSWER WAS THE REVERSE OF THE ASSUMPTION.** The auto-CHECK was already general —
+`_data_freshness_monitor` runs for every org after every sweep, and `_scan_connector_health` is a daily
+cron across all orgs. On the HOUSE org it worked perfectly: **12 `freshness:` alerts, one a day,
+2026-09-09 → 09-20**, plus **14 `connector:email_sweep_config:*:errored`**, all delivered to
+sanjot@cellfonzrus.com. The platform found the missing ingest the day after it began and said so every
+single day. It was never a detection failure. Three things were wrong anyway, and a fourth was missing.
+
+| # | Defect | Measured |
+|---|---|---|
+| 1 | **Nobody to tell, and no trace.** `_send_alert` returned early when a scope had no `alert_recipient` row — no send, and **no `alert_log` row**, so there was no evidence it had tried | `connector` scope configured on the house org only. LuxeLink: **0** connector alerts ever. Vzone: **0**, and no recipients at all |
+| 2 | **An unheard alert counted as delivered.** The dedup counted ANY prior row, including one written when zero messages went out | the quietest failure was also the stickiest |
+| 3 | **Correct alerts, drowned.** Both ref_keys carried TODAY's date, so a standing failure re-alerted daily forever | 7–8/day on the house org, six for connectors nobody uses (ePay last ran 08-24, FTP 06-26, B2B reporting `disabled`) — the one that mattered was one line in ~90 emails |
+| 4 | **No repair existed for the one failure the platform CAN fix** | see below |
+
+**THE MISSING REPAIR.** A sweep only sees mail inside its IMAP window (`email_sweep_config.since_days`).
+Once a feed falls further behind than the window reaches, the file that would close the gap is IN the
+mailbox and invisible — every later run is a correct no-op and the gap is permanent until a human widens
+it. The house org sat at `latest_data_date = 2026-09-08` with a 2-day window: **nothing the platform
+could do on its own would ever have recovered 09-09..09-19.**
+
+**WHAT SHIPPED, for every tenant.**
+- `closing/router._org_admin_recipients` — a scope with no configured recipient falls back to the
+  tenant's own ACTIVE admins (role `admin` or `super_admin`, real email, org-scoped). Configured rows
+  still win. "Somebody is told" is now a property of the platform, not of a row someone remembered.
+- A suppressed alert is **recorded** (`alert_log`, empty `recipients`, `detail.suppressed`), and the
+  dedup now requires a row that actually DELIVERED — so an unheard alert never blocks the next one.
+- Both ref_keys are keyed on the **episode**, not the day: `connector:…:since-<last success>:<kind>` and
+  `freshness:…:stuck-at-<data date>`. One alert while a condition holds; a fresh one when it recurs.
+  No new state — `last_run_at` means "last success" because of §19.17.
+- **`commcalc/router._freshness_autofix`** — a feed still behind after its sweep triggers ONE catch-up
+  sweep at a **transient** wider window (`_run_email_sweep[_all](…, since_days_override=…)`, never
+  written to config), then re-measures. Recovered ⇒ **no alert at all**. Still behind ⇒ the alert says
+  the catch-up ran, how wide, and what it recovered.
+
+**IT IS SELF-LIMITING, WHICH IS WHY IT NEEDS NO COOLDOWN TABLE.** The catch-up fires only when the gap
+is WIDER than the window (`needed > since_days`). A successful run moves the feed's latest date up,
+`needed` falls inside the window, and the condition stops being true. Capped at
+`AUTOFIX_MAX_CATCHUP_DAYS = 60`. Live decision, measured 2026-09-20: house `daily_sales_feed` ends
+09-08, window 2d ⇒ **catch up at 14d**; LuxeLink nothing stale ⇒ no action; Vzone stale but **no mailbox
+⇒ no-op**, because a repair that cannot pull has nothing to do.
+
+**IT COULD NOT HAVE SHIPPED FIRST.** Widening the window was dangerous until §19.19: the house mailbox
+holds an hourly copy of every report, so a wide window meant ~336 whole-period imports drained in
+arrival order. The backlog collapse made a wide window cost one import per report per month — the
+autofix is a direct consequence of that change.
+
+**Proof:** `backend/harness_alert_autofix.py` (38 checks) — §A the fallback and everyone it must NOT
+mail, §B the honesty rules, §C episode keys (12 days ⇒ 1 alert), §D the autofix decision including the
+live house row and the self-limiting property, §E the wiring, bounds and transience.
 
 §19.19 **A BACKLOG OF THE SAME REPORT COST ONE IMPORT PER EMAIL, NOT ONE PER PERIOD (fixed 2026-09-20).**
 
