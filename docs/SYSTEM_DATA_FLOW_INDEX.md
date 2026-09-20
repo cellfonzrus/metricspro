@@ -7727,7 +7727,9 @@ that, use the intelligence to assign the categories to the fields and ask the us
 is being uploaded should be able to save is most important — previously mostly all imports did not
 save the first time."*
 
-Design of record: the workflow architect's `onboarding_flow_design.md` (2026-09-20) — §0 principles, §3
+**Design of record: `docs/ONBOARDING_FLOW_DESIGN.md` — read before setting up a new tenant** (in the repo since
+Stage C; §7 "Report availability is DERIVED from the tenant's declaration — never listed" is the owner's directive
+of 2026-09-20 and is NOT built yet — see §30.8 OPEN). Design of record: the workflow architect's `onboarding_flow_design.md` (2026-09-20) — §0 principles, §3
 the commission stage (3.1–3.9), §4 state model, §5 must-not-happen. **This is the FIRST slice: stage 3
 only.** Stage B (sales / inventory / POS / "other reports" on the same spine) is the next PR; the
 payloads already carry `source_kind`, `target_table`, `identity_fields` and a `verify` block so it
@@ -8054,7 +8056,12 @@ second; confirm, never silently reassign. Cards: sales with IMEI + phone (`pos`)
 (`pos_product_sales`), commission statement, RESIDUAL statement (a commission `statement_type`, not a kind),
 inventory on hand AND inventory aging (both `inventory_aging_device` — aging = on-hand + received / age
 columns; decided by the presence of a received / aging column), X-report, merchant settlement, bill payments,
-something else. (c) **Residual mapping — a CONFIRMED collision.** Stage A keys `commcalc.column_mapping` by
+something else. (d) **§7 availability gating** (`docs/ONBOARDING_FLOW_DESIGN.md` §7): the next PR builds the report-kind registry
+(`applies_to` POS / carrier + `defined_by` house / tenant) and routes ALL FIVE upload surfaces (upload page, upload
+wizard, email-imports patterns + the "apply standard" preset, intake 2.0 cards, nav tiles) through the ONE visibility
+function with a build-failing lock; today only the upload page gates, and it hardcodes a POS vendor name.
+(c) **Residual mapping — a CONFIRMED collision, and the CLASS is "a column-mapping key that ignores the statement
+type"** (not "residual is missing"): the next PR fixes it for every statement type at once. Stage A keys `commcalc.column_mapping` by
 (org, `commission_ledger`, carrier_id, target_field) (`_intake_commit_commission`, `_INTAKE_REPORT_KEY`): a
 residual statement from the same carrier with a different layout would OVERWRITE the commission statement's
 map for `raw_amount` / label / date, and its sign answer. Fix: key the map through the statement type the way
