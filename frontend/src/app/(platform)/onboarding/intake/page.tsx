@@ -34,6 +34,8 @@ import {
 } from './intake-shared'
 import { Stage2Flow, STAGE2_STEPS } from './stage2'
 import { useReportKinds } from '@/lib/report-kinds'
+import ScreenLink, { SCREENS, type ScreenKey } from '@/components/ScreenLink'
+import ShowsIn from '@/components/ShowsIn'
 import { STATEMENT_TYPE_DEFAULT, statementTypeToken } from '@/lib/statement-type'
 
 // ── stage-3 payload types (mirror onboarding_intake.py) ─────────────────────────────────────────
@@ -539,15 +541,18 @@ export default function OnboardingIntakePage() {
             <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>5.1 — Monthly runbook</h2>
             <p style={{ ...note, marginBottom: 12 }}>{rail.runbook.note}</p>
             <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
-              {rail.runbook.links.map(l => <a key={l.href} href={l.href} style={{ ...primary, textDecoration: 'none', display: 'inline-block' }}>{l.label}</a>)}
-              {(rail.runbook.reports || []).map(l => <a key={l.href} href={l.href} title={l.why} style={{ ...ghost, textDecoration: 'none', display: 'inline-block' }}>{l.label}</a>)}
+              {/* the links are screen keys → ScreenLink (the ONE screen → href map, RBAC-gated); never an href spelled here */}
+              {rail.runbook.links.map(l => l.screen in SCREENS ? <span key={l.screen} style={{ ...primary, display: 'inline-block' }}><ScreenLink to={l.screen as ScreenKey} style={{ color: '#fff', textDecoration: 'none' }}>{l.label}</ScreenLink></span> : <span key={l.screen}>{l.label}</span>)}
+              {(rail.runbook.reports || []).map(l => l.screen in SCREENS ? <span key={l.screen} title={l.why} style={{ ...ghost, display: 'inline-block' }}><ScreenLink to={l.screen as ScreenKey} style={{ textDecoration: 'none' }}>{l.label}</ScreenLink></span> : <span key={l.screen}>{l.label}</span>)}
             </div>
             <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
-              <thead><tr style={{ color: 'var(--text2)' }}><th align="left">What to upload each month</th><th align="left">Example file</th><th align="left">Lands in</th><th align="left">Mapping saved</th><th align="left">Status</th></tr></thead>
+              <thead><tr style={{ color: 'var(--text2)' }}><th align="left">What to upload each month</th><th align="left">Example file</th><th align="left">Lands in</th><th align="left">Shows in</th><th align="left">Mapping saved</th><th align="left">Status</th></tr></thead>
               <tbody>{rail.runbook.monthly.map(m => (
                 <tr key={m.instance_key} style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={{ padding: '6px 4px', fontWeight: 600 }}>{m.label}</td><td style={{ padding: '6px 4px', ...note }}>{m.filename_example || '—'}</td>
-                  <td style={{ padding: '6px 4px' }}><code>{m.lands_in}</code></td><td style={{ padding: '6px 4px' }}>{m.mapping_saved ? 'yes' : 'not yet'}</td>
+                  <td style={{ padding: '6px 4px' }}><code>{m.lands_in}</code></td>
+                  <td style={{ padding: '6px 4px', fontSize: 12 }}><ShowsIn info={{ table: null, consumers: m.shows_in || [], note: 'no report reads it yet' }} lead="Shows in" compact style={{ margin: 0 }} /></td>
+                  <td style={{ padding: '6px 4px' }}>{m.mapping_saved ? 'yes' : 'not yet'}</td>
                   <td style={{ padding: '6px 4px' }}><Lamp status={m.status} />{(LAMP[m.status] || LAMP.not_started).label}</td>
                 </tr>))}</tbody>
             </table>

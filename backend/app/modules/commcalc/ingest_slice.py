@@ -46,6 +46,10 @@ INGEST_PARTITION = {
     # the incident fix — same two-portal exposure as the other raw_ma_* tables.
     "raw_ma_fulfillment": {"partition": "tspid",               "date": "date_ordered"},
     "raw_sales":          {"partition": "store",               "date": "trans_date"},
+    # The POS by-product aggregate's OWN table (mig 1011, 2026-09-20 — landing identity): the same
+    # store × date-range slice as raw_sales, in its own table so it never replaces line-level rows.
+    # The KIND dimension of a slice (which report kind wrote a row) lives in landing_identity.KIND_STAMP.
+    "raw_sales_product":  {"partition": "store",               "date": "trans_date"},
     # Per-line vendor rebate history (mig 1005). The store arrives IN THE DATA on 100% of rows (the
     # feed's "Invoiced At" cell carries the store name + code), and a multi-store tenant exports one
     # file per store — so store ∩ sold_on is exactly "this file's own slice". This is also the ONLY

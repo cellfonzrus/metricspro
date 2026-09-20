@@ -5,6 +5,7 @@ import { api, apiUpload, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { readUploadOutcome } from '../../_lib/uploadGuard'
 import { PERIOD_ROUTES, MODULE_ROUTES, ROUTE_NOTES, ROUTE_URL_OVERRIDE } from '../../_lib/uploadRoutes'
+import ShowsIn from '@/components/ShowsIn'
 import { useReportKinds } from '@/lib/report-kinds'
 import type { ReportKindRow } from '@/lib/carrier-scope'
 
@@ -178,6 +179,8 @@ export default function UploadWizardPage() {
                     <strong>From:</strong> {s.url ? <a href={s.url} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>{s.source} ↗</a> : s.source}
                   </div>
                   {s.note && <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 4, fontStyle: 'italic' }}>{s.note}</div>}
+                  {/* WHERE THIS UPLOAD SHOWS UP — the registry row's consumers, linked (owner 2026-09-20). */}
+                  <ShowsIn info={kinds.showsIn(s.id)} loaded={kinds.loaded} compact />
                 </div>
                 <div style={{ textAlign: 'right', fontSize: 12, color: last ? '#15803d' : 'var(--text3)', whiteSpace: 'nowrap' }}>
                   {last ? `✓ loaded ${String(last.uploaded_at).slice(0, 10)}` : (s.ft ? 'not loaded for this period' : '')}

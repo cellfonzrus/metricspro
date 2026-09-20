@@ -269,11 +269,18 @@ class FakeDB:
             "carrier": ["id", "org_id", "name", "code", "is_default"],
             "column_mapping": ["id", "org_id", "report_key", "carrier_id", "target_field", "source_header",
                                "transform", "is_active", "priority", "updated_at", "sign_convention"],
+            # `source` = mig 727 (writer provenance) — since 2026-09-20 also the report KIND that wrote the row
+            # (landing_identity.KIND_STAMP); `raw_sales_product` = mig 1011, the by-product aggregate's OWN table
             "raw_sales": ["id", "org_id", "period", "period_month", "period_year", "store", "salesperson", "user_login",
                           "department", "category", "product_desc", "product_id", "gp", "ext_price", "trans_id",
                           "trans_date", "contract_type", "mdn", "serial_1", "register", "tender_type", "voided",
                           "trans_type", "sku", "customer", "email", "customer_no", "quantity", "total_cost",
-                          "pricing_discounts", "contract_no", "created_at"],
+                          "pricing_discounts", "contract_no", "source", "created_at"],
+            "raw_sales_product": ["id", "org_id", "period", "period_month", "period_year", "store", "salesperson", "user_login",
+                                  "department", "category", "product_desc", "product_id", "gp", "ext_price", "trans_id",
+                                  "trans_date", "contract_type", "mdn", "serial_1", "register", "tender_type", "voided",
+                                  "trans_type", "sku", "customer", "email", "customer_no", "quantity", "total_cost",
+                                  "pricing_discounts", "contract_no", "source", "created_at"],
             "daily_sales_feed": ["id", "org_id", "period", "store", "salesperson", "department", "category", "product_desc",
                                  "gp", "ext_price", "trans_id", "trans_date", "contract_type", "mdn", "serial_1", "tender_type",
                                  "voided", "trans_type", "quantity"],
@@ -327,7 +334,7 @@ class FakeDB:
                 bad = [k for k in r if k not in self.declared[table]]
                 if bad:
                     raise RuntimeError(f'42703 column "{bad[0]}" of {table} does not exist')
-        if table in ("raw_sales", "raw_ma_daily_tx"):
+        if table in ("raw_sales", "raw_sales_product", "raw_ma_daily_tx"):
             for r in rows:
                 if not r.get("period"):
                     raise RuntimeError(f'23502 null value in column "period" of {table} violates not-null constraint')
@@ -779,7 +786,11 @@ SALES_MAP = {"trans_id": "Invoice #", "store": "Invoiced At", "salesperson": "So
              "serial_1": "Tracking #", "product_desc": "Product Name", "category": "Category", "department": "Category",
              "ext_price": "Total Price", "gp": "Gross Profit", "voided": "Refund", "quantity": "Quantity"}
 db = fresh_db()
-c6 = commit(db, sales_xlsx(), "sales.xlsx", source_kind="pos", pos_source="rq", layout="pos_product_sales", column_map=json.dumps(SALES_MAP))
+# PIN UPDATED 2026-09-20 (landing identity): the bill-pay extraction is a LINE-LEVEL reading (department / category /
+# product name per sale line), so this export commits under the line-level card — kind `sales`, layout `sales`, which
+# now carries the second POS shape's spellings (Invoice # / Sold By / Sold On / Tracking # / Product SKU / Quantity).
+# The product layout (`pos_product_sales`) lands in its OWN table and runs no extraction (nothing to match on).
+c6 = commit(db, sales_xlsx(), "sales.xlsx", source_kind="sales", pos_source="rq", layout="sales", column_map=json.dumps(SALES_MAP))
 bx = c6["verified_numbers"].get("billpay_extract") or {}
 check("the sales export commits (ok) and the commit RAN the extraction over the landed slice — the count and Σ of the department-'rtr' lines, non-voided, exactly",
       c6["ok"] is True and bx.get("basis") and bx["lines"] == len(BILL_LINES) and bx["sum"] == BILL_SUM and bx["feed_present"] is False
@@ -944,7 +955,7 @@ check("Stage-5: the runbook names where each monthly file lands — pos_tender_s
       and rb["x_report:rq:x_report"]["mapping_saved"] is True)
 check("…and lists the two cross-check reports beside the two links (the links are unchanged)",
       [l["label"] for l in rail["runbook"]["links"]] == ["Sales report", "Commissions"]
-      and {r["href"] for r in rail["runbook"]["reports"]} == {"/commcalc/bill-payments", "/commcalc/inventory-sold-recon"})
+      and {r["screen"] for r in rail["runbook"]["reports"]} == {"bill_payments", "inventory_sold_recon"})
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("H. NEGATIVE CONTROLS — the save guarantee per kind, the gates")

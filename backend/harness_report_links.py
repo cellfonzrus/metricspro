@@ -247,11 +247,18 @@ class FakeDB:
                                   "payment_month", "category", "commission", "spiff", "equipment_rebate",
                                   "residual_monthly", "autopay_residual", "payout_total", "raw_amount", "is_payout",
                                   "origin", "source_table", "source_row_id", "synced_at"],                # mig 071 / 251
+            # `source` = mig 727 (writer provenance) — since 2026-09-20 also the report KIND that wrote the row
+            # (landing_identity.KIND_STAMP); `raw_sales_product` = mig 1011, the by-product aggregate's OWN table
             "raw_sales": ["id", "org_id", "period", "period_month", "period_year", "store", "salesperson", "user_login",
                           "department", "category", "product_desc", "product_id", "gp", "ext_price", "trans_id",
                           "trans_date", "contract_type", "mdn", "serial_1", "register", "tender_type", "voided",
                           "trans_type", "sku", "customer", "email", "customer_no", "quantity", "total_cost",
-                          "pricing_discounts", "contract_no", "created_at"],
+                          "pricing_discounts", "contract_no", "source", "created_at"],
+            "raw_sales_product": ["id", "org_id", "period", "period_month", "period_year", "store", "salesperson", "user_login",
+                                  "department", "category", "product_desc", "product_id", "gp", "ext_price", "trans_id",
+                                  "trans_date", "contract_type", "mdn", "serial_1", "register", "tender_type", "voided",
+                                  "trans_type", "sku", "customer", "email", "customer_no", "quantity", "total_cost",
+                                  "pricing_discounts", "contract_no", "source", "created_at"],
             "inventory_aging_device": ["id", "org_id", "imei", "serial", "sku", "item", "store", "unit_cost",
                                        "received_date", "days_in_stock", "as_of_date", "source", "raw_row",
                                        "on_hand", "off_hand_as_of", "status", "quantity", "total_cost", "category",
@@ -285,7 +292,7 @@ class FakeDB:
         if table == "commission_ledger":
             for r in rows:
                 r.setdefault("origin", "file")
-        if table == "raw_sales":
+        if table in ("raw_sales", "raw_sales_product"):
             for r in rows:
                 if not r.get("period"):
                     raise RuntimeError(f'23502 null value in column "period" of {table} violates not-null constraint')

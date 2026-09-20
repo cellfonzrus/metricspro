@@ -144,8 +144,10 @@ for key, hdr in (("pos_product_sales", SALES_HDR), ("pos_inventory_listing", INV
     sug = {s["target_field"]: s for s in cm.suggest(hdr, key)}
     unmatched = sorted(f for f, s in sug.items() if not s.get("suggested_source"))
     ok(not unmatched, f"{key}: every declared field finds its header (unmatched: {unmatched})")
-    ok(cm.TABLE_MAP[key] in ("raw_sales", "inventory_aging_device"),
-       f"{key} targets the EXISTING table {cm.TABLE_MAP[key]} (no sibling raw_* table)")
+    # PIN UPDATED 2026-09-20 (landing identity): the by-product layout lands in its OWN table (mig 1011) — landed in
+    # raw_sales it double-counted against the line-level rows and its slice replace deleted them (org f4f1c16e…).
+    ok(cm.TABLE_MAP[key] in ("raw_sales_product", "inventory_aging_device"),
+       f"{key} targets {cm.TABLE_MAP[key]} (the product table of mig 1011 / the existing inventory table)")
 
 # the six redundant money columns must NOT each be mapped (that would book the same money 6x)
 sales_fields = {f[0] for f in cm.TARGET_FIELDS["pos_product_sales"]}

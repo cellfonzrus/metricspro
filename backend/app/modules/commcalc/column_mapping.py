@@ -121,28 +121,42 @@ TARGET_FIELDS = {
         ("payment_date", "Payment date", "date10", False, "Payment Date", []),
         ("rep_username", "Rep username", "text", False, "Rep Username", []),
     ],
+    # ── THE LINE-LEVEL SALES EXPORT (→ raw_sales) — "Sales report with IMEI and phone number". ANY
+    #    POS's one-row-per-sale-line export maps through this layout: the aliases carry the second POS
+    #    shape's spellings (invoice / sold-by / sold-on / tracking #) beside the first's, and the three
+    #    optional fields raw_sales has carried since mig 1004 (sku / quantity / total_cost) are mapped
+    #    when the export has them. `trans_date` parses through `date_auto` (merchant_portals.iso_date):
+    #    ISO and 'YYYY-MM-DD HH:MM:SS' give exactly what the 10-char truncation gave; a US 'MM/DD/YYYY
+    #    HH:MM:SS' cell now parses instead of being stored as an ambiguous string (mig 1004's rule).
+    #    A saved column_mapping row keeps its own transform — nothing existing re-parses.
     "sales": [
-        ("store", "Store", "text", False, "Store", []),
-        ("salesperson", "Salesperson", "text", True, "Salesperson", []),
-        ("user_login", "User login", "text", False, "User Login", []),
+        ("store", "Store", "text", False, "Store", ["Invoiced At", "Location"]),
+        ("salesperson", "Salesperson", "text", True, "Salesperson", ["Sold By"]),
+        ("user_login", "User login", "text", False, "User Login", ["Tendered By"]),
         ("contract_type", "Contract type", "text", False, "Contract Type", []),
-        ("department", "Department", "text", False, "Department", []),
+        # `category_top` on a plain cell is the cell itself (feed_shape.category_path: no separator →
+        # whole), so a first-shape Department column reads exactly as before; a hierarchical category
+        # path from the second shape gives its top level, as the product layout already did.
+        ("department", "Department", "category_top", False, "Department", ["Category"]),
         ("category", "Category", "text", False, "Category", []),
-        ("product_desc", "Product description", "text", False, "Product Desc", ["Product Description"]),
+        ("product_desc", "Product description", "text", False, "Product Desc", ["Product Description", "Product Name"]),
         ("product_id", "Product ID", "int", False, "Product ID", []),
-        ("gp", "Gross profit", "number", False, "GP", []),
-        ("ext_price", "Ext price", "number", False, "Ext Price", []),
-        ("trans_id", "Transaction ID", "text", True, "Trans ID", []),
-        ("trans_date", "Transaction date", "date10", False, "Trans Date Time", ["Trans Date"]),
-        ("mdn", "Mobile number", "mdn", False, "Activated Mobile Number", ["Primary Account Number"]),
-        ("serial_1", "Serial", "text", False, "Serial 1", []),
+        ("gp", "Gross profit", "number", False, "GP", ["Gross Profit"]),
+        ("ext_price", "Ext price", "number", False, "Ext Price", ["Total Price"]),
+        ("trans_id", "Transaction ID", "text", True, "Trans ID", ["Invoice #", "Invoice No"]),
+        ("trans_date", "Transaction date", "date_auto", False, "Trans Date Time", ["Trans Date", "Sold On", "Invoice Date"]),
+        ("mdn", "Mobile number", "mdn", False, "Activated Mobile Number", ["Primary Account Number", "Mobile Number", "Phone Number"]),
+        ("serial_1", "Serial", "text", False, "Serial 1", ["Tracking #", "IMEI", "Serial"]),
         ("register", "Register", "text", False, "Register", []),
         ("tender_type", "Tender type", "text", False, "Tender Type", []),
-        ("voided", "Voided", "text", False, "Voided", []),
+        ("voided", "Voided", "text", False, "Voided", ["Refund"]),
         ("trans_type", "Transaction type", "text", False, "Trans Type", []),
         ("customer", "Customer", "text", False, "Customer", []),
         ("email", "Email", "text", False, "Email", []),
         ("customer_no", "Customer #", "mdn", False, "Customer #", ["Customer No"]),
+        ("sku", "Product SKU", "text", False, "Product SKU", ["SKU"]),
+        ("quantity", "Quantity", "number", False, "Quantity", []),
+        ("total_cost", "Total cost", "number", False, "Total Cost", []),
     ],
     # ── POS LINE-LEVEL SALES (→ raw_sales). The second shape a POS sells lines in: one row per
     #    invoice LINE, a US date-time, a refund flag instead of a void flag, and a hierarchical
@@ -378,7 +392,13 @@ TABLE_MAP = {
     # maps to them, and which tenant is OFFERED them is decided by report_definitions.carrier_id
     # (mig 291), never by a branch here. Both reuse EXISTING tables — raw_sales (§2) and
     # inventory_aging_device (mig 216) — rather than standing up sibling raw_* tables.
-    "pos_product_sales": "raw_sales",
+    # 2026-09-20 (owner decision): the BY-PRODUCT aggregate lands in its OWN table. Landed beside the
+    # line-level rows it double-counts when summed, and — measured on org f4f1c16e… — its slice replace
+    # (store × dates) deleted 48,875 line-level rows. `raw_sales_product` is created by mig 1011
+    # (written, NOT applied): until it runs, a landing to it is REFUSED naming the file, never
+    # redirected into raw_sales. THIS entry is the one home of that fact — onboarding_intake's
+    # SOURCE_KIND_TARGET and every reader dereference it (landing_identity; the lock pins it).
+    "pos_product_sales": "raw_sales_product",
     "pos_inventory_listing": "inventory_aging_device",
     # Per-line vendor rebate/commission history (mig 1005). A LANDING table read by no money path:
     # this feed is EARNED, not collected, and whether an earned rebate books as a receivable is an

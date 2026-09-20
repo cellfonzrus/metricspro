@@ -24,6 +24,12 @@ name: carrier-vocab-guard
 # not appear in frontend copy, as a bare literal in a page, in the backend payload modules' strings or
 # in the registry / intake / spine logic (the class folded out of harness_report_kind_lock.py).
 #
+# THE LANDING-IDENTITY LOCK (index §32, 2026-09-20) runs here too: every writer to a table more than one
+# report kind can land in STAMPS the kind (landing_identity.KIND_STAMP) and scopes its replace by it; ONE
+# consumers map says where an upload shows up and every upload surface renders it through ShowsIn; a
+# second copy, an unstamped writer or a surface that stops saying where fails the build
+# (backend/harness_landing_identity_lock.py; stdlib only).
+#
 # THE REPORT-LINKS LOCK (index §30.11, 2026-09-20) runs here too: ONE device / phone-number pairing
 # implementation (inventory_sold_recon.line_pairings, folded by activation_index, called by
 # report_links) with the key normalisers in their homes; a second copy anywhere in commcalc, or a
@@ -38,6 +44,9 @@ on:
       - "backend/harness_report_kind_lock.py"
       - "backend/harness_mapping_key_lock.py"
       - "backend/harness_report_links_lock.py"
+      - "backend/harness_landing_identity_lock.py"
+      - "backend/app/modules/commcalc/landing_identity.py"
+      - "backend/app/modules/commcalc/ingest_slice.py"
       - "backend/app/modules/commcalc/report_links.py"
       - "backend/app/modules/commcalc/inventory_sold_recon.py"
       - "backend/app/modules/commcalc/device_cost_recon.py"
@@ -94,3 +103,6 @@ jobs:
       - name: Run the report-links lock (one pairing implementation; the links and the inventory check call it)
         working-directory: backend
         run: python3 harness_report_links_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the landing-identity lock (every writer stamps the report kind; one consumers map; every surface says where)
+        working-directory: backend
+        run: python3 harness_landing_identity_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

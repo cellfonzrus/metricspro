@@ -28,6 +28,7 @@ import {
 } from './intake-shared'
 import { useReportKinds } from '@/lib/report-kinds'
 import type { ReportKindRow } from '@/lib/carrier-scope'
+import ShowsIn from '@/components/ShowsIn'
 
 type SalesNumbers = {
   rows: number; distinct_txns: number; sum_amount: number; sum_gp: number | null
@@ -76,7 +77,8 @@ type Commit2 = {
   verified_numbers: Record<string, unknown> & { rows_landed?: number; rows_built?: number; rows_inserted?: number; rows_without_device_key?: number
     rows_excluded_not_ours?: number; tie?: Tie; numbers?: SalesNumbers | InvNumbers | XrNumbers | MerNumbers | BpNumbers; basis?: string; attestation?: { reason: string } | null; confirmed_by?: string | null
     billpay_extract?: { basis: string | null; lines?: number; sum?: number; feed_present?: boolean; difference?: number | null; report?: string; error?: string }
-    sold_check?: { basis: string | null; activated_not_rung_out?: number; sold_not_cleared?: number; activations_unpairable?: number; activations_present?: boolean; report?: string; error?: string } }
+    sold_check?: { basis: string | null; activated_not_rung_out?: number; sold_not_cleared?: number; activations_unpairable?: number; activations_present?: boolean; report?: string; error?: string }
+    shows_in?: import('@/lib/report-kinds').ShowsIn | null }
   state: { saved: boolean; reason?: string }
 }
 
@@ -136,6 +138,9 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
   const [asOf, setAsOf] = useState('')
   const [role, setRole] = useState('')          // a merchant settlement's role (external terminal / the POS's card tender)
   const [attest, setAttest] = useState('')
+  // 2.6: confirm deleting rows of a DIFFERENT report kind that sit in this file's store × date slice (landing
+  // identity, 2026-09-20). Off by default — such a landing is refused naming the loss until this is ticked.
+  const [replaceOther, setReplaceOther] = useState(false)
   const [commitRes, setCommitRes] = useState<Commit2 | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const restoredFor = useRef('')
@@ -270,13 +275,14 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
     try {
       const fd = buildForm({ verified_by: who })
       if (attest.trim()) fd.set('attestation', JSON.stringify({ reason: attest.trim() }))
+      if (replaceOther) fd.set('confirm_replace_other_kinds', '1')
       const r: Commit2 = await apiUpload(`${BASE}/commit`, fd)
       setCommitRes(r); setStep('2.6')
       await reloadState(instanceKey)
       if (!r.ok && !r.recorded) flash('Committed with problems — see the red panel. Nothing here is reported as verified until the re-read matches.')
     } catch (e: unknown) { flash((e as Error)?.message || 'Commit refused') }
     finally { setBusy(false) }
-  }, [inst, file, kept, buildForm, who, attest, reloadState, instanceKey, flash, setStep])
+  }, [inst, file, kept, buildForm, who, attest, replaceOther, reloadState, instanceKey, flash, setStep])
 
   function onFiles(fl: FileList | null) {
     const f = fl?.[0]
@@ -395,6 +401,8 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
             </div>
             {c.what_in_it && <div style={note}>{c.what_in_it}</div>}
             {(c.recognisable_columns || []).length > 0 && <div style={{ ...note, fontSize: 11 }}>You&apos;ll recognise it by columns like {c.recognisable_columns!.slice(0, 5).join(', ')}.</div>}
+            {/* WHERE IT SHOWS UP — the card's landing table's consumers, linked (owner 2026-09-20) */}
+            <ShowsIn info={c.shows_in} loaded={registry.loaded} compact />
             {hint(c.landing) && c.landing !== 'sales' && c.landing !== 'pos' && c.landing !== 'inventory' && <div style={{ ...note, fontSize: 11, marginTop: 2 }}>{hint(c.landing)}{knownKinds.find(k => k.value === c.landing)?.target_table ? <> · lands in <code>{knownKinds.find(k => k.value === c.landing)?.target_table}</code></> : null}</div>}
             {actionFor(c)}
             {c.landing === 'inventory' && c.key === intakeCards.find(x => x.landing === 'inventory')?.key && (
@@ -422,7 +430,8 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
       {step === '2.1' && (
         <div style={card}>
           <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>2.1 — Upload the export</h2>
-          <p style={{ ...note, marginBottom: 14 }}>Drop it exactly as your system produces it. We read every sheet, find the header row under any title block, and find the total row by its shape.</p>
+          <p style={{ ...note, marginBottom: 6 }}>Drop it exactly as your system produces it. We read every sheet, find the header row under any title block, and find the total row by its shape.</p>
+          <ShowsIn info={registry.showsIn(reportKindOf) || (registry.forSurface('intake').find(k => k.landing === kind && (!layout || !k.layout || k.layout === layout))?.shows_in ?? null)} loaded={registry.loaded} style={{ marginBottom: 12 }} />
           <Dropzone file={file} filename={filename} onFiles={onFiles} dragOver={dragOver} setDragOver={setDragOver} hint={kind === 'x_report' ? 'Drop the X-report workbook (one sheet per store, one day — X-Report_MMDDYYYY-MMDDYYYY)' : kind === 'merchant_payments' ? 'Drop the settlement export (per merchant, per business day, per card brand)' : 'Drop the export here'} />
           {kind === 'merchant_payments' && portals && (
             <label style={{ fontSize: 13, display: 'block', marginTop: 10 }}>Settlement role — which side of the daily card tally this export answers:
@@ -632,6 +641,12 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
               : `Confirming saves the column map for this layout, saves your store and rep decisions (as aliases your reports resolve through), imports the rows through the platform's importer — replacing only the slice this file owns — and then re-reads what landed. The numbers below come back from the table, not from this screen.`}</p>
             {a && kind !== 'other' && tie && <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Confirm {title} — {isSales || kind === 'bill_payments' ? `${n?.date_span?.from} → ${n?.date_span?.to}` : kind === 'x_report' ? (n?.close_date || asOf) : kind === 'merchant_payments' ? `${n?.dates?.[0]} → ${n?.dates?.[n.dates.length - 1]}` : `as of ${asOf}`} — {money(tie.our_total)}</div>}
             {inst?.verified_numbers && !a && <div style={{ ...note, marginBottom: 12 }}>Last confirmed by {inst.verified_by || '?'} · {inst.verified_at || ''} · status {inst.status}{inst.blocking_reason ? ` · ${inst.blocking_reason}` : ''}. Re-read the file (2.1) to confirm again.</div>}
+            {isSales && (
+              <label style={{ ...note, display: 'block', marginBottom: 10 }}>
+                <input type="checkbox" checked={replaceOther} onChange={e => setReplaceOther(e.target.checked)} style={{ marginRight: 6 }} />
+                Replace rows of a <b>different report kind</b> already stored for these stores and dates. Leave this off: a landing that would delete another kind&apos;s rows is refused and names the loss, so nothing is overwritten by accident.
+              </label>
+            )}
             <div style={{ display: 'flex', gap: 8 }}>
               <button style={ghost} onClick={() => setStep('2.5')}>← Back</button>
               <button style={primary} disabled={busy || !a || (!file && !canUseKept)} onClick={commit}>{busy ? 'Saving…' : kind === 'other' ? 'Record as received' : 'Confirm and import'}</button>
@@ -659,6 +674,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
                 </table>
               )}
               {commitRes.verified_numbers.attestation && <div style={{ ...note, marginBottom: 8 }}>Attested: &quot;{commitRes.verified_numbers.attestation.reason}&quot; — {commitRes.verified_numbers.confirmed_by}</div>}
+              {commitRes.verified_numbers.shows_in && <ShowsIn info={commitRes.verified_numbers.shows_in} lead="These rows now show in" />}
               {/* Stage C — the cross-checks the commit ran, stated with their basis */}
               {commitRes.verified_numbers.billpay_extract && (
                 <div style={{ ...card, background: 'var(--bg,transparent)', fontSize: 13, marginBottom: 10 }}>

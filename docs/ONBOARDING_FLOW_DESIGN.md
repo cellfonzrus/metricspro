@@ -248,3 +248,48 @@ override (the `cap` scope), and the widening is recorded — it is config, not c
 **Why this is a design and not a filter.** The 2026-09 defect was fixed on the navigation tiles (#234) and
 left every other upload surface unfixed — the same defect wearing a hat. A rule that lives in one function
 and is enforced by a check is the only shape that stays fixed when the next surface is added.
+
+## 8. A landed row says which report KIND wrote it; a replace is store × dates × KIND (owner 2026-09-20)
+
+Owner: *"the data is not flowing into the exec mtd from wherever it is uploaded."* Measured on the first tenant to walk
+Stage 2 twice: the line-level sales export (48,875 rows) and the by-product aggregate (10,823 rows) both landed in the same
+table for the same store × date span, and the second landing's slice replace — store × dates — deleted the first. Nothing
+had recorded which report kind wrote which row, so nothing could scope the replace to it.
+
+**The rule.** Every row a Stage-2 (or any) landing writes carries the report kind that wrote it — the column-mapping layout
+key — in the table's kind column (`landing_identity.KIND_STAMP`: ONE home of "which column, which default"). The slice a
+file owns is **store × dates × kind**. A landing NEVER deletes rows of another kind silently: when another kind's rows sit
+in its slice it is refused (nothing written, traced) with the loss in plain words — *"This would replace 48,875 rows of
+'Sales report with IMEI and phone number' with 10,823 rows of 'Sales report with cost and selling price' …"* — and lands
+only when the person confirms at 2.6 (the loss is then recorded, never implied). A row landed before this rule (NULL) reads
+as the table's default kind, so nothing existing changes meaning.
+
+**Two kinds that answer different questions never share a table.** The by-product aggregate (cost and selling price per
+product) double-counts against line-level rows if summed and replaces them if landed beside them; it lands in its OWN table
+(`raw_sales_product`, mig 1011). "Which table a layout lands in" has one home (`column_mapping.TABLE_MAP`) and every path
+dereferences it; a caller cannot point a layout elsewhere.
+
+**A landing nobody can read is not a landing.** Every landing table has a registered list of readers and the fields each
+needs (`landing_identity.CONSUMERS`). A frame blank on every field a gating reader needs (the Executive MTD's department /
+category / product name) is refused BEFORE a row is written, naming the reader and the fields — never accepted into a table
+where it counts as nothing.
+
+## 9. Every upload says where it shows up (owner 2026-09-20)
+
+Owner: *"it should be mentioned on the upload page where this upload will be reflected, with a link. If the user does not
+know and uploads the data it does no good."*
+
+**The rule.** Every surface that offers an upload — the intake's 2.0 cards and 2.1 drop, the 2.6 result, the Stage-5
+runbook, the Upload page's tiles, the Upload wizard's steps, the Email and FTP import routes — says *"This upload will show
+in: [Executive MTD] [Sales Report] [Gross Profit] …"* with each name a link. The list is DERIVED from one chain — the
+report-kind registry row → the table its landing writes → that table's registered readers — never typed on a surface; the
+links are the platform's one screen → page mechanism (ScreenLink), gated by the reader's own permissions. A report page that
+has rows but nothing to count, or no rows, links BACK the same way: which report kind feeds it, and the page to upload it on.
+
+**A wrong file is told the right page.** When a file does not fit the tile it was dropped on, the registry's own detection
+runs over its header row first and the refusal opens with *"This looks like a 'Cash register / X-report'. Upload it under
+Onboarding — Commission Intake."*; the column list is the second line, never the only one.
+
+**Locked.** `backend/harness_landing_identity_lock.py` fails the build when a writer to a multi-kind table stops stamping the
+kind, when a second consumers map appears anywhere, when an upload surface stops rendering the one component, or when a
+reader named in the map has no page to link to.

@@ -27,10 +27,13 @@ export type VerifyRow = {
   // Stage C: the cross-check the commit ran (bill-pay lines extracted from a sales export; units activated but still on hand)
   note?: string | null
 }
+// links / reports are ScreenLink SCREEN KEYS (the sidebar's own hrefs, RBAC-gated) — derived by the backend from the
+// one consumers map (landing_identity.CONSUMERS); `shows_in` per monthly line = that landing table's readers
 export type Runbook = {
-  links: { label: string; href: string; screen: string }[]
-  reports?: { label: string; href: string; screen: string; why: string }[]
-  monthly: { instance_key: string; kind: string; label: string; filename_example: string | null; lands_in: string; mapping_saved: boolean; status: string }[]
+  links: { label: string; screen: string }[]
+  reports?: { label: string; screen: string; why: string }[]
+  monthly: { instance_key: string; kind: string; label: string; filename_example: string | null; lands_in: string; mapping_saved: boolean; status: string
+             shows_in?: { screen: string; label: string; needs: string[]; gate: boolean; why?: string | null }[] }[]
   note: string
 }
 export type Rail = {
