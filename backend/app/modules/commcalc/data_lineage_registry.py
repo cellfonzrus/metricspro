@@ -132,8 +132,19 @@ INGEST_TABLES_BY_MODULE = {
 # (permanently empty) and the books-stale banner never fired. account/autocompute._PERIOD_SOURCES already
 # lists daily_sales_feed with uploaded_at first (fix dcb0807); this registry makes that rule the ONE place
 # it's written down, and the guard locks it so it can't silently regress.
+#
+# EVERY table whose arrival column is NOT created_at belongs here — that is the whole point of the map.
+# `harness_ingest_freshness.py` §C fails the build if `account/autocompute._PERIOD_SOURCES` names a
+# non-created_at arrival column for a table this dict does not declare, so the two copies of the fact
+# cannot drift apart again (they already did once: the registry held daily_sales_feed and nothing
+# dereferenced it, while autocompute carried its own copy).
 FRESHNESS_COLUMN_BY_TABLE = {
     "daily_sales_feed": "uploaded_at",
+    # VIP sweep landing tables: the sweep stamps `swept_at` when a row lands. `created_at` exists but
+    # moves on re-write, so it is the same trap as daily_sales_feed — declared here rather than left
+    # implicit in the one list that happened to know about it.
+    "vip_paygo_payments": "swept_at",
+    "vip_credit_memos": "swept_at",
 }
 
 # ── MODULES AUDITED TO HAVE NO EXTERNAL FEED (owner 2026-08-30 census) ─────────────────────────────

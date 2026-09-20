@@ -67,6 +67,31 @@ gates the merge, and nothing here weakens it:
 If any of those is not satisfied, the PR waits and the reason is stated plainly — that is the one
 case where the owner hears about a merge that has not happened.
 
+## A fix is a DESIGN fix or it is not a fix (owner directive 2026-09-20)
+
+Owner: *"this happened in luxelink and was fixed, again it was a patchwork and i want no patchwork —
+if one thing is fixed for one tenant it should be a design fix not a temporary fix, this should be a
+requirement of the design."*
+
+A defect is never repaired for the tenant, feed, report or code path that happened to surface it. Fix
+the MECHANISM, for every caller of it, or say plainly that you have not.
+
+- **Name the class, not the instance.** Before fixing, ask what general fact was wrong. "Boost's
+  mailbox status is stale" is an instance; "a sweep's status is not a reliable record of what it did"
+  is the class. Fix the class.
+- **Find the siblings before you ship.** Every other path that answers the SAME question must be
+  checked in the same PR and fixed or explicitly excused: the other sweep, the other tenant, the other
+  feed, the other ingest route. Two paths answering one question is the duplicate defect the index
+  rules already forbid — one of them fixed and the other not is the same defect wearing a hat.
+- **One fact, one home, dereferenced — never copied.** A fact every caller needs (which table is the
+  live feed, which column means "arrived", which columns are earnings) lives in ONE registry and
+  callers READ it. A second copy is a future divergence, and writing the registry without wiring the
+  callers to it is not a fix at all — it has happened three times here (see §19.18).
+- **Lock it so it cannot un-wire.** A design fix ships with a check that FAILS THE BUILD if a caller
+  stops dereferencing the shared fact, or if a second copy appears. Without that, the next change
+  quietly restores the patchwork.
+- **A per-tenant config row is not a patch; per-tenant CODE is.** RULE TWO already bans the latter.
+
 ## House conventions (apply everywhere)
 
 - **RULE TWO — config, never code**: no carrier/tenant/product branch names in code; behavior is

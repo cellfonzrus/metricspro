@@ -3185,6 +3185,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `commcalc.carrier_commission` (mig `065`) | **NOTHING WRITES IT for any live org — 0 rows house, 0 rows LuxeLink (measured 2026-09-20)**, which is why `rep_commissions.carrier_statement_comm` reads `$0.00` on every live row. `_apply_new_engines` reads it into `stmt_by_rep` (`router.py`, the statement block) and `/carrier-comm-file/extract` writes it. The live carrier statement for a master-agent tenant is `raw_ma_commission`, NOT this table — see §31.2 | §15 carrier statement commission; §31 carrier earned vs employee paid |
 | `commcalc.raw_ma_commission` — as the EARNED side | per-device statement money in `spiff_m1..m6` / `rebate` / `device_margin` / `consumer_margin` / `mrc_net_discount`, netted per device by `sale_installment_engine._ma_gate_index` (mig `308`, base + adjustment summed so a clawback nets out); which columns count as dealer earnings is `commission_catalog.amount_fields(org,'ma_commission')` with `_MA_NUMERIC_COLS` as the house default | §31 — `carrier_vs_pay.rollup_by_rep` via `GET /commcalc/carrier-vs-pay/{period}`. Also §15 MA commission, §8 installment gate |
 | `commcalc.rep_commissions.boost_commission` — as the EARNED side | the PRE-ATTRIBUTED dealer figure for a processor-payment tenant: `raw_payment_detail` rows in the `Commission` payment category, summed per `rep_username` by `calculator.calc_rep_commissions` (`pay_by_login`). Read as stored by the earned-vs-paid report, **never recomputed** | §6 rep commission (Boost); §31.5 the second feed shape |
+| `commcalc.daily_sales_feed.uploaded_at` · `vip_paygo_payments.swept_at` · `vip_credit_memos.swept_at` — the ARRIVAL columns (as opposed to each table's DATA date) | the ingest that lands the row | `data_lineage_registry.FRESHNESS_COLUMN_BY_TABLE` / `freshness_column(table)` is the ONE declaration; `router._table_feed_freshness` dereferences it to fill `last_ingest_at`, and `account/autocompute._PERIOD_SOURCES` must agree with it. Consumed by `_data_freshness_monitor` to tell **"the report email stopped arriving"** (old ingest) from **"the file arrives, its CONTENT is frozen"** (recent ingest, old data date) — a distinction that was structurally impossible for every table-backed feed until 2026-09-20, see §19.18. Proof `harness_ingest_freshness.py` (31 checks) |
 | `commcalc.email_sweep_config` / `ftp_sweep_config` — the FRESHNESS columns `last_run_at` vs `last_attempt_at` (mig `241`) | `router._sweep_run_stamp(success)` is the SOLE decider, written through `_email_status_update` (mailbox, scoped `org_id`+`account`) / `_status_update` (FTP). **Only an ingest advances `last_run_at`** (`ok > 0` attachments); a rejected login, a mailbox with no filename rules, a connect error or a crash writes `last_attempt_at`. Both degrade to a status-only write on a pre-241 database | `router._scan_connector_health` → `GET /commcalc/connector-health` (ERRORED/STALE arms — the STALE arm was DEAD for these two tables until 2026-09-20, see §19), and `core.control_box_api._SCHEDULER_SPECS['sched_email_sweep']` → `control_box.heartbeat_lamp(last_success=…)`, whose parameter name this now actually honours. Scheduling reads NEITHER column — `/run-due` keys off `next_run_at`. Proof `harness_sweep_freshness.py` (28 checks) |
 
 ## 17. Cross-reference: by ENDPOINT (high-value)
@@ -3442,6 +3443,64 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 ---
 
 ## 19. Known gaps & inert config
+
+§19.18 **"IS THE DATA STILL FLOWING?" — THE DISCRIMINATOR WAS DEAD FOR EVERY TABLE-BACKED FEED, AND
+THE SWEEP COULD LOSE THE RECORD OF A SUCCESSFUL RUN (fixed 2026-09-20, owner directive: no patchwork).**
+
+Owner: *"it was the same password but it fizzled out of the b2bimports — this happened in luxelink and
+was fixed, again it was a patchwork and i want no patchwork; if one thing is fixed for one tenant it
+should be a design fix not a temporary fix, this should be a requirement of the design."* The standing
+rule that came out of it is in `CLAUDE.md`; this is the defect that produced it.
+
+**THREE DEFECTS, ONE CLASS — a fact fixed on ONE path and never made a property of the design.**
+
+1. **`account/autocompute._PERIOD_SOURCES`** learned that `daily_sales_feed`'s arrival column is
+   `uploaded_at` (its rows are re-inserted and promoted, so `created_at` lies). Its own comment names
+   the pattern: *"the coa READ-path was universalized but this data-DETECTION list was never
+   mirrored"*. A feed-only tenant's P&L never computed.
+2. **`data_lineage_registry.FRESHNESS_COLUMN_BY_TABLE` + `freshness_column()`** were then written to
+   hold that fact ONCE — and `freshness_column()` had **zero callers** for its whole life. It was a
+   registry nobody dereferenced.
+3. So **`router._table_feed_freshness` returned `last_ingest_at: None` unconditionally** — initialised,
+   never assigned — for every table-backed feed on every tenant. The sibling `_custom_feed_freshness`
+   (raw_custom_import) sets it properly, so the diagnosis worked for Activation Details and Bill
+   Payment and was DEAD for the sales feed.
+
+**WHAT THAT COST.** `_data_freshness_monitor` tells a tenant WHICH failure they have: an old ingest
+means the report email stopped arriving (chase the sender); a RECENT ingest with an old data date means
+the file still arrives and its CONTENT is frozen (chase the source's report). With `last_ingest_at`
+always None, `arrival_stopped = (not li_full) or …` is always True, so only the first sentence could
+ever be produced. Boost 2026-09-20, measured: the mailbox ingested **6,601 rows at 03:41** and the
+newest transaction in the data was still **2026-09-07** — the true diagnosis was "arriving, content
+frozen" and the platform said "stopped arriving" for thirteen days.
+
+**A FOURTH, POINTING THE OTHER WAY.** `_run_email_sweep` ran its optional post-ingest work (shrink
+alert, mailbox cleaner, unrouted list + alert) BEFORE the one write that records the outcome, un-wrapped.
+A raise anywhere in it discarded the record of a sweep that had already succeeded — and `run-now`
+dispatches through `background_tasks.add_task`, which has no crash handler, so the exception reached
+nobody and the row kept its PREVIOUS status. Boost, same morning: the owner re-entered the password at
+03:35 and swept four times; all four ingested (journalled in `email_processed` + `upload_trace` at
+03:40:47 / 03:41:00 / 03:41:13 / 03:41:25) and the config row still read
+`login rejected: [AUTHENTICATIONFAILED]` from 03:00. The platform reported a working mailbox as
+"fizzled" — the false-RED mirror of §19.17's false-GREEN.
+
+**THE FIX, as a property of the design rather than of any tenant.**
+- `_table_feed_freshness` DEREFERENCES `_lineage.freshness_column(table)` and populates
+  `last_ingest_at`; it carries no copy of the fact. A table without the column degrades to None and the
+  wording falls back to the old conservative sentence — never a 500.
+- `FRESHNESS_COLUMN_BY_TABLE` gained the two VIP sweep tables (`vip_paygo_payments`,
+  `vip_credit_memos` → `swept_at`) that `_PERIOD_SOURCES` knew about and the registry did not. **The
+  guard found those, not a human.**
+- Both sweeps (mailbox AND FTP) build `status_msg` first, run the optional work inside a `try`, and
+  stamp the outcome in the `finally`. `POST /email-sweep/run-now` wraps its background task so a crash
+  is stamped on every affected mailbox and then re-raised — the same treatment `/run-due` already gave.
+- **Locked:** `backend/harness_ingest_freshness.py` (31 checks) fails the build if the probe stops
+  dereferencing the registry, if a second copy of the column name appears beside it, if the registry and
+  `_PERIOD_SOURCES` disagree about any table, or if either sweep's stamp leaves its `finally`.
+
+**STILL OPEN AND REPORTED, NOT FIXED:** Boost's b2bsoft export itself is frozen. The login works and the
+sweep ingests, but the newest data in the attachment is 2026-09-07, so 09-08..09-19 does not exist in
+the mailbox to be pulled (§19.17). With this change the platform now says that in the right words.
 
 §19.17 **THE BOOST MAILBOX LOGIN HAS BEEN REJECTED SINCE 2026-09-07 — REPORTED, NOT CODED AROUND
 (2026-09-20).** `commcalc.email_sweep_config` for the house org (`b2breports@metricspro.tech`,
