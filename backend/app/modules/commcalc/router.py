@@ -18139,8 +18139,15 @@ def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", t
             _t = _date.fromisoformat(str(today)[:10])
         except Exception:
             _t = None
+    # ── THE PLAN STATES ITS ACTIVATION BASIS (owner 2026-09-20, "configurable in settings not hard
+    #    coded") ───────────────────────────────────────────────────────────────────────────────────
+    # `mtd_rates.activation_basis` — the SAME already-JSONB, already-UI-editable blob the per-category
+    # rates live in, so no migration and no new editor. Absent / unrecognised -> 'auto' -> today's
+    # behaviour, byte-identical for every existing plan.
+    from app.modules.commcalc import activation_bucketing as _ab_pol
+    _basis_policy = _ab_pol.resolve_basis_policy(_stored)
     data = _exec_mtd(client, org_id, period, stores=stores or None, markets=markets or None,
-                     reps=emps_scope or None, today=_t)
+                     reps=emps_scope or None, today=_t, activation_basis_policy=_basis_policy)
     emp_rows = ((data.get("by_employee") or {}).get("rows")) or []
     rows = _commission_from_mtd_rows(emp_rows, rate_map, eff_acc_pct)
     # ── SET-UP / ACTIVATION FEE ON THE EXEC-MTD BASIS (owner 2026-08-01 + 2026-09-17) ───────────────
@@ -18187,6 +18194,10 @@ def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", t
                       "pay": round(sum(r["by_category"][c]["pay"] for r in rows), 2),
                       "rate": rate_map.get(c, 0.0), "label": _MTD_CATEGORY_LABELS[c]}
                   for c in _MTD_ACT_CATEGORIES}
+    _src_meta = data.get("activation_source") or {}
+    _counts = {c: cat_totals[c]["count"] for c in _MTD_ACT_CATEGORIES}
+    _basis_meta = dict(_src_meta)
+    _basis_meta["exposure"] = _ab_pol.basis_flip_exposure(_counts, rate_map)
     totals = {
         "activations": sum(r["activations"] for r in rows),
         "acc_sales": round(sum(r["acc_sales"] for r in rows), 2),
@@ -18203,6 +18214,11 @@ def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", t
         "rate_map": rate_map, "accessory_pct": eff_acc_pct,
         "scope": {"stores": stores, "markets": markets, "employees": emps_scope},
         "activation_source": data.get("activation_source"),
+        # WHAT BASIS PAID THIS, AND WHAT AN UPLOAD WOULD MOVE. `exposure.delta` is the dollars between
+        # the SPLIT and the FOLDED reading of the same sales: it is non-zero only when a split-only
+        # category is priced differently from the category it folds into, which is the whole mechanism
+        # behind "the same tablet paid $10 in July and $0 in August". $0 = the flip is harmless here.
+        "activation_basis": _basis_meta,
         "setup_fee": {"scope": _sf_src_mtd, "settings": _sf_set_mtd, "warnings": _sf_warn_mtd},
         "by_rep": rows, "totals": totals,
     }
@@ -22111,6 +22127,122 @@ def run_discrepancy_check(payload: dict, org_id: str = ORG_ID):
         out["ma"] = ma_summary
     elif ma_err:
         out["ma"] = {"error": ma_err}
+    return out
+
+
+@router.get("/carrier-vs-pay/{period}")
+def carrier_vs_pay_report(period: str, org_id: str = ORG_ID, market: str = "", store: str = ""):
+    """CARRIER STATEMENT EARNED vs EMPLOYEE PAID, per rep, for one month. READ-ONLY. BOOKS NOTHING.
+
+    Owner directive 2026-09-20 — the evidence surface for "is the basis for calculation the same feed
+    source for all carriers". Dealer REVENUE (what the carrier statement says was earned on this
+    rep's activations) sits beside the PAYROLL EXPENSE (what the rep was actually paid). The two are
+    never summed and never netted; the gap is reported as the NAMED
+    `carrier_earned_minus_employee_paid`, and only for reps where BOTH sides were measured.
+
+    DUPLICATE CHECK (CLAUDE.md build gate). Nothing here is a second derivation:
+      • sold universe, device→rep attribution, paid/unpaid evidence, business-rule attribution —
+        `ma_recon` (§15), the SAME engine POST /discrepancy/run persists for the Pay Discrepancy
+        report. This endpoint runs it read-only and never calls persist_results.
+      • per-device statement money — `sale_installment_engine._ma_gate_index` (mig 308), which
+        already nets a device's base + adjustment rows so a clawback reduces the figure.
+      • payout DIRECTION — the org's `installment_gate_source_config` ladder via
+        `ma_recon.load_gate_cfg`, the same knob the payout gate reads.
+      • employee side — `commcalc.rep_commissions` as stored. Never recomputed, never written.
+      • store→market — `_store_market_resolver`, the canonical union resolver (§13a).
+    `/commission-received-breakout` is the neighbouring report and does NOT answer this: it is
+    company/store grain, has no rep dimension, and never reads rep_commissions.
+
+    ABSENCE IS NOT A FINDING. When no carrier statement is loaded for the window, every earned
+    figure is `null` with state 'not_reported' — never $0.00 — and no margin is computed. See
+    `commcalc/carrier_vs_pay.py` for the three states and the reason vocabulary (shared with
+    marketing/event_sales.py, §23s.8).
+
+    RULE TWO: which statement columns count as dealer earnings is the org's own
+    `commission_catalog` amount-field list, with the mig-308 column tuple as the house default. No
+    carrier, tenant or market name appears in the logic.
+    """
+    require_org(org_id)
+    from app.modules.commcalc import ma_recon, carrier_vs_pay as _cvp
+    from app.modules.commcalc.sale_installment_engine import _ma_gate_index
+    client = sb()
+
+    # ── the SOLD side + the paid/unpaid evidence — ma_recon, read-only (no persist) ──────────────
+    cfg = ma_recon.load_gate_cfg(client, org_id)
+    rules = ma_recon.load_rules(client, org_id)
+    sold_rows = ma_recon.load_sold_sales(client, org_id, period)
+    sold_idx, sold_without_serial = ma_recon.build_sold_index(sold_rows)
+    ma_rows, tx_rows = ma_recon.load_ma_paid_rows(client, org_id, period)
+    paid_idx = ma_recon.build_paid_index(ma_rows, tx_rows, cfg)
+    recon_rows, recon_summary = ma_recon.reconcile_ma_activations(
+        sold_idx, paid_idx, rules, period, cfg)
+
+    # ── the statement MONEY — the mig-308 netted index over the SAME rows ma_recon loaded ────────
+    money_idx = _ma_gate_index(ma_rows)
+    try:
+        configured = commission_catalog.amount_fields(client, org_id, "ma_commission")
+    except Exception:
+        configured = None
+    from app.modules.commcalc.sale_installment_engine import _MA_NUMERIC_COLS as _house_cols
+    columns = _cvp.earnings_columns(configured, _house_cols)
+
+    # ── the EMPLOYEE side — rep_commissions as stored ────────────────────────────────────────────
+    try:
+        pay_rows = (client.schema("commcalc").table("rep_commissions").select("*")
+                    .eq("org_id", org_id).in_("period", _pvariants(period))
+                    .limit(100000).execute().data) or []
+    except Exception:
+        pay_rows = []
+
+    # ── THE SECOND FEED SHAPE ────────────────────────────────────────────────────────────────────
+    # A tenant with no master-agent statement may still have a per-rep dealer figure: the processor
+    # PAYMENT feed, already aggregated per rep by `calculator.calc_rep_commissions` into
+    # `rep_commissions.boost_commission` (raw_payment_detail rows in the 'Commission' payment
+    # CATEGORY, keyed on rep_username). Reading it here is not a second derivation — it is the SAME
+    # number the commission report already shows, and nothing recomputes it. Without this, such a
+    # tenant read 'not reported' for every rep while a measured figure sat one column away.
+    # Config, not a branch: the shape is chosen by WHICH FEED HAS ROWS, never by a carrier name.
+    _statement_loaded = bool(ma_rows or tx_rows)
+    _pre, _shape = None, _cvp.EARNED_SHAPE_STATEMENT_DEVICE
+    if not _statement_loaded:
+        _agg = {}
+        for _r in pay_rows:
+            _v = _r.get("boost_commission")
+            if _v is None:
+                continue
+            _k = _cvp.normalize_rep(_r.get("epay_salesperson") or _r.get("storeops_name"))
+            if _k:
+                _agg[_k] = round(safe_float(_agg.get(_k)) + safe_float(_v), 2)
+        if _agg:
+            _pre, _shape = _agg, _cvp.EARNED_SHAPE_PREATTRIBUTED_REP
+
+    _market_for, _all_markets = _store_market_resolver(client, org_id)
+    out = _cvp.rollup_by_rep(
+        recon_rows, money_idx, pay_rows,
+        columns=columns, payout_sign=cfg.get("ma_payout_sign"),
+        statement_loaded=_statement_loaded, market_for=_market_for,
+        preattributed_earned=_pre, earned_shape=_shape)
+
+    # RULE FIVE — the filters narrow the ROWS; the payload says what it dropped, never silently.
+    markets = {m.strip().upper() for m in (market or "").split(",") if m.strip()}
+    stores = {s.strip().lower() for s in (store or "").split(",") if s.strip()}
+    rows = out["rows"]
+    if markets or stores:
+        kept = [r for r in rows
+                if (not markets or (r.get("market") or "").upper() in markets)
+                and (not stores or (r.get("store") or "").lower() in stores)]
+        out["meta"]["filtered"] = {"markets": sorted(markets), "stores": sorted(stores),
+                                   "reps_shown": len(kept), "reps_total": len(rows)}
+        out["rows"] = kept
+    out["period"] = period
+    out["org_id"] = org_id
+    out["meta"]["sold_summary"] = recon_summary
+    out["meta"]["sold_without_serial"] = sold_without_serial
+    out["meta"]["statement_rows"] = {"ma_commission": len(ma_rows), "ma_daily_tx": len(tx_rows)}
+    out["meta"]["earnings_columns_source"] = ("org commission_catalog" if configured
+                                              else "house default (mig 308 column set)")
+    out["meta"]["writes"] = ("none — this endpoint reads ma_recon, the mig-308 money index and "
+                             "rep_commissions, and persists nothing")
     return out
 
 
@@ -26192,7 +26324,8 @@ def _blank_sales_cell(store, rep, date):
             "act_tablet": 0, "act_home_internet": 0, "act_edge": 0}
 
 
-def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_stores=None):
+def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_stores=None,
+                            policy=None):
     """THE single place that decides the activation BASIS for every display consumer (owner 2026-08-26:
     "wire once, applies everywhere — no per-surface wiring"). Sets explicit activation COUNT fields
     (act_new / act_port / act_byod / act_upg) on every shared cell; the Sales Report and Exec MTD both read
@@ -26212,12 +26345,27 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
         # The sales feed does not distinguish tablet / home-internet / edge → 0 (they stay folded inside the
         # feed's own `new` sense). An INACTIVE basis is therefore byte-identical to before this split.
         a["act_tablet"] = a["act_home_internet"] = a["act_edge"] = 0
+    # ── THE BASIS IS NOW STATED, NOT INFERRED (owner 2026-09-20) ────────────────────────────────
+    # `policy` is the caller's explicit choice (activation_bucketing.BASIS_POLICIES); None/'auto' is
+    # today's behaviour and every number below is byte-identical. What changes unconditionally is that
+    # the returned meta NAMES the basis, whether it is a DEGRADED one, and why — previously a silent
+    # fold was inferable only from `ad_rows == 0`, and it re-priced sales (a split category whose rate
+    # differs from the category it folds into).
+    from app.modules.commcalc import activation_bucketing as _ab
+    _pol = _ab.resolve_basis_policy({"activation_basis": policy}) if policy else _ab.BASIS_POLICY_DEFAULT
     msrc = _metric_source(client, org_id, "activations")
+    _stated = msrc.get("source") if msrc.get("enabled") else None
     if not (msrc.get("enabled") and msrc.get("source") == "activation_details"):
-        return {"active": False, "basis": "sales_agg", "ad_rows": 0}
+        # The tenant has not stated Activation Details as their activation source, so folding is the
+        # stated behaviour and nothing is degraded.
+        return {"active": False, "basis": "sales_agg", "ad_rows": 0, "policy": _pol,
+                "stated_source": _stated, "degraded": False,
+                "reason": "the activation source of truth is not Activation Details."}
     ad_cells, ad_n = _ad_cells_full(client, org_id, period, ckey_fn)
     if not ad_n:
-        return {"active": False, "basis": "sales_agg", "ad_rows": 0}
+        _d = _ab.basis_decision(_pol, 0, _stated)
+        return {"active": False, "basis": "sales_agg", "ad_rows": 0, "policy": _pol,
+                "stated_source": _stated, "degraded": True, "reason": _d["reason"]}
     for a in cells.values():
         a["act_new"] = a["act_port"] = a["act_byod"] = a["act_upg"] = 0   # AD authoritative
         a["act_tablet"] = a["act_home_internet"] = a["act_edge"] = 0
@@ -26233,7 +26381,26 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
         a["act_tablet"], a["act_home_internet"], a["act_edge"] = ad["tablet"], ad["home_internet"], ad["edge"]
         a["act_new"] = ad["new"] + ad["tablet"] + ad["home_internet"] + ad["edge"]
         a["act_port"], a["act_byod"], a["act_upg"] = ad["port"], ad["byod"], ad["upgrade"]
-    return {"active": True, "basis": "activation_details", "ad_rows": ad_n}
+    if _pol == "folded":
+        # A DELIBERATE FOLD, and a NARROW one. It folds ONLY the split-only sub-counts back into
+        # `act_new` — which already contains them by construction (`new + tablet + home_internet +
+        # edge` above), so zeroing the three is the whole operation. Every other count keeps the
+        # Activation-Details basis the tenant stated.
+        #
+        # An earlier draft of this made 'folded' mean "use the sales aggregation instead", and that was
+        # WRONG: measured live it moved August by +$890 and September by −$120 against the +$550/+$380
+        # the ruling asks for, because re-basing changes EVERY category's counts, not just the split
+        # ones. Folding must not be a basis change — it is a presentation choice about three counts.
+        for a in cells.values():
+            a["act_tablet"] = a["act_home_internet"] = a["act_edge"] = 0
+        return {"active": True, "basis": "activation_details", "ad_rows": ad_n, "policy": _pol,
+                "stated_source": _stated, "degraded": False, "folded_split_categories": True,
+                "reason": (f"Activation Details supplied {ad_n} row(s); policy 'folded' folds "
+                           + ", ".join(_ab.SPLIT_ONLY_CATEGORIES)
+                           + f" into '{_ab.FOLD_TARGET}' so an upload cannot re-price those sales.")}
+    return {"active": True, "basis": "activation_details", "ad_rows": ad_n, "policy": _pol,
+            "stated_source": _stated, "degraded": False,
+            "reason": f"Activation Details supplied {ad_n} row(s) for this period."}
 
 
 # THE line predicate lives in exec_metric_defs (mig 962) so the report, the coverage detector and the
@@ -26261,7 +26428,7 @@ def _exec_act_class(ct, rules):
 
 
 def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, today=None,
-              date_from=None, date_to=None, authorization=""):
+              date_from=None, date_to=None, authorization="", activation_basis_policy=None):
     """Executive Month-To-Date summary — the b2bsoft 'Month To Date Location/Employee Sales Report',
     now DERIVED FROM the EXACT SAME aggregation the Sales Report uses (owner directive 2026-07-16: "the
     Sales Report is correct — Exec MTD should take its cumulative numbers from there"). Reads the SAME
@@ -26463,7 +26630,11 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     # stores (incl. AD-only) appear. The MTD cut / date-range below then windows both bases identically.
     _flt_active = bool(store_sel or rep_sel or market_sel)
     _restrict = {k[0] for k in cells} if _flt_active else None
-    _act_src = _apply_activation_basis(client, org_id, period, cells, _ckey_ex, restrict_stores=_restrict)
+    # `activation_basis_policy` is the CALLER's explicit basis choice (owner 2026-09-20). None = the
+    # report's own default = today's behaviour, byte-identical. The PAY path passes the plan's stated
+    # policy so a plan can choose folded counts and stop an upload re-pricing a sale.
+    _act_src = _apply_activation_basis(client, org_id, period, cells, _ckey_ex,
+                                       restrict_stores=_restrict, policy=activation_basis_policy)
     _act_override, _ad_n = bool(_act_src.get('active')), _act_src.get('ad_rows') or 0
     _msrc_act = _metric_source(client, org_id, 'activations')
 
@@ -26634,11 +26805,19 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
             # SOURCE OF TRUTH (mig 923): tells the UI which basis drove Total Activation and whether Upgrade
             # is excluded from it, so the number is never silently redefined. Sales basis (the default) →
             # active:false, byte-identical response otherwise.
+            # The FOUR pre-2026-09-20 keys are unchanged; the rest NAME the decision that used to be
+            # inferable only from `ad_rows == 0` — which policy was in force, what the tenant had
+            # STATED, whether this period is being paid on a basis they did not choose, and why.
             'activation_source': {'source': _msrc_act.get('source'),
                                   'active': bool(_act_override),
                                   'basis': 'activation_details' if _act_override else 'sales_agg',
                                   'ad_rows': (_ad_n if _act_override else 0),
-                                  'total_activation_excludes_upgrade': bool(_act_override)},
+                                  'total_activation_excludes_upgrade': bool(_act_override),
+                                  'policy': _act_src.get('policy'),
+                                  'stated_source': _act_src.get('stated_source'),
+                                  'degraded': bool(_act_src.get('degraded')),
+                                  'folded_split_categories': bool(_act_src.get('folded_split_categories')),
+                                  'reason': _act_src.get('reason')},
             'filters': filters, 'applied': applied,
             'date_range': {'active': rng_on, 'from': rng_from_s, 'to': rng_to_s,
                            'requested_from': (str(date_from)[:10] or None) if date_from else None,
