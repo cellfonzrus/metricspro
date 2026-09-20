@@ -12,6 +12,19 @@ THE FIVE CANONICAL CATEGORIES (carrier-agnostic; "essentially the same" as the B
 A payout paid over many months stays ONE category but each installment keeps its payment_month, so it's
 classified once and displayed as it's paid.
 
+THE BUCKETS ARE CONFIG, NOT A LIST IN CODE (owner directive 2026-09-20: "this is not to be hardcoded,
+the user should be able to define the buckets and also assign the bucket to a bigger category on the
+P&L"). `commcalc.commission_bucket` (mig 1009) holds one row per bucket per org — key, label, KIND
+(earned | deduction, which decides the sign a line books with), order, active, the neutral hint words
+the onboarding intake pre-places labels with, and the P&L line it rolls up to (`pl_line_key`, a key of
+account/coa.PL_SPEC). The house org seeds the five above plus `chargebacks`, `vendor_fee` and
+`misc_charges`; a tenant inherits the house rows and overrides per key. The five above stay COLUMN-
+BACKED (their mig-071 amount columns are still written, so every existing reader is byte-identical);
+every other bucket is read by (category, payout_total) — no schema change per bucket. `CATEGORIES` /
+`CATEGORY_LABELS` are the column-backed five and the display fallback; `HOUSE_BUCKETS` mirrors the
+1009 seed and is what a database without the table reads for DISPLAY — a line may not be BOOKED to a
+column-less bucket until the table exists (the landing paths refuse, naming the migration).
+
 WHICH DIRECTION IS "EARNED" IS THE FEED'S OWN CONVENTION, AND IT IS CONFIG (owner bug report 2026-09-20).
 On the MA Daily Tx (Total/VidaPay) a NEGATIVE amount is a payout and positives are dealer charges; other
 statements state the same money the other way up (a positive is what the carrier owes, a negative is a
@@ -43,17 +56,191 @@ MAPPING_REPORT_KEY = "commission_ledger"    # the column_mapping report_key this
 AMOUNT_FIELD = "raw_amount"                 # the mapped column whose sign convention is being declared
 DEFAULT_SOURCE_REPORT = "ma_daily_tx"
 
-# canonical payout buckets (the five amount columns on commission_ledger) + non-payout sentinels
+# THE COLUMN-BACKED buckets (the five amount columns on commission_ledger, mig 071) + non-payout
+# sentinels. Every OTHER bucket lives in the registry below and is read by (category, payout_total).
 CATEGORIES = ["commission", "spiff", "equipment_rebate", "residual_monthly", "autopay_residual"]
+COLUMN_BACKED = tuple(CATEGORIES)
 CATEGORY_LABELS = {
     "commission": "Commission",
     "spiff": "Spiff",
     "equipment_rebate": "Equipment rebate",
     "residual_monthly": "Residual / monthly incentives",
     "autopay_residual": "Auto Pay residual",
-    "charge": "Bill / activation payment (not a payout)",
+    "chargebacks": "Chargebacks",
+    "vendor_fee": "Vendor fee",
+    "misc_charges": "Misc charges",
+    # `charge` is NOT a bucket and NOT the same thing as `misc_charges`: it is the sentinel for a line
+    # that is not part of the statement's payout at all — the dealer's own bill / activation payment
+    # on a master-agent feed (a DIFFERENT money stream, `payout_negative`). It books nothing and sits
+    # outside every tie-out. `misc_charges` is a DEDUCTION BUCKET: money the carrier took off the
+    # statement (an adjustment, a charitable contribution), booked signed so the buckets still sum to
+    # the statement's own total.
+    "charge": "Bill / activation payment (not a payout — outside the buckets, not a deduction)",
     "other": "Other payout (unmapped)",
 }
+
+# ── THE BUCKET REGISTRY (mig 1009) — per-org rows, house defaults, tenant overrides per key ─────
+BUCKET_TABLE = "commission_bucket"
+BUCKET_MIGRATION = "1009_commission_bucket_registry.sql"
+KIND_EARNED, KIND_DEDUCTION = "earned", "deduction"
+BUCKET_KINDS = (KIND_EARNED, KIND_DEDUCTION)
+KIND_LABELS = {KIND_EARNED: "Earned (money the carrier pays us)",
+               KIND_DEDUCTION: "Deduction (money taken off the statement — books signed, never abs())"}
+BUCKETS_TENANT, BUCKETS_HOUSE, BUCKETS_BUILTIN = "tenant", "house", "builtin"
+_BUCKET_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+# MIRRORS THE 1009 SEED EXACTLY (harness_commission_ledger_sign.py parses the migration and compares).
+# What a database WITHOUT the table reads, for display only. Neutral English hint words — no carrier,
+# tenant or product name (RULE TWO). Tuple order = (key, label, kind, sort_order, hint_words, pl_line_key,
+# is_builtin); is_builtin marks the five column-backed keys, whose key can never change.
+HOUSE_BUCKETS = [
+    ("commission", "Commission", KIND_EARNED, 10,
+     ["commission", "activation", "upgrade", "price plan", "new account", "add-a-line", "add a line", "new line"],
+     "carrier_comm", True),
+    ("spiff", "Spiff", KIND_EARNED, 20, ["spiff", "spf", "incentive", "bonus", "bounty"], "carrier_comm", True),
+    ("equipment_rebate", "Equipment rebate", KIND_EARNED, 30,
+     ["rebate", "subsidy", "promo", "trade-in", "trade in", "trade"], "device_rebate", True),
+    ("residual_monthly", "Residual / monthly incentives", KIND_EARNED, 40,
+     ["residual", "monthly incentive"], "mi_income", True),
+    ("autopay_residual", "Auto Pay residual", KIND_EARNED, 50,
+     ["autopay residual", "auto pay residual", "auto-pay residual", "autopay", "auto pay", "auto-pay"], "mi_income", True),
+    ("chargebacks", "Chargebacks", KIND_DEDUCTION, 60,
+     ["chargeback", "charge back", "charge-back", "deactivation", "deactivate", "deact", "clawback",
+      "claw back", "claw-back", "reversal", "reversed"], "chargebacks", False),
+    ("vendor_fee", "Vendor fee", KIND_DEDUCTION, 70, ["service fee", "vendor fee", "fee"], "vip_fees", False),
+    ("misc_charges", "Misc charges", KIND_DEDUCTION, 80,
+     ["adjustment", "adjust", "misc", "miscellaneous", "charitable", "contribution", "other charge"],
+     "store_opex", False),
+]
+
+
+def _bucket_dict(key, label, kind, sort_order, hint_words, pl_line_key, is_builtin, **extra):
+    d = {"key": key, "label": label, "kind": kind, "sort_order": sort_order, "is_active": True,
+         "hint_words": list(hint_words or []), "pl_line_key": pl_line_key, "is_builtin": bool(is_builtin),
+         "column_backed": key in COLUMN_BACKED, "org_id": None, "id": None}
+    d.update(extra)
+    return d
+
+
+def builtin_buckets():
+    """The house defaults as bucket dicts — what a pre-1009 database reads for DISPLAY. PURE."""
+    return [_bucket_dict(*t) for t in HOUSE_BUCKETS]
+
+
+def normalise_bucket(row):
+    """One registry row (or a POST body) -> a valid bucket dict, or None when the key is not a key.
+    Unknown kinds read as 'earned' (a typo can never make money book the wrong way silently — the
+    endpoint validates before writing; this is the READ side's tolerance). PURE."""
+    key = str((row or {}).get("key") or "").strip().lower()
+    if not _BUCKET_KEY_RE.match(key):
+        return None
+    kind = str(row.get("kind") or KIND_EARNED).strip().lower()
+    words = row.get("hint_words")
+    if isinstance(words, str):
+        words = [w for w in re.split(r"[,\n;]+", words)]
+    words = [str(w).strip().lower() for w in (words or []) if str(w).strip()]
+    try:
+        order = int(row.get("sort_order") if row.get("sort_order") is not None else 100)
+    except (TypeError, ValueError):
+        order = 100
+    active = row.get("is_active")
+    return _bucket_dict(key, str(row.get("label") or key).strip() or key,
+                        kind if kind in BUCKET_KINDS else KIND_EARNED, order, words,
+                        (str(row.get("pl_line_key") or "").strip() or None),
+                        bool(row.get("is_builtin")) or key in COLUMN_BACKED,
+                        is_active=(True if active is None else bool(active)),
+                        org_id=row.get("org_id"), id=row.get("id"))
+
+
+def merge_buckets(house_rows, tenant_rows):
+    """House defaults with the tenant's rows overriding PER KEY (mig-207 report_pull_map pattern):
+    a tenant that adds one bucket keeps the house ones; a tenant row for a house key replaces it.
+    Sorted by (sort_order, key). PURE."""
+    out = {}
+    for r in house_rows or []:
+        b = normalise_bucket(r)
+        if b:
+            b["source"] = BUCKETS_HOUSE
+            out[b["key"]] = b
+    for r in tenant_rows or []:
+        b = normalise_bucket(r)
+        if b:
+            b["source"] = BUCKETS_TENANT
+            out[b["key"]] = b
+    return sorted(out.values(), key=lambda b: (b["sort_order"], b["key"]))
+
+
+def load_buckets_meta(client, org_id):
+    """(buckets, meta) for ONE org. Two ORG-SCOPED reads: the house org's rows (the defaults) and this
+    org's rows (the overrides), merged per key. A database without the table (mig 1009 not applied)
+    returns the built-in mirror of the seed with ready=False, so display works and a caller that
+    would BOOK to a column-less bucket can refuse, naming the migration."""
+    meta = {"ready": True, "migration": BUCKET_MIGRATION, "source": BUCKETS_BUILTIN,
+            "tenant_rows": 0, "house_rows": 0}
+    try:
+        house = (client.schema("commcalc").table(BUCKET_TABLE).select("*")
+                 .eq("org_id", ORG_HOUSE).execute().data) or []
+        tenant = [] if org_id == ORG_HOUSE else (
+            (client.schema("commcalc").table(BUCKET_TABLE).select("*")
+             .eq("org_id", org_id).execute().data) or [])
+    except Exception:
+        meta["ready"] = False
+        return builtin_buckets(), meta
+    meta["house_rows"], meta["tenant_rows"] = len(house), len(tenant)
+    if not house and not tenant:
+        # the table exists but the seed has not landed: still the built-ins, still say so
+        meta["source"] = BUCKETS_BUILTIN
+        return builtin_buckets(), meta
+    meta["source"] = BUCKETS_TENANT if tenant else BUCKETS_HOUSE
+    merged = merge_buckets(house or builtin_buckets(), tenant)
+    return merged, meta
+
+
+def load_buckets(client, org_id):
+    return load_buckets_meta(client, org_id)[0]
+
+
+def active_buckets(buckets=None):
+    return [b for b in (buckets if buckets is not None else builtin_buckets()) if b.get("is_active", True)]
+
+
+def bucket_keys(buckets=None, active_only=True):
+    src = active_buckets(buckets) if active_only else (buckets if buckets is not None else builtin_buckets())
+    return [b["key"] for b in src]
+
+
+def bucket_labels(buckets=None):
+    out = dict(CATEGORY_LABELS)
+    for b in (buckets if buckets is not None else builtin_buckets()):
+        out[b["key"]] = b["label"]
+    return out
+
+
+def bucket_by_key(buckets=None):
+    return {b["key"]: b for b in (buckets if buckets is not None else builtin_buckets())}
+
+
+def deduction_keys(buckets=None):
+    return {b["key"] for b in (buckets if buckets is not None else builtin_buckets()) if b.get("kind") == KIND_DEDUCTION}
+
+
+def bucket_kind(category, buckets=None):
+    """'earned' | 'deduction' for a registry bucket key; None for a sentinel or an unknown key."""
+    b = bucket_by_key(buckets).get(str(category or ""))
+    return b.get("kind") if b else None
+
+
+def unbookable_categories(rows, buckets_meta):
+    """The categories among `rows` that are NOT column-backed while the registry table is absent —
+    the set a landing path must refuse (naming BUCKET_MIGRATION) rather than write a bucket key the
+    database cannot describe. Empty when the table exists or every row is column-backed/sentinel."""
+    if (buckets_meta or {}).get("ready", True):
+        return []
+    seen = set()
+    for r in rows or []:
+        c = str(r.get("category") or "")
+        if c and c not in COLUMN_BACKED and c not in ("charge", "other", "exclude"):
+            seen.add(c)
+    return sorted(seen)
 MATCH_FIELDS = ["product_name", "order_type"]
 # `product_class` (2026-08-01, owner-gated) is NOT a text matcher: the pattern is a CLASS KEY and the
 # rule matches when the LINE'S OWN CONFIRMED CLASS equals it. This module has NO dependency on the
@@ -363,7 +550,7 @@ LEG_BUCKETS = ("m1", "trailing", "unsplit")
 LEG_LABELS = {"m1": "1st Month", "trailing": "M2–M12", "unsplit": "Unsplit"}
 
 
-def _first_matching_rule(row, rules, conv=None):
+def _first_matching_rule(row, rules, conv=None, buckets=None):
     """The rule that classified this line, re-derived with the SAME two-pass order `classify` uses, so a
     rule-level leg override applies to exactly the lines that rule categorised. None if nothing matched."""
     if not rules:
@@ -371,22 +558,23 @@ def _first_matching_rule(row, rules, conv=None):
     ot, pn = row.get("order_type"), row.get("product_name")
     conv = conv or DEFAULT_CONVENTION
     d = direction(row.get("raw_amount"), conv)
+    ded = deduction_keys(buckets)
     for pass_class in (True, False):
         for rule in rules:
             if (rule.get("match_op") == CLASS_MATCH_OP) != pass_class:
                 continue
-            if _rule_may_match(rule, d, conv):
+            if _rule_may_match(rule, d, conv, ded):
                 if _match(rule, ot, pn):
                     return rule
     return None
 
 
-def leg_of(row, rules=None, legcls=None, conv=None):
+def leg_of(row, rules=None, legcls=None, conv=None, buckets=None):
     """(leg_bucket, leg_month, why) for ONE ledger row. PURE apart from the injected classifier.
     `legcls` is a commission_legs.LegClassifier; None = its DB-free code defaults."""
     from app.modules.commcalc import commission_legs as _legs
     legcls = legcls or _legs.default_classifier()
-    rule = _first_matching_rule(row, rules, conv)
+    rule = _first_matching_rule(row, rules, conv, buckets)
     if rule is not None:
         rb = str(rule.get("leg_bucket") or "").strip().lower()
         if rb in LEG_BUCKETS:
@@ -421,30 +609,43 @@ def _match(rule, order_type, product_name):
     return val == pat if op == "equals" else (pat in val)
 
 
-def _rule_may_match(rule, d, conv):
+def _rule_may_match(rule, d, conv, deductions=None):
     """May this rule be TRIED against a line pointing direction `d`? Under the default convention this is
     exactly the old `rule['sign_rule'] == 'any' or amount < 0`. Under 'signed' reversal handling a
     reversal is also offered to the rules, because it is the same money coming back and it has to find
-    the bucket it reverses — it books NEGATIVE, never abs()."""
+    the bucket it reverses — it books NEGATIVE, never abs(). A rule that targets a DEDUCTION bucket is
+    offered a line pointing EITHER way: a deduction naturally points against the earned direction, and a
+    refund of one points with it — both are that bucket's money and both book SIGNED."""
     if d == DIR_PAYOUT:
         return True
     if rule.get("sign_rule") == "any":
         return True
+    if deductions and rule.get("category") in deductions:
+        return d != DIR_FLAT
     return d == DIR_REVERSAL and (conv or DEFAULT_CONVENTION).get("reversal_handling") == REVERSAL_SIGNED
 
 
-def _booking_for(category, d, conv):
+def _booking_for(category, d, conv, deductions=None):
     """How a matched line books: DIR_PAYOUT (+|amt|), DIR_REVERSAL (−|amt|) or None (books nothing).
     A 'charge'/'exclude' category books nothing, as before. Under the default convention every booked
-    line is DIR_PAYOUT, so the magnitude is abs() exactly as it has always been."""
+    line is DIR_PAYOUT, so the magnitude is abs() exactly as it has always been.
+
+    THE DEDUCTION SIGN RULE (mig 1009): a line in a DEDUCTION bucket books its CANONICAL SIGNED amount
+    (raw × payout_sign) whichever way it points and whatever the reversal handling — DIR_REVERSAL
+    (−|amt|) when it points against the earned direction (a −1,500 deactivation under payout_positive;
+    a fee written as a positive charge under payout_negative), DIR_PAYOUT (+|amt|) when it points with
+    it (a fee REFUND reduces the deduction). Never abs(): that is how Σ over every bucket, earned and
+    deduction, stays equal to the statement's own total."""
     if category in ("charge", "exclude"):
         return None
+    if deductions and category in deductions:
+        return DIR_REVERSAL if d == DIR_REVERSAL else DIR_PAYOUT
     if d == DIR_REVERSAL and (conv or DEFAULT_CONVENTION).get("reversal_handling") == REVERSAL_SIGNED:
         return DIR_REVERSAL
     return DIR_PAYOUT
 
 
-def classify_line(raw_amount, order_type, product_name, rules, conv=None):
+def classify_line(raw_amount, order_type, product_name, rules, conv=None, buckets=None):
     """(category, booking) for one source line under a sign convention. `booking` is DIR_PAYOUT,
     DIR_REVERSAL or None (books nothing) — see _booking_for. PURE.
 
@@ -453,12 +654,17 @@ def classify_line(raw_amount, order_type, product_name, rules, conv=None):
     pointing the other way is a reversal; under the default handling it stays a 'charge' exactly as
     before, and under 'signed' it books into its own bucket as a NEGATIVE so the bucket reads net.
 
+    `buckets` is the org's bucket registry (mig 1009; None = the built-in house defaults): it says which
+    categories are DEDUCTION buckets, which book signed either way. An existing rule targets none of
+    them, so every existing rule-set classifies byte-identically (the differential proof).
+
     TWO PASSES since 2026-08-01: a `product_class` rule (the line's owner-CONFIRMED MA product class) is
     tried first, then every rule in priority order as before. A tenant with no product_class rules — or
     with ledger wiring left in its default 'legacy' mode, where no class index is ever compiled onto the
     rules — gets exactly the same answer as before, which the differential proof asserts name by name."""
     conv = conv or DEFAULT_CONVENTION
     d = direction(raw_amount, conv)
+    ded = deduction_keys(buckets)
     # PASS 1 — the line's CONFIRMED product class, if the tenant wired it (design of record: the class is
     # consulted FIRST and the keyword rules are the fallback for names nobody has classified). When no
     # product_class rule exists, or none carries a compiled index, this loop matches nothing and the
@@ -467,9 +673,9 @@ def classify_line(raw_amount, order_type, product_name, rules, conv=None):
         for rule in rules:
             if (rule.get("match_op") == CLASS_MATCH_OP) != pass_class:
                 continue
-            if _rule_may_match(rule, d, conv) and _match(rule, order_type, product_name):
+            if _rule_may_match(rule, d, conv, ded) and _match(rule, order_type, product_name):
                 cat = rule.get("category") or "other"
-                return cat, _booking_for(cat, d, conv)
+                return cat, _booking_for(cat, d, conv, ded)
     # Nothing matched. A line pointing the payout way is an UNMAPPED payout ('other' — surfaced, never
     # silently dropped); one pointing the other way is a charge, unless reversals are being netted, in
     # which case it is an unmapped reversal and surfaces the same way with the opposite sign.
@@ -480,25 +686,30 @@ def classify_line(raw_amount, order_type, product_name, rules, conv=None):
     return "charge", None
 
 
-def classify(raw_amount, order_type, product_name, rules, conv=None):
+def classify(raw_amount, order_type, product_name, rules, conv=None, buckets=None):
     """(category, is_payout) — the long-standing two-value form, unchanged for every existing caller.
     `is_payout` is True for a line in the payout stream, which under 'signed' reversal handling includes
     a netted chargeback; `build_row` uses classify_line so it can tell the two apart."""
-    cat, booking = classify_line(raw_amount, order_type, product_name, rules, conv)
+    cat, booking = classify_line(raw_amount, order_type, product_name, rules, conv, buckets)
     return cat, booking is not None
 
 
-def build_row(src, base, rules, conv=None):
+def build_row(src, base, rules, conv=None, buckets=None):
     """Build one commission_ledger row from a mapped source row `src` (keys: account_id/account_name/
     store/rep_user/order_number/order_type/product_name/trans_date/due_date/raw_amount). `base` carries
     org_id + period. The payout magnitude is booked into the matched category column: +|amount| for a
     line pointing the way the template's convention says money is EARNED, and −|amount| for a reversal
     when that template nets reversals. `conv` defaults to the MA convention, so an existing caller that
-    passes no convention builds a byte-identical row."""
+    passes no convention builds a byte-identical row.
+
+    The row SHAPE is unchanged by the bucket registry (mig 1009): the five column-backed buckets still
+    land in their own column; a line in any other bucket (a deduction, or one the tenant defined)
+    carries its bucket key in `category` and its SIGNED amount in `payout_total`, and all five columns
+    read 0 — no schema change per bucket, and every reader of the five columns is byte-identical."""
     order_type = src.get("order_type")
     product_name = src.get("product_name")
     raw = _sf(src.get("raw_amount"))
-    category, booking = classify_line(raw, order_type, product_name, rules, conv)
+    category, booking = classify_line(raw, order_type, product_name, rules, conv, buckets)
     is_payout = booking is not None
     magnitude = booked_amount(raw, booking)
     row = dict(base)
@@ -518,9 +729,20 @@ def build_row(src, base, rules, conv=None):
     return row
 
 
-def summarize(rows, rules=None, legcls=None, conv=None):
+def summarize(rows, rules=None, legcls=None, conv=None, buckets=None, buckets_meta=None):
     """Roll a list of ledger rows into: per-category totals + counts, per-(category,payment_month) matrix,
     payout grand total, charge total, and the 'other' (unmapped-payout) count for surfacing gaps.
+
+    THE BUCKETS COME FROM THE REGISTRY (mig 1009): `buckets` is the org's merged bucket list
+    (load_buckets); None = the built-in house defaults. `categories` carries one entry per registry
+    bucket (the five column-backed keys are ALWAYS present, so every existing reader keeps its keys) with
+    its kind / label / order, and the payload adds the roll-up the owner asked for: `earned_total` (Σ
+    earned buckets), `deductions_total` (Σ deduction buckets, signed), `net_total`. `payout_total` keeps
+    its meaning — the NET the statement pays: every booked line's signed amount, earned buckets + other
+    (unmapped) + deductions — which is exactly what it summed to before deductions existed (there were
+    none), so every existing figure is byte-identical. A line whose category is a key the registry does
+    not list (a deactivated or deleted bucket) is NOT dropped: it is summed under `unlisted` and still
+    counted in payout_total, so money can never disappear from the total by editing the registry.
 
     ALSO (owner 2026-08-04) the COMMISSION LEG dimension: the same payout money split into the 1st-month
     leg vs the M2–M12 trailing legs, per category and in total. That is a DECOMPOSITION — for every
@@ -528,11 +750,22 @@ def summarize(rows, rules=None, legcls=None, conv=None):
     for the grand payout total; `leg_identity_ok` proves it in the payload instead of asserting it.
     `rules`/`legcls` are optional: without them the leg is derived from each line's own payment month and
     label, which is exactly what pre-extension callers get plus the new (additive) keys."""
-    cats = {c: {"total": 0.0, "count": 0} for c in CATEGORIES}
+    reg = list(buckets) if buckets is not None else builtin_buckets()
+    by_key = {b["key"]: b for b in reg}
+    ordered = [b["key"] for b in reg]
+    for c in CATEGORIES:                       # the column-backed five are always reported
+        if c not in by_key:
+            by_key[c] = _bucket_dict(c, CATEGORY_LABELS[c], KIND_EARNED, 999, [], None, True, is_active=False)
+            ordered.append(c)
+    cats = {c: {"total": 0.0, "count": 0, "kind": by_key[c]["kind"], "label": by_key[c]["label"],
+                "active": bool(by_key[c].get("is_active", True)), "column_backed": c in COLUMN_BACKED,
+                "sort_order": by_key[c]["sort_order"], "pl_line_key": by_key[c].get("pl_line_key")}
+            for c in ordered}
     by_month = {}
-    payout_total = charge_total = other_total = 0.0
-    other_count = 0
-    leg_cats = {c: {b: 0.0 for b in LEG_BUCKETS} for c in list(CATEGORIES) + ["other"]}
+    payout_total = charge_total = other_total = unlisted_total = 0.0
+    other_count = unlisted_count = 0
+    unlisted_keys = {}
+    leg_cats = {c: {b: 0.0 for b in LEG_BUCKETS} for c in ordered + ["other", "unlisted"]}
     leg_tot = {b: 0.0 for b in LEG_BUCKETS}
     leg_ladder, leg_unmapped = {}, {}
     for r in rows:
@@ -554,9 +787,15 @@ def summarize(rows, rules=None, legcls=None, conv=None):
             booked = "other"
         elif cat == "charge":
             charge_total += _sf(r.get("raw_amount"))
+        elif cat and cat != "exclude" and r.get("is_payout"):
+            unlisted_total += amt
+            unlisted_count += 1
+            unlisted_keys[cat] = unlisted_keys.get(cat, 0) + 1
+            payout_total += amt
+            booked = "unlisted"
         if booked is None:                 # a charge is not a payout — it has no leg
             continue
-        bucket, leg_month, _why = leg_of(r, rules, legcls, conv)
+        bucket, leg_month, _why = leg_of(r, rules, legcls, conv, reg)
         if bucket not in LEG_BUCKETS:
             bucket = "unsplit"
         leg_cats[booked][bucket] += amt
@@ -576,17 +815,35 @@ def summarize(rows, rules=None, legcls=None, conv=None):
     for b in LEG_BUCKETS:
         leg_tot[b] = round(leg_tot[b], 2)
     payout_total = round(payout_total, 2)
+    earned_total = round(sum(v["total"] for v in cats.values() if v["kind"] == KIND_EARNED), 2)
+    deductions_total = round(sum(v["total"] for v in cats.values() if v["kind"] == KIND_DEDUCTION), 2)
     identity_ok = abs(round(sum(leg_tot.values()), 2) - payout_total) < 0.01 and all(
-        abs(round(sum(leg_cats[c].values()), 2) - cats[c]["total"]) < 0.01 for c in CATEGORIES)
+        abs(round(sum(leg_cats[c].values()), 2) - cats[c]["total"]) < 0.01 for c in cats)
     return {
         "categories": cats,
-        "category_labels": CATEGORY_LABELS,
+        "category_labels": bucket_labels(reg),
         "by_month": by_month,
         "payout_total": payout_total,
         "charge_total": round(charge_total, 2),
         "other_total": round(other_total, 2),
         "other_count": other_count,
         "line_count": len(rows),
+        # ── the bucket registry (mig 1009; additive) ──
+        "buckets": [dict(b) for b in reg],
+        "bucket_kinds": list(BUCKET_KINDS),
+        "bucket_kind_labels": KIND_LABELS,
+        "bucket_source": (buckets_meta or {}).get("source", BUCKETS_BUILTIN if buckets is None else BUCKETS_TENANT),
+        "bucket_ready": bool((buckets_meta or {}).get("ready", buckets is not None)),
+        "bucket_migration": BUCKET_MIGRATION,
+        "earned_total": earned_total,
+        "deductions_total": deductions_total,
+        "net_total": payout_total,
+        "unlisted_total": round(unlisted_total, 2),
+        "unlisted_count": unlisted_count,
+        "unlisted_keys": unlisted_keys,
+        "payout_total_basis": ("payout_total = the NET the statement pays: Σ earned buckets + unmapped "
+                               "('other') + deductions (signed) + any line filed under a bucket key the "
+                               "registry no longer lists ('unlisted'); charges are outside it."),
         # ── commission LEG dimension (additive; categories above are byte-identical) ──
         "legs": leg_tot,
         "leg_labels": LEG_LABELS,

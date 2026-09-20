@@ -22,7 +22,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, apiUpload } from '@/lib/client'
 import {
   BASE, card, note, inp, btn, primary, ghost, mono, money, num, Lamp, DetectPanel, ColumnsTable, StoreResolver, Dropzone,
+  useAutoSave, SaveButton,
   type StateResp, type Instance, type Column, type MoneyCol, type Detect, type StoreRow, type RepRow, type Tie, type FileRef, type IdentityDecisions,
+  type SaveResult,
 } from './intake-shared'
 
 type SalesNumbers = {
@@ -105,7 +107,13 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
     if (!inst || restoredFor.current === inst.instance_key) return
     restoredFor.current = inst.instance_key
     const p = inst.payload || {}
-    setFile(null); setA(null); setCommitRes(null); setAttest(''); setTypedTotal(''); setSheet(''); setHeaderRow(''); setFooterMode('auto')
+    // every field the auto-save writes comes back (owner 2026-09-20: "if you refresh … it is not being saved")
+    setFile(null); setA(null); setCommitRes(null)
+    setAttest(typeof p.attestation === 'string' ? p.attestation : '')
+    setTypedTotal(typeof p.typed_total === 'string' ? p.typed_total : '')
+    setSheet(typeof p.sheet === 'string' ? p.sheet : '')
+    setHeaderRow(typeof p.header_row === 'string' ? p.header_row : '')
+    setFooterMode(p.footer_mode === 'none' ? 'none' : 'auto')
     setFilename(typeof p.filename === 'string' ? p.filename : '')
     setKept(p.file && typeof p.file === 'object' ? (p.file as FileRef) : null)
     setColumnMap(p.column_map && typeof p.column_map === 'object' ? (p.column_map as Record<string, string>) : {})
@@ -118,6 +126,29 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
     try { await api(`${BASE}/state`, { method: 'PUT', body: JSON.stringify({ instance_key: instanceKey, step: stepKey, payload: patch, by: who }) }); await reloadState(instanceKey) } catch { /* the rail is a convenience */ }
   }, [instanceKey, who, reloadState])
   const go = useCallback((k: string, patch: Record<string, unknown> = {}) => { setStep(k); persist(k, patch) }, [persist, setStep])
+
+  // ── AUTO-SAVE (owner 2026-09-20) — the same debounced PUT /state as stage 3, step kept where it is
+  const persistNow = useCallback(async (patch: Record<string, unknown>, keepalive = false): Promise<SaveResult> => {
+    if (!instanceKey) return { saved: false, reason: 'add the export on the checklist first' }
+    const d: StateResp = await api(`${BASE}/state`, { method: 'PUT', body: JSON.stringify({ instance_key: instanceKey, step, payload: patch, by: who }), keepalive })
+    if (d.state_ready === false) return { saved: false, reason: `run migration ${d.migration}` }
+    return d.save || { saved: true }
+  }, [instanceKey, step, who])
+  const { schedule, saveNow, status: saveStatus } = useAutoSave(persistNow)
+  const draft = useMemo(() => ({
+    column_map: columnMap, identity: decisions, typed_total: typedTotal, as_of_date: asOf || null, attestation: attest,
+    sheet, header_row: headerRow, footer_mode: footerMode,
+  }), [columnMap, decisions, typedTotal, asOf, attest, sheet, headerRow, footerMode])
+  const draftSeen = useRef({ instance: '', key: '' })
+  useEffect(() => {
+    if (!instanceKey || !a) return
+    const key = JSON.stringify(draft)
+    if (draftSeen.current.instance !== instanceKey) { draftSeen.current = { instance: instanceKey, key }; return }   // a (re)opened instance: the restore is not a change
+    if (key === draftSeen.current.key) return
+    draftSeen.current = { instance: instanceKey, key }
+    schedule(draft)
+  }, [draft, instanceKey, a, schedule])
+  const saveUi = <SaveButton onSave={() => saveNow(draft)} status={saveStatus} stateReady={state?.state_ready !== false} migration={state?.migration} busy={busy} />
 
   const kind = inst?.kind || ''
   const p = (inst?.payload || {}) as Record<string, unknown>
@@ -291,6 +322,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
           <Dropzone file={file} filename={filename} onFiles={onFiles} dragOver={dragOver} setDragOver={setDragOver} hint="Drop the export here" />
           <div style={{ marginTop: 14, display: 'flex', gap: 8 }}>
             <button style={primary} disabled={busy || (!file && !canUseKept)} onClick={() => analyze().then(r => r && setStep('2.2'))}>{busy ? 'Reading…' : 'Read the file →'}</button>
+            {saveUi}
           </div>
         </div>
       )}
@@ -304,6 +336,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
             <button style={ghost} onClick={() => setStep('2.1')}>← Back</button>
             <button style={btn} disabled={busy || (!file && !canUseKept)} onClick={() => analyze({ keepStep: true })}>Re-read with these settings</button>
             <button style={primary} onClick={() => go(kind === 'other' ? '2.5' : '2.3')}>{kind === 'other' ? 'What we can record →' : 'Columns →'}</button>
+            {saveUi}
           </div>
         </div>
       )}
@@ -324,6 +357,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
             <button style={btn} disabled={busy || (!file && !canUseKept)} onClick={() => analyze({ keepStep: true })}>Re-check with these columns</button>
             <button style={primary} disabled={!canLeave23} title={canLeave23 ? '' : `Map ${(required[kind] || []).join(', ')} first`}
               onClick={() => { persist('2.4', { column_map: columnMap }); analyze({ keepStep: true }).finally(() => setStep('2.4')) }}>Stores and reps →</button>
+            {saveUi}
           </div>
         </div>
       )}
@@ -339,6 +373,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
             <button style={primary} disabled={busy || unresolved.length > 0} title={unresolved.length ? `${unresolved.length} store string(s) unresolved` : ''}
               onClick={() => { persist('2.5', { identity: decisions }); analyze({ keepStep: true, dec: decisions }).finally(() => setStep('2.5')) }}>Our numbers →</button>
             {unresolved.length > 0 && <span style={{ ...note, color: '#ef4444' }}>{unresolved.length} unresolved: {unresolved.slice(0, 4).join(', ')}{unresolved.length > 4 ? ' …' : ''} — re-check after deciding</span>}
+            {saveUi}
           </div>
         </div>
       )}
@@ -410,6 +445,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
             {kind !== 'other' && <button style={btn} disabled={busy || (!file && !canUseKept)} onClick={() => analyze({ keepStep: true })}>Recompute</button>}
             {kind !== 'other' && <button style={ghost} onClick={() => setStep('2.3')}>Fix the columns</button>}
             <button style={primary} disabled={(kind !== 'other' && (a.verify.refusals.length > 0 && !attest.trim())) || (needsAttest && !attest.trim())} onClick={() => go('2.6', { typed_total: typedTotal, as_of_date: asOf || null })}>Confirm →</button>
+            {saveUi}
           </div>
         </div>
       )}

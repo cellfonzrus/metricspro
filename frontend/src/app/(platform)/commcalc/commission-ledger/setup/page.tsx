@@ -11,11 +11,12 @@ type Tmpl = { key: string; label: string; builtin: boolean; rule_count: number }
 type Analysis = {
   row_count: number; usable_rows: number; headers: string[]; amount_source: string
   suggestions: { target_field: string; label: string; suggested_source: string; confidence: string }[]
-  summary: { payout_total: number; charge_total: number; other_total: number; other_count: number; line_count: number; categories: Record<string, { total: number; count: number }> }
+  summary: { payout_total: number; charge_total: number; other_total: number; other_count: number; line_count: number
+    categories: Record<string, { total: number; count: number; kind?: string }>; earned_total?: number; deductions_total?: number }
   observed: { order_type: string; product_name: string; count: number; payout_total: number; category: string }[]
   categories: string[]; category_labels: Record<string, string>
 }
-const CATS = ['commission', 'spiff', 'equipment_rebate', 'residual_monthly', 'autopay_residual']
+// THE BUCKETS COME FROM THE BACKEND (the org's bucket registry, mig 1009) — `a.categories` — never a list here.
 const KEY_FIELDS = [
   { tf: 'raw_amount', label: 'Amount', hint: 'the money column — negative = a payout', star: true, transform: 'number' },
   { tf: 'product_name', label: 'Product / description', hint: 'drives which bucket a line goes to', star: true, transform: 'text' },
@@ -186,13 +187,20 @@ export default function CommissionLedgerSetupPage() {
               ({money(a.summary.charge_total)} are bill/activation payments, not payouts).
             </p>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
-              {CATS.map(c => (
+              {(a.categories || Object.keys(a.summary.categories || {})).map(c => (
                 <div key={c} style={{ ...card, minWidth: 130, padding: 12 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase' }}>{a.category_labels[c] || c}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase' }}>{a.category_labels[c] || c}{a.summary.categories[c]?.kind === 'deduction' ? ' (deduction)' : ''}</div>
                   <div style={{ fontSize: 18, fontWeight: 700 }}>{money(a.summary.categories[c]?.total || 0)}</div>
                   <div style={{ fontSize: 11, color: 'var(--text3)' }}>{a.summary.categories[c]?.count || 0} lines</div>
                 </div>
               ))}
+              {(a.summary.deductions_total || 0) !== 0 && (
+                <div style={{ ...card, minWidth: 150, padding: 12 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase' }}>Earned · deductions · net</div>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{money(a.summary.earned_total || 0)} · {money(a.summary.deductions_total || 0)}</div>
+                  <div style={{ fontSize: 18, fontWeight: 700 }}>{money(a.summary.payout_total)}</div>
+                </div>
+              )}
             </div>
             {a.summary.other_count > 0 ? (
               <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '10px 12px', fontSize: 13 }}>

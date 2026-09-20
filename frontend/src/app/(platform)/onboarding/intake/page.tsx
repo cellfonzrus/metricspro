@@ -28,7 +28,9 @@ import { api, apiUpload } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import {
   BASE, card, note, inp, btn, primary, ghost, mono, money, num, LAMP, Lamp, Badge, DetectPanel, ColumnsTable, StoreResolver, Dropzone,
+  useAutoSave, SaveButton,
   type StateResp, type Column, type MoneyCol, type Detect, type StoreRow, type RepRow, type Tie, type FileRef, type IdentityDecisions,
+  type BucketRow, type BucketMeta, type SaveResult,
 } from './intake-shared'
 import { Stage2Flow, STAGE2_STEPS } from './stage2'
 
@@ -40,8 +42,12 @@ type Label = {
   sub_labels: { sub_label: string; count: number; sum_raw: number }[]
   reversal_flag: boolean; bucket: string; provenance: string | null; provenance_label: string | null
 }
-type Bucket = { gross: number; chargebacks: number; net: number; count: number }
-type Totals = { buckets: Record<string, Bucket>; bucket_labels: Record<string, string>; net_total: number; other: Bucket; charges: { total: number; count: number }; rows: number }
+type Bucket = { gross: number; chargebacks: number; net: number; count: number; kind?: string; label?: string }
+type Totals = {
+  buckets: Record<string, Bucket>; bucket_labels: Record<string, string>; bucket_order?: string[]
+  earned_total?: number; deductions_total?: number; net_total: number
+  other: Bucket; unlisted?: Bucket & { keys: Record<string, number> }; charges: { total: number; count: number }; rows: number
+}
 type LedgerTie = Tie & { other_unassigned: number; other_count: number }
 type Analysis = {
   source_kind: string; statement_type: string; carrier: { id: string; name: string; code: string }
@@ -50,6 +56,8 @@ type Analysis = {
   sign: { question: string; positive: SignRow[]; negative: SignRow[]; positive_count: number; negative_count: number
           options: { value: string; label: string }[]; answer: string | null; stored_answer: string | null; convention: string | null; answered: boolean }
   labels: Label[]; buckets: string[]; bucket_labels: Record<string, string>; unassigned: string[]
+  bucket_rows?: BucketRow[]; bucket_meta?: BucketMeta
+  blank_label?: { count: number; sum_raw: number; message: string } | null
   identity: Record<string, { value: string; count: number; sum_raw: number }[]>
   stores: StoreRow[]; reps: RepRow[]; unresolved_stores: string[]
   period: { months: { period: string; rows: number }[]; span_from: string | null; span_to: string | null; proposed: string | null; spans_two_months: boolean; dated_rows: number }
@@ -153,11 +161,17 @@ export default function OnboardingIntakePage() {
       if (Array.isArray(p.assignments)) {
         const a: Record<string, string> = {}; const rv: Record<string, boolean> = {}
         for (const x of p.assignments as Assignment[]) { a[x.label] = x.bucket; rv[x.label] = !!x.is_reversal }
+        if (p.reversal_flags && typeof p.reversal_flags === 'object') for (const [k, v] of Object.entries(p.reversal_flags as Record<string, boolean>)) rv[k] = !!v
         setAssign(a); setReversal(rv)
       }
       if (p.identity && typeof p.identity === 'object') setDecisions(p.identity as IdentityDecisions)
       if (typeof p.period === 'string') setPeriod(p.period)
       if (typeof p.typed_total === 'string') setTypedTotal(p.typed_total)
+      // every field the auto-save writes comes back (owner 2026-09-20: "if you refresh … it is not being saved")
+      if (typeof p.attestation === 'string') setAttest(p.attestation)
+      if (typeof p.sheet === 'string') setSheet(p.sheet)
+      if (typeof p.header_row === 'string') setHeaderRow(p.header_row)
+      if (p.footer_mode === 'auto' || p.footer_mode === 'none') setFooterMode(p.footer_mode)
       if (typeof p.filename === 'string') setFilename(p.filename)
       if (p.file && typeof p.file === 'object') setKept(p.file as FileRef)
       if (p.analysis && typeof p.analysis === 'object') setAnalysis(p.analysis as Analysis)
@@ -188,6 +202,41 @@ export default function OnboardingIntakePage() {
     return labels.map(l => ({ label: l.label, match_field: l.match_field, bucket: assign[l.label] || UNASSIGNED, is_reversal: !!reversal[l.label] }))
   }, [analysis, assign, reversal])
   const unassigned = useMemo(() => assignments.filter(a => a.bucket === UNASSIGNED).map(a => a.label), [assignments])
+
+  // ── AUTO-SAVE (owner 2026-09-20): every choice on every step is written, debounced, with the step
+  // kept where it is; the Save button flushes the same write at once; the indicator says what happened.
+  // PUT /state merges per key on the backend, so a debounced `assignments` write never clobbers a
+  // `sign_answer` written a moment earlier (pinned in harness_onboarding_intake.py §K).
+  const persistNow = useCallback(async (patch: Record<string, unknown>, keepalive = false): Promise<SaveResult> => {
+    if (!instanceKey) return { saved: false, reason: 'pick the carrier first' }
+    const d: StateResp = await api(`${BASE}/state`, { method: 'PUT', body: JSON.stringify({ instance_key: instanceKey, step, payload: patch, by: who }), keepalive })
+    setState(prev => prev ? { ...prev, rail: d.rail, state_ready: d.state_ready, save: d.save } : d)
+    if (d.state_ready === false) return { saved: false, reason: `run migration ${d.migration}` }
+    return d.save || { saved: true }
+  }, [instanceKey, step, who])
+  const { schedule, saveNow, status: saveStatus } = useAutoSave(persistNow)
+  const draft = useMemo(() => ({
+    kind: 'commission', carrier_id: carrierId, statement_type: statementType,
+    assignments: assignments.filter(x => x.bucket !== UNASSIGNED),
+    reversal_flags: reversal, sign_answer: signAnswer, identity: decisions, typed_total: typedTotal, period,
+    attestation: attest, column_map: columnMap, sheet, header_row: headerRow, footer_mode: footerMode,
+  }), [carrierId, statementType, assignments, reversal, signAnswer, decisions, typedTotal, period, attest, columnMap, sheet, headerRow, footerMode])
+  const draftSeen = useRef('')
+  useEffect(() => {
+    if (stage !== '3' || !instanceKey || !analysis) return
+    const key = JSON.stringify(draft)
+    if (!draftSeen.current) { draftSeen.current = key; return }        // the restore / first read is not a change
+    if (key === draftSeen.current) return
+    draftSeen.current = key
+    schedule(draft)
+  }, [draft, stage, instanceKey, analysis, schedule])
+  const saveUi = <SaveButton onSave={() => saveNow(draft)} status={saveStatus} stateReady={state?.state_ready !== false} migration={state?.migration} busy={busy} />
+
+  // ── THE BUCKETS ARE THE REGISTRY (mig 1009): whatever the backend sends, in its order — no key named here
+  const bucketRows: BucketRow[] = useMemo(() => (analysis?.bucket_rows || state?.bucket_rows || []).filter(b => b.is_active !== false), [analysis, state])
+  const bucketKind = useCallback((k: string) => bucketRows.find(b => b.key === k)?.kind || 'earned', [bucketRows])
+  const earnedKeys = useMemo(() => bucketRows.filter(b => b.kind !== 'deduction').map(b => b.key), [bucketRows])
+  const dedKeys = useMemo(() => bucketRows.filter(b => b.kind === 'deduction').map(b => b.key), [bucketRows])
   const trimmedAnalysis = (a: Analysis) => ({ ...a, state: undefined, labels: a.labels.slice(0, 400).map(l => ({ ...l, sub_labels: (l.sub_labels || []).slice(0, 25) })) })
   const canUseKept = !file && !!kept?.stored
 
@@ -330,8 +379,9 @@ export default function OnboardingIntakePage() {
 
   const a = analysis
   const headers = a?.detect.headers || []
-  const buckets = state?.buckets || a?.buckets || ['commission', 'spiff', 'equipment_rebate', 'residual_monthly', 'autopay_residual']
-  const bucketLabels = state?.bucket_labels || a?.bucket_labels || {}
+  const buckets = bucketRows.length ? bucketRows.map(b => b.key) : (a?.buckets || state?.buckets || [])
+  const bucketLabels = { ...(state?.bucket_labels || {}), ...(a?.bucket_labels || {}) }
+  const bucketMeta = a?.bucket_meta || state?.bucket_meta
   const canLeave33 = !!columnMap.raw_amount && !!columnMap.product_name
   const tie = a?.verify.tie || null
   const needsAttest = !!a && (tie?.match === false || tie?.match === null)
@@ -489,6 +539,7 @@ export default function OnboardingIntakePage() {
             <div style={{ marginTop: 14, display: 'flex', gap: 8 }}>
               <button style={primary} disabled={busy || (!file && !canUseKept) || !carrierId} onClick={() => analyze().then(r => r && setStep('3.2'))}>{busy ? 'Reading…' : 'Read the file →'}</button>
               {a && !file && !canUseKept && <button style={ghost} onClick={() => setStep('3.2')}>Continue with what was saved →</button>}
+              {saveUi}
             </div>
           </div>
         )}
@@ -503,6 +554,7 @@ export default function OnboardingIntakePage() {
               <button style={ghost} onClick={() => setStep('3.1')}>← Back</button>
               <button style={btn} disabled={busy || (!file && !canUseKept)} onClick={() => analyze({ keepStep: true })}>Re-read with these settings</button>
               <button style={primary} onClick={() => go('3.3')}>Columns →</button>
+              {saveUi}
             </div>
           </div>
         )}
@@ -524,6 +576,7 @@ export default function OnboardingIntakePage() {
               <button style={btn} disabled={busy || (!file && !canUseKept)} onClick={() => analyze({ keepStep: true })}>Re-check with these columns</button>
               <button style={primary} disabled={!canLeave33} title={canLeave33 ? '' : 'Map the Amount and the Product / description first'}
                 onClick={() => { persist('3.4', { column_map: columnMap }); analyze({ keepStep: true }).finally(() => setStep('3.4')) }}>Which sign is money earned →</button>
+              {saveUi}
             </div>
           </div>
         )}
@@ -559,6 +612,7 @@ export default function OnboardingIntakePage() {
             <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
               <button style={ghost} onClick={() => setStep('3.3')}>← Back</button>
               <button style={primary} disabled={!signAnswer || busy} title={signAnswer ? '' : 'Answer the question first'} onClick={() => go('3.5', { sign_answer: signAnswer })}>Labels →</button>
+              {saveUi}
             </div>
           </div>
         )}
@@ -570,8 +624,18 @@ export default function OnboardingIntakePage() {
             <p style={{ ...note, marginBottom: 12 }}>
               {step === '3.5'
                 ? `${a.labels.length} distinct labels, largest first. Σ canonical is the amount after your sign answer (earned is ${signAnswer}). A label pre-placed in a bucket shows where that came from.`
-                : 'Every label must be in one of the five buckets — there is no "other". A reversal (chargeback / deactivation) goes into the bucket it reverses; it books negative there, so the bucket reads net.'}
+                : `Every label must be in one of your buckets — there is no "other". A reversal (chargeback / deactivation) can go into the bucket it reverses (it books negative there, so the bucket reads net) or into a deduction bucket of its own — your choice, nothing is decided for you. Deduction buckets book signed: money taken off the statement reads negative. Add, rename or reorder buckets on the Category → Bucket Map page.`}
             </p>
+            {step === '3.6' && bucketMeta && bucketMeta.ready === false && (
+              <div style={{ ...card, padding: '8px 12px', fontSize: 13, marginBottom: 10, borderColor: '#f59e0b', background: 'rgba(245,158,11,.08)' }}>
+                The bucket registry (migration {bucketMeta.migration}) is not applied yet: the buckets shown are the built-in defaults. A label can be placed in a deduction bucket here, but the confirm step will refuse until the migration runs.
+              </div>
+            )}
+            {step === '3.6' && a.blank_label && (
+              <div style={{ ...card, padding: '8px 12px', fontSize: 13, marginBottom: 10, borderColor: '#ef4444', background: 'rgba(239,68,68,.06)', color: '#b91c1c' }}>
+                {a.blank_label.message} <button style={{ ...ghost, padding: '2px 8px', fontSize: 12 }} onClick={() => setStep('3.3')}>Fix the columns</button>
+              </div>
+            )}
             {step === '3.5' && (
               <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
                 <thead><tr style={{ color: 'var(--text2)' }}><th align="left">Label</th><th align="right">Rows</th><th align="right">Σ raw</th><th align="right">Σ canonical</th><th align="left">Sign mix</th><th align="left">Pre-placed</th></tr></thead>
@@ -587,12 +651,13 @@ export default function OnboardingIntakePage() {
             )}
             {step === '3.6' && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10 }}>
-                {[UNASSIGNED, ...buckets].map(b => {
+                {[UNASSIGNED, ...(bucketRows.length ? [...earnedKeys, ...dedKeys] : buckets)].map(b => {
                   const cards = a.labels.filter(l => (assign[l.label] || UNASSIGNED) === b)
                   const sum = cards.reduce((s, l) => s + (l.sum_canonical ?? l.sum_raw), 0)
+                  const ded = b !== UNASSIGNED && bucketKind(b) === 'deduction'
                   return (
-                    <div key={b} style={{ ...card, padding: 10, borderColor: b === UNASSIGNED && cards.length ? '#ef4444' : 'var(--border)', minHeight: 120 }}>
-                      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 2 }}>{b === UNASSIGNED ? 'Unassigned' : bucketLabels[b] || b}</div>
+                    <div key={b} style={{ ...card, padding: 10, borderColor: b === UNASSIGNED && cards.length ? '#ef4444' : ded ? 'rgba(239,68,68,.35)' : 'var(--border)', minHeight: 120 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 2 }}>{b === UNASSIGNED ? 'Unassigned' : bucketLabels[b] || b}{ded && <span style={{ ...note, fontSize: 10, marginLeft: 6, color: '#b91c1c' }}>deduction</span>}</div>
                       <div style={{ ...note, fontSize: 11, marginBottom: 8 }}>{cards.length} label(s) · {money(sum)}</div>
                       {cards.map(l => (
                         <div key={l.label} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 8, marginBottom: 6, background: 'var(--bg,transparent)' }}>
@@ -601,7 +666,10 @@ export default function OnboardingIntakePage() {
                           {assign[l.label] && assign[l.label] !== UNASSIGNED && l.provenance && l.bucket === assign[l.label] && <div style={{ marginTop: 4 }}><Badge prov={l.provenance} label={l.provenance_label} /></div>}
                           <select value={assign[l.label] || UNASSIGNED} onChange={e => setAssign(m => ({ ...m, [l.label]: e.target.value }))} style={{ ...inp, width: '100%', marginTop: 6, fontSize: 12, padding: '4px 6px' }}>
                             <option value={UNASSIGNED}>— unassigned —</option>
-                            {buckets.map(x => <option key={x} value={x}>{bucketLabels[x] || x}</option>)}
+                            {bucketRows.length ? <>
+                              <optgroup label="Earned">{earnedKeys.map(x => <option key={x} value={x}>{bucketLabels[x] || x}</option>)}</optgroup>
+                              {dedKeys.length > 0 && <optgroup label="Deductions (book signed)">{dedKeys.map(x => <option key={x} value={x}>{bucketLabels[x] || x}</option>)}</optgroup>}
+                            </> : buckets.map(x => <option key={x} value={x}>{bucketLabels[x] || x}</option>)}
                           </select>
                           <label style={{ ...note, fontSize: 11, display: 'block', marginTop: 4 }}>
                             <input type="checkbox" checked={!!reversal[l.label]} onChange={e => setReversal(m => ({ ...m, [l.label]: e.target.checked }))} /> reversal (chargeback / deactivation)
@@ -618,9 +686,10 @@ export default function OnboardingIntakePage() {
               {step === '3.5' && <button style={primary} onClick={() => go('3.6')}>Bucket the labels →</button>}
               {step === '3.6' && <>
                 <button style={primary} disabled={!!unassigned.length || busy} title={unassigned.length ? `${unassigned.length} label(s) still unassigned` : ''}
-                  onClick={() => { persist('3.7', { assignments }); analyze({ keepStep: true }).finally(() => setStep('3.7')) }}>Store / account attribution →</button>
+                  onClick={() => { persist('3.7', { assignments, reversal_flags: reversal }); analyze({ keepStep: true }).finally(() => setStep('3.7')) }}>Store / account attribution →</button>
                 {!!unassigned.length && <span style={{ ...note, color: '#ef4444' }}>{unassigned.length} label(s) unassigned: {unassigned.slice(0, 5).join(', ')}{unassigned.length > 5 ? ' …' : ''}</span>}
               </>}
+              {saveUi}
             </div>
           </div>
         )}
@@ -642,6 +711,7 @@ export default function OnboardingIntakePage() {
               <button style={btn} disabled={busy || (!file && !canUseKept)} onClick={() => analyze({ keepStep: true, dec: decisions })}>Re-check with these decisions</button>
               <button style={primary} disabled={unresolvedStores.length > 0} title={unresolvedStores.length ? `${unresolvedStores.length} store string(s) unresolved` : ''} onClick={() => { persist('3.8', { identity: decisions }); analyze({ keepStep: true, dec: decisions }).finally(() => setStep('3.8')) }}>Totals →</button>
               {unresolvedStores.length > 0 && <span style={{ ...note, color: '#ef4444' }}>{unresolvedStores.length} unresolved: {unresolvedStores.slice(0, 4).join(', ')}{unresolvedStores.length > 4 ? ' …' : ''} — re-check after deciding</span>}
+              {saveUi}
             </div>
           </div>
         )}
@@ -655,12 +725,17 @@ export default function OnboardingIntakePage() {
             {!a.verify.totals && <div style={{ ...note, marginBottom: 12, color: '#b45309' }}>Answer 3.4 (and re-attach the file) to compute the totals.</div>}
             {a.verify.totals && tie && (
               <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse', marginBottom: 12 }}>
-                <thead><tr style={{ color: 'var(--text2)' }}><th align="left">Bucket</th><th align="right">Gross</th><th align="right">Chargebacks</th><th align="right">Net</th><th align="right">Rows</th></tr></thead>
+                <thead><tr style={{ color: 'var(--text2)' }}><th align="left">Bucket</th><th align="right">Earned (+)</th><th align="right">Reversed (−)</th><th align="right">Net</th><th align="right">Rows</th></tr></thead>
                 <tbody>
-                  {buckets.map(b => { const x = a.verify.totals!.buckets[b]; return (
-                    <tr key={b} style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>{bucketLabels[b] || b}</td><td style={mono}>{money(x?.gross)}</td><td style={{ ...mono, color: (x?.chargebacks || 0) < 0 ? '#ef4444' : 'inherit' }}>{money(x?.chargebacks)}</td><td style={{ ...mono, fontWeight: 600 }}>{money(x?.net)}</td><td style={mono}>{num(x?.count)}</td></tr>) })}
+                  {(a.verify.totals.bucket_order || buckets).filter(b => bucketKind(b) !== 'deduction').map(b => { const x = a.verify.totals!.buckets[b]; return (
+                    <tr key={b} style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>{x?.label || bucketLabels[b] || b}</td><td style={mono}>{money(x?.gross)}</td><td style={{ ...mono, color: (x?.chargebacks || 0) < 0 ? '#ef4444' : 'inherit' }}>{money(x?.chargebacks)}</td><td style={{ ...mono, fontWeight: 600 }}>{money(x?.net)}</td><td style={mono}>{num(x?.count)}</td></tr>) })}
+                  <tr style={{ borderTop: '1px solid var(--border)', fontWeight: 600, color: 'var(--text2)' }}><td style={{ padding: '5px 4px' }}>Earned buckets</td><td /><td /><td style={mono}>{money(a.verify.totals.earned_total ?? a.verify.totals.net_total)}</td><td /></tr>
+                  {(a.verify.totals.bucket_order || buckets).filter(b => bucketKind(b) === 'deduction').map(b => { const x = a.verify.totals!.buckets[b]; return (
+                    <tr key={b} style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>{x?.label || bucketLabels[b] || b} <span style={{ ...note, fontSize: 10, color: '#b91c1c' }}>deduction</span></td><td style={mono}>{money(x?.gross)}</td><td style={{ ...mono, color: (x?.chargebacks || 0) < 0 ? '#ef4444' : 'inherit' }}>{money(x?.chargebacks)}</td><td style={{ ...mono, fontWeight: 600 }}>{money(x?.net)}</td><td style={mono}>{num(x?.count)}</td></tr>) })}
+                  {dedKeys.length > 0 && <tr style={{ borderTop: '1px solid var(--border)', fontWeight: 600, color: 'var(--text2)' }}><td style={{ padding: '5px 4px' }}>Deduction buckets</td><td /><td /><td style={{ ...mono, color: (a.verify.totals.deductions_total || 0) < 0 ? '#ef4444' : 'inherit' }}>{money(a.verify.totals.deductions_total ?? 0)}</td><td /></tr>}
                   {a.verify.totals.other.count > 0 && <tr style={{ borderTop: '1px solid var(--border)', color: '#ef4444' }}><td style={{ padding: '5px 4px' }}>Unassigned (booked to no bucket)</td><td style={mono}>{money(a.verify.totals.other.gross)}</td><td style={mono}>{money(a.verify.totals.other.chargebacks)}</td><td style={mono}>{money(a.verify.totals.other.net)}</td><td style={mono}>{num(a.verify.totals.other.count)}</td></tr>}
-                  <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700 }}><td style={{ padding: '6px 4px' }}>Σ canonical (all buckets)</td><td /><td /><td style={mono}>{money(tie.our_total)}</td><td /></tr>
+                  {!!a.verify.totals.unlisted?.count && <tr style={{ borderTop: '1px solid var(--border)', color: '#b45309' }}><td style={{ padding: '5px 4px' }}>Filed under a bucket no longer listed ({Object.keys(a.verify.totals.unlisted.keys || {}).join(', ')})</td><td style={mono}>{money(a.verify.totals.unlisted.gross)}</td><td style={mono}>{money(a.verify.totals.unlisted.chargebacks)}</td><td style={mono}>{money(a.verify.totals.unlisted.net)}</td><td style={mono}>{num(a.verify.totals.unlisted.count)}</td></tr>}
+                  <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700 }}><td style={{ padding: '6px 4px' }}>Σ all buckets (net: earned + deductions)</td><td /><td /><td style={mono}>{money(tie.our_total)}</td><td /></tr>
                   <tr><td style={{ padding: '4px 4px' }}>File&apos;s own total ({tie.file_total_source === 'footer' ? `footer row${a.detect.footer.rows.length ? ` ${a.detect.footer.rows.map(r => r.row).join(', ')}` : ''}` : tie.file_total_source === 'typed' ? 'typed by you' : 'none'})</td><td /><td /><td style={mono}>{money(tie.file_total)}</td><td /></tr>
                   <tr style={{ fontWeight: 700, color: tie.match ? '#16a34a' : '#ef4444' }}><td style={{ padding: '4px 4px' }}>Difference</td><td /><td /><td style={mono}>{tie.difference === null ? 'nothing to compare' : money(tie.difference)}</td><td /></tr>
                 </tbody>
@@ -688,6 +763,7 @@ export default function OnboardingIntakePage() {
               <button style={ghost} onClick={() => setStep('3.3')}>Fix the columns</button>
               <button style={ghost} onClick={() => setStep('3.6')}>Fix the buckets</button>
               <button style={primary} disabled={!a.verify.totals || (needsAttest && !attest.trim())} onClick={() => go('3.9', { period, typed_total: typedTotal, attestation: attest })}>Confirm →</button>
+              {saveUi}
             </div>
           </div>
         )}
@@ -721,10 +797,11 @@ export default function OnboardingIntakePage() {
                   </div>
                 </div>
                 <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse', marginBottom: 12 }}>
-                  <thead><tr style={{ color: 'var(--text2)' }}><th align="left">Bucket (re-read)</th><th align="right">Gross</th><th align="right">Chargebacks</th><th align="right">Net</th></tr></thead>
+                  <thead><tr style={{ color: 'var(--text2)' }}><th align="left">Bucket (re-read)</th><th align="right">Earned (+)</th><th align="right">Reversed (−)</th><th align="right">Net</th></tr></thead>
                   <tbody>
-                    {buckets.map(b => { const x = commitRes.verified_numbers.totals.buckets[b]; return <tr key={b} style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>{bucketLabels[b] || b}</td><td style={mono}>{money(x?.gross)}</td><td style={mono}>{money(x?.chargebacks)}</td><td style={{ ...mono, fontWeight: 600 }}>{money(x?.net)}</td></tr> })}
-                    <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700 }}><td style={{ padding: '5px 4px' }}>Σ canonical</td><td /><td /><td style={mono}>{money(commitRes.verified_numbers.tie.our_total)}</td></tr>
+                    {(commitRes.verified_numbers.totals.bucket_order || buckets).map(b => { const x = commitRes.verified_numbers.totals.buckets[b]; return <tr key={b} style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>{x?.label || bucketLabels[b] || b}{x?.kind === 'deduction' && <span style={{ ...note, fontSize: 10, color: '#b91c1c' }}> deduction</span>}</td><td style={mono}>{money(x?.gross)}</td><td style={mono}>{money(x?.chargebacks)}</td><td style={{ ...mono, fontWeight: 600 }}>{money(x?.net)}</td></tr> })}
+                    {commitRes.verified_numbers.totals.deductions_total !== undefined && <tr style={{ borderTop: '1px solid var(--border)', color: 'var(--text2)', fontWeight: 600 }}><td style={{ padding: '5px 4px' }}>Earned {money(commitRes.verified_numbers.totals.earned_total)} · deductions {money(commitRes.verified_numbers.totals.deductions_total)}</td><td /><td /><td /></tr>}
+                    <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700 }}><td style={{ padding: '5px 4px' }}>Σ all buckets (net)</td><td /><td /><td style={mono}>{money(commitRes.verified_numbers.tie.our_total)}</td></tr>
                     <tr><td style={{ padding: '5px 4px' }}>File&apos;s own total</td><td /><td /><td style={mono}>{money(commitRes.verified_numbers.tie.file_total)}</td></tr>
                     <tr style={{ fontWeight: 700, color: commitRes.verified_numbers.tie.match ? '#16a34a' : '#ef4444' }}><td style={{ padding: '5px 4px' }}>Difference</td><td /><td /><td style={mono}>{money(commitRes.verified_numbers.tie.difference)}</td></tr>
                   </tbody>

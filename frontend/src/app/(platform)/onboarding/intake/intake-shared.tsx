@@ -1,4 +1,5 @@
 'use client'
+import { useCallback, useEffect, useRef, useState } from 'react'
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 // TENANT ONBOARDING — what every stage of the intake shares (design 2026-09-20, §0 "one shape for
 // every data stage"): the payload types that mirror onboarding_intake.py, the styles, the lamps and
@@ -36,13 +37,22 @@ export type Rail = {
 }
 export type Layout = { report_key: string; label: string; default: boolean }
 export type SourceKind = { value: string; label: string; built: boolean; target_table: string | null; layouts: Layout[] }
+// THE BUCKET REGISTRY (commcalc.commission_bucket, mig 1009) — one row per bucket per org; `kind` decides
+// the sign a line books with. The page renders whatever the backend sends: no bucket key is named here.
+export type BucketRow = {
+  key: string; label: string; kind: 'earned' | 'deduction' | string; sort_order: number; is_active: boolean
+  hint_words: string[]; pl_line_key: string | null; is_builtin: boolean; column_backed: boolean; source?: string
+}
+export type BucketMeta = { ready: boolean; migration: string; source: string; tenant_rows?: number; house_rows?: number }
 export type StateResp = {
   state_ready: boolean; migration: string; note?: string; rail: Rail; carriers: Carrier[]
   pos_sources: { pos_key: string; label: string }[]; stores: { store_code: string; address: string | null; market: string | null }[]
   employees: string[]; company: { companies: number; stores: number; carriers: number }
   source_kinds: SourceKind[]; inventory_none_key: string; statement_type_default: string
   sign_question: string; buckets: string[]; bucket_labels: Record<string, string>; save?: { saved: boolean; reason?: string }
+  bucket_rows?: BucketRow[]; bucket_meta?: BucketMeta
 }
+export type SaveResult = { saved: boolean; reason?: string }
 export type Column = {
   target_field: string; label: string; required: boolean; transform: string; column: string
   provenance: string | null; provenance_label: string | null; confidence: string; samples: string[]
@@ -87,6 +97,82 @@ const PROV_STYLE: Record<string, React.CSSProperties> = {
   'your earlier choice': { background: 'rgba(22,163,74,.12)', color: '#15803d' },
   'house default': { background: 'rgba(147,51,234,.12)', color: '#7e22ce' },
   guess: { background: 'rgba(245,158,11,.15)', color: '#b45309' },
+}
+
+// ── AUTO-SAVE (owner 2026-09-20: "as you keep assigning the buckets it should auto save and give an
+// option to save manually also — if you refresh and come out of the module it is not being saved").
+// Design §0.2 / §4: every screen writes its payload on each change. `useAutoSave` debounces (600 ms,
+// trailing) a PUT /state of the step's draft, merges pending patches, flushes on demand (the Save
+// button), on unmount and on pagehide / beforeunload with a keepalive request, and reports its state
+// so the person can SEE that their work is safe: saving… / saved hh:mm / not saved — why.
+export type SaveStatus = { state: 'idle' | 'saving' | 'saved' | 'error'; at: string | null; reason: string | null; pending: boolean }
+export const AUTOSAVE_MS = 600
+
+export function useAutoSave(persistNow: (patch: Record<string, unknown>, keepalive?: boolean) => Promise<SaveResult>) {
+  const [status, setStatus] = useState<SaveStatus>({ state: 'idle', at: null, reason: null, pending: false })
+  const pending = useRef<Record<string, unknown> | null>(null)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const persistRef = useRef(persistNow)
+  useEffect(() => { persistRef.current = persistNow }, [persistNow])
+
+  const flush = useCallback(async (keepalive = false) => {
+    if (timer.current) { clearTimeout(timer.current); timer.current = null }
+    const patch = pending.current
+    if (!patch) return
+    pending.current = null
+    setStatus(s => ({ ...s, state: 'saving', pending: false }))
+    try {
+      const r = await persistRef.current(patch, keepalive)
+      if (r.saved) setStatus({ state: 'saved', at: new Date().toISOString(), reason: null, pending: false })
+      else setStatus({ state: 'error', at: null, reason: r.reason || 'the server did not confirm the save', pending: false })
+    } catch (e: unknown) {
+      pending.current = { ...patch, ...(pending.current || {}) }          // keep it for the next try
+      setStatus({ state: 'error', at: null, reason: (e as Error)?.message || 'PUT /state failed', pending: true })
+    }
+  }, [])
+
+  const schedule = useCallback((patch: Record<string, unknown>) => {
+    pending.current = { ...(pending.current || {}), ...patch }
+    setStatus(s => ({ ...s, pending: true }))
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = setTimeout(() => { flush(false) }, AUTOSAVE_MS)
+  }, [flush])
+
+  const saveNow = useCallback((patch?: Record<string, unknown>) => {
+    if (patch) pending.current = { ...(pending.current || {}), ...patch }
+    return flush(false)
+  }, [flush])
+
+  useEffect(() => {
+    const onHide = () => { if (pending.current) flush(true) }
+    window.addEventListener('pagehide', onHide)
+    window.addEventListener('beforeunload', onHide)
+    return () => {
+      window.removeEventListener('pagehide', onHide)
+      window.removeEventListener('beforeunload', onHide)
+      if (pending.current) flush(true)                                     // route change / unmount
+    }
+  }, [flush])
+
+  return { schedule, saveNow, status }
+}
+
+export function SaveIndicator({ status, stateReady, migration }: { status: SaveStatus; stateReady: boolean; migration?: string }) {
+  const hhmm = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '')
+  if (!stateReady) return <span style={{ ...note, fontSize: 12, color: '#ef4444' }}>Not saved: run migration {migration || '1007_onboarding_intake_state.sql'}</span>
+  if (status.state === 'saving') return <span style={{ ...note, fontSize: 12 }}>Saving…</span>
+  if (status.state === 'error') return <span style={{ ...note, fontSize: 12, color: '#ef4444' }}>Not saved — {status.reason}</span>
+  if (status.state === 'saved') return <span style={{ ...note, fontSize: 12, color: '#15803d' }}>Saved ✓ {hhmm(status.at)}{status.pending ? ' · changes pending…' : ''}</span>
+  return <span style={{ ...note, fontSize: 12 }}>{status.pending ? 'Unsaved changes…' : 'Auto-save on'}</span>
+}
+
+export function SaveButton({ onSave, status, stateReady, migration, busy }: { onSave: () => void; status: SaveStatus; stateReady: boolean; migration?: string; busy?: boolean }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      <button style={btn} disabled={busy || status.state === 'saving'} onClick={onSave} title="Save what you have chosen so far (it also auto-saves as you go)">Save</button>
+      <SaveIndicator status={status} stateReady={stateReady} migration={migration} />
+    </span>
+  )
 }
 
 export function Lamp({ status }: { status: string }) {
