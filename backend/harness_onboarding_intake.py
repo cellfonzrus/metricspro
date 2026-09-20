@@ -689,7 +689,7 @@ check("$0.00 = $0.00 is NOT verified without a reason (design §5.3)",
 check("the clean scenario passes the gate", OI.commit_refusals("positive", labels, assign, tie) == [])
 rail = OI.rail([{"stage": "3", "instance_key": "commission:c1:commission_statement", "step": "3.4", "status": "in_progress", "payload": {"x": 1}}])
 check("the rail is a projection of the persisted rows: stage 3 in progress, resume at 3.4",
-      rail["stages"][2]["status"] == "in_progress" and rail["resume"] == {"instance_key": "commission:c1:commission_statement", "step": "3.4"}
+      rail["stages"][2]["status"] == "in_progress" and rail["resume"] == {"instance_key": "commission:c1:commission_statement", "step": "3.4", "stage": "3"}
       and [s["key"] for s in rail["steps"]] == OI.STEP_KEYS)
 check("every instance verified → stage verified; nothing → resume None",
       OI.rail([{"stage": "3", "instance_key": "a", "step": "3.9", "status": "verified"}])["stages"][2]["status"] == "verified"
@@ -737,7 +737,7 @@ check("every label assigned → the preview ties out to the cent, nothing unassi
 # state written by the page as it goes
 st = R.onboarding_intake_put_state(R.OnboardingIntakeStateIn(instance_key=a3["instance_key"], step="3.6", payload={"sign_answer": "positive", "column_map": MAP}), org_id=ORG)
 check("PUT /state persists the step and payload; the rail resumes at 3.6 for this instance",
-      st["save"]["saved"] is True and st["rail"]["resume"] == {"instance_key": a3["instance_key"], "step": "3.6"})
+      st["save"]["saved"] is True and st["rail"]["resume"] == {"instance_key": a3["instance_key"], "step": "3.6", "stage": "3"})
 st2 = R.onboarding_intake_put_state(R.OnboardingIntakeStateIn(instance_key=a3["instance_key"], step="3.8", payload={"assignments": CHOSEN}), org_id=ORG)
 check("a later PUT MERGES the payload (the 3.4 answer survives the 3.6 write) and one row exists per instance",
       st2["rail"]["instances"][0]["payload"].get("sign_answer") == "positive" and st2["rail"]["instances"][0]["payload"].get("assignments") == CHOSEN
@@ -813,9 +813,9 @@ check("…the SAME commit with an attestation + reason lands and records the att
       and c3["verified_numbers"]["tie"]["difference"] == -3029.66, c3.get("verified_numbers", {}).get("tie"))
 s_, d_ = http_error(commit, db, column_map=_json.dumps(MAP), sign_answer="positive", assignments=ASSIGN, period="")
 check("no period → 400 (the period is the slice the statement owns)", s_ == 400 and "period" in str(d_))
-s_, d_ = http_error(commit, db, column_map=_json.dumps(MAP), sign_answer="positive", assignments=ASSIGN, source_kind="sales")
-check("source_kind 'sales' is admitted by the enum and refused as Stage B — honestly, not silently",
-      s_ == 400 and "Stage B" in str(d_))
+s_, d_ = http_error(commit, db, column_map=_json.dumps(MAP), sign_answer="positive", assignments=ASSIGN, source_kind="sales", layout="bogus_layout")
+check("source_kind 'sales' is a REAL kind now (Stage B): refused for a real reason (an unknown layout), never as 'not built'",
+      s_ == 400 and ("layout" in str(d_) or "pos_source" in str(d_)) and "Stage B" not in str(d_))
 s_, d_ = http_error(commit, db, column_map=_json.dumps(MAP), sign_answer="positive", assignments=ASSIGN, source_kind="bogus")
 check("an unknown source_kind → 400", s_ == 400)
 s_, d_ = http_error(commit, db, column_map=_json.dumps(MAP), sign_answer="positive", assignments=ASSIGN, carrier_id="cccccccc-0000-0000-0000-000000000000")
@@ -859,9 +859,9 @@ c6 = commit(db, column_map=_json.dumps(MAP), sign_answer="positive", assignments
 check("without mig 1007: the commit still LANDS and ties out; state.saved=False with the reason",
       c6["ok"] is True and c6["state"]["saved"] is False and "1007" in c6["state"]["reason"] and len(db.tables["commission_ledger"]) == 521)
 sx = R.onboarding_intake_state(org_id=ORG)
-check("GET /state without the migration: state_ready False, carriers listed, the enum admits Stage B kinds but marks only 'commission' built",
+check("GET /state without the migration: state_ready False, carriers listed, every kind of the enum is built (Stage B landed)",
       sx["state_ready"] is False and len(sx["carriers"]) == 2 and [k["value"] for k in sx["source_kinds"]] == list(OI.SOURCE_KINDS)
-      and [k["built"] for k in sx["source_kinds"]] == [True, False, False, False, False])
+      and all(k["built"] for k in sx["source_kinds"]))
 s_, d_ = http_error(R.onboarding_intake_put_state, R.OnboardingIntakeStateIn(instance_key="x", step="9.9"), org_id=ORG)
 check("PUT /state validates the step", s_ == 400)
 # no footer at all: the tenant must type or attest
@@ -880,7 +880,7 @@ paths = [rt.path for rt in R.router.routes]
 check("the four endpoints are mounted",
       all(p in paths for p in ("/commcalc/onboarding/intake/state", "/commcalc/onboarding/intake/analyze", "/commcalc/onboarding/intake/commit"))
       and sum(1 for p in paths if p == "/commcalc/onboarding/intake/state") == 2)
-commit_src = inspect.getsource(R.onboarding_intake_commit)
+commit_src = inspect.getsource(R.onboarding_intake_commit) + inspect.getsource(R._intake_commit_commission)
 imp_src = inspect.getsource(R.commission_ledger_import)
 check("the commit saves through the ONE mapping writer and the Category Map's own writer, lands through the import's own path, and re-reads",
       all(t in commit_src for t in ("upsert_column_mapping(", "upsert_commission_category_map(", "_ledger_land_rows(", "_intake_reread(")))
@@ -892,7 +892,8 @@ carrier_words = re.compile(r"\b(boost|verizon|cricket|metro|vidapay|total\s+wire
 mod_src = inspect.getsource(OI)
 intake_router_src = "".join(inspect.getsource(f) for f in (
     R.onboarding_intake_analyze, R.onboarding_intake_commit, R.onboarding_intake_state, R.onboarding_intake_put_state,
-    R._intake_prepare, R._intake_payload, R._intake_carrier, R._intake_house_defaults, R._intake_save_state, R._intake_reread))
+    R._intake_prepare, R._intake_prepare_commission, R._intake_commit_commission, R._intake_payload, R._intake_carrier,
+    R._intake_house_defaults, R._intake_save_state, R._intake_reread))
 check("no carrier name in onboarding_intake.py or in the router's intake functions (RULE TWO)",
       not carrier_words.search(mod_src) and not carrier_words.search(intake_router_src))
 check("no pandas / fastapi / supabase import in the pure module",
@@ -906,9 +907,11 @@ check("registered in the index: the endpoints, the module, the tables and the pa
       all(t in idx for t in ("/commcalc/onboarding/intake/analyze", "/commcalc/onboarding/intake/commit", "onboarding_intake.py",
                              "commcalc.onboarding_stage_state", "onboarding/intake/page.tsx", "harness_onboarding_intake.py")))
 page = open(FE_PAGE, encoding="utf-8").read() if os.path.exists(FE_PAGE) else ""
-check("the page asks 3.4 verbatim, with the two buttons, and calls the three endpoints",
+shared_fe = os.path.join(os.path.dirname(FE_PAGE), "intake-shared.tsx")
+shared = open(shared_fe, encoding="utf-8").read() if os.path.exists(shared_fe) else ""
+check("the page asks 3.4 verbatim, with the two buttons, and calls the three endpoints (BASE lives in the shared intake module since Stage B)",
       OI.SIGN_QUESTION in page and "Earned is positive" in page and "Earned is negative" in page
-      and "/commcalc/onboarding/intake'" in page
+      and "/commcalc/onboarding/intake'" in (page + shared)
       and all(t in page for t in ("${BASE}/state", "${BASE}/analyze", "${BASE}/commit")))
 check("the page has no default sign answer (the buttons start unselected) and no drag library",
       "signAnswer" in page and "useState<SignAnswer>(null)" in page and "react-dnd" not in page and "dnd-kit" not in page)

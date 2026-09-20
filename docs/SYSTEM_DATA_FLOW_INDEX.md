@@ -52,7 +52,7 @@ Primary code homes:
 | 27 | **Vendor rebate history (earned, per line)** | "A new tenant's carrier statement lists every rebate and commission it owes us per line — where does that file land, why is it not in the P&L, and what is the difference between what we have EARNED and what has actually been COLLECTED?" |
 | 28 | **"Which company am I in"** | "My login belongs to more than one company — which one is every page on screen actually showing, how would I know if it changed under me, and why did another company's mailbox turn up in a new tenant's setup?" |
 | 29 | **Roster reach — who is in the employee picker** | "Whose names may this login pick from on the closing sheet? Why did a permission change empty the dropdown, and why does a rep with a market on their record still only see their own store?" |
-| 30 | **Tenant onboarding — commission-statement INTAKE (stage 3)** | "A new tenant drops a carrier statement the platform has never seen — how does it learn which column is which, ask which sign is money EARNED, bucket every label, and prove the import tied out to the file's own total before saying 'saved'? Where is my place kept if I leave?" |
+| 30 | **Tenant onboarding — the INTAKE (stages 2–5: sales / POS / inventory / other reports, commission statements, verify, runbook)** | "A new tenant drops a carrier statement the platform has never seen — how does it learn which column is which, ask which sign is money EARNED, bucket every label, and prove the import tied out to the file's own total before saying 'saved'? Where is my place kept if I leave? What do I have to upload — sales, inventory, anything else — where does each land, how does a store string it has never seen get resolved, and where is the one table that says every source is verified?" |
 | 11a | **Inventory vs Sold** | "My snapshot says this phone is in stock — was it already sold? Which units do I clear out, which sales do I adjust, and why is a sold-then-refunded unit not on the list?" |
 
 ---
@@ -116,6 +116,13 @@ email), (c) **RPC/manual entry**.
   through `column_mapping.suggest`, drops the footer through `feed_shape.is_footer_row`, saves the map
   through `POST /column-mapping`'s function, the rules through `POST /commission-category-map`'s, and
   lands through `_ledger_land_rows` (factored out of `/commission-ledger/import`, which now calls it too).
+  **Stage B (§30.6, 2026-09-20):** the SAME two endpoints take `source_kind=sales|pos` (→ `raw_sales`
+  through `_ingest_mapped_df`, the `/upload-mapped` core: no period named, each row books to the month of
+  its OWN date, the replace is the file's store × date slice), `inventory` (→ `inventory_aging_device`
+  through `b2b_sweep.write_inventory_devices`, the snapshot writer) and `other` (NO destination table on
+  the platform: recorded as received with headers / rows / money Σ and the kept file). Dispatched by
+  `router._intake_land`; store strings gated by the shared resolver `router._intake_store_resolver`
+  (§13a chain) before anything lands.
 - Column mapping config: migrations `042_column_mapping.sql`, `212_commission_manual_report_mapping.sql`;
   endpoints `/column-mapping*` `router.py:3333-3472`, `/manual-upload/mapping` `router.py:24125`.
 - Upload history/trace: `/upload/history` `router.py:2168`, `/upload-trace` `router.py:16256` (mig `202`,`241`).
@@ -2930,7 +2937,9 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `commcalc.carrier` (mig `038`) · `commcalc.report_definitions.carrier_id` (mig `291`) · `commcalc.connector_instances.carrier_id` (mig `039`) | `implementation_spine.carrier_visible` — THE one predicate (`router._carrier_visible` delegates to it); `upload_scope_map`; `carrier_blocks` | **§26 — "which uploads and automations belong to a carrier" is these three columns and nothing else.** `report_definitions.connector_id` is the automation↔upload binding the owner asked for, and it has existed since mig `039`. NULL `carrier_id` = carrier-agnostic and ALWAYS shown |
 | `commcalc.column_mapping` (mig `042`; **`sign_convention` mig `1006`**) | `POST /commcalc/column-mapping` — THE one writer (§25.11) | `column_mapping.load_rules` → `apply_mapping` (every mapped ingest); **`commission_ledger.convention_from_mapping`** reads the `raw_amount` row's `sign_convention` = which sign of that column is money EARNED, per (org, report, carrier) — `payout_negative` (NULL = this = unchanged) \| `payout_positive` \| **`payout_negative_netted` (mig `1008`, NOT applied — the onboarding intake's 'earned is negative' answer: negative earned AND a positive is a chargeback that nets off, §30)**. Declared in the mapping wizard on `number` fields only, or by the intake's 3.4 answer; nothing is backfilled (§25.12) |
 | `commcalc.onboarding_run` (mig `1007`, NOT applied) | `router._intake_save_state` (one in-progress run per org, created on the first PUT /onboarding/intake/state) | `router._intake_state_payload` → `onboarding_intake.rail` — the left rail of `/onboarding/intake`. State only; nothing in payout/P&L reads it (§30) |
-| `commcalc.onboarding_stage_state` (mig `1007`, NOT applied) | `router._intake_save_state` — one row per (run, stage, instance_key = `commission:<carrier_id>:<statement slug>`); `payload` merged per key on every step; `verified_numbers` written by `/onboarding/intake/commit` from the RE-READ ledger rows | `onboarding_intake.rail` (projection: lamps, resume step). Sibling of mig-927 `onboarding_state` by design — that one is (org, step) navigator meta with no instance/run dimension (§30) |
+| `commcalc.onboarding_stage_state` (mig `1007`, NOT applied) | `router._intake_save_state` — one row per (run, stage, instance_key): stage 3 `commission:<carrier_id>:<statement slug>`; stage 2 `sales|pos|inventory:<pos source>:<layout>`, `other:<pos source or file>:<name slug>`, and the explicit `inventory:none:none` "no inventory export" choice (PUT /state with a reason); `payload` merged per key on every step (incl. `file` = the KEPT upload's storage reference, bucket `onboarding-intake`); `verified_numbers` written by `/onboarding/intake/commit` from the RE-READ rows of the kind's table | `onboarding_intake.rail` (projection: lamps, resume step, the Stage-4 `verify_table`, the Stage-5 `runbook`). Sibling of mig-927 `onboarding_state` by design — that one is (org, step) navigator meta with no instance/run dimension (§30) |
+| `commcalc.onboarding_run.signed_off_by / _on_behalf / _at` (mig `1007`) | `POST /commcalc/onboarding/intake/sign-off` (4.2; refused while any source is red) | `onboarding_intake.rail` → `sign_off` block; stages 4/5 read verified only when every instance is verified AND the run is signed off (§30.6) |
+| `commcalc.store_aliases` / `storeops.stores` / `commcalc.rep_aliases` — WRITTEN BY THE INTAKE (§30.6) | `router._intake_apply_identity` — through `add_store_alias` (POST /store-aliases' function, `source='onboarding-intake'`), `storeops.router.create_store`, and the `POST /rep-aliases` upsert shape; every write READ BACK through a fresh `_intake_store_resolver` before any row lands | the §13a chain everywhere — the landed `raw_sales.store` / `commission_ledger.store` keep the POS/statement spelling and resolve through the alias |
 | `commcalc.commission_category_map` (mig `071`; leg `274`) | `POST /commcalc/commission-category-map` (the Category Map editor) + the 071/072 house seeds | `commission_ledger.load_rules_meta` (org-scoped; `'*'` rules included) → `classify_line`/`build_row`; `ma_class_wiring.compile_rules` for `match_op='product_class'`. A template with no rows and no built-in defaults classifies NOTHING and says so — it never borrows another template's (§25.12) |
 | `pos.service_plans` · `pos.dealer_codes` (mig `726`, `742`) | POS settings CRUD; `POST /pos/dealer-codes/sync-from-reports`; the wizard's `apply_import` (ADDITIVE — a name/code already present is SKIPPED, never overwritten) | the register, activations, and the wizard's `count` predicates (§23n) |
 | `commcalc.product_mrc` (mig `074`/`201`) — an MRC CATALOGUE keyed on `raw_mi.customer_plan`, NOT a plan list | `POST /commcalc/product-mrc` + the price-sheet import | `installment_engine._catalog_mrc` (payout MRC), `GET /commcalc/product-mrc/coverage`, `import_health._p_product_mrc`, and — with `commcalc.raw_mi` as its other half — `onboarding.resolve_service_plans` (§23n). Empty on a carrier that reports MRC per subscriber, which is WHY reading it alone showed the house tenant zero plans |
@@ -3055,9 +3064,10 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | _every endpoint OFFERING market options (dropdown/enumeration)_ | — | §13c canonical vocabulary (`core.scope.canonical_markets` composed via `merge_market_options`/`org_market_options`); inventory pinned in `harness_market_enumeration_guard.py`; B-1115/LI truth table `harness_market_vocabulary_truth.py` (owner 2026-09-04) |
 | `POST /commcalc/column-mapping` (the ONE writer of `commcalc.column_mapping`; also where an AMOUNT column declares **which sign is money earned**) | `router.upsert_column_mapping` — read-then-write over the mig-042 expression index; `sign_convention` validated against `commission_ledger.SIGN_CONVENTIONS`, written only on a `number` transform and only when the mig-1006 column exists | §25.11 (the save that never saved) + §25.12 (the convention). Proof `harness_column_mapping_save.py`, `harness_commission_ledger_sign.py` |
 | `POST /commcalc/commission-ledger/import` · `POST /commcalc/commission-ledger/analyze` (classify a statement into the five canonical buckets) | `router.commission_ledger_import` / `commission_ledger_analyze` → `_ledger_source_rules` → `_ledger_convention(hdr_rules)` → `_ledger_footer_drop` → `commission_ledger.build_row`/`summarize`. Payloads carry `rules_source`, `convention`, `convention_meta`, `footer_rows_dropped` | §15 canonical ledger, §25.12 |
-| `POST /commcalc/onboarding/intake/analyze` (READ-ONLY: sheet/header/footer detection, column proposal WITH provenance + 3 samples, the 3.4 sign panels, labels with sign mix + bucket suggestions with provenance, period proposal, identity strings, the 3.8 preview) | `router.onboarding_intake_analyze` → `_intake_prepare` (`_read_upload_grids` → `onboarding_intake.stitch_sheets` → `column_mapping.suggest` → `onboarding_intake.propose_columns` → `_ledger_map_records` → `onboarding_intake.split_footer` (feed_shape rule) → `commission_ledger.convention_from_mapping` → `label_summary` / `suggest_buckets` → `commission_ledger.build_row` → `bucket_totals` / `tie_out`) → `_intake_payload` | §30. Proof `harness_onboarding_intake.py` |
-| `POST /commcalc/onboarding/intake/commit` (THE SAVE: map → `upsert_column_mapping` incl. `sign_convention`; rules → `upsert_commission_category_map`; rows → `_ledger_land_rows`; then `_intake_reread` + `bucket_totals` + `tie_out`; refuses 400 on unanswered sign / unassigned label / non-zero difference without attestation; `ok:false` + `problems` when the re-read disagrees) | `router.onboarding_intake_commit` | §30. Never reports success unless rows re-read = rows built and the re-read total equals what was shown |
-| `GET /commcalc/onboarding/intake/state` · `PUT /commcalc/onboarding/intake/state` (the rail — a projection of mig-1007 rows; the PUT merges one step's payload) | `router.onboarding_intake_state` / `onboarding_intake_put_state` → `_intake_state_payload` / `_intake_save_state` → `onboarding_intake.rail`. Degrade honestly without mig 1007 (`state_ready:false`, migration named) | §30 |
+| `POST /commcalc/onboarding/intake/analyze` (READ-ONLY over the data tables — every kind: sheet/header/footer detection, column proposal WITH provenance + 3 samples, the shared store/rep resolution rows + decisions, the kind's verify numbers beside the file's total; stage 3 adds the 3.4 sign panels, labels + bucket suggestions, the 3.8 preview. `file` optional: `use_stored=1` + `instance_key` re-reads the KEPT upload; a dropped file is kept (`_intake_file_put`, the only write) | `router.onboarding_intake_analyze` → `_intake_prepare` → `_intake_prepare_commission` (as before) or `_intake_prepare_stage2` (`_intake_read_shape` → `column_mapping.suggest` → `propose_columns` → `apply_mapping` → `split_footer(amount_field)` → `identity_rows` → `resolve_stores` / `resolve_reps` over `_intake_store_resolver` / `_intake_rep_resolver` → `sales_verify` / `inventory_verify` / `other_summary` → `simple_tie` → `stage2_refusals`) → `_intake_payload` | §30 / §30.6. Proofs `harness_onboarding_intake.py`, `harness_onboarding_intake_b.py` |
+| `POST /commcalc/onboarding/intake/commit` (THE SAVE, every kind: refuse while a gate is open; map → `upsert_column_mapping` + read back; identity decisions → `_intake_apply_identity` + read back through the resolver; land → `_intake_land` (commission `_ledger_land_rows`; sales/pos `_ingest_mapped_df`; inventory `b2b_sweep.write_inventory_devices`; other: recorded, nothing landed); RE-READ → `_intake_reread` / `_intake_reread_sales` / `_intake_reread_inventory`; `ok` only when re-read count and totals equal what was shown, else `ok:false` + `problems`, stage row `needs_input`) | `router.onboarding_intake_commit` → `_intake_commit_commission` / `_intake_commit_stage2` / `_intake_commit_other` | §30 / §30.6. Never reports success unless rows re-read = rows built and the re-read total equals what was shown |
+| `GET /commcalc/onboarding/intake/state` · `PUT /commcalc/onboarding/intake/state` (the rail — a projection of mig-1007 rows: instances of stages 2 and 3, the Stage-4 verify table, the Stage-5 runbook, the sign-off; GET also serves the 2.0 vocabulary — every kind with its layouts (`layouts_for_kind` over `column_mapping.TABLE_MAP`), the org's `pos_profile` sources, its store roster and employees for 2.4, the company lamp counts; the PUT merges one step's payload, admits every stage's step keys, records `inventory:none:none` as verified only with a reason, and refuses to mark any other source verified — only the commit's re-read does) | `router.onboarding_intake_state` / `onboarding_intake_put_state` → `_intake_state_payload` / `_intake_save_state` → `onboarding_intake.rail`. Degrade honestly without mig 1007 (`state_ready:false`, migration named) | §30 / §30.6 |
+| `POST /commcalc/onboarding/intake/sign-off` (4.2: name, role, on-behalf flag → `onboarding_run.signed_off_*`; refused while any source in the run is red, naming them) | `router.onboarding_intake_sign_off` → `onboarding_intake.rail` → `verify_table` | §30.6 |
 | `GET /commcalc/commission-category-map` · `GET /commcalc/commission-ledger/templates` | `router.get_commission_category_map` (returns `default_rules` for the templates that HAVE them, `unclassified_note` when a report inherits none, and the amount column's convention) / `commission_ledger_templates` → `list_templates` | §15, §25.12 — the Category Map editor and its template picker |
 | `GET /commcalc/exec-mtd/{period}` (returns `metric_coverage` — the silent-zero detector) · `GET/PUT /commcalc/exec-metric-config` | `router.py` `exec_mtd` / `get_exec_metric_config` / `put_exec_metric_config` | §3 Exec-MTD metric definitions (carrier presets + detector, mig `962`) |
 | `POST /commcalc/data-sources/sweep/run-due` | `router.py:data_sources_run_due` | §12a — the ONE portal-pull scheduler (VidaPay, b2bsoft, and the three merchant portals); cron self-registered by mig `956`; since mig `998` a connector whose `pull` route is closed is dropped BEFORE `next_run_at` is advanced and reported as `route_disabled` in the tick's answer — §12a.1 |
@@ -3238,6 +3248,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | PSA projected | `raw_dlar_store.psa_projected` | store KPI reader |
 | MI payout / ATU payout | `raw_mi.actual_mi_payout` / `actual_atu_payout` | installment gate; MI ATU RPC |
 | MA-TX MRC (M1 activation) | `raw_ma_daily_tx.retail_cost` on the `order_type='Activation Order'` row (config: `ma_tx_activation_order_type`) | `sale_installment_engine.ma_tx_mrc_for` via the two-hop serial→`activation_order`→`order_number` join (mig `308`; `mrc_source='ma_tx_activation'`) |
+| Onboarding intake, Stage 2 verify numbers — sales/POS: rows, distinct transaction ids, Σ amount, Σ GP, date span (+ undated rows), voided rows, per-store and per-rep counts with Σ; inventory: units, Σ cost, per-store units, rows with / without a device key, as-of date; other: rows, headers, every money column's Σ — beside the file's own total (footer, else typed — recorded as 'typed') | `raw_sales.{ext_price,gp,trans_id,trans_date,store,salesperson,voided}` / `inventory_aging_device.{unit_cost,store,imei,serial,as_of_date}` RE-READ after landing over exactly the slice the file owns (store-set × date range; store-set × as_of) | `onboarding_intake.sales_verify` / `inventory_verify` / `other_summary` → `simple_tie` (difference to the cent; `match` None when nothing to compare) → `stage2_refusals` (§30.6). The commit's `ok` needs rows re-read = rows built = rows inserted AND the re-read Σ = the Σ shown |
 | Onboarding intake tie-out — Σ canonical (five buckets, gross/chargebacks/net) vs the statement's OWN total | `commcalc.commission_ledger.{payout_total, category}` RE-READ after landing; the file's total = the footer row's `raw_amount` × the declared earned sign (or a typed total, recorded as 'typed') | `onboarding_intake.bucket_totals` → `tie_out` (difference to the cent; `match` None when nothing to compare) → `commit_refusals` (§30). Never abs(): gross = Σ positive bookings, chargebacks = Σ negative, net = their sum |
 | MA-TX month-n paid evidence | `raw_ma_daily_tx.retail_cost` net of the `'MONTH n'`-worded rows (`product_name` via `commission_ledger.parse_payment_month`) | `sale_installment_engine.ma_tx_month_evidence` / `_gate_met_ma_tx` — UNION with `raw_ma_commission.spiff_m{n}` (n ≤ 6); direction `ma_payout_sign`, floor `ma_min_amount`, horizon `ma_max_month` ≤ 16 (mig `308`) |
 | MA merchant discount (P&L "Merchant discount") | `raw_ma_daily_tx.merchant_discount` (+, dealer income) | `account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings` (mig `309`); per-org toggle `commission_org_config.pl_merchant_discount_own_line` — `false` = legacy `atu_income` fold, byte-identical dollars |
@@ -7496,12 +7507,98 @@ lands through the same helper), RULE TWO, migrations, this registration, and the
 **Money surfaced, not moved.** Nothing is recomputed for anyone; no row anywhere changes until a tenant
 walks the flow for their own carrier. The two migrations create empty state tables and widen one CHECK.
 
-**OPEN — reported, not built in this slice:** (1) **3.7 store/account resolution** — surfaced with Σ and
-counts, but the resolver (§13a, shared with 2.4) is Stage B; the fixture file has no store column at all
-(rep ids only). (2) **Stage B kinds** (`sales` / `inventory` / `pos` / `other`) are admitted by the enum
-and refused with "Stage B" — honestly, not silently. (3) **The file is not stored between visits**: the
-rail restores every choice and the analysis, but re-checking or committing after leaving needs the
-statement dropped again (3.1 says so). (4) A tenant that also saved a GLOBAL (carrier-NULL)
-`commission_ledger` mapping through the older wizard has those rows merged under carrier rows at import
-time for fields the intake left unmapped; the re-read tie-out would expose any effect, and no such rows
-exist on the platform today (§25.11 measured the table empty). (5) The 3.4 conflation in 30.3.
+**OPEN after Stage A — items (1), (2) and (3) are CLOSED by Stage B (§30.6):** (1) 3.7 store resolution
+now runs through the shared resolver and gates the commit; (2) every kind of the enum lands or is recorded
+honestly; (3) the file is kept between visits. Still open: (4) A tenant that also saved a GLOBAL
+(carrier-NULL) `commission_ledger` mapping through the older wizard has those rows merged under carrier
+rows at import time for fields the intake left unmapped; the re-read tie-out would expose any effect, and
+no such rows exist on the platform today (§25.11 measured the table empty). (5) The 3.4 conflation in 30.3.
+
+### 30.6 STAGE B — sales / POS / inventory / "other" on the SAME spine, and the shared store resolver (2026-09-20)
+
+Owner: *"they only can upload their existing data: Sales reports, Commission reports, POS reports,
+Inventory reports — ask the user if we have uploaded any other report like bill payments or credit card
+payments or x reports. All of these should be able to be uploaded … Whatever is being uploaded should be
+able to save is most important."*
+
+**DUPLICATE CHECK (build gate) — searched §2 (`_ingest_mapped_df` / `/upload-mapped`, `pos_product_sales` /
+`pos_inventory_listing` / `sales` report keys, the mig-1004 shape rules, `ingest_slice`), §11 / `b2b_sweep`
+(the inventory snapshot writer), §13 / §13a (`_store_maps`, `_store_code_resolver`, `coa.store_resolver`,
+`store_aliases`, `rep_aliases`), §16 / §17 (`custom_report_dataset` is a registry, not a rows table — there
+is NO generic raw table for an arbitrary report), the storage-bucket pattern (closing-envelopes, store-docs).**
+
+| Need | REUSED (not rebuilt) | New |
+|------|----------------------|-----|
+| Read / detect / propose / footer for a POS or inventory export | Stage A's spine: `_read_upload_grids`, `stitch_sheets`, `column_mapping.suggest` + `propose_columns` (provenance: the tenant's saved carrier-NULL rows → the HOUSE org's rows for the same layout → the file), `split_footer` / `footer_summary` (now take the kind's `amount_field`), `money_columns` (now summed over DATA rows — a footer's own totals doubled every Σ) | `_intake_read_shape` (the shared read), `_intake_prepare_stage2` |
+| Which layout a kind maps through | `column_mapping.TARGET_FIELDS` / `TABLE_MAP` — every registered key whose target is the kind's table is a layout (`layouts_for_kind`); defaults `sales` → `sales`, `pos` → `pos_product_sales`, `inventory` → `pos_inventory_listing`. The POS SOURCE is a code the person picks (the org's `pos_profile` rows) or types — a key, never a branch | `SOURCE_KIND_TARGET` / `REPORT_KEY_BY_KIND` / `KIND_FIELDS` / `KIND_REQUIRED` |
+| Landing raw_sales | `_ingest_mapped_df` — the `/upload-mapped` core, called with NO period (each row books to the month of its own date, mig 1004) so the replace is the file's (store-set × date range) slice (`ingest_slice.INGEST_PARTITION['raw_sales']`), snapshot + restore, upload_log, upload_trace `source='onboarding-intake'`. Rows whose store the person marked "not ours" are EXCLUDED before the call and counted | `_intake_land` (the one dispatcher) |
+| Landing inventory | `b2b_sweep.write_inventory_devices` — the platform's inventory SNAPSHOT semantics (mig 294: upsert per (org, imei), stamp `as_of_date`, mark the file's stores' absent units off-hand). `inventory_aging_device` stays OUTSIDE `INGEST_PARTITION` (pinned by `harness_ingest_partition_replace.py`: snapshot feeds are not slice-replaced). A unit with no IMEI and no serial (ordered, not received) has no device key: REPORTED, not landed (`rows_without_device_key`) | the `imei`-else-`serial` key fill; `as_of_date` required on commit |
+| "Other" reports | — there is no generic raw table (checked). RECORDED: the stage row carries headers, row count, every money column's Σ and the kept file; `ok:false, recorded:true`, `needs_input` with the reason "no destination for '<name>' yet — an owner decision names the table"; the Stage-4 row is red with that text; the runbook says "(no destination yet — recorded only)". Never faked into a table, never dropped | `other_summary`, `_intake_commit_other` |
+| Store strings → store codes (2.4 AND 3.7) | `_store_maps` (the union roster) + `_store_code_resolver` (alias → mapping → roster precedence) — the §13a chain; the WRITES go through `add_store_alias` (POST /store-aliases' function — whose `body.get(...)` crashed on every call and is fixed here: pydantic models have no `.get`), `storeops.router.create_store`, and the `POST /rep-aliases` upsert shape | `_intake_store_resolver` (answers `(code | None, how)` — the chain's "return the raw string" fallback reads as None: unknown is unknown, never "Default"), `_intake_rep_resolver` (roster name / `epay_salesperson` / `employee_id` + `rep_aliases`), pure `resolve_stores` / `resolve_reps` / `unresolved_stores` / `excluded_stores`, `_intake_apply_identity` (write, then READ BACK through a fresh resolver; a write that does not stick refuses the commit) |
+| Keeping the file between visits | the platform's private-storage-bucket pattern (closing-envelopes / store-docs / timeclock selfies): bucket `onboarding-intake`, path `<org>/<instance slug>/<filename>`, the reference in `onboarding_stage_state.payload.file` — no new table, no migration | `_intake_file_put` / `_intake_file_get`; `analyze` / `commit` take `use_stored=1` + `instance_key`; a store that is unavailable is SAID (`file.stored:false` + reason) and the person re-drops |
+| The rail, Stage 4, Stage 5 | mig-1007 rows, `onboarding_intake.rail` | instances of both stages with labels; `verify_table` (one row per source: our total, file total, diff, status, who, when, the step a red row links to); `runbook` (the two links + "what to upload each month" from the instances); `company_lamp` (Stage 1 reads `coa.org_companies` / `_store_maps` / `carrier` counts — NOT built here); `POST /sign-off` |
+
+**Stage 2, step by step (design §2).** 2.0 "What do you have?" — Sales export (per POS: source + kind
+`pos` line-level / `sales` daily + layout), Inventory export (or **"No inventory export"**, recorded through
+PUT /state as `inventory:none:none` VERIFIED only with a reason and a name — never a blank), Commission
+statements (pointed at Stage 3), Other reports (free-text name). Each ticked item is an instance row at 2.1.
+2.1 drop (or the kept file) → 2.2 sheets / header / footer (shared panel) → 2.3 columns with provenance +
+samples; the required columns per kind (`KIND_REQUIRED`: store + date + amount for sales/pos — they decide
+the slice and the month; store + sku for inventory) gate the step → 2.4 **stores and reps** through the
+shared panel (assign / create / not ours with a reason; reps: assign to an employee / leave — surfaced,
+not a gate) → 2.5 rows parsed vs data rows, distinct transactions, Σ amount, Σ GP, date span, voided count,
+per-store and per-rep counts, beside the footer total or a typed total (recorded as "typed"); inventory:
+units, Σ cost, per-store units, device-key counts, as-of date; the open gates are listed as `refusals`
+before anyone presses commit → 2.6 commit → the RE-READ card ("Saved and verified" only when the re-read
+count and Σ match) → "Another export?".
+
+**THE SAVE GUARANTEE, generalised (`_intake_commit_stage2`).** Refuse (400, nothing written) while:
+a required column is unmapped; a store string is unresolved; any row carries no parseable date (sales) or
+no store; nothing would land; the file states no total and none was typed, or the difference is non-zero,
+without an attestation carrying a reason ($0.00 = $0.00 too); inventory has no as-of date. Then: save the
+map (carrier-NULL rows for the layout) and READ IT BACK; write the identity decisions and READ THEM BACK
+through a fresh resolver; land through the kind's existing path; RE-READ exactly the slice the file owns
+(`_intake_reread_sales`: org × store-set × date range, paged; `_intake_reread_inventory`: org × store-set ×
+as_of, paged); `ok` only when rows re-read = rows built = rows inserted AND Σ re-read = Σ shown (and the
+tie matches or is attested). 3.7 is now a gate too: `_intake_commit_commission` refuses an unresolved
+store string (assign / create / company-level / not ours with a reason) and writes the decisions through
+the same `_intake_apply_identity` before landing.
+
+**Proof: `backend/harness_onboarding_intake_b.py` — DB-free, over an in-memory fake of the client + its
+storage.** A POS export as a workbook (title block, header, 48 invoice lines over 24 invoices for THREE store
+strings — one spelled like the roster address, one already a code, one unknown — a footer, a continuation
+sheet); an inventory listing with 3 ordered units without an IMEI; a "bill payments" report nobody has a
+table for. The resolver knows two strings and not the third; the commit is refused until it is assigned /
+created / not-ours-with-reason; then the map, the alias and the rep alias save and read back, the rows land
+through `_ingest_mapped_df` (48 rows, period from each row's own date, the replace slice reported), the
+re-read count and Σ match the footer; a re-commit replaces the slice; a row of the same store outside the
+date range survives; "not ours" excludes and counts; "create" makes the storeops row through storeops'
+writer. Inventory: 27 keyed units through the snapshot writer, 3 reported; next month upserts (27 rows,
+re-stamped). Other: recorded, red, nothing written. Negative controls: a landing that drops every row /
+half the rows → `ok:false`; an alias that does not stick → refused, nothing imported; a disagreeing footer,
+no date column, undated rows, no footer (until typed), a wrong layout, no POS source, `use_stored` with
+nothing kept, the file store unavailable, no mig 1007. Wiring: the landing is the existing paths and no
+`.insert` of its own; RULE TWO (no carrier, POS vendor or tenant name); registration; the page.
+
+**Files:** `onboarding_intake.py` (Stage-2 section + the rail), `router.py` (`_intake_prepare_stage2`,
+`_intake_commit_stage2`, `_intake_commit_other`, `_intake_land`, `_intake_reread_sales/_inventory`,
+`_intake_store_resolver`, `_intake_rep_resolver`, `_intake_apply_identity`, `_intake_file_put/_get`,
+`_intake_company`, `onboarding_intake_sign_off`; `add_store_alias` fixed), frontend
+`onboarding/intake/page.tsx` (the shell: rail for all five stages, stage 3, Stage 4 table + sign-off, Stage 5
+runbook), `onboarding/intake/stage2.tsx` (2.0–2.6), `onboarding/intake/intake-shared.tsx` (types, atoms,
+the SHARED `StoreResolver` panel rendered by 2.4 and 3.7). No new table, no new migration.
+
+**Money surfaced, not moved.** Nothing is recomputed for anyone; no row changes until a tenant walks the
+flow. Migrations 1007 / 1008 are still written and NOT applied (state degrades honestly).
+
+**OPEN — reported, not decided here:** (a) **"Other" reports have no destination.** Bill payments, card /
+merchant payments and X-reports are recorded and kept, not landed; naming a table (a generic
+`raw_other_report` with jsonb rows, or one table per report kind) is an owner decision — the count of
+received-but-unlanded reports is on the Stage-4 table. (b) **Inventory semantics across paths.**
+`pos_inventory_listing` through `/upload-mapped` still INSERTS (mig 1004: blank IMEI → NULL, no
+replace), while the intake lands through the sweep's snapshot writer (upsert per IMEI + off-hand); a unit
+with no device key lands on the first and is reported-not-landed on the second. One semantics for the
+table is an owner call. (c) **The store guard.** `_ingest_mapped_df` is not fronted by
+`ingest_store_guard.screen` (its writes use a table variable the CI regex does not see); the intake's
+resolver gate is stronger (every store string must resolve to the org's own roster before landing), but
+the older `/upload-mapped` path is not gated. (d) Stage 1 is a lamp only.
