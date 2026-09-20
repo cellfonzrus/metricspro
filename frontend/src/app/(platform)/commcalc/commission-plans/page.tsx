@@ -13,6 +13,7 @@ import {
   UnassignedRow, UnmatchedExplorer, OrphanAssignments, StoreBridgePanel, ExcludedSellers,
 } from '../_lib/coverageDiagnosis'
 import RunCommissionButton from '../_lib/RunCommissionButton'
+import CommissionWaysHeader from '../_lib/CommissionWaysHeader'
 import CoverageWizard from '../_lib/CoverageWizard'
 import { useActiveCarrier } from '@/lib/auth-context'
 
@@ -684,6 +685,12 @@ export default function CommissionPlansPage() {
         </p>
       </div>
 
+      {/* THE TWO WAYS (owner directive 2026-09-20) — the SAME header the Employee Commission Structure page
+          opens with, read from _lib/commissionWays.ts. Option 1 is this editor's "Make Executive MTD this
+          plan's commission basis" box (anchored below); Option 2 is the rules form itself. */}
+      <CommissionWaysHeader compact selectedBasis={draft?.commission_basis} planName={draft?.name}
+        anchors={{ exec_mtd_flat: '#exec-mtd-basis', custom_steps: '#plan-rules' }} />
+
       {/* RUN COMMISSION (owner directive 2026-08-05) — editing a plan changes NOTHING until the period
           is recomputed, so the recalculate control lives here, next to the structure being edited.
           Shares the period picker below (Preview) so one page never targets two different months. */}
@@ -762,9 +769,9 @@ export default function CommissionPlansPage() {
         </div>
       )}
 
-      {/* editor */}
+      {/* editor — Option 2 (the customised rules); the two-ways header above anchors here */}
       {draft && (
-        <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+        <div className="card" id="plan-rules" style={{ padding: 16, marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
             <div style={{ fontWeight: 700, fontSize: 14 }}>{draft.id ? '✏️ Edit plan' : '➕ New plan'}</div>
             <span style={{ flex: 1 }} />
@@ -1088,7 +1095,7 @@ export default function CommissionPlansPage() {
       {/* EXECUTIVE-MTD BASIS — an ADDITIONAL way to calculate this plan, alongside the rules above. Reads the
           Exec MTD per-employee numbers (Total Activation broken out by type + Acc. Sales) and applies a rate
           per category, so the numbers match the report exactly. Read-only; the rules above are untouched. */}
-      <div className="card" style={{ padding: 16, marginTop: 14 }}>
+      <div className="card" id="exec-mtd-basis" style={{ padding: 16, marginTop: 14 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>
           📈 Calculate from Executive MTD <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text2)' }}>
             (an additional basis — one $ rate per activation type + accessory %)</span>
