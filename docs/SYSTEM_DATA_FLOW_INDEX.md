@@ -1075,6 +1075,72 @@ row, §C pins `total_payout`, §E pins the columns that must stay empty, §F pin
 
 ---
 
+### 6d. WHY PAID UNITS COME IN UNDER TOTAL ACTIVATION — the reconciliation (owner question 2026-09-20)
+
+Owner: *"the total activations should still match for every month as they are coming from b2b data …
+so why does the system calculate less commission"*. Reconciled on live rows for one rep, then swept.
+**Worked example — store 957, July 2026, one rep, screen `TOTAL ACTIVATION 78` vs paid `72 units`:**
+
+| step | units | mechanism | verdict |
+|---|---|---|---|
+| screen at capture time | 78 | | |
+| − 1 | 77 | txn `5176` is a **`trans_type='Return'`** (2026-07-28, two `Activation` lines + a −$50.17 refund). The canonical skip rule drops Returns — the same rule commissions, targets and the Sales Report all share. It entered `daily_sales_feed` 2026-07-29 and `raw_sales` 2026-08-01, so a screen captured before then legitimately showed 78. It also explains `TOTAL PHONES` 67→66 — **one** transaction, all three differences | CORRECT |
+| − 5 | **72 paid** | Upgrades, priced at the plan's own `mtd_rates.upgrade = 0`. The upgrades **are** classified (the screen's `UPGRADE 5` is the same 5) — it is the RATE, not a classification miss | DELIBERATE CONFIG |
+| pay | | 72 × $10 = $720 + 10% × $577.82 accessory = **$777.78** | |
+
+**THE `AAL` SUFFIXES ARE NOT THE GAP.** All five variants classify: `Activation AAL` /
+`Activation With IDV AAL` / `Port with IDV AAL` → premium (the last also takes the Port sub-split),
+`BYOD Activation AAL` / `BYOD Port AAL` → BYOD. **Where the classification config lives** (all per-org,
+RULE TWO): `commcalc.accessory_config.contract_type_map` (mig `213`, 16 rows live incl. an explicit
+`'byod port aal' → byod`) resolved by `router._resolve_ct_bucket`, falling back to
+`calculator.classify_contract_type` (CONTAINS-based, so an unmapped suffix still lands);
+`accessory_config.activation_rules` (mig `224`) rescues BLANK-contract-type transactions
+(`_blank_ct_bucket_map` — 8 of one rep's July tickets); `exec_metric_config.activation.rules` supplies
+the Port sub-split token; the RATES are `commission_plan.mtd_rates`.
+
+**⚠ THE DEFECT: one sale counted twice.** TOTAL ACTIVATION sums four DISTINCT-TRANSACTION counts, but
+`_sales_cell_agg` assigns a transaction to a bucket **per line**. A ticket carrying two
+differently-classified activation lines — e.g. a tablet `Activation AAL` line AND a `BYOD Activation`
+line — joins BOTH sets and is counted twice. On an exec-MTD-basis plan every extra bucket membership
+is **another paid unit**. Live May–Sep 2026: **211 tickets — NY 92 (= $920 paid twice at the NY $10
+rate), Chicago 119 (report inflation only; Chicago pays from rules, not these buckets)**:
+
+| | May | Jun | Jul | Aug | Sep |
+|---|---|---|---|---|---|
+| NY tickets | 37 | 11 | 13 | 22 | 9 |
+| Chicago tickets | 0 | 0 | 48 | 49 | 22 |
+
+So the count can read **higher** than b2bsoft, not only lower. Measured by the PURE
+`activation_bucketing.mixed_bucket_transactions(cells)` — it reads the sets the classifier already
+produced and re-classifies nothing, so it cannot disagree with what it reports on. **NOTHING IS FIXED:**
+which bucket such a ticket belongs to is a money decision and it is the owner's.
+
+**⚠ THE BASIS FLIPS MONTH TO MONTH, AND IT MOVES PAY.** `_apply_activation_basis` uses Activation
+Details when `raw_custom_import` has rows for the period, else it degrades to `sales_agg`. Live:
+`ad_rows = 0` for May–Jul (so `basis='sales_agg'`), 1,078 for Aug and 813 for Sep
+(`basis='activation_details'`). Two consequences for the SAME sale:
+- `tablet` / `home_internet` / `edge` are populated **only** on the AD basis. On `sales_agg` a tablet
+  activation folds into `activation` and pays the $10 activation rate; on the AD basis it splits out
+  and pays `mtd_rates.tablet = 0`. NY: **tablet 0 / 0 / 0 / 55 / 38** by month — so 55 August and 38
+  September tablet activations paid $0 where the identical July sale paid $10 (**$930**). NY unpaid
+  units at $10: May $120, Jun $180, Jul $90, **Aug $670, Sep $460**.
+- `total_activation_excludes_upgrade` is False on `sales_agg` and **True** on the AD basis, so TOTAL
+  ACTIVATION itself changes meaning between July and August.
+Both are the documented design; neither is visible on the screen the owner reads. If tablets are meant
+not to pay, `sales_agg` months are over-paying; if they are, AD months are under-paying. **Owner call.**
+
+**ACCESSORIES ARE NOT ASSESSABLE FOR MAR–JUL 2026** (owner, 2026-09-20: *"marh-july was partail data
+entry"*). No system accessory figure for those months — including the `$577.82` in the worked example
+— may be presented as correct. Activations are unaffected by that statement: they come from b2b.
+
+**Protection does not pay in NY** (owner, 2026-09-20) — no protection category is required, and
+`total_protect` on the Exec MTD row is reporting only.
+
+**Proof:** `backend/harness_activation_cross_bucket.py` (27 checks, DB-free — §A reproduces the
+double-count, §B negative controls, §D pins the AAL classification, §E purity + RULE TWO).
+
+---
+
 ### 6c. THE ONE PLAN RESOLUTION — `_resolve_plan_by_rep` (owner-reported class, 2026-09-17)
 
 **`router._resolve_plan_by_rep(client, org_id, period, only_rep=None, notices=None)`** is THE answer to

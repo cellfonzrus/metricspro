@@ -133,3 +133,58 @@ def activation_details_bucket(contract_type, sp_name, product, category, rules=N
     if "activation" in ct:
         return "New Activation"
     return "Other"
+
+
+# ── CROSS-BUCKET TRANSACTION DIAGNOSTIC (owner question 2026-09-20) ─────────────────────────────
+# Owner: "the total activations should still match for every month as they are coming from b2b data".
+#
+# TOTAL ACTIVATION is the sum of four DISTINCT-transaction counts (Activation+Port / BYOD / Upgrade).
+# `router._sales_cell_agg` assigns a transaction to a bucket PER LINE, so a single ticket carrying two
+# differently-classified activation lines — e.g. a tablet 'Activation AAL' line and a 'BYOD Activation'
+# line on the same sale — is added to TWO bucket sets and counted TWICE in the total. It is one sale.
+#
+# This function MEASURES that, per transaction, so the gap between our number and b2bsoft's can be
+# reconciled ticket by ticket instead of guessed at. It is a DIAGNOSTIC: it classifies nothing, changes
+# no bucket and moves no money. Deciding which bucket such a ticket belongs to is a money decision
+# (on an exec-MTD-basis plan each extra bucket membership is another paid unit) and belongs to the
+# owner, so nothing here resolves it.
+#
+# PURE, stdlib-only. Takes the cells `_sales_cell_agg` already produced — it does not re-classify, so it
+# can never disagree with the classifier it is reporting on.
+ACTIVATION_BUCKET_SETS = (("_prem", "Activation"), ("_byod", "BYOD"), ("_upg", "Upgrade"))
+
+
+def mixed_bucket_transactions(cells, per_rep=False):
+    """Transactions counted in MORE THAN ONE activation bucket. PURE.
+
+    `cells` is `router._sales_cell_agg(...)` output: {(store, rep, date) -> cell}, each cell carrying the
+    distinct-transaction sets `_prem` / `_byod` / `_upg`.
+
+    Returns {"transactions": {trans_id: {"buckets": [...], "rep": str, "store": str, "extra": int}},
+             "count": int, "extra_units": int, "by_rep": {rep: extra_units}}
+    where `extra` is how many times that ONE sale is counted beyond the first, and `extra_units` is the
+    total inflation of TOTAL ACTIVATION. On a per-unit pay basis `extra_units` is also the number of
+    units paid more than once.
+    """
+    seen = {}
+    for key, cell in (cells or {}).items():
+        store = (cell or {}).get("store") or (key[0] if isinstance(key, tuple) else "")
+        rep = (cell or {}).get("salesperson") or (key[1] if isinstance(key, tuple) and len(key) > 1 else "")
+        for attr, label in ACTIVATION_BUCKET_SETS:
+            for tid in ((cell or {}).get(attr) or ()):
+                t = str(tid).strip()
+                if not t:
+                    continue
+                e = seen.setdefault(t, {"buckets": [], "rep": rep, "store": store})
+                if label not in e["buckets"]:
+                    e["buckets"].append(label)
+    out, by_rep, extra_units = {}, {}, 0
+    for t, e in seen.items():
+        if len(e["buckets"]) < 2:
+            continue
+        extra = len(e["buckets"]) - 1
+        extra_units += extra
+        by_rep[e["rep"]] = by_rep.get(e["rep"], 0) + extra
+        out[t] = {"buckets": sorted(e["buckets"]), "rep": e["rep"], "store": e["store"], "extra": extra}
+    return {"transactions": out, "count": len(out), "extra_units": extra_units,
+            "by_rep": dict(sorted(by_rep.items(), key=lambda kv: -kv[1]))}
