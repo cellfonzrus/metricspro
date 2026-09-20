@@ -4521,6 +4521,47 @@ on their own employment record.
 | the cross-tenant switcher (`x-active-org` + the middleware's super-admin no-rewrite bypass) | `client.ts`, `tenant_middleware.py:928` | **IS** the entry mechanism. §22 adds the reason/expiry/banner/audit it never had — not a new bypass. |
 | `core.impersonation*` "view as employee" (mig `730`) | `app/core/impersonation.py` | **UNTOUCHED.** `impersonate` stays DEFAULT-DENY with no super-admin bypass; an entry session grants `("acting_org",)` and nothing else. |
 | `core.access_log` (mig `856`) | `app/core/access_log.py` | Stays the per-request trail. `core.operator_action` records INTENT, which a request log cannot express. |
+
+#### Capability URLs are stripped before the trail is written — `app/core/path_redact.py`
+
+Owner, 2026-09-20: *"why does our url have secrets — should all of those be masked?"* Two public flows
+authenticate with a CAPABILITY URL because there is nobody to authenticate yet: `/r/{token}` (the
+in-store referral QR, scanned on a customer's own phone) and `/onboard/{token}` (a pre-start employee
+with no account). The URL IS the credential. **That design is correct and unchanged** — the referral
+token is an HMAC-SHA256 capability over one referral id + version with expiry and single-use enforced
+by the ROW, and the onboarding token is 192 bits of `secrets.token_urlsafe(24)`, revocable, behind a
+date-of-birth gate.
+
+What was wrong is where those URLs were WRITTEN DOWN. `core.access_log` stored `path[:400]` and
+`query[:400]` on every request and skipped none of the **13** token-bearing routes, so a live token
+was persisted in plaintext — and on the onboarding document routes the DOB gate travels as
+`?value=…`, so one row held **both factors**. `db_resilience` already dropped the query string because
+*"filters carry org_id / emails"*; nothing had applied that reasoning to path SEGMENTS.
+
+- **The home is the route table.** `/public/onboarding/{token}` already names its own secret, so
+  `path_redact` takes the app's route templates as input and derives the masking. No second list of
+  sensitive paths exists to drift. `SENSITIVE_PARAMS` classifies parameter NAMES (`token`, `secret`,
+  `signature`, …) and deliberately excludes `{key}`, `{code_id}`, `{report_key}`, `{store_code}` —
+  business identifiers whose masking would cost audit value for no security gain.
+- **Only the secret goes.** A redacted row reads `…/onboarding/{token}/task/9f3c/document/aa12`: the
+  task and file ids survive, so "who touched which file" is still answerable.
+- **Two layers.** Precise template matching, plus a BACKSTOP on each sensitive route's literal prefix
+  that catches 404 probes, trailing slashes and shapes no route matched — derived from the same
+  templates, so it is the same fact applied more bluntly, not a second copy.
+- **Fail closed.** Every entry point is wrapped; on any internal fault the fallback is MORE masking.
+  `_FALLBACK_RULES` (the last real compile) keeps a call site redacting when it cannot reach the app.
+- **Call sites:** `access_log` (path + query) and `main.py::_log_system_error` (stderr + `failure_log`).
+  The `BrowserWorkProxy` forward keeps the REAL path — it forwards a request, it does not log one.
+  `db_resilience` is out of scope: its path is the outbound PostgREST URL, not an app route.
+- **Proof** `backend/harness_path_redact.py` (54). §E fails the build if a logging call site stops
+  dereferencing the module, and if a newly added credential-shaped path parameter is unclassified
+  (mutation-proven: a `{reset_token}` route is reported as `UNCLASSIFIED`).
+- **§F EXISTS BECAUSE FIXTURES HID A TOTAL FAILURE.** 48 string-based assertions passed while the live
+  wiring redacted NOTHING: `app.routes` is not flat here — an included router is left as one
+  `_IncludedRouter` carrying the real `APIRouter` on `.original_router` and its mount prefix on
+  `.include_context.prefix`. The first traversal read only the top level, saw 31 entries instead of
+  **1596**, and compiled ZERO sensitive routes. §F therefore exercises `rules_for_app` against real
+  FastAPI router objects, and fails on the non-recursive traversal.
 | `core.control_box` `LAMPS`/`redact`/`heartbeat` (§20) | `core/control_box.py` | IMPORTED, not re-implemented. The restore-drill lamp plugs into §20's config-driven heartbeat with **zero** control-box code change. |
 | `revoke_super_admin`'s "cannot remove the LAST super-admin" | `core/router.py:944` | The same idea, applied to the cutover (`policy_change_decision`). |
 

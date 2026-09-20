@@ -9,6 +9,7 @@ client; when the browser hasn't granted location, GPS is simply null.
 import asyncio
 from app.core.database import get_supabase_admin
 from app.core import tenant_middleware as _tm
+from app.core import path_redact as _pr
 
 _SKIP_PREFIXES = ("/health", "/favicon", "/static", "/_next", "/openapi", "/docs", "/redoc")
 
@@ -63,8 +64,17 @@ class AccessLogMiddleware:
                     "actor_role": actor.get("role"),
                     "anonymous": not bool(actor.get("uid")),
                     "method": method,
-                    "path": path[:400],
-                    "query": (scope.get("query_string", b"").decode() or "")[:400] or None,
+                    # CREDENTIALS NEVER REACH THIS ROW (owner question 2026-09-20). Two public flows
+                    # authenticate with a capability URL — the referral QR and the HR onboarding
+                    # portal — so their PATH is the secret, and on the onboarding document routes the
+                    # date-of-birth gate rides along as `?value=…`. Until this, one row held both
+                    # factors in plaintext, for as long as the log is kept. `path_redact` derives what
+                    # to mask from the app's OWN route templates (`{token}` names itself), so a new
+                    # capability route is covered the day it is written, with no list to update here.
+                    "path": _pr.redact_for_app(scope.get("app"), path)[:400],
+                    "query": (_pr.redact_query_for_app(
+                        scope.get("app"), path,
+                        scope.get("query_string", b"").decode() or "")[:400]) or None,
                     "status": status["code"],
                     "ip": (_tm._client_ip_from(scope, headers) or None),
                     "user_agent": (headers.get("user-agent") or "")[:300] or None,

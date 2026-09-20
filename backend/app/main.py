@@ -55,6 +55,11 @@ app = FastAPI(
 # untouched (directive item 5c). Best-effort logging never itself raises.
 def _log_system_error(request, exc) -> str:
     ref = secrets.token_hex(4)
+    # The crash path logs the URL too, so it needs the same credential stripping as the access log:
+    # a 500 inside a capability-URL endpoint would otherwise write the token to stderr AND to
+    # core.failure_log. `path_redact` reads the app's own route templates (see its header).
+    from app.core import path_redact as _pr
+    safe_path = _pr.redact_for_app(getattr(request, "app", None), request.url.path)
     # STDERR FIRST (2026-08-21). The failure_log insert below is best-effort and its `except` is silent,
     # so until now a ref handed to a user was only recoverable IF that insert had succeeded — when the DB
     # was the thing that was broken (the most likely cause of a 500) the reference led nowhere, forever,
@@ -63,7 +68,7 @@ def _log_system_error(request, exc) -> str:
     # container platform captures, BEFORE the DB is touched; costs one write on a path that only runs
     # when the request has already failed. Never raises (a logging fault must not replace the real error).
     try:
-        print(f"[system-error {ref}] {request.method} {request.url.path} "
+        print(f"[system-error {ref}] {request.method} {safe_path} "
               f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
     except Exception:
         pass
@@ -72,9 +77,9 @@ def _log_system_error(request, exc) -> str:
         org_id = request.query_params.get("org_id") or "00000000-0000-0000-0000-000000000001"
         get_supabase().schema("core").table("failure_log").insert({
             "org_id": org_id, "category": "system_error", "severity": "error",
-            "source": f"{request.method} {request.url.path}"[:200],
-            "message": f"Unhandled server error [{ref}] on {request.url.path}"[:1000],
-            "detail": {"ref": ref, "method": request.method, "path": request.url.path,
+            "source": f"{request.method} {safe_path}"[:200],
+            "message": f"Unhandled server error [{ref}] on {safe_path}"[:1000],
+            "detail": {"ref": ref, "method": request.method, "path": safe_path,
                        "exc_type": type(exc).__name__,
                        "traceback": traceback.format_exc()[-4000:]},
             "remediation": ("An unexpected server error. Search core.failure_log for this reference id to "
