@@ -3538,13 +3538,38 @@ invoked the puller in-process and `assert_browser_allowed()` raised deep inside 
 `/vip`, `/dlar` and `/b2b` run-due were unguarded too. **The fix existed; the caller that replaced it
 was never wired to it** — the fourth instance of §19.18's pattern in one day.
 
-**THE FIX:** `_BROWSER_SWEEP_KINDS` declares the four portal scrapers (an externally registered kind is
-never assumed to need a browser). `/connectors/run-due` asks per connector before dispatching: with
-`BROWSER_SERVICE_URL` set it forwards the WHOLE tick via the existing proxy; with nowhere to forward it
-the connector's own row records an ATTEMPT naming the deployment problem, `next_run_at` is NOT advanced
-(a refusal does not satisfy a schedule), the blocked connectors are named in the response, and the
-non-browser sweeps in the same tick still run. The three unguarded per-vendor run-dues got the same
-one-line guard, after their secret check.
+**THE FIX:** `_BROWSER_SWEEP_KINDS` declares the sweep kinds that launch Chromium (an externally
+registered kind is never assumed to need a browser). `/connectors/run-due` asks per connector before
+dispatching: with `BROWSER_SERVICE_URL` set it forwards the WHOLE tick via the existing proxy; with
+nowhere to forward it the connector's own row records an ATTEMPT naming the deployment problem,
+`next_run_at` is NOT advanced (a refusal does not satisfy a schedule), the blocked connectors are named
+in the response, and the non-browser sweeps in the same tick still run.
+
+### 19.23a — "pulls from a portal" is not "launches a browser" (corrected the same day)
+
+`_BROWSER_SWEEP_KINDS` first shipped as `{vip, dlar, epay, b2b}` — every kind that pulls from a vendor
+PORTAL — and the same guard was added to `/vip`, `/dlar` and `/b2b` `sweep/run-due`. That conflated two
+different facts. Only **`epay_sweep.py`** imports playwright (behind `assert_browser_allowed()`);
+`dlar_sweep.py`, `vip_sweep.py` and `b2b_sweep.py` scrape over `requests` + BeautifulSoup and launch
+nothing. On this deployment (`SERVICE_ROLE=api`, `BROWSER_SERVICE_URL` unset — proven by ePay's own
+stored error text) the over-declared set would have REFUSED two connectors that work: **dlar**, which
+had imported successfully at 11:05 that morning and was next due 09-21 11:00, and **vip**, which ran
+09-18 and was next due 09-25. A guard written to explain ONE broken connector would have caused an
+outage of TWO healthy ones. Caught before its next tick — nothing was lost.
+
+- **The class:** a hand-kept list of "which sweeps need a browser" is a SECOND COPY of a fact the sweep
+  modules already own. One fact, one home: the home is the module; the constant is only its fast form,
+  because dispatch must not parse source on every tick.
+- **The lock:** `backend/harness_browser_sweep_kinds.py` (24) DERIVES the truth — for each
+  `_SWEEP_BUILTINS` kind it resolves the puller, follows it to its `*_sweep` module and asks whether
+  that module carries `playwright` / `assert_browser_allowed` — and FAILS THE BUILD when the declared
+  set and the derived set disagree **in either direction**: a kind declared that launches nothing
+  (refused for no reason) or a browser sweep left undeclared (the original ePay defect). Both
+  directions are mutation-proven. `harness_connector_dispatch` §D now pins the guarded endpoints as
+  exactly `{/epay/sweep/run-due, /data-sources/sweep/run-due}` and asserts the five non-browser
+  run-dues are NOT guarded.
+- **Why a guard is not a harmless extra:** with no `BROWSER_SERVICE_URL` it 503s a sweep that would
+  have worked; with one it ships the tick to another service for nothing.
 
 **MEASURED, house org — the alert list is now one line, and it is the true one:**
 

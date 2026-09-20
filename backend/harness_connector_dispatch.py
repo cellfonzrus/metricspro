@@ -104,8 +104,16 @@ ok("B5 the scan reports WHICH schedule it judged against, so the number is never
    "(schedule: {_freq})" in _func_src(ROUTER, "_scan_connector_health"))
 
 print("\n§C  ePay — browser work is dispatched to the service that can do it")
-eq("C1 the four portal scrapers are declared browser kinds",
-   BROWSER, {"vip", "dlar", "epay", "b2b"})
+# CORRECTED 2026-09-20, hours after it shipped: this first read {vip, dlar, epay, b2b} — every kind
+# that pulls from a vendor PORTAL. "Logs into a portal" is not "launches Chromium": dlar, vip and b2b
+# scrape over requests + BeautifulSoup and import playwright nowhere, so declaring them would have
+# REFUSED connectors that work (dlar had imported successfully that morning; vip four days earlier).
+# The derivation itself lives in harness_browser_sweep_kinds.py, which fails the build in EITHER
+# direction; what is pinned here is that this dispatcher's set is the browser-only one.
+eq("C1 only the sweep kind that actually launches Chromium is declared", BROWSER, {"epay"})
+ok("C1b …and the HTTP scrapers are explicitly not in it",
+   not ({"vip", "dlar", "b2b"} & BROWSER),
+   "declaring a requests-based sweep would block a connector that runs fine on the API service")
 ok("C2 …and every one of them has a puller (the sets cannot drift apart unnoticed)",
    BROWSER <= set(_ns["_SWEEP_BUILTINS"]), (BROWSER, set(_ns["_SWEEP_BUILTINS"])))
 ok("C3 an EXTERNALLY registered kind is not assumed to need a browser",
@@ -134,19 +142,31 @@ print("\n§D  every scheduled entry point that can launch Chromium is guarded")
 # Each handler is located by PARSING, not by slicing a guessed number of characters after its
 # decorator — /data-sources/sweep/run-due carries a ~1,000-character docstring, so a fixed window
 # reads the prose and concludes the guard is missing.
-_HANDLER = {"/vip/sweep/run-due": "vip_sweep_run_due", "/dlar/sweep/run-due": "dlar_sweep_run_due",
-            "/b2b/sweep/run-due": "b2b_sweep_run_due", "/epay/sweep/run-due": "epay_sweep_run_due",
+# GUARDED — these reach playwright, so on a SERVICE_ROLE=api service they must proxy, not run.
+_HANDLER = {"/epay/sweep/run-due": "epay_sweep_run_due",
             "/data-sources/sweep/run-due": "data_sources_run_due"}
+# UNGUARDED ON PURPOSE — requests + BeautifulSoup. A guard here is not a harmless extra: with no
+# BROWSER_SERVICE_URL it 503s a sweep that would have worked, and with one it ships the tick to
+# another service for no reason. Three of these were guarded for a few hours on 2026-09-20.
+_NO_BROWSER = {"/vip/sweep/run-due": "vip_sweep_run_due",
+               "/dlar/sweep/run-due": "dlar_sweep_run_due",
+               "/b2b/sweep/run-due": "b2b_sweep_run_due",
+               "the FTP run-due": "ftp_run_due", "the mailbox run-due": "email_run_due"}
 for ep, fn in _HANDLER.items():
     body = _func_src(ROUTER, fn)
     ok(f"D1 {ep} calls require_browser_service()", "require_browser_service()" in body)
+for ep, fn in _NO_BROWSER.items():
+    body = _func_src(ROUTER, fn)
+    ok(f"D1b {ep} does NOT — it never launches a browser", "require_browser_service()" not in body,
+       "guarding it would refuse a sweep that runs fine on the API service")
 ok("D2 the secret check still comes FIRST — an unauthenticated caller learns nothing about the deploy",
-   all(_func_src(ROUTER, _HANDLER[ep]).index("verify_notify_secret")
-       < _func_src(ROUTER, _HANDLER[ep]).index("require_browser_service()")
-       for ep in ("/vip/sweep/run-due", "/dlar/sweep/run-due", "/b2b/sweep/run-due")))
-ok("D3 the FTP and email run-dues are NOT browser-guarded — they launch no browser",
-   "require_browser_service()" not in _func_src(ROUTER, "ftp_run_due")
-   and "require_browser_service()" not in _func_src(ROUTER, "email_run_due"))
+   all(_func_src(ROUTER, fn).index("verify_notify_secret")
+       < _func_src(ROUTER, fn).index("require_browser_service()")
+       for fn in _HANDLER.values()))
+ok("D3 the guarded set is exactly the sweeps that can launch Chromium",
+   all("require_browser_service()" in _func_src(ROUTER, fn) for fn in _HANDLER.values())
+   and not any("require_browser_service()" in _func_src(ROUTER, fn)
+               for fn in _NO_BROWSER.values()))
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
