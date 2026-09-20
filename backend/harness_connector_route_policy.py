@@ -332,6 +332,28 @@ def main():
     eq([i["key"] for i in plain], [i["key"] for i in before],
        "an absent route_policy context is byte-identical to pre-mig-998 behaviour")
 
+    print("\n7d. THE CHIP IS A SENTENCE — every route, not just the one we happened to look at")
+    # Until 2026-09-20 `headline()` interpolated ROUTE_LABEL, whose entries carry a leading article for
+    # `detail()`'s object position ("...is THE portal login"), into a SUBJECT slot — so every closed
+    # route rendered a double article: "Automatic the portal login is switched off for this connector."
+    # It was invisible while nothing displayed it; §19.22 put it on the connector-health row and in
+    # front of the owner. Pinned for EVERY route, so a new label with an article cannot re-break it.
+    for _rt in list(crp.ROUTES) + ["not_a_route", "", None]:
+        _h = crp.headline({"allowed": False, "route": _rt})
+        ok(_h.startswith("Automatic ") and _h.endswith(" is switched off for this connector."),
+           "route %r renders the chip sentence" % (_rt,))
+        _subj = _h[len("Automatic "):-len(" is switched off for this connector.")]
+        ok(_subj and not _subj.lower().split()[0] in ("the", "a", "an"),
+           "...with no article doubled into the subject (%r)" % _h)
+        ok(not _subj.endswith("reports"),
+           "...and a SINGULAR subject, so it agrees with 'is' (%r)" % _h)
+    eq(crp.headline({"allowed": False, "route": "pull"}),
+       "Automatic portal login is switched off for this connector.",
+       "the pull chip matches the frontend's own fallback string VERBATIM (email-imports page), so "
+       "the owner reads one sentence whichever side rendered it")
+    ok(crp.subject_label("pull") and crp.ROUTE_LABEL["pull"].endswith(crp.subject_label("pull")),
+       "the subject form is DERIVED from ROUTE_LABEL, not a second hand-written copy of it")
+
     print("\n6b. Hygiene: no secret, and no vendor name in a code path")
     src = open("app/modules/commcalc/connector_route_policy.py").read()
     for word in ("b2bsoft", "vidapay", "wsreports", "luxelink"):
