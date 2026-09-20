@@ -3554,8 +3554,6 @@ def vip_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = 
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
-    require_browser_service()   # SERVICE_ROLE=api → this sweep launches Chromium; the API service
-                               # proxies the tick to the sweeps worker (see _BROWSER_SWEEP_KINDS)
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
     due = client.schema('commcalc').table('vip_sweep_config').select('*') \
@@ -11388,9 +11386,25 @@ _SWEEP_BUILTINS = {'vip': '_do_vip_sweep', 'dlar': '_do_dlar_sweep',
 # `Sweep failed: Browser/portal sweeps do not run on the user-facing API service (SERVICE_ROLE=api)`
 # every day from 2026-08-24. The fix existed; the caller that superseded it was not wired to it.
 #
+# ONLY ePay, AND THAT IS NOT A JUDGEMENT CALL (corrected 2026-09-20, same day). This set first read
+# {vip, dlar, epay, b2b} — every kind that pulls from a vendor PORTAL. That conflated "logs into a
+# portal" with "launches a browser", and they are not the same fact: `dlar_sweep`, `vip_sweep` and
+# `b2b_sweep` scrape over `requests` + BeautifulSoup and never import playwright, while `epay_sweep`
+# is the one builtin that calls `sync_playwright()` behind `assert_browser_allowed()`. Blocking the
+# other three would have refused connectors that WORK on this deployment — dlar had just imported
+# successfully, and vip ran four days earlier — turning a guard meant to explain one broken connector
+# into an outage of two healthy ones.
+#
+# THE FACT LIVES IN THE SWEEP MODULE, NOT IN THIS LIST. A kind belongs here if and only if its
+# puller can reach `assert_browser_allowed()` / playwright. This declaration is the fast form of that
+# fact (dispatch must not introspect source per tick), so `harness_browser_sweep_kinds.py` DERIVES the
+# truth from the sweep modules and FAILS THE BUILD if the two disagree — in either direction. Add a
+# browser to a sweep without listing it here and the build stops; list a kind that never launches one
+# and the build stops.
+#
 # An externally registered kind (register_sweep) is NOT assumed to need a browser — a third-party
 # puller must never be blocked by a guess about what it launches.
-_BROWSER_SWEEP_KINDS = frozenset({'vip', 'dlar', 'epay', 'b2b'})
+_BROWSER_SWEEP_KINDS = frozenset({'epay'})
 _SWEEP_EXTERNAL: dict = {}  # populated by register_sweep() from other modules / new providers
 
 
@@ -13111,8 +13125,6 @@ def dlar_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
-    require_browser_service()   # SERVICE_ROLE=api → this sweep launches Chromium; the API service
-                               # proxies the tick to the sweeps worker (see _BROWSER_SWEEP_KINDS)
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
     due = client.schema('commcalc').table('dlar_sweep_config').select('*') \
@@ -13264,8 +13276,6 @@ def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = 
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
-    require_browser_service()   # SERVICE_ROLE=api → this sweep launches Chromium; the API service
-                               # proxies the tick to the sweeps worker (see _BROWSER_SWEEP_KINDS)
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
     due = client.schema('commcalc').table('b2b_sweep_config').select('*') \
