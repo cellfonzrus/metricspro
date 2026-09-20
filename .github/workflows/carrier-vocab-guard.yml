@@ -9,17 +9,28 @@ name: carrier-vocab-guard
 # term outside a NAV-gated page or the guard's pinned, reviewed exceptions.
 #
 # Dependency-free: the guard statically scans frontend/src on bare Python — no pip install.
+#
+# THE REPORT-KIND LOCK (design §7, 2026-09-20) runs in the same job: every upload surface must read
+# the report-kind registry through the one hook, and no second list of report kinds / filename
+# patterns / POS vendor names may exist in code (backend/harness_report_kind_lock.py; stdlib only).
 
 on:
   pull_request:
     paths:
       - "frontend/src/**"
       - "backend/harness_carrier_vocab_guard.py"
+      - "backend/harness_report_kind_lock.py"
+      - "backend/app/modules/commcalc/report_kinds.py"
+      - "backend/app/modules/commcalc/onboarding_intake.py"
+      - "backend/app/modules/commcalc/implementation_spine.py"
+      - "backend/app/modules/commcalc/router.py"
+      - "database/migrations/1010_report_kind_registry.sql"
       - ".github/workflows/carrier-vocab-guard.yml"
   push:
     branches: [main]
     paths:
       - "frontend/src/**"
+      - "backend/app/modules/commcalc/report_kinds.py"
   workflow_dispatch:
 
 permissions:
@@ -40,3 +51,6 @@ jobs:
       - name: Run carrier vocabulary guard
         working-directory: backend
         run: python3 harness_carrier_vocab_guard.py | tee "$GITHUB_STEP_SUMMARY"
+      - name: Run the report-kind lock (every upload surface reads the registry; no second list)
+        working-directory: backend
+        run: python3 harness_report_kind_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

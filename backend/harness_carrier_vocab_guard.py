@@ -72,7 +72,9 @@ REVIEWED_EXCEPTIONS = {
     "app/(platform)/commcalc/atu-opportunity/page.tsx": {"both": "per-carrier param labels lens-filtered in-file"},
     "app/(platform)/commcalc/commission-legs/page.tsx": {"both": "lens-gated empty-state + source names of loaded feeds"},
     "app/(platform)/commcalc/management-incentive/page.tsx": {"total": "carrier-named presets lens-hidden in-file"},
-    "app/(platform)/commcalc/upload/page.tsx": {"both": "tiles carrier-tagged + tileVisible-filtered in-file"},
+    "app/(platform)/commcalc/upload/page.tsx": {"both": "tiles registry-gated (report-kind registry, §30.9) + tileVisible-filtered in-file"},
+    "app/(platform)/commcalc/_lib/uploadRoutes.ts": {
+        "both": "upload ROUTE metadata keyed by route key; a route renders only when the tenant's report-kind registry names it (carrier scope is registry data, §30.9)"},
     "app/(platform)/commcalc/upload/wizard/page.tsx": {
         "boost": "FALLBACK_STEPS legacy boost defaults; connector-driven path is data-scoped"},
     # Data-conditional copy: the string renders only alongside that carrier's own data rows.

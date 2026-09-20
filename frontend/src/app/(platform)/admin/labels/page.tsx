@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
 import { invalidateApiCache } from '@/lib/cache'
 import { NAV, NAV_CARRIERS } from '@/lib/rbac'
-import { POS_GATED_SURFACES } from '@/lib/carrier-scope'
+import { useReportKinds } from '@/lib/report-kinds'
 import { useAuth } from '@/lib/auth-context'
 
 // Display Labels — per-tenant nicknames for the sidebar. Rename what you SEE ("Distributors"→"Suppliers",
@@ -34,13 +34,18 @@ export default function DisplayLabelsPage() {
       .finally(() => setLoaded(true))
   }, [])
 
-  async function setCap(href: string, val: 'auto' | 'show' | 'hide', ns: 'carrier' | 'pos' = 'carrier') {
+  // THE REPORT-KIND REGISTRY (design §7): every kind with a POS / carrier applies-to is listed so a
+  // super-admin can widen a tenant's set through the SAME cap mechanism (`kind:<key>`), recorded as config.
+  const kinds = useReportKinds()
+  const gatedKinds = (kinds.payload?.all_keys || []).filter(k => (k.applies_to_pos || []).length || (k.applies_to_carrier || []).length)
+  const visibleKeys = new Set(kinds.visible.map(k => k.key))
+  async function setCap(href: string, val: 'auto' | 'show' | 'hide', ns: 'carrier' | 'pos' | 'kind' = 'carrier') {
     const key = ns + ':' + href
     try {
       await api('/api/v1/commcalc/nav-labels', { method: 'POST', body: JSON.stringify({ scope: 'cap', key, label: val === 'auto' ? '' : val }) })
       invalidateApiCache('nav-config')   // sidebar (layout) caches nav-config → refresh it after this write
       setCaps(p => { const n = { ...p }; if (val === 'auto') delete n[key]; else n[key] = val === 'show'; return n })
-      setMsg(val === 'auto' ? (ns === 'pos' ? 'Reset to follow the POS setting' : 'Reset to carrier default')
+      setMsg(val === 'auto' ? (ns === 'pos' ? 'Reset to follow the POS setting' : ns === 'kind' ? 'Reset to follow the declared POS / carrier' : 'Reset to carrier default')
                             : val === 'show' ? 'Always shown' : 'Always hidden')
       setTimeout(() => setMsg(''), 3000)
     } catch (e: any) { setMsg(e?.message || 'Save failed') }
@@ -90,30 +95,35 @@ export default function DisplayLabelsPage() {
       {loaded && (
         <div className="card" style={{ padding: 16, marginBottom: 14 }}>
           <div style={{ fontWeight: 700, fontSize: 14, textTransform: 'uppercase', letterSpacing: '0.05em',
-            color: 'var(--text2)', marginBottom: 4 }}>POS-gated options</div>
+            color: 'var(--text2)', marginBottom: 4 }}>POS- and carrier-gated report kinds</div>
           <div style={{ color: 'var(--text3)', fontSize: 12, marginBottom: 10 }}>
-            Hidden because they belong to a different POS than the one this company has declared.
+            Report kinds that apply to a specific POS or carrier (the report-kind registry). Auto follows what this company
+            declared{kinds.declaration ? <> — POS <b>{kinds.declaration.pos.join(' / ') || 'none'}</b>, carrier <b>{kinds.declaration.carriers.join(' / ') || 'none'}</b></> : null}.
             {!isSuper && ' Turning one back on is reserved for the platform team — you can still hide it or reset it.'}
+            {kinds.loaded && !kinds.ready && ' The registry table is not applied yet — these are the house defaults.'}
           </div>
-          {POS_GATED_SURFACES.map(sfc => {
-            const cur = caps['pos:' + sfc.key]
+          {gatedKinds.map(k => {
+            const cur = caps['kind:' + k.key]
             const v = cur === true ? 'show' : cur === false ? 'hide' : 'auto'
             return (
-              <div key={sfc.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '5px 0' }}>
+              <div key={k.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '5px 0' }}>
                 <div style={{ fontSize: 13, color: 'var(--text)' }}>
-                  {sfc.label}
-                  <span style={{ color: 'var(--text3)', fontSize: 11, marginLeft: 8 }}>{sfc.why}</span>
+                  {k.label}
+                  <span style={{ color: 'var(--text3)', fontSize: 11, marginLeft: 8 }}>
+                    applies to {[...(k.applies_to_pos || []).map(c => `POS ${c}`), ...(k.applies_to_carrier || []).map(c => `carrier ${c}`)].join(', ')} · {visibleKeys.has(k.key) ? 'shown' : 'hidden'} now
+                  </span>
                 </div>
-                <select value={v} onChange={e => setCap(sfc.key, e.target.value as 'auto' | 'show' | 'hide', 'pos')}
-                  title="POS visibility — Auto follows this company's declared POS"
+                <select value={v} onChange={e => setCap(k.key, e.target.value as 'auto' | 'show' | 'hide', 'kind')}
+                  title="Visibility — Auto follows this company's declared POS and carrier"
                   style={{ padding: '5px 7px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }}>
-                  <option value="auto">Auto (follow our POS)</option>
+                  <option value="auto">Auto (follow our POS / carrier)</option>
                   {(isSuper || v === 'show') && <option value="show">Always show</option>}
                   <option value="hide">Always hide</option>
                 </select>
               </div>
             )
           })}
+          {gatedKinds.length === 0 && <div style={{ color: 'var(--text3)', fontSize: 12 }}>{kinds.loaded ? 'No gated report kinds in the registry.' : 'Loading…'}</div>}
         </div>
       )}
 

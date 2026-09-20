@@ -15,6 +15,7 @@ from app.modules.commcalc import whatif
 # The tenant-implementation spine (owner 2026-09-12): the ONE ordered, carrier-scoped setup flow, and
 # the one `carrier_visible` predicate the sweep / Connectors / Imports all ask. PURE — no DB, no I/O.
 from app.modules.commcalc import implementation_spine
+from app.modules.commcalc import report_kinds as _report_kinds  # mig 1010 — THE report-kind registry (design §7)
 from app.modules.commcalc import vendor_rebate_feed   # mig 1005 — earned-vs-collected, books nothing
 from app.modules.commcalc import tax_collected as _tax_agg  # THE one per-(store, day) sales-tax pass
 from app.modules.commcalc import exec_metric_defs as _emd   # mig 962 — ONE bucket vocabulary + presets
@@ -6513,6 +6514,7 @@ async def onboarding_intake_commit(
     instance_key: str = Form(""),
     use_stored: str = Form(""),
     role: str = Form(""),
+    report_kind: str = Form(""),
     org_id: str = ORG_ID,
 ):
     """THE SAVE, for every kind, with the same guarantee: refuse (400, nothing written) while a gate
@@ -6536,11 +6538,60 @@ async def onboarding_intake_commit(
     if not isinstance(att, dict):
         raise HTTPException(400, "attestation must be a JSON object {reason}")
     who = (verified_by or "").strip() or None
+    # the registry card the person picked at 2.0 / 3.1 (mig 1010) — the kind the confirmed layout is
+    # learned under; blank → derived from landing + layout + statement type + headers (kind_key_for)
+    ctx["report_kind"] = _fstr(report_kind).strip().lower()
     if kind == "commission":
         return _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who, fname)
     if kind == "other":
         return _intake_commit_other(client, org_id, ctx, who, fname, contents, file is not None)
     return _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname)
+
+
+def _intake_caps(client, org_id):
+    """This org's `cap` overrides (ui_label_override scope 'cap' → {key: True|False|None}) — the SAME
+    rows GET /nav-config reads; only the report-kind namespace is needed here."""
+    caps = {}
+    try:
+        for r in (client.schema("commcalc").table("ui_label_override").select("key,label")
+                  .eq("org_id", org_id).eq("scope", "cap").execute().data) or []:
+            k = str(r.get("key") or "")
+            if k.startswith(_report_kinds.CAP_PREFIX):
+                v = str(r.get("label") or "").lower()
+                caps[k] = True if v == "show" else (False if v == "hide" else None)
+    except Exception:
+        caps = {}
+    return caps
+
+
+def _intake_learn_signature(client, org_id, ctx, landing, statement_type=None, layout=None, define_name=None):
+    """After a CONFIRMED intake: (a) resolve which registry kind this layout is — the card the person
+    picked (`ctx['report_kind']`), else derived from landing + layout + statement type + the headers
+    (on-hand vs aging by a received column); (b) for a free-text 'other', DEFINE it at the house org
+    under this tenant's declared carriers (design §7 rule 3); (c) write the org's signature row + the
+    house copy — HEADER NAMES ONLY (report_kinds.signature_row; pinned by harness_report_kinds.py).
+    Never raises; before mig 1010 it reports why nothing was learned."""
+    headers = [h for h in (ctx.get("headers") or []) if str(h or "").strip()]
+    if not headers:
+        return {"learned": False, "reason": "no header row detected"}
+    rows, ready = _report_kinds.load_registry(client, org_id)
+    out = {}
+    key = None
+    if landing == "other":
+        decl = _report_kinds.tenant_declaration(client, org_id)
+        defined = _report_kinds.define_kind(client, org_id, define_name, applies_to_pos=(),
+                                            applies_to_carrier=decl.get("carriers") or (), headers=headers)
+        out["defined"] = defined
+        key = defined.get("key")
+    if not key:
+        key = _report_kinds.kind_key_for(rows, landing, layout=layout, statement_type=statement_type,
+                                         headers=headers, chosen=ctx.get("report_kind"),
+                                         target_fields={k: column_mapping._base_fields(k) for k in column_mapping.TARGET_FIELDS})
+    if not key:
+        return {**out, "learned": False, "reason": f"no registry kind lands as '{landing}'"}
+    if not ready:
+        return {**out, "learned": False, "kind": key, "reason": f"{_report_kinds.MIGRATION} not applied"}
+    return {**out, **_report_kinds.learn_signature(client, org_id, headers, key, statement_type=statement_type, layout=layout)}
 
 
 def _intake_commit_other(client, org_id, ctx, who, fname, contents, dropped):
@@ -6558,8 +6609,13 @@ def _intake_commit_other(client, org_id, ctx, who, fname, contents, dropped):
         patch["file"] = ref
     state = _intake_save_state(client, org_id, ctx["instance_key"], step="2.6", status=_intake.STATUS_NEEDS_INPUT,
                                payload_patch=patch, verified_numbers=vn, verified_by=who, blocking_reason=reason, by=who)
+    # design §7 rule 3: a report NOBODY had defined, confirmed as received under this tenant's
+    # carriers, becomes a registry row at the house org (defined_by='tenant') so the NEXT tenant on
+    # that carrier is offered it — and its header names become a learned signature. Header names
+    # only; the file itself stays in the intake's own storage.
+    learned = _intake_learn_signature(client, org_id, ctx, "other", define_name=ctx.get("name"))
     return {"ok": False, "recorded": True, "problems": [reason], "saved": 0, "instance_key": ctx["instance_key"],
-            "source_kind": "other", "verified_numbers": vn, "state": state}
+            "source_kind": "other", "verified_numbers": vn, "state": state, "report_kind": learned}
 
 
 def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
@@ -6721,10 +6777,13 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
                        "period": period_label},
         verified_numbers=verified_numbers, verified_by=who,
         blocking_reason=("; ".join(problems) if problems else ""), by=who)
+    # a CONFIRMED layout is learned (mig 1010 report_signature: header names only) — only on ok
+    learned = _intake_learn_signature(client, org_id, ctx, kind, layout=report_key) if ok else {"learned": False, "reason": "not confirmed"}
     return {"ok": ok, "problems": problems, "saved": landed["saved"], "source_kind": kind,
             "instance_key": ctx["instance_key"], "report_key": report_key, "target_table": ctx["target_table"],
             "mapping_saved": saved_fields, "identity_written": identity_written,
-            "verified_numbers": verified_numbers, "state": state, "landing": landed.get("detail")}
+            "verified_numbers": verified_numbers, "state": state, "landing": landed.get("detail"),
+            "report_kind": learned}
 
 
 def _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who, fname):
@@ -6853,7 +6912,12 @@ def _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who
                        "identity": ctx["identity_decisions"], "filename": fname, "kind": "commission"},
         verified_numbers=verified_numbers, verified_by=who,
         blocking_reason=("; ".join(problems) if problems else ""), by=who)
+    # a CONFIRMED statement layout is learned under its statement type (mig 1010; header names only)
+    learned = (_intake_learn_signature(client, org_id, ctx, "commission", statement_type=ctx.get("statement_type"),
+                                       layout=commission_ledger.MAPPING_REPORT_KEY)
+               if ok else {"learned": False, "reason": "not confirmed"})
     return {"ok": ok, "problems": problems, "saved": saved, "source_report": source_report, "period": per,
+            "report_kind": learned,
             "carrier": {"id": carrier["id"], "name": carrier.get("name"), "code": ctx["carrier_code"]},
             "instance_key": ctx["instance_key"], "mapping_saved": saved_fields,
             "sign_convention": conv_name, "convention_meta": conv_meta,
@@ -9781,6 +9845,79 @@ def list_connectors(org_id: str = ORG_ID, carrier: str = ""):
     return [{**c, 'status': _connector_status(client, org_id, c.get('config_table')),
              'creds': _connector_creds(client, org_id, c.get('config_table')),
              'reports': by_conn.get(c['id'], [])} for c in conns]
+
+
+@router.get("/report-kinds")
+def report_kinds_endpoint(org_id: str = ORG_ID):
+    """WHICH REPORT KINDS THIS TENANT MAY UPLOAD — computed, never listed (design §7; mig 1010).
+
+    ONE payload every upload surface renders from (the Upload page, the Upload wizard, Email imports'
+    filename rules + "apply the <POS> standard", the intake's 2.0 cards, the POS-gated tiles):
+      · `declaration` — what the tenant declared, from `report_kinds.tenant_declaration` (THE one
+        reader: the pos_system term / pos_profile rows + the org's carrier rows) and the reasons
+        anything is withheld;
+      · `kinds` — the registry rows (house + this org's overrides, merged per key) that
+        `report_kinds.visible_kinds` shows this tenant, each with its PROVENANCE ("house default",
+        "your override", "confirmed by you N times", "widened by super-admin", "defined by a
+        tenant on this carrier");
+      · `hidden` — what is withheld and why (so a surface can say so instead of nothing);
+      · `surfaces` — the visible keys per surface; `upload_types` — the legacy route keys those kinds
+        are uploaded through; `filename_rules` — the DECLARED POS standard's rules (pos_profile, mig
+        200, house row inherited) restricted to visible kinds; `standard` — the declared POS whose
+        standard "Apply the … standard" applies;
+      · `registry_ready` — false before mig 1010, in which case the rows are the code mirror.
+    Read-only, org-scoped ({org, house} on every read), never 500s a page."""
+    require_org(org_id)
+    client = sb()
+    rows, ready = _report_kinds.load_registry(client, org_id)
+    decl = _report_kinds.tenant_declaration(client, org_id)
+    caps = _intake_caps(client, org_id)
+    sigs = _report_kinds.load_signatures(client, org_id) if ready else []
+    profile_rules, standard = [], None
+    if decl.get("pos"):
+        pk = decl["pos"][0]
+        # the declared POS's standard: this org's row, else the house row, else the code default
+        # for its own key, else NONE (never another POS's rules) — _pos_profile's ladder
+        prof = _pos_profile(client, org_id, pk)
+        if prof:
+            profile_rules = prof.get("filename_rules") or []
+            standard = {"pos_key": prof.get("pos_key") or pk, "label": prof.get("label") or pk,
+                        "source": "your row" if prof.get("org_id") == org_id and not prof.get("inherited_from") else "house default"}
+        else:
+            standard = {"pos_key": pk, "label": pk, "source": "none", "note": "no filename standard is defined for this POS yet"}
+    return _report_kinds.payload(rows, ready, decl, caps, sigs, org_id, profile_rules=profile_rules, standard=standard)
+
+
+@router.post("/report-kinds/detect")
+async def report_kinds_detect(file: UploadFile = File(...), org_id: str = ORG_ID):
+    """"This looks like your <kind> — right?" — PURE detection over the file's HEADER NAMES.
+
+    Reads the workbook the way the intake does (`_read_upload_grids` → `onboarding_intake.
+    stitch_sheets`: the widest consistent header block), then `report_kinds.detect_report_kind` over
+    the tenant's visible registry + the confirmed signatures ({org, house}). Nothing is stored — not
+    the file, not a value, not the filename; the response says confirm / ask / none and the evidence
+    per candidate. The person confirms; the platform never assigns silently."""
+    require_org(org_id)
+    client = sb()
+    contents = await file.read()
+    try:
+        sheets = _read_upload_grids(contents, file.filename or "")
+    except Exception as e:
+        raise HTTPException(400, f"could not read the file: {str(e)[:160]}")
+    shape = _intake.stitch_sheets(sheets)
+    headers = [h for h in (shape.get("headers") or []) if str(h or "").strip()]
+    rows, ready = _report_kinds.load_registry(client, org_id)
+    decl = _report_kinds.tenant_declaration(client, org_id)
+    vis = _report_kinds.visible_kinds(rows, decl, _intake_caps(client, org_id), org_id)
+    sigs = _report_kinds.load_signatures(client, org_id) if ready else []
+    ranked = _report_kinds.detect_report_kind(headers, vis, sigs)
+    dec = _report_kinds.decide(ranked)
+    by_key = {r["key"]: r for r in vis}
+    cands = [{"key": k, "label": by_key[k]["label"], "confidence": c, "evidence": ev, "landing": by_key[k]["landing"],
+              "layout": by_key[k].get("layout"), "statement_type": by_key[k].get("statement_type")}
+             for k, c, ev in dec["candidates"]]
+    return {"mode": dec["mode"], "candidates": cands, "header_count": len(headers), "sheet": shape.get("sheet"),
+            "registry_ready": ready, "fallback_key": next((r["key"] for r in vis if r["landing"] == "other"), None)}
 
 
 @router.get("/upload-registry")
@@ -16943,7 +17080,7 @@ def set_nav_label(body: NavLabelIn, org_id: str = ORG_ID,
     # apply to them. So this can never lock anyone out of something they already had; the worst it can
     # do is refuse to hand out something new.
     if scope == 'cap' and label.lower() == 'show' and not gc["super_admin"] \
-            and (key.startswith('carrier:') or key.startswith('pos:')):
+            and (key.startswith('carrier:') or key.startswith('pos:') or key.startswith(_report_kinds.CAP_PREFIX)):
         raise HTTPException(403, "Turning a carrier- or POS-gated option back on is reserved for a "
                                  "platform super-admin. You can still hide it, or reset it to follow "
                                  "your carrier and POS settings. Ask the platform team to re-grant it.")
@@ -30929,11 +31066,17 @@ _B2BSOFT_POS_DEFAULT = {
 
 
 def _pos_profile(client, org_id, pos_key="b2bsoft"):
-    """This tenant's editable POS standard profile, else the code default (so it works before mig 200).
-    Org-scoped read — never reaches into another tenant's row."""
+    """This tenant's editable POS standard profile, else the HOUSE org's row for the same pos_key
+    (the house-default + tenant-override shape of mig 207 — added 2026-09-20 so a tenant that
+    declared a POS gets that POS's standard without a per-tenant seed), else the code default (so it
+    works before mig 200). Org-scoped: this org's row, then the house row, never a third tenant's."""
     try:
         rows = (client.schema("commcalc").table("pos_profile").select("*")
                 .eq("org_id", org_id).eq("pos_key", pos_key).limit(1).execute().data) or []
+        if not rows and org_id != _report_kinds.HOUSE_ORG:
+            rows = (client.schema("commcalc").table("pos_profile").select("*")
+                    .eq("org_id", _report_kinds.HOUSE_ORG).eq("pos_key", pos_key).limit(1).execute().data) or []
+            rows = [{**r, "org_id": org_id, "inherited_from": "house"} for r in rows]
         if rows:
             r = rows[0]
             # Fill any blank column from the code default so a partially-edited row still applies cleanly.
@@ -30947,6 +31090,11 @@ def _pos_profile(client, org_id, pos_key="b2bsoft"):
             return r
     except Exception:
         pass
+    # The code default is the default for ITS OWN pos_key only. Asking for another POS's standard
+    # when no row exists must answer None — handing back this default would apply one POS's
+    # filename rules to a tenant that declared a different POS (the owner's Verizon/RQ defect).
+    if (pos_key or "").strip().lower() != _B2BSOFT_POS_DEFAULT["pos_key"]:
+        return None
     return {"org_id": org_id, **_B2BSOFT_POS_DEFAULT}
 
 
@@ -32069,6 +32217,9 @@ def apply_pos_profile(pos_key: str, org_id: str = ORG_ID, account: str = "defaul
     account = (account or "default").strip() or "default"
     client = sb()
     prof = _pos_profile(client, org_id, pos_key)
+    if prof is None:
+        raise HTTPException(400, f"No filename standard is defined for POS '{pos_key}' yet — nothing applied. "
+                                 "Define one (a pos_profile row for that POS) rather than applying another POS's rules.")
     imapd = prof.get("imap_defaults") or {}
     sched = prof.get("schedule_defaults") or {}
     std_rules = prof.get("filename_rules") or []

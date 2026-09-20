@@ -5,105 +5,38 @@ import { usePeriod } from '@/lib/period-context'
 import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_lib/uploadGuard'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 import { LastUploadLine, useLastUploads } from '../_lib/lastUpload'
+import { MODE_UI, modeVerb, PERIOD_ROUTES, PERIODLESS, MODULE_ROUTES, LINK_ROUTES, ALL_TRACE_KEYS, type ModuleRoute } from '../_lib/uploadRoutes'
 import { useActiveCarrier } from '@/lib/auth-context'
 import { carrierCode } from '@/lib/rbac'
-import { posOK, POS_GATED_SURFACES } from '@/lib/carrier-scope'
 import { useReportLabels } from '@/lib/report-labels'
+import { useReportKinds } from '@/lib/report-kinds'
+import type { ReportKindRow } from '@/lib/carrier-scope'
 
-// ── WHAT AN UPLOAD ACTUALLY DOES, per file type (owner 2026-07-29) ──────────────────────────────
-// The tiles used to say "Replace File" on EVERY report, which is wrong for more than half of them: the
-// day-grain feeds ADD days and only refresh the days the file covers. This ONE map is display metadata
-// that MIRRORS the backend's real write semantics in backend/app/modules/commcalc/router.py
-// (`_upload_file_impl`) — keep it in sync if the backend's keying changes:
-//   • DATE_KEYED = {daily_sales, ma_commission, ma_daily_tx, ma_fulfillment} → delete-then-insert PER DAY
-//     ⇒ 'additive_daily': new days add, a re-upload of the same day refreshes only that day.
-//   • x_report (upsert on org+close_date+store+tender_type) / inventory_aging (per-store snapshot upsert)
-//     ⇒ 'additive_keyed': nothing outside the file's own keys is ever cleared.
-//   • has_period types (sales, payment_detail, mi_report, dlar_rep, dlar_store, comp_report) → the
-//     SELECTED period is deleted then re-inserted ⇒ 'replace_period'.
-//   • catalog / master_cats (has_period === false) → the whole table is wiped ⇒ 'replace_all'.
-type UploadMode = 'additive_daily' | 'additive_keyed' | 'replace_period' | 'replace_all'
-const MODE_UI: Record<UploadMode, { verb: string; explain: string }> = {
-  additive_daily: { verb: '⬆️ Upload additional file',
-    explain: 'Adds the days in the file. Re-uploading the same day is safe — it refreshes only that day; other days stay.' },
-  additive_keyed: { verb: '⬆️ Upload additional file',
-    explain: 'Adds or refreshes only what this file covers — nothing outside it is cleared.' },
-  replace_period: { verb: '📂 Replace period file',
-    explain: 'Clears & replaces everything stored for the selected period.' },
-  replace_all: { verb: '📂 Replace all data',
-    explain: 'Replaces ALL stored rows for this report — not just one period.' },
-}
-const modeVerb = (mode: UploadMode, prior: boolean) => (prior ? MODE_UI[mode].verb : '📂 Choose File')
+// ── WHAT THIS PAGE OFFERS IS COMPUTED, NEVER LISTED (owner directives 2026-09-20; design §7) ──────
+// Owner: "it is very important that we don't have extra file upload paths for a new tenant who does
+// not need those based on the carrier they pick … Currently in the Verizon tenant we have all the
+// table uploads for B2B when it has been declared that the POS is not B2B, it is RQ."
+//
+// This page used to carry FOUR hardcoded arrays of what a tenant may upload, a `carrier` tag per
+// tile, and a POS vendor name as a constant (`CUSTOM_REPORTS_POS`) — the one place that gated on the
+// tenant's POS, by a name in code. All of it is gone:
+//   · WHICH tiles show comes from the REPORT-KIND REGISTRY (GET /commcalc/report-kinds → lib/report-
+//     kinds.ts → the ONE visibility function). A tile renders only when a visible registry row names
+//     its route key in `upload_types` (or its custom sheet label). The registry rows carry the POS /
+//     carrier codes as DATA; this file names none.
+//   · HOW a route posts (endpoint, period-vs-day grain, what the write does) is metadata keyed by
+//     route key in ../_lib/uploadRoutes.ts, shared with the wizard.
+//   · The connector registry's carrier scope (`report_definitions.carrier_id`, GET /upload-registry,
+//     `tileVisible`) still applies — the two gates AND together; neither is a second copy of the other.
+// HONEST BEFORE THE REGISTRY LOADS: nothing is offered until /report-kinds answers; a failed read
+// says so instead of showing every tile (show less and say why).
+const PERIOD_META = PERIOD_ROUTES
 
-// ── WHICH TILES BELONG TO WHICH CARRIER IS DATA, NOT A TYPE (owner 2026-09-12) ──────────────────
-// These four arrays used to carry `carrier?: 'boost' | 'total'` — a literal union of two carrier
-// names. It was RULE TWO failing in the most concrete way there is: a Verizon tenant handed a real
-// commission export could not be OFFERED their own report, because a third carrier was
-// unrepresentable in the type. The union is gone; `carrier` below is now an open `string`.
-//
-// Carrier scope now comes from `GET /commcalc/upload-registry`, which projects the rows that already
-// answer this — `report_definitions.carrier_id` (mig 291, added for exactly this: "we need to filter
-// out the uploads and auto import based on what carrier is chosen") and `connector_instances.
-// carrier_id` for the auto-import sources, whose ids ARE `sweep_kind` values. A new carrier is rows,
-// so no edit here is ever needed again.
-//
-// THE SHIPPED TAG IS A FALLBACK DEFAULT, AND THE REGISTRY OVERRIDES IT. It is the last-resort
-// default for a tile the tenant's registry has no row for — the same posture `core.module_onboarding_
-// task` already takes and that the index states as a rule: DB is truth, the in-code registry is the
-// fallback. A row in `report_definitions` wins over the tag on the same id, always.
-//
-// WHY A FALLBACK AT ALL, rather than deleting the tags outright. Three of these tiles carry carrier
-// vocabulary in their own LABELS ("MA Commission Details (Total)"). Dropping the tag would make them
-// visible to a tenant whose registry simply has no row for them — and mig 291 deliberately DELETED
-// the inert rows that would otherwise have carried the scope, so "absent" is the normal state, not
-// an oversight. That would put one carrier's words on another carrier's side, which is an explicit
-// owner directive (2026-09-04), so it is not a trade worth making for tidiness.
-//
-// A TILE NEITHER THE REGISTRY NOR THE FALLBACK CLASSIFIES STAYS VISIBLE — the same refusal
-// `_carrier_visible` makes server-side: failing to classify a tile must never hide a report a tenant
-// needs to upload.
-const FILE_TYPES: { id: string; label: string; icon: string; required: boolean; desc: string; mode: UploadMode; carrier?: string }[] = [
-  { id: 'sales',          label: 'Sales Transactions',    icon: '🛍️', required: true,  mode: 'replace_period', desc: 'POS Sales Transaction Details (78-col, all columns)' },
-  { id: 'daily_sales',    label: 'Daily Sales Upload',      icon: '📅', required: false, mode: 'additive_daily', desc: 'Append daily transactions — no period wipe, deduped by Trans ID' },
-  { id: 'payment_detail', label: 'Payment Detail',        icon: '💳', required: true,  mode: 'replace_period', desc: 'Payment Processor Commission Payment Detail', carrier: 'boost' },
-  { id: 'dlar_rep',       label: 'Metrics — Rep Report',  icon: '📊', required: true,  mode: 'replace_period', desc: 'Rep KPI report (per-carrier portal)' },
-  { id: 'dlar_store',     label: 'Metrics — Store Report', icon: '🏪', required: false, mode: 'replace_period', desc: 'Store-level KPI data (per-carrier portal)' },
-  { id: 'mi_report',      label: 'MI & ATU Report',       icon: '💰', required: false, mode: 'replace_period', desc: 'Monthly Incentive + ATU Payout', carrier: 'boost' },
-  { id: 'catalog',        label: 'Product Catalog',       icon: '📱', required: false, mode: 'replace_all',    desc: 'Product catalog + cost/category — the B2B "Product Update" (Product-ID) OR the TOTAL/UPC "Product Catalog Update" variant' },
-  { id: 'master_cats',    label: 'Payment Categories',    icon: '🗂️', required: false, mode: 'replace_all',    desc: 'Payment type → category mapping' },
-  { id: 'comp_report',    label: 'Comprehensive Comp Report', icon: '🏦', required: false, mode: 'replace_period', desc: 'Carrier store-level rebates & MDF' },
-  { id: 'inventory_aging', label: 'Inventory Aging (POS)',  icon: '📦', required: false, mode: 'additive_keyed', desc: 'b2bsoft / any POS inventory aging — per-store value snapshot' },
-  { id: 'x_report',       label: 'X Report (POS tenders)', icon: '🧾', required: false, mode: 'additive_keyed', desc: 'POS daily tenders by type — reconciles vs the daily closing sheet' },
-  // Total / VidaPay Master-Agent portal exports (mig 083) — the Total-side MI/ATU equivalents.
-  // Date-grain: the period derives per ROW, so no period selection; re-uploads are day-idempotent.
-  { id: 'ma_commission',  label: 'MA Commission Details (Total)', icon: '🧾', required: false, mode: 'additive_daily', desc: 'Total/VidaPay per-activation commission detail — spiffs M1–M6, rebates, MRC Net Discount', carrier: 'total' },
-  { id: 'ma_daily_tx',    label: 'MA Daily Tx (Total airtime)', icon: '📆', required: false, mode: 'additive_daily', desc: 'Total/VidaPay daily airtime/top-up transactions — merchant discount = your margin', carrier: 'total' },
-  { id: 'ma_fulfillment', label: 'MA Handset Fulfillment (Total)', icon: '🚚', required: false, mode: 'additive_daily', desc: 'Total/VidaPay marketplace handset fulfillment orders', carrier: 'total' },
-]
-const PERIODLESS = new Set(['catalog', 'master_cats', 'inventory_aging', 'x_report', 'ma_commission', 'ma_daily_tx', 'ma_fulfillment'])
-const TYPE_META = Object.fromEntries(FILE_TYPES.map(t => [t.id, t]))
-
-// The b2b "Activation Details" / "Bill Payment Transactions Processed" / "Sales by Product" reports the
-// owner ingests by email — given direct upload tiles here. Captured through the self-serve custom-import
-// path (the resolver detects each by its columns, not its key), and the tile auto-provisions the sheet on
-// first upload so there is no separate setup step.
-//
-// THESE ARE EXPORTS OF ONE POS, NOT OF A CARRIER. `CUSTOM_REPORTS_POS` is the shipped fallback tag —
-// same posture as the `carrier` tags above, "registry first, shipped tag second": it decides only
-// until the tenant's own `pos_system` term (mig 953) says otherwise. A tenant that has declared a
-// different POS no longer sees this block at all (owner 2026-09-13: "since we declared that the pos is
-// not b2b anymore it is rq that shoud not give the option for b2b any more").
-const CUSTOM_REPORTS_POS = 'b2bsoft'
-// The override key for this block, from the shared registry — so a gated surface is always one a
-// super-admin can re-grant at /admin/labels (owner directive 2026-09-13).
-const CUSTOM_REPORTS_SURFACE = POS_GATED_SURFACES[0].key
-const CUSTOM_REPORTS: { label: string; icon: string; desc: string }[] = [
-  { label: 'Activation Details', icon: '📲', desc: 'b2b Activation Details — one row per activation (Service Plan = the activation). Drives the store activation counts.' },
-  { label: 'Bill Payments', icon: '💵', desc: 'b2b Bill Payment Transactions Processed — powers the bill-payment discounts report.' },
-  { label: 'Sales by Product', icon: '🧾', desc: 'b2b Sales by Product — accessory sales by department (Accessories + C2wireless).' },
-]
-
-// Auto-import sources + the period granularities the user asked for, per source.
+// Auto-import sources + the period granularities the user asked for, per source. These are the
+// portal SWEEPS (connector registry, carrier-scoped by `connector_instances.carrier_id` through
+// GET /upload-registry → tileVisible), not upload choices; the shipped `carrier` tag is the same
+// last-resort fallback the registry overrides. No vendor is named for the POS row: the tenant's
+// own POS word comes from the vocabulary term.
 const AUTO_SOURCES = [
   { id: 'dlar', name: 'Metrics Rep/Store (carrier KPI portal)', icon: '📊', desc: 'Store + Rep KPI reports',
     cfg: 'dlar/sweep/config', run: 'dlar/sweep/run-now', configure: '/commcalc/dlar/sweep',
@@ -111,48 +44,12 @@ const AUTO_SOURCES = [
   { id: 'epay', name: 'Payment Processor Portal', icon: '💰', desc: 'MI · ATU · Commission · Comprehensive · Reconciliation',
     cfg: 'epay/sweep/config', run: 'epay/sweep/run-now', configure: '/commcalc/epay/sweep', carrier: 'boost',
     scopes: [{ v: 'daily', l: 'Daily' }, { v: 'mtd', l: 'Month-to-date' }, { v: 'full', l: 'Full month' }] },
-  { id: 'b2b', name: 'POS (b2bsoft / RTPOS / RQ)', icon: '📦', desc: 'Sales Transaction · Inventory Aging — configure the portal login (2FA) under Data Sources',
+  { id: 'b2b', name: 'POS portal', icon: '📦', desc: 'Sales transactions · inventory aging — configure the portal login (2FA) under Data Sources',
     cfg: 'b2b/sweep/config', run: 'b2b/sweep/run-now', configure: '/commcalc/email-imports#portal-logins',
     scopes: [{ v: 'day', l: 'Single day' }, { v: 'month', l: 'Month' }, { v: 'custom', l: 'Custom range' }] },
-  { id: 'vip', name: 'VIP Wireless portal', icon: '🧾', desc: 'Invoices · PayGo · Credit memos',
+  { id: 'vip', name: 'Distributor portal', icon: '🧾', desc: 'Invoices · PayGo · Credit memos',
     cfg: 'vip/sweep/config', run: 'vip/sweep/run-now', configure: '/commcalc/vip/sweep', carrier: 'boost',
     scopes: [{ v: 'recent', l: 'Recent (lookback)' }, { v: 'full', l: 'Full history' }] },
-]
-
-// Module uploads — files that load into other modules (their own endpoints, not the generic
-// /commcalc/upload/{file_type}). Each posts a multipart file to its own endpoint.
-// Same honesty rules as FILE_TYPES above. `traceKeys` = the upload_type/file_type these endpoints record
-// their ingest under (they are NOT always the tile id); `tracked: false` = the endpoint writes no ingest
-// journal at all (asset + closing are other modules' routers), so the tile shows NO last-upload line
-// rather than a false "no data uploaded yet".
-const MODULE_UPLOADS: { id: string; label: string; icon: string; endpoint: string; needsDate: boolean;
-                        desc: string; mode: UploadMode; traceKeys?: string[]; tracked?: boolean;
-                        carrier?: string }[] = [
-  { id: 'hotsheet',      label: 'Pricing Hotsheet',     icon: '🏷️', endpoint: 'commcalc/hotsheet/upload', needsDate: true,
-    mode: 'additive_keyed', traceKeys: ['hotsheet'],
-    desc: 'Carrier promo pricing by device — powers the Hotsheet expected-vs-paid recon. Pick the effective date.' },
-  { id: 'vip_workbook',  label: 'VIP Wireless Workbook', icon: '🧾', endpoint: 'commcalc/vip/upload', needsDate: false,
-    mode: 'replace_all', traceKeys: ['vip_workbook', 'vip_invoices'], carrier: 'boost',
-    desc: 'Distributor scraper workbook (Invoices / Lines / Devices sheets). Full-replace of Distributor history.' },
-  { id: 'asset_ledger',  label: 'Asset Ledger',         icon: '📒', endpoint: 'asset/upload', needsDate: false,
-    mode: 'replace_all', tracked: false, carrier: 'boost',
-    desc: 'Asset_Lending.xlsx — wipes & re-inserts all asset rows, then backfills market + flags.' },
-  { id: 'daily_closing', label: 'Daily Closing Sheet',  icon: '🧮', endpoint: 'closing/upload', needsDate: false,
-    mode: 'additive_daily', tracked: false,
-    desc: 'Google "Envelopes Data" export — one row per rep per day; idempotent per day.' },
-]
-// Structured (non-file) uploads that live on their own page — linked, not inlined here.
-const MODULE_LINKS: { id: string; label: string; icon: string; href: string; desc: string;
-                      carrier?: string }[] = [
-  { id: 'b2b_inventory', label: 'b2bsoft Inventory', icon: '📦', href: '/commcalc/asset/inventory-recon', carrier: 'boost',
-       desc: 'On-hand inventory by store & category — structured entry/recon, not a single file. Opens its page.' },
-]
-
-// Every report key the "last set of data" lookup should answer for — the manual tiles plus the module
-// uploads that actually record an ingest. Module-scope constant so its identity is stable across renders.
-const LAST_UPLOAD_KEYS = [
-  ...FILE_TYPES.map(t => t.id),
-  ...MODULE_UPLOADS.flatMap(m => m.traceKeys || []),
 ]
 
 type UploadRecord ={ id: string; file_type: string; period: string | null; filename: string | null; rows_saved: number; uploaded_at: string }
@@ -197,20 +94,12 @@ export default function UploadPage() {
     if (haveCarriers.length === 0) return true   // nothing to scope BY ⇒ hide nothing
     return haveCarriers.includes(code) && (!multi || code === activeCarrier)
   }
-  // THE TENANT'S OWN POS, from the one place it is already stored: the `pos_system` vocabulary term
-  // (mig 953 house preset + tenant override, resolved server-side by report_labels.py). The fallback
-  // is deliberately '' and NOT the neutral noun 'POS' — an unresolved term must read as "unknown", so
-  // posVisible hides nothing, rather than as a POS named "POS" that matches none of the tiles.
+  // The tenant's POS vocabulary term (mig 953) — for COPY only ("<POS> email reports"); which tiles
+  // show is the registry's answer below, never a comparison against this string.
   const { term } = useReportLabels()
-  const currentPos = term('pos_system', '')
-  // Per-tenant capability overrides — the SAME map the sidebar's carrier gate reads (ui_label_override
-  // scope 'cap' via GET /commcalc/nav-config). Fail-soft: an unreadable map leaves the gate alone.
-  const [navCaps, setNavCaps] = useState<Record<string, boolean | null>>({})
-  useEffect(() => {
-    api('/api/v1/commcalc/nav-config')
-      .then((r: { capabilities?: Record<string, boolean | null> }) => setNavCaps(r?.capabilities || {}))
-      .catch(() => setNavCaps({}))
-  }, [])
+  // THE REGISTRY: which report kinds this tenant may upload, with provenance — the one visibility
+  // function, run in the hook. `allows(routeKey)` gates every tile block on this page.
+  const kinds = useReportKinds()
   const [uploading, setUploading] = useState<string | null>(null)
   const [statuses, setStatuses] = useState<Record<string, 'idle'|'uploading'|'done'|'error'|'warn'>>({})
   const [messages, setMessages] = useState<Record<string, string>>({})
@@ -220,10 +109,10 @@ export default function UploadPage() {
   const [showHistory, setShowHistory] = useState(false)
   // "when was the last set of data uploaded", per report — folds upload_trace (every ingest path,
   // incl. the hourly email sweep) with upload_log. Reloaded after every upload on this page.
-  const { last: lastData, loaded: lastLoaded, hint: lastHint, reload: reloadLast } = useLastUploads(LAST_UPLOAD_KEYS)
+  const { last: lastData, loaded: lastLoaded, hint: lastHint, reload: reloadLast } = useLastUploads(ALL_TRACE_KEYS)
 
   // The newest landed record across a module upload's trace keys (vip logs under two different keys).
-  const moduleLast = (entry: typeof MODULE_UPLOADS[number]) => {
+  const moduleLast = (entry: ModuleRoute) => {
     const recs = (entry.traceKeys || []).map(k => lastData[k]).filter(Boolean)
     if (!recs.length) return null
     return recs.reduce((a, b) => (!a?.last_at ? b : !b?.last_at ? a : (a.last_at! >= b.last_at! ? a : b)))
@@ -308,7 +197,7 @@ export default function UploadPage() {
     setUploading(null)
   }
 
-  async function handleModuleUpload(entry: typeof MODULE_UPLOADS[number], file: File) {
+  async function handleModuleUpload(entry: ModuleRoute, file: File) {
     if (entry.needsDate && !(modDate[entry.id] || '').trim()) { alert('Pick an effective date for the hotsheet first'); return }
     setUploading(entry.id); setStatuses(s => ({ ...s, [entry.id]: 'uploading' }))
     const form = new FormData(); form.append('file', file)
@@ -326,32 +215,38 @@ export default function UploadPage() {
     setUploading(null)
   }
 
-  // The 3 b2b reports the owner ingests by email (Activation Details / Bill Payments / Sales by Product),
-  // uploadable HERE directly. Each is captured through the self-serve custom-import path; the report's
-  // dataset detects it by column SIGNATURE, so the report_key doesn't matter — the tile auto-PROVISIONS the
-  // custom sheet on first upload (POST /custom-import-types) so there is no separate setup step, then posts
-  // the file through the SAME /upload/<report_key> capture as every other tile. Status/messages keyed by the
-  // report's fixed label.
-  async function uploadCustomReport(rep: typeof CUSTOM_REPORTS[number], file: File) {
+  // A registry kind captured as a self-serve custom-import sheet (mig 099). The tile auto-PROVISIONS
+  // the sheet on first upload (POST /custom-import-types) so there is no separate setup step, then posts
+  // the file through the SAME /upload/<report_key> capture as every other tile. Status/messages keyed by
+  // the sheet label the registry row carries.
+  async function uploadCustomReport(rep: ReportKindRow, file: File) {
+    const label = rep.custom_sheet_label || rep.label
     if (!period.trim()) { alert('Enter the period this data is for first'); return }
-    setStatuses(s => ({ ...s, [rep.label]: 'uploading' }))
+    setStatuses(s => ({ ...s, [label]: 'uploading' }))
     try {
-      let key = customTypes.find((c: any) => (c.label || '').trim().toLowerCase() === rep.label.toLowerCase())?.report_key
+      let key = customTypes.find((c: any) => (c.label || '').trim().toLowerCase() === label.toLowerCase())?.report_key
       if (!key) {
-        const r: any = await api('/api/v1/commcalc/custom-import-types', { method: 'POST', body: JSON.stringify({ label: rep.label }) })
+        const r: any = await api('/api/v1/commcalc/custom-import-types', { method: 'POST', body: JSON.stringify({ label }) })
         key = r.report_key; await loadCustomTypes()
       }
       const form = new FormData(); form.append('file', file)
       const data = await apiUpload(`/api/v1/commcalc/upload/${encodeURIComponent(key)}?period=${encodeURIComponent(period)}&org_id=${ORG_ID}`, form)
       const o = readUploadOutcome(data, 'rows')
-      setStatuses(s => ({ ...s, [rep.label]: o.tone === 'ok' ? 'done' : 'warn' }))
-      setMessages(m => ({ ...m, [rep.label]: (o.tone === 'ok' ? '✅ ' : '⚠️ ') + o.text }))
+      setStatuses(s => ({ ...s, [label]: o.tone === 'ok' ? 'done' : 'warn' }))
+      setMessages(m => ({ ...m, [label]: (o.tone === 'ok' ? '✅ ' : '⚠️ ') + o.text }))
       loadHistory(); reloadLast(); loadCustomTypes()
     } catch (e: any) {
-      setStatuses(s => ({ ...s, [rep.label]: 'error' }))
-      setMessages(m => ({ ...m, [rep.label]: `❌ ${e.message || e}` }))
+      setStatuses(s => ({ ...s, [label]: 'error' }))
+      setMessages(m => ({ ...m, [label]: `❌ ${e.message || e}` }))
     }
   }
+
+  // THE FIVE TILE SETS, each derived from the registry — a route with no visible registry row is not
+  // rendered, and before the registry answers nothing is (design §7: show less and say why).
+  const periodTiles = kinds.loaded && !kinds.error ? Object.values(PERIOD_META).filter(t => kinds.allows(t.id) && tileVisible(t.id)) : []
+  const moduleTiles = kinds.loaded && !kinds.error ? Object.values(MODULE_ROUTES).filter(m => kinds.allows(m.id) && tileVisible(m.id)) : []
+  const linkTiles = kinds.loaded && !kinds.error ? Object.values(LINK_ROUTES).filter(l => kinds.allows(l.id) && tileVisible(l.id)) : []
+  const customTiles = kinds.loaded && !kinds.error ? kinds.forSurface('upload').filter(k => !!k.custom_sheet_label) : []
 
   return (
     <div>
@@ -440,9 +335,9 @@ export default function UploadPage() {
           <div style={{ borderTop: '1px solid var(--border)', maxHeight: 320, overflowY: 'auto' }}>
             {history.length === 0 ? <div style={{ padding: 16, color: 'var(--text3)', fontSize: 13 }}>No uploads recorded yet.</div> : (
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}><tbody>
-                {history.map(h => { const meta = TYPE_META[h.file_type]; return (
+                {history.map(h => { const meta = PERIOD_META[h.file_type]; return (
                   <tr key={h.id} style={{ borderTop: '1px solid var(--border)' }}>
-                    <td style={{ padding: '8px 14px', whiteSpace: 'nowrap' }}><span style={{ marginRight: 6 }}>{meta?.icon || '📄'}</span>{meta?.label || h.file_type}</td>
+                    <td style={{ padding: '8px 14px', whiteSpace: 'nowrap' }}><span style={{ marginRight: 6 }}>{meta?.icon || '📄'}</span>{kinds.labelFor(h.file_type, meta?.label || h.file_type)}</td>
                     <td style={{ padding: '8px 14px', color: 'var(--text2)', whiteSpace: 'nowrap' }}>{h.period || '—'}</td>
                     <td style={{ padding: '8px 14px', color: 'var(--text3)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.filename || ''}</td>
                     <td style={{ padding: '8px 14px', color: 'var(--text2)', textAlign: 'right', whiteSpace: 'nowrap' }}>{h.rows_saved.toLocaleString()} rows</td>
@@ -456,6 +351,21 @@ export default function UploadPage() {
       </div>
 
       <div style={{ fontWeight: 700, fontSize: 14, margin: '0 0 10px' }}>📁 Manual upload</div>
+      {/* WHAT DECIDES THE TILES BELOW — said out loud. The registry's declaration, what it withheld and
+          why, and whether it is the live table or the shipped mirror (mig 1010 not yet applied). */}
+      {!kinds.loaded ? (
+        <div style={{ color: 'var(--text3)', fontSize: 12, margin: '0 0 12px' }}>Reading which report kinds this company may upload…</div>
+      ) : kinds.error ? (
+        <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#991b1b', margin: '0 0 12px' }}>
+          ⚠️ The report-kind registry could not be read ({kinds.error}) — the upload tiles are withheld rather than guessed. Reload, or ask the platform team.
+        </div>
+      ) : (
+        <div style={{ color: 'var(--text3)', fontSize: 12, margin: '0 0 12px' }}>
+          Offered for {kinds.declaration?.pos?.length ? <>POS <b>{kinds.declaration.pos.join(' / ')}</b></> : 'no declared POS'} · {kinds.declaration?.carriers?.length ? <>carrier <b>{kinds.declaration.carriers.join(' / ')}</b></> : 'no declared carrier'}
+          {!kinds.ready && <> · registry table not applied yet — showing the house defaults ({kinds.payload?.migration})</>}
+          {kinds.withheld && <> · {kinds.withheld}</>}
+        </div>
+      )}
       {/* If an ingest journal is missing (mig 202 / 007 not run on this deployment) the "Last upload"
           lines below are INCOMPLETE — say so rather than letting a tile read as "never uploaded". */}
       {lastHint && (
@@ -464,7 +374,7 @@ export default function UploadPage() {
         </div>
       )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
-        {FILE_TYPES.filter(t => tileVisible(t.id, t.carrier)).map(({ id, label, icon, required, desc, mode }) => {
+        {periodTiles.map(({ id, label, icon, required, desc, mode }) => {
           const status = statuses[id] || 'idle'; const msg = messages[id] || ''; const prior = lastUpload(id)
           // "has data already" for the BUTTON wording = anything this report ever ingested (not just the
           // selected period) — a day-grain feed has no period badge at all.
@@ -475,7 +385,7 @@ export default function UploadPage() {
                 <span style={{ fontSize: 28 }}>{icon}</span>
                 <div style={{ flex: 1 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ fontWeight: 600, fontSize: 14 }}>{label}</span>
+                    <span style={{ fontWeight: 600, fontSize: 14 }}>{kinds.labelFor(id, label)}</span>
                     {required && <span style={{ fontSize: 10, background: '#fee2e2', color: '#dc2626', padding: '1px 6px', borderRadius: 999, fontWeight: 600 }}>Required</span>}
                     {prior && <span style={{ fontSize: 10, background: '#dcfce7', color: '#15803d', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>✓ Uploaded</span>}
                   </div>
@@ -508,14 +418,14 @@ export default function UploadPage() {
         📦 Module uploads <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>— files that feed the asset, Distributor, hotsheet &amp; daily-closing modules</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
-        {MODULE_UPLOADS.filter(entry => tileVisible(entry.id, entry.carrier)).map(entry => {
+        {moduleTiles.map(entry => {
           const status = statuses[entry.id] || 'idle'; const msg = messages[entry.id] || ''
           return (
             <div key={entry.id} className="card" style={{ border: status === 'done' ? '1px solid #86efac' : status === 'error' ? '1px solid #fca5a5' : undefined, background: status === 'done' ? '#f0fdf4' : status === 'error' ? '#fef2f2' : undefined }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                 <span style={{ fontSize: 28 }}>{entry.icon}</span>
                 <div style={{ flex: 1 }}>
-                  <span style={{ fontWeight: 600, fontSize: 14 }}>{entry.label}</span>
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>{kinds.labelFor(entry.id, entry.label)}</span>
                   <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 6px' }}>{entry.desc}</div>
                   <div style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 10px' }}>{MODE_UI[entry.mode].explain}</div>
                   {entry.needsDate && (
@@ -539,12 +449,12 @@ export default function UploadPage() {
             </div>
           )
         })}
-        {MODULE_LINKS.filter(link => tileVisible(link.id, link.carrier)).map(link => (
+        {linkTiles.map(link => (
           <a key={link.id} href={link.href} className="card" style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
               <span style={{ fontSize: 28 }}>{link.icon}</span>
               <div style={{ flex: 1 }}>
-                <span style={{ fontWeight: 600, fontSize: 14 }}>{link.label} <span style={{ fontSize: 11, color: 'var(--text3)' }}>↗</span></span>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>{kinds.labelFor(link.id, link.label)} <span style={{ fontSize: 11, color: 'var(--text3)' }}>↗</span></span>
                 <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 0' }}>{link.desc}</div>
               </div>
             </div>
@@ -552,33 +462,31 @@ export default function UploadPage() {
         ))}
       </div>
 
-      {/* ── The 3 b2b reports ingested by email — direct upload links here (owner 2026-08-26). Each posts
-          through the SAME /upload/<report_key> capture as the built-in tiles (so it can't freeze differently),
-          auto-provisioning its sheet on first upload. Period-scoped (re-uploading a period replaces it).
-
-          GATED ON THE TENANT'S POS since 2026-09-13. This was the ONE tile block on this page with no
-          visibility filter at all — every other block already asks tileVisible — so a tenant that had
-          declared a different POS was still offered another POS's exports. The heading now names the
-          tenant's OWN system from the resolved term rather than a hardcoded brand. */}
-      {posOK(CUSTOM_REPORTS_SURFACE, CUSTOM_REPORTS_POS, currentPos, navCaps) && (<>
+      {/* ── Registry kinds captured as custom-import sheets (the POS email reports). Each posts through
+          the SAME /upload/<report_key> capture as the built-in tiles, auto-provisioning its sheet on first
+          upload. Period-scoped (re-uploading a period replaces it). WHICH of these show is the registry's
+          answer — a kind whose applies-to POS is not the declared one is simply not a row here. */}
+      {customTiles.length > 0 && (<>
       <div style={{ fontWeight: 700, fontSize: 14, margin: '24px 0 10px' }}>
-        📥 {term('pos_system', 'POS')} email reports <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>— upload the Activation Details, Bill Payment &amp; Sales-by-Product exports here too</span>
+        📥 {term('pos_system', 'POS')} email reports <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>— upload the exports your POS emails here too</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
-        {CUSTOM_REPORTS.map(rep => {
-          const status = statuses[rep.label] || 'idle'; const msg = messages[rep.label] || ''
-          const landed = customTypes.find((c: any) => (c.label || '').trim().toLowerCase() === rep.label.toLowerCase())
+        {customTiles.map(rep => {
+          const label = rep.custom_sheet_label || rep.label
+          const status = statuses[label] || 'idle'; const msg = messages[label] || ''
+          const landed = customTypes.find((c: any) => (c.label || '').trim().toLowerCase() === label.toLowerCase())
           return (
-            <div key={rep.label} className="card" style={{ border: status === 'done' ? '1px solid #86efac' : status === 'error' ? '1px solid #fca5a5' : status === 'warn' ? '1px solid #fcd34d' : undefined, background: status === 'done' ? '#f0fdf4' : status === 'error' ? '#fef2f2' : status === 'warn' ? '#fffbeb' : undefined }}>
+            <div key={rep.key} className="card" style={{ border: status === 'done' ? '1px solid #86efac' : status === 'error' ? '1px solid #fca5a5' : status === 'warn' ? '1px solid #fcd34d' : undefined, background: status === 'done' ? '#f0fdf4' : status === 'error' ? '#fef2f2' : status === 'warn' ? '#fffbeb' : undefined }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                <span style={{ fontSize: 28 }}>{rep.icon}</span>
+                <span style={{ fontSize: 28 }}>📥</span>
                 <div style={{ flex: 1 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ fontWeight: 600, fontSize: 14 }}>{rep.label}</span>
                     {(landed?.rows || 0) > 0 && <span style={{ fontSize: 10, background: '#dcfce7', color: '#15803d', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>{Number(landed.rows).toLocaleString()} rows</span>}
+                    <span style={{ fontSize: 10, color: 'var(--text3)' }}>{rep.provenance_text}</span>
                   </div>
-                  <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 6px' }}>{rep.desc}</div>
-                  <div style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 10px' }}>Captured as-is; re-uploading a period replaces it (the b2b MTD export is cumulative).</div>
+                  <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 6px' }}>{rep.what_in_it}{rep.source_hint ? ` — ${rep.source_hint}` : ''}</div>
+                  <div style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 10px' }}>Captured as-is; re-uploading a period replaces it (a cumulative MTD export is safe to re-upload).</div>
                   {status === 'uploading' ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text2)', fontSize: 13 }}><div className="spinner" />Uploading...</div>
                   ) : (
@@ -613,14 +521,14 @@ export default function UploadPage() {
           than growing a second copy of it.
 
           RULE TWO: nothing here names a carrier. The list, the labels and the ordering are all rows. */}
-      {registryReports.filter(r => !TYPE_META[r.report_key] && tileVisible(r.report_key, r.carrier_code || undefined)).length > 0 && (
+      {registryReports.filter(r => !PERIOD_META[r.report_key] && tileVisible(r.report_key, r.carrier_code || undefined)).length > 0 && (
         <>
           <div style={{ fontWeight: 700, fontSize: 14, margin: '24px 0 10px' }}>
             🧾 Your carrier&apos;s reports <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>— registered for this tenant; mapped once, then imported</span>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
             {registryReports
-              .filter(r => !TYPE_META[r.report_key] && tileVisible(r.report_key, r.carrier_code || undefined))
+              .filter(r => !PERIOD_META[r.report_key] && tileVisible(r.report_key, r.carrier_code || undefined))
               .map(r => (
                 <a key={r.report_key} href="/commcalc/implementation" className="card"
                    style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
