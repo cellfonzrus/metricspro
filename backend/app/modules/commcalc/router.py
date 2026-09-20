@@ -4637,6 +4637,33 @@ def _ledger_convention_for(client, org_id, carrier_id=""):
         return commission_ledger.convention_from_mapping([])
 
 
+def _ledger_buckets(client, org_id):
+    """(buckets, meta) — THE org's bucket registry (commcalc.commission_bucket, mig 1009): the house
+    org's defaults with this org's rows overriding per key, both reads org-scoped. A database without
+    the table returns the built-in mirror of the seed with meta['ready']=False, for DISPLAY only —
+    see _ledger_bucket_guard for what may not be BOOKED until it exists. Never raises."""
+    try:
+        return commission_ledger.load_buckets_meta(client, org_id)
+    except Exception:
+        return commission_ledger.builtin_buckets(), {"ready": False, "migration": commission_ledger.BUCKET_MIGRATION,
+                                                      "source": commission_ledger.BUCKETS_BUILTIN}
+
+
+def _ledger_bucket_guard(client, org_id, rows, buckets_meta=None):
+    """REFUSE (400) to land rows that book to a bucket with no amount column of its own while the
+    registry table (mig 1009) is absent — the database could not say what that key IS (its kind, its
+    sign, its P&L line), so the line would be a category string nobody can read back honestly. Names
+    the migration. Column-backed buckets, 'charge', 'other' and 'exclude' are unaffected; a database
+    WITH the table never refuses here."""
+    meta = buckets_meta if buckets_meta is not None else _ledger_buckets(client, org_id)[1]
+    bad = commission_ledger.unbookable_categories(rows, meta)
+    if bad:
+        raise HTTPException(400, f"{sum(1 for r in rows if r.get('category') in bad)} line(s) would book to "
+                                 f"bucket(s) {', '.join(bad)}, which need the bucket registry — apply migration "
+                                 f"{commission_ledger.BUCKET_MIGRATION} first. Nothing was written and nothing "
+                                 "was re-bucketed.")
+
+
 def _ledger_footer_drop(rows, client, org_id):
     """Drop a statement's own GRAND-TOTAL row from a set of MAPPED ledger source rows. Returns
     (kept, dropped). REUSES the mig-1004 feed-shape rule (column_mapping.drop_footer_rows ->
@@ -4710,6 +4737,7 @@ def _ledger_land_rows(client, org_id, rows, source_report, period, filename=None
     # to today's exact statement, so behaviour is byte-identical until the migration runs.
     if not rows:
         raise HTTPException(400, "No usable rows — check the column mapping for this file.")
+    _ledger_bucket_guard(client, org_id, rows)          # BEFORE the wipe: refuse, never half-land
     if period:
         try:
             _ledger_delete_scoped(client, org_id, source_report, period, ledger_ma_sync.ORIGIN_FILE)
@@ -4765,20 +4793,23 @@ async def commission_ledger_import(
     # UNTOUCHED, so classification is byte-identical. In 'class' mode it attaches the tenant's CONFIRMED
     # product-class index to any product_class rule.
     cat_rules, _class_meta = ma_class_wiring.ledger_rules_with_class(client, org_id, source_report, cat_rules)
+    buckets, bmeta = _ledger_buckets(client, org_id)
     base = {"org_id": org_id, "source_report": source_report}
     if period:
         base["period"] = period
     mapped = _ledger_map_records(df.to_dict("records"), hdr_rules)
     mapped, footer_rows = _ledger_footer_drop(mapped, client, org_id)
-    rows = [commission_ledger.build_row(src, base, cat_rules, conv) for src in mapped]
+    rows = [commission_ledger.build_row(src, base, cat_rules, conv, buckets) for src in mapped]
     if not rows:
         raise HTTPException(400, "No usable rows — check the column mapping for this file.")
     saved = _ledger_land_rows(client, org_id, rows, source_report, period,
                               filename=getattr(file, "filename", None), source="ledger-import")
-    summary = commission_ledger.summarize(rows, rules=cat_rules, conv=conv)
+    summary = commission_ledger.summarize(rows, rules=cat_rules, conv=conv, buckets=buckets, buckets_meta=bmeta)
     return {"saved": saved, "source_report": source_report, "period": period, "summary": summary,
             "rules_source": rules_source, "convention": conv, "convention_meta": conv_meta,
-            "footer_rows_dropped": footer_rows}
+            "footer_rows_dropped": footer_rows,
+            "categories": commission_ledger.bucket_keys(buckets), "category_labels": commission_ledger.bucket_labels(buckets),
+            "buckets": buckets, "bucket_meta": bmeta}
 
 
 @router.post("/commission-ledger/analyze")
@@ -4805,10 +4836,11 @@ async def commission_ledger_analyze(
     cat_rules, rules_source = commission_ledger.load_rules_meta(client, org_id, source_report)
     conv, conv_meta = _ledger_convention(hdr_rules)
     cat_rules, class_meta = ma_class_wiring.ledger_rules_with_class(client, org_id, source_report, cat_rules)
+    buckets, bmeta = _ledger_buckets(client, org_id)
     mapped = _ledger_map_records(df.to_dict("records"), hdr_rules)
     mapped, footer_rows = _ledger_footer_drop(mapped, client, org_id)
     rows = [commission_ledger.build_row(src, {"org_id": org_id, "source_report": source_report},
-                                        cat_rules, conv) for src in mapped]
+                                        cat_rules, conv, buckets) for src in mapped]
     agg = {}
     for r in rows:
         key = (r.get("order_type") or "", r.get("product_name") or "")
@@ -4820,11 +4852,12 @@ async def commission_ledger_analyze(
     amount_src = next((s["suggested_source"] for s in suggestions if s["target_field"] == "raw_amount"), "")
     return {"headers": headers, "row_count": int(len(df)), "usable_rows": len(rows),
             "suggestions": suggestions, "amount_source": amount_src,
-            "summary": commission_ledger.summarize(rows, rules=cat_rules, conv=conv),
+            "summary": commission_ledger.summarize(rows, rules=cat_rules, conv=conv, buckets=buckets, buckets_meta=bmeta),
             "observed": observed, "class_wiring": class_meta,
             "rules_source": rules_source, "convention": conv, "convention_meta": conv_meta,
             "footer_rows_dropped": footer_rows,
-            "categories": commission_ledger.CATEGORIES, "category_labels": commission_ledger.CATEGORY_LABELS}
+            "categories": commission_ledger.bucket_keys(buckets), "category_labels": commission_ledger.bucket_labels(buckets),
+            "buckets": buckets, "bucket_meta": bmeta}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -5115,11 +5148,15 @@ def _intake_prepare_commission(client, org_id, contents, filename, carrier_id, s
     labels = _intake.label_summary(kept, conv)
     cat_rules, rules_source = commission_ledger.load_rules_meta(client, org_id, source_report)
     tenant_rules = cat_rules if rules_source == commission_ledger.RULES_TENANT else []
-    labels = _intake.suggest_buckets(labels, tenant_rules, house_cats, carrier.get("name") or code)
+    # THE BUCKETS ARE THE REGISTRY (mig 1009): the org's merged rows, their kinds and their hint words
+    buckets, bmeta = _ledger_buckets(client, org_id)
+    bucket_keys = commission_ledger.bucket_keys(buckets)
+    labels = _intake.suggest_buckets(labels, tenant_rules, house_cats, carrier.get("name") or code, buckets=buckets)
+    blank_issue = _intake.blank_label_issue(labels)
     assignments = _intake_json(assignments_json, "assignments", None)
     if assignments is None:
         assignments = [{"label": a["label"], "match_field": a.get("match_field"), "bucket": a["bucket"],
-                        "is_reversal": bool(a.get("reversal_flag"))} for a in labels if a["bucket"] in _intake.BUCKETS]
+                        "is_reversal": bool(a.get("reversal_flag"))} for a in labels if a["bucket"] in bucket_keys]
     elif not isinstance(assignments, list):
         raise HTTPException(400, "assignments must be a JSON list of {label, bucket, is_reversal}")
     by_label = {a["label"]: a for a in labels}
@@ -5137,13 +5174,15 @@ def _intake_prepare_commission(client, org_id, contents, filename, carrier_id, s
     store_rows = _intake.resolve_stores(identity.get("store") or [], _intake_store_resolver(client, org_id),
                                         decisions.get("store") or {}, allow_company_level=True)
     # 3.8 preview — IN MEMORY, from the same rows the commit would build; the commit re-reads the DB
-    preview_rules = _intake.rules_for_assignments(source_report, assignments)
+    preview_rules = _intake.rules_for_assignments(source_report, assignments, buckets)
     built = [commission_ledger.build_row(src, {"org_id": org_id, "source_report": source_report},
-                                         preview_rules, conv) for src in kept] if conv else []
-    totals = _intake.bucket_totals(built) if conv else None
+                                         preview_rules, conv, buckets) for src in kept] if conv else []
+    totals = _intake.bucket_totals(built, buckets) if conv else None
     tie = (_intake.tie_out(totals, footer["file_total_raw"], conv["payout_sign"], typed_total)
            if conv else None)
-    banners = _intake.sanity_banners(assignments, totals, conv["payout_sign"]) if conv else []
+    banners = _intake.sanity_banners(assignments, totals, conv["payout_sign"], buckets) if conv else []
+    if blank_issue:
+        banners = [blank_issue["message"]] + banners
     amount_header = next((p["column"] for p in proposal if p["target_field"] == _intake.AMOUNT_FIELD), "")
     text_headers = [p["column"] for p in proposal if p["column"] and (p.get("transform") or "text") != "number"]
     return {
@@ -5153,6 +5192,7 @@ def _intake_prepare_commission(client, org_id, contents, filename, carrier_id, s
         "kept": kept, "footers": footers, "footer": footer, "identity_fields": ident,
         "stored_meta": stored_meta, "stored_answer": stored_answer, "answer": answer,
         "conv_name": conv_name, "conv": conv, "labels": labels, "rules_source": rules_source,
+        "buckets": buckets, "bucket_meta": bmeta, "blank_issue": blank_issue,
         "assignments": assignments, "preview_rules": preview_rules, "built": built, "totals": totals,
         "tie": tie, "banners": banners, "typed_total": typed_total,
         "money_columns": _intake.money_columns(headers, records, amount_header, text_headers),
@@ -5467,8 +5507,12 @@ def _intake_payload(ctx):
             "sign": {**_intake.sign_panels(ctx["kept"]), "answer": ctx["answer"],
                      "stored_answer": ctx["stored_answer"], "stored": ctx["stored_meta"],
                      "convention": ctx["conv_name"], "answered": bool(ctx["conv_name"])},
-            "labels": ctx["labels"], "buckets": _intake.BUCKETS, "bucket_labels": _intake.BUCKET_LABELS,
-            "unassigned": _intake.unassigned_labels(ctx["labels"], ctx["assignments"]),
+            "labels": [l for l in ctx["labels"] if l.get("label") != _intake.BLANK_LABEL],
+            "buckets": commission_ledger.bucket_keys(ctx["buckets"]),
+            "bucket_labels": _intake.bucket_labels(ctx["buckets"]),
+            "bucket_rows": ctx["buckets"], "bucket_meta": ctx["bucket_meta"],
+            "blank_label": ctx["blank_issue"],
+            "unassigned": _intake.unassigned_labels(ctx["labels"], ctx["assignments"], ctx["buckets"]),
             "assignments": ctx["assignments"], "rules_source": ctx["rules_source"],
             "identity": ctx["identity"],
             "verify": {"basis": "preview — computed from the parsed file; the commit re-reads the landed rows",
@@ -5534,8 +5578,10 @@ def onboarding_intake_state(instance_key: str = "", org_id: str = ORG_ID):
                                  for k in _intake.SOURCE_KINDS],
                 "inventory_none_key": _intake.INVENTORY_NONE_KEY,
                 "statement_type_default": _intake.STATEMENT_TYPE_DEFAULT,
-                "sign_question": _intake.SIGN_QUESTION,
-                "buckets": _intake.BUCKETS, "bucket_labels": _intake.BUCKET_LABELS})
+                "sign_question": _intake.SIGN_QUESTION})
+    _b, _bm = _ledger_buckets(client, org_id)
+    out.update({"buckets": commission_ledger.bucket_keys(_b), "bucket_labels": _intake.bucket_labels(_b),
+                "bucket_rows": _b, "bucket_meta": _bm})
     return out
 
 
@@ -5691,7 +5737,7 @@ def _intake_reread(client, org_id, source_report, period):
     rows, lo = [], 0
     while True:
         q = (client.schema("commcalc").table("commission_ledger")
-             .select("category,payout_total,raw_amount,product_name,order_type")
+             .select("category,payout_total,raw_amount,product_name,order_type,is_payout")
              .eq("org_id", org_id).eq("source_report", source_report).eq("period", period))
         if origin_ok:
             q = q.eq("origin", ledger_ma_sync.ORIGIN_FILE)
@@ -5985,7 +6031,14 @@ def _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who
     per = (period or "").strip()
     if not per:
         raise HTTPException(400, "period is required (e.g. 'August 2026') — it is the slice this statement owns")
-    refusals = _intake.commit_refusals(ctx["answer"], ctx["labels"], ctx["assignments"], ctx["tie"], att)
+    refusals = _intake.commit_refusals(ctx["answer"], ctx["labels"], ctx["assignments"], ctx["tie"], att, ctx["buckets"])
+    # A bucket with no column of its own needs the registry (mig 1009) before a line may be BOOKED to
+    # it — refused here, BEFORE the mapping / rules are written, naming the migration.
+    _needs_registry = commission_ledger.unbookable_categories(
+        [{"category": str(a.get("bucket") or "")} for a in ctx["assignments"]], ctx["bucket_meta"])
+    if _needs_registry:
+        refusals.append(f"3.6: bucket(s) {', '.join(_needs_registry)} need the bucket registry — apply migration "
+                        f"{commission_ledger.BUCKET_MIGRATION} first (nothing is re-bucketed on your behalf).")
     unresolved = _intake.unresolved_stores(ctx["stores"])
     if unresolved:
         refusals.append(f"3.7: {len(unresolved)} store string(s) are unresolved: " + ", ".join(unresolved[:8])
@@ -6044,8 +6097,8 @@ def _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who
     identity_written = _intake_apply_identity(client, org_id, ctx["stores"], [], who)
     # (d) BUILD from the confirmed map + the rules READ BACK, land through the import's own path
     base = {"org_id": org_id, "source_report": source_report, "period": per}
-    rows = [commission_ledger.build_row(src, base, cat_rules, conv) for src in ctx["kept"]]
-    expected = _intake.bucket_totals(rows)
+    rows = [commission_ledger.build_row(src, base, cat_rules, conv, ctx["buckets"]) for src in ctx["kept"]]
+    expected = _intake.bucket_totals(rows, ctx["buckets"])
     expected_tie = _intake.tie_out(expected, ctx["footer"]["file_total_raw"], conv["payout_sign"], typed_total)
     if expected_tie.get("match") is False and not str(att.get("reason") or "").strip():
         raise HTTPException(400, f"With the rules as saved, our total {expected_tie['our_total']:,.2f} differs "
@@ -6055,7 +6108,7 @@ def _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who
                               filename=fname, source="onboarding-intake")
     # (e) RE-READ what landed. What we show is what is in the table, not what was in memory.
     landed = _intake_reread(client, org_id, source_report, per)
-    totals = _intake.bucket_totals(landed)
+    totals = _intake.bucket_totals(landed, ctx["buckets"])
     tie = _intake.tie_out(totals, ctx["footer"]["file_total_raw"], conv["payout_sign"], typed_total)
     count_ok = len(landed) == len(rows) == saved
     tie_ok = bool(tie.get("match")) or bool(str(att.get("reason") or "").strip())
@@ -6099,7 +6152,9 @@ def _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who
             "rules_saved": len(ctx["preview_rules"]), "rules_source": rules_source,
             "identity_written": identity_written,
             "verified_numbers": verified_numbers, "state": state,
-            "summary": commission_ledger.summarize(rows, rules=cat_rules, conv=conv)}
+            "buckets": commission_ledger.bucket_keys(ctx["buckets"]), "bucket_labels": _intake.bucket_labels(ctx["buckets"]),
+            "summary": commission_ledger.summarize(rows, rules=cat_rules, conv=conv, buckets=ctx["buckets"],
+                                                   buckets_meta=ctx["bucket_meta"])}
 
 
 def _ledger_class_wiring_meta(client, org_id, source_report):
@@ -6143,10 +6198,12 @@ def commission_ledger_summary(source_report: str = "ma_daily_tx", period: str = 
     except Exception:
         _rules, _rules_source = None, None
     _conv, _conv_meta = _ledger_convention_for(_client, org_id)
+    _buckets, _bmeta = _ledger_buckets(_client, org_id)
     return {"source_report": source_report, "period": period, "origin": origin or None,
             "rules_source": _rules_source, "convention": _conv, "convention_meta": _conv_meta,
             **commission_ledger.summarize(rows, rules=_rules, conv=_conv,
-                                          legcls=_org_leg_classifier(_client, org_id))}
+                                          legcls=_org_leg_classifier(_client, org_id),
+                                          buckets=_buckets, buckets_meta=_bmeta)}
 
 
 @router.get("/commission-ledger/rows")
@@ -6230,11 +6287,16 @@ def commission_ledger_by_rep(source_report: str = "ma_daily_tx", period: str = "
     never touches the live calc. Empty (not 500) if migration 071 isn't applied yet."""
     require_org(org_id)
     client = sb()
-    CATS = commission_ledger.CATEGORIES
+    # THE BUCKETS ARE THE REGISTRY (mig 1009): the five column-backed ones are read off their columns
+    # exactly as before; every other bucket (a deduction, or one the tenant defined) is read by
+    # (category, payout_total). `ledger_payout` is the NET (earned + deductions, signed).
+    buckets, bmeta = _ledger_buckets(client, org_id)
+    CATS = commission_ledger.bucket_keys(buckets)
+    COLS = [c for c in CATS if c in commission_ledger.COLUMN_BACKED]
     # 1. ledger payouts for this template/period, grouped by canonical rep
     try:
         q = (client.schema("commcalc").table("commission_ledger")
-             .select("rep_user,payout_total," + ",".join(CATS))
+             .select("rep_user,payout_total,category," + ",".join(COLS))
              .eq("org_id", org_id).eq("source_report", source_report))
         if period:
             q = q.in_("period", _pvariants(period))
@@ -6250,8 +6312,11 @@ def commission_ledger_by_rep(source_report: str = "ma_daily_tx", period: str = "
         a = reps.setdefault(rep, {"rep": rep, "lines": 0, "ledger_payout": 0.0, **{c: 0.0 for c in CATS}})
         a["lines"] += 1
         a["ledger_payout"] = round(a["ledger_payout"] + safe_float(r.get("payout_total")), 2)
-        for c in CATS:
+        for c in COLS:
             a[c] = round(a[c] + safe_float(r.get(c)), 2)
+        _cat = str(r.get("category") or "")
+        if _cat in CATS and _cat not in commission_ledger.COLUMN_BACKED:
+            a[_cat] = round(a[_cat] + safe_float(r.get("payout_total")), 2)
     # 2. live rep_commissions payout for the same period, keyed by the same canonical name
     live = {}
     if period:
@@ -6277,7 +6342,8 @@ def commission_ledger_by_rep(source_report: str = "ma_daily_tx", period: str = "
               "live_payout": round(sum((a.get("live_payout") or 0.0) for a in out), 2),
               **{c: round(sum(a[c] for a in out), 2) for c in CATS}}
     return {"source_report": source_report, "period": period, "reps": out, "totals": totals,
-            "categories": CATS, "category_labels": commission_ledger.CATEGORY_LABELS,
+            "categories": CATS, "category_labels": commission_ledger.bucket_labels(buckets),
+            "buckets": buckets, "bucket_meta": bmeta,
             "matched_count": sum(1 for a in out if a["matched"]), "rep_count": len(out)}
 
 
@@ -6297,9 +6363,11 @@ def commission_ledger_templates(org_id: str = ORG_ID):
                  any(r.get("report_key") == s for r in cfg)]
         t["ma_syncable"] = bool(known)
         t["ma_sources"] = known
+    _b, _bm = _ledger_buckets(client, org_id)
     return {"templates": tmpls,
-            "categories": commission_ledger.CATEGORIES,
-            "category_labels": commission_ledger.CATEGORY_LABELS,
+            "categories": commission_ledger.bucket_keys(_b),
+            "category_labels": commission_ledger.bucket_labels(_b),
+            "buckets": _b, "bucket_meta": _bm,
             "sync_ready": _ledger_origin_ready(client, org_id),
             "sync_migration": "251_commission_ledger_ma_sync.sql"}
 
@@ -6525,7 +6593,9 @@ def _ledger_ma_payload(client, org_id, source_report, period, carrier_id="", rep
                                                        carrier_id, report_key)
     existing, ready = _ledger_existing_by_origin(client, org_id, source_report, period)
     observed = _ledger_observed(rows)
-    summary = commission_ledger.summarize(rows, rules=cmeta["cat_rules"], conv=cmeta["convention"])
+    _b, _bm = _ledger_buckets(client, org_id)
+    summary = commission_ledger.summarize(rows, rules=cmeta["cat_rules"], conv=cmeta["convention"],
+                                          buckets=_b, buckets_meta=_bm)
     guard = ledger_ma_sync.merge_diags([s["diag"] for s in sources])
     note = ledger_ma_sync.overlap_note(existing, len(rows))
     payload = {
@@ -6542,8 +6612,9 @@ def _ledger_ma_payload(client, org_id, source_report, period, carrier_id="", rep
         "warnings": warnings,
         # which classification mode this derivation ran in (mig 265; 'legacy' == keyword rules only)
         "class_wiring": _ledger_class_wiring_meta(client, org_id, source_report),
-        "categories": commission_ledger.CATEGORIES,
-        "category_labels": commission_ledger.CATEGORY_LABELS,
+        "categories": commission_ledger.bucket_keys(_b),
+        "category_labels": commission_ledger.bucket_labels(_b),
+        "buckets": _b, "bucket_meta": _bm,
         "origin_labels": ledger_ma_sync.ORIGIN_LABELS,
     }
     return payload, rows
@@ -6584,6 +6655,7 @@ def commission_ledger_ma_sync(source_report: str = "ma_daily_tx", period: str = 
         raise HTTPException(400, "Nothing to write — no usable rows were derived. " +
                             (payload["warnings"][0] if payload["warnings"] else
                              "Check the period and the source tables."))
+    _ledger_bucket_guard(client, org_id, rows)          # BEFORE the wipe: refuse, never half-land
     _ledger_delete_scoped(client, org_id, source_report, period, ledger_ma_sync.ORIGIN_SYNC)
     saved = 0
     for i in range(0, len(rows), 500):
@@ -6710,6 +6782,7 @@ def get_commission_category_map(source_report: str = "ma_daily_tx", org_id: str 
     # classified with, another template's patterns.
     defaults = commission_ledger.default_rules_for(source_report)
     conv, conv_meta = _ledger_convention_for(client, org_id)
+    _b, _bm = _ledger_buckets(client, org_id)
     return {"source_report": source_report, "rules": rows, "ready": ready,
             "using_defaults": bool(not rows and defaults),
             "rules_source": (commission_ledger.RULES_TENANT if rows else
@@ -6723,7 +6796,9 @@ def get_commission_category_map(source_report: str = "ma_daily_tx", org_id: str 
             # mapping wizard (mig 1006), shown here because it decides what these rules DO with a line.
             "convention": conv, "convention_meta": conv_meta,
             "default_rules": defaults,
-            "categories": commission_ledger.CATEGORIES, "category_labels": commission_ledger.CATEGORY_LABELS,
+            # THE BUCKETS ARE THE REGISTRY (mig 1009): the picker lists every ACTIVE bucket of this org
+            "categories": commission_ledger.bucket_keys(_b), "category_labels": commission_ledger.bucket_labels(_b),
+            "buckets": _b, "bucket_meta": _bm,
             "match_fields": commission_ledger.MATCH_FIELDS, "match_ops": commission_ledger.MATCH_OPS,
             "sign_rules": commission_ledger.SIGN_RULES,
             # COMMISSION LEG (owner 2026-08-04) — the second, orthogonal dimension on this map.
@@ -6794,6 +6869,154 @@ def delete_commission_category_map(rid: str, org_id: str = ORG_ID):
     require_org(org_id)
     sb().schema("commcalc").table("commission_category_map").delete().eq("org_id", org_id).eq("id", rid).execute()
     return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# THE BUCKET REGISTRY — commcalc.commission_bucket (mig 1009; owner directive 2026-09-20: "the user
+# should be able to define the buckets and also assign the bucket to a bigger category on the P&L").
+# One row per bucket per org; the house org's rows are the defaults and a tenant's row overrides per
+# key (commission_ledger.merge_buckets). Every read is org-scoped; the write is admin-gated (a
+# bucket's KIND decides the sign a line books with — money posture). The P&L link is a key of the
+# EXISTING chart, account/coa.PL_SPEC, validated here so a typo can never invent a P&L line; booking
+# the ledger into the P&L is finance's (account/coa.build_inputs) and is NOT done here.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+class CommissionBucketIn(LaxModel):
+    key: str = ""
+    label: str = ""
+    kind: str = ""
+    sort_order: Any = None
+    is_active: Any = None
+    hint_words: Any = None
+    pl_line_key: Any = None
+
+
+def _pl_lines(client, org_id):
+    """The P&L chart (account/coa.PL_SPEC — THE chart every booking names) with this org's own line
+    labels (commission_org_config.pl_line_labels, mig 314) for the picker. Lazy import: the account
+    module imports commcalc, never the reverse at import time."""
+    from app.modules.account import coa as _coa
+    labels = {}
+    try:
+        rows = (client.schema("commcalc").table("commission_org_config").select("pl_line_labels")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        if rows and isinstance(rows[0].get("pl_line_labels"), dict):
+            labels = {str(k): str(v) for k, v in rows[0]["pl_line_labels"].items() if v}
+    except Exception:
+        pass
+    return [{"key": k, "label": labels.get(k) or lbl, "house_label": lbl, "section": sec}
+            for (k, lbl, sec, _mode, _grain) in _coa.PL_SPEC]
+
+
+def _bucket_usage(client, org_id):
+    """How many ledger lines of THIS org sit under each bucket key (capped scan, reported as such) —
+    so the settings page can say what deactivating or deleting a bucket would orphan."""
+    counts, truncated = {}, False
+    try:
+        rows = (client.schema("commcalc").table("commission_ledger").select("category")
+                .eq("org_id", org_id).limit(commission_ledger.TEMPLATE_SCAN_CAP).execute().data) or []
+        truncated = len(rows) >= commission_ledger.TEMPLATE_SCAN_CAP
+        for r in rows:
+            k = r.get("category")
+            if k:
+                counts[k] = counts.get(k, 0) + 1
+    except Exception:
+        pass
+    return counts, truncated
+
+
+@router.get("/commission-buckets")
+def get_commission_buckets(org_id: str = ORG_ID):
+    """The org's bucket registry (house defaults + this org's overrides, merged per key), the P&L chart
+    to link a bucket to, the kinds, and how many ledger lines use each key. Pre-1009: the built-in
+    mirror of the seed with ready=False and the migration named — read-only until it runs."""
+    require_org(org_id)
+    client = sb()
+    buckets, meta = _ledger_buckets(client, org_id)
+    usage, truncated = _bucket_usage(client, org_id)
+    for b in buckets:
+        b["ledger_lines"] = usage.get(b["key"], 0)
+    return {"buckets": buckets, "ready": bool(meta.get("ready")), "migration": commission_ledger.BUCKET_MIGRATION,
+            "source": meta.get("source"), "tenant_rows": meta.get("tenant_rows", 0),
+            "house_rows": meta.get("house_rows", 0), "is_house_org": org_id == ORG_ID,
+            "kinds": [{"value": k, "label": commission_ledger.KIND_LABELS[k]} for k in commission_ledger.BUCKET_KINDS],
+            "column_backed": list(commission_ledger.COLUMN_BACKED),
+            "pl_lines": _pl_lines(client, org_id),
+            "usage_scan_truncated": truncated,
+            "unlisted_in_ledger": sorted(k for k in usage if k not in {b["key"] for b in buckets}
+                                         and k not in ("charge", "other", "exclude")),
+            "note": ("A bucket's KIND decides the sign a line books with: earned books +|amt| (a netted "
+                     "reversal −|amt|); a deduction books its signed amount either way, never abs(). "
+                     "Σ over every active bucket = the statement's own total. The P&L line is recorded "
+                     "here for finance to book against — nothing is booked to the P&L by this page.")}
+
+
+@router.post("/commission-buckets")
+def upsert_commission_bucket(body: CommissionBucketIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Create or update ONE bucket for this org (an override of the house row with the same key, or a
+    new bucket). Admin-gated. Validates the key ([a-z][a-z0-9_]*), the kind, and the P&L line against
+    account/coa.PL_SPEC. A column-backed key (mig 071) may be relabelled / reordered / deactivated /
+    re-hinted but never renamed. 400 (nothing written) when migration 1009 is absent."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    client = sb()
+    buckets, meta = _ledger_buckets(client, org_id)
+    if not meta.get("ready"):
+        raise HTTPException(400, f"The bucket registry needs migration {commission_ledger.BUCKET_MIGRATION} — "
+                                 "nothing was written. Until it runs the ledger reads the built-in house defaults.")
+    key = (body.key or "").strip().lower()
+    if not commission_ledger._BUCKET_KEY_RE.match(key):
+        raise HTTPException(400, "key must be a-z, 0-9 and _ (starting with a letter), at most 64 characters")
+    if key in ("charge", "other", "exclude", "unassigned", "unlisted"):
+        raise HTTPException(400, f"'{key}' is a reserved sentinel, not a bucket")
+    existing = commission_ledger.bucket_by_key(buckets).get(key)
+    kind = (body.kind or (existing or {}).get("kind") or commission_ledger.KIND_EARNED).strip().lower()
+    if kind not in commission_ledger.BUCKET_KINDS:
+        raise HTTPException(400, "kind must be one of " + ", ".join(commission_ledger.BUCKET_KINDS))
+    pl = str(body.pl_line_key or "").strip() if body.pl_line_key is not None else (existing or {}).get("pl_line_key")
+    if pl:
+        if pl not in {ln["key"] for ln in _pl_lines(client, org_id)}:
+            raise HTTPException(400, f"pl_line_key '{pl}' is not a line of the P&L chart")
+    else:
+        pl = None
+    label = (body.label or "").strip() or (existing or {}).get("label") or key
+    words = body.hint_words if body.hint_words is not None else (existing or {}).get("hint_words", [])
+    norm = commission_ledger.normalise_bucket({"key": key, "label": label, "kind": kind,
+                                               "sort_order": body.sort_order if body.sort_order is not None else (existing or {}).get("sort_order", 100),
+                                               "is_active": body.is_active if body.is_active is not None else (existing or {}).get("is_active", True),
+                                               "hint_words": words, "pl_line_key": pl})
+    row = {"org_id": org_id, "key": key, "label": norm["label"], "kind": norm["kind"], "sort_order": norm["sort_order"],
+           "is_active": norm["is_active"], "hint_words": norm["hint_words"], "pl_line_key": norm["pl_line_key"],
+           "is_builtin": key in commission_ledger.COLUMN_BACKED, "updated_at": column_mapping.now_iso()}
+    try:
+        r = client.schema("commcalc").table(commission_ledger.BUCKET_TABLE).upsert(row, on_conflict="org_id,key").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save the bucket: {str(e)[:200]}")
+    saved = (r.data[0] if getattr(r, "data", None) else row)
+    return {"ok": True, "bucket": commission_ledger.normalise_bucket(saved), "buckets": _ledger_buckets(client, org_id)[0]}
+
+
+@router.delete("/commission-buckets/{key}")
+def delete_commission_bucket(key: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Remove THIS org's own row for a bucket. Refused for a column-backed key, and for any key that
+    ledger lines of this org still use (deactivate it instead — the lines keep reading as 'unlisted'
+    money, never vanish). A house default cannot be deleted by a tenant: deactivating it is the
+    tenant's override."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    client = sb()
+    key = (key or "").strip().lower()
+    if key in commission_ledger.COLUMN_BACKED:
+        raise HTTPException(400, f"'{key}' is column-backed (migration 071) and cannot be deleted — deactivate it instead")
+    usage, truncated = _bucket_usage(client, org_id)
+    if usage.get(key):
+        raise HTTPException(400, f"{usage[key]} ledger line(s){' or more' if truncated else ''} are filed under '{key}' — "
+                                 "deactivate it instead; deleting would leave that money without a bucket")
+    try:
+        r = (client.schema("commcalc").table(commission_ledger.BUCKET_TABLE).delete()
+             .eq("org_id", org_id).eq("key", key).execute())
+    except Exception as e:
+        raise HTTPException(400, f"Could not delete: {str(e)[:200]}")
+    return {"ok": True, "deleted": len(getattr(r, "data", None) or []), "buckets": _ledger_buckets(client, org_id)[0]}
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -7515,7 +7738,7 @@ def apply_ma_class_wiring_rule_proposals(body: ApplyMaClassWiringRuleProposalsIn
     client = sb()
     classes, _r = _mpc_classes(client, org_id)
     allowed = set(ma_product_class.assignable(classes))
-    ok_cats = set(commission_ledger.CATEGORIES) | {ma_class_wiring.CHARGE_BUCKET}
+    ok_cats = set(commission_ledger.bucket_keys(_ledger_buckets(client, org_id)[0])) | {ma_class_wiring.CHARGE_BUCKET}
     written, rejected = [], []
     for w in wanted:
         cls = ma_class_wiring.normalize((w or {}).get("product_class"))

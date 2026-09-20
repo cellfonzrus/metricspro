@@ -12,11 +12,17 @@ import { optionsFromRows } from '@/lib/standard-filters'
 // (Total / Boost / your own) namespace the classification rules. Backed by commcalc.commission_ledger +
 // commission_category_map (migration 071); the classifier degrades to built-in defaults until 071 is run.
 
+// THE BUCKETS ARE THE ORG'S REGISTRY (commcalc.commission_bucket, mig 1009) — `buckets` on every payload,
+// in the org's order, with each bucket's KIND (earned | deduction). No bucket key is named in this file.
+type BucketRow = { key: string; label: string; kind: string; is_active: boolean; column_backed?: boolean; pl_line_key?: string | null }
 type Summ = {
   source_report: string; period: string; line_count: number; payout_total: number; charge_total: number
   other_total: number; other_count: number
-  categories: Record<string, { total: number; count: number }>
+  categories: Record<string, { total: number; count: number; kind?: string; label?: string; active?: boolean }>
   category_labels: Record<string, string>; by_month: Record<string, number>
+  buckets?: BucketRow[]; bucket_source?: string; bucket_ready?: boolean; bucket_migration?: string
+  earned_total?: number; deductions_total?: number; net_total?: number
+  unlisted_total?: number; unlisted_count?: number; unlisted_keys?: Record<string, number>
   // COMMISSION LEG (owner 2026-08-04) — the same payout money, additionally split into the leg of the
   // activation's life it belongs to. `by_category_leg[category]` sums to that category's own total, and
   // `legs` sums to payout_total; `leg_identity_ok` is the backend's own proof of both.
@@ -62,8 +68,11 @@ type SyncPrev = {
   existing_by_origin: OriginRow[]; overlap_note: string | null; warnings: string[]
 }
 type RepRow = { rep: string; lines: number; ledger_payout: number; live_payout: number | null; matched: boolean } & Record<string, number>
-type ByRep = { reps: RepRow[]; totals: Record<string, number>; matched_count: number; rep_count: number; category_labels: Record<string, string> }
-const CATS = ['commission', 'spiff', 'equipment_rebate', 'residual_monthly', 'autopay_residual']
+type ByRep = { reps: RepRow[]; totals: Record<string, number>; matched_count: number; rep_count: number; category_labels: Record<string, string>; categories?: string[]; buckets?: BucketRow[] }
+const bucketKeys = (s: Summ | null | undefined) => {
+  const reg = (s?.buckets || []).filter(b => b.is_active !== false).map(b => b.key)
+  return reg.length ? reg : Object.keys(s?.categories || {})
+}
 const money = (n: number) => (n || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
 const inp: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const tile: React.CSSProperties = { border: '1px solid var(--border)', borderRadius: 10, padding: 14, minWidth: 150, background: 'var(--surface)' }
@@ -91,6 +100,9 @@ export default function CommissionLedgerPage() {
   const [origin, setOrigin] = useState('')             // '' = every source (unchanged behaviour)
   const [applying, setApplying] = useState(false)
   const tmpl = tmpls.find(t => t.key === src)
+  // the buckets, from the registry the backend sends (never a list here); the by-rep payload carries the same
+  const CATS = useMemo(() => { const k = bucketKeys(summ); return k.length ? k : (byRep?.categories || []) }, [summ, byRep])
+  const kindOf = (c: string) => summ?.categories?.[c]?.kind || summ?.buckets?.find(b => b.key === c)?.kind || 'earned'
 
   const oq = origin ? `&origin=${encodeURIComponent(origin)}` : ''
   async function loadTemplates() {
@@ -331,17 +343,17 @@ export default function CommissionLedgerPage() {
           )}
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
-            {CATS.map(c => (
+            {bucketKeys(prev.summary).map(c => (
               <div key={c} style={{ ...tile, minWidth: 130, padding: 10 }}>
-                <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' }}>{labels[c] || c}</div>
+                <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' }}>{labels[c] || c}{prev.summary?.categories?.[c]?.kind === 'deduction' ? ' · deduction' : ''}</div>
                 <div style={{ fontSize: 16, fontWeight: 700 }}>{money(prev.summary?.categories?.[c]?.total || 0)}</div>
                 <div style={{ fontSize: 10, color: 'var(--text3)' }}>{prev.summary?.categories?.[c]?.count || 0} lines</div>
               </div>
             ))}
             <div style={{ ...tile, minWidth: 130, padding: 10 }}>
-              <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' }}>Total payouts</div>
+              <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' }}>Net payout</div>
               <div style={{ fontSize: 16, fontWeight: 700 }}>{money(prev.summary?.payout_total || 0)}</div>
-              <div style={{ fontSize: 10, color: 'var(--text3)' }}>{money(prev.summary?.charge_total || 0)} bill/act.</div>
+              <div style={{ fontSize: 10, color: 'var(--text3)' }}>earned {money(prev.summary?.earned_total ?? prev.summary?.payout_total ?? 0)} · deductions {money(prev.summary?.deductions_total ?? 0)} · {money(prev.summary?.charge_total || 0)} bill/act.</div>
             </div>
           </div>
 
@@ -437,18 +449,32 @@ export default function CommissionLedgerPage() {
           {view === 'cat' && (<>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
             {CATS.map(c => (
-              <div key={c} style={{ ...tile, cursor: 'pointer' }} onClick={() => openDrill(c)} title="Click to drill">
-                <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>{labels[c] || c}</div>
-                <div style={{ fontSize: 20, fontWeight: 700 }}>{money(summ.categories[c]?.total || 0)}</div>
+              <div key={c} style={{ ...tile, cursor: 'pointer', borderColor: kindOf(c) === 'deduction' ? 'rgba(239,68,68,.35)' : 'var(--border)' }} onClick={() => openDrill(c)} title="Click to drill">
+                <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>{labels[c] || c}{kindOf(c) === 'deduction' ? <span style={{ color: '#b91c1c' }}> · deduction</span> : ''}</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: kindOf(c) === 'deduction' && (summ.categories[c]?.total || 0) < 0 ? '#b91c1c' : 'inherit' }}>{money(summ.categories[c]?.total || 0)}</div>
                 <div style={{ fontSize: 11, color: 'var(--text3)' }}>{summ.categories[c]?.count || 0} lines</div>
               </div>
             ))}
             <div style={{ ...tile, background: 'var(--bg, transparent)' }}>
-              <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Total payouts</div>
+              <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Net payout</div>
               <div style={{ fontSize: 20, fontWeight: 700 }}>{money(summ.payout_total)}</div>
+              <div style={{ fontSize: 11, color: 'var(--text3)' }}>earned {money(summ.earned_total ?? summ.payout_total)} · deductions {money(summ.deductions_total ?? 0)}{summ.other_total ? ` · unmapped ${money(summ.other_total)}` : ''}</div>
               <div style={{ fontSize: 11, color: 'var(--text3)' }}>{summ.line_count} lines · {money(summ.charge_total)} bill/act. payments</div>
             </div>
+            {!!summ.unlisted_count && (
+              <div style={{ ...tile, borderColor: '#f59e0b' }} title="Lines filed under a bucket key the registry no longer lists — still counted in the net, never dropped">
+                <div style={{ fontSize: 11, color: '#b45309', textTransform: 'uppercase', marginBottom: 4 }}>Bucket no longer listed</div>
+                <div style={{ fontSize: 20, fontWeight: 700 }}>{money(summ.unlisted_total || 0)}</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)' }}>{summ.unlisted_count} lines · {Object.keys(summ.unlisted_keys || {}).join(', ')}</div>
+              </div>
+            )}
           </div>
+          {summ.bucket_ready === false && (
+            <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
+              The bucket registry (migration <code>{summ.bucket_migration}</code>) is not applied: the buckets shown are the built-in defaults. Define your own on{' '}
+              <a href="/commcalc/commission-category-map" style={{ color: '#9a3412', fontWeight: 700 }}>Category → Bucket Map</a> once it runs.
+            </div>
+          )}
 
           {/* ── COMMISSION LEG (owner 2026-08-04): 1st Month vs M2–M12, the SAME money as above ──
               This is a decomposition, not a second total: each row of the table sums back to the

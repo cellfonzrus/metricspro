@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api } from '@/lib/client'
 import { useActiveCarrier } from '@/lib/auth-context'
 import { carrierDisplayName } from '@/lib/carrier-scope'
@@ -12,6 +12,16 @@ import { carrierDisplayName } from '@/lib/carrier-scope'
 // commcalc.commission_category_map (migration 071); falls back to built-in defaults until 071 is run.
 
 type Rule = { id?: string; source_report: string; match_field: string; match_op: string; pattern: string; category: string; sign_rule: string; priority: number; is_seeded?: boolean; leg_bucket?: string | null }
+// THE BUCKET REGISTRY (commcalc.commission_bucket, mig 1009; owner 2026-09-20: "the user should be able to
+// define the buckets and also assign the bucket to a bigger category on the P&L"). One row per bucket per
+// org — house defaults, a tenant's row overrides per key. `kind` decides the sign a line books with; the
+// P&L line is picked from the EXISTING chart the backend sends. No bucket key is named in this file.
+type BucketRow = { key: string; label: string; kind: string; sort_order: number; is_active: boolean; hint_words: string[]; pl_line_key: string | null; is_builtin: boolean; column_backed: boolean; source?: string; ledger_lines?: number; org_id?: string | null }
+type BucketsResp = {
+  buckets: BucketRow[]; ready: boolean; migration: string; source: string; tenant_rows: number; house_rows: number; is_house_org: boolean
+  kinds: { value: string; label: string }[]; column_backed: string[]; pl_lines: { key: string; label: string; house_label: string; section: string }[]
+  usage_scan_truncated: boolean; unlisted_in_ledger: string[]; note: string
+}
 type Tmpl = { key: string; label: string; builtin: boolean; rule_count: number }
 type Obs = { order_type: string; product_name: string; count: number; payout_total: number; category: string; is_payout: boolean; leg_bucket?: string; leg_month?: number | null; leg_why?: string }
 // COMMISSION LEG (owner 2026-08-04) — a SECOND, orthogonal dimension over the five buckets: was this
@@ -194,6 +204,8 @@ export default function CommissionCategoryMapPage() {
         <button onClick={newTemplate} style={{ ...inp, cursor: 'pointer' }}>＋ New template</button>
       </div>
 
+      <BucketsPanel onChanged={() => { loadMap(src); loadObserved(src) }} />
+
       {/* rules table */}
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 14 }}>
         <thead><tr style={{ textAlign: 'left', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>
@@ -241,7 +253,7 @@ export default function CommissionCategoryMapPage() {
           <input style={{ ...inp, width: 170 }} placeholder="pattern (e.g. Spiff)" value={nr.pattern} onChange={e => setNr({ ...nr, pattern: e.target.value })} />
         )}
         <span style={{ fontSize: 13 }}>→</span>
-        <select style={inp} value={nr.category} onChange={e => setNr({ ...nr, category: e.target.value })}>{cats.map(c => <option key={c} value={c}>{labels[c] || c}</option>)}</select>
+        <select style={inp} value={nr.category} onChange={e => setNr({ ...nr, category: e.target.value })} title="Your buckets — defined in the Buckets panel above">{cats.map(c => <option key={c} value={c}>{labels[c] || c}</option>)}</select>
         <select style={inp} value={nr.leg_bucket || ''} onChange={e => setNr({ ...nr, leg_bucket: e.target.value })} title="Commission leg — leave on Derive to read the line's own payment month">
           <option value="">leg: Derive</option>
           {legBuckets.map(b => <option key={b} value={b}>leg: {LEG_LABEL[b] || b}</option>)}
@@ -279,5 +291,104 @@ export default function CommissionCategoryMapPage() {
         </table>
       )}
     </div>
+  )
+}
+
+// ── THE BUCKETS PANEL — add / rename / reorder / deactivate a bucket, its kind, its hint words and the
+// P&L line it rolls up to. Everything rendered here comes from GET /commission-buckets (the registry +
+// the P&L chart + the kinds); a change goes through POST /commission-buckets (admin-gated). Nothing on
+// this panel books a dollar: a bucket's kind decides how FUTURE lines book, and the P&L link is
+// recorded for finance to book against.
+function BucketsPanel({ onChanged }: { onChanged: () => void }) {
+  const [d, setD] = useState<BucketsResp | null>(null)
+  const [edit, setEdit] = useState<Record<string, Partial<BucketRow> & { hint_text?: string }>>({})
+  const [adding, setAdding] = useState<{ key: string; label: string; kind: string; sort_order: number; hint_text: string; pl_line_key: string }>({ key: '', label: '', kind: 'earned', sort_order: 100, hint_text: '', pl_line_key: '' })
+  const [msg, setMsg] = useState('')
+  const [open, setOpen] = useState(true)
+  const load = useCallback(async () => { try { setD(await api('/api/v1/commcalc/commission-buckets')) } catch (e: unknown) { setMsg((e as Error)?.message || 'Could not load the buckets') } }, [])
+  useEffect(() => {
+    // sync FROM the backend (the registry): setState only inside the promise callback
+    let alive = true
+    api('/api/v1/commcalc/commission-buckets').then((r: BucketsResp) => { if (alive) setD(r) }).catch((e: unknown) => { if (alive) setMsg((e as Error)?.message || 'Could not load the buckets') })
+    return () => { alive = false }
+  }, [])
+  function flash(m: string) { setMsg(m); setTimeout(() => setMsg(''), 5000) }
+  async function save(row: Partial<BucketRow> & { key: string; hint_text?: string }) {
+    const body: Record<string, unknown> = { key: row.key, label: row.label, kind: row.kind, sort_order: row.sort_order, is_active: row.is_active, pl_line_key: row.pl_line_key ?? '' }
+    if (row.hint_text !== undefined) body.hint_words = row.hint_text
+    else if (row.hint_words) body.hint_words = row.hint_words
+    try {
+      await api('/api/v1/commcalc/commission-buckets', { method: 'POST', body: JSON.stringify(body) })
+      flash(`Saved bucket "${row.label || row.key}"`); setEdit(e => { const n = { ...e }; delete n[row.key]; return n }); await load(); onChanged()
+    } catch (e: unknown) { flash((e as Error)?.message || 'Save failed') }
+  }
+  async function remove(b: BucketRow) {
+    if (!confirm(`Delete your row for "${b.label}"? (A house default cannot be deleted — deactivate it instead.)`)) return
+    try { await api('/api/v1/commcalc/commission-buckets/' + encodeURIComponent(b.key), { method: 'DELETE' }); flash('Removed'); await load(); onChanged() }
+    catch (e: unknown) { flash((e as Error)?.message || 'Delete refused') }
+  }
+  if (!d) return <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>{msg || 'Loading the buckets…'}</div>
+  const plLabel = (k: string | null) => d.pl_lines.find(l => l.key === k)?.label || (k ? k : '— none —')
+  const rowOf = (b: BucketRow) => ({ ...b, hint_text: b.hint_words.join(', '), ...(edit[b.key] || {}) })
+  return (
+    <details open={open} onToggle={e => setOpen((e.target as HTMLDetailsElement).open)} style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface)', padding: 12, marginBottom: 16 }}>
+      <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 14 }}>
+        🪣 Buckets — {d.buckets.filter(b => b.is_active).length} active ({d.source === 'tenant' ? 'your own settings over the house defaults' : d.source === 'house' ? 'the house defaults' : 'built-in defaults'})
+      </summary>
+      <p style={{ color: 'var(--text2)', fontSize: 12.5, margin: '8px 0', lineHeight: 1.5 }}>{d.note}</p>
+      {!d.ready && (
+        <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
+          Run migration <code>{d.migration}</code> to define buckets. Until then these are the built-in defaults, read-only, and a line cannot be booked to a bucket that has no column of its own.
+        </div>
+      )}
+      {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 10px', fontSize: 13, marginBottom: 8 }}>{msg}</div>}
+      {!!d.unlisted_in_ledger.length && <div style={{ fontSize: 12, color: '#b45309', marginBottom: 8 }}>Ledger lines are filed under bucket keys no longer listed: {d.unlisted_in_ledger.join(', ')} — they still count in every net; re-activate the bucket to show them by name.</div>}
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+        <thead><tr style={{ textAlign: 'left', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>
+          <th style={{ padding: '4px 6px' }}>Order</th><th style={{ padding: '4px 6px' }}>Label</th><th style={{ padding: '4px 6px' }}>Key</th><th style={{ padding: '4px 6px' }}>Kind</th>
+          <th style={{ padding: '4px 6px' }}>Hint words (the intake&apos;s guesses)</th><th style={{ padding: '4px 6px' }}>P&amp;L line</th><th style={{ padding: '4px 6px' }}>Active</th><th style={{ padding: '4px 6px' }}>Lines</th><th></th>
+        </tr></thead>
+        <tbody>
+          {d.buckets.map(b => { const r = rowOf(b); const dirty = !!edit[b.key]; return (
+            <tr key={b.key} style={{ borderTop: '1px solid var(--border)', opacity: r.is_active ? 1 : 0.55 }}>
+              <td style={{ padding: '3px 6px' }}><input type="number" value={r.sort_order} onChange={e => setEdit(x => ({ ...x, [b.key]: { ...x[b.key], sort_order: Number(e.target.value) } }))} style={{ ...inp, width: 60, padding: '3px 6px' }} disabled={!d.ready} /></td>
+              <td style={{ padding: '3px 6px' }}><input value={r.label} onChange={e => setEdit(x => ({ ...x, [b.key]: { ...x[b.key], label: e.target.value } }))} style={{ ...inp, width: 170, padding: '3px 6px' }} disabled={!d.ready} /></td>
+              <td style={{ padding: '3px 6px', fontFamily: 'monospace', color: 'var(--text2)' }}>{b.key}{b.column_backed && <span title="one of the five column-backed buckets (migration 071): its key cannot change" style={{ fontSize: 10, marginLeft: 4 }}>▣</span>}</td>
+              <td style={{ padding: '3px 6px' }}>
+                <select value={r.kind} onChange={e => setEdit(x => ({ ...x, [b.key]: { ...x[b.key], kind: e.target.value } }))} style={{ ...inp, padding: '3px 6px' }} disabled={!d.ready} title={d.kinds.find(k => k.value === r.kind)?.label}>
+                  {d.kinds.map(k => <option key={k.value} value={k.value}>{k.value}</option>)}
+                </select>
+              </td>
+              <td style={{ padding: '3px 6px' }}><input value={r.hint_text} onChange={e => setEdit(x => ({ ...x, [b.key]: { ...x[b.key], hint_text: e.target.value } }))} style={{ ...inp, width: '100%', minWidth: 220, padding: '3px 6px' }} placeholder="comma-separated words" disabled={!d.ready} /></td>
+              <td style={{ padding: '3px 6px' }}>
+                <select value={r.pl_line_key || ''} onChange={e => setEdit(x => ({ ...x, [b.key]: { ...x[b.key], pl_line_key: e.target.value || null } }))} style={{ ...inp, padding: '3px 6px', maxWidth: 220 }} disabled={!d.ready} title={plLabel(r.pl_line_key || null)}>
+                  <option value="">— none —</option>
+                  {d.pl_lines.map(l => <option key={l.key} value={l.key}>{l.label} ({l.section})</option>)}
+                </select>
+              </td>
+              <td style={{ padding: '3px 6px' }}><input type="checkbox" checked={!!r.is_active} onChange={e => setEdit(x => ({ ...x, [b.key]: { ...x[b.key], is_active: e.target.checked } }))} disabled={!d.ready} /></td>
+              <td style={{ padding: '3px 6px', textAlign: 'right', color: 'var(--text2)' }}>{b.ledger_lines ?? 0}{d.usage_scan_truncated ? '+' : ''}</td>
+              <td style={{ padding: '3px 6px', whiteSpace: 'nowrap' }}>
+                {dirty && <button onClick={() => save(r)} style={{ ...inp, cursor: 'pointer', fontSize: 11, padding: '3px 8px', background: 'var(--accent,#2563eb)', color: '#fff', border: 'none' }}>Save</button>}
+                {!b.column_backed && b.source === 'tenant' && !b.ledger_lines && <button onClick={() => remove(b)} title="delete your row (only when no ledger line uses it)" style={{ ...inp, cursor: 'pointer', fontSize: 11, padding: '3px 8px', marginLeft: 4 }}>✕</button>}
+              </td>
+            </tr>) })}
+          <tr style={{ borderTop: '2px solid var(--border)' }}>
+            <td style={{ padding: '3px 6px' }}><input type="number" value={adding.sort_order} onChange={e => setAdding({ ...adding, sort_order: Number(e.target.value) })} style={{ ...inp, width: 60, padding: '3px 6px' }} disabled={!d.ready} /></td>
+            <td style={{ padding: '3px 6px' }}><input value={adding.label} onChange={e => setAdding({ ...adding, label: e.target.value, key: adding.key || e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') })} placeholder="new bucket label" style={{ ...inp, width: 170, padding: '3px 6px' }} disabled={!d.ready} /></td>
+            <td style={{ padding: '3px 6px' }}><input value={adding.key} onChange={e => setAdding({ ...adding, key: e.target.value.toLowerCase().replace(/[^a-z0-9_]+/g, '_') })} placeholder="key" style={{ ...inp, width: 130, padding: '3px 6px', fontFamily: 'monospace' }} disabled={!d.ready} /></td>
+            <td style={{ padding: '3px 6px' }}><select value={adding.kind} onChange={e => setAdding({ ...adding, kind: e.target.value })} style={{ ...inp, padding: '3px 6px' }} disabled={!d.ready}>{d.kinds.map(k => <option key={k.value} value={k.value}>{k.value}</option>)}</select></td>
+            <td style={{ padding: '3px 6px' }}><input value={adding.hint_text} onChange={e => setAdding({ ...adding, hint_text: e.target.value })} placeholder="comma-separated words" style={{ ...inp, width: '100%', minWidth: 220, padding: '3px 6px' }} disabled={!d.ready} /></td>
+            <td style={{ padding: '3px 6px' }}><select value={adding.pl_line_key} onChange={e => setAdding({ ...adding, pl_line_key: e.target.value })} style={{ ...inp, padding: '3px 6px', maxWidth: 220 }} disabled={!d.ready}><option value="">— none —</option>{d.pl_lines.map(l => <option key={l.key} value={l.key}>{l.label} ({l.section})</option>)}</select></td>
+            <td /><td />
+            <td style={{ padding: '3px 6px' }}><button disabled={!d.ready || !adding.key || !adding.label} onClick={() => save({ key: adding.key, label: adding.label, kind: adding.kind, sort_order: adding.sort_order, is_active: true, hint_text: adding.hint_text, pl_line_key: adding.pl_line_key || null }).then(() => setAdding({ key: '', label: '', kind: 'earned', sort_order: 100, hint_text: '', pl_line_key: '' }))} style={{ ...inp, cursor: 'pointer', fontSize: 11, padding: '3px 8px', fontWeight: 700 }}>＋ Add bucket</button></td>
+          </tr>
+        </tbody>
+      </table>
+      <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 8, lineHeight: 1.5 }}>
+        <b>Kind:</b> {d.kinds.map(k => `${k.value} = ${k.label}`).join(' · ')}. <b>Order</b> is the order on every screen (intake tray, totals card, ledger tiles). <b>Hint words</b> are what the onboarding intake matches a statement&apos;s labels against to pre-place them — a guess the person confirms. <b>P&amp;L line</b> is the line of the chart this bucket rolls up to; it is recorded here for finance to book against.
+        {d.is_house_org ? ' You are editing the HOUSE defaults every tenant inherits.' : ' Your rows override the house defaults per key; a house bucket you do not want is deactivated, not deleted.'}
+      </div>
+    </details>
   )
 }

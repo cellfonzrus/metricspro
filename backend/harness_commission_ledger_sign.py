@@ -656,10 +656,15 @@ check("THE TIE-OUT — the five canonical buckets sum to the statement's OWN gra
       "This holds whatever buckets the tenant chose, which is why it is the real proof",
       money(sum(buckets.values())) == 86970.34 and S["payout_total"] == 86970.34,
       (money(sum(buckets.values())), S["payout_total"]))
+# PIN CHANGED 2026-09-20 (bucket registry, mig 1009): summarize() now reports one entry per registry
+# bucket — the five column-backed ones AND the three house-default deduction buckets, which read 0.00
+# here because no rule of this tenant targets them. The five figures are unchanged to the cent.
 check("the buckets are: commission 13,829.00 | spiff 15,087.00 | equipment rebate 58,054.34 "
-      "| residual 0.00 | auto-pay residual 0.00",
-      buckets == {"commission": 13829.0, "spiff": 15087.0, "equipment_rebate": 58054.34,
-                  "residual_monthly": 0.0, "autopay_residual": 0.0}, buckets)
+      "| residual 0.00 | auto-pay residual 0.00 — and the three registry deduction buckets read 0.00, "
+      "because no rule targets them",
+      {k: buckets[k] for k in CL.CATEGORIES} == {"commission": 13829.0, "spiff": 15087.0, "equipment_rebate": 58054.34,
+                                                 "residual_monthly": 0.0, "autopay_residual": 0.0}
+      and all(buckets.get(k) == 0.0 for k in ("chargebacks", "vendor_fee", "misc_charges")), buckets)
 check("every one of the 521 lines is in the payout stream; no earned line is filed as a 'charge'",
       S["line_count"] == 521 and S["charge_total"] == 0.0, (S["line_count"], S["charge_total"]))
 
@@ -778,9 +783,9 @@ ana = inspect.getsource(R.commission_ledger_analyze)
 for nm, src in (("import", imp), ("analyze", ana)):
     check("POST /commission-ledger/" + nm + " reads the convention off the MAPPING it just loaded",
           "_ledger_convention(hdr_rules)" in src)
-    check("POST /commission-ledger/" + nm + " passes it into every row it builds",
-          "build_row(src, base, cat_rules, conv)" in src or
-          "cat_rules, conv)" in src)
+    # PIN CHANGED 2026-09-20: build_row also takes the org's bucket REGISTRY (mig 1009)
+    check("POST /commission-ledger/" + nm + " passes it — and the bucket registry — into every row it builds",
+          "cat_rules, conv, buckets)" in src and "_ledger_buckets(client, org_id)" in src)
     check("POST /commission-ledger/" + nm + " drops the file's own total row through the shared "
           "feed-shape rule",
           "_ledger_footer_drop(" in src)
@@ -795,6 +800,208 @@ check("the Category Map page is told when a report inherits no rules at all",
 check("POST /column-mapping validates the declaration and only writes it on an amount column",
       all(t in inspect.getsource(R.upsert_column_mapping)
           for t in ("SIGN_CONVENTIONS", "_known_columns", 'transform != "number"')))
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+section("I. THE BUCKET REGISTRY (mig 1009) — buckets are config rows; the house seed is the code's mirror")
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# Owner 2026-09-20: "need to add the following buckets: Chargebacks, Vendor fee, Misc charges", then
+# "again this is not to be hardcoded, the user should be able to define the buckets and also assign
+# the bucket to a bigger category on the P&L". So: one row per bucket per org, house defaults, a tenant
+# overrides per key. The migration's seed is parsed OUT of the file and compared with HOUSE_BUCKETS.
+MIG1009 = io.open(os.path.join(MIG_DIR, "1009_commission_bucket_registry.sql"), encoding="utf-8").read()
+_seed_re = re.compile(r"\('" + re.escape(HOUSE) + r"',\s*'(?P<key>[a-z_]+)',\s*'(?P<label>[^']*)',\s*'(?P<kind>\w+)',"
+                      r"\s*(?P<order>\d+),\s*(?P<active>true|false),\s*ARRAY\[(?P<words>[^\]]*)\],\s*'(?P<pl>\w+)',"
+                      r"\s*(?P<builtin>true|false)\)", re.S)
+SEED_BUCKETS = [(m.group("key"), m.group("label"), m.group("kind"), int(m.group("order")),
+                 [w.strip().strip("'") for w in m.group("words").split(",") if w.strip()],
+                 m.group("pl"), m.group("builtin") == "true") for m in _seed_re.finditer(MIG1009)]
+check("migration 1009 seeds EIGHT house buckets: the five column-backed ones + chargebacks / vendor_fee / misc_charges",
+      [s[0] for s in SEED_BUCKETS] == CL.CATEGORIES + ["chargebacks", "vendor_fee", "misc_charges"], [s[0] for s in SEED_BUCKETS])
+check("HOUSE_BUCKETS in code mirrors the seed EXACTLY (key, label, kind, order, hint words, P&L line, builtin)",
+      [tuple(t) for t in CL.HOUSE_BUCKETS] == [tuple(s) for s in SEED_BUCKETS],
+      [(a, b) for a, b in zip(CL.HOUSE_BUCKETS, SEED_BUCKETS) if tuple(a) != tuple(b)][:2])
+check("the three new buckets are DEDUCTION kind; the five are EARNED; the five are the column-backed ones",
+      {b["key"]: b["kind"] for b in CL.builtin_buckets()} == {**{c: "earned" for c in CL.CATEGORIES},
+                                                              "chargebacks": "deduction", "vendor_fee": "deduction", "misc_charges": "deduction"}
+      and tuple(CL.COLUMN_BACKED) == tuple(CL.CATEGORIES)
+      and all(b["column_backed"] == (b["key"] in CL.CATEGORIES) for b in CL.builtin_buckets()))
+check("migration 1009 names no carrier and adds NO column to commission_ledger (the five columns stay the only ones)",
+      not [b for b in BANNED if b in MIG1009.lower()] and "alter table commcalc.commission_ledger" not in MIG1009.lower())
+check("...is additive, idempotent (IF NOT EXISTS / ON CONFLICT DO NOTHING) and states its REVERT",
+      "create table if not exists commcalc.commission_bucket" in MIG1009.lower() and "on conflict (org_id, key) do nothing" in MIG1009.lower()
+      and "-- revert:" in MIG1009.lower())
+check("every hint word in the seed is neutral English — no carrier, tenant or product name",
+      not [w for s in SEED_BUCKETS for w in s[4] if any(b in w.lower() for b in BANNED + ("boost", "total wireless", "vidapay", "cricket", "metro"))])
+check("every P&L link in the seed is a line of the EXISTING chart (account/coa.PL_SPEC) — no parallel mapping",
+      set(s[5] for s in SEED_BUCKETS) <= {k for (k, *_r) in __import__("app.modules.account.coa", fromlist=["PL_SPEC"]).PL_SPEC},
+      set(s[5] for s in SEED_BUCKETS))
+# the merge: house defaults + tenant override per key
+_t_rows = [{"key": "chargebacks", "label": "Clawbacks", "kind": "deduction", "sort_order": 5, "is_active": True, "hint_words": ["claw"], "pl_line_key": "chargebacks"},
+           {"key": "spiff", "is_active": False, "label": "Spiff", "kind": "earned", "sort_order": 20},
+           {"key": "co_op_marketing", "label": "Co-op marketing", "kind": "earned", "sort_order": 55, "hint_words": ["co-op", "coop"], "pl_line_key": "mdf_income"}]
+merged = CL.merge_buckets(CL.builtin_buckets(), _t_rows)
+mk = {b["key"]: b for b in merged}
+check("merge: a tenant row OVERRIDES the house row with the same key (relabel + reorder), a deactivated house bucket stays "
+      "listed but inactive, a tenant-defined bucket is ADDED — the rest of the house set is kept",
+      mk["chargebacks"]["label"] == "Clawbacks" and merged[0]["key"] == "chargebacks" and mk["spiff"]["is_active"] is False
+      and "co_op_marketing" in mk and len(merged) == 9 and set(mk) >= set(CL.CATEGORIES), [b["key"] for b in merged])
+check("active_buckets / bucket_keys skip the deactivated one; bucket_labels still knows its label",
+      "spiff" not in CL.bucket_keys(merged) and CL.bucket_labels(merged)["spiff"] == "Spiff" and "co_op_marketing" in CL.bucket_keys(merged))
+check("a row whose key is not a key is dropped, an unknown kind reads as earned, hint words as a string are split",
+      CL.normalise_bucket({"key": "Bad Key!"}) is None and CL.normalise_bucket({"key": "x", "kind": "sideways"})["kind"] == "earned"
+      and CL.normalise_bucket({"key": "x", "hint_words": "a, b;c"})["hint_words"] == ["a", "b", "c"])
+
+
+class RegistryClient(FakeClient):
+    """The sign harness's fake client with a switch: `absent=True` makes the registry table raise, as a
+    database without migration 1009 does."""
+    def __init__(self, store, absent=False):
+        super().__init__(store)
+        self.absent = absent
+
+    def table(self, t):
+        if t == CL.BUCKET_TABLE and self.absent:
+            raise RuntimeError('42P01 relation "commcalc.commission_bucket" does not exist')
+        return super().table(t)
+
+
+reg_store = {CL.BUCKET_TABLE: [dict(b, org_id=HOUSE) for b in CL.builtin_buckets()]}
+b_pre, m_pre = CL.load_buckets_meta(RegistryClient(reg_store, absent=True), TENANT)
+b_house, m_house = CL.load_buckets_meta(RegistryClient(reg_store), TENANT)
+reg_store[CL.BUCKET_TABLE].append({"key": "vendor_fee", "org_id": TENANT, "label": "Distributor fees", "kind": "deduction",
+                                   "sort_order": 70, "is_active": True, "hint_words": ["fee"], "pl_line_key": "vip_fees"})
+b_ten, m_ten = CL.load_buckets_meta(RegistryClient(reg_store), TENANT)
+check("load_buckets_meta: no table → the built-in mirror, ready=False, the migration named (DISPLAY still works)",
+      [b["key"] for b in b_pre] == [t[0] for t in CL.HOUSE_BUCKETS] and m_pre["ready"] is False and "1009" in m_pre["migration"])
+check("...table with the house seed → source 'house'; a tenant row → source 'tenant', merged per key, org-scoped reads",
+      m_house["source"] == "house" and m_ten["source"] == "tenant" and {b["key"]: b["label"] for b in b_ten}["vendor_fee"] == "Distributor fees"
+      and m_ten["tenant_rows"] == 1 and m_ten["house_rows"] == 8)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+section("J. THE DEDUCTION SIGN RULE — signed either way, never abs(); Σ(all buckets) = the statement's total")
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+REG = CL.builtin_buckets()
+# The 121 reversal-flagged labels of the fixture assigned to `chargebacks` (the owner's decision, 2026-09-20:
+# chargebacks are a bucket of their own); every other label keeps the tenant's bucket from §F.
+NEG_LABELS = sorted({r["order_type"] for r in DETAIL if r["raw_amount"] < 0})
+CB_RULES = [{"match_field": "order_type", "match_op": "equals", "pattern": lbl, "category": "chargebacks",
+             "sign_rule": "negative_only", "priority": i} for i, lbl in enumerate(NEG_LABELS)] + TENANT_RULES
+check("the fixture's all-negative labels are the deactivation / chargeback / fee / adjustment ones (" + str(len(NEG_LABELS)) + " labels)",
+      all(any(w in l.lower() for w in ("deact", "chargeback", "fee", "charitable")) for l in NEG_LABELS), NEG_LABELS)
+CB_ROWS = [CL.build_row(r, {"org_id": TENANT, "source_report": TEMPLATE, "period": "Aug 2026"}, CB_RULES, conv, REG) for r in kept]
+S_CB = CL.summarize(CB_ROWS, rules=CB_RULES, conv=conv, buckets=REG)
+cb = {k: v["total"] for k, v in S_CB["categories"].items()}
+check("THE OWNER'S CHOICE: the 121 reversal lines assigned to `chargebacks` book −7,396.27 there, SIGNED",
+      cb["chargebacks"] == -7396.27 and S_CB["categories"]["chargebacks"]["count"] == 121, (cb["chargebacks"], S_CB["categories"]["chargebacks"]["count"]))
+check("...the earned buckets sum to 94,366.61 (the gross earned)",
+      S_CB["earned_total"] == 94366.61 and money(sum(v for k, v in cb.items() if k in CL.CATEGORIES)) == 94366.61, S_CB["earned_total"])
+check("...deductions total −7,396.27, and net = 86,970.34 = the statement's own total — THE INVARIANT: "
+      "Σ(all eight buckets) = the file total, whatever buckets the tenant chose",
+      S_CB["deductions_total"] == -7396.27 and S_CB["net_total"] == 86970.34 and S_CB["payout_total"] == 86970.34
+      and money(sum(cb.values())) == 86970.34, (S_CB["deductions_total"], S_CB["net_total"]))
+check("THE OTHER VALID CHOICE (reversals left in the buckets they reverse, §F): same net 86,970.34, chargebacks 0.00 — both tie",
+      S["payout_total"] == 86970.34 and S["categories"]["chargebacks"]["total"] == 0.0 and S["deductions_total"] == 0.0
+      and S["earned_total"] == 86970.34 and S_CB["net_total"] == S["net_total"])
+check("a deduction line's row keeps the five columns at 0 and carries its signed amount in payout_total under its key — no new column",
+      all(r["category"] == "chargebacks" and r["payout_total"] < 0 and all(r[c] == 0 for c in CL.CATEGORIES)
+          and set(r) == set(FINAL[0]) for r in CB_ROWS if r["category"] == "chargebacks"))
+check("payout_total keeps its meaning — the NET the statement pays — and says so",
+      "NET" in S_CB["payout_total_basis"] and S_CB["net_total"] == S_CB["payout_total"])
+check("the leg decomposition still sums back to every bucket, deductions included", S_CB["leg_identity_ok"] is True)
+
+# A vendor fee and a misc charge under BOTH conventions, with a refund of the fee — the four numbers tie.
+FEE_RULES = [{"match_field": "product_name", "match_op": "contains", "pattern": "Service fee", "category": "vendor_fee", "sign_rule": "negative_only", "priority": 1},
+             {"match_field": "product_name", "match_op": "contains", "pattern": "Adjustment", "category": "misc_charges", "sign_rule": "negative_only", "priority": 2},
+             {"match_field": "product_name", "match_op": "contains", "pattern": "Commission", "category": "commission", "sign_rule": "negative_only", "priority": 3}]
+POS_FILE = [("Commission M1", 1000.0), ("Service fee", -50.0), ("Service fee refund", 10.0), ("Adjustment - charity", -12.75)]
+NEG_FILE = [(l, -a) for (l, a) in POS_FILE]              # the same statement written negative-earned
+def _book(file_rows, conv_name):
+    cv = CL.convention_named(conv_name)
+    rows = [CL.build_row({"product_name": l, "order_type": "", "raw_amount": a}, {"org_id": TENANT, "source_report": TEMPLATE}, FEE_RULES, cv, REG)
+            for (l, a) in file_rows]
+    return rows, CL.summarize(rows, rules=FEE_RULES, conv=cv, buckets=REG)
+_r_pos, s_pos = _book(POS_FILE, CL.SIGN_PAYOUT_POSITIVE)
+_r_neg, s_neg = _book(NEG_FILE, CL.SIGN_PAYOUT_NEGATIVE_NETTED)
+_r_pn, s_pn = _book(NEG_FILE, CL.SIGN_PAYOUT_NEGATIVE)
+for nm, s in (("payout_positive", s_pos), ("payout_negative_netted", s_neg), ("payout_negative (fees written as positive charges)", s_pn)):
+    c = {k: v["total"] for k, v in s["categories"].items()}
+    check(f"under {nm}: vendor fee −50 + refund +10 = −40.00, misc −12.75, commission +1,000.00, net 947.25 = the file's total",
+          c["vendor_fee"] == -40.0 and c["misc_charges"] == -12.75 and c["commission"] == 1000.0 and s["net_total"] == 947.25
+          and s["deductions_total"] == -52.75 and s["earned_total"] == 1000.0, c)
+check("under payout_negative the DEDUCTION rule is what books the positive charge lines — a positive line with NO deduction rule "
+      "stays a 'charge' exactly as today (the master-agent feeds' dealer purchases are not re-bucketed)",
+      CL.classify_line(50.0, "", "Service fee", FEE_RULES[2:], CL.convention_named(CL.SIGN_PAYOUT_NEGATIVE), REG) == ("charge", None)
+      and CL.classify_line(50.0, "", "Service fee", FEE_RULES, CL.convention_named(CL.SIGN_PAYOUT_NEGATIVE), REG) == ("vendor_fee", CL.DIR_REVERSAL))
+check("a $0 line in a deduction bucket books nothing", CL.booked_amount(0.0, CL.classify_line(0.0, "", "Service fee", FEE_RULES, conv, REG)[1]) == 0.0)
+check("a row filed under a key the registry does not list is NOT dropped from the total: it is reported as 'unlisted'",
+      (lambda s: s["unlisted_total"] == -5.0 and s["unlisted_keys"] == {"gone_bucket": 1} and s["payout_total"] == 995.0)(
+          CL.summarize(_r_pos[:1] + [{"category": "gone_bucket", "payout_total": -5.0, "is_payout": True, "raw_amount": -5.0}], conv=conv, buckets=REG)))
+check("`charge` is not `misc_charges`: the label says so, and a 'charge' line books to no bucket while a misc charge books signed",
+      "not a deduction" in CL.CATEGORY_LABELS["charge"] and CL.bucket_kind("charge", REG) is None and CL.bucket_kind("misc_charges", REG) == "deduction")
+
+# ── NEGATIVE CONTROLS for the deduction rule ──
+def probe_deduction():
+    rows = [CL.build_row(r, {"org_id": TENANT, "source_report": TEMPLATE}, CB_RULES, conv, REG) for r in kept]
+    s = CL.summarize(rows, rules=CB_RULES, conv=conv, buckets=REG)
+    check("x", s["categories"]["chargebacks"]["total"] == -7396.27 and s["net_total"] == 86970.34)
+
+check("baseline: the deduction probe is green", rerun(probe_deduction) == (1, 0))
+_keep_bf = CL._booking_for
+CL._booking_for = lambda category, d, conv, deductions=None: (None if category in ("charge", "exclude") else CL.DIR_PAYOUT)
+check("ARMED — a deduction bucket that books abs() turns RED: chargebacks would read +7,396.27 and net 101,762.88",
+      rerun(probe_deduction) == (0, 1)
+      and CL.summarize([CL.build_row(r, {"org_id": TENANT, "source_report": TEMPLATE}, CB_RULES, conv, REG) for r in kept],
+                       rules=CB_RULES, conv=conv, buckets=REG)["net_total"] == 101762.88)
+CL._booking_for = _keep_bf
+check("RESTORED — signed again", rerun(probe_deduction) == (1, 0))
+CL._booking_for = lambda category, d, conv, deductions=None: (None if (category in ("charge", "exclude") or (deductions and category in deductions))
+                                                              else _keep_bf(category, d, conv, deductions))
+check("ARMED — a deduction that books NOTHING (money silently dropped) turns RED: net would read 94,366.61, not the file's 86,970.34",
+      rerun(probe_deduction) == (0, 1))
+CL._booking_for = _keep_bf
+check("RESTORED", rerun(probe_deduction) == (1, 0))
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+section("K. PRE-MIGRATION: a landing that would book to a column-less bucket is REFUSED, naming 1009")
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+pre = RegistryClient({CL.BUCKET_TABLE: []}, absent=True)
+check("unbookable_categories: with the table absent, 'chargebacks' is unbookable; the five, 'charge' and 'other' are not",
+      CL.unbookable_categories(CB_ROWS, m_pre) == ["chargebacks"] and CL.unbookable_categories(FINAL, m_pre) == []
+      and CL.unbookable_categories(CB_ROWS, m_house) == [])
+_st, _detail = None, None
+try:
+    R._ledger_bucket_guard(pre, TENANT, CB_ROWS)
+except R.HTTPException as e:
+    _st, _detail = e.status_code, str(e.detail)
+check("router._ledger_bucket_guard refuses (400) naming 1009_commission_bucket_registry.sql and the 121 lines — nothing re-bucketed",
+      _st == 400 and "1009" in _detail and "121 line(s)" in _detail and "chargebacks" in _detail, (_st, _detail))
+_ok = True
+try:
+    R._ledger_bucket_guard(pre, TENANT, FINAL)
+    R._ledger_bucket_guard(RegistryClient(reg_store), TENANT, CB_ROWS)
+except R.HTTPException:
+    _ok = False
+check("...and does NOT refuse the five column-backed buckets pre-migration, nor anything once the table exists", _ok)
+land_src = inspect.getsource(R._ledger_land_rows)
+sync_src = inspect.getsource(R.commission_ledger_ma_sync)
+check("the guard is WIRED into both landing paths (file import + MA refresh), BEFORE the slice wipe",
+      "_ledger_bucket_guard(" in land_src and land_src.index("_ledger_bucket_guard(") < land_src.index("_ledger_delete_scoped(")
+      and "_ledger_bucket_guard(" in sync_src and sync_src.index("_ledger_bucket_guard(") < sync_src.index("_ledger_delete_scoped("))
+check("the registry endpoints are mounted and the Category Map / templates / summary / by-rep payloads carry the registry",
+      all(p in [rt.path for rt in R.router.routes] for p in ("/commcalc/commission-buckets", "/commcalc/commission-buckets/{key}"))
+      and all('"buckets"' in inspect.getsource(getattr(R, f)) for f in ("get_commission_category_map", "commission_ledger_templates", "commission_ledger_by_rep"))
+      and "buckets=_buckets" in inspect.getsource(R.commission_ledger_summary))
+check("the bucket writer validates the P&L link against the chart and is admin-gated; a column-backed key cannot be deleted",
+      all(t in inspect.getsource(R.upsert_commission_bucket) for t in ("_pl_lines(", "_require_commission_admin(", "BUCKET_KINDS", "_BUCKET_KEY_RE"))
+      and "COLUMN_BACKED" in inspect.getsource(R.delete_commission_bucket))
+check("no carrier name in the registry code either (RULE TWO)",
+      not [b for b in BANNED if b in ("\n".join(inspect.getsource(getattr(R, f)) for f in
+                                       ("get_commission_buckets", "upsert_commission_bucket", "delete_commission_bucket", "_ledger_buckets", "_ledger_bucket_guard", "_pl_lines"))).lower()])
+check("byte-identity still holds with the registry in play (§C re-run after every patch above was restored)",
+      rerun(probe_identity) == (1, 0))
 
 
 print("\n══ commission-ledger sign convention: %d passed, %d failed ══" % (_pass, _fail))
