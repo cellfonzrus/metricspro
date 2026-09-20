@@ -2011,8 +2011,19 @@ house org): `enabled=true`, **`consecutive_failures=29`**, last delivery **2026-
   **RULE TWO:** the connector slug is `data_source.processor` (what `_SOURCE_SCRAPERS` already
   dispatches on); the vendor's name exists only in the SEEDED ROWS, never in a code path.
 - **Module** `commcalc/connector_route_policy.py` (PURE): `resolve` / `is_open` / `is_closed` /
-  `headline` / `detail` / `health` / `refusal` / `status_line`, plus the one IO helper `load_rows`
-  (org-scoped `in_(org_id, [org, HOUSE])`). No rows / no table ⇒ **OPEN** — pre-migration it is inert.
+  `headline` / `detail` / `health` / `refusal` / `status_line` / `subject_label`, plus the one IO
+  helper `load_rows` (org-scoped `in_(org_id, [org, HOUSE])`). No rows / no table ⇒ **OPEN** —
+  pre-migration it is inert.
+- **ONE label, TWO grammatical positions (2026-09-20).** `ROUTE_LABEL` carries a leading article
+  because `detail()` uses it as an OBJECT ("the supported route … is **the** portal login").
+  `headline()` uses the same words as a SUBJECT, so it reads them through `subject_label(route)`,
+  which strips the article — rather than keeping a second hand-written table that would drift.
+  Before this, every closed route rendered a double article ("Automatic **the** portal login is
+  switched off"); harmless while nothing displayed it, visible the moment §19.22 put `headline()` on
+  the connector-health row. The `pull` chip now equals the `email-imports` page's own fallback string
+  verbatim, and `harness_connector_route_policy` §7d pins the sentence shape for EVERY route so a new
+  label with an article cannot re-break it. A per-row `remedy_label` (what mig 998 seeds) only ever
+  reaches object position, so the seeded wording is untouched.
 - **Gated (all read the ONE policy, none branches on a vendor):** `POST /data-sources/{sid}/run`,
   `POST /data-sources/{sid}/login/start`, `POST /data-sources/{sid}/live-login/start`,
   `POST /data-sources/sweep/run-due` (dropped BEFORE `next_run_at` is advanced and before dispatch —
@@ -2042,7 +2053,7 @@ house org): `enabled=true`, **`consecutive_failures=29`**, last delivery **2026-
 - **REVERSIBLE — one row:** `UPDATE commcalc.connector_route_policy SET allowed = true WHERE
   connector = '<slug>'`. Nothing is deleted: credentials, saved sessions, `live_login.py`,
   `vidapay_sweep.run_b2bsoft_sweep` and every ingested row are untouched.
-- **Proof** `harness_connector_route_policy.py` (126) — the seed is parsed OUT of mig 998, so the
+- **Proof** `harness_connector_route_policy.py` (152) — the seed is parsed OUT of mig 998, so the
   harness cannot pass against a seed the migration does not contain; covers off-by-default for house
   + existing + future orgs, the stated non-actionable state, the roll-up honesty, one-row reversal,
   the sibling carriers (VidaPay/T-CETRA — **a different vendor's 2FA, still working** — the three card

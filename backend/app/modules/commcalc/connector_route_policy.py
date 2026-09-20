@@ -63,7 +63,9 @@ DEFAULT_ROUTE = "pull"
 # Human wording for a route, used when a policy row names a remedy route but no remedy label.
 ROUTE_LABEL = {
     "pull": "the portal login",
-    "email_sweep": "the email-ingested reports",
+    # SINGULAR on purpose: `headline()` uses these same words as a SUBJECT ("Automatic <x> is switched
+    # off"), so a plural label would disagree with the verb. One home, both sentences.
+    "email_sweep": "the email-ingested report feed",
     "ftp": "the FTP/SFTP drop",
     "google_sa": "the Google service-account feed",
     "manual_expected": "a manual upload",
@@ -143,12 +145,27 @@ def is_closed(policy):
     return not is_open(policy)
 
 
+def subject_label(route):
+    """A route label in SUBJECT position — the same words as ROUTE_LABEL, without its leading article.
+
+    ONE HOME, TWO POSITIONS. `detail()` needs the label as an object ("The supported route ... is THE
+    portal login"), `headline()` needs it as a subject ("Automatic PORTAL LOGIN is switched off").
+    Keeping a second hand-written table for the second position is exactly the copy that drifts, so the
+    article is dropped here instead. Without this, every closed route rendered a double article —
+    "Automatic the portal login is switched off" — on the connector-health row and in every
+    `refusal()` body. PURE."""
+    lab = ROUTE_LABEL.get(normalize(route), "the ingest route")
+    for art in ("the ", "an ", "a "):
+        if lab.lower().startswith(art):
+            return lab[len(art):]
+    return lab
+
+
 def headline(policy):
     """The one-line chip text for a closed route. PURE."""
     if is_open(policy):
         return ""
-    return "Automatic %s is switched off for this connector." % (
-        ROUTE_LABEL.get(normalize(policy.get("route")), "ingest route"))
+    return "Automatic %s is switched off for this connector." % subject_label(policy.get("route"))
 
 
 def detail(policy):
