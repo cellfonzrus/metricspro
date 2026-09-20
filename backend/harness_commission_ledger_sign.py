@@ -459,11 +459,13 @@ check("a garbled / stale declaration falls back to the default — it can never 
       == CL.DEFAULT_CONVENTION)
 check("a mapping with no amount column at all resolves to the default and says 'unmapped'",
       CL.convention_from_mapping([])[1]["source"] == "unmapped")
-check("the vocabulary is exactly two named conventions — a tenant states what the FILE does, "
-      "not how the engine should behave",
-      tuple(CL.SIGN_CONVENTIONS) == ("payout_negative", "payout_positive")
-      and set(CL.CONVENTIONS) == set(CL.SIGN_CONVENTIONS))
-check("both are labelled in plain words for the wizard",
+check("the vocabulary is exactly three NAMED conventions — a tenant states what the FILE does, "
+      "not how the engine should behave (the third, negative-earned-with-netted-chargebacks, is the "
+      "onboarding intake's 'earned is negative' answer; mig 1008)",
+      tuple(CL.SIGN_CONVENTIONS) == ("payout_negative", "payout_positive", "payout_negative_netted")
+      and set(CL.CONVENTIONS) == set(CL.SIGN_CONVENTIONS)
+      and CL.CONVENTIONS["payout_negative_netted"] == {"payout_sign": -1, "reversal_handling": "signed"})
+check("all are labelled in plain words for the wizard",
       all(CL.SIGN_CONVENTION_LABELS.get(v) for v in CL.SIGN_CONVENTIONS))
 
 

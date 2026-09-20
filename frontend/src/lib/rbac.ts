@@ -804,6 +804,9 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/connectors', label: 'Connectors', icon: '🔌', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/onboarding', label: 'Onboarding Wizard', icon: '🚀', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/implementation', label: 'Implementation Wizard', icon: '🧭', module: 'commissions', scopes: ['all'], tileOnly: true },
+    // The NEW tenant onboarding flow (design 2026-09-20), stage 3 = commission-statement intake. Its own
+    // path (not /commcalc/onboarding, which is the older questionnaire wizard); admin scope, tile only.
+    { href: '/onboarding/intake', label: 'Onboarding — Commission Intake', icon: '📥', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/upload', label: 'Upload Files', icon: '📁', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/upload/wizard', label: 'Upload Wizard', icon: '🧭', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/carrier-comm-file', label: 'Carrier Comm File → Table', icon: '📑', module: 'commissions', scopes: ['all'], tileOnly: true },

@@ -38,7 +38,7 @@ import { NAV, canSeeItem } from '@/lib/rbac'
 export type ScreenKey =
   | 'cash_setup' | 'tender_setup' | 'store_matching' | 'roles_access' | 'sales_tax' | 'pos_settings'
   | 'employees' | 'store_setup' | 'sales_report_settings' | 'connectors' | 'vision_settings'
-  | 'comm_onboarding' | 'menu_layout' | 'dashboard_designer' | 'target_settings'
+  | 'comm_onboarding' | 'onboarding_intake' | 'menu_layout' | 'dashboard_designer' | 'target_settings'
   | 'org_structure' | 'billing_usage'
 
 export type ScreenDest = {
@@ -116,6 +116,11 @@ export const SCREENS: Record<ScreenKey, ScreenDest> = {
     href: '/commcalc/onboarding', label: 'Onboarding Wizard',
     blurb: 'Onboarding Wizard: add carriers and the rest of the tenant setup',
     aliases: ['Onboarding → Carrier', 'Onboarding Wizard'],
+  },
+  onboarding_intake: {
+    href: '/onboarding/intake', label: 'Onboarding — Commission Intake',
+    blurb: 'Onboarding — Commission Intake: drop a carrier statement, confirm the columns, answer which sign is money earned, bucket every label, tie out to the file\'s total',
+    aliases: ['Onboarding → Commission Intake', 'Commission Intake'],
   },
   menu_layout: {
     href: '/admin/menu', label: 'Menu Layout',

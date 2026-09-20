@@ -97,15 +97,27 @@ REVERSAL_MODES = (REVERSAL_CHARGE, REVERSAL_SIGNED)
 # free knobs: a tenant picks what their file DOES, not how the engine should behave.
 SIGN_PAYOUT_NEGATIVE = "payout_negative"
 SIGN_PAYOUT_POSITIVE = "payout_positive"
-SIGN_CONVENTIONS = (SIGN_PAYOUT_NEGATIVE, SIGN_PAYOUT_POSITIVE)
+# THE THIRD NAMED CONVENTION (onboarding intake, 2026-09-20; mig 1008). The intake's 3.4 question —
+# "In this file, is money you EARNED positive or negative?" — has two answers, and BOTH net a
+# reversal into the bucket it reverses (design §3.6: a chargeback is the same money coming back, never
+# a different stream). `payout_negative` cannot say that: on the master-agent feeds it describes, the
+# opposite sign IS a different stream (the dealer buying airtime), so it books a positive as a charge.
+# A statement written negative-earned WITH positive chargebacks therefore needs its own name, or the
+# intake would either inflate (abs()) or leave the chargebacks outside the buckets and never tie out.
+# Nothing declares this until a tenant answers 3.4 "earned is negative"; every existing row is
+# unchanged (NULL still reads as payout_negative).
+SIGN_PAYOUT_NEGATIVE_NETTED = "payout_negative_netted"
+SIGN_CONVENTIONS = (SIGN_PAYOUT_NEGATIVE, SIGN_PAYOUT_POSITIVE, SIGN_PAYOUT_NEGATIVE_NETTED)
 SIGN_CONVENTION_DEFAULT = SIGN_PAYOUT_NEGATIVE
 SIGN_CONVENTION_LABELS = {
     SIGN_PAYOUT_NEGATIVE: "A NEGATIVE amount is money earned (a positive is a charge to us)",
     SIGN_PAYOUT_POSITIVE: "A POSITIVE amount is money earned (a negative is a chargeback that nets off)",
+    SIGN_PAYOUT_NEGATIVE_NETTED: "A NEGATIVE amount is money earned (a positive is a chargeback that nets off)",
 }
 CONVENTIONS = {
     SIGN_PAYOUT_NEGATIVE: {"payout_sign": PAYOUT_SIGN_NEGATIVE, "reversal_handling": REVERSAL_CHARGE},
     SIGN_PAYOUT_POSITIVE: {"payout_sign": PAYOUT_SIGN_POSITIVE, "reversal_handling": REVERSAL_SIGNED},
+    SIGN_PAYOUT_NEGATIVE_NETTED: {"payout_sign": PAYOUT_SIGN_NEGATIVE, "reversal_handling": REVERSAL_SIGNED},
 }
 # Absent declaration, absent column, absent migration => this, for EVERY report and every template. It
 # is exactly what every caller had before the convention existed, which is what makes it provable.
