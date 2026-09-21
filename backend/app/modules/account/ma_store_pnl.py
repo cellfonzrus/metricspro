@@ -34,7 +34,7 @@ CONFIG, NEVER CODE (RULE TWO — mig 314 columns on commcalc.commission_org_conf
                                      raw_ma_commission.spiff_m1..m6 at the ACTIVATION month) or
                                      'daily_tx' (cash basis: book the raw_ma_daily_tx month-spiff
                                      rows in the month PAID, M1..M12+ via the shared
-                                     commission_ledger.parse_payment_month regex, and STOP booking
+                                     commission_ledger.month_leg_of resolver, and STOP booking
                                      the sheet's spiff columns so the same dollar can never book at
                                      both the activation month and the cash month).
   pl_ma_spiff_order_types   jsonb  — which daily-tx order_type families are month spiffs
@@ -56,7 +56,7 @@ comm-sheet components are the audited `_MA_COMPONENTS`. A retail_cost books AT M
 (precedence residual → MDF → month-spiff); merchant_discount is separate money and always books.
 """
 from app.modules.commcalc.calculator import safe_float
-from app.modules.commcalc.commission_ledger import parse_payment_month
+from app.modules.commcalc.commission_ledger import month_leg_of
 from app.modules.account import residual_subs as _rs
 
 # ── comm-sheet component → P&L head (moved verbatim from coa.build_inputs' inline map so the pure
@@ -318,7 +318,7 @@ def ma_tx_bookings(rows, pnl_cfg=None, cfg=None):
              stores" reads as itself in the drill-down);
           3. MONTH SPIFF (only when month_spiff_source='daily_tx') — order_type ∈
              cfg['spiff_order_types'] (case-insensitive) → `carrier_comm`, detail 'M<n>' via THE
-             shared commission_ledger.parse_payment_month regex ('TBV MONTH 4', 'M1 Proration',
+             shared commission_ledger.month_leg_of resolver ('TBV MONTH 4', 'M1 Proration',
              'SPF Month 1' all parse; no month token → 'Spiff (other)'). M1..M12+ come from the
              data, never from a hardcoded count."""
     pnl_cfg = pnl_cfg if pnl_cfg is not None else _rs.default_ma_pnl_config()
@@ -341,7 +341,10 @@ def ma_tx_bookings(rows, pnl_cfg=None, cfg=None):
         elif mdf_tokens and any(t in prod.lower() for t in mdf_tokens):
             out.append((MDF_LINE, acct, -safe_float(r.get("retail_cost")), prod.strip() or None))
         elif spiff_types and str(r.get("order_type") or "").strip().lower() in spiff_types:
-            n = parse_payment_month(prod)
+            # THE leg question, asked of the one home — not the month-token parser. A carrier
+            # states the first month in two forms and only one carries a token; asking for the
+            # token alone is what read August's M1 as $2,300.40 against a real $6,049.96.
+            n = month_leg_of(prod)
             detail = ("M%d" % n) if n else _SPIFF_OTHER_DETAIL
             out.append(("carrier_comm", acct, -safe_float(r.get("retail_cost")), detail))
     return out
@@ -1023,7 +1026,7 @@ def ma_received_month_ladder(rows, pnl_cfg=None, cfg=None, store_index=None):
     month-of-life and by store.
 
     Runs `ma_tx_bookings` — the same classifier, the same precedence, the same shared
-    `commission_ledger.parse_payment_month` — with `month_spiff_source` forced to 'daily_tx' so the
+    `commission_ledger.month_leg_of` — with `month_spiff_source` forced to 'daily_tx' so the
     ladder EXISTS even for an org that books the sheet basis. Forcing it here can never move money:
     this function returns a read-out and books nothing. M1..M12+ come from the data, so this is the
     only one of the two bases that can reach M7 and beyond."""
