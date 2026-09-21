@@ -634,8 +634,9 @@ check("G8 the registry row: landing 'invoice' is an intake landing; the card is 
       "invoice" in RK.INTAKE_LANDINGS and (lambda r: r["applies_to_pos"] == [] and r["applies_to_carrier"] == [] and r["sort_order"] == 25
                                            and all(any(t[0] == f for t in CM.TARGET_FIELDS["sales_by_invoice"]) for f in r["signature_fields"]))(
           next(r for r in RK.house_mirror() if r["key"] == "sales_by_invoice")))
-check("G9 shows_in for the card names ONLY the reader that reads it (the intake's Stage 4) — never the Tax Collected report or the closing recon, which do not read these tables yet",
-      (lambda si: si["table"] == "raw_sales_invoice" and [c["screen"] for c in si["consumers"]] == ["onboarding_intake"])(
+check("G9 shows_in for the card names ONLY the readers that read it — the intake's Stage 4 and, since 2026-09-21 (§30.14), the POS sales rebuilt from the reports — "
+      "never the Tax Collected report or the closing recon, which do not read these tables yet",
+      (lambda si: si["table"] == "raw_sales_invoice" and [c["screen"] for c in si["consumers"]] == ["onboarding_intake", "pos_receipts"])(
           LI.shows_in(next(r for r in RK.house_mirror() if r["key"] == "sales_by_invoice"), CM.TABLE_MAP, R._TRACE_TARGET_TABLE, OI.SOURCE_KIND_TARGET)))
 lineage = io.open(os.path.join(ROOT, "backend", "app", "modules", "commcalc", "data_lineage_registry.py"), encoding="utf-8").read()
 seed = io.open(os.path.join(ROOT, "database", "migrations", "925_data_lineage_seed.sql"), encoding="utf-8").read()

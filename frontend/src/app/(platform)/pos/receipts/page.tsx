@@ -5,6 +5,8 @@
 // backend Document. Backend: /pos/receipt-import/* + /pos/receipt-imports/*.
 import { useEffect, useState, type CSSProperties } from 'react'
 import { api, apiPrintHtml } from '@/lib/client'
+import { usePosTerm } from '@/lib/report-labels'
+import ScreenLink from '@/components/ScreenLink'
 
 type Fmt = { source: string; label: string }
 type Col = { key: string; label: string; kind: string; align?: string }
@@ -26,6 +28,20 @@ interface ImportRow {
   device_name?: string | null; imei?: string | null; total?: number | null; sale_date?: string | null
   store_code?: string | null; created_at?: string
 }
+// a sale REBUILT from the two landed sales reports (backend pos/sales_from_reports, index §30.14)
+interface RebuiltRow {
+  id: string; sale_id?: string | null; invoice_no?: string | null; sale_date?: string | null
+  store_code?: string | null; store?: string | null; customer_name?: string | null; total?: number | null
+  payments?: { label: string; amount: number | null }[]; lines_found?: number | null
+  lines_tie?: boolean; tenders_tie?: boolean; words?: string[]; built_at?: string | null
+}
+interface RebuildResult {
+  ok: boolean; ran: boolean; reason?: string | null; pos?: string | null; format_label?: string | null
+  invoices?: number; with_lines?: number; without_lines?: number; created?: number; replaced?: number; failed?: number
+  words?: string[]; line_invoices_without_header?: string[]
+}
+const monthAgo = () => { const d = new Date(); d.setDate(d.getDate() - 31); return d.toISOString().slice(0, 10) }
+const today = () => new Date().toISOString().slice(0, 10)
 
 const money = (v: unknown) => {
   const n = typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(/[^0-9.-]/g, ''))
@@ -56,12 +72,21 @@ export default function ReceiptImportPage() {
   const [q, setQ] = useState('')
   const [rows, setRows] = useState<ImportRow[]>([])
 
+  // ── sales rebuilt from the landed reports (the two report kinds the intake / Upload page land) ──
+  const { pos: posWord } = usePosTerm()
+  const [rbFrom, setRbFrom] = useState(monthAgo())
+  const [rbTo, setRbTo] = useState(today())
+  const [rbResult, setRbResult] = useState<RebuildResult | null>(null)
+  const [rebuilt, setRebuilt] = useState<RebuiltRow[]>([])
+  const [rebuiltNote, setRebuiltNote] = useState<string>('')
+
   useEffect(() => {
     api('/api/v1/pos/receipt-import/formats').then((r: { formats: Fmt[]; default_source?: string }) => {
       setFormats(r.formats || [])
       setSource(r.default_source || r.formats?.[0]?.source || '')
     }).catch(() => {})
     search()
+    loadRebuilt()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const search = async () => {
@@ -69,6 +94,26 @@ export default function ReceiptImportPage() {
       const r = await api(`/api/v1/pos/receipt-imports?q=${encodeURIComponent(q)}`)
       setRows(r.receipt_imports || [])
     } catch (e) { setError(e instanceof Error ? e.message : 'Search failed') }
+  }
+
+  const loadRebuilt = async (from = rbFrom, to = rbTo) => {
+    try {
+      const r = await api(`/api/v1/pos/sales-from-reports?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)
+      setRebuilt(r.sales || [])
+      setRebuiltNote(r.format_reason || (r.format_label ? `printed in the ${r.format_label} layout` : ''))
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not list the rebuilt sales') }
+  }
+
+  const rebuild = async () => {
+    setBusy('rebuild'); setError(''); setRbResult(null)
+    try {
+      const r: RebuildResult = await api('/api/v1/pos/sales-from-reports/rebuild', {
+        method: 'POST', body: JSON.stringify({ from: rbFrom, to: rbTo }),
+      })
+      setRbResult(r)
+      await loadRebuilt()
+    } catch (e) { setError(e instanceof Error ? e.message : 'Rebuild failed') }
+    finally { setBusy(null) }
   }
 
   const onFile = async (f: File | null) => {
@@ -258,6 +303,66 @@ export default function ReceiptImportPage() {
           {savedId && <div style={{ marginTop: 10, color: '#0a7d33', fontSize: 13 }}>✓ Saved. Use 🖨 Print to reprint in the original format.</div>}
         </div>
       )}
+
+      {/* sales rebuilt from the two landed sales reports — the invoice-level export (with its tender
+          columns) joined to the line-level export by invoice number; printed through the same renderer */}
+      <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, marginBottom: 20 }}>
+        <div style={{ fontWeight: 700, marginBottom: 4 }}>Rebuild sales from the landed reports</div>
+        <p className="pg-note" style={{ color: 'var(--text2)', margin: '0 0 10px', fontSize: 13 }}>
+          Every invoice in the <b>Sales by invoice with tender types</b> upload is combined with its lines from the
+          <b> Sales report with IMEI and phone number</b> upload (by invoice number) into one {posWord} sale, printable in the
+          receipt layout of your declared {posWord}. Both uploads are made under <ScreenLink to="onboarding_intake" /> or
+          <ScreenLink to="upload_files" />; the rebuild also runs on every commit of either one. Re-running a period replaces
+          those invoices — it never duplicates them.
+        </p>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div><label style={label}>From</label><input type="date" value={rbFrom} onChange={e => setRbFrom(e.target.value)} style={{ ...input, width: 150 }} /></div>
+          <div><label style={label}>To</label><input type="date" value={rbTo} onChange={e => setRbTo(e.target.value)} style={{ ...input, width: 150 }} /></div>
+          <button className="btn btn-primary" disabled={busy === 'rebuild'} onClick={rebuild}>{busy === 'rebuild' ? 'Rebuilding…' : 'Rebuild sales from the landed reports'}</button>
+          <button className="btn btn-secondary" onClick={() => loadRebuilt()}>Show rebuilt sales</button>
+        </div>
+        {rbResult && (
+          <div style={{ marginTop: 10, fontSize: 13, background: rbResult.ran && rbResult.ok ? 'var(--bg)' : '#fff4e5', padding: '8px 12px', borderRadius: 6 }}>
+            {!rbResult.ran && <div style={{ color: '#9b1c1c' }}>{rbResult.reason}</div>}
+            {rbResult.ran && (
+              <>
+                <div><b>{rbResult.invoices ?? 0}</b> invoice(s) · {rbResult.with_lines ?? 0} with lines · {rbResult.without_lines ?? 0} without · {rbResult.created ?? 0} created · {rbResult.replaced ?? 0} replaced{rbResult.failed ? ` · ${rbResult.failed} failed` : ''}{rbResult.format_label ? ` · ${rbResult.format_label} layout` : ''}</div>
+                {(rbResult.words || []).map((w, i) => <div key={i} style={{ color: 'var(--text2)' }}>{w}</div>)}
+              </>
+            )}
+          </div>
+        )}
+        {rebuiltNote && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text2)' }}>{rebuiltNote}</div>}
+        <div className="table-wrapper" style={{ overflowX: 'auto', marginTop: 10 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 860 }}>
+            <thead><tr style={{ textAlign: 'left', color: 'var(--text2)' }}>
+              <th style={{ padding: 6 }}>Date</th><th style={{ padding: 6 }}>Store</th><th style={{ padding: 6 }}>Invoice #</th>
+              <th style={{ padding: 6 }}>Customer</th><th style={{ padding: 6 }}>Total</th><th style={{ padding: 6 }}>Tenders</th>
+              <th style={{ padding: 6 }}>Lines</th><th style={{ padding: 6 }}></th>
+            </tr></thead>
+            <tbody>
+              {rebuilt.map(r => (
+                <tr key={r.id} style={{ borderTop: '1px solid var(--border)' }} title={(r.words || []).join('\n')}>
+                  <td style={{ padding: 6 }}>{r.sale_date || '—'}</td>
+                  <td style={{ padding: 6 }}>{r.store_code || r.store || '—'}</td>
+                  <td style={{ padding: 6 }}>{r.invoice_no || '—'}</td>
+                  <td style={{ padding: 6 }}>{r.customer_name || '—'}</td>
+                  <td style={{ padding: 6 }}>{money(r.total)}</td>
+                  <td style={{ padding: 6 }}>{(r.payments || []).length ? (r.payments || []).map(p => `${p.label} ${money(p.amount)}`).join(', ') : '—'}</td>
+                  <td style={{ padding: 6, color: r.lines_found ? (r.lines_tie ? 'inherit' : '#9b5e00') : '#9b1c1c' }}>
+                    {r.lines_found ?? 0}{r.lines_found ? (r.lines_tie ? '' : ' (do not tie)') : ' (none found)'}
+                  </td>
+                  <td style={{ padding: 6, whiteSpace: 'nowrap' }}>
+                    <button className="btn btn-secondary" onClick={() => openStored(r.id)}>Open</button>{' '}
+                    <button className="btn btn-secondary" onClick={() => print(r.id)}>🖨 Print receipt</button>
+                  </td>
+                </tr>
+              ))}
+              {rebuilt.length === 0 && <tr><td colSpan={8} style={{ padding: 16, color: 'var(--text2)', textAlign: 'center' }}>No sales rebuilt from the reports in this period yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       {/* imported receipts list */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '4px 0 10px' }}>
