@@ -89,6 +89,33 @@ def find_money(line: str) -> list[str]:
     return _MONEY_RE.findall(line or "")
 
 
+def fmt_money(v) -> str:
+    """The ONE money spelling on a receipt: 1410 → '$1,410.00'; -1410 → '($1,410.00)' (accounting
+    negative, as the financed offset lines print); unparseable → the value as text. The renderer, the
+    parsers' round-trip and the sales-from-reports builder all spell money through this."""
+    n = money(v)
+    if n is None:
+        return "" if v is None else str(v)
+    return ("(" + f"${abs(n):,.2f}" + ")") if n < 0 else f"${n:,.2f}"
+
+
+def format_date(iso: str, fmt: str) -> str:
+    """ISO 'YYYY-MM-DD' → the spelling a format prints (fmt is a strftime pattern, e.g. '%d-%b-%Y' →
+    '28-Nov-2025'). A value that is not an ISO date is returned as given, never guessed."""
+    import datetime as _dt
+    s = (iso or "").strip()[:10]
+    try:
+        return _dt.date.fromisoformat(s).strftime(fmt)
+    except (ValueError, TypeError):
+        return (iso or "").strip()
+
+
+# The key under which a Document says WHERE IT CAME FROM when it was not parsed from a file (the
+# sales rebuilt from the landed reports, pos/sales_from_reports.py). A parser never sets it; the
+# round-trip proof compares documents without it.
+PROVENANCE_KEY = "provenance"
+
+
 def new_document(pos_source: str, format_label: str) -> dict:
     return {
         "pos_source": pos_source, "format_label": format_label, "title": None,

@@ -92,6 +92,9 @@ CONSUMERS = {
          "why": "sold IMEIs are matched against the carrier's rebate and inventory feeds"},
         {"screen": "pl_statement", "label": "P&L Statement", "needs": ["ext_price", "gp"], "gate": False,
          "why": "device and accessory revenue book to the P&L from the sales lines"},
+        {"screen": "pos_receipts", "label": "POS sales / receipts", "needs": ["trans_id", "product_desc", "ext_price"], "gate": False,
+         "why": "each invoice's lines become the items of a POS sale rebuilt with the sales-by-invoice header, "
+                "reprintable in the declared POS's receipt format (index §30.14)"},
     ],
     "raw_sales_product": [
         {"screen": "onboarding_intake", "label": "Onboarding — Stage 4 verify and report links", "needs": ["sku", "ext_price"], "gate": True,
@@ -109,6 +112,9 @@ CONSUMERS = {
          "needs": ["trans_id", "invoice_total"], "gate": True,
          "why": "each invoice's totals are verified, its tender columns are split per store-day beside the register's X-report, "
                 "Σ tax is shown as a tie-out, and the invoice number links the report to the line-level sales export"},
+        {"screen": "pos_receipts", "label": "POS sales / receipts", "needs": ["trans_id", "invoice_total"], "gate": False,
+         "why": "each invoice header becomes a POS sale (with its lines from the line-level export, by invoice number), "
+                "reprintable in the declared POS's receipt format (index §30.14)"},
     ],
     "raw_sales_invoice_tender": [
         {"screen": "onboarding_intake", "label": "Onboarding — Stage 4 tender split vs X-report", "needs": ["amount", "tender_class"], "gate": True,
@@ -116,6 +122,9 @@ CONSUMERS = {
         {"screen": "closing_recon", "label": "Closing Reconciliation (cash collected, cash / card recon, deposit recon)", "needs": ["amount", "tender_class"], "gate": False,
          "why": "the tender split per store-day the closing recons read when the company's tender basis is the invoice tenders "
                 "(or the X-report else the invoice) — set at intake step 2.5b; the house default reads the X-report"},
+        {"screen": "pos_receipts", "label": "POS sales / receipts", "needs": ["amount", "tender_class"], "gate": False,
+         "why": "the customer-payment tender rows print as the receipt's payment lines; a tender class with no place on the closing "
+                "axis (a vendor rebate, a coupon) explains the difference between the lines and what the customer paid (index §30.14)"},
     ],
     "daily_sales_feed": [
         {"screen": "sales_recon", "label": "Sales Feed Recon", "needs": ["trans_id"], "gate": False,

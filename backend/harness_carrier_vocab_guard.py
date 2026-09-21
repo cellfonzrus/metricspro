@@ -197,7 +197,8 @@ POS_REVIEWED_EXCEPTIONS = {
 #    signature substring of the literal) -> reason; stale FAILS.
 POS_BACKEND_LOGIC = ["commcalc/report_kinds.py", "commcalc/onboarding_intake.py", "commcalc/implementation_spine.py",
                      "commcalc/invoice_tenders.py",     # 2026-09-21 — the invoice tender split (pure; no vendor, no brand)
-                     "commcalc/connector_registry.py"]  # 2026-09-21 — the connector registry: no vendor before its mirror marker
+                     "commcalc/connector_registry.py",  # 2026-09-21 — the connector registry: no vendor before its mirror marker
+                     "pos/sales_from_reports.py"]       # 2026-09-21 — sales rebuilt from the reports (the format is the DECLARED POS's, never a literal)
 POS_BACKEND_COPY = [
     "commcalc/router.py", "commcalc/sales_recon.py", "commcalc/imei_rebate_report.py", "commcalc/report_labels.py",
     "closing/router.py", "closing/attention_providers.py", "asset/router.py", "account/finance_attention.py",

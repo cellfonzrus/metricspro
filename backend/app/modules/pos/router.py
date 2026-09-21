@@ -16,7 +16,7 @@ one existed; no code read `modules`, so POS visibility was enforced only client-
 Adding it server-side has to land together with seeding `pos` into MODULE_CATALOG and the roles
 UI, or every existing role — none of which carries a `pos` key — would be locked out at once.
 """
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from app.core.database import get_supabase
 
@@ -3001,6 +3001,39 @@ def receipt_import_print(import_id: str, editable: bool = False, org_id: str = O
     if not rows or not rows[0].get("document"):
         raise HTTPException(404, "no printable document for this import")
     return HTMLResponse(content=_rrender.render_html(rows[0]["document"], editable=bool(editable)))
+
+
+# ── Sales REBUILT from the landed sales reports (owner 2026-09-21; index §30.14) ───────────────────
+# The two report kinds the intake / Upload page already land (the invoice-level export with its tender
+# columns, the line-level export) are combined per invoice number into ONE structured receipt document,
+# imported through the same importer a scanned receipt uses, and reprinted through the format registered
+# for the tenant's DECLARED POS. The rebuild also runs on every intake commit of either kind; this
+# endpoint is the same consumer offered for a period ("Rebuild sales from the landed reports").
+from app.modules.pos import sales_from_reports as _sfr
+
+
+@router.post("/sales-from-reports/rebuild")
+def sales_from_reports_rebuild(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Body: {from: 'YYYY-MM-DD', to: 'YYYY-MM-DD', stores?: [store strings], dry_run?}. Every invoice of
+    the slice present in the invoice landing becomes a POS sale (lines from the line landing by invoice
+    number; a header with no lines still becomes a sale and says so). Keyed org × invoice #: re-running
+    replaces, never duplicates. Answers the counts, the ties in words and the per-invoice reports."""
+    lo, hi = (body.get("from") or "").strip()[:10], (body.get("to") or "").strip()[:10]
+    if not (lo and hi) or lo > hi:
+        raise HTTPException(400, "from and to (YYYY-MM-DD, from ≤ to) are required")
+    stores = body.get("stores") if isinstance(body.get("stores"), list) and body.get("stores") else None
+    who = _caller_employee(authorization, org_id) or None
+    return _sfr.rebuild(sb(), org_id, lo, hi, stores=stores, who=who, dry_run=bool(body.get("dry_run")))
+
+
+@router.get("/sales-from-reports")
+def sales_from_reports_list(from_: str = Query("", alias="from"), to: str = "", org_id: str = ORG_ID):
+    """The POS sales rebuilt from the reports in a date range (newest first): invoice #, date, store,
+    customer, total, the payment lines, lines found, the tie words; each prints through
+    GET /pos/receipt-imports/{id}/print (the one renderer) and opens for editing like any import."""
+    fmt = _sfr.resolve_format(sb(), org_id)
+    return {"pos": fmt["pos"], "format_label": (fmt["format"] or {}).get("label") if fmt["ok"] else None,
+            "format_reason": fmt["reason"], "sales": _sfr.list_rebuilt(sb(), org_id, from_ or None, to or None)}
 
 
 # ── Vendor rebate / activation report (carrier commission + rebate history XLSX) ───────────────────
