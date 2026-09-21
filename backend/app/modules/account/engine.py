@@ -75,6 +75,12 @@ def _assemble(inputs, journal_rows, spec, label_map, sections_def, scope, stores
         note = (inputs.get(key) or {}).get("note")
         if note:
             row["note"] = note
+        # WHICH SOURCE booked a commission line, and the other source's figure beside it (mig 1013,
+        # ledger_pnl.divergence): the P&L's drill-down back to the Commission Ledger. Only emitted
+        # when coa attached it, so every other line and every other tenant keeps a byte-identical payload.
+        cs = (inputs.get(key) or {}).get("commission_source")
+        if cs:
+            row["commission_source"] = cs
         lines_by_section[section].append(row)
 
     # fold in manual journal entries (match by label to a spec line, else append)

@@ -36,6 +36,8 @@ import { Stage2Flow, STAGE2_STEPS } from './stage2'
 import { useReportKinds } from '@/lib/report-kinds'
 import ScreenLink, { SCREENS, type ScreenKey } from '@/components/ScreenLink'
 import ShowsIn from '@/components/ShowsIn'
+import PlCommissionSourcePanel from '@/components/PlCommissionSourcePanel'
+import type { ShowsIn as ShowsInPayload } from '@/lib/report-kinds'
 import { STATEMENT_TYPE_DEFAULT, statementTypeToken } from '@/lib/statement-type'
 
 // ── stage-3 payload types (mirror onboarding_intake.py) ─────────────────────────────────────────
@@ -74,6 +76,7 @@ type CommitResp = {
   rules_saved: number; identity_written?: { aliases: [string, string][]; stores_created: string[] }
   verified_numbers: { rows_in_file: number; rows_usable: number; footer_rows_dropped: number; rows_built: number; rows_landed: number; rows_inserted: number; totals: Totals; tie: LedgerTie; attestation: { reason: string } | null; confirmed_by: string | null; confirmed_at: string }
   state: { saved: boolean; reason?: string }
+  shows_in?: ShowsInPayload           // where this statement shows up — incl. the P&L lines its buckets book to (mig 1013)
 }
 type SignAnswer = 'positive' | 'negative' | null
 type Assignment = { label: string; match_field?: string | null; bucket: string; is_reversal: boolean }
@@ -875,6 +878,11 @@ export default function OnboardingIntakePage() {
                   </tbody>
                 </table>
                 {commitRes.verified_numbers.attestation && <div style={{ ...note, marginBottom: 8 }}>Attested: &quot;{commitRes.verified_numbers.attestation.reason}&quot; — {commitRes.verified_numbers.confirmed_by}</div>}
+                {/* WHERE THIS STATEMENT SHOWS UP (mig 1013): the ledger's consumers from the one map, the P&L
+                    entry naming the lines its buckets book to; and the source switch, so the person who just
+                    took the statement in can make it reach the P&L — suggested, confirmed here, never silent */}
+                {commitRes.shows_in && <ShowsIn info={commitRes.shows_in} lead="This statement will show in" />}
+                <PlCommissionSourcePanel compact lead="Which source books the P&L's commission lines for this company?" />
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button style={primary} onClick={resetForAnother}>Another carrier?</button>
                   <a href="/commcalc/commission-ledger" style={{ ...ghost, textDecoration: 'none', display: 'inline-block' }}>Open the Commission Ledger</a>

@@ -89,6 +89,17 @@ REBATE_ROUTES = {"contra_cogs": ("device_rebate", -1), "income": ("rebate_income
 # to selling price + device rebate - device cost"). See the DEVICE MARGIN section at the foot of
 # this module for the block, its columns and the gross-profit identity.
 DEVICE_MARGIN_ROUTES = ("off", "margin_block")
+# ── mig 1013 (owner 2026-09-21: "p&l is not showing the commission received, it shows in the
+# commission ledger but not populating the p&l - check platform wide not bandaid"). WHICH SOURCE books
+# the P&L's commission lines, per org — the vocabulary lives HERE beside the other P&L source-of-truth
+# switches; the resolution lives in account/ledger_pnl.resolve_source (the ONE resolver):
+#   'feeds'             (house default) today's bookings from the feed tables — byte-identical;
+#   'ledger'            book from commcalc.commission_ledger by bucket -> commission_bucket.pl_line_key,
+#                       suppressing the commission-FEED bookings for the same lines (never both);
+#   'ledger_else_feeds' per period: the ledger when it holds lines for the period, else the feeds.
+COMMISSION_SOURCE_FEEDS, COMMISSION_SOURCE_LEDGER, COMMISSION_SOURCE_LEDGER_ELSE_FEEDS = (
+    "feeds", "ledger", "ledger_else_feeds")
+COMMISSION_SOURCES = (COMMISSION_SOURCE_FEEDS, COMMISSION_SOURCE_LEDGER, COMMISSION_SOURCE_LEDGER_ELSE_FEEDS)
 
 
 def rebate_route(cfg):
@@ -119,6 +130,7 @@ def default_config():
         "line_labels": {},
         "rebate_presentation": "contra_cogs",
         "device_margin_presentation": "off",
+        "commission_source": COMMISSION_SOURCE_FEEDS,
     }
 
 
@@ -126,6 +138,7 @@ _CFG_COLS_314 = ("pl_ma_store_attribution,pl_ma_month_spiff_source,"
                  "pl_ma_spiff_order_types,pl_mdf_product_tokens,pl_line_labels")
 _CFG_COLS_934 = _CFG_COLS_314 + ",pl_rebate_presentation"
 _CFG_COLS_996 = _CFG_COLS_934 + ",pl_device_margin_presentation"
+_CFG_COLS_1013 = _CFG_COLS_996 + ",pl_commission_source"
 
 
 def load_config(client, org_id):
@@ -136,11 +149,11 @@ def load_config(client, org_id):
     try:
         # Column-set fallback, NEWEST first: selecting a column a live DB doesn't have yet is a
         # PostgREST error for the WHOLE select, and falling all the way back to defaults would
-        # silently drop the mig-314 seeds an org already runs on. So: mig-996 column set, then the
-        # mig-934 set, then the mig-314 set, then defaults — each older set keeps every value it
-        # does carry.
+        # silently drop the mig-314 seeds an org already runs on. So: mig-1013 column set, then the
+        # mig-996 set, then the mig-934 set, then the mig-314 set, then defaults — each older set
+        # keeps every value it does carry.
         rows = []
-        for _cols in (_CFG_COLS_996, _CFG_COLS_934, _CFG_COLS_314):
+        for _cols in (_CFG_COLS_1013, _CFG_COLS_996, _CFG_COLS_934, _CFG_COLS_314):
             try:
                 rows = (client.schema("commcalc").table("commission_org_config")
                         .select(_cols).eq("org_id", org_id).limit(1).execute().data) or []
@@ -171,6 +184,11 @@ def load_config(client, org_id):
             dmp = str(r.get("pl_device_margin_presentation") or "").strip().lower()
             if dmp in DEVICE_MARGIN_ROUTES:
                 cfg["device_margin_presentation"] = dmp
+            # mig 1013 — an unknown value keeps the house default ('feeds'): a typo can never move
+            # a P&L line off the feed tables silently.
+            cs = str(r.get("pl_commission_source") or "").strip().lower()
+            if cs in COMMISSION_SOURCES:
+                cfg["commission_source"] = cs
     except Exception:
         pass
     return cfg

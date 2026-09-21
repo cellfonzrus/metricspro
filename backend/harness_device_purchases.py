@@ -368,7 +368,17 @@ check("B3 …and the only account-module file this work touches at all, besides 
                     # money ROUTING lives, so listing it is not enough — B2d below pins every
                     # pre-existing function in it byte-identical to the branch point, which is a
                     # STRICTER claim than "this file did not appear in git status".
-                    "backend/app/modules/account/ma_store_pnl.py"}, mods)
+                    "backend/app/modules/account/ma_store_pnl.py",
+                    # RE-BASELINED 2026-09-21 (mig 1013, owner: "p&l is not showing the commission
+                    # received … check platform wide not bandaid"). The P&L commission SOURCE work
+                    # adds the NEW module ledger_pnl.py (pure booking through the ledger's own
+                    # summarizer), a `commission_source` passthrough in engine._assemble (copied onto
+                    # the row like `note`; no arithmetic), and the config-reader extension in
+                    # ma_store_pnl (B2d/B2f below say exactly which functions, and pin every
+                    # BOOKING function byte-identical). coa.py's change is inside the sanctioned
+                    # build_inputs (B2a-B2c). Proven by backend/harness_pl_commission_source.py.
+                    "backend/app/modules/account/engine.py",
+                    "backend/app/modules/account/ledger_pnl.py"}, mods)
 
 # ── B2d: ma_store_pnl.py — ADDITIONS ONLY ───────────────────────────────────────────────────────
 # Everything that decides WHERE an MA dollar books (ma_commission_bookings, ma_tx_bookings,
@@ -389,10 +399,17 @@ if _msp_base.strip():
     # fix routes these two through `commission_ledger.month_leg_of`. What must not change is the
     # MONEY, and B2f below proves that directly — the (line, amount) sequence is identical and only
     # the M<n> DETAIL LABEL moves. That is a stricter claim than "the file did not change".
-    MSP_SANCTIONED = ("ma_tx_bookings", "ma_received_month_ladder")
+    # ALSO SANCTIONED 2026-09-21 (mig 1013, the P&L commission SOURCE — owner: "p&l is not showing the
+    # commission received … check platform wide not bandaid"): the CONFIG READER pair — `default_config`
+    # gains the `commission_source` key (house default 'feeds') and `load_config` reads the new column
+    # (newest column set first, adaptive) — because that is where every other P&L switch is read and a
+    # sibling config home is the duplicate the index forbids. Neither decides where a dollar books; B2g
+    # below pins every function that DOES. Proven by backend/harness_pl_commission_source.py.
+    MSP_SANCTIONED = ("ma_tx_bookings", "ma_received_month_ladder", "default_config", "load_config")
     _msp_unsanctioned = [f for f in _msp_changed if f not in MSP_SANCTIONED]
     check("B2d ma_store_pnl.py — no pre-existing function changed except the two sanctioned by the "
-          "2026-09-21 M1-leg correction, so no MA dollar books anywhere different",
+          "2026-09-21 M1-leg correction and the config-reader pair sanctioned by mig 1013, so no MA "
+          "dollar books anywhere different",
           _msp_unsanctioned == [], _msp_unsanctioned)
     check("B2e …and nothing was removed from ma_store_pnl.py", _msp_removed == [], _msp_removed)
 
@@ -419,6 +436,16 @@ if _msp_base.strip():
           [("ma_merchant_discount", None, 0.0), ("carrier_comm", None, 27.5),
            ("ma_merchant_discount", None, 1.25), ("carrier_comm", None, 22.5),
            ("ma_merchant_discount", None, 0.0), ("mi_income", None, 9.0)])
+
+    # B2g (mig 1013) — the functions that decide WHERE an MA dollar books, other than the one B2f pins
+    # by its money, are byte-identical to the branch point.
+    _MSP_BOOKING = ("ma_commission_bookings", "rebate_route", "account_store_index", "load_store_index",
+                    "canonical_store_index", "gp_carrier_income", "commission_received_lines",
+                    "device_margin_bookings", "device_margin_supersedes")
+    _msp_booking_moved = sorted(f for f in _MSP_BOOKING if f in _b and f in _n and _b[f] != _n[f])
+    check("B2g …and every other function that decides WHERE an MA dollar books is byte-identical to the "
+          "branch point (the sheet booking rules, the rebate route, the account->store index, the GP "
+          "read-out, the commission-received family)", _msp_booking_moved == [], _msp_booking_moved)
 else:
     check("B2d ma_store_pnl.py baseline unavailable (git-less CI) — skipped, not silently passed",
           True)

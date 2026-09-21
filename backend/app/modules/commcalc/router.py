@@ -4852,6 +4852,23 @@ def _ledger_convention_for(client, org_id, carrier_id="", source_report=""):
         return commission_ledger.convention_from_mapping([])
 
 
+def _ledger_pl_link(client, org_id):
+    """The P&L lines the org's buckets book to + the configured P&L commission source (mig 1013) —
+    ledger_pnl.pl_link over THE registry reader and THE config reader. What every "this statement will
+    show in" surface renders through landing_identity.shows_in / consumers_for_table. Never raises."""
+    try:
+        from app.modules.account import ledger_pnl as _lp
+        from app.modules.account import ma_store_pnl as _msp
+        from app.modules.account import coa as _coa
+        buckets, _bmeta = _ledger_buckets(client, org_id)
+        cfg = _msp.load_config(client, org_id)
+        return _lp.pl_link(buckets, _coa.PL_LABEL, cfg.get("line_labels"), _coa.PL_SECTION,
+                           configured=cfg.get("commission_source"), cfg=cfg)
+    except Exception as e:
+        print(f"WARN _ledger_pl_link failed for org {org_id}: {e}")
+        return None
+
+
 def _ledger_buckets(client, org_id):
     """(buckets, meta) — THE org's bucket registry (commcalc.commission_bucket, mig 1009): the house
     org's defaults with this org's rows overriding per key, both reads org-scoped. A database without
@@ -5201,11 +5218,12 @@ def _intake_state_payload(client, org_id, current_instance=None):
                 "note": ("Resumable state is not available until migration "
                          f"{_INTAKE_STATE_MIGRATION} is applied — the flow still works; leaving the "
                          "page loses your place."),
-                "run": None, "company": company, "rail": _intake.rail([], current_instance, company)}
+                "run": None, "company": company,
+                "rail": _intake.rail([], current_instance, company, pl_link=_ledger_pl_link(client, org_id))}
     run = _intake_run(client, org_id)
     rows = _intake_stage_rows(client, org_id, (run or {}).get("id"))
     return {"state_ready": True, "migration": _INTAKE_STATE_MIGRATION, "run": run, "company": company,
-            "rail": _intake.rail(rows, current_instance, company, run)}
+            "rail": _intake.rail(rows, current_instance, company, run, pl_link=_ledger_pl_link(client, org_id))}
 
 
 def _intake_save_state(client, org_id, instance_key, step=None, status=None, payload_patch=None,
@@ -8006,6 +8024,10 @@ def _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who
             "identity_written": identity_written,
             "verified_numbers": verified_numbers, "state": state,
             "buckets": commission_ledger.bucket_keys(ctx["buckets"]), "bucket_labels": _intake.bucket_labels(ctx["buckets"]),
+            # WHERE THIS STATEMENT SHOWS UP (mig 1013): the ledger's consumers from the ONE map, the P&L
+            # entry carrying the lines the org's buckets are linked to and whether the ledger books the P&L
+            "shows_in": _landing.shows_in({"landing": "commission"}, column_mapping.TABLE_MAP, _TRACE_TARGET_TABLE,
+                                          _intake.SOURCE_KIND_TARGET, pl_link=_ledger_pl_link(client, org_id)),
             "summary": commission_ledger.summarize(rows, rules=cat_rules, conv=conv, buckets=ctx["buckets"],
                                                    buckets_meta=ctx["bucket_meta"])}
 
@@ -14596,7 +14618,18 @@ def _commission_org_config(client, org_id):
             # it back is an instant revert. Live measurement before the switch (org 854f6d7b, 2026-08):
             # the accessory basis for rules-plan reps grows ~2.75x (12-rep sample $6,165 → $16,969),
             # because raw_sales held 3,235 rows for the period while the union holds 9,161.
-            "sales_source": _ss if _ss in ("legacy", "union") else "legacy"}
+            "sales_source": _ss if _ss in ("legacy", "union") else "legacy",
+            # mig 1013 — WHICH SOURCE BOOKS THE P&L COMMISSION LINES. 💰 MONEY SETTING (statement value).
+            # 'feeds' (default, and the value read when the column is absent) = today's feed-table
+            # bookings, byte-identical. 'ledger' / 'ledger_else_feeds' book from the Commission Ledger
+            # (account/ledger_pnl). Vocabulary: ma_store_pnl.COMMISSION_SOURCES (one home).
+            "pl_commission_source": _pl_commission_source_value(r.get("pl_commission_source"))}
+
+
+def _pl_commission_source_value(v):
+    from app.modules.account import ma_store_pnl as _msp
+    v = str(v or "").strip().lower()
+    return v if v in _msp.COMMISSION_SOURCES else _msp.COMMISSION_SOURCE_FEEDS
 
 
 def _sales_source_mode(client, org_id):
@@ -16384,6 +16417,7 @@ class PutCommissionSettingsIn(LaxModel):
     installment_mrc_hardware_guard: Any = None
     store_resolution: Any = None
     calc_stale_minutes: Any = None
+    pl_commission_source: Any = None
 
 
 @router.put("/commission-settings")
@@ -16455,7 +16489,56 @@ def put_commission_settings(body: PutCommissionSettingsIn, authorization: str = 
              .update({"calc_stale_minutes": _csm_val}).eq('org_id', org_id).execute())
         except Exception as e:
             print(f"WARN calc_stale_minutes not saved for org {org_id} (is migration 275 applied?): {e}")
+    # mig 1013 — 💰 WHICH SOURCE BOOKS THE P&L COMMISSION LINES (owner 2026-09-21). Its OWN statement
+    # (the mig-247 lesson), but NEVER best-effort: a P&L source that did not save is a defect the
+    # person must hear about, so a missing column refuses naming the migration. The value is
+    # validated against the ONE vocabulary (ma_store_pnl.COMMISSION_SOURCES) — an unknown word is a
+    # 400, never a silent default. Same admin gate as the rest of this endpoint. Takes effect on the
+    # next /account/compute for a period; the P&L line's drill-down shows both sources' figures.
+    if "pl_commission_source" in body.model_fields_set:
+        from app.modules.account import ma_store_pnl as _msp
+        from app.modules.account import ledger_pnl as _lp
+        _pcs = str(body.pl_commission_source or "").strip().lower()
+        if _pcs not in _msp.COMMISSION_SOURCES:
+            raise HTTPException(400, f"pl_commission_source must be one of {', '.join(_msp.COMMISSION_SOURCES)}")
+        try:
+            (sb().schema('commcalc').table('commission_org_config')
+             .update({"pl_commission_source": _pcs}).eq('org_id', org_id).execute())
+        except Exception as e:
+            raise HTTPException(400, f"The P&L commission source was NOT saved — is migration {_lp.MIGRATION} "
+                                     f"applied? ({str(e)[:160]})")
+        # READ BACK — what is saved is what the P&L will read, not what was posted
+        _saved = _lp.load_source_meta(sb(), org_id)
+        if _saved.get("configured") != _pcs:
+            raise HTTPException(400, f"The P&L commission source did not read back as '{_pcs}' "
+                                     f"(read '{_saved.get('configured')}') — nothing changed.")
     return _commission_org_config(sb(), org_id)
+
+
+@router.get("/pl-commission-source")
+def get_pl_commission_source(org_id: str = ORG_ID):
+    """Which source books the P&L commission lines for this org (mig 1013), in layman words, with the
+    SUGGESTION and the evidence behind it, the P&L lines the ledger's buckets are linked to, and
+    "this statement will show in" for the ledger. READ-ONLY: the one writer is PUT /commission-settings
+    {pl_commission_source}; the panel re-reads this after saving."""
+    require_org(org_id)
+    from app.modules.account import ledger_pnl as _lp
+    client = sb()
+    meta = _lp.load_source_meta(client, org_id)
+    evidence = _lp.load_source_evidence(client, org_id)
+    link = _ledger_pl_link(client, org_id) or {"lines": [], "source": meta["configured"], "active": False}
+    return {
+        "value": meta["configured"], "ready": meta["ready"], "migration": meta["migration"],
+        "options": [{"value": v, "label": _lp.SOURCE_LABELS[v], "blurb": _lp.SOURCE_BLURBS[v]} for v in _lp.SOURCES],
+        "suggestion": _lp.suggest_source(meta["configured"], evidence["feed_tables_with_rows"], evidence["ledger_lines"]),
+        "evidence": evidence,
+        "pl_link": link,
+        "shows_in": _landing.shows_in({"landing": "commission"}, column_mapping.TABLE_MAP, _TRACE_TARGET_TABLE,
+                                      _intake.SOURCE_KIND_TARGET, pl_link=link),
+        "not_ready_note": (None if meta["ready"] else
+                           f"Migration {meta['migration']} is not applied: the P&L books from the feed tables and "
+                           "the switch cannot be saved until it runs."),
+    }
 
 
 # ── installment-schedule EDIT helpers (mig 210): shared create/update writer + audit trail ──────────

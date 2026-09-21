@@ -45,6 +45,16 @@ name: carrier-vocab-guard
 # (backend/harness_sales_by_invoice.py: the 41-header fixture end to end over the real router) runs
 # locally like the other intake proofs — it needs the app's dependencies.
 #
+# THE P&L-COMMISSION-SOURCE LOCK (index §4b, mig 1013, 2026-09-21) runs here too: which source books the
+# P&L's commission lines has ONE resolver (account/ledger_pnl.resolve_source), the ledger booking
+# dereferences the bucket registry's pl_line_key through the ledger's own summarizer (no bucket → line
+# map, no second sum over ledger rows outside the commission module), the feed-suppression set is DERIVED,
+# every commission-feed path in coa.build_inputs goes through the guarded adder, and every surface (the
+# P&L drill-down, ShowsIn, the one settings panel with its one writer) renders the one answer
+# (backend/harness_pl_commission_source_lock.py; stdlib only). The money PROOF
+# (backend/harness_pl_commission_source.py: the compatibility pin, the booking, the guard, the divergence)
+# runs locally like the other P&L proofs — it needs the app's dependencies.
+#
 # THE REPORT-LINKS LOCK (index §30.11, 2026-09-20) runs here too: ONE device / phone-number pairing
 # implementation (inventory_sold_recon.line_pairings, folded by activation_index, called by
 # report_links) with the key normalisers in their homes; a second copy anywhere in commcalc, or a
@@ -63,6 +73,12 @@ on:
       - "backend/harness_line_class_lock.py"
       - "backend/harness_line_class.py"
       - "backend/harness_tender_vocab_lock.py"
+      - "backend/harness_pl_commission_source_lock.py"
+      - "backend/app/modules/account/ledger_pnl.py"
+      - "backend/app/modules/account/coa.py"
+      - "backend/app/modules/account/engine.py"
+      - "backend/app/modules/account/ma_store_pnl.py"
+      - "database/migrations/1013_pl_commission_source.sql"
       - "backend/harness_intake_fakes.py"
       - "backend/app/modules/commcalc/line_class.py"
       - "backend/app/modules/commcalc/calculator.py"
@@ -148,3 +164,6 @@ jobs:
       - name: Run the tender-vocab lock (one tender vocabulary; every classifier dereferences it)
         working-directory: backend
         run: python3 harness_tender_vocab_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the P&L-commission-source lock (one resolver; the ledger booking dereferences the registry; a derived suppression set; one sum; every surface wired)
+        working-directory: backend
+        run: python3 harness_pl_commission_source_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
