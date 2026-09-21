@@ -73,8 +73,9 @@ ck('neutralTerm reads the registry default and never a vendor', neutralTerm(veri
 ck('a blank preset value is not a declaration', !pickPosTerm({ ...verizonRQ, terms: { verizon: { pos_system: '  ' }, _: {} } }, 'verizon').posDeclared)
 
 // ── the registry side: the REAL house seed, parsed out of mig 1010 (same parser as prove_report_kinds)
-const sql = readFileSync(join(ROOT, 'database', 'migrations', '1010_report_kind_registry.sql'), 'utf8')
-const body = sql.split('upload_types, sort_order, custom_sheet_label) VALUES')[1].split('ON CONFLICT')[0]
+// every migration that seeds HOUSE report kinds (backend report_kinds.SEED_MIGRATIONS): 1010 + 1012's sales_by_invoice
+const SEEDS = ['1010_report_kind_registry.sql', '1012_sales_by_invoice.sql']
+const body = SEEDS.map(n => readFileSync(join(ROOT, 'database', 'migrations', n), 'utf8').split('upload_types, sort_order, custom_sheet_label) VALUES')[1].split('ON CONFLICT')[0]).join('\n')
 const COLS = ['org_id', 'key', 'label', 'what_in_it', 'recognisable_columns', 'source_hint', 'applies_to_pos', 'applies_to_carrier', 'defined_by',
   'statement_type', 'landing', 'layout', 'signature_fields', 'requires_columns', 'excludes_columns', 'upload_types', 'sort_order', 'custom_sheet_label']
 const arr = s => s.startsWith('{') ? (s.slice(1, -1).match(/"((?:[^"\\]|\\.)*)"/g) || []).map(x => x.slice(1, -1)) : s

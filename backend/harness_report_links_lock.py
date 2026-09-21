@@ -168,6 +168,9 @@ def scan(files, allow):
         for fn in ("_intake_link_source", "_intake_link_activations"):
             if ".table(" in func_body(rt, fn):
                 findings.append(("modules/commcalc/router.py", f"{fn} queries a table of its own instead of the kinds' re-reads"))
+        # 2026-09-21 — the invoice export (sales by invoice) links by invoice number / store / date through ITS re-read
+        if "_intake_reread_invoice(" not in func_body(rt, "_intake_link_source"):
+            findings.append(("modules/commcalc/router.py", "_intake_link_source has no invoice branch through _intake_reread_invoice (the invoice export would be unlinkable)"))
         if "_isr.reconcile(" not in func_body(rt, "_intake_sold_check_after_inventory"):
             findings.append(("modules/commcalc/router.py", "_intake_sold_check_after_inventory no longer rides inventory_sold_recon.reconcile"))
     # (d) a second normaliser anywhere in commcalc outside the allow set
@@ -230,6 +233,8 @@ def main():
     check("NEG a second phone-number normaliser in another commcalc module → RED", any("second mobile-key normaliser `phone_of`" in m for _r, m in f7), f7)
     f8 = scan({**base, "modules/commcalc/other_thing.py": "def key_of(v):\n    s = str(v or '').strip()\n    if s.endswith('.0'):\n        s = s[:-2]\n    return s.upper()\n"}, ALLOW)
     check("NEG a second device-key normaliser (trim → '.0' → upper) → RED", any("second device-key normaliser `key_of`" in m for _r, m in f8), f8)
+    f10 = scan({**base, "modules/commcalc/router.py": rt_src.replace("_intake_reread_invoice(client, org_id, id_values, span[\"from\"], span[\"to\"], kind=p.get(\"layout\") or None)", "[]")}, ALLOW)
+    check("NEG the link reader dropping the invoice branch → RED", any("no invoice branch" in m for _r, m in f10), f10)
     f9 = scan(base, {**ALLOW, ("modules/commcalc/gone.py", "nope"): "a def that no longer exists"})
     check("NEG a stale allow entry → RED", any("STALE allow entry" in m for _r, m in f9), f9)
 

@@ -1225,8 +1225,8 @@ check("...the draft carries every field the owner named: assignments, reversal f
       "attestation, column map, sheet / header row / footer overrides",
       all(t in page for t in ("reversal_flags: reversal", "sign_answer: signAnswer", "identity: decisions", "typed_total: typedTotal", "period,",
                               "attestation: attest", "column_map: columnMap", "sheet, header_row: headerRow, footer_mode: footerMode")))
-check("...a Save button (with the indicator) sits on EVERY step 3.1–3.8 (7 action rows: 3.5 and 3.6 share one) and on stage 2's steps 2.1–2.5 + 2.5a (6 rows; 2.5a's row is passed into LineClassStep)",
-      page.count("{saveUi}") == 7 and stage2.count("{saveUi}") == 6 and "useAutoSave(persistNow)" in stage2, (page.count("{saveUi}"), stage2.count("{saveUi}")))
+check("...a Save button (with the indicator) sits on EVERY step 3.1–3.8 (7 action rows: 3.5 and 3.6 share one) and on stage 2's steps 2.1–2.5 + 2.5a + 2.5b (7 rows; 2.5a's row is passed into LineClassStep, 2.5b's into TenderColumnsStep)",
+      page.count("{saveUi}") == 7 and stage2.count("{saveUi}") == 7 and "useAutoSave(persistNow)" in stage2, (page.count("{saveUi}"), stage2.count("{saveUi}")))
 check("...RESTORE reads every one of those fields back on reopen (stage 3 and stage 2)",
       all(t in page for t in ("p.reversal_flags", "p.attestation", "p.sheet", "p.header_row", "p.footer_mode", "p.typed_total", "p.period", "p.identity", "p.sign_answer", "p.assignments"))
       and all(t in stage2 for t in ("p.attestation", "p.typed_total", "p.sheet", "p.header_row", "p.footer_mode", "p.identity", "p.column_map")))

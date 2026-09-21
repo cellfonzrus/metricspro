@@ -30,6 +30,7 @@ import { useReportKinds } from '@/lib/report-kinds'
 import type { ReportKindRow } from '@/lib/carrier-scope'
 import ShowsIn from '@/components/ShowsIn'
 import { LineClassStep, type LineClassBlock } from './line-class-step'   // 2.5a — what counts as an activation (owner 2026-09-21)
+import { TenderColumnsStep, type TenderColumnsBlock, type TenderDecision, type TenderTie, type TenderNumbers } from './tender-columns-step'   // 2.5b — the invoice export's tender columns + the tender basis (owner 2026-09-21)
 
 type SalesNumbers = {
   rows: number; distinct_txns: number; sum_amount: number; sum_gp: number | null
@@ -72,7 +73,12 @@ type Analysis2 = {
             rows_excluded_not_ours: number; excluded: Record<string, string>; rows_to_land: number; ignored_money_columns: MoneyCol[]; refusals: string[] }
   file?: FileRef; state?: StateResp
   line_class?: LineClassBlock | null      // 2.5a — the activation types + metric buckets over the frame that would land
+  tender_columns?: TenderColumnsBlock | null   // 2.5b — an invoice export's tender / tax columns over the frame that would land
+  tender_tie?: TenderTie; tie_field?: string | null
 }
+type TenderRecon = { basis: string | null; error?: string; words?: string; store_days?: number; compared?: number; matched?: number; days?: number
+  rows?: { store: string; date: string; verdict: string; invoice: Record<string, number>; xreport: Record<string, number> | null; difference: Record<string, number> | null }[]
+  tender_basis?: { basis: string; label: string }; report?: string }
 type Commit2 = {
   ok: boolean; recorded?: boolean; problems: string[]; saved: number; source_kind: string; instance_key: string
   // 2.5a: `ok` = the landing re-read matched; `verified` additionally needs the activation gate closed
@@ -82,13 +88,14 @@ type Commit2 = {
     rows_excluded_not_ours?: number; tie?: Tie; numbers?: SalesNumbers | InvNumbers | XrNumbers | MerNumbers | BpNumbers; basis?: string; attestation?: { reason: string } | null; confirmed_by?: string | null
     billpay_extract?: { basis: string | null; lines?: number; sum?: number; feed_present?: boolean; difference?: number | null; report?: string; error?: string }
     sold_check?: { basis: string | null; activated_not_rung_out?: number; sold_not_cleared?: number; activations_unpairable?: number; activations_present?: boolean; report?: string; error?: string }
+    tender_recon?: TenderRecon; tender_basis?: { basis: string; label: string; source: string; written?: { written?: boolean; error?: string } | null }
     shows_in?: import('@/lib/report-kinds').ShowsIn | null }
   state: { saved: boolean; reason?: string }
 }
 
 export const STAGE2_STEPS: [string, string][] = [
   ['2.0', 'What do you have?'], ['2.1', 'Upload the export'], ['2.2', 'Sheet, header row, footer'], ['2.3', 'Confirm the columns'],
-  ['2.4', 'Stores and reps'], ['2.5', 'Our numbers beside the file\'s'], ['2.5a', 'What counts as an activation'], ['2.6', 'Confirm this export'],
+  ['2.4', 'Stores and reps'], ['2.5', 'Our numbers beside the file\'s'], ['2.5a', 'What counts as an activation'], ['2.5b', 'Tender types and tax columns'], ['2.6', 'Confirm this export'],
 ]
 const KEYS = STAGE2_STEPS.map(s => s[0])
 // THE 2.0 CARDS ARE THE REGISTRY (design §7, 2026-09-20): what this tenant can upload is read from
@@ -145,6 +152,13 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
   // 2.6: confirm deleting rows of a DIFFERENT report kind that sit in this file's store × date slice (landing
   // identity, 2026-09-20). Off by default — such a landing is refused naming the loss until this is ticked.
   const [replaceOther, setReplaceOther] = useState(false)
+  // 2.5b (owner 2026-09-21): the invoice export's tender-column decisions, the money field the tie uses, the tender basis;
+  // `carryFrom` = a RETIRED line whose kept file is re-read under this kind (no re-drop)
+  const [tenderDecisions, setTenderDecisions] = useState<Record<string, TenderDecision>>({})
+  const [tieField, setTieField] = useState('')
+  const [tenderBasis, setTenderBasis] = useState('')
+  const [carryFrom, setCarryFrom] = useState('')
+  const [retireReason, setRetireReason] = useState('')
   const [commitRes, setCommitRes] = useState<Commit2 | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const restoredFor = useRef('')
@@ -167,6 +181,10 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
     setDecisions(p.identity && typeof p.identity === 'object' ? (p.identity as IdentityDecisions) : {})
     setAsOf(typeof p.as_of_date === 'string' ? p.as_of_date : '')
     setRole(typeof p.settlement_role === 'string' ? p.settlement_role : typeof p.role === 'string' ? p.role : '')
+    setTenderDecisions(p.tender_columns && typeof p.tender_columns === 'object' ? (p.tender_columns as Record<string, TenderDecision>) : {})
+    setTieField(typeof p.tie_field === 'string' ? p.tie_field : '')
+    setTenderBasis(typeof p.tender_basis === 'string' ? p.tender_basis : '')
+    setCarryFrom('')
   }, [inst])
 
   const persist = useCallback(async (stepKey: string, patch: Record<string, unknown>) => {
@@ -186,7 +204,8 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
   const draft = useMemo(() => ({
     column_map: columnMap, identity: decisions, typed_total: typedTotal, as_of_date: asOf || null, attestation: attest,
     sheet, header_row: headerRow, footer_mode: footerMode, role: role || null,
-  }), [columnMap, decisions, typedTotal, asOf, attest, sheet, headerRow, footerMode, role])
+    tender_columns: tenderDecisions, tie_field: tieField || null, tender_basis: tenderBasis || null,
+  }), [columnMap, decisions, typedTotal, asOf, attest, sheet, headerRow, footerMode, role, tenderDecisions, tieField, tenderBasis])
   const draftSeen = useRef({ instance: '', key: '' })
   useEffect(() => {
     if (!instanceKey || !a) return
@@ -235,8 +254,9 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
   // ── analyze (read-only) ───────────────────────────────────────────────────────────────────────
   const buildForm = useCallback((extra: Record<string, string> = {}) => {
     const fd = new FormData()
-    if (file) fd.append('file', file); else if (kept?.stored) { fd.append('use_stored', '1') }
-    fd.append('instance_key', instanceKey); fd.append('source_kind', kind); fd.append('pos_source', sourceRef)
+    // the kept file: this instance's, or a RETIRED line's (the same file re-read under the right kind — its reference is carried over)
+    if (file) fd.append('file', file); else if (kept?.stored) { fd.append('use_stored', '1') } else if (carryFrom) { fd.append('use_stored', '1') }
+    fd.append('instance_key', (!file && !kept?.stored && carryFrom) ? carryFrom : instanceKey); fd.append('source_kind', kind); fd.append('pos_source', sourceRef)
     if (kind === 'other') fd.append('name', otherNameOf); else if (!isMatrix) fd.append('layout', layout)
     if (reportKindOf) fd.append('report_kind', reportKindOf)
     if (kind === 'merchant_payments' && role) fd.append('role', role)
@@ -247,13 +267,18 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
     if (sheet) fd.append('sheet', sheet)
     if (headerRow !== '') fd.append('header_row', headerRow)
     fd.append('footer', footerMode)
+    if (kind === 'invoice') {
+      if (Object.keys(tenderDecisions).length) fd.append('tender_columns', JSON.stringify(tenderDecisions))
+      if (tieField) fd.append('tie_field', tieField)
+      if (tenderBasis) fd.append('tender_basis', tenderBasis)
+    }
     for (const [k, v] of Object.entries(extra)) fd.set(k, v)
     return fd
-  }, [file, kept, instanceKey, kind, sourceRef, otherNameOf, reportKindOf, layout, isMatrix, role, columnMap, decisions, typedTotal, asOf, sheet, headerRow, footerMode])
+  }, [file, kept, carryFrom, instanceKey, kind, sourceRef, otherNameOf, reportKindOf, layout, isMatrix, role, columnMap, decisions, typedTotal, asOf, sheet, headerRow, footerMode, tenderDecisions, tieField, tenderBasis])
 
   const analyze = useCallback(async (opts: { keepStep?: boolean; cm?: Record<string, string>; dec?: IdentityDecisions } = {}) => {
     if (!inst) return null
-    if (!file && !kept?.stored) { flash('Drop the file first.'); return null }
+    if (!file && !kept?.stored && !carryFrom) { flash('Drop the file first.'); return null }
     setBusy(true)
     try {
       const fd = buildForm()
@@ -262,6 +287,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
       const r: Analysis2 = await apiUpload(`${BASE}/analyze`, fd)
       setA(r)
       if (file) { setFilename(file.name); if (r.file) setKept(r.file) }
+      if (!file && carryFrom && r.file?.stored) { setKept(r.file); setFilename(r.file.filename || r.filename || ''); setCarryFrom('') }   // carried: this instance keeps it now
       const next: Record<string, string> = { ...(opts.cm ?? columnMap) }
       for (const c of r.columns) if (!(c.target_field in next) && c.column) next[c.target_field] = c.column
       setColumnMap(next)
@@ -270,11 +296,11 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
       return r
     } catch (e: unknown) { flash((e as Error)?.message || 'Could not read the file'); return null }
     finally { setBusy(false) }
-  }, [inst, file, kept, buildForm, columnMap, kind, asOf, role, persist, step, filename, decisions, flash])
+  }, [inst, file, kept, carryFrom, buildForm, columnMap, kind, asOf, role, persist, step, filename, decisions, flash])
 
   const commit = useCallback(async () => {
     if (!inst) return
-    if (!file && !kept?.stored) { flash('Drop the file again to commit — it was not kept.'); return }
+    if (!file && !kept?.stored && !carryFrom) { flash('Drop the file again to commit — it was not kept.'); return }
     setBusy(true)
     try {
       const fd = buildForm({ verified_by: who })
@@ -286,7 +312,26 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
       if (!r.ok && !r.recorded) flash('Committed with problems — see the red panel. Nothing here is reported as verified until the re-read matches.')
     } catch (e: unknown) { flash((e as Error)?.message || 'Commit refused') }
     finally { setBusy(false) }
-  }, [inst, file, kept, buildForm, who, attest, replaceOther, reloadState, instanceKey, flash, setStep])
+  }, [inst, file, kept, carryFrom, buildForm, who, attest, replaceOther, reloadState, instanceKey, flash, setStep])
+
+  const retire = useCallback(async (removeLanded: boolean) => {
+    if (!inst || !retireReason.trim()) { flash('Say why this line is retired (recorded with your name).'); return }
+    setBusy(true)
+    try {
+      const body: Record<string, unknown> = { instance_key: instanceKey, reason: retireReason.trim(), by: who }
+      if (removeLanded) body.remove_landed = '1'
+      let r = await api(`${BASE}/retire`, { method: 'POST', body: JSON.stringify(body) })
+      if (r.dry_run) {
+        const n: number = r.would_remove?.rows ?? 0
+        const per = Object.entries(r.would_remove?.per_table || {}).map(([t, c]) => `${t}: ${(c as number).toLocaleString('en-US')}`).join(', ')
+        if (!window.confirm(`This line landed ${n.toLocaleString('en-US')} row(s) (${per}) in its own slice. Remove exactly these ${n.toLocaleString('en-US')} row(s) and retire the line? Nothing else is touched.`)) { flash('Nothing retired, nothing removed.'); return }
+        r = await api(`${BASE}/retire`, { method: 'POST', body: JSON.stringify({ ...body, confirm_rows: String(n) }) })
+      }
+      flash(r.retired?.removed ? `Retired; ${(r.retired.removed.rows as number).toLocaleString('en-US')} row(s) it had landed were removed.` : 'Retired — on the record, out of the verify table.')
+      await reloadState(); setInstanceKey(''); setStep('2.0')
+    } catch (e: unknown) { flash((e as Error)?.message || 'Could not retire') }
+    finally { setBusy(false) }
+  }, [inst, instanceKey, retireReason, who, reloadState, setInstanceKey, setStep, flash])
 
   function onFiles(fl: FileList | null) {
     const f = fl?.[0]
@@ -298,12 +343,14 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
   const tie = a?.verify.tie || null
   const needsAttest = !!a && kind !== 'other' && (tie?.match === false || tie?.match === null)
   const unresolved = a?.unresolved_stores || []
-  const required: Record<string, string[]> = { sales: ['store', 'trans_date', 'ext_price'], pos: ['store', 'trans_date', 'ext_price'], inventory: ['store', 'sku'], other: [], x_report: [], merchant_payments: [] }
+  const required: Record<string, string[]> = { sales: ['store', 'trans_date', 'ext_price'], pos: ['store', 'trans_date', 'ext_price'], invoice: ['store', 'trans_date', 'trans_id', 'invoice_total'], inventory: ['store', 'sku'], other: [], x_report: [], merchant_payments: [] }
   // a bill-pay report's required columns follow its LAYOUT — the backend names them per column
   const requiredHere = required[kind] || (a?.columns || []).filter(c => c.required).map(c => c.target_field)
   const canLeave23 = requiredHere.every(f => !!columnMap[f])
   const isSales = kind === 'sales' || kind === 'pos'
-  const n = a?.verify.numbers as (SalesNumbers & InvNumbers & OtherNumbers & XrNumbers & MerNumbers & BpNumbers) | undefined
+  const isInvoice = kind === 'invoice'
+  const n = a?.verify.numbers as (SalesNumbers & InvNumbers & OtherNumbers & XrNumbers & MerNumbers & BpNumbers & TenderNumbers) | undefined
+  const retiredWithFile = (state?.rail.retired || []).filter(x => x.file?.stored)
 
   // ── 2.0 ────────────────────────────────────────────────────────────────────────────────────────
   if (step === '2.0' || !inst) {
@@ -319,7 +366,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
       if (!card) return
       if (card.landing === 'commission') { flash(`A ${card.label} is taken in under Stage 3 — pick Stage 3 in the rail.`); return }
       if (card.landing === 'other') { setOtherName(fname.replace(/\.[a-z0-9]+$/i, '')); return }
-      if (['sales', 'pos', 'inventory', 'x_report'].includes(card.landing)) {
+      if (['sales', 'pos', 'invoice', 'inventory', 'x_report'].includes(card.landing)) {
         if (!posRef.trim()) { flash(`This looks like your ${card.label} — name the POS it comes from, then add it.`); return }
         addInstance(card.landing, posRef.trim(), defaultLayout(card), '', card.key); return
       }
@@ -327,7 +374,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
     }
     const actionFor = (c: ReportKindRow) => {
       const l = c.landing
-      if (l === 'sales' || l === 'pos') return (
+      if (l === 'sales' || l === 'pos' || l === 'invoice') return (
         <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <select value={salesLayout} onChange={e => setSalesLayout(e.target.value)} style={inp}>
             <option value="">layout: {c.layout ? c.layout.replace(/_/g, ' ') : 'default'}</option>
@@ -437,6 +484,13 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
           <p style={{ ...note, marginBottom: 6 }}>Drop it exactly as your system produces it. We read every sheet, find the header row under any title block, and find the total row by its shape.</p>
           <ShowsIn info={registry.showsIn(reportKindOf) || (registry.forSurface('intake').find(k => k.landing === kind && (!layout || !k.layout || k.layout === layout))?.shows_in ?? null)} loaded={registry.loaded} style={{ marginBottom: 12 }} />
           <Dropzone file={file} filename={filename} onFiles={onFiles} dragOver={dragOver} setDragOver={setDragOver} hint={kind === 'x_report' ? 'Drop the X-report workbook (one sheet per store, one day — X-Report_MMDDYYYY-MMDDYYYY)' : kind === 'merchant_payments' ? 'Drop the settlement export (per merchant, per business day, per card brand)' : 'Drop the export here'} />
+          {/* a line RETIRED as mis-filed keeps its file: re-read it under THIS kind, no re-drop (owner 2026-09-21) */}
+          {!file && !kept?.stored && retiredWithFile.length > 0 && (
+            <div style={{ ...note, fontSize: 12, marginTop: 8 }}>Or re-read a file kept under a retired line:{' '}
+              {retiredWithFile.map(x => <button key={x.instance_key} style={{ ...btn, fontSize: 12, padding: '3px 8px', marginRight: 6, background: carryFrom === x.instance_key ? 'rgba(37,99,235,.12)' : undefined }} onClick={() => setCarryFrom(carryFrom === x.instance_key ? '' : x.instance_key)}>{x.filename || x.label} ({x.label})</button>)}
+              {carryFrom && <span> — will be read under <b>{cardLabel(reportKindOf, kind)}</b> and kept for this line.</span>}
+            </div>
+          )}
           {kind === 'merchant_payments' && portals && (
             <label style={{ fontSize: 13, display: 'block', marginTop: 10 }}>Settlement role — which side of the daily card tally this export answers:
               <select value={role} onChange={e => setRole(e.target.value)} style={{ ...inp, marginLeft: 8 }}>
@@ -446,7 +500,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
             </label>
           )}
           <div style={{ marginTop: 14, display: 'flex', gap: 8 }}>
-            <button style={primary} disabled={busy || (!file && !canUseKept)} onClick={() => analyze().then(r => r && setStep('2.2'))}>{busy ? 'Reading…' : 'Read the file →'}</button>
+            <button style={primary} disabled={busy || (!file && !canUseKept && !carryFrom)} onClick={() => analyze().then(r => r && setStep('2.2'))}>{busy ? 'Reading…' : 'Read the file →'}</button>
             {saveUi}
           </div>
         </div>
@@ -482,7 +536,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
       {step === '2.3' && a && kind !== 'other' && !a.matrix && (
         <div style={card}>
           <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>2.3 — Confirm the columns</h2>
-          <p style={{ ...note, marginBottom: 12 }}>Each platform field, the column we propose, where that proposal came from, and three values from that column. {isSales ? 'Store, date and amount are needed: they decide which slice of the table this file owns and which month each row books to.' : kind === 'bill_payments' ? 'The account / terminal id, the date, the amount and the product are needed: they decide the slice this file owns, and which rows your bill-payment rule counts.' : 'Store and SKU are needed; a unit without an IMEI yet is reported, not landed.'}</p>
+          <p style={{ ...note, marginBottom: 12 }}>Each platform field, the column we propose, where that proposal came from, and three values from that column. {isSales ? 'Store, date and amount are needed: they decide which slice of the table this file owns and which month each row books to.' : isInvoice ? 'Store, date, invoice number and invoice total are needed: they decide the slice this file owns, the month each invoice books to, and what the tender columns (next step) must add up to. The tender columns are NOT mapped here — they are declared at 2.5b.' : kind === 'bill_payments' ? 'The account / terminal id, the date, the amount and the product are needed: they decide the slice this file owns, and which rows your bill-payment rule counts.' : 'Store and SKU are needed; a unit without an IMEI yet is reported, not landed.'}</p>
           <ColumnsTable columns={a.columns} headers={a.detect.headers} columnMap={columnMap} setColumnMap={setColumnMap} />
           {a.money_columns.length > 1 && (
             <div style={{ ...card, background: 'var(--bg,transparent)', marginTop: 12, fontSize: 13 }}>
@@ -543,6 +597,26 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Voided / refund rows</td><td style={mono}>{num(n.voided_rows)}</td></tr>
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px', verticalAlign: 'top' }}>Per store</td><td style={{ ...note, textAlign: 'right' }}>{(n.per_store || []).slice(0, 12).map(s => `${s.value}: ${num(s.count)} · ${money(s.sum)}`).join(' | ')}</td></tr>
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px', verticalAlign: 'top' }}>Per rep</td><td style={{ ...note, textAlign: 'right' }}>{(n.per_rep || []).slice(0, 12).map(s => `${s.value}: ${num(s.count)} · ${money(s.sum)}`).join(' | ')}</td></tr>
+              </tbody>
+            </table>
+          )}
+          {isInvoice && n && (
+            <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse', marginBottom: 12 }}>
+              <tbody>
+                <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Rows in file / usable / footer / excluded (not ours) / to land</td><td style={mono}>{num(a.verify.rows_in_file)} / {num(a.verify.rows_usable)} / {a.verify.footer_rows} / {a.verify.rows_excluded_not_ours} / <b>{num(a.verify.rows_to_land)}</b></td></tr>
+                <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Invoices (distinct invoice numbers)</td><td style={mono}>{num(n.distinct_txns)}</td></tr>
+                <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Σ {(a.tie_field || 'net_sales').replace(/_/g, ' ')} (the total this file is tied on)
+                  <select value={tieField} onChange={e => setTieField(e.target.value)} style={{ ...inp, marginLeft: 8, padding: '3px 6px', fontSize: 12 }}>
+                    <option value="">tie on: net sales (default)</option>
+                    {(state?.invoice_tie_fields || []).map(f => <option key={f} value={f}>tie on: {f.replace(/_/g, ' ')}</option>)}
+                  </select>
+                  <button style={{ ...btn, marginLeft: 6, fontSize: 12, padding: '3px 8px' }} disabled={busy || (!file && !canUseKept)} onClick={() => analyze({ keepStep: true })}>Recompute</button></td><td style={{ ...mono, fontWeight: 700 }}>{money(n.sum_amount)}</td></tr>
+                <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Σ invoice total (what the tender columns must add up to)</td><td style={mono}>{money(n.sum_invoice_total)}</td></tr>
+                <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Σ gross profit</td><td style={mono}>{money(n.sum_gp)}</td></tr>
+                <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Σ tax (invoice-level)</td><td style={mono}>{money(n.sum_tax)}</td></tr>
+                <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Tender columns (declared at 2.5b)</td><td style={{ ...note, textAlign: 'right' }}>{n.tenders?.words}</td></tr>
+                <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Date span</td><td style={mono}>{n.date_span?.from || '—'} → {n.date_span?.to || '—'}{n.date_span?.undated_rows ? <span style={{ color: '#ef4444' }}> · {n.date_span.undated_rows} rows without a date</span> : null}</td></tr>
+                <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px', verticalAlign: 'top' }}>Per store</td><td style={{ ...note, textAlign: 'right' }}>{(n.per_store || []).slice(0, 12).map(s => `${s.value}: ${num(s.count)} · ${money(s.sum)}`).join(' | ')}</td></tr>
               </tbody>
             </table>
           )}
@@ -627,7 +701,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
             <button style={ghost} onClick={() => setStep(kind === 'other' ? '2.2' : '2.4')}>← Back</button>
             {kind !== 'other' && <button style={btn} disabled={busy || (!file && !canUseKept)} onClick={() => analyze({ keepStep: true })}>Recompute</button>}
             {kind !== 'other' && !a.matrix && <button style={ghost} onClick={() => setStep('2.3')}>Fix the columns</button>}
-            <button style={primary} disabled={(kind !== 'other' && (a.verify.refusals.length > 0 && !attest.trim())) || (needsAttest && !attest.trim())} onClick={() => go(a.line_class ? '2.5a' : '2.6', { typed_total: typedTotal, as_of_date: asOf || null })}>{a.line_class ? 'Next: what counts as an activation →' : 'Confirm →'}</button>
+            <button style={primary} disabled={(kind !== 'other' && (a.verify.refusals.length > 0 && !attest.trim())) || (needsAttest && !attest.trim())} onClick={() => go(a.line_class ? '2.5a' : isInvoice ? '2.5b' : '2.6', { typed_total: typedTotal, as_of_date: asOf || null, tie_field: tieField || null })}>{a.line_class ? 'Next: what counts as an activation →' : isInvoice ? 'Next: tender types and tax columns →' : 'Confirm →'}</button>
             {saveUi}
           </div>
         </div>
@@ -639,6 +713,13 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
           onBack={() => setStep('2.5')} onNext={() => go('2.6', {})} saveUi={saveUi} flash={flash} />
       )}
 
+      {step === '2.5b' && inst && isInvoice && (
+        <TenderColumnsStep block={a?.tender_columns || null} numbers={(n as unknown as TenderNumbers) || null} tie={a?.tender_tie || null}
+          decisions={tenderDecisions} setDecisions={setTenderDecisions} basis={tenderBasis} setBasis={setTenderBasis} basisInfo={state?.tender_basis || null}
+          busy={busy} canRecheck={!!a && (!!file || canUseKept)} recheck={() => analyze({ keepStep: true })}
+          onBack={() => setStep('2.5')} onNext={() => go('2.6', { tender_columns: tenderDecisions, tender_basis: tenderBasis || null })} saveUi={saveUi} />
+      )}
+
       {step === '2.6' && (a || inst?.status === 'verified' || inst?.status === 'needs_input') && (
         <div style={card}>
           <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>2.6 — Confirm this export</h2>
@@ -647,20 +728,31 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
               ? 'Confirming records this report as received (columns, row count, money columns, the kept file). It gets a destination when the owner names one.'
               : kind === 'x_report' ? 'Confirming saves your store decisions (as aliases every closing recon resolves through), lands the tender rows through the X-report import (one row per store, day and tender — a re-upload restates the day), and re-reads them from the table.'
               : kind === 'merchant_payments' ? 'Confirming saves your merchant-id decisions to the per-store merchant-id map, lands the settlement rows exactly as the scheduled portal pull would (per merchant, business day and card brand, marked as an upload) and re-reads them. The daily card tally reads them from there.'
+              : isInvoice ? 'Confirming saves the column map, your store and rep decisions, remembers which columns are tender types (for next month), saves the tender basis you chose, lands one row per invoice and one row per invoice and tender column — replacing only the slice this file owns — re-reads both, and shows the tender split per store and day beside the register\'s X-report.'
               : kind === 'bill_payments' ? 'Confirming saves the column map, saves your account decisions to the per-store merchant-id map, lands the rows in the processor bill-pay feed — replacing only the slice this file owns — and re-reads the bill payments through the very reader the coverage recon uses.'
               : `Confirming saves the column map for this layout, saves your store and rep decisions (as aliases your reports resolve through), imports the rows through the platform's importer — replacing only the slice this file owns — and then re-reads what landed. The numbers below come back from the table, not from this screen.`}</p>
-            {a && kind !== 'other' && tie && <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Confirm {title} — {isSales || kind === 'bill_payments' ? `${n?.date_span?.from} → ${n?.date_span?.to}` : kind === 'x_report' ? (n?.close_date || asOf) : kind === 'merchant_payments' ? `${n?.dates?.[0]} → ${n?.dates?.[n.dates.length - 1]}` : `as of ${asOf}`} — {money(tie.our_total)}</div>}
+            {a && kind !== 'other' && tie && <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Confirm {title} — {isSales || isInvoice || kind === 'bill_payments' ? `${n?.date_span?.from} → ${n?.date_span?.to}` : kind === 'x_report' ? (n?.close_date || asOf) : kind === 'merchant_payments' ? `${n?.dates?.[0]} → ${n?.dates?.[n.dates.length - 1]}` : `as of ${asOf}`} — {money(tie.our_total)}</div>}
             {inst?.verified_numbers && !a && <div style={{ ...note, marginBottom: 12 }}>Last confirmed by {inst.verified_by || '?'} · {inst.verified_at || ''} · status {inst.status}{inst.blocking_reason ? ` · ${inst.blocking_reason}` : ''}. Re-read the file (2.1) to confirm again.</div>}
-            {isSales && (
+            {(isSales || isInvoice) && (
               <label style={{ ...note, display: 'block', marginBottom: 10 }}>
                 <input type="checkbox" checked={replaceOther} onChange={e => setReplaceOther(e.target.checked)} style={{ marginRight: 6 }} />
                 Replace rows of a <b>different report kind</b> already stored for these stores and dates. Leave this off: a landing that would delete another kind&apos;s rows is refused and names the loss, so nothing is overwritten by accident.
               </label>
             )}
             <div style={{ display: 'flex', gap: 8 }}>
-              <button style={ghost} onClick={() => setStep('2.5')}>← Back</button>
-              <button style={primary} disabled={busy || !a || (!file && !canUseKept)} onClick={commit}>{busy ? 'Saving…' : kind === 'other' ? 'Record as received' : 'Confirm and import'}</button>
+              <button style={ghost} onClick={() => setStep(isInvoice ? '2.5b' : '2.5')}>← Back</button>
+              <button style={primary} disabled={busy || !a || (!file && !canUseKept && !carryFrom)} onClick={commit}>{busy ? 'Saving…' : kind === 'other' ? 'Record as received' : 'Confirm and import'}</button>
             </div>
+            {/* RETIRE a mis-filed line (owner 2026-09-21): the reason is recorded with your name; the line leaves the verify table, the runbook
+                and the sign-off; its kept file can be re-read under the right kind. Removing what it landed is a separate, COUNTED confirmation. */}
+            {inst && (
+              <div style={{ ...note, fontSize: 12, marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+                Filed under the wrong report kind? Retire this line:{' '}
+                <input value={retireReason} onChange={e => setRetireReason(e.target.value)} placeholder="why (recorded with your name)" style={{ ...inp, width: 280, fontSize: 12, padding: '3px 8px' }} />
+                <button style={{ ...btn, fontSize: 12, padding: '3px 8px', marginLeft: 6 }} disabled={busy || !retireReason.trim()} onClick={() => retire(false)}>Retire (keep what it landed)</button>
+                <button style={{ ...btn, fontSize: 12, padding: '3px 8px', marginLeft: 6 }} disabled={busy || !retireReason.trim()} onClick={() => retire(true)}>Retire and remove what it landed…</button>
+              </div>
+            )}
           </>}
           {commitRes && (
             <div>
@@ -696,6 +788,16 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
                     : <>{String((commitRes.verified_numbers as Record<string, unknown>).activation_classes ? ((commitRes.verified_numbers as { activation_classes: { activation_type_transactions: number } }).activation_classes.activation_type_transactions) : '')} activation-type invoices counted — the Sales Report and Executive MTD split them by type.</>}
                 </div>
               )}
+              {commitRes.verified_numbers.tender_recon && (
+                <div style={{ ...card, background: 'var(--bg,transparent)', fontSize: 13, marginBottom: 10 }}>
+                  <b>Tender split per store and day, beside the register&apos;s X-report:</b> {commitRes.verified_numbers.tender_recon.basis
+                    ? <>{commitRes.verified_numbers.tender_recon.words}
+                        {(commitRes.verified_numbers.tender_recon.rows || []).filter(r2 => r2.xreport && r2.verdict !== 'matches the X-report').slice(0, 8).map(r2 => <div key={`${r2.store}|${r2.date}`} style={{ ...note, fontSize: 12 }}>{r2.store} {r2.date}: {r2.verdict}</div>)}
+                        {commitRes.verified_numbers.tender_basis && <div style={{ ...note, fontSize: 12, marginTop: 4 }}>Cash Collected and the cash / card recon read <b>{commitRes.verified_numbers.tender_basis.label}</b> ({commitRes.verified_numbers.tender_basis.source}). <a href={commitRes.verified_numbers.tender_recon.report || '/closing/tender-recon-3way'}>open the tender recon</a></div>}
+                        {(n as unknown as TenderNumbers | undefined)?.tax?.sum !== undefined && <div style={{ ...note, fontSize: 12 }}>Σ tax (invoice-level) {money((commitRes.verified_numbers.numbers as unknown as TenderNumbers)?.tax?.sum ?? null)} — a tie-out; the Tax Collected report does not read invoice-level tax yet.</div>}</>
+                    : <span style={{ color: '#b45309' }}>{commitRes.verified_numbers.tender_recon.error}</span>}
+                </div>
+              )}
               {commitRes.verified_numbers.shows_in && <ShowsIn info={commitRes.verified_numbers.shows_in} lead="These rows now show in" />}
               {/* Stage C — the cross-checks the commit ran, stated with their basis */}
               {commitRes.verified_numbers.billpay_extract && (
@@ -715,7 +817,8 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
               <div style={{ display: 'flex', gap: 8 }}>
                 <button style={primary} onClick={() => { setInstanceKey(''); setStep('2.0') }}>Another export?</button>
                 {isSales && <a href="/commcalc/sales-report" style={{ ...ghost, textDecoration: 'none', display: 'inline-block' }}>Open the Sales report</a>}
-                {kind === 'x_report' && <a href="/closing/cash-recon-management" style={{ ...ghost, textDecoration: 'none', display: 'inline-block' }}>Open the cash recon</a>}
+                {(kind === 'x_report' || isInvoice) && <a href="/closing/cash-recon-management" style={{ ...ghost, textDecoration: 'none', display: 'inline-block' }}>Open the cash recon</a>}
+                {isInvoice && <button style={ghost} onClick={() => setStep('2.5b')}>Tender types and tax columns (2.5b)</button>}
                 {kind === 'merchant_payments' && <a href="/closing/cash-recon-management" style={{ ...ghost, textDecoration: 'none', display: 'inline-block' }}>Open the card settlement recon</a>}
                 {kind === 'bill_payments' && <a href="/commcalc/bill-payments" style={{ ...ghost, textDecoration: 'none', display: 'inline-block' }}>Open the Bill Payments report</a>}
                 {!commitRes.ok && !commitRes.recorded && <button style={ghost} onClick={() => { setCommitRes(null); setStep('2.5') }}>Back to the numbers</button>}
@@ -726,7 +829,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
         </div>
       )}
 
-      {KEYS.includes(step) && step !== '2.1' && step !== '2.0' && step !== '2.5a' && !a && !(step === '2.6' && inst && (inst.status === 'verified' || inst.status === 'needs_input')) && (
+      {KEYS.includes(step) && step !== '2.1' && step !== '2.0' && step !== '2.5a' && !(step === '2.5b' && isInvoice) && !a && !(step === '2.6' && inst && (inst.status === 'verified' || inst.status === 'needs_input')) && (
         <div style={card}>
           <div style={note}>Nothing to show for this step yet — read the file at 2.1 first{kept?.stored ? ' (it was kept; no need to drop it again)' : ''}.</div>
           <button style={{ ...primary, marginTop: 10 }} onClick={() => setStep('2.1')}>Go to 2.1</button>

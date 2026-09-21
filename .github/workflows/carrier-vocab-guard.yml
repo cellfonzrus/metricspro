@@ -37,6 +37,14 @@ name: carrier-vocab-guard
 # "no line could be told apart" way-back (backend/harness_line_class_lock.py + harness_line_class.py, the
 # money compatibility pin; stdlib only).
 #
+# THE TENDER-VOCAB LOCK (index §30.13, 2026-09-21) runs here too: the tender classes have ONE home
+# (closing.router.TENDER_VOCAB, from which the closing axis is derived, and the one ladder tender_class);
+# the intake's tender-column step spells no tender word (its classifiers are injected), every other tender
+# word list is a NAMED pre-existing sibling, and the Stage-4 tender split rides the closing recon's own
+# reader (backend/harness_tender_vocab_lock.py; stdlib only). The sales-by-invoice PROOF
+# (backend/harness_sales_by_invoice.py: the 41-header fixture end to end over the real router) runs
+# locally like the other intake proofs — it needs the app's dependencies.
+#
 # THE REPORT-LINKS LOCK (index §30.11, 2026-09-20) runs here too: ONE device / phone-number pairing
 # implementation (inventory_sold_recon.line_pairings, folded by activation_index, called by
 # report_links) with the key normalisers in their homes; a second copy anywhere in commcalc, or a
@@ -54,6 +62,7 @@ on:
       - "backend/harness_landing_identity_lock.py"
       - "backend/harness_line_class_lock.py"
       - "backend/harness_line_class.py"
+      - "backend/harness_tender_vocab_lock.py"
       - "backend/harness_intake_fakes.py"
       - "backend/app/modules/commcalc/line_class.py"
       - "backend/app/modules/commcalc/calculator.py"
@@ -67,6 +76,7 @@ on:
       - "backend/app/modules/commcalc/sale_installment_engine.py"
       - "backend/app/modules/marketing/event_sales.py"
       - "backend/app/modules/commcalc/landing_identity.py"
+      - "backend/app/modules/commcalc/invoice_tenders.py"
       - "backend/app/modules/commcalc/ingest_slice.py"
       - "backend/app/modules/commcalc/report_links.py"
       - "backend/app/modules/commcalc/inventory_sold_recon.py"
@@ -81,6 +91,7 @@ on:
       - "backend/app/modules/commcalc/sales_recon.py"
       - "backend/app/modules/commcalc/imei_rebate_report.py"
       - "backend/app/modules/closing/router.py"
+      - "backend/app/modules/closing/tender_config.py"
       - "backend/app/modules/closing/attention_providers.py"
       - "backend/app/modules/asset/router.py"
       - "backend/app/modules/account/finance_attention.py"
@@ -89,6 +100,7 @@ on:
       - "database/migrations/200_commission_b2bsoft_pos_profile.sql"
       - "database/migrations/953_carrier_vocabulary_term_presets.sql"
       - "database/migrations/1004_pos_feed_shape_ingest.sql"
+      - "database/migrations/1012_sales_by_invoice.sql"
       - ".github/workflows/carrier-vocab-guard.yml"
   push:
     branches: [main]
@@ -133,3 +145,6 @@ jobs:
       - name: Run the line-class proof (the money compatibility pin + the suggestion engine over the measured vocabulary)
         working-directory: backend
         run: python3 harness_line_class.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the tender-vocab lock (one tender vocabulary; every classifier dereferences it)
+        working-directory: backend
+        run: python3 harness_tender_vocab_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

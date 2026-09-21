@@ -182,6 +182,19 @@ class FakeDB:
                                   "trans_date", "contract_type", "mdn", "serial_1", "register", "tender_type", "voided",
                                   "trans_type", "sku", "customer", "email", "customer_no", "quantity", "total_cost",
                                   "pricing_discounts", "contract_no", "source", "created_at"],
+            # mig 1012 (2026-09-21) — sales by invoice: the invoice header + its child tender / tax-component rows
+            "raw_sales_invoice": ["id", "org_id", "period", "period_month", "period_year", "trans_id", "trans_date", "store",
+                                  "invoiced_by", "salesperson", "salesperson_login", "tendered_by", "tendered_by_login", "customer",
+                                  "channel", "region", "district", "subtotal", "adjustments", "net_sales", "sales", "total_cost", "gp",
+                                  "extra_charges", "donations", "invoice_total", "coupons", "gift_card_sales", "non_revenue_sales",
+                                  "tax", "source", "import_batch_id", "created_at"],
+            "raw_sales_invoice_tender": ["id", "org_id", "period", "period_month", "period_year", "store", "trans_date", "trans_id",
+                                         "salesperson", "role", "tender_label", "tender_class", "keyed_manually", "amount", "source",
+                                         "import_batch_id", "created_at"],
+            # mig 111 — the per-org raw label → tender map (the X-report / sales legs; report='invoice' since 2026-09-21)
+            "closing_tender_def": ["id", "org_id", "tender_key", "label", "sort_order", "is_standard", "is_active", "recon_class",
+                                   "include_in_total", "created_at"],
+            "closing_tender_map": ["id", "org_id", "tender_key", "report", "source_labels", "match_mode", "priority", "created_at"],
             "daily_sales_feed": ["id", "org_id", "period", "store", "salesperson", "department", "category", "product_desc",
                                  "gp", "ext_price", "trans_id", "trans_date", "contract_type", "mdn", "serial_1", "tender_type",
                                  "voided", "trans_type", "quantity"],
@@ -242,7 +255,7 @@ class FakeDB:
                 bad = [k for k in r if k not in self.declared[table]]
                 if bad:
                     raise RuntimeError(f'42703 column "{bad[0]}" of {table} does not exist')
-        if table in ("raw_sales", "raw_sales_product", "raw_ma_daily_tx"):
+        if table in ("raw_sales", "raw_sales_product", "raw_sales_invoice", "raw_sales_invoice_tender", "raw_ma_daily_tx"):
             for r in rows:
                 if not r.get("period"):
                     raise RuntimeError(f'23502 null value in column "period" of {table} violates not-null constraint')

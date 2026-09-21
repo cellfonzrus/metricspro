@@ -48,12 +48,14 @@ from app.modules.commcalc import commission_ledger as CL
 from app.modules.commcalc import column_mapping as CM      # the layout → table registry (dereferenced, never copied)
 from app.modules.commcalc import multisheet
 from app.modules.commcalc.feed_shape import is_footer_row, period_fields
+from app.modules.commcalc import invoice_tenders as _invoice_tenders     # 2026-09-21 — the invoice tender split (pure)
 
 # ── vocabulary ──────────────────────────────────────────────────────────────────────────────────
-SOURCE_KINDS = ("commission", "sales", "inventory", "pos", "x_report", "merchant_payments", "bill_payments", "other")
+SOURCE_KINDS = ("commission", "sales", "inventory", "pos", "invoice", "x_report", "merchant_payments", "bill_payments", "other")
 SOURCE_KIND_LABELS = {
     "commission": "Commission statement", "sales": "Sales report", "inventory": "Inventory report",
     "pos": "POS report",
+    "invoice": "Sales by invoice with tender types",
     "x_report": "X-report (POS daily takings by tender, per store)",
     "merchant_payments": "Merchant / card-processor settlement report",
     "bill_payments": "Bill-payment report from the carrier's processor",
@@ -89,6 +91,7 @@ OTHER_KIND_HINTS = {
 # export → its OWN product-level table (owner decision; mig 1011), inventory → the snapshot table.
 # Spelling a table here again was the second copy that let the two drift.
 SOURCE_KIND_TARGET = {"commission": CL.LEDGER_TABLE, "sales": CM.TABLE_MAP["sales"], "pos": CM.TABLE_MAP["pos_product_sales"],
+                      "invoice": CM.TABLE_MAP["sales_by_invoice"],
                       "inventory": CM.TABLE_MAP["pos_inventory_listing"],
                       "x_report": "pos_tender_summary", "merchant_payments": "merchant_settlement_day",
                       "bill_payments": "raw_ma_daily_tx"}
@@ -106,10 +109,12 @@ MATRIX_INSTANCE_SLOT = {"x_report": "x_report", "merchant_payments": "settlement
 # The column-mapping REPORT KEY (column_mapping.TARGET_FIELDS / TABLE_MAP) each kind maps through —
 # the default LAYOUT; a kind may offer several layouts that land in the same table (layouts_for_kind).
 REPORT_KEY_BY_KIND = {"commission": CL.mapping_report_key(""), "sales": "sales", "pos": "pos_product_sales",
+                      "invoice": "sales_by_invoice",
                       "inventory": "pos_inventory_listing", "bill_payments": "ma_daily_tx"}
 LAYOUT_LABELS = {
     "sales": "daily sales export (store / salesperson / product lines)",
     "pos_product_sales": "POS product-sales export (one row per invoice line)",
+    "sales_by_invoice": "sales by invoice (one row per invoice, one amount column per tender type)",
     "pos_inventory_listing": "POS on-hand inventory listing (one row per unit)",
     "ma_daily_tx": "processor daily-transaction report (account / order type / product / retail cost)",
     "epay_daily_tx": "processor daily transaction detail (terminal / product title / retail)",
@@ -120,6 +125,10 @@ KIND_FIELDS = {
                   "rep": "salesperson", "txn": "trans_id", "void": "voided"},
     "pos":       {"amount": "ext_price", "gp": "gp", "date": "trans_date", "store": "store",
                   "rep": "salesperson", "txn": "trans_id", "void": "voided"},
+    # the invoice export ties on NET SALES by default (the person may pick another money field at 2.5 —
+    # INVOICE_TIE_FIELDS); `total` is what the tender columns must add up to; `tax` the invoice's total tax
+    "invoice":   {"amount": "net_sales", "gp": "gp", "date": "trans_date", "store": "store",
+                  "rep": "salesperson", "txn": "trans_id", "total": "invoice_total", "tax": "tax"},
     "inventory": {"amount": "total_cost", "unit_cost": "unit_cost", "qty": "quantity", "store": "store",
                   "key": "imei", "key2": "serial", "sku": "sku"},
     "commission": {"amount": CL.AMOUNT_FIELD, "store": "store", "rep": "rep_user", "date": "trans_date"},
@@ -135,7 +144,9 @@ BILLPAY_LAYOUT_FIELDS = {
 }
 # The columns a kind MUST have before it may land — what the slice-scoped replace and the tie-out need
 # (design §2: period from each row's own date; replace only the slice the file owns = store × dates).
+INVOICE_TIE_FIELDS = ("net_sales", "sales", "invoice_total", "subtotal")
 KIND_REQUIRED = {"sales": ("store", "trans_date", "ext_price"), "pos": ("store", "trans_date", "ext_price"),
+                 "invoice": ("store", "trans_date", "trans_id", "invoice_total"),
                  "inventory": ("store", "sku"), "commission": (CL.AMOUNT_FIELD, "product_name"), "other": (),
                  "x_report": (), "merchant_payments": ()}
 BILLPAY_LAYOUT_REQUIRED = {"ma_daily_tx": ("account_id", "tx_date", "retail_cost", "product_name"),
@@ -145,7 +156,7 @@ INVENTORY_NONE_KEY = "inventory:none:none"          # the explicit "no inventory
 
 STAGE_COMMISSION = "3"
 STAGE_SALES = "2"
-KIND_STAGE = {"commission": STAGE_COMMISSION, "sales": STAGE_SALES, "pos": STAGE_SALES,
+KIND_STAGE = {"commission": STAGE_COMMISSION, "sales": STAGE_SALES, "pos": STAGE_SALES, "invoice": STAGE_SALES,
               "inventory": STAGE_SALES, "other": STAGE_SALES,
               "x_report": STAGE_SALES, "merchant_payments": STAGE_SALES, "bill_payments": STAGE_SALES}
 
@@ -183,6 +194,7 @@ STEPS_STAGE2 = [
     ("2.4", "Stores and reps"),
     ("2.5", "Our numbers beside the file's"),
     ("2.5a", "What counts as an activation"),
+    ("2.5b", "Tender types and tax columns"),
     ("2.6", "Confirm this export"),
 ]
 # 2.5a (owner 2026-09-21): the line-level sales export's activation TYPES (new activation / upgrade /
@@ -192,6 +204,11 @@ STEPS_STAGE2 = [
 # through the router's /onboarding/intake/line-class. The gate below refuses to call a landed export
 # verified while not one line can be told apart as an activation type, unless the person attests.
 STEP_LINE_CLASS = "2.5a"
+# 2.5b (owner 2026-09-21): an INVOICE export's tender columns — "which columns are tender types, and what
+# kind of payment is each?" — proposed from the header words through the one tender vocabulary
+# (closing.router.TENDER_VOCAB / tender_class), confirmed, remembered as closing_tender_map rows
+# (report='invoice'), landed one row per (invoice, column); the tax component columns ride along.
+STEP_TENDER_COLUMNS = "2.5b"
 STEPS_STAGE4 = [("4.1", "Every source, verified"), ("4.2", "Sign-off")]
 STEPS_STAGE5 = [("5.1", "Monthly runbook")]
 STEPS_BY_STAGE = {"2": STEPS_STAGE2, "3": STEPS, "4": STEPS_STAGE4, "5": STEPS_STAGE5}
@@ -200,7 +217,11 @@ STEP_KEYS_STAGE2 = [k for k, _ in STEPS_STAGE2]
 ALL_STEP_KEYS = [k for st in ("2", "3", "4", "5") for k, _ in STEPS_BY_STAGE[st]]
 STATUS_NOT_STARTED, STATUS_IN_PROGRESS, STATUS_NEEDS_INPUT, STATUS_VERIFIED = (
     "not_started", "in_progress", "needs_input", "verified")
-STATUSES = (STATUS_NOT_STARTED, STATUS_IN_PROGRESS, STATUS_NEEDS_INPUT, STATUS_VERIFIED)
+# 'retired' (2026-09-21): a line that was FILED WRONG (a report added under the wrong card) is retired
+# with a reason and a name — kept on the record, out of the verify table, the runbook and the sign-off.
+# Never a manual DB edit; POST /onboarding/intake/retire. Nothing it landed is touched by retiring it.
+STATUS_RETIRED = "retired"
+STATUSES = (STATUS_NOT_STARTED, STATUS_IN_PROGRESS, STATUS_NEEDS_INPUT, STATUS_VERIFIED, STATUS_RETIRED)
 
 # THE THREE PROVENANCES (design §0.3). There is no fourth, and none of them is "another carrier".
 PROV_FILE = "from your file"
@@ -322,7 +343,7 @@ def stage2_instance_key(source_kind, source_ref, layout_or_name):
     instance, prefilled from nothing of the first."""
     kind = _s(source_kind).lower()
     if kind not in KIND_STAGE or kind == "commission":
-        raise ValueError("stage-2 kinds are sales | pos | inventory | x_report | merchant_payments | bill_payments | other")
+        raise ValueError("stage-2 kinds are sales | pos | invoice | inventory | x_report | merchant_payments | bill_payments | other")
     return f"{kind}:{slug(source_ref) or 'file'}:{slug(layout_or_name) or 'report'}"
 
 
@@ -1484,11 +1505,17 @@ def simple_tie(our_total, file_total_raw, typed_total=None):
 
 
 def stage2_refusals(kind, mapped_fields, stores, tie, attestation=None, undated_rows=0,
-                    storeless_rows=0, rows_to_land=0, layout=None, extra=None):
+                    storeless_rows=0, rows_to_land=0, layout=None, extra=None, tender_tie=None):
     """Why a Stage-2 commit is REFUSED (design §0.1, §2 exit, §5.3, §5.7). An empty list = proceed.
     `extra` = kind-specific refusals the router computed (an X-report with no close date, a merchant
-    upload that would double days the scheduled pull already landed) — appended verbatim."""
+    upload that would double days the scheduled pull already landed) — appended verbatim.
+    `tender_tie` (the invoice kind, 2.5b) = Σ of the declared tender columns beside Σ invoice total —
+    a non-zero difference is refused unless attested with a reason, like the file's own total."""
     out = []
+    att_ok = bool(_s((attestation or {}).get("reason")))
+    if tender_tie is not None and tender_tie.get("match") is False and not att_ok:
+        out.append(f"The tender columns do not add up to the invoice totals — {tender_tie.get('words')}. "
+                   f"Fix the columns at step {STEP_TENDER_COLUMNS}, or attest the difference with a reason.")
     kind = _s(kind).lower()
     missing = [f for f in kind_required(kind, layout) if f not in set(mapped_fields or [])]
     if missing:
@@ -1497,13 +1524,12 @@ def stage2_refusals(kind, mapped_fields, stores, tie, attestation=None, undated_
     if unresolved:
         out.append(f"{len(unresolved)} store string(s) are unresolved: " + ", ".join(unresolved[:8])
                    + (" …" if len(unresolved) > 8 else "") + " — assign each to one of your stores, create the store, or mark it not yours with a reason.")
-    if kind in ("sales", "pos") and undated_rows:
+    if kind in ("sales", "pos", "invoice") and undated_rows:
         out.append(f"{undated_rows} row(s) carry no parseable date — a row without a date cannot be booked to a month; fix the date column or the file.")
     if storeless_rows:
         out.append(f"{storeless_rows} row(s) carry no store — the file cannot prove which slice it owns; fix the store column or the file.")
     if rows_to_land == 0 and kind != "other":
         out.append("Nothing would land — every row is a footer, excluded, or empty.")
-    att_ok = bool(_s((attestation or {}).get("reason")))
     if tie is not None and kind != "other":
         if tie.get("match") is None and not att_ok:
             out.append("The file states no total and none was typed — enter the file's total, or attest why there is none.")
@@ -1571,13 +1597,23 @@ def rail(stage_rows, current_instance=None, company=None, run=None):
     """The left rail as a projection of the persisted stage rows (design §0.2): every instance of
     stages 2 and 3 with its step and lamp, the stage lamps, the Stage-4 verify table and the Stage-5
     runbook. Reopening lands on the first non-verified step of the current instance."""
-    instances = []
+    instances, retired = [], []
     for r in stage_rows or []:
         st_no = _s(r.get("stage"))
         if st_no not in ("2", "3"):
             continue
         st = _s(r.get("status")) if _s(r.get("status")) in STATUSES else STATUS_IN_PROGRESS
         keys = [k for k, _ in STEPS_BY_STAGE[st_no]]
+        if st == STATUS_RETIRED:
+            # a mis-filed line, retired with a reason: on the record, out of the verify table / runbook / sign-off
+            pl = r.get("payload") or {}
+            retired.append({"instance_key": r.get("instance_key"), "stage": st_no, "kind": kind_of_instance(r.get("instance_key")),
+                            "label": _instance_label(r), "reason": r.get("blocking_reason"),
+                            "by": r.get("verified_by"), "at": r.get("verified_at") or r.get("updated_at"),
+                            # the kept file, so the right kind can re-read it without a re-drop (use_stored + this key)
+                            "file": pl.get("file") if isinstance(pl.get("file"), dict) else None, "filename": pl.get("filename"),
+                            "removed": ((r.get("verified_numbers") or {}).get("retired") or {}).get("removed")})
+            continue
         instances.append({"instance_key": r.get("instance_key"), "stage": st_no,
                           "kind": kind_of_instance(r.get("instance_key")),
                           "label": _instance_label(r),
@@ -1607,7 +1643,7 @@ def rail(stage_rows, current_instance=None, company=None, run=None):
     return {"stages": stages,
             "steps": [{"key": k, "label": l} for k, l in STEPS],
             "steps_by_stage": {st: [{"key": k, "label": l} for k, l in steps] for st, steps in STEPS_BY_STAGE.items()},
-            "instances": instances,
+            "instances": instances, "retired": retired,
             "resume": {"instance_key": cur["instance_key"], "step": cur["step"], "stage": cur["stage"]} if cur else None,
             "verify_table": verify_table(instances),
             "runbook": runbook(instances),
@@ -1641,13 +1677,14 @@ def verify_table(instances):
         else:
             basis = vn.get("basis")
         red = i["status"] != STATUS_VERIFIED
-        # the step that fixes a red row: the identity gate first, the activation gate next, then the
-        # totals, else where it stopped
+        # the step that fixes a red row: the identity gate first, the activation gate next, the tender
+        # columns (an invoice export whose tenders do not add up), then the totals, else where it stopped
         fix_step = i["step"]
         if red and i["stage"] == "2":
             br = _s(i.get("blocking_reason"))
             gate = (vn.get("activation_gate") or {}).get("blocked") or f"step {STEP_LINE_CLASS}" in br
-            fix_step = "2.4" if "unresolved" in br else STEP_LINE_CLASS if gate else "2.5" if vn else i["step"]
+            fix_step = ("2.4" if "unresolved" in br else STEP_LINE_CLASS if gate
+                        else STEP_TENDER_COLUMNS if f"step {STEP_TENDER_COLUMNS}" in br else "2.5" if vn else i["step"])
         elif red and i["stage"] == "3":
             fix_step = "3.8" if vn else i["step"]
         rows.append({"instance_key": i["instance_key"], "stage": i["stage"], "kind": kind, "label": i["label"],
@@ -1662,7 +1699,10 @@ def verify_table(instances):
                      "sold_check": vn.get("sold_check"),
                      # 2.5a — the activation split of a landed sales export (or "not yet checked")
                      "activation_note": activation_note(vn), "activation_classes": vn.get("activation_classes"),
-                     "activation_gate": vn.get("activation_gate")})
+                     "activation_gate": vn.get("activation_gate"),
+                     # 2.5b — an invoice export's tender split beside the X-report, and Σ tax (owner 2026-09-21)
+                     "tender_note": _invoice_tenders.stage4_tender_note(vn) if kind == "invoice" else None,
+                     "tender_recon": vn.get("tender_recon") if kind == "invoice" else None})
     return rows
 
 
