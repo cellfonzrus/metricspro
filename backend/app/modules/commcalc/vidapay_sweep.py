@@ -1727,7 +1727,7 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
             browser.close()
 
 
-def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
+def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None, label=None):
     """b2bsoft SSO (sso.b2bsoft.com, IdentityServer) is a MULTI-STEP login: page 1 asks for the ACCESS
     CODE (Company ID — the same value as VidaPay's Account ID, DB field account_id), THEN page 2 asks for
     User ID + Password, then the 2FA challenge. The generic single-page begin_login can't find the
@@ -1738,6 +1738,7 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
     except Exception:
         raise VidaPayLoginError("Playwright/Chromium is not available in the backend image.")
     base_url = _norm_url(url, B2BSOFT_URL)
+    lab = _portal_label(label)      # copy names the connector by its registry label (mig 1014)
     assert_browser_allowed()   # SERVICE_ROLE=api → no Chromium on the user-facing API service
     with sync_playwright() as p:
         browser = _launch(p)
@@ -1760,7 +1761,7 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
             _b, _d0 = _blocked(page)
             if _b:
                 raise VidaPayLoginError(
-                    "b2bsoft's WAF is blocking our server's requests (\"" +
+                    f"{lab}'s WAF is blocking our server's requests (\"" +
                     ((_d0.get("headings") or ["blocked"])[0]) +
                     "\") — this is the datacenter-IP wall (it lets a few logins through, then flags the IP). "
                     "The login itself works; the portal is refusing our egress IP. Put a RESIDENTIAL / allow-"
@@ -1814,10 +1815,10 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
                             + " Diagnostic: " + str(diag))
                     if _looks_like_bot_wall(page):
                         raise VidaPayLoginError(
-                            "b2bsoft served an anti-automation page instead of the password form — reach it from a "
+                            f"{lab} served an anti-automation page instead of the password form — reach it from a "
                             "residential / allow-listed IP (set the Egress proxy). Diagnostic: " + str(diag))
                     raise VidaPayLoginError(
-                        "Reached b2bsoft but could not find the password field — send this diagnostic. Diagnostic: " + str(diag))
+                        f"Reached {lab} but could not find the password field — send this diagnostic. Diagnostic: " + str(diag))
                 ue = _find_input(login_fr, want=("user", "login", "email", "userid", "username"),
                                  avoid=("company", "access", "code", "pass"))
                 if ue and user:
@@ -1891,7 +1892,7 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
                         "screenshot_b64": _shot_b64(page)}
             if state == "botwall":
                 raise VidaPayLoginError(
-                    "b2bsoft served an anti-automation page after login — set a residential proxy. Diagnostic: " + str(diag))
+                    f"{lab} served an anti-automation page after login — set a residential proxy. Diagnostic: " + str(diag))
             if state == "login":
                 raise VidaPayLoginError(
                     "Login rejected — still on the login form. What was typed + the portal's own error are in the "
@@ -2000,7 +2001,7 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
             browser.close()
 
 
-def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
+def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None, label=None):
     """b2bsoft SSO 2FA: fill #TwoFactorCode, TICK 'Remember this device for 90 days' (#IsTrustedDevice —
     so the session persists and future logins skip 2FA), click #verifyButton, then the OIDC flow
     redirects back to the portal (authenticated). Returns the durable session."""
@@ -2129,7 +2130,7 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
                 st["_sessionStorage"] = {"origin": sd.get("url") or base_url, "items": ss_dump}
             return {"status": "authenticated", "storage_state": st,
                     "diag": {**_snapshot(page), "final_url": page.url, "storage": sd,
-                             "cookie_hosts": cookie_hosts, "_note": "post-2FA landed on portal (b2bsoft)"},
+                             "cookie_hosts": cookie_hosts, "_note": f"post-2FA landed on portal ({_portal_label(label)})"},
                     "screenshot_b64": _shot_b64(page)}
         except Exception as e:   # attach the evidence to EVERY failure, incl. Playwright timeouts
             if getattr(e, "screenshot_b64", None) is None:
@@ -3481,6 +3482,15 @@ def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrie
 # The login/2FA endpoints already use the generic begin_login/complete_2fa above, so b2bsoft's
 # interactive 2FA works for a data_source with processor='b2bsoft'; this is the report-pull handler.
 B2BSOFT_URL = "https://wsreports.b2bsoft.com"
+# COPY DEREFERENCES THE REGISTRY (owner 2026-09-21). Every tenant-facing sentence these functions
+# raise or return names the connector by the label the router read off commcalc.connector_registry
+# (mig 1014) and passed as `label=`; with none, the neutral noun. No vendor is spelled in a payload
+# string here (backend/harness_carrier_vocab_guard.py scans this module).
+PORTAL_NEUTRAL_LABEL = "reports portal"
+
+
+def _portal_label(label):
+    return str(label or "").strip() or PORTAL_NEUTRAL_LABEL
 
 
 def b2b_reports_probe(page):
@@ -3511,7 +3521,7 @@ def b2b_reports_probe(page):
     return probe
 
 
-def pull_b2bsoft_on_page(page):
+def pull_b2bsoft_on_page(page, label=None):
     """The b2bsoft 'pull' on an ALREADY-AUTHENTICATED page: there is no report download wired for this
     portal yet, so it probes what the session offers and says so HONESTLY.
 
@@ -3525,7 +3535,7 @@ def pull_b2bsoft_on_page(page):
     data_source.last_run_at — re-creating, for this processor, exactly the fake freshness that
     migration 241 was written to kill."""
     return {
-        "status": "⚠️ imported 0 rows — signed in to b2bsoft OK, but its Sales Transaction Details "
+        "status": f"⚠️ imported 0 rows — signed in to {_portal_label(label)} OK, but its Sales Transaction Details "
                   "auto-download is not wired yet, so this pull imported nothing (the daily email "
                   "feed keeps ingesting meanwhile)",
         "authenticated": True, "delivered": False, "rows_ingested": 0, "reason": "not_wired",
@@ -3533,7 +3543,7 @@ def pull_b2bsoft_on_page(page):
     }
 
 
-def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrier_id=None, proxy_url=None):
+def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrier_id=None, proxy_url=None, label=None):
     """Restore the authenticated b2bsoft session (established via the interactive Log in + 2FA flow and
     persisted as storage_state — optionally routed through a residential proxy to clear b2bsoft's
     datacenter-IP wall) and verify it's alive, reporting the sales-report links it exposes so the Sales
@@ -3572,8 +3582,8 @@ def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrie
                     or "/account/login" in u or "twofactor" in u:
                 _raise_if_rate_limited(page, markers=markers, where="The POS portal")
                 raise VidaPayAuthError(
-                    "The b2bsoft session has expired — please re-authenticate (Log in + enter the 2FA code).")
-            return pull_b2bsoft_on_page(page)
+                    f"The {_portal_label(label)} session has expired — please re-authenticate (Log in + enter the 2FA code).")
+            return pull_b2bsoft_on_page(page, label=label)
         finally:
             browser.close()
 

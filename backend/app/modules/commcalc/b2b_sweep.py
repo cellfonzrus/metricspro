@@ -37,7 +37,9 @@ def _bounded_session(_timeout=60):
     s.request = _req
     return s
 
-BASE = "https://wsreports.b2bsoft.com"
+# The portal HOST is the connector registry's fact (commcalc.connector_registry, mig 1014 — the row's
+# `host`), passed in by the caller on the `connector` row; nothing here spells it. `_base_url` builds
+# the URL from that row so the real client, once written, reads the same home the copy does.
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120 Safari/537.36")
 
@@ -67,20 +69,50 @@ def _num(v):
 
 
 # ── portal client (STUBS — fill once creds are supplied) ─────────────────────────────────────
-def login(session, user, pw):
-    """Authenticate to wsreports.b2bsoft.com. STUB — to be implemented from a live probe."""
-    raise B2BNotConfigured(
-        "The b2bsoft (wsreports.b2bsoft.com) portal client is not reverse-engineered yet. "
-        "Provide the b2bsoft login so the Inventory Aging report flow can be captured.")
+# COPY DEREFERENCES THE REGISTRY (owner 2026-09-21: "it says rq connection but refers to b2b
+# reports"). These messages reach the page as the connector's `last_detail`, so they name the
+# connector by its registered `label` / `host` (commcalc.connector_registry, mig 1014 — the row the
+# router resolves and passes as `connector`), never by a vendor spelled here. With no row the copy
+# uses the neutral noun. backend/harness_carrier_vocab_guard.py scans this module's strings.
+NEUTRAL_LABEL = "reports portal"
 
 
-def fetch_inventory_aging(session, **kwargs):
+def _label(connector):
+    return str((connector or {}).get("label") or "").strip() or NEUTRAL_LABEL
+
+
+def _base_url(connector):
+    host = str((connector or {}).get("host") or "").strip()
+    return ("https://" + host) if host else None
+
+
+def not_implemented_message(connector):
+    """The ONE sentence the stub reports until the portal client is written — label / host from the
+    registry row. PURE (pinned by harness_connector_registry.py §D)."""
+    lab = str((connector or {}).get("label") or "").strip()
+    host = str((connector or {}).get("host") or "").strip()
+    if not lab:
+        return ("This reports-portal client is not implemented yet — provide its login under Connectors "
+                "so the Inventory Aging report flow can be captured.")
+    where = f" ({host})" if host else ""
+    return (f"The {lab}{where} portal client is not implemented yet — provide the {lab} login under "
+            f"Connectors so the Inventory Aging report flow can be captured.")
+
+
+def login(session, user, pw, connector=None):
+    """Authenticate to the connector's reports portal (`connector['host']`). STUB — to be implemented
+    from a live probe."""
+    raise B2BNotConfigured(not_implemented_message(connector))
+
+
+def fetch_inventory_aging(session, connector=None, **kwargs):
     """Return the Inventory Aging report as a list of raw row dicts. STUB.
 
     When implemented this returns rows carrying at least a store identifier and a $ value
     column (the report has a cost/value column per the user) — normalize_inventory() below
     turns them into one (store, value) pair per store."""
-    raise B2BNotConfigured("fetch_inventory_aging() not implemented — provide b2bsoft credentials.")
+    raise B2BNotConfigured(
+        f"fetch_inventory_aging() is not implemented yet — provide the {_label(connector)} credentials.")
 
 
 # ── normalize (REAL — store-agnostic; the only portal-specific bit is the column names) ───────
@@ -471,13 +503,14 @@ def write_inventory_values(client, org_id, store_values, as_of_date):
     return saved
 
 
-def run_inventory_sweep(client, org_id, user, pw, store_field=None, value_field=None):
+def run_inventory_sweep(client, org_id, user, pw, store_field=None, value_field=None, connector=None):
     """Log in → fetch Inventory Aging → normalize → upsert swept values. Returns a summary dict.
-    Raises B2BNotConfigured until the portal client stubs above are implemented."""
+    Raises B2BNotConfigured until the portal client stubs above are implemented.
+    `connector` = the connector registry row (label / host) the copy and the client dereference."""
     session = _bounded_session()
     session.headers.update({"User-Agent": UA})
-    login(session, user, pw)
-    raw = fetch_inventory_aging(session)
+    login(session, user, pw, connector=connector)
+    raw = fetch_inventory_aging(session, connector=connector)
     store_values = normalize_inventory(raw, store_field, value_field)
     as_of = datetime.now(timezone.utc).date().isoformat()
     saved = write_inventory_values(client, org_id, store_values, as_of)

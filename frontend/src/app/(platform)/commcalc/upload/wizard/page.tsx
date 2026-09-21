@@ -7,6 +7,7 @@ import { readUploadOutcome } from '../../_lib/uploadGuard'
 import { PERIOD_ROUTES, MODULE_ROUTES, ROUTE_NOTES, ROUTE_URL_OVERRIDE } from '../../_lib/uploadRoutes'
 import ShowsIn from '@/components/ShowsIn'
 import { useReportKinds } from '@/lib/report-kinds'
+import { useConnectors } from '@/lib/connectors'
 import type { ReportKindRow } from '@/lib/carrier-scope'
 
 const enc = encodeURIComponent
@@ -74,7 +75,7 @@ function stepsFromKinds(kindRows: ReportKindRow[]): Step[] {
 
 type Rec = { file_type: string; period: string | null; uploaded_at: string }
 type RegistryReport = { report_key: string; label?: string | null; source_name?: string | null; report_id?: string | number | null; upload_endpoint?: string | null; source_url?: string | null; auto?: boolean }
-type Connector = { vendor_name: string; label?: string | null; portal_url?: string | null; reports?: RegistryReport[] }
+type Connector = { vendor_name: string; label?: string | null; portal_url?: string | null; sweep_kind?: string | null; reports?: RegistryReport[] }
 
 export default function UploadWizardPage() {
   const { period } = usePeriod()
@@ -94,7 +95,12 @@ export default function UploadWizardPage() {
 
   // Registry first; the visible kinds' routes when the connector registry is empty; NOTHING before
   // the report-kind registry has answered or when it could not be read.
-  const registrySteps = kinds.loaded && !kinds.error ? stepsFromRegistry(conns, kinds.allows, kinds.labelFor) : []
+  // THE CONNECTOR REGISTRY (mig 1014): a connector instance whose connector does not apply to this tenant's
+  // declared POS / carrier contributes no step (its reports are gated per KIND by useReportKinds already —
+  // the two gates AND together, the same posture as the Upload page's tiles).
+  const connectors = useConnectors()
+  const registrySteps = kinds.loaded && !kinds.error && connectors.loaded
+    ? stepsFromRegistry(conns.filter(c => connectors.allows(c.sweep_kind)), kinds.allows, kinds.labelFor) : []
   const kindSteps = kinds.loaded && !kinds.error && registrySteps.length === 0 ? stepsFromKinds(kinds.forSurface('wizard')) : []
   const STEPS = registrySteps.length ? registrySteps : kindSteps
   const fromRegistry = registrySteps.length > 0

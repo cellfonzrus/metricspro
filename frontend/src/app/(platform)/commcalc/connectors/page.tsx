@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
 import { WorkflowNext } from '@/components/WorkflowNext'
+import { useConnectors } from '@/lib/connectors'
 
 // Unified connector registry (SaaS framework Phase 2): every vendor portal + the reports it provides
 // + live sweep status, with a generic run-now. The single source of truth for the data pipeline.
@@ -13,6 +14,11 @@ const fin: React.CSSProperties = { padding: '6px 9px', borderRadius: 6, border: 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 export default function ConnectorsPage() {
+  // THE CONNECTOR REGISTRY (mig 1014): which connectors apply to this tenant's declared POS / carrier.
+  // The "Add connector" sweep-kind picker offers the registry's visible portal connectors (+ manual);
+  // an instance whose connector does not apply is shown as such — no status, no Run now — never hidden
+  // (it is a stored row) and never judged (owner 2026-09-21: "it says rq connection but refers to b2b").
+  const registry = useConnectors()
   const [conns, setConns] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
@@ -90,8 +96,9 @@ export default function ConnectorsPage() {
             <select style={fin} value={nc.twofa_method || 'none'} onChange={e => setNc({ ...nc, twofa_method: e.target.value })} title="2-factor method">
               {['none', 'sms', 'totp', 'email', 'biometric'].map(k => <option key={k} value={k}>2FA: {k}</option>)}
             </select>
-            <select style={fin} value={nc.sweep_kind} onChange={e => setNc({ ...nc, sweep_kind: e.target.value })} title="run-now dispatch kind">
-              {['manual', 'vip', 'dlar', 'epay', 'b2b', 'google_closing'].map(k => <option key={k} value={k}>{k}</option>)}
+            <select style={fin} value={nc.sweep_kind} onChange={e => setNc({ ...nc, sweep_kind: e.target.value })} title="run-now dispatch kind — the connectors the registry offers this tenant">
+              <option value="manual">manual</option>
+              {registry.visible.filter(r => r.kind !== 'mailbox' && r.kind !== 'ftp').map(r => <option key={r.key} value={r.key}>{r.key} — {r.label}</option>)}
             </select>
             <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={addConnector}>Add</button>
           </div>
@@ -110,6 +117,18 @@ export default function ConnectorsPage() {
         const credReady = !!(cr.has_user && cr.has_pass)
         const ready = !!(c.automatable && credReady && st.enabled && st.next_run_at)
         const missing = !c.automatable ? 'manual-only' : !credReady ? 'credentials' : !st.enabled ? 'schedule off' : !st.next_run_at ? 'no schedule' : ''
+        // connector_scope (mig 1014): the registry's answer for this instance's connector, computed server-side
+        const notApplicable = c.connector_scope && c.connector_scope.applies === false
+        if (notApplicable) {
+          return (
+            <div key={c.id} className="card" style={{ padding: 12, marginBottom: 14, opacity: 0.6 }}>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>{c.vendor_name} <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text3)' }}>{c.label}</span></div>
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>
+                Not applicable to this tenant — {c.connector_scope.why}. Nothing runs, nothing is monitored and no status is shown for it; widen its scope in the connector registry if this tenant does use it.
+              </div>
+            </div>
+          )
+        }
         return (
           <div key={c.id} className="card" style={{ padding: 16, marginBottom: 14, opacity: c.enabled ? 1 : 0.6 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
@@ -213,6 +232,7 @@ export default function ConnectorsPage() {
           </div>
         )
       })}
+      {registry.withheld && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6 }}>{registry.withheld}</div>}
       <WorkflowNext here="/commcalc/connectors" />
     </div>
   )

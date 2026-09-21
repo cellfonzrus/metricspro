@@ -134,9 +134,14 @@ _SWEEPS = [
      "store and rep KPI metrics"),
     ("vip_sweep_config", "Distributor portal sweep (VIP)", "/commcalc/vip/sweep",
      "distributor invoices, PayGo billing, the asset ledger and chargebacks"),
-    ("b2b_sweep_config", "POS portal sweep (B2B Soft)", "/commcalc/connectors",
+    ("b2b_sweep_config", "POS portal sweep", "/commcalc/connectors",
      "on-hand inventory value"),
 ]
+# The connector SLUG each legacy per-vendor sweep table speaks for when its row carries none (the
+# b2b row carries its own in `connector`, mig 998) — the same map router._CONNECTOR_SLUG_SOURCE
+# keeps; used only to ask the connector registry (mig 1014) whether the connector applies.
+_SWEEP_SLUGS = {"epay_sweep_config": "epay", "dlar_sweep_config": "dlar", "vip_sweep_config": "vip",
+                "b2b_sweep_config": "b2b"}
 
 
 def _login_hint(processor, status, auth_status, auth_message):
@@ -237,6 +242,20 @@ def p_connectors(client, org_id, ctx):
         from app.modules.commcalc import connector_route_policy as _crp
     except Exception:
         _crp = None
+    # Connector scope (mig 1014, owner 2026-09-21): does this connector even APPLY to the tenant's
+    # declared POS / carrier? Like the route policy, the context arrives from the org-scoped endpoint
+    # (import_health._connector_scope_ctx) — never read here. No context ⇒ inert (everything applies).
+    _scope_ctx = (ctx or {}).get("connector_scope")
+
+    def _applies(connector):
+        """False only when the registry KNOWS the connector and its scope misses this tenant."""
+        if not _scope_ctx:
+            return True
+        try:
+            from app.modules.commcalc import connector_registry as _cr
+            return bool(_cr.scope_for(_scope_ctx, connector).get("applies", True))
+        except Exception:
+            return True
 
     def _route_policy(_client, _org, connector, rows):
         """The (connector, portal-login) policy for one row. Never raises; open when unknown."""
@@ -278,6 +297,13 @@ def p_connectors(client, org_id, ctx):
         if not rows:
             continue                                  # never configured ⇒ the tenant doesn't use it
         r = rows[0]
+        # ── NOT THIS TENANT'S CONNECTOR (mig 1014) ───────────────────────────────────────────────
+        # Checked before anything else: a sweep whose connector does not apply to the declared POS /
+        # carrier raises NO attention item — its stale error is not a fault of theirs to fix. The
+        # slug is the row's own `connector` (998) or the table's implied one (_SWEEP_SLUGS), never a
+        # vendor spelled here.
+        if not _applies((r.get("connector") or "").strip() or _SWEEP_SLUGS.get(table, "")):
+            continue
         enabled = bool(r.get("enabled"))
         has_creds = bool((r.get("portal_user") or "").strip() and (r.get("portal_pass") or "").strip())
         status = (r.get("last_status") or "")
@@ -339,6 +365,8 @@ def p_connectors(client, org_id, ctx):
         procs.add(proc.lower())
         name = (s.get("label") or proc or "portal login").strip()
         if not s.get("enabled"):
+            continue
+        if not _applies(proc):          # mig 1014 — not this tenant's connector: no item (see (a))
             continue
         # ── ROUTE CLOSED BY CONFIG (mig 998) ────────────────────────────────────────────────────
         # First and terminal, ahead of the credential/cooldown/failure checks below, for the same
@@ -779,6 +807,13 @@ def p_portal_sessions(client, org_id, ctx):
         from app.modules.commcalc import connector_route_policy as _crp
     except Exception:
         _crp = None
+    # Connector scope (mig 1014): a login for a connector that does not apply to this tenant's declared
+    # POS / carrier has no session question to answer — no popup. Context from the endpoint, never read here.
+    _scope_ctx = (ctx or {}).get("connector_scope")
+    try:
+        from app.modules.commcalc import connector_registry as _cr
+    except Exception:
+        _cr = None
     now = ctx.get("now") or _now()
     try:
         rows = (client.schema("commcalc").table("data_source")
@@ -791,6 +826,12 @@ def p_portal_sessions(client, org_id, ctx):
     for r in rows:
         if not _mp.is_portal((r.get("processor") or "").strip().lower()):
             continue
+        if _scope_ctx and _cr is not None:
+            try:
+                if not _cr.scope_for(_scope_ctx, r.get("processor")).get("applies", True):
+                    continue
+            except Exception:
+                pass
         # Never let session material reach the item: swap the blob for the boolean the evaluator wants.
         probe = {k: v for k, v in r.items() if k != "session_state"}
         probe["has_session"] = bool(r.get("session_state"))

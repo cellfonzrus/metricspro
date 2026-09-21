@@ -44,6 +44,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FE = os.path.join(ROOT, "frontend", "src")
 BE = os.path.join(ROOT, "backend", "app", "modules", "commcalc")
 HOOK_FILE = "lib/report-kinds.ts"
+# The connector registry (mig 1014, 2026-09-21) REUSES the one visibility function one axis over — its
+# hook is the SECOND and last permitted caller of reportKindsVisible (with the `connector:` namespace);
+# harness_connector_scope_lock.py owns that surface's rules. Any third caller is still RED here.
+CONNECTOR_HOOK_FILE = "lib/connectors.ts"
+REGISTRY_HOOKS = (HOOK_FILE, CONNECTOR_HOOK_FILE)
 VIS_FILE = "lib/carrier-scope.ts"
 SHARED_PRIMITIVE = "app/(platform)/onboarding/intake/intake-shared.tsx"
 
@@ -179,8 +184,8 @@ def scan(files, allow):
                     v.append((rel, "term_compare", TERM_COMPARE.search(body).group(0)))
             if rel != HOOK_FILE and re.search(r"/commcalc/report-kinds['\"`$]", body):
                 v.append((rel, "second_fetch", "fetches /report-kinds directly instead of through useReportKinds"))
-            if rel != HOOK_FILE and "reportKindsVisible(" in body:
-                v.append((rel, "second_caller", "calls reportKindsVisible outside the one hook"))
+            if rel not in REGISTRY_HOOKS and "reportKindsVisible(" in body:
+                v.append((rel, "second_caller", "calls reportKindsVisible outside the two registry hooks"))
         # (a) surfaces dereference the registry
         if is_surface(rel, src):
             if (rel, "surface") in allow:
@@ -202,7 +207,9 @@ def main():
     files = walk_fe()
     hook = files.get(HOOK_FILE, "")
     vis = files.get(VIS_FILE, "")
-    check("the one visibility function exists in carrier-scope.ts", "export function reportKindsVisible(" in vis)
+    # generic since 2026-09-21 (`reportKindsVisible<T extends ScopedRow>(…, capPrefix)`) so the connector
+    # registry runs the SAME function with its own cap namespace — still ONE function, still one file
+    check("the one visibility function exists in carrier-scope.ts", bool(re.search(r"export function reportKindsVisible(<[^>]*>)?\(", vis)))
     check("the one hook exists, calls it, and fetches the one endpoint",
           "reportKindsVisible(" in hook and "/api/v1/commcalc/report-kinds" in hook and "export function useReportKinds()" in hook)
     surfaces = [rel for rel, src in files.items() if is_surface(rel, src)]
@@ -267,6 +274,10 @@ def main():
     check("a NEW file importing the intake upload primitive without the hook → RED", any(c == "surface" and "new-upload" in r for r, c, _ in v9), v9)
     _, stale2 = scan(base, {**ALLOW, ("app/(platform)/commcalc/upload/page.tsx", "glob"): "stale on purpose"})
     check("a stale allow entry → RED", ("app/(platform)/commcalc/upload/page.tsx", "glob") in stale2, stale2)
+    ctl = dict(base)
+    ctl["app/(platform)/commcalc/connectors/page.tsx"] = "'use client'\nconst v = reportKindsVisible(rows, decl, caps, 'connector:')\n"
+    v10, _ = scan(ctl, ALLOW)
+    check("a THIRD caller of reportKindsVisible (a page, not one of the two registry hooks) → RED", any(c == "second_caller" for _, c, _ in v10), v10)
 
     print("\n%d passed, %d failed" % (P, F))
     if F:

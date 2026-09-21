@@ -330,12 +330,17 @@ def normalise_row(row):
     return out
 
 
-def merge_rows(rows, org_id):
+def merge_rows(rows, org_id, normalise=None):
     """House rows + this org's rows merged PER KEY — the tenant's row overrides the house row (the
-    mig-207 shape). A row from a THIRD org is never read (the loader does not fetch one)."""
+    mig-207 shape). A row from a THIRD org is never read (the loader does not fetch one).
+
+    `normalise` (2026-09-21): the row normaliser — this registry's `normalise_row` by default; the
+    connector registry (connector_registry.py, mig 1014) passes its own so the SAME merge serves both
+    registries instead of a second copy of the house-over-tenant rule."""
+    norm = normalise or normalise_row
     house, own = {}, {}
     for r in rows or []:
-        n = normalise_row(r)
+        n = norm(r)
         if _s(n["org_id"]) == HOUSE_ORG:
             house[n["key"]] = n
         elif _s(n["org_id"]) == _s(org_id):
@@ -413,25 +418,33 @@ def applies(row, declaration):
     return pos_ok and car_ok
 
 
-def cap_override(caps, key):
-    v = (caps or {}).get(CAP_PREFIX + key)
+def cap_override(caps, key, cap_prefix=CAP_PREFIX):
+    """The super-admin `cap` override for one registry row: `<cap_prefix><key>` → True (show) / False
+    (hide) / None (follow the declaration). `cap_prefix` is `kind:` for report kinds and `connector:`
+    for the connector registry (mig 1014) — ONE override mechanism, one more key namespace."""
+    v = (caps or {}).get(cap_prefix + key)
     return True if v is True else (False if v is False else None)
 
 
-def visible_kinds(rows, declaration, caps=None, org_id=None, confirmations=None):
+def visible_kinds(rows, declaration, caps=None, org_id=None, confirmations=None, cap_prefix=CAP_PREFIX):
     """Rows visible to a tenant, each with its provenance — THE rule every surface dereferences.
 
       · inactive → never;
       · cap override `kind:<key>` hide → hidden (recorded); show → shown as 'widened by super-admin';
       · else shown iff applies(row, declaration).
     `rows` are already merged per key (merge_rows). `confirmations` = {kind_key: N} from this org's
-    own signature rows, for the "confirmed by you N times" provenance."""
+    own signature rows, for the "confirmed by you N times" provenance.
+
+    GENERALISED, NOT COPIED (2026-09-21, the connector class): any registry whose rows carry `key`,
+    `is_active`, `applies_to_pos`, `applies_to_carrier`, `defined_by` and `_source` runs through THIS
+    function — connector_registry.visible calls it with `cap_prefix='connector:'`. The default keeps
+    report kinds byte-identical."""
     out = []
     conf = confirmations or {}
     for r in rows or []:
         if not r["is_active"]:
             continue
-        ov = cap_override(caps, r["key"])
+        ov = cap_override(caps, r["key"], cap_prefix)
         if ov is False:
             continue
         by_rule = applies(r, declaration)
@@ -454,14 +467,15 @@ def visible_kinds(rows, declaration, caps=None, org_id=None, confirmations=None)
     return out
 
 
-def hidden_kinds(rows, declaration, caps=None):
-    """The rows NOT shown and why — so a surface can say 'N kinds hidden because …' instead of nothing."""
+def hidden_kinds(rows, declaration, caps=None, cap_prefix=CAP_PREFIX):
+    """The rows NOT shown and why — so a surface can say 'N kinds hidden because …' instead of nothing.
+    Shared with the connector registry through `cap_prefix`, like visible_kinds."""
     out = []
     for r in rows or []:
         if not r["is_active"]:
             out.append({"key": r["key"], "label": r["label"], "why": "inactive"})
             continue
-        ov = cap_override(caps, r["key"])
+        ov = cap_override(caps, r["key"], cap_prefix)
         if ov is False:
             out.append({"key": r["key"], "label": r["label"], "why": PROV_HIDDEN})
         elif ov is not True and not applies(r, declaration):
