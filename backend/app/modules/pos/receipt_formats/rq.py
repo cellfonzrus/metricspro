@@ -1,6 +1,11 @@
 """RQ / Wireless Zone receipt format. Declares its columns/labels; the engine reads positions from the
 actual file. Everything the reprint needs (header, items, totals, contract details, comments, legal
-footer) is captured — nothing about the layout is hardcoded beyond the label vocabulary this POS uses."""
+footer) is captured — nothing about the layout is hardcoded beyond the label vocabulary this POS uses.
+
+The same declarations serve a document BUILT for this POS from the landed sales reports
+(pos/sales_from_reports.py): TITLE, DATE_FORMAT, FINANCED_ITEMS (which item lines make the 'Financed:'
+total), CONTRACT_SECTION (the tracking / contract table) and PRINT_LAYOUT (the geometry render_words
+lays a document out on, so `parse` reads the rendering back — the round-trip the proof pins)."""
 from __future__ import annotations
 
 import re
@@ -9,6 +14,8 @@ from . import base, engine
 
 POS_SOURCE = "rq"
 LABEL = "RQ (Wireless Zone)"
+TITLE = "Sale"                       # the receipt title this POS prints on a sale
+DATE_FORMAT = "%d-%b-%Y"             # how it prints the tendered-on date ('28-Nov-2025')
 
 # Item columns, in the order this POS prints them. `hdr` = the header words the engine locates.
 COLUMNS = [
@@ -32,6 +39,30 @@ TOTALS = [
 # contains "Financed"/"Total" (e.g. "Device Payment Agreement Financed Amount") never ends the table.
 STOP_LABELS = ["Subtotal:", "Payment:"]
 FOOTER_ANCHOR = "Terms and Conditions"
+CHANGE_LABEL = "Change"              # the payment lines sit between 'Payment:' and this row
+
+# A FINANCED line on this POS: an item whose description carries the same word its 'Financed:' total
+# does, with a NEGATIVE quantity (the installment offset: '… Financed Amount  -1  $1,410.00  ($1,410.00)').
+# The 'Financed:' total is minus the sum of their totals. The same vocabulary word as TOTALS — no
+# product, carrier or tenant name.
+FINANCED_ITEMS = {"match": ["financed"], "qty_negative": True}
+
+# The 'Contract Details:' table under the totals — one row per (tracking #, contract #) pair.
+CONTRACT_SECTION = {"title": "Contract Details", "anchor": ["Contract", "Details"],
+                    "columns": [{"key": "tracking", "label": "Tracking #", "kind": base.KIND_SERIAL, "hdr": ["Tracking", "#"]},
+                                {"key": "contract", "label": "Contract #", "kind": base.KIND_CODE, "hdr": ["Contract", "#"]}]}
+
+# The print geometry of this POS's receipt (x positions measured on a real one) — what render_words
+# lays a document out on, so the parser above reads the rendering back exactly (the round-trip pin).
+# Left-aligned columns start at `x`; the money columns end at `right`.
+PRINT_LAYOUT = {
+    "title_x": 515, "store_x": 69, "meta_label_x": 380, "meta_value_x": 462, "left_x": 27, "bill_x": 98,
+    "totals_label_x": 466, "totals_value_right": 594, "payment_value_right": 190,
+    "columns": [{"key": "sku", "x": 27, "right": None}, {"key": "name", "x": 109, "right": None},
+                {"key": "tracking", "x": 341, "right": None}, {"key": "qty", "x": 449, "right": None},
+                {"key": "price", "x": 492, "right": 541}, {"key": "total", "x": 545, "right": 594}],
+    "section_columns_x": [27, 149], "char_w": 5.0,
+}
 
 
 def parse(pages_words) -> dict:
@@ -55,6 +86,7 @@ def parse(pages_words) -> dict:
     tendered_on = meta("sale_date", "Tendered On", True, "Tendered", "On")
     meta("salesperson", "Sales Person", True, "Sales", "Person")
     meta("tendered_by", "Tendered By", False, "Tendered", "By")
+    meta("tendered_at", "Tendered At", False, "Tendered", "At")
     if tendered_on:
         iso = base.parse_iso_date(tendered_on)
         if iso:
@@ -80,34 +112,37 @@ def parse(pages_words) -> dict:
     cols, items, stop = engine.extract_table(rows, COLUMNS, STOP_LABELS)
     doc["columns"], doc["items"] = cols, items
 
-    # totals + payments (region after the items)
+    # totals + payments (region after the items). The payment lines are whatever the register printed
+    # between 'Payment:' and 'Change:' — cash, a card brand, a keyed-by-hand twin — never a fixed word.
     doc["totals"] = engine.extract_totals(rows, TOTALS, start=stop)
-    pay_i = engine.find_row(rows, "Cash", start=stop)
-    if pay_i >= 0:
-        monies = base.find_money(engine.row_text(rows[pay_i]))
-        if monies:
-            doc["payments"].append({"label": "Cash", "amount": base.money(monies[-1])})
+    doc["payments"] = engine.extract_payments(rows, stop, CHANGE_LABEL, TOTALS)
 
     # comments
     ci = engine.find_row(rows, "Comments")
     if ci >= 0 and ci + 1 < len(rows):
         doc["comments"] = engine.row_text(rows[ci]).split(":", 1)[-1].strip() or engine.row_text(rows[ci + 1]).strip()
 
-    # contract details section (Contract # / Tracking #)
-    cd = engine.find_row(rows, "Contract", "Details")
-    if cd >= 0:
-        pairs = []
-        for j in range(cd + 1, min(cd + 60, len(rows))):
-            t = engine.row_text(rows[j]).strip()
-            if not t or "comments" in t.lower():
-                break
-            nums = re.findall(r"\d{6,}", t)
-            for n in nums:
-                pairs.append([n])
-        if pairs:
-            doc["sections"].append({"title": "Contract Details", "kind": "list",
-                                    "columns": [{"key": "ref", "label": "Contract / Tracking #"}],
-                                    "rows": pairs})
+    # contract details section: the (Tracking #, Contract #) table — read as PAIRS through the same
+    # header-located column bounds the item table uses; a receipt without that header row (an older
+    # print) falls back to the flat list of reference numbers it used to give.
+    scols, srows = engine.extract_pairs(rows, CONTRACT_SECTION["anchor"], CONTRACT_SECTION["columns"],
+                                        stop_tokens=("comments", FOOTER_ANCHOR))
+    if srows:
+        doc["sections"].append({"title": CONTRACT_SECTION["title"], "kind": "table", "columns": scols, "rows": srows})
+    else:
+        cd = engine.find_row(rows, *CONTRACT_SECTION["anchor"])
+        if cd >= 0:
+            pairs = []
+            for j in range(cd + 1, min(cd + 60, len(rows))):
+                t = engine.row_text(rows[j]).strip()
+                if not t or "comments" in t.lower():
+                    break
+                for n in re.findall(r"\d{6,}", t):
+                    pairs.append([n])
+            if pairs:
+                doc["sections"].append({"title": CONTRACT_SECTION["title"], "kind": "list",
+                                        "columns": [{"key": "ref", "label": "Contract / Tracking #"}],
+                                        "rows": pairs})
 
     doc["footer_text"] = engine.footer_from(rows, FOOTER_ANCHOR)
     doc["derived"] = base.compute_derived(doc)

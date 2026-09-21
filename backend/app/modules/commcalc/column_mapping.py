@@ -157,6 +157,9 @@ TARGET_FIELDS = {
         ("sku", "Product SKU", "text", False, "Product SKU", ["SKU"]),
         ("quantity", "Quantity", "number", False, "Quantity", []),
         ("total_cost", "Total cost", "number", False, "Total Cost", []),
+        # the contract number a line belongs to (raw_sales.contract_no since mig 1004) — the receipt's
+        # 'Contract Details' pairs it with the line's tracking # (pos/sales_from_reports, §30.14)
+        ("contract_no", "Contract #", "text", False, "Contract #", ["Contract No"]),
     ],
     # ── POS LINE-LEVEL SALES (→ raw_sales). The second shape a POS sells lines in: one row per
     #    invoice LINE, a US date-time, a refund flag instead of a void flag, and a hierarchical
