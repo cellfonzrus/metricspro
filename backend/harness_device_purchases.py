@@ -393,23 +393,58 @@ if _msp_base.strip():
         open(os.path.join(HERE, "app/modules/account/ma_store_pnl.py"), encoding="utf-8").read())
     _msp_removed = sorted(set(_b) - set(_n))
     _msp_changed = sorted(k for k in set(_b) & set(_n) if _b[k] != _n[k])
-    # RE-BASELINED 2026-09-21 (mig 1013): the CONFIG READER pair may change — `default_config` gains
-    # the `commission_source` key (house default 'feeds') and `load_config` reads the new column
-    # (newest column set first, adaptive) — because that is where every other P&L switch is read
-    # and a sibling config home is the duplicate the index forbids. The claim that matters is
-    # STRICTER and pinned in B2f: every function that decides WHERE an MA dollar books is byte-
-    # identical. Proven by backend/harness_pl_commission_source.py.
-    _MSP_SANCTIONED = {"default_config", "load_config"}
-    _MSP_BOOKING = ("ma_commission_bookings", "ma_tx_bookings", "rebate_route", "account_store_index",
-                    "load_store_index", "canonical_store_index", "gp_carrier_income",
-                    "commission_received_lines", "device_margin_bookings", "device_margin_supersedes")
-    check("B2d ma_store_pnl.py is ADDITIONS ONLY except the sanctioned config-reader pair "
-          "(default_config, load_config — mig 1013) — no other pre-existing function changed",
-          sorted(set(_msp_changed) - _MSP_SANCTIONED) == [], sorted(set(_msp_changed) - _MSP_SANCTIONED))
+    # SANCTIONED 2026-09-21, same discipline B2b applies to coa.py and for the same reason: a
+    # proxy that has become wrong is made to say what it means, never switched off. The owner
+    # reported that the Gross Profit M1 tile was wrong ("the m1 commission cannot be 2300"); the
+    # fix routes these two through `commission_ledger.month_leg_of`. What must not change is the
+    # MONEY, and B2f below proves that directly — the (line, amount) sequence is identical and only
+    # the M<n> DETAIL LABEL moves. That is a stricter claim than "the file did not change".
+    # ALSO SANCTIONED 2026-09-21 (mig 1013, the P&L commission SOURCE — owner: "p&l is not showing the
+    # commission received … check platform wide not bandaid"): the CONFIG READER pair — `default_config`
+    # gains the `commission_source` key (house default 'feeds') and `load_config` reads the new column
+    # (newest column set first, adaptive) — because that is where every other P&L switch is read and a
+    # sibling config home is the duplicate the index forbids. Neither decides where a dollar books; B2g
+    # below pins every function that DOES. Proven by backend/harness_pl_commission_source.py.
+    MSP_SANCTIONED = ("ma_tx_bookings", "ma_received_month_ladder", "default_config", "load_config")
+    _msp_unsanctioned = [f for f in _msp_changed if f not in MSP_SANCTIONED]
+    check("B2d ma_store_pnl.py — no pre-existing function changed except the two sanctioned by the "
+          "2026-09-21 M1-leg correction and the config-reader pair sanctioned by mig 1013, so no MA "
+          "dollar books anywhere different",
+          _msp_unsanctioned == [], _msp_unsanctioned)
     check("B2e …and nothing was removed from ma_store_pnl.py", _msp_removed == [], _msp_removed)
+
+    # B2f — what the sanction is worth: the sanctioned functions move NO money. The (line, amount)
+    # sequence is byte-identical across the leg correction; only the detail label changes.
+    from app.modules.account import ma_store_pnl as _msp_live
+    _cfg = dict(_msp_live.default_config(), month_spiff_source=_msp_live.BASIS_RECEIVED,
+                spiff_order_types=["PostPaid Additional Spiff"])
+    _pnl = {"merchant_discount_own_line": True, "residual_order_types": ["Postpaid Residual Order"]}
+    _rows = [
+        {"account_id": "", "order_type": "PostPaid Additional Spiff",
+         "product_name": "Total Wireless 5G Unlimited $55 New Activation Commission",
+         "retail_cost": -27.50, "merchant_discount": 0.0},
+        {"account_id": "", "order_type": "PostPaid Additional Spiff",
+         "product_name": "TBV MONTH 2 New Activation Commission",
+         "retail_cost": -22.50, "merchant_discount": 1.25},
+        {"account_id": "", "order_type": "Postpaid Residual Order",
+         "product_name": "Postpaid Residual", "retail_cost": -9.00, "merchant_discount": 0.0},
+    ]
+    _booked = [(l, _acct, m) for l, _acct, m, _d in _msp_live.ma_tx_bookings(_rows, _pnl, _cfg)]
+    check("B2f the sanctioned functions move NO money — the (line, amount) sequence is exactly "
+          "what it was before the leg correction; only the M<n> detail label moves",
+          _booked,
+          [("ma_merchant_discount", None, 0.0), ("carrier_comm", None, 27.5),
+           ("ma_merchant_discount", None, 1.25), ("carrier_comm", None, 22.5),
+           ("ma_merchant_discount", None, 0.0), ("mi_income", None, 9.0)])
+
+    # B2g (mig 1013) — the functions that decide WHERE an MA dollar books, other than the one B2f pins
+    # by its money, are byte-identical to the branch point.
+    _MSP_BOOKING = ("ma_commission_bookings", "rebate_route", "account_store_index", "load_store_index",
+                    "canonical_store_index", "gp_carrier_income", "commission_received_lines",
+                    "device_margin_bookings", "device_margin_supersedes")
     _msp_booking_moved = sorted(f for f in _MSP_BOOKING if f in _b and f in _n and _b[f] != _n[f])
-    check("B2f …and every function that decides WHERE an MA dollar books is byte-identical to the "
-          "branch point (the booking rules, the rebate route, the account->store index, the GP "
+    check("B2g …and every other function that decides WHERE an MA dollar books is byte-identical to the "
+          "branch point (the sheet booking rules, the rebate route, the account->store index, the GP "
           "read-out, the commission-received family)", _msp_booking_moved == [], _msp_booking_moved)
 else:
     check("B2d ma_store_pnl.py baseline unavailable (git-less CI) — skipped, not silently passed",

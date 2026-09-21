@@ -8143,7 +8143,7 @@ def commission_ledger_observed_types(source_report: str = "ma_daily_tx", period:
         b, lm, why = commission_ledger.leg_of(
             {"order_type": a["order_type"], "product_name": a["product_name"],
              "raw_amount": _sign * (1 if a.get("is_payout") else -1),
-             "payment_month": commission_ledger.parse_payment_month(a["product_name"])},
+             "payment_month": commission_ledger.month_leg_of(a["product_name"])},
             _rules, _lc, _conv)
         a["leg_bucket"], a["leg_month"], a["leg_why"] = b, lm, why
     out = sorted(agg.values(), key=lambda x: (-x["payout_total"], x["product_name"]))
