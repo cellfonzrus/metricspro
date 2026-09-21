@@ -5474,7 +5474,7 @@ def _intake_store_resolver(client, org_id):
 def _intake_rep_resolver(client, org_id):
     """resolve(raw) → (canonical employee name | None, how) over the org's roster
     (storeops.employees: name / epay_salesperson / employee_id) and commcalc.rep_aliases."""
-    names, aliases = {}, {}
+    names, aliases, ids = {}, {}, {}
     try:
         for e in (client.schema("storeops").table("employees").select("employee_id,name,epay_salesperson,is_active")
                   .eq("org_id", org_id).execute().data) or []:
@@ -5483,6 +5483,8 @@ def _intake_rep_resolver(client, org_id):
                 k = str(k or "").strip().lower()
                 if k and nm:
                     names.setdefault(k, nm)
+            if nm and str(e.get("employee_id") or "").strip():
+                ids.setdefault(nm.lower(), str(e["employee_id"]).strip())   # canonical name → employee_id (the POS sale's rep key)
     except Exception:
         pass
     try:
@@ -5504,6 +5506,7 @@ def _intake_rep_resolver(client, org_id):
             return names[v], "roster"
         return None, None
     resolve.employees = sorted(set(names.values()))
+    resolve.employee_ids = ids          # canonical name (lower) → storeops employee_id, for a caller that keys a row on the rep
     return resolve
 
 
@@ -6762,18 +6765,19 @@ def _intake_reread_sales(client, org_id, stores, lo, hi, table=None, kind=None):
     through landing_identity.kind_of_row, so a re-read never counts another kind's rows as its own."""
     table = table or _intake.SOURCE_KIND_TARGET["sales"]
     kind_col = _landing.stamp_column(table)
-    cols = ("store,salesperson,trans_id,trans_date,ext_price,gp,voided,"
+    cols = ("id,store,salesperson,trans_id,trans_date,ext_price,gp,voided,"
             "department,category,product_desc,tender_type,trans_type,contract_type,"
-            "mdn,serial_1,user_login")                             # + the Stage-D link fields (§30.11) + the activation-type fields (2.5a)
+            "mdn,serial_1,user_login,sku,quantity,contract_no")      # + the Stage-D link fields (§30.11) + the activation-type fields (2.5a) + the receipt fields (§30.14)
     if table != _intake.SOURCE_KIND_TARGET["sales"]:
-        cols = "store,salesperson,trans_id,trans_date,ext_price,gp,voided,product_desc,sku,quantity,total_cost,serial_1,user_login"
+        cols = "id,store,salesperson,trans_id,trans_date,ext_price,gp,voided,product_desc,sku,quantity,total_cost,serial_1,user_login"
     if kind_col and kind:
         cols += "," + kind_col
     rows, start = [], 0
     while True:
-        page = (client.schema("commcalc").table(table)
-                .select(cols)
-                .eq("org_id", org_id).in_("store", list(stores)).gte("trans_date", lo).lte("trans_date", hi)
+        q = client.schema("commcalc").table(table).select(cols).eq("org_id", org_id)
+        if stores is not None:                                     # None = every store of the org (the POS rebuild by period, §30.14)
+            q = q.in_("store", list(stores))
+        page = (q.gte("trans_date", lo).lte("trans_date", hi)
                 .order("id").range(start, start + _INTAKE_REREAD_PAGE - 1).execute().data) or []
         rows.extend(page)
         if len(page) < _INTAKE_REREAD_PAGE:
@@ -6814,13 +6818,16 @@ def _intake_reread_invoice(client, org_id, stores, lo, hi, kind=None):
     RE-READ in pages after landing; the kind filtered through landing_identity.kind_of_row."""
     table = _intake.SOURCE_KIND_TARGET["invoice"]
     kind_col = _landing.stamp_column(table)
-    cols = "store,salesperson,trans_id,trans_date,net_sales,sales,subtotal,invoice_total,gp,tax,tendered_by,customer"
+    cols = ("id,store,salesperson,trans_id,trans_date,net_sales,sales,subtotal,invoice_total,gp,tax,tendered_by,customer,"
+            "invoiced_by,extra_charges,donations,coupons")           # + the receipt header fields (§30.14)
     if kind_col and kind:
         cols += "," + kind_col
     rows, start = [], 0
     while True:
-        page = (client.schema("commcalc").table(table).select(cols)
-                .eq("org_id", org_id).in_("store", list(stores)).gte("trans_date", lo).lte("trans_date", hi)
+        q = client.schema("commcalc").table(table).select(cols).eq("org_id", org_id)
+        if stores is not None:                                     # None = every store of the org (the POS rebuild by period, §30.14)
+            q = q.in_("store", list(stores))
+        page = (q.gte("trans_date", lo).lte("trans_date", hi)
                 .order("id").range(start, start + _INTAKE_REREAD_PAGE - 1).execute().data) or []
         rows.extend(page)
         if len(page) < _INTAKE_REREAD_PAGE:
@@ -6836,13 +6843,15 @@ def _intake_reread_invoice_tenders(client, org_id, stores, lo, hi, kind=None):
     the same slice (stores × dates × kind), RE-READ in pages after landing."""
     table = column_mapping.CHILD_TABLE_MAP[_intake.REPORT_KEY_BY_KIND["invoice"]]
     kind_col = _landing.stamp_column(table)
-    cols = "store,trans_date,trans_id,salesperson,role,tender_label,tender_class,keyed_manually,amount"
+    cols = "id,store,trans_date,trans_id,salesperson,role,tender_label,tender_class,keyed_manually,amount"
     if kind_col and kind:
         cols += "," + kind_col
     rows, start = [], 0
     while True:
-        page = (client.schema("commcalc").table(table).select(cols)
-                .eq("org_id", org_id).in_("store", list(stores)).gte("trans_date", lo).lte("trans_date", hi)
+        q = client.schema("commcalc").table(table).select(cols).eq("org_id", org_id)
+        if stores is not None:                                     # None = every store of the org (the POS rebuild by period, §30.14)
+            q = q.in_("store", list(stores))
+        page = (q.gte("trans_date", lo).lte("trans_date", hi)
                 .order("id").range(start, start + _INTAKE_REREAD_PAGE - 1).execute().data) or []
         rows.extend(page)
         if len(page) < _INTAKE_REREAD_PAGE:
@@ -6851,6 +6860,20 @@ def _intake_reread_invoice_tenders(client, org_id, stores, lo, hi, kind=None):
     if kind_col and kind:
         rows = [r for r in rows if _landing.kind_of_row(table, r, column_mapping.TABLE_MAP) == kind]
     return rows
+
+
+def _intake_pos_rebuild_after_landing(client, org_id, stores, lo, hi, who=None):
+    """STAGE C, the POS: the invoices of the landed slice (store-set × dates) present in BOTH the
+    invoice-level and the line-level landings become POS sales — one structured receipt document per
+    invoice, imported through the one importer, reprintable in the declared POS's format
+    (pos/sales_from_reports.rebuild, index §30.14). Runs on the commit of EITHER kind; keyed org ×
+    invoice #, so a second commit replaces, never duplicates. A failure is reported on the commit's
+    cross-checks, never raised into the landing (the rows are already saved and verified)."""
+    try:
+        from app.modules.pos import sales_from_reports as _sfr
+        return _sfr.rebuild(client, org_id, lo, hi, stores=list(stores) if stores else None, who=who)
+    except Exception as e:
+        return {"ok": False, "ran": False, "reason": f"the POS rebuild did not run: {str(e)[:200]}"}
 
 
 def _intake_tender_basis(client, org_id):
@@ -7755,6 +7778,8 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
         cross["tender_recon"] = _intake_invoice_tender_recon(client, org_id, trows)
         cross["tender_map"] = tender_map_written
         cross["tender_basis"] = {**_intake_tender_basis(client, org_id), "written": basis_written}
+        # STAGE C, the POS: the landed invoices become POS sales / receipts (with the lines already landed)
+        cross["pos_rebuild"] = _intake_pos_rebuild_after_landing(client, org_id, stores_landed, span["from"], span["to"], who=who)
         cross["shows_in"] = _landing.shows_in({"layout": report_key, "landing": kind}, column_mapping.TABLE_MAP,
                                               _TRACE_TARGET_TABLE, _intake.SOURCE_KIND_TARGET)
     elif kind == "bill_payments":
@@ -7797,6 +7822,8 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
                 cross["activation_classes"] = _lc.count_classes(rows, _line_rules_of(_accessory_config(client, org_id)), skip=_line_skip)
             except Exception as e:
                 cross["activation_classes"] = {"error": f"activation-type count did not run: {str(e)[:200]}"}
+            # STAGE C, the POS: the landed lines join their invoice headers (if landed) into POS sales / receipts
+            cross["pos_rebuild"] = _intake_pos_rebuild_after_landing(client, org_id, stores_landed, span["from"], span["to"], who=who)
         cross["shows_in"] = _landing.shows_in({"layout": report_key, "landing": kind}, column_mapping.TABLE_MAP,
                                               _TRACE_TARGET_TABLE, _intake.SOURCE_KIND_TARGET)
     ok = count_ok and tie_ok and same_as_shown

@@ -384,3 +384,37 @@ is) dereferences it for every consumer, and every closing page says which basis 
 name (`POST /onboarding/intake/retire`): it stays on the record, leaves the verify table, the runbook and the sign-off, and its kept
 file is re-read under the right kind without a re-drop. Removing what it landed is a separate, COUNTED confirmation — the owner
 approves a number, never "whatever is there" — recorded on the row and in the upload trace.
+
+## 12. The two sales reports become POS sales — one receipt document, one importer, one renderer, the declared POS's format (owner 2026-09-21)
+
+Owner: *"2 different excel reports need to be combined into one, an upload mechanism to be created … to upload these 2 reports from
+time to time and combine them into usable sales data and then print out in the same exact format of the receipt uploaded, the data
+can be combined using the invoice as the common link between the 2"*.
+
+**The upload mechanism is the two cards.** The invoice-level export (with its tender columns) and the line-level export are the two
+report kinds the intake and the Upload page already land, slice-replace and verify (§8, §11). Nothing new is uploaded; both cards say
+*"This upload will show in: … [POS sales / receipts]"* through the one consumers map (§9). Uploading either one, whenever the tenant
+likes, rebuilds the POS sales of that slice; the POS page offers the same rebuild for any period.
+
+**The rule.** Every invoice present in the invoice landing becomes ONE POS sale with ONE structured receipt document — the SAME shape a
+scanned receipt is parsed into (`receipt_formats.base.new_document`), imported through the SAME importer
+(`receipt_import.upsert_structured` → `import_structured`), reprinted through the SAME renderer (`receipt_formats.render`) in the
+format REGISTERED for the tenant's DECLARED POS (`report_kinds.tenant_declaration` → `receipt_formats.registry.get`). The lines join by
+the invoice number — the pairing the report links already make. The header, the totals and the payment lines come from the invoice
+row and its tender rows (a tender whose class has no place on the closing axis — a vendor rebate, a coupon — is not a customer payment:
+it explains why the lines add up to more than the customer paid); the items, the financed total and the contract details from the
+lines. Keyed org × POS × invoice number: a re-run replaces that invoice's sale, never a second one; a scanned receipt of the same
+invoice stays its own record. Every rebuilt receipt carries its provenance (which two landings, which rows, who, when) and a report in
+plain words — lines found or not, the ties, what could not be rebuilt.
+
+**What "the same exact format" means here.** The document round-trips: rendered on the format's declared print geometry, the format's
+own parser reads it back as the same document (`backend/harness_pos_sales_from_reports.py` §C). What the reports do not carry — which
+lines the register prints and at what customer price, the tendered-on time, the bill-to address, the register's legal footer — is
+stated as a difference on the record, never faked (index §30.14 lists every field, measured on the real invoice).
+
+**No POS declared, or a POS with no registered format.** The rebuild answers a plain sentence naming where to declare the POS (or that
+a format is not registered yet) and writes nothing — never another POS's layout.
+
+**Locked.** `backend/harness_pos_sales_from_reports_lock.py` (CI): a second document shape, a second importer, a second renderer, or a
+consumer that names a POS key / a tender class instead of reading the declaration and the vocabulary fails the build; the module is
+held by the carrier-vocab guard; the consumers map and ScreenLink carry the POS screen.

@@ -173,22 +173,50 @@ def _split_name(full: str | None) -> tuple[str, str]:
     return (parts[0], " ".join(parts[1:]))
 
 
+_CUSTOMER_COLS = "id,notes,first_name,last_name,address_1,address_2,city,state,zip,phone_primary"
+
+
+def find_customer(client, org_id: str, parsed: dict) -> dict | None:
+    """THE customer match every receipt import uses: by phone (the strongest key), else by the FULL
+    name — first AND last, case-insensitive. It used to match the last name alone, so the first
+    customer named 'Singh' took every later Singh's receipt (found while rebuilding sales from the
+    reports, 2026-09-21; fixed here for the OCR path too). A one-word name matches a customer whose
+    last name is that word and whose first name is empty. Returns the row or None; never raises."""
+    phone = parsed.get("phone")
+    name = (parsed.get("customer_name") or "").strip()
+    tbl = client.schema("pos").table("customers")
+    try:
+        if phone:
+            rows = (tbl.select(_CUSTOMER_COLS).eq("org_id", org_id).eq("phone_primary", phone)
+                    .limit(1).execute().data) or []
+            if rows:
+                return rows[0]
+        if name:
+            first, last = _split_name(name)
+            if last:
+                rows = (tbl.select(_CUSTOMER_COLS).eq("org_id", org_id).ilike("last_name", last)
+                        .limit(50).execute().data) or []
+                rows = [r for r in rows if (r.get("first_name") or "").strip().lower() == first.lower()
+                        and (r.get("last_name") or "").strip().lower() == last.lower()]
+            else:
+                rows = (tbl.select(_CUSTOMER_COLS).eq("org_id", org_id).ilike("last_name", first)
+                        .limit(50).execute().data) or []
+                rows = [r for r in rows if not (r.get("first_name") or "").strip()
+                        and (r.get("last_name") or "").strip().lower() == first.lower()]
+            return rows[0] if rows else None
+    except Exception:
+        return None
+    return None
+
+
 def _match_or_create_customer(client, org_id: str, parsed: dict, note: str | None) -> str | None:
-    """Find a customer by phone (strongest key), else by exact name; create one when neither hits.
+    """Find a customer (find_customer: phone, else the full name); create one when neither hits.
     Appends `note` to the customer's notes. Returns customer_id or None (never raises fatally)."""
     phone = parsed.get("phone")
     name = parsed.get("customer_name")
     tbl = client.schema("pos").table("customers")
     try:
-        found = None
-        if phone:
-            rows = (tbl.select("id,notes").eq("org_id", org_id).eq("phone_primary", phone)
-                    .limit(1).execute().data) or []
-            found = rows[0] if rows else None
-        if not found and name:
-            rows = (tbl.select("id,notes").eq("org_id", org_id).ilike("last_name", _split_name(name)[1] or name)
-                    .limit(1).execute().data) or []
-            found = rows[0] if rows else None
+        found = find_customer(client, org_id, parsed)
         if found:
             if note:
                 merged = ((found.get("notes") or "") + f"\n[receipt import] {note}").strip()
@@ -301,43 +329,103 @@ def _derived(document: dict) -> dict:
     return _b.compute_derived(document or {})
 
 
+def _sale_money(document: dict, der: dict) -> dict:
+    """The summary sale's money FROM THE DOCUMENT'S OWN TOTALS: subtotal / tax (the format's 'sales_tax'
+    or any key carrying 'tax') / total (the derived grand total). A document with no subtotal row keeps
+    the old rule (subtotal = total, tax 0) so an older parse changes nothing."""
+    from app.modules.pos.receipt_formats.base import money as _m
+    totals = {str(t.get("key") or ""): t.get("amount") for t in (document or {}).get("totals") or []}
+    total = _m(der.get("total")) or 0.0
+    sub = _m(totals.get("subtotal"))
+    tax = 0.0
+    for k, v in totals.items():
+        if "tax" in k and _m(v) is not None:
+            tax += _m(v)
+    return {"subtotal": total if sub is None else sub, "tax_total": round(tax, 2), "total": total}
+
+
+def _sale_row(document: dict, der: dict, *, org_id, store_code, employee_id, uploaded_by, notes, pos_source) -> dict:
+    """The pos.sales summary row a structured document becomes — one shape for create and replace.
+    The sale is dated on the receipt's own date (derived sale_date) when it carries one."""
+    money = _sale_money(document, der)
+    prov = (document or {}).get("provenance") or None
+    row = {
+        "org_id": org_id, "store_code": store_code, "employee_id": employee_id or uploaded_by,
+        "receipt_type": "sale", "status": "completed", "source": "receipt_import",
+        "subtotal": money["subtotal"], "tax_total": money["tax_total"], "total": money["total"], "balance": 0, "notes": notes,
+        "receipt": {"source": "receipt_import", "pos_source": pos_source,
+                    "invoice_no": der.get("invoice_no"), "imeis": der.get("imeis"),
+                    "sale_date": der.get("sale_date"), "salesperson": der.get("salesperson"),
+                    "payments": (document or {}).get("payments") or [],
+                    **({"provenance": {k: v for k, v in prov.items() if k != "report"}} if prov else {})},
+    }
+    if der.get("sale_date"):
+        row["created_at"] = f"{der['sale_date']}T12:00:00Z"
+    return row
+
+
 def import_structured(client, *, org_id: str, pos_source: str, document: dict,
                       uploaded_by: str | None, store_code: str | None, notes: str | None,
-                      image_path: str | None = None) -> dict:
-    """Store a parsed structured receipt: a summary sale + the receipt_imports row carrying the
-    editable `document`. Returns {import_id, sale_id, transaction_id}."""
+                      image_path: str | None = None, employee_id: str | None = None) -> dict:
+    """Store a parsed structured receipt: the customer (matched or created from the document's bill-to
+    name), a summary sale carrying the document's own subtotal / tax / total, dated on the receipt's
+    date, + the receipt_imports row carrying the editable `document`. Returns {import_id, sale_id,
+    transaction_id, customer_id}. THE ONE way a structured document becomes a POS sale — the scanned-PDF
+    path and the sales rebuilt from the landed reports both come through here."""
     der = (document or {}).get("derived") or _derived(document)
     total = der.get("total") or 0.0
+    customer_id = _match_or_create_customer(client, org_id, {"customer_name": der.get("customer_name"), "phone": der.get("phone")}, notes)
 
-    sale_row = {
-        "org_id": org_id, "store_code": store_code, "employee_id": uploaded_by,
-        "receipt_type": "sale", "status": "completed", "source": "receipt_import",
-        "subtotal": total, "tax_total": 0, "total": total, "balance": 0, "notes": notes,
-        "receipt": {"source": "receipt_import", "pos_source": pos_source,
-                    "invoice_no": der.get("invoice_no"), "imeis": der.get("imeis")},
-    }
+    sale_row = _sale_row(document, der, org_id=org_id, store_code=store_code, employee_id=employee_id,
+                         uploaded_by=uploaded_by, notes=notes, pos_source=pos_source)
+    if customer_id:
+        sale_row["customer_id"] = customer_id
     sr = client.schema("pos").table("sales").insert(sale_row).execute()
     sale = (sr.data or [{}])[0]
     sale_id, transaction_id = sale.get("id"), sale.get("transaction_id")
 
     imp = {
-        "org_id": org_id, "store_code": store_code, "sale_id": sale_id, "status": "imported",
+        "org_id": org_id, "store_code": store_code, "sale_id": sale_id, "customer_id": customer_id, "status": "imported",
         "image_path": image_path, "notes": notes, "pos_source": pos_source, "document": document,
         "invoice_no": der.get("invoice_no"), "salesperson": der.get("salesperson"),
         "imei": der.get("imei"), "phone": der.get("phone"), "customer_name": der.get("customer_name"),
         "device_name": der.get("device_name"), "total": total, "sale_date": der.get("sale_date"),
         "uploaded_by": uploaded_by,
     }
-    row = _encrypt_import_row(imp)  # encrypts imei/note + imei_bidx; `document` passes through plaintext
+    row = _encrypt_import_row({k: v for k, v in imp.items() if not (k == "customer_id" and v is None)})
     ir = client.schema("pos").table("receipt_imports").insert(row).execute()
     return {"import_id": (ir.data or [{}])[0].get("id"), "sale_id": sale_id,
-            "transaction_id": transaction_id}
+            "transaction_id": transaction_id, "customer_id": customer_id, "created": True}
 
 
-def update_structured_document(client, org_id: str, import_id: str, document: dict) -> dict:
+def _sync_sale(client, org_id: str, sale_id: str | None, document: dict, der: dict, **kw) -> None:
+    """Bring the summary pos.sales row in step with its (edited or rebuilt) document — money, date,
+    payments, and the store / rep / customer when the caller passes them. Never raises."""
+    if not sale_id:
+        return
+    try:
+        money = _sale_money(document, der)
+        patch = {"subtotal": money["subtotal"], "tax_total": money["tax_total"], "total": money["total"]}
+        prov = (document or {}).get("provenance") or None
+        patch["receipt"] = {"source": "receipt_import", "pos_source": kw.get("pos_source"),
+                            "invoice_no": der.get("invoice_no"), "imeis": der.get("imeis"), "sale_date": der.get("sale_date"),
+                            "salesperson": der.get("salesperson"), "payments": (document or {}).get("payments") or [],
+                            **({"provenance": {k: v for k, v in prov.items() if k != "report"}} if prov else {})}
+        for k in ("store_code", "employee_id", "customer_id"):
+            if kw.get(k):
+                patch[k] = kw[k]
+        if der.get("sale_date"):
+            patch["created_at"] = f"{der['sale_date']}T12:00:00Z"
+        client.schema("pos").table("sales").update(patch).eq("org_id", org_id).eq("id", sale_id).execute()
+    except Exception:
+        pass
+
+
+def update_structured_document(client, org_id: str, import_id: str, document: dict, sale_id: str | None = None, **sale_kw) -> dict:
     """Save edits to a structured receipt. Recomputes the derived search/summary fields from the
     edited document (so a changed description/qty/price/tax stays searchable and the summary total
-    tracks the edit), refreshes the encrypted imei + its blind index, and returns the saved doc."""
+    tracks the edit), refreshes the encrypted imei + its blind index, brings the summary sale's money in
+    step (it did not before — an edited tax left pos.sales as first written), and returns the saved doc."""
     from app.core import crypto
     d = dict(document or {})
     d["derived"] = _derived(d)
@@ -350,5 +438,58 @@ def update_structured_document(client, org_id: str, import_id: str, document: di
         "imei": crypto.encrypt(imei) if imei else None,
         "imei_bidx": crypto.blind_index(imei, mode="digits") if imei else None,
     }
+    for k in ("store_code", "customer_id"):
+        if sale_kw.get(k):
+            patch[k] = sale_kw[k]
     client.schema("pos").table("receipt_imports").update(patch).eq("org_id", org_id).eq("id", import_id).execute()
+    if sale_id is None:
+        try:
+            rows = (client.schema("pos").table("receipt_imports").select("sale_id,pos_source").eq("org_id", org_id)
+                    .eq("id", import_id).limit(1).execute().data) or []
+            sale_id = rows[0].get("sale_id") if rows else None
+            sale_kw.setdefault("pos_source", rows[0].get("pos_source") if rows else None)
+        except Exception:
+            sale_id = None
+    _sync_sale(client, org_id, sale_id, d, der, **sale_kw)
     return d
+
+
+def find_structured(client, org_id: str, pos_source: str, invoice_no: str, provenance_kind: str | None = None) -> dict | None:
+    """The receipt_imports row already holding this org × POS × invoice number — and, when asked, the
+    one whose document carries that provenance kind (a sale rebuilt from the reports never replaces a
+    scanned receipt of the same invoice, nor the other way round). Org-scoped; None when absent."""
+    if not invoice_no:
+        return None
+    try:
+        rows = (client.schema("pos").table("receipt_imports").select("id,sale_id,customer_id,document,status")
+                .eq("org_id", org_id).eq("pos_source", pos_source).eq("invoice_no", invoice_no)
+                .limit(50).execute().data) or []
+    except Exception:
+        return None
+    for r in rows:
+        if r.get("status") == "voided":
+            continue
+        kind = ((r.get("document") or {}).get("provenance") or {}).get("kind")
+        if provenance_kind is None or kind == provenance_kind:
+            return r
+    return None
+
+
+def upsert_structured(client, *, org_id: str, pos_source: str, document: dict, uploaded_by: str | None,
+                      store_code: str | None, notes: str | None, employee_id: str | None = None) -> dict:
+    """Import a structured document ONCE per org × POS × invoice number (× provenance kind): the first
+    run creates the sale + import row through import_structured; every later run REPLACES that row's
+    document and its sale's money / store / rep / customer — never a second sale for the same invoice.
+    Returns import_structured's shape plus {"replaced": bool}."""
+    der = (document or {}).get("derived") or _derived(document)
+    prov_kind = ((document or {}).get("provenance") or {}).get("kind")
+    existing = find_structured(client, org_id, pos_source, der.get("invoice_no"), prov_kind)
+    if not existing:
+        return import_structured(client, org_id=org_id, pos_source=pos_source, document=document, uploaded_by=uploaded_by,
+                                 store_code=store_code, notes=notes, employee_id=employee_id)
+    customer_id = existing.get("customer_id") or _match_or_create_customer(
+        client, org_id, {"customer_name": der.get("customer_name"), "phone": der.get("phone")}, None)
+    update_structured_document(client, org_id, existing["id"], document, sale_id=existing.get("sale_id"),
+                               pos_source=pos_source, store_code=store_code, employee_id=employee_id, customer_id=customer_id)
+    return {"import_id": existing["id"], "sale_id": existing.get("sale_id"), "transaction_id": None,
+            "customer_id": customer_id, "created": False, "replaced": True}

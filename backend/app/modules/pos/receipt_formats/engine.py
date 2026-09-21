@@ -36,10 +36,13 @@ def row_text(row) -> str:
 
 
 def find_row(rows, *needles, start: int = 0):
-    """Index of the first row (≥ start) whose text contains ALL needles (case-insensitive)."""
+    """Index of the first row (≥ start) whose text contains ALL needles as WHOLE WORDS (case-insensitive;
+    a needle may be a phrase). Word-bounded since 2026-09-21: a bare substring test let the anchor
+    'Tendered At' land on 'Tendered By: <a surname ending in -at>' — found by the round-trip proof of a
+    sale rebuilt from the reports (pos/sales_from_reports)."""
     for i in range(start, len(rows)):
-        t = row_text(rows[i]).lower()
-        if all(n.lower() in t for n in needles):
+        t = row_text(rows[i])
+        if all(_phrase_in(t, n) for n in needles):
             return i
     return -1
 
@@ -226,3 +229,59 @@ def footer_from(rows, start_label) -> str | None:
     lines = [row_text(rows[k]).strip() for k in range(i, len(rows))]
     lines = [ln for ln in lines if ln and not re.match(r"^Page \d+ of \d+", ln)]
     return "\n".join(lines) or None
+
+
+def extract_payments(rows, start, stop_label, exclude_specs=()) -> list[dict]:
+    """The payment lines: every row AFTER the row containing 'Payment' (from `start`) and BEFORE the
+    `stop_label` row, that carries a money value and is NOT one of the format's totals rows
+    (`exclude_specs` = the TOTALS specs — a tax / financed / total row that sits between them is not a
+    payment). Each row's label is the text before its last money token, so any tender the register
+    printed ('Cash', a card brand, a keyed-by-hand twin) reads back — never a hardcoded tender word."""
+    pi = find_row(rows, "Payment", start=start)
+    if pi < 0:
+        return []
+    out = []
+    for j in range(pi + 1, len(rows)):
+        t = row_text(rows[j]).strip()
+        if _phrase_in(t, stop_label):
+            break
+        if any(all(_phrase_in(t, m) for m in spec["match"]) for spec in exclude_specs):
+            continue
+        monies = base.find_money(t)
+        if not monies:
+            continue
+        label = t[: t.rfind(monies[-1])].strip().rstrip(":").strip()
+        if label:
+            out.append({"label": label, "amount": base.money(monies[-1])})
+    return out
+
+
+def extract_pairs(rows, anchor_tokens, col_specs, *, stop_tokens=("comments",), max_rows=400):
+    """A small two-or-more column table under an anchor row (e.g. 'Contract Details:' → a header row
+    'Tracking # | Contract #' → one row per pair). The header row is located like the item table's
+    (column_bounds over the declared header words, within the four rows after the anchor) and every
+    following row is bucketed by those x-spans until a blank row, a stop token or a row with no cell.
+    Returns (columns, rows) or (None, None) when no such header follows the anchor."""
+    a = find_row(rows, *anchor_tokens)
+    if a < 0:
+        return None, None
+    cols, hdr_i = None, -1
+    for i in range(a + 1, min(a + 5, len(rows))):
+        c = column_bounds(rows[i], col_specs)
+        if c:
+            cols, hdr_i = c, i
+            break
+    if cols is None:
+        return None, None
+    out = []
+    for j in range(hdr_i + 1, min(hdr_i + 1 + max_rows, len(rows))):
+        t = row_text(rows[j]).strip()
+        if not t or any(_phrase_in(t, s) for s in stop_tokens):
+            break
+        cells = bucket_columns(rows[j], cols)
+        # a reference row carries at least one number; a prose row (the legal footer) ends the table
+        if not any(v for v in cells.values()) or not re.search(r"\d", t):
+            break
+        out.append([cells[c["key"]] for c in cols])
+    public = [{"key": c["key"], "label": c["label"]} for c in cols]
+    return public, out

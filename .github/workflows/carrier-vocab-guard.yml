@@ -63,6 +63,10 @@ on:
       - "backend/harness_line_class_lock.py"
       - "backend/harness_line_class.py"
       - "backend/harness_tender_vocab_lock.py"
+      - "backend/harness_pos_sales_from_reports_lock.py"
+      - "backend/app/modules/pos/sales_from_reports.py"
+      - "backend/app/modules/pos/receipt_import.py"
+      - "backend/app/modules/pos/receipt_formats/**"
       - "backend/harness_intake_fakes.py"
       - "backend/app/modules/commcalc/line_class.py"
       - "backend/app/modules/commcalc/calculator.py"
@@ -148,3 +152,6 @@ jobs:
       - name: Run the tender-vocab lock (one tender vocabulary; every classifier dereferences it)
         working-directory: backend
         run: python3 harness_tender_vocab_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the POS sales-from-reports lock (one receipt document shape, one importer, one renderer; the format follows the declared POS)
+        working-directory: backend
+        run: python3 harness_pos_sales_from_reports_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

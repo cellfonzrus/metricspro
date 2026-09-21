@@ -2,6 +2,7 @@
 extracted verbatim from harness_onboarding_intake_c.py (2026-09-21) so harness_onboarding_intake_d.py
 (the 2.5a activation-type step) does not carry a fourth copy. Declared columns make a select of an
 undeclared column raise like Postgres 42703; storage is a dict. No network, no DB."""
+import re
 import uuid
 
 
@@ -49,9 +50,23 @@ class _Q:
     def limit(self, n):    self._limit = n; return self
     def range(self, lo, hi): self._range = (lo, hi); return self
 
+    @staticmethod
+    def _get(r, k):
+        """A column, or a PostgREST JSON path ('document->provenance->>kind') walked into the row's
+        JSON — the filter shape pos/sales_from_reports.list_rebuilt uses."""
+        if "->" not in str(k):
+            return r.get(k)
+        parts = [p for p in re.split(r"->>?", str(k)) if p]
+        cur = r
+        for p in parts:
+            if not isinstance(cur, dict):
+                return None
+            cur = cur.get(p)
+        return cur
+
     def _match(self, r):
         for op, k, v in self.filters:
-            x = r.get(k)
+            x = self._get(r, k)
             if op == "eq" and x != v: return False
             if op == "neq" and x == v: return False
             if op == "in" and x not in v: return False
@@ -209,7 +224,7 @@ class FakeDB:
                                        "on_hand", "off_hand_as_of", "status", "quantity", "total_cost", "category",
                                        "updated_at", "created_at"],
             "store_mapping": ["id", "org_id", "store_code", "store_address", "market", "is_active"],
-            "stores": ["id", "org_id", "store_code", "address", "market", "is_active", "entity_id", "timezone"],
+            "stores": ["id", "org_id", "store_code", "address", "market", "is_active", "entity_id", "timezone", "phone"],   # phone = mig 003
             "store_aliases": ["id", "org_id", "alias", "store_code", "note", "source", "confidence"],
             "rep_aliases": ["id", "org_id", "alias", "canonical"],
             "employees": ["id", "org_id", "employee_id", "name", "home_store", "epay_salesperson", "is_active"],
@@ -248,6 +263,17 @@ class FakeDB:
                                  "catalog_classify_enabled", "catalog_accessory_categories", "apply_to_gp",
                                  "definition_drives_pay", "gp_acc_basis", "updated_at"],                # mig 208 … 313 … 930
             "exec_metric_config": ["id", "org_id", "bucket", "rules", "basis", "carrier", "applicable", "updated_at"],  # mig 204/962/963
+            # ── the POS tables a structured receipt becomes (mig 725 / 864 / 866) — the sales rebuilt from the reports (§30.14) ──
+            "sales": ["id", "org_id", "transaction_id", "store_code", "customer_id", "employee_id", "receipt_type", "status", "subtotal",
+                      "discount_total", "tax_total", "total", "balance", "is_activation_sale", "receipt", "voided_at", "voided_by", "notes",
+                      "created_at", "updated_at", "source"],
+            "receipt_imports": ["id", "org_id", "store_code", "sale_id", "customer_id", "status", "image_path", "raw_ocr", "parsed", "notes",
+                                "imei", "phone", "customer_name", "device_name", "total", "sale_date", "uploaded_by", "created_at", "updated_at",
+                                "pos_source", "invoice_no", "salesperson", "document", "imei_bidx", "phone_bidx", "search_bidx"],
+            "customers": ["id", "org_id", "cust_number", "account_type", "company_name", "first_name", "last_name", "middle_initial", "dob",
+                          "driver_license_state", "primary_account_no", "password", "email", "phone_primary", "phone_secondary", "address_1",
+                          "address_2", "city", "state", "zip", "referral_source", "credit_limit", "accept_checks", "is_active", "notes",
+                          "created_at", "updated_at"],
         }
         # the unique indexes the migrations leave on a table TODAY (a conflict target must name one — 42P10
         # otherwise, as Postgres does); a table not listed accepts any target, as the fake always did
