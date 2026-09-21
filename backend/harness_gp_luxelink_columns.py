@@ -20,7 +20,8 @@ Proves (owner directive 2026-07-29 "go"):
     7. Rep rows use the same per-line rule.
     8. Transparency map shows BrandedHandset under BOTH accessory and device buckets.
   MA CARRIER-INCOME FALLBACK (ePay-less org):
-    9. raw_payment_detail EMPTY → Commission column = sign-flipped Σ raw_ma_commission components
+    9. raw_payment_detail EMPTY → the MA carrier-income columns come from ma_store_pnl.gp_carrier_income
+       (the SAME bookings the P&L books) — rebate and wallet funding are NOT commission (2026-09-21)
        (356.14) on ONE company-wide row; ATU = Σ merchant_discount (120.25); totals include both.
    10. ma_income=None → NO company-wide row (list lengths + totals unchanged).
    11. End-to-end _compute_gp for the luxelink-like org: buckets + MA row + totals all correct.
@@ -195,17 +196,43 @@ check("4a2. same lines on basis 'gp' → Acc GP 17 (the legacy answer is intact 
 check("4b. same dept, phone category → Phone Sales 100 (box dept)", close(row_l.get("phone_sales"), 100.0))
 check("6a. Rtr→plan map + blank dept → Plan GP 7", close(row_l.get("plan_gp"), 7.0))
 check("6b. SimMarketplace line (named, unmapped, not box) → Other 2", close(row_l.get("other_gp"), 2.0))
-ma_row = next((r for r in res_l["store_rows"] if "VidaPay" in str(r.get("store"))), None)
-check("9a. ePay-less → ONE company-wide MA row", ma_row is not None
-      and sum(1 for r in res_l["store_rows"] if "VidaPay" in str(r.get("store"))) == 1)
-check("9b. commission received (sign-flipped Σ components) → Commission column 356.14",
-      ma_row is not None and close(ma_row.get("comm"), 356.14))
+# ── 9, 11: the MA carrier-income columns. CONTRACT CHANGED 2026-09-21 (owner bug report: "the m1
+# commision is different in both … the gross profit shows company level commission it shoudl show
+# store level"). The GP report no longer sums the commission sheet itself: it files the bookings
+# `coa.build_inputs` books, through `ma_store_pnl.gp_carrier_income`. On THIS fixture the sheet
+# carries only device/consumer margin and a rebate — no spiff at all — so:
+#   · Commission column = 0.00. The old code called Σ(all twelve components) "commission received"
+#     and put 356.14 there; the owner ruled twice that a rebate is not commission (2026-09-08) and
+#     that wallet funding is not revenue (2026-08-10), and those rulings now reach this report too.
+#   · device_margin 200.14 + consumer_margin 100.00 are REVENUE (the P&L's `ma_device_margin`) but
+#     the GP report has no column for them, so they land in Unmapped — counted in Total Rev, and
+#     NAMED in `ma_income['filed']` rather than folded into a column that would mean something else.
+#   · the 56.00 rebate leaves GP revenue entirely and is named in `ma_income['excluded']` with the
+#     ruling that removed it; on the P&L it nets against Device cost, where the purchase sits.
+#   · airtime margin 120.25 → ATU, unchanged.
+# This fixture configures no store attribution, so the money stays on the honest unplaced row —
+# which is what that row is FOR now: only what genuinely has no store reaches it.
+ma_row = next((r for r in res_l["store_rows"] if "no store on the processor account" in str(r.get("store"))), None)
+check("9a. ePay-less → the MA money lands on the honest unplaced row (no attribution configured)",
+      ma_row is not None
+      and sum(1 for r in res_l["store_rows"]
+              if "no store on the processor account" in str(r.get("store"))) == 1)
+check("9b. a sheet with no spiff produces NO commission — the margins are not commission",
+      ma_row is not None and close(ma_row.get("comm"), 0.0), (ma_row or {}).get("comm"))
+check("9b2. device + consumer margin → Unmapped 300.14 (revenue, no GP column of its own)",
+      ma_row is not None and close(ma_row.get("unmapped"), 300.14), (ma_row or {}).get("unmapped"))
 check("9c. airtime margin → ATU column 120.25", ma_row is not None and close(ma_row.get("atu"), 120.25))
-check("9d. totals include the MA row", close(res_l["totals"]["comm"], 356.14)
+check("9d. totals include the MA row", close(res_l["totals"]["comm"], 0.0)
+      and close(res_l["totals"]["unmapped"], 300.14)
       and close(res_l["totals"]["atu"], 120.25) and close(res_l["totals"]["acc_gp"], 40.0),
       res_l["totals"])
-check("11. MA row books clean (no phantom store fields; net = comm+atu)",
-      ma_row is not None and ma_row.get("store_code") == "" and close(ma_row.get("net_profit"), 476.39))
+check("9e. the rebate is OUT of GP revenue, and says which ruling took it out",
+      any(e["line"] == "device_rebate" and e.get("reason")
+          for e in ((res_l.get("commission_legs") or {}).get("headline") or {}).get("excluded") or []),
+      ((res_l.get("commission_legs") or {}).get("headline") or {}).get("excluded"))
+check("11. MA row books clean (no phantom store fields; net = comm+mi+atu+mdf+unmapped)",
+      ma_row is not None and ma_row.get("store_code") == ""
+      and close(ma_row.get("net_profit"), 420.39), (ma_row or {}).get("net_profit"))
 rep_amy = next((r for r in res_l["rep_rows"] if r["rep"] == "Amy"), {})
 check("7. rep rows use the same per-line rule (Amy acc 40 / phones 100 / plan 7)",
       close(rep_amy.get("acc_gp"), 40.0) and close(rep_amy.get("phone_sales"), 100.0)

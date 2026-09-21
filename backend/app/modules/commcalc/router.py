@@ -21311,41 +21311,57 @@ def _compute_gp(client, org_id, period, market=""):
         print(f'WARN gp sales select fell back (no voided/trans_type columns?): {_sce}')
         sales  = sc.table('raw_sales').select('store,department,category,gp,product_desc,ext_price,salesperson,product_id,sku').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
     pay_detail = sc.table('raw_payment_detail').select('business_address,amount,payment_type').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
-    # VidaPay/MA fallback for the carrier-income columns (owner 2026-07-29: "the commission received
-    # should be in commission column"). ePay-less orgs (Total/luxelink — raw_payment_detail EMPTY for the
-    # period) fall through to the MA sources, mirroring the P&L's owner-approved fallback (account/coa.py):
-    # commission received = raw_ma_commission (sign-flipped Σ _MA_COMPONENTS; positive = dealer receives)
-    # → the COMMISSION column; airtime margin = raw_ma_daily_tx.merchant_discount → the ATU column. MA rows
-    # carry no store address, so calc_gp_report books the money on ONE company-wide row (same posture as
-    # the P&L). House/Boost: pay_detail non-empty → never fires; both MA tables empty → None → identical.
+    # ── VidaPay/MA carrier income — DEREFERENCED, not derived (owner bug report 2026-09-21) ──────
+    # Owner: "why does the gross profit report and the p&l entries dont match, the m1 commision is
+    # different in both and also the gross profit shows company level commission it shoudl show
+    # store level as it is paid on store level."
+    #
+    # This block used to sum `raw_ma_commission`'s twelve components itself (`-Σ _MA_COMPONENTS`)
+    # and hand the total to ONE company-wide row. That was a second derivation of a figure the P&L
+    # already owns, and it had drifted from it on all three axes at once — timing basis, what counts
+    # as commission, and store grain (measured Aug-2026: the two reports shared $0.00; GP's "1st
+    # Month" read $23,271.90 against the P&L's M1 of $2,300.40). It now reads THE ONE HOME,
+    # `account/ma_store_pnl.gp_carrier_income`, which files the very bookings `coa.build_inputs`
+    # books. Nothing here decides anything about money any more.
+    #
+    # The GATE is unchanged and still data-driven, never a tenant name: ePay-less orgs (empty
+    # raw_payment_detail for the period) fall through to the MA sources; a Boost org never does.
     ma_income = None
     if not pay_detail:
-        _ma_comm = _ma_atu = 0.0
         try:
-            from app.modules.account.residual_subs import _MA_COMPONENTS as _MACOMP
-            _mrows = sc.table('raw_ma_commission').select(','.join(_MACOMP)).eq('org_id', org_id) \
-                .in_('period', pv).limit(100000).execute().data or []
-            _ma_comm = -sum(sum(safe_float(x.get(c)) for c in _MACOMP) for x in _mrows)
-        except Exception:
-            _ma_comm = 0.0
-        try:
-            _drows = sc.table('raw_ma_daily_tx').select('merchant_discount').eq('org_id', org_id) \
-                .in_('period', pv).limit(100000).execute().data or []
-            _ma_atu = sum(safe_float(x.get('merchant_discount')) for x in _drows)
-        except Exception:
-            _ma_atu = 0.0
-        if _ma_comm or _ma_atu:
-            ma_income = {'comm': round(_ma_comm, 2), 'atu': round(_ma_atu, 2)}
-            # Commission-LEG split (owner 2026-08-04): the leg is the COLUMN NAME on the MA feed
-            # (spiff_m1 = 1st month, spiff_m2..m6 = trailing). Hand the GP engine the PER-COMPONENT
-            # sums plus the exact component list `_ma_comm` was built from, so the split re-sums to
-            # `comm` by construction instead of being re-derived from a second query.
+            from app.modules.account import ma_store_pnl as _msp_gp
+            from app.modules.account import residual_subs as _rs_gp
+            _ma_cfg = _msp_gp.load_config(client, org_id)
+            _ma_pnl_cfg = _rs_gp.load_ma_pnl_config(client, org_id)
+            # The account -> CANONICAL store address map (mig 314 ∪ ma_account_store_map, spellings
+            # collapsed by coa.store_resolver). The GP rows are matched to it through the SAME
+            # resolver below — never a leading-street-number join, which mis-joins "21880" against
+            # "218-80" and loses that store's money to a phantom row.
+            _ma_idx = (_msp_gp.canonical_store_index(client, org_id)
+                       if _ma_cfg.get("store_attribution") else {})
+            _mrows = sc.table('raw_ma_commission') \
+                .select(','.join(_rs_gp._MA_COMPONENTS) + ',merchant_account_id') \
+                .eq('org_id', org_id).in_('period', pv).limit(100000).execute().data or []
             try:
-                ma_income['components'] = {c: sum(safe_float(x.get(c)) for x in _mrows)
-                                           for c in _MACOMP}
-                ma_income['component_list'] = list(_MACOMP)
+                _drows = sc.table('raw_ma_daily_tx') \
+                    .select('product_name,order_type,account_id,'
+                            + ','.join(_rs_gp._MA_PNL_MONEY_COLUMNS)) \
+                    .eq('org_id', org_id).in_('period', pv).limit(200000).execute().data or []
             except Exception:
-                pass
+                # order_type/account_id absent (older feed schema): the label family alone still
+                # books, company-wide — the same degrade path coa.build_inputs takes.
+                _drows = sc.table('raw_ma_daily_tx') \
+                    .select('product_name,' + ','.join(_rs_gp._MA_PNL_MONEY_COLUMNS)) \
+                    .eq('org_id', org_id).in_('period', pv).limit(200000).execute().data or []
+            if _mrows or _drows:
+                _mai = _msp_gp.gp_carrier_income(_mrows, _drows, _ma_pnl_cfg, _ma_cfg,
+                                                 store_index=_ma_idx)
+                if any(_mai['totals'].get(k) for k in _mai['totals']):
+                    ma_income = _mai
+        except Exception as _mae:
+            print(f'WARN gp MA carrier income unavailable: {_mae}')
+            ma_income = None
+
     # `mi_activation_date` is selected ONLY so the commission-LEG split can tell 1st-month residual
     # (subscriber activated THIS month) from M2–M12 residual. The mi/atu money columns do not read it
     # and are byte-identical. Falls back to the pre-split select if the column is absent (pre-mig-021
@@ -21480,11 +21496,26 @@ def _compute_gp(client, org_id, period, market=""):
         _lc_comm = (_r[0].get('labour_commission_expense_names') if _r else None) or []
     except Exception:
         pass   # pre-994: no vocabulary ⇒ no double-book claim and no suppression, exactly as before
+    # The store-spelling canonicalizer the MA side is already put through
+    # (`ma_store_pnl.canonical_store_index` -> `coa.store_resolver`). Passing THE SAME one to the GP
+    # engine is what lets a processor account's store and a sales-feed store meet on one spelling:
+    # LuxeLink's fulfillment says "21880 Hempstead Ave" where the sales feed says "218-80 Hempstead
+    # Avenue", and a leading-street-number join would send $9,040.90 to a phantom store. Only used
+    # when there is MA income to place; never raises (no resolver -> match on the raw string, which
+    # simply places less, and says so by leaving the money on the honest unplaced row).
+    _resolve_canonical = None
+    if ma_income:
+        try:
+            from app.modules.account import coa as _coa_gp
+            _resolve_canonical = _coa_gp.store_resolver(client, org_id)
+        except Exception as _rce:
+            print(f'WARN gp canonical store resolver unavailable: {_rce}')
     result = calc_gp_report(sales, pay_detail, mi_rows, rep_comms, expenses, catalog, store_map, period,
                             comp_rows=comp_rows, gp_category_map=gp_cat_map,
                             item_gp_map=gp_item_map, gp_categories=gp_cats,
                             resolve_store_code=_resolve_code,
-                            config_classify=config_classify, ma_income=ma_income, leg_classify=_legcls,
+                            config_classify=config_classify, ma_income=ma_income,
+                            resolve_store_canonical=_resolve_canonical, leg_classify=_legcls,
                             acc_basis=_acc_basis, commission_suppression_names=_lc_comm)
     result['expenses_carried_from'] = _exp_carried_from
     # LABOUR COVERAGE (owner directive 2026-09-08: "salaries … not getting updated for a lot of
@@ -21923,22 +21954,40 @@ def set_gp_item_category(body: SetGpItemCategoryIn, org_id: str = ORG_ID):
 # a rate, a tier or a calc input. `commcalc/commission_legs.py` holds the (pure) attribution rules and
 # `commcalc.commission_leg_config` / `commission_leg_label_map` (mig 274) hold the per-org config.
 
-def _ma_summary_legs(client, org_id, comps):
-    """1st-month / M2–M12 split of a master-agent commission roll-up, from the SAME component sums the
-    roll-up's own `total_payable` is built from — so the two can never disagree. Never raises."""
+def _ma_summary_legs(client, org_id, comps, comm_rows=None, tx_rows=None, store_index=None):
+    """1st-month / M2–M12 split of a master-agent commission roll-up. Never raises.
+
+    DEREFERENCES, does not derive (owner bug report 2026-09-21). The total comes from
+    `ma_store_pnl.ma_sheet_component_total` — the ONE definition of "the sheet's payable" — instead
+    of this function summing `_MA_LEG_COMPONENTS` for itself, which is how the Gross Profit report
+    and the P&L came to disagree by $20,971.50 on the owner's own M1 tile.
+
+    BOTH BASES, LABELLED (owner decision 2026-09-21). `earned` is what the commission SHEET says was
+    earned at activation (spiff_m1..m6 — structurally six months, and no more); `received` is what
+    the daily-transaction CASH rows say arrived, which is where M7..M12+ actually live. The headline
+    m1 / m2_12 / unsplit stay on the SHEET basis so this page keeps tying to the portal's own
+    "Commissions Paid" tile, and the cash ladder rides alongside rather than replacing it."""
     try:
+        from app.modules.account import ma_store_pnl as _msp
         res = _org_leg_classifier(client, org_id).ma(comps, _MA_LEG_COMPONENTS)
-        total = round(-sum(safe_float(comps.get(c)) for c in _MA_LEG_COMPONENTS), 2)
-        return {"m1": res["buckets"]["m1"], "m2_12": res["buckets"]["trailing"],
-                "unsplit": res["buckets"]["unsplit"], "total": total,
-                "ladder": res["leg_ladder"],
-                "identity_ok": abs(round(sum(res["buckets"].values()), 2) - total) < 0.01,
-                "unsplit_fields": res.get("unsplit_fields") or [],
-                "basis": ("1st Month = spiff_m1; M2–M12 = spiff_m2…m6 — the leg is the column name on "
-                          "the MA Commission Details export. The activation-order margins "
-                          "(rebate / device / consumer / financing / wallet funding / fees) are NOT "
-                          "commission legs (owner 2026-08-04) — they are in the total but sit in "
-                          "Unsplit, which is why 1st Month here equals the portal's Commissions Paid.")}
+        total = _msp.ma_sheet_component_total(comps)
+        cfg = _msp.load_config(client, org_id)
+        out = {"m1": res["buckets"]["m1"], "m2_12": res["buckets"]["trailing"],
+               "unsplit": res["buckets"]["unsplit"], "total": total,
+               "ladder": res["leg_ladder"],
+               "identity_ok": abs(round(sum(res["buckets"].values()), 2) - total) < 0.01,
+               "unsplit_fields": res.get("unsplit_fields") or [],
+               "booked_basis": cfg.get("month_spiff_source"),
+               "basis": ("1st Month = spiff_m1; M2–M12 = spiff_m2…m6 — the leg is the column name on "
+                         "the MA Commission Details export. The activation-order margins "
+                         "(rebate / device / consumer / financing / wallet funding / fees) are NOT "
+                         "commission legs (owner 2026-08-04) — they are in the total but sit in "
+                         "Unsplit, which is why 1st Month here equals the portal's Commissions Paid.")}
+        if comm_rows is not None:
+            out["earned"] = _msp.ma_earned_month_ladder(comm_rows, cfg, store_index)
+        if tx_rows is not None:
+            out["received"] = _msp.ma_received_month_ladder(tx_rows, None, cfg, store_index)
+        return out
     except Exception as e:
         return {"m1": 0.0, "m2_12": 0.0, "unsplit": 0.0, "total": 0.0, "ladder": {},
                 "identity_ok": False, "basis": f"leg split unavailable ({e})"}
@@ -22183,8 +22232,18 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
                         agg[c] = sum(safe_float(x.get(c)) for x in mr)
                     ma_rows.append(agg)
     if ma_rows and (markets or stores):
-        notes.append('VidaPay/master-agent commission carries no store address, so it is company-wide '
-                     'and is EXCLUDED while a store or market filter is active.')
+        # CORRECTED 2026-09-21. The old wording here — "carries no store address, so it is
+        # company-wide" — stopped being true at mig 314: every MA row carries a processor account and
+        # `ma_store_pnl.canonical_store_index` resolves it to a store (LuxeLink: 20/20). The REAL
+        # reason this trend still cannot split it is narrower and is now stated as itself: the
+        # month rollup RPC (`commission_leg_ma_rollup`) aggregates the sheet per PERIOD without the
+        # account column, so there is nothing per-store to filter on here yet. The surfaces that DO
+        # attribute it per store are named, so the answer is one click away instead of denied.
+        notes.append('VidaPay/master-agent commission IS store-attributable (processor account -> '
+                     'store, mig 314) but this month-over-month rollup aggregates it per period '
+                     'without the account, so it is EXCLUDED while a store or market filter is '
+                     'active. For MA commission per store see the Gross Profit report, the P&L, or '
+                     'MA Commission -> by store.')
     for r in ma_rows:
         lab = pkey.get(str(r.get('period') or '').strip())
         if not lab or (markets or stores):
@@ -36157,6 +36216,15 @@ def _read_ma(client, org_id, table, period, cols):
     return out
 
 
+def _int_or(v, dflt=10**6):
+    """Sort key for a month-ladder key: the number when it is one, otherwise last. The ladder's keys
+    come from the DATA (M1..M12+ and 'unknown'), never from a hardcoded month count."""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return dflt
+
+
 @router.get("/ma-commission/summary")
 def ma_commission_summary(period: str = "", stores: str = "", reps: str = "", org_id: str = ORG_ID):
     """The Total-processor commission roll-up (raw_ma_commission + raw_ma_daily_tx, mig 083).
@@ -36168,8 +36236,12 @@ def ma_commission_summary(period: str = "", stores: str = "", reps: str = "", or
     narrow the WHOLE roll-up — tiles, tables and export alike (WYSIWYG §3c) — server-side, so the
     aggregates stay correct under a filter. Both blank = the unfiltered report (backward-compatible).
     `store_options` / `rep_options` are computed from the UNFILTERED rows so the picker stays stable.
-    There is no `market` dimension here: this is processor account-keyed data with no store_mapping
-    linkage (documented deviation)."""
+    STORE (owner bug report 2026-09-21). The old note here said this was "processor account-keyed
+    data with no store_mapping linkage". That stopped being true at mig 314: `raw_ma_fulfillment`
+    carries both the processor account and the store address, and `ma_store_pnl.canonical_store_index`
+    resolves it (LuxeLink: 20/20 accounts). Each `by_store` row therefore now names its real
+    `store`; an account the index cannot resolve keeps `store: null` and is NEVER guessed onto
+    one."""
     require_org(org_id)
     client = sb()
     try:
@@ -36180,10 +36252,30 @@ def ma_commission_summary(period: str = "", stores: str = "", reps: str = "", or
         return {"ready": False, "note": "Run migration 083_total_processor_sources.sql, then upload the "
                                         "MA reports on Data Imports (or add mailbox rules)."}
     try:
+        # `product_name` + `order_type` are read ONLY so the RECEIVED (cash-basis) month ladder can
+        # be built by the one home — the money columns below are unchanged. Falls back to the
+        # pre-2026-09-21 select if a tenant's table lacks them, in which case the cash ladder is
+        # simply absent rather than wrong.
         tx = _read_ma(client, org_id, "raw_ma_daily_tx", period.strip(),
-                      "tx_date,period,account_id,account_name,retail_cost,merchant_discount")
+                      "tx_date,period,account_id,account_name,product_name,order_type,"
+                      "retail_cost,merchant_discount")
     except Exception:
-        tx = []
+        try:
+            tx = _read_ma(client, org_id, "raw_ma_daily_tx", period.strip(),
+                          "tx_date,period,account_id,account_name,retail_cost,merchant_discount")
+        except Exception:
+            tx = []
+
+    # THE account -> canonical store map (mig 314, ma_store_pnl). This page used to say the data had
+    # "no store_mapping linkage"; it has had one since mig 314 and the P&L has used it since. Reading
+    # it here is what lets the owner see a STORE where they previously saw a processor account id.
+    # Never raises: an unavailable index leaves every row's `store` null — honest, never guessed.
+    from app.modules.account import ma_store_pnl as _msp_ma
+    try:
+        _ma_store_idx = _msp_ma.canonical_store_index(client, org_id) or {}
+    except Exception as _mie:
+        print(f'WARN ma-commission/summary store index unavailable: {_mie}')
+        _ma_store_idx = {}
 
     # Stable pick-don't-type option lists from the UNFILTERED rows (before narrowing).
     _store_names: dict = {}
@@ -36199,7 +36291,11 @@ def ma_commission_summary(period: str = "", stores: str = "", reps: str = "", or
                 _store_names[k] = nm
             else:
                 _store_names.setdefault(k, None)
-    store_options = sorted(({"id": k, "label": (v or k)} for k, v in _store_names.items()),
+    # The picker names the STORE when the mig-314 index knows it, falling back to the processor
+    # account name and then the raw id — so "which store is this?" is answerable from the list.
+    store_options = sorted(({"id": k, "label": (_ma_store_idx.get(k) or v or k),
+                             "store": _ma_store_idx.get(k), "account_name": v}
+                            for k, v in _store_names.items()),
                            key=lambda o: str(o["label"]).lower())
     rep_options = sorted({(r.get("user_name") or "").strip() for r in comm if (r.get("user_name") or "").strip()})
     # Optional server-side narrowing (blank = no filter).
@@ -36216,8 +36312,11 @@ def ma_commission_summary(period: str = "", stores: str = "", reps: str = "", or
     by_store, by_rep, by_platform = {}, {}, {}
     dates = [r.get("tx_date") for r in comm if r.get("tx_date")]
     for r in comm:
-        pay = -sum(safe_float(r.get(k)) for k in _MA_COMPONENTS)   # flip: positive = dealer receives
-        spiffs = -sum(safe_float(r.get(f"spiff_m{i}")) for i in range(1, 7))
+        # ONE definition of the sheet's payable and of its spiff total (ma_store_pnl) — this used to
+        # sum the component list and walk `range(1, 7)` itself, which is both a second derivation
+        # and the reason no sheet-fed surface could ever show M7..M12.
+        pay = _msp_ma.ma_sheet_component_total(r)      # flip: positive = dealer receives
+        spiffs = _msp_ma.ma_sheet_spiff_total(r)
         for k in _MA_COMPONENTS:
             comps[k] += safe_float(r.get(k))
         acts["total"] += 1
@@ -36230,7 +36329,8 @@ def ma_commission_summary(period: str = "", stores: str = "", reps: str = "", or
         if at2 in ("branded", "byop"):
             acts[at2] += 1
         sk = (r.get("merchant_account_id") or "?").strip() or "?"
-        st = by_store.setdefault(sk, {"account_id": sk, "activations": 0, "payable": 0.0,
+        st = by_store.setdefault(sk, {"account_id": sk, "store": _ma_store_idx.get(sk),
+                                      "activations": 0, "payable": 0.0,
                                       "spiffs": 0.0, "rebates": 0.0, "airtime_margin": 0.0, "name": None})
         st["activations"] += 1
         st["payable"] += pay
@@ -36258,7 +36358,8 @@ def ma_commission_summary(period: str = "", stores: str = "", reps: str = "", or
         margin = safe_float(r.get("merchant_discount"))
         airtime["margin"] += margin
         sk = (r.get("account_id") or "?").strip() or "?"
-        st = by_store.setdefault(sk, {"account_id": sk, "activations": 0, "payable": 0.0,
+        st = by_store.setdefault(sk, {"account_id": sk, "store": _ma_store_idx.get(sk),
+                                      "activations": 0, "payable": 0.0,
                                       "spiffs": 0.0, "rebates": 0.0, "airtime_margin": 0.0, "name": None})
         st["airtime_margin"] += margin
         if r.get("account_name") and not st.get("name"):
@@ -36269,8 +36370,16 @@ def ma_commission_summary(period: str = "", stores: str = "", reps: str = "", or
         rp["avg_mrc"] = round(rp.pop("_mrc_sum") / rp["_mrc_n"], 2) if rp["_mrc_n"] else None
         rp.pop("_mrc_n", None)
     rnd = lambda d: {k: (round(v, 2) if isinstance(v, float) else v) for k, v in d.items()}
-    total_payable = -sum(comps.values())
-    spiff_by_month = {f"m{i}": round(-comps[f"spiff_m{i}"], 2) for i in range(1, 7)}
+    total_payable = _msp_ma.ma_sheet_component_total(comps)
+    # The month ladder comes from the ONE home, on BOTH bases (owner decision 2026-09-21). `earned`
+    # is the sheet's own spiff columns keyed by the month THEY name — no `range(1, 7)` anywhere, so
+    # a sheet that ever grows a seventh column is carried automatically; `received` is the cash
+    # rows, which is where M7..M12+ actually exist today.
+    _legs_block = _ma_summary_legs(client, org_id, comps, comm_rows=comm, tx_rows=tx,
+                                   store_index=_ma_store_idx)
+    _earned_months = (_legs_block.get("earned") or {}).get("months") or {}
+    spiff_by_month = {("m%s" % k): _earned_months[k]
+                      for k in sorted(_earned_months, key=lambda x: (x == "unknown", _int_or(x)))}
     dates = [d for d in dates if d]
     return {"ready": True, "period": period or "all",
             "rows": len(comm), "date_range": ([min(dates), max(dates)] if dates else None),
@@ -36283,13 +36392,13 @@ def ma_commission_summary(period: str = "", stores: str = "", reps: str = "", or
                            "rebates": round(-comps["rebate"], 2),
                            "wallet_funding": round(-comps["wallet_funding"], 2),
                            "fees_margin": round(-comps["fees_margin"], 2),
-                           "spiffs_total": round(-sum(comps[f"spiff_m{i}"] for i in range(1, 7)), 2)},
+                           "spiffs_total": _msp_ma.ma_sheet_spiff_total(comps)},
             "spiff_by_month": spiff_by_month,
             # COMMISSION LEGS (owner 2026-08-04) — the SAME `total_payable`, additionally split into
             # the 1st-month leg vs the M2–M12 trailing legs by the ONE shared classifier
             # (commcalc/commission_legs.py), so this page and the Gross Profit report cannot disagree.
             # `identity_ok` proves the parts add back to total_payable rather than asserting it.
-            "legs": _ma_summary_legs(client, org_id, comps),
+            "legs": _legs_block,
             "airtime": rnd(airtime),
             "by_store": sorted((rnd(s) for s in by_store.values()),
                                key=lambda s: -(s["payable"] + s["airtime_margin"])),
