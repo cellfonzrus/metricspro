@@ -62,7 +62,7 @@ export function feedsForScreen(visible: ReportKindRow[], screen: string): FeedFo
     .map(r => ({ key: r.key, label: r.label, where: r.where || null }))
 }
 export type ReportSurface = 'intake' | 'upload' | 'wizard' | 'email_imports' | 'tiles'
-export const INTAKE_LANDINGS = ['sales', 'pos', 'inventory', 'commission', 'x_report', 'merchant_payments', 'bill_payments', 'other']
+export const INTAKE_LANDINGS = ['sales', 'pos', 'invoice', 'inventory', 'commission', 'x_report', 'merchant_payments', 'bill_payments', 'other']
 
 // ── PURE selectors (proven by frontend/prove_report_kinds.mjs against the real transpiled TS) ────
 

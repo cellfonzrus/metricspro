@@ -135,9 +135,13 @@ class FakeUpload:
 
 
 def house_seed_rows():
-    """The 1010 seed, parsed OUT of the SQL file — so the mirror check cannot pass against itself."""
-    sql = io.open(MIG, encoding="utf-8").read()
-    body = sql.split("upload_types, sort_order, custom_sheet_label) VALUES", 1)[1].split("ON CONFLICT", 1)[0]
+    """The house seed, parsed OUT of the SQL files — every migration in report_kinds.SEED_MIGRATIONS
+    (1010 + each later house kind, e.g. 1012's sales_by_invoice) in order — so the mirror check cannot
+    pass against itself."""
+    body = ""
+    for name in RK.SEED_MIGRATIONS:
+        sql = io.open(os.path.join(ROOT, "database", "migrations", name), encoding="utf-8").read()
+        body += "\n" + sql.split("upload_types, sort_order, custom_sheet_label) VALUES", 1)[1].split("ON CONFLICT", 1)[0]
     rows = []
     tok = re.compile(r"'((?:[^']|'')*)'|(\{[^}]*\})|(\d+)|(NULL)")
     for line in body.strip().split("\n"):
@@ -172,7 +176,7 @@ TF["ma_daily_tx"] = CM._base_fields("ma_daily_tx")
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("A. THE MIRROR IS THE SEED — report_kinds.HOUSE_KINDS parsed back out of " + RK.MIGRATION)
 seed = house_seed_rows()
-check("the migration file exists and seeds rows", len(seed) > 0, MIG)
+check("the migration files exist and seed rows (" + ", ".join(RK.SEED_MIGRATIONS) + ")", len(seed) > 0 and all(os.path.exists(os.path.join(ROOT, "database", "migrations", n)) for n in RK.SEED_MIGRATIONS), MIG)
 check("the seed has exactly the mirror's rows, in order", [r["key"] for r in seed] == RK.HOUSE_KEYS,
       ([r["key"] for r in seed], RK.HOUSE_KEYS))
 mirror = {r["key"]: RK.normalise_row({**r, "org_id": HOUSE}) for r in RK.HOUSE_KINDS}
@@ -326,6 +330,15 @@ for name, hdrs, want in (("sales — line level with IMEI + phone", SALES_LINE, 
     ranked, dec = top(hdrs)
     check(f"{name} → {want} (confirm)", dec["mode"] == "confirm" and dec["candidates"][0][0] == want,
           (dec["mode"], [(k, c) for k, c, _ in ranked[:3]]))
+SALES_INVOICE = ["Created On", "Invoiced At", "Tendered By", "Sold By", "Invoice #", "Customer", "Invoice Subtotal", "Adjustments", "Net Sales",
+                 "Total Cost", "Gross Profit", "Invoice Total", "Cash", "Visa", "Debit PIN", "TotalTaxPaidAmount"]
+ranked, dec = top(SALES_INVOICE)
+check("sales BY INVOICE with tender columns (2026-09-21) → sales_by_invoice ranked FIRST; it shares Invoice # / Sold By / Total Cost / Gross Profit with the by-product card, so the decision is ASK naming both — never a silent assignment; a confirmed signature (mig 1012 seeds the measured one) makes it a confirm",
+      ranked and ranked[0][0] == "sales_by_invoice" and dec["mode"] in ("ask", "confirm") and all(k != "sales_imei_phone" for k, _, _ in ranked)
+      and RK.decide(RK.detect_report_kind(SALES_INVOICE, vz_vis, [{"org_id": HOUSE, "fingerprint": RK.header_fingerprint(SALES_INVOICE), "report_kind_key": "sales_by_invoice", "confirmations": 1}], TF))["candidates"][0][0] == "sales_by_invoice",
+      (dec["mode"], [(k, c) for k, c, _ in ranked[:3]]))
+ranked, dec = top(SALES_PROD)
+check("…and the by-product file (a SKU / tracking # / product name column present) is NOT a candidate for the invoice card (excludes_columns)", all(k != "sales_by_invoice" for k, _, _ in ranked))
 ranked, dec = top(INV_AGING)
 check("the aging file is NOT also a candidate for on-hand (excludes_columns rule) — no tie", all(k != "inventory_on_hand" for k, _, _ in ranked))
 ranked, dec = top(INV_ONHAND)

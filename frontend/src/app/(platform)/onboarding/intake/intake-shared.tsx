@@ -28,7 +28,12 @@ export type VerifyRow = {
   note?: string | null
   // 2.5a: the activation split of a landed sales export, or "not yet checked" (owner 2026-09-21)
   activation_note?: string | null
+  // 2.5b: an invoice export's tender split beside the X-report per store-day, and Σ tax (owner 2026-09-21)
+  tender_note?: string | null
 }
+// a line retired as mis-filed (POST /onboarding/intake/retire): on the record, out of the verify table / runbook / sign-off
+export type RetiredLine = { instance_key: string; stage: string; kind: string; label: string; reason: string | null; by: string | null; at: string | null
+  file?: FileRef | null; filename?: string | null; removed?: { rows: number; per_table: Record<string, number> } | null }
 // links / reports are ScreenLink SCREEN KEYS (the sidebar's own hrefs, RBAC-gated) — derived by the backend from the
 // one consumers map (landing_identity.CONSUMERS); `shows_in` per monthly line = that landing table's readers
 export type Runbook = {
@@ -40,7 +45,7 @@ export type Runbook = {
 }
 export type Rail = {
   stages: Stage[]; steps: { key: string; label: string }[]; steps_by_stage: Record<string, { key: string; label: string }[]>
-  instances: Instance[]; resume: { instance_key: string; step: string; stage: string } | null
+  instances: Instance[]; retired?: RetiredLine[]; resume: { instance_key: string; step: string; stage: string } | null
   verify_table: VerifyRow[]; runbook: Runbook
   sign_off: { signed: boolean; by: string | null; at: string | null; on_behalf: boolean; all_verified: boolean }
 }
@@ -102,6 +107,11 @@ export type StateResp = {
   sign_question: string; buckets: string[]; bucket_labels: Record<string, string>; save?: { saved: boolean; reason?: string }
   bucket_rows?: BucketRow[]; bucket_meta?: BucketMeta
   report_links?: ReportLinks
+  // 2.5b — the tender classes a column may be (closing.router.TENDER_VOCAB, the one home), the tie fields, the roles,
+  // and the company's TENDER BASIS (closing.router.tender_basis — what Cash Collected reads)
+  tender_vocab?: { key: string; label: string; recon_class: string; closing_axis: boolean; folds_to: string | null }[]
+  invoice_tie_fields?: string[]; tender_roles?: string[]
+  tender_basis?: { basis: string; source: string; label: string; upload_kind: string; screen: string; bases: { key: string; label: string }[] }
 }
 export type SaveResult = { saved: boolean; reason?: string }
 export type Column = {

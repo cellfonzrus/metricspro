@@ -511,6 +511,8 @@ export default function OnboardingIntakePage() {
                       {r.note && <div style={{ ...note, fontSize: 11, color: '#b45309', fontWeight: 600 }}>{r.note}</div>}
                       {/* 2.5a — the activation split of a landed sales export (or "not yet checked — open step 2.5a") */}
                       {r.activation_note && <div style={{ ...note, fontSize: 11, color: r.activation_note.startsWith('activations:') ? 'var(--text2)' : '#b45309', fontWeight: 600, cursor: 'pointer' }} onClick={e => { e.stopPropagation(); openRow(r.instance_key, r.stage, '2.5a') }}>{r.activation_note}</div>}
+                      {/* 2.5b — an invoice export's tender split beside the X-report per store-day, and Σ tax (owner 2026-09-21) */}
+                      {r.tender_note && <div style={{ ...note, fontSize: 11, color: 'var(--text2)', fontWeight: 600, cursor: 'pointer' }} onClick={e => { e.stopPropagation(); openRow(r.instance_key, r.stage, '2.5b') }}>{r.tender_note}</div>}
                       {/* Stage D — how many other loaded reports this one is linked to by a common column */}
                       {shownLinks?.notes?.[r.instance_key] && <div style={{ ...note, fontSize: 11 }}>{shownLinks.notes[r.instance_key]}</div>}</td>
                     <td style={{ padding: '6px 4px' }}>{r.period || '—'}</td>
@@ -522,6 +524,13 @@ export default function OnboardingIntakePage() {
                 ))}
               </tbody>
             </table>
+            {/* lines RETIRED as mis-filed (2026-09-21): on the record with the reason and the name; out of the table, the runbook and the sign-off */}
+            {!!rail.retired?.length && (
+              <div style={{ ...note, fontSize: 12, marginBottom: 12 }}>
+                <b>Retired lines</b> (filed under the wrong report kind — kept on the record, not counted):{' '}
+                {rail.retired.map(x => <span key={x.instance_key}>{x.label} — {x.reason} ({x.by || '?'}{x.at ? `, ${x.at.slice(0, 16).replace('T', ' ')}` : ''}){x.removed ? ` · ${x.removed.rows.toLocaleString('en-US')} landed row(s) removed` : ''}{x.file?.stored ? ' · its file is kept and can be re-read under the right kind' : ''}; </span>)}
+              </div>
+            )}
             {/* ═══ Stage D — REPORT LINKS: every loaded report linked to every other by the columns they share ═══ */}
             <ReportLinksSection links={shownLinks} busy={linksBusy} pairKey={pairKey} setPairKey={setPairKey} loadLinks={loadLinks} />
             <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>4.2 — Sign-off</h2>

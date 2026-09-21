@@ -94,6 +94,13 @@ INGEST_TABLES_BY_MODULE = {
         # rows (SKU, cost, selling price); never summed beside raw_sales (double count). Read by the
         # onboarding verify + report links only; no money path.
         "raw_sales_product",
+        # Sales by invoice with the tender types (mig 1012, owner 2026-09-21): ONE ROW PER INVOICE
+        # (raw_sales_invoice) + one row per invoice × declared tender / tax-component column
+        # (raw_sales_invoice_tender), landed by the intake's `invoice` kind through the mapped ingest.
+        # Read by the onboarding Stage-4 verify (invoice totals, the tender split beside the X-report
+        # per store-day, Σ tax, the report links); no money path reads either yet — the tax aggregator
+        # and the closing basis are PROPOSED in index §30.13.
+        "raw_sales_invoice", "raw_sales_invoice_tender",
     ),
     # pos — the in-house POS. Its builtin stream (commcalc.pos_builtin_daily_sales /
     # commcalc.pos_builtin_sales) promotes into the sales feed; receipt OCR and the carrier vendor-rebate

@@ -50,6 +50,11 @@ INGEST_PARTITION = {
     # store × date-range slice as raw_sales, in its own table so it never replaces line-level rows.
     # The KIND dimension of a slice (which report kind wrote a row) lives in landing_identity.KIND_STAMP.
     "raw_sales_product":  {"partition": "store",               "date": "trans_date"},
+    # Sales by invoice with the tender types (mig 1012, 2026-09-21): the invoice header and its child
+    # tender / tax-component rows — both keyed store × trans_date, both replaced as ONE file's slice
+    # (the landing runs the parent then the child through the same slice replace).
+    "raw_sales_invoice":        {"partition": "store",         "date": "trans_date"},
+    "raw_sales_invoice_tender": {"partition": "store",         "date": "trans_date"},
     # Per-line vendor rebate history (mig 1005). The store arrives IN THE DATA on 100% of rows (the
     # feed's "Invoiced At" cell carries the store name + code), and a multi-store tenant exports one
     # file per store — so store ∩ sold_on is exactly "this file's own slice". This is also the ONLY

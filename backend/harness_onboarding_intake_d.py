@@ -162,9 +162,9 @@ check("A3 the proposal names category / product words per class with their count
 mb = (lc.get("metrics") or {}).get("buckets") or {}
 check("A4 the metric buckets: phones matched 0 and proposes category_contains words → 67; bill_payment matched 0 and proposes nothing",
       mb.get("phones", {}).get("matched") == 0 and mb["phones"]["preview"] == 67 and mb["bill_payment"]["matched"] == 0 and mb["bill_payment"]["proposal"] is None, mb.get("phones"))
-check("A5 the step exists on the spine between 2.5 and 2.6 (rail vocabulary + next_step)",
-      OI.STEP_KEYS_STAGE2[OI.STEP_KEYS_STAGE2.index("2.5") + 1] == "2.5a" and OI.next_step("2.5") == "2.5a" and OI.next_step("2.5a") == "2.6"
-      and "2.5a" in OI.ALL_STEP_KEYS)
+check("A5 the step exists on the spine after 2.5 (rail vocabulary + next_step); since 2026-09-21 the spine's next key is 2.5b (the invoice export's tender columns) — the page walks a SALES export from 2.5a straight to 2.6 by kind, as it walks an invoice export past 2.5a",
+      OI.STEP_KEYS_STAGE2[OI.STEP_KEYS_STAGE2.index("2.5") + 1] == "2.5a" and OI.next_step("2.5") == "2.5a" and OI.next_step("2.5a") == "2.5b"
+      and OI.next_step("2.5b") == "2.6" and "2.5a" in OI.ALL_STEP_KEYS)
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("§B commit — landed, but NOT verified until the words are mapped")
