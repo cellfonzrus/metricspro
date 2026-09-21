@@ -16,6 +16,7 @@ Degrades to an empty/ready:false result if migration 059 isn't applied yet (tabl
 import re
 
 from app.modules.commcalc.calculator import safe_float
+from app.modules.commcalc import line_class as _lc    # THE activation-type predicate (2026-09-21)
 # ONE shared voided token set for pay + display (owner 2026-07-25) — see gp_report.VOID_TOKENS.
 from app.modules.commcalc.gp_report import is_voided as _is_voided, VOID_TOKENS as _VOID_TOKENS
 
@@ -825,11 +826,19 @@ def _artifact_flag(rep_name, hints, best_score):
 
 
 def _read_ct_classification_config(client, org_id):
-    """(contract_type_map, activation_rules) — the tenant's EXISTING display-classification config
-    (accessory_config, migs 213 + 224). Read in its OWN defensive query so a missing column/table degrades
-    to ({}, []) = the hard-coded classifier only. Never raises."""
-    ct_map, rules = {}, []
-    for cols in ("contract_type_map,activation_rules", "contract_type_map"):
+    """(line_rules, activation_rules) — the tenant's classification config, read the ONE way
+    (router._accessory_config → line_class.resolve_rules over accessory_config.activation_details_rules +
+    contract_type_map; the mig-224 transaction-level activation_rules beside it). Falls back to its own
+    defensive read of the same columns when the router cannot be imported (a proof harness), and to
+    (house rules, []) when nothing is readable. Never raises."""
+    try:
+        from app.modules.commcalc.router import _accessory_config
+        acfg = _accessory_config(client, org_id) or {}
+        return (acfg.get("line_rules") or _lc.HOUSE_RULES), list(acfg.get("activation_rules") or [])
+    except Exception:
+        pass
+    ct_map, rules, ad_raw = {}, [], None
+    for cols in ("contract_type_map,activation_rules,activation_details_rules", "contract_type_map,activation_rules", "contract_type_map"):
         try:
             rows = (client.schema("commcalc").table("accessory_config").select(cols)
                     .eq("org_id", org_id).limit(1).execute().data) or []
@@ -842,36 +851,29 @@ def _read_ct_classification_config(client, org_id):
             ar = rows[0].get("activation_rules")
             if isinstance(ar, list):
                 rules = [r for r in ar if isinstance(r, dict)]
+            ad_raw = rows[0].get("activation_details_rules")
         break
-    return ct_map, rules
+    return _lc.resolve_rules(ad_raw, ct_map), rules
 
 
 def _activation_buckets(client, org_id, rows):
     """[bucket|None] parallel to `rows` — each sale line's activation bucket ('premium'|'upgrade'|'byod').
 
-    Reuses the SHARED display resolver (router._resolve_ct_bucket honours the tenant's mig-213
-    contract_type_map; router._blank_ct_bucket_map applies the tenant's mig-224 transaction-level
-    activation_rules to BLANK-contract_type transactions). This is deliberately NOT a sixth classifier —
-    it is the same one the Sales Report / Executive MTD / Daily Targets already use, so what a tenant sees
-    as an activation and what a plan can pay on cannot disagree. Lazy import (router imports this module);
-    on any import failure it falls back to the code classifier alone. Never raises."""
-    ct_map, rules = _read_ct_classification_config(client, org_id)
+    THE ONE predicate (line_class.classify_line with the tenant's rules — which fields carry the type,
+    which tokens name each class, the mig-213 exact map absorbed) plus router._blank_ct_bucket_map (the
+    tenant's mig-224 TRANSACTION-level activation_rules for a transaction no line classifies). This is
+    deliberately NOT a sixth classifier — it is the same one the Sales Report / Executive MTD / Daily
+    Targets / the legacy pay path use, so what a tenant sees as an activation and what a plan can pay
+    on cannot disagree. Lazy import (router imports this module); without the router the rescue map is
+    empty. Never raises."""
+    line_rules, rules = _read_ct_classification_config(client, org_id)
     try:
-        from app.modules.commcalc.router import _resolve_ct_bucket, _blank_ct_bucket_map
+        from app.modules.commcalc.router import _blank_ct_bucket_map
     except Exception:
-        from app.modules.commcalc.calculator import classify_contract_type as _cc
-
-        def _resolve_ct_bucket(ct, cm=None):
-            if cm:
-                b = cm.get(str(ct or "").strip().lower())
-                if b:
-                    return None if b == "none" else b
-            return _cc(ct)
-
-        def _blank_ct_bucket_map(_rows, _cm, _rules):
+        def _blank_ct_bucket_map(_rows, _lr, _rules):
             return {}
     try:
-        by_tid = _blank_ct_bucket_map(rows, ct_map, rules) if rules else {}
+        by_tid = _blank_ct_bucket_map(rows, line_rules, rules) if rules else {}
     except Exception:
         by_tid = {}
     # ONE LINE PER RESCUED TRANSACTION. The blank-contract_type rescue (mig 224) classifies a whole
@@ -898,7 +900,7 @@ def _activation_buckets(client, org_id, rows):
     out = []
     for i, r in enumerate(rows):
         try:
-            b = _resolve_ct_bucket(str(r.get("contract_type") or ""), ct_map)
+            b = _lc.classify_line(r, line_rules)
         except Exception:
             b = None
         if not b:

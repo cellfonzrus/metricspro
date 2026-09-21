@@ -704,7 +704,9 @@ def _compute_day_boost(client, org_id, period, lines, cfg, smap, source_table):
                 "accessory_product_keywords": _acfg["products_list"],
                 "acima_tenders": _acfg["acima_tenders_list"],
                 "setup_fee_keywords": _acfg["setup_fee_keywords_list"],
-                "setup_fee_match_mode": _r._sfp_cfg_mode(client, org_id)}
+                "setup_fee_match_mode": _r._sfp_cfg_mode(client, org_id),
+                # the ONE activation-type predicate's per-org rules (line_class, 2026-09-21)
+                "line_class_rules": _acfg.get("line_rules")}
     except Exception:
         pass
 

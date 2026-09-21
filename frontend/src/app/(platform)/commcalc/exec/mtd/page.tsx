@@ -151,7 +151,11 @@ export default function ExecMtdPage() {
   // (rows exist but nothing to count), and which report kinds FEED the tables it reads — each with the
   // page to upload it on. Rendered as links through ScreenLink; no href and no kind is spelled here.
   const landing: { tables: string[]; rows: number; needs: string[]; blank_fields: string[];
-    feeds: { key: string; label: string; table: string; where: { screen: string; label: string; upload_types: string[] } }[] } | null = data?.landing || null
+    feeds: { key: string; label: string; table: string; where: { screen: string; label: string; upload_types: string[] } }[]
+    // 2.5a (owner 2026-09-21): THE activation-type predicate's own count over the same rows — rows exist,
+    // the columns are there, but not one line could be told apart as an activation / upgrade / BYOD / port
+    classified?: { scanned: number; activation_type_lines: number; activation_type_transactions: number; fields: string[]; source: string
+      gate_open: boolean; note: string | null; map_at: { screen: string; step: string } } | null } | null = data?.landing || null
   const landingEmpty = !!landing && (landing.rows === 0 || (landing.blank_fields || []).length === (landing.needs || []).length) && (landing.needs || []).length > 0
 
   // 16-column layout, in the exact order of the owner's spreadsheet, THEN two appended reconciliation
@@ -413,6 +417,24 @@ export default function ExecMtdPage() {
         </div>
       )}
 
+      {/* NO LINE COULD BE TOLD APART AS AN ACTIVATION (owner 2026-09-21: "88 txns but not a break up in to
+          activations and upgrade etc, also nothing on exec mtd"). The rows are here and carry the columns; the
+          activation TYPE lives in a column the org's rules do not read yet (a category path, a product name).
+          The way back is the intake step that maps the words — a ScreenLink, never a second link map. */}
+      {!landingEmpty && landing?.classified?.gate_open && (
+        <div style={{ fontSize: 12.5, marginBottom: 10, background: '#fffbeb', border: '1px solid #fcd34d',
+          color: '#92400e', borderRadius: 8, padding: '9px 12px' }}>
+          <div style={{ fontWeight: 700, marginBottom: 3 }}>
+            {landing.classified.scanned.toLocaleString()} sales lines this period, and no line could be told apart as an activation or upgrade
+          </div>
+          <div>
+            The activation columns read 0 because the rules in force read only <b>{(landing.classified.fields || []).join(' / ')}</b> and no line carries an activation word there
+            (rule source: {landing.classified.source}). Map which words mean activation / upgrade / bring-your-own-device / port-in under{' '}
+            <ScreenLink to="onboarding_intake">Onboarding — Commission Intake</ScreenLink> (step {landing.classified.map_at?.step || '2.5a'}, &quot;What counts as an activation&quot;) — the rows are already landed, nothing needs re-uploading.
+          </div>
+        </div>
+      )}
+
       {/* METRIC-DEFINITION COVERAGE (mig 962). A column reading 0 because its definition describes some
           other tenant's POS vocabulary is indistinguishable from a genuine 0 — that is the whole defect.
           This says which bucket matched nothing and what the data actually contains. No carrier or
@@ -541,12 +563,14 @@ function MetricConfigPanel({ onClose, onSaved }: { onClose: () => void; onSaved:
   const [cfg, setCfg] = useState<any>(null)
   const [saving, setSaving] = useState<string | null>(null)
   useEffect(() => { api('/api/v1/commcalc/exec-metric-config').then(setCfg).catch(console.error) }, [])
+  // `activation` is deliberately absent (2026-09-21): the activation split — BYOD / Upgrade / Port and the
+  // words that name them, in whichever column carries them — has ONE home now, set under Onboarding —
+  // Commission Intake step 2.5a (accessory_config.activation_details_rules). A row here would be a second copy.
   const BUCKET_KEYS: Record<string, string[]> = {
-    activation: ['byod', 'upgrade', 'port'],
-    phones: ['category'],
-    bill_payment: ['department', 'category'],
-    accessory: ['category'],
-    activation_fee: ['product_desc_contains'],
+    phones: ['category', 'category_contains', 'department_contains'],
+    bill_payment: ['department', 'category', 'category_contains', 'department_contains', 'product_desc_contains'],
+    accessory: ['category', 'category_contains', 'product_desc_contains'],
+    activation_fee: ['product_desc_contains', 'category_contains'],
     protect: ['product_desc_contains', 'exclude_product_desc_contains', 'exclude_department', 'exclude_category'],
   }
   const setTok = (bucket: string, key: string, csv: string) => {
@@ -576,11 +600,13 @@ function MetricConfigPanel({ onClose, onSaved }: { onClose: () => void; onSaved:
         ℹ️ <b>Activation type</b> (Activation/BYOD/Upgrade counts) and <b>Accessory $</b> now flow from the
         shared Sales Report classifier + the Sales Report’s <b>Classification settings</b> — counted by
         <b> distinct transaction</b> — so Executive MTD, the Sales Report and Daily Targets always agree.
-        The tokens below still drive the <b>Port</b> split and the per-line columns
-        (<b>Total Phones / Bill Payment / Activation Fee / Total Protect</b>); the <code>activation</code>
-        byod/upgrade and <code>accessory</code> tokens no longer change the headline counts.
+        The tokens below drive the per-line columns
+        (<b>Total Phones / Bill Payment / Activation Fee / Total Protect</b>). The activation split
+        (New / Port / BYOD / Upgrade — and which column carries those words) is set in ONE place:{' '}
+        <ScreenLink to="onboarding_intake">Onboarding — Commission Intake</ScreenLink>, step 2.5a &quot;What counts as an activation&quot;.
+        <code>category_contains</code> / <code>department_contains</code> match a substring of a category path.
       </p>
-      {(cfg.buckets as string[]).map((b) => (
+      {(cfg.buckets as string[]).filter((b) => b !== 'activation').map((b) => (
         <div key={b} style={{ borderTop: '1px solid var(--border)', padding: '8px 0' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ fontWeight: 600, fontSize: 13 }}>{b} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>({cfg.config[b].basis})</span></div>

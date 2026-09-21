@@ -1366,7 +1366,7 @@ def event_sales_report(date_from: str = "", date_to: str = "", store: str = "",
     stores = [s for s in (store or "").split(",") if s.strip()]
     rows, seen, note = _es_sales_rows(org_id, lo, hi, cfg, stores)
     cells, code_by_store, cell_note = _es_shared_counts(org_id, rows)
-    summary = ES.sales_summary(rows, cfg)
+    summary = ES.sales_summary(rows, cfg, classify=ES.org_classifier(get_supabase(), org_id))
     by_key = _es_cells_by_key(cells)
     for k in summary["event_keys"]:
         k["store_code"] = code_by_store.get(k["store"])
@@ -1376,7 +1376,7 @@ def event_sales_report(date_from: str = "", date_to: str = "", store: str = "",
         "window": {"from": lo, "to": hi},
         "config": cfg,
         "summary": summary,
-        "rows": ES.annotate_rows(rows, cfg),
+        "rows": ES.annotate_rows(rows, cfg, classify=ES.org_classifier(get_supabase(), org_id)),
         "shared_pass_cells": cells,
         "empty_reason": (ES.no_register_note(cfg, seen) if not rows else None),
         "attribution": ES.attribution(cfg, seen, source_note=(note or cell_note)),
@@ -1458,7 +1458,7 @@ def event_sales_subscriber_retention(date_from: str = "", date_to: str = "", sto
     lo, hi = _es_range(date_from, date_to)
     stores = [s for s in (store or "").split(",") if s.strip()]
     rows, seen, note = _es_sales_rows(org_id, lo, hi, cfg, stores)
-    lines = ES.activation_lines(rows, cfg)
+    lines = ES.activation_lines(rows, cfg, classify=ES.org_classifier(get_supabase(), org_id))
     windows = list(cfg.get("event_retention_windows_days") or ())
 
     hi_scan = hi
@@ -1853,7 +1853,7 @@ def event_sales_roi(date_from: str = "", date_to: str = "", store: str = "", tra
         rows = [r for r in rows if str(r.get("trans_date") or "")[:10] == want]
     cells, code_by_store, cell_note = _es_shared_counts(org_id, rows)
     by_key = _es_cells_by_key(cells)
-    summary = ES.sales_summary(rows, cfg)
+    summary = ES.sales_summary(rows, cfg, classify=ES.org_classifier(get_supabase(), org_id))
     events, event_stores = _es_events_for(org_id, lo, hi)
     entered_by_event, units_by_event = _es_entered_costs(
         org_id, [e.get("id") for e in events])
@@ -1865,7 +1865,7 @@ def event_sales_roi(date_from: str = "", date_to: str = "", store: str = "", tra
     # lines of the same activation), one bounded read of the per-line commission feeds for those
     # numbers, one index. The per-day match then costs nothing and every day in the window is
     # measured against the same as-of instant.
-    all_lines = ES.activation_lines(rows, cfg)
+    all_lines = ES.activation_lines(rows, cfg, classify=ES.org_classifier(get_supabase(), org_id))
     comm_events, feeds_loaded, periods_read, comm_feed_notes = _es_commission_events(
         org_id, all_lines, cfg)
     comm_index = ES.index_commission_events(comm_events)
@@ -1894,7 +1894,7 @@ def event_sales_roi(date_from: str = "", date_to: str = "", store: str = "", tra
         ev = ES.match_event(events, event_stores, code, day, store_aliases=[s_raw])
         ev_id = str((ev or {}).get("id") or "")
 
-        lines = ES.phone_lines(krows, cfg)
+        lines = ES.phone_lines(krows, cfg, classify=ES.org_classifier(get_supabase(), org_id))
         phones = ES.price_phones(lines, _es_catalog(org_id, lines),
                                  entered_unit_costs=units_by_event.get(ev_id),
                                  use_catalog=bool(cfg.get("event_roi_phone_cost_from_catalog")))
