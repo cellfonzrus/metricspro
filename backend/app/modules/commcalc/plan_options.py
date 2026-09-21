@@ -364,13 +364,16 @@ def _ct_context(client, org_id):
     except Exception:
         pay_cfg = {"plan_ct_resolution": "raw"}
     try:
-        ct_map, rules = commission_engine._read_ct_classification_config(client, org_id)
+        line_rules, rules = commission_engine._read_ct_classification_config(client, org_id)
     except Exception:
-        ct_map, rules = {}, []
+        line_rules, rules = None, []
+    from app.modules.commcalc import line_class as _lc
+    line_rules = line_rules or _lc.HOUSE_RULES
+    ct_map = dict(line_rules.get("exact") or {})       # the exact value → class layer (mig 213 absorbed)
     buckets = {}
     for _ct, b in (ct_map or {}).items():
-        b = str(b or "").strip().lower()
-        if b and b != "none":
+        b = _lc.bucket_of(str(b or "").strip().lower()) or ""
+        if b:
             buckets[b] = buckets.get(b, 0) + 1
     rule_buckets = {}
     for r in (rules or []):
@@ -383,23 +386,19 @@ def _ct_context(client, org_id):
         "buckets_from_map": buckets,
         "buckets_from_rules": rule_buckets,
         "ct_map": ct_map or {},
+        "line_rules": line_rules,
     }
 
 
-def _resolved_bucket(ct, ct_map):
-    """The activation bucket a CONTRACT-TYPE value resolves to for this tenant ('' when none). Calls the
-    SHARED display resolver (router._resolve_ct_bucket honouring the tenant's map); falls back to the code
-    classifier if the router can't be imported. Never raises. Used only to annotate options and to let the
-    editor mirror the engine's `_ct_resolved` candidate when resolution == 'mapped'."""
+def _resolved_bucket(row, line_rules):
+    """The activation bucket a sale ROW resolves to for this tenant ('' when none) — THE one predicate
+    (line_class.classify_line) with the tenant's rules. Never raises. Used only to annotate options and
+    to let the editor mirror the engine's `_ct_resolved` candidate when resolution == 'mapped'."""
     try:
-        from app.modules.commcalc.router import _resolve_ct_bucket
-        return str(_resolve_ct_bucket(str(ct or ""), ct_map) or "")
+        from app.modules.commcalc import line_class as _lc
+        return str(_lc.classify_line(row if isinstance(row, dict) else {"contract_type": row}, line_rules) or "")
     except Exception:
-        try:
-            from app.modules.commcalc.calculator import classify_contract_type
-            return str(classify_contract_type(str(ct or "")) or "")
-        except Exception:
-            return ""
+        return ""
 
 
 # ── periods ──────────────────────────────────────────────────────────────────────────────────────
@@ -466,7 +465,7 @@ def field_options(client, org_id, months=3, period="", limit=4000, value_limit=4
             if ctx["resolution"] == "mapped":
                 for b in SYNTHETIC_VALUES["activation_bucket"]:
                     lines = sum(int(r.get("lines") or 0) for r in rows
-                                if _resolved_bucket(r.get("contract_type"), ctx["ct_map"]) == b)
+                                if _resolved_bucket(r, ctx["line_rules"]) == b)
                     entry["values"].append({"value": b, "lines": lines, "resolved_bucket": True})
                 entry["note"] = ("Contract-type resolution is 'mapped': a rule also matches the RESOLVED "
                                  "activation bucket (premium / upgrade / byod).")
@@ -518,7 +517,7 @@ def field_options(client, org_id, months=3, period="", limit=4000, value_limit=4
                 dict_map[c].append(v)
             enc.append(i)
         if mapped:
-            rv = _resolved_bucket(r.get("contract_type"), ctx["ct_map"])
+            rv = _resolved_bucket(r, ctx["line_rules"])
             j = ct_resolved_index.get(rv)
             if j is None:
                 j = ct_resolved_index[rv] = len(ct_resolved_dict)

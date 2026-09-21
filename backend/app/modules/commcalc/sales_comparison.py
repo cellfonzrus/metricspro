@@ -39,7 +39,7 @@ filters (not voided, not a Return) are the same two every commcalc sales report 
 """
 import calendar as _cal
 
-from app.modules.commcalc.calculator import safe_float, classify_contract_type
+from app.modules.commcalc.calculator import safe_float, classify_line
 from app.modules.commcalc import installment_category as _icat
 from app.modules.commcalc import financing_registry as _finreg
 
@@ -187,11 +187,12 @@ def _blank_metric():
     return {"units": 0, "revenue": 0.0, "gp": 0.0}
 
 
-def tally(rows, rules, is_accessory, vendors):
+def tally(rows, rules, is_accessory, vendors, line_rules=None):
     """One window → {store: {cat_key: {units, revenue, gp}}}, plus a `txns` count and `other_units`
     (home-internet / SIM / unclassified device sales, surfaced for honesty). PURE — `is_accessory(row)`
     is injected. `rules` = installment_category.load_category_rules(...); `vendors` =
-    financing_registry.resolve_vendors(...)."""
+    financing_registry.resolve_vendors(...); `line_rules` = the org's activation-type rules
+    (line_class.resolve_rules; None = house defaults) for THE one predicate."""
     fin_vendors = [v for v in (vendors or []) if v.get("enabled") and (v.get("matchers") or [])]
     per_store = {}
     for tid, lines in _txn_groups(rows).items():
@@ -217,12 +218,13 @@ def tally(rows, rules, is_accessory, vendors):
             st["other_units"] += 1
 
         # ── BYOD (independent tally, like the Sales Report's BYOD column) ──
-        if any(classify_contract_type(ln.get("contract_type")) == "byod" for ln in lines):
+        if any(classify_line(ln, line_rules) == "byod" for ln in lines):
             cats.setdefault("byod", _blank_metric())["units"] += 1
 
-        # ── Activation (independent tally): a PREMIUM new-line activation on the receipt. Same shared
-        #    classify_contract_type the commission engine / Sales Report use; distinct-txn count. ──
-        if any(classify_contract_type(ln.get("contract_type")) == "premium" for ln in lines):
+        # ── Activation (independent tally): a PREMIUM new-line activation on the receipt. THE one
+        #    predicate (line_class via classify_line) the commission engine / Sales Report use, over the
+        #    whole row with the org's rules; distinct-txn count. ──
+        if any(classify_line(ln, line_rules) == "premium" for ln in lines):
             cats.setdefault("activation", _blank_metric())["units"] += 1
 
         # ── Accessories: every accessory LINE on the receipt, with its revenue ($ is the headline) ──
@@ -271,7 +273,8 @@ def _combine(cur_m, prev_m):
 
 
 def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
-          base_period, compare_period, mode, window_label, resolve_market=None, params=None):
+          base_period, compare_period, mode, window_label, resolve_market=None, params=None,
+          line_rules=None):
     """The whole report payload. PURE apart from the injected `resolve_market(store)`.
 
     Returns per-(store × category) rows (each with current / previous / Δ / Δ%), a totals-by-category
@@ -282,8 +285,8 @@ def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
     cat_label = {c["key"]: c["label"] for c in cats}
     cat_metric = {c["key"]: c.get("metric", "units") for c in cats}
 
-    base = tally(base_rows, rules, is_accessory, vendors)
-    comp = tally(cmp_rows, rules, is_accessory, vendors)
+    base = tally(base_rows, rules, is_accessory, vendors, line_rules)
+    comp = tally(cmp_rows, rules, is_accessory, vendors, line_rules)
     stores = sorted(set(base) | set(comp))
 
     rows = []

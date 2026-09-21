@@ -509,6 +509,8 @@ export default function OnboardingIntakePage() {
                     <td style={{ padding: '6px 4px', fontWeight: 600 }}>{r.label}{r.red && <div style={{ ...note, fontSize: 11, color: '#ef4444' }}>{r.blocking_reason || r.status} → step {r.fix_step}</div>}{!r.red && r.basis && <div style={{ ...note, fontSize: 11 }}>{r.basis}</div>}
                       {/* Stage C — the cross-check this commit ran (bill payments extracted / units activated but still on hand) */}
                       {r.note && <div style={{ ...note, fontSize: 11, color: '#b45309', fontWeight: 600 }}>{r.note}</div>}
+                      {/* 2.5a — the activation split of a landed sales export (or "not yet checked — open step 2.5a") */}
+                      {r.activation_note && <div style={{ ...note, fontSize: 11, color: r.activation_note.startsWith('activations:') ? 'var(--text2)' : '#b45309', fontWeight: 600, cursor: 'pointer' }} onClick={e => { e.stopPropagation(); openRow(r.instance_key, r.stage, '2.5a') }}>{r.activation_note}</div>}
                       {/* Stage D — how many other loaded reports this one is linked to by a common column */}
                       {shownLinks?.notes?.[r.instance_key] && <div style={{ ...note, fontSize: 11 }}>{shownLinks.notes[r.instance_key]}</div>}</td>
                     <td style={{ padding: '6px 4px' }}>{r.period || '—'}</td>

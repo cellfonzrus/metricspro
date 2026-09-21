@@ -26,6 +26,8 @@ export type VerifyRow = {
   blocking_reason: string | null; basis: string | null; fix_step: string
   // Stage C: the cross-check the commit ran (bill-pay lines extracted from a sales export; units activated but still on hand)
   note?: string | null
+  // 2.5a: the activation split of a landed sales export, or "not yet checked" (owner 2026-09-21)
+  activation_note?: string | null
 }
 // links / reports are ScreenLink SCREEN KEYS (the sidebar's own hrefs, RBAC-gated) — derived by the backend from the
 // one consumers map (landing_identity.CONSUMERS); `shows_in` per monthly line = that landing table's readers

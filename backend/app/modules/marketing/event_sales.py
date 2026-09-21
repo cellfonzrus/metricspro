@@ -185,9 +185,22 @@ def resolve_event_sales_config(row):
 # commcalc's import cost, and this module must stay importable (and provable) where commcalc's
 # dependencies are absent. Both helpers accept an INJECTED classifier so the harness can prove the
 # logic without importing anything, and the injected default IS the shared one in production.
-def _shared_classify():
-    from app.modules.commcalc.calculator import classify_contract_type
-    return classify_contract_type
+def _shared_classify(rules=None):
+    """A ROW classifier bound to the org's activation-type rules (`rules` = line_class.resolve_rules
+    output; None = house defaults) — THE one predicate (commcalc.line_class via calculator.classify_line).
+    The router hands the org's rules in through `org_classifier`; a harness may inject its own."""
+    from app.modules.commcalc.calculator import classify_line
+    return lambda row: classify_line(row, rules)
+
+
+def org_classifier(client, org_id):
+    """The org-bound classifier for the marketing endpoints: the org's rules from the ONE reader
+    (commcalc.router._accessory_config['line_rules']); house defaults when unavailable. Never raises."""
+    try:
+        from app.modules.commcalc.router import _accessory_config
+        return _shared_classify((_accessory_config(client, org_id) or {}).get("line_rules"))
+    except Exception:
+        return _shared_classify(None)
 
 
 def _shared_is_voided():
@@ -204,7 +217,7 @@ def line_class(row, classify=None):
     rows sits on a line whose contract type is non-blank). The blanks are correctly not activations.
     """
     fn = classify or _shared_classify()
-    return fn(str((row or {}).get("contract_type") or ""))
+    return fn(row or {})
 
 
 def is_countable(row, is_voided=None):

@@ -7686,6 +7686,17 @@ def _acc_cfg(client, org_id):
             "p": {x.strip().lower() for x in kws}}
 
 
+def _line_rules(client, org_id):
+    """The org's activation-type rules the ONE way (commcalc.router._accessory_config['line_rules'] →
+    line_class.resolve_rules over accessory_config.activation_details_rules); house defaults when the
+    read is unavailable. Lazily imported (the closing recon rides commcalc's classifier, never a copy)."""
+    try:
+        from app.modules.commcalc.router import _accessory_config
+        return (_accessory_config(client, org_id) or {}).get("line_rules")
+    except Exception:
+        return None
+
+
 def _is_acc(dept, cat, acc, product=""):
     d = (dept or "").strip().lower()
     c = (cat or "").strip().lower()
@@ -7705,9 +7716,10 @@ def _b2b_counts_by_store(client, org_id: str, date: str) -> dict:
     + accessory GP — from the SAME unified B2B source as the money recon (_b2b_sales_rows, feed-first
     for the open month). Replaces the rigid daily_sales_actuals RPC so the recon counts populate for
     July too, and stay consistent with the Sales Report / Action Plan."""
-    from app.modules.commcalc.calculator import classify_contract_type
+    from app.modules.commcalc.calculator import classify_line
     resolve = _addr_resolver(client, org_id)
     acc = _acc_cfg(client, org_id)
+    _lr = _line_rules(client, org_id)
     rows = _b2b_sales_rows(client, org_id, date,
                            "store,department,category,product_desc,contract_type,trans_id,gp,voided,trans_type")
     out, seen = {}, {}
@@ -7722,7 +7734,7 @@ def _b2b_counts_by_store(client, org_id: str, date: str) -> dict:
         o = out.setdefault(code, {"activations": 0, "upgrades": 0, "acc_gp": 0.0})
         s = seen.setdefault(code, {"act": set(), "upg": set()})
         tid = str(r.get("trans_id") or "").strip()
-        cls = classify_contract_type(r.get("contract_type"))
+        cls = classify_line(r, _lr)
         if tid and cls in ("premium", "byod"):
             s["act"].add(tid)
         elif tid and cls == "upgrade":
@@ -7946,8 +7958,9 @@ def _b2b_day(client, org_id: str, date: str) -> dict:
             return num_to_code.get(nk)
         return None
 
-    from app.modules.commcalc.calculator import classify_contract_type
+    from app.modules.commcalc.calculator import classify_line
     acc = _acc_cfg(client, org_id)
+    _lr = _line_rules(client, org_id)
     rows = _b2b_sales_rows(client, org_id, date,
                            "store,salesperson,department,category,product_desc,contract_type,trans_id,tender_type,ext_price,voided,trans_type")
     by_store, by_rep, counts, seen = {}, {}, {}, {}
@@ -7975,7 +7988,7 @@ def _b2b_day(client, org_id: str, date: str) -> dict:
         # Activation/upgrade counts from the SAME source + shared classifier (no rigid RPC).
         if str(r.get("trans_type") or "").strip() != "Return":
             tid = str(r.get("trans_id") or "").strip()
-            ct_cls = classify_contract_type(r.get("contract_type"))
+            ct_cls = classify_line(r, _lr)
             s = seen.setdefault(code, {"act": set(), "upg": set()})
             if tid and ct_cls in ("premium", "byod"):
                 s["act"].add(tid)

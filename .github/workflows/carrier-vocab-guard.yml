@@ -30,6 +30,13 @@ name: carrier-vocab-guard
 # second copy, an unstamped writer or a surface that stops saying where fails the build
 # (backend/harness_landing_identity_lock.py; stdlib only).
 #
+# THE LINE-CLASS LOCK (index §3 / §30.12, 2026-09-21) runs here too: a sale line's activation type has ONE
+# predicate (commcalc/line_class.activation_class) and ONE per-org rules home
+# (accessory_config.activation_details_rules); every classifier dereferences it, no second token list,
+# the 2.5a intake step writes only through the two config writers, the Exec MTD page renders the
+# "no line could be told apart" way-back (backend/harness_line_class_lock.py + harness_line_class.py, the
+# money compatibility pin; stdlib only).
+#
 # THE REPORT-LINKS LOCK (index §30.11, 2026-09-20) runs here too: ONE device / phone-number pairing
 # implementation (inventory_sold_recon.line_pairings, folded by activation_index, called by
 # report_links) with the key normalisers in their homes; a second copy anywhere in commcalc, or a
@@ -45,6 +52,20 @@ on:
       - "backend/harness_mapping_key_lock.py"
       - "backend/harness_report_links_lock.py"
       - "backend/harness_landing_identity_lock.py"
+      - "backend/harness_line_class_lock.py"
+      - "backend/harness_line_class.py"
+      - "backend/harness_intake_fakes.py"
+      - "backend/app/modules/commcalc/line_class.py"
+      - "backend/app/modules/commcalc/calculator.py"
+      - "backend/app/modules/commcalc/exec_metric_defs.py"
+      - "backend/app/modules/commcalc/activation_bucketing.py"
+      - "backend/app/modules/commcalc/commission_engine.py"
+      - "backend/app/modules/commcalc/plan_options.py"
+      - "backend/app/modules/commcalc/whatif.py"
+      - "backend/app/modules/commcalc/sales_comparison.py"
+      - "backend/app/modules/commcalc/payout_accrual.py"
+      - "backend/app/modules/commcalc/sale_installment_engine.py"
+      - "backend/app/modules/marketing/event_sales.py"
       - "backend/app/modules/commcalc/landing_identity.py"
       - "backend/app/modules/commcalc/ingest_slice.py"
       - "backend/app/modules/commcalc/report_links.py"
@@ -106,3 +127,9 @@ jobs:
       - name: Run the landing-identity lock (every writer stamps the report kind; one consumers map; every surface says where)
         working-directory: backend
         run: python3 harness_landing_identity_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the line-class lock (one activation-type predicate; one rules home; every caller dereferences it)
+        working-directory: backend
+        run: python3 harness_line_class_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the line-class proof (the money compatibility pin + the suggestion engine over the measured vocabulary)
+        working-directory: backend
+        run: python3 harness_line_class.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

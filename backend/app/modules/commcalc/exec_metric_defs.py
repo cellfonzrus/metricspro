@@ -75,9 +75,11 @@ CODE_DEFAULTS = {
 BUCKETS = tuple(CODE_DEFAULTS.keys())
 
 # Buckets whose rules classify SALE LINES by department/category/product_desc. `activation` is the
-# odd one out: its rules are contract-type keyword tokens consumed by _exec_act_class, not line
-# predicates, so the coverage detector must skip it (a zero here means "no activations", which is
-# a legitimate answer, not a broken definition).
+# odd one out: its byod/upgrade/port token lists are the PRE-2026-09-21 home of the activation split.
+# The ONE activation predicate is now `line_class.activation_class` (rules in
+# accessory_config.activation_details_rules); a TENANT-authored row here is honoured as a legacy
+# layer only for a class that home does not declare (line_class.resolve_rules). The coverage detector
+# skips it (a zero there is "no activations" — the intake's own gate, line_class.gate_open, owns it).
 LINE_BUCKETS = ('phones', 'bill_payment', 'accessory', 'activation_fee', 'protect')
 
 
@@ -89,7 +91,13 @@ def line_match(rule, dept, cat, pdesc):
     Moved here from router._exec_line_match so the predicate has ONE definition. The exact-vs-
     substring asymmetry is deliberate and load-bearing: a substring department match would let
     'boost rtr' inside "$8 included in your boost rtr payment" (a PROTECTION-plan line) count as a
-    bill payment — 1,339 such lines exist in the house org's August 2026 data alone."""
+    bill payment — 1,339 such lines exist in the house org's August 2026 data alone.
+
+    `category_contains` / `department_contains` (2026-09-21, additive): a POS that stores the
+    category as a PATH ('… >> Cellular Equipment >> SmartPhones >> …') can never match by exact
+    membership; a tenant that chose a substring for such a field — through the onboarding step that
+    shows the count it would match (line_class.suggest_metric_rules) — matches by contains. A rule
+    without these keys is byte-identical."""
     rule = rule or {}
     if rule.get('exclude_department') and dept in rule['exclude_department']:
         return False
@@ -102,6 +110,10 @@ def line_match(rule, dept, cat, pdesc):
     if rule.get('department') and dept in rule['department']:
         return True
     if rule.get('product_desc_contains') and any(t in pdesc for t in rule['product_desc_contains']):
+        return True
+    if rule.get('category_contains') and cat and any(t in cat for t in rule['category_contains']):
+        return True
+    if rule.get('department_contains') and dept and any(t in dept for t in rule['department_contains']):
         return True
     return False
 

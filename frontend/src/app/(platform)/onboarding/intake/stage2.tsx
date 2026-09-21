@@ -29,6 +29,7 @@ import {
 import { useReportKinds } from '@/lib/report-kinds'
 import type { ReportKindRow } from '@/lib/carrier-scope'
 import ShowsIn from '@/components/ShowsIn'
+import { LineClassStep, type LineClassBlock } from './line-class-step'   // 2.5a — what counts as an activation (owner 2026-09-21)
 
 type SalesNumbers = {
   rows: number; distinct_txns: number; sum_amount: number; sum_gp: number | null
@@ -70,9 +71,12 @@ type Analysis2 = {
   verify: { basis: string; numbers: SalesNumbers | InvNumbers | OtherNumbers | XrNumbers | MerNumbers | BpNumbers; tie: Tie | null; rows_in_file: number; rows_usable: number; footer_rows: number
             rows_excluded_not_ours: number; excluded: Record<string, string>; rows_to_land: number; ignored_money_columns: MoneyCol[]; refusals: string[] }
   file?: FileRef; state?: StateResp
+  line_class?: LineClassBlock | null      // 2.5a — the activation types + metric buckets over the frame that would land
 }
 type Commit2 = {
   ok: boolean; recorded?: boolean; problems: string[]; saved: number; source_kind: string; instance_key: string
+  // 2.5a: `ok` = the landing re-read matched; `verified` additionally needs the activation gate closed
+  verified?: boolean; activation_gate?: { blocked: boolean; open: boolean; checked: boolean; reason: string; step?: string; attested?: { reason: string; by: string | null } | null }
   mapping_saved?: string[]; identity_written?: { aliases: [string, string][]; stores_created: string[]; rep_aliases: [string, string][] }
   verified_numbers: Record<string, unknown> & { rows_landed?: number; rows_built?: number; rows_inserted?: number; rows_without_device_key?: number
     rows_excluded_not_ours?: number; tie?: Tie; numbers?: SalesNumbers | InvNumbers | XrNumbers | MerNumbers | BpNumbers; basis?: string; attestation?: { reason: string } | null; confirmed_by?: string | null
@@ -84,7 +88,7 @@ type Commit2 = {
 
 export const STAGE2_STEPS: [string, string][] = [
   ['2.0', 'What do you have?'], ['2.1', 'Upload the export'], ['2.2', 'Sheet, header row, footer'], ['2.3', 'Confirm the columns'],
-  ['2.4', 'Stores and reps'], ['2.5', 'Our numbers beside the file\'s'], ['2.6', 'Confirm this export'],
+  ['2.4', 'Stores and reps'], ['2.5', 'Our numbers beside the file\'s'], ['2.5a', 'What counts as an activation'], ['2.6', 'Confirm this export'],
 ]
 const KEYS = STAGE2_STEPS.map(s => s[0])
 // THE 2.0 CARDS ARE THE REGISTRY (design §7, 2026-09-20): what this tenant can upload is read from
@@ -623,10 +627,16 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
             <button style={ghost} onClick={() => setStep(kind === 'other' ? '2.2' : '2.4')}>← Back</button>
             {kind !== 'other' && <button style={btn} disabled={busy || (!file && !canUseKept)} onClick={() => analyze({ keepStep: true })}>Recompute</button>}
             {kind !== 'other' && !a.matrix && <button style={ghost} onClick={() => setStep('2.3')}>Fix the columns</button>}
-            <button style={primary} disabled={(kind !== 'other' && (a.verify.refusals.length > 0 && !attest.trim())) || (needsAttest && !attest.trim())} onClick={() => go('2.6', { typed_total: typedTotal, as_of_date: asOf || null })}>Confirm →</button>
+            <button style={primary} disabled={(kind !== 'other' && (a.verify.refusals.length > 0 && !attest.trim())) || (needsAttest && !attest.trim())} onClick={() => go(a.line_class ? '2.5a' : '2.6', { typed_total: typedTotal, as_of_date: asOf || null })}>{a.line_class ? 'Next: what counts as an activation →' : 'Confirm →'}</button>
             {saveUi}
           </div>
         </div>
+      )}
+
+      {step === '2.5a' && inst && (
+        <LineClassStep instanceKey={instanceKey} who={who} analysis={a?.line_class || null}
+          canReanalyze={!!a && (!!file || canUseKept)} reanalyze={() => analyze({ keepStep: true })}
+          onBack={() => setStep('2.5')} onNext={() => go('2.6', {})} saveUi={saveUi} flash={flash} />
       )}
 
       {step === '2.6' && (a || inst?.status === 'verified' || inst?.status === 'needs_input') && (
@@ -654,9 +664,12 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
           </>}
           {commitRes && (
             <div>
-              <div style={{ ...card, borderColor: commitRes.ok ? '#16a34a' : commitRes.recorded ? '#f59e0b' : '#ef4444', background: commitRes.ok ? 'rgba(22,163,74,.06)' : commitRes.recorded ? 'rgba(245,158,11,.08)' : 'rgba(239,68,68,.06)', marginBottom: 12 }}>
-                <div style={{ fontWeight: 700, fontSize: 15 }}>{commitRes.ok ? 'Saved and verified' : commitRes.recorded ? 'Recorded as received — no destination yet' : 'Saved, but NOT verified'} — {title}</div>
-                {!commitRes.ok && <ul style={{ margin: '6px 0 0 18px', color: commitRes.recorded ? '#b45309' : '#ef4444', fontSize: 13 }}>{commitRes.problems.map((p2, i) => <li key={i}>{p2}</li>)}</ul>}
+              <div style={{ ...card, borderColor: commitRes.ok && commitRes.verified !== false ? '#16a34a' : commitRes.recorded ? '#f59e0b' : '#ef4444', background: commitRes.ok && commitRes.verified !== false ? 'rgba(22,163,74,.06)' : commitRes.recorded ? 'rgba(245,158,11,.08)' : 'rgba(239,68,68,.06)', marginBottom: 12 }}>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>{commitRes.ok && commitRes.verified !== false ? 'Saved and verified' : commitRes.recorded ? 'Recorded as received — no destination yet' : commitRes.ok ? 'Rows landed, but NOT verified' : 'Saved, but NOT verified'} — {title}</div>
+                {(!commitRes.ok || commitRes.verified === false) && <ul style={{ margin: '6px 0 0 18px', color: commitRes.recorded ? '#b45309' : '#ef4444', fontSize: 13 }}>{commitRes.problems.map((p2, i) => <li key={i}>{p2}</li>)}</ul>}
+                {commitRes.ok && commitRes.verified === false && commitRes.activation_gate?.blocked && (
+                  <div style={{ marginTop: 6 }}><button style={{ ...primary, fontSize: 12, padding: '4px 10px' }} onClick={() => setStep('2.5a')}>Map what counts as an activation (2.5a)</button></div>
+                )}
                 {!commitRes.recorded && <div style={{ ...note, marginTop: 6 }}>
                   Column map saved for {commitRes.mapping_saved?.length ?? 0} fields · aliases written {commitRes.identity_written?.aliases.length ?? 0} · stores created {commitRes.identity_written?.stores_created.length ?? 0} · rows inserted {num(commitRes.verified_numbers.rows_inserted)} · <b>rows re-read from the table: {num(commitRes.verified_numbers.rows_landed)}</b> of {num(commitRes.verified_numbers.rows_built)} built
                   {!!commitRes.verified_numbers.rows_without_device_key && <> · {commitRes.verified_numbers.rows_without_device_key} unit(s) without a device key not landed</>}
@@ -674,6 +687,15 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
                 </table>
               )}
               {commitRes.verified_numbers.attestation && <div style={{ ...note, marginBottom: 8 }}>Attested: &quot;{commitRes.verified_numbers.attestation.reason}&quot; — {commitRes.verified_numbers.confirmed_by}</div>}
+              {/* 2.5a — the activation split of the landed rows, by the one predicate; or the gate that keeps this export unverified */}
+              {commitRes.activation_gate?.checked && (
+                <div style={{ ...card, background: 'var(--bg,transparent)', fontSize: 13, marginBottom: 10 }}>
+                  <b>Activation types in the landed rows:</b>{' '}
+                  {commitRes.activation_gate.open
+                    ? (commitRes.activation_gate.attested ? <>none — attested by {commitRes.activation_gate.attested.by || '?'}: &quot;{commitRes.activation_gate.attested.reason}&quot;</> : <span style={{ color: '#ef4444' }}>none could be told apart — {commitRes.activation_gate.reason}</span>)
+                    : <>{String((commitRes.verified_numbers as Record<string, unknown>).activation_classes ? ((commitRes.verified_numbers as { activation_classes: { activation_type_transactions: number } }).activation_classes.activation_type_transactions) : '')} activation-type invoices counted — the Sales Report and Executive MTD split them by type.</>}
+                </div>
+              )}
               {commitRes.verified_numbers.shows_in && <ShowsIn info={commitRes.verified_numbers.shows_in} lead="These rows now show in" />}
               {/* Stage C — the cross-checks the commit ran, stated with their basis */}
               {commitRes.verified_numbers.billpay_extract && (
@@ -697,13 +719,14 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
                 {kind === 'merchant_payments' && <a href="/closing/cash-recon-management" style={{ ...ghost, textDecoration: 'none', display: 'inline-block' }}>Open the card settlement recon</a>}
                 {kind === 'bill_payments' && <a href="/commcalc/bill-payments" style={{ ...ghost, textDecoration: 'none', display: 'inline-block' }}>Open the Bill Payments report</a>}
                 {!commitRes.ok && !commitRes.recorded && <button style={ghost} onClick={() => { setCommitRes(null); setStep('2.5') }}>Back to the numbers</button>}
+                {isSales && <button style={ghost} onClick={() => setStep('2.5a')}>What counts as an activation (2.5a)</button>}
               </div>
             </div>
           )}
         </div>
       )}
 
-      {KEYS.includes(step) && step !== '2.1' && step !== '2.0' && !a && !(step === '2.6' && inst && (inst.status === 'verified' || inst.status === 'needs_input')) && (
+      {KEYS.includes(step) && step !== '2.1' && step !== '2.0' && step !== '2.5a' && !a && !(step === '2.6' && inst && (inst.status === 'verified' || inst.status === 'needs_input')) && (
         <div style={card}>
           <div style={note}>Nothing to show for this step yet — read the file at 2.1 first{kept?.stored ? ' (it was kept; no need to drop it again)' : ''}.</div>
           <button style={{ ...primary, marginTop: 10 }} onClick={() => setStep('2.1')}>Go to 2.1</button>
