@@ -811,3 +811,334 @@ def ma_payout_attribution(rows, activation_orders=None, store_index=None, activa
             "unlinked_amount": round(sum(fm["unlinked_amount"] for fm in out), 2),
             "store_resolved_amount": round(
                 sum(fm["amount"] for fm in out if not fm["store_unresolved_rows"]), 2)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE GROSS-PROFIT REPORT READS THE SAME BOOKINGS THE P&L BOOKS (owner bug report 2026-09-21)
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# Owner, verbatim: "for lucelink why does the gross profit report and the p&l entries dont match,
+# the m1 commision is different in both and also the gross profit shows company level commission it
+# shoudl show store level as it is paid on store level".
+#
+# MEASURED (org 854f6d7b…, August 2026), the two reports shared LITERALLY NO DOLLARS:
+#
+#   GP Commission column                         241,853.82   ← −Σ raw_ma_commission components
+#     − rebate            → P&L contra-COGS     −251,946.31
+#     − wallet funding    → P&L balance sheet    +43,445.63
+#     − device margin     → its own P&L line      −6,160.00
+#     − consumer financing→ its own P&L line        −599.99
+#     − sheet spiff_m1..m6 (SUPPRESSED in P&L)   −26,593.15
+#     ───────────────────────────────────────────────────
+#     dollars in common with P&L carrier_comm          0.00
+#   P&L carrier_comm (daily-tx cash)              98,656.37   ← a feed the GP column never opened
+#
+#   GP "1st Month" $23,271.90  vs  P&L "M1" $2,300.40   — a $20,971.50 gap on the owner's own tile.
+#
+# THREE facts were involved and ALL THREE already had a home here; the GP path just never read them:
+#   · WHICH BASIS the org books — `pl_ma_month_spiff_source` (mig 314). GP had no basis switch at
+#     all, so the tenant's stated policy was honoured in one report and ignored in the other.
+#   · WHAT COUNTS AS COMMISSION — `commission_received_lines()`. The GP column carried the device
+#     rebate and the wallet funding the owner had already ruled out of the P&L (2026-09-08 "dont
+#     count any rebate received in the commission", mig 992; 2026-08-10 wallet funding → the
+#     `distributor_clearing` balance-sheet line). One report was fixed, its sibling was not.
+#   · WHICH STORE a dollar belongs to — the mig-314 account→store index. Every August sheet row
+#     carries `merchant_account_id` and 20 of 20 accounts resolve through `canonical_store_index`;
+#     the company-wide row was never a data limitation, only a stale code path.
+#
+# SO THE MONEY NOW COMES FROM THE BOOKINGS THEMSELVES. `gp_carrier_income` runs the very functions
+# `coa.build_inputs` runs — `ma_commission_bookings` + `ma_tx_bookings`, same config, same
+# precedence, same signs — and FILES each booking into the Gross Profit column that already means
+# that thing. It re-sums no feed. A dollar the P&L books and a dollar the GP report shows are now
+# the SAME dollar, by construction, and the parity is pinned by
+# `backend/harness_gp_pnl_commission_parity.py` under BOTH basis settings.
+#
+# BOTH BASES, LABELLED (owner decision 2026-09-21). The money column is the basis the org BOOKS, so
+# GP and the P&L agree to the cent. The other basis rides alongside as a labelled read-out that
+# books nothing — `ma_earned_month_ladder` (what the sheet says was EARNED at activation) and
+# `ma_received_month_ladder` (what the cash rows say was RECEIVED). The received ladder is the one
+# that can reach M7..M12+: the sheet has six spiff columns and structurally never can.
+
+# A P&L line key → the Gross-Profit column that already means the same thing. These are P&L line
+# keys (structural), never carrier or tenant names — RULE TWO is untouched.
+GP_INCOME_COLUMNS = {
+    "carrier_comm":         "comm",   # M1..M12+ month spiffs / bounties
+    "fee_income":           "comm",   # fee margin — commission_received_lines() counts it as commission
+    "mi_income":            "mi",     # residual (labelled "Residual" on the MA side)
+    "atu_income":           "atu",    # legacy airtime fold (pre-mig-309 orgs)
+    "ma_merchant_discount": "atu",    # airtime margin — its own P&L line since mig 309
+    "mdf_income":           "mdf",    # MDF / market spiffs
+}
+# A revenue line the Gross Profit report has no column for lands HERE — the report's existing
+# "money that arrived and no bucket claims it" column. It is counted in Total Rev, so GP revenue
+# still equals the P&L's MA revenue to the cent, and it is NAMED in `filed` below rather than
+# quietly folded into a column that would mean something else.
+GP_INCOME_FALLBACK_COLUMN = "unmapped"
+# Why a booking is NOT Gross-Profit revenue at all. Each is an owner ruling already applied to the
+# P&L; this is the same ruling reaching the second report, not a new rule.
+GP_NOT_REVENUE_REASONS = {
+    "device_rebate": ("device-purchase rebate — nets against Device cost inside COGS, never "
+                      "commission (owner 2026-09-08, mig 992)"),
+    "distributor_clearing": ("wallet funding — an entity-level settlement that books to the balance "
+                             "sheet, not revenue (owner ruling 2026-08-10)"),
+}
+GP_NOT_REVENUE_DEFAULT_REASON = "not a P&L revenue line"
+# The two month-of-life bases, named once so no surface invents its own wording.
+BASIS_EARNED = "commission_sheet"
+BASIS_RECEIVED = "daily_tx"
+BASIS_LABELS = {
+    BASIS_EARNED: "earned (activation month, from the MA commission sheet's spiff columns)",
+    BASIS_RECEIVED: "received (cash month, from the daily-transaction rows)",
+}
+MONTH_UNKNOWN = "unknown"
+
+
+def pl_revenue_lines():
+    """The P&L line keys in the REVENUE section, read from `coa.PL_SPEC` — the ONE place the
+    statement's shape is declared. Deliberately NOT a literal copy: a line that moves section in
+    coa must move here with it, or the two would drift exactly the way GP and the P&L drifted."""
+    from app.modules.account.coa import PL_SPEC
+    return tuple(spec[0] for spec in PL_SPEC if len(spec) > 2 and spec[2] == "revenue")
+
+
+def gp_income_column(line, revenue_lines=None):
+    """PURE: (gp_column, reason_not_revenue) for one booked P&L line key.
+
+    A revenue line lands in the GP column that means the same thing, or in the honest fallback.
+    A non-revenue line lands NOWHERE and carries the ruling that says why."""
+    rev = set(revenue_lines if revenue_lines is not None else pl_revenue_lines())
+    if line not in rev:
+        return None, GP_NOT_REVENUE_REASONS.get(line, GP_NOT_REVENUE_DEFAULT_REASON)
+    return GP_INCOME_COLUMNS.get(line, GP_INCOME_FALLBACK_COLUMN), None
+
+
+def assert_commission_column_is_commission(revenue_lines=None):
+    """The checked invariant behind the owner's two rulings: nothing outside
+    `commission_received_lines()` may reach the Gross-Profit COMMISSION column, and in particular no
+    rebate line and no device-margin line may. Raises AssertionError naming the offender — so a
+    future edit cannot re-file a rebate as commission the way the GP report had."""
+    commission = set(commission_received_lines())
+    for line, col in GP_INCOME_COLUMNS.items():
+        if col == "comm":
+            assert line in commission, (
+                "GP_INCOME_COLUMNS files %r into the Commission column, but it is not in "
+                "commission_received_lines()" % line)
+    for line in set(REBATE_LINES) | set(NON_COMMISSION_DEVICE_LINES):
+        assert GP_INCOME_COLUMNS.get(line) != "comm", (
+            "%r is a rebate / device line and may never reach the Commission column "
+            "(owner 2026-09-08)" % line)
+    return True
+
+
+def ma_sheet_component_total(rows_or_sums):
+    """PURE: the MA commission SHEET's payable total — money the dealer RECEIVES (positive).
+
+    Accepts either the raw rows or an already-summed {component: value} map, and iterates the ONE
+    audited component list (`residual_subs._MA_COMPONENTS`) with the feed's own sign convention
+    (negative on the export = paid to the dealer). Every surface that used to write
+    `-sum(... _MA_COMPONENTS)` for itself calls this instead."""
+    if isinstance(rows_or_sums, dict):
+        return round(-sum(safe_float(rows_or_sums.get(c)) for c in _rs._MA_COMPONENTS), 2)
+    return round(-sum(sum(safe_float((r or {}).get(c)) for c in _rs._MA_COMPONENTS)
+                      for r in (rows_or_sums or [])), 2)
+
+
+def ma_commission_components(cfg=None):
+    """PURE: ({components that ARE commission received}, {components that are NOT}).
+
+    Derived from the SAME two facts the P&L books with — `MA_COMMISSION_HEADS` (which line each
+    component books to, with the org's rebate route) and `commission_received_lines()` (which lines
+    are commission received). No surface needs its own list of "the commission columns" again; the
+    2026-09-08 ruling that a rebate is not commission, and the 2026-08-10 ruling that wallet funding
+    is a balance-sheet settlement, both reach every caller through this one function."""
+    cfg = cfg if cfg is not None else default_config()
+    reb_line, _sign = rebate_route(cfg)
+    commission = set(commission_received_lines())
+    yes, no = [], []
+    for c in _rs._MA_COMPONENTS:
+        if c == "wallet_funding":
+            line = "distributor_clearing"           # balance sheet, never revenue
+        elif c == "rebate":
+            line = reb_line
+        else:
+            line = (MA_COMMISSION_HEADS.get(c) or (None, None))[0]
+        (yes if line in commission else no).append(c)
+    return tuple(yes), tuple(no)
+
+
+def ma_sheet_spiff_total(row_or_sums):
+    """PURE: the MA commission SHEET's spiff total — money the dealer RECEIVES (positive) — over
+    `SPIFF_COMPONENTS`, which is itself derived from `MA_COMMISSION_HEADS`. No caller counts the
+    sheet's spiff columns with a hardcoded `range(1, 7)` any more: that count is why no
+    sheet-fed surface could ever display M7..M12, and it is a second copy of a fact this module
+    already holds. Accepts one row, a list of rows, or an already-summed {component: value} map."""
+    if isinstance(row_or_sums, dict):
+        return round(-sum(safe_float(row_or_sums.get(c)) for c in SPIFF_COMPONENTS), 2)
+    return round(-sum(sum(safe_float((r or {}).get(c)) for c in SPIFF_COMPONENTS)
+                      for r in (row_or_sums or [])), 2)
+
+
+def _ladder_add(dst, month, amount, store=None):
+    """Tally one dollar into a {month-key: amount} ladder (+ the per-store ladder). PURE."""
+    key = MONTH_UNKNOWN if month in (None, "", MONTH_UNKNOWN) else str(int(month))
+    dst["months"][key] = round(dst["months"].get(key, 0.0) + amount, 2)
+    dst["total"] = round(dst["total"] + amount, 2)
+    per = dst["by_store"].setdefault(store or "", {"months": {}, "total": 0.0})
+    per["months"][key] = round(per["months"].get(key, 0.0) + amount, 2)
+    per["total"] = round(per["total"] + amount, 2)
+
+
+def _empty_ladder(basis):
+    return {"basis": basis, "basis_label": BASIS_LABELS.get(basis, basis),
+            "months": {}, "total": 0.0, "by_store": {}}
+
+
+def ma_earned_month_ladder(rows, cfg=None, store_index=None, leg_cfg=None):
+    """PURE read-out (books NOTHING): what the MA commission SHEET says was EARNED, by month-of-life
+    and by store.
+
+    The month of a spiff column is decided by `commission_legs.ma_field_leg` — the module that
+    already owns "which column is which month" for the whole platform — so this cannot invent a
+    second mapping. Amounts use the same sign flip the bookings use. Store grain comes from the
+    caller's `canonical_store_index`; an account the index does not know keeps the honest ''
+    (company-wide) key, exactly as the P&L leaves it company-wide."""
+    from app.modules.commcalc import commission_legs as _legs
+    cfg = cfg if cfg is not None else default_config()
+    attribute = bool(cfg.get("store_attribution"))
+    idx = {str(k).strip(): v for k, v in (store_index or {}).items() if str(k).strip()}
+    out = _empty_ladder(BASIS_EARNED)
+    for r in rows or []:
+        r = r or {}
+        store = idx.get(str(r.get("merchant_account_id") or "").strip(), "") if attribute else ""
+        for c in SPIFF_COMPONENTS:
+            amt = -safe_float(r.get(c))
+            if not amt:
+                continue
+            _bucket, month = _legs.ma_field_leg(c, leg_cfg)
+            _ladder_add(out, month, amt, store)
+    return out
+
+
+def ma_received_month_ladder(rows, pnl_cfg=None, cfg=None, store_index=None):
+    """PURE read-out (books NOTHING): what the daily-transaction CASH rows say was RECEIVED, by
+    month-of-life and by store.
+
+    Runs `ma_tx_bookings` — the same classifier, the same precedence, the same shared
+    `commission_ledger.parse_payment_month` — with `month_spiff_source` forced to 'daily_tx' so the
+    ladder EXISTS even for an org that books the sheet basis. Forcing it here can never move money:
+    this function returns a read-out and books nothing. M1..M12+ come from the data, so this is the
+    only one of the two bases that can reach M7 and beyond."""
+    cfg = dict(cfg if cfg is not None else default_config())
+    cfg["month_spiff_source"] = BASIS_RECEIVED
+    idx = {str(k).strip(): v for k, v in (store_index or {}).items() if str(k).strip()}
+    attribute = bool(cfg.get("store_attribution"))
+    out = _empty_ladder(BASIS_RECEIVED)
+    for line, acct, amt, detail in ma_tx_bookings(rows, pnl_cfg, cfg):
+        if line != "carrier_comm" or not amt:
+            continue
+        store = idx.get(str(acct or "").strip(), "") if attribute else ""
+        d = str(detail or "")
+        month = int(d[1:]) if (d[:1] == "M" and d[1:].isdigit()) else None
+        _ladder_add(out, month, amt, store)
+    return out
+
+
+def gp_carrier_income(comm_rows, tx_rows, pnl_cfg=None, cfg=None, store_index=None,
+                      revenue_lines=None, leg_cfg=None):
+    """PURE: the Gross-Profit report's MA/VidaPay carrier income, READ OUT OF THE BOOKINGS the P&L
+    books — never a second sum of the raw feeds.
+
+      comm_rows / tx_rows — raw_ma_commission / raw_ma_daily_tx dicts, the SAME selects
+                            `coa.build_inputs` makes.
+      pnl_cfg             — `residual_subs.load_ma_pnl_config` (mig 309).
+      cfg                 — `load_config` (mig 314/934/996). Its `month_spiff_source` decides which
+                            basis is MONEY; both bases are reported either way.
+      store_index         — `canonical_store_index` ({account: canonical store address}). Absent, or
+                            an account it does not know, keeps the honest '' company-wide key.
+
+    Returns:
+      by_store  {store or '': {comm, mi, atu, mdf, unmapped, months, m1, trailing, unsplit}}
+      totals    the same keys, summed
+      months    the BOOKED basis's month ladder, which explains `comm` exactly
+      basis / basis_label / earned / received     — both bases, labelled
+      filed     [{line, amount, column}]          — where every revenue dollar went
+      excluded  [{line, amount, reason}]          — what is NOT GP revenue, and the ruling that says so
+      lines     {line: amount} for every MA booking, so nothing is anonymous
+
+    IDENTITY (pinned by harness_gp_pnl_commission_parity.py): for every store,
+    m1 + trailing + unsplit == comm, and Σ(booked-basis months) + fee_income == comm."""
+    assert_commission_column_is_commission(revenue_lines)
+    cfg = cfg if cfg is not None else default_config()
+    rev = tuple(revenue_lines if revenue_lines is not None else pl_revenue_lines())
+    idx = {str(k).strip(): v for k, v in (store_index or {}).items() if str(k).strip()}
+    attribute = bool(cfg.get("store_attribution"))
+    basis = (cfg.get("month_spiff_source") or BASIS_EARNED)
+    columns = ("comm", "mi", "atu", "mdf", GP_INCOME_FALLBACK_COLUMN)
+
+    by_store, totals, lines = {}, {c: 0.0 for c in columns}, {}
+    filed, excluded = {}, {}
+    fee_by_store = {}
+
+    def _cell(store):
+        return by_store.setdefault(store or "", {c: 0.0 for c in columns})
+
+    for line, acct, amt, _detail in (list(ma_commission_bookings(comm_rows, cfg))
+                                     + list(ma_tx_bookings(tx_rows, pnl_cfg, cfg))):
+        amt = round(safe_float(amt), 2)
+        if not amt:
+            continue
+        lines[line] = round(lines.get(line, 0.0) + amt, 2)
+        col, why = gp_income_column(line, rev)
+        if col is None:
+            e = excluded.setdefault(line, {"line": line, "amount": 0.0, "reason": why})
+            e["amount"] = round(e["amount"] + amt, 2)
+            continue
+        store = idx.get(str(acct or "").strip(), "") if attribute else ""
+        cell = _cell(store)
+        cell[col] = round(cell[col] + amt, 2)
+        totals[col] = round(totals[col] + amt, 2)
+        f = filed.setdefault(line, {"line": line, "amount": 0.0, "column": col})
+        f["amount"] = round(f["amount"] + amt, 2)
+        if line == "fee_income":
+            fee_by_store[store] = round(fee_by_store.get(store, 0.0) + amt, 2)
+
+    earned = ma_earned_month_ladder(comm_rows, cfg, idx, leg_cfg)
+    received = ma_received_month_ladder(tx_rows, pnl_cfg, cfg, idx)
+    booked = received if basis == BASIS_RECEIVED else earned
+
+    # The month ladder explains the Commission column. `fee_income` carries no month-of-life at all,
+    # so it sits in the SAME honest `unsplit` bucket the GP leg split has always used for money whose
+    # source states no month — never guessed into M1.
+    for store, cell in by_store.items():
+        months = dict((booked["by_store"].get(store) or {}).get("months") or {})
+        cell["months"] = months
+        cell["m1"] = round(months.get("1", 0.0), 2)
+        cell["trailing"] = round(sum(v for k, v in months.items()
+                                     if k != MONTH_UNKNOWN and k != "1"), 2)
+        cell["unsplit"] = round(cell["comm"] - cell["m1"] - cell["trailing"], 2)
+
+    # WHAT IS IN `unsplit`, named. The GP page renders this beside the two legs so an unexplained
+    # pile of money can never sit next to the numbers the owner reads. Under the old contract this
+    # was the six margin columns; under this one the margins are not in the column at all, and the
+    # only money without a month-of-life is an unlabelled spiff row and the fee margin.
+    unsplit_fields = []
+    if booked["months"].get(MONTH_UNKNOWN):
+        unsplit_fields.append("%s (spiff rows whose label names no month)" % _SPIFF_OTHER_DETAIL)
+    if lines.get("fee_income"):
+        unsplit_fields.append("fee_income (fee margin carries no month-of-life)")
+
+    return {
+        "by_store": by_store,
+        "totals": totals,
+        "unsplit_fields": unsplit_fields,
+        "months": dict(booked["months"]),
+        "basis": basis,
+        "basis_label": BASIS_LABELS.get(basis, basis),
+        "earned": earned,
+        "received": received,
+        "filed": sorted(filed.values(), key=lambda f: (-abs(f["amount"]), f["line"])),
+        "excluded": sorted(excluded.values(), key=lambda e: (-abs(e["amount"]), e["line"])),
+        "lines": lines,
+        "store_attributed": attribute,
+        "company_wide": {c: round((by_store.get("") or {}).get(c, 0.0), 2) for c in columns},
+        "stores_resolved": sorted(s for s in by_store if s),
+    }

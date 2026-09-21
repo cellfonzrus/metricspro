@@ -204,15 +204,26 @@ for g in out["groups"]:
 print("\nB. RECONCILIATION — the REAL gp_report.calc_gp_report, same fixtures, same figures")
 
 # B-i: an MA-fed (Total/VidaPay) org — GP books MA commission into `comm` and merchant_discount into `atu`.
+# CONTRACT CHANGED 2026-09-21 (owner bug report: "the m1 commision is different in both"). The GP
+# report no longer takes a total and splits it — it files the bookings the P&L books, through
+# `ma_store_pnl.gp_carrier_income`. Feeding BOTH surfaces from the one home is exactly what this
+# section is for: if the breakout and the GP report ever mean different things by "commission
+# received" again, these assertions fail.
+from app.modules.account import ma_store_pnl as MSP          # noqa: E402
 legcls = LEGS.default_classifier()
 ma_sums = {c: sum(r.get(c, 0.0) for r in MA_ROWS if PKEY.get(r["period"]) == "June 2026")
            for c in MA_COMPONENTS}
-ma_comm = round(-sum(ma_sums[c] for c in MA_COMPONENTS), 2)
+_JUNE_MA = [dict(r) for r in MA_ROWS if PKEY.get(r["period"]) == "June 2026"]
+_JUNE_TX = [{"account_id": "", "order_type": "", "product_name": "",
+             "retail_cost": 0.0, "merchant_discount": 14000.0}]
+_ma_income = MSP.gp_carrier_income(_JUNE_MA, _JUNE_TX, None,
+                                   dict(MSP.default_config(),
+                                        month_spiff_source=MSP.BASIS_EARNED),
+                                   store_index={})
 gp_ma = calc_gp_report(
     sales=[], pay_detail=[], mi_rows=[], rep_commissions=[], expenses=[], catalog=[],
     store_mapping=[], period="June 2026",
-    ma_income={"comm": ma_comm, "atu": 14000.0, "components": ma_sums,
-               "component_list": list(MA_COMPONENTS)},
+    ma_income=_ma_income,
     leg_classify=legcls)
 gt = gp_ma["totals"]
 out_ma = build(ma_rows=[r for r in MA_ROWS if PKEY.get(r["period"]) == "June 2026"],
@@ -327,10 +338,28 @@ print("\nD. M1 == spiff_m1 alone; the six margins land in Unsplit and are NAMED"
 m1_expected = round(-sum(r.get("spiff_m1", 0.0) for r in MA_ROWS), 2)
 margins = round(-sum(r.get(c, 0.0) for r in MA_ROWS for c in MARGIN_COLS), 2)
 chk("D1 M1 == Σ spiff_m1", close(sc_ma["m1"], m1_expected), f"{sc_ma['m1']} vs {m1_expected}")
-chk("D2 Unsplit == Σ the six margins", close(sc_ma["unsplit"], margins),
-    f"{sc_ma['unsplit']} vs {margins}")
+# OWNER RULING 2026-09-08 reached this surface on 2026-09-21: the activation-order margins and the
+# rebate are NOT commission received, so they are no longer inside `comm_ma` at all — they are their
+# own REFERENCE row, in no total, fully visible. What remains unsplit inside the commission row is
+# only money that genuinely states no month-of-life: the fee margin.
+_fees = round(-sum(r.get("fees_margin", 0.0) for r in MA_ROWS), 2)
+_margins_no_fees = round(margins - _fees, 2)
+chk("D2 Unsplit == the fee margin alone (the rest is not commission any more)",
+    close(sc_ma["unsplit"], _fees), f"{sc_ma['unsplit']} vs {_fees}")
 named = set((sc_ma.get("meta") or {}).get("unsplit_fields") or [])
-chk("D3 the six margin columns are NAMED on the row", named == set(MARGIN_COLS), str(sorted(named)))
+chk("D3 what IS unsplit is named on the row", named == {"fees_margin"}, str(sorted(named)))
+sc_ref = stream(out, "ma_activation_margins")
+chk("D3b the margins and the rebate are SHOWN, on their own reference row",
+    close(sc_ref["total"], _margins_no_fees), f"{sc_ref['total']} vs {_margins_no_fees}")
+chk("D3c …and that row is in NO total (it is not commission received)",
+    sc_ref["in_total"] is False)
+chk("D3d …and it names which columns it holds",
+    set((sc_ref.get("meta") or {}).get("columns") or []) == set(MARGIN_COLS) - {"fees_margin"},
+    str(sorted((sc_ref.get("meta") or {}).get("columns") or [])))
+chk("D3e which columns are commission is decided by the ONE home, not a list here",
+    set(MSP.ma_commission_components()[0]) >= {"spiff_m1", "fees_margin"}
+    and set(MSP.ma_commission_components()[1]) >= {"rebate", "wallet_funding"},
+    str(MSP.ma_commission_components()))
 for n in range(2, 7):
     exp = round(-sum(r.get(f"spiff_m{n}", 0.0) for r in MA_ROWS), 2)
     chk(f"D4 M{n} is its OWN line == Σ spiff_m{n}", close(sc_ma["legs"].get(str(n), 0.0), exp),
@@ -341,7 +370,16 @@ chk("D5 leg_columns exposes M1..M6 individually",
 cfg_back = dict(LEGS.DEFAULT_CFG); cfg_back["ma_m1_fields"] = list(MARGIN_COLS)
 back = build(legcls=LEGS.LegClassifier(cfg_back), label_rows=[], mi_rows=[], tx_rows=[])
 sb_ma = stream(back, "comm_ma")
-chk("D6 config puts the margins back into M1", close(sb_ma["m1"], m1_expected + margins))
+# `ma_m1_fields` is still live config (RULE TWO) and still decides M1-vs-trailing for the money that
+# IS commission — but it can no longer drag the margin block into M1, because the margin block is no
+# longer in the commission row on any configuration. That is the design fix: the 2026-08-05 defect
+# is now impossible rather than merely defaulted-away.
+# The config still moves the money it is allowed to move: `fees_margin` IS commission received, so
+# naming it in `ma_m1_fields` legitimately files it under M1. The rebate, the wallet funding and the
+# device/consumer margins do NOT move, because they are not in this row at all any more.
+chk("D6 config can only move money that IS commission — fee margin moves, the rest cannot",
+    close(sb_ma["m1"], round(m1_expected + _fees, 2)),
+    f"{sb_ma['m1']} vs {round(m1_expected + _fees, 2)}")
 chk("D7 …and the TOTAL is unchanged either way", close(sb_ma["total"], sc_ma["total"]))
 
 # ═══ E. THE ePay / VidaPay DOUBLE-COUNT GATE ══════════════════════════════════════════════════════

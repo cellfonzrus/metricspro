@@ -24,6 +24,7 @@ Primary code homes:
 | 2 | **Data ingest & raw_* tables** | "How does sales/DLAR/MI/inventory data get in? Email? Upload? Sweep? Which raw table?" |
 | 3 | **Sales report & the shared cell-agg** | "Where do activation/accessory counts come from? Why do Sales Report / Exec MTD / Targets agree now?" |
 | 4 | **GP / P&L report** | "How is store gross-profit / P&L built? What's voided? Where's the money booked?" |
+| 4a | **GP vs P&L — one home for MA commission** | "Why do the Gross Profit report and the P&L disagree about M1 commission, and why does one show a company total where the other shows stores?" |
 | 5 | **Daily Targets & actuals** | "How are daily targets computed vs actuals? What's an 'achieved' number? Accessory $ actual?" |
 | 6 | **Rep commission (Boost)** | "How is a rep paid? premium/byod/upgrade counts, acc/setup/trade-in, tiers, KPIs. Where stored?" |
 | 7 | **Carrier residual installments** | "Multi-month carrier residual pay from raw_mi. Why do named activation_types not pay?" |
@@ -359,8 +360,11 @@ commissions, expenses.
 - **Department classification:** `_dept_classifier(gp_category_map)` `gp_report.py:31`, overrides
   `_gp_overrides` `gp_report.py:19`; config `commcalc.gp_category_map` (mig `069_gp_category_map.sql`),
   endpoints `/gp-category-map` `router.py:14893,14907`, `/gp-departments` `14934`.
-- **Store booking:** payment-detail rows carry no store address → booked on ONE company-wide row unless
-  the street-number join resolves a code (`router.py:14632,14711`).
+- **Store booking:** ePay payment-detail rows carry no store address → booked on ONE company-wide row
+  unless the street-number join resolves a code (`router.py:14632,14711`). **MA/VidaPay carrier income
+  is NOT in that sentence any more (2026-09-21, §4a):** it is store-attributed through
+  `ma_store_pnl.canonical_store_index`, and only a processor account the index cannot resolve stays
+  company-wide.
 - **Leg ladders** (multi-month carrier income roll-forward): `_leg_ladder_add/_merge` `gp_report.py:96,108`.
 
 **Source tables:** `raw_sales`/`daily_sales_feed`, `raw_payment_detail`, `raw_mi`, `raw_catalog`,
@@ -1004,6 +1008,91 @@ commissions, expenses.
   (`asset_ledger_open_bookings` or `handset_payable_bookings`) at `as_of = today`, and reports
   `basis` / `bs_line` / `snapshot.tie_delta` (tile-at-today − the target line on the last computed
   snapshot) so a non-zero delta names a STALE SNAPSHOT, never a disagreement about the math.
+
+---
+
+## 4a. GP vs P&L — ONE HOME for MA commission (owner bug report 2026-09-21)
+
+**Answers:** "why does the gross profit report and the p&l entries dont match, the m1 commision is
+different in both and also the gross profit shows company level commission it shoudl show store
+level as it is paid on store level" (LuxeLink / Luxlink Wireless, org `854f6d7b-…`).
+
+**MEASURED, August 2026 — the two reports shared ZERO dollars:**
+
+```
+GP Commission column                         241,853.82   ← router summed raw_ma_commission itself
+  − rebate            → P&L contra-COGS     −251,946.31
+  − wallet funding    → P&L balance sheet    +43,445.63
+  − device margin     → its own P&L line      −6,160.00
+  − consumer financing→ its own P&L line        −599.99
+  − sheet spiff_m1..m6 (SUPPRESSED in P&L)   −26,593.15
+  ───────────────────────────────────────────────────
+  dollars in common with P&L carrier_comm          0.00
+P&L carrier_comm (daily-tx cash)              98,656.37
+GP "1st Month" 23,271.90  vs  P&L "M1" 2,300.40  →  a $20,971.50 gap on the owner's own tile.
+```
+
+**THREE facts, all of which already had a home here, none of which the GP path read:**
+- **timing basis** — `commission_org_config.pl_ma_month_spiff_source` (mig 314). LuxeLink books
+  `'daily_tx'` (cash month); the GP report had no basis switch at all, so the tenant's stated policy
+  was honoured in one report and ignored in the other.
+- **what counts as commission** — `ma_store_pnl.commission_received_lines()`. The GP column carried
+  the device rebate and the wallet funding the owner had already ruled out of the P&L (2026-09-08
+  rebate, mig 992; 2026-08-10 wallet funding → `distributor_clearing`). One report was fixed, its
+  sibling was not.
+- **store grain** — the mig-314 account→store index. 20/20 August accounts resolve through
+  `ma_store_pnl.canonical_store_index`; the company-wide row was a stale code path, not a data limit.
+
+**THE ONE HOME — `backend/app/modules/account/ma_store_pnl.py`.** New PURE read-outs, beside the
+booking functions they read (the booking functions themselves are byte-identical — pinned by
+`harness_device_purchases.py` B2d/B2e):
+| function | what it answers |
+|---|---|
+| `gp_carrier_income(comm_rows, tx_rows, pnl_cfg, cfg, store_index)` | the GP report's MA income, FILED out of the very bookings `coa.build_inputs` books — `by_store` / `totals` / `months` / `earned` / `received` / `filed` / `excluded` / `unsplit_fields` |
+| `ma_earned_month_ladder(rows, cfg, store_index, leg_cfg)` | what the SHEET says was EARNED at activation (months via `commission_legs.ma_field_leg`) |
+| `ma_received_month_ladder(rows, pnl_cfg, cfg, store_index)` | what the CASH rows say was RECEIVED (M1..M12+ via `commission_ledger.parse_payment_month`) |
+| `ma_sheet_component_total` / `ma_sheet_spiff_total` | the sheet's payable / spiff totals — replaces every local `-Σ _MA_COMPONENTS` |
+| `ma_commission_components(cfg)` | (columns that ARE commission, columns that are not) from `MA_COMMISSION_HEADS` + `commission_received_lines()` |
+| `pl_revenue_lines()` / `gp_income_column(line)` | which P&L lines are revenue (read from `coa.PL_SPEC`) and which GP column each files into |
+| `assert_commission_column_is_commission()` | the checked invariant: no rebate line, no device-margin line, may reach the Commission column |
+| `GP_INCOME_COLUMNS` | `carrier_comm`/`fee_income`→`comm`, `mi_income`→`mi`, `ma_merchant_discount`/`atu_income`→`atu`, `mdf_income`→`mdf`; any other revenue line → `unmapped` (counted in Total Rev, named in `filed`) |
+
+**CALLERS THAT NOW DEREFERENCE IT (none of them derives any more):**
+- `router._compute_gp` `router.py` — the inline `-Σ _MA_COMPONENTS` block is GONE; it reads
+  `gp_carrier_income` + `canonical_store_index`, and passes `coa.store_resolver` to the GP engine as
+  `resolve_store_canonical`. Inherited by `GET /gp/{period}`, `GET /gp-trend` and the `gp_snapshot`
+  cache (mig 102), which all run through this one function.
+- `gp_report.calc_gp_report(…, resolve_store_canonical=…)` — files each MA figure onto its store row;
+  the old "(Company-wide — VidaPay/MA)" row is replaced by "(Company-wide — no store on the processor
+  account)", which appears ONLY when a dollar genuinely has no store. **`unmapped` is now summed into
+  `totals`** — it never was, the same missing-column defect the block's own note describes.
+- `router._ma_summary_legs` + `GET /ma-commission/summary` — `ma_sheet_component_total` /
+  `ma_sheet_spiff_total` instead of local sums; `spiff_by_month` comes from the ladder (no
+  `range(1, 7)`, so M7..M12 can display); `by_store` rows and the store picker name the real STORE.
+  The docstring's "no store_mapping linkage (documented deviation)" is DELETED — untrue since mig 314.
+- `commission_received.add_ma_rows` — the activation-order margins and the rebate leave the
+  `comm_ma` stream for a new REFERENCE stream **`ma_activation_margins`** (`in_total: False`, fully
+  visible); which columns are commission comes from `ma_commission_components()`.
+- `GET /commission-leg-trend` note corrected: MA money IS store-attributable; the reason this
+  rollup cannot filter by store is that `commission_leg_ma_rollup` aggregates per period WITHOUT the
+  account column — stated as itself, with the surfaces that DO attribute it named.
+
+**BOTH BASES, LABELLED (owner decision 2026-09-21).** The money column carries the basis the org
+BOOKS, so GP and the P&L are the same dollars; the other basis rides alongside as a display-only
+read-out. Only the cash basis can reach M7..M12 — the sheet has six spiff columns and never can.
+
+**AUGUST 2026 AFTER:** GP Commission `98,656.37` == P&L `carrier_comm` `98,656.37`, M1 `2,300.40`
+both sides, across **20 stores, $0.00 company-wide**; MI `35,490.67`, ATU `19,481.36`, MDF
+`16,000.00` all equal their P&L lines. `208,500.68` net of rebate + wallet funding left GP revenue
+(owner-approved). **P&L company totals unchanged.**
+
+**LOCKS:** `backend/harness_gp_pnl_commission_parity.py` (65 checks, DB-free — parity under BOTH
+bases, the two exclusions with their rulings, store grain, the August regression, and an ARMED
+negative control proving a leading-street-number join splits `218-80 Hempstead Avenue` from the MA
+feed's `21880 Hempstead Ave` into two rows) and `backend/harness_ma_income_one_home_guard.py`
+(FAILS THE BUILD if any module outside `ma_store_pnl.py` / `residual_subs.py` totals the MA money
+columns, or if `_compute_gp` / `_ma_summary_legs` / `ma_commission_summary` stop dereferencing the
+home; it also keeps a named inventory of the six-column SHEET sites, which are not income figures).
 
 ---
 
@@ -3214,6 +3303,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | **Custom reports** | mig `099`,`211` | `/custom-report*` `25771-25962` |
 | **Expected commission** | mig `258` | `expected_commission.py`; `/expected-commission/*` `11397-11579` |
 | **IMEI rebates** | mig `216` (aging) | `imei_rebate_report.py`; `/imei-rebates` `26448` |
+| `raw_ma_commission` / `raw_ma_daily_tx` — **as a REPORTED INCOME figure** §4a | mig `083` (tables); mig `314`/`934` (config) | WRITTEN by the upload/sweep paths (§2). READ AS MONEY for a report by **`account/ma_store_pnl.py`** and `account/residual_subs.py` ONLY — `gp_carrier_income`, `ma_earned_month_ladder`, `ma_received_month_ladder`, `ma_sheet_component_total`, `ma_sheet_spiff_total`, `ma_commission_components`. `coa.build_inputs` (P&L), `router._compute_gp` (GP), `router.ma_commission_summary` + `_ma_summary_legs` and `commission_received.add_ma_rows` all DEREFERENCE those; none sums the components itself. Locked by `harness_ma_income_one_home_guard.py` |
 | **Vendor rebate history (earned, per line)** §27 | mig `1005` (`raw_vendor_rebate`) | `commcalc/vendor_rebate_feed.py` (PURE; `BOOKS_TO` = ()); `GET /commcalc/vendor-rebates`. Lands via `POST /commcalc/upload-mapped` (no new ingest route). **Books NOTHING** — earned ≠ collected, open owner decision. NOT `raw_ma_commission` (money reads it) and NOT `activation_rebate_ledger` (that one books). Proof `harness_vendor_rebate_landing.py` |
 | **Device Forecasting & Vendor Payables (module 095)** | `device_payable_ledger` + `payable_source_map` (mig `095_device_payables` — a NEW carrier is a config row: source_table/imei_field/store_field/owed_field/sold-match/reimbursement), `device_model_alias` (mig `096` — raw model → canonical + carrier, the forecast alignment) | `payables/engine.py` (`build_ledger` delete+insert per carrier; **`ma_store_resolution`/`resolve_ma_store` — Total/MA device→store attribution, 2026-09-04**: POS sale line → `inventory_aging_device` §11 device grain → mig-314 account index (`ma_store_pnl.load_store_index` + `coa.store_resolver` spelling collapse) → None, fills blanks only); `payables/router.py` `/api/v1/payables/*` — `/forecast` (phones-only velocity/on-hand/recommend, per carrier; Boost leg `raw_sales` device lines, Total leg `raw_ma_commission` + the attribution above), `/payables` (per-IMEI ledger read; read-time blank-store fill via the same attribution), `/filter-options` (canonical §13c roster+markets — the frontend bar's PLATFORM-WIDE gate source), `/owed-by-date` (ledger, else `raw_ma_daily_tx` vendor-feed fallback), `/due`, `/priority`, `/source-maps*`, `/phone-map*`, `/settings`, `POST /rebuild`. Frontend `commcalc/payables/page.tsx` (bar gated on roster ∪ rows — owner 2026-09-04 "need to be platform wide"). Proofs `harness_device_forecast_store_filter.py`, `harness_payables_market_filter.py` |
 | **ATU opportunity** | mig `295` | `atu_opportunity.py`; `/atu-opportunity` `28410` |
@@ -3427,6 +3517,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `GET /account/device-purchases` (`from_period`/`to_period` = 'YYYY-MM', inclusive; default = the current calendar year) | `account/router.device_purchases` → `account/device_purchases.compute` (pure core `aggregate`) | §23y Device Purchases from the distributor — device spend BILLED in a window, by company × store. PURCHASES, **not** COGS (`account/device_cogs`), and it books nothing |
 | `GET /account/device-payable` (`as_at` = 'YYYY-MM-DD', DAY granularity; default = today) | `account/router.device_payable` → `account/device_payable.compute` (pure core `aggregate`) | §23z Device Payable as at a date — of the units BILLED on or before `as_at`, those whose per-unit payment date falls after it or is absent, by company × store. A **backdated** payable, which `GET /account/liabilities-due` and the BS `owed_vip` (§4/§23n — current state off the ledger STATUS column, which cannot be backdated) structurally cannot answer. Coverage is derived from the data; an `as_at` outside it returns `coverage.state='not_measured'` with `payable_amount: null`, never $0.00. Non-device items are a separate, billed-basis section. Books nothing, writes nothing |
 | `GET /sales-report` | `15792` | §3 |
+| `GET /ma-commission/summary` — per-store MA roll-up. `by_store[].store` and the store picker name the real STORE via `ma_store_pnl.canonical_store_index` (mig 314); `spiff_by_month` is the EARNED ladder and `legs.received` the CASH ladder, both from the one home, neither with a hardcoded month count | `router.ma_commission_summary` | §4a |
 | `GET /gp/{period}` (payload also carries `expenses_carried_from`, **`labour_coverage`** and **`labour_double_booked`** — the salary silent-zero / month-grain / double-book detectors, display-only — plus **`labour_commission_suppressed`**, the per-store record of which commission expense rows STOPPED booking and what `rep_commissions` books in their place; that one is NOT display-only, `exp_total`/`net_profit` move with it) | `14750` | §4 |
 | `GET/PUT /targets/{period}` | `19005/19071` | §5 |
 | `GET /targets/{period}/summary` | `19440` | §5 |
@@ -3542,6 +3633,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
 | Which report kinds a tenant is OFFERED (every upload surface) — and why each other kind is withheld | `commcalc.report_kind.applies_to_pos / applies_to_carrier / is_active / defined_by` ∩ the declaration (`ui_label_override` `report_term` `pos_system` term / `pos_profile.pos_key` + `commcalc.carrier.code`) + `ui_label_override` scope 'cap' `kind:<key>` | `report_kinds.visible_kinds` ≡ `carrier-scope.reportKindsVisible` → `GET /commcalc/report-kinds` → `useReportKinds`; §30.9. Not a list anywhere in a page (locked). Confidence of "this looks like your X" = `detect_report_kind` (fingerprint 1.0 > overlap 0.8–0.99 > signals 0.4–0.79) |
+| MA/VidaPay commission RECEIVED, on the Gross Profit report AND the P&L — and its M1..M12+ ladder | `raw_ma_commission` spiff columns (EARNED, activation month) and `raw_ma_daily_tx` spiff-family rows (RECEIVED, cash month); which one is MONEY is `commission_org_config.pl_ma_month_spiff_source`; store from the mig-314 account→store index | **ONE home** `ma_store_pnl.gp_carrier_income` → GP columns, and the same bookings → `coa.build_inputs` → the P&L. §4a. Both bases always reported, labelled; only the cash basis reaches M7..M12 (the sheet has six spiff columns). Rebate and wallet funding are NOT commission on either report (owner 2026-09-08 / 2026-08-10) — `commission_received_lines()` is the ruling, and `assert_commission_column_is_commission()` the checked invariant |
 | Carrier commission EARNED on a rep's activations (dealer REVENUE) | shape A: `raw_ma_commission` money columns netted by `_ma_gate_index`, attributed device→sale→rep via `ma_recon`. shape B: `rep_commissions.boost_commission` (already per rep). Which shape is used is decided by WHICH FEED HAS ROWS, never a carrier name | `carrier_vs_pay.rollup_by_rep` → `GET /commcalc/carrier-vs-pay/{period}`; §31. Three states — `reported` / `measured_zero` / `not_reported`; a `not_reported` earned figure is `null` and yields NO margin, never `$0.00` |
 | Employee commission PAID (payroll EXPENSE) — beside the earned figure | `rep_commissions.total_payout` as stored | same report, a SEPARATE key. §31.3 — the two ledgers are never summed or netted; `difference_measured_reps` states how many reps the published gap actually covers |
 | Which sales universe the PAY engines read (`'legacy'` vs `'union'`) | `commission_org_config.sales_source` (mig `306`) → `router._sales_source_mode` → `commission_engine._read_sales` | §31.9 — measured live: the two universes are IDENTICAL on the house org (so its Exec MTD / Sales Report / back-office agreement proves nothing about the setting) and **3.3x apart** on LuxeLink in Aug 2026, worth **$6,480.98 of rep pay** |

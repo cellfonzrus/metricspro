@@ -425,18 +425,48 @@ check("every source names WHAT decides its leg, in plain English",
 check("the payload states the config actually in force", blk["config"]["resolved_from"] == "code_default")
 
 # ── the MA (ePay-less tenant) path on the same engine ──
-ma_income = {"comm": router_total, "atu": 33.0, "components": ma_sums, "component_list": MACOMP}
+# CONTRACT CHANGED 2026-09-21 (owner bug report: "the m1 commision is different in both … the gross
+# profit shows company level commission"). `ma_income` is no longer a total this engine splits for
+# itself — it is the already-booked, already-store-keyed read-out from THE ONE HOME
+# (`ma_store_pnl.gp_carrier_income`), so the Gross Profit report and the P&L cannot state different
+# dollars. What is proved here is unchanged in SPIRIT: the split adds back to the column, money with
+# no month-of-life is reported unsplit rather than guessed, and the airtime margin carries none.
+# Full parity with the P&L (both bases, store grain, the rebate/wallet-funding exclusions and the
+# street-number negative control) is proved in harness_gp_pnl_commission_parity.py.
+from app.modules.account import ma_store_pnl as _MSP      # noqa: E402
+ma_income = {
+    "by_store": {"": {"comm": 220.0, "mi": 0.0, "atu": 33.0, "mdf": 0.0, "unmapped": 0.0,
+                      "months": {"1": 100.0, "3": 60.0, "unknown": 60.0},
+                      "m1": 100.0, "trailing": 60.0, "unsplit": 60.0}},
+    "totals": {"comm": 220.0, "mi": 0.0, "atu": 33.0, "mdf": 0.0, "unmapped": 0.0},
+    "months": {"1": 100.0, "3": 60.0, "unknown": 60.0},
+    "basis": _MSP.BASIS_RECEIVED, "basis_label": _MSP.BASIS_LABELS[_MSP.BASIS_RECEIVED],
+    "earned": {"months": {"1": 5.0}, "total": 5.0, "by_store": {}},
+    "received": {"months": {"1": 100.0, "3": 60.0, "unknown": 60.0}, "total": 220.0,
+                 "by_store": {}},
+    "filed": [], "excluded": [], "lines": {"carrier_comm": 220.0},
+    "store_attributed": True, "stores_resolved": [],
+}
 r2 = calc_gp_report([], [], [], [], [], [], [], PERIOD, ma_income=ma_income)
 T2 = r2["totals"]
 check("[MA tenant] the split adds back to the MA Commission column",
       eq2(T2["comm_m1"] + T2["comm_m2_12"] + T2["comm_unsplit"], T2["comm"]),
       (T2["comm_m1"], T2["comm_m2_12"], T2["comm_unsplit"], T2["comm"]))
-check("[MA tenant] Commission column itself is untouched", eq2(T2["comm"], router_total))
+check("[MA tenant] the Commission column is what the P&L booked, to the cent",
+      eq2(T2["comm"], 220.0), T2["comm"])
 check("[MA tenant] MA airtime margin (ATU) has no month-of-life -> honestly unsplit",
       eq2(T2["atu_unsplit"], 33.0) and eq2(T2["atu_m1"], 0) and eq2(T2["atu_m2_12"], 0))
+check("[MA tenant] BOTH bases are reported, labelled, beside the money column",
+      (r2["commission_legs"]["headline"].get("basis") == _MSP.BASIS_RECEIVED
+       and bool(r2["commission_legs"]["headline"].get("earned"))
+       and bool(r2["commission_legs"]["headline"].get("received"))),
+      r2["commission_legs"]["headline"].get("basis_label"))
 r3 = calc_gp_report([], [], [], [], [], [], [], PERIOD,
-                    ma_income={"comm": 100.0, "atu": 0.0})     # older caller: no components
-check("[MA tenant] with no component detail the money is reported UNSPLIT, never guessed",
+                    ma_income={"by_store": {"": {"comm": 100.0, "mi": 0.0, "atu": 0.0, "mdf": 0.0,
+                                                 "unmapped": 0.0, "months": {},
+                                                 "m1": 0.0, "trailing": 0.0, "unsplit": 100.0}},
+                               "totals": {"comm": 100.0}, "months": {}})
+check("[MA tenant] with no month stated anywhere the money is UNSPLIT, never guessed",
       eq2(r3["totals"]["comm_unsplit"], 100.0) and eq2(r3["totals"]["comm_m1"], 0))
 
 # ── an org with zero commission data still renders ──
@@ -779,11 +809,16 @@ check("an ePay-less month DOES book MA commission, split by leg column",
       (jm["m1"], jm["m2_12"], jm["unsplit"], jm["total"]))
 check("IDENTITY: the MA month's parts add back to its total",
       eq2(jm["m1"] + jm["m2_12"] + jm["unsplit"], jm["total"]))
-check("company-wide MA money is EXCLUDED (and said so) while a store filter is active",
+# NOTE CORRECTED 2026-09-21. The trend still excludes MA money under a store filter, but the
+# REASON it used to give ("carries no store address") stopped being true at mig 314. The behaviour
+# is unchanged and still announced; only the stated reason is now the real one — the month rollup
+# aggregates per period WITHOUT the processor account, so there is nothing per-store to filter on
+# here yet — and it names the surfaces that do attribute it (GP, P&L, MA Commission by store).
+check("MA money is EXCLUDED under a store filter, and the note says WHY (the real reason)",
       eq2(call(
           R.commission_leg_trend(period="June 2026", months=1, store=STORE_A,
                                  org_id=HOUSE))["company"][0]["total"], 0.0)
-      and any("company-wide" in n for n in call(
+      and any("EXCLUDED" in n and "store-attributable" in n for n in call(
           R.commission_leg_trend(period="June 2026", months=1, store=STORE_A,
                                  org_id=HOUSE))["notes"]))
 

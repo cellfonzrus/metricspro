@@ -101,6 +101,21 @@ STREAMS = {
         "source": "commcalc.raw_ma_daily_tx (merchant_discount)",
         "splits_on": "nothing — this feed carries no activation date and no month-of-life column",
     },
+    # OWNER RULING 2026-09-08, reaching this surface on 2026-09-21: "dont count any rebate received
+    # in the commission". The MA commission sheet's activation-order columns — rebate, device and
+    # consumer margin, consumer financing, wallet funding — are NOT commission earned for producing
+    # a subscriber. They used to sit inside `comm_ma` and be counted in the commission total, which
+    # is the same defect the Gross Profit report had. They are still SHOWN, in full, as their own
+    # REFERENCE row (`in_total: False`) so nothing disappears — exactly how the residual-orders
+    # divergence is already handled here. Which columns belong on which side is not decided here:
+    # `ma_store_pnl.ma_commission_components()` answers it from the P&L's own line map.
+    "ma_activation_margins": {
+        "label": "Activation-order margins & rebates (VidaPay — NOT commission)",
+        "group": G_REFERENCE, "in_total": False,
+        "source": "commcalc.raw_ma_commission (rebate, device/consumer margin, financing, wallet funding)",
+        "splits_on": "nothing — these columns state no month-of-life, and they are not commission "
+                     "earned for producing a subscriber (owner 2026-09-08 / 2026-08-10)",
+    },
     "ma_residual_orders": {
         "label": "Postpaid Residual Orders (VidaPay)", "group": G_REFERENCE, "in_total": False,
         "source": "commcalc.raw_ma_daily_tx (retail_cost, Order Type = the configured residual order type)",
@@ -108,7 +123,8 @@ STREAMS = {
     },
 }
 
-STREAM_ORDER = ["comm_epay", "comm_ma", "comp_comm", "mi", "atu", "ma_airtime", "ma_residual_orders"]
+STREAM_ORDER = ["comm_epay", "comm_ma", "comp_comm", "mi", "atu", "ma_airtime",
+                "ma_activation_margins", "ma_residual_orders"]
 
 
 def _sf(v):
@@ -203,6 +219,21 @@ def add_label_rows(accs, rows, periods, legcls, period_key, passes, comp_is_comm
         acc.add(lab, leg, r.get("amount"), r.get("n"))
 
 
+def _ma_commission_columns(components):
+    """(commission columns, reference columns) out of the caller's component list, in the caller's
+    own order. Resolved by `ma_store_pnl.ma_commission_components` — never a second list here. If
+    that module cannot be imported the caller's list is treated as commission, which is the
+    pre-2026-09-21 behaviour: degrade to what shipped, never to a silent zero."""
+    try:
+        from app.modules.account.ma_store_pnl import ma_commission_components
+        yes, _no = ma_commission_components()
+        yes = set(yes)
+    except Exception:
+        return list(components), []
+    return ([c for c in components if c in yes],
+            [c for c in components if c not in yes])
+
+
 def add_ma_rows(accs, rows, periods, legcls, period_key, components, skip_periods=()):
     """VidaPay/MA commission. Each row: {period, <component columns>…}. The leg is the COLUMN NAME
     (`commission_legs.split_ma_components`), so the ladder is exact by construction and the three
@@ -215,7 +246,11 @@ def add_ma_rows(accs, rows, periods, legcls, period_key, components, skip_period
         lab = period_key.get(str(r.get("period") or "").strip())
         if not lab or lab not in periods or lab in skip_periods:
             continue
-        res = legcls.ma(r, components)
+        # WHICH columns are commission comes from the ONE home (ma_store_pnl), not from a list
+        # here: the same classification the P&L books with, so this surface and the books cannot
+        # disagree about what the word means. The rest is shown on its own reference row.
+        _comm_cols, _ref_cols = _ma_commission_columns(components)
+        res = legcls.ma(r, _comm_cols)
         for lk, lv in (res.get("leg_ladder") or {}).items():
             accs["comm_ma"].add(lab, lk, lv)
         accs["comm_ma"].cells[lab]["lines"] += int(_sf(r.get("n")))
@@ -225,6 +260,11 @@ def add_ma_rows(accs, rows, periods, legcls, period_key, components, skip_period
             for f in uf:
                 if f not in accs["comm_ma"].meta["unsplit_fields"]:
                     accs["comm_ma"].meta["unsplit_fields"].append(f)
+        if _ref_cols and "ma_activation_margins" in accs:
+            ref = legcls.ma(r, _ref_cols)
+            for lk, lv in (ref.get("leg_ladder") or {}).items():
+                accs["ma_activation_margins"].add(lab, lk, lv)
+            accs["ma_activation_margins"].meta.setdefault("columns", list(_ref_cols))
 
 
 def add_mi_rows(accs, rows, periods, legcls, period_key, passes_sfid):

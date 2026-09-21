@@ -360,7 +360,36 @@ check("B3 …and the only account-module file this work touches at all, besides 
                     "backend/app/modules/account/distributor_chargebacks.py",
                     # coa.py may appear here ONLY because of the sanctioned chargeback expense
                     # booking; B2a/B2b/B2c above police exactly what may have changed inside it.
-                    "backend/app/modules/account/coa.py"}, mods)
+                    "backend/app/modules/account/coa.py",
+                    # RE-BASELINED AGAIN 2026-09-21, same discipline as coa.py above and for the
+                    # same reason: a proxy that has become wrong must be made to say what it means,
+                    # never switched off. The GP/P&L commission parity work (owner bug report
+                    # 2026-09-21) adds read-out functions to ma_store_pnl.py. That file is where MA
+                    # money ROUTING lives, so listing it is not enough — B2d below pins every
+                    # pre-existing function in it byte-identical to the branch point, which is a
+                    # STRICTER claim than "this file did not appear in git status".
+                    "backend/app/modules/account/ma_store_pnl.py"}, mods)
+
+# ── B2d: ma_store_pnl.py — ADDITIONS ONLY ───────────────────────────────────────────────────────
+# Everything that decides WHERE an MA dollar books (ma_commission_bookings, ma_tx_bookings,
+# rebate_route, load_config, the account->store index, the device-margin block) must be byte-
+# identical to the branch point. New read-outs beside them are allowed; a changed booking rule is
+# not, and would fail here naming the function.
+_msp_path = "backend/app/modules/account/ma_store_pnl.py"
+_msp_base = _git("show", "%s:%s" % (base or "HEAD", _msp_path)).stdout
+if _msp_base.strip():
+    _b = harnesslib.function_sources(_msp_base)
+    _n = harnesslib.function_sources(
+        open(os.path.join(HERE, "app/modules/account/ma_store_pnl.py"), encoding="utf-8").read())
+    _msp_removed = sorted(set(_b) - set(_n))
+    _msp_changed = sorted(k for k in set(_b) & set(_n) if _b[k] != _n[k])
+    check("B2d ma_store_pnl.py is ADDITIONS ONLY — no pre-existing function changed, so no MA "
+          "dollar books anywhere different than it did at the branch point",
+          _msp_changed == [], _msp_changed)
+    check("B2e …and nothing was removed from ma_store_pnl.py", _msp_removed == [], _msp_removed)
+else:
+    check("B2d ma_store_pnl.py baseline unavailable (git-less CI) — skipped, not silently passed",
+          True)
 
 # The resolver contract this report leans on, exercised through coa AS SHIPPED.
 res = coa.store_resolver(FakeClient(TABLES), ORG)
