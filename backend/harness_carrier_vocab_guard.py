@@ -154,6 +154,13 @@ def pos_vocabulary():
                 names.setdefault(str(c).strip(), "report_kinds.HOUSE_KINDS applies_to_pos")
     except Exception as e:      # pragma: no cover
         print("WARN could not read report_kinds.HOUSE_KINDS:", e)
+    try:                        # the connector registry's POS scopes (mig 1014) — the same codes, one axis over
+        from app.modules.commcalc import connector_registry as _cr
+        for r in _cr.HOUSE_CONNECTORS:
+            for c in r.get("applies_to_pos") or []:
+                names.setdefault(str(c).strip(), "connector_registry.HOUSE_CONNECTORS applies_to_pos")
+    except Exception as e:      # pragma: no cover
+        print("WARN could not read connector_registry.HOUSE_CONNECTORS:", e)
     spellings = {}
     for name, origin in names.items():
         base = re.sub(r"\(.*?\)", "", name).strip()             # 'B2B Soft (standard)' → 'B2B Soft'
@@ -181,7 +188,6 @@ def pos_regex(spellings):
 #    stored category name. A stale entry (file no longer carries a spelling) FAILS, so this can only shrink.
 POS_REVIEWED_EXCEPTIONS = {
     "app/(platform)/commcalc/upload/page.tsx": "AUTO_SOURCES connector id 'b2b' + its sweep route paths (data keys, rendered as 'POS portal')",
-    "app/(platform)/commcalc/connectors/page.tsx": "connector sweep-kind ids (data)",
     "app/(platform)/commcalc/expenses/page.tsx": "'B2B Platform Fee' is a STORED expense-category name (tenant rows already carry it; renaming the default would split their history) + its matrix-upload alias key",
 }
 
@@ -190,13 +196,25 @@ POS_REVIEWED_EXCEPTIONS = {
 #    `note` / `reason` / `message` / `detail`) — they call report_labels.pos_term. Allow = (file, a
 #    signature substring of the literal) -> reason; stale FAILS.
 POS_BACKEND_LOGIC = ["commcalc/report_kinds.py", "commcalc/onboarding_intake.py", "commcalc/implementation_spine.py",
-                     "commcalc/invoice_tenders.py"]     # 2026-09-21 — the invoice tender split (pure; no vendor, no brand)
+                     "commcalc/invoice_tenders.py",     # 2026-09-21 — the invoice tender split (pure; no vendor, no brand)
+                     "commcalc/connector_registry.py"]  # 2026-09-21 — the connector registry: no vendor before its mirror marker
 POS_BACKEND_COPY = [
     "commcalc/router.py", "commcalc/sales_recon.py", "commcalc/imei_rebate_report.py", "commcalc/report_labels.py",
     "closing/router.py", "closing/attention_providers.py", "asset/router.py", "account/finance_attention.py",
     "core/onboarding.py",
+    # 2026-09-21 — the #262 seam closed: the connector modules' error / status strings reach a page as a
+    # connector's `last_detail` / `auth_message` / pull status, so they are PAYLOAD copy. They name the
+    # connector by the registry row's label (connector_registry, mig 1014) passed in by the router.
+    "commcalc/b2b_sweep.py", "commcalc/vidapay_sweep.py", "commcalc/import_audit.py",
+    # the receipt formats: only their vocabulary DECLARATIONS may spell the POS (allowed below, pinned)
+    "pos/receipt_formats/b2b.py", "pos/receipt_formats/rq.py", "pos/receipt_formats/base.py",
+    "pos/receipt_formats/engine.py", "pos/receipt_formats/render.py", "pos/receipt_formats/registry.py",
 ]
 POS_BACKEND_ALLOW = {
+    # the receipt-format registry's vocabulary declarations — each format's LABEL is the name of the POS it
+    # parses, keyed by POS_SOURCE (a picker data value, like a pos_profile label); not tenant-scoped copy
+    ("pos/receipt_formats/b2b.py", "B2B (TCC / Verizon)"): "the format's own label — the POS this parser reads (picker data, keyed by POS_SOURCE)",
+    ("pos/receipt_formats/rq.py", "RQ (Wireless Zone)"): "the format's own label — the POS this parser reads (picker data, keyed by POS_SOURCE)",
     ("commcalc/router.py", "B2B Soft (standard)"): "the mig-200 pos_profile seed mirrored in code (the house standard's own label — data for its OWN pos_key)",
     ("commcalc/router.py", "daily B2B sales export"): "mig-200 filename-rule note in the same mirror (data)",
     ("commcalc/router.py", "b2bsoft inventory aging"): "mig-200 filename-rule note in the same mirror (data)",
@@ -330,6 +348,9 @@ def pos_scan_backend(sources, rx, allow, logic=POS_BACKEND_LOGIC, copy=POS_BACKE
         body = _py_code(sources.get(rel, ""))
         if rel.endswith("report_kinds.py") and "HOUSE_KEYS = " in body:
             body = body.split("HOUSE_KEYS = ", 1)[1]
+        if rel.endswith("connector_registry.py") and "HOUSE_CONNECTORS = [" in body:
+            # the seed's mirror is DATA (vendor labels, hosts, POS codes); the logic after its marker is not
+            body = body.split("HOUSE_CONNECTORS = [", 1)[0] + body.split("HOUSE_CONNECTOR_KEYS = ", 1)[1]
         if rel.endswith("onboarding_intake.py"):
             body = re.sub(r'"[^"\n]*"', '""', body)
         m = rx.search(body)

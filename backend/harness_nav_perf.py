@@ -344,8 +344,13 @@ ck("D12 the memo key uses the SERVER-resolved org (`org` from _gate/_scope_org),
 _MIG998_DELTAS = ((", route_policy=None", ""),
                   ("""feed_health(client, org_id),
            "route_policy": route_policy or []}""", "feed_health(client, org_id)}"))
+# Migration 1014 (owner 2026-09-21, the connector-scope class) added the SAME shape once more —
+# `connector_scope`, the connector registry's context handed down by the org-scoped endpoint for the
+# same isolation reason. Normalised first (it sits inside the 998 text), then the 998 deltas.
+_MIG1014_DELTAS = ((", connector_scope=None", ""),
+                   (""", "connector_scope": connector_scope}""", "}"))
 _ca_now = SRC_IH.split("def collect_attention")[1][:1400]
-for _a, _b in _MIG998_DELTAS:
+for _a, _b in _MIG1014_DELTAS + _MIG998_DELTAS:
     _ca_now = _ca_now.replace(_a, _b, 1)
 ck("D13 `collect_attention` itself is untouched and still uncached (harnesses call it directly)",
    git_show(BASE, "backend/app/modules/core/import_health.py").split("def collect_attention")[1][:1200]

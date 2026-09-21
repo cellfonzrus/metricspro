@@ -1135,6 +1135,18 @@ def _p_plan_coverage(client, org_id, ctx):
                   n, "/commcalc/commission-plans", "Assign plans")]
 
 
+def _connector_scope_ctx(client, org_id):
+    """The connector registry's scope context (mig 1014) for `collect_attention`'s context — the
+    merged house + org rows, the tenant's declaration and its `connector:` caps, read ONCE here by the
+    ORG-SCOPED endpoint (the house-default read is an inheritance read, which a cheap provider must not
+    make — the same reason `_route_policy_rows` exists). None on any failure ⇒ providers are inert."""
+    try:
+        from app.modules.commcalc import connector_registry as _cr
+        return _cr.scope_context(client, org_id)
+    except Exception:
+        return None
+
+
 def _route_policy_rows(client, org_id):
     """The org's + house connector_route_policy rows (mig 998) for `collect_attention`'s context.
     ORG-SCOPED inside connector_route_policy.load_rows; [] before the migration or on any failure, so
@@ -1154,11 +1166,11 @@ def _route_policy_rows(client, org_id):
 # alone. Omitting it ⇒ providers see no policy and behave exactly as they did before mig 998, so an
 # absent parameter can never invent a closure. This one optional keyword + its ctx entry are the only
 # change to this function since the nav-perf baseline (harness_nav_perf D13 normalises exactly them).
-def collect_attention(client, org_id, *, deep=False, feed_h=None, route_policy=None):
+def collect_attention(client, org_id, *, deep=False, feed_h=None, route_policy=None, connector_scope=None):
     """Run every registered provider for ONE org. Exception-isolated per provider."""
     now = _now()
     ctx = {"now": now, "feed_health": feed_h if feed_h is not None else feed_health(client, org_id),
-           "route_policy": route_policy or []}
+           "route_policy": route_policy or [], "connector_scope": connector_scope}
     items, deferred, errors = [], [], []
     for p in PROVIDERS:
         if p["cost"] == "heavy" and not deep:
@@ -1450,6 +1462,7 @@ def get_attention(org_id: str = ORG_ID, deep: int = 0, fresh: int = 0,
         memo = _attention_memo_get(org, deep)
         if memo is not None:
             return {**memo, "org_id": org}
-    payload = collect_attention(client, org, deep=bool(deep), route_policy=_route_policy_rows(client, org))
+    payload = collect_attention(client, org, deep=bool(deep), route_policy=_route_policy_rows(client, org),
+                                connector_scope=_connector_scope_ctx(client, org))
     _attention_memo_put(org, deep, payload)
     return {**payload, "org_id": org}

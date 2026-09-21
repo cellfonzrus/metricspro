@@ -5,6 +5,7 @@ from typing import List, Optional, Any
 import pandas as pd
 import io
 import re
+import functools as _functools
 from app.core.database import get_supabase
 from app.core.service_role import (require_browser_service,   # SERVICE_ROLE=api → clean 503 on browser endpoints
                                     browser_allowed as _browser_allowed,
@@ -21,6 +22,7 @@ from app.modules.commcalc import whatif
 # the one `carrier_visible` predicate the sweep / Connectors / Imports all ask. PURE — no DB, no I/O.
 from app.modules.commcalc import implementation_spine
 from app.modules.commcalc import report_kinds as _report_kinds  # mig 1010 — THE report-kind registry (design §7)
+from app.modules.commcalc import connector_registry as _connector_registry  # mig 1014 — THE connector registry (its scope rides report_kinds' predicate)
 from app.modules.commcalc import vendor_rebate_feed   # mig 1005 — earned-vs-collected, books nothing
 from app.modules.commcalc import tax_collected as _tax_agg  # THE one per-(store, day) sales-tax pass
 from app.modules.commcalc import exec_metric_defs as _emd   # mig 962 — ONE bucket vocabulary + presets
@@ -3175,12 +3177,15 @@ _VIP_CFG_DEFAULTS = {'enabled': False, 'frequency': 'weekly', 'day_of_week': 0,
                      'sweep_creditmemo': False, 'sweep_asset_ledger': True, 'sweep_chargebacks': True}
 
 
-def _vip_public_cfg(cfg):
-    """Config WITHOUT the password — only whether credentials are set."""
+def _vip_public_cfg(cfg, org_id=None):
+    """Config WITHOUT the password — only whether credentials are set. `connector_scope` (mig 1014):
+    whether the connector this table drives applies to the tenant's declared POS / carrier."""
+    oid = org_id or (cfg or {}).get('org_id')
     if not cfg:
         return {**_VIP_CFG_DEFAULTS, 'configured': False, 'has_credentials': False,
                 'portal_user': None, 'next_run_at': None, 'last_run_at': None,
-                'last_status': None, 'last_detail': None}
+                'last_status': None, 'last_detail': None,
+                'connector_scope': _sweep_public_scope(sb(), oid, 'vip_sweep_config', cfg) if oid else None}
     out = {k: cfg.get(k) for k in (
         'enabled', 'frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
         'lookback_days', 'sweep_invoices', 'sweep_asset', 'sweep_creditmemo', 'sweep_asset_ledger',
@@ -3188,6 +3193,7 @@ def _vip_public_cfg(cfg):
         'last_attempt_at')}
     out['configured'] = True
     out['has_credentials'] = bool(cfg.get('portal_user') and cfg.get('portal_pass'))
+    out['connector_scope'] = _sweep_public_scope(sb(), oid, 'vip_sweep_config', cfg) if oid else None
     return out
 
 
@@ -3509,7 +3515,7 @@ def _do_vip_sweep(org_id):
 @router.get("/vip/sweep/config")
 def vip_sweep_get_config(org_id: str = ORG_ID):
     require_org(org_id)
-    return _vip_public_cfg(_vip_cfg(sb(), org_id))
+    return _vip_public_cfg(_vip_cfg(sb(), org_id), org_id)
 
 
 class VipSweepPutConfigIn(LaxModel):
@@ -3553,7 +3559,7 @@ async def vip_sweep_put_config(body: VipSweepPutConfigIn, org_id: str = ORG_ID,
         merged.get('frequency') or 'weekly', merged.get('day_of_week'),
         merged.get('day_of_month'), merged.get('hour'), merged.get('timezone'))
     client.schema('commcalc').table('vip_sweep_config').upsert(row, on_conflict='org_id').execute()
-    return _vip_public_cfg(_vip_cfg(client, org_id))
+    return _vip_public_cfg(_vip_cfg(client, org_id), org_id)
 
 
 @router.post("/vip/sweep/run-now")
@@ -10948,9 +10954,37 @@ def list_connectors(org_id: str = ORG_ID, carrier: str = ""):
     for d in defs:
         d['last_upload'] = last_up.get(d.get('report_key'))
         by_conn.setdefault(d.get('connector_id'), []).append(d)
+    # CONNECTOR SCOPE (mig 1014): does the connector each instance dispatches (its sweep_kind) apply to
+    # this tenant's declared POS / carrier? Read once; the page renders the answer, never decides it.
+    sctx = _connector_scope_ctx(client, org_id)
     return [{**c, 'status': _connector_status(client, org_id, c.get('config_table')),
              'creds': _connector_creds(client, org_id, c.get('config_table')),
+             'connector_scope': _connector_scope(sctx, c.get('sweep_kind')),
              'reports': by_conn.get(c['id'], [])} for c in conns]
+
+
+@router.get("/connector-registry")
+def connector_registry_endpoint(org_id: str = ORG_ID):
+    """WHICH CONNECTORS APPLY TO THIS TENANT — computed, never listed (mig 1014; owner 2026-09-21
+    "it says rq connection but refers to b2b reports").
+
+    ONE payload every connector surface renders from (the Inventory Values portal form, the Upload
+    page's auto-import tiles, the Connectors page, the email-imports processor pickers, the per-vendor
+    sweep pages): `declaration` (the SAME one reader as /report-kinds — report_kinds.tenant_declaration),
+    `connectors` (the registry rows house + this org's overrides that connector_registry.visible — i.e.
+    report_kinds.visible_kinds with the `connector:` cap namespace — shows this tenant, with provenance),
+    `hidden` (what is withheld and why), `all_keys`, `caps`, `pos` (the tenant's POS term for copy),
+    `neutral_line` (the ONE sentence a surface prints when no reports-portal connector is defined for
+    the declared POS), `registry_ready` (false before mig 1014 — the rows are the code mirror).
+    Read-only, org-scoped ({org, house} on every read), never 500s a page."""
+    require_org(org_id)
+    client = sb()
+    ctx = _connector_registry.scope_context(client, org_id)
+    # the POS word for copy = report_labels.pos_term (the one home, #262); "declared" = the declaration's
+    # own pos_source says the term resolved (the same fact usePosTerm().posDeclared carries)
+    declared = str((ctx.get("declaration") or {}).get("pos_source") or "").startswith("report_term")
+    return _connector_registry.payload(ctx["rows"], ctx["ready"], ctx["declaration"], ctx["caps"], org_id,
+                                       pos=_report_labels.pos_term(client, org_id), pos_declared=declared)
 
 
 @router.get("/report-kinds")
@@ -13854,18 +13888,22 @@ _DLAR_CFG_DEFAULTS = {'enabled': False, 'frequency': 'daily', 'day_of_week': 0,
                       'day_of_month': 1, 'hour': 7, 'timezone': 'America/New_York'}
 
 
-def _dlar_public_cfg(cfg):
-    """Config WITHOUT the password — only whether credentials are set."""
+def _dlar_public_cfg(cfg, org_id=None):
+    """Config WITHOUT the password — only whether credentials are set. `connector_scope` (mig 1014):
+    whether the connector this table drives applies to the tenant's declared POS / carrier."""
+    oid = org_id or (cfg or {}).get('org_id')
     if not cfg:
         return {**_DLAR_CFG_DEFAULTS, 'configured': False, 'has_credentials': False,
                 'portal_user': None, 'next_run_at': None, 'last_run_at': None,
-                'last_status': None, 'last_detail': None}
+                'last_status': None, 'last_detail': None,
+                'connector_scope': _sweep_public_scope(sb(), oid, 'dlar_sweep_config', cfg) if oid else None}
     out = {k: cfg.get(k) for k in (
         'enabled', 'frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
         'portal_user', 'next_run_at', 'last_run_at', 'last_status', 'last_detail',
         'last_attempt_at')}
     out['configured'] = True
     out['has_credentials'] = bool(cfg.get('portal_user') and cfg.get('portal_pass'))
+    out['connector_scope'] = _sweep_public_scope(sb(), oid, 'dlar_sweep_config', cfg) if oid else None
     return out
 
 
@@ -13911,7 +13949,7 @@ def _do_dlar_sweep(org_id):
 @router.get("/dlar/sweep/config")
 def dlar_sweep_get_config(org_id: str = ORG_ID):
     require_org(org_id)
-    return _dlar_public_cfg(_dlar_cfg(sb(), org_id))
+    return _dlar_public_cfg(_dlar_cfg(sb(), org_id), org_id)
 
 
 class DlarSweepPutConfigIn(LaxModel):
@@ -13948,7 +13986,7 @@ async def dlar_sweep_put_config(body: DlarSweepPutConfigIn, org_id: str = ORG_ID
         merged.get('frequency') or 'daily', merged.get('day_of_week'),
         merged.get('day_of_month'), merged.get('hour'), merged.get('timezone'))
     client.schema('commcalc').table('dlar_sweep_config').upsert(row, on_conflict='org_id').execute()
-    return _dlar_public_cfg(_dlar_cfg(client, org_id))
+    return _dlar_public_cfg(_dlar_cfg(client, org_id), org_id)
 
 
 @router.post("/dlar/sweep/run-now")
@@ -13997,11 +14035,15 @@ def _b2b_cfg(client, org_id):
     return rows[0] if rows else None
 
 
-def _b2b_public_cfg(cfg):
+def _b2b_public_cfg(cfg, org_id=None):
+    # `connector_scope` (mig 1014): does the connector this table drives apply to this tenant's declared
+    # POS / carrier? The page renders the neutral line instead of the form when it does not.
+    oid = org_id or (cfg or {}).get('org_id')
     if not cfg:
         return {**_B2B_CFG_DEFAULTS, 'configured': False, 'has_credentials': False,
                 'portal_user': None, 'next_run_at': None, 'last_run_at': None,
-                'last_status': None, 'last_detail': None}
+                'last_status': None, 'last_detail': None,
+                'connector_scope': _sweep_public_scope(sb(), oid, 'b2b_sweep_config', cfg) if oid else None}
     out = {k: cfg.get(k) for k in (
         'enabled', 'frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
         'portal_user', 'next_run_at', 'last_run_at', 'last_status', 'last_detail',
@@ -14017,6 +14059,7 @@ def _b2b_public_cfg(cfg):
                                                    {"processor": cfg.get('connector')})
     except Exception:
         out['route_policy'] = None
+    out['connector_scope'] = _sweep_public_scope(sb(), oid, 'b2b_sweep_config', cfg) if oid else None
     return out
 
 
@@ -14042,7 +14085,10 @@ def _do_b2b_sweep(org_id):
         return
     _b2b_set_status(client, org_id, 'running', 'Sweep in progress…')
     try:
-        res = b2b_sweep.run_inventory_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'])
+        # the connector's registered label / host (mig 1014) — the copy the client raises names it by
+        # these, never by a vendor spelled in code
+        conn = _connector_scope(_connector_scope_ctx(client, org_id), _sweep_table_slug('b2b_sweep_config', cfg))
+        res = b2b_sweep.run_inventory_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'], connector=conn)
         # HONEST ZERO: the login can succeed and the report still parse 0 stores (a renamed store/value
         # column, a layout we don't flatten). That is NOT an import — recording it as 'ok' + a fresh
         # last_run_at is exactly the false green the 2026-07-26 audit removed. Same posture the email
@@ -14067,7 +14113,7 @@ def _do_b2b_sweep(org_id):
 @router.get("/b2b/sweep/config")
 def b2b_sweep_get_config(org_id: str = ORG_ID):
     require_org(org_id)
-    return _b2b_public_cfg(_b2b_cfg(sb(), org_id))
+    return _b2b_public_cfg(_b2b_cfg(sb(), org_id), org_id)
 
 
 @router.put("/b2b/sweep/config")
@@ -14093,7 +14139,7 @@ def b2b_sweep_put_config(body: dict, org_id: str = ORG_ID,
         merged.get('frequency') or 'daily', merged.get('day_of_week'),
         merged.get('day_of_month'), merged.get('hour'), merged.get('timezone'))
     client.schema('commcalc').table('b2b_sweep_config').upsert(row, on_conflict='org_id').execute()
-    return _b2b_public_cfg(_b2b_cfg(client, org_id))
+    return _b2b_public_cfg(_b2b_cfg(client, org_id), org_id)
 
 
 @router.post("/b2b/sweep/run-now")
@@ -14159,12 +14205,15 @@ def _epay_cfg(client, org_id):
     return rows[0] if rows else None
 
 
-def _epay_public_cfg(cfg):
-    """Config WITHOUT the password — only whether credentials are set."""
+def _epay_public_cfg(cfg, org_id=None):
+    """Config WITHOUT the password — only whether credentials are set. `connector_scope` (mig 1014):
+    whether the connector this table drives applies to the tenant's declared POS / carrier."""
+    oid = org_id or (cfg or {}).get('org_id')
     if not cfg:
         return {**_EPAY_CFG_DEFAULTS, 'configured': False, 'has_credentials': False,
                 'portal_user': None, 'next_run_at': None, 'last_run_at': None,
-                'last_status': None, 'last_detail': None}
+                'last_status': None, 'last_detail': None,
+                'connector_scope': _sweep_public_scope(sb(), oid, 'epay_sweep_config', cfg) if oid else None}
     out = {k: cfg.get(k) for k in (
         'enabled', 'frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
         'portal_url', 'portal_user', 'sweep_mi', 'sweep_comp', 'sweep_payment',
@@ -14174,6 +14223,7 @@ def _epay_public_cfg(cfg):
     # sweep_mi defaults on (back-compat: pre-toggle configs only ever pulled MI)
     if out.get('sweep_mi') is None:
         out['sweep_mi'] = True
+    out['connector_scope'] = _sweep_public_scope(sb(), oid, 'epay_sweep_config', cfg) if oid else None
     return out
 
 
@@ -14239,7 +14289,7 @@ def _do_epay_sweep(org_id, only=None):
 @router.get("/epay/sweep/config")
 def epay_sweep_get_config(org_id: str = ORG_ID):
     require_org(org_id)
-    return _epay_public_cfg(_epay_cfg(sb(), org_id))
+    return _epay_public_cfg(_epay_cfg(sb(), org_id), org_id)
 
 
 class EpaySweepPutConfigIn(LaxModel):
@@ -14299,7 +14349,7 @@ async def epay_sweep_put_config(body: EpaySweepPutConfigIn, org_id: str = ORG_ID
             client.schema('commcalc').table('epay_sweep_config').upsert(row, on_conflict='org_id').execute()
         else:
             raise
-    return _epay_public_cfg(_epay_cfg(client, org_id))
+    return _epay_public_cfg(_epay_cfg(client, org_id), org_id)
 
 
 @router.post("/epay/sweep/run-now")
@@ -34051,6 +34101,7 @@ def _scan_connector_health(client):
     except Exception:
         instance_kinds = set()
     out = []
+    _sctx = {}      # connector-registry scope context per org (mig 1014), read once per org
     for table, label in _CONNECTOR_HEALTH_SOURCES:
         try:
             rows = (client.schema("commcalc").table(table).select("*").execute().data) or []
@@ -34062,6 +34113,24 @@ def _scan_connector_health(client):
             status = (r.get("last_status") or "").lower()
             name = (r.get("label") or r.get("source_name") or r.get("account")
                     or r.get("vendor_name") or label)
+            # DOES THIS CONNECTOR EVEN APPLY TO THIS TENANT? (mig 1014, owner 2026-09-21). A connector
+            # whose registry scope misses the tenant's declared POS / carrier is not this tenant's —
+            # its stale error is not a fault to alert on and never lights a lamp. Reported as
+            # `unmonitored` with the reason (a configured row is never made invisible), never alerted.
+            _oid = str(r.get("org_id") or ORG_ID)
+            if _oid not in _sctx:
+                _sctx[_oid] = _connector_scope_ctx(client, _oid)
+            _sc = _connector_scope(_sctx[_oid], _sweep_table_slug(table, r))
+            if _sc.get("applies") is False:
+                out.append({
+                    "org_id": r.get("org_id") or ORG_ID, "source": f"{label} — {name}",
+                    "kind": "unmonitored",
+                    "detail": ("does not apply to this tenant's declared POS / carrier "
+                               f"({_sc.get('why') or 'out of scope'})")[:180],
+                    "alertable": False,
+                    "ref_key": f"connector:{table}:{r.get('id')}:not_applicable",
+                })
+                continue
             # CAN THE PLATFORM EVEN RUN THIS? Asked BEFORE health, because a connector nothing will
             # ever dispatch, or whose route the owner closed on purpose, is not failing — it is
             # unmonitored. Reported (so the coverage is visible) and never alerted.
@@ -34359,7 +34428,7 @@ async def _b2bsoft_scraper(org_id, src_row):
     return await run_in_threadpool(
         vp.run_b2bsoft_sweep, sb(), org_id, src_row.get("portal_url"),
         src_row.get("session_state"), src_row.get("id"), src_row.get("carrier_id"),
-        src_row.get("proxy_url"))
+        src_row.get("proxy_url"), label=_connector_label(sb(), org_id, src_row.get("processor")))
 
 
 async def _merchant_portal_scraper(org_id, src_row):
@@ -34389,8 +34458,12 @@ _SOURCE_SCRAPERS = {"vidapay": _vidapay_scraper, "total_access": _vidapay_scrape
                     "businesstrack": _merchant_portal_scraper}
 
 
-def _strip_source_pw(row, policy_rows=None):
+def _strip_source_pw(row, policy_rows=None, scope_ctx=None):
     """Public view of a data_source row — drops every secret, exposes only booleans/status.
+
+    `scope_ctx` (mig 1014, read ONCE by the caller through `_connector_scope_ctx`) attaches
+    `connector_scope`: whether the row's connector applies to this tenant's declared POS / carrier.
+    Omitted ⇒ no scope attached and behaviour is exactly as before.
 
     `policy_rows` are this org's + the house connector_route_policy rows (mig 998, read ONCE by the
     caller). They are resolved onto the row as `route_policy` BEFORE session health is computed, so a
@@ -34429,6 +34502,8 @@ def _strip_source_pw(row, policy_rows=None):
                                              row.get("processor"))
     except Exception:
         row["route_policy"] = None
+    if scope_ctx is not None:
+        row["connector_scope"] = _connector_scope(scope_ctx, row.get("processor"))
     # Durable-session health (mig 955) — computed, so a session that quietly died is visible on the
     # page BEFORE the overnight pull silently returns nothing. Runs on the ALREADY-STRIPPED row, so it
     # reads has_session/expiry/status only and can never surface session material.
@@ -34532,6 +34607,52 @@ def _route_closed(policy):
         return _crp().is_closed(policy)
     except Exception:
         return False
+
+
+# ── CONNECTOR SCOPE (mig 1014, owner 2026-09-21: "it says rq connection but refers to b2b reports") ──
+# Does this connector even APPLY to this tenant's declared POS / carrier? The answer is the connector
+# registry's (connector_registry.scope → report_kinds.visible_kinds, the SAME predicate report kinds use),
+# read ONCE per org into a context and asked per slug. Every backend connector surface — the public sweep
+# configs, the data-source rows, the merchant-portal health, the connector-health scan, the Connectors
+# list — asks THROUGH these helpers (harness_connector_scope_lock.py pins it). RULE TWO: the slug is read
+# off the row / _CONNECTOR_SLUG_SOURCE, never spelled here. Inert (applies True) on any failure.
+def _connector_scope_ctx(client, org_id):
+    try:
+        return _connector_registry.scope_context(client, org_id)
+    except Exception:
+        return None
+
+
+def _connector_scope(ctx, connector):
+    try:
+        return _connector_registry.scope_for(ctx, connector)
+    except Exception:
+        return {"applies": True, "registered": False, "key": connector, "label": None, "host": None,
+                "kind": None, "why": "scope unavailable", "provenance": None}
+
+
+def _connector_label(client, org_id, connector):
+    """The registry's label for a slug (for the copy the sweeps raise / return), else None → neutral."""
+    try:
+        return _connector_scope(_connector_scope_ctx(client, org_id), connector).get("label") or None
+    except Exception:
+        return None
+
+
+def _sweep_table_slug(table, row):
+    """The connector slug a legacy per-vendor *_sweep_config row speaks for (_CONNECTOR_SLUG_SOURCE)."""
+    col, implied = _CONNECTOR_SLUG_SOURCE.get(table, (None, None))
+    return (str((row or {}).get(col) or "").strip() if col else "") or (implied or "")
+
+
+def _sweep_public_scope(client, org_id, table, cfg):
+    """`connector_scope` for a public sweep-config payload — the registry's answer for the connector
+    this table drives, so the page can say "does not apply to your declared POS" instead of rendering
+    a form and a stale error for a connector that is not the tenant's."""
+    try:
+        return _connector_scope(_connector_scope_ctx(client, org_id), _sweep_table_slug(table, cfg))
+    except Exception:
+        return None
 
 
 def _source_cooldown(client, sid, org_id, row=None):
@@ -34737,7 +34858,8 @@ def list_data_sources(org_id: str = ORG_ID):
     except Exception:
         return {"ready": False, "sources": [], "note": "Run migration 083_total_processor_sources.sql to enable."}
     prows = _crp().load_rows(sb(), org_id)     # one read for the whole list (mig 998)
-    return {"ready": True, "sources": [_strip_source_pw(r, prows) for r in rows],
+    sctx = _connector_scope_ctx(sb(), org_id)  # one read for the whole list (mig 1014)
+    return {"ready": True, "sources": [_strip_source_pw(r, prows, sctx) for r in rows],
             "scrapers_wired": sorted(_SOURCE_SCRAPERS.keys())}
 
 
@@ -35691,12 +35813,13 @@ def _unattended_relogin(client, s, org_id):
                 "message": (_pb().humanize(cool) or "The portal is in a cooldown window.")}
     is_b2b = proc in ("b2bsoft", "b2b")
     now = datetime.now(timezone.utc)
+    _lab = _connector_label(client, org_id, proc)     # the registry's name for the copy (mig 1014)
     try:
         res = vp.login_unattended(
             s.get("portal_url"), s.get("account_id"), s.get("username"), s.get("password"),
             imap_cfg, _oob.rules_from_source(s), proxy_url=s.get("proxy_url"),
-            begin_fn=vp.begin_login_b2bsoft if is_b2b else None,
-            complete_fn=vp.complete_2fa_b2bsoft if is_b2b else None)
+            begin_fn=_functools.partial(vp.begin_login_b2bsoft, label=_lab) if is_b2b else None,
+            complete_fn=_functools.partial(vp.complete_2fa_b2bsoft, label=_lab) if is_b2b else None)
     except Exception as e:
         try:   # portal throttling? arm the escalating cooldown, same as every other login path
             _pb().record_outcome(client, s["id"], org_id, None, delivered=False, exc=e, row=s)
@@ -35733,7 +35856,8 @@ def _do_portal_login(sid: str, org_id: str):
     if not rows:
         return
     s = rows[0]
-    _login_fn = vp.begin_login_b2bsoft if (s.get("processor") or "").lower() in ("b2bsoft", "b2b") else vp.begin_login
+    _login_fn = (_functools.partial(vp.begin_login_b2bsoft, label=_connector_label(client, org_id, s.get("processor")))
+                 if (s.get("processor") or "").lower() in ("b2bsoft", "b2b") else vp.begin_login)
     now = datetime.now(timezone.utc)
 
     def _note_login_failure(exc, message):
@@ -35880,7 +36004,8 @@ async def data_source_login_verify(sid: str, body: LoginCodeIn, org_id: str = OR
             raise
         except Exception:
             pass
-    _verify_fn = vp.complete_2fa_b2bsoft if (s.get("processor") or "").lower() in ("b2bsoft", "b2b") else vp.complete_2fa
+    _verify_fn = (_functools.partial(vp.complete_2fa_b2bsoft, label=_connector_label(client, org_id, s.get("processor")))
+                  if (s.get("processor") or "").lower() in ("b2bsoft", "b2b") else vp.complete_2fa)
     try:
         res = await run_in_threadpool(_verify_fn, s.get("portal_url"), s.get("pending_state"),
                                       code, s.get("proxy_url"))
@@ -35996,7 +36121,7 @@ def _live_pull(client, org_id, src_row):
         # b2bsoft portal. Latent while a pull needed a deliberate ▶ Pull now; wrong the moment a
         # successful login pulls on its own.
         if proc in ("b2bsoft", "b2b"):
-            return vp.pull_b2bsoft_on_page(page)
+            return vp.pull_b2bsoft_on_page(page, label=_connector_label(client, org_id, proc))
         # Merchant card portals (mig 955): pull their OWN report set on this live authenticated page,
         # which is the whole point of the live session — these portals re-challenge a cold restore.
         from app.modules.commcalc import merchant_portals as _mp
@@ -36198,8 +36323,11 @@ def merchant_portal_health(org_id: str = ORG_ID):
     except Exception as e:
         return {"ok": False, "error": f"data_source not ready: {e}", "items": []}
     prows = _crp().load_rows(client, org_id)   # mig 998 — so a closed route reads as route_disabled
-    public = [_strip_source_pw(r, prows) for r in rows
-              if mp.is_portal((r.get("processor") or "").strip().lower())]
+    sctx = _connector_scope_ctx(client, org_id)  # mig 1014 — a connector that does not APPLY to this
+    # tenant's declared POS / carrier has no session to watch: it is not in the roll-up at all
+    public = [r for r in (_strip_source_pw(r, prows, sctx) for r in rows
+                          if mp.is_portal((r.get("processor") or "").strip().lower()))
+              if (r.get("connector_scope") or {}).get("applies", True)]
     return {"ok": True, **psh.summarize(public)}
 
 

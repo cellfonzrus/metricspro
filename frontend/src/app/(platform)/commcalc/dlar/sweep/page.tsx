@@ -1,6 +1,8 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { api, ORG_ID } from '@/lib/client'
+import { usePosTerm } from '@/lib/report-labels'
+import { scopeState, connectorNotApplicableCopy, type ConnectorScope } from '@/lib/connectors'
 
 
 type Cfg = {
@@ -9,6 +11,7 @@ type Cfg = {
   hour: number; timezone: string
   next_run_at: string | null; last_run_at: string | null; last_attempt_at?: string | null
   last_status: string | null; last_detail: string | null
+  connector_scope?: ConnectorScope | null   // the connector registry's answer for this sweep's connector (mig 1014)
 }
 
 const DOW = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
@@ -17,6 +20,7 @@ const sel = { padding: '7px 10px', borderRadius: 8, border: '1px solid var(--bor
 const fmtTs = (s: string | null) => (s ? new Date(s).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }) : '—')
 
 export default function DlarSweepAdmin() {
+  const { pos, posDeclared } = usePosTerm()   // the tenant's POS word for the not-applicable copy
   const [cfg, setCfg] = useState<Cfg | null>(null)
   const [pass, setPass] = useState('')          // write-only; blank = keep existing
   const [loading, setLoading] = useState(true)
@@ -71,6 +75,12 @@ export default function DlarSweepAdmin() {
 
   if (loading) return <div style={{ padding: 60, textAlign: 'center', color: 'var(--text3)' }}>Loading…</div>
   if (!cfg) return <div style={{ padding: 60, textAlign: 'center', color: 'var(--text3)' }}>Could not load config. Did you run 012_dlar_sweep.sql?</div>
+  // CONNECTOR SCOPE (mig 1014, owner 2026-09-21): this page drives ONE connector. When the registry says
+  // it does not apply to the tenant's declared POS / carrier, the ONE not-applicable sentence replaces the
+  // form, its status and its stored error — the connector is not this tenant's to fix.
+  if (scopeState(cfg.connector_scope, true) === 'not_defined') {
+    return <div className="card" style={{ padding: 16, fontSize: 13, color: 'var(--text2)', maxWidth: 760 }}>🔌 {connectorNotApplicableCopy({ scope: cfg.connector_scope, pos, posDeclared })}</div>
+  }
 
   const statusColor = cfg.last_status === 'ok' ? '#059669' : cfg.last_status === 'error' ? '#dc2626' : cfg.last_status === 'running' ? '#d97706' : 'var(--text3)'
   const row = { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' as const }

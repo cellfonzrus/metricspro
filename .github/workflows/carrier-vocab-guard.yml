@@ -55,6 +55,13 @@ name: carrier-vocab-guard
 # (backend/harness_pl_commission_source.py: the compatibility pin, the booking, the guard, the divergence)
 # runs locally like the other P&L proofs — it needs the app's dependencies.
 #
+# THE CONNECTOR-SCOPE LOCK (index §12a.2, mig 1014, 2026-09-21) runs here too: connectors carry a POS /
+# carrier scope in ONE registry (commcalc.connector_registry, mirror connector_registry.HOUSE_CONNECTORS —
+# parsed back from the seed), visibility is report_kinds' predicate one axis over (the `connector:` cap
+# namespace), every connector surface (frontend and backend) dereferences it, the ONE neutral line has two
+# homes pinned equal, no page keeps a connector list, and the connector modules' copy spells no vendor
+# (the #262 seam, closed in the guard's POS axis) — backend/harness_connector_scope_lock.py; stdlib only.
+#
 # THE REPORT-LINKS LOCK (index §30.11, 2026-09-20) runs here too: ONE device / phone-number pairing
 # implementation (inventory_sold_recon.line_pairings, folded by activation_index, called by
 # report_links) with the key normalisers in their homes; a second copy anywhere in commcalc, or a
@@ -67,6 +74,16 @@ on:
       - "frontend/src/**"
       - "backend/harness_carrier_vocab_guard.py"
       - "backend/harness_report_kind_lock.py"
+      - "backend/harness_connector_scope_lock.py"
+      - "backend/app/modules/commcalc/connector_registry.py"
+      - "backend/app/modules/commcalc/b2b_sweep.py"
+      - "backend/app/modules/commcalc/vidapay_sweep.py"
+      - "backend/app/modules/commcalc/import_audit.py"
+      - "backend/app/modules/commcalc/merchant_portals.py"
+      - "backend/app/modules/core/import_health.py"
+      - "backend/app/modules/core/control_box_api.py"
+      - "backend/app/modules/pos/receipt_formats/**"
+      - "database/migrations/1014_connector_registry.sql"
       - "backend/harness_mapping_key_lock.py"
       - "backend/harness_report_links_lock.py"
       - "backend/harness_landing_identity_lock.py"
@@ -146,6 +163,9 @@ jobs:
       - name: Run the report-kind lock (every upload surface reads the registry; no second list)
         working-directory: backend
         run: python3 harness_report_kind_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the connector-scope lock (every connector surface reads the registry; mirror = seed; one neutral line; no second list)
+        working-directory: backend
+        run: python3 harness_connector_scope_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the mapping-key lock (one derivation per statement type; no literal mapping key)
         working-directory: backend
         run: python3 harness_mapping_key_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

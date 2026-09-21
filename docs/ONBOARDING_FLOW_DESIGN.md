@@ -249,6 +249,20 @@ override (the `cap` scope), and the widening is recorded — it is config, not c
 left every other upload surface unfixed — the same defect wearing a hat. A rule that lives in one function
 and is enforced by a check is the only shape that stays fixed when the next surface is added.
 
+**Connectors are scoped the same way (owner 2026-09-21: "it says rq connection but refers to b2b reports").**
+A connector — a portal sweep, a data-source login, a mailbox / FTP pull — is not a report kind, but the same
+rule governs it: which connectors a tenant is offered, whose health is watched and whose errors are shown is
+COMPUTED from the tenant's declaration against ONE registry (`commcalc.connector_registry`, mig 1014: `key` +
+`aliases`, `label`, `host`, `applies_to_pos[]` / `applies_to_carrier[]`, `defined_by`), through the SAME
+visibility function report kinds use (one cap namespace over, `connector:<key>`), on every connector surface —
+the Inventory Values portal form, the auto-import tiles, the wizard's connector steps, the Connectors page, the
+processor-login picker, the per-vendor sweep pages, the health scan, the control box lamp and the login-popup
+attention items. A tenant whose declared POS has no reports-portal connector reads ONE neutral line ("No
+reports-portal connection is defined for {POS} yet — when {POS} has a reports portal, it can be added under
+Connectors") — no form, no chip, no lamp, no alert. Connector copy names a connector by its registered label and
+host, never by a vendor spelled in code. The same build-failing lock posture applies
+(`backend/harness_connector_scope_lock.py`); index §12a.2.
+
 ## 8. A landed row says which report KIND wrote it; a replace is store × dates × KIND (owner 2026-09-20)
 
 Owner: *"the data is not flowing into the exec mtd from wherever it is uploaded."* Measured on the first tenant to walk

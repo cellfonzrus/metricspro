@@ -5,21 +5,26 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { usePosTerm } from '@/lib/report-labels'
+import { scopeState, connectorNotApplicableCopy } from '@/lib/connectors'
 
 const inp: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
 type Row = { store: string; swept_value: number | null; manual_value: number | null; effective: number | null; effective_source: string | null; as_of_date: string | null; note: string | null }
 
 export default function InventoryValuesPage() {
-  const { pos } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
+  const { pos, posDeclared } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
   const [rows, setRows] = useState<Row[]>([])
   const [sweep, setSweep] = useState<any>(null)
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
-  // POS portal connection form
+  // POS portal connection form. `cfg.connector_scope` (mig 1014) is the connector registry's answer,
+  // computed by the backend for the connector this form drives: does it APPLY to the tenant's declared
+  // POS / carrier? Owner 2026-09-21 ("it says rq connection but refers to b2b reports"): the form,
+  // its chip and its stored error render ONLY when it does; otherwise the ONE neutral line.
   const [cfg, setCfg] = useState<any>({})
+  const [cfgLoaded, setCfgLoaded] = useState(false)
   const [pass, setPass] = useState('')
   const [savingCfg, setSavingCfg] = useState(false)
   const [fetching, setFetching] = useState(false)
@@ -36,7 +41,7 @@ export default function InventoryValuesPage() {
       api(`/api/v1/account/inventory-recon?org_id=${ORG_ID}`).catch(() => null),
     ]).then(([d, c, rc]: any) => {
       setRows(d.rows || []); setSweep(d.sweep); setTotal(d.total_effective || 0); setCfg(c || {}); setRecon(rc)
-    }).catch(console.error).finally(() => setLoading(false))
+    }).catch(console.error).finally(() => { setLoading(false); setCfgLoaded(true) })
   }
   useEffect(() => { load() }, [])
 
@@ -72,6 +77,10 @@ export default function InventoryValuesPage() {
     } catch (e: any) { setMsg('Fetch failed: ' + (e?.message || e)) }
     setFetching(false)
   }
+
+  // Step 1 (lib/connectors.ts): 'checking' | 'unknown' | 'not_defined' | 'defined'. 'unknown' (an
+  // older backend / a failed read) renders the form as before — a lookup failure never hides a surface.
+  const portalScope = scopeState(cfg?.connector_scope, cfgLoaded)
 
   function buildPayload(): ExportPayload {
     return {
@@ -111,7 +120,13 @@ export default function InventoryValuesPage() {
         </div>
       </div>
 
-      {/* POS portal connection */}
+      {/* POS portal connection — rendered only when the connector this form drives applies to the
+          tenant's declared POS (the registry's answer rides cfg.connector_scope); else the neutral line. */}
+      {portalScope === 'not_defined' ? (
+        <div className="card" style={{ padding: 14, marginBottom: 16, fontSize: 13, color: 'var(--text2)' }}>
+          🔌 {connectorNotApplicableCopy({ scope: cfg?.connector_scope, pos, posDeclared })}
+        </div>
+      ) : portalScope !== 'checking' && (
       <div className="card" style={{ padding: 14, marginBottom: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <strong style={{ fontSize: 14 }}>🔌 {pos} portal connection</strong>
@@ -134,6 +149,7 @@ export default function InventoryValuesPage() {
         </div>
         <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>The password is stored backend-only and never shown. Auto-fetch runs on the schedule once credentials are saved + Enabled and the portal client is live.</div>
       </div>
+      )}
 
       <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 10 }}>
         Total on-hand inventory (effective): <strong style={{ color: 'var(--text)' }}>{fmt(total)}</strong> · {rows.length} stores

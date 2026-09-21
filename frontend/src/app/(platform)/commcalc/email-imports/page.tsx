@@ -10,6 +10,7 @@ import { useReportKinds, suggestRuleFrom } from '@/lib/report-kinds'
 import ShowsIn from '@/components/ShowsIn'
 import { useReportLabels } from '@/lib/report-labels'
 import { posSquash } from '@/lib/carrier-scope'
+import { useConnectors } from '@/lib/connectors'
 
 // Generic email (IMAP) inbox sweep — sibling of the FTP sweep. Configure a mailbox (host/creds) and
 // attachment-filename → upload-type patterns; the backend polls the inbox on a schedule and routes
@@ -26,19 +27,11 @@ const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: 
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
 const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 2 }
 
-// Merchant-processor portals (owner 2026-09-04, mig 955). Display labels + default portal URLs only —
-// WHICH portal a tenant runs is a data_source row, never a branch in code (RULE TWO). The POS's own
-// login row is keyed by the DECLARED POS code (GET /report-kinds), so no POS default lives here.
-const PROCESSOR_LABELS: Record<string, string> = {
-  payanywhere: 'payanywhere — PayAnywhere / Payments Hub (external credit card)',
-  transfirst: 'transfirst — TransFirst TransLink (POS merchant)',
-  businesstrack: 'businesstrack — ClientLine / BusinessTrack (POS merchant)',
-}
-const PROCESSOR_URLS: Record<string, string> = {
-  payanywhere: 'https://www.paymentshub.com/',
-  transfirst: 'https://translink.transfirst.com/login.aspx',
-  businesstrack: 'https://cl.businesstrack.com/',
-}
+// Processor portals: WHICH portal logins a tenant may add, their labels and hosts, come from the
+// CONNECTOR REGISTRY (GET /commcalc/connector-registry → lib/connectors.ts useConnectors, mig 1014) —
+// the registry rows that apply to the declared POS / carrier. No processor list, label or URL lives in
+// this file (owner 2026-09-21: a tenant that declared RQ was offered another POS's portal connector).
+// The POS's own login row is keyed by the DECLARED POS code (GET /report-kinds), as before.
 
 // One-click IMAP presets so a user can add a Gmail/Yahoo/Outlook/etc. mailbox without knowing servers.
 const PROVIDERS: Record<string, { label: string; imap_host: string; imap_port: number; use_ssl: boolean; hint?: string }> = {
@@ -58,6 +51,8 @@ export default function EmailImportsPage() {
   // THE REGISTRY (design §7): the declared POS standard's filename rules restricted to the kinds this
   // tenant may upload, the upload types a rule may route to, and the standard the preset applies.
   const kinds = useReportKinds()
+  // THE CONNECTOR REGISTRY (mig 1014): the portal connectors this tenant may add a login for.
+  const connectors = useConnectors()
   const { term } = useReportLabels()
   const declaredPos = kinds.declaration?.pos?.[0] || ''
   const posWord = term('pos_system', 'POS')
@@ -994,7 +989,7 @@ export default function EmailImportsPage() {
           <a href="/commcalc/report-mappings" className="btn btn-secondary" style={{ fontSize: 12 }} title="Which portal report lands in which table + column mapping — configurable, not hard-coded">🗺️ Report mapping</a>
           <a href="/commcalc/ma-upload" className="btn btn-secondary" style={{ fontSize: 12 }} title="Upload processor report files by hand, per carrier — the parallel track to the live portal pull">⬆️ Manual upload</a>
           <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft({ processor: declaredPos, portal_url: '', enabled: false })} title={declaredPos ? `processor = your declared POS (${declaredPos})` : 'declare your POS first — the login row is keyed by its code'} disabled={!declaredPos}>＋ Add {posWord} sales login</button>
-          <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft({ processor: 'vidapay', enabled: false })}>＋ Add login</button>
+          <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft({ processor: connectors.visible.find(r => r.kind === 'portal' && !(declaredPos && posSquash(r.key) === posSquash(declaredPos)))?.key || '', enabled: false })}>＋ Add login</button>
         </div>
         <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 10px' }}>
           Every portal login your commission data comes from — a company can have several distributors, two
@@ -1013,7 +1008,11 @@ export default function EmailImportsPage() {
               {sources.map((s: any) => (
                 <tr key={s.id} style={{ borderTop: '1px solid var(--border)', fontSize: 13 }}>
                   <td style={{ padding: '6px 8px', fontWeight: 600 }}>{s.label || '—'}{!s.enabled && <span style={{ fontSize: 11, color: '#b45309' }}> (off)</span>}</td>
-                  <td style={{ padding: '6px 8px' }}>{s.processor}</td>
+                  <td style={{ padding: '6px 8px' }}>{s.processor}
+                    {/* connector_scope (mig 1014): a stored login for a connector that does not apply to this
+                        tenant's declared POS / carrier is kept, and SAYS so — never hidden, never judged. */}
+                    {s.connector_scope && s.connector_scope.applies === false && <div style={{ fontSize: 11, color: '#b45309' }}>not applicable to this tenant — {s.connector_scope.why}</div>}
+                  </td>
                   <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{distributors.find((d: any) => d.id === s.distributor_id)?.name || '—'}</td>
                   <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{carriers.find((c: any) => c.id === s.carrier_id)?.name || '—'}</td>
                   <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{s.account_id ? `${s.account_id} / ` : ''}{s.username || '—'}{s.has_password ? ' 🔑' : ''}</td>
@@ -1038,7 +1037,8 @@ export default function EmailImportsPage() {
                         📨 Use {s.route_policy?.remedy_label || 'the supported route'}
                       </a>
                     ) : (<>
-                    {(['vidapay', 'total_access', 'payanywhere', 'transfirst', 'businesstrack'].includes((s.processor || '').toLowerCase()) || (!!declaredPos && posSquash(s.processor) === posSquash(declaredPos))) && (
+                    {/* the live-login button: a PORTAL connector the registry offers this tenant, or the declared POS's own login */}
+                    {((connectors.byKey(s.processor)?.kind || '') === 'portal' || (!!declaredPos && posSquash(s.processor) === posSquash(declaredPos))) && (
                       <><button className="btn btn-secondary" title="Watchable LIVE login: one browser stays open from login through the 2FA code — the code is sent ONCE (no re-send). Best for portals that send a single-use code." style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626', fontWeight: 700 }} onClick={() => startLive(s)}>🔴 Live login</button>{' '}</>
                     )}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} disabled={authBusy === s.id} onClick={() => startLogin(s)}>{authBusy === s.id ? '…' : (s.auth_status === 'authenticated' ? '🔁 Re-auth' : '🔐 Log in')}</button>{' '}
@@ -1065,10 +1065,21 @@ export default function EmailImportsPage() {
                     a genuinely new processor stays available via the explicit create affordance. */}
                 <div style={{ marginTop: 4 }}>
                   <EntityPicker
-                    options={(() => { const o = [...(declaredPos ? [declaredPos] : []), 'vidapay', 'total_access', 'epay', 'payanywhere', 'transfirst', 'businesstrack', 'other'].map(p => ({ id: p, label: p === declaredPos ? `${p} — your ${posWord} (sales & inventory exports)` : (PROCESSOR_LABELS[p] || p) })); if (srcDraft.processor && !o.some(x => x.id === srcDraft.processor)) o.unshift({ id: srcDraft.processor, label: srcDraft.processor }); return o })()}
+                    options={(() => {
+                      // the declared POS's own login first, then every PORTAL connector the registry offers this
+                      // tenant (label + host from the registry row), then 'other' — never a list kept here
+                      const o: { id: string; label: string }[] = declaredPos ? [{ id: declaredPos, label: `${declaredPos} — your ${posWord} (sales & inventory exports)` }] : []
+                      for (const r of connectors.visible) {
+                        if (r.kind !== 'portal' || (declaredPos && posSquash(r.key) === posSquash(declaredPos))) continue
+                        o.push({ id: r.key, label: `${r.key} — ${r.label}` })
+                      }
+                      o.push({ id: 'other', label: 'other' })
+                      if (srcDraft.processor && !o.some(x => x.id === srcDraft.processor)) o.unshift({ id: srcDraft.processor, label: srcDraft.processor })
+                      return o
+                    })()}
                     value={srcDraft.processor || null} allowCreate width="100%"
-                    onChange={proc => { const patch: any = { processor: proc || '' }; const d = PROCESSOR_URLS[proc || '']; if (d && !srcDraft.portal_url) patch.portal_url = d; setSrcDraft({ ...srcDraft, ...patch }) }}
-                    onCreate={proc => { const patch: any = { processor: proc }; const d = PROCESSOR_URLS[proc]; if (d && !srcDraft.portal_url) patch.portal_url = d; setSrcDraft({ ...srcDraft, ...patch }) }}
+                    onChange={proc => { const patch: any = { processor: proc || '' }; const h = connectors.byKey(proc)?.host; if (h && !srcDraft.portal_url) patch.portal_url = `https://${h}/`; setSrcDraft({ ...srcDraft, ...patch }) }}
+                    onCreate={proc => { const patch: any = { processor: proc }; const h = connectors.byKey(proc)?.host; if (h && !srcDraft.portal_url) patch.portal_url = `https://${h}/`; setSrcDraft({ ...srcDraft, ...patch }) }}
                     placeholder="pick or type a processor…" ariaLabel="Processor" />
                 </div></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Distributor<br />

@@ -481,7 +481,8 @@ check("index §17 lists the endpoint and the detect route", "GET /commcalc/repor
 check("index §30.8 OPEN (b) and (d) are marked closed", "(b) **Layman cards" in idx and "CLOSED" in idx.split("(b) **Layman cards", 1)[1][:400] and "(d) **§7 availability gating" in idx and "CLOSED" in idx.split("(d) **§7 availability gating", 1)[1][:400])
 fe = os.path.join(ROOT, "frontend", "src")
 check("the frontend twin exists: carrier-scope.reportKindsVisible + lib/report-kinds.useReportKinds",
-      "export function reportKindsVisible(" in io.open(os.path.join(fe, "lib", "carrier-scope.ts"), encoding="utf-8").read()
+      # generic since 2026-09-21 (`reportKindsVisible<T extends ScopedRow>(…, capPrefix)` — the connector registry runs the SAME function)
+      re.search(r"export function reportKindsVisible(<[^>]*>)?\(", io.open(os.path.join(fe, "lib", "carrier-scope.ts"), encoding="utf-8").read()) is not None
       and "export function useReportKinds()" in io.open(os.path.join(fe, "lib", "report-kinds.ts"), encoding="utf-8").read())
 
 print(f"\n══ report-kind registry: {_pass} passed, {_fail} failed ══")

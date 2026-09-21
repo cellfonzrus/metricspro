@@ -212,6 +212,17 @@ export type ReportKindRow = {
 }
 export type ReportDeclaration = { pos: string[]; pos_source?: string; carriers: string[]; carrier_source?: string; reasons?: string[] }
 
+/**
+ * THE SHAPE THE PREDICATE READS — what a registry row must carry to be gated by the declaration. Report
+ * kinds (ReportKindRow) and connectors (lib/connectors.ts ConnectorRow, mig 1014) both satisfy it, so ONE
+ * function below serves both registries — the connector class of 2026-09-21 reused this rather than
+ * copying it (CLAUDE.md: one fact, one home, dereferenced).
+ */
+export type ScopedRow = {
+  key: string; applies_to_pos?: string[]; applies_to_carrier?: string[]; defined_by?: 'house' | 'tenant'
+  is_active?: boolean; sort_order?: number; provenance?: string; provenance_text?: string
+}
+
 export const KIND_CAP_PREFIX = 'kind:'
 export const KIND_PROVENANCE = {
   house: 'house default', override: 'your override', widened: 'widened by super-admin',
@@ -219,7 +230,7 @@ export const KIND_PROVENANCE = {
 } as const
 
 /** The rows a kind's applies-to and a declaration intersect on (empty applies-to = any). Same squash as posSquash. */
-export function kindApplies(row: Pick<ReportKindRow, 'applies_to_pos' | 'applies_to_carrier'>, decl: ReportDeclaration | null | undefined): boolean {
+export function kindApplies(row: Pick<ScopedRow, 'applies_to_pos' | 'applies_to_carrier'>, decl: ReportDeclaration | null | undefined): boolean {
   const pos = new Set((decl?.pos || []).map(posSquash))
   const car = new Set((decl?.carriers || []).map(posSquash))
   const ap = (row.applies_to_pos || []).map(posSquash).filter(Boolean)
@@ -229,9 +240,10 @@ export function kindApplies(row: Pick<ReportKindRow, 'applies_to_pos' | 'applies
   return posOk && carOk
 }
 
-/** The `kind:<key>` cap override: true = show, false = hide, null = auto (follow the declaration). */
-export function kindCapOverride(caps: Record<string, boolean | null> | undefined, key: string): boolean | null {
-  const v = (caps || {})[KIND_CAP_PREFIX + key]
+/** The `<prefix><key>` cap override: true = show, false = hide, null = auto (follow the declaration).
+ *  `kind:` for report kinds; the connector registry passes `connector:` — one override mechanism, one more namespace. */
+export function kindCapOverride(caps: Record<string, boolean | null> | undefined, key: string, capPrefix: string = KIND_CAP_PREFIX): boolean | null {
+  const v = (caps || {})[capPrefix + key]
   return v === true ? true : v === false ? false : null
 }
 
@@ -241,15 +253,16 @@ export function kindCapOverride(caps: Record<string, boolean | null> | undefined
  * decides. An UNKNOWN declaration (no POS / no carrier declared) shows LESS, never more — the
  * POS-specific and carrier-specific rows stay hidden and the payload's `reasons` say why.
  */
-export function reportKindsVisible(
-  rows: ReportKindRow[] | null | undefined,
+export function reportKindsVisible<T extends ScopedRow = ReportKindRow>(
+  rows: T[] | null | undefined,
   decl: ReportDeclaration | null | undefined,
   caps?: Record<string, boolean | null>,
-): ReportKindRow[] {
-  const out: ReportKindRow[] = []
+  capPrefix: string = KIND_CAP_PREFIX,
+): T[] {
+  const out: T[] = []
   for (const r of rows || []) {
     if (r.is_active === false) continue
-    const ov = kindCapOverride(caps, r.key)
+    const ov = kindCapOverride(caps, r.key, capPrefix)
     if (ov === false) continue
     const byRule = kindApplies(r, decl)
     if (!byRule && ov !== true) continue

@@ -10,6 +10,7 @@ import { useActiveCarrier } from '@/lib/auth-context'
 import { carrierCode } from '@/lib/rbac'
 import { useReportLabels } from '@/lib/report-labels'
 import { useReportKinds } from '@/lib/report-kinds'
+import { useConnectors } from '@/lib/connectors'
 import ShowsIn from '@/components/ShowsIn'
 import { LinkedText } from '@/components/ScreenLink'
 import type { ReportKindRow } from '@/lib/carrier-scope'
@@ -39,6 +40,10 @@ const PERIOD_META = PERIOD_ROUTES
 // GET /upload-registry → tileVisible), not upload choices; the shipped `carrier` tag is the same
 // last-resort fallback the registry overrides. No vendor is named for the POS row: the tenant's
 // own POS word comes from the vocabulary term.
+// WHICH of these tiles a tenant is offered is the CONNECTOR REGISTRY's answer (mig 1014, owner
+// 2026-09-21: a tenant that declared RQ was offered the POS-portal sweep of another POS) — `id` is
+// the connector slug `useConnectors().allows(id)` asks about; this array is HOW a tile reaches its
+// sweep (cfg / run / configure routes), never a list of what applies (harness_connector_scope_lock.py).
 const AUTO_SOURCES = [
   { id: 'dlar', name: 'Metrics Rep/Store (carrier KPI portal)', icon: '📊', desc: 'Store + Rep KPI reports',
     cfg: 'dlar/sweep/config', run: 'dlar/sweep/run-now', configure: '/commcalc/dlar/sweep',
@@ -102,6 +107,10 @@ export default function UploadPage() {
   // THE REGISTRY: which report kinds this tenant may upload, with provenance — the one visibility
   // function, run in the hook. `allows(routeKey)` gates every tile block on this page.
   const kinds = useReportKinds()
+  // THE CONNECTOR REGISTRY (mig 1014): which auto-import connectors apply to this tenant's declared
+  // POS / carrier — the same predicate, one axis over. Nothing is offered until it loads; a failed
+  // read hides nothing (`allows` is true for a registry that could not be asked).
+  const conns = useConnectors()
   const [uploading, setUploading] = useState<string | null>(null)
   const [statuses, setStatuses] = useState<Record<string, 'idle'|'uploading'|'done'|'error'|'warn'>>({})
   const [messages, setMessages] = useState<Record<string, string>>({})
@@ -274,7 +283,7 @@ export default function UploadPage() {
         </div>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <tbody>
-            {AUTO_SOURCES.filter(s => tileVisible(s.id, s.carrier)).map(s => {
+            {AUTO_SOURCES.filter(s => tileVisible(s.id, s.carrier) && conns.loaded && conns.allows(s.id)).map(s => {
               const c = cfgs[s.id] || {}
               // ROUTE GATE (mig 998): a portal sweep whose login route is switched off by config must
               // not read as "pending" or as a fault, and must not offer Run now. `route_policy` is
@@ -324,6 +333,7 @@ export default function UploadPage() {
         </table>
         <div style={{ padding: '8px 16px', fontSize: 11, color: 'var(--text3)', borderTop: '1px solid var(--border)' }}>
           A sweep marked 🚫 has its automatic portal login switched off by config — that is a decision, not a fault, and the row says which route carries its data instead. Each portal pulls its own date range — the period selector sets the target.
+          {conns.withheld ? <> {conns.withheld}</> : null}
         </div>
       </div>
 

@@ -261,11 +261,14 @@ def _attention_evidence(client, org_id, deep):
     """ONE call to the existing aggregator, then fan its items out per provider. Cheap providers only
     unless `deep` — a board refresh must never pay for a 40k-row scan (import_health's own rule)."""
     try:
-        from app.modules.core.import_health import collect_attention, _route_policy_rows
+        from app.modules.core.import_health import collect_attention, _route_policy_rows, _connector_scope_ctx
         # mig 998 — the board sees the same route-policy context the login popup does, so a connector
         # switched off by config reads as stated-and-off here too, never as a fault and never as green.
+        # mig 1014 — and the same connector-scope context, so a connector that does not apply to this
+        # tenant's declared POS / carrier raises no item here either.
         att = collect_attention(client, org_id, deep=bool(deep),
-                                route_policy=_route_policy_rows(client, org_id)) or {}
+                                route_policy=_route_policy_rows(client, org_id),
+                                connector_scope=_connector_scope_ctx(client, org_id)) or {}
     except Exception as e:
         return {}, {"_all": cbx.redact(e)}
     by_provider = {}
@@ -296,13 +299,19 @@ def _portal_evidence(client, org_id):
     the feed-freshness providers rather than being judged by a session rule it was never given."""
     from app.modules.commcalc import merchant_portals as mp
     from app.modules.commcalc import portal_session_health as psh
-    from app.modules.commcalc.router import _strip_source_pw
+    from app.modules.commcalc.router import _strip_source_pw, _connector_scope_ctx
     rows = (client.schema("commcalc").table("data_source").select("*")
             .eq("org_id", org_id).execute().data) or []
     keep = [r for r in rows
             if mp.is_portal((r.get("processor") or "").strip().lower())
             or any(r.get(f) not in (None, "") for f in _SESSION_FIELDS)]
-    return {"summary": psh.summarize([_strip_source_pw(r) for r in keep])}
+    # CONNECTOR SCOPE (mig 1014): a login for a connector that does not apply to this tenant's declared
+    # POS / carrier has no session to watch — it never reaches the lamp (the connector-health scan
+    # reports it as unmonitored, so it is not silent either).
+    sctx = _connector_scope_ctx(client, org_id)
+    public = [r for r in (_strip_source_pw(r, None, sctx) for r in keep)
+              if (r.get("connector_scope") or {}).get("applies", True)]
+    return {"summary": psh.summarize(public)}
 
 
 def _heartbeat_evidence(client, org_id, spec):
