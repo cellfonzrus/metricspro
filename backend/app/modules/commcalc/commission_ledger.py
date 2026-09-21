@@ -566,8 +566,14 @@ _MONTH_RE = re.compile(r"MONTH\s*(\d+)|(?<![A-Za-z0-9])M(\d+)(?![A-Za-z0-9])", r
 
 
 def parse_payment_month(product_name):
-    """Extract the payment month from a product label: 'TBV MONTH 4 …' -> 4, 'Commission - M1 Proration'
-    -> 1, 'SPF Month 1' -> 1. None when no month token is present."""
+    """Extract the payment month TOKEN from a product label: 'TBV MONTH 4 …' -> 4,
+    'Commission - M1 Proration' -> 1, 'SPF Month 1' -> 1. None when no month token is present.
+
+    This answers "does this label SAY a month", and nothing else. It is NOT the answer to "which
+    month-of-life leg is this row" — a carrier states that in more than one form. Ask
+    `month_leg_of()` for the leg; it delegates here for the token case. (Enforced:
+    backend/harness_ma_income_one_home_guard.py fails the build if a leg question is asked of this
+    function outside this module.)"""
     m = _MONTH_RE.search(str(product_name or ""))
     if not m:
         return None
@@ -576,6 +582,61 @@ def parse_payment_month(product_name):
         return int(g)
     except (TypeError, ValueError):
         return None
+
+
+# ── "WHICH MONTH-OF-LIFE LEG IS THIS ROW" — ONE HOME (owner report 2026-09-21) ───────────────────
+# Owner, on the Gross Profit M1 tile: "the m1 commission cannot be 2300". He was right, and the
+# reason is a vocabulary gap, not arithmetic.
+#
+# The master agent states the FIRST month's commission in TWO forms, and which one it uses changed
+# part-way through the year (measured, org 854f6d7b…, all 8 periods Feb–Sep 2026):
+#     "TBV MONTH 2 New Activation Commission"          -> a MONTH TOKEN   (parse_payment_month)
+#     "Total Wireless 5G Unlimited $55 New Activation Commission"
+#                                                      -> NO token: the leg is stated by the label
+#                                                         being an ACTIVATION commission at all
+# Feb–May 2026 carry the second form ONLY (0.00 of token-M1 in all four months); June onwards carry
+# both. Reading the token alone therefore drops most of M1 into the honest-but-wrong "no month"
+# bucket: August 2026 read M1 = $2,300.40 when the month's real M1 is $6,049.96 — 1,218 rows and
+# $19,292.54 platform-wide sat unlabelled across the eight periods. No dollar was ever lost (every
+# column total was right); the LEG was wrong, which is exactly the number the owner reads.
+#
+# So the leg question gets its own function, and every caller asks THIS one. The token still wins
+# when present — a label that says MONTH 2 is month 2 even though it also says "New Activation
+# Commission" — so this can only ADD a leg where there was none, never move one.
+#
+# RULE TWO: the vocabulary is data, not a branch. `activation_labels` overrides per org (the
+# existing `commcalc.commission_leg_label_map` remains the per-exact-label authority and still
+# wins upstream in commission_legs); the default below is a LABEL FORM, not a carrier, tenant or
+# product name, and it is what makes this correct out of the box rather than stored-but-inert.
+ACTIVATION_LEG_MONTH = 1
+ACTIVATION_LABEL_PATTERNS = (r"\bnew\s+activation\s+(?:commission|spf)\b",
+                             r"\bactivation\s+commission\b")
+_ACTIVATION_RE = re.compile("|".join(ACTIVATION_LABEL_PATTERNS), re.I)
+
+
+def month_leg_of(product_name, activation_labels=None):
+    """PURE: the month-of-life leg a product label states, or None when it states none.
+
+    Precedence, highest first:
+      1. an explicit month TOKEN  ("MONTH 4", "M1")  -> that month   [parse_payment_month]
+      2. the label is an ACTIVATION commission with no token          -> ACTIVATION_LEG_MONTH (1)
+      3. otherwise None — reported as having no month, never guessed into one.
+
+    `activation_labels` = per-org regex list replacing the default form. A bad pattern is ignored
+    rather than raising, so a tenant cannot take a report down with a typo."""
+    name = str(product_name or "")
+    n = parse_payment_month(name)
+    if n:
+        return n
+    if not name.strip():
+        return None
+    rx = _ACTIVATION_RE
+    if activation_labels:
+        try:
+            rx = re.compile("|".join(str(p) for p in activation_labels), re.I)
+        except re.error:
+            rx = _ACTIVATION_RE
+    return ACTIVATION_LEG_MONTH if rx.search(name) else None
 
 
 # ── COMMISSION LEG (1st month vs M2–M12) — owner directive 2026-08-04 ────────────────────────────
@@ -587,7 +648,7 @@ def parse_payment_month(product_name):
 # DERIVED AT READ TIME — nothing is stamped on a commission_ledger row, so there is no backfill and the
 # ingest path is untouched. Precedence, highest first:
 #   1. the matched map rule's explicit `leg_bucket` (mig 274; NULL on every pre-existing rule)
-#   2. the line's own `payment_month` — already parsed at build time by parse_payment_month()
+#   2. the line's own `payment_month` — already resolved at build time by month_leg_of()
 #   3. the org's label rules / per-label overrides in commission_legs
 #   4. the org's configured `unlabeled_bucket` (default: the honest 'unsplit')
 LEG_BUCKETS = ("m1", "trailing", "unsplit")
@@ -763,7 +824,7 @@ def build_row(src, base, rules, conv=None, buckets=None):
         "store": src.get("store"), "rep_user": src.get("rep_user"),
         "order_number": src.get("order_number"), "order_type": order_type,
         "product_name": product_name, "trans_date": src.get("trans_date"),
-        "due_date": src.get("due_date"), "payment_month": parse_payment_month(product_name),
+        "due_date": src.get("due_date"), "payment_month": month_leg_of(product_name),
         "category": category, "raw_amount": round(raw, 2), "is_payout": is_payout,
         "payout_total": magnitude,
         "commission": 0, "spiff": 0, "equipment_rebate": 0, "residual_monthly": 0, "autopay_residual": 0,

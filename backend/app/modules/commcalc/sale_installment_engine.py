@@ -52,7 +52,7 @@ from app.modules.commcalc import expected_commission as xcomm
 # THE "MONTH n" parser (mig 308 / MA TX): the ONE regex that reads 'TBV MONTH 5 New Activation SPF'
 # → 5 already lives in the Commission Ledger. REUSED, never re-implemented, so the ledger's month
 # attribution and the installment gate can never drift apart on wording.
-from app.modules.commcalc.commission_ledger import parse_payment_month
+from app.modules.commcalc.commission_ledger import month_leg_of
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -974,7 +974,7 @@ def _gate_met_ma(sale_line, ma_index, month_index, cfg):
 # normalized, _norm_imei) → raw_ma_commission.activation_order ↔ raw_ma_daily_tx.order_number.
 # order_number is NOT unique in the feed (one order = activation row + MONTH-n rows + adjustments),
 # which is exactly why the index below groups and NETS per order. The month wording is parsed by the
-# Commission Ledger's parse_payment_month — REUSED, never a second regex.
+# Commission Ledger's month_leg_of — REUSED, never a second regex.
 #
 # 💰 MONEY GUARD: the ONLY raw_ma_daily_tx money column these paths read is retail_cost.
 # merchant_discount (airtime margin) is not part of this formula, and merchant_invoice is an invoice
@@ -1019,7 +1019,7 @@ def build_ma_tx_index(tx_rows, cfg):
         (case-insensitive, trimmed; CONFIG, never a literal). Carries retail_cost (the MRC),
         product_name and account_id. The first activation row with a nonzero retail_cost wins as the
         MRC donor; 'count' reports how many were seen.
-      • 'months' — per payment month n (parse_payment_month over product_name), the NET summed
+      • 'months' — per payment month n (month_leg_of over product_name), the NET summed
         retail_cost across the order's rows, so a base + adjustment/clawback pair nets exactly like
         the ma_commission spiff evidence does.
     Rows with no order_number are skipped; never raises. PURE (rows + config passed in)."""
@@ -1045,7 +1045,12 @@ def build_ma_tx_index(tx_rows, cfg):
                     e["activation"]["retail_cost"] = rc
                     e["activation"]["product_name"] = str(r.get("product_name") or "")
                     e["activation"]["account_id"] = acct or e["activation"].get("account_id")
-        n = parse_payment_month(r.get("product_name"))
+        # Same leg question, same one home. MEASURED before wiring (org 854f6d7b…, all 8 periods):
+        # of the 1,218 rows this newly resolves to month 1, ZERO carry an order_number that is in
+        # this gate's link index, so not one order gains month-1 evidence and NO payout moves.
+        # harness_month_leg_resolution.py pins that at 0 — if a future feed starts carrying the
+        # activation order on these rows, the harness says so instead of paying silently.
+        n = month_leg_of(r.get("product_name"))
         if n:
             e["months"][n] = round(safe_float(e["months"].get(n)) + safe_float(r.get("retail_cost")), 2)
     return idx

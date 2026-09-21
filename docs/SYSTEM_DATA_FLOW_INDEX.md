@@ -1068,6 +1068,42 @@ both sides, across **20 stores, $0.00 company-wide**; MI `35,490.67`, ATU `19,48
 `16,000.00` all equal their P&L lines. `208,500.68` net of rebate + wallet funding left GP revenue
 (owner-approved). **P&L company totals unchanged.**
 
+### 4a.1 M1 WAS HIDING — the leg question has its own home (owner report 2026-09-21)
+
+Owner, on the Gross Profit M1 tile: *"the m1 commission cannot be 2300"*. He was right, and the
+cause was vocabulary, not arithmetic. The master agent states the FIRST month's commission in TWO
+forms and switched between them part-way through the year:
+
+| form | example | carries a month token? |
+|---|---|---|
+| token | `TBV MONTH 2 New Activation Commission` | yes |
+| activation commission | `Total Wireless 5G Unlimited $55 New Activation Commission` | **no** |
+
+Measured, org `854f6d7b-…`, all 8 periods: Feb–May 2026 carry the second form ONLY (token-M1 = 0.00
+in all four months); June onward carry both. Reading the token alone put **1,218 rows / $19,292.54**
+into the honest-but-wrong "no month" bucket. **August M1 read $2,300.40; it is $6,049.96.** No dollar
+was ever lost — every column total was right — but the LEG was wrong, and the leg is what the owner
+reads.
+
+- **ONE HOME: `commission_ledger.month_leg_of(product_name, activation_labels=None)`** — token first
+  (delegates to `parse_payment_month`), else the activation-commission form → month 1, else None.
+  Strictly ADDITIVE: a label that already stated a month is untouched. Vocabulary is data
+  (`ACTIVATION_LABEL_PATTERNS`, per-org override; a broken regex falls back instead of raising) and
+  contains no carrier, tenant or product name.
+- **`parse_payment_month` is now private to its module** — it answers only "does this label SAY a
+  month". Every leg caller asks `month_leg_of`: `ma_store_pnl.ma_tx_bookings`,
+  `sale_installment_engine.build_ma_tx_index`, `commission_ledger.build_row`, `router.py` §15 payload.
+- **NO PAYOUT MOVED — measured, not assumed.** `build_ma_tx_index` feeds the installment gate, which
+  only looks up orders from the link index. Of the 1,218 newly-resolved rows, **ZERO** carry an
+  `order_number` in that index, so no order gains month-1 evidence. Pinned at 0 in the harness, so a
+  feed that later carries the activation order shows up instead of paying silently.
+- **LOCKS:** `backend/harness_month_leg_resolution.py` (51 checks, DB-free — the resolution table with
+  negative controls, additivity, the per-org vocabulary, **August pinned at BOTH the old and the
+  corrected split**, and the payout no-op) + CHECK 2b in `harness_ma_income_one_home_guard.py`, which
+  fails the build if any module outside `commission_ledger.py` asks the token parser a leg question.
+  `harness_device_purchases.py` B2d sanctions the two changed booking functions BY NAME and B2f proves
+  their `(line, amount)` sequence is unchanged — only the `M<n>` detail label moves.
+
 **LOCKS:** `backend/harness_gp_pnl_commission_parity.py` (65 checks, DB-free — parity under BOTH
 bases, the two exclusions with their rulings, store grain, the August regression, and an ARMED
 negative control proving a leading-street-number join splits `218-80 Hempstead Avenue` from the MA
@@ -3622,6 +3658,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
 | Which report kinds a tenant is OFFERED (every upload surface) — and why each other kind is withheld | `commcalc.report_kind.applies_to_pos / applies_to_carrier / is_active / defined_by` ∩ the declaration (`ui_label_override` `report_term` `pos_system` term / `pos_profile.pos_key` + `commcalc.carrier.code`) + `ui_label_override` scope 'cap' `kind:<key>` | `report_kinds.visible_kinds` ≡ `carrier-scope.reportKindsVisible` → `GET /commcalc/report-kinds` → `useReportKinds`; §30.9. Not a list anywhere in a page (locked). Confidence of "this looks like your X" = `detect_report_kind` (fingerprint 1.0 > overlap 0.8–0.99 > signals 0.4–0.79) |
+| Which month-of-life LEG a carrier payment row states | `raw_ma_daily_tx.product_name` — a month TOKEN (`MONTH 4`, `M1`) or the ACTIVATION-COMMISSION form, which carries no token | **ONE home** `commission_ledger.month_leg_of`; `parse_payment_month` answers only the token question and is private to that module (CHECK 2b in `harness_ma_income_one_home_guard.py`). §4a.1 — reading the token alone hid 1,218 rows / $19,292.54 of M1 and read August's M1 as $2,300.40 against $6,049.96. Strictly additive; no payout moved (measured 0 orders) |
 | MA/VidaPay commission RECEIVED, on the Gross Profit report AND the P&L — and its M1..M12+ ladder | `raw_ma_commission` spiff columns (EARNED, activation month) and `raw_ma_daily_tx` spiff-family rows (RECEIVED, cash month); which one is MONEY is `commission_org_config.pl_ma_month_spiff_source`; store from the mig-314 account→store index | **ONE home** `ma_store_pnl.gp_carrier_income` → GP columns, and the same bookings → `coa.build_inputs` → the P&L. §4a. Both bases always reported, labelled; only the cash basis reaches M7..M12 (the sheet has six spiff columns). Rebate and wallet funding are NOT commission on either report (owner 2026-09-08 / 2026-08-10) — `commission_received_lines()` is the ruling, and `assert_commission_column_is_commission()` the checked invariant |
 | Carrier commission EARNED on a rep's activations (dealer REVENUE) | shape A: `raw_ma_commission` money columns netted by `_ma_gate_index`, attributed device→sale→rep via `ma_recon`. shape B: `rep_commissions.boost_commission` (already per rep). Which shape is used is decided by WHICH FEED HAS ROWS, never a carrier name | `carrier_vs_pay.rollup_by_rep` → `GET /commcalc/carrier-vs-pay/{period}`; §31. Three states — `reported` / `measured_zero` / `not_reported`; a `not_reported` earned figure is `null` and yields NO margin, never `$0.00` |
 | Employee commission PAID (payroll EXPENSE) — beside the earned figure | `rep_commissions.total_payout` as stored | same report, a SEPARATE key. §31.3 — the two ledgers are never summed or netted; `difference_measured_reps` states how many reps the published gap actually covers |
