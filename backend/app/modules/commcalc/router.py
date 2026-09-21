@@ -13,7 +13,8 @@ from app.core.service_role import (require_browser_service,   # SERVICE_ROLE=api
 from app.core.schemas import LaxModel
 from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
-from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_contract_type
+from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
+from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
 from app.modules.commcalc import whatif
 # The tenant-implementation spine (owner 2026-09-12): the ONE ordered, carrier-scoped setup flow, and
 # the one `carrier_visible` predicate the sweep / Connectors / Imports all ask. PURE — no DB, no I/O.
@@ -5881,6 +5882,50 @@ def _intake_prepare_merchant(client, org_id, contents, filename, portal_key, ike
             "house_defaults": {"columns": 0}, "extra_refusals": extra}
 
 
+def _intake_line_class_block(client, org_id, rows):
+    """THE 2.5a STEP'S PAYLOAD (owner 2026-09-21: "88 txns but not a break up into activations and upgrade
+    etc, also nothing on exec mtd"): over the rows in hand — the org's CURRENT activation-type rules and
+    what they classify, the suggestion engine's proposal per class with the count it would classify (THE
+    predicate over the proposal, so what is confirmed is what every report counts), and for each
+    Executive-MTD line bucket its current match count with a proposal where it matches nothing (the
+    mig-962 detector's gap). Reads the same two config homes the save writes
+    (accessory_config.activation_details_rules via _accessory_config; exec_metric_config via
+    _exec_metric_config). PURE apart from those two reads; never raises past a stated error."""
+    acfg = _accessory_config(client, org_id)
+    rules = _line_rules_of(acfg) or _lc.HOUSE_RULES
+    sug = _lc.suggest_rules(rows, rules, skip=_line_skip)
+    try:
+        ecfg = _exec_metric_config(client, org_id, with_sources=True)
+        metrics = _lc.suggest_metric_rules(rows, ecfg, hints=rules.get("metric_hints"), skip=_line_skip)
+    except Exception as e:
+        metrics = {"scanned": 0, "buckets": {}, "error": str(e)[:200]}
+    return {"step": "2.5a", "classes": [{"key": c, "label": _lc.CLASS_LABELS[c]} for c in _lc.CLASSES],
+            "candidate_fields": list(_lc.CANDIDATE_FIELDS),
+            "rules": {k: rules[k] for k in ("fields", "tokens", "exact", "source", "declared")},
+            "current": sug["current"], "gate_open": _lc.gate_open(sug["current"]),
+            "gate_note": _lc.gate_sentence(sug["current"]) if _lc.gate_open(sug["current"]) else None,
+            "suggest": {k: sug[k] for k in ("scanned", "distinct", "per_class", "too_broad", "proposal", "preview")},
+            "metrics": metrics}
+
+
+def _intake_landed_slice(client, org_id, instance_key):
+    """(rows, stage row) — the sales lines an instance LANDED, re-read from its table exactly as the commit
+    re-read them (its stores × its date span × its kind), so the 2.5a step over an already-landed export
+    counts what the reports count. (None, row) when the instance has no landed slice yet."""
+    run = _intake_run(client, org_id)
+    inst = next((r for r in _intake_stage_rows(client, org_id, (run or {}).get("id"))
+                 if r.get("instance_key") == instance_key), None)
+    if not inst:
+        return None, None
+    vn = inst.get("verified_numbers") or {}
+    span = vn.get("date_span") or {}
+    stores = [str(p.get("value")) for p in ((vn.get("numbers") or {}).get("per_store") or []) if str(p.get("value") or "").strip()]
+    table = vn.get("target_table") or _intake.SOURCE_KIND_TARGET["sales"]
+    if table != _intake.SOURCE_KIND_TARGET["sales"] or not (span.get("from") and span.get("to") and stores):
+        return None, inst
+    return _intake_reread_sales(client, org_id, stores, span["from"], span["to"], table=table, kind=vn.get("report_key")), inst
+
+
 def _intake_prepare_stage2(client, org_id, contents, filename, kind, column_map_json, typed_total,
                            sheet="", header_row="", footer="auto", pos_source="", layout="", name="",
                            identity_json=None, as_of_date="", role="", **_ignored):
@@ -6000,6 +6045,14 @@ def _intake_prepare_stage2(client, org_id, contents, filename, kind, column_map_
     else:
         vn = _intake.sales_verify(land, kf)
         our_total = vn["sum_amount"]
+        # 2.5a — which lines are activations / upgrades / BYOD / ports, and which are phones, bill
+        # payments…: the suggestion engine over the frame that would land (line-level table only; the
+        # product-level layout carries no type). Never blocks the analysis.
+        if target_table == _intake.SOURCE_KIND_TARGET["sales"]:
+            try:
+                base["line_class"] = _intake_line_class_block(client, org_id, land)
+            except Exception as e:
+                base["line_class"] = {"error": f"activation-type check did not run: {str(e)[:200]}"}
     tie = _intake.simple_tie(our_total, footer_info["file_total_raw"], typed_total)
     amount_header = next((p["column"] for p in proposal if p["target_field"] == kf["amount"]), "")
     text_headers = [p["column"] for p in proposal if p["column"] and (p.get("transform") or "text") != "number"]
@@ -6104,6 +6157,7 @@ def _intake_payload(ctx):
         "settlement_role": ctx.get("settlement_role"), "merchant_processor": ctx.get("merchant_processor"),
         "source_id": ctx.get("source_id"),
         "identity_kind": ("merchant_id" if ctx.get("merchant_processor") else "store"),
+        "line_class": ctx.get("line_class"),        # 2.5a — activation types + metric buckets over this frame
         "verify": {"basis": ("received — no destination" if kind == "other" else
                              "preview — computed from the parsed file; the commit re-reads the landed rows"),
                    "numbers": ctx["verify_numbers"], "tie": ctx["tie"],
@@ -6242,6 +6296,102 @@ def onboarding_intake_put_state(body: OnboardingIntakeStateIn, org_id: str = ORG
     return out
 
 
+# ── 2.5a — WHICH LINES ARE ACTIVATIONS, UPGRADES, BYOD, PORTS; WHICH ARE PHONES, BILL PAYMENTS … ──
+# Owner (2026-09-21): "sales report shows 88 txns but not a break up in to activations and upgrade etc,
+# also nothing on exec mtd". The step reads and writes the TWO existing config homes only —
+# accessory_config.activation_details_rules through put_accessory_config (the one writer) and
+# exec_metric_config through put_exec_metric_config — and re-counts the landed slice through THE
+# predicate; the lock (harness_line_class_lock.py) fails the build if this function writes anywhere else.
+@router.get("/onboarding/intake/line-class")
+def onboarding_intake_line_class(instance_key: str = "", org_id: str = ORG_ID):
+    """The 2.5a step over an instance's LANDED slice (re-read as the commit re-read it): current rules,
+    what they classify, the proposal per class with its count, the metric buckets. Read-only.
+    `landed:false` when the instance has landed nothing yet (the analyze payload carries the block then)."""
+    require_org(org_id)
+    client = sb()
+    ik = (instance_key or "").strip()
+    if not ik:
+        raise HTTPException(400, "instance_key is required")
+    rows, inst = _intake_landed_slice(client, org_id, ik)
+    if inst is None:
+        raise HTTPException(404, "no such instance in this org's onboarding run")
+    if rows is None:
+        return {"instance_key": ik, "landed": False, "rows": 0, "block": None,
+                "note": "This export has not landed rows yet — read the file at 2.1; the check runs over the rows that would land."}
+    return {"instance_key": ik, "landed": True, "rows": len(rows), "block": _intake_line_class_block(client, org_id, rows),
+            "recorded": (inst.get("verified_numbers") or {}).get("activation_classes"),
+            "status": inst.get("status"), "blocking_reason": inst.get("blocking_reason")}
+
+
+class OnboardingLineClassIn(LaxModel):
+    instance_key: str = ""
+    fields: Any = None            # ["contract_type", "category", …] — which columns carry the activation type
+    tokens: Any = None            # {activation: [...], upgrade: [...], byod: [...], port: [...], hardware_only: [...]}
+    metric_rules: Any = None      # {bucket: rules} for the Executive-MTD line buckets (phones, bill_payment, …)
+    no_activations: Any = None    # a reason: "this file truly has no activations" (recorded with the name)
+    by: Any = None
+
+
+@router.put("/onboarding/intake/line-class")
+def onboarding_intake_put_line_class(body: OnboardingLineClassIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """SAVE the 2.5a step: the activation-type rules into the ONE home (accessory_config.activation_details_rules,
+    through put_accessory_config — the Activation-Details basis keys beside them untouched), the metric bucket
+    rules into exec_metric_config (through put_exec_metric_config), then RE-COUNT the instance's landed slice
+    through THE predicate and record it on the stage row (`verified_numbers.activation_classes`): verified
+    when the landing was ok and the gate is closed — by a rule that classifies ≥1 activation-type line or by
+    the recorded attestation — else needs_input naming this step. Gated like every Classification edit."""
+    require_org(org_id)
+    if not _can_edit_classification(authorization, org_id):
+        raise HTTPException(403, "You don't have permission to edit Classification settings.")
+    client = sb()
+    who = str(body.by or "").strip() or None
+    written = {"activation_rules": False, "metric_buckets": []}
+    if body.fields is not None or body.tokens is not None:
+        if body.fields is not None and not isinstance(body.fields, list):
+            raise HTTPException(400, "fields must be a list of column names")
+        if body.tokens is not None and not isinstance(body.tokens, dict):
+            raise HTTPException(400, "tokens must be an object {class: [words]}")
+        cur_raw = (_accessory_config(client, org_id) or {}).get("activation_details_rules_raw") or {}
+        merged = _lc.merge_into_raw(cur_raw, fields=body.fields, tokens=body.tokens)
+        put_accessory_config(PutAccessoryConfigIn(activation_details_rules=merged), org_id, authorization)
+        written["activation_rules"] = True
+    if isinstance(body.metric_rules, dict) and body.metric_rules:
+        ecfg = _exec_metric_config(client, org_id, with_sources=True)
+        for bucket, rules in body.metric_rules.items():
+            if bucket not in _emd.LINE_BUCKETS or not isinstance(rules, dict):
+                raise HTTPException(400, f"metric_rules: unknown bucket '{bucket}' (allowed: {', '.join(_emd.LINE_BUCKETS)})")
+            res = put_exec_metric_config(PutExecMetricConfigIn(bucket=bucket, rules=rules, basis=(ecfg.get(bucket) or {}).get("basis")), org_id)
+            if not res.get("ok"):
+                raise HTTPException(400, f"metric definition '{bucket}' did not save: {res.get('hint') or res.get('error')}")
+            written["metric_buckets"].append(bucket)
+    _invalidate_accessory_config(org_id)
+    ik = (body.instance_key or "").strip()
+    out = {"ok": True, "written": written, "instance_key": ik or None}
+    if not ik:
+        return out
+    rows, inst = _intake_landed_slice(client, org_id, ik)
+    if inst is None:
+        raise HTTPException(404, "no such instance in this org's onboarding run")
+    vn = dict(inst.get("verified_numbers") or {})
+    att = {"no_activations": str(body.no_activations or "").strip()} if str(body.no_activations or "").strip() else {}
+    if rows is not None:
+        block = _intake_line_class_block(client, org_id, rows)
+        vn["activation_classes"] = block["current"]
+        gate = _intake.activation_gate(block["current"], att, previous=vn.get("activation_gate"), by=who)
+        vn["activation_gate"] = gate
+        # a pre-design row (no landing_ok recorded) that was verified had a good landing
+        landing_ok = bool(vn.get("landing_ok", inst.get("status") == _intake.STATUS_VERIFIED))
+        verified = landing_ok and not gate["blocked"]
+        reason = gate["reason"] if gate["blocked"] else ("" if landing_ok else (inst.get("blocking_reason") or ""))
+        state = _intake_save_state(client, org_id, ik, status=(_intake.STATUS_VERIFIED if verified else _intake.STATUS_NEEDS_INPUT),
+                                   verified_numbers=vn, verified_by=inst.get("verified_by") or who,
+                                   blocking_reason=reason, by=who)
+        out.update({"landed": True, "rows": len(rows), "block": block, "verified": verified, "activation_gate": gate, "state": state})
+    else:
+        out.update({"landed": False, "rows": 0, "block": None})
+    return out
+
+
 class OnboardingSignOffIn(LaxModel):
     name: str = ""
     role: Any = None
@@ -6370,8 +6520,8 @@ def _intake_reread_sales(client, org_id, stores, lo, hi, table=None, kind=None):
     table = table or _intake.SOURCE_KIND_TARGET["sales"]
     kind_col = _landing.stamp_column(table)
     cols = ("store,salesperson,trans_id,trans_date,ext_price,gp,voided,"
-            "department,category,product_desc,tender_type,trans_type,"
-            "mdn,serial_1,user_login")                             # + the Stage-D link fields (§30.11)
+            "department,category,product_desc,tender_type,trans_type,contract_type,"
+            "mdn,serial_1,user_login")                             # + the Stage-D link fields (§30.11) + the activation-type fields (2.5a)
     if table != _intake.SOURCE_KIND_TARGET["sales"]:
         cols = "store,salesperson,trans_id,trans_date,ext_price,gp,voided,product_desc,sku,quantity,total_cost,serial_1,user_login"
     if kind_col and kind:
@@ -7165,9 +7315,19 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
         # a line-level table only; product-level rows carry no department / category to match on
         if ctx["target_table"] == _intake.SOURCE_KIND_TARGET["sales"]:
             cross["billpay_extract"] = _intake_billpay_extract_after_sales(client, org_id, stores_landed, span["from"], span["to"], rows=rows)
+            # THE ACTIVATION GATE (owner 2026-09-21): the ONE predicate over the RE-READ rows with the org's
+            # rules. A slice with lines and not one activation-type line is landed but NOT verified until
+            # the words are mapped (2.5a) or the person attests the file truly has no activations.
+            try:
+                cross["activation_classes"] = _lc.count_classes(rows, _line_rules_of(_accessory_config(client, org_id)), skip=_line_skip)
+            except Exception as e:
+                cross["activation_classes"] = {"error": f"activation-type count did not run: {str(e)[:200]}"}
         cross["shows_in"] = _landing.shows_in({"layout": report_key, "landing": kind}, column_mapping.TABLE_MAP,
                                               _TRACE_TARGET_TABLE, _intake.SOURCE_KIND_TARGET)
     ok = count_ok and tie_ok and same_as_shown
+    gate = _intake.activation_gate(cross.get("activation_classes"), att, by=who)
+    if gate["blocked"]:
+        cross["activation_gate"] = gate
     problems = []
     if not count_ok:
         problems.append(f"rows landed {vn['rows']} ≠ rows built {landed['rows_built']} (inserted {landed['saved']})")
@@ -7180,6 +7340,8 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
     verified_numbers = {
         "basis": (f"re-read through the mig-939 bill-pay reader after landing in commcalc.{ctx['target_table']}" if kind == "bill_payments"
                   else f"re-read from commcalc.{ctx['target_table']} after landing"),
+        "landing_ok": ok,
+        "activation_gate": gate,
         "rows_in_file": len(ctx["records"]), "rows_usable": len(ctx["mapped"]),
         "footer_rows_dropped": len(ctx["footers"]), "rows_excluded_not_ours": ctx.get("excluded_rows", 0),
         "rows_built": landed["rows_built"], "rows_landed": vn["rows"], "rows_inserted": landed["saved"],
@@ -7201,9 +7363,12 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
     }
     period_label = (f"{vn0['date_span']['from']} – {vn0['date_span']['to']}" if vn0.get("date_span") else
                     vn0.get("close_date") or (f"{vn0['dates'][0]} – {vn0['dates'][-1]}" if vn0.get("dates") else ctx.get("as_of_date")))
+    verified = ok and not gate["blocked"]
+    if gate["blocked"]:
+        problems.append(gate["reason"])
     state = _intake_save_state(
         client, org_id, ctx["instance_key"], step="2.6",
-        status=_intake.STATUS_VERIFIED if ok else _intake.STATUS_NEEDS_INPUT,
+        status=_intake.STATUS_VERIFIED if verified else _intake.STATUS_NEEDS_INPUT,
         payload_patch={"kind": kind, "source_ref": ctx["source_ref"], "layout": report_key, "filename": fname,
                        "target_table": ctx["target_table"],
                        "column_map": {p["target_field"]: p["column"] for p in ctx.get("proposal") or [] if p.get("column")},
@@ -7214,7 +7379,7 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
         blocking_reason=("; ".join(problems) if problems else ""), by=who)
     # a CONFIRMED layout is learned (mig 1010 report_signature: header names only) — only on ok
     learned = _intake_learn_signature(client, org_id, ctx, kind, layout=report_key) if ok else {"learned": False, "reason": "not confirmed"}
-    return {"ok": ok, "problems": problems, "saved": landed["saved"], "source_kind": kind,
+    return {"ok": ok, "verified": verified, "activation_gate": gate, "problems": problems, "saved": landed["saved"], "source_kind": kind,
             "instance_key": ctx["instance_key"], "report_key": report_key, "target_table": ctx["target_table"],
             "mapping_saved": saved_fields, "identity_written": identity_written,
             "verified_numbers": verified_numbers, "state": state, "landing": landed.get("detail"),
@@ -12194,6 +12359,31 @@ def _accessory_config_uncached(client, org_id):
         _vv = str(_v or "").strip().lower()
         if _kk and _vv in _CT_BUCKETS:
             ct_map[_kk] = _vv
+    # THE ACTIVATION-TYPE RULES (2026-09-21; line_class) — which FIELDS carry the activation type and
+    # which TOKENS name each class, per org, in the EXISTING mig-313 JSON column
+    # `activation_details_rules` (extended, no migration; the Activation-Details basis keys live beside
+    # ours and are untouched). The mig-213 map above is absorbed as the `exact` layer. A TENANT-authored
+    # exec_metric_config 'activation' row (the pre-design port/byod/upgrade tokens) is honoured as a
+    # legacy layer for any class the one home does not declare. Own defensive query: an absent column
+    # degrades to house defaults = today's behaviour. Consumed by EVERY classifier: the pay path
+    # (calc_rep_commissions via cfg['line_class_rules']), the plan engine, the Sales Report / Exec MTD /
+    # Daily Targets aggregation, the closing recon, the event register, what-if, sales comparison.
+    ad_raw = {}
+    try:
+        adrows = (client.schema("commcalc").table("accessory_config")
+                  .select("activation_details_rules").eq("org_id", org_id).limit(1).execute().data) or []
+        if adrows and isinstance(adrows[0].get("activation_details_rules"), dict):
+            ad_raw = adrows[0]["activation_details_rules"] or {}
+    except Exception:
+        ad_raw = {}
+    legacy_act = None
+    try:
+        _ex_act = (_exec_metric_config(client, org_id, with_sources=True) or {}).get("activation") or {}
+        if _ex_act.get("source") == "tenant":
+            legacy_act = _ex_act.get("rules") or None
+    except Exception:
+        legacy_act = None
+    line_rules = _lc.resolve_rules(ad_raw, ct_map, legacy_act)
     # BILL-PAYMENT products (mig 214; per-org, admin-editable) — which product/item values count as a
     # bill payment (walk-in recharge) for the Daily-Targets CONVERSION metric (boxes ÷ billpays). Fetched in
     # its OWN defensive query so a missing column (pre-214) can NEVER disturb the resolution above — it falls
@@ -12318,6 +12508,7 @@ def _accessory_config_uncached(client, org_id):
             "billpay_products_list": billpay_products,
             "contract_type_map": ct_map, "contract_type_map_raw": ct_map_raw,
             "activation_rules": activation_rules,
+            "line_rules": line_rules, "activation_details_rules_raw": ad_raw,
             "box_count_buckets": set(box_count_buckets),
             "box_count_buckets_list": box_count_buckets,
             "catalog_classify_enabled": catalog_classify_enabled,
@@ -14552,7 +14743,11 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
                # that literal and the default match mode is the historic case-sensitive one, so Boost is
                # byte-identical; only a tenant who edits the list or the mode changes anything.
                'setup_fee_keywords': _acfg['setup_fee_keywords_list'],
-               'setup_fee_match_mode': _sfp_cfg_mode(client, org_id)}
+               'setup_fee_match_mode': _sfp_cfg_mode(client, org_id),
+               # ACTIVATION TYPE (2026-09-21): the ONE predicate's per-org rules reach the pay path — a
+               # tenant whose export carries the type outside contract_type earns its activations here
+               # exactly as the Sales Report counts them. House defaults = byte-identical.
+               'line_class_rules': _acfg['line_rules']}
 
         # Resolve payment categories
         cat_map = {r['description'].strip(): r['category'] for r in pay_cats if r.get('description')}
@@ -22721,7 +22916,7 @@ def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = 
         out = _salescmp.build(
             brows, crows, rules, is_acc, vendors,
             base_period=base_p, compare_period=cmp_p, mode=mode, window_label=window_label,
-            resolve_market=resolve_market,
+            resolve_market=resolve_market, line_rules=_line_rules_of(_accessory_config(client, org_id)),
             params={"period": base_p, "mode": mode, "compare_period": cmp_p,
                     "as_of_day": eff_as_of, "week": week, "carrier": active_carrier,
                     "stores": sorted(sel_stores), "markets": sorted(sel_markets)})
@@ -22855,6 +23050,9 @@ def get_accessory_config(org_id: str = ORG_ID):
             "billpay_products": c["billpay_products_list"],
             "contract_type_map": c["contract_type_map_raw"],
             "activation_rules": c["activation_rules"],
+            # THE activation-type rules (line_class, 2026-09-21): raw JSON + resolved (house defaults filled)
+            "activation_details_rules": c.get("activation_details_rules_raw") or {},
+            "line_rules": {k: v for k, v in (c.get("line_rules") or _lc.HOUSE_RULES).items() if k != "metric_hints"},
             "box_count_buckets": c["box_count_buckets_list"],
             "catalog_classify_enabled": c["catalog_classify_enabled"],
             "catalog_accessory_categories": c["catalog_accessory_categories_list"],
@@ -22873,6 +23071,7 @@ class PutAccessoryConfigIn(LaxModel):
     billpay_products: Any = None
     contract_type_map: Any = None
     activation_rules: Any = None
+    activation_details_rules: Any = None     # mig 313 JSON: the line_class keys + the Activation-Details basis keys
     box_count_buckets: Any = None
     catalog_classify_enabled: Any = None
     catalog_accessory_categories: Any = None
@@ -22976,6 +23175,22 @@ def put_accessory_config(body: PutAccessoryConfigIn, org_id: str = ORG_ID, autho
         row["activation_rules"] = _rules
     else:
         row["activation_rules"] = cur["activation_rules"]
+    # ACTIVATION-TYPE RULES (mig 313 column, extended 2026-09-21 — line_class). A partial body MERGES over
+    # the stored JSON: the line_class keys are normalised through merge_into_raw, every other key (the
+    # Activation-Details basis rules) passes through untouched, so neither owner of the column can erase
+    # the other's rules. Never a second column, never a second writer (the 2.5a step calls this).
+    if "activation_details_rules" in body.model_fields_set:
+        _adr = body.activation_details_rules
+        if not isinstance(_adr, dict):
+            raise HTTPException(400, "activation_details_rules must be a JSON object")
+        _cur_raw = dict(cur.get("activation_details_rules_raw") or {})
+        _merged = _lc.merge_into_raw(_cur_raw, fields=_adr.get("fields"), tokens=_adr.get("tokens"), exact=_adr.get("exact"))
+        for _k, _v in _adr.items():
+            if _k not in ("fields", "tokens", "exact"):
+                _merged[_k] = _v
+        row["activation_details_rules"] = _merged
+    else:
+        row["activation_details_rules"] = dict(cur.get("activation_details_rules_raw") or {})
     # BOX-COUNT buckets (mig 231) — which activation buckets add to "total boxes sold". Sanitized to the
     # known bucket vocabulary. Empty = device-line boxes only (byte-identical).
     if "box_count_buckets" in body.model_fields_set:
@@ -23015,12 +23230,13 @@ def put_accessory_config(body: PutAccessoryConfigIn, org_id: str = ORG_ID, autho
     # editing the accessory lists never breaks before the migrations run (billpay → Boost-token fallback,
     # contract-type map → empty/classifier, box → _BOX_DEPTS, set-up fee → 'Device Setup Charge', catalog →
     # disabled/legacy classification).
-    _new930 = ["gp_acc_basis"]
+    _new313 = ["activation_details_rules"]
+    _new930 = _new313 + ["gp_acc_basis"]
     _new276 = _new930 + ["definition_drives_pay"]
     _new250 = _new276 + ["apply_to_gp"]
     _new231 = _new250 + ["box_count_buckets", "catalog_classify_enabled", "catalog_accessory_categories"]
     _drop_final = _new231 + ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords", "box_departments"]
-    for _drop in ([], _new930, _new276, _new250, _new231, _new231 + ["activation_rules"], _new231 + ["activation_rules", "billpay_products"],
+    for _drop in ([], _new313, _new930, _new276, _new250, _new231, _new231 + ["activation_rules"], _new231 + ["activation_rules", "billpay_products"],
                   _new231 + ["activation_rules", "billpay_products", "contract_type_map"],
                   _new231 + ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords"], _drop_final):
         attempt = dict(row)
@@ -23375,7 +23591,7 @@ def commission_drill(period: str, rep: str = "", org_id: str = ORG_ID):
         if str(r.get("trans_type") or "").strip() == "Return":
             continue
         tid = str(r.get("trans_id") or "").strip()
-        cls = classify_contract_type(r.get("contract_type"))
+        cls = classify_line(r, _line_rules_of(acfg))
         if tid and cls == "premium":
             prem.setdefault(tid, _line(r))
         elif tid and cls == "byod":
@@ -25065,58 +25281,24 @@ _VOID_TOKENS = _GP_VOID_TOKENS
 # (mig 214) — an empty per-org list falls back to these so the house/Boost conversion stays byte-identical.
 _BILLPAY_DEFAULT_TOKENS = ('boost rtr', 'xfinity prepaid refill')
 
-# DISPLAY-ONLY auto-recognition of NON-PHONE ACTIVATION categories whose Contract Type labels the phone
-# classifier (calculator.classify_contract_type, tuned to Boost handset labels) does not recognize (owner
-# 2026-08-13, "luxelink activations don't match b2bsoft" — Diversey read 30 vs 49 because Home Internet /
-# FiOS / Tablet activations resolved to None and dropped out of Total Activation). A Total-carrier B2B
-# Month-To-Date report counts these as activations, so the store total has to as well. Substring, lower-cased
-# — deliberately keyword-shaped (never "any non-blank label") so a stray non-activation type can't be swept
-# in. See _resolve_ct_bucket for the strict gating that keeps the house/Boost org byte-identical.
-# 'edge' = a carrier early-upgrade / device-lease activation (e.g. Verizon Edge); the b2bsoft MTD report
-# counts it in Total Activation, so it belongs here (owner's Diversey breakdown 2026-08-13: 7 new act + 18
-# port + 6 byod + 12 tablet + 5 home internet + 1 edge = 49).
-_AUTO_ACT_CATEGORY_KEYS = ('home internet', 'home-internet', 'fixed wireless', 'fwa', 'fios', 'tablet', 'edge')
+# ── THE ACTIVATION-TYPE PREDICATE (2026-09-21) ────────────────────────────────────────────────────
+# `_resolve_ct_bucket` (contract_type + the mig-213 map, with the non-phone auto-count for a config-driven
+# tenant) is RETIRED: every classification below goes through `line_class.activation_class` with the
+# org's rules (`acfg['line_rules']`, resolved in _accessory_config_uncached from
+# accessory_config.activation_details_rules + contract_type_map). The auto-count keys it carried are
+# the house `auto_activation_tokens` there, applied under the same opt-in (a non-empty exact map).
+def _line_rules_of(acfg):
+    """The org's resolved line_class rules off an _accessory_config result (None → house defaults)."""
+    r = (acfg or {}).get('line_rules') if isinstance(acfg, dict) else None
+    return r if isinstance(r, dict) else None
 
 
-def _resolve_ct_bucket(ct, ct_map=None):
-    """DISPLAY-path contract-type classification with a per-org override (mig 213). Returns
-    'byod' | 'upgrade' | 'premium' | None — the SAME vocabulary as calculator.classify_contract_type.
-
-    `ct_map` = the org's {stripped-lowercased contract_type : bucket} map from
-    accessory_config['contract_type_map'] (bucket in 'premium'|'upgrade'|'byod'|'none'). A MAPPED value wins
-    ('none' -> None, i.e. force-excluded); an UNMAPPED value falls back to the hard-coded classifier — so an
-    empty map (the house/Boost default) is BYTE-IDENTICAL to calling classify_contract_type directly, and a
-    tenant only needs to map the labels the hard-coded set misses. Pure; never raises.
-
-    NON-PHONE ACTIVATION AUTO-COUNT (owner 2026-08-13). After an explicit map miss AND a phone-classifier
-    miss, a CONFIG-DRIVEN tenant (one that maintains a non-empty contract_type_map) also gets the well-known
-    non-phone activation categories in _AUTO_ACT_CATEGORY_KEYS (Home Internet / FiOS / Tablet / FWA)
-    recognized as 'premium', so those activations count toward Total Activation the way the b2bsoft MTD report
-    counts them. Three guards keep this safe:
-      • The house/Boost org has an EMPTY map -> this branch is skipped -> BYTE-IDENTICAL (no house number
-        moves). Only a tenant that has already opted into config-driven classification is affected.
-      • It fires ONLY for a label the tenant did NOT explicitly map — so mapping a label to 'none' (or to any
-        bucket) still wins and is the escape hatch to exclude a category on purpose.
-      • It fires ONLY when the phone classifier found no signal, so 'Tablet Upgrade' stays 'upgrade' and
-        'BYOD Home Internet' stays 'byod' (byod/upgrade are decided first in classify_contract_type).
-
-    DISPLAY ONLY: used by _sales_cell_agg (Sales Report / Executive MTD / Daily Targets). The Boost payout
-    path (calculator.classify_contract_type) and plan-mode payout (commission_engine) do NOT call this, so
-    neither the map nor the auto-count ever moves a commission/payout number."""
-    if ct_map:
-        b = ct_map.get(str(ct or "").strip().lower())
-        if b:
-            return None if b == "none" else b
-    base = classify_contract_type(ct)
-    if base:
-        return base
-    # Config-driven tenants only (non-empty map): auto-count the non-phone activation categories the phone
-    # classifier misses. Empty map (house/Boost) -> skipped -> byte-identical.
-    if ct_map:
-        cl = str(ct or "").strip().lower()
-        if cl and any(k in cl for k in _AUTO_ACT_CATEGORY_KEYS):
-            return 'premium'
-    return None
+def _line_skip(r):
+    """The canonical DISPLAY skip rule for one sale line (voided, or a Return) — the same predicate
+    _sales_cell_agg applies — so the intake's activation gate and the Exec-MTD banner count exactly the
+    lines the reports count."""
+    return (str((r or {}).get('voided') or '').strip().lower() in _VOID_TOKENS
+            or str((r or {}).get('trans_type') or '').strip() == 'Return')
 
 
 def _line_cond_hit(cond, lines):
@@ -25176,11 +25358,12 @@ def _classify_blank_ct_txn(lines, rules):
     return None
 
 
-def _blank_ct_bucket_map(rows, ct_map, rules):
-    """trans_id -> activation bucket for transactions with NO contract_type-based classification, via the
-    per-org activation_rules (mig 224). Only fires for a tid where NO line resolves to premium/upgrade/byod
-    through contract_type (so it NEVER overrides a labeled classification). EMPTY rules => {} => no-op =>
-    Boost byte-identical. Pure; never raises."""
+def _blank_ct_bucket_map(rows, line_rules, rules):
+    """trans_id -> activation bucket for transactions with NO line-level classification, via the per-org
+    TRANSACTION-level activation_rules (mig 224: multi-line evidence — a device line + a plan line). Only
+    fires for a tid where NO line classifies through THE line predicate (line_class, the org's
+    `line_rules`), so it NEVER overrides a classified line. EMPTY rules => {} => no-op => byte-identical.
+    Pure; never raises."""
     if not rules:
         return {}
     txn, classed = {}, set()
@@ -25196,7 +25379,7 @@ def _blank_ct_bucket_map(rows, ct_map, rules):
         if not t:
             continue
         txn.setdefault(t, []).append(r)
-        if _resolve_ct_bucket(str(r.get('contract_type') or ''), ct_map):
+        if _lc.classify_line(r, line_rules):
             classed.add(t)
     out = {}
     for t, lns in txn.items():
@@ -25279,9 +25462,10 @@ def _classification_gaps(rows, acfg, is_excluded=None, want_samples=False, sampl
     surfaced here — the blank-ct activation rules match on department/category/product_desc/trans_type, which
     are exactly the fields returned."""
     from collections import Counter
-    ct_map = (acfg or {}).get('contract_type_map')
+    line_rules = _line_rules_of(acfg)
+    _exact = (line_rules or _lc.HOUSE_RULES)['exact']
     rules = (acfg or {}).get('activation_rules') or []
-    blank_bucket = _blank_ct_bucket_map(rows, ct_map, rules)
+    blank_bucket = _blank_ct_bucket_map(rows, line_rules, rules)
     unrec_lines, unrec_txn = Counter(), {}
     txn_blank, txn_classed = set(), set()
     lines_by_tid = {}
@@ -25294,7 +25478,7 @@ def _classification_gaps(rows, acfg, is_excluded=None, want_samples=False, sampl
         ct = str(r.get('contract_type') or '').strip()
         if tid:
             lines_by_tid.setdefault(tid, []).append(r)
-        cls = _resolve_ct_bucket(ct, ct_map)
+        cls = _lc.classify_line(r, line_rules)
         if cls:
             if tid:
                 txn_classed.add(tid)
@@ -25302,7 +25486,7 @@ def _classification_gaps(rows, acfg, is_excluded=None, want_samples=False, sampl
             # A label the tenant EXPLICITLY mapped to 'none' is a DELIBERATE exclusion, not a gap — don't
             # nag them to "map it so it counts" (it resolves to None on purpose). Swaps are likewise not an
             # activation gap. Everything else that resolves to None with a non-blank label is unrecognized.
-            _explicit_none = bool(ct_map) and ct_map.get(ct.lower()) == 'none'
+            _explicit_none = _exact.get(ct.lower()) == 'none'
             if 'swap' not in ct.lower() and not _explicit_none:
                 unrec_lines[ct] += 1
                 if tid:
@@ -25326,8 +25510,9 @@ def _classification_gaps(rows, acfg, is_excluded=None, want_samples=False, sampl
         parts.append(f"{len(unrecognized)} contract-type value(s) are unrecognized ({_top})")
     note = None
     if parts:
-        note = ('; '.join(parts) + ' — map them in Sales Report ⚙ Classification (contract-type map / '
-                'blank-contract-type activation rules) so they count as activations.')
+        note = ('; '.join(parts) + ' — map them under Onboarding — Commission Intake, step 2.5a '
+                '(which words mean activation / upgrade / BYOD), or in Sales Report ⚙ Classification '
+                '(contract-type map / blank-contract-type activation rules) so they count as activations.')
     out = {'unrecognized_contract_types': unrecognized,
            'blank_ct_transactions': len(txn_blank),
            'blank_ct_non_activation': len(non_act),
@@ -25461,9 +25646,10 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
     additionally splits the bill-payment dollars by POS tender (card / cash / mixed / other) via
     metric_recon.classify_tender when the rows carry tender_type; None (every pre-existing caller) →
     the split accumulators stay 0.0 and the aggregation is byte-identical. See the block comment above."""
-    act_rules = (exec_cfg.get('activation', {}) or {}).get('rules', {}) if exec_cfg else {}
-    # Per-org contract-type -> bucket override (mig 213); empty for the house -> byte-identical classifier.
-    ct_map = acfg.get('contract_type_map') if acfg else None
+    # THE activation-type predicate's rules (line_class, 2026-09-21): which FIELDS carry the fact and
+    # which TOKENS name each class, per org — the mig-213 map absorbed as its exact layer, the Port
+    # sub-split its 'port' class. None (no acfg) → house defaults → byte-identical to the retired chain.
+    line_rules = _line_rules_of(acfg)
     # Per-org bill-payment product membership (mig 214). A set of lowercased product values; NON-empty ->
     # case-insensitive EXACT match on product_desc; empty/unset -> the hard-coded Boost-token fallback below
     # (house conversion byte-identical). See _accessory_config + _BILLPAY_DEFAULT_TOKENS.
@@ -25472,7 +25658,7 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
     # classifies via contract_type — so this SUPPLEMENTS, never overrides, the ct classifier. Empty rules
     # (the house/Boost default) -> {} -> the supplement below is a no-op (BYTE-IDENTICAL).
     _act_rules = acfg.get('activation_rules') if acfg else None
-    blank_bucket = _blank_ct_bucket_map(rows, ct_map, _act_rules)
+    blank_bucket = _blank_ct_bucket_map(rows, line_rules, _act_rules)
     agg = {}
     for r in rows:
         # ── THE canonical skip rules — shared by all three (was three slightly different predicates).
@@ -25518,18 +25704,19 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
         a['lines'] += 1
         a['revenue'] += ext
         a['gp'] += gp
-        # SHARED activation classifier (money-adjacent; identical to commissions + targets), DISTINCT-txn.
-        # Config-driven per-org override (mig 213) wins for a mapped label; else the hard-coded classifier.
-        _cls = _resolve_ct_bucket(ct, ct_map)
+        # THE SHARED activation classifier (identical to commissions + targets), DISTINCT-txn: the one
+        # predicate over the whole ROW — the fact may sit in contract_type, the category path or the
+        # product name, per the org's rules. Port is a SUB-split of premium (never a redefinition of it):
+        # the same predicate says 'port'; only needed when exec_cfg is present (Exec MTD).
+        _full = _lc.activation_class(r, line_rules)
+        _cls = _lc.bucket_of(_full)
         if tid and _cls == 'byod':
             a['_byod'].add(tid)
         elif tid and _cls == 'upgrade':
             a['_upg'].add(tid)
         elif tid and _cls == 'premium':
             a['_prem'].add(tid)
-            # Port is a SUB-split of premium/activation (never a redefinition of it) — the token stays
-            # exec_metric_config-configurable; only needed when exec_cfg is present (Exec MTD).
-            if exec_cfg and _exec_act_class(ct, act_rules) == 'port':
+            if exec_cfg and _full == 'port':
                 a['_port'].add(tid)
         elif tid and not _cls and tid in blank_bucket:
             # Blank-contract_type transaction rescued by the per-org activation_rules (mig 224). DISTINCT-
@@ -27910,23 +28097,9 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
 _exec_line_match = _emd.line_match
 
 
-def _exec_act_class(ct, rules):
-    """Activation split (b2bsoft Location/Employee report): BYOD/Upgrade/Port by keyword-CONTAINS on the
-    contract_type (config tokens), any OTHER non-blank contract_type = a plain Activation. Priority
-    upgrade > byod > port > activation (so 'BYOD Port' = BYOD, 'Port with IDV' = Port). This is the ONE
-    split the spreadsheet uses; it reuses the same 'non-blank contract_type = an activation' rule as
-    classify_contract_type/_compute_feed_actuals_py but adds the Port refinement. None = not an activation
-    line (blank contract_type — e.g. an accessory/bill-payment line)."""
-    c = (ct or '').strip().lower()
-    if not c:
-        return None
-    if any(t in c for t in (rules.get('upgrade') or [])):
-        return 'upgrade'
-    if any(t in c for t in (rules.get('byod') or [])):
-        return 'byod'
-    if any(t in c for t in (rules.get('port') or [])):
-        return 'port'
-    return 'activation'
+# `_exec_act_class` (the contract_type-only Port/BYOD/Upgrade split on exec_metric_config tokens) is
+# RETIRED (2026-09-21): the split is the 'port' class of line_class.activation_class, read by
+# _sales_cell_agg — one predicate, one rules home (accessory_config.activation_details_rules).
 
 
 def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, today=None,
@@ -28321,6 +28494,17 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
                        "blank_fields": _landing.blank_fields_over(rows, _ex_needs), "feeds": _ex_feeds}
     except Exception:
         _landing_ex = {"tables": [], "rows": 0, "needs": [], "blank_fields": [], "feeds": []}
+    # ── ROWS EXIST BUT NO LINE COULD BE TOLD APART AS AN ACTIVATION (owner 2026-09-21: "88 txns but not
+    #    a break up into activations and upgrade etc, also nothing on exec mtd"). THE predicate's own
+    #    count over the same rows; the page says which fields were read and links to the intake step
+    #    that maps the words. DISPLAY-ONLY, never raises.
+    try:
+        _cls_counts = _lc.count_classes(rows, _line_rules_of(acfg), skip=_line_skip)
+        _landing_ex["classified"] = {**_cls_counts, "gate_open": _lc.gate_open(_cls_counts),
+                                     "map_at": {"screen": "onboarding_intake", "step": "2.5a"},
+                                     "note": _lc.gate_sentence(_cls_counts) if _lc.gate_open(_cls_counts) else None}
+    except Exception:
+        _landing_ex["classified"] = None
 
     return {'period': period, 'source': meta,
             'classification_gaps': _cls_gaps_ex,

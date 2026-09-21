@@ -182,8 +182,16 @@ STEPS_STAGE2 = [
     ("2.3", "Confirm the columns"),
     ("2.4", "Stores and reps"),
     ("2.5", "Our numbers beside the file's"),
+    ("2.5a", "What counts as an activation"),
     ("2.6", "Confirm this export"),
 ]
+# 2.5a (owner 2026-09-21): the line-level sales export's activation TYPES (new activation / upgrade /
+# bring-your-own-device / port-in) and the Executive-MTD line buckets (phones, bill payments …) are
+# MAPPED here from the file's own words — the rules live in the two existing config homes
+# (accessory_config.activation_details_rules, exec_metric_config); the step reads and writes them
+# through the router's /onboarding/intake/line-class. The gate below refuses to call a landed export
+# verified while not one line can be told apart as an activation type, unless the person attests.
+STEP_LINE_CLASS = "2.5a"
 STEPS_STAGE4 = [("4.1", "Every source, verified"), ("4.2", "Sign-off")]
 STEPS_STAGE5 = [("5.1", "Monthly runbook")]
 STEPS_BY_STAGE = {"2": STEPS_STAGE2, "3": STEPS, "4": STEPS_STAGE4, "5": STEPS_STAGE5}
@@ -1386,6 +1394,60 @@ def billpay_feed_verify(kept, fields, is_billpay, resolve_store=None):
             "distinct_txns": len({_s(m.get(txn)) for m in kept or [] if txn and _s(m.get(txn))}) if txn else None}
 
 
+def activation_gate(counts, attestation=None, previous=None, by=None):
+    """THE ACTIVATION GATE (owner 2026-09-21). `counts` = line_class.count_classes over the landed slice
+    (None = the check did not run → not blocked, stated). Blocked when the slice has lines and not one
+    is an activation type AND nobody attested that the file truly has no activations. The attestation
+    is `attestation['no_activations']` (the commit form) or `attestation['reason']` on the 2.5a save,
+    or one already recorded on `previous` — recorded with the name, never inferred. PURE."""
+    c = counts or {}
+    att = attestation or {}
+    prev = previous or {}
+    reason_txt = _s(att.get("no_activations") or "")
+    if not reason_txt and prev.get("attested"):
+        rec = prev["attested"]
+    elif reason_txt:
+        rec = {"reason": reason_txt, "by": by or att.get("by"), "at": now_iso()}
+    else:
+        rec = None
+    if not c or c.get("error") or "scanned" not in c:
+        return {"blocked": False, "open": False, "checked": False, "attested": rec,
+                "reason": (c or {}).get("error") or "activation types not checked", "step": STEP_LINE_CLASS}
+    is_open = int(c.get("scanned") or 0) > 0 and int(c.get("activation_type_lines") or 0) == 0
+    blocked = is_open and not rec
+    reason = ""
+    if blocked:
+        reason = (f"{int(c.get('scanned') or 0):,} line(s) landed and not one could be told apart as an activation, "
+                  f"upgrade, port-in or bring-your-own-device line (columns read: {', '.join(c.get('fields') or [])}) — "
+                  f"map which words mean which under step {STEP_LINE_CLASS}, or attest that this file truly has no activations.")
+    elif is_open and rec:
+        reason = f"no activation-type line; attested by {rec.get('by') or '?'}: {rec.get('reason')}"
+    return {"blocked": blocked, "open": is_open, "checked": True, "attested": rec, "reason": reason,
+            "step": STEP_LINE_CLASS,
+            "activation_type_lines": int(c.get("activation_type_lines") or 0),
+            "activation_type_transactions": int(c.get("activation_type_transactions") or 0),
+            "scanned": int(c.get("scanned") or 0)}
+
+
+def activation_note(vn):
+    """The Stage-4 line for the activation split of a landed sales export: the counts per class, the
+    attestation, or 'not yet checked' for a line-level export landed before the step existed."""
+    vn = vn or {}
+    ac = vn.get("activation_classes")
+    if not ac or ac.get("error") or "classes" not in ac:
+        if vn.get("target_table") == SOURCE_KIND_TARGET["sales"]:
+            return f"activation types not yet checked — open step {STEP_LINE_CLASS}"
+        return None
+    g = vn.get("activation_gate") or {}
+    cl = ac.get("classes") or {}
+    parts = [f"{cl[k]['transactions']} {cl[k]['label'].lower()}" for k in ("activation", "port", "byod", "upgrade") if k in cl and cl[k].get("transactions")]
+    if parts:
+        return "activations: " + ", ".join(parts) + f" (of {int(ac.get('scanned') or 0):,} lines)"
+    if g.get("attested"):
+        return f"no activations — attested by {g['attested'].get('by') or '?'}"
+    return f"no line could be told apart as an activation — step {STEP_LINE_CLASS}"
+
+
 def stage4_note(vn):
     """The one-line cross-check a Stage-4 row carries beside its totals (Stage C): the bill-pay lines
     EXTRACTED from a sales export, or the units the inventory check found activated but still on hand.
@@ -1579,10 +1641,13 @@ def verify_table(instances):
         else:
             basis = vn.get("basis")
         red = i["status"] != STATUS_VERIFIED
-        # the step that fixes a red row: the identity gate first, then the totals, else where it stopped
+        # the step that fixes a red row: the identity gate first, the activation gate next, then the
+        # totals, else where it stopped
         fix_step = i["step"]
         if red and i["stage"] == "2":
-            fix_step = "2.4" if "unresolved" in _s(i.get("blocking_reason")) else "2.5" if vn else i["step"]
+            br = _s(i.get("blocking_reason"))
+            gate = (vn.get("activation_gate") or {}).get("blocked") or f"step {STEP_LINE_CLASS}" in br
+            fix_step = "2.4" if "unresolved" in br else STEP_LINE_CLASS if gate else "2.5" if vn else i["step"]
         elif red and i["stage"] == "3":
             fix_step = "3.8" if vn else i["step"]
         rows.append({"instance_key": i["instance_key"], "stage": i["stage"], "kind": kind, "label": i["label"],
@@ -1594,7 +1659,10 @@ def verify_table(instances):
                      "blocking_reason": i.get("blocking_reason"), "basis": basis, "fix_step": fix_step,
                      # Stage C: the cross-check this commit ran (bill-pay extraction / inventory-vs-activations)
                      "note": stage4_note(vn), "billpay_extract": vn.get("billpay_extract"),
-                     "sold_check": vn.get("sold_check")})
+                     "sold_check": vn.get("sold_check"),
+                     # 2.5a — the activation split of a landed sales export (or "not yet checked")
+                     "activation_note": activation_note(vn), "activation_classes": vn.get("activation_classes"),
+                     "activation_gate": vn.get("activation_gate")})
     return rows
 
 

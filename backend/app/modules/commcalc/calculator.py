@@ -11,49 +11,33 @@ from app.modules.commcalc import setup_fee_pay as _sfp
 from app.modules.commcalc.gp_report import is_voided as _is_voided, VOID_TOKENS as _VOID_TOKENS
 
 DEVICE_DEPTS = {'Android - XP', 'IPHONE - XP', 'TABLET - XP'}
-# BYOD: any contract type containing 'BYOD'
-BYOD_ACT = {
-    'BYOD','BYOD Port-In','BYOD Add A Line','BYOD Port-In Add A Line',
-    'BYOD Swap','BYOD Eligible Port-In'
-}
-# Upgrade: any containing 'Upgrade'
-UPGRADE_ACT = {'Upgrade','Upgrade Port-In','Device Upgrade'}
-# Premium: standard activations (non-BYOD, non-upgrade)
-PREMIUM_ACT = {
-    'Activation','Port-In','Add A Line','Port-In Add A Line',
-    'Eligible Port-In Activation','Activation Add A Line',
-    'Eligible Port-In Add A Line'
-}
-# Activation keyword patterns — recognize label VARIANTS the exact sets above miss (e.g. "New
-# Activation", "Standard Activation", "Eligible Port In Activation") so drifted B2B Contract Type
-# labels still pay/count instead of being silently dropped. Kept activation-specific (NOT "any
-# non-empty type") so a stray non-activation label can't accidentally earn an activation bounty.
-# 'idv' = an IDV (identity-verification) port activation, e.g. "Port with IDV" / "Port w/ IDV" /
-# "Activation With IDV". OWNER RULING 2026-07-16: "Port with IDV" IS an activation. A bare CONTAINS
-# on 'idv' catches the slash/casing drift too; it can't over-reach a BYOD/Upgrade label because the
-# 'byod' and 'upgrade' checks in classify_contract_type return FIRST (so "BYOD Port with IDV" stays
-# byod, "Upgrade with IDV" stays upgrade). 'port with idv' is kept explicit for intent/legibility.
-_PREMIUM_KEYS = ('activation', 'port-in', 'port in', 'add a line', 'add-a-line', 'new line', ' aal', 'aal ',
-                 'idv', 'port with idv')
+
+# ── ACTIVATION TYPE: THE ONE PREDICATE (2026-09-21) ───────────────────────────────────────────────
+# The token lists that lived here (PREMIUM_ACT / BYOD_ACT / UPGRADE_ACT / _PREMIUM_KEYS) are now the
+# HOUSE DEFAULTS of `line_class.HOUSE_TOKENS`, and the classification reads the org's OWN rules
+# (accessory_config.activation_details_rules: which FIELDS carry the fact, which TOKENS name each
+# class). A POS whose export has no Contract Type column carries the type in the category path or
+# the product name; before this, every such tenant earned zero activations here, silently.
+# BYTE-IDENTICAL BY CONSTRUCTION under house defaults: `harness_line_class.py` replays the retired
+# classifier over every contract-type spelling in the seeds and asserts equality.
+from app.modules.commcalc import line_class as _lc
 
 
-def classify_contract_type(ct: str):
-    """The ONE contract-type classifier shared by commissions, targets, and the sales report.
-    Returns 'byod' | 'upgrade' | 'premium' | None. Tolerant of label drift: BYOD/Upgrade by CONTAINS,
-    premium by the known set OR an activation keyword (incl. 'idv' — an IDV/identity-verification port
-    activation such as "Port with IDV"; owner ruling 2026-07-16). None = not a phone-activation line
-    (e.g. an accessory line, which carries a blank Contract Type)."""
-    c = (ct or '').strip()
-    if not c:
-        return None
-    cl = c.lower()
-    if 'byod' in cl:
-        return 'byod'
-    if 'upgrade' in cl:
-        return 'upgrade'
-    if c in PREMIUM_ACT or any(k in cl for k in _PREMIUM_KEYS):
-        return 'premium'
-    return None
+def classify_line(row, rules=None):
+    """The ONE classifier, over a SALE LINE (a row dict) and the org's resolved rules
+    (`line_class.resolve_rules`; None = house defaults). Returns 'byod' | 'upgrade' | 'premium' | None
+    — the vocabulary commissions, targets and the Sales Report sum on. None = not a phone-activation
+    line (an accessory, a bill payment, a feature)."""
+    return _lc.classify_line(row, rules)
+
+
+def classify_contract_type(ct, rules=None):
+    """Compatibility alias: classify a bare CONTRACT-TYPE value (or a whole row) through the one
+    predicate. Kept for the proof harnesses that inject a classifier; no app module calls it — every
+    caller passes the ROW (`classify_line`), because the fact may live in another column."""
+    if isinstance(ct, dict):
+        return _lc.classify_line(ct, rules)
+    return _lc.classify_line({'contract_type': ct}, rules)
 
 def parse_period(period: str) -> dict:
     months = {
@@ -192,6 +176,8 @@ def calc_rep_commissions(
     # disagree on case is a MONEY change (see setup_fee_pay.divergence(), which measures it first).
     _setup_kws = _sfp.normalize_keywords(cfg.get('setup_fee_keywords'))
     _setup_mode = str(cfg.get('setup_fee_match_mode') or 'legacy_case_sensitive').strip().lower()
+    # ACTIVATION-TYPE rules (2026-09-21): the org's resolved line_class rules, or the house defaults.
+    _line_rules = cfg.get('line_class_rules') if isinstance(cfg.get('line_class_rules'), dict) else None
     if not _acc_depts and not _acc_cats and not _acc_kws:
         _acc_depts = {'ondigo'}
     # Configurable ACIMA-lease tender (mig 094): which Tender Type value(s) mark an ACIMA lease
@@ -324,7 +310,9 @@ def calc_rep_commissions(
         cat = str(r.get('category','')).strip()
         product = str(r.get('product_desc','')).strip()
         
-        _cls = classify_contract_type(ct)
+        # THE one predicate over the whole ROW with the org's rules (cfg['line_class_rules'], threaded by
+        # the caller from _accessory_config['line_rules']; None = house defaults = today's behaviour).
+        _cls = classify_line(r, _line_rules)
         if _cls == 'byod': entry['byod_set'].add(tid)
         elif _cls == 'upgrade': entry['upg_set'].add(tid)
         elif _cls == 'premium': entry['prem_set'].add(tid)

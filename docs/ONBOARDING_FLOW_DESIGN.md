@@ -293,3 +293,33 @@ Onboarding — Commission Intake."*; the column list is the second line, never t
 **Locked.** `backend/harness_landing_identity_lock.py` fails the build when a writer to a multi-kind table stops stamping the
 kind, when a second consumers map appears anywhere, when an upload surface stops rendering the one component, or when a
 reader named in the map has no page to link to.
+
+## 10. What counts as an activation is MAPPED from the file's own words — one predicate, everywhere (owner 2026-09-21)
+
+Owner: *"sales report shows 88 txns but not a break up in to activations and upgrade etc, also nothing on exec mtd"*.
+Measured on the first tenant whose POS export has no contract-type column: the activation type sat in the category path
+leaf and the product name; every report and every commission calculation read zero activations, silently.
+
+**The rule.** A sale line's activation type (new activation / upgrade / bring-your-own-device / port-in / hardware only) is
+decided by ONE predicate (`commcalc/line_class.activation_class`) over the org's own rules: WHICH columns carry the type and
+WHICH words name each class — config rows with house defaults (`accessory_config.activation_details_rules`), never a column
+name or a word in code. Every surface that counts an activation — the Sales Report, Executive MTD, Daily Targets, every
+commission calculation, the closing recon, the event register — dereferences that predicate. Two answers to "is this line an
+activation" is the duplicate defect; the build fails on a second one (`backend/harness_line_class_lock.py`).
+
+**Stage 2 asks it — step 2.5a "What counts as an activation".** After the numbers (2.5) and before the confirm (2.6), the
+platform scans the file's distinct values per column, proposes the words that name each type from a generic hint vocabulary
+(a word that appears on nearly every line is a department, not a type — reported, never proposed), shows the column each word
+lives in, sample values and the count it would classify — computed by the predicate itself, so what the person confirms is
+what every report will count. The same step maps the Executive MTD's line columns (phones, bill payments, protection …) where
+their rule matches nothing. Accept or edit, save: the two existing config homes are written through their one writer each,
+and the landed rows are re-counted.
+
+**The gate.** A landed sales export whose rows cannot be told apart as any activation type is landed but NOT verified in
+Stage 4 until a rule classifies at least one line or the person attests, with a reason and their name, that the file truly
+has no activations. The Executive MTD page says the same thing in its own words and links to the step (ScreenLink) — the rows
+are already there; nothing is re-uploaded.
+
+**Compatibility.** The house defaults ARE the retired classifiers (contract type only, the same token lists): every existing
+tenant's classification and pay are byte-identical (`backend/harness_line_class.py` replays the retired code over every
+spelling in the seeds). Index §30.12 has the measured numbers and the file list.

@@ -48,7 +48,7 @@ their dollars — never silently dropped). BOTH readings are computed on every c
 unreadable table, or zero CONFIRMED classifications all keep today's numbers to the cent.
 """
 import calendar
-from app.modules.commcalc.calculator import classify_contract_type, safe_float
+from app.modules.commcalc.calculator import classify_line, safe_float
 from app.modules.commcalc import ma_class_wiring
 from app.modules.account import residual_subs
 
@@ -831,15 +831,17 @@ def _norm_mdn(v):
 
 
 def _byod_mdns(client, org_id, periods):
-    """Distinct normalized MDNs whose activation classified as BYOD, across the given sales periods."""
+    """Distinct normalized MDNs whose activation classified as BYOD, across the given sales periods —
+    through THE one predicate with the org's rules (line_class; the fact may sit outside contract_type)."""
     out = set()
+    _rules = _line_rules(client, org_id)
     for period in periods:
         for tbl in ("raw_sales", "daily_sales_feed"):
             page, got = 0, False
             while True:
                 try:
                     chunk = (client.schema("commcalc").table(tbl)
-                             .select("mdn,contract_type,voided,trans_type")
+                             .select("mdn,contract_type,voided,trans_type,category,department,product_desc")
                              .eq("org_id", org_id).in_("period", _pvariants(period))
                              .range(page * 1000, page * 1000 + 999).execute().data) or []
                 except Exception:
@@ -851,7 +853,7 @@ def _byod_mdns(client, org_id, periods):
                         continue
                     if str(r.get("trans_type") or "").strip() == "Return":
                         continue
-                    if classify_contract_type(r.get("contract_type")) == "byod":
+                    if classify_line(r, _rules) == "byod":
                         m = _norm_mdn(r.get("mdn"))
                         if m:
                             out.add(m)
@@ -977,8 +979,19 @@ def _pearson(xs, ys):
     return round(sxy / ((sxx * syy) ** 0.5), 3)
 
 
+def _line_rules(client, org_id):
+    """The org's activation-type rules the ONE way (router._accessory_config['line_rules']); house
+    defaults when the router is unavailable. Never raises."""
+    try:
+        from app.modules.commcalc.router import _accessory_config
+        return (_accessory_config(client, org_id) or {}).get("line_rules")
+    except Exception:
+        return None
+
+
 def accessory_byod_correlation(client, org_id, months=4):
     acc = _acc_cfg(client, org_id)
+    _rules = _line_rules(client, org_id)
     periods = _list_periods(client, org_id)[:max(1, min(months, 12))]
     points = []
     for period in periods:
@@ -996,7 +1009,7 @@ def accessory_byod_correlation(client, org_id, months=4):
             if _is_acc(r.get("department"), r.get("category"), r.get("product_desc"), acc):
                 s["acc_rev"] += ext
             tid = str(r.get("trans_id") or "").strip()
-            if tid and classify_contract_type(r.get("contract_type")) == "byod":
+            if tid and classify_line(r, _rules) == "byod":
                 s["byod"].add(tid)
         for store, s in per_store.items():
             if s["revenue"] <= 0 and not s["byod"]:
