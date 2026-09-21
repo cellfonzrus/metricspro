@@ -9,7 +9,7 @@ from app.core.database import get_supabase
 from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
 from app.core.schemas import LaxModel
-from app.modules.account import coa, engine, autocompute, report_gates, statement_engine
+from app.modules.account import coa, engine, autocompute, report_gates, statement_engine, analysis
 # Settings/imports audit (2026-07-26): importing this module REGISTERS the finance domain's checks with
 # platform-core's admin-attention feed (GET /core/attention). It is read-only diagnostics and is fully
 # guarded internally — if core.import_health is unavailable the import is inert, so finance never breaks
@@ -991,9 +991,19 @@ def overview(period: str, org_id: str = ORG_ID):
         s = scopes.setdefault(sk, {"scope_key": sk, "scope_label": r.get("scope_label")})
         p = r.get("payload") or {}
         if r["statement_type"] == "pl":
-            s["revenue"] = sum(sec["subtotal"] for sec in p.get("sections", []) if sec["type"] == "revenue")
-            s["gross_profit"] = p.get("gross_profit")
-            s["net_income"] = p.get("net_income")
+            # ONE HOME for the headline figures (owner request 2026-09-21 — the Expenses column).
+            # This endpoint used to re-sum the revenue sections itself, a second copy of the rule
+            # `analysis.pl_totals` already owned ("recomputed from the sections exactly like
+            # /account/overview does" — its own docstring named the duplicate). It now DEREFERENCES
+            # that home, so the hub's Revenue / Gross Profit / Net Income / EXPENSES are the very
+            # numbers the P&L reports for the same scope+period, and a reclassification moves both
+            # together. `expenses` = analysis.EXPENSE_SECTIONS subtotals (Operating Expenses +
+            # Other) ⇒ gross_profit − expenses == net_income, always.
+            t = analysis.pl_totals(p)
+            s["revenue"] = t["revenue"]
+            s["gross_profit"] = t["gross_profit"]
+            s["net_income"] = t["net_income"]
+            s["expenses"] = t["expenses"]
         elif r["statement_type"] == "balance_sheet":
             s["assets"] = p.get("assets_total")
             s["balanced"] = p.get("balanced")
@@ -1043,9 +1053,9 @@ def _consolidated_pl(client, org_id, period):
             .eq("scope_key", "consolidated").eq("statement_type", "pl").execute().data) or []
     if not rows:
         return None
-    pl = rows[0].get("payload") or {}
-    rev = sum(sec.get("subtotal", 0) for sec in pl.get("sections", []) if sec.get("type") == "revenue")
-    return {"revenue": rev, "gross_profit": pl.get("gross_profit") or 0, "net_income": pl.get("net_income") or 0}
+    # Same ONE HOME as `overview` above — the narrative can never quote a revenue the dashboard
+    # does not show, because neither of them owns the formula any more.
+    return analysis.pl_totals(rows[0].get("payload") or {})
 
 
 def _account_narrative(client, org_id, period):

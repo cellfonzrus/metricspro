@@ -8,6 +8,13 @@ name: carrier-vocab-guard
 # lib/rbac.ts. This job FAILS the build when frontend display copy hardcodes a cross-side carrier
 # term outside a NAV-gated page or the guard's pinned, reviewed exceptions.
 #
+# THE FINANCE EXPENSES LOCK (index §4, 2026-09-21) runs in the same job: "expenses for a scope and
+# period" has ONE home — `account/analysis.pl_totals` over `analysis.EXPENSE_SECTIONS` — and the Account
+# hub's Expenses column, the drill-down, the P&L and the narrative all dereference it. A caller that
+# starts summing the statement sections itself, a NEW below-gross-profit section missing from that
+# tuple, or a frontend mirror that drifts from it, fails the build
+# (backend/harness_account_expenses_one_home.py; stdlib only).
+#
 # Dependency-free: the guard statically scans frontend/src on bare Python — no pip install.
 #
 # THE REPORT-KIND LOCK (design §7, 2026-09-20) runs in the same job: every upload surface must read
@@ -47,6 +54,10 @@ on:
   pull_request:
     paths:
       - "frontend/src/**"
+      - "backend/harness_account_expenses_one_home.py"
+      - "backend/app/modules/account/analysis.py"
+      - "backend/app/modules/account/statement_engine.py"
+      - "backend/app/modules/account/router.py"
       - "backend/harness_carrier_vocab_guard.py"
       - "backend/harness_report_kind_lock.py"
       - "backend/harness_mapping_key_lock.py"
@@ -115,6 +126,9 @@ jobs:
       - name: Run carrier vocabulary guard (+ the POS vocabulary axis, index §26.10)
         working-directory: backend
         run: python3 harness_carrier_vocab_guard.py | tee "$GITHUB_STEP_SUMMARY"
+      - name: Run the finance-expenses lock (one home for "expenses"; hub, drill-down, P&L and narrative dereference it)
+        working-directory: backend
+        run: python3 harness_account_expenses_one_home.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the report-kind lock (every upload surface reads the registry; no second list)
         working-directory: backend
         run: python3 harness_report_kind_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
