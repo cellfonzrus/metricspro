@@ -95,11 +95,17 @@ class _Q:
         if self.op == "upsert":
             self.db.check_rows(self.table, self.rows, upsert=True)
             keys = [k.strip() for k in (self.conflict or "").split(",") if k.strip()]
+            # Postgres 42P10: an ON CONFLICT target must name a unique index / constraint of the table. A
+            # table with DECLARED unique indexes (the migrations' current shape) refuses any other target —
+            # this is how the fake reproduces mig 962 dropping UNIQUE (org_id, bucket) on exec_metric_config
+            # (the 2.5a "phones tick did not persist" root cause). NULLS NOT DISTINCT: None matches None.
+            uniques = self.db.unique_indexes.get(self.table)
+            if uniques is not None and sorted(keys) not in [sorted(u) for u in uniques]:
+                raise RuntimeError('42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification')
             written = []
             for r in self.rows:
                 row = dict(r)
-                hit = next((x for x in t if keys and all(x.get(k) == row.get(k) for k in keys)
-                            and all(row.get(k) is not None for k in keys)), None)
+                hit = next((x for x in t if keys and all(x.get(k) == row.get(k) for k in keys)), None)
                 if hit:
                     hit.update(row)
                     written.append(dict(hit))
@@ -242,6 +248,11 @@ class FakeDB:
                                  "catalog_classify_enabled", "catalog_accessory_categories", "apply_to_gp",
                                  "definition_drives_pay", "gp_acc_basis", "updated_at"],                # mig 208 … 313 … 930
             "exec_metric_config": ["id", "org_id", "bucket", "rules", "basis", "carrier", "applicable", "updated_at"],  # mig 204/962/963
+        }
+        # the unique indexes the migrations leave on a table TODAY (a conflict target must name one — 42P10
+        # otherwise, as Postgres does); a table not listed accepts any target, as the fake always did
+        self.unique_indexes = {
+            "exec_metric_config": [("org_id", "bucket", "carrier")],      # mig 962 (NULLS NOT DISTINCT); mig 204's (org_id, bucket) DROPPED
         }
 
     def columns(self, table):

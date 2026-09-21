@@ -5900,11 +5900,18 @@ def _intake_line_class_block(client, org_id, rows):
         metrics = _lc.suggest_metric_rules(rows, ecfg, hints=rules.get("metric_hints"), skip=_line_skip)
     except Exception as e:
         metrics = {"scanned": 0, "buckets": {}, "error": str(e)[:200]}
+    # RE-VALIDATION of the rules IN FORCE over these rows (the second class): a saved word that names
+    # nearly every line is REFUSED here — the step shows it, the save path refuses until it is fixed
+    refused = sug["refused"]
     return {"step": "2.5a", "classes": [{"key": c, "label": _lc.CLASS_LABELS[c]} for c in _lc.CLASSES],
             "candidate_fields": list(_lc.CANDIDATE_FIELDS),
-            "rules": {k: rules[k] for k in ("fields", "tokens", "exact", "source", "declared")},
+            # the rules in force: fields, tokens, exact, provenance — NEVER the hint lists (the engine's
+            # input is not the person's starting text; the step seeds from suggest.proposal only)
+            "rules": {k: rules[k] for k in ("fields", "tokens", "exact", "source", "declared", "house_fill")},
             "current": sug["current"], "gate_open": _lc.gate_open(sug["current"]),
             "gate_note": _lc.gate_sentence(sug["current"]) if _lc.gate_open(sug["current"]) else None,
+            "refused": refused, "rules_ok": not refused,
+            "refusal_note": _lc.refusal_sentence(refused, sug["scanned"]) if refused else None,
             "suggest": {k: sug[k] for k in ("scanned", "distinct", "per_class", "too_broad", "proposal", "preview")},
             "metrics": metrics}
 
@@ -5925,6 +5932,40 @@ def _intake_landed_slice(client, org_id, instance_key):
     if table != _intake.SOURCE_KIND_TARGET["sales"] or not (span.get("from") and span.get("to") and stores):
         return None, inst
     return _intake_reread_sales(client, org_id, stores, span["from"], span["to"], table=table, kind=vn.get("report_key")), inst
+
+
+def _intake_draft_frame(client, org_id, inst):
+    """The sales lines a NOT-YET-LANDED Stage-2 instance WOULD land: its KEPT file re-read through THE
+    prepare path (_intake_prepare — the same parse analyze and the commit use) with the answers its
+    auto-saved draft carries (column map, sheet, header row, footer, identity, typed total). So the 2.5a
+    guard measures the analyzed frame when nothing is landed yet — never a second parse. None when the
+    instance keeps no file, has no draft, is not a line-level sales kind, or the read fails (the caller
+    states "not measured"). Never raises."""
+    try:
+        ik = str((inst or {}).get("instance_key") or "")
+        p = (inst or {}).get("payload") or {}
+        parts = ik.split(":", 2)
+        if len(parts) != 3:
+            return None
+        kind, src, slot = parts
+        ref = p.get("file") if isinstance(p.get("file"), dict) else {}
+        if kind not in _intake.SOURCE_KINDS or kind == "commission" or not ref.get("stored"):
+            return None
+        import json as _json
+        contents, fname = _intake_file_get(client, org_id, ik)
+        cm = p.get("column_map")
+        ident = p.get("identity")
+        ctx = _intake_prepare(client, org_id, contents, fname, kind, None, None,
+                              _json.dumps(cm) if isinstance(cm, dict) else "", None, None, str(p.get("typed_total") or ""),
+                              sheet=str(p.get("sheet") or ""), header_row=str(p.get("header_row") or ""),
+                              footer=str(p.get("footer_mode") or "auto"), pos_source=src, layout=slot, name=slot,
+                              identity_json=_json.dumps(ident) if isinstance(ident, dict) else None,
+                              as_of_date=str(p.get("as_of_date") or ""), role=str(p.get("role") or ""))
+        if ctx.get("target_table") != _intake.SOURCE_KIND_TARGET["sales"]:
+            return None
+        return list(ctx.get("land") or [])
+    except Exception:
+        return None
 
 
 def _intake_prepare_stage2(client, org_id, contents, filename, kind, column_map_json, typed_total,
@@ -6465,6 +6506,7 @@ class OnboardingLineClassIn(LaxModel):
     tokens: Any = None            # {activation: [...], upgrade: [...], byod: [...], port: [...], hardware_only: [...]}
     metric_rules: Any = None      # {bucket: rules} for the Executive-MTD line buckets (phones, bill_payment, …)
     no_activations: Any = None    # a reason: "this file truly has no activations" (recorded with the name)
+    broad_ok: Any = None          # ["<class>:<word>", …] — words the person attests by name although they name nearly every line
     by: Any = None
 
 
@@ -6475,39 +6517,81 @@ def onboarding_intake_put_line_class(body: OnboardingLineClassIn, org_id: str = 
     rules into exec_metric_config (through put_exec_metric_config), then RE-COUNT the instance's landed slice
     through THE predicate and record it on the stage row (`verified_numbers.activation_classes`): verified
     when the landing was ok and the gate is closed — by a rule that classifies ≥1 activation-type line or by
-    the recorded attestation — else needs_input naming this step. Gated like every Classification edit."""
+    the recorded attestation — else needs_input naming this step. Gated like every Classification edit.
+
+    THE GUARD (the second class, 2026-09-21): before ANYTHING is written, the rules that WOULD BE in force
+    (the merged JSON resolved by the one resolver, _line_rules_resolve) are run over the rows in hand — the
+    instance's LANDED slice, or the analyzed frame of its kept file when nothing has landed — and a word that
+    names ≥ line_class.BROAD_RATIO of the lines is REFUSED (400, nothing written, each word named with its
+    share) unless the body's `broad_ok` attests that word by name (recorded with the name in the same
+    JSON). Everything is validated first; the metric rows are written before the activation rules so a
+    failed write leaves nothing half-saved, and the response says what was written."""
     require_org(org_id)
     if not _can_edit_classification(authorization, org_id):
         raise HTTPException(403, "You don't have permission to edit Classification settings.")
     client = sb()
     who = str(body.by or "").strip() or None
-    written = {"activation_rules": False, "metric_buckets": []}
-    if body.fields is not None or body.tokens is not None:
-        if body.fields is not None and not isinstance(body.fields, list):
-            raise HTTPException(400, "fields must be a list of column names")
-        if body.tokens is not None and not isinstance(body.tokens, dict):
-            raise HTTPException(400, "tokens must be an object {class: [words]}")
-        cur_raw = (_accessory_config(client, org_id) or {}).get("activation_details_rules_raw") or {}
-        merged = _lc.merge_into_raw(cur_raw, fields=body.fields, tokens=body.tokens)
-        put_accessory_config(PutAccessoryConfigIn(activation_details_rules=merged), org_id, authorization)
-        written["activation_rules"] = True
+    # ── 1. validate every part of the body — nothing written yet ──
+    if body.fields is not None and not isinstance(body.fields, list):
+        raise HTTPException(400, "fields must be a list of column names")
+    if body.tokens is not None and not isinstance(body.tokens, dict):
+        raise HTTPException(400, "tokens must be an object {class: [words]}")
+    metric_rules = {}
     if isinstance(body.metric_rules, dict) and body.metric_rules:
-        ecfg = _exec_metric_config(client, org_id, with_sources=True)
         for bucket, rules in body.metric_rules.items():
             if bucket not in _emd.LINE_BUCKETS or not isinstance(rules, dict):
                 raise HTTPException(400, f"metric_rules: unknown bucket '{bucket}' (allowed: {', '.join(_emd.LINE_BUCKETS)})")
+            metric_rules[bucket] = rules
+    broad_ok = _lc.norm_broad_ok(body.broad_ok)
+    ik = (body.instance_key or "").strip()
+    rows = inst = None
+    if ik:
+        rows, inst = _intake_landed_slice(client, org_id, ik)
+        if inst is None:
+            raise HTTPException(404, "no such instance in this org's onboarding run")
+    # ── 2. THE GUARD over what would be SAVED, over the rows in hand ──
+    merged = None
+    guard = {"measured": False, "basis": None, "rows": 0, "refused": [], "attested": broad_ok}
+    if body.fields is not None or body.tokens is not None or broad_ok:
+        acfg = _accessory_config(client, org_id) or {}
+        cur_raw = acfg.get("activation_details_rules_raw") or {}
+        check_rows, basis = rows, "landed"
+        if check_rows is None and inst is not None:
+            check_rows, basis = _intake_draft_frame(client, org_id, inst), "frame"
+        effective = _line_rules_resolve(client, org_id, _lc.merge_into_raw(cur_raw, fields=body.fields, tokens=body.tokens),
+                                        acfg.get("contract_type_map") or {})
+        shares = []
+        if check_rows is not None:
+            shares, _n = _lc.token_shares(check_rows, effective, skip=_line_skip)
+            merged = _lc.merge_into_raw(cur_raw, fields=body.fields, tokens=body.tokens, broad_ok=broad_ok, by=who, shares=shares)
+            effective = _line_rules_resolve(client, org_id, merged, acfg.get("contract_type_map") or {})
+            refused = _lc.refused_tokens(check_rows, effective, skip=_line_skip)
+            guard = {"measured": True, "basis": basis, "rows": len(check_rows), "refused": refused, "attested": broad_ok}
+            if refused:
+                raise HTTPException(400, {"message": _lc.refusal_sentence(refused, len(check_rows), saving=True),
+                                          "refused": refused, "basis": basis, "rows": len(check_rows), "attest_with": "broad_ok"})
+        else:
+            merged = _lc.merge_into_raw(cur_raw, fields=body.fields, tokens=body.tokens, broad_ok=broad_ok, by=who)
+            guard["reason"] = ("no rows are landed for this export and no kept file could be re-read — the words were not "
+                               "measured here; the commit re-validates them over the landed rows")
+    # ── 3. the writes: through the two writers only, the metric rows first ──
+    written = {"activation_rules": False, "metric_buckets": []}
+    if metric_rules:
+        ecfg = _exec_metric_config(client, org_id, with_sources=True)
+        for bucket, rules in metric_rules.items():
             res = put_exec_metric_config(PutExecMetricConfigIn(bucket=bucket, rules=rules, basis=(ecfg.get(bucket) or {}).get("basis")), org_id)
             if not res.get("ok"):
-                raise HTTPException(400, f"metric definition '{bucket}' did not save: {res.get('hint') or res.get('error')}")
+                done = (", ".join(written["metric_buckets"]) or "nothing else")
+                raise HTTPException(400, f"metric definition '{bucket}' did not save ({res.get('error') or res.get('hint')}); "
+                                         f"written so far: {done}; the activation rules were NOT written")
             written["metric_buckets"].append(bucket)
+    if merged is not None:
+        put_accessory_config(PutAccessoryConfigIn(activation_details_rules=merged), org_id, authorization)
+        written["activation_rules"] = True
     _invalidate_accessory_config(org_id)
-    ik = (body.instance_key or "").strip()
-    out = {"ok": True, "written": written, "instance_key": ik or None}
+    out = {"ok": True, "written": written, "guard": guard, "instance_key": ik or None}
     if not ik:
         return out
-    rows, inst = _intake_landed_slice(client, org_id, ik)
-    if inst is None:
-        raise HTTPException(404, "no such instance in this org's onboarding run")
     vn = dict(inst.get("verified_numbers") or {})
     att = {"no_activations": str(body.no_activations or "").strip()} if str(body.no_activations or "").strip() else {}
     if rows is not None:
@@ -12643,6 +12727,22 @@ def _invalidate_accessory_config(org_id):
         return 0
 
 
+def _line_rules_resolve(client, org_id, ad_raw, ct_map):
+    """THE ONE resolution of an org's activation-type rules (line_class.resolve_rules over the mig-313
+    JSON, the mig-213 exact map and the legacy exec 'activation' layer). Called by the loader
+    (_accessory_config_uncached) for the rules IN FORCE and by the 2.5a save for the rules that WOULD BE
+    in force — so the too-broad guard measures exactly what every report and the pay path would read.
+    A second resolution would drift (the lock names this helper)."""
+    legacy_act = None
+    try:
+        _ex_act = (_exec_metric_config(client, org_id, with_sources=True) or {}).get("activation") or {}
+        if _ex_act.get("source") == "tenant":
+            legacy_act = _ex_act.get("rules") or None
+    except Exception:
+        legacy_act = None
+    return _lc.resolve_rules(ad_raw, ct_map, legacy_act)
+
+
 def _accessory_config_uncached(client, org_id):
     """Configurable accessory classification, resolved PER-ORG (mig 208 commcalc.accessory_config, keyed on
     org_id — REPLACES the flag_rules singleton, which could physically hold only ONE org's config because
@@ -12772,14 +12872,7 @@ def _accessory_config_uncached(client, org_id):
             ad_raw = adrows[0]["activation_details_rules"] or {}
     except Exception:
         ad_raw = {}
-    legacy_act = None
-    try:
-        _ex_act = (_exec_metric_config(client, org_id, with_sources=True) or {}).get("activation") or {}
-        if _ex_act.get("source") == "tenant":
-            legacy_act = _ex_act.get("rules") or None
-    except Exception:
-        legacy_act = None
-    line_rules = _lc.resolve_rules(ad_raw, ct_map, legacy_act)
+    line_rules = _line_rules_resolve(client, org_id, ad_raw, ct_map)
     # BILL-PAYMENT products (mig 214; per-org, admin-editable) — which product/item values count as a
     # bill payment (walk-in recharge) for the Daily-Targets CONVERSION metric (boxes ÷ billpays). Fetched in
     # its OWN defensive query so a missing column (pre-214) can NEVER disturb the resolution above — it falls
@@ -28896,9 +28989,14 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     #    that maps the words. DISPLAY-ONLY, never raises.
     try:
         _cls_counts = _lc.count_classes(rows, _line_rules_of(acfg), skip=_line_skip)
+        # …and the twin: a saved word naming nearly every line (every invoice an activation) is REFUSED
+        # here too — `rules_refused` + the refusal in words; the page shows it beside the silent-zero banner
         _landing_ex["classified"] = {**_cls_counts, "gate_open": _lc.gate_open(_cls_counts),
+                                     "rules_refused": _lc.rules_refused(_cls_counts),
                                      "map_at": {"screen": "onboarding_intake", "step": "2.5a"},
-                                     "note": _lc.gate_sentence(_cls_counts) if _lc.gate_open(_cls_counts) else None}
+                                     "note": (_lc.gate_sentence(_cls_counts) if _lc.gate_open(_cls_counts)
+                                              else _lc.refusal_sentence(_cls_counts["refused"], _cls_counts["scanned"])
+                                              if _lc.rules_refused(_cls_counts) else None)}
     except Exception:
         _landing_ex["classified"] = None
 
@@ -30471,14 +30569,23 @@ def put_exec_metric_config(body: PutExecMetricConfigIn, org_id: str = ORG_ID):
         raise HTTPException(400, f"unknown bucket (allowed: {', '.join(_EXEC_BUCKETS)})")
     rules = body.rules if isinstance(body.rules, dict) else {}
     basis = 'ext_price' if str(body.basis or 'count') == 'ext_price' else 'count'
-    try:
-        sb().schema('commcalc').table('exec_metric_config').upsert(
-            {'org_id': org_id, 'bucket': bucket, 'rules': rules, 'basis': basis,
-             'updated_at': _datetime.now(_timezone.utc).isoformat()},
-            on_conflict='org_id,bucket').execute()
-        return {"ok": True, "bucket": bucket}
-    except Exception as e:
-        return {"ok": False, "hint": "run migration 204 (exec_metric_config)", "error": str(e)[:200]}
+    # THE ROOT CAUSE of "the phones tick did not persist" (owner 2026-09-21, step 2.5a): mig 962 DROPPED the
+    # mig-204 UNIQUE (org_id, bucket) and replaced it with the unique index (org_id, bucket, carrier) NULLS NOT
+    # DISTINCT, so an upsert whose conflict target is still (org_id, bucket) is refused by Postgres ("there is
+    # no unique or exclusion constraint matching the ON CONFLICT specification") — every tenant write through
+    # this endpoint and the Metric-definitions panel failed since 962, reported as "run migration 204". The
+    # conflict target now names the index (an org's OWN row is carrier NULL); a pre-962 database (no carrier
+    # column) still takes the legacy target — the same column ladder _exec_metric_config reads with.
+    row = {'org_id': org_id, 'bucket': bucket, 'rules': rules, 'basis': basis,
+           'updated_at': _datetime.now(_timezone.utc).isoformat()}
+    errors = []
+    for _row, _target in (({**row, 'carrier': None}, 'org_id,bucket,carrier'), (row, 'org_id,bucket')):
+        try:
+            sb().schema('commcalc').table('exec_metric_config').upsert(_row, on_conflict=_target).execute()
+            return {"ok": True, "bucket": bucket, "conflict_target": _target}
+        except Exception as e:
+            errors.append(f"{_target}: {str(e)[:160]}")
+    return {"ok": False, "hint": "exec_metric_config could not be written (mig 204 / 962)", "error": " | ".join(errors)[:400]}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════

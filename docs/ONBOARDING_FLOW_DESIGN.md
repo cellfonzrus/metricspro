@@ -324,6 +324,27 @@ are already there; nothing is re-uploaded.
 tenant's classification and pay are byte-identical (`backend/harness_line_class.py` replays the retired code over every
 spelling in the seeds). Index §30.12 has the measured numbers and the file list.
 
+**The effective rule IS what the person confirmed (2026-09-21 addendum).** The first tenant save put the bare word
+"activation" — inside every category path of the export — under new activation, and every invoice counted as one: the silent
+zero's twin. Three rules close it, each for every caller:
+
+- **The guard runs over what is SAVED.** The save resolves the rules that would be in force exactly as the loader does and
+  measures every word over the rows in hand (the landed rows, or the rows the kept file would land); a word naming nearly every
+  line (≥ 80%) is REFUSED — nothing written, the word named with its class and share — unless the person ticks *keep this word
+  anyway*, an attestation by name recorded in the same config. What is already saved is re-validated the same way on every
+  open, on the commit and on the Executive MTD page: a refused rule blocks verification, the Stage-4 row reads *rule refused —
+  "…" names 95% of the lines*, never a split, and the page opens in the refusal state with the corrected proposal.
+- **No leak.** The platform's built-in words are contract-type words; they fill an unmapped type only when the column read is
+  the contract type. Once the person declares other columns, an unmapped type has NO words — the step shows it empty and says so.
+- **The seed is the proposal.** The editable words are seeded from the engine's proposal only — the person's own declared words
+  minus any refused, plus this file's hits; the hint vocabulary is the engine's input and never the person's starting text; the
+  bare words "activation" / "port" are not hints at all.
+
+The metric tick's failure was the writer, not the step: mig 962 replaced the unique constraint the Executive-MTD definitions
+writer upserted against, so every tenant write failed as "run migration 204"; the writer now names the index. Everything is
+proven DB-free: `harness_line_class.py` §G, `harness_onboarding_intake_d.py` §H (the owner's state, verbatim), the lock's (f)
+controls and `frontend/prove_line_class_step.mjs` (the real step logic over the engine's own block).
+
 ## 11. The tender types of an invoice-level sales export are DECLARED at intake, classed through ONE tender vocabulary, and become the cash-collected basis by config (owner 2026-09-21)
 
 Owner: *"sales by invoice report also has the tender types on the report, need to capture that as well"* — *"tender types is in
