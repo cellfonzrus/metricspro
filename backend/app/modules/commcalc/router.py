@@ -22511,7 +22511,10 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
         series.append({**d,
                        'm2_12_pct': round(d['m2_12'] / tot * 100, 1) if tot else 0.0,
                        'tmr3': tmr3.get(lab)})
-    ladder_months = sorted({int(k) for d in series for k in d['ladder'] if k != 'unknown'})
+    # ONE home for "which rungs exist" (commission_legs.months_present, §4a.2) — this used to
+    # be a local set comprehension, one of three copies of the same convention.
+    ladder_months = [int(k) for k in _commission_legs.months_present(*[d['ladder'] for d in series],
+                                                          include_unknown=False)]
 
     return {
         'months': labels,
@@ -36534,13 +36537,11 @@ def _read_ma(client, org_id, table, period, cols):
     return out
 
 
-def _int_or(v, dflt=10**6):
-    """Sort key for a month-ladder key: the number when it is one, otherwise last. The ladder's keys
-    come from the DATA (M1..M12+ and 'unknown'), never from a hardcoded month count."""
-    try:
-        return int(v)
-    except (TypeError, ValueError):
-        return dflt
+def _int_or(v, dflt=None):
+    """Sort key for a month-ladder key. DEREFERENCES the one home (commission_legs.ladder_sort_key,
+    §4a.2) rather than restating the convention; `dflt` is accepted for the existing callers and
+    ignored, because "where does the unknown rung sort" is not a per-caller decision."""
+    return _commission_legs.ladder_sort_key(v)
 
 
 @router.get("/ma-commission/summary")

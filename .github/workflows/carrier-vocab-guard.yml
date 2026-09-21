@@ -97,6 +97,12 @@ on:
       - "backend/app/modules/account/ma_store_pnl.py"
       - "database/migrations/1013_pl_commission_source.sql"
       - "backend/harness_intake_fakes.py"
+      - "backend/harness_ma_income_one_home_guard.py"
+      - "backend/harness_ma_month_columns.py"
+      - "backend/app/modules/commcalc/commission_legs.py"
+      - "backend/app/modules/commcalc/commission_ledger.py"
+      - "backend/app/modules/commcalc/gp_report.py"
+      - "backend/app/modules/account/ma_store_pnl.py"
       - "backend/app/modules/commcalc/line_class.py"
       - "backend/app/modules/commcalc/calculator.py"
       - "backend/app/modules/commcalc/exec_metric_defs.py"
@@ -187,3 +193,13 @@ jobs:
       - name: Run the P&L-commission-source lock (one resolver; the ledger booking dereferences the registry; a derived suppression set; one sum; every surface wired)
         working-directory: backend
         run: python3 harness_pl_commission_source_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §4a / §4a.1 / §4a.2 — the MA money, the month-of-life LEG and the ladder's RUNG
+      # convention each have ONE home. These locks shipped with #270/#272 but were never wired into
+      # CI, so nothing failed the build when a caller stopped dereferencing them. Wiring them is the
+      # "lock it so it cannot un-wire" half of the design-fix rule; both are stdlib-only and DB-free.
+      - name: Run the MA one-home guard (MA income · the month LEG · the ladder RUNG convention)
+        working-directory: backend
+        run: python3 harness_ma_income_one_home_guard.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the month-of-life column proof (data-driven rungs; August 2026 split pinned)
+        working-directory: backend
+        run: python3 harness_ma_month_columns.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

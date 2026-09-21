@@ -26,6 +26,13 @@ interface StoreRow {
   comp_comm_m1: number; comp_comm_m2_12: number; comp_comm_unsplit: number
   mi_m1: number; mi_m2_12: number; mi_unsplit: number
   atu_m1: number; atu_m2_12: number; atu_unsplit: number
+  // ONE COLUMN PER MONTH-OF-LIFE (owner report 2026-09-21: "display each months commission in
+  // separate column so we see what is going on"). `comm_ladder` is {rung: $} for THIS store — the
+  // rungs the DATA carries, keyed by the server's one home (commission_legs.ladder_key), plus the
+  // 'unknown' rung which is its OWN column and is never folded into a month. The flat
+  // `comm_month_<n>` / `comm_month_unlabelled` companions ride alongside so the CSV carries them.
+  comm_ladder?: Record<string, number>
+  [k: `comm_month_${string}`]: any
   mi: number; atu: number; total_rev: number
   rep_pay: number; exp_total: number; net_phone_cost: number
   net_profit: number; net_excl_mdf: number; net_profit_target?: number; net_profit_attainment?: number
@@ -37,12 +44,18 @@ interface RepRow {
   acc_gp?: number; setup_gp?: number; phone_sales?: number; plan_gp?: number; comm_earned?: number
 }
 
-interface ColDef { key: string; label: string; group: string; bold?: boolean; red?: boolean; highlight?: boolean; leg?: boolean; title?: string }
+interface ColDef { key: string; label: string; group: string; bold?: boolean; red?: boolean; highlight?: boolean; leg?: boolean; month?: boolean; title?: string }
 // One row of the server's commission-leg card. `unsplit_fields` / `unsplit_why` are present only on the
 // Commission row of a master-agent-fed org, naming the export columns that are not commission legs.
 type LegSource = { key: string; label?: string; splits_on?: string; m1?: number; m2_12?: number
                    unsplit?: number; total?: number; identity_ok?: boolean
-                   unsplit_fields?: string[]; unsplit_why?: string }
+                   unsplit_fields?: string[]; unsplit_why?: string
+                   // BOTH bases, labelled (owner 2026-09-21): the sheet's EARNED ladder and the cash
+                   // RECEIVED ladder, each {basis, basis_label, months: {rung: $}, total}. `basis` says
+                   // which one this org BOOKS, i.e. which one the money column above actually is.
+                   basis?: string; basis_label?: string
+                   earned?: { basis?: string; basis_label?: string; months?: Record<string, number>; total?: number }
+                   received?: { basis?: string; basis_label?: string; months?: Record<string, number>; total?: number } }
 
 // Owner directive 2026-08-04: the Commission column is split into the 1st-month leg and the M2–M12
 // trailing legs. They are SUB-columns of Commission (Commission itself stays, so nothing that read this
@@ -102,6 +115,7 @@ export default function GPReportPage() {
   const [showLegs, setShowLegs] = useState(true)      // 🧩 1st-month vs M2–M12 commission sub-columns
   const [legTrend, setLegTrend] = useState<any>(null) // month-over-month M1 vs M2–M12 (owner 2026-08-04)
   const [legLadder, setLegLadder] = useState(false)   // expand the per-month-of-life ladder table
+  const [showMonths, setShowMonths] = useState(false) // 📅 one column per month-of-life (owner 2026-09-21)
   const cw = useColumnResize()                          // auto-fit + user-resizable columns
 
   useEffect(() => {
@@ -143,12 +157,44 @@ export default function GPReportPage() {
   // The 'Unsplit' sub-column earns its place only when this org actually HAS money whose source states
   // no month-of-life; otherwise the owner gets exactly the two columns asked for.
   const anyUnsplit = allRows.some(r => Math.abs(r.comm_unsplit || 0) > 0.004)
+  // ── ONE COLUMN PER MONTH-OF-LIFE (owner report 2026-09-21) ────────────────────────────────────
+  // "the m2-m6 commission is 375% of the mrc … research where this is going wrong and display each
+  // months commission in separate column so we see what is going on".
+  //
+  // The column LIST comes from the server (`commission_legs.ladder_months` — the rungs the feed
+  // actually carries), never from a count written here. That is the point: a schedule the owner
+  // believes runs to M6 that turns out to pay an M7 must show an M7 COLUMN, and a hardcoded 6 or 12
+  // would have hidden it. The Unlabelled rung is its own column, always last, never folded into a
+  // month — money whose label states no month-of-life is a finding, not an M1.
+  const legsBlock = data.commission_legs || {}
+  const monthKeys: string[] = legsBlock.ladder_months || []
+  const monthLabels: Record<string, string> = legsBlock.ladder_month_labels || {}
+  const monthCols: Record<string, string> = legsBlock.ladder_columns || {}
+  const unknownKey: string = legsBlock.ladder_unknown_key || 'unknown'
+  const MONTH_COLS: ColDef[] = monthKeys.map(k => ({
+    key: monthCols[k] || `comm_month_${k}`,
+    label: `· ${monthLabels[k] || k}`,
+    group: 'Payments', month: true,
+    title: k === unknownKey
+      ? 'Commission whose product label states NO month-of-life. It is shown as itself — never folded into M1, never dropped. Map these labels on Commission received over M1-M12.'
+      : `Commission received on the ${monthLabels[k]} leg — the ${k}${k === '1' ? 'st' : 'th'} month of the subscriber's life. Its own column so a leg that is short, or a leg that should not exist at all, is visible.`,
+  }))
   // Accessory-column label comes from the server payload (config-driven basis, mig 932 — 'sales'
   // = sell price, house default → 'Acc Sales'; 'gp' opt-back → 'Acc GP'). Never hardcoded here.
   const accLabel: string = data.acc_label || 'Acc Sales'
   const COLS: ColDef[] = COLS_BASE.filter(c =>
     !c.leg ? true : (showLegs && (c.key !== 'comm_unsplit' || anyUnsplit)))
     .map(c => (c.key === 'acc_gp' ? { ...c, label: accLabel } : c))
+  // The month columns sit immediately after the LAST surviving Commission column, so the eye reads
+  // Commission → 1st Month → M2–M12 → M1 → M2 → … → Unlabelled left to right. Anchoring on "the
+  // last one that survived" rather than on a named key means the splice cannot land in the wrong
+  // place when the Unsplit sub-column is absent (a fully-mapped org) or the leg toggle is off.
+  const COMM_BLOCK = new Set(['comm', 'comm_m1', 'comm_m2_12', 'comm_unsplit'])
+  if (showMonths && MONTH_COLS.length) {
+    let at = -1
+    COLS.forEach((c, i) => { if (COMM_BLOCK.has(c.key)) at = i })
+    if (at >= 0) COLS.splice(at + 1, 0, ...MONTH_COLS)
+  }
   const rows: StoreRow[] = allRows.filter(r => {
     if (selMarkets.length && !selMarkets.includes(r.market)) return false
     if (selStores.length && !selStores.includes(r.store)) return false
@@ -187,6 +233,10 @@ export default function GPReportPage() {
   const commSrc = legSources.find(x => x.key === 'comm')
   const commUnsplitFields: string[] = commSrc?.unsplit_fields || []
   const commUnsplitWhy: string = commSrc?.unsplit_why || ''
+  // Which BASIS this org books (mig 314 `pl_ma_month_spiff_source`) — read from the server payload,
+  // never decided here, so the Gross Profit report and the P&L can never name different money.
+  const commBasisKey: string = commSrc?.basis || ''
+  const commBasisLabel: string = commSrc?.basis_label || ''
 
   function Cell({ val, col }: { val: number; col: ColDef }) {
     const color = col.highlight
@@ -257,6 +307,23 @@ export default function GPReportPage() {
         { header: 'Parts add back?', get: (r: any) => r.key === '_note' ? '' : (r.ok ? 'yes' : 'NO — report this') },
       ] as ExportColumn[],
     }
+    // ONE COLUMN PER MONTH-OF-LIFE, always exported (owner report 2026-09-21). Like the leg sheet
+    // above, this rides regardless of the on-screen toggle, because the per-rung comparison is the
+    // number the owner asked to be able to check. Rungs come from the server's list, so an M7 — or
+    // an Unlabelled bucket — is a column here the day it exists.
+    const monthSheet = monthKeys.length ? [{
+      name: 'Commission by month-of-life',
+      rows: ([['received', commSrc?.received], ['earned', commSrc?.earned]] as any[])
+        .filter(([, b]) => !!b)
+        .map(([key, b]: any) => ({ key, label: b.basis_label || key, booked: key === commBasisKey,
+                                   months: b.months || {}, total: b.total || 0 })),
+      columns: [
+        { header: 'Basis', get: (r: any) => r.label + (r.booked ? ' (booked)' : '') },
+        ...monthKeys.map(k => ({ header: monthLabels[k] || k,
+                                 get: (r: any) => r.months[k] ?? 0, money: true })),
+        { header: 'Total', get: (r: any) => r.total, money: true },
+      ] as ExportColumn[],
+    }] : []
     return {
       title: 'Gross Profit Report',
       subtitle: `${period} · ${rows.length}${rows.length !== allRows.length ? ` of ${allRows.length}` : ''} stores · net ${fmt(totals.net_profit || 0)} · commission ${fmt(totals.comm || 0)} = 1st month ${fmt(totals.comm_m1 || 0)} + M2–M12 ${fmt(totals.comm_m2_12 || 0)}${(totals.comm_unsplit || 0) ? ` + unsplit ${fmt(totals.comm_unsplit)}` : ''}${fd ? ` · ${fd}` : ''}`,
@@ -265,7 +332,7 @@ export default function GPReportPage() {
         { header: 'Store', get: (r: StoreRow) => r.store },
         { header: 'Market', get: (r: StoreRow) => r.market || '' },
         ...COLS.map(c => ({ header: c.label, get: (r: StoreRow) => r[c.key as keyof StoreRow], money: true } as ExportColumn)),
-      ] }, legSheet],
+      ] }, legSheet, ...monthSheet],
     }
   }
 
@@ -322,6 +389,20 @@ export default function GPReportPage() {
               title="Split the Commission column into 1st-month and M2–M12 legs"
               style={{ fontSize: 12, background: showLegs ? 'var(--accent)' : undefined, color: showLegs ? 'white' : undefined }}>
               🧩 Legs
+            </button>
+          )}
+          {/* Owner report 2026-09-21: "display each months commission in separate column so we see
+              what is going on". One column per rung the feed carries — M1, M2, M3 … and Unlabelled —
+              not a fixed six or twelve. Disabled, with the reason said out loud, when this period's
+              Commission column carries no month-of-life at all. */}
+          {view === 'store' && (
+            <button className="btn btn-secondary" onClick={() => setShowMonths(v => !v)}
+              disabled={!MONTH_COLS.length}
+              title={MONTH_COLS.length
+                ? `One column per month-of-life: ${monthKeys.map(k => monthLabels[k] || k).join(', ')}`
+                : 'No month-of-life on this period’s Commission column yet'}
+              style={{ fontSize: 12, background: showMonths ? 'var(--accent)' : undefined, color: showMonths ? 'white' : undefined }}>
+              📅 Months
             </button>
           )}
           <button className="btn btn-secondary" onClick={exportCSV}>📥 CSV</button>
@@ -424,6 +505,83 @@ export default function GPReportPage() {
         </div>
       )}
 
+
+      {/* ── COMMISSION BY MONTH-OF-LIFE, BOTH BASES (owner report 2026-09-21) ──────────────────
+          "the m2-m6 commission is 375% of the mrc considering 75% each for 5 months the numbers
+           still dont match … research where this is going wrong and display each months commission
+           in separate column so we see what is going on".
+
+          Two rows over the same rungs: what the commission SHEET says was EARNED at activation, and
+          what the cash rows say was RECEIVED. They are different money on purpose — the money column
+          on this report is whichever basis the org BOOKS — and putting them one above the other is
+          what makes the gap readable. A rung where RECEIVED is far below EARNED is the finding; a
+          rung above the schedule's last month existing at all is also a finding. Neither can hide,
+          because the rungs come from the data. */}
+      {!loading && view === 'store' && monthKeys.length > 0 && (
+        <div className="card" style={{ padding: '12px 14px', marginBottom: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>📅 Commission by month-of-life — each month its own column</div>
+            <button className="btn btn-secondary" onClick={() => setShowMonths(v => !v)}
+              style={{ fontSize: 11, background: showMonths ? 'var(--accent)' : undefined, color: showMonths ? 'white' : undefined }}>
+              {showMonths ? 'Hide' : 'Show'} these columns per store
+            </button>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, lineHeight: 1.5 }}>
+            <b>Earned</b> = what the commission sheet states at activation. <b>Received</b> = what the cash rows
+            state arrived this period. This report&apos;s Commission column carries the <b>{commBasisLabel || 'booked'}</b> basis,
+            so the other row is shown for comparison and adds nothing. The rungs below are the ones this
+            period&apos;s data actually carries — no fixed six, no fixed twelve.
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6, lineHeight: 1.5 }}>
+            ⓘ Comparing this period&apos;s trailing total to this period&apos;s M1 is <b>not</b> a test of the contract:
+            each rung here arrives from a different activation cohort, so the ratio moves with cohort size on its own.
+            Read a rung against the <b>same rung&apos;s</b> earned figure instead.
+          </div>
+          <div className="table-wrapper" style={{ marginTop: 10 }}>
+            <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+              <thead>
+                <tr style={{ fontSize: 11, color: 'var(--text3)', textAlign: 'left' }}>
+                  <th style={{ padding: '4px 8px' }}>Basis</th>
+                  {monthKeys.map(k => (
+                    <th key={k} style={{ padding: '4px 8px', textAlign: 'right',
+                                         color: k === unknownKey ? '#b45309' : undefined }}>
+                      {monthLabels[k] || k}
+                    </th>
+                  ))}
+                  <th style={{ padding: '4px 8px', textAlign: 'right' }}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {([['received', commSrc?.received], ['earned', commSrc?.earned]] as const)
+                  .filter(([, b]) => !!b)
+                  .map(([key, b]: any) => (
+                  <tr key={key} style={{ fontSize: 12, borderTop: '1px solid var(--border)',
+                                         fontWeight: key === commBasisKey ? 700 : 400 }}>
+                    <td style={{ padding: '4px 8px' }}>
+                      {b.basis_label || key}
+                      {key === commBasisKey && <span style={{ fontSize: 10, color: 'var(--accent)', marginLeft: 6 }}>· booked</span>}
+                    </td>
+                    {monthKeys.map(k => (
+                      <td key={k} style={{ padding: '4px 8px', textAlign: 'right',
+                                           color: k === unknownKey && (b.months || {})[k] ? '#b45309' : undefined }}>
+                        {(b.months || {})[k] ? fmt((b.months || {})[k]) : '—'}
+                      </td>
+                    ))}
+                    <td style={{ padding: '4px 8px', textAlign: 'right', fontWeight: 700 }}>{fmt(b.total || 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {monthKeys.includes(unknownKey) && (
+            <div style={{ fontSize: 11, color: '#b45309', marginTop: 8, lineHeight: 1.5 }}>
+              The <b>{monthLabels[unknownKey]}</b> column is money whose product label states no month-of-life. It is
+              shown as itself — never folded into M1, never dropped.{' '}
+              <a href="/commcalc/commission-legs" style={{ fontWeight: 600, color: 'var(--accent)' }}>Map those labels →</a>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── COMMISSION LEGS (owner directive 2026-08-04) ────────────────────────────────────────
           "1st Month commission which is paid the same month of the activation and the other is

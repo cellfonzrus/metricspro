@@ -910,7 +910,9 @@ BASIS_LABELS = {
     BASIS_EARNED: "earned (activation month, from the MA commission sheet's spiff columns)",
     BASIS_RECEIVED: "received (cash month, from the daily-transaction rows)",
 }
-MONTH_UNKNOWN = "unknown"
+# The unknown-rung key is commission_legs' to define; this alias exists so the existing readers of
+# `MONTH_UNKNOWN` in this module keep working, and it DEREFERENCES rather than restates it (§4a.2).
+from app.modules.commcalc.commission_legs import LADDER_UNKNOWN as MONTH_UNKNOWN
 
 
 def pl_revenue_lines():
@@ -1000,7 +1002,8 @@ def ma_sheet_spiff_total(row_or_sums):
 
 def _ladder_add(dst, month, amount, store=None):
     """Tally one dollar into a {month-key: amount} ladder (+ the per-store ladder). PURE."""
-    key = MONTH_UNKNOWN if month in (None, "", MONTH_UNKNOWN) else str(int(month))
+    from app.modules.commcalc import commission_legs as _legs
+    key = _legs.ladder_key(month)      # ONE home for the rung key (commission_legs, §4a.2)
     dst["months"][key] = round(dst["months"].get(key, 0.0) + amount, 2)
     dst["total"] = round(dst["total"] + amount, 2)
     per = dst["by_store"].setdefault(store or "", {"months": {}, "total": 0.0})

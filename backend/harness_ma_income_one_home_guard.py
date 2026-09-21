@@ -76,6 +76,31 @@ MONTH_LEG_HOME = "app/modules/commcalc/commission_ledger.py"
 TOKEN_PARSER = "parse_payment_month"
 LEG_RESOLVER = "month_leg_of"
 
+# ── CHECK 2c — the MONTH LADDER's rung convention also has one home ─────────────────────────────
+# Owner report 2026-09-21: "display each months commission in separate column so we see what is
+# going on". A column per rung is only safe if every surface agrees on what a rung IS. Before this,
+# THREE modules each wrote their own copy of the convention — gp_report's
+# "'unknown' if leg_month in (None,'','unknown')", ma_store_pnl's own MONTH_UNKNOWN literal, and
+# router's `sorted({int(k) ... if k != 'unknown'})` + private `_int_or`. Three copies of one
+# convention is how a rung that exists in the data becomes visible on one surface and invisible on
+# another, which is the exact defect the per-month columns are meant to make impossible.
+#
+# `commission_legs` owns it: ladder_key / ladder_sort_key / months_present / ladder_column /
+# ladder_label / ladder_to_public. A fourth copy fails the build here.
+LADDER_HOME = "app/modules/commcalc/commission_legs.py"
+LADDER_COPY_PATTERNS = (
+    # a literal 'unknown' rung key decided locally instead of via ladder_key()
+    (re.compile(r"""["']unknown["']\s+if\s+\w+\s+in\s*\("""), "a local ladder-key rule"),
+    # a local "which rungs exist" set comprehension instead of months_present()
+    (re.compile(r"""\{\s*int\(\s*\w+\s*\)\s+for\s+.*?["']unknown["']"""),
+     "a local months-present derivation"),
+    # a local M-label built by hand instead of ladder_label()
+    (re.compile(r"""["']M["']\s*\+\s*str\("""), "a hand-built M<n> label"),
+)
+LADDER_COPY_SANCTIONED = {
+    # the home itself is excluded by name below; nothing else is sanctioned today.
+}
+
 # ── CHECK 3 — INVENTORY (reported, not a build gate) ─────────────────────────────────────────────
 # The commission SHEET's export genuinely carries six spiff columns, so a surface that reconciles to
 # that export, or reads one device's spiff evidence, legitimately walks six. Those are named here so
@@ -225,6 +250,26 @@ def main():
     else:
         print("   PASS — %s is private to %s; every caller asks %s()"
               % (TOKEN_PARSER, MONTH_LEG_HOME, LEG_RESOLVER))
+    print()
+
+    # CHECK 2c
+    print("CHECK 2c — the month LADDER's rung convention has one home")
+    ladder_offenders = []
+    for rel, src in sources.items():
+        if rel == LADDER_HOME or rel in LADDER_COPY_SANCTIONED:
+            continue
+        for lineno, text in _code_lines(src):
+            for rx, what in LADDER_COPY_PATTERNS:
+                if rx.search(text):
+                    ladder_offenders.append((rel, lineno, what, text.strip()[:100]))
+    if ladder_offenders:
+        for rel, lineno, what, text in ladder_offenders:
+            print("   FAIL %s:%d carries %s" % (rel, lineno, what))
+            print("        %s" % text)
+            print("        -> commission_legs.ladder_key / months_present / ladder_label")
+        failures.append("%d local copy/copies of the ladder convention" % len(ladder_offenders))
+    else:
+        print("   PASS — every surface dereferences %s for the rung key, order and label" % LADDER_HOME)
     print()
 
     # CHECK 3 — inventory, on the record, never a build gate

@@ -905,7 +905,10 @@ def summarize(rows, rules=None, legcls=None, conv=None, buckets=None, buckets_me
             bucket = "unsplit"
         leg_cats[booked][bucket] += amt
         leg_tot[bucket] += amt
-        lk = "unknown" if leg_month in (None, "") else str(int(leg_month))
+        # ONE home for the rung key (commission_legs.ladder_key, §4a.2) — this was the FOURTH local
+        # copy of the convention and the guard's CHECK 2c found it.
+        from app.modules.commcalc import commission_legs as _cl_legs
+        lk = _cl_legs.ladder_key(leg_month)
         leg_ladder[lk] = round(leg_ladder.get(lk, 0.0) + amt, 2)
         if bucket == "unsplit":            # surface WHAT is unattributed, the way 'other' is surfaced
             lbl = str(r.get("product_name") or "(blank)")
