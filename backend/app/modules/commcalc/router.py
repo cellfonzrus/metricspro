@@ -15,6 +15,7 @@ from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
+from app.modules.commcalc import invoice_tenders as _invt   # 2026-09-21 — the invoice tender split (pure; classes injected from closing)
 from app.modules.commcalc import whatif
 # The tenant-implementation spine (owner 2026-09-12): the ONE ordered, carrier-scoped setup flow, and
 # the one `carrier_visible` predicate the sweep / Connectors / Imports all ask. PURE — no DB, no I/O.
@@ -4851,6 +4852,23 @@ def _ledger_convention_for(client, org_id, carrier_id="", source_report=""):
         return commission_ledger.convention_from_mapping([])
 
 
+def _ledger_pl_link(client, org_id):
+    """The P&L lines the org's buckets book to + the configured P&L commission source (mig 1013) —
+    ledger_pnl.pl_link over THE registry reader and THE config reader. What every "this statement will
+    show in" surface renders through landing_identity.shows_in / consumers_for_table. Never raises."""
+    try:
+        from app.modules.account import ledger_pnl as _lp
+        from app.modules.account import ma_store_pnl as _msp
+        from app.modules.account import coa as _coa
+        buckets, _bmeta = _ledger_buckets(client, org_id)
+        cfg = _msp.load_config(client, org_id)
+        return _lp.pl_link(buckets, _coa.PL_LABEL, cfg.get("line_labels"), _coa.PL_SECTION,
+                           configured=cfg.get("commission_source"), cfg=cfg)
+    except Exception as e:
+        print(f"WARN _ledger_pl_link failed for org {org_id}: {e}")
+        return None
+
+
 def _ledger_buckets(client, org_id):
     """(buckets, meta) — THE org's bucket registry (commcalc.commission_bucket, mig 1009): the house
     org's defaults with this org's rows overriding per key, both reads org-scoped. A database without
@@ -5200,11 +5218,12 @@ def _intake_state_payload(client, org_id, current_instance=None):
                 "note": ("Resumable state is not available until migration "
                          f"{_INTAKE_STATE_MIGRATION} is applied — the flow still works; leaving the "
                          "page loses your place."),
-                "run": None, "company": company, "rail": _intake.rail([], current_instance, company)}
+                "run": None, "company": company,
+                "rail": _intake.rail([], current_instance, company, pl_link=_ledger_pl_link(client, org_id))}
     run = _intake_run(client, org_id)
     rows = _intake_stage_rows(client, org_id, (run or {}).get("id"))
     return {"state_ready": True, "migration": _INTAKE_STATE_MIGRATION, "run": run, "company": company,
-            "rail": _intake.rail(rows, current_instance, company, run)}
+            "rail": _intake.rail(rows, current_instance, company, run, pl_link=_ledger_pl_link(client, org_id))}
 
 
 def _intake_save_state(client, org_id, instance_key, step=None, status=None, payload_patch=None,
@@ -5899,11 +5918,18 @@ def _intake_line_class_block(client, org_id, rows):
         metrics = _lc.suggest_metric_rules(rows, ecfg, hints=rules.get("metric_hints"), skip=_line_skip)
     except Exception as e:
         metrics = {"scanned": 0, "buckets": {}, "error": str(e)[:200]}
+    # RE-VALIDATION of the rules IN FORCE over these rows (the second class): a saved word that names
+    # nearly every line is REFUSED here — the step shows it, the save path refuses until it is fixed
+    refused = sug["refused"]
     return {"step": "2.5a", "classes": [{"key": c, "label": _lc.CLASS_LABELS[c]} for c in _lc.CLASSES],
             "candidate_fields": list(_lc.CANDIDATE_FIELDS),
-            "rules": {k: rules[k] for k in ("fields", "tokens", "exact", "source", "declared")},
+            # the rules in force: fields, tokens, exact, provenance — NEVER the hint lists (the engine's
+            # input is not the person's starting text; the step seeds from suggest.proposal only)
+            "rules": {k: rules[k] for k in ("fields", "tokens", "exact", "source", "declared", "house_fill")},
             "current": sug["current"], "gate_open": _lc.gate_open(sug["current"]),
             "gate_note": _lc.gate_sentence(sug["current"]) if _lc.gate_open(sug["current"]) else None,
+            "refused": refused, "rules_ok": not refused,
+            "refusal_note": _lc.refusal_sentence(refused, sug["scanned"]) if refused else None,
             "suggest": {k: sug[k] for k in ("scanned", "distinct", "per_class", "too_broad", "proposal", "preview")},
             "metrics": metrics}
 
@@ -5924,6 +5950,40 @@ def _intake_landed_slice(client, org_id, instance_key):
     if table != _intake.SOURCE_KIND_TARGET["sales"] or not (span.get("from") and span.get("to") and stores):
         return None, inst
     return _intake_reread_sales(client, org_id, stores, span["from"], span["to"], table=table, kind=vn.get("report_key")), inst
+
+
+def _intake_draft_frame(client, org_id, inst):
+    """The sales lines a NOT-YET-LANDED Stage-2 instance WOULD land: its KEPT file re-read through THE
+    prepare path (_intake_prepare — the same parse analyze and the commit use) with the answers its
+    auto-saved draft carries (column map, sheet, header row, footer, identity, typed total). So the 2.5a
+    guard measures the analyzed frame when nothing is landed yet — never a second parse. None when the
+    instance keeps no file, has no draft, is not a line-level sales kind, or the read fails (the caller
+    states "not measured"). Never raises."""
+    try:
+        ik = str((inst or {}).get("instance_key") or "")
+        p = (inst or {}).get("payload") or {}
+        parts = ik.split(":", 2)
+        if len(parts) != 3:
+            return None
+        kind, src, slot = parts
+        ref = p.get("file") if isinstance(p.get("file"), dict) else {}
+        if kind not in _intake.SOURCE_KINDS or kind == "commission" or not ref.get("stored"):
+            return None
+        import json as _json
+        contents, fname = _intake_file_get(client, org_id, ik)
+        cm = p.get("column_map")
+        ident = p.get("identity")
+        ctx = _intake_prepare(client, org_id, contents, fname, kind, None, None,
+                              _json.dumps(cm) if isinstance(cm, dict) else "", None, None, str(p.get("typed_total") or ""),
+                              sheet=str(p.get("sheet") or ""), header_row=str(p.get("header_row") or ""),
+                              footer=str(p.get("footer_mode") or "auto"), pos_source=src, layout=slot, name=slot,
+                              identity_json=_json.dumps(ident) if isinstance(ident, dict) else None,
+                              as_of_date=str(p.get("as_of_date") or ""), role=str(p.get("role") or ""))
+        if ctx.get("target_table") != _intake.SOURCE_KIND_TARGET["sales"]:
+            return None
+        return list(ctx.get("land") or [])
+    except Exception:
+        return None
 
 
 def _intake_prepare_stage2(client, org_id, contents, filename, kind, column_map_json, typed_total,
@@ -6042,6 +6102,32 @@ def _intake_prepare_stage2(client, org_id, contents, filename, kind, column_map_
             extra.append("Not one row in this file is a bill payment by this org's own rule (order type / product tokens, "
                          "mig 944 metric source of truth; product list mig 214) — the file would land but the coverage recon "
                          "would read $0.00 from it. Check the order-type / product columns, or the rule.")
+    elif kind == "invoice":
+        # ── 2.5b — WHICH COLUMNS ARE TENDER TYPES, AND WHAT KIND OF PAYMENT IS EACH (owner 2026-09-21:
+        #    "tender types is in columns"). Proposed from the header words through THE tender
+        #    vocabulary (closing.router.TENDER_VOCAB / tender_class — one home) with the org's own
+        #    closing_tender_map rows (report='invoice') first; the person's decisions laid over; the
+        #    tender rows (one per invoice × column with an amount ≠ 0) built here so the preview and the
+        #    landing come from the SAME rows. The tie field is net sales unless the person picked another.
+        tie_field = _fstr(_ignored.get("tie_field")).lower()
+        if tie_field and tie_field not in _intake.INVOICE_TIE_FIELDS:
+            raise HTTPException(400, "tie_field must be one of " + ", ".join(_intake.INVOICE_TIE_FIELDS))
+        if tie_field:
+            kf = {**kf, "amount": tie_field}
+        mapped_headers = [p["column"] for p in proposal if p.get("column")]
+        tax_header = next((p["column"] for p in proposal if p["target_field"] == kf["tax"] and p.get("column")), None)
+        block = _intake_tender_columns_block(client, org_id, headers, [r for r, _m in pairs], mapped_headers, tax_header,
+                                             _intake_json(_ignored.get("tender_columns_json"), "tender_columns", {}) or {})
+        base["tender_columns"] = block
+        land_ids = {id(x) for x in land}
+        trows = _invt.tender_rows([(r, m) for r, m in pairs if id(m) in land_ids], block["confirmed"], kf, exclude=excluded)
+        base["tender_rows"] = trows
+        vn = _invt.invoice_verify(land, kf, trows)
+        vn["tie_field"] = kf["amount"]
+        our_total = vn["sum_amount"]
+        base["tender_tie"] = _invt.tender_tie(vn)
+        extra.extend(block.get("errors") or [])
+        base["kind_fields"] = kf
     else:
         vn = _intake.sales_verify(land, kf)
         our_total = vn["sum_amount"]
@@ -6158,6 +6244,9 @@ def _intake_payload(ctx):
         "source_id": ctx.get("source_id"),
         "identity_kind": ("merchant_id" if ctx.get("merchant_processor") else "store"),
         "line_class": ctx.get("line_class"),        # 2.5a — activation types + metric buckets over this frame
+        "tender_columns": ctx.get("tender_columns"),  # 2.5b — an invoice export's tender / tax columns over this frame
+        "tender_tie": ctx.get("tender_tie"),
+        "tie_field": (ctx.get("kind_fields") or {}).get("amount"),
         "verify": {"basis": ("received — no destination" if kind == "other" else
                              "preview — computed from the parsed file; the commit re-reads the landed rows"),
                    "numbers": ctx["verify_numbers"], "tie": ctx["tie"],
@@ -6171,7 +6260,7 @@ def _intake_payload(ctx):
                        undated_rows=((ctx["verify_numbers"].get("date_span") or {}).get("undated_rows") or 0),
                        storeless_rows=ctx["verify_numbers"].get("storeless_rows") or 0,
                        rows_to_land=len(ctx.get("land", [])), layout=ctx.get("layout"),
-                       extra=ctx.get("extra_refusals")) if kind != "other" else [])},
+                       extra=ctx.get("extra_refusals"), tender_tie=ctx.get("tender_tie")) if kind != "other" else [])},
     })
     return out
 
@@ -6242,7 +6331,12 @@ def onboarding_intake_state(instance_key: str = "", links: str = "", org_id: str
                 "billpay_feed": _intake_billpay_feed(client, org_id),
                 "inventory_none_key": _intake.INVENTORY_NONE_KEY,
                 "statement_type_default": _intake.STATEMENT_TYPE_DEFAULT,
-                "sign_question": _intake.SIGN_QUESTION})
+                "sign_question": _intake.SIGN_QUESTION,
+                # 2.5b — the tender classes a column may be (closing.router.TENDER_VOCAB, the one home) + the tie fields
+                "tender_vocab": _intake_tender_vocab(), "invoice_tie_fields": list(_intake.INVOICE_TIE_FIELDS),
+                "tender_roles": list(_invt.ROLES),
+                # the org's TENDER BASIS (closing.router.tender_basis — what Cash Collected reads) + the choices
+                "tender_basis": _intake_tender_basis(client, org_id)})
     _b, _bm = _ledger_buckets(client, org_id)
     out.update({"buckets": commission_ledger.bucket_keys(_b), "bucket_labels": _intake.bucket_labels(_b),
                 "bucket_rows": _b, "bucket_meta": _bm})
@@ -6296,6 +6390,107 @@ def onboarding_intake_put_state(body: OnboardingIntakeStateIn, org_id: str = ORG
     return out
 
 
+class OnboardingRetireIn(LaxModel):
+    instance_key: str = ""
+    reason: Any = None
+    by: Any = None
+    remove_landed: Any = None     # true → also remove the rows THIS line landed (its own slice), two-step: see confirm_rows
+    confirm_rows: Any = None      # the exact row count the dry run reported — the owner's explicit approval of that number
+
+
+def _intake_landed_slice_of(inst):
+    """The slice a Stage-2 instance landed, from what its commit RECORDED: the table, the kind, the store
+    strings that landed (not 'not ours') and the date span. None when the record cannot name a slice."""
+    vn = inst.get("verified_numbers") or {}
+    p = inst.get("payload") or {}
+    table = vn.get("target_table") or p.get("target_table")
+    kind = vn.get("report_key") or p.get("layout")
+    stores = [str(r.get("value")) for r in ((vn.get("identity") or {}).get("stores") or [])
+              if r.get("value") and str(r.get("action") or "") != "not_ours"]
+    span = vn.get("date_span") or {}
+    spec = _INGEST_PARTITION.get(table or "")
+    if not (table and spec and stores and span.get("from") and span.get("to")):
+        return None
+    return {"table": table, "kind": kind, "partition_col": spec["partition"], "date_col": spec["date"],
+            "stores": sorted(set(stores)), "from": span["from"], "to": span["to"], "child": column_mapping.CHILD_TABLE_MAP.get(kind or "")}
+
+
+def _intake_remove_landed(client, org_id, slice_, confirm_rows=None):
+    """DRY RUN (confirm_rows None): count the rows the slice holds per table, nothing touched. CONFIRMED
+    (confirm_rows == the dry run's total): delete exactly those rows by their ids, per table, and record it.
+    A count that no longer matches is refused — the owner approves a NUMBER, never 'whatever is there'."""
+    counts, ids_by_table = {}, {}
+    for table in [slice_["table"]] + ([slice_["child"]] if slice_.get("child") else []):
+        q = (client.schema("commcalc").table(table).select("id").eq("org_id", org_id)
+             .in_(slice_["partition_col"], slice_["stores"]).gte(slice_["date_col"], slice_["from"]).lte(slice_["date_col"], slice_["to"]))
+        q = _landing.apply_kind_filter(q, table, slice_["kind"], column_mapping.TABLE_MAP)
+        rows = q.limit(100000).execute().data or []
+        ids_by_table[table] = [r["id"] for r in rows if r.get("id")]
+        counts[table] = len(ids_by_table[table])
+    total = sum(counts.values())
+    if confirm_rows is None:
+        return {"dry_run": True, "rows": total, "per_table": counts, "slice": slice_,
+                "note": f"{total:,} row(s) would be removed — call again with confirm_rows={total} to remove exactly them"}
+    if int(confirm_rows) != total:
+        raise HTTPException(409, f"The slice now holds {total:,} row(s), not the {int(confirm_rows):,} you confirmed — nothing removed; re-run the dry run.")
+    removed = {}
+    for table, ids in ids_by_table.items():
+        n = 0
+        for i in range(0, len(ids), 500):
+            client.schema("commcalc").table(table).delete().eq("org_id", org_id).in_("id", ids[i:i + 500]).execute()
+            n += len(ids[i:i + 500])
+        removed[table] = n
+    _write_upload_trace(org_id, source="onboarding-intake", filename=None, upload_type=slice_.get("kind") or "retire", period="",
+                        result={"saved": 0, "note": f"retired line: removed {total:,} row(s) it had landed — " + ", ".join(f"{t} {n:,}" for t, n in removed.items()),
+                                "_trace": {"rows_in": 0, "target_table": slice_["table"]}})
+    return {"dry_run": False, "rows": total, "per_table": removed, "slice": slice_}
+
+
+@router.post("/onboarding/intake/retire")
+def onboarding_intake_retire(body: OnboardingRetireIn, org_id: str = ORG_ID):
+    """RETIRE a line that was FILED WRONG (owner 2026-09-21: the sales-by-invoice file was added under the
+    by-product card). The row stays on the record with the reason and the name, out of the verify table,
+    the runbook and the sign-off — never a manual DB edit. NOTHING it landed is touched: rows a mis-filed
+    line landed are the landing's own slice (store × dates × kind) and are replaced by the right kind's
+    upload or left as they are; retiring only stops the intake counting the line."""
+    require_org(org_id)
+    ik = (body.instance_key or "").strip()
+    reason = str(body.reason or "").strip()
+    if not ik:
+        raise HTTPException(400, "instance_key is required")
+    if not reason:
+        raise HTTPException(400, "Say why this line is retired (recorded with your name) — e.g. 'filed under the wrong report kind'.")
+    if _intake.kind_of_instance(ik) not in _intake.SOURCE_KINDS:
+        raise HTTPException(400, "instance_key must start with one of " + "|".join(_intake.SOURCE_KINDS))
+    client = sb()
+    who = str(body.by or "").strip() or None
+    run = _intake_run(client, org_id)
+    inst = next((r for r in _intake_stage_rows(client, org_id, (run or {}).get("id")) if r.get("instance_key") == ik), None)
+    if not inst:
+        raise HTTPException(404, "no such instance in this org's onboarding run")
+    vn = dict(inst.get("verified_numbers") or {})
+    removal = None
+    if str(body.remove_landed or "").strip().lower() in ("1", "true", "yes"):
+        # the rows this line landed — ITS OWN slice as its commit recorded it — counted first (dry run), removed
+        # only when the caller confirms that exact count; recorded on the row and in the upload trace
+        slice_ = _intake_landed_slice_of(inst)
+        if not slice_:
+            raise HTTPException(400, "This line recorded no landed slice (table × stores × dates) — nothing to remove; retire it without remove_landed.")
+        removal = _intake_remove_landed(client, org_id, slice_, None if body.confirm_rows in (None, "") else int(body.confirm_rows))
+        if removal.get("dry_run"):
+            return {"dry_run": True, "instance_key": ik, "would_remove": removal, "retired": False,
+                    "note": "Nothing was retired or removed. " + removal["note"]}
+    vn["retired"] = {"reason": reason, "by": who, "at": _intake.now_iso(), "status_before": inst.get("status"),
+                     "removed": removal}
+    res = _intake_save_state(client, org_id, ik, status=_intake.STATUS_RETIRED, verified_numbers=vn, verified_by=who,
+                             blocking_reason=f"retired: {reason}", by=who)
+    out = _intake_state_payload(client, org_id, None)
+    out["save"] = res
+    out["retired"] = {"instance_key": ik, "reason": reason, "by": who, "removed": removal,
+                      "kept_file": ((inst.get("payload") or {}).get("file") if isinstance((inst.get("payload") or {}).get("file"), dict) else None)}
+    return out
+
+
 # ── 2.5a — WHICH LINES ARE ACTIVATIONS, UPGRADES, BYOD, PORTS; WHICH ARE PHONES, BILL PAYMENTS … ──
 # Owner (2026-09-21): "sales report shows 88 txns but not a break up in to activations and upgrade etc,
 # also nothing on exec mtd". The step reads and writes the TWO existing config homes only —
@@ -6329,6 +6524,7 @@ class OnboardingLineClassIn(LaxModel):
     tokens: Any = None            # {activation: [...], upgrade: [...], byod: [...], port: [...], hardware_only: [...]}
     metric_rules: Any = None      # {bucket: rules} for the Executive-MTD line buckets (phones, bill_payment, …)
     no_activations: Any = None    # a reason: "this file truly has no activations" (recorded with the name)
+    broad_ok: Any = None          # ["<class>:<word>", …] — words the person attests by name although they name nearly every line
     by: Any = None
 
 
@@ -6339,39 +6535,81 @@ def onboarding_intake_put_line_class(body: OnboardingLineClassIn, org_id: str = 
     rules into exec_metric_config (through put_exec_metric_config), then RE-COUNT the instance's landed slice
     through THE predicate and record it on the stage row (`verified_numbers.activation_classes`): verified
     when the landing was ok and the gate is closed — by a rule that classifies ≥1 activation-type line or by
-    the recorded attestation — else needs_input naming this step. Gated like every Classification edit."""
+    the recorded attestation — else needs_input naming this step. Gated like every Classification edit.
+
+    THE GUARD (the second class, 2026-09-21): before ANYTHING is written, the rules that WOULD BE in force
+    (the merged JSON resolved by the one resolver, _line_rules_resolve) are run over the rows in hand — the
+    instance's LANDED slice, or the analyzed frame of its kept file when nothing has landed — and a word that
+    names ≥ line_class.BROAD_RATIO of the lines is REFUSED (400, nothing written, each word named with its
+    share) unless the body's `broad_ok` attests that word by name (recorded with the name in the same
+    JSON). Everything is validated first; the metric rows are written before the activation rules so a
+    failed write leaves nothing half-saved, and the response says what was written."""
     require_org(org_id)
     if not _can_edit_classification(authorization, org_id):
         raise HTTPException(403, "You don't have permission to edit Classification settings.")
     client = sb()
     who = str(body.by or "").strip() or None
-    written = {"activation_rules": False, "metric_buckets": []}
-    if body.fields is not None or body.tokens is not None:
-        if body.fields is not None and not isinstance(body.fields, list):
-            raise HTTPException(400, "fields must be a list of column names")
-        if body.tokens is not None and not isinstance(body.tokens, dict):
-            raise HTTPException(400, "tokens must be an object {class: [words]}")
-        cur_raw = (_accessory_config(client, org_id) or {}).get("activation_details_rules_raw") or {}
-        merged = _lc.merge_into_raw(cur_raw, fields=body.fields, tokens=body.tokens)
-        put_accessory_config(PutAccessoryConfigIn(activation_details_rules=merged), org_id, authorization)
-        written["activation_rules"] = True
+    # ── 1. validate every part of the body — nothing written yet ──
+    if body.fields is not None and not isinstance(body.fields, list):
+        raise HTTPException(400, "fields must be a list of column names")
+    if body.tokens is not None and not isinstance(body.tokens, dict):
+        raise HTTPException(400, "tokens must be an object {class: [words]}")
+    metric_rules = {}
     if isinstance(body.metric_rules, dict) and body.metric_rules:
-        ecfg = _exec_metric_config(client, org_id, with_sources=True)
         for bucket, rules in body.metric_rules.items():
             if bucket not in _emd.LINE_BUCKETS or not isinstance(rules, dict):
                 raise HTTPException(400, f"metric_rules: unknown bucket '{bucket}' (allowed: {', '.join(_emd.LINE_BUCKETS)})")
+            metric_rules[bucket] = rules
+    broad_ok = _lc.norm_broad_ok(body.broad_ok)
+    ik = (body.instance_key or "").strip()
+    rows = inst = None
+    if ik:
+        rows, inst = _intake_landed_slice(client, org_id, ik)
+        if inst is None:
+            raise HTTPException(404, "no such instance in this org's onboarding run")
+    # ── 2. THE GUARD over what would be SAVED, over the rows in hand ──
+    merged = None
+    guard = {"measured": False, "basis": None, "rows": 0, "refused": [], "attested": broad_ok}
+    if body.fields is not None or body.tokens is not None or broad_ok:
+        acfg = _accessory_config(client, org_id) or {}
+        cur_raw = acfg.get("activation_details_rules_raw") or {}
+        check_rows, basis = rows, "landed"
+        if check_rows is None and inst is not None:
+            check_rows, basis = _intake_draft_frame(client, org_id, inst), "frame"
+        effective = _line_rules_resolve(client, org_id, _lc.merge_into_raw(cur_raw, fields=body.fields, tokens=body.tokens),
+                                        acfg.get("contract_type_map") or {})
+        shares = []
+        if check_rows is not None:
+            shares, _n = _lc.token_shares(check_rows, effective, skip=_line_skip)
+            merged = _lc.merge_into_raw(cur_raw, fields=body.fields, tokens=body.tokens, broad_ok=broad_ok, by=who, shares=shares)
+            effective = _line_rules_resolve(client, org_id, merged, acfg.get("contract_type_map") or {})
+            refused = _lc.refused_tokens(check_rows, effective, skip=_line_skip)
+            guard = {"measured": True, "basis": basis, "rows": len(check_rows), "refused": refused, "attested": broad_ok}
+            if refused:
+                raise HTTPException(400, {"message": _lc.refusal_sentence(refused, len(check_rows), saving=True),
+                                          "refused": refused, "basis": basis, "rows": len(check_rows), "attest_with": "broad_ok"})
+        else:
+            merged = _lc.merge_into_raw(cur_raw, fields=body.fields, tokens=body.tokens, broad_ok=broad_ok, by=who)
+            guard["reason"] = ("no rows are landed for this export and no kept file could be re-read — the words were not "
+                               "measured here; the commit re-validates them over the landed rows")
+    # ── 3. the writes: through the two writers only, the metric rows first ──
+    written = {"activation_rules": False, "metric_buckets": []}
+    if metric_rules:
+        ecfg = _exec_metric_config(client, org_id, with_sources=True)
+        for bucket, rules in metric_rules.items():
             res = put_exec_metric_config(PutExecMetricConfigIn(bucket=bucket, rules=rules, basis=(ecfg.get(bucket) or {}).get("basis")), org_id)
             if not res.get("ok"):
-                raise HTTPException(400, f"metric definition '{bucket}' did not save: {res.get('hint') or res.get('error')}")
+                done = (", ".join(written["metric_buckets"]) or "nothing else")
+                raise HTTPException(400, f"metric definition '{bucket}' did not save ({res.get('error') or res.get('hint')}); "
+                                         f"written so far: {done}; the activation rules were NOT written")
             written["metric_buckets"].append(bucket)
+    if merged is not None:
+        put_accessory_config(PutAccessoryConfigIn(activation_details_rules=merged), org_id, authorization)
+        written["activation_rules"] = True
     _invalidate_accessory_config(org_id)
-    ik = (body.instance_key or "").strip()
-    out = {"ok": True, "written": written, "instance_key": ik or None}
+    out = {"ok": True, "written": written, "guard": guard, "instance_key": ik or None}
     if not ik:
         return out
-    rows, inst = _intake_landed_slice(client, org_id, ik)
-    if inst is None:
-        raise HTTPException(404, "no such instance in this org's onboarding run")
     vn = dict(inst.get("verified_numbers") or {})
     att = {"no_activations": str(body.no_activations or "").strip()} if str(body.no_activations or "").strip() else {}
     if rows is not None:
@@ -6430,12 +6668,28 @@ def onboarding_intake_sign_off(body: OnboardingSignOffIn, org_id: str = ORG_ID):
 
 
 async def _intake_contents(client, org_id, file, source_kind, instance_key_hint, use_stored):
-    """The bytes to analyze / commit: the dropped file, else the file KEPT for this instance."""
+    """The bytes to analyze / commit: the dropped file, else the file KEPT for the instance `instance_key_hint`
+    names — which may be ANOTHER instance's (a line retired because the file was filed under the wrong
+    card: the same kept file is re-read under the right kind, no re-drop; owner 2026-09-21)."""
     if file is not None and getattr(file, "filename", None) is not None:
         return await file.read(), getattr(file, "filename", "") or ""
     if not use_stored or not instance_key_hint:
         raise HTTPException(400, "Drop the file (or pass use_stored=1 with the instance_key of a step whose file was kept).")
     return _intake_file_get(client, org_id, instance_key_hint)
+
+
+def _intake_carry_kept_file(client, org_id, from_instance, to_instance):
+    """When a kept file of one instance is re-read under another, carry the reference so the new
+    instance keeps it too (its 2.6 and every later month need no re-drop)."""
+    if not from_instance or from_instance == to_instance:
+        return None
+    run = _intake_run(client, org_id)
+    src = next((r for r in _intake_stage_rows(client, org_id, (run or {}).get("id")) if r.get("instance_key") == from_instance), None)
+    ref = ((src or {}).get("payload") or {}).get("file")
+    if isinstance(ref, dict) and ref.get("stored"):
+        _intake_save_state(client, org_id, to_instance, payload_patch={"file": ref, "filename": ref.get("filename"), "file_carried_from": from_instance})
+        return ref
+    return None
 
 
 @router.post("/onboarding/intake/analyze")
@@ -6460,6 +6714,9 @@ async def onboarding_intake_analyze(
     use_stored: str = Form(""),
     keep_file: str = Form("1"),
     role: str = Form(""),
+    tender_columns: str = Form(""),
+    tie_field: str = Form(""),
+    tender_basis: str = Form(""),
     org_id: str = ORG_ID,
 ):
     """READ-ONLY over the data tables: everything the steps need in one payload. Saves nothing but
@@ -6469,17 +6726,21 @@ async def onboarding_intake_analyze(
     require_org(org_id)
     client = sb()
     (source_kind, carrier_id, statement_type, pos_source, layout, name, column_map, sign_answer, assignments, identity,
-     typed_total, as_of_date, sheet, header_row, footer, instance_key, use_stored, keep_file, role) = map(_fstr, (
+     typed_total, as_of_date, sheet, header_row, footer, instance_key, use_stored, keep_file, role, tender_columns, tie_field) = map(_fstr, (
         source_kind, carrier_id, statement_type, pos_source, layout, name, column_map, sign_answer, assignments, identity,
-        typed_total, as_of_date, sheet, header_row, footer, instance_key, use_stored, keep_file, role))
+        typed_total, as_of_date, sheet, header_row, footer, instance_key, use_stored, keep_file, role, tender_columns, tie_field))
     contents, fname = await _intake_contents(client, org_id, file, source_kind, instance_key, use_stored)
     ctx = _intake_prepare(client, org_id, contents, fname, source_kind, carrier_id,
                           statement_type, column_map, sign_answer, assignments, typed_total,
                           sheet=sheet, header_row=header_row, footer=footer or "auto",
                           pos_source=pos_source, layout=layout, name=name, identity_json=identity, as_of_date=as_of_date,
-                          role=role)
+                          role=role, tender_columns_json=tender_columns, tie_field=tie_field)
     out = _intake_payload(ctx)
     out["filename"] = fname
+    if file is None and use_stored and instance_key and instance_key != ctx["instance_key"]:
+        carried = _intake_carry_kept_file(client, org_id, instance_key, ctx["instance_key"])
+        if carried:
+            out["file"] = {**carried, "carried_from": instance_key}
     if file is not None and getattr(file, "filename", None) is not None and keep_file not in ("0", "false", "no"):
         # the ONLY thing analyze writes: the reference to the KEPT file (nothing else — no mapping, no
         # rule, no row, and no stage row at all when the store was unavailable)
@@ -6564,6 +6825,146 @@ def _intake_reread_xreport(client, org_id, stores, close_date):
             .eq("close_date", close_date).in_("store", list(stores)).limit(20000).execute().data) or []
     return [(str(r.get("store") or ""), str(r.get("close_date") or "")[:10], str(r.get("tender_type") or ""),
              float(r.get("amount") or 0.0)) for r in rows]
+
+
+def _intake_reread_invoice(client, org_id, stores, lo, hi, kind=None):
+    """The invoice rows this file owns — (org, its stores, its date range, ITS KIND) in the invoice table —
+    RE-READ in pages after landing; the kind filtered through landing_identity.kind_of_row."""
+    table = _intake.SOURCE_KIND_TARGET["invoice"]
+    kind_col = _landing.stamp_column(table)
+    cols = "store,salesperson,trans_id,trans_date,net_sales,sales,subtotal,invoice_total,gp,tax,tendered_by,customer"
+    if kind_col and kind:
+        cols += "," + kind_col
+    rows, start = [], 0
+    while True:
+        page = (client.schema("commcalc").table(table).select(cols)
+                .eq("org_id", org_id).in_("store", list(stores)).gte("trans_date", lo).lte("trans_date", hi)
+                .order("id").range(start, start + _INTAKE_REREAD_PAGE - 1).execute().data) or []
+        rows.extend(page)
+        if len(page) < _INTAKE_REREAD_PAGE:
+            break
+        start += _INTAKE_REREAD_PAGE
+    if kind_col and kind:
+        rows = [r for r in rows if _landing.kind_of_row(table, r, column_mapping.TABLE_MAP) == kind]
+    return rows
+
+
+def _intake_reread_invoice_tenders(client, org_id, stores, lo, hi, kind=None):
+    """The tender / tax-component rows this file owns in the CHILD table (column_mapping.CHILD_TABLE_MAP) —
+    the same slice (stores × dates × kind), RE-READ in pages after landing."""
+    table = column_mapping.CHILD_TABLE_MAP[_intake.REPORT_KEY_BY_KIND["invoice"]]
+    kind_col = _landing.stamp_column(table)
+    cols = "store,trans_date,trans_id,salesperson,role,tender_label,tender_class,keyed_manually,amount"
+    if kind_col and kind:
+        cols += "," + kind_col
+    rows, start = [], 0
+    while True:
+        page = (client.schema("commcalc").table(table).select(cols)
+                .eq("org_id", org_id).in_("store", list(stores)).gte("trans_date", lo).lte("trans_date", hi)
+                .order("id").range(start, start + _INTAKE_REREAD_PAGE - 1).execute().data) or []
+        rows.extend(page)
+        if len(page) < _INTAKE_REREAD_PAGE:
+            break
+        start += _INTAKE_REREAD_PAGE
+    if kind_col and kind:
+        rows = [r for r in rows if _landing.kind_of_row(table, r, column_mapping.TABLE_MAP) == kind]
+    return rows
+
+
+def _intake_tender_basis(client, org_id):
+    """The org's tender basis, from the one home (closing.router.tender_basis_info) — lazy import."""
+    from app.modules.closing import router as _cr
+    return _cr.tender_basis_info(client, org_id)
+
+
+def _intake_tender_vocab():
+    """The tender classes a column may be — closing.router.TENDER_VOCAB, THE one home (lazy import: this
+    module takes no import-time dependency on closing, as _xr_canon_known does)."""
+    from app.modules.closing import router as _cr
+    return [{"key": k, "label": l, "recon_class": c, "closing_axis": ax, "folds_to": f} for (k, l, c, ax, f) in _cr.TENDER_VOCAB]
+
+
+def _intake_tender_resolver(client, org_id):
+    """header → canonical tender class: the org's closing_tender_map rows for report='invoice' (the mig-111
+    home of raw label → tender, exactly as the X-report and sales legs resolve theirs through
+    tender_config.make_resolver), falling back to closing.router.tender_class (the one ladder). Also
+    returns the 'your earlier choice' map and the keyed-manually predicate."""
+    from app.modules.closing import router as _cr
+    from app.modules.closing.tender_config import load_tender_config, make_resolver
+    _defs, maps = load_tender_config(client, org_id)
+    resolve = make_resolver(maps, _invt.MAP_REPORT, _cr.tender_class, _cr.TENDER_CLASSES)
+    earlier = _invt.earlier_from_map(maps)
+    return resolve, _cr.keyed_manually, earlier
+
+
+def _intake_tender_columns_block(client, org_id, headers, records, mapped_headers, tax_header, decisions):
+    """THE 2.5b STEP'S PAYLOAD: every money column of the file that is not a header field, with its
+    proposed role (tender with its class / tax component / not proposed), Σ and counts; the person's
+    decisions laid over; the vocabulary the dropdown offers. Errors (an unknown class) are refusals."""
+    from app.modules.closing import router as _cr
+    resolve, keyed_of, earlier = _intake_tender_resolver(client, org_id)
+    proposal = _invt.suggest_columns(headers, records, mapped_headers, resolve, keyed_of, tax_header=tax_header, earlier=earlier)
+    applied = _invt.apply_decisions(proposal, decisions if isinstance(decisions, dict) else {}, _cr.TENDER_CLASSES)
+    return {"step": _intake.STEP_TENDER_COLUMNS, "columns": applied["columns"], "confirmed": applied["columns"],
+            "tenders": applied["tenders"], "taxes": applied["taxes"], "unplaced": proposal["unplaced"],
+            "errors": applied["errors"], "scanned": proposal["scanned"], "tax_header": tax_header,
+            "vocab": _intake_tender_vocab(), "roles": list(_invt.ROLES),
+            "earlier_choices": len(earlier), "decisions": decisions if isinstance(decisions, dict) else {}}
+
+
+def _intake_write_tender_map(client, org_id, confirmed):
+    """REMEMBER the confirmed tender columns as the org's closing_tender_map rows for report='invoice'
+    (invoice_tenders.tender_map_rows): the invoice rows are REPLACED as a set (delete report='invoice'
+    only — the X-report / sales legs' rows are never touched), then READ BACK through the very resolver
+    the next analyze uses; a write that does not stick refuses the commit. Degrades to a stated reason
+    before mig 111."""
+    rows = _invt.tender_map_rows(org_id, confirmed)
+    try:
+        client.schema("commcalc").table("closing_tender_map").delete().eq("org_id", org_id).eq("report", _invt.MAP_REPORT).execute()
+        if rows:
+            client.schema("commcalc").table("closing_tender_map").insert(rows).execute()
+    except Exception as e:
+        if not rows:
+            return {"written": 0, "note": f"nothing to remember ({str(e)[:80]})"}
+        return {"error": f"The tender columns could not be remembered (closing_tender_map, mig 111): {str(e)[:160]} — nothing imported."}
+    resolve, _keyed, earlier = _intake_tender_resolver(client, org_id)
+    wrong = [c["header"] for c in confirmed if c.get("role") == _invt.ROLE_TENDER and resolve(c["header"]) != c.get("tender_class")]
+    if wrong:
+        return {"error": "The tender columns did not read back as saved: " + ", ".join(wrong) + " — nothing imported."}
+    return {"written": len(rows), "classes": sorted({r["tender_key"] for r in rows if r["tender_key"] != _invt.KEYED_FLAG_KEY}),
+            "keyed": sorted(c["header"] for c in confirmed if c.get("keyed_manually")), "read_back": True}
+
+
+_INVOICE_RECON_MAX_DAYS = 92
+
+
+def _intake_invoice_tender_recon(client, org_id, trows):
+    """STAGE 4 — the invoice tender split per store-day BESIDE the X-report (owner 2026-09-21). The store
+    strings resolve through closing.router._addr_resolver and the X-report side is
+    closing.router._xreport_tenders_by_store per date — the SAME reader and resolver every closing cash /
+    card recon uses, so this can never disagree with them about a day. Read-only; nothing here changes
+    what the closing recon uses as its basis (a fallback basis when no X-report exists is PROPOSED in
+    index §30.13, not built)."""
+    from app.modules.closing import router as _cr
+    try:
+        dates = sorted({str(t.get("trans_date") or "")[:10] for t in trows if t.get("role") == "tender" and t.get("trans_date")})
+        capped = len(dates) > _INVOICE_RECON_MAX_DAYS
+        store_days, by_date = {}, {}
+        for d in dates[:_INVOICE_RECON_MAX_DAYS]:
+            # the INVOICE leg through the closing module's own reader (what Cash Collected reads under the
+            # 'invoice' basis) and the X-REPORT leg through the one resolver forced to that leg
+            for code, agg in _cr._invoice_tenders_by_store(client, org_id, d).items():
+                store_days[(code, d)] = agg
+            by_date[d] = _cr._tender_split_by_store(client, org_id, d, basis="x_report")["totals"]
+        rec = _invt.recon_vs_xreport(store_days, by_date)
+        tb = _cr.tender_basis_info(client, org_id)
+        return {**rec, "basis": "invoice tender rows per store-day through closing.router._invoice_tenders_by_store (the closing "
+                                "module's own reader, store strings through its address resolver) beside commcalc.pos_tender_summary "
+                                "through _tender_split_by_store — the tie-out; which leg the closing recon READS is the tender basis",
+                "tender_basis": tb, "days": len(dates), "days_capped": capped,
+                "report": "/closing/tender-recon-3way"}
+    except Exception as e:
+        return {"basis": None, "error": f"tender recon did not run: {str(e)[:200]}"}
 
 
 def _intake_reread_merchant(client, org_id, source_id, lo, hi):
@@ -6775,6 +7176,14 @@ def _intake_link_source(client, org_id, inst, registry_rows, store_resolve, rep_
                                                table=p.get("target_table") or _intake.SOURCE_KIND_TARGET.get(kind),
                                                kind=p.get("layout") or None)
             src["reread"] = "_intake_reread_sales"
+        elif kind == "invoice":
+            # one row per INVOICE: `trans_id` is the invoice number the line-level export carries — the
+            # link to raw_sales; store + date pair it with the X-report per store-day (§30.13)
+            span = vn.get("date_span") or {}
+            if not (id_values and span.get("from") and span.get("to")):
+                return {**src, "read_ok": False, "note": "no landed slice recorded (stores × dates) — commit the export first"}
+            src["rows"] = _intake_reread_invoice(client, org_id, id_values, span["from"], span["to"], kind=p.get("layout") or None)
+            src["reread"] = "_intake_reread_invoice"
         elif kind == "inventory":
             as_of = vn.get("as_of_date")
             if not (id_values and as_of):
@@ -6954,6 +7363,47 @@ def _intake_land(client, org_id, kind, ctx, filename, who=None):
                         (slice replace on account × dates), `epay_ingest.ingest` for the transaction
                         detail feed (idempotent on transaction id) — Stage C.
     Returns {saved, rows_built, detail, skipped}."""
+    if kind == "invoice":
+        # ── SALES BY INVOICE (owner 2026-09-21): the invoice HEADER lands through `_ingest_mapped_df`
+        #    exactly as a sales export does (stamped, consumer-gated, slice-replaced store × dates × kind,
+        #    snapshot + restore, traced); then the TENDER SPLIT — one row per (invoice, declared column)
+        #    with an amount ≠ 0, built at 2.5b from the same rows — lands in the CHILD table
+        #    column_mapping.CHILD_TABLE_MAP names, through the SAME path (same stamp, same slice). Two
+        #    calls, one importer, no insert of its own.
+        kf = ctx.get("kind_fields") or _intake.kind_fields(kind, ctx.get("layout"))
+        excluded = ctx.get("excluded") or {}
+        footer_idx = {f["row"] for f in ctx["footers"]}
+        mapped_index = {id(m): i for i, m in enumerate(ctx["mapped"])}
+        raw_rows = []
+        for r, m in ctx["pairs"]:
+            i = mapped_index.get(id(m))
+            if i is None or i in footer_idx:
+                continue
+            if _intake._s(m.get(kf["store"])) in excluded:
+                continue
+            raw_rows.append(r)
+        df = pd.DataFrame(raw_rows) if raw_rows else pd.DataFrame(columns=ctx["headers"])
+        res = _ingest_mapped_df(org_id, ctx["report_key"], ctx["target_table"], ctx["rules"], df,
+                                period="", fname=filename, trace_source="onboarding-intake",
+                                replace_other_kinds=bool(ctx.get("replace_other_kinds")))
+        trows = list(ctx.get("tender_rows") or [])
+        child = column_mapping.CHILD_TABLE_MAP[ctx["report_key"]]
+        tres = {"saved": 0, "note": "no tender or tax component column declared — nothing to land"}
+        if trows:
+            tcols = ("store", "trans_date", "trans_id", "salesperson", "role", "tender_label", "tender_class", "keyed_manually", "amount")
+            trules = [{"target_field": c, "source_header": c,
+                       "transform": ("number" if c == "amount" else "bool" if c == "keyed_manually" else "date_auto" if c == "trans_date" else "text")}
+                      for c in tcols]
+            # a blank class (a tax row) is '' at the frame boundary — pandas would turn None into NaN and the
+            # text transform would land the string 'nan' (caught by harness_sales_by_invoice.py D10)
+            tdf = pd.DataFrame([{c: ("" if t.get(c) is None else t.get(c)) for c in tcols} for t in trows])
+            tres = _ingest_mapped_df(org_id, ctx["report_key"], child, trules, tdf, period="",
+                                     fname=filename, trace_source="onboarding-intake",
+                                     replace_other_kinds=bool(ctx.get("replace_other_kinds")))
+        return {"saved": int(res.get("saved") or 0), "rows_built": len(raw_rows),
+                "detail": {**res, "tenders": {"saved": int(tres.get("saved") or 0), "rows_built": len(trows), "table": child,
+                                              "note": tres.get("note")}},
+                "skipped": 0}
     if kind in ("sales", "pos") or (kind == "bill_payments" and ctx["target_table"] == "raw_ma_daily_tx"):
         kf = _intake.kind_fields(kind, ctx.get("layout"))
         excluded = ctx.get("excluded") or {}
@@ -7091,6 +7541,9 @@ async def onboarding_intake_commit(
     role: str = Form(""),
     report_kind: str = Form(""),
     confirm_replace_other_kinds: str = Form(""),
+    tender_columns: str = Form(""),
+    tie_field: str = Form(""),
+    tender_basis: str = Form(""),
     org_id: str = ORG_ID,
 ):
     """THE SAVE, for every kind, with the same guarantee: refuse (400, nothing written) while a gate
@@ -7100,16 +7553,18 @@ async def onboarding_intake_commit(
     require_org(org_id)
     client = sb()
     (source_kind, carrier_id, statement_type, pos_source, layout, name, period, column_map, sign_answer, assignments,
-     identity, attestation, typed_total, as_of_date, verified_by, sheet, header_row, footer, instance_key, use_stored, role) = map(_fstr, (
+     identity, attestation, typed_total, as_of_date, verified_by, sheet, header_row, footer, instance_key, use_stored, role,
+     tender_columns, tie_field) = map(_fstr, (
         source_kind, carrier_id, statement_type, pos_source, layout, name, period, column_map, sign_answer, assignments,
-        identity, attestation, typed_total, as_of_date, verified_by, sheet, header_row, footer, instance_key, use_stored, role))
+        identity, attestation, typed_total, as_of_date, verified_by, sheet, header_row, footer, instance_key, use_stored, role,
+        tender_columns, tie_field))
     contents, fname = await _intake_contents(client, org_id, file, source_kind, instance_key, use_stored)
     kind = (source_kind or "commission").strip().lower()
     ctx = _intake_prepare(client, org_id, contents, fname, source_kind, carrier_id,
                           statement_type, column_map, sign_answer, assignments, typed_total,
                           sheet=sheet, header_row=header_row, footer=footer or "auto",
                           pos_source=pos_source, layout=layout, name=name, identity_json=identity, as_of_date=as_of_date,
-                          role=role)
+                          role=role, tender_columns_json=tender_columns, tie_field=tie_field)
     att = _intake_json(attestation, "attestation", {}) or {}
     if not isinstance(att, dict):
         raise HTTPException(400, "attestation must be a JSON object {reason}")
@@ -7120,6 +7575,9 @@ async def onboarding_intake_commit(
     # 2.6 confirmation: delete rows of a DIFFERENT report kind sitting in this file's slice (landing
     # identity, 2026-09-20). Absent → such a landing is refused naming the loss; never silent.
     ctx["replace_other_kinds"] = _fstr(confirm_replace_other_kinds).strip().lower() in ("1", "true", "yes")
+    # 2.5b (owner 2026-09-21 "nothing on cash collected either"): the tender BASIS the person chose —
+    # written to the one home (closing.router.put_tender_basis) at commit, read back, refused if it did not stick
+    ctx["tender_basis"] = _fstr(tender_basis).strip().lower() or None
     if kind == "commission":
         return _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who, fname)
     if kind == "other":
@@ -7205,7 +7663,7 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
         kind, ctx.get("mapped_fields"), ctx["stores"], ctx["tie"], att,
         undated_rows=((vn0.get("date_span") or {}).get("undated_rows") or 0),
         storeless_rows=vn0.get("storeless_rows") or 0, rows_to_land=len(ctx["land"]),
-        layout=ctx.get("layout"), extra=ctx.get("extra_refusals"))
+        layout=ctx.get("layout"), extra=ctx.get("extra_refusals"), tender_tie=ctx.get("tender_tie"))
     if kind == "inventory" and not ctx.get("as_of_date"):
         refusals.append("as_of_date is required — the date this on-hand listing was taken.")
     if refusals:
@@ -7237,6 +7695,18 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
     # (b) THE IDENTITY DECISIONS, through the alias / store / merchant-id writers, read back through the resolver
     identity_written = _intake_apply_identity(client, org_id, ctx["stores"], ctx["reps"], who,
                                               processor=ctx.get("merchant_processor"))
+    # (b2) THE TENDER COLUMNS (2.5b, the invoice kind): the confirmed header → class decisions are REMEMBERED
+    #      in the org's closing_tender_map (report='invoice' — the mig-111 home of raw label → tender), read back
+    tender_map_written, basis_written = None, None
+    if kind == "invoice":
+        tender_map_written = _intake_write_tender_map(client, org_id, (ctx.get("tender_columns") or {}).get("confirmed") or [])
+        if tender_map_written.get("error"):
+            raise HTTPException(400, tender_map_written["error"])
+        if ctx.get("tender_basis"):
+            from app.modules.closing import router as _cr
+            basis_written = _cr.put_tender_basis(client, org_id, ctx["tender_basis"])
+            if basis_written.get("error"):
+                raise HTTPException(400, "The tender basis was not saved — " + basis_written["error"] + " Nothing imported.")
     # (c) LAND through the kind's existing path
     landed = _intake_land(client, org_id, kind, ctx, fname, who)
     # (d) RE-READ what landed. What we show is what is in the table, not what was in memory.
@@ -7282,6 +7752,29 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
                          and abs(_intake.money(vn["sum_gross"] - vn0["sum_gross"])) < 0.005
                          and abs(_intake.money(vn["sum_fees"] - vn0["sum_fees"])) < 0.005
                          and vn["txn_count"] == vn0["txn_count"] and role_ok)
+    elif kind == "invoice":
+        kf = ctx.get("kind_fields") or kf
+        stores_landed = sorted({_intake._s(m.get(kf["store"])) for m in ctx["land"] if _intake._s(m.get(kf["store"]))})
+        span = vn0["date_span"]
+        rows = _intake_reread_invoice(client, org_id, stores_landed, span["from"], span["to"], kind=report_key)
+        trows = _intake_reread_invoice_tenders(client, org_id, stores_landed, span["from"], span["to"], kind=report_key)
+        vn = _invt.invoice_verify(rows, kf, trows)
+        vn["tie_field"] = kf["amount"]
+        our = vn["sum_amount"]
+        tl = (landed.get("detail") or {}).get("tenders") or {}
+        count_ok = (vn["rows"] == landed["rows_built"] == landed["saved"]
+                    and vn["tenders"]["rows"] + vn["tax"]["component_rows"] == tl.get("rows_built", 0) == tl.get("saved", 0))
+        tie = _intake.simple_tie(our, ctx["footer"]["file_total_raw"], typed_total)
+        tie_ok = bool(tie.get("match")) or bool(_intake._s(att.get("reason")))
+        same_as_shown = (abs(_intake.money(our - ctx["tie"]["our_total"])) < 0.005
+                         and abs(_intake.money(vn["tenders"]["sum"] - vn0["tenders"]["sum"])) < 0.005)
+        # STAGE 4 — the tender split per store-day BESIDE the X-report (the closing recon's own reader),
+        # never a second basis; and Σ tax as a tie-out (the Tax Collected aggregator does not read it yet)
+        cross["tender_recon"] = _intake_invoice_tender_recon(client, org_id, trows)
+        cross["tender_map"] = tender_map_written
+        cross["tender_basis"] = {**_intake_tender_basis(client, org_id), "written": basis_written}
+        cross["shows_in"] = _landing.shows_in({"layout": report_key, "landing": kind}, column_mapping.TABLE_MAP,
+                                              _TRACE_TARGET_TABLE, _intake.SOURCE_KIND_TARGET)
     elif kind == "bill_payments":
         accounts = sorted({_intake._s(m.get(kf["store"])) for m in ctx["land"] if _intake._s(m.get(kf["store"]))})
         span = vn0["date_span"]
@@ -7336,7 +7829,8 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
     if not same_as_shown:
         problems.append(f"re-read total {our} ≠ shown {ctx['tie']['our_total']}"
                         + (" (the coverage recon's reader does not sum to the bill-pay rows shown — an unmapped account, or the rule)"
-                           if kind == "bill_payments" else ""))
+                           if kind == "bill_payments" else "")
+                        + (f" (or the re-read tender Σ {vn['tenders']['sum']} ≠ shown {vn0['tenders']['sum']})" if kind == "invoice" else ""))
     verified_numbers = {
         "basis": (f"re-read through the mig-939 bill-pay reader after landing in commcalc.{ctx['target_table']}" if kind == "bill_payments"
                   else f"re-read from commcalc.{ctx['target_table']} after landing"),
@@ -7374,6 +7868,10 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
                        "column_map": {p["target_field"]: p["column"] for p in ctx.get("proposal") or [] if p.get("column")},
                        "identity": ctx["identity_decisions"], "as_of_date": ctx.get("as_of_date"),
                        "settlement_role": ctx.get("settlement_role"), "source_id": ctx.get("source_id"),
+                       "tender_columns": ({c["header"]: {"role": c["role"], "tender_class": c.get("tender_class"), "keyed_manually": bool(c.get("keyed_manually"))}
+                                           for c in ((ctx.get("tender_columns") or {}).get("confirmed") or [])} if kind == "invoice" else None),
+                       "tie_field": (ctx.get("kind_fields") or {}).get("amount") if kind == "invoice" else None,
+                       "tender_basis": ctx.get("tender_basis") if kind == "invoice" else None,
                        "period": period_label},
         verified_numbers=verified_numbers, verified_by=who,
         blocking_reason=("; ".join(problems) if problems else ""), by=who)
@@ -7526,6 +8024,10 @@ def _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who
             "identity_written": identity_written,
             "verified_numbers": verified_numbers, "state": state,
             "buckets": commission_ledger.bucket_keys(ctx["buckets"]), "bucket_labels": _intake.bucket_labels(ctx["buckets"]),
+            # WHERE THIS STATEMENT SHOWS UP (mig 1013): the ledger's consumers from the ONE map, the P&L
+            # entry carrying the lines the org's buckets are linked to and whether the ledger books the P&L
+            "shows_in": _landing.shows_in({"landing": "commission"}, column_mapping.TABLE_MAP, _TRACE_TARGET_TABLE,
+                                          _intake.SOURCE_KIND_TARGET, pl_link=_ledger_pl_link(client, org_id)),
             "summary": commission_ledger.summarize(rows, rules=cat_rules, conv=conv, buckets=ctx["buckets"],
                                                    buckets_meta=ctx["bucket_meta"])}
 
@@ -7641,7 +8143,7 @@ def commission_ledger_observed_types(source_report: str = "ma_daily_tx", period:
         b, lm, why = commission_ledger.leg_of(
             {"order_type": a["order_type"], "product_name": a["product_name"],
              "raw_amount": _sign * (1 if a.get("is_payout") else -1),
-             "payment_month": commission_ledger.parse_payment_month(a["product_name"])},
+             "payment_month": commission_ledger.month_leg_of(a["product_name"])},
             _rules, _lc, _conv)
         a["leg_bucket"], a["leg_month"], a["leg_why"] = b, lm, why
     out = sorted(agg.values(), key=lambda x: (-x["payout_total"], x["product_name"]))
@@ -12247,6 +12749,22 @@ def _invalidate_accessory_config(org_id):
         return 0
 
 
+def _line_rules_resolve(client, org_id, ad_raw, ct_map):
+    """THE ONE resolution of an org's activation-type rules (line_class.resolve_rules over the mig-313
+    JSON, the mig-213 exact map and the legacy exec 'activation' layer). Called by the loader
+    (_accessory_config_uncached) for the rules IN FORCE and by the 2.5a save for the rules that WOULD BE
+    in force — so the too-broad guard measures exactly what every report and the pay path would read.
+    A second resolution would drift (the lock names this helper)."""
+    legacy_act = None
+    try:
+        _ex_act = (_exec_metric_config(client, org_id, with_sources=True) or {}).get("activation") or {}
+        if _ex_act.get("source") == "tenant":
+            legacy_act = _ex_act.get("rules") or None
+    except Exception:
+        legacy_act = None
+    return _lc.resolve_rules(ad_raw, ct_map, legacy_act)
+
+
 def _accessory_config_uncached(client, org_id):
     """Configurable accessory classification, resolved PER-ORG (mig 208 commcalc.accessory_config, keyed on
     org_id — REPLACES the flag_rules singleton, which could physically hold only ONE org's config because
@@ -12376,14 +12894,7 @@ def _accessory_config_uncached(client, org_id):
             ad_raw = adrows[0]["activation_details_rules"] or {}
     except Exception:
         ad_raw = {}
-    legacy_act = None
-    try:
-        _ex_act = (_exec_metric_config(client, org_id, with_sources=True) or {}).get("activation") or {}
-        if _ex_act.get("source") == "tenant":
-            legacy_act = _ex_act.get("rules") or None
-    except Exception:
-        legacy_act = None
-    line_rules = _lc.resolve_rules(ad_raw, ct_map, legacy_act)
+    line_rules = _line_rules_resolve(client, org_id, ad_raw, ct_map)
     # BILL-PAYMENT products (mig 214; per-org, admin-editable) — which product/item values count as a
     # bill payment (walk-in recharge) for the Daily-Targets CONVERSION metric (boxes ÷ billpays). Fetched in
     # its OWN defensive query so a missing column (pre-214) can NEVER disturb the resolution above — it falls
@@ -14107,7 +14618,18 @@ def _commission_org_config(client, org_id):
             # it back is an instant revert. Live measurement before the switch (org 854f6d7b, 2026-08):
             # the accessory basis for rules-plan reps grows ~2.75x (12-rep sample $6,165 → $16,969),
             # because raw_sales held 3,235 rows for the period while the union holds 9,161.
-            "sales_source": _ss if _ss in ("legacy", "union") else "legacy"}
+            "sales_source": _ss if _ss in ("legacy", "union") else "legacy",
+            # mig 1013 — WHICH SOURCE BOOKS THE P&L COMMISSION LINES. 💰 MONEY SETTING (statement value).
+            # 'feeds' (default, and the value read when the column is absent) = today's feed-table
+            # bookings, byte-identical. 'ledger' / 'ledger_else_feeds' book from the Commission Ledger
+            # (account/ledger_pnl). Vocabulary: ma_store_pnl.COMMISSION_SOURCES (one home).
+            "pl_commission_source": _pl_commission_source_value(r.get("pl_commission_source"))}
+
+
+def _pl_commission_source_value(v):
+    from app.modules.account import ma_store_pnl as _msp
+    v = str(v or "").strip().lower()
+    return v if v in _msp.COMMISSION_SOURCES else _msp.COMMISSION_SOURCE_FEEDS
 
 
 def _sales_source_mode(client, org_id):
@@ -15895,6 +16417,7 @@ class PutCommissionSettingsIn(LaxModel):
     installment_mrc_hardware_guard: Any = None
     store_resolution: Any = None
     calc_stale_minutes: Any = None
+    pl_commission_source: Any = None
 
 
 @router.put("/commission-settings")
@@ -15966,7 +16489,56 @@ def put_commission_settings(body: PutCommissionSettingsIn, authorization: str = 
              .update({"calc_stale_minutes": _csm_val}).eq('org_id', org_id).execute())
         except Exception as e:
             print(f"WARN calc_stale_minutes not saved for org {org_id} (is migration 275 applied?): {e}")
+    # mig 1013 — 💰 WHICH SOURCE BOOKS THE P&L COMMISSION LINES (owner 2026-09-21). Its OWN statement
+    # (the mig-247 lesson), but NEVER best-effort: a P&L source that did not save is a defect the
+    # person must hear about, so a missing column refuses naming the migration. The value is
+    # validated against the ONE vocabulary (ma_store_pnl.COMMISSION_SOURCES) — an unknown word is a
+    # 400, never a silent default. Same admin gate as the rest of this endpoint. Takes effect on the
+    # next /account/compute for a period; the P&L line's drill-down shows both sources' figures.
+    if "pl_commission_source" in body.model_fields_set:
+        from app.modules.account import ma_store_pnl as _msp
+        from app.modules.account import ledger_pnl as _lp
+        _pcs = str(body.pl_commission_source or "").strip().lower()
+        if _pcs not in _msp.COMMISSION_SOURCES:
+            raise HTTPException(400, f"pl_commission_source must be one of {', '.join(_msp.COMMISSION_SOURCES)}")
+        try:
+            (sb().schema('commcalc').table('commission_org_config')
+             .update({"pl_commission_source": _pcs}).eq('org_id', org_id).execute())
+        except Exception as e:
+            raise HTTPException(400, f"The P&L commission source was NOT saved — is migration {_lp.MIGRATION} "
+                                     f"applied? ({str(e)[:160]})")
+        # READ BACK — what is saved is what the P&L will read, not what was posted
+        _saved = _lp.load_source_meta(sb(), org_id)
+        if _saved.get("configured") != _pcs:
+            raise HTTPException(400, f"The P&L commission source did not read back as '{_pcs}' "
+                                     f"(read '{_saved.get('configured')}') — nothing changed.")
     return _commission_org_config(sb(), org_id)
+
+
+@router.get("/pl-commission-source")
+def get_pl_commission_source(org_id: str = ORG_ID):
+    """Which source books the P&L commission lines for this org (mig 1013), in layman words, with the
+    SUGGESTION and the evidence behind it, the P&L lines the ledger's buckets are linked to, and
+    "this statement will show in" for the ledger. READ-ONLY: the one writer is PUT /commission-settings
+    {pl_commission_source}; the panel re-reads this after saving."""
+    require_org(org_id)
+    from app.modules.account import ledger_pnl as _lp
+    client = sb()
+    meta = _lp.load_source_meta(client, org_id)
+    evidence = _lp.load_source_evidence(client, org_id)
+    link = _ledger_pl_link(client, org_id) or {"lines": [], "source": meta["configured"], "active": False}
+    return {
+        "value": meta["configured"], "ready": meta["ready"], "migration": meta["migration"],
+        "options": [{"value": v, "label": _lp.SOURCE_LABELS[v], "blurb": _lp.SOURCE_BLURBS[v]} for v in _lp.SOURCES],
+        "suggestion": _lp.suggest_source(meta["configured"], evidence["feed_tables_with_rows"], evidence["ledger_lines"]),
+        "evidence": evidence,
+        "pl_link": link,
+        "shows_in": _landing.shows_in({"landing": "commission"}, column_mapping.TABLE_MAP, _TRACE_TARGET_TABLE,
+                                      _intake.SOURCE_KIND_TARGET, pl_link=link),
+        "not_ready_note": (None if meta["ready"] else
+                           f"Migration {meta['migration']} is not applied: the P&L books from the feed tables and "
+                           "the switch cannot be saved until it runs."),
+    }
 
 
 # ── installment-schedule EDIT helpers (mig 210): shared create/update writer + audit trail ──────────
@@ -28559,9 +29131,14 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     #    that maps the words. DISPLAY-ONLY, never raises.
     try:
         _cls_counts = _lc.count_classes(rows, _line_rules_of(acfg), skip=_line_skip)
+        # …and the twin: a saved word naming nearly every line (every invoice an activation) is REFUSED
+        # here too — `rules_refused` + the refusal in words; the page shows it beside the silent-zero banner
         _landing_ex["classified"] = {**_cls_counts, "gate_open": _lc.gate_open(_cls_counts),
+                                     "rules_refused": _lc.rules_refused(_cls_counts),
                                      "map_at": {"screen": "onboarding_intake", "step": "2.5a"},
-                                     "note": _lc.gate_sentence(_cls_counts) if _lc.gate_open(_cls_counts) else None}
+                                     "note": (_lc.gate_sentence(_cls_counts) if _lc.gate_open(_cls_counts)
+                                              else _lc.refusal_sentence(_cls_counts["refused"], _cls_counts["scanned"])
+                                              if _lc.rules_refused(_cls_counts) else None)}
     except Exception:
         _landing_ex["classified"] = None
 
@@ -30134,14 +30711,23 @@ def put_exec_metric_config(body: PutExecMetricConfigIn, org_id: str = ORG_ID):
         raise HTTPException(400, f"unknown bucket (allowed: {', '.join(_EXEC_BUCKETS)})")
     rules = body.rules if isinstance(body.rules, dict) else {}
     basis = 'ext_price' if str(body.basis or 'count') == 'ext_price' else 'count'
-    try:
-        sb().schema('commcalc').table('exec_metric_config').upsert(
-            {'org_id': org_id, 'bucket': bucket, 'rules': rules, 'basis': basis,
-             'updated_at': _datetime.now(_timezone.utc).isoformat()},
-            on_conflict='org_id,bucket').execute()
-        return {"ok": True, "bucket": bucket}
-    except Exception as e:
-        return {"ok": False, "hint": "run migration 204 (exec_metric_config)", "error": str(e)[:200]}
+    # THE ROOT CAUSE of "the phones tick did not persist" (owner 2026-09-21, step 2.5a): mig 962 DROPPED the
+    # mig-204 UNIQUE (org_id, bucket) and replaced it with the unique index (org_id, bucket, carrier) NULLS NOT
+    # DISTINCT, so an upsert whose conflict target is still (org_id, bucket) is refused by Postgres ("there is
+    # no unique or exclusion constraint matching the ON CONFLICT specification") — every tenant write through
+    # this endpoint and the Metric-definitions panel failed since 962, reported as "run migration 204". The
+    # conflict target now names the index (an org's OWN row is carrier NULL); a pre-962 database (no carrier
+    # column) still takes the legacy target — the same column ladder _exec_metric_config reads with.
+    row = {'org_id': org_id, 'bucket': bucket, 'rules': rules, 'basis': basis,
+           'updated_at': _datetime.now(_timezone.utc).isoformat()}
+    errors = []
+    for _row, _target in (({**row, 'carrier': None}, 'org_id,bucket,carrier'), (row, 'org_id,bucket')):
+        try:
+            sb().schema('commcalc').table('exec_metric_config').upsert(_row, on_conflict=_target).execute()
+            return {"ok": True, "bucket": bucket, "conflict_target": _target}
+        except Exception as e:
+            errors.append(f"{_target}: {str(e)[:160]}")
+    return {"ok": False, "hint": "exec_metric_config could not be written (mig 204 / 962)", "error": " | ".join(errors)[:400]}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════

@@ -57,6 +57,10 @@ from datetime import datetime, timezone
 
 HOUSE_ORG = "00000000-0000-0000-0000-000000000001"
 MIGRATION = "1010_report_kind_registry.sql"
+# every migration that seeds HOUSE rows of commcalc.report_kind, in order — HOUSE_KINDS is the byte-equal
+# mirror of their VALUES blocks concatenated (harness_report_kinds.py §A parses each back); a new house
+# kind is a NEW numbered migration (never an edit of an earlier seed) and a row appended here
+SEED_MIGRATIONS = (MIGRATION, "1012_sales_by_invoice.sql")
 TABLE = "report_kind"
 SIGNATURE_TABLE = "report_signature"
 DEFINED_BY = ("house", "tenant")
@@ -65,9 +69,9 @@ STATEMENT_TYPE_DEFAULT = "commission"            # the blank / unstated type = t
 # Where a kind LANDS = the intake's source kinds (onboarding_intake.SOURCE_KINDS) plus three the
 # intake does not take: a custom-import sheet (self-serve capture, mig 099), a report registered
 # through the connector registry (report_definitions, uploaded by its legacy route), a module page.
-LANDINGS = ("sales", "pos", "inventory", "commission", "x_report", "merchant_payments", "bill_payments", "other",
+LANDINGS = ("sales", "pos", "invoice", "inventory", "commission", "x_report", "merchant_payments", "bill_payments", "other",
             "custom_import", "carrier_report", "module")
-INTAKE_LANDINGS = ("sales", "pos", "inventory", "commission", "x_report", "merchant_payments", "bill_payments", "other")
+INTAKE_LANDINGS = ("sales", "pos", "invoice", "inventory", "commission", "x_report", "merchant_payments", "bill_payments", "other")
 CAP_PREFIX = "kind:"                 # ui_label_override scope 'cap' key namespace (beside carrier:/pos:)
 SURFACES = ("intake", "upload", "wizard", "email_imports", "tiles")
 # Detection thresholds (design: exact fingerprint > ≥80% overlap > signature presence; ask on a tie).
@@ -215,6 +219,19 @@ HOUSE_KINDS = [
        what_in_it="On-hand inventory by store and category — structured entry and recon on its own page.",
        source_hint="export from your POS", applies_to_pos=["b2bsoft"], applies_to_carrier=["boost"], landing="module",
        upload_types=["b2b_inventory"], sort_order=360),
+    # ── mig 1012 (owner 2026-09-21: "sales by invoice report also has the tender types on the report") ──
+    # ONE ROW PER INVOICE with one amount column per tender type — NOT the by-product aggregate it was
+    # mis-carded as on 2026-09-20 (that card is one row per invoice LINE with a SKU; this one has no SKU,
+    # no tracking number, no product name — `excludes_columns` — and carries an invoice total —
+    # `requires_columns`). Sorted between the two sales cards.
+    _k(key="sales_by_invoice", label="Sales by invoice with tender types (how each invoice was paid)",
+       what_in_it="One row per invoice with its totals and tax, and one amount column per tender type — cash, each card brand, "
+                  "debit, a vendor rebate — so you can see how each invoice was paid.",
+       recognisable_columns=["Invoice #", "Invoice Total", "Net Sales", "Tendered By", "Cash", "Adjustments"],
+       source_hint="export from your POS", landing="invoice", layout="sales_by_invoice",
+       signature_fields=["trans_id", "invoice_total", "net_sales", "tax", "tendered_by"],
+       requires_columns=["Invoice Total"], excludes_columns=["Product SKU", "SKU", "Tracking #", "Product Name", "IMEI", "Serial"],
+       sort_order=25),
 ]
 HOUSE_KEYS = [r["key"] for r in HOUSE_KINDS]
 

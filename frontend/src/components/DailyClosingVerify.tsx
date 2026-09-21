@@ -7,6 +7,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import type { EntityOption } from '@/components/EntityPicker'
 import type { StandardFilterValue } from '@/lib/standard-filters'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import ScreenLink from '@/components/ScreenLink'
 import EnvelopeViewLink from '@/components/EnvelopeViewLink'
 import { LinkedText } from '@/components/ScreenLink'
 import { useReportLabels } from '@/lib/report-labels'
@@ -188,6 +189,15 @@ function MissedChargebacksPanel({ filt }: { filt: StandardFilterValue }) {
       )}
     </div>
   )
+}
+
+// WHICH TENDER SPLIT a store-day's money recon read — the backend's `money_recon.tender_source` (x_report | invoice |
+// sales_feed), decided by the company's TENDER BASIS (closing.router._tender_split_by_store; owner 2026-09-21 "nothing on
+// cash collected either"). The page states it; it never decides it.
+function tenderSourceLabel(src: string | null | undefined, short = false) {
+  if (src === 'x_report') return short ? 'X-report' : 'POS X-report'
+  if (src === 'invoice') return short ? 'invoice tenders' : 'the invoice tenders (sales by invoice)'
+  return short ? 'sales' : 'sales feed'
 }
 
 export default function DailyClosingVerify() {
@@ -725,6 +735,13 @@ export default function DailyClosingVerify() {
               </div>
             )}
 
+            {/* WHICH TENDER BASIS this company's money recon reads (owner 2026-09-21 "nothing on cash collected either") — one
+                per-company setting (closing.router.tender_basis), stated here with the way back to the upload that feeds it */}
+            {data?.tender_basis && (
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
+                Tender basis: <b>{data.tender_basis.label}</b> ({data.tender_basis.source}) — set, and the report it reads uploaded, under <ScreenLink to="onboarding_intake">Onboarding — Commission Intake</ScreenLink>.
+              </div>
+            )}
             {/* Money reconciliation vs the POS X-report (owner 2026-08-20: "make sure the X-report data
                 is also pulling in"). money_recon.cash/credit.b2b is the X-report tender when
                 tender_source==='x_report' (else the sales feed). `closing` already reflects any DM
@@ -733,7 +750,7 @@ export default function DailyClosingVerify() {
               <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 8, background: 'var(--surface2)', fontSize: 13 }}>
                 <strong>Money reconciliation</strong>
                 <span style={{ color: 'var(--text3)', fontSize: 11, marginLeft: 6 }}>
-                  declared{s.dm_corrected ? ' (DM-corrected)' : ''} vs {s.money_recon.tender_source === 'x_report' ? 'POS X-report' : 'sales feed'}
+                  declared{s.dm_corrected ? ' (DM-corrected)' : ''} vs {tenderSourceLabel(s.money_recon.tender_source)}
                   {s.money_recon.tenders_available === false ? (xReport.applies === 'not_defined' ? ` — ${notApplicableCopy({ pos, posDeclared, feedNoun: 'cash register / X-report', purpose: 'reconcile the tenders against' })}` : ' — no X-report tender data for this day (recon pending)') : ''}
                 </span>
                 <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginTop: 6 }}>
@@ -745,7 +762,7 @@ export default function DailyClosingVerify() {
                         closing {fmt(m.closing)}
                         {m.pending
                           ? <span style={{ color: 'var(--text3)' }}> · X-report pending</span>
-                          : <> vs {s.money_recon.tender_source === 'x_report' ? 'X-report' : 'sales'} {fmt(m.b2b)}{' '}
+                          : <> vs {tenderSourceLabel(s.money_recon.tender_source, true)} {fmt(m.b2b)}{' '}
                               <b style={{ color: m.flag ? 'var(--amber, #b45309)' : 'var(--green, #16794a)' }}>
                                 {m.flag ? `Δ${(m.var ?? 0) > 0 ? '+' : ''}${fmt(m.var)}` : '✓'}</b></>}
                       </div>

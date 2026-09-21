@@ -162,9 +162,9 @@ check("A3 the proposal names category / product words per class with their count
 mb = (lc.get("metrics") or {}).get("buckets") or {}
 check("A4 the metric buckets: phones matched 0 and proposes category_contains words → 67; bill_payment matched 0 and proposes nothing",
       mb.get("phones", {}).get("matched") == 0 and mb["phones"]["preview"] == 67 and mb["bill_payment"]["matched"] == 0 and mb["bill_payment"]["proposal"] is None, mb.get("phones"))
-check("A5 the step exists on the spine between 2.5 and 2.6 (rail vocabulary + next_step)",
-      OI.STEP_KEYS_STAGE2[OI.STEP_KEYS_STAGE2.index("2.5") + 1] == "2.5a" and OI.next_step("2.5") == "2.5a" and OI.next_step("2.5a") == "2.6"
-      and "2.5a" in OI.ALL_STEP_KEYS)
+check("A5 the step exists on the spine after 2.5 (rail vocabulary + next_step); since 2026-09-21 the spine's next key is 2.5b (the invoice export's tender columns) — the page walks a SALES export from 2.5a straight to 2.6 by kind, as it walks an invoice export past 2.5a",
+      OI.STEP_KEYS_STAGE2[OI.STEP_KEYS_STAGE2.index("2.5") + 1] == "2.5a" and OI.next_step("2.5") == "2.5a" and OI.next_step("2.5a") == "2.5b"
+      and OI.next_step("2.5b") == "2.6" and "2.5a" in OI.ALL_STEP_KEYS)
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("§B commit — landed, but NOT verified until the words are mapped")
@@ -305,6 +305,129 @@ check("G6 an org with no config row → house rules (contract_type only, the ret
       h["line_rules"]["source"] == "house" and h["line_rules"]["fields"] == ["contract_type"] and h["line_rules"]["tokens"] == LC.HOUSE_RULES["tokens"])
 check("G7 the org-scope rule: every read the step makes is org-scoped (the fake filters by org_id; another org's rows never leak)",
       all(r["org_id"] == ORG for r in db.tables["accessory_config"]) and R._accessory_config(db, "other-org")["line_rules"]["source"] == "house")
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+section("§H THE SECOND CLASS — the owner's measured state (2026-09-21) reproduced, refused, and corrected through the step")
+# the owner's saved row, VERBATIM: fields ['category'], the bare word 'activation' under activation (inside every
+# category path of the export), 'prepaid' under activation; no exec_metric_config row (the phones tick did not persist)
+OWNER_ADR = {"edge_name_tokens": ["edge plan"], "fields": ["category"],
+             "tokens": {"activation": ["new activation", "activation", "add a line", "new act", "prepaid"], "upgrade": ["upgrade"],
+                        "byod": ["customer provided", "byod", "customer owned"], "port": ["port"], "hardware_only": ["hardware only"]}}
+db4 = fresh_db()
+c4 = commit(db4, sales_xlsx(), "sales.xlsx", source_kind="sales", pos_source="mypos", layout="sales",
+            column_map=json.dumps(SALES_MAP), typed_total=f"{FILE_TOTAL:.2f}")
+row4 = next(r for r in db4.tables["accessory_config"] if r["org_id"] == ORG)
+row4["activation_details_rules"] = dict(OWNER_ADR)          # the state the database holds — seeded, never written by code in production
+R._invalidate_accessory_config(ORG)
+use(db4)
+g4 = R.onboarding_intake_line_class(instance_key=IKEY, org_id=ORG)
+b4 = g4["block"]
+check("H1 GET over the landed slice RE-VALIDATES what is saved: the bare word 'activation' is REFUSED (names ≥80% of the lines), rules_ok False, the refusal note names the word and its share; with that rule every invoice but the hardware-only one is an activation",
+      b4["rules_ok"] is False and [(b["class"], b["token"]) for b in b4["refused"]] == [("activation", "activation")]
+      and b4["refused"][0]["ratio"] >= LC.BROAD_RATIO and '"activation"' in b4["refusal_note"] and "%" in b4["refusal_note"]
+      and b4["current"]["classes"]["activation"]["transactions"] == 87 and b4["gate_open"] is False, (b4.get("refused"), b4.get("refusal_note")))
+check("H2 the block's editable seed (suggest.proposal) is the person's words MINUS the refused one plus the file's hits — 'prepaid' (the person's word) kept, the bare word gone; the rules block carries no hint list at all",
+      b4["suggest"]["proposal"]["tokens"]["activation"] == ["new activation", "add a line", "new act", "prepaid"]
+      and "hints" not in b4["rules"] and "metric_hints" not in b4["rules"] and b4["rules"]["house_fill"] is False, b4["suggest"]["proposal"])
+p4 = R.onboarding_intake_put_line_class(R.OnboardingLineClassIn(instance_key=IKEY, by="pat"), org_id=ORG)   # a re-count with the rules in force, no change
+st4 = R.onboarding_intake_state(org_id=ORG)
+vt4 = next(r for r in st4["rail"]["verify_table"] if r["instance_key"] == IKEY)
+check("H3 the re-count of the landed rows under the refused rule does NOT verify: gate blocked naming the word, Stage-4 row RED, fix_step 2.5a, the activation note reads 'rule refused …' — never 'activations: 87 new activation'",
+      p4["verified"] is False and p4["activation_gate"]["blocked"] is True and '"activation"' in p4["activation_gate"]["reason"]
+      and vt4["red"] is True and vt4["fix_step"] == "2.5a" and (vt4["activation_note"] or "").startswith("rule refused")
+      and "87 new activation" not in (vt4["activation_note"] or ""), (p4.get("activation_gate"), vt4.get("activation_note")))
+before = json.dumps(next(r for r in db4.tables["accessory_config"] if r["org_id"] == ORG)["activation_details_rules"], sort_keys=True)
+status, detail = http_error(R.onboarding_intake_put_line_class,
+                            R.OnboardingLineClassIn(instance_key=IKEY, fields=["category"],
+                                                    tokens={**OWNER_ADR["tokens"], "byod": ["customer provided"]},
+                                                    metric_rules={"phones": b4["metrics"]["buckets"]["phones"]["proposal"]}, by="pat"), org_id=ORG)
+after = json.dumps(next(r for r in db4.tables["accessory_config"] if r["org_id"] == ORG)["activation_details_rules"], sort_keys=True)
+check("H4 THE GUARD at save: a body carrying the bare word → 400 whose detail names the word, its class and share, the basis (landed) and how to attest; NOTHING written — the rules row byte-identical, no exec_metric_config row",
+      status == 400 and isinstance(detail, dict) and detail["refused"][0]["token"] == "activation" and detail["basis"] == "landed"
+      and detail["attest_with"] == "broad_ok" and "Not saved" in detail["message"] and before == after
+      and not [r for r in db4.tables.get("exec_metric_config", []) if r["org_id"] == ORG], (status, detail if not isinstance(detail, dict) else detail.get("message")))
+# THE ROOT CAUSE of the phones tick not persisting: mig 962 replaced UNIQUE (org_id, bucket) with the unique index
+# (org_id, bucket, carrier) NULLS NOT DISTINCT; the writer still upserted ON CONFLICT (org_id, bucket) → Postgres 42P10
+try:
+    db4.schema("commcalc").table("exec_metric_config").upsert({"org_id": ORG, "bucket": "phones", "rules": {}, "basis": "count"}, on_conflict="org_id,bucket").execute()
+    old_target_error = None
+except Exception as e:
+    old_target_error = str(e)
+res_w = R.put_exec_metric_config(R.PutExecMetricConfigIn(bucket="phones", rules={"category_contains": ["smartphone"]}, basis="count"), org_id=ORG)
+check("H5 ROOT CAUSE reproduced: the pre-fix conflict target (org_id, bucket) is REFUSED by the post-962 shape (42P10); the writer now names the index (org_id, bucket, carrier) and the row is written (an org's own row: carrier NULL)",
+      old_target_error and "42P10" in old_target_error and res_w.get("ok") is True and res_w.get("conflict_target") == "org_id,bucket,carrier"
+      and [r for r in db4.tables["exec_metric_config"] if r["org_id"] == ORG][0].get("carrier") is None, (old_target_error, res_w))
+res_w2 = R.put_exec_metric_config(R.PutExecMetricConfigIn(bucket="phones", rules={"category_contains": ["smartphone", "basic phone"]}, basis="count"), org_id=ORG)
+check("H6 …a second write UPDATES the same row (one own-row per bucket, NULLS NOT DISTINCT), never a duplicate",
+      res_w2.get("ok") and len([r for r in db4.tables["exec_metric_config"] if r["org_id"] == ORG and r["bucket"] == "phones"]) == 1
+      and [r for r in db4.tables["exec_metric_config"] if r["org_id"] == ORG][0]["rules"]["category_contains"] == ["smartphone", "basic phone"])
+saved_idx, saved_cols = db4.unique_indexes["exec_metric_config"], db4.declared["exec_metric_config"]
+db4.unique_indexes["exec_metric_config"] = [("org_id", "bucket")]
+db4.declared["exec_metric_config"] = [c for c in saved_cols if c != "carrier"]
+db4.tables["exec_metric_config"] = [r for r in db4.tables["exec_metric_config"] if r["org_id"] != ORG]
+res_w3 = R.put_exec_metric_config(R.PutExecMetricConfigIn(bucket="phones", rules={"category_contains": ["x"]}, basis="count"), org_id=ORG)
+db4.unique_indexes["exec_metric_config"], db4.declared["exec_metric_config"] = saved_idx, saved_cols
+db4.tables["exec_metric_config"] = [r for r in db4.tables["exec_metric_config"] if r["org_id"] != ORG]
+check("H7 …and a PRE-962 database (no carrier column, UNIQUE (org_id, bucket)) still writes through the legacy target — the same column ladder the reader uses",
+      res_w3.get("ok") is True and res_w3.get("conflict_target") == "org_id,bucket", res_w3)
+# THE CORRECTION — the owner's clicks: the seed (proposal without the bare word), the phones tick, save
+fixed = b4["suggest"]["proposal"]
+p5 = R.onboarding_intake_put_line_class(R.OnboardingLineClassIn(instance_key=IKEY, fields=fixed["fields"], tokens=fixed["tokens"],
+                                                                 metric_rules={"phones": b4["metrics"]["buckets"]["phones"]["proposal"]}, by="pat"), org_id=ORG)
+adr5 = next(r for r in db4.tables["accessory_config"] if r["org_id"] == ORG)["activation_details_rules"]
+emc5 = [r for r in db4.tables["exec_metric_config"] if r["org_id"] == ORG]
+ex5 = R._exec_mtd(db4, ORG, "August 2026", today=date(2026, 9, 21))
+tot5 = ex5["by_location"]["total"]
+cl5 = (ex5.get("landing") or {}).get("classified") or {}
+check("H8 saving the seed (the bare word gone) + the phones tick: ok, both homes written, the guard measured over the landed rows, verified, the split 39 / 25 / 23; the 'prepaid' word and the basis key survive; exec_metric_config holds the phones row; Exec MTD Total Phones 67 (> 0), Total Activation 87, nothing refused",
+      p5["ok"] and p5["written"] == {"activation_rules": True, "metric_buckets": ["phones"]} and p5["guard"]["measured"] and p5["guard"]["basis"] == "landed"
+      and p5["verified"] is True and p5["block"]["current"]["classes"]["activation"]["transactions"] == 39
+      and adr5["tokens"]["activation"] == ["new activation", "add a line", "new act", "prepaid"] and adr5["edge_name_tokens"] == ["edge plan"]
+      and len(emc5) == 1 and emc5[0]["bucket"] == "phones" and int(tot5.get("total_phones") or 0) == 67 and int(tot5.get("total_activation") or 0) == 87
+      and cl5.get("rules_refused") is False, (p5.get("written"), p5.get("guard"), adr5.get("tokens"), len(emc5), tot5.get("total_phones"), cl5.get("rules_refused")))
+st5 = R.onboarding_intake_state(org_id=ORG)
+vt5 = next(r for r in st5["rail"]["verify_table"] if r["instance_key"] == IKEY)
+check("H9 the Stage-4 row is GREEN again with the split as its note", vt5["red"] is False and "39 new activation" in (vt5["activation_note"] or ""), vt5.get("activation_note"))
+# the attestation by name: a broad word the person KEEPS is recorded with the name and lifts the refusal for that word only
+p6 = R.onboarding_intake_put_line_class(R.OnboardingLineClassIn(instance_key=IKEY, tokens={"activation": ["new activation", "activation"]},
+                                                                 broad_ok=["activation:activation"], by="pat"), org_id=ORG)
+adr6 = next(r for r in db4.tables["accessory_config"] if r["org_id"] == ORG)["activation_details_rules"]
+g6 = R.onboarding_intake_line_class(instance_key=IKEY, org_id=ORG)["block"]
+check("H10 an explicit attestation naming the word (broad_ok) is accepted: recorded under broad_attested with the name and the measured share; GET shows the word broad-but-attested, nothing refused; the metric part untouched",
+      p6["ok"] and adr6["broad_attested"]["activation:activation"]["by"] == "pat" and adr6["broad_attested"]["activation:activation"]["ratio"] >= 0.8
+      and g6["rules_ok"] is True and g6["current"]["broad"] and g6["current"]["broad"][0]["attested"] is True and p6["written"]["metric_buckets"] == [],
+      (adr6.get("broad_attested"), g6.get("refused")))
+p7 = R.onboarding_intake_put_line_class(R.OnboardingLineClassIn(instance_key=IKEY, tokens={"activation": ["new activation"]}, by="pat"), org_id=ORG)
+adr7 = next(r for r in db4.tables["accessory_config"] if r["org_id"] == ORG)["activation_details_rules"]
+check("H11 removing the attested word prunes its attestation (an attestation names a word in force); the split is back to 39",
+      p7["ok"] and adr7.get("broad_attested") == {} and p7["block"]["current"]["classes"]["activation"]["transactions"] == 39, adr7.get("broad_attested"))
+# NOT LANDED YET: the guard measures the analyzed frame of the kept file (through THE prepare path), never skips
+db5 = fresh_db()
+a5 = analyze(db5, sales_xlsx(), "sales.xlsx", source_kind="sales", pos_source="mypos", layout="sales",
+             column_map=json.dumps(SALES_MAP), typed_total=f"{FILE_TOTAL:.2f}", keep_file="1")
+R.onboarding_intake_put_state(R.OnboardingIntakeStateIn(instance_key=IKEY, step="2.5a", payload={"column_map": SALES_MAP, "typed_total": f"{FILE_TOTAL:.2f}"}, by="pat"), org_id=ORG)
+status, detail = http_error(R.onboarding_intake_put_line_class,
+                            R.OnboardingLineClassIn(instance_key=IKEY, fields=["category"], tokens={"activation": ["activation"]}, by="pat"), org_id=ORG)
+check("H12 before the commit (nothing landed, the file kept, the draft auto-saved): the guard runs over the rows the file WOULD land (basis 'frame') and refuses the bare word — nothing written",
+      status == 400 and isinstance(detail, dict) and detail["basis"] == "frame" and detail["rows"] == len(ROWS)
+      and (next(r for r in db5.tables["accessory_config"] if r["org_id"] == ORG)["activation_details_rules"]) == {"edge_name_tokens": ["edge plan"]}, (status, detail if not isinstance(detail, dict) else (detail.get("basis"), detail.get("rows"))))
+p8 = R.onboarding_intake_put_line_class(R.OnboardingLineClassIn(instance_key=IKEY, fields=a5["line_class"]["suggest"]["proposal"]["fields"],
+                                                                 tokens=a5["line_class"]["suggest"]["proposal"]["tokens"], by="pat"), org_id=ORG)
+check("H13 …and the proposal saves before the commit with the guard measured over the frame; the later commit then counts the split and verifies",
+      p8["ok"] and p8["guard"]["measured"] and p8["guard"]["basis"] == "frame" and p8["landed"] is False, p8.get("guard"))
+c5 = commit(db5, sales_xlsx(), "sales.xlsx", source_kind="sales", pos_source="mypos", layout="sales",
+            column_map=json.dumps(SALES_MAP), typed_total=f"{FILE_TOTAL:.2f}")
+check("H14 the commit after a pre-landing save: landed, verified, 39 new-activation invoices, nothing refused",
+      c5["ok"] and c5["verified"] and c5["verified_numbers"]["activation_classes"]["classes"]["activation"]["transactions"] == 39
+      and c5["verified_numbers"]["activation_classes"]["refused"] == [], (c5.get("problems"), c5.get("activation_gate")))
+# THE PIN: an org with no declaration is untouched by the guard (house defaults are never measured)
+db6 = FakeDB()
+use(db6)
+h6 = R._accessory_config(db6, HOUSE)["line_rules"]
+check("H15 the house org: no declaration → house rules, house_fill, nothing refused over rows that are 100% 'Activation' by contract type (the guard measures tenant words only) — byte-identical",
+      h6["source"] == "house" and h6["house_fill"] is True
+      and LC.count_classes([dict(r, contract_type="Activation") for r in ROWS], h6)["refused"] == []
+      and LC.count_classes([dict(r, contract_type="Activation") for r in ROWS], h6)["classes"]["activation"]["transactions"] == 88)
 
 print(f"\n══ onboarding intake — Stage D-2 (2.5a): {_pass} passed, {_fail} failed ══")
 sys.exit(1 if _fail else 0)

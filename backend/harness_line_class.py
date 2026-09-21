@@ -272,11 +272,14 @@ def toks(cls):
     return [c["token"] for c in pc[cls]]
 
 
-check("C2 PROPOSES category contains 'new activation' → activation (40 lines) — and the department word 'activation' inside every path is TOO BROAD, not proposed",
+S_BARE = LC.suggest_rules(ROWS, LC.resolve_rules({"hints": {"activation": ["new activation", "activation"]}}))
+check("C2 PROPOSES category contains 'new activation' → activation (40 lines); the bare word 'activation' is NOT a house hint any more (decision 2026-09-21) and, as a tenant hint, the department word inside every path is reported TOO BROAD, never proposed",
       any(c["field"] == "category" and c["token"] == "new activation" and c["lines"] == 40 for c in pc["activation"])
-      and "activation" not in toks("activation")
-      and any(b["class"] == "activation" and b["token"] == "activation" and b["field"] == "category" and b["ratio"] > 0.8 for b in S["too_broad"]),
-      (toks("activation"), S["too_broad"][:3]))
+      and "activation" not in toks("activation") and "activation" not in LC.HOUSE_HINTS["activation"] and "port" not in LC.HOUSE_HINTS["port"]
+      and not any(b["class"] == "activation" for b in S["too_broad"])
+      and "activation" not in S_BARE["proposal"]["tokens"]["activation"]
+      and any(b["class"] == "activation" and b["token"] == "activation" and b["field"] == "category" and b["ratio"] > 0.8 for b in S_BARE["too_broad"]),
+      (toks("activation"), S["too_broad"][:3], S_BARE["proposal"]["tokens"]["activation"]))
 check("C3 PROPOSES category contains 'upgrade' → upgrade (25 lines; the leaf spells it 'Upgrades')",
       any(c["field"] == "category" and c["token"] == "upgrade" and c["lines"] == 25 for c in pc["upgrade"]), pc["upgrade"])
 check("C4 PROPOSES category 'customer provided' AND product 'customer owned' → BYOD (24 lines each)",
@@ -363,10 +366,78 @@ check("E3 the intake's activation gate: open with no attestation → blocked nam
       and OI.activation_gate(cur, {"no_activations": "accessory-only kiosk"}, by="pat")["attested"]["by"] == "pat"
       and not OI.activation_gate(None)["blocked"] and OI.activation_gate(None)["checked"] is False
       and not OI.activation_gate(pv)["blocked"])
-check("E4 merge_into_raw keeps the Activation-Details basis keys beside ours and normalises only ours",
+check("E4 merge_into_raw keeps the Activation-Details basis keys beside ours, normalises only ours, and stores ONLY the classes given (no copy of the house list in a tenant row — the resolver fills)",
       LC.merge_into_raw({"edge_contract_tokens": ["edge"], "fields": ["x"]}, fields=["category"], tokens={"byod": ["Customer Owned"]})
-      == {"edge_contract_tokens": ["edge"], "fields": ["category"],
-          "tokens": {"activation": list(LC.HOUSE_TOKENS["activation"]), "upgrade": ["upgrade"], "byod": ["customer owned"], "port": ["port"], "hardware_only": []}})
+      == {"edge_contract_tokens": ["edge"], "fields": ["category"], "tokens": {"byod": ["customer owned"]}}
+      and LC.merge_into_raw({"tokens": {"byod": ["byod"], "upgrade": ["upg"]}}, tokens={"upgrade": [], "port": ["port-in"]})["tokens"]
+      == {"byod": ["byod"], "upgrade": [], "port": ["port-in"]})
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+section("§G THE SECOND CLASS — the effective rule is what the person confirmed (guard, no-leak, seed, pin)")
+# the owner's measured state (2026-09-21): fields ['category'], the bare word 'activation' saved under activation —
+# inside every category path of the export → every invoice an activation
+OWNER_RAW = {"fields": ["category"], "tokens": {"activation": ["new activation", "activation", "add a line", "new act", "prepaid"],
+                                                "upgrade": ["upgrade"], "byod": ["customer provided", "byod", "customer owned"],
+                                                "port": ["port"], "hardware_only": ["hardware only"]}}
+OWNER = LC.resolve_rules(OWNER_RAW)
+own = LC.count_classes(ROWS, OWNER)
+shares, n_sc = LC.token_shares(ROWS, OWNER)
+bare = next(x for x in shares if x["class"] == "activation" and x["token"] == "activation")
+check("G1 THE GUARD measures the EFFECTIVE rule over the rows: the saved bare word 'activation' names ≥80% of the scanned lines; count_classes carries it under `refused`; rules_refused is True; with it every invoice is an activation (87 of 88 here — only the hardware-only invoice escapes by precedence; on the live export, 88 of 88 — the silent zero's twin)",
+      bare["ratio"] >= LC.BROAD_RATIO and n_sc == len(ROWS) and [(b["class"], b["token"]) for b in own["refused"]] == [("activation", "activation")]
+      and LC.rules_refused(own) and own["classes"]["activation"]["transactions"] == 87
+      and LC.refused_tokens(ROWS, OWNER) == own["refused"], (bare, own["refused"], own["classes"]["activation"]))
+g = OI.activation_gate(own, by="pat")
+check("G2 the intake's gate is BLOCKED by a refused word (no 'no activations' attestation closes it), the reason names the word and its share and step 2.5a; the Stage-4 note reads 'rule refused', never 'activations: 88 new activation'",
+      g["blocked"] and g["refused"] and '"activation"' in g["reason"] and "%" in g["reason"] and "2.5a" in g["reason"]
+      and OI.activation_gate(own, {"no_activations": "none here"}, by="pat")["blocked"] is True
+      and OI.activation_note({"activation_classes": own, "target_table": "raw_sales"}).startswith("rule refused")
+      and "87 new activation" not in OI.activation_note({"activation_classes": own, "target_table": "raw_sales"}), (g["reason"], OI.activation_note({"activation_classes": own})))
+sent = LC.refusal_sentence(own["refused"], own["scanned"], saving=True)
+check("G3 the refusal in words names the word, its class and its share, and says nothing was saved",
+      sent.startswith("Not saved") and '"activation"' in sent and "new activation" in sent and "% of the lines" in sent, sent)
+ATT_RAW = {**OWNER_RAW, "broad_attested": {"activation:activation": {"by": "pat", "at": "2026-09-21T00:00:00+00:00", "ratio": 0.99}}}
+att = LC.count_classes(ROWS, LC.resolve_rules(ATT_RAW))
+check("G4 an attestation BY NAME (broad_attested '<class>:<word>' in the same JSON) lifts the refusal for that word only: broad still lists it (attested), refused is empty, the gate is not blocked",
+      att["broad"] and att["broad"][0]["attested"] is True and att["refused"] == [] and not LC.rules_refused(att) and not OI.activation_gate(att)["blocked"])
+FIXED = LC.resolve_rules({**OWNER_RAW, "tokens": {**OWNER_RAW["tokens"], "activation": ["new activation"]}})
+fx = LC.count_classes(ROWS, FIXED)
+check("G5 with the bare word removed the SAME rows split 39 / 25 / 23 by distinct invoice and nothing is refused",
+      fx["refused"] == [] and fx["classes"]["activation"]["transactions"] == 39 and fx["classes"]["upgrade"]["transactions"] == 25
+      and fx["classes"]["byod"]["transactions"] == 23, {k: v["transactions"] for k, v in fx["classes"].items()})
+# THE NO-LEAK RULE
+NL = LC.resolve_rules({"fields": ["category"], "tokens": {"activation": ["new activation"]}}, {"x": "premium"}, {"port": ["port"], "byod": ["byod"]})
+check("G6 NO-LEAK: under tenant-declared fields an undeclared class has NO words — no house token, no legacy exec token, no mig-213 auto token (contract-type words never reach a category column); house_fill False",
+      NL["tokens"] == {"activation": ["new activation"], "upgrade": [], "byod": [], "port": [], "hardware_only": []}
+      and NL["auto_activation_tokens"] == [] and NL["house_fill"] is False, NL["tokens"])
+KEEP = LC.resolve_rules({"tokens": {"byod": ["bring your own"]}}, None, {"port": ["ported"]})
+KEEP2 = LC.resolve_rules({"fields": ["contract_type"], "tokens": {"byod": ["bring your own"]}})
+check("G7 …a tenant with declared TOKENS but the house field keeps today's behaviour (house words + the legacy port token fill the undeclared classes); declaring the house field explicitly is the same",
+      KEEP["tokens"]["activation"] == LC.HOUSE_TOKENS["activation"] and KEEP["tokens"]["port"] == ["ported"] and KEEP["tokens"]["byod"] == ["bring your own"]
+      and KEEP["house_fill"] is True and KEEP2["tokens"]["activation"] == LC.HOUSE_TOKENS["activation"] and KEEP2["tokens"]["port"] == ["port"])
+check("G8 THE PIN: an org with no declaration resolves exactly as before — every class the house list, contract_type only, house_fill True, nothing refused over any rows (house defaults are never measured)",
+      LC.resolve_rules(None)["tokens"] == {c: list(LC.HOUSE_TOKENS[c]) for c in LC.CLASSES} and LC.resolve_rules(None)["fields"] == ["contract_type"]
+      and LC.resolve_rules(None)["house_fill"] is True
+      and LC.count_classes([dict(r, contract_type="Activation") for r in ROWS], LC.HOUSE_RULES)["refused"] == []
+      and LC.refused_tokens([dict(r, contract_type="Activation") for r in ROWS], LC.HOUSE_RULES) == [])
+# THE SEED — the proposal is the person's declared words minus the refused, plus the file's hits
+SP = LC.suggest_rules(ROWS, OWNER)
+check("G9 THE SEED: over the owner's saved row the proposal drops the refused bare word, keeps the person's other words, adds nothing that is a hint only; an undeclared class under tenant fields proposes NO words; the preview is the split",
+      SP["proposal"]["tokens"]["activation"] == ["new activation", "add a line", "new act", "prepaid"]
+      and SP["proposal"]["tokens"]["port"] == ["port"] and SP["refused"] == own["refused"]
+      and SP["preview"]["classes"]["activation"]["transactions"] == 39 and SP["preview"]["refused"] == []
+      and LC.suggest_rules(ROWS, NL)["proposal"]["tokens"]["port"] == [], SP["proposal"]["tokens"])
+check("G10 …and under HOUSE rules the proposal is the hits, with an undeclared class EMPTY once a tenant field is proposed (no house word rides into a category rule)",
+      prop["tokens"]["port"] == [] and prop["tokens"]["activation"] == ["new activation"] and "category" in prop["fields"], prop["tokens"])
+check("G11 norm_broad_ok accepts 'class:word' strings and {class, token} objects, drops junk and unknown classes",
+      LC.norm_broad_ok(["activation:activation", {"class": "upgrade", "token": "Upg"}, "nope:x", "activation:", 3, "activation:activation"])
+      == ["activation:activation", "upgrade:upg"])
+m = LC.merge_into_raw(OWNER_RAW, tokens={"activation": ["new activation", "activation"]}, broad_ok=["activation:activation", "upgrade:upgrade"], by="pat",
+                      shares=[{"class": "activation", "token": "activation", "ratio": 0.99}])
+m2 = LC.merge_into_raw(m, tokens={"activation": ["new activation"]})
+check("G12 merge_into_raw records the attestation with the name and the measured share; an attestation for a word no longer in force is pruned on the next save",
+      set(m["broad_attested"]) == {"activation:activation", "upgrade:upgrade"} and m["broad_attested"]["activation:activation"]["by"] == "pat"
+      and m["broad_attested"]["activation:activation"]["ratio"] == 0.99 and set(m2["broad_attested"]) == {"upgrade:upgrade"}, (m.get("broad_attested"), m2.get("broad_attested")))
 
 print(f"\n══ line class: {_pass} passed, {_fail} failed ══")
 sys.exit(1 if _fail else 0)

@@ -38,10 +38,30 @@ WHAT THIS MODULE IS:
     class holds; zero activation-type lines over a slice that has lines is what the intake refuses to
     call "verified" until the rule is mapped or the person attests the file truly has no activations.
 
+THE SECOND CLASS (2026-09-21, the owner's first save of step 2.5a — "the effective rule is not what the
+person confirmed"): the tenant saved `fields: ['category']`, `tokens.activation: ['new activation',
+'activation', …]`; the bare word sits inside every category path of that export (856 of 898 lines), so
+every invoice counted as an activation (88 / 88) — the silent zero's twin. Three faces, one mechanism:
+  · the too-broad guard ran over the PROPOSALS, never over what is SAVED → `token_shares` /
+    `broad_tokens` / `refused_tokens` measure the EFFECTIVE rules over the rows in hand; the save
+    refuses a refused word (unless the person attests it by name — recorded in the same JSON under
+    `broad_attested`); GET / the commit / Exec MTD re-validate what is saved (`count_classes` carries
+    `refused`; `rules_refused` / `refusal_sentence`);
+  · house tokens are CONTRACT-TYPE words and leaked onto a tenant's declared fields → THE NO-LEAK RULE:
+    house tokens (and the legacy exec 'activation' layer, and the mig-213 auto tokens) fill an
+    undeclared class only when the fields read ARE the house field; under tenant-declared fields an
+    undeclared class has NO words (the step shows it empty and says so);
+  · the hint list is the ENGINE's input, never the person's starting text — the step seeds its editable
+    words from `suggest_rules(...).proposal` only; the bare words 'activation' / 'port' are no longer
+    hints (a department word, a suffix of 'support' / 'report'): the guard would catch them only after
+    they had been proposed, so they are not proposed at all.
+
 RULE TWO: no carrier, POS vendor, tenant or product name appears here. The hint words are generic
 activation vocabulary; a tenant's own words are config rows. stdlib only — the harness imports this file
 directly.
 """
+from datetime import datetime as _dt, timezone as _tz
+
 from app.modules.commcalc import exec_metric_defs as _emd     # pure: the Exec-MTD line predicate
 
 CLASSES = ("activation", "upgrade", "byod", "port", "hardware_only")
@@ -72,12 +92,19 @@ HOUSE_TOKENS = {
 HOUSE_AUTO_ACTIVATION_TOKENS = ["home internet", "home-internet", "fixed wireless", "fwa", "fios", "tablet", "edge"]
 # the fields the suggestion engine scans, in the order a proposal prefers them
 CANDIDATE_FIELDS = ("contract_type", "category", "department", "product_desc", "trans_type")
-# generic activation vocabulary (config: `hints` in the same JSON; these are the house defaults)
+# generic activation vocabulary (config: `hints` in the same JSON; these are the house defaults).
+# DECISION (2026-09-21): the bare words 'activation' and 'port' are NOT hints. 'activation' is the
+# department word inside every category path of a price-sheet export and a substring of 'activation
+# fee'; 'port' is a substring of 'support' / 'report'. The too-broad guard would refuse them only once
+# proposed and only when they name ≥ BROAD_RATIO of the lines — a word naming 30% of the lines wrongly
+# would sail through — so a word that is generic ON ITS OWN is never a proposal. A tenant whose column
+# carries exactly 'Activation' as a value is served by the house tokens (a contract-type column) or by
+# typing the word, which the guard then measures.
 HOUSE_HINTS = {
-    "activation": ["new activation", "activation", "new line", "add a line", "add-a-line", "aal", "new act"],
+    "activation": ["new activation", "new line", "add a line", "add-a-line", "aal", "new act"],
     "upgrade": ["upgrade"],
     "byod": ["byod", "bring your own", "customer provided", "customer owned", "customer phone", "own device", "sim only"],
-    "port": ["port-in", "port in", "port"],
+    "port": ["port-in", "port in", "port in activation", "number port", "ported"],
     "hardware_only": ["hardware only", "prepaid", "equipment only", "no activation", "device only"],
 }
 # the Executive-MTD line buckets' generic vocabulary (config: `metric_hints`)
@@ -92,11 +119,34 @@ HOUSE_METRIC_HINTS = {
 # which row column each metric proposal names, and the line_match key it becomes
 METRIC_FIELDS = (("category", "category_contains"), ("department", "department_contains"),
                  ("product_desc", "product_desc_contains"))
-# a hint that names this share of ALL scanned lines is a department word, not a type
+# a word that names this share of ALL scanned lines is a department word, not a type — the SAME ratio
+# gates a hint (never proposed) and a saved token (refused unless attested by name)
 BROAD_RATIO = 0.8
 # the keys this module owns inside accessory_config.activation_details_rules (the Activation-Details
 # basis keys — edge_* / upgrade_hidden_* — live beside them and are never touched by a save here)
-OWNED_KEYS = ("fields", "tokens", "exact", "auto_activation_tokens", "hints", "metric_hints")
+OWNED_KEYS = ("fields", "tokens", "exact", "auto_activation_tokens", "hints", "metric_hints", "broad_attested")
+
+
+def _now_iso():
+    return _dt.now(_tz.utc).isoformat(timespec="seconds")
+
+
+def attest_key(cls, token):
+    """The key a too-broad attestation is recorded under: '<class>:<token>' (the token verbatim —
+    a leading / trailing space is load-bearing)."""
+    return f"{_s(cls)}:{str(token or '').lower()}"
+
+
+def _norm_attested(mapping):
+    """{attest_key: {by, at, ratio, reason}} — junk dropped. A value that is not a dict is kept as
+    {'by': str(value)} so an older hand-written row still counts as an attestation."""
+    out = {}
+    for k, v in (mapping or {}).items() if isinstance(mapping, dict) else ():
+        key = str(k or "").lower()
+        if not key or ":" not in key:
+            continue
+        out[key] = dict(v) if isinstance(v, dict) else {"by": str(v or "") or None}
+    return out
 
 
 def _s(v):
@@ -146,16 +196,24 @@ def resolve_rules(raw=None, ct_map=None, legacy_activation=None):
                           ({byod, upgrade, port} token lists), honoured only for a class `tokens`
                           does not declare — so an org that tuned its port token before this design
                           keeps it until it saves the one home; house defaults otherwise.
-    Missing keys → house defaults (today's behaviour). Unknown keys are ignored."""
+    Missing keys → house defaults (today's behaviour). Unknown keys are ignored.
+
+    THE NO-LEAK RULE: the house tokens are CONTRACT-TYPE words ('activation', ' aal', 'idv', 'port' …).
+    They — and the legacy exec 'activation' layer and the mig-213 auto tokens, which are the same kind of
+    word — fill an undeclared class ONLY when the fields read are the house field. Once the fields are
+    tenant-declared and differ from it, an undeclared class has NO words: `house_fill` says which
+    applied. Every org with no declaration resolves exactly as before (the pin)."""
     raw = raw if isinstance(raw, dict) else {}
     tokens_raw = raw.get("tokens") if isinstance(raw.get("tokens"), dict) else {}
     legacy = legacy_activation if isinstance(legacy_activation, dict) else {}
+    fields = _norm_fields(raw.get("fields"))
+    house_fill = fields == list(HOUSE_FIELDS)
     tokens = {}
     for cls in CLASSES:
         v = tokens_raw.get(cls)
-        if v is None and cls in ("byod", "upgrade", "port"):
+        if v is None and cls in ("byod", "upgrade", "port") and house_fill:
             v = legacy.get(cls)
-        tokens[cls] = _norm_tokens(v, HOUSE_TOKENS[cls])
+        tokens[cls] = _norm_tokens(v, HOUSE_TOKENS[cls] if house_fill else [])
     exact = _norm_exact(ct_map, {})
     exact = _norm_exact(raw.get("exact"), exact)
     hints_raw = raw.get("hints") if isinstance(raw.get("hints"), dict) else {}
@@ -163,13 +221,16 @@ def resolve_rules(raw=None, ct_map=None, legacy_activation=None):
     declared = {"fields": isinstance(raw.get("fields"), (list, tuple)) and bool(raw.get("fields")),
                 "tokens": bool(tokens_raw), "exact": bool(exact)}
     return {
-        "fields": _norm_fields(raw.get("fields")),
+        "fields": fields,
         "tokens": tokens,
         "exact": exact,
-        "auto_activation_tokens": _norm_tokens(raw.get("auto_activation_tokens"), HOUSE_AUTO_ACTIVATION_TOKENS),
+        "auto_activation_tokens": _norm_tokens(raw.get("auto_activation_tokens"),
+                                               HOUSE_AUTO_ACTIVATION_TOKENS if house_fill else []),
         "hints": {c: _norm_tokens(hints_raw.get(c), HOUSE_HINTS[c]) for c in CLASSES},
         "metric_hints": {b: _norm_tokens(mhints_raw.get(b), HOUSE_METRIC_HINTS[b]) for b in HOUSE_METRIC_HINTS},
+        "broad_attested": _norm_attested(raw.get("broad_attested")),
         "declared": declared,
+        "house_fill": house_fill,
         "source": "tenant" if (declared["fields"] or declared["tokens"] or declared["exact"]) else "house",
     }
 
@@ -255,10 +316,15 @@ def count_classes(rows, rules=None, skip=None, txn_field="trans_id"):
                 act_txns.add(tid)
     classes = {c: {"lines": per[c]["lines"], "transactions": len(per[c]["txns"]), "label": CLASS_LABELS[c]}
                for c in CLASSES}
+    # RE-VALIDATION of what is in force (the second class): a tenant-declared word that names nearly
+    # every line is carried here so the gate, the Stage-4 row and the Exec MTD banner can refuse it —
+    # house defaults are never measured (the pin: an org with no declaration is byte-identical)
+    broad = broad_tokens(rows, r, skip) if r["declared"]["tokens"] else []
     return {"scanned": scanned, "skipped": skipped, "unclassified_lines": unclassified, "classes": classes,
             "activation_type_lines": sum(classes[c]["lines"] for c in ACTIVATION_TYPE_CLASSES),
             "activation_type_transactions": len(act_txns),
-            "fields": list(r["fields"]), "source": r["source"]}
+            "fields": list(r["fields"]), "source": r["source"],
+            "broad": broad, "refused": [b for b in broad if not b["attested"]]}
 
 
 def gate_open(counts):
@@ -274,6 +340,90 @@ def gate_sentence(counts, step_label="Onboarding — step 2.5a"):
             f"activation, upgrade, port-in or bring-your-own-device line (fields read: "
             f"{', '.join(c.get('fields') or [])}). Map which words mean which under {step_label}, or "
             f"attest that this file truly has no activations.")
+
+
+# ── THE TOO-BROAD GUARD over what is IN FORCE / what would be SAVED (the second class) ──────────────
+def token_shares(rows, rules=None, skip=None):
+    """For EVERY token of every class in `rules`: how many scanned lines carry it in any configured
+    field, and that share of the scanned lines. ([{class, token, lines, ratio}], scanned). PURE."""
+    r = rules or HOUSE_RULES
+    toks = [(cls, t) for cls in CLASSES for t in r["tokens"][cls]]
+    hits = [0] * len(toks)
+    scanned = 0
+    for row in rows or []:
+        if skip is not None and skip(row):
+            continue
+        scanned += 1
+        if not toks:
+            continue
+        texts = [x for x in _texts(row, r) if x]
+        if not texts:
+            continue
+        for i, (_cls, t) in enumerate(toks):
+            if any(t in x for x in texts):
+                hits[i] += 1
+    return ([{"class": cls, "token": t, "lines": hits[i],
+              "ratio": round(hits[i] / scanned, 3) if scanned else 0.0}
+             for i, (cls, t) in enumerate(toks)], scanned)
+
+
+def broad_tokens(rows, rules=None, skip=None, broad_ratio=BROAD_RATIO):
+    """The tokens of `rules` that name ≥ `broad_ratio` of the scanned lines — a department word, not a
+    type — each with `attested` (the person attested that word by name; recorded under
+    `broad_attested` in the same JSON). PURE. Over no rows nothing is broad (nothing is measured)."""
+    r = rules or HOUSE_RULES
+    shares, scanned = token_shares(rows, r, skip)
+    att = r.get("broad_attested") or {}
+    return [{**s, "scanned": scanned, "attested": attest_key(s["class"], s["token"]) in att}
+            for s in shares if scanned and s["ratio"] >= broad_ratio]
+
+
+def refused_tokens(rows, rules=None, skip=None, broad_ratio=BROAD_RATIO):
+    """The broad tokens nobody attested — what a save is REFUSED for and what a saved rule is refused
+    over at re-validation. Only tenant-declared tokens are measured (house defaults are the pin)."""
+    r = rules or HOUSE_RULES
+    if not r["declared"]["tokens"]:
+        return []
+    return [b for b in broad_tokens(rows, r, skip, broad_ratio) if not b["attested"]]
+
+
+def rules_refused(counts):
+    """True when the counts (count_classes) were produced by a rule with an unattested too-broad word:
+    the numbers are NOT a split, they are the silent zero's twin (every invoice an activation)."""
+    return bool((counts or {}).get("refused"))
+
+
+def _refused_words(refused):
+    return ", ".join(f"\"{b['token']}\" under {CLASS_LABELS.get(b['class'], b['class']).lower()} "
+                     f"({int(round(b['ratio'] * 100))}% of the lines)" for b in refused)
+
+
+def refusal_sentence(refused, scanned=None, step_label="Onboarding — step 2.5a", saving=False):
+    """The refusal in plain words, naming each word with its share. `saving` phrases it for the save
+    (nothing written); otherwise for a rule already in force."""
+    n = int(scanned or (refused[0].get("scanned") if refused else 0) or 0)
+    words = _refused_words(refused or [])
+    if saving:
+        return (f"Not saved — {words} would name nearly every one of the {n:,} sales lines read, so it is a "
+                f"department word, not an activation type; with it every invoice would count. Remove the word, "
+                f"or tick \"keep this word anyway\" to attest it by name.")
+    return (f"The activation rule in force cannot be trusted: {words} names nearly every one of the {n:,} sales "
+            f"lines read, so every invoice counts as that type. Fix the words under {step_label} (remove the "
+            f"word, or attest it by name there).")
+
+
+def norm_broad_ok(value):
+    """The save body's attestation → ['<class>:<token>', …]: strings 'class:token' or {class, token}
+    objects; junk dropped."""
+    out = []
+    for item in (value or []) if isinstance(value, (list, tuple)) else ():
+        if isinstance(item, dict):
+            key = attest_key(item.get("class"), item.get("token"))
+        else:
+            key = str(item or "").lower()
+        if ":" in key and key.split(":", 1)[0] in CLASSES and key.split(":", 1)[1] and key not in out:
+            out.append(key)
+    return out
 
 
 # ── the suggestion engine ────────────────────────────────────────────────────────────────────────
@@ -326,7 +476,10 @@ def suggest_rules(rows, current=None, skip=None, fields=CANDIDATE_FIELDS, broad_
              "too_broad": [...], "proposal": {"fields": [...], "tokens": {cls: [...]}},
              "preview": count_classes(rows, proposal-as-rules), "current": count_classes(rows, current)}.
     The preview is THE predicate over the proposal, so the counts shown are the counts every report
-    will produce once saved. A class with no hit proposes nothing (its tokens stay as they are)."""
+    will produce once saved. THE PROPOSAL IS THE ONLY SEED of the step's editable words: per class it is
+    the person's own declared words (minus any refused as too broad) plus the hint hits in this file;
+    with nothing declared, the hits — else, under the house field only, the house words (today's
+    behaviour); under tenant fields an undeclared class proposes NO words (the no-leak rule)."""
     cur = current or HOUSE_RULES
     vals, scanned = distinct_values(rows, fields, skip)
     per_class, too_broad = {c: [] for c in CLASSES}, []
@@ -335,24 +488,37 @@ def suggest_rules(rows, current=None, skip=None, fields=CANDIDATE_FIELDS, broad_
             acc, broad = _candidates(vals[f], scanned, cur["hints"][cls], broad_ratio)
             per_class[cls].extend({"field": f, **a} for a in acc)
             too_broad.extend({"class": cls, "field": f, **b} for b in broad)
-    tokens = {}
     used_fields = []
     for cls in CLASSES:
-        tk = []
         for c in per_class[cls]:
-            if c["token"] not in tk:
-                tk.append(c["token"])
             if c["field"] not in used_fields:
                 used_fields.append(c["field"])
-        tokens[cls] = tk if tk else list(cur["tokens"][cls])
     prop_fields = [f for f in cur["fields"]] + [f for f in fields if f in used_fields and f not in cur["fields"]]
+    current = count_classes(rows, cur, skip)
+    refused = {attest_key(b["class"], b["token"]) for b in current["refused"]}
+    tokens = {}
+    for cls in CLASSES:
+        hits = []
+        for c in per_class[cls]:
+            if c["token"] not in hits:
+                hits.append(c["token"])
+        if cur["declared"]["tokens"]:
+            keep = [t for t in cur["tokens"][cls] if attest_key(cls, t) not in refused]
+            tk = keep + [t for t in hits if t not in keep]
+        elif hits:
+            tk = hits
+        else:
+            tk = list(cur["tokens"][cls]) if prop_fields == list(HOUSE_FIELDS) else []
+        tokens[cls] = tk
     proposal = {"fields": prop_fields, "tokens": tokens}
-    proposed_rules = resolve_rules({**{k: v for k, v in (cur or {}).items() if k in ("exact", "auto_activation_tokens", "hints", "metric_hints")},
+    # the preview resolves the proposal exactly as the save would store it (fields + tokens over the
+    # org's exact map and attestations; the house auto tokens follow the no-leak rule, never carried)
+    proposed_rules = resolve_rules({**{k: v for k, v in (cur or {}).items() if k in ("exact", "hints", "metric_hints", "broad_attested")},
                                     **proposal})
     return {"scanned": scanned, "distinct": {f: len(vals[f]) for f in fields}, "per_class": per_class,
             "too_broad": too_broad, "proposal": proposal,
             "preview": count_classes(rows, proposed_rules, skip),
-            "current": count_classes(rows, cur, skip)}
+            "current": current, "refused": current["refused"]}
 
 
 def suggest_metric_rules(rows, resolved, hints=None, skip=None, broad_ratio=BROAD_RATIO):
@@ -395,14 +561,29 @@ def suggest_metric_rules(rows, resolved, hints=None, skip=None, broad_ratio=BROA
 
 
 # ── the save shape (the PUT merges; the Activation-Details basis keys beside ours are kept) ───────
-def merge_into_raw(current_raw, fields=None, tokens=None, exact=None):
-    """The JSON to store: the org's existing activation_details_rules with OUR keys replaced. PURE."""
+def merge_into_raw(current_raw, fields=None, tokens=None, exact=None, broad_ok=None, by=None, shares=None):
+    """The JSON to store: the org's existing activation_details_rules with OUR keys replaced. PURE.
+    `tokens` merges PER CLASS over the stored map (a partial body never erases another class; an
+    explicit [] disables a class); a class never given is NOT stored — the resolver fills it (house words
+    under the house field, nothing under tenant fields) — so no copy of the house list lives in a tenant
+    row. `broad_ok` = ['<class>:<token>', …] the person attested by name (recorded with `by`, the time
+    and the measured share from `shares`); an attestation for a word no longer in force is dropped."""
     out = dict(current_raw) if isinstance(current_raw, dict) else {}
     if fields is not None:
         out["fields"] = _norm_fields(fields)
     if tokens is not None and isinstance(tokens, dict):
-        out["tokens"] = {c: _norm_tokens(tokens.get(c), HOUSE_TOKENS[c]) if tokens.get(c) is not None else list(HOUSE_TOKENS[c])
-                         for c in CLASSES}
+        merged = dict(out.get("tokens")) if isinstance(out.get("tokens"), dict) else {}
+        for c in CLASSES:
+            if tokens.get(c) is not None:
+                merged[c] = _norm_tokens(tokens.get(c), [])
+        out["tokens"] = {c: v for c, v in merged.items() if c in CLASSES}
     if exact is not None and isinstance(exact, dict):
         out["exact"] = _norm_exact(exact, {})
+    att = _norm_attested(out.get("broad_attested"))
+    ratio_of = {attest_key(x["class"], x["token"]): x.get("ratio") for x in (shares or [])}
+    for key in norm_broad_ok(broad_ok):
+        att[key] = {"by": by, "at": _now_iso(), "ratio": ratio_of.get(key)}
+    if att or "broad_attested" in out:
+        in_force = {attest_key(c, t) for c, ts in (out.get("tokens") or {}).items() if isinstance(ts, list) for t in ts}
+        out["broad_attested"] = {k: v for k, v in att.items() if k in in_force}
     return out

@@ -193,6 +193,8 @@ BS_SPEC = [
 ]
 PL_LABEL = {k: lbl for k, lbl, *_ in PL_SPEC}
 BS_LABEL = {k: lbl for k, lbl, *_ in BS_SPEC}
+# {line_key: section} — what a booking's SIGN on the line is decided from (ledger_pnl.line_sign, mig 1013)
+PL_SECTION = {k: sec for k, _lbl, sec, *_ in PL_SPEC}
 
 
 def _norm_store(s):
@@ -933,6 +935,47 @@ def build_inputs(client, org_id, period):
         if detail_label:
             L[key]["detail"][detail_label] = round(L[key]["detail"].get(detail_label, 0.0) + amt, 2)
 
+    # ── THE P&L COMMISSION SOURCE (owner 2026-09-21, mig 1013) ──────────────────────────────────
+    # "p&l is not showing the commission received, it shows in the commission ledger but not
+    # populating the p&l - check platform wide not bandaid." Which source books the commission lines
+    # is per-org CONFIG (commission_org_config.pl_commission_source, read by ma_store_pnl.load_config
+    # above) resolved by ONE function (ledger_pnl.resolve_source). Under 'ledger' the lines the org's
+    # bucket registry names (ledger_pnl.covered_lines — DERIVED from commission_bucket.pl_line_key,
+    # never a list here) book from commcalc.commission_ledger below, and the commission-FEED bookings
+    # for those same lines are dropped by `add_comm` (recorded for the drill-down, never silent) so a
+    # line is never booked from both. House default 'feeds' ⇒ `add_comm` IS `add` ⇒ byte-identical.
+    # The ledger is read under every source so the P&L can show Σ feeds vs Σ ledger per line (the
+    # divergence a tenant reads before flipping the switch). NEVER raises.
+    _lp, _lp_buckets, _lp_rows, _lp_src, _lp_covered = None, [], [], "feeds", frozenset()
+    _lp_feed_tally, _lp_feed_booked, _lp_suppressed = {}, set(), {}
+    try:
+        from app.modules.account import ledger_pnl as _lp
+        from app.modules.commcalc import commission_ledger as _cl
+        _lp_buckets, _lp_bmeta = _cl.load_buckets_meta(client, org_id)     # THE one registry reader
+        _lp_rows = _lp.load_ledger_rows(client, org_id, period_keys)
+        _lp_src = _lp.resolve_source((_ma314_cfg or {}).get("commission_source"), bool(_lp_rows))
+        if _lp_src == _lp.SOURCE_LEDGER:
+            _lp_covered = frozenset(_lp.covered_lines(_lp_buckets, PL_SECTION, _ma314_cfg))
+    except Exception as e:
+        _lp, _lp_src, _lp_covered = None, "feeds", frozenset()
+        _warn("P&L commission source unavailable — feed tables book, as before", e)
+
+    def add_comm(key, store, amt, detail_label=None):
+        """THE GUARDED ADDER for the COMMISSION-FEED paths (raw_mi, raw_ma_commission,
+        raw_ma_daily_tx, raw_comp_report, activation_rebate_ledger's commission and rebate). Tallies
+        what the feeds book per line; under 'ledger' drops a booking whose line the ledger covers
+        (tallied as suppressed) instead of adding it. Non-commission sources use `add` directly and
+        are never touched by the source switch."""
+        a = round(safe_float(amt), 2)
+        if not a:
+            return
+        _lp_feed_tally[key] = round(_lp_feed_tally.get(key, 0.0) + a, 2)
+        if key in _lp_covered:
+            _lp_suppressed[key] = round(_lp_suppressed.get(key, 0.0) + a, 2)
+            return
+        _lp_feed_booked.add(key)
+        add(key, store, amt, detail_label)
+
     # raw_mi — MI + ATU residual income (company-wide). CARRIER-AGNOSTIC, mirroring the shipped
     # residual-per-sub report (residual_subs._aggregate, dcb0807): Boost is the primary source
     # (raw_mi); a tenant with NO raw_mi for the period falls through to the VidaPay/MA tables so its
@@ -945,8 +988,8 @@ def build_inputs(client, org_id, period):
         for r in _fetch_all(client, "raw_mi", "actual_mi_payout,actual_atu_payout",
                             {"org_id": org_id, "period": period_keys}):
             had_raw_mi = True
-            add("mi_income", None, r.get("actual_mi_payout"))
-            add("atu_income", None, r.get("actual_atu_payout"))
+            add_comm("mi_income", None, r.get("actual_mi_payout"))
+            add_comm("atu_income", None, r.get("actual_atu_payout"))
     except Exception:
         had_raw_mi = False
     if not had_raw_mi:
@@ -990,7 +1033,7 @@ def build_inputs(client, org_id, period):
                     {"org_id": org_id, "period": period_keys})
                 for _line, _acct, _amt, _dlabel in _msp.ma_commission_bookings(
                         _comm_rows, _ma314_cfg):
-                    add(_line, _ma_store(_acct), _amt, detail_label=_dlabel)
+                    add_comm(_line, _ma_store(_acct), _amt, detail_label=_dlabel)
         except Exception as e:
             _warn("raw_ma_commission P&L booking failed", e)
         # ── MA TX → P&L (Phase B, owner spec 2026-09-01, mig 309): "Merchant discount for each line
@@ -1041,11 +1084,11 @@ def build_inputs(client, org_id, period):
             if _msp is not None:
                 for _line, _acct, _amt, _dlabel in _msp.ma_tx_bookings(
                         _tx_rows, _ma_pnl_cfg, _ma314_cfg):
-                    add(_line, _ma_store(_acct), _amt, detail_label=_dlabel)
+                    add_comm(_line, _ma_store(_acct), _amt, detail_label=_dlabel)
             else:
                 # ma_store_pnl unavailable — keep the mig-309 booking so the books never regress.
                 for _line, _amt in _rs.ma_tx_pnl_bookings(_tx_rows, _ma_pnl_cfg):
-                    add(_line, None, _amt)
+                    add_comm(_line, None, _amt)
         except Exception as e:
             _warn("raw_ma_daily_tx P&L booking failed", e)
 
@@ -1066,8 +1109,8 @@ def build_inputs(client, org_id, period):
             if _cc_rules:
                 m = carrier_map.match_rule(_cc_rules, r.get("compensation_type"))
                 comp = m.get("component") if m else None
-            add("carrier_comm", _norm_store(r.get("business_address")), r.get("payment_amount"),
-                detail_label=_CC_LABEL.get(comp, "Unmapped"))
+            add_comm("carrier_comm", _norm_store(r.get("business_address")), r.get("payment_amount"),
+                     detail_label=_CC_LABEL.get(comp, "Unmapped"))
     except Exception:
         pass
 
@@ -1087,17 +1130,49 @@ def build_inputs(client, org_id, period):
                             "business_address,period,commission_amount,device_rebate_amount,device_cost",
                             {"org_id": org_id, "period": period_keys}):
             st = _norm_store(r.get("business_address"))
-            add("carrier_comm", st, safe_float(r.get("commission_amount")),
-                detail_label="Activation report commission")
+            add_comm("carrier_comm", st, safe_float(r.get("commission_amount")),
+                     detail_label="Activation report commission")
+            # the device COST is the device leg, not commission — the ledger never carries it, so it
+            # books through the plain adder under every source
             add("device_cost", st, safe_float(r.get("device_cost")),
                 detail_label="Device cost (activation report)")
             # mig 934: ledger amounts are positive money-in, so `sign * amount` books negative
             # contra-COGS by default (byte-identical to the pre-934 `-amount`) and positive
             # revenue under pl_rebate_presentation='income'.
-            add(_reb_line, st, _reb_sign * safe_float(r.get("device_rebate_amount")),
-                detail_label="Device rebate (activation report)")
+            add_comm(_reb_line, st, _reb_sign * safe_float(r.get("device_rebate_amount")),
+                     detail_label="Device rebate (activation report)")
     except Exception:
         pass
+
+    # ── COMMISSION FROM THE LEDGER (mig 1013) — after every commission-feed path above ─────────
+    # Under 'ledger': Σ per bucket per store (commission_ledger.summarize — the ledger's own
+    # summarizer, the finance boundary) lands on the line the org's registry names, per store through
+    # the same store resolver `add` uses (unresolvable → the P&L's existing company-wide convention),
+    # with a detail row per bucket so the drill-down says where it came from. Under every source the
+    # per-line divergence (Σ feeds vs Σ ledger, in words) rides on `commission_source` (engine
+    # passthrough). The DOUBLE-BOOKING GUARD runs outside the try: a covered line that still took a
+    # feed booking is an honest failure, never a doubled statement.
+    _lb = None
+    if _lp is not None:
+        try:
+            _lb = _lp.ledger_bookings(_lp_rows, _lp_buckets, PL_SECTION, _ma314_cfg)
+            if _lp_src == _lp.SOURCE_LEDGER:
+                for _line, _store, _amt, _dlabel, _bucket in _lb["bookings"]:
+                    add(_line, _store, _amt, detail_label=_dlabel)
+            for _line, _m in _lp.divergence(
+                    _lp_feed_tally, _lb["by_line"], _lp_src, _lp_covered,
+                    configured=(_ma314_cfg or {}).get("commission_source"),
+                    unbooked=_lb["unbooked"], by_source_report=_lb["by_source_report"],
+                    ledger_line_count=_lb["line_count"]).items():
+                if _line in L:
+                    L[_line]["commission_source"] = _m
+        except Exception as e:
+            _warn("commission-ledger P&L booking failed", e)
+    if _lp is not None and _lp_src == _lp.SOURCE_LEDGER:
+        _dbl = _lp.double_booked(_lp_feed_booked, {b[0] for b in (_lb or {}).get("bookings") or ()})
+        if _dbl:
+            raise RuntimeError("P&L commission double-booking: line(s) booked from both the ledger and "
+                               f"a feed for org {org_id} / {period}: {', '.join(_dbl)}")
 
     # sales — accessory/device revenue + cost (store). UNIFIED source: raw_sales ∪ daily_sales_feed
     # (dedup by trans_id, raw_sales wins) so GP is correct whether or not the daily feed was promoted

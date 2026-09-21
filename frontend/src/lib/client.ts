@@ -445,6 +445,9 @@ export async function api(path: string, opts: RequestInit = {}) {
     // reads `e.message` is unchanged.
     const e: any = new Error(errMsg(err, res.status))
     e.status = res.status
+    // …and the server's structured detail, when it sent one (a refusal that names its evidence — e.g.
+    // the 2.5a too-broad guard's {message, refused[]}): additive, `e.message` is unchanged.
+    e.detail = err?.detail
     throw e
   }
   return res.json()

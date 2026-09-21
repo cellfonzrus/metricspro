@@ -4,6 +4,7 @@ import { api, apiUpload } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import EntityPicker from '@/components/EntityPicker'
 import { optionsFromRows } from '@/lib/standard-filters'
+import PlCommissionSourcePanel from '@/components/PlCommissionSourcePanel'
 
 // Canonical Commission Ledger (SAP-style) — normalise ANY carrier's commission/tx file into FIVE canonical
 // buckets: Commission / Spiff / Equipment rebate / Residual-monthly / Auto Pay residual. A payout paid over
@@ -475,6 +476,8 @@ export default function CommissionLedgerPage() {
               <a href="/commcalc/commission-category-map" style={{ color: '#9a3412', fontWeight: 700 }}>Category → Bucket Map</a> once it runs.
             </div>
           )}
+          {/* WHERE THIS LEDGER SHOWS UP ON THE P&L, and which source books it (mig 1013) — the one panel */}
+          <PlCommissionSourcePanel />
 
           {/* ── COMMISSION LEG (owner 2026-08-04): 1st Month vs M2–M12, the SAME money as above ──
               This is a decomposition, not a second total: each row of the table sums back to the

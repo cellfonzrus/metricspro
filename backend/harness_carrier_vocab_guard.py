@@ -189,7 +189,8 @@ POS_REVIEWED_EXCEPTIONS = {
 #    pos_vendor class); COPY files may not carry one in a whitespace-bearing string literal (a payload
 #    `note` / `reason` / `message` / `detail`) — they call report_labels.pos_term. Allow = (file, a
 #    signature substring of the literal) -> reason; stale FAILS.
-POS_BACKEND_LOGIC = ["commcalc/report_kinds.py", "commcalc/onboarding_intake.py", "commcalc/implementation_spine.py"]
+POS_BACKEND_LOGIC = ["commcalc/report_kinds.py", "commcalc/onboarding_intake.py", "commcalc/implementation_spine.py",
+                     "commcalc/invoice_tenders.py"]     # 2026-09-21 — the invoice tender split (pure; no vendor, no brand)
 POS_BACKEND_COPY = [
     "commcalc/router.py", "commcalc/sales_recon.py", "commcalc/imei_rebate_report.py", "commcalc/report_labels.py",
     "closing/router.py", "closing/attention_providers.py", "asset/router.py", "account/finance_attention.py",

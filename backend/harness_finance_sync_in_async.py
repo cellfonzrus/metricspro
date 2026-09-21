@@ -213,8 +213,13 @@ check("fetch_cost(anthropic, bad cred) falls back to flat figure without raising
 print("\n[5] MONEY PROOF — every non-transport function is AST-identical to origin/main")
 # ═══════════════════════════════════════════════════════════════════════════════════════════
 # Sites we deliberately changed. Everything else must match origin/main exactly.
+#   engine.py {_assemble} (2026-09-21, mig 1013) — the `commission_source` PASSTHROUGH: coa attaches
+#   which source booked a commission line (feed tables / Commission Ledger) with the other source's
+#   figure and the difference in words, and _assemble copies it onto the row exactly as it copies
+#   `note` — emitted only when coa set it, so every other line's payload is byte-identical. No
+#   arithmetic in _assemble changed. Proven by backend/harness_pl_commission_source.py.
 EXPECTED_DELTA = {
-    ENGINE: {"_narrate"},
+    ENGINE: {"_narrate", "_assemble"},
     RECON: {"_missed_days"},
     AROUTER: {"compute", "run_due", "get_recon"},
     PCOSTS: {"_anthropic_cost", "fetch_cost"},
@@ -287,8 +292,15 @@ for rel, allowed in EXPECTED_DELTA.items():
 # The value is (functions allowed to CHANGE, functions allowed to be ADDED). A removal is never
 # sanctioned, and an addition must be named here — a new helper in a money module is exactly the
 # kind of thing this guard exists to make someone justify, not something it should wave through.
+#   coa.py +{build_inputs.add_comm} (2026-09-21, mig 1013) — THE GUARDED ADDER for the commission-
+#   FEED paths (owner: "p&l is not showing the commission received, it shows in the commission ledger
+#   but not populating the p&l - check platform wide not bandaid"). A nested closure inside
+#   build_inputs: it tallies what the feeds book per line and, ONLY when the org's
+#   pl_commission_source resolves to the Commission Ledger, drops a feed booking whose line the
+#   ledger covers (so a line is never booked from both). Under the house default it calls `add`
+#   unchanged — byte-identical, pinned by backend/harness_pl_commission_source.py §A.
 MONEY_MODULE_DELTA = {
-    f"{MOD}/account/coa.py": ({"_account_config", "build_inputs"}, {"_lcov_mod"}),
+    f"{MOD}/account/coa.py": ({"_account_config", "build_inputs"}, {"_lcov_mod", "build_inputs.add_comm"}),
     f"{MOD}/account/autocompute.py": (set(), set()),
     f"{MOD}/account/statement_filter.py": (set(), set()),
 }

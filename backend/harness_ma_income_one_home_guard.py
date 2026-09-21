@@ -65,6 +65,17 @@ DEREFERENCE_TOKENS = ("gp_carrier_income", "ma_earned_month_ladder", "ma_receive
                       "ma_sheet_component_total", "commission_received_lines",
                       "canonical_store_index")
 
+# ── CHECK 2b — "which month-of-life leg is this row" also has one home ──────────────────────────
+# Owner report 2026-09-21 ("the m1 commission cannot be 2300"). `parse_payment_month` answers only
+# "does this label SAY a month". The LEG question has a second form — a label that is an activation
+# commission and carries no token — and asking the token parser instead dropped 1,218 rows and
+# $19,292.54 of M1 into the unlabelled bucket, reading August's M1 as $2,300.40 against $6,049.96.
+# `commission_ledger.month_leg_of` is the leg's one home; the token parser stays private to its own
+# module. A caller that goes back to the token parser for a leg fails the build here.
+MONTH_LEG_HOME = "app/modules/commcalc/commission_ledger.py"
+TOKEN_PARSER = "parse_payment_month"
+LEG_RESOLVER = "month_leg_of"
+
 # ── CHECK 3 — INVENTORY (reported, not a build gate) ─────────────────────────────────────────────
 # The commission SHEET's export genuinely carries six spiff columns, so a surface that reconciles to
 # that export, or reads one device's spiff evidence, legitimately walks six. Those are named here so
@@ -194,6 +205,26 @@ def main():
         else:
             print("   FAIL %s:%s (%s) dereferences nothing from ma_store_pnl" % (rel, fn, what))
             failures.append("%s:%s unwired" % (rel, fn))
+    print()
+
+    # CHECK 2b
+    print("CHECK 2b — the month-of-life LEG question has one home")
+    leg_offenders = []
+    for rel, src in sources.items():
+        if rel == MONTH_LEG_HOME:
+            continue
+        for lineno, text in _code_lines(src):
+            if (TOKEN_PARSER + "(") in text:
+                leg_offenders.append((rel, lineno, text.strip()[:100]))
+    if leg_offenders:
+        for rel, lineno, text in leg_offenders:
+            print("   FAIL %s:%d asks the TOKEN parser a leg question" % (rel, lineno))
+            print("        %s" % text)
+            print("        -> use commission_ledger.%s()" % LEG_RESOLVER)
+        failures.append("%d caller(s) ask %s for a leg" % (len(leg_offenders), TOKEN_PARSER))
+    else:
+        print("   PASS — %s is private to %s; every caller asks %s()"
+              % (TOKEN_PARSER, MONTH_LEG_HOME, LEG_RESOLVER))
     print()
 
     # CHECK 3 — inventory, on the record, never a build gate

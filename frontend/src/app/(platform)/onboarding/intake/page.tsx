@@ -36,6 +36,8 @@ import { Stage2Flow, STAGE2_STEPS } from './stage2'
 import { useReportKinds } from '@/lib/report-kinds'
 import ScreenLink, { SCREENS, type ScreenKey } from '@/components/ScreenLink'
 import ShowsIn from '@/components/ShowsIn'
+import PlCommissionSourcePanel from '@/components/PlCommissionSourcePanel'
+import type { ShowsIn as ShowsInPayload } from '@/lib/report-kinds'
 import { STATEMENT_TYPE_DEFAULT, statementTypeToken } from '@/lib/statement-type'
 
 // ── stage-3 payload types (mirror onboarding_intake.py) ─────────────────────────────────────────
@@ -74,6 +76,7 @@ type CommitResp = {
   rules_saved: number; identity_written?: { aliases: [string, string][]; stores_created: string[] }
   verified_numbers: { rows_in_file: number; rows_usable: number; footer_rows_dropped: number; rows_built: number; rows_landed: number; rows_inserted: number; totals: Totals; tie: LedgerTie; attestation: { reason: string } | null; confirmed_by: string | null; confirmed_at: string }
   state: { saved: boolean; reason?: string }
+  shows_in?: ShowsInPayload           // where this statement shows up — incl. the P&L lines its buckets book to (mig 1013)
 }
 type SignAnswer = 'positive' | 'negative' | null
 type Assignment = { label: string; match_field?: string | null; bucket: string; is_reversal: boolean }
@@ -511,6 +514,8 @@ export default function OnboardingIntakePage() {
                       {r.note && <div style={{ ...note, fontSize: 11, color: '#b45309', fontWeight: 600 }}>{r.note}</div>}
                       {/* 2.5a — the activation split of a landed sales export (or "not yet checked — open step 2.5a") */}
                       {r.activation_note && <div style={{ ...note, fontSize: 11, color: r.activation_note.startsWith('activations:') ? 'var(--text2)' : '#b45309', fontWeight: 600, cursor: 'pointer' }} onClick={e => { e.stopPropagation(); openRow(r.instance_key, r.stage, '2.5a') }}>{r.activation_note}</div>}
+                      {/* 2.5b — an invoice export's tender split beside the X-report per store-day, and Σ tax (owner 2026-09-21) */}
+                      {r.tender_note && <div style={{ ...note, fontSize: 11, color: 'var(--text2)', fontWeight: 600, cursor: 'pointer' }} onClick={e => { e.stopPropagation(); openRow(r.instance_key, r.stage, '2.5b') }}>{r.tender_note}</div>}
                       {/* Stage D — how many other loaded reports this one is linked to by a common column */}
                       {shownLinks?.notes?.[r.instance_key] && <div style={{ ...note, fontSize: 11 }}>{shownLinks.notes[r.instance_key]}</div>}</td>
                     <td style={{ padding: '6px 4px' }}>{r.period || '—'}</td>
@@ -522,6 +527,13 @@ export default function OnboardingIntakePage() {
                 ))}
               </tbody>
             </table>
+            {/* lines RETIRED as mis-filed (2026-09-21): on the record with the reason and the name; out of the table, the runbook and the sign-off */}
+            {!!rail.retired?.length && (
+              <div style={{ ...note, fontSize: 12, marginBottom: 12 }}>
+                <b>Retired lines</b> (filed under the wrong report kind — kept on the record, not counted):{' '}
+                {rail.retired.map(x => <span key={x.instance_key}>{x.label} — {x.reason} ({x.by || '?'}{x.at ? `, ${x.at.slice(0, 16).replace('T', ' ')}` : ''}){x.removed ? ` · ${x.removed.rows.toLocaleString('en-US')} landed row(s) removed` : ''}{x.file?.stored ? ' · its file is kept and can be re-read under the right kind' : ''}; </span>)}
+              </div>
+            )}
             {/* ═══ Stage D — REPORT LINKS: every loaded report linked to every other by the columns they share ═══ */}
             <ReportLinksSection links={shownLinks} busy={linksBusy} pairKey={pairKey} setPairKey={setPairKey} loadLinks={loadLinks} />
             <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>4.2 — Sign-off</h2>
@@ -866,6 +878,11 @@ export default function OnboardingIntakePage() {
                   </tbody>
                 </table>
                 {commitRes.verified_numbers.attestation && <div style={{ ...note, marginBottom: 8 }}>Attested: &quot;{commitRes.verified_numbers.attestation.reason}&quot; — {commitRes.verified_numbers.confirmed_by}</div>}
+                {/* WHERE THIS STATEMENT SHOWS UP (mig 1013): the ledger's consumers from the one map, the P&L
+                    entry naming the lines its buckets book to; and the source switch, so the person who just
+                    took the statement in can make it reach the P&L — suggested, confirmed here, never silent */}
+                {commitRes.shows_in && <ShowsIn info={commitRes.shows_in} lead="This statement will show in" />}
+                <PlCommissionSourcePanel compact lead="Which source books the P&L's commission lines for this company?" />
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button style={primary} onClick={resetForAnother}>Another carrier?</button>
                   <a href="/commcalc/commission-ledger" style={{ ...ghost, textDecoration: 'none', display: 'inline-block' }}>Open the Commission Ledger</a>

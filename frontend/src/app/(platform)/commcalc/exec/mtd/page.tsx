@@ -155,7 +155,8 @@ export default function ExecMtdPage() {
     // 2.5a (owner 2026-09-21): THE activation-type predicate's own count over the same rows — rows exist,
     // the columns are there, but not one line could be told apart as an activation / upgrade / BYOD / port
     classified?: { scanned: number; activation_type_lines: number; activation_type_transactions: number; fields: string[]; source: string
-      gate_open: boolean; note: string | null; map_at: { screen: string; step: string } } | null } | null = data?.landing || null
+      gate_open: boolean; rules_refused?: boolean; refused?: { class: string; token: string; ratio: number }[]
+      note: string | null; map_at: { screen: string; step: string } } | null } | null = data?.landing || null
   const landingEmpty = !!landing && (landing.rows === 0 || (landing.blank_fields || []).length === (landing.needs || []).length) && (landing.needs || []).length > 0
 
   // 16-column layout, in the exact order of the owner's spreadsheet, THEN two appended reconciliation
@@ -421,6 +422,20 @@ export default function ExecMtdPage() {
           activations and upgrade etc, also nothing on exec mtd"). The rows are here and carry the columns; the
           activation TYPE lives in a column the org's rules do not read yet (a category path, a product name).
           The way back is the intake step that maps the words — a ScreenLink, never a second link map. */}
+      {/* THE TWIN (2026-09-21): a saved word inside nearly every line makes every invoice an activation — the
+          predicate's count carries `refused`; the split shown below is NOT a split until the word is fixed. */}
+      {!landingEmpty && landing?.classified?.rules_refused && (
+        <div style={{ fontSize: 12.5, marginBottom: 10, background: '#fef2f2', border: '1px solid #fca5a5',
+          color: '#991b1b', borderRadius: 8, padding: '9px 12px' }}>
+          <div style={{ fontWeight: 700, marginBottom: 3 }}>
+            The activation rule in force cannot be trusted — the activation columns below count nearly every invoice
+          </div>
+          <div>
+            {landing.classified.note} ({(landing.classified.refused || []).map(b => `"${b.token}" under ${b.class.replace(/_/g, ' ')}: ${Math.round(b.ratio * 100)}% of lines`).join('; ')}).
+            Fix the words under <ScreenLink to="onboarding_intake">Onboarding — Commission Intake</ScreenLink> (step {landing.classified.map_at?.step || '2.5a'}).
+          </div>
+        </div>
+      )}
       {!landingEmpty && landing?.classified?.gate_open && (
         <div style={{ fontSize: 12.5, marginBottom: 10, background: '#fffbeb', border: '1px solid #fcd34d',
           color: '#92400e', borderRadius: 8, padding: '9px 12px' }}>

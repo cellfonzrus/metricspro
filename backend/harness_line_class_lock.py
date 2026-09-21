@@ -28,6 +28,16 @@ WHAT FAILS THE BUILD
       offers the retired `activation` token row.
   (e) NEGATIVE CONTROLS over synthetic sources: a second token list → RED; a caller that reverts to the
       bare alias → RED; a stale excuse → RED; a step that upserts on its own → RED.
+  (f) THE SECOND CLASS (2026-09-21, "the effective rule is not what the person confirmed"):
+      · THE GUARD: the 2.5a save resolves the rules that WOULD be in force through the ONE resolver
+        (`_line_rules_resolve` — the loader's own), measures them (`_lc.refused_tokens(`) and raises
+        BEFORE either writer runs; a save that writes first, or resolves on its own → RED. A saved broad
+        word → refused (behavioural, over the engine itself) → else RED.
+      · THE NO-LEAK RULE: under tenant-declared fields an undeclared class resolves to NO words; a house
+        token present there → RED (behavioural).
+      · THE SEED: the step's editable words come from `seedFromBlock` (line-class-logic.ts), which reads
+        `suggest.proposal` only; the block the router returns carries no hint list; a step or logic file
+        that reads `hints` / `HOUSE_HINTS`, or seeds from `block.rules` → RED. The frontend proof exists.
 
 Runs beside the carrier-vocab / report-kind / landing-identity locks (.github/workflows/carrier-vocab-guard.yml).
 
@@ -43,7 +53,9 @@ FE = os.path.join(ROOT, "frontend", "src")
 HOME = "modules/commcalc/line_class.py"
 STAGE2 = "app/(platform)/onboarding/intake/stage2.tsx"
 STEP_FILE = "app/(platform)/onboarding/intake/line-class-step.tsx"
+LOGIC_FILE = "app/(platform)/onboarding/intake/line-class-logic.ts"
 MTD_PAGE = "app/(platform)/commcalc/exec/mtd/page.tsx"
+FE_PROOF = os.path.join(ROOT, "frontend", "prove_line_class_step.mjs")
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "carrier-vocab-guard.yml")
 
 # (a) token-check excuses — (relative path) → reason; each must STILL carry a token check (stale → RED)
@@ -188,8 +200,13 @@ def scan_step_writes(router_src):
     if "_lc.activation_class(" not in agg:
         v.append(("router.py", "_sales_cell_agg does not call the predicate"))
     loader = fn_body(router_src, "_accessory_config_uncached") or ""
-    if "activation_details_rules" not in loader or "_lc.resolve_rules(" not in loader:
-        v.append(("router.py", "_accessory_config_uncached no longer resolves line_rules from activation_details_rules"))
+    resolver = fn_body(router_src, "_line_rules_resolve") or ""
+    if "activation_details_rules" not in loader or "_line_rules_resolve(" not in loader or "_lc.resolve_rules(" not in resolver:
+        v.append(("router.py", "_accessory_config_uncached no longer resolves line_rules from activation_details_rules through _line_rules_resolve"))
+    # the ONE resolution: nothing but the helper calls _lc.resolve_rules (a second resolution would drift)
+    others = [ln.strip() for ln in code_lines(router_src.replace(resolver, "")).split("\n") if "_lc.resolve_rules(" in strip_comment(ln)]
+    if others:
+        v.append(("router.py", "a second resolution of the activation-type rules outside _line_rules_resolve: " + others[0][:80]))
     writer = fn_body(router_src, "put_accessory_config") or ""
     if "activation_details_rules" not in writer or "_lc.merge_into_raw(" not in writer:
         v.append(("router.py", "put_accessory_config no longer writes activation_details_rules through merge_into_raw"))
@@ -201,7 +218,7 @@ def scan_surfaces(fe):
     s2 = fe.get(STAGE2, "")
     if "'2.5a'" not in s2 or "LineClassStep" not in s2:
         v.append((STAGE2, "no 2.5a step / does not render LineClassStep"))
-    st = fe.get(STEP_FILE, "")
+    st = fe.get(STEP_FILE, "") + fe.get(LOGIC_FILE, "")     # the step + its pure logic (the body shape lives there)
     if "/line-class" not in st or "no_activations" not in st or "metric_rules" not in st:
         v.append((STEP_FILE, "the step no longer reads / saves through /line-class (rules, metric_rules, the attestation)"))
     mtd = fe.get(MTD_PAGE, "")
@@ -209,6 +226,54 @@ def scan_surfaces(fe):
         v.append((MTD_PAGE, "does not render landing.classified with a ScreenLink to the intake"))
     if re.search(r"activation:\s*\[\s*'byod'", mtd):
         v.append((MTD_PAGE, "the metric editor still offers the retired activation token row"))
+    return v
+
+
+def scan_guard(router_src):
+    """(f) THE GUARD runs over what would be SAVED, through the one resolver, BEFORE either writer."""
+    v = []
+    body = fn_body(router_src, "onboarding_intake_put_line_class")
+    if body is None:
+        return [("router.py", "onboarding_intake_put_line_class missing")]
+    code = code_lines(body)
+    need = {"resolve": "_line_rules_resolve(", "measure": "_lc.refused_tokens(", "refuse": "raise HTTPException(400, {\"message\": _lc.refusal_sentence(",
+            "acc": "put_accessory_config(PutAccessoryConfigIn(", "metric": "put_exec_metric_config(PutExecMetricConfigIn("}
+    pos = {k: code.find(x) for k, x in need.items()}
+    for k, x in need.items():
+        if pos[k] < 0:
+            v.append(("router.py", "2.5a save no longer carries: " + x))
+    if all(p >= 0 for p in pos.values()):
+        first_write = min(pos["acc"], pos["metric"])
+        if not (pos["resolve"] < first_write and pos["measure"] < first_write and pos["refuse"] < first_write):
+            v.append(("router.py", "2.5a save WRITES before the too-broad guard has resolved, measured and refused"))
+    if "_lc.resolve_rules(" in code:
+        v.append(("router.py", "2.5a save resolves the rules on its own instead of through _line_rules_resolve"))
+    blk = fn_body(router_src, "_intake_line_class_block") or ""
+    if '"refused"' not in blk or "_lc.refusal_sentence(" not in blk:
+        v.append(("router.py", "_intake_line_class_block no longer re-validates the rules in force (refused / refusal_note)"))
+    if re.search(r'"rules":\s*rules\b(?!\[)', code_lines(blk)) or '"hints"' in code_lines(blk):
+        v.append(("router.py", "_intake_line_class_block hands the hint lists to the step (the engine's input is not the person's starting text)"))
+    return v
+
+
+def scan_seed(fe):
+    """(f) THE SEED: the step seeds from seedFromBlock (line-class-logic), which reads suggest.proposal only."""
+    v = []
+    st, lg = fe.get(STEP_FILE, ""), fe.get(LOGIC_FILE, "")
+    if not lg:
+        return [(LOGIC_FILE, "missing")]
+    if "seedFromBlock" not in st or "buildPutBody" not in st or "from './line-class-logic'" not in st:
+        v.append((STEP_FILE, "the step no longer seeds / builds its body through line-class-logic"))
+    for rel, src in ((STEP_FILE, st), (LOGIC_FILE, lg)):
+        code = "\n".join(ln for ln in src.split("\n") if not ln.strip().startswith("//"))
+        if re.search(r"\bhints\b|HOUSE_HINTS|metric_hints", code):
+            v.append((rel, "reads a hint list"))
+    seed = re.search(r"export function seedFromBlock[\s\S]*?\n}", lg)
+    seed_body = seed.group(0) if seed else ""
+    if "block.suggest.proposal" not in seed_body or re.search(r"block\.rules\b", seed_body):
+        v.append((LOGIC_FILE, "seedFromBlock does not seed from suggest.proposal only"))
+    if "broad_ok" not in lg or "metric_rules" not in lg:
+        v.append((LOGIC_FILE, "buildPutBody no longer carries broad_ok / metric_rules"))
     return v
 
 
@@ -238,6 +303,33 @@ wf = read(WORKFLOW) if os.path.exists(WORKFLOW) else ""
 check("(d) the CI job runs this lock and the line-class proof beside the other locks",
       "harness_line_class_lock.py" in wf and "harness_line_class.py" in wf and "backend/app/modules/commcalc/line_class.py" in wf)
 
+# ── (f) the second class: the guard, the no-leak rule, the seed ──────────────────────────────────
+v = scan_guard(BE["modules/commcalc/router.py"])
+check("(f) the 2.5a save resolves through the ONE resolver, measures and refuses BEFORE either writer; the block re-validates the rules in force and hands no hint list to the step", not v, v)
+v = scan_seed(FE_FILES)
+check("(f) the step seeds its editable words from seedFromBlock (suggest.proposal only) and builds its body through buildPutBody; no hint list is read on the frontend", not v, v)
+check("(f) the frontend proof for the step's pure logic exists (prove_line_class_step.mjs)", os.path.exists(FE_PROOF))
+sys.path.insert(0, os.path.join(ROOT, "backend"))
+from app.modules.commcalc import line_class as _LC       # noqa: E402  (stdlib only — the engine itself)
+_ROWS = [{"category": ">> activations >> new activation", "trans_id": str(i)} for i in range(30)] + \
+        [{"category": ">> activations >> features", "trans_id": str(100 + i)} for i in range(60)] + \
+        [{"category": ">> accessories >> cases", "trans_id": str(200 + i)} for i in range(10)]
+_BROAD = _LC.resolve_rules({"fields": ["category"], "tokens": {"activation": ["new activation", "activation"]}})
+_ref = _LC.refused_tokens(_ROWS, _BROAD)
+check("(f) BEHAVIOURAL — a saved broad word is REFUSED by the engine (a tenant word naming ≥80% of the lines, unattested)",
+      [(b["class"], b["token"]) for b in _ref] == [("activation", "activation")] and _LC.rules_refused(_LC.count_classes(_ROWS, _BROAD)), _ref)
+_ATT = _LC.resolve_rules({"fields": ["category"], "tokens": {"activation": ["new activation", "activation"]}, "broad_attested": {"activation:activation": {"by": "pat"}}})
+check("(f) BEHAVIOURAL — the same word attested BY NAME is not refused; a different broad word still is",
+      _LC.refused_tokens(_ROWS, _ATT) == [] and _LC.refused_tokens(_ROWS, _LC.resolve_rules({"fields": ["category"], "tokens": {"upgrade": ["activations"]}})))
+_NL = _LC.resolve_rules({"fields": ["category"], "tokens": {"activation": ["new activation"]}}, {"x": "premium"}, {"port": ["port"]})
+check("(f) BEHAVIOURAL — NO-LEAK: tenant fields + an undeclared class → no house token, no legacy token, no auto token",
+      all(_NL["tokens"][c] == [] for c in ("upgrade", "byod", "port", "hardware_only")) and _NL["auto_activation_tokens"] == [] and not _NL["house_fill"], _NL["tokens"])
+check("(f) BEHAVIOURAL — the pin: no declaration → house words on the house field, never measured",
+      _LC.resolve_rules(None)["tokens"] == {c: list(_LC.HOUSE_TOKENS[c]) for c in _LC.CLASSES}
+      and _LC.refused_tokens([{"contract_type": "Activation", "trans_id": "1"}] * 10, _LC.HOUSE_RULES) == [])
+check("(f) the bare words 'activation' and 'port' are not house hints (decision 2026-09-21)",
+      "activation" not in _LC.HOUSE_HINTS["activation"] and "port" not in _LC.HOUSE_HINTS["port"])
+
 # ── (e) negative controls ────────────────────────────────────────────────────────────────────────
 syn = dict(BE)
 syn["modules/commcalc/sneaky.py"] = "def f(ct):\n    cl = ct.lower()\n    if 'byod' in cl:\n        return 'byod'\n"
@@ -265,6 +357,25 @@ check("(e) a second reader / writer of the rules column → RED", scan_rules_hom
 syn = dict(FE_FILES)
 syn[MTD_PAGE] = FE_FILES.get(MTD_PAGE, "").replace("classified", "klassified")
 check("(e) the Exec MTD page dropping the classified banner → RED", scan_surfaces(syn))
+# (f) negative controls
+body = fn_body(rt, "onboarding_intake_put_line_class")
+guard_at = body.find("refused = _lc.refused_tokens(")
+write_at = body.find("if metric_rules:")
+moved = rt.replace(body, body[:guard_at] + body[write_at:] + body[guard_at:write_at])   # the writes hoisted above the guard
+check("(f) a save that writes before the guard has refused → RED", any("WRITES before" in d for _, d in scan_guard(moved)))
+check("(f) a save resolving the rules on its own (a second _lc.resolve_rules) → RED",
+      any("on its own" in d for _, d in scan_guard(rt.replace(body, body.replace("_line_rules_resolve(client, org_id, merged,", "_lc.resolve_rules(merged, _x, ")))))
+blk = fn_body(rt, "_intake_line_class_block")
+check("(f) the block handing the whole rules dict (with the hint lists) to the step → RED",
+      any("hint lists" in d for _, d in scan_guard(rt.replace(blk, blk.replace('"rules": {k: rules[k] for k in ("fields", "tokens", "exact", "source", "declared", "house_fill")}', '"rules": rules')))))
+syn = dict(FE_FILES)
+syn[LOGIC_FILE] = FE_FILES[LOGIC_FILE].replace("const src = block.suggest.proposal", "const src = block.gate_open ? block.suggest.proposal : block.rules")
+check("(f) the seed reading the rules in force instead of the proposal → RED", any("suggest.proposal only" in d for _, d in scan_seed(syn)))
+syn = dict(FE_FILES)
+syn[STEP_FILE] = FE_FILES[STEP_FILE] + "\nconst seedWords = (b: LineClassBlock) => (b as any).hints\n"
+check("(f) a step reading a hint list → RED", any("hint list" in d for _, d in scan_seed(syn)))
+check("(f) a tenant-fields rule with a house word present in an undeclared class → RED (the behavioural control cannot be satisfied by a leaking resolver)",
+      _LC.resolve_rules({"fields": ["category"]})["tokens"]["port"] == [] and _LC.resolve_rules({"fields": ["category"]})["tokens"]["activation"] == [])
 
 print("\n%d passed, %d failed" % (P, F))
 if F:

@@ -186,6 +186,43 @@ TARGET_FIELDS = {
         ("pricing_discounts", "Pricing discounts", "number", False, "Pricing Discounts", ["Discounts"]),
         ("contract_no", "Contract #", "text", False, "Contract #", ["Contract No"]),
     ],
+    # ── SALES BY INVOICE with the tender types (→ raw_sales_invoice, mig 1012; owner 2026-09-21: "sales by
+    #    invoice report also has the tender types on the report, need to capture that as well — tender
+    #    types is in columns"). ONE ROW PER INVOICE: who / where / when, the invoice's money columns, the
+    #    total tax. The TENDER COLUMNS are NOT here on purpose — a POS names them per tenant and per
+    #    register set-up (a brand, its non-integrated twin, a debit PIN column, a vendor rebate), so they
+    #    are DECLARED at intake step 2.5b (commcalc/invoice_tenders) and landed one row per (invoice,
+    #    column) in the child table CHILD_TABLE_MAP names, carrying the column's canonical tender class
+    #    (closing.router.TENDER_VOCAB — one home). A jurisdiction tax column rides the same child grain.
+    #    `trans_id` is the same invoice number the line-level export carries — the link to raw_sales.
+    #    `trans_date` is the first date field (period_source_field): each row books to its own month.
+    "sales_by_invoice": [
+        ("trans_id", "Invoice #", "text", True, "Invoice #", ["Invoice No", "Invoice"]),
+        ("trans_date", "Invoice date", "date_auto", False, "Created On", ["Invoice Date", "Invoiced On", "Sold On", "Date"]),
+        ("store", "Store / location", "text", False, "Invoiced At", ["Location", "Store"]),
+        ("invoiced_by", "Invoiced by", "text", False, "Invoiced By", []),
+        ("salesperson", "Sold by", "text", False, "Sold By", ["Salesperson"]),
+        ("salesperson_login", "Sold by (login)", "text", False, "Sold By Username", []),
+        ("tendered_by", "Tendered by", "text", False, "Tendered By", []),
+        ("tendered_by_login", "Tendered by (login)", "text", False, "Tendered By Username", []),
+        ("customer", "Customer", "text", False, "Customer", []),
+        ("channel", "Channel", "text", False, "Channel", []),
+        ("region", "Region", "text", False, "Region", []),
+        ("district", "District", "text", False, "District", []),
+        ("subtotal", "Invoice subtotal", "number", False, "Invoice Subtotal", ["Subtotal"]),
+        ("adjustments", "Adjustments", "number", False, "Adjustments", []),
+        ("net_sales", "Net sales", "number", False, "Net Sales", []),
+        ("sales", "Sales", "number", False, "Sales", []),
+        ("total_cost", "Total cost", "number", False, "Total Cost", []),
+        ("gp", "Gross profit", "number", False, "Gross Profit", ["Net Profit"]),
+        ("extra_charges", "Extra charges", "number", False, "Extra Charges", []),
+        ("donations", "Donations", "number", False, "Total Donations", ["Donations"]),
+        ("invoice_total", "Invoice total", "number", False, "Invoice Total", ["Total"]),
+        ("coupons", "Coupons", "number", False, "Total Coupons", ["Coupons"]),
+        ("gift_card_sales", "Gift card sales", "number", False, "Gift Card Sales", []),
+        ("non_revenue_sales", "Non-revenue sales", "number", False, "Non-Revenue Sales", []),
+        ("tax", "Total tax", "number", False, "TotalTaxPaidAmount", ["Total Tax", "Sales Tax", "Tax"]),
+    ],
     # ── POS ON-HAND INVENTORY (→ inventory_aging_device, mig 216 — the EXISTING per-device inventory
     #    table, extended rather than duplicated). `sku` is the required identity (100% filled): a
     #    serial is NOT required, because rows a dealer has ordered but not yet received legitimately
@@ -399,6 +436,12 @@ TABLE_MAP = {
     # redirected into raw_sales. THIS entry is the one home of that fact — onboarding_intake's
     # SOURCE_KIND_TARGET and every reader dereference it (landing_identity; the lock pins it).
     "pos_product_sales": "raw_sales_product",
+    # Sales by invoice with the tender types (mig 1012, owner 2026-09-21): ONE ROW PER INVOICE in its
+    # own table — never raw_sales (a line-level table; the same file mis-carded as the by-product
+    # aggregate landed there on 2026-09-20 and replaced 48,875 line-level rows) and never
+    # raw_sales_product (a line grain; the invoice grain does not fit it). Its tender split lands in
+    # the child table CHILD_TABLE_MAP names.
+    "sales_by_invoice": "raw_sales_invoice",
     "pos_inventory_listing": "inventory_aging_device",
     # Per-line vendor rebate/commission history (mig 1005). A LANDING table read by no money path:
     # this feed is EARNED, not collected, and whether an earned rebate books as a receivable is an
@@ -409,6 +452,16 @@ TABLE_MAP = {
     # Processor daily transaction detail (mig 903) — the ePay-shaped bill-pay feed the mig-939 coverage
     # recon reads; landed by epay_ingest.ingest (idempotent upsert), NEVER by the slice replace.
     "epay_daily_tx": "raw_epay_daily_tx",
+}
+
+
+# A layout whose landing writes a SECOND, child-grain table beside its own (one row per invoice ×
+# declared column): the ONE home of "which child table", dereferenced by the intake's landing, the
+# re-reads, landing_identity.KIND_STAMP and ingest_slice.INGEST_PARTITION (which spell the table
+# because they are stdlib-only, and the lock pins the three agree). The child rows are stamped with
+# the SAME report kind as the parent (they were written by the same landing).
+CHILD_TABLE_MAP = {
+    "sales_by_invoice": "raw_sales_invoice_tender",
 }
 
 

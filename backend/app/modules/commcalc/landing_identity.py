@@ -51,9 +51,17 @@ KIND_STAMP = {
                           "what": "line-level sales rows (one row per sale line, with IMEI / phone number)"},
     "raw_sales_product": {"column": "source", "default": "pos_product_sales",
                           "what": "product-level sales rows (one row per invoice line with SKU, cost and selling price)"},
+    # Sales by invoice with the tender types (mig 1012, owner 2026-09-21): the invoice header and its
+    # child tender / tax-component rows. One layout today; stamped from day one so a second layout
+    # (another POS's invoice export) can never collide silently. The child rows carry the PARENT's kind.
+    "raw_sales_invoice":        {"column": "source", "default": "sales_by_invoice",
+                                 "what": "invoice-level sales rows (one row per invoice with its totals and tax)"},
+    "raw_sales_invoice_tender": {"column": "source", "default": "sales_by_invoice",
+                                 "what": "invoice tender rows (one row per invoice and tender column, with its class)"},
 }
 # Tables a landing path targets that a migration must create first — the refusal names the file.
-TABLE_MIGRATION = {"raw_sales_product": "1011_raw_sales_product.sql"}
+TABLE_MIGRATION = {"raw_sales_product": "1011_raw_sales_product.sql",
+                   "raw_sales_invoice": "1012_sales_by_invoice.sql", "raw_sales_invoice_tender": "1012_sales_by_invoice.sql"}
 
 # ── 3. THE CONSUMERS — who reads each landing table, and which fields must not be blank for them ──
 # `needs` = the fields the consumer classifies or sums on; a frame blank on EVERY one of them lands
@@ -90,6 +98,25 @@ CONSUMERS = {
          "why": "the product-level rows are verified (rows, Σ price, Σ cost) and linked to the other reports by invoice and SKU; "
                 "no money report sums them — summing product-level rows against line-level rows would double-count (owner decision 2026-09-20)"},
     ],
+    # Sales by invoice with the tender types (owner 2026-09-21). HONEST: the header table's only reader is
+    # the intake's Stage 4 (the invoice totals, Σ tax as a tie-out, the report links by invoice number /
+    # store / date) — the Tax Collected aggregator does NOT read it yet (PROPOSED, index §30.13), so it is
+    # not listed: "this upload will show in" must never name a page that does not read it. The TENDER
+    # rows ARE read by every closing cash / card recon when the org's tender basis is 'invoice' or
+    # 'x_report_else_invoice' (closing.router._tender_split_by_store — owner: "nothing on cash collected").
+    "raw_sales_invoice": [
+        {"screen": "onboarding_intake", "label": "Onboarding — Stage 4 verify, tender split vs X-report, tax tie-out, report links",
+         "needs": ["trans_id", "invoice_total"], "gate": True,
+         "why": "each invoice's totals are verified, its tender columns are split per store-day beside the register's X-report, "
+                "Σ tax is shown as a tie-out, and the invoice number links the report to the line-level sales export"},
+    ],
+    "raw_sales_invoice_tender": [
+        {"screen": "onboarding_intake", "label": "Onboarding — Stage 4 tender split vs X-report", "needs": ["amount", "tender_class"], "gate": True,
+         "why": "one row per invoice and tender column, classed through the one tender vocabulary; summed per store-day beside the X-report"},
+        {"screen": "closing_recon", "label": "Closing Reconciliation (cash collected, cash / card recon, deposit recon)", "needs": ["amount", "tender_class"], "gate": False,
+         "why": "the tender split per store-day the closing recons read when the company's tender basis is the invoice tenders "
+                "(or the X-report else the invoice) — set at intake step 2.5b; the house default reads the X-report"},
+    ],
     "daily_sales_feed": [
         {"screen": "sales_recon", "label": "Sales Feed Recon", "needs": ["trans_id"], "gate": False,
          "why": "the daily feed is the live side of the monthly-vs-daily reconciliation"},
@@ -110,6 +137,12 @@ CONSUMERS = {
     ],
     "commission_ledger": [
         {"screen": "commission_ledger", "label": "Commission Ledger", "needs": ["raw_amount"], "gate": False, "why": "the five buckets and the tie-out"},
+        # mig 1013 (owner 2026-09-21): the ledger books the P&L when the org's P&L commission source is the
+        # ledger — each bucket to the line its registry row names. `shows_in(..., pl_link=…)` decorates this
+        # entry with those lines (ledger_pnl.pl_link), so the statement says WHICH P&L lines it will show on.
+        {"screen": "pl_statement", "label": "P&L Statement", "needs": ["payout_total"], "gate": False,
+         "why": "each bucket's total books to the P&L line its bucket is linked to (Category → Bucket Map) "
+                "when the P&L commission source is the ledger"},
         {"screen": "carrier_vs_pay", "label": "Carrier Earned vs Employee Paid", "needs": ["raw_amount", "rep_user"], "gate": False,
          "why": "what the carrier paid per rep beside what the rep was paid"},
         {"screen": "whatif", "label": "What-If Analysis", "needs": ["raw_amount"], "gate": False, "why": "carrier income headings"},
@@ -267,8 +300,25 @@ def apply_kind_filter(q, table, kind, table_map):
 
 
 # ── 3. the consumer gate ─────────────────────────────────────────────────────────────────────────
-def consumers_for_table(table):
-    return list(CONSUMERS.get(table) or [])
+PL_LINK_TABLE = "commission_ledger"      # the table whose P&L consumer carries the registry's lines
+PL_LINK_SCREEN = "pl_statement"
+
+
+def consumers_for_table(table, pl_link=None):
+    """The consumers of `table` as payload entries. `pl_link` (ledger_pnl.pl_link: the P&L lines the
+    org's buckets are linked to, the configured source, whether it is active) decorates the ledger's
+    P&L consumer — ONE derivation, rendered by every surface through ShowsIn."""
+    out = []
+    for c in CONSUMERS.get(table) or []:
+        e = {"screen": c["screen"], "label": c["label"], "needs": list(c.get("needs") or []),
+             "gate": bool(c.get("gate")), "why": c.get("why")}
+        if pl_link and table == PL_LINK_TABLE and c["screen"] == PL_LINK_SCREEN:
+            e["lines"] = [dict(x) for x in (pl_link.get("lines") or [])]
+            e["source"] = pl_link.get("source")
+            e["active"] = bool(pl_link.get("active"))
+            e["source_label"] = pl_link.get("source_label")
+        out.append(e)
+    return out
 
 
 def blank_consumer_fields(rows, table):
@@ -327,14 +377,15 @@ def where_to_upload(row):
     return {"screen": "upload_files", "label": "Upload Files", "upload_types": []}
 
 
-def shows_in(row, table_map, route_tables=None, landing_tables=None):
+def shows_in(row, table_map, route_tables=None, landing_tables=None, pl_link=None):
     """"This upload will show in: …" for one registry row — the table it lands in and that table's
-    consumers (screen keys + labels + the fields each needs). Recorded-only kinds say so."""
+    consumers (screen keys + labels + the fields each needs). Recorded-only kinds say so. `pl_link`
+    (ledger_pnl.pl_link) names the P&L lines a commission statement will show on — the ledger's P&L
+    consumer carries them (consumers_for_table)."""
     t = landing_table_for(row, table_map, route_tables, landing_tables)
     if not t:
         return {"table": None, "consumers": [], "note": "recorded as received — no table reads it yet (an owner decision names one)"}
-    cons = [{"screen": c["screen"], "label": c["label"], "needs": list(c.get("needs") or []), "gate": bool(c.get("gate")), "why": c.get("why")}
-            for c in CONSUMERS.get(t) or []]
+    cons = consumers_for_table(t, pl_link)
     return {"table": t, "consumers": cons,
             "note": None if cons else f"lands in commcalc.{t}; no report reads it yet"}
 

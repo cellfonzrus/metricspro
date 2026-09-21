@@ -21,7 +21,12 @@ import { reportKindsVisible, type ReportDeclaration, type ReportKindRow } from '
 
 export type FilenameRule = { pattern: string; upload_type: string; note?: string | null }
 /** One reader of a landing table — a ScreenLink screen key + the fields it needs (backend landing_identity.CONSUMERS). */
-export type Consumer = { screen: string; label: string; needs: string[]; gate: boolean; why?: string | null }
+// `lines` / `source` / `active` (mig 1013): the ledger's P&L consumer carries the P&L LINES the org's buckets
+// are linked to (derived from the bucket registry's pl_line_key by the backend — never listed here), which
+// source books the P&L today and whether the ledger is that source. ShowsIn renders "P&L Statement → …".
+export type PlLine = { key: string; label: string; buckets?: string[] }
+export type Consumer = { screen: string; label: string; needs: string[]; gate: boolean; why?: string | null
+  lines?: PlLine[]; source?: string | null; active?: boolean; source_label?: string | null }
 export type ShowsIn = { table: string | null; consumers: Consumer[]; note: string | null }
 export type ReportKindsPayload = {
   registry_ready: boolean; migration: string
@@ -62,7 +67,7 @@ export function feedsForScreen(visible: ReportKindRow[], screen: string): FeedFo
     .map(r => ({ key: r.key, label: r.label, where: r.where || null }))
 }
 export type ReportSurface = 'intake' | 'upload' | 'wizard' | 'email_imports' | 'tiles'
-export const INTAKE_LANDINGS = ['sales', 'pos', 'inventory', 'commission', 'x_report', 'merchant_payments', 'bill_payments', 'other']
+export const INTAKE_LANDINGS = ['sales', 'pos', 'invoice', 'inventory', 'commission', 'x_report', 'merchant_payments', 'bill_payments', 'other']
 
 // ── PURE selectors (proven by frontend/prove_report_kinds.mjs against the real transpiled TS) ────
 

@@ -974,9 +974,16 @@ def _closing_summary_org_ctx(client, org_id) -> dict:
         stores = []
         _roster_ok = False
     store_meta = {s.get("store_code"): s for s in stores if s.get("store_code")}
-    tcfg = (client.schema("storeops").table("tenants").select("closing_mode")
-            .eq("org_id", org_id).limit(1).execute().data or [{}])
+    try:
+        tcfg = (client.schema("storeops").table("tenants").select("closing_mode,closing_tender_basis")
+                .eq("org_id", org_id).limit(1).execute().data or [{}])
+    except Exception:
+        # pre-1012 (no closing_tender_basis column): the original read, the house-default basis
+        tcfg = (client.schema("storeops").table("tenants").select("closing_mode")
+                .eq("org_id", org_id).limit(1).execute().data or [{}])
     closing_mode = (tcfg[0].get("closing_mode") if tcfg else None) or "per_rep"
+    # the TENDER BASIS (2026-09-21) — resolved ONCE per request from the same row, threaded to every date
+    tender_basis_ctx = tender_basis_from_row(tcfg[0] if tcfg else None)
     try:
         closer_rows = (client.schema("storeops").table("store_closer")
                        .select("store_code,employee_id,employee_name").eq("org_id", org_id)
@@ -1000,6 +1007,7 @@ def _closing_summary_org_ctx(client, org_id) -> dict:
                   if str(e.get("employee_id") or "").strip()]
     return {"ckeys": _ckeys, "clabels": _clabels, "crclass": _crclass, "tlabels": tlabels,
             "store_meta": store_meta, "closing_mode": closing_mode, "closer_by_store": closer_by_store,
+            "tender_basis": tender_basis_ctx,
             "closer_row_by_store": closer_row_by_store,
             "roster_names": roster_names, "roster_ids": roster_ids,
             "roster_ok": _roster_ok}
@@ -1070,15 +1078,19 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
     # Authoritative cash/card split comes from the POS X-REPORT (pos_tender_summary), NOT the sales
     # feed (which omits Tender Type). When the X-report is imported for the day, it overrides the
     # feed tenders in the money recon below.
+    # …through THE one resolver, which dereferences the org's tender basis (2026-09-21): the X-report,
+    # the invoice tenders, or the X-report else the invoice — per store the leg read is on `basis_by_store`.
     try:
-        xreport_tenders = _xreport_tenders_by_store(client, org_id, date)
+        _split = _tender_split_by_store(client, org_id, date, basis=(org_ctx.get("tender_basis") or {}).get("basis"))
+        xreport_tenders = _split["totals"]
+        _leg_by_store = _split["basis_by_store"]
     except Exception as e:
         print("closing X-report tender load failed:", e)
-        xreport_tenders = {}
+        xreport_tenders, _leg_by_store = {}, {}
     # Distinguish "no X-report EVER for this tenant" (config/delivery — mailbox rule or the b2bsoft
     # schedule never set up) from "just today's file hasn't landed yet" (2026-07-15 luxelink diagnosis)
     # -> a sharper, more actionable honest-empty message on the money_recon note below.
-    x_report_ever = bool(xreport_tenders)
+    x_report_ever = any(v == "x_report" for v in _leg_by_store.values())
     if not x_report_ever:
         try:
             x_report_ever = bool((client.schema("commcalc").table("pos_tender_summary").select("close_date")
@@ -1351,7 +1363,7 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
             # (which usually lacks a tender split → pending, not flagged).
             xt = xreport_tenders.get(code) if code else None
             if xt:
-                tender_cash, tender_card, tender_src, tenders_ok = xt["cash"], xt["card"], "x_report", True
+                tender_cash, tender_card, tender_src, tenders_ok = xt["cash"], xt["card"], _leg_by_store.get(code, "x_report"), True
             else:
                 tender_cash, tender_card, tender_src = bm["cash"], bm["card"], "sales_feed"
                 tenders_ok = bm.get("tenders_available", True)
@@ -1574,6 +1586,7 @@ def closing_summary(date: str = None, date_from: str = None, date_to: str = None
     if ks is not None:
         out = [s for s in out if in_keyset(ks, s.get("store_code"), s.get("store_address"))]
     return {"date": date, "dates": dates, "range": is_range, "stores": out,
+            "tender_basis": tender_basis_info(client, org_id, org_ctx.get("tender_basis")),
            "dates_requested": len(all_dates), "dates_computed": len(dates), "range_capped": range_capped,
            "can_review": can_review, "market_filter_skipped": market_filter_skipped}
 
@@ -3621,6 +3634,7 @@ def deposit_recon_report(date: str = "", date_from: str = "", date_to: str = "",
         })
     out_days.sort(key=lambda r: (r["close_date"], r["store_address"] or ""), reverse=True)
     return {"date_from": str(d_from), "date_to": str(d_to), "days": out_days, "categories": cats_all,
+            "tender_basis": tender_basis_info(client, org_id),
             "toggles": {"include_expenses": inc_exp, "include_bill_payments": inc_bill, "include_other_adj": inc_other},
             "tolerance": tolerance}
 
@@ -6549,7 +6563,7 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
             # Same rep-picker contract as GET /closing/pickups (owner report 2026-09-07): every rep
             # with an envelope in this window/scope, collected before the employee filter.
             "employee_options": sorted(emp_options, key=lambda n: n.lower()),
-            "pos_source": _pos_src}
+            "pos_source": _pos_src, "tender_basis": tender_basis_info(client, org_id)}
 
 
 # ── POS-side resolutions, SHARED (owner directive 2026-09-02 "those numbers should be right
@@ -6928,6 +6942,7 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
     _dm_over = [r for r in out if r["cash_picked_variance"] is not None
                 and r["cash_picked_variance"] > abs(_f(tolerance))]
     return {"start": start, "end": end, "rows": out, "billpay_source": billpay_source,
+            "tender_basis": tender_basis_info(client, org_id),
             "sales_source": sales_source,
             "tolerance": _f(tolerance),
             "rep_options": sorted(_rep_options),
@@ -7449,19 +7464,50 @@ def _tender_class(t: str) -> str:
     return "other"
 
 
-# ── Canonical 7 tender types (the axis of the 3-way recon: closing vs X-report vs sales-transactions) ──
-CANON_TENDERS = ["cash", "credit", "ext_cc", "gift", "store_acct", "zelle", "acima"]
-CANON_TENDER_LABEL = {
-    "cash": "Cash", "credit": "Credit", "ext_cc": "External Credit Card",
-    "gift": "Gift Card", "store_acct": "Store Account", "zelle": "Zelle / CashApp",
-    "acima": "ACIMA (lease)",
-}
+# ── THE TENDER VOCABULARY — ONE home (owner 2026-09-21: "sales by invoice report also has the tender
+#    types on the report, need to capture that as well"). Every canonical tender CLASS the platform
+#    knows, in ONE ordered list: the seven the closing sheet declares (the 3-way recon's axis —
+#    `closing_axis`), plus the finer classes an INVOICE-level tender split names and the closing
+#    sheet does not (a debit PIN column, a coupon column, a vendor rebate applied as payment). A finer
+#    class FOLDS to the axis class the closing sheet would have declared it as (`folds_to`), so the
+#    closing legs read byte-identically: `_canon_tender` is `tender_class` folded to the axis.
+#    `recon_class` = the cash / card / other gate the class belongs to. CANON_TENDERS /
+#    CANON_TENDER_LABEL are DERIVED below — never a second list. Readers: this router's three legs,
+#    tender_config (the mig-111 tenant axis over the same keys), commcalc/router._xr_canon_known, the
+#    onboarding intake's tender-column step (commcalc/invoice_tenders — through this module only).
+#    Locked by backend/harness_tender_vocab_lock.py.
+TENDER_VOCAB = [
+    # key            label                      recon_class  closing_axis  folds_to
+    ("cash",         "Cash",                    "cash",      True,         None),
+    ("credit",       "Credit",                  "card",      True,         None),
+    ("ext_cc",       "External Credit Card",    "card",      True,         None),
+    ("gift",         "Gift Card",               "other",     True,         None),
+    ("store_acct",   "Store Account",           "other",     True,         None),
+    ("zelle",        "Zelle / CashApp",         "other",     True,         None),
+    ("acima",        "ACIMA (lease)",           "other",     True,         None),
+    # the invoice-level classes (2026-09-21) — additive; each says which axis class it folds to
+    ("debit",        "Debit card (PIN)",        "card",      False,        "credit"),
+    ("coupon",       "Coupon",                  "other",     False,        None),
+    ("vendor_rebate", "Vendor rebate applied",  "other",     False,        None),
+]
+TENDER_CLASSES = [k for (k, _l, _c, _ax, _f) in TENDER_VOCAB]
+TENDER_CLASS_LABEL = {k: l for (k, l, _c, _ax, _f) in TENDER_VOCAB}
+TENDER_RECON_CLASS = {k: c for (k, _l, c, _ax, _f) in TENDER_VOCAB}
+TENDER_FOLDS_TO = {k: f for (k, _l, _c, _ax, f) in TENDER_VOCAB}
+# Canonical 7 tender types (the axis of the 3-way recon: closing vs X-report vs sales-transactions) — DERIVED
+CANON_TENDERS = [k for (k, _l, _c, ax, _f) in TENDER_VOCAB if ax]
+CANON_TENDER_LABEL = {k: l for (k, l, _c, ax, _f) in TENDER_VOCAB if ax}
+# a tender column the register did not integrate (the amount was KEYED by hand): same class, flagged
+KEYED_MANUALLY_WORDS = ("non-integrated", "non integrated", "nonintegrated", "manual", "keyed")
 
 
-def _canon_tender(raw: str):
-    """Map any source's raw tender string to one of the 6 canonical tenders (or None = unmapped).
+def tender_class(raw: str):
+    """Map any source's raw tender string (an X-report label, a sales-line tender type, an INVOICE
+    report's tender COLUMN header) to one canonical tender class of TENDER_VOCAB (or None = unmapped).
     ORDER MATTERS: 'gift card' contains 'card', 'cash app' contains 'cash', 'external credit card'
-    contains 'credit' — so the specific buckets are tested before the generic cash/credit ones."""
+    contains 'credit', 'debit card' contains 'card' — so the specific classes are tested before the
+    generic cash / debit / credit ones. The coupon and vendor-rebate words are tested LAST: a label
+    that any earlier rule places keeps its place (what `_canon_tender` always answered)."""
     t = (raw or "").strip().lower()
     if not t:
         return None
@@ -7477,9 +7523,109 @@ def _canon_tender(raw: str):
         return "ext_cc"
     if "cash" in t:
         return "cash"
-    if any(h in t for h in ("credit", "debit", "card", "visa", "master", "amex", "discover")):
+    if "debit" in t:
+        return "debit"
+    if any(h in t for h in ("credit", "card", "visa", "master", "amex", "american express", "discover")):
         return "credit"
+    if "coupon" in t:
+        return "coupon"
+    if any(h in t for h in ("ven reb", "vendor reb", "vend reb", "vendor rebate", "mfr rebate", "manufacturer rebate")):
+        return "vendor_rebate"
     return None
+
+
+def fold_to_axis(cls):
+    """A canonical class → the closing-axis class it is declared as (itself when on the axis; its
+    `folds_to`; None when the closing sheet has no place for it — coupon, vendor rebate)."""
+    if cls is None:
+        return None
+    if cls in CANON_TENDER_LABEL:
+        return cls
+    return TENDER_FOLDS_TO.get(cls)
+
+
+def _canon_tender(raw: str):
+    """Map any source's raw tender string to one of the closing-axis tenders (or None = unmapped) —
+    `tender_class` folded to the axis. Byte-identical to the retired seven-way ladder for every
+    label it placed (pinned by harness_sales_by_invoice.py §A over a spelling battery): 'debit …'
+    folds to credit as before; a coupon / vendor-rebate label the old ladder answered None for still
+    answers None here."""
+    return fold_to_axis(tender_class(raw))
+
+
+def keyed_manually(raw: str) -> bool:
+    """Was this tender column keyed by hand at the register (a 'non-integrated' card column)? Same
+    class as its integrated twin, flagged — house words above; the intake records the flag per column."""
+    t = (raw or "").strip().lower()
+    return bool(t) and any(w in t for w in KEYED_MANUALLY_WORDS)
+
+
+# ── THE TENDER BASIS — what Cash Collected / the cash-card recon / the deposit recon read as the tender
+#    split per store-day (owner 2026-09-21: "nothing on cash collected either"). Per-org CONFIG on
+#    storeops.tenants.closing_tender_basis (mig 1012; the mig-111 home of the closing recon's per-org
+#    settings), house default 'x_report' = byte-identical for every existing tenant; 'invoice' = derived
+#    from the invoice tender rows the intake lands (raw_sales_invoice_tender); 'x_report_else_invoice' =
+#    the X-report when one exists for the store-day, else the invoice-derived totals. ONE resolver
+#    (_tender_split_by_store → _xreport_tenders_by_store keeps its name and shape for every consumer);
+#    the intake's tender step SETS it; every closing page SAYS which basis it read. POS / carrier neutral.
+TENDER_BASES = ("x_report", "invoice", "x_report_else_invoice")
+TENDER_BASIS_DEFAULT = "x_report"
+TENDER_BASIS_LABEL = {"x_report": "the register's daily X-report",
+                      "invoice": "the tender columns of the sales-by-invoice export",
+                      "x_report_else_invoice": "the X-report when one exists for the store-day, else the invoice tenders"}
+# the report-kind registry key whose upload feeds each basis (ScreenLink → Onboarding — Commission Intake)
+TENDER_BASIS_UPLOAD_KIND = {"x_report": "x_report", "invoice": "sales_by_invoice", "x_report_else_invoice": "x_report"}
+
+
+def tender_basis_from_row(tenant_row):
+    """PURE: {basis, source} from a storeops.tenants row (or None) — the org's closing_tender_basis when it
+    is a known basis, else the house default."""
+    v = str(((tenant_row or {}).get("closing_tender_basis")) or "").strip().lower()
+    if v in TENDER_BASES:
+        return {"basis": v, "source": "your setting"}
+    return {"basis": TENDER_BASIS_DEFAULT, "source": "house default"}
+
+
+def tender_basis(client, org_id, tenant_row=None):
+    """{basis, source} — the org's closing_tender_basis, else the house default. `tenant_row` = the
+    storeops.tenants row a caller already read (the closing summary reads it ONCE per request — the
+    hoisted org context; harness_dmverify_parity M3 pins one read). NEVER raises: a config read that
+    fails (pre-1012, no tenant row) resolves to the default, never to a guessed basis."""
+    if tenant_row is not None:
+        return tender_basis_from_row(tenant_row)
+    try:
+        t = (client.schema("storeops").table("tenants").select("closing_tender_basis")
+             .eq("org_id", org_id).limit(1).execute().data or [])
+        return tender_basis_from_row(t[0] if t else None)
+    except Exception:
+        pass
+    return {"basis": TENDER_BASIS_DEFAULT, "source": "house default"}
+
+
+def tender_basis_info(client, org_id, tb=None):
+    """The line every closing page states: which basis it reads, in words, and where that upload lives.
+    `tb` = an already-resolved {basis, source} (no second read)."""
+    tb = tb or tender_basis(client, org_id)
+    return {**tb, "label": TENDER_BASIS_LABEL[tb["basis"]], "upload_kind": TENDER_BASIS_UPLOAD_KIND[tb["basis"]],
+            "screen": "onboarding_intake", "bases": [{"key": k, "label": TENDER_BASIS_LABEL[k]} for k in TENDER_BASES]}
+
+
+def put_tender_basis(client, org_id, value):
+    """THE ONE WRITER: set the org's basis (storeops.tenants.closing_tender_basis) and READ IT BACK through
+    tender_basis(); a write that does not stick is an error the caller must surface, never a silent no-op."""
+    v = str(value or "").strip().lower()
+    if v not in TENDER_BASES:
+        return {"error": f"tender_basis must be one of {', '.join(TENDER_BASES)}"}
+    try:
+        res = client.schema("storeops").table("tenants").update({"closing_tender_basis": v}).eq("org_id", org_id).execute()
+        if not (res.data or []):
+            return {"error": "this company has no storeops.tenants row — the basis could not be saved (set the company up first)"}
+    except Exception as e:
+        return {"error": f"the basis could not be saved (storeops.tenants.closing_tender_basis — mig 1012): {str(e)[:160]}"}
+    back = tender_basis(client, org_id)
+    if back["basis"] != v:
+        return {"error": f"the basis did not read back as saved ({back['basis']} ≠ {v})"}
+    return {"written": True, "basis": v, "read_back": True}
 
 
 # Standard tender_key → physical daily_closing column. A standard tender reads its t_* column; a custom
@@ -7816,10 +7962,81 @@ def _addr_resolver(client, org_id):
     return resolve
 
 
-def _xreport_tenders_by_store(client, org_id: str, date: str) -> dict:
-    """Cash/card/other per store_code from the POS X-REPORT (commcalc.pos_tender_summary) for `date`
-    — the AUTHORITATIVE tender split (the daily sales feed omits Tender Type). Returns {} when no
-    X-report has been imported for that day (then the recon falls back to the feed / shows pending)."""
+def _xreport_tenders_by_store(client, org_id: str, date: str, basis: str = None) -> dict:
+    """Cash/card/other per store_code for `date` — THE tender split every closing recon reads. Since
+    2026-09-21 it dereferences the org's TENDER BASIS (tender_basis): the POS X-REPORT
+    (commcalc.pos_tender_summary — the house default, byte-identical to before), the INVOICE tenders
+    (raw_sales_invoice_tender, landed by the intake), or the X-report else the invoice per store-day.
+    Same name, same shape ({code: {cash, card, other, total}}) for every consumer; `basis` forces a leg
+    (the intake's Stage-4 tie-out compares the two). {} when the basis has nothing for that day."""
+    return _tender_split_by_store(client, org_id, date, basis)["totals"]
+
+
+def _tender_split_by_store(client, org_id: str, date: str, basis: str = None) -> dict:
+    """THE ONE RESOLVER: {totals: {code: agg}, basis: the org's (or forced) basis, basis_by_store: {code:
+    'x_report' | 'invoice'}} — so a page can say per store which leg it read. Locked: every closing
+    consumer reads through this (harness_tender_vocab_lock.py §e); no sibling reader."""
+    b = (basis or "").strip().lower() or tender_basis(client, org_id)["basis"]
+    if b not in TENDER_BASES:
+        b = TENDER_BASIS_DEFAULT
+    xr = _xreport_rows_by_store(client, org_id, date) if b in ("x_report", "x_report_else_invoice") else {}
+    inv = _invoice_tenders_by_store(client, org_id, date) if b in ("invoice", "x_report_else_invoice") else {}
+    totals, by = {}, {}
+    if b == "x_report":
+        totals, by = xr, {c: "x_report" for c in xr}
+    elif b == "invoice":
+        totals, by = inv, {c: "invoice" for c in inv}
+    else:
+        totals, by = dict(xr), {c: "x_report" for c in xr}
+        for code, agg in inv.items():
+            if code not in totals:
+                totals[code], by[code] = agg, "invoice"
+    return {"totals": totals, "basis": b, "basis_by_store": by}
+
+
+def _invoice_tenders_by_store(client, org_id: str, date: str) -> dict:
+    """Cash/card/other per store_code from the INVOICE TENDER rows for `date` (commcalc.raw_sales_invoice_tender,
+    role='tender' — one row per invoice × declared tender column, landed by the intake's sales-by-invoice
+    kind). The store STRING resolves through _addr_resolver (the same chain the X-report's does), the
+    class folds to the cash / card / other gate through TENDER_RECON_CLASS (one home). Returns {} when no
+    invoice tender row exists for that day; an unresolved store is named, never guessed. `by_class` rides
+    each agg (additive) so the intake's tie-out can show the split per class."""
+    try:
+        rows = (client.schema("commcalc").table("raw_sales_invoice_tender")
+                .select("store,tender_class,amount,role").eq("org_id", org_id)
+                .eq("trans_date", date).eq("role", "tender").limit(50000).execute().data) or []
+    except Exception:
+        rows = []
+    if not rows:
+        return {}
+    resolve = _addr_resolver(client, org_id)
+    out, _unresolved = {}, set()
+    for r in rows:
+        code = resolve(r.get("store"))
+        if not code:
+            _unresolved.add((r.get("store") or "").strip())
+            continue
+        cls = (r.get("tender_class") or "").lower()
+        gate = TENDER_RECON_CLASS.get(cls) or "other"
+        agg = out.setdefault(code, {"cash": 0.0, "card": 0.0, "other": 0.0, "total": 0.0, "by_class": {}})
+        amt = _f(r.get("amount"))
+        agg[gate] += amt
+        agg["total"] += amt
+        agg["by_class"][cls] = round(agg["by_class"].get(cls, 0.0) + amt, 2)
+    for a in out.values():
+        for k in ("cash", "card", "other", "total"):
+            a[k] = round(a[k], 2)
+    if _unresolved:
+        print("WARN [closing] invoice tenders %s: %d store name(s) map to no store, their tenders are "
+              "NOT counted: %s -- map them on the Store-Matching screen"
+              % (date, len(_unresolved), sorted(_unresolved)[:10]), flush=True)
+    return out
+
+
+def _xreport_rows_by_store(client, org_id: str, date: str) -> dict:
+    """The X-REPORT leg: cash/card/other per store_code from commcalc.pos_tender_summary for `date`
+    (the daily sales feed omits Tender Type). Returns {} when no X-report has been imported for that day
+    (then the recon falls back to the feed / shows pending). Read ONLY through _tender_split_by_store."""
     try:
         rows = (client.schema("commcalc").table("pos_tender_summary")
                 .select("store,tender_class,amount").eq("org_id", org_id)

@@ -221,6 +221,7 @@ def main():
         print("      allow %-58s [%s] — %s" % (k[0], k[1], why[:70]))
 
     # (b)
+    oi = be.get("modules/commcalc/onboarding_intake.py", "")
     um = unstamped_multi(CM.TABLE_MAP, LI.KIND_STAMP, STAMP_EXCUSED)
     check("(b) every table ≥2 layouts target is stamped or excused with a live reason: %s" % LI.multi_kind_tables(CM.TABLE_MAP), not um, um)
     router = be.get("modules/commcalc/router.py", "")
@@ -236,7 +237,17 @@ def main():
     from app.modules.commcalc import ingest_slice as IS
     check("(b) both stamped sales tables are slice-replaced (INGEST_PARTITION) on store × trans_date",
           all(IS.INGEST_PARTITION.get(t) == {"partition": "store", "date": "trans_date"} for t in ("raw_sales", "raw_sales_product")))
-    oi = be.get("modules/commcalc/onboarding_intake.py", "")
+    # 2026-09-21 — sales by invoice: the parent + the CHILD table (column_mapping.CHILD_TABLE_MAP, the one home of "which
+    # child table") are stamped, sliced and named by ONE migration; the child rows carry the parent's kind; the router and
+    # the intake spell the child table nowhere (they dereference CHILD_TABLE_MAP)
+    child = CM.CHILD_TABLE_MAP.get("sales_by_invoice")
+    check("(b) the invoice layout's parent and child tables are stamped with the SAME default kind, slice-replaced on store × trans_date, gated by one migration, and the child table is dereferenced (no literal in router / intake)",
+          child and CM.TABLE_MAP["sales_by_invoice"] in LI.KIND_STAMP and child in LI.KIND_STAMP
+          and LI.KIND_STAMP[child]["default"] == LI.KIND_STAMP[CM.TABLE_MAP["sales_by_invoice"]]["default"] == "sales_by_invoice"
+          and all(IS.INGEST_PARTITION.get(t) == {"partition": "store", "date": "trans_date"} for t in (CM.TABLE_MAP["sales_by_invoice"], child))
+          and LI.TABLE_MIGRATION.get(child) == LI.TABLE_MIGRATION.get(CM.TABLE_MAP["sales_by_invoice"])
+          and ("'%s'" % child) not in be.get("modules/commcalc/router.py", "") and ('"%s"' % child) not in be.get("modules/commcalc/router.py", "")
+          and ("'%s'" % child) not in oi and ('"%s"' % child) not in oi, child)
     skt = re.search(r"^SOURCE_KIND_TARGET\s*=\s*\{.*?\}", oi, re.M | re.S)
     check("(c) SOURCE_KIND_TARGET dereferences column_mapping.TABLE_MAP for the mapped kinds (no sales-table literal)",
           skt and "CM.TABLE_MAP[" in skt.group(0) and '"raw_sales"' not in skt.group(0), skt.group(0)[:120] if skt else "missing")

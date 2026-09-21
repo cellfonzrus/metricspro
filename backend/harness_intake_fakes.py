@@ -95,11 +95,17 @@ class _Q:
         if self.op == "upsert":
             self.db.check_rows(self.table, self.rows, upsert=True)
             keys = [k.strip() for k in (self.conflict or "").split(",") if k.strip()]
+            # Postgres 42P10: an ON CONFLICT target must name a unique index / constraint of the table. A
+            # table with DECLARED unique indexes (the migrations' current shape) refuses any other target —
+            # this is how the fake reproduces mig 962 dropping UNIQUE (org_id, bucket) on exec_metric_config
+            # (the 2.5a "phones tick did not persist" root cause). NULLS NOT DISTINCT: None matches None.
+            uniques = self.db.unique_indexes.get(self.table)
+            if uniques is not None and sorted(keys) not in [sorted(u) for u in uniques]:
+                raise RuntimeError('42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification')
             written = []
             for r in self.rows:
                 row = dict(r)
-                hit = next((x for x in t if keys and all(x.get(k) == row.get(k) for k in keys)
-                            and all(row.get(k) is not None for k in keys)), None)
+                hit = next((x for x in t if keys and all(x.get(k) == row.get(k) for k in keys)), None)
                 if hit:
                     hit.update(row)
                     written.append(dict(hit))
@@ -182,6 +188,19 @@ class FakeDB:
                                   "trans_date", "contract_type", "mdn", "serial_1", "register", "tender_type", "voided",
                                   "trans_type", "sku", "customer", "email", "customer_no", "quantity", "total_cost",
                                   "pricing_discounts", "contract_no", "source", "created_at"],
+            # mig 1012 (2026-09-21) — sales by invoice: the invoice header + its child tender / tax-component rows
+            "raw_sales_invoice": ["id", "org_id", "period", "period_month", "period_year", "trans_id", "trans_date", "store",
+                                  "invoiced_by", "salesperson", "salesperson_login", "tendered_by", "tendered_by_login", "customer",
+                                  "channel", "region", "district", "subtotal", "adjustments", "net_sales", "sales", "total_cost", "gp",
+                                  "extra_charges", "donations", "invoice_total", "coupons", "gift_card_sales", "non_revenue_sales",
+                                  "tax", "source", "import_batch_id", "created_at"],
+            "raw_sales_invoice_tender": ["id", "org_id", "period", "period_month", "period_year", "store", "trans_date", "trans_id",
+                                         "salesperson", "role", "tender_label", "tender_class", "keyed_manually", "amount", "source",
+                                         "import_batch_id", "created_at"],
+            # mig 111 — the per-org raw label → tender map (the X-report / sales legs; report='invoice' since 2026-09-21)
+            "closing_tender_def": ["id", "org_id", "tender_key", "label", "sort_order", "is_standard", "is_active", "recon_class",
+                                   "include_in_total", "created_at"],
+            "closing_tender_map": ["id", "org_id", "tender_key", "report", "source_labels", "match_mode", "priority", "created_at"],
             "daily_sales_feed": ["id", "org_id", "period", "store", "salesperson", "department", "category", "product_desc",
                                  "gp", "ext_price", "trans_id", "trans_date", "contract_type", "mdn", "serial_1", "tender_type",
                                  "voided", "trans_type", "quantity"],
@@ -230,6 +249,11 @@ class FakeDB:
                                  "definition_drives_pay", "gp_acc_basis", "updated_at"],                # mig 208 … 313 … 930
             "exec_metric_config": ["id", "org_id", "bucket", "rules", "basis", "carrier", "applicable", "updated_at"],  # mig 204/962/963
         }
+        # the unique indexes the migrations leave on a table TODAY (a conflict target must name one — 42P10
+        # otherwise, as Postgres does); a table not listed accepts any target, as the fake always did
+        self.unique_indexes = {
+            "exec_metric_config": [("org_id", "bucket", "carrier")],      # mig 962 (NULLS NOT DISTINCT); mig 204's (org_id, bucket) DROPPED
+        }
 
     def columns(self, table):
         if table in self.declared:
@@ -242,7 +266,7 @@ class FakeDB:
                 bad = [k for k in r if k not in self.declared[table]]
                 if bad:
                     raise RuntimeError(f'42703 column "{bad[0]}" of {table} does not exist')
-        if table in ("raw_sales", "raw_sales_product", "raw_ma_daily_tx"):
+        if table in ("raw_sales", "raw_sales_product", "raw_sales_invoice", "raw_sales_invoice_tender", "raw_ma_daily_tx"):
             for r in rows:
                 if not r.get("period"):
                     raise RuntimeError(f'23502 null value in column "period" of {table} violates not-null constraint')

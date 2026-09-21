@@ -9,6 +9,7 @@ import type { StandardFilterValue } from '@/lib/standard-filters'
 import type { StoreOpt } from '@/lib/market-store-cascade'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import ScreenLink from '@/components/ScreenLink'
 
 // Management one-screen cash reconciliation (owner directive 2026-09-02, verbatim): "for the
 // management it should show what has been received as per the system in both cash pick up, epay
@@ -164,6 +165,10 @@ export default function CashReconManagementPage() {
             </label>
             {data?.billpay_source && data.billpay_source !== 'none' && (
               <span style={{ fontSize: 12, color: 'var(--text3)' }}>POS bill-pay source: {data.billpay_source}</span>
+            )}
+            {/* the TENDER BASIS the POS cash / card columns read (owner 2026-09-21): one per-company setting, stated with the way back */}
+            {data?.tender_basis && (
+              <span style={{ fontSize: 12, color: 'var(--text3)' }}>Tender basis: <b>{data.tender_basis.label}</b> ({data.tender_basis.source}) — <ScreenLink to="onboarding_intake">set at intake</ScreenLink></span>
             )}
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
               {rows.length > 0 && <><ExportButtons payload={exportPayload} compact /><SendReportButton exportPayload={exportPayload} compact /></>}

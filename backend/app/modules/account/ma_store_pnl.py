@@ -34,7 +34,7 @@ CONFIG, NEVER CODE (RULE TWO — mig 314 columns on commcalc.commission_org_conf
                                      raw_ma_commission.spiff_m1..m6 at the ACTIVATION month) or
                                      'daily_tx' (cash basis: book the raw_ma_daily_tx month-spiff
                                      rows in the month PAID, M1..M12+ via the shared
-                                     commission_ledger.parse_payment_month regex, and STOP booking
+                                     commission_ledger.month_leg_of resolver, and STOP booking
                                      the sheet's spiff columns so the same dollar can never book at
                                      both the activation month and the cash month).
   pl_ma_spiff_order_types   jsonb  — which daily-tx order_type families are month spiffs
@@ -56,7 +56,7 @@ comm-sheet components are the audited `_MA_COMPONENTS`. A retail_cost books AT M
 (precedence residual → MDF → month-spiff); merchant_discount is separate money and always books.
 """
 from app.modules.commcalc.calculator import safe_float
-from app.modules.commcalc.commission_ledger import parse_payment_month
+from app.modules.commcalc.commission_ledger import month_leg_of
 from app.modules.account import residual_subs as _rs
 
 # ── comm-sheet component → P&L head (moved verbatim from coa.build_inputs' inline map so the pure
@@ -89,6 +89,17 @@ REBATE_ROUTES = {"contra_cogs": ("device_rebate", -1), "income": ("rebate_income
 # to selling price + device rebate - device cost"). See the DEVICE MARGIN section at the foot of
 # this module for the block, its columns and the gross-profit identity.
 DEVICE_MARGIN_ROUTES = ("off", "margin_block")
+# ── mig 1013 (owner 2026-09-21: "p&l is not showing the commission received, it shows in the
+# commission ledger but not populating the p&l - check platform wide not bandaid"). WHICH SOURCE books
+# the P&L's commission lines, per org — the vocabulary lives HERE beside the other P&L source-of-truth
+# switches; the resolution lives in account/ledger_pnl.resolve_source (the ONE resolver):
+#   'feeds'             (house default) today's bookings from the feed tables — byte-identical;
+#   'ledger'            book from commcalc.commission_ledger by bucket -> commission_bucket.pl_line_key,
+#                       suppressing the commission-FEED bookings for the same lines (never both);
+#   'ledger_else_feeds' per period: the ledger when it holds lines for the period, else the feeds.
+COMMISSION_SOURCE_FEEDS, COMMISSION_SOURCE_LEDGER, COMMISSION_SOURCE_LEDGER_ELSE_FEEDS = (
+    "feeds", "ledger", "ledger_else_feeds")
+COMMISSION_SOURCES = (COMMISSION_SOURCE_FEEDS, COMMISSION_SOURCE_LEDGER, COMMISSION_SOURCE_LEDGER_ELSE_FEEDS)
 
 
 def rebate_route(cfg):
@@ -119,6 +130,7 @@ def default_config():
         "line_labels": {},
         "rebate_presentation": "contra_cogs",
         "device_margin_presentation": "off",
+        "commission_source": COMMISSION_SOURCE_FEEDS,
     }
 
 
@@ -126,6 +138,7 @@ _CFG_COLS_314 = ("pl_ma_store_attribution,pl_ma_month_spiff_source,"
                  "pl_ma_spiff_order_types,pl_mdf_product_tokens,pl_line_labels")
 _CFG_COLS_934 = _CFG_COLS_314 + ",pl_rebate_presentation"
 _CFG_COLS_996 = _CFG_COLS_934 + ",pl_device_margin_presentation"
+_CFG_COLS_1013 = _CFG_COLS_996 + ",pl_commission_source"
 
 
 def load_config(client, org_id):
@@ -136,11 +149,11 @@ def load_config(client, org_id):
     try:
         # Column-set fallback, NEWEST first: selecting a column a live DB doesn't have yet is a
         # PostgREST error for the WHOLE select, and falling all the way back to defaults would
-        # silently drop the mig-314 seeds an org already runs on. So: mig-996 column set, then the
-        # mig-934 set, then the mig-314 set, then defaults — each older set keeps every value it
-        # does carry.
+        # silently drop the mig-314 seeds an org already runs on. So: mig-1013 column set, then the
+        # mig-996 set, then the mig-934 set, then the mig-314 set, then defaults — each older set
+        # keeps every value it does carry.
         rows = []
-        for _cols in (_CFG_COLS_996, _CFG_COLS_934, _CFG_COLS_314):
+        for _cols in (_CFG_COLS_1013, _CFG_COLS_996, _CFG_COLS_934, _CFG_COLS_314):
             try:
                 rows = (client.schema("commcalc").table("commission_org_config")
                         .select(_cols).eq("org_id", org_id).limit(1).execute().data) or []
@@ -171,6 +184,11 @@ def load_config(client, org_id):
             dmp = str(r.get("pl_device_margin_presentation") or "").strip().lower()
             if dmp in DEVICE_MARGIN_ROUTES:
                 cfg["device_margin_presentation"] = dmp
+            # mig 1013 — an unknown value keeps the house default ('feeds'): a typo can never move
+            # a P&L line off the feed tables silently.
+            cs = str(r.get("pl_commission_source") or "").strip().lower()
+            if cs in COMMISSION_SOURCES:
+                cfg["commission_source"] = cs
     except Exception:
         pass
     return cfg
@@ -318,7 +336,7 @@ def ma_tx_bookings(rows, pnl_cfg=None, cfg=None):
              stores" reads as itself in the drill-down);
           3. MONTH SPIFF (only when month_spiff_source='daily_tx') — order_type ∈
              cfg['spiff_order_types'] (case-insensitive) → `carrier_comm`, detail 'M<n>' via THE
-             shared commission_ledger.parse_payment_month regex ('TBV MONTH 4', 'M1 Proration',
+             shared commission_ledger.month_leg_of resolver ('TBV MONTH 4', 'M1 Proration',
              'SPF Month 1' all parse; no month token → 'Spiff (other)'). M1..M12+ come from the
              data, never from a hardcoded count."""
     pnl_cfg = pnl_cfg if pnl_cfg is not None else _rs.default_ma_pnl_config()
@@ -341,7 +359,10 @@ def ma_tx_bookings(rows, pnl_cfg=None, cfg=None):
         elif mdf_tokens and any(t in prod.lower() for t in mdf_tokens):
             out.append((MDF_LINE, acct, -safe_float(r.get("retail_cost")), prod.strip() or None))
         elif spiff_types and str(r.get("order_type") or "").strip().lower() in spiff_types:
-            n = parse_payment_month(prod)
+            # THE leg question, asked of the one home — not the month-token parser. A carrier
+            # states the first month in two forms and only one carries a token; asking for the
+            # token alone is what read August's M1 as $2,300.40 against a real $6,049.96.
+            n = month_leg_of(prod)
             detail = ("M%d" % n) if n else _SPIFF_OTHER_DETAIL
             out.append(("carrier_comm", acct, -safe_float(r.get("retail_cost")), detail))
     return out
@@ -1023,7 +1044,7 @@ def ma_received_month_ladder(rows, pnl_cfg=None, cfg=None, store_index=None):
     month-of-life and by store.
 
     Runs `ma_tx_bookings` — the same classifier, the same precedence, the same shared
-    `commission_ledger.parse_payment_month` — with `month_spiff_source` forced to 'daily_tx' so the
+    `commission_ledger.month_leg_of` — with `month_spiff_source` forced to 'daily_tx' so the
     ladder EXISTS even for an org that books the sheet basis. Forcing it here can never move money:
     this function returns a read-out and books nothing. M1..M12+ come from the data, so this is the
     only one of the two bases that can reach M7 and beyond."""

@@ -323,3 +323,64 @@ are already there; nothing is re-uploaded.
 **Compatibility.** The house defaults ARE the retired classifiers (contract type only, the same token lists): every existing
 tenant's classification and pay are byte-identical (`backend/harness_line_class.py` replays the retired code over every
 spelling in the seeds). Index §30.12 has the measured numbers and the file list.
+
+**The effective rule IS what the person confirmed (2026-09-21 addendum).** The first tenant save put the bare word
+"activation" — inside every category path of the export — under new activation, and every invoice counted as one: the silent
+zero's twin. Three rules close it, each for every caller:
+
+- **The guard runs over what is SAVED.** The save resolves the rules that would be in force exactly as the loader does and
+  measures every word over the rows in hand (the landed rows, or the rows the kept file would land); a word naming nearly every
+  line (≥ 80%) is REFUSED — nothing written, the word named with its class and share — unless the person ticks *keep this word
+  anyway*, an attestation by name recorded in the same config. What is already saved is re-validated the same way on every
+  open, on the commit and on the Executive MTD page: a refused rule blocks verification, the Stage-4 row reads *rule refused —
+  "…" names 95% of the lines*, never a split, and the page opens in the refusal state with the corrected proposal.
+- **No leak.** The platform's built-in words are contract-type words; they fill an unmapped type only when the column read is
+  the contract type. Once the person declares other columns, an unmapped type has NO words — the step shows it empty and says so.
+- **The seed is the proposal.** The editable words are seeded from the engine's proposal only — the person's own declared words
+  minus any refused, plus this file's hits; the hint vocabulary is the engine's input and never the person's starting text; the
+  bare words "activation" / "port" are not hints at all.
+
+The metric tick's failure was the writer, not the step: mig 962 replaced the unique constraint the Executive-MTD definitions
+writer upserted against, so every tenant write failed as "run migration 204"; the writer now names the index. Everything is
+proven DB-free: `harness_line_class.py` §G, `harness_onboarding_intake_d.py` §H (the owner's state, verbatim), the lock's (f)
+controls and `frontend/prove_line_class_step.mjs` (the real step logic over the engine's own block).
+
+## 11. The tender types of an invoice-level sales export are DECLARED at intake, classed through ONE tender vocabulary, and become the cash-collected basis by config (owner 2026-09-21)
+
+Owner: *"sales by invoice report also has the tender types on the report, need to capture that as well"* — *"tender types is in
+columns"* — *"nothing on cash collected either"*. Measured on the first tenant whose POS exports a SALES-BY-INVOICE report: one
+row per invoice, twelve amount columns — one per tender type (the card brands, their non-integrated twins, cash, a debit PIN
+column, a vendor rebate applied as payment) — and two tax columns. The file had been filed under the by-product card; nothing
+of its tenders was captured anywhere, and Cash Collected read nothing for a tenant with no X-report.
+
+**The rule.** An invoice-level export is its own report kind (`sales_by_invoice`, index §30.13): the invoice HEADER lands one row
+per invoice in its own table; the TENDER SPLIT lands one row per (invoice, declared column) with an amount, carrying the column's
+canonical tender class. Which columns are tenders is never fixed in code: the intake asks — step 2.5b *"Which columns are tender
+types, and what kind of payment is each?"* — proposing a role for every money column that is not an invoice field from the words
+in its header, the Σ over the file, and whether the register keyed it by hand (a "non-integrated" twin: the same kind of payment,
+flagged). The person confirms; the decisions ride the auto-saved draft; the commit remembers them as the org's own raw-label →
+tender rules (the mig-111 `closing_tender_map`, one more report leg — `invoice`), so next month's file is pre-classified.
+
+**One tender vocabulary.** The classes a column may be are `closing.router.TENDER_VOCAB` — the closing recon's seven-tender axis
+plus the finer classes an invoice split names (debit, coupon, vendor rebate), each folding to the axis class the closing sheet
+declares it as. `CANON_TENDERS` is DERIVED from it; the header → class ladder is `tender_class`; `_canon_tender` is that ladder
+folded to the axis — byte-identical for every label it placed before. The intake's step spells no tender word: its classifiers
+arrive injected from that home. A second list fails the build (`backend/harness_tender_vocab_lock.py`).
+
+**The tie-out.** Step 2.5 ties the file on Σ net sales (or the sales column the person picks); step 2.5b ties Σ of the declared
+tender columns against Σ invoice total, per invoice, in words — a difference is refused until attested with a reason, like the
+file's own total. Stage 4 shows the tender split per store and day BESIDE the register's X-report (through the closing module's own
+readers, never a second derivation) with the difference where an X-report exists, and Σ tax as a tie-out (the Tax Collected
+aggregator does not read invoice-level tax yet — proposed, not built).
+
+**The cash-collected basis is CONFIG.** What Cash Collected, the cash / card recon and the deposit recon read as the tender split
+per store-day is one per-company setting (`storeops.tenants.closing_tender_basis`): the X-report (the house default — byte-identical
+for every existing tenant), the invoice tenders, or the X-report when one exists for the store-day else the invoice tenders. Step
+2.5b asks *"Do you also upload a daily cash register / X-report? If not, the invoice tenders will be your cash-collected basis"* and
+saves the answer through the one writer; ONE resolver in closing (`_tender_split_by_store`, which `_xreport_tenders_by_store` now
+is) dereferences it for every consumer, and every closing page says which basis it read, with the link back to the upload.
+
+**A mis-filed line is retired, never edited.** A report added under the wrong card is retired from the intake with a reason and a
+name (`POST /onboarding/intake/retire`): it stays on the record, leaves the verify table, the runbook and the sign-off, and its kept
+file is re-read under the right kind without a re-drop. Removing what it landed is a separate, COUNTED confirmation — the owner
+approves a number, never "whatever is there" — recorded on the row and in the upload trace.
