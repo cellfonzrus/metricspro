@@ -12,30 +12,25 @@
 // the backend's /onboarding/intake/line-class; the landed rows are re-counted and the export is verified
 // only when a rule classifies ≥1 activation-type line — or the person attests the file has none.
 //
+// THE SECOND CLASS (2026-09-21, "the effective rule is not what the person confirmed"): the editable
+// words are seeded from the engine's PROPOSAL only (line-class-logic.seedFromBlock — the hint lists never
+// reach this file); a word that names nearly every line is REFUSED by the save (400, nothing written,
+// the words named with their share) unless the person ticks "keep this word anyway" — an attestation
+// by name; and a rule already saved that is too broad is shown REFUSED here on open (the block's
+// `refused`), so "88 new activation" from a department word never reads as a split.
+//
 // This component classifies nothing and stores nothing of its own. No carrier, POS vendor or tenant
 // is named here (RULE TWO).
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api } from '@/lib/client'
 import { BASE, card, note, inp, btn, primary, ghost, mono, num } from './intake-shared'
+import { seedFromBlock, buildPutBody, refusalOf, attestKey, type LineClassBlock, type ClassKey, type Counts, type Refusal } from './line-class-logic'
+export type { LineClassBlock } from './line-class-logic'
 
-type ClassKey = 'activation' | 'upgrade' | 'byod' | 'port' | 'hardware_only'
-type Counts = { scanned: number; skipped: number; unclassified_lines: number; activation_type_lines: number; activation_type_transactions: number
-  fields: string[]; source: string; classes: Record<string, { lines: number; transactions: number; label: string }> }
-type Candidate = { field: string; token: string; lines: number; ratio: number; samples: string[] }
-type MetricBucket = { bucket: string; matched: number; source: string; applicable: boolean; rules: Record<string, string[]>
-  candidates: Candidate[]; proposal: Record<string, string[]> | null; preview: number | null }
-export type LineClassBlock = {
-  step: string; classes: { key: ClassKey; label: string }[]; candidate_fields: string[]
-  rules: { fields: string[]; tokens: Record<ClassKey, string[]>; exact: Record<string, string>; source: string; declared: Record<string, boolean> }
-  current: Counts; gate_open: boolean; gate_note: string | null
-  suggest: { scanned: number; distinct: Record<string, number>; per_class: Record<ClassKey, Candidate[]>
-    too_broad: (Candidate & { class: string })[]; proposal: { fields: string[]; tokens: Record<ClassKey, string[]> }; preview: Counts }
-  metrics: { scanned: number; buckets: Record<string, MetricBucket>; error?: string }
-  error?: string
-}
 type Get = { instance_key: string; landed: boolean; rows: number; block: LineClassBlock | null; recorded?: Counts | null; status?: string; blocking_reason?: string | null; note?: string }
 type Put = { ok: boolean; written: { activation_rules: boolean; metric_buckets: string[] }; landed?: boolean; rows?: number; block?: LineClassBlock | null
+  guard?: { measured: boolean; basis: string | null; rows: number; reason?: string }
   verified?: boolean; activation_gate?: { blocked: boolean; open: boolean; attested: { reason: string; by: string | null } | null; reason: string }; state?: { saved: boolean; reason?: string } }
 
 const CLASS_HELP: Record<ClassKey, string> = {
@@ -46,8 +41,7 @@ const CLASS_HELP: Record<ClassKey, string> = {
   hardware_only: 'a device or prepaid unit sold with NO line of service — never counted as an activation',
 }
 const FIELD_LABEL: Record<string, string> = { contract_type: 'contract type', category: 'category (path)', department: 'department', product_desc: 'product name', trans_type: 'transaction type' }
-const csv = (a: string[] | undefined) => (a || []).join(', ')
-const parse = (s: string) => s.split(',').map(x => x.trim().toLowerCase()).filter(Boolean)
+const pct = (r: number) => `${Math.round(r * 100)}%`
 
 export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanalyze, onBack, onNext, saveUi, flash }: {
   instanceKey: string; who: string; analysis: LineClassBlock | null; canReanalyze: boolean; reanalyze: () => Promise<unknown>
@@ -57,9 +51,11 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
   const [loading, setLoading] = useState(!!instanceKey)   // the landed-slice read starts with the step
   const [busy, setBusy] = useState(false)
   const [res, setRes] = useState<Put | null>(null)
+  const [refusal, setRefusal] = useState<Refusal | null>(null)   // the save's refusal (nothing was written)
   const [fields, setFields] = useState<string[]>([])
   const [tokens, setTokens] = useState<Record<string, string>>({})
   const [useMetric, setUseMetric] = useState<Record<string, boolean>>({})
+  const [broadOk, setBroadOk] = useState<string[]>([])            // '<class>:<word>' the person keeps anyway
   const [noAct, setNoAct] = useState('')
   const [seeded, setSeeded] = useState('')
 
@@ -79,40 +75,33 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
   const block: LineClassBlock | null = (got?.landed && got.block) ? got.block : analysis
   const landed = !!got?.landed
 
-  // seed the editable rules once per block (the "adjust state when a prop changes" pattern): the proposal
-  // when nothing classifies, else the rules in force
-  const seedKey = block && !block.error ? `${instanceKey}|${landed}|${block.gate_open}` : ''
+  // seed the editable rules once per block (the "adjust state when a prop changes" pattern) — from the
+  // engine's PROPOSAL only (seedFromBlock): the person's declared words minus any refused, plus this
+  // file's own hits; never the hint lists, never the raw rules in force
+  const seedKey = block && !block.error ? `${instanceKey}|${landed}|${block.gate_open}|${(block.refused || []).length}` : ''
   if (block && !block.error && seeded !== seedKey) {
     setSeeded(seedKey)
-    const src = block.gate_open ? block.suggest.proposal : block.rules
-    setFields([...(src.fields || [])])
-    const t: Record<string, string> = {}
-    for (const c of block.classes) t[c.key] = csv(src.tokens?.[c.key])
-    setTokens(t)
-    const um: Record<string, boolean> = {}
-    for (const [b, m] of Object.entries(block.metrics?.buckets || {})) um[b] = !!m.proposal
-    setUseMetric(um)
+    const s = seedFromBlock(block)
+    setFields(s.fields)
+    setTokens(s.tokens)
+    setUseMetric(s.useMetric)
+    setBroadOk([])
     setRes(null)
+    setRefusal(null)
   }
 
-  const preview = useMemo(() => {
-    if (!block || block.error) return null
-    return block.gate_open ? block.suggest.preview : block.current
-  }, [block])
+  // the counts shown beside the words: the proposal's preview while nothing classifies or the rule in
+  // force is refused, else the counts in force (cheap — no memo)
+  const preview: Counts | null = !block || block.error ? null
+    : (block.gate_open || (block.refused || []).length > 0) ? block.suggest.preview : block.current
   const anyActivation = (c: Counts | null) => !!c && c.activation_type_lines > 0
 
   const save = useCallback(async () => {
     if (!block) return
     setBusy(true)
+    setRefusal(null)
     try {
-      const metric_rules: Record<string, Record<string, string[]>> = {}
-      for (const [b, m] of Object.entries(block.metrics?.buckets || {})) if (useMetric[b] && m.proposal) metric_rules[b] = m.proposal
-      const body = {
-        instance_key: instanceKey, by: who,
-        fields, tokens: Object.fromEntries(Object.entries(tokens).map(([k, v]) => [k, parse(v)])),
-        metric_rules: Object.keys(metric_rules).length ? metric_rules : null,
-        no_activations: noAct.trim() || null,
-      }
+      const body = buildPutBody({ instanceKey, who, fields, tokens, useMetric, buckets: block.metrics?.buckets, noAct, broadOk })
       const r: Put = await api(`${BASE}/line-class`, { method: 'PUT', body: JSON.stringify(body) })
       setRes(r)
       if (r.landed) await load()
@@ -120,9 +109,14 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
       flash(r.landed
         ? (r.verified ? 'Saved — the landed rows were re-counted and this export is verified.' : 'Saved — the landed rows were re-counted; still not verified (see below).')
         : 'Saved — the rules apply to every report from now on; re-read the file to see the counts.')
-    } catch (e: unknown) { flash((e as Error)?.message || 'Could not save') }
+    } catch (e: unknown) {
+      const err = e as Error & { detail?: unknown }
+      const ref = refusalOf(err?.detail, err?.message || 'Not saved')
+      if (ref) { setRefusal(ref); flash('Not saved — a word names nearly every line (see the refusal below).') }
+      else flash(err?.message || 'Could not save')
+    }
     finally { setBusy(false) }
-  }, [block, instanceKey, who, fields, tokens, useMetric, noAct, canReanalyze, reanalyze, load, flash])
+  }, [block, instanceKey, who, fields, tokens, useMetric, noAct, broadOk, canReanalyze, reanalyze, load, flash])
 
   if (!block) {
     return (
@@ -144,9 +138,12 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
   }
   const shown = res?.block || block
   const counts = res?.block ? res.block.current : preview
+  const inForceRefused = block.refused || []
   const gateOpen = res ? !!res.activation_gate?.open : block.gate_open
-  const blocked = res ? !!res.activation_gate?.blocked : (block.gate_open && !noAct.trim())
+  const blocked = res ? !!res.activation_gate?.blocked : ((block.gate_open && !noAct.trim()) || inForceRefused.length > 0)
   const basis = landed ? `${num(got?.rows || 0)} rows landed for this export, re-read from the table` : `${num(block.current.scanned)} rows that would land, from the parsed file`
+  const houseWordsApply = fields.length === 1 && fields[0] === 'contract_type'
+  const toggleBroad = (key: string, on: boolean) => setBroadOk(on ? [...broadOk.filter(k => k !== key), key] : broadOk.filter(k => k !== key))
 
   return (
     <div style={card}>
@@ -156,6 +153,15 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
         Below is what the platform found in <b>this file</b>: per type, the words that name it, the column they live in and how many lines each would count.
         Accept or edit, then save. Basis: {basis}.
       </p>
+      {inForceRefused.length > 0 && (
+        <div style={{ ...card, borderColor: '#ef4444', background: 'rgba(239,68,68,.07)', marginBottom: 10, fontSize: 13 }}>
+          <b>The activation rule saved for this company cannot be trusted</b> — {block.refusal_note}
+          <div style={{ marginTop: 4 }}>
+            {inForceRefused.map(b => <div key={attestKey(b.class, b.token)}>&quot;{b.token}&quot; under {b.class.replace(/_/g, ' ')}: {num(b.lines)} of {num(b.scanned || block.current.scanned)} lines ({pct(b.ratio)})</div>)}
+          </div>
+          <div style={{ ...note, fontSize: 12, marginTop: 4 }}>The words below are the platform&apos;s proposal with that word removed. Save to replace the saved rule; until then every report counts every invoice as that type and this export stays not verified.</div>
+        </div>
+      )}
       {block.gate_open && (
         <div style={{ ...card, borderColor: '#f59e0b', background: 'rgba(245,158,11,.08)', marginBottom: 10, fontSize: 13 }}>
           <b>With the rules in force, not one line could be told apart as an activation, upgrade, port-in or bring-your-own-device line</b>
@@ -182,12 +188,18 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
           {block.classes.map(c => {
             const cands = block.suggest.per_class?.[c.key] || []
             const cnt = counts?.classes?.[c.key]
+            const empty = !(tokens[c.key] || '').trim()
             return (
               <tr key={c.key} style={{ borderTop: '1px solid var(--border)', verticalAlign: 'top' }}>
                 <td style={{ padding: '6px 4px' }}><b>{c.label}</b><div style={{ ...note, fontSize: 11 }}>{CLASS_HELP[c.key]}</div></td>
                 <td style={{ padding: '6px 4px' }}>
                   <input value={tokens[c.key] ?? ''} onChange={e => setTokens({ ...tokens, [c.key]: e.target.value })} style={{ ...inp, width: '100%' }} placeholder="no words — this type is not counted" />
                   {!!cands.length && <div style={{ ...note, fontSize: 11, marginTop: 3 }}>found in this file: {cands.map(x => `"${x.token}" in ${FIELD_LABEL[x.field] || x.field} (${num(x.lines)} lines, e.g. ${x.samples[0]})`).join(' · ')}</div>}
+                  {empty && !cands.length && (
+                    <div style={{ ...note, fontSize: 11, marginTop: 3 }}>
+                      no words — this type is not counted{houseWordsApply ? '' : ' (the platform’s built-in contract-type words apply only when the column read is the contract type; type the words this file uses, if any)'}
+                    </div>
+                  )}
                 </td>
                 <td style={{ ...mono, padding: '6px 4px', textAlign: 'right' }}>{cnt ? <>{num(cnt.lines)} lines<br /><span style={note}>{num(cnt.transactions)} invoices</span></> : '—'}</td>
               </tr>
@@ -197,12 +209,30 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
       </table>
       {!!block.suggest.too_broad?.length && (
         <div style={{ ...note, fontSize: 12, marginBottom: 8 }}>
-          Not proposed (the word appears on nearly every line, so it names a department, not a type): {block.suggest.too_broad.map(b => `"${b.token}" in ${FIELD_LABEL[b.field] || b.field} for ${b.class} (${Math.round(b.ratio * 100)}% of lines)`).join(' · ')}
+          Not proposed (the word appears on nearly every line, so it names a department, not a type): {block.suggest.too_broad.map(b => `"${b.token}" in ${FIELD_LABEL[b.field] || b.field} for ${b.class} (${pct(b.ratio)} of lines)`).join(' · ')}
+        </div>
+      )}
+      {refusal && (
+        <div style={{ ...card, borderColor: '#ef4444', background: 'rgba(239,68,68,.07)', marginBottom: 10, fontSize: 13 }}>
+          <b>Not saved.</b> {refusal.message}
+          <div style={{ marginTop: 6 }}>
+            {refusal.refused.map(b => {
+              const key = attestKey(b.class, b.token)
+              return (
+                <label key={key} style={{ display: 'block', fontSize: 13 }}>
+                  <input type="checkbox" checked={broadOk.includes(key)} onChange={e => toggleBroad(key, e.target.checked)} style={{ marginRight: 5 }} />
+                  keep &quot;{b.token}&quot; under {b.class.replace(/_/g, ' ')} anyway — it names {num(b.lines)} of {num(b.scanned || refusal.rows || 0)} lines ({pct(b.ratio)}); recorded with your name
+                </label>
+              )
+            })}
+          </div>
+          <div style={{ ...note, fontSize: 12, marginTop: 4 }}>Measured over {refusal.basis === 'frame' ? 'the rows this file would land' : 'the landed rows'} ({num(refusal.rows || 0)}). Remove the word from the box above, or tick it to keep it, then save again.</div>
         </div>
       )}
       <div style={{ ...note, fontSize: 12, marginBottom: 12 }}>
         Counting rule: an invoice counts once per type however many of its lines carry the word; an invoice with both a new-activation line and an upgrade line counts in both.
         The same rules drive the Sales Report, Executive MTD, Daily Targets and every commission calculation — this is the one place they are set.
+        A word that names nearly every line is refused at save (it is a department, not a type).
       </div>
 
       <div style={{ fontSize: 13, fontWeight: 700, margin: '8px 0 4px' }}>Executive MTD line columns — phones, bill payments, protection, accessories, activation fee</div>
@@ -239,6 +269,7 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
       {res && (
         <div style={{ ...card, borderColor: res.verified || !res.landed ? '#16a34a' : '#ef4444', background: res.verified || !res.landed ? 'rgba(22,163,74,.06)' : 'rgba(239,68,68,.06)', marginBottom: 10, fontSize: 13 }}>
           <b>Saved.</b> Activation rules {res.written.activation_rules ? 'written' : 'unchanged'} · metric columns written: {res.written.metric_buckets.length ? res.written.metric_buckets.join(', ') : 'none'}
+          {res.guard && <> · words checked over {res.guard.measured ? `${num(res.guard.rows)} ${res.guard.basis === 'frame' ? 'rows that would land' : 'landed rows'}` : `nothing (${res.guard.reason || 'no rows'})`}</>}
           {res.landed && res.block && <> · re-counted over {num(res.rows || 0)} landed rows: {res.block.current.activation_type_transactions} activation-type invoices
             ({block.classes.map(c => `${res.block!.current.classes[c.key]?.transactions ?? 0} ${c.label.toLowerCase()}`).join(', ')})</>}
           {res.landed && <div style={{ marginTop: 4, fontWeight: 700, color: res.verified ? '#16a34a' : '#ef4444' }}>{res.verified ? 'This export is verified.' : `Not verified — ${res.activation_gate?.reason}`}</div>}
@@ -252,7 +283,7 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
         <button style={blocked ? btn : primary} onClick={onNext}>{blocked ? 'Continue anyway →' : 'Continue →'}</button>
         {saveUi}
       </div>
-      {blocked && <div style={{ ...note, fontSize: 12, marginTop: 6 }}>Continuing without a rule or an attestation lands the rows but leaves this export <b>not verified</b> in Stage 4 until one is recorded here.</div>}
+      {blocked && <div style={{ ...note, fontSize: 12, marginTop: 6 }}>Continuing {inForceRefused.length ? 'with a refused rule' : 'without a rule or an attestation'} lands the rows but leaves this export <b>not verified</b> in Stage 4 until it is fixed here.</div>}
     </div>
   )
 }

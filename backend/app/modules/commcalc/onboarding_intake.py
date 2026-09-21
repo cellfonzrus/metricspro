@@ -1435,16 +1435,24 @@ def activation_gate(counts, attestation=None, previous=None, by=None):
         return {"blocked": False, "open": False, "checked": False, "attested": rec,
                 "reason": (c or {}).get("error") or "activation types not checked", "step": STEP_LINE_CLASS}
     is_open = int(c.get("scanned") or 0) > 0 and int(c.get("activation_type_lines") or 0) == 0
-    blocked = is_open and not rec
+    # THE TWIN of the silent zero (2026-09-21): a saved word that names nearly every line makes every
+    # invoice an activation. `refused` rides the counts (line_class.count_classes); no "no activations"
+    # attestation closes it — the fix is the word itself, at the step (or an attestation OF THE WORD there)
+    refused = [b for b in (c.get("refused") or []) if isinstance(b, dict)]
+    blocked = (is_open and not rec) or bool(refused)
     reason = ""
-    if blocked:
+    if refused:
+        reason = ("the activation rule in force cannot be trusted: "
+                  + ", ".join(f"\"{b.get('token')}\" ({int(round(float(b.get('ratio') or 0) * 100))}% of the lines)" for b in refused)
+                  + f" names nearly every line, so every invoice counts as that type — fix the words under step {STEP_LINE_CLASS}")
+    elif blocked:
         reason = (f"{int(c.get('scanned') or 0):,} line(s) landed and not one could be told apart as an activation, "
                   f"upgrade, port-in or bring-your-own-device line (columns read: {', '.join(c.get('fields') or [])}) — "
                   f"map which words mean which under step {STEP_LINE_CLASS}, or attest that this file truly has no activations.")
     elif is_open and rec:
         reason = f"no activation-type line; attested by {rec.get('by') or '?'}: {rec.get('reason')}"
     return {"blocked": blocked, "open": is_open, "checked": True, "attested": rec, "reason": reason,
-            "step": STEP_LINE_CLASS,
+            "refused": refused, "step": STEP_LINE_CLASS,
             "activation_type_lines": int(c.get("activation_type_lines") or 0),
             "activation_type_transactions": int(c.get("activation_type_transactions") or 0),
             "scanned": int(c.get("scanned") or 0)}
@@ -1461,6 +1469,12 @@ def activation_note(vn):
         return None
     g = vn.get("activation_gate") or {}
     cl = ac.get("classes") or {}
+    refused = [b for b in (ac.get("refused") or []) if isinstance(b, dict)]
+    if refused:
+        # never read as clean: "activations: 88 new activation" from a word inside every line is the
+        # silent zero's twin — the row says the rule is refused and names the word
+        return ("rule refused — " + ", ".join(f"\"{b.get('token')}\" names {int(round(float(b.get('ratio') or 0) * 100))}% of {int(ac.get('scanned') or 0):,} lines"
+                                              for b in refused) + f" — fix the words at step {STEP_LINE_CLASS}")
     parts = [f"{cl[k]['transactions']} {cl[k]['label'].lower()}" for k in ("activation", "port", "byod", "upgrade") if k in cl and cl[k].get("transactions")]
     if parts:
         return "activations: " + ", ".join(parts) + f" (of {int(ac.get('scanned') or 0):,} lines)"
