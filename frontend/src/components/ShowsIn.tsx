@@ -40,6 +40,14 @@ export default function ShowsIn({ info, loaded = true, lead = 'This upload will 
       {shown.map(c => (
         <span key={c.screen} style={pill} title={[c.why || '', c.needs?.length ? `needs ${c.needs.join(' / ')}` : ''].filter(Boolean).join(' — ')}>
           {isScreenKey(c.screen) ? <ScreenLink to={c.screen}>{c.label}</ScreenLink> : c.label}
+          {/* the P&L LINES a commission statement books to (mig 1013) — from the backend's `lines`, derived
+              from the bucket registry; `active` false = the ledger is not the P&L's commission source yet */}
+          {c.lines && c.lines.length > 0 && (
+            <span data-pl-lines={c.lines.map(l => l.key).join(',')} title={c.lines.map(l => `${l.label}: ${(l.buckets || []).join(', ')}`).join(' · ')}>
+              {' → '}{c.lines.map(l => l.label).join(', ')}
+              {c.active === false && <span style={{ color: '#b45309' }}> (not the P&L source yet)</span>}
+            </span>
+          )}
           {c.gate && <span title="this reader gates the landing: a file blank on every field it needs is refused" style={{ marginLeft: 3, color: 'var(--text3)' }}>*</span>}
         </span>
       ))}

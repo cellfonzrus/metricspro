@@ -137,6 +137,12 @@ CONSUMERS = {
     ],
     "commission_ledger": [
         {"screen": "commission_ledger", "label": "Commission Ledger", "needs": ["raw_amount"], "gate": False, "why": "the five buckets and the tie-out"},
+        # mig 1013 (owner 2026-09-21): the ledger books the P&L when the org's P&L commission source is the
+        # ledger — each bucket to the line its registry row names. `shows_in(..., pl_link=…)` decorates this
+        # entry with those lines (ledger_pnl.pl_link), so the statement says WHICH P&L lines it will show on.
+        {"screen": "pl_statement", "label": "P&L Statement", "needs": ["payout_total"], "gate": False,
+         "why": "each bucket's total books to the P&L line its bucket is linked to (Category → Bucket Map) "
+                "when the P&L commission source is the ledger"},
         {"screen": "carrier_vs_pay", "label": "Carrier Earned vs Employee Paid", "needs": ["raw_amount", "rep_user"], "gate": False,
          "why": "what the carrier paid per rep beside what the rep was paid"},
         {"screen": "whatif", "label": "What-If Analysis", "needs": ["raw_amount"], "gate": False, "why": "carrier income headings"},
@@ -294,8 +300,25 @@ def apply_kind_filter(q, table, kind, table_map):
 
 
 # ── 3. the consumer gate ─────────────────────────────────────────────────────────────────────────
-def consumers_for_table(table):
-    return list(CONSUMERS.get(table) or [])
+PL_LINK_TABLE = "commission_ledger"      # the table whose P&L consumer carries the registry's lines
+PL_LINK_SCREEN = "pl_statement"
+
+
+def consumers_for_table(table, pl_link=None):
+    """The consumers of `table` as payload entries. `pl_link` (ledger_pnl.pl_link: the P&L lines the
+    org's buckets are linked to, the configured source, whether it is active) decorates the ledger's
+    P&L consumer — ONE derivation, rendered by every surface through ShowsIn."""
+    out = []
+    for c in CONSUMERS.get(table) or []:
+        e = {"screen": c["screen"], "label": c["label"], "needs": list(c.get("needs") or []),
+             "gate": bool(c.get("gate")), "why": c.get("why")}
+        if pl_link and table == PL_LINK_TABLE and c["screen"] == PL_LINK_SCREEN:
+            e["lines"] = [dict(x) for x in (pl_link.get("lines") or [])]
+            e["source"] = pl_link.get("source")
+            e["active"] = bool(pl_link.get("active"))
+            e["source_label"] = pl_link.get("source_label")
+        out.append(e)
+    return out
 
 
 def blank_consumer_fields(rows, table):
@@ -354,14 +377,15 @@ def where_to_upload(row):
     return {"screen": "upload_files", "label": "Upload Files", "upload_types": []}
 
 
-def shows_in(row, table_map, route_tables=None, landing_tables=None):
+def shows_in(row, table_map, route_tables=None, landing_tables=None, pl_link=None):
     """"This upload will show in: …" for one registry row — the table it lands in and that table's
-    consumers (screen keys + labels + the fields each needs). Recorded-only kinds say so."""
+    consumers (screen keys + labels + the fields each needs). Recorded-only kinds say so. `pl_link`
+    (ledger_pnl.pl_link) names the P&L lines a commission statement will show on — the ledger's P&L
+    consumer carries them (consumers_for_table)."""
     t = landing_table_for(row, table_map, route_tables, landing_tables)
     if not t:
         return {"table": None, "consumers": [], "note": "recorded as received — no table reads it yet (an owner decision names one)"}
-    cons = [{"screen": c["screen"], "label": c["label"], "needs": list(c.get("needs") or []), "gate": bool(c.get("gate")), "why": c.get("why")}
-            for c in CONSUMERS.get(t) or []]
+    cons = consumers_for_table(t, pl_link)
     return {"table": t, "consumers": cons,
             "note": None if cons else f"lands in commcalc.{t}; no report reads it yet"}
 

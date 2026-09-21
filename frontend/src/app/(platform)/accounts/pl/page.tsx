@@ -11,6 +11,7 @@ import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-fi
 import type { EntityOption } from '@/components/EntityPicker'
 import type { ExportSheet } from '@/lib/export'
 import { StalenessBanner } from '../_components/StalenessBanner'
+import ScreenLink from '@/components/ScreenLink'
 import { statementInfoSheet, statementSubtitle, type StatementMeta } from '../_components/statementExport'
 
 const SECTION_TITLE: Record<string, string> = { revenue: 'Revenue', cogs: 'Cost of Goods Sold', opex: 'Operating Expenses', other: 'Other' }
@@ -214,6 +215,23 @@ function Section({ s, open, setOpen }: { s: any; open: Record<string, boolean>; 
                   <div style={{ marginTop: 3, fontSize: 11.5, lineHeight: 1.45, color: 'var(--text3)', maxWidth: 620 }}>
                     <span style={{ marginRight: 5, fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 999, whiteSpace: 'nowrap' }}>not measured</span>
                     {l.note}
+                  </div>
+                )}
+                {/* WHICH SOURCE booked a commission line (mig 1013) — the feed tables or the Commission
+                    Ledger — with the OTHER source's figure and the difference in the backend's own words,
+                    and the way back to the ledger. Only rendered when the backend attached it. */}
+                {l.commission_source && (
+                  <div style={{ marginTop: 3, fontSize: 11.5, lineHeight: 1.45, color: 'var(--text3)', maxWidth: 620 }} data-commission-source={l.commission_source.source}>
+                    <span style={{ marginRight: 5, fontSize: 10, color: l.commission_source.source === 'ledger' ? '#3730a3' : '#065f46', background: l.commission_source.source === 'ledger' ? '#e0e7ff' : '#d1fae5', padding: '1px 5px', borderRadius: 999, whiteSpace: 'nowrap' }}>
+                      {l.commission_source.source === 'ledger' ? 'from the Commission Ledger' : 'from the feed tables'}
+                    </span>
+                    {l.commission_source.words}{' '}
+                    <ScreenLink to="commission_ledger">Open the Commission Ledger</ScreenLink>
+                    {(l.commission_source.unbooked || []).length > 0 && (
+                      <div style={{ marginTop: 2, color: '#b45309' }}>
+                        Not on the P&L: {l.commission_source.unbooked.map((u: any) => `${u.what} ${fmt(u.amount)} — ${u.reason}`).join('; ')}
+                      </div>
+                    )}
                   </div>
                 )}
               </td>

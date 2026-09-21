@@ -1607,7 +1607,7 @@ def company_lamp(company):
     return STATUS_NOT_STARTED
 
 
-def rail(stage_rows, current_instance=None, company=None, run=None):
+def rail(stage_rows, current_instance=None, company=None, run=None, pl_link=None):
     """The left rail as a projection of the persisted stage rows (design §0.2): every instance of
     stages 2 and 3 with its step and lamp, the stage lamps, the Stage-4 verify table and the Stage-5
     runbook. Reopening lands on the first non-verified step of the current instance."""
@@ -1660,7 +1660,7 @@ def rail(stage_rows, current_instance=None, company=None, run=None):
             "instances": instances, "retired": retired,
             "resume": {"instance_key": cur["instance_key"], "step": cur["step"], "stage": cur["stage"]} if cur else None,
             "verify_table": verify_table(instances),
-            "runbook": runbook(instances),
+            "runbook": runbook(instances, pl_link),
             "sign_off": {"signed": signed, "by": (run or {}).get("signed_off_by"),
                          "at": (run or {}).get("signed_off_at"),
                          "on_behalf": bool((run or {}).get("signed_off_on_behalf")),
@@ -1729,7 +1729,7 @@ def lands_in(kind, payload=None):
     return SOURCE_KIND_TARGET.get(_s(kind).lower()) or "(no destination yet — recorded only)"
 
 
-def runbook(instances):
+def runbook(instances, pl_link=None):
     """Stage 5 — what to upload each month, generated from the instances that were configured, plus
     the two links the owner asked for (design §2 Stage 5)."""
     monthly = []
@@ -1749,9 +1749,10 @@ def runbook(instances):
     # Commission Ledger the ledger's. Each monthly line also carries "shows in" from the same map.
     from app.modules.commcalc import landing_identity as _li
     links = [{"label": "Sales report", "screen": "sales_report"}, {"label": "Commissions", "screen": "commission_ledger"}]
+    # `pl_link` (ledger_pnl.pl_link, loaded once by the router) names the P&L lines the ledger books —
+    # the commission statement's row says "P&L Statement → Carrier commissions & incentives, …".
     for m in monthly:
-        m["shows_in"] = [{"screen": c["screen"], "label": c["label"], "needs": list(c.get("needs") or []), "gate": bool(c.get("gate")), "why": c.get("why")}
-                         for c in _li.consumers_for_table(m["lands_in"])]
+        m["shows_in"] = _li.consumers_for_table(m["lands_in"], pl_link)
     # Stage C: the cross-check reports the intake feeds — listed beside the two links, never in them
     kinds = {i["kind"] for i in instances or []}
     reports = []
