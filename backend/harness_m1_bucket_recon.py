@@ -147,16 +147,39 @@ SALES = [
 ]
 SMAP = [{"store_address": "1200 Main St", "salesforce_id": "SF1", "market": "NY",
          "store_code": "S1", "is_active": True}]
-MA_INCOME = {"comm": TOTAL, "atu": 1_234.56,
-             "components": dict(SUMS), "component_list": list(_MA_COMPONENTS)}
+# CONTRACT CHANGED 2026-09-21 (owner bug report: "the m1 commision is different in both … the gross
+# profit shows company level commission"). `ma_income` is no longer a total the GP engine splits for
+# itself — it is the already-booked read-out from THE ONE HOME, `ma_store_pnl.gp_carrier_income`,
+# built from the very bookings `coa.build_inputs` books. That makes THIS section's point stronger,
+# not weaker: the margin block can no longer reach M1 by configuration, because it can no longer
+# reach the Commission column at all. `ma_m1_fields` still decides M1-vs-trailing for the money that
+# IS commission, and sections A/B above still prove the 124k -> 28k correction on the classifier
+# itself. Built on the SHEET basis, because that is the basis the sheet's spiff columns state.
+from app.modules.account import ma_store_pnl as MSP           # noqa: E402
+_MA_SHEET_ROW = dict(SUMS)                                    # raw feed signs (negative = to dealer)
+_MA_TX_ROWS = [{"account_id": "", "order_type": "", "product_name": "",
+                "retail_cost": 0.0, "merchant_discount": 1_234.56}]
+_MA_CFG = dict(MSP.default_config(), month_spiff_source=MSP.BASIS_EARNED)
+
+
+def ma_income_for(cfg):
+    return MSP.gp_carrier_income([dict(_MA_SHEET_ROW)], [dict(r) for r in _MA_TX_ROWS],
+                                 None, _MA_CFG, store_index={}, leg_cfg=cfg)
 
 
 def gp_with(cfg):
     return GP.calc_gp_report(
         sales=[dict(r) for r in SALES], pay_detail=[], mi_rows=[], rep_commissions=[], expenses=[],
         catalog=[], store_mapping=[dict(r) for r in SMAP], period="June 2026", comp_rows=[],
-        ma_income=dict(MA_INCOME, components=dict(SUMS)),
+        ma_income=ma_income_for(cfg),
         leg_classify=CL.LegClassifier(cfg))
+
+
+# What the Commission column NOW holds: the sheet's spiff legs plus fee margin, which
+# `commission_received_lines()` counts as commission. The margin block is gone from it entirely.
+SHEET_SPIFFS = round(-sum(SUMS[c] for c in SPIFFS), 2)                       # 39,670
+FEE_MARGIN = round(-SUMS["fees_margin"], 2)                                  # 2,150
+COMMISSION_NOW = round(SHEET_SPIFFS + FEE_MARGIN, 2)
 
 
 gp_old, gp_new = gp_with(OLD_CFG), gp_with(NEW_CFG)
@@ -171,11 +194,19 @@ _MONEY_KEYS = [k for k in t_new
 _moved = [k for k in _MONEY_KEYS if not eq2(t_old.get(k, 0), t_new.get(k, 0))]
 check("EVERY pre-existing GP money total is byte-identical (%d columns checked)" % len(_MONEY_KEYS),
       not _moved, _moved)
-check("...including Commission received itself", eq2(t_new["comm"], TOTAL), t_new["comm"])
+check("...including Commission received itself", eq2(t_new["comm"], COMMISSION_NOW), t_new["comm"])
+check("the Commission column no longer contains the margin block AT ALL (owner 2026-09-08/08-10)",
+      eq2(round(TOTAL - t_new["comm"], 2), round(MARGIN_BLOCK - FEE_MARGIN, 2)),
+      (TOTAL, t_new["comm"], MARGIN_BLOCK))
+check("...and the rebate is named as excluded, with the ruling that excluded it",
+      any(e["line"] in MSP.REBATE_LINES and e.get("reason")
+          for e in gp_new["commission_legs"]["headline"].get("excluded") or []),
+      gp_new["commission_legs"]["headline"].get("excluded"))
 check("...and Net Profit", eq2(t_old["net_profit"], t_new["net_profit"]))
-check("GP '1st Month Commission' tile falls 124,000 -> 28,000",
-      eq2(t_old["comm_m1"], 124_000.00) and eq2(t_new["comm_m1"], PORTAL_M1),
-      (t_old["comm_m1"], t_new["comm_m1"]))
+check("GP '1st Month Commission' tile lands on the portal's M1 ($28,000 = spiff_m1 alone)",
+      eq2(t_new["comm_m1"], PORTAL_M1), t_new["comm_m1"])
+check("...and the margin block can no longer beconfigure into M1, because it is not commission",
+      eq2(t_old["comm_m1"], PORTAL_M1), t_old["comm_m1"])
 check("GP 'M2-M12 Commission' tile is unchanged", eq2(t_old["comm_m2_12"], t_new["comm_m2_12"]))
 check("GP Unsplit absorbs the margin block, so the three still add to Commission",
       eq2(t_new["comm_m1"] + t_new["comm_m2_12"] + t_new["comm_unsplit"], t_new["comm"]),
@@ -186,10 +217,19 @@ _hl = gp_new["commission_legs"]["headline"]
 check("the leg card names the REAL source (VidaPay/MA, not 'ePay Payment Detail')",
       "VidaPay" in _hl["label"], _hl["label"])
 check("...and says the split is on the leg COLUMN", "column" in _hl["splits_on"].lower(), _hl["splits_on"])
-check("...and NAMES the six unsplit columns with a plain-English why",
-      sorted(_hl.get("unsplit_fields") or []) == sorted(MARGINS)
-      and "not commission legs" in (_hl.get("unsplit_why") or ""),
+# The margin block used to be what sat in `unsplit` and the card named those six columns. It is no
+# longer in the Commission column at all (owner 2026-09-08 / 2026-08-10, applied to this report on
+# 2026-09-21), so the card now names what genuinely IS unsplit — money whose source states no
+# month-of-life — and the margins are named in `excluded` instead, with the ruling that removed them.
+check("...and NAMES what is unsplit, with a plain-English why",
+      any("fee" in f.lower() or "no month" in f.lower()
+          for f in (_hl.get("unsplit_fields") or []))
+      and "month-of-life" in (_hl.get("unsplit_why") or ""),
       (_hl.get("unsplit_fields"), _hl.get("unsplit_why")))
+check("...and NAMES what LEFT the column, with the owner ruling that took it out",
+      {e["line"] for e in (_hl.get("excluded") or [])} >= {"device_rebate", "distributor_clearing"}
+      and all(e.get("reason") for e in (_hl.get("excluded") or [])),
+      _hl.get("excluded"))
 check("an ePay (house/Boost) org's leg card still says ePay Payment Detail",
       GP.calc_gp_report(sales=[dict(r) for r in SALES], pay_detail=[
           {"business_address": "1200 Main St", "amount": 90.0,
@@ -198,10 +238,15 @@ check("an ePay (house/Boost) org's leg card still says ePay Payment Detail",
           store_mapping=[dict(r) for r in SMAP], period="June 2026", comp_rows=[],
           leg_classify=CL.LegClassifier(NEW_CFG))["commission_legs"]["headline"]["label"]
       == "Commission received (ePay Payment Detail)")
-check("a caller that passes NO components still reports the money honestly as unsplit (never guessed)",
+check("a caller whose MA money states NO month anywhere reports it unsplit (never guessed)",
       eq2(GP.calc_gp_report(sales=[], pay_detail=[], mi_rows=[], rep_commissions=[], expenses=[],
                             catalog=[], store_mapping=[dict(r) for r in SMAP], period="June 2026",
-                            comp_rows=[], ma_income={"comm": TOTAL, "atu": 0.0},
+                            comp_rows=[],
+                            ma_income={"by_store": {"": {"comm": TOTAL, "mi": 0.0, "atu": 0.0,
+                                                         "mdf": 0.0, "unmapped": 0.0, "months": {},
+                                                         "m1": 0.0, "trailing": 0.0,
+                                                         "unsplit": TOTAL}},
+                                       "totals": {"comm": TOTAL}, "months": {}},
                             leg_classify=CL.LegClassifier(NEW_CFG))["totals"]["comm_unsplit"], TOTAL))
 
 
@@ -244,8 +289,15 @@ check("the recon tile that cross-checks the portal is defined as spiff_m1 alone"
 tile_value = round(-sum(SUMS[c] for c in tile["value_fields"].split(",")), 2)
 check("GP '1st Month' now EQUALS that tile (the two surfaces agreed on nothing before)",
       eq2(t_new["comm_m1"], tile_value), (t_new["comm_m1"], tile_value))
-check("...and the SHIPPED code disagreed with it by the whole margin block",
-      eq2(t_old["comm_m1"] - tile_value, MARGIN_BLOCK))
+# The 2026-08-05 defect was "the margin block is in M1"; `ma_m1_fields` was the configuration that
+# put it there. It cannot do that any more — the margins are not in the Commission column at all —
+# so what is asserted now is the STRONGER statement: even the shipped-and-wrong config lands on the
+# portal's M1, because the money it used to mis-file is no longer commission on any config.
+check("...and not even the shipped-and-wrong config can put the margin block back in M1",
+      eq2(t_old["comm_m1"], tile_value), (t_old["comm_m1"], tile_value))
+check("...while the classifier ITSELF still reproduces the old defect on the old config (A/B above)",
+      eq2(old["buckets"]["m1"] - tile_value, MARGIN_BLOCK),
+      (old["buckets"]["m1"], tile_value, MARGIN_BLOCK))
 check("the owner's settled definition is recorded in the module the tile lives in",
       "these are not margins but paid commission based on MRC"
       in " ".join((MAO.__doc__ or "").split()))

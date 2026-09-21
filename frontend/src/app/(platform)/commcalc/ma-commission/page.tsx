@@ -66,7 +66,10 @@ export default function MaCommissionPage() {
 
   // RULE FOUR export: tiles summary + the by-store / by-rep / spiff-by-month report tables.
   const storeCols: ExportColumn[] = [
-    { header: 'Store / account', field: 'store', role: 'store', get: (r: any) => r.name || r.account_id },
+    // The STORE, resolved by the mig-314 account->store index (owner bug report 2026-09-21: this
+    // page used to be able to show only a processor account id). An account the index cannot
+    // resolve falls back to the account name and then the id — never a guessed store.
+    { header: 'Store / account', field: 'store', role: 'store', get: (r: any) => r.store || r.name || r.account_id },
     { header: 'Account', field: 'account_id', get: (r: any) => r.account_id },
     { header: 'Activations', get: (r: any) => r.activations },
     { header: 'Rebates', money: true, get: (r: any) => r.rebates },
@@ -220,7 +223,7 @@ export default function MaCommissionPage() {
             <tbody>
               {byStoreRows.map((s: any) => (
                 <tr key={s.account_id} style={{ borderTop: '1px solid var(--border)' }}>
-                  <td style={{ ...td, fontWeight: 600 }}>{s.name || s.account_id}{s.name && <span style={{ fontSize: 11, color: 'var(--text3)' }}> · {s.account_id}</span>}</td>
+                  <td style={{ ...td, fontWeight: 600 }}>{s.store || s.name || s.account_id}{(s.store || s.name) && <span style={{ fontSize: 11, color: 'var(--text3)' }}> · {s.account_id}</span>}</td>
                   <td style={td}>{s.activations}</td>
                   <td style={td}>{fmt(s.rebates)}</td>
                   <td style={td}>{fmt(s.spiffs)}</td>

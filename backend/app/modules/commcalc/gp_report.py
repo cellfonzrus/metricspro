@@ -209,6 +209,7 @@ def calc_gp_report(
     resolve_store_code=None,
     config_classify: dict = None,
     ma_income: dict = None,
+    resolve_store_canonical=None,
     leg_classify=None,
     acc_basis: str = 'gp',
     commission_suppression_names: list = None,
@@ -227,12 +228,20 @@ def calc_gp_report(
     then the explicit gp_category_map department overrides, then box departments => device, blank => plan,
     else other. None (default, and every org with apply_to_gp false) = the legacy department-only
     classifier, byte-identical.
-    ma_income: {'comm': $, 'atu': $} of VidaPay/MA carrier income for ePay-less orgs (router computes it
-    only when raw_payment_detail is EMPTY for the period). Lands on ONE company-wide row — MA rows carry
-    no store address (same posture as the P&L's owner-approved MA fallback). None = no row (house).
-    May also carry 'components' ({raw_ma_commission column: raw summed value}) and 'component_list' (the
-    exact column list the router's own total was built from) so the commission-leg split of that income
-    is exact rather than re-derived.
+    ma_income: VidaPay/MA carrier income for ePay-less orgs, as produced by THE ONE HOME —
+    `account/ma_store_pnl.gp_carrier_income` — which reads the very bookings `coa.build_inputs` books
+    (owner bug report 2026-09-21: "the m1 commision is different in both … the gross profit shows
+    company level commission it shoudl show store level as it is paid on store level"). This engine
+    FILES those figures, it does not derive them: `by_store` is keyed by CANONICAL store address
+    (`ma_store_pnl.canonical_store_index`), `''` is the honest company-wide bucket for a processor
+    account no index knows, and `months` carries the booked basis's M1..M12+ ladder. Both bases ride
+    along labelled in `earned` / `received`, display-only. None = no MA income (house/Boost).
+    resolve_store_canonical: raw store string -> canonical store address (`coa.store_resolver`) — the
+    SAME canonicalization `ma_store_pnl.canonical_store_index` puts the MA side through, so the two
+    join on one spelling. A naive leading-street-number join does NOT work here and must never be
+    reintroduced: LuxeLink's MA fulfillment spells Hempstead "21880" where the sales feed spells it
+    "218-80", and matching on the first token sends that store's money to a phantom row (negative
+    control in harness_gp_pnl_commission_parity.py). None = match on the raw string.
     leg_classify (owner directive 2026-08-04): a commission_legs.LegClassifier that attributes RECEIVED
     commission money to the 1st-month leg vs the M2–M12 trailing legs. None = the pure code-default
     classifier. This is a DECOMPOSITION ONLY: it adds `*_m1` / `*_m2_12` / `*_unsplit` companions to
@@ -498,6 +507,29 @@ def calc_gp_report(
     _supp_by_key = {s['store_code']: s['expense']
                     for s in commission_suppressed['stores'] if s['suppressed']}
 
+    # ── MA/VidaPay carrier income, PER STORE (owner bug report 2026-09-21) ───────────────────────
+    # `ma_income` arrives already booked and already store-keyed by THE ONE HOME
+    # (`ma_store_pnl.gp_carrier_income` → `canonical_store_index`). This engine only files it onto
+    # the row it belongs to, so a dollar on the P&L and the same dollar here can never be two
+    # different dollars again. Keys are CANONICAL store addresses; `''` is the honest company-wide
+    # bucket for a processor account the index cannot resolve — it is never hidden and never guessed
+    # onto a store. Matching goes through the SAME canonicalization the MA side went through, NOT a
+    # leading-street-number join (which mis-joins "21880" against "218-80" and loses a store).
+    _ma_cells = {str(k): dict(v) for k, v in ((ma_income or {}).get('by_store') or {}).items()}
+    _ma_months = {str(k): dict((v or {}).get('months') or {})
+                  for k, v in ((ma_income or {}).get('by_store') or {}).items()}
+
+    def _ma_take(raw_store):
+        """Pop this store's MA cell (once), matched on the canonical spelling. Popping is what makes
+        the leftovers below provably 'nothing fell through the join' rather than an assumption."""
+        if not _ma_cells:
+            return None, None
+        canon = str((resolve_store_canonical(raw_store) if resolve_store_canonical
+                     else raw_store) or '').strip()
+        if canon and canon in _ma_cells:
+            return _ma_cells.pop(canon), _ma_months.pop(canon, {})
+        return None, None
+
     # ── Build store rows ──────────────────────────────────────────
     store_rows = []
     for store, rows in by_store.items():
@@ -539,6 +571,38 @@ def calc_gp_report(
         _leg_ladder_merge(leg_ladder, 'mi', (mi_data.get('mi_ladder') or {}).get('l'))
         _leg_ladder_merge(leg_ladder, 'atu', (mi_data.get('atu_ladder') or {}).get('l'))
 
+        # MA/VidaPay carrier income for THIS store. Each figure lands in the column that already
+        # means it — commission in Commission, residual in MI, airtime margin in ATU, market spiff
+        # in MDF — and a revenue line the report has no column for lands in Unmapped, named in
+        # `ma_income['filed']` rather than folded into a column that would mean something else.
+        # The rebate and the wallet funding are NOT here at all: `gp_carrier_income` excludes them
+        # with the owner's own rulings attached (`ma_income['excluded']`).
+        _ma_cell, _ma_cell_months = _ma_take(store)
+        if _ma_cell:
+            comm_recv  += _ma_cell.get('comm', 0.0)
+            mdf        += _ma_cell.get('mdf', 0.0)
+            mi_amt     += _ma_cell.get('mi', 0.0)
+            atu_amt    += _ma_cell.get('atu', 0.0)
+            unmapped   += _ma_cell.get('unmapped', 0.0)
+            comm_legs = dict(comm_legs)
+            comm_legs[_legs.M1]       = round(comm_legs.get(_legs.M1, 0.0) + _ma_cell.get('m1', 0.0), 2)
+            comm_legs[_legs.TRAILING] = round(comm_legs.get(_legs.TRAILING, 0.0) + _ma_cell.get('trailing', 0.0), 2)
+            comm_legs[_legs.UNSPLIT]  = round(comm_legs.get(_legs.UNSPLIT, 0.0) + _ma_cell.get('unsplit', 0.0), 2)
+            for _mk, _mv in (_ma_cell_months or {}).items():
+                _leg_ladder_add(leg_ladder, 'comm', None if _mk == 'unknown' else _mk, _mv)
+            # The MA residual and airtime margin state no month-of-life anywhere in their feed, so
+            # they land in the honest `unsplit` bucket — never guessed into 1st Month. Keeping them
+            # in the split at all is what holds the report's own promise that, for every source,
+            # m1 + M2-M12 + unsplit == that source's column (`identity_ok`).
+            if _ma_cell.get('mi'):
+                mi_legs = dict(mi_legs)
+                mi_legs[_legs.UNSPLIT] = round(mi_legs.get(_legs.UNSPLIT, 0.0) + _ma_cell['mi'], 2)
+                _leg_ladder_add(leg_ladder, 'mi', None, _ma_cell['mi'])
+            if _ma_cell.get('atu'):
+                atu_legs = dict(atu_legs)
+                atu_legs[_legs.UNSPLIT] = round(atu_legs.get(_legs.UNSPLIT, 0.0) + _ma_cell['atu'], 2)
+                _leg_ladder_add(leg_ladder, 'atu', None, _ma_cell['atu'])
+
         total_rev  = acc_gp + setup_gp + phone_sales + plan_gp + other_gp + comm_recv + reimb + mdf + chargeback + unmapped + mi_amt + atu_amt
         rep_pay    = rep_pay_by_store.get(num, 0)
         # Expenses are keyed by the org's storeops store_code (the Expenses page picks from storeops.stores).
@@ -574,62 +638,70 @@ def calc_gp_report(
             'net_profit': net_profit, 'net_excl_mdf': net_excl_mdf,
         })
 
-    # ── VidaPay/MA carrier income (ePay-less orgs) — ONE company-wide row ─────────────────────────
-    # Owner 2026-07-29: "the commission received should be in commission column." MA rows carry no store
-    # address (only a processor merchant id), so — exactly like the P&L's MA fallback — the money is
-    # booked company-wide instead of inventing a phantom per-store bucket. comm = MA Commission Details
-    # payable (sign-flipped, positive = dealer receives); atu = airtime margin (merchant_discount).
-    # ma_income is None for every ePay org (house/Boost) → no row, byte-identical.
+    # ── VidaPay/MA carrier income — what the account→store index could NOT place ─────────────────
+    # Owner bug report 2026-09-21: "the gross profit shows company level commission it shoudl show
+    # store level as it is paid on store level". It now does — every MA figure was filed onto its
+    # store in the loop above. What reaches HERE is only what honestly has no store: a processor
+    # account that `ma_store_pnl.canonical_store_index` cannot resolve (`''`), exactly the posture
+    # the P&L takes. For LuxeLink August 2026 that is $0.00 across all 20 accounts; the row appears
+    # only when a real dollar has nowhere to go, and it is NEVER hidden.
+    #
+    # A canonical store the MA side knows but the sales feed has no row for also lands here, under
+    # its own name rather than being silently dropped — the join can lose nothing without saying so.
     _ma_leg_note = None
-    if ma_income and (safe_float(ma_income.get('comm')) or safe_float(ma_income.get('atu'))):
-        _mc, _ma = safe_float(ma_income.get('comm')), safe_float(ma_income.get('atu'))
-        # LEG SPLIT of the MA commission: the leg is the COLUMN (spiff_m1 = 1st month, spiff_m2..m6 =
-        # trailing). The activation-order MARGIN columns are NOT commission legs (owner 2026-08-04:
-        # "these are not margins but paid commission based on MRC") — they carry no month-of-life and
-        # land in `unsplit`, named on the card below. Split over the EXACT component list the router
-        # built _mc from, so the three buckets re-sum to _mc. Without components (older caller) the
-        # money is honestly reported as unsplit rather than guessed.
-        _ma_comp_list = list(ma_income.get('component_list') or [])
-        if _ma_comp_list:
-            _ma_split_res = leg_classify.ma(ma_income.get('components') or {}, _ma_comp_list)
-            _ma_legs = dict(_ma_split_res['buckets'])
-            _ma_leg_note = {
-                'source': 'raw_ma_commission (VidaPay / master agent)',
-                'splits_on': ('the leg COLUMN on the MA Commission Details export — spiff_m1 = 1st '
-                              'month, spiff_m2…m6 = M2–M12'),
-                'unsplit_fields': list(_ma_split_res.get('unsplit_fields') or []),
-                'unsplit_why': ('these columns are activation-order margins/rebates, not commission '
-                                'legs — VidaPay states them as their own figures, so folding them '
-                                'into 1st Month would double-count them against the portal'),
-            }
-            for _lk, _lv in (_ma_split_res.get('leg_ladder') or {}).items():
-                _leg_ladder_add(leg_ladder, 'comm', None if _lk == 'unknown' else _lk, _lv)
-            # Guard the identity even if a component list and the caller's total ever disagree
-            # (rounding at the cent): any residue is reported, never silently dropped.
-            _resid = round(_mc - sum(_ma_legs.values()), 2)
-            if _resid:
-                _ma_legs[_legs.UNSPLIT] = round(_ma_legs[_legs.UNSPLIT] + _resid, 2)
-                _leg_ladder_add(leg_ladder, 'comm', None, _resid)
-        else:
-            _ma_legs = _legs.empty_split()
-            _ma_legs[_legs.UNSPLIT] = _mc
-            _leg_ladder_add(leg_ladder, 'comm', None, _mc)
-        # MA ATU (airtime margin) carries no month-of-life at all in the feed -> honestly unsplit.
-        _ma_atu_legs = _legs.empty_split()
-        _ma_atu_legs[_legs.UNSPLIT] = _ma
-        _leg_ladder_add(leg_ladder, 'atu', None, _ma)
+    if ma_income:
+        _ma_leg_note = {
+            'source': 'account/ma_store_pnl.gp_carrier_income — the SAME bookings the P&L books',
+            'basis': ma_income.get('basis'),
+            'basis_label': ma_income.get('basis_label'),
+            'splits_on': ('the month-of-life the BOOKED basis states: the daily-transaction rows\''
+                          ' own M<n> label (M1..M12+), or the commission sheet\'s spiff column '
+                          '(spiff_m1..m6, which structurally stops at M6)'),
+            # Both bases, labelled (owner decision 2026-09-21). Display only — the money column is
+            # the basis this org BOOKS, so the Gross Profit report and the P&L cannot disagree.
+            'earned': ma_income.get('earned'),
+            'received': ma_income.get('received'),
+            'filed': ma_income.get('filed'),
+            # What is NOT in the Commission column any more, and the owner ruling that says so.
+            'excluded': ma_income.get('excluded'),
+            'store_attributed': ma_income.get('store_attributed'),
+            'stores_resolved': len(ma_income.get('stores_resolved') or []),
+            'unsplit_fields': list(ma_income.get('unsplit_fields') or []),
+        }
+    for _mk in sorted(_ma_cells):
+        _cell = _ma_cells[_mk]
+        _months = _ma_months.get(_mk) or {}
+        if not any(safe_float(_cell.get(k)) for k in ('comm', 'mi', 'atu', 'mdf', 'unmapped')):
+            continue
+        _legs_split = dict(_legs.empty_split())
+        _legs_split[_legs.M1]       = round(safe_float(_cell.get('m1')), 2)
+        _legs_split[_legs.TRAILING] = round(safe_float(_cell.get('trailing')), 2)
+        _legs_split[_legs.UNSPLIT]  = round(safe_float(_cell.get('unsplit')), 2)
+        _mi_split = dict(_legs.empty_split())
+        _mi_split[_legs.UNSPLIT] = round(safe_float(_cell.get('mi')), 2)
+        _atu_split = dict(_legs.empty_split())
+        _atu_split[_legs.UNSPLIT] = round(safe_float(_cell.get('atu')), 2)
+        for _lk, _lv in _months.items():
+            _leg_ladder_add(leg_ladder, 'comm', None if _lk == 'unknown' else _lk, _lv)
+        _leg_ladder_add(leg_ladder, 'mi', None, safe_float(_cell.get('mi')))
+        _leg_ladder_add(leg_ladder, 'atu', None, safe_float(_cell.get('atu')))
+        _c, _mi2 = safe_float(_cell.get('comm')), safe_float(_cell.get('mi'))
+        _a, _md = safe_float(_cell.get('atu')), safe_float(_cell.get('mdf'))
+        _um = safe_float(_cell.get('unmapped'))
         store_rows.append({
-            'store': '(Company-wide — VidaPay/MA)', 'store_code': '', 'market': '',
+            'store': _mk or '(Company-wide — no store on the processor account)',
+            'store_code': '', 'market': '',
             'acc_gp': 0.0, 'setup_gp': 0.0, 'phone_sales': 0.0, 'plan_gp': 0.0, 'other_gp': 0.0,
-            'comm': _mc, 'reimb': 0.0, 'mdf': 0.0,
+            'comm': _c, 'reimb': 0.0, 'mdf': _md,
             'comp_comm': 0.0, 'comp_reimb': 0.0, 'comp_mdf': 0.0,
-            'chargeback': 0.0, 'unmapped': 0.0, 'mi': 0.0, 'atu': _ma,
-            **_legs.to_public('comm', _ma_legs),
+            'chargeback': 0.0, 'unmapped': _um, 'mi': _mi2, 'atu': _a,
+            **_legs.to_public('comm', _legs_split),
             **_legs.to_public('comp_comm', _legs.empty_split()),
-            **_legs.to_public('mi', _legs.empty_split()),
-            **_legs.to_public('atu', _ma_atu_legs),
-            'total_rev': _mc + _ma, 'rep_pay': 0.0, 'exp_total': 0.0, 'net_phone_cost': 0.0,
-            'net_profit': _mc + _ma, 'net_excl_mdf': _mc + _ma,
+            **_legs.to_public('mi', _mi_split),
+            **_legs.to_public('atu', _atu_split),
+            'total_rev': _c + _mi2 + _a + _md + _um, 'rep_pay': 0.0, 'exp_total': 0.0,
+            'net_phone_cost': 0.0,
+            'net_profit': _c + _mi2 + _a + _md + _um, 'net_excl_mdf': _c + _mi2 + _a + _um,
         })
 
     # ── Build rep rows ────────────────────────────────────────────
@@ -672,6 +744,11 @@ def calc_gp_report(
         'comp_reimb': sum(r['comp_reimb'] for r in store_rows),
         'comp_mdf': sum(r['comp_mdf'] for r in store_rows),
         'chargeback': sum(r['chargeback'] for r in store_rows),
+        # `unmapped` is one of total_rev's terms and was never summed here — the SAME missing-column
+        # defect the note below describes, found by the 2026-09-21 MA rewiring when carrier revenue
+        # with no dedicated GP column started landing in it (Aug-2026 LuxeLink: $6,759.99 of device
+        # margin + consumer financing visible per store, $0.00 in the header).
+        'unmapped': sum(r['unmapped'] for r in store_rows),
         'mi': sum(r['mi'] for r in store_rows),
         'atu': sum(r['atu'] for r in store_rows),
         'total_rev': sum(r['total_rev'] for r in store_rows),
@@ -790,10 +867,24 @@ def calc_gp_report(
             'total': _tot, 'parts_total': _sum,
             'identity_ok': abs(_tot - _sum) < 0.01,
             'ladder': leg_ladder.get(_p, {}),
-            # Only ever set on the MA-fed Commission row: WHICH columns are in `unsplit` and WHY, so
-            # an unexplained pile of money can never appear next to the two legs the owner reads.
-            **({'unsplit_fields': _ma_leg_note['unsplit_fields'],
-                'unsplit_why': _ma_leg_note['unsplit_why']} if (_p == 'comm' and _ma_leg_note) else {}),
+            # Only ever set on the MA-fed Commission row. BOTH bases ride here, labelled (owner
+            # decision 2026-09-21) — `earned` is what the commission sheet says was earned at
+            # activation, `received` is what the cash rows say arrived; the money column carries
+            # whichever one this org BOOKS (`basis`), so the Gross Profit report and the P&L are the
+            # same dollars. `excluded` names what left the Commission column and the owner ruling
+            # that took it out; `filed` names where every remaining dollar went.
+            **({'unsplit_fields': _ma_leg_note.get('unsplit_fields') or [],
+                'basis': _ma_leg_note.get('basis'),
+                'basis_label': _ma_leg_note.get('basis_label'),
+                'earned': _ma_leg_note.get('earned'),
+                'received': _ma_leg_note.get('received'),
+                'filed': _ma_leg_note.get('filed'),
+                'excluded': _ma_leg_note.get('excluded'),
+                'store_attributed': _ma_leg_note.get('store_attributed'),
+                'stores_resolved': _ma_leg_note.get('stores_resolved'),
+                'unsplit_why': ('money whose source states no month-of-life — an unlabelled spiff '
+                                'row, or fee margin, which carries none at all')}
+               if (_p == 'comm' and _ma_leg_note) else {}),
         })
     commission_legs_block = {
         'sources': leg_sources,
