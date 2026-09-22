@@ -74,7 +74,11 @@ DELETE FROM commcalc.commission_ledger WHERE org_id = '<f4f1c16e…>' AND source
 3. `_pvariants` × 9 across the platform (see siblings).
 4. A statement typed at 3.1 whose slug differs from a later registry token (#258 seam 3) keeps its own ledger key — the identity follows the slug the rows carry.
 
-Registered: index §15 / §16 / §17 / §18 / §4b addendum / §30.7 addendum / §30.10 addendum / §32 / **§30.15**; `docs/ONBOARDING_FLOW_DESIGN.md` §13.
+Registered: index §15 / §16 / §17 / §18 / §4b addendum / §30.7 addendum / §30.10 addendum / §32 / **§30.15**; `docs/ONBOARDING_FLOW_DESIGN.md` §14.
+
+### Merged onto #279's head (238607c = main 43aabcb + `wip/config-reader-any-subset`)
+
+Both designs hold. In the resolved files: `.github/workflows/carrier-vocab-guard.yml` keeps the plan-sources lock step AND the ledger statement-identity lock step (beside the any-columns lock); `coa.build_inputs` hands `divergence` BOTH `conflicts=` (the landings guard) and `config_columns_missing=` (the reader's report); `ledger_pnl.divergence` takes both, and `load_ledger_rows` is #279's any-subset read verbatim (`_LEDGER_REQUIRED` / `_LEDGER_OPTIONAL`, `origin` probed through `core.column_tolerant.present_columns` — the landing is derived from `source_report` / `period` / `origin`, so the P&L reader needs no date column); `router._ledger_existing_by_origin` and `commission_ledger_provenance` probe `origin` / `synced_at` through `present_columns` AND read through `_ledger_query` (org × family × every period spelling — no `_pvariants`, no literal filter); my `_ledger_landings_present` column-tier loop was a for-ladder under #279's lock and is rewritten as one probe + ONE select (`present_columns` / `select_list`); `docs/ONBOARDING_FLOW_DESIGN.md` keeps #278's §13 (plan sources) and this design as **§14**. Re-run on the merged tree: identity proof 92, identity lock 34, any-columns 57 + lock 16, P&L 73 + lock 18, ma_sync 113, sign 125, landing-identity lock, org-scope 25, carrier-vocab, statement-type mapping 62, intake 164 / B 87 / C 92, `tsc --noEmit` clean.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 

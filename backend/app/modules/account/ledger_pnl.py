@@ -49,9 +49,10 @@ backend/harness_pl_commission_source_lock.py (CI).
 from app.modules.commcalc.calculator import safe_float
 from app.modules.commcalc import commission_ledger as _cl
 from app.modules.account import ma_store_pnl as _msp
+from app.core import column_tolerant as _ct      # the ONE reading rule for a wide table (§4b.1)
 
-MIGRATION = "1013_pl_commission_source.sql"
 CONFIG_COLUMN = "pl_commission_source"
+MIGRATION = _msp.PL_CONFIG_MIGRATION[CONFIG_COLUMN]      # one home: ma_store_pnl.PL_CONFIG_COLUMNS
 
 SOURCE_FEEDS = _msp.COMMISSION_SOURCE_FEEDS
 SOURCE_LEDGER = _msp.COMMISSION_SOURCE_LEDGER
@@ -252,15 +253,19 @@ def _fmt(x):
 
 
 def divergence(feed_by_line, ledger_by_line, source, covered, configured=None, unbooked=None,
-               by_source_report=None, ledger_line_count=0, conflicts=None):
+               by_source_report=None, ledger_line_count=0, config_columns_missing=None, conflicts=None):
     """PURE. {line: commission_source-meta} for every line either source names. Under 'ledger' a
     covered line says what the ledger booked and what the feeds WOULD have booked (suppressed); under
     'feeds' a line the ledger also holds says what the feeds booked and what the ledger holds —
     the gap a migrating tenant reads before flipping the switch. A line only the feeds book, in an
-    org whose ledger is empty, gets NO meta (the payload stays byte-identical)."""
+    org whose ledger is empty, gets NO meta (the payload stays byte-identical).
+    `config_columns_missing` (the reader's report, 2026-09-22): when the switch column itself is
+    absent the words SAY so and name the migration — the read side says what the save side refuses —
+    and `switch_ready` is False; otherwise the meta is byte-identical to before."""
     feed_by_line = {k: _money(v) for k, v in (feed_by_line or {}).items()}
     ledger_by_line = {k: _money(v) for k, v in (ledger_by_line or {}).items()}
     covered = set(covered or ())
+    switch_ready = CONFIG_COLUMN not in set(config_columns_missing or ())
     out = {}
     lines = set(ledger_by_line) | (covered if source == SOURCE_LEDGER else set())
     if ledger_by_line:
@@ -293,8 +298,12 @@ def divergence(feed_by_line, ledger_by_line, source, covered, configured=None, u
                          "source to the ledger to book it from there.")
             else:
                 words = f"Booked from the feed tables ({_fmt(f)}). The Commission Ledger holds nothing for this line this month."
+        if not switch_ready:
+            words += (f" The P&L commission-source switch column ({CONFIG_COLUMN}) is not applied on this "
+                      f"database yet — apply migration {MIGRATION}; until then the feed tables book this line.")
         out[line] = {"source": SOURCE_LEDGER if booked_from_ledger else SOURCE_FEEDS,
                      "configured": str(configured or SOURCE_FEEDS),
+                     "switch_ready": switch_ready,
                      "feeds": f, "ledger": l, "difference": diff,
                      "suppressed": _money(f) if booked_from_ledger else 0.0,
                      "words": words,
@@ -358,9 +367,13 @@ def suggest_source(configured, feed_tables_with_rows, ledger_line_count):
 
 
 # ── 8. I/O — the only two readers ───────────────────────────────────────────────────────────────
-_LEDGER_COLS = "category,payout_total,store,source_report,origin,is_payout,raw_amount,payment_month,product_name,period,created_at,synced_at"
-_LEDGER_COLS_PRE251 = "category,payout_total,store,source_report,is_payout,raw_amount,payment_month,product_name,period,created_at"
-_LEDGER_COLS_MIN = "category,payout_total,store,source_report,is_payout,raw_amount,payment_month,product_name,period"
+# The ledger is a wide, hot table, so it keeps an explicit column list; the OPTIONAL column (`origin`,
+# mig 251) is probed on its own before the one real select (core.column_tolerant, §4b.1) — never a
+# block whose failure on one column drops another. The N-landings guard (§30.15) derives a landing from
+# source_report / period / origin, all read here; the landing's date is decoration the P&L does not need.
+_LEDGER_REQUIRED = ("category", "payout_total", "store", "source_report", "is_payout", "raw_amount",
+                    "payment_month", "product_name", "period")
+_LEDGER_OPTIONAL = ("origin",)
 
 
 def load_ledger_rows(client, org_id, period_keys, page=1000, cap=200000):
@@ -370,39 +383,37 @@ def load_ledger_rows(client, org_id, period_keys, page=1000, cap=200000):
     keys = list(period_keys or [])
     if not keys:
         return []
-    for cols in (_LEDGER_COLS, _LEDGER_COLS_PRE251, _LEDGER_COLS_MIN):
-        out, start = [], 0
-        try:
-            while start < cap:
-                chunk = (client.schema("commcalc").table(_cl.LEDGER_TABLE).select(cols)
-                         .eq("org_id", org_id).in_("period", keys)
-                         .range(start, start + page - 1).execute().data) or []
-                out.extend(chunk)
-                if len(chunk) < page:
-                    break
-                start += page
-            return out
-        except Exception:
-            continue
-    return []
+    table = lambda: client.schema("commcalc").table(_cl.LEDGER_TABLE)      # noqa: E731
+    scope = lambda q: q.eq("org_id", org_id)                                # noqa: E731
+    out, start = [], 0
+    try:
+        cols = _ct.select_list(_LEDGER_REQUIRED, _LEDGER_OPTIONAL,
+                               _ct.present_columns(table, scope, _LEDGER_OPTIONAL))
+        while start < cap:
+            chunk = (scope(table().select(cols)).in_("period", keys)
+                     .range(start, start + page - 1).execute().data) or []
+            out.extend(chunk)
+            if len(chunk) < page:
+                break
+            start += page
+        return out
+    except Exception:
+        return []
 
 
 def load_source_meta(client, org_id):
-    """I/O, org-scoped: {configured, ready, migration} — whether the mig-1013 column exists (a read of
-    it fails on a database without it) and the org's raw value. The RESOLVED value for a period still
-    comes from `resolve_source` — this is the settings panel's read-back. NEVER raises."""
-    meta = {"configured": SOURCE_FEEDS, "ready": True, "migration": MIGRATION}
-    try:
-        rows = (client.schema("commcalc").table("commission_org_config").select(CONFIG_COLUMN)
-                .eq("org_id", org_id).limit(1).execute().data) or []
-    except Exception:
-        meta["ready"] = False
-        return meta
-    if rows:
-        v = str(rows[0].get(CONFIG_COLUMN) or "").strip().lower()
-        if v in SOURCES:
-            meta["configured"] = v
-    return meta
+    """I/O, org-scoped: {configured, ready, migration, config_columns_missing,
+    config_migrations_missing} — the settings panel's read-back. ONE reader: this dereferences
+    `ma_store_pnl.load_config` (which reads the row whole and reports what is absent), so the panel
+    and the P&L can never disagree about what the org configured. `ready` is False exactly when the
+    mig-1013 column is absent. The RESOLVED value for a period still comes from `resolve_source`.
+    NEVER raises."""
+    cfg = _msp.load_config(client, org_id)
+    missing = list(cfg.get("config_columns_missing") or [])
+    return {"configured": cfg.get("commission_source") or SOURCE_FEEDS,
+            "ready": CONFIG_COLUMN not in missing, "migration": MIGRATION,
+            "config_columns_missing": missing,
+            "config_migrations_missing": list(cfg.get("config_migrations_missing") or [])}
 
 
 def load_source_evidence(client, org_id, ledger_probe=5000):

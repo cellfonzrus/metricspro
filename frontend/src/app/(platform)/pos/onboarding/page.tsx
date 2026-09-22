@@ -19,6 +19,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import {
+  buildConfigBody, changedKeys, csv, planLine, refusalOf, seedFromPreview,
+  type PlanPreview, type Refused, type Seed, type SourceEdit,
+} from './plan-sources-logic'
 
 type Evidence = { state: string; count: number | null; reason: string }
 type Task = {
@@ -366,6 +370,13 @@ function ImportFromExisting({ source, onChanged }: { source: string; onChanged: 
   const [err, setErr] = useState('')
   const [result, setResult] = useState<any>(null)
 
+  // a plan's provenance is rendered by the source's own label from the payload (never a name typed here)
+  const labelOf: Record<string, string> = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const src of (preview?.sources || []) as { key: string; label: string }[]) m[src.key] = src.label
+    return m
+  }, [preview])
+
   const look = useCallback(async () => {
     setBusy(true); setErr(''); setResult(null)
     try {
@@ -413,6 +424,12 @@ function ImportFromExisting({ source, onChanged }: { source: string; onChanged: 
 
       {err && <div style={{ fontSize: 12.5, color: '#b91c1c', marginBottom: 8 }}>{err}</div>}
 
+      {/* WHICH SOURCES the "bring over" reads is per-company config the person confirms here (owner
+          2026-09-22). The card lists the sources from the payload — nothing in this file names a table. */}
+      {preview?.sources && preview.configurable && (
+        <PlanSourcesCard source={source} preview={preview} onSaved={p => { setPreview(p); setResult(null) }} />
+      )}
+
       {preview && (
         <div style={{ fontSize: 13, marginBottom: 10 }}>
           <b>{preview.count}</b> record(s) ready to create in <code>{preview.creates}</code>.
@@ -437,7 +454,7 @@ function ImportFromExisting({ source, onChanged }: { source: string; onChanged: 
               {preview.sample.slice(0, 8).map((s: any, i: number) => (
                 <div key={i}>{typeof s === 'string' ? s : (
                   s.plan_name
-                    ? `${s.plan_name}${s.monthly_fee != null ? ` — $${s.monthly_fee}/mo` : ''}${s.subscribers ? ` (${s.subscribers} subs)` : ''}`
+                    ? planLine(s, preview.mrc_next, labelOf)
                     : s.code
                       ? `${s.code}${s.description ? ` — ${s.description}` : ''}`
                       : (s.short_name || s.legal_name || s.serial_number || JSON.stringify(s).slice(0, 90)))}</div>
@@ -463,6 +480,141 @@ function ImportFromExisting({ source, onChanged }: { source: string; onChanged: 
         <button className="btn" onClick={apply} disabled={busy || !preview?.count}>
           {busy ? 'Working…' : `Bring over ${preview?.count ?? 0}`}
         </button>
+      </div>
+    </div>
+  )
+}
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// WHERE YOUR PLAN NAMES COME FROM (owner 2026-09-22: "we have enough plans in the system to bring over
+// but it does not give an option to bring over").
+//
+// The sources are the backend registry resolved over this company's own rules (preview.sources) — this
+// component lists NO table and NO source key. A source that reports a monthly charge is on by default;
+// a line-level source (a sales export, a commission statement) is off until the person confirms the
+// words that mark a plan line — proposed here from the file's own vocabulary with the count each names,
+// the words that mean "this is a rebate, not a plan" with what each removes, and a heading word that
+// names nearly every line refused unless attested by name. The editable words are seeded from the
+// proposal ONLY (plan-sources-logic.seedFromPreview); the save goes through ONE endpoint and the card
+// re-renders from the preview it returns.
+function PlanSourcesCard({ source, preview, onSaved }: { source: string; preview: PlanPreview; onSaved: (p: any) => void }) {
+  // `base` is what the card last seeded from the preview (the proposal); `seed.edits` is what the person
+  // has in the inputs. "Dirty" = differs from base — never from the rules in force, which a fresh
+  // proposal differs from by design.
+  const [base, setBase] = useState<Seed>(() => seedFromPreview(preview))
+  const [seed, setSeed] = useState<Seed>(() => seedFromPreview(preview))
+  const [attested, setAttested] = useState<string[]>([])
+  const [refusal, setRefusal] = useState<{ message: string; keys: string[]; refused: Refused[] } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  useEffect(() => { const s = seedFromPreview(preview); setBase(s); setSeed(s); setRefusal(null) }, [preview])
+
+  const dirty = changedKeys(preview, seed.edits, base.edits)
+  function edit(key: string, patch: Partial<SourceEdit>) {
+    setSeed(s => ({ ...s, edits: { ...s.edits, [key]: { ...s.edits[key], ...patch } } }))
+  }
+  async function save() {
+    setBusy(true); setErr(''); setRefusal(null)
+    try {
+      const body = buildConfigBody(preview, seed.edits, base.edits, attested)
+      const p = await api(`/api/v1/core/onboarding/import-sources/${source}/config`,
+        { method: 'PUT', body: JSON.stringify(body) })
+      setAttested([]); onSaved(p)
+    } catch (e: any) {
+      const r = refusalOf(e)
+      if (r) setRefusal(r); else setErr(e?.message || 'Could not save.')
+    } finally { setBusy(false) }
+  }
+  const n = (v: number | null | undefined) => (v ?? 0).toLocaleString()
+
+  return (
+    <div style={{ marginBottom: 12, border: '1px solid var(--border)', background: 'var(--card)', borderRadius: 8, padding: '10px 12px' }}>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 2 }}>Where your plan names come from</div>
+      <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>
+        Every place MetricsPro already holds your plans, with what each one has. Tick a source to use it.
+        A sales export or commission statement needs you to confirm the words that mark a plan line first.
+      </div>
+      {(preview.sources || []).map(s => {
+        const e = seed.edits[s.key]
+        const sug = s.suggest
+        return (
+          <div key={s.key} style={{ borderTop: '1px solid var(--border)', padding: '8px 0', fontSize: 12.5 }}>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'baseline', cursor: 'pointer' }}>
+              <input type="checkbox" checked={!!e?.enabled} onChange={ev => edit(s.key, { enabled: ev.target.checked })} />
+              <span style={{ fontWeight: 600 }}>{s.label}</span>
+              <span style={{ color: 'var(--text3)', fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>{s.table}</span>
+              <span style={{ marginLeft: 'auto', color: 'var(--text2)' }}>
+                {s.error ? `could not be read: ${s.error}`
+                  : s.kind === 'lines'
+                    ? `${n(s.rows)} line(s)${sug ? ` · ${n(sug.preview?.lines)} carry a plan word · ${n(sug.preview?.plans)} name(s)` : ''}${s.truncated ? ' (first part only)' : ''}`
+                    : `${n(s.rows)} row(s) · ${n(s.plans)} plan(s)${s.period ? ` · ${s.period}` : ''}`}
+              </span>
+            </label>
+            {s.kind !== 'lines' && s.where && (
+              <div style={{ fontSize: 11.5, color: 'var(--text3)', marginLeft: 22 }}>Filled by {s.where}.</div>
+            )}
+            {s.kind === 'lines' && e && (
+              <div style={{ marginLeft: 22, marginTop: 6, display: 'grid', gap: 6 }}>
+                <label style={{ display: 'grid', gap: 2 }}>
+                  <span style={{ fontSize: 11.5, color: 'var(--text2)' }}>
+                    Words that mark a plan line (comma-separated; matched anywhere in the line&apos;s {csv(s.fields)})
+                  </span>
+                  <input className="input" value={e.include} onChange={ev => edit(s.key, { include: ev.target.value })}
+                    placeholder="e.g. rate plan" />
+                </label>
+                {sug && sug.include.length > 0 && (
+                  <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>
+                    Found in this file: {sug.include.map(c => `"${c.token}" in ${c.field} (${n(c.lines)} line(s))`).join(' · ')}
+                  </div>
+                )}
+                <label style={{ display: 'grid', gap: 2 }}>
+                  <span style={{ fontSize: 11.5, color: 'var(--text2)' }}>
+                    Words that mean it is NOT a plan (a rebate, a bonus, a clawback…)
+                  </span>
+                  <input className="input" value={e.exclude} onChange={ev => edit(s.key, { exclude: ev.target.value })}
+                    placeholder="e.g. rebate" />
+                </label>
+                {sug && sug.exclude.length > 0 && (
+                  <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>
+                    {sug.exclude.map(c => `"${c.token}" would leave out ${n(c.removes)} line(s) — e.g. ${c.samples[0] || ''}`).join(' · ')}
+                  </div>
+                )}
+                {sug && sug.too_broad.length > 0 && (
+                  <div style={{ fontSize: 11.5, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '4px 8px' }}>
+                    Too broad to be a plan word — not proposed: {sug.too_broad.map(c => `"${c.token}" (${Math.round(c.ratio * 100)}% of all lines)`).join(', ')}.
+                    A word that names nearly every line is a heading, not a plan.
+                  </div>
+                )}
+                {s.refusal_note && (
+                  <div style={{ fontSize: 11.5, color: '#991b1b', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, padding: '4px 8px' }}>
+                    {s.refusal_note}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })}
+      {refusal && (
+        <div style={{ marginTop: 8, fontSize: 12.5, color: '#991b1b', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, padding: '6px 10px' }}>
+          <div>{refusal.message}</div>
+          {refusal.keys.map(k => (
+            <label key={k} style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4, cursor: 'pointer' }}>
+              <input type="checkbox" checked={attested.includes(k)}
+                onChange={ev => setAttested(a => ev.target.checked ? [...a, k] : a.filter(x => x !== k))} />
+              Yes — every line &quot;{k.split(':').slice(1).join(':')}&quot; names really is a plan. Save it anyway.
+            </label>
+          ))}
+        </div>
+      )}
+      {err && <div style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 6 }}>{err}</div>}
+      <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+        <button className="btn" onClick={save} disabled={busy || (!dirty.length && !attested.length)}>
+          {busy ? 'Saving…' : 'Save & re-check'}
+        </button>
+        <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>
+          {preview.config?.source === 'tenant' ? 'Your saved rules are in force.' : 'Standard rules in force — nothing saved yet.'}
+        </span>
       </div>
     </div>
   )

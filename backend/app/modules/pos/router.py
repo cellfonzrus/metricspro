@@ -1696,6 +1696,22 @@ def list_settings(store_code: str = "", org_id: str = ORG_ID):
     return {"settings": rows}
 
 
+def upsert_pos_setting(client, org_id: str, key: str, value, store: str = None) -> dict:
+    """THE one writer of a pos.pos_settings row (org default when `store` is None, else the store
+    override). Factored out of the PUT below (2026-09-22) so the POS wizard's own rules — which landed
+    sources carry a tenant's plan names (core/plan_sources, key `plan_sources`) — are saved through the
+    same path as every other POS setting, never a second insert/update of this table."""
+    q = (client.schema("pos").table("pos_settings")
+         .update({"value": value, "updated_at": "now()"})
+         .eq("org_id", org_id).eq("key", key))
+    q = q.eq("store_code", store) if store else q.is_("store_code", "null")
+    r = q.execute()
+    if not r.data:
+        r = client.schema("pos").table("pos_settings").insert(
+            {"org_id": org_id, "store_code": store, "key": key, "value": value}).execute()
+    return (r.data or [{}])[0]
+
+
 @router.put("/settings")
 def upsert_setting(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     _require_pos_perm(authorization, org_id, "pos_settings")
@@ -1703,16 +1719,7 @@ def upsert_setting(body: dict, authorization: str = Header(default=""), org_id: 
     if not key or "value" not in body:
         raise HTTPException(400, "key and value required")
     store = (body.get("store_code") or "").strip() or None
-    q = (sb().schema("pos").table("pos_settings")
-         .update({"value": body["value"], "updated_at": "now()"})
-         .eq("org_id", org_id).eq("key", key))
-    q = q.eq("store_code", store) if store else q.is_("store_code", "null")
-    r = q.execute()
-    if not r.data:
-        r = sb().schema("pos").table("pos_settings").insert(
-            {"org_id": org_id, "store_code": store, "key": key,
-             "value": body["value"]}).execute()
-    return {"setting": (r.data or [{}])[0]}
+    return {"setting": upsert_pos_setting(sb(), org_id, key, body["value"], store)}
 
 
 @router.delete("/settings")

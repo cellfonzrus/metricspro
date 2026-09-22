@@ -14,6 +14,7 @@ from app.core.service_role import (require_browser_service,   # SERVICE_ROLE=api
 from app.core.schemas import LaxModel
 from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
+from app.core import column_tolerant as _ct    # 2026-09-22 — ANY-SUBSET column reads, the one reading rule (index §4b.1)
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
 from app.modules.commcalc import invoice_tenders as _invt   # 2026-09-21 — the invoice tender split (pure; classes injected from closing)
@@ -3316,15 +3317,14 @@ def _registry_auto_map(client, org_id):
     """report_definitions.auto by report_key — CARRIER-SCOPED. The registry (Connectors page) drives which reports a
     sweep pulls. A report with no registry row falls back to the connector's config toggle, so this is
     a zero-behavior-change cutover (the seeded auto flags already match the live toggles)."""
+    # ANY SUBSET OF COLUMNS (index §4b.1): the registry rows are read whole; carrier_id (mig 291) is
+    # taken when present (pre-291 → the un-scoped read, never {}) and its absence can no longer hide
+    # report_key / auto.
     try:
         rows = (client.schema('commcalc').table('report_definitions')
-                .select('report_key,auto,carrier_id').eq('org_id', org_id).execute().data) or []
+                .select('*').eq('org_id', org_id).execute().data) or []
     except Exception:
-        try:    # pre-291 database has no carrier_id — degrade to the un-scoped read, never to {}
-            rows = (client.schema('commcalc').table('report_definitions')
-                    .select('report_key,auto').eq('org_id', org_id).execute().data) or []
-        except Exception:
-            return {}
+        return {}
     # CARRIER SCOPE (mig 291): never auto-pull a report belonging to a carrier this tenant does not
     # run. A row with carrier_id NULL is carrier-agnostic and always considered.
     carriers = _tenant_carriers(client, org_id)
@@ -4952,27 +4952,28 @@ def _ledger_landings_present(client, org_id, source_report, period, origin="", p
     FAMILY read across EVERY stored period spelling (paged, org-scoped) and grouped by
     `commission_ledger.landings_for(rows, period)`, so the landings of THIS canonical period are found
     whatever spelling they were stored under ('Aug 2026', 'aug 2026' — the orphans no period_keys reader
-    lists) and a replace can wipe them and SAY what it replaced. Column tiers degrade (pre-251: no
-    origin; a fake without created_at) and never raise: an unmeasurable scope reports [] with
-    `measured=False`."""
-    for cols in ("source_report,period,origin,payout_total,created_at,synced_at",
-                 "source_report,period,origin,payout_total", "source_report,period,payout_total", "*"):
-        rows, start = [], 0
-        try:
-            while start < cap:
-                chunk = (_ledger_query(client, org_id, source_report, cols=cols)
-                         .range(start, start + page - 1).execute().data) or []
-                rows.extend(chunk)
-                if len(chunk) < page:
-                    break
-                start += page
-        except Exception:
-            continue
-        if origin:
-            rows = [r for r in rows if (r.get("origin") or ledger_ma_sync.ORIGIN_FILE) == origin]
-        groups = commission_ledger.landings_for(rows, period)
-        return [L for g in groups for L in g["landings"]], True
-    return [], False
+    lists) and a replace can wipe them and SAY what it replaced. ANY SUBSET OF COLUMNS (§4b.1): the
+    optional columns (`origin` / `synced_at`, mig 251; `created_at` for a fake that carries none) are
+    probed on their own and the ONE real select carries what exists — never a block that can fail on an
+    unrelated column. Never raises: an unreadable ledger reports [] with `measured=False`."""
+    present = _ct.present_columns(lambda: client.schema("commcalc").table("commission_ledger"),
+                                  lambda q: q.eq("org_id", org_id), ("origin", "synced_at", "created_at"))
+    cols = _ct.select_list(("source_report", "period", "payout_total"), ("origin", "synced_at", "created_at"), present)
+    rows, start = [], 0
+    try:
+        while start < cap:
+            chunk = (_ledger_query(client, org_id, source_report, cols=cols)
+                     .range(start, start + page - 1).execute().data) or []
+            rows.extend(chunk)
+            if len(chunk) < page:
+                break
+            start += page
+    except Exception:
+        return [], False
+    if origin:
+        rows = [r for r in rows if (r.get("origin") or ledger_ma_sync.ORIGIN_FILE) == origin]
+    groups = commission_ledger.landings_for(rows, period)
+    return [L for g in groups for L in g["landings"]], True
 
 
 def _ledger_delete_scoped(client, org_id, source_report, period, origin, meta=None):
@@ -8513,17 +8514,19 @@ def _ledger_existing_by_origin(client, org_id, source_report, period):
     """What is ALREADY in the ledger for (template, period), split by provenance:
     {origin: {lines, payout_total, last_at}}. Pre-251 (no origin column) every row reads as 'file' and
     `ready` is False. Spelling-agnostic on period."""
-    out, ready = {}, True
+    out = {}
+    # ANY SUBSET OF COLUMNS (index §4b.1): the mig-251 provenance columns are PROBED on their own and the
+    # one real select carries what exists — `ready` is exactly "origin exists", never "some other column
+    # was missing".
+    _present = _ct.present_columns(lambda: client.schema("commcalc").table("commission_ledger"),
+                                   lambda q: q.eq("org_id", org_id), ("origin", "synced_at"))
+    ready = "origin" in _present
     try:
         rows = _ledger_query(client, org_id, source_report, period,
-                             cols="origin,payout_total,created_at,synced_at").limit(100000).execute().data or []
+                             cols=_ct.select_list(("payout_total", "created_at"), ("origin", "synced_at"), _present)
+                             ).limit(100000).execute().data or []
     except Exception:
-        ready = False
-        try:
-            rows = _ledger_query(client, org_id, source_report, period,
-                                 cols="payout_total,created_at").limit(100000).execute().data or []
-        except Exception:
-            rows = []
+        rows = []
     for r in rows:
         o = (r.get("origin") or ledger_ma_sync.ORIGIN_FILE) if ready else ledger_ma_sync.ORIGIN_FILE
         a = out.setdefault(o, {"origin": o, "label": ledger_ma_sync.ORIGIN_LABELS.get(o, o),
@@ -8810,18 +8813,17 @@ def commission_ledger_provenance(source_report: str = "ma_daily_tx", org_id: str
     raw feed has moved on while the ledger hasn't is obvious at a glance. READ-ONLY."""
     require_org(org_id)
     client = sb()
-    ready = True
+    # ANY SUBSET OF COLUMNS (index §4b.1): the mig-251 provenance columns are PROBED on their own and the
+    # one real select carries what exists — `ready` is exactly "origin exists".
+    _present = _ct.present_columns(lambda: client.schema("commcalc").table("commission_ledger"),
+                                   lambda q: q.eq("org_id", org_id), ("origin", "synced_at"))
+    ready = "origin" in _present
     try:
         rows = _ledger_query(client, org_id, source_report,
-                             cols="period,source_report,origin,payout_total,created_at,synced_at"
+                             cols=_ct.select_list(("period", "source_report", "payout_total", "created_at"), ("origin", "synced_at"), _present)
                              ).limit(100000).execute().data or []
     except Exception:
-        ready = False
-        try:
-            rows = _ledger_query(client, org_id, source_report,
-                                 cols="period,source_report,payout_total,created_at").limit(100000).execute().data or []
-        except Exception:
-            rows = []
+        rows = []
     # THE LANDINGS (index §30.15): per canonical period, every landing of this statement — under which
     # key, which spelling, which origin — and whether the period holds more than one (the refusal); a
     # period spelled non-canonically ('aug 2026') is an ORPHAN no period reader finds and is said so
@@ -10938,37 +10940,26 @@ def carrier_category_options(period: str = "", org_id: str = ORG_ID):
 
 
 # ── Unified connector model (SaaS framework Phase 2: registry + live status + run-now dispatch) ──
+# The status + schedule fields a connector card shows — the PROJECTION of the sweep-config row
+# (never the whole row: it also holds credentials). last_attempt_at is mig 241.
+_CONNECTOR_STATUS_COLS = ('enabled', 'last_run_at', 'last_status', 'last_detail', 'next_run_at',
+                          'frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone', 'last_attempt_at')
+
+
 def _connector_status(client, org_id, cfg_table):
-    """Live status (last run / next run / enabled / schedule) from the connector's *_sweep_config.
-    The schedule fields are read best-effort in a second query so a config table without them
-    never breaks the primary status."""
+    """Live status (last run / next run / enabled / schedule) from the connector's *_sweep_config —
+    one whole-row read projected to `_CONNECTOR_STATUS_COLS`, so a config table without a schedule
+    column (or without mig 241's last_attempt_at) still yields every field it does have."""
     if not cfg_table:
         return {}
-    try:
-        rows = (client.schema('commcalc').table(cfg_table)
-                .select('enabled,last_run_at,last_status,last_detail,next_run_at')
-                .eq('org_id', org_id).limit(1).execute().data) or []
-        out = rows[0] if rows else {}
-    except Exception:
+    # ANY SUBSET OF COLUMNS (index §4b.1): ONE whole-row read; the status and schedule fields are taken
+    # when present and PROJECTED (a sweep-config row also holds credentials, which never leave here).
+    # Pre-241 (no last_attempt_at) reads exactly as before, and no column's absence hides another's.
+    rd = _ct.read_row(lambda: client.schema('commcalc').table(cfg_table), lambda q: q.eq('org_id', org_id))
+    if not rd.readable:
         return {}
-    try:
-        # last_attempt_at rides the best-effort query on purpose: pre-mig-241 the column doesn't exist and
-        # this whole select 400s — the primary status block above must still come through.
-        sch = (client.schema('commcalc').table(cfg_table)
-               .select('frequency,day_of_week,day_of_month,hour,timezone,last_attempt_at')
-               .eq('org_id', org_id).limit(1).execute().data) or []
-        if sch:
-            out = {**out, **sch[0]}
-    except Exception:
-        try:
-            sch = (client.schema('commcalc').table(cfg_table)
-                   .select('frequency,day_of_week,day_of_month,hour,timezone')
-                   .eq('org_id', org_id).limit(1).execute().data) or []
-            if sch:
-                out = {**out, **sch[0]}
-        except Exception:
-            pass
-    return out
+    row = rd.row or {}
+    return {k: row[k] for k in _CONNECTOR_STATUS_COLS if k in row}
 
 
 def _connector_creds(client, org_id, cfg_table):
@@ -13068,17 +13059,20 @@ def _accessory_config_uncached(client, org_id):
          the house GP map is empty → no effect).
     Returns normalized sets + the raw lists."""
     depts, cats, kws, acima = [], [], [], []
-    got = False
+    # ONE WHOLE-ROW READ (index §4b.1, 2026-09-22) replaces NINE single-column reads of the same row:
+    # `select("*")`, and every section below takes its column when present — a column an un-run
+    # migration has not added yet degrades THAT section to its default and nothing else, exactly as
+    # the nine own-queries did, in one round trip instead of nine. The row is `_ac` throughout.
+    _acr = _ct.read_row(lambda: client.schema("commcalc").table("accessory_config"),
+                        lambda q: q.eq("org_id", org_id))
+    _ac = _acr.row or {}
+    got = _acr.row is not None
     try:
-        rows = (client.schema("commcalc").table("accessory_config")
-                .select("departments,categories,product_keywords,acima_tenders")
-                .eq("org_id", org_id).limit(1).execute().data) or []
-        if rows:
-            got = True
-            depts = [d for d in (rows[0].get("departments") or []) if d]
-            cats = [c for c in (rows[0].get("categories") or []) if c]
-            kws = [k for k in (rows[0].get("product_keywords") or []) if k]
-            acima = [t for t in (rows[0].get("acima_tenders") or []) if t]
+        if got:
+            depts = [d for d in (_ac.get("departments") or []) if d]
+            cats = [c for c in (_ac.get("categories") or []) if c]
+            kws = [k for k in (_ac.get("product_keywords") or []) if k]
+            acima = [t for t in (_ac.get("acima_tenders") or []) if t]
     except Exception:
         got = False
     if not got:
@@ -13119,10 +13113,7 @@ def _accessory_config_uncached(client, org_id):
     # original constant), so config-driven for a tenant without changing case semantics.
     box_depts = []
     try:
-        brows = (client.schema("commcalc").table("accessory_config")
-                 .select("box_departments").eq("org_id", org_id).limit(1).execute().data) or []
-        if brows:
-            box_depts = [b for b in (brows[0].get("box_departments") or []) if b]
+        box_depts = [b for b in (_ac.get("box_departments") or []) if b]
     except Exception:
         box_depts = []
     if not box_depts:
@@ -13133,10 +13124,7 @@ def _accessory_config_uncached(client, org_id):
     # ['Device Setup Charge']. CROSS-PACKAGE OVERLAP: pkg A also resolves this identically (clean merge).
     setup_kws = []
     try:
-        srows = (client.schema("commcalc").table("accessory_config")
-                 .select("setup_fee_keywords").eq("org_id", org_id).limit(1).execute().data) or []
-        if srows:
-            setup_kws = [k for k in (srows[0].get("setup_fee_keywords") or []) if k]
+        setup_kws = [k for k in (_ac.get("setup_fee_keywords") or []) if k]
     except Exception:
         setup_kws = []
     if not setup_kws:
@@ -13148,13 +13136,8 @@ def _accessory_config_uncached(client, org_id):
     # aggregation then falls straight through to classify_contract_type -> house/Boost display BYTE-IDENTICAL.
     # DISPLAY ONLY: consumed by _sales_cell_agg (Sales Report / Exec MTD / Daily Targets); no payout path.
     ct_map_raw = {}
-    try:
-        crows = (client.schema("commcalc").table("accessory_config")
-                 .select("contract_type_map").eq("org_id", org_id).limit(1).execute().data) or []
-        if crows and isinstance(crows[0].get("contract_type_map"), dict):
-            ct_map_raw = crows[0]["contract_type_map"] or {}
-    except Exception:
-        ct_map_raw = {}
+    if isinstance(_ac.get("contract_type_map"), dict):
+        ct_map_raw = _ac["contract_type_map"] or {}
     # Normalized {stripped-lowercased contract_type : bucket} for O(1) case-insensitive matching; buckets are
     # limited to the classifier's own vocabulary + 'none' (force-exclude). Unknown buckets/blank keys dropped.
     _CT_BUCKETS = {"premium", "upgrade", "byod", "none"}
@@ -13174,13 +13157,8 @@ def _accessory_config_uncached(client, org_id):
     # (calc_rep_commissions via cfg['line_class_rules']), the plan engine, the Sales Report / Exec MTD /
     # Daily Targets aggregation, the closing recon, the event register, what-if, sales comparison.
     ad_raw = {}
-    try:
-        adrows = (client.schema("commcalc").table("accessory_config")
-                  .select("activation_details_rules").eq("org_id", org_id).limit(1).execute().data) or []
-        if adrows and isinstance(adrows[0].get("activation_details_rules"), dict):
-            ad_raw = adrows[0]["activation_details_rules"] or {}
-    except Exception:
-        ad_raw = {}
+    if isinstance(_ac.get("activation_details_rules"), dict):
+        ad_raw = _ac["activation_details_rules"] or {}
     line_rules = _line_rules_resolve(client, org_id, ad_raw, ct_map)
     # BILL-PAYMENT products (mig 214; per-org, admin-editable) — which product/item values count as a
     # bill payment (walk-in recharge) for the Daily-Targets CONVERSION metric (boxes ÷ billpays). Fetched in
@@ -13197,48 +13175,26 @@ def _accessory_config_uncached(client, org_id):
     # EMPTY list, and the blank-ct engine is then a no-op (house/Boost display BYTE-IDENTICAL). DISPLAY
     # ONLY: consumed by _sales_cell_agg; no payout path reads it.
     activation_rules = []
-    try:
-        arows = (client.schema("commcalc").table("accessory_config")
-                 .select("activation_rules").eq("org_id", org_id).limit(1).execute().data) or []
-        if arows and isinstance(arows[0].get("activation_rules"), list):
-            activation_rules = [r for r in (arows[0].get("activation_rules") or []) if isinstance(r, dict)]
-    except Exception:
-        activation_rules = []
+    if isinstance(_ac.get("activation_rules"), list):
+        activation_rules = [r for r in (_ac.get("activation_rules") or []) if isinstance(r, dict)]
     billpay_products = []
-    try:
-        prows = (client.schema("commcalc").table("accessory_config")
-                 .select("billpay_products").eq("org_id", org_id).limit(1).execute().data) or []
-        if prows and isinstance(prows[0].get("billpay_products"), list):
-            billpay_products = [str(p).strip() for p in (prows[0].get("billpay_products") or []) if str(p).strip()]
-    except Exception:
-        billpay_products = []
+    if isinstance(_ac.get("billpay_products"), list):
+        billpay_products = [str(p).strip() for p in (_ac.get("billpay_products") or []) if str(p).strip()]
     # BOX-COUNT contribution buckets (mig 231; per-org, admin-editable) — which activation buckets
     # ('byod'/'upgrade'/'premium') add their DISTINCT-transaction count to the "total boxes sold" metric
     # (box_count). OWNER 2026-07-24: "customer phone = BYOD" must count toward total boxes. Fetched in its
     # OWN defensive query; missing column / empty (pre-231, or the house default) → NO extra boxes → box
     # counting stays BYTE-IDENTICAL (device-line boxes only). Applied at the END of _sales_cell_agg.
     box_count_buckets = []
-    try:
-        bcrows = (client.schema("commcalc").table("accessory_config")
-                  .select("box_count_buckets").eq("org_id", org_id).limit(1).execute().data) or []
-        if bcrows and isinstance(bcrows[0].get("box_count_buckets"), list):
-            box_count_buckets = [str(b).strip().lower() for b in (bcrows[0].get("box_count_buckets") or [])
-                                 if str(b).strip().lower() in ("byod", "upgrade", "premium")]
-    except Exception:
-        box_count_buckets = []
+    if isinstance(_ac.get("box_count_buckets"), list):
+        box_count_buckets = [str(b).strip().lower() for b in (_ac.get("box_count_buckets") or [])
+                             if str(b).strip().lower() in ("byod", "upgrade", "premium")]
     # GP-REPORT adoption flag (mig 250; per-org, admin-editable — the Classification modal's "use for
     # GP report" toggle). When TRUE the GP report classifies its Acc GP / Phone Sales buckets through THIS
     # config (_is_accessory + box_departments) instead of the department-only Boost defaults. Fetched in
     # its OWN defensive query; missing column (pre-250) / default false → GP classification BYTE-IDENTICAL.
     # DISPLAY ONLY (GP page); no payout path reads it.
-    apply_to_gp = False
-    try:
-        grows = (client.schema("commcalc").table("accessory_config")
-                 .select("apply_to_gp").eq("org_id", org_id).limit(1).execute().data) or []
-        if grows:
-            apply_to_gp = bool(grows[0].get("apply_to_gp"))
-    except Exception:
-        apply_to_gp = False
+    apply_to_gp = bool(_ac.get("apply_to_gp")) if got else False
     # CATALOG-DRIVEN accessory classification (migs 230/231; mig 224 doctrine — additive, config-gated).
     # `catalog_classify_enabled` (default false → Boost/house byte-identical) turns on an ADDITIVE catalog
     # layer: a line whose product (by normalized product_desc, else sku/upc/product_id where present) carries
@@ -13248,12 +13204,9 @@ def _accessory_config_uncached(client, org_id):
     catalog_classify_enabled = False
     catalog_accessory_categories = []
     try:
-        ccrows = (client.schema("commcalc").table("accessory_config")
-                  .select("catalog_classify_enabled,catalog_accessory_categories")
-                  .eq("org_id", org_id).limit(1).execute().data) or []
-        if ccrows:
-            catalog_classify_enabled = bool(ccrows[0].get("catalog_classify_enabled"))
-            catalog_accessory_categories = [str(c).strip() for c in (ccrows[0].get("catalog_accessory_categories") or []) if str(c).strip()]
+        if got:
+            catalog_classify_enabled = bool(_ac.get("catalog_classify_enabled"))
+            catalog_accessory_categories = [str(c).strip() for c in (_ac.get("catalog_accessory_categories") or []) if str(c).strip()]
     except Exception:
         catalog_classify_enabled = False
     # ACCESSORY DEFINITION AS A PAY BASIS (mig 276). Surfaced here purely so the Accessory Definition
@@ -13261,27 +13214,15 @@ def _accessory_config_uncached(client, org_id):
     # is CONSUMED only by commission_engine.preview (the synthetic `accessory` match_field), never by any
     # display classifier. Own defensive query; missing column (pre-276) / default false → the pay path is
     # BYTE-IDENTICAL to before.
-    definition_drives_pay = False
-    try:
-        dprows = (client.schema("commcalc").table("accessory_config")
-                  .select("definition_drives_pay").eq("org_id", org_id).limit(1).execute().data) or []
-        if dprows:
-            definition_drives_pay = bool(dprows[0].get("definition_drives_pay"))
-    except Exception:
-        definition_drives_pay = False
+    definition_drives_pay = bool(_ac.get("definition_drives_pay")) if got else False
     # GP ACCESSORY-COLUMN BASIS (mig 930; owner 2026-09-02 — "Acc Gp should show the price at which
     # the accessories were sold not the Gross profit as they are not entered correct … renamed to Acc
     # Sales"). 'sales' = Σ ext_price of accessory lines (the portal-reconciled basis — house DEFAULT);
     # 'gp' = the legacy Σ gp, opt-back for a tenant whose POS costs are trustworthy. Own defensive
     # query; a missing column (pre-930) / NULL / junk value falls back to the house default 'sales'.
     gp_acc_basis = "sales"
-    try:
-        gbrows = (client.schema("commcalc").table("accessory_config")
-                  .select("gp_acc_basis").eq("org_id", org_id).limit(1).execute().data) or []
-        if gbrows and str(gbrows[0].get("gp_acc_basis") or "").strip().lower() in ("sales", "gp"):
-            gp_acc_basis = str(gbrows[0]["gp_acc_basis"]).strip().lower()
-    except Exception:
-        gp_acc_basis = "sales"
+    if str(_ac.get("gp_acc_basis") or "").strip().lower() in ("sales", "gp"):
+        gp_acc_basis = str(_ac["gp_acc_basis"]).strip().lower()
     catalog_classifier = None
     if catalog_classify_enabled:
         try:
@@ -16832,6 +16773,10 @@ def get_pl_commission_source(org_id: str = ORG_ID):
     link = _ledger_pl_link(client, org_id) or {"lines": [], "source": meta["configured"], "active": False}
     return {
         "value": meta["configured"], "ready": meta["ready"], "migration": meta["migration"],
+        # what the reader found absent on the org's config row (§4b.1) — the same reader the P&L uses,
+        # so this panel and the statement can never disagree about what is configured
+        "config_columns_missing": meta.get("config_columns_missing") or [],
+        "config_migrations_missing": meta.get("config_migrations_missing") or [],
         "options": [{"value": v, "label": _lp.SOURCE_LABELS[v], "blurb": _lp.SOURCE_BLURBS[v]} for v in _lp.SOURCES],
         "suggestion": _lp.suggest_source(meta["configured"], evidence["feed_tables_with_rows"], evidence["ledger_lines"]),
         "evidence": evidence,
@@ -21843,11 +21788,11 @@ def _compute_gp(client, org_id, period, market=""):
     # (subscriber activated THIS month) from M2–M12 residual. The mi/atu money columns do not read it
     # and are byte-identical. Falls back to the pre-split select if the column is absent (pre-mig-021
     # raw_mi), in which case every residual dollar is honestly reported as 'unsplit'.
-    try:
-        mi_rows = sc.table('raw_mi').select('salesforce_id,actual_mi_payout,actual_atu_payout,mi_activation_date').eq('org_id', org_id).in_('period', pv).execute().data or []
-    except Exception as _mie:
-        print(f'WARN gp raw_mi select fell back (no mi_activation_date column?): {_mie}')
-        mi_rows = sc.table('raw_mi').select('salesforce_id,actual_mi_payout,actual_atu_payout').eq('org_id', org_id).in_('period', pv).execute().data or []
+    # ANY SUBSET OF COLUMNS (index §4b.1): `mi_activation_date` is PROBED on its own and the one real
+    # select carries it when it exists; a missing column reads exactly as the pre-split select did.
+    _mi_cols = _ct.select_list(('salesforce_id', 'actual_mi_payout', 'actual_atu_payout'), ('mi_activation_date',),
+                               _ct.present_columns(lambda: sc.table('raw_mi'), lambda q: q.eq('org_id', org_id), ('mi_activation_date',)))
+    mi_rows = sc.table('raw_mi').select(_mi_cols).eq('org_id', org_id).in_('period', pv).execute().data or []
     rep_comms  = sc.table('rep_commissions').select('store,total_payout,epay_salesperson,storeops_name').eq('org_id', org_id).in_('period', pv).execute().data or []
     # STICKY expenses (owner 2026-09-02: "the expenses column is not auto pulling from the expenses
     # sheet … apply a systematic fix not a band aid"). The Expenses SHEET has carried a month with no
@@ -21867,10 +21812,11 @@ def _compute_gp(client, org_id, period, market=""):
     # Wide select so the cost map can key on the TOTAL variant's UPC/SKU/desc (migs 230/231); high limit so
     # a multi-thousand-row catalog isn't truncated at the PostgREST default. Falls back to the legacy
     # product_id,cost select when the TOTAL columns don't exist yet (pre-230) → house byte-identical.
-    try:
-        catalog    = sc.table('raw_catalog').select('product_id,cost,upc,sku,product_desc').eq('org_id', org_id).limit(100000).execute().data or []
-    except Exception:
-        catalog    = sc.table('raw_catalog').select('product_id,cost').eq('org_id', org_id).limit(100000).execute().data or []
+    # ANY SUBSET OF COLUMNS (index §4b.1): each TOTAL column (migs 230/231) is PROBED on its own, so a
+    # catalog with `sku` but not `upc` still keys on `sku` — the former block dropped all three together.
+    _cat_cols = _ct.select_list(('product_id', 'cost'), ('upc', 'sku', 'product_desc'),
+                                _ct.present_columns(lambda: sc.table('raw_catalog'), lambda q: q.eq('org_id', org_id), ('upc', 'sku', 'product_desc')))
+    catalog    = sc.table('raw_catalog').select(_cat_cols).eq('org_id', org_id).limit(100000).execute().data or []
     store_map  = sc.table('store_mapping').select('store_address,salesforce_id,market,store_code,is_active').eq('org_id', org_id).execute().data or []
     # Canonical market enrichment (2026-09-03 "1115 Liberty Ave"/LI class): a mapping row with a
     # BLANK market inherits the store's market from the canonical union resolver (storeops.stores ∪
@@ -29930,10 +29876,11 @@ def _billpay_tender_tokens(client, org_id):
     from app.modules.commcalc import metric_recon as _mr
     card, cash = None, None
     try:
-        rows = (client.schema("commcalc").table("accessory_config")
-                .select("billpay_card_tenders,billpay_cash_tenders")
-                .eq("org_id", org_id).limit(1).execute().data) or []
-        if rows:
+        # ANY SUBSET OF COLUMNS (index §4b.1): the row is read whole; either mig-944 column is taken
+        # when present, so neither can hide the other.
+        rows = [_ct.read_row(lambda: client.schema("commcalc").table("accessory_config"),
+                             lambda q: q.eq("org_id", org_id)).row or {}]
+        if rows[0]:
             cv, sv = rows[0].get("billpay_card_tenders"), rows[0].get("billpay_cash_tenders")
             card = [str(t).strip() for t in cv if str(t or "").strip()] if isinstance(cv, (list, tuple)) else None
             cash = [str(t).strip() for t in sv if str(t or "").strip()] if isinstance(sv, (list, tuple)) else None
@@ -36416,26 +36363,21 @@ def data_source_pull_diagnostic(sid: str, org_id: str = ORG_ID):
     input values). Degrades to an explanatory note before migration 242."""
     require_org(org_id)
     client = sb()
-    try:
-        rows = (client.schema("commcalc").table("data_source")
-                .select("id,label,processor,last_pull_diag,last_pull_at,last_status,"
-                        "last_run_at,last_attempt_at,auth_status")
-                .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
-    except Exception:
-        rows = []
-        try:
-            rows = (client.schema("commcalc").table("data_source")
-                    .select("id,label,processor,last_status,last_run_at,auth_status")
-                    .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
-        except Exception:
-            rows = []
-        if rows:
-            return {"ready": False, "diag": None, "row": rows[0],
-                    "note": ("Run migration 242_commission_pull_diagnostic.sql to store what each pull "
-                             "saw. Until then only the one-line status below is kept.")}
-    if not rows:
+    # ANY SUBSET OF COLUMNS (index §4b.1): the row is read whole and PROJECTED to the diagnostic fields
+    # (a data_source row also holds credentials, which never enter this payload); the mig-242 columns
+    # are taken when present — `ready` is exactly "last_pull_diag exists", never "another column was
+    # missing".
+    _DIAG_COLS = ("id", "label", "processor", "last_pull_diag", "last_pull_at", "last_status",
+                  "last_run_at", "last_attempt_at", "auth_status")
+    rd = _ct.read_row(lambda: client.schema("commcalc").table("data_source"),
+                      lambda q: q.eq("id", sid).eq("org_id", org_id), expected=_DIAG_COLS)
+    if rd.row is None:
         raise HTTPException(404, "unknown data source")
-    r = rows[0]
+    r = {k: rd.row[k] for k in _DIAG_COLS if k in rd.row}
+    if "last_pull_diag" in rd.missing:
+        return {"ready": False, "diag": None, "row": r,
+                "note": ("Run migration 242_commission_pull_diagnostic.sql to store what each pull "
+                         "saw. Until then only the one-line status below is kept.")}
     diag = r.get("last_pull_diag")
     if isinstance(diag, str):
         import json as _json
@@ -37691,12 +37633,11 @@ def _activation_details_rules(client, org_id):
     billpay_products posture: its OWN defensive query, so an absent column / row / table (mig 313 unrun)
     degrades to the defaults and can never break the resolver. Org-scoped — a tenant's rules never leak
     to another org."""
-    raw = None
+    # ONE READ (index §4b.1, 2026-09-22): the same JSON `_accessory_config` already loads (whole-row
+    # read, cached, invalidated by the one writer put_accessory_config) — a second read of the same
+    # column was the duplicate the index forbids. Missing column / row / table → {} → house defaults.
     try:
-        rows = (client.schema("commcalc").table("accessory_config")
-                .select("activation_details_rules").eq("org_id", org_id).limit(1).execute().data) or []
-        if rows:
-            raw = rows[0].get("activation_details_rules")
+        raw = (_accessory_config(client, org_id) or {}).get("activation_details_rules_raw")
     except Exception:
         raw = None
     return _act_bucketing.resolve_rules(raw)

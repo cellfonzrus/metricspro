@@ -559,16 +559,16 @@ def _plan_pay_config(client, org_id):
     migration's setting readable on its own, so a missing activation_source column degrades to
     'raw_sales' (today's behaviour) without disturbing the mig-232 / mig-249 reads."""
     out = {"plan_ct_resolution": "raw", "store_resolution": "exact", "activation_source": "raw_sales"}
-    rows = None
-    for cols in ("plan_ct_resolution,store_resolution,activation_source",
-                 "plan_ct_resolution,store_resolution", "plan_ct_resolution"):
-        try:
-            rows = (client.schema("commcalc").table("commission_org_config")
-                    .select(cols).eq("org_id", org_id).limit(1).execute().data) or []
-            break
-        except Exception:
-            rows = None
-            continue
+    # ANY SUBSET OF COLUMNS (index §4b.1, 2026-09-22): the row is read whole through the one reading
+    # rule (core.column_tolerant) and each setting is taken when its column is present. The former
+    # widest-first ladder had the defect it was written to avoid, one rung down: a missing mig-249
+    # column would have hidden a present mig-296 one. `config_columns_missing` names what is absent.
+    from app.core import column_tolerant as _ct
+    rd = _ct.read_row(lambda: client.schema("commcalc").table("commission_org_config"),
+                      lambda q: q.eq("org_id", org_id),
+                      expected=("plan_ct_resolution", "store_resolution", "activation_source"))
+    out["config_columns_missing"] = list(rd.missing)
+    rows = [rd.row] if rd.row else None
     if rows:
         v = str(rows[0].get("plan_ct_resolution") or "raw").strip().lower()
         out["plan_ct_resolution"] = v if v in ("raw", "mapped") else "raw"
@@ -665,14 +665,13 @@ def _read_employee_roster(client, org_id):
     money path) — the pay path keeps using _read_employee_roles, which is untouched.
 
     Ordered by id so candidate ranking is deterministic across runs. Returns [] on any failure (the
-    diagnosis then honestly reports the roster as unavailable instead of blaming the name)."""
-    for cols in ("id,name,role,email,epay_salesperson,home_store,is_active", "id,name,role"):
-        try:
-            return (client.schema("storeops").table("employees").select(cols)
-                    .eq("org_id", org_id).order("id").execute().data) or []
-        except Exception:
-            continue
-    return []
+    diagnosis then honestly reports the roster as unavailable instead of blaming the name).
+    ANY SUBSET OF COLUMNS (§4b.1): the roster is read whole; the diagnosis takes the columns present."""
+    try:
+        return (client.schema("storeops").table("employees").select("*")
+                .eq("org_id", org_id).order("id").execute().data) or []
+    except Exception:
+        return []
 
 
 def _coverage_config(client, org_id):
@@ -838,21 +837,22 @@ def _read_ct_classification_config(client, org_id):
     except Exception:
         pass
     ct_map, rules, ad_raw = {}, [], None
-    for cols in ("contract_type_map,activation_rules,activation_details_rules", "contract_type_map,activation_rules", "contract_type_map"):
-        try:
-            rows = (client.schema("commcalc").table("accessory_config").select(cols)
-                    .eq("org_id", org_id).limit(1).execute().data) or []
-        except Exception:
-            continue
-        if rows:
-            cm = rows[0].get("contract_type_map")
-            if isinstance(cm, dict):
-                ct_map = {str(k).strip().lower(): str(v).strip().lower() for k, v in cm.items()}
-            ar = rows[0].get("activation_rules")
-            if isinstance(ar, list):
-                rules = [r for r in ar if isinstance(r, dict)]
-            ad_raw = rows[0].get("activation_details_rules")
-        break
+    # ANY SUBSET OF COLUMNS (§4b.1): the row is read whole through the one reading rule; each of the
+    # three columns is taken when present, so none can hide another (the former ladder could).
+    try:
+        from app.core import column_tolerant as _ct
+        row = _ct.read_row(lambda: client.schema("commcalc").table("accessory_config"),
+                           lambda q: q.eq("org_id", org_id)).row
+    except Exception:
+        row = None
+    if row:
+        cm = row.get("contract_type_map")
+        if isinstance(cm, dict):
+            ct_map = {str(k).strip().lower(): str(v).strip().lower() for k, v in cm.items()}
+        ar = row.get("activation_rules")
+        if isinstance(ar, list):
+            rules = [r for r in ar if isinstance(r, dict)]
+        ad_raw = row.get("activation_details_rules")
     return _lc.resolve_rules(ad_raw, ct_map), rules
 
 
