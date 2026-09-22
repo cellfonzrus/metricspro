@@ -218,7 +218,7 @@ class _Q:
                     keep.append(r)
             self.st.t[self.key] = keep
             WRITE_LOG.append({"mode": "delete", "table": self.table, "eq": dict(self._eq),
-                              "is": dict(self._is), "removed": gone})
+                              "in": dict(self._in), "is": dict(self._is), "removed": gone})
             return type("Res", (), {"data": []})()
         if self._mode in ("insert", "upsert"):
             payload = self._payload or []
@@ -394,8 +394,12 @@ check("the source names the raw table + how the period matched",
       and prev["sources"][0]["read"]["matched_by"] == "period", prev["sources"][0]["read"])
 check("the amount column is stated on the payload",
       prev["sources"][0]["diag"]["amount_col"] == "retail_cost", prev["sources"][0]["diag"])
-check("the delete scope is declared up front",
-      prev["delete_scope"] == {"org_id": HOUSE, "source_report": "ma_daily_tx", "period": "June 2026",
+# 2026-09-22 (index §30.15): the scope is the statement's whole FAMILY under every spelling of the
+# period, and the payload says the canonical key / spelling the rows will be STORED under
+check("the delete scope is declared up front (the family, every period spelling, the stored key)",
+      prev["delete_scope"] == {"org_id": HOUSE, "source_report": ["ma_daily_tx__commission_statement", "ma_daily_tx"],
+                               "period": ["June 2026", "2026-06"],
+                               "stored_as": {"source_report": "ma_daily_tx__commission_statement", "period": "June 2026"},
                                "origin": "ma_sync"}, prev["delete_scope"])
 check("the overlap note is absent when the period is empty", prev["overlap_note"] is None)
 
@@ -421,9 +425,12 @@ check("every inserted row carries its source table + raw row id",
       all(row.get("source_table") == "raw_ma_daily_tx" and row.get("source_row_id")
           for w in inserted for row in w["payload"]))
 dels = [w for w in WRITE_LOG if w["mode"] == "delete" and w["table"] == "commission_ledger"]
-check("the delete was org+template+period+origin scoped",
-      dels and all(d["eq"].get("org_id") == HOUSE and d["eq"].get("source_report") == "ma_daily_tx"
-                   and d["eq"].get("period") == "June 2026" and d["eq"].get("origin") == "ma_sync"
+# 2026-09-22 (index §30.15): the wipe is the statement's whole FAMILY (canonical key + legacy bare key)
+# under EVERY spelling of the period — an in_ filter each — still org- and origin-scoped
+check("the delete was org+template(family)+period(every spelling)+origin scoped",
+      dels and all(d["eq"].get("org_id") == HOUSE
+                   and d["in"].get("source_report") == ["ma_daily_tx__commission_statement", "ma_daily_tx"]
+                   and d["in"].get("period") == ["June 2026", "2026-06"] and d["eq"].get("origin") == "ma_sync"
                    for d in dels), dels)
 check("no unscoped delete happened", not unscoped_writes())
 check("an upload_trace row was written (the ingest is auditable)",
@@ -474,12 +481,18 @@ only_file = R.commission_ledger_summary(source_report="ma_daily_tx", period="Jun
                                         org_id=HOUSE)
 only_sync = R.commission_ledger_summary(source_report="ma_daily_tx", period="June 2026",
                                         origin="ma_sync", org_id=HOUSE)
-check("unfiltered summary sums both sources (unchanged behaviour)",
-      both["payout_total"] == 111.0 + 37.5, both["payout_total"])
+# 2026-09-22 (index §30.15): a period populated by BOTH origins is two LANDINGS of one statement —
+# the unfiltered summary REFUSES to add them (tiles read 0, the sentence names both) instead of the
+# earlier "adds them together" warning; each origin alone still reads its own figure
+check("unfiltered summary REFUSES to sum both sources (two landings of one statement × period)",
+      both.get("refused") is True and both["payout_total"] == 0
+      and "June 2026 holds 2 landings of the commission statement" in (both.get("landing_conflict") or ""),
+      (both["payout_total"], both.get("landing_conflict")))
 check("origin=file isolates the file import", only_file["payout_total"] == 111.0)
 check("origin=ma_sync isolates the refresh", only_sync["payout_total"] == 37.5)
-check("file + sync == unfiltered (no row is hidden or double-shown)",
-      only_file["payout_total"] + only_sync["payout_total"] == both["payout_total"])
+check("file + sync == what the two landings hold (no row is hidden)",
+      only_file["payout_total"] + only_sync["payout_total"] == 111.0 + 37.5
+      and sorted(x["rows"] for x in both["landings"][0]["landings"]) == [1, 4])
 rws = R.commission_ledger_rows(source_report="ma_daily_tx", period="June 2026", origin="ma_sync",
                                org_id=HOUSE)
 check("the drill-down honours the origin filter",
@@ -591,14 +604,16 @@ check("the component shape reports its synthesized fields, not as config gaps",
 check("the context fields resolve through the source's own hints",
       {f["target_field"]: f["col"] for f in mc["sources"][0]["mapped_fields"]}.get("order_number")
       == "activation_order", mc["sources"][0]["mapped_fields"])
-check("MA Commission writes into its OWN template namespace",
-      mc["source_report"] == "ma_commission" and mc["delete_scope"]["source_report"] == "ma_commission")
+check("MA Commission writes into its OWN template namespace (its family; stored under its canonical key — §30.15)",
+      mc["source_report"] == "ma_commission"
+      and mc["delete_scope"]["source_report"] == ["ma_commission__commission_statement", "ma_commission"]
+      and mc["delete_scope"]["stored_as"] == {"source_report": "ma_commission__commission_statement", "period": "June 2026"})
 st = install(Store(base_tables()))
 R.commission_ledger_ma_sync(source_report="ma_commission", period="June 2026", org_id=HOUSE)
 R.commission_ledger_ma_sync(source_report="ma_daily_tx", period="June 2026", org_id=HOUSE)
-check("the two templates coexist without touching each other",
-      len([r for r in st.t["commcalc.commission_ledger"] if r["source_report"] == "ma_commission"]) == 4
-      and len([r for r in st.t["commcalc.commission_ledger"] if r["source_report"] == "ma_daily_tx"]) == 4,
+check("the two templates coexist without touching each other (each stored under its canonical key — §30.15)",
+      len([r for r in st.t["commcalc.commission_ledger"] if r["source_report"] == "ma_commission__commission_statement"]) == 4
+      and len([r for r in st.t["commcalc.commission_ledger"] if r["source_report"] == "ma_daily_tx__commission_statement"]) == 4,
       [(r["source_report"], r["product_name"]) for r in st.t["commcalc.commission_ledger"]])
 
 print("\n── J. DEGRADATION ──")
@@ -629,8 +644,9 @@ check("pre-251 a file import still clears its period (old behaviour)", mode == "
 check("...with exactly ONE un-origin-scoped delete",
       len([w for w in WRITE_LOG if w["mode"] == "delete"]) == 1
       and "origin" not in WRITE_LOG[0]["eq"], WRITE_LOG)
-check("...still org+template+period scoped", WRITE_LOG[0]["eq"].get("org_id") == HOUSE
-      and WRITE_LOG[0]["eq"].get("period") == "June 2026")
+check("...still org+template(family)+period(every spelling) scoped", WRITE_LOG[0]["eq"].get("org_id") == HOUSE
+      and WRITE_LOG[0]["in"].get("period") == ["June 2026", "2026-06"]
+      and WRITE_LOG[0]["in"].get("source_report") == ["ma_daily_tx__commission_statement", "ma_daily_tx"])
 
 # missing raw table (mig 083 unrun)
 tb = base_tables()

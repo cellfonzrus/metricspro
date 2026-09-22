@@ -86,7 +86,14 @@ def effective_expense_rows(client, org_id, period, pvariants, select_cols):
     which is exactly the pre-mig-206 world where every row WAS manual).
     Org-scoped throughout; never raises — any read failure degrades to (whatever was read, None)."""
     sc = client.schema("commcalc")
-    cols = select_cols if "source_key" in select_cols else (select_cols + ",source_key")
+    # ANY SUBSET OF COLUMNS (index §4b.1): `source_key` (mig 206) is PROBED on its own before the one
+    # real select — pre-206 every row is manual, exactly as before — instead of a block whose failure
+    # on that column re-read the caller's columns and could not tell a schema gap from a read error.
+    from app.core import column_tolerant as _ct
+    _present = _ct.present_columns(lambda: sc.table("store_expenses"),
+                                   lambda q: q.eq("org_id", org_id), ("source_key",))
+    cols = select_cols if ("source_key" in select_cols or "source_key" not in _present) \
+        else (select_cols + ",source_key")
 
     def _read(q_period_list):
         try:
@@ -94,12 +101,7 @@ def effective_expense_rows(client, org_id, period, pvariants, select_cols):
                     .eq("org_id", org_id).in_("period", list(q_period_list))
                     .limit(100000).execute().data) or []
         except Exception:
-            try:  # pre-mig-206: no source_key column — every row is manual
-                return (sc.table("store_expenses").select(select_cols)
-                        .eq("org_id", org_id).in_("period", list(q_period_list))
-                        .limit(100000).execute().data) or []
-            except Exception:
-                return []
+            return []
 
     rows = _read(pvariants)
     if rows:

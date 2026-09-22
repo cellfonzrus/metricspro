@@ -100,6 +100,232 @@ def statement_type_of_source_report(source_report):
     from app.modules.commcalc import column_mapping as _cm
     return _cm.split_report_key(source_report)[1]
 
+
+# ── THE ONE LEDGER STATEMENT IDENTITY (owner 2026-09-22; index §30.15) ────────────────────────────
+# THE CLASS THIS CLOSES: a statement's ledger identity was ROUTE-DEPENDENT. The onboarding intake wrote
+# `commission_ledger.source_report = <carrier>__<statement slug>` (onboarding_intake.source_report_key);
+# the older /commission-ledger/import wizard wrote whatever template key the person typed — the bare
+# carrier code — and the MA refresh wrote the bare template key. §30.10 unified the MAPPING key per
+# statement type but not the LEDGER key, so ONE statement × period landed under two keys, the scoped
+# replace never saw the other copy, and a ledger-sourced P&L (§4b) would have booked it twice
+# (measured, org f4f1c16e…: July 2026 under '<carrier>' 973 rows AND under '<carrier>__commission_statement'
+# 973 rows). The PERIOD was stored as typed too ('Aug 2026' / 'aug 2026' / 'August 2026'), so copies
+# under a spelling `period_keys` does not list were orphans no reader found.
+#
+# Now ONE identity, derived here and dereferenced by every route:
+#     identity  = (base, statement-type slug)      base = the carrier code or the template key, slugged
+#     stored    = base + '__' + slug               ledger_source_report(); the intake's form, byte-for-byte
+#     legacy    = bare base  ≡  (base, DEFAULT)    a bare key READS as that base's DEFAULT statement type
+#     family    = every stored spelling of one identity — what every reader filters and every replace wipes
+#     period    = _period.canonical_period()       the month-NAME form; readers filter by period_keys()
+# The statement-type SLUG is the intake's (`ledger_slug` of the text the person typed at 3.1) because that
+# is what every live row and rule namespace carries; the MAPPING key's token (§30.10) is derived from the
+# same text through `statement_type_of_source_report` → report_kinds.statement_type_token, so the two
+# keys are two projections of one (base, type) pair and never disagree. No carrier is named here.
+# `harness_ledger_identity_lock.py` fails the build on a second derivation, on a ledger read that filters
+# `source_report` / `period` by a literal, and on a ledger insert outside the one lander.
+LEDGER_STATEMENT_TYPE_DEFAULT = "commission statement"     # the blank / unstated type; the intake's 3.1 default
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def ledger_slug(text):
+    """A stable key from a display string: lower, [a-z0-9_] only, no leading/trailing '_'. THE slug
+    the intake's keys are built from (onboarding_intake.slug dereferences this). PURE."""
+    return _SLUG_RE.sub("_", str(text or "").strip().lower()).strip("_")
+
+
+def ledger_identity(source_report, statement_type=""):
+    """(base, statement-type slug) — THE identity a `source_report` names. `statement_type`, when
+    given (the text typed on a wizard), decides the type; else the key's own `__<slug>` suffix; a bare
+    key is that base's DEFAULT statement type (compatibility: every pre-existing bare row reads as
+    the default type, which is exactly what it was). ('', default) for a blank key. PURE."""
+    from app.modules.commcalc import column_mapping as _cm
+    default = ledger_slug(LEDGER_STATEMENT_TYPE_DEFAULT)
+    st = ledger_slug(statement_type)
+    base, suffix = _cm.split_report_key(str(source_report or "").strip())
+    base = ledger_slug(base)
+    if st:
+        return base, st
+    return base, (ledger_slug(suffix) or default)
+
+
+def ledger_source_report(base, statement_type=""):
+    """THE stored `commission_ledger.source_report` (and the rule namespace) for (base, statement type):
+    `<base>__<slug>` — the intake's form, byte-for-byte (so every row and rule it ever wrote is
+    already canonical). `base` may itself be a full key; its identity is re-derived. PURE."""
+    b, st = ledger_identity(base, statement_type)
+    if not b:
+        raise ValueError("carrier code / template key required")
+    return f"{b}__{st}"
+
+
+def source_report_family(source_report, statement_type=""):
+    """Every stored spelling that IS this identity, canonical first: `[<base>__<slug>]`, plus the bare
+    `<base>` when the type is the default (the legacy spelling every pre-existing row carries). What
+    every ledger READ filters `source_report` by and every scoped replace wipes. PURE."""
+    b, st = ledger_identity(source_report, statement_type)
+    if not b:
+        return [str(source_report or "").strip()] if str(source_report or "").strip() else []
+    fam = [f"{b}__{st}"]
+    if st == ledger_slug(LEDGER_STATEMENT_TYPE_DEFAULT):
+        fam.append(b)
+        raw = str(source_report or "").strip()
+        if raw and raw not in fam:                    # a legacy key stored un-slugged ('Carrier X')
+            fam.append(raw)
+    return fam
+
+
+def identity_key(source_report):
+    """The canonical stored key of the identity a row's `source_report` names (`<base>__<slug>`), or the
+    raw value when it names no base — what every grouping by statement keys on (the P&L's, the
+    landings'). THE one place the key is composed for a read. PURE."""
+    b, st = ledger_identity(source_report)
+    return f"{b}__{st}" if b else str(source_report or "").strip()
+
+
+def is_legacy_source_report(source_report):
+    """True when `source_report` is a bare (pre-identity) spelling — no statement-type part. PURE."""
+    from app.modules.commcalc import column_mapping as _cm
+    return not _cm.split_report_key(str(source_report or "").strip())[1]
+
+
+def template_key(source_report):
+    """The ONE key a family is LISTED and PICKED by (the template picker, the rule editor's link, the
+    sync config, every `source_report=` query parameter): the bare base for the DEFAULT statement type
+    ('ma_daily_tx', a carrier code) and `<base>__<slug>` for every other type — the same SHAPE as the
+    §30.10 mapping key (bare for the default type, a suffix otherwise). The STORED key differs only for
+    the default type (`<base>__commission_statement`); readers filter by the family, so a person can
+    pass either spelling and read the same statement. PURE."""
+    b, st = ledger_identity(source_report)
+    if not b:
+        return str(source_report or "").strip()
+    return b if st == ledger_slug(LEDGER_STATEMENT_TYPE_DEFAULT) else f"{b}__{st}"
+
+
+def statement_type_words(source_report):
+    """'commission statement' / 'residual statement' — the identity's type, in words, for a sentence.
+    PURE."""
+    _b, st = ledger_identity(source_report)
+    return st.replace("_", " ")
+
+
+# ── THE PERIOD: one spelling, one home (dereferenced from account/_period, never copied) ────────
+def canonical_period(period):
+    """The spelling a landing STORES — `_period.canonical_period` (the month-name form). PURE."""
+    from app.modules.account import _period as _pd
+    return _pd.canonical_period(period)
+
+
+def ledger_period_keys(period):
+    """Every spelling a ledger READ filters `period` by — `_period.period_keys` (canonical first).
+    [] for a blank period (no filter). PURE."""
+    from app.modules.account import _period as _pd
+    if period is None or not str(period).strip():
+        return []
+    return _pd.period_keys(str(period).strip())
+
+
+def is_orphan_period(period):
+    """A stored period spelling no `period_keys` reader looks up ('aug 2026'): stored ≠ canonical."""
+    from app.modules.account import _period as _pd
+    return bool(str(period or "").strip()) and not _pd.is_canonical_period(period)
+
+
+# ── THE LANDINGS GUARD — N copies of one statement × period are REFUSED, never summed silently ─
+# A LANDING is one call of the lander: one (origin, stored source_report spelling, stored period
+# spelling) tuple — the lander deletes that exact scope (post-§30.15: the whole family × period_keys ×
+# origin) before it inserts, so within one tuple there is never more than one landing, and two tuples
+# of one identity × canonical period ARE two landings (the live shape: '<carrier>'/'July 2026' and
+# '<carrier>__commission_statement'/'July 2026'). No landing-id column is needed: the landing is
+# derived from the columns every row already carries. `created_at` (mig 071) dates it when present.
+def landings_for(rows, period=None):
+    """PURE. [{key (canonical stored key), base, statement_type, period (canonical), landings:
+    [{origin, source_report, period, rows, payout_total, landed_at}], rows, conflict}] — one entry per
+    identity × canonical period among `rows`, landings ordered newest first. `period`, when given,
+    keeps only that canonical period. Σ payout_total here is EVIDENCE for the sentence, never a
+    booking (the commission module owns its sums)."""
+    groups = {}
+    want = canonical_period(period) if period else None
+    for r in rows or []:
+        sr = str(r.get("source_report") or "")
+        b, st = ledger_identity(sr)
+        key = identity_key(sr)
+        per_raw = str(r.get("period") or "").strip()
+        per = canonical_period(per_raw)
+        if want and per != want:
+            continue
+        g = groups.setdefault((key, per), {"key": key, "base": b, "statement_type": st.replace("_", " "),
+                                           "period": per, "landings": {}, "rows": 0})
+        g["rows"] += 1
+        origin = str(r.get("origin") or "file")
+        lk = (origin, sr, per_raw)
+        L = g["landings"].setdefault(lk, {"origin": origin, "source_report": sr, "period": per_raw,
+                                          "rows": 0, "payout_total": 0.0, "landed_at": None,
+                                          "legacy_key": is_legacy_source_report(sr),
+                                          "orphan_period": is_orphan_period(per_raw)})
+        L["rows"] += 1
+        L["payout_total"] = round(L["payout_total"] + _sf(r.get("payout_total")), 2)
+        ts = r.get("synced_at") or r.get("created_at")
+        if ts and (L["landed_at"] is None or str(ts) < str(L["landed_at"])):
+            L["landed_at"] = str(ts)
+    out = []
+    for (_k, _p), g in sorted(groups.items()):
+        ls = sorted(g["landings"].values(), key=lambda x: (str(x["landed_at"] or ""), x["source_report"], x["period"]), reverse=True)
+        g["landings"] = ls
+        g["payout_total"] = round(sum(_sf(x.get("payout_total")) for x in ls), 2)   # the group's net (evidence)
+        g["conflict"] = len(ls) > 1
+        g["sentence"] = landing_sentence(g) if g["conflict"] else None
+        out.append(g)
+    return out
+
+
+def landing_sentence(group):
+    """The refusal, in the owner's words: "July 2026 holds 2 landings of the commission statement
+    (973 + 973 rows) — retire one under Onboarding → Intake". PURE."""
+    ls = group.get("landings") or []
+    counts = " + ".join(f"{int(x.get('rows') or 0):,}" for x in ls)
+    return (f"{group.get('period') or '(no period)'} holds {len(ls)} landings of the "
+            f"{group.get('statement_type') or 'statement'} ({counts} rows) — retire one under Onboarding → Intake")
+
+
+def landing_conflicts(rows, period=None):
+    """PURE. The identity × period groups among `rows` that hold MORE THAN ONE landing — what every
+    summing reader (the ledger page, by-rep, the P&L booking) must refuse to add up."""
+    return [g for g in landings_for(rows, period) if g["conflict"]]
+
+
+def landing_detail(landing):
+    """One landing, in words, for the trace and the 3.9 result: "973 rows landed on 2026-09-20 under
+    the older key '<carrier>'" / "521 rows landed on … under the spelling 'aug 2026'". PURE."""
+    n = int(landing.get("rows") or 0)
+    when = str(landing.get("landed_at") or "")[:10]
+    s = f"{n:,} rows" + (f" landed on {when}" if when else "")
+    bits = []
+    if landing.get("legacy_key"):
+        bits.append(f"under the older key '{landing.get('source_report')}'")
+    if landing.get("orphan_period"):
+        bits.append(f"under the period spelling '{landing.get('period')}'")
+    if landing.get("origin") and landing.get("origin") != "file":
+        bits.append(f"origin {landing.get('origin')}")
+    return s + (" " + ", ".join(bits) if bits else "")
+
+
+def replaced_sentence(replaced, new_rows, new_total):
+    """The lander's trace sentence for what a landing REPLACED (the #264 posture: never a silent second
+    copy): "replaced 973 rows landed on 2026-09-20 under the older key '<carrier>' (its net 14,411.40
+    differs from this landing's 165,997.59 — a different sign convention or line count)". '' when
+    nothing was replaced. PURE."""
+    if not replaced:
+        return ""
+    parts = []
+    for r in replaced:
+        d = "replaced " + landing_detail(r)
+        if int(r.get("rows") or 0) != int(new_rows or 0) or abs(_sf(r.get("payout_total")) - _sf(new_total)) >= 0.005:
+            d += (f" (its net {_sf(r.get('payout_total')):,.2f} / {int(r.get('rows') or 0):,} rows differs from this "
+                  f"landing's {_sf(new_total):,.2f} / {int(new_rows or 0):,} rows — a different sign convention or line count)")
+        parts.append(d)
+    return "; ".join(parts)
+
 # THE COLUMN-BACKED buckets (the five amount columns on commission_ledger, mig 071) + non-payout
 # sentinels. Every OTHER bucket lives in the registry below and is read by (category, payout_total).
 CATEGORIES = ["commission", "spiff", "equipment_rebate", "residual_monthly", "autopay_residual"]
@@ -465,9 +691,11 @@ RULES_TENANT, RULES_BUILTIN, RULES_NONE = "tenant", "builtin_default", "none"
 
 def default_rules_for(source_report):
     """The built-in fallback rules for ONE template, as rule dicts. [] for a template that has none."""
+    base, st = ledger_identity(source_report)          # 'ma_daily_tx__commission_statement' has the seed's defaults
+    key = base if st == ledger_slug(LEDGER_STATEMENT_TYPE_DEFAULT) else source_report
     return [{"match_field": mf, "match_op": op, "pattern": pat, "category": cat,
              "sign_rule": sr, "priority": pr}
-            for (mf, op, pat, cat, sr, pr) in DEFAULT_RULES_BY_TEMPLATE.get(source_report, ())]
+            for (mf, op, pat, cat, sr, pr) in DEFAULT_RULES_BY_TEMPLATE.get(key, ())]
 
 
 # Preconfigured TEMPLATES a new tenant can adopt or fork. The source_report key namespaces a whole
@@ -503,14 +731,18 @@ def list_templates(client, org_id):
 
     Both reads are ORG-SCOPED. The ledger scan is capped; `scan_truncated` says so rather than
     quietly under-counting."""
-    counts, lines, truncated = {}, {}, False
+    counts, lines, truncated, spellings = {}, {}, False, {}
+    # ONE entry per statement IDENTITY (index §30.15): a family's legacy bare key and its canonical key
+    # fold onto the family's template key — two spellings of one statement are never two templates
     try:
         rows = (client.schema("commcalc").table(MAP_TABLE).select("source_report")
                 .eq("org_id", org_id).execute().data) or []
         for r in rows:
             k = r.get("source_report")
-            if k:
-                counts[k] = counts.get(k, 0) + 1
+            if k and k != "*":
+                tk = template_key(k)
+                counts[tk] = counts.get(tk, 0) + 1
+                spellings.setdefault(tk, set()).add(k)
     except Exception:
         pass
     try:
@@ -520,14 +752,18 @@ def list_templates(client, org_id):
         for r in led:
             k = r.get("source_report")
             if k:
-                lines[k] = lines.get(k, 0) + 1
+                tk = template_key(k)
+                lines[tk] = lines.get(tk, 0) + 1
+                spellings.setdefault(tk, set()).add(k)
     except Exception:
         pass
     seen = set(counts) | set(lines)
     keys = list(BUILTIN_TEMPLATES) + [k for k in sorted(seen) if k not in BUILTIN_TEMPLATES]
     return [{"key": k, "label": BUILTIN_TEMPLATES.get(k, k), "builtin": k in BUILTIN_TEMPLATES,
              "rule_count": counts.get(k, 0), "ledger_lines": lines.get(k, 0),
-             "scan_truncated": truncated} for k in keys]
+             "scan_truncated": truncated,
+             # every stored spelling this template folds (a legacy bare key beside the canonical one)
+             "spellings": sorted(spellings.get(k, set()))} for k in keys]
 
 
 def _sf(v):
@@ -547,8 +783,10 @@ def load_rules_meta(client, org_id, source_report=DEFAULT_SOURCE_REPORT):
     """
     rows = []
     try:
+        # THE FAMILY (index §30.15): a statement's rules under its canonical key AND its legacy bare
+        # key are ONE rule-set — the older wizard saved under the bare key, the intake under the long one
         rows = (client.schema("commcalc").table(MAP_TABLE).select("*")
-                .eq("org_id", org_id).in_("source_report", [source_report, "*"]).execute().data) or []
+                .eq("org_id", org_id).in_("source_report", source_report_family(source_report) + ["*"]).execute().data) or []
     except Exception:
         rows = []
     if rows:
@@ -927,10 +1165,18 @@ def summarize(rows, rules=None, legcls=None, conv=None, buckets=None, buckets_me
     deductions_total = round(sum(v["total"] for v in cats.values() if v["kind"] == KIND_DEDUCTION), 2)
     identity_ok = abs(round(sum(leg_tot.values()), 2) - payout_total) < 0.01 and all(
         abs(round(sum(leg_cats[c].values()), 2) - cats[c]["total"]) < 0.01 for c in cats)
+    # THE LANDINGS GUARD (index §30.15) — additive: which landings these rows come from, and the
+    # refusal sentence when one statement × period holds more than one. The totals above are
+    # unchanged; a CALLER that sums money (the ledger page, by-rep, the P&L booking) reads
+    # `landing_conflict` and refuses. Rows without a source_report / period (a preview) are one landing.
+    _landings = landings_for(rows)
+    _conflicts = [g for g in _landings if g["conflict"]]
     return {
         "categories": cats,
         "category_labels": bucket_labels(reg),
         "by_month": by_month,
+        "landings": _landings,
+        "landing_conflict": ("; ".join(g["sentence"] for g in _conflicts) or None),
         "payout_total": payout_total,
         "charge_total": round(charge_total, 2),
         "other_total": round(other_total, 2),

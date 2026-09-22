@@ -230,7 +230,9 @@ def main():
     ledger_del = funcs.get("_ledger_delete_scoped", "")
     check("(b) the ledger excuse is still TRUE: _ledger_land_rows wipes through _ledger_delete_scoped, which filters the delete by source_report",
           "commission_ledger" in STAMP_EXCUSED and "_ledger_delete_scoped(" in ledger and "source_report" in ledger
-          and ".delete()" in ledger_del and 'eq("source_report"' in ledger_del.replace("'", '"'))
+          and ".delete()" in ledger_del
+          # since 2026-09-22 (index §30.15) the filter is the statement's whole FAMILY of stored keys (in_), not one literal
+          and ('in_("source_report"' in ledger_del.replace("'", '"') or 'eq("source_report"' in ledger_del.replace("'", '"')))
     check("(b) the product layout lands in its OWN table, registered in the slice map, and SOURCE_KIND_TARGET dereferences TABLE_MAP",
           CM.TABLE_MAP["pos_product_sales"] != CM.TABLE_MAP["sales"] and CM.TABLE_MAP["pos_product_sales"] in LI.KIND_STAMP
           and CM.TABLE_MAP["sales"] in LI.KIND_STAMP)

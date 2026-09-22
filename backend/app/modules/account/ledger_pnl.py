@@ -49,9 +49,10 @@ backend/harness_pl_commission_source_lock.py (CI).
 from app.modules.commcalc.calculator import safe_float
 from app.modules.commcalc import commission_ledger as _cl
 from app.modules.account import ma_store_pnl as _msp
+from app.core import column_tolerant as _ct      # the ONE reading rule for a wide table (§4b.1)
 
-MIGRATION = "1013_pl_commission_source.sql"
 CONFIG_COLUMN = "pl_commission_source"
+MIGRATION = _msp.PL_CONFIG_MIGRATION[CONFIG_COLUMN]      # one home: ma_store_pnl.PL_CONFIG_COLUMNS
 
 SOURCE_FEEDS = _msp.COMMISSION_SOURCE_FEEDS
 SOURCE_LEDGER = _msp.COMMISSION_SOURCE_LEDGER
@@ -81,6 +82,7 @@ UNBOOKED_NO_LINE = "no P&L line chosen for this bucket (Category → Bucket Map 
 UNBOOKED_UNMAPPED = "unmapped payout ('other') — assign these labels a bucket on the Category → Bucket Map"
 UNBOOKED_UNLISTED = "filed under a bucket key the registry no longer lists"
 UNBOOKED_UNKNOWN_LINE = "the bucket names a P&L line the chart does not have"
+UNBOOKED_LANDINGS = "landed more than once for this period — nothing is booked from it until one landing is retired"
 
 
 def _money(x):
@@ -154,6 +156,28 @@ def ledger_bookings(rows, buckets, sections, cfg=None):
        "line_count": n}
     The amounts are `commission_ledger.summarize`'s — this function never sums a payout_total."""
     rows = list(rows or [])
+    # THE LANDINGS GUARD (index §30.15) — DEREFERENCED from the ledger's own `landing_conflicts`: a
+    # statement × period the ledger holds MORE THAN ONE LANDING of (the same statement under two keys,
+    # two spellings of the period, or two origins) books NOTHING — its rows are set aside, reported
+    # under `unbooked` with the ledger's sentence, and `conflicts` carries the evidence; every other
+    # statement in the period books as usual. Summing two copies is the defect this closes.
+    conflicts = _cl.landing_conflicts(rows)
+    held = {(g["key"], g["period"]) for g in conflicts}
+    unbooked = {}
+    if held:
+        kept = []
+        for r in rows:
+            key = (_cl.identity_key(str(r.get("source_report") or "")), _cl.canonical_period(str(r.get("period") or "").strip()))
+            if key in held:
+                continue
+            kept.append(r)
+        rows = kept
+        for g in conflicts:
+            unbooked[("landings", g["key"], g["period"])] = {
+                "what": f"{g['statement_type']} ({g['base']}) — {g['period']}",
+                "amount": _money(g.get("payout_total")),          # the ledger's own Σ — never summed here
+                "reason": f"{UNBOOKED_LANDINGS}: {g['sentence']}", "lines": int(g.get("rows") or 0),
+                "landings": g["landings"]}
     groups, order = {}, []
     for r in rows:
         st = _store_of(r)
@@ -161,7 +185,7 @@ def ledger_bookings(rows, buckets, sections, cfg=None):
             groups[st] = []
             order.append(st)
         groups[st].append(r)
-    bookings, by_line, by_bucket, unbooked = [], {}, {}, {}
+    bookings, by_line, by_bucket = [], {}, {}
     by_src = {}
     for st in order:
         s = _cl.summarize(groups[st], buckets=buckets)
@@ -208,7 +232,8 @@ def ledger_bookings(rows, buckets, sections, cfg=None):
     for k, rs in by_report.items():
         by_src[k] = _cl.summarize(rs, buckets=buckets)["payout_total"]
     return {"bookings": bookings, "by_line": by_line, "by_bucket": by_bucket,
-            "by_source_report": by_src, "unbooked": list(unbooked.values()), "line_count": len(rows)}
+            "by_source_report": by_src, "unbooked": list(unbooked.values()), "line_count": len(rows),
+            "conflicts": conflicts, "held_lines": sum(int(g.get("rows") or 0) for g in conflicts)}
 
 
 # ── 4. THE GUARD ─────────────────────────────────────────────────────────────────────────────────
@@ -228,15 +253,19 @@ def _fmt(x):
 
 
 def divergence(feed_by_line, ledger_by_line, source, covered, configured=None, unbooked=None,
-               by_source_report=None, ledger_line_count=0):
+               by_source_report=None, ledger_line_count=0, config_columns_missing=None, conflicts=None):
     """PURE. {line: commission_source-meta} for every line either source names. Under 'ledger' a
     covered line says what the ledger booked and what the feeds WOULD have booked (suppressed); under
     'feeds' a line the ledger also holds says what the feeds booked and what the ledger holds —
     the gap a migrating tenant reads before flipping the switch. A line only the feeds book, in an
-    org whose ledger is empty, gets NO meta (the payload stays byte-identical)."""
+    org whose ledger is empty, gets NO meta (the payload stays byte-identical).
+    `config_columns_missing` (the reader's report, 2026-09-22): when the switch column itself is
+    absent the words SAY so and name the migration — the read side says what the save side refuses —
+    and `switch_ready` is False; otherwise the meta is byte-identical to before."""
     feed_by_line = {k: _money(v) for k, v in (feed_by_line or {}).items()}
     ledger_by_line = {k: _money(v) for k, v in (ledger_by_line or {}).items()}
     covered = set(covered or ())
+    switch_ready = CONFIG_COLUMN not in set(config_columns_missing or ())
     out = {}
     lines = set(ledger_by_line) | (covered if source == SOURCE_LEDGER else set())
     if ledger_by_line:
@@ -245,7 +274,13 @@ def divergence(feed_by_line, ledger_by_line, source, covered, configured=None, u
         f, l = feed_by_line.get(line, 0.0), ledger_by_line.get(line, 0.0)
         booked_from_ledger = source == SOURCE_LEDGER and line in covered
         diff = _money(l - f)
-        if booked_from_ledger:
+        if booked_from_ledger and conflicts:
+            # the ledger REFUSED (a statement landed more than once): nothing booked, the feeds still
+            # switched off on this covered line, and the sentence says exactly why (index §30.15)
+            words = ("Nothing booked from the Commission Ledger on this line" + (f" beyond {_fmt(l)}" if l else "") +
+                     ": " + "; ".join(g["sentence"] for g in conflicts) + ". The feed booking" +
+                     (f" ({_fmt(f)})" if f else "") + " stays switched off so nothing is counted twice.")
+        elif booked_from_ledger:
             if f:
                 words = (f"Booked from the Commission Ledger ({_fmt(l)}). The feed tables would have booked "
                          f"{_fmt(f)} this month — a difference of {_fmt(diff)}; the feed booking is switched off "
@@ -263,14 +298,19 @@ def divergence(feed_by_line, ledger_by_line, source, covered, configured=None, u
                          "source to the ledger to book it from there.")
             else:
                 words = f"Booked from the feed tables ({_fmt(f)}). The Commission Ledger holds nothing for this line this month."
+        if not switch_ready:
+            words += (f" The P&L commission-source switch column ({CONFIG_COLUMN}) is not applied on this "
+                      f"database yet — apply migration {MIGRATION}; until then the feed tables book this line.")
         out[line] = {"source": SOURCE_LEDGER if booked_from_ledger else SOURCE_FEEDS,
                      "configured": str(configured or SOURCE_FEEDS),
+                     "switch_ready": switch_ready,
                      "feeds": f, "ledger": l, "difference": diff,
                      "suppressed": _money(f) if booked_from_ledger else 0.0,
                      "words": words,
                      "ledger_lines": int(ledger_line_count or 0),
                      "by_source_report": dict(by_source_report or {}),
-                     "unbooked": list(unbooked or []) if source == SOURCE_LEDGER else []}
+                     "unbooked": list(unbooked or []) if source == SOURCE_LEDGER else [],
+                     "landing_conflicts": [g["sentence"] for g in (conflicts or [])]}
     return out
 
 
@@ -327,8 +367,13 @@ def suggest_source(configured, feed_tables_with_rows, ledger_line_count):
 
 
 # ── 8. I/O — the only two readers ───────────────────────────────────────────────────────────────
-_LEDGER_COLS = "category,payout_total,store,source_report,origin,is_payout,raw_amount,payment_month,product_name,period"
-_LEDGER_COLS_PRE251 = "category,payout_total,store,source_report,is_payout,raw_amount,payment_month,product_name,period"
+# The ledger is a wide, hot table, so it keeps an explicit column list; the OPTIONAL column (`origin`,
+# mig 251) is probed on its own before the one real select (core.column_tolerant, §4b.1) — never a
+# block whose failure on one column drops another. The N-landings guard (§30.15) derives a landing from
+# source_report / period / origin, all read here; the landing's date is decoration the P&L does not need.
+_LEDGER_REQUIRED = ("category", "payout_total", "store", "source_report", "is_payout", "raw_amount",
+                    "payment_month", "product_name", "period")
+_LEDGER_OPTIONAL = ("origin",)
 
 
 def load_ledger_rows(client, org_id, period_keys, page=1000, cap=200000):
@@ -338,39 +383,37 @@ def load_ledger_rows(client, org_id, period_keys, page=1000, cap=200000):
     keys = list(period_keys or [])
     if not keys:
         return []
-    for cols in (_LEDGER_COLS, _LEDGER_COLS_PRE251):
-        out, start = [], 0
-        try:
-            while start < cap:
-                chunk = (client.schema("commcalc").table(_cl.LEDGER_TABLE).select(cols)
-                         .eq("org_id", org_id).in_("period", keys)
-                         .range(start, start + page - 1).execute().data) or []
-                out.extend(chunk)
-                if len(chunk) < page:
-                    break
-                start += page
-            return out
-        except Exception:
-            continue
-    return []
+    table = lambda: client.schema("commcalc").table(_cl.LEDGER_TABLE)      # noqa: E731
+    scope = lambda q: q.eq("org_id", org_id)                                # noqa: E731
+    out, start = [], 0
+    try:
+        cols = _ct.select_list(_LEDGER_REQUIRED, _LEDGER_OPTIONAL,
+                               _ct.present_columns(table, scope, _LEDGER_OPTIONAL))
+        while start < cap:
+            chunk = (scope(table().select(cols)).in_("period", keys)
+                     .range(start, start + page - 1).execute().data) or []
+            out.extend(chunk)
+            if len(chunk) < page:
+                break
+            start += page
+        return out
+    except Exception:
+        return []
 
 
 def load_source_meta(client, org_id):
-    """I/O, org-scoped: {configured, ready, migration} — whether the mig-1013 column exists (a read of
-    it fails on a database without it) and the org's raw value. The RESOLVED value for a period still
-    comes from `resolve_source` — this is the settings panel's read-back. NEVER raises."""
-    meta = {"configured": SOURCE_FEEDS, "ready": True, "migration": MIGRATION}
-    try:
-        rows = (client.schema("commcalc").table("commission_org_config").select(CONFIG_COLUMN)
-                .eq("org_id", org_id).limit(1).execute().data) or []
-    except Exception:
-        meta["ready"] = False
-        return meta
-    if rows:
-        v = str(rows[0].get(CONFIG_COLUMN) or "").strip().lower()
-        if v in SOURCES:
-            meta["configured"] = v
-    return meta
+    """I/O, org-scoped: {configured, ready, migration, config_columns_missing,
+    config_migrations_missing} — the settings panel's read-back. ONE reader: this dereferences
+    `ma_store_pnl.load_config` (which reads the row whole and reports what is absent), so the panel
+    and the P&L can never disagree about what the org configured. `ready` is False exactly when the
+    mig-1013 column is absent. The RESOLVED value for a period still comes from `resolve_source`.
+    NEVER raises."""
+    cfg = _msp.load_config(client, org_id)
+    missing = list(cfg.get("config_columns_missing") or [])
+    return {"configured": cfg.get("commission_source") or SOURCE_FEEDS,
+            "ready": CONFIG_COLUMN not in missing, "migration": MIGRATION,
+            "config_columns_missing": missing,
+            "config_migrations_missing": list(cfg.get("config_migrations_missing") or [])}
 
 
 def load_source_evidence(client, org_id, ledger_probe=5000):

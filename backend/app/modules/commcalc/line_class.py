@@ -469,6 +469,11 @@ def _candidates(values, scanned, hints, broad_ratio):
     return accepted, broad
 
 
+# the public name of the candidate scan, for the OTHER per-org word rules that reuse this engine rather
+# than growing a sibling (core/plan_sources.py — which landed sources carry a tenant's plan names, 2026-09-22)
+candidate_words = _candidates
+
+
 def suggest_rules(rows, current=None, skip=None, fields=CANDIDATE_FIELDS, broad_ratio=BROAD_RATIO):
     """Propose `fields` + `tokens` per class from the rows' own vocabulary. PURE.
 
