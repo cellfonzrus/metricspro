@@ -432,3 +432,39 @@ a format is not registered yet) and writes nothing — never another POS's layou
 **Locked.** `backend/harness_pos_sales_from_reports_lock.py` (CI): a second document shape, a second importer, a second renderer, or a
 consumer that names a POS key / a tender class instead of reading the declaration and the vocabulary fails the build; the module is
 held by the carrier-vocab guard; the consumers map and ScreenLink carry the POS screen.
+
+## 13. A statement has ONE ledger identity, ONE period spelling, ONE lander — and N landings are refused (owner 2026-09-22)
+
+**The instance.** The same July commission file landed through the intake (`<carrier>__commission_statement`) and, twenty
+seconds later, through the older Commission Ledger wizard (`<carrier>`): 973 + 973 rows for `'July 2026'`, the older copy
+carrying the pre-#246 sign (Σ 14,411.40 vs 165,997.59). August was landed under `'Aug 2026'`, `'aug 2026'` and
+`'August 2026'` — the first two orphans no reader looks up. Index §30.15 has the measured table.
+
+**The class.** (1) The ledger key was route-dependent: §30.10 derived the MAPPING key per statement type, but the
+LEDGER key was whatever each route spelled. (2) The period was stored as typed. (3) No reader guarded against N copies.
+
+**The design (index §30.15).**
+- **Identity** — `commission_ledger.ledger_identity(source_report, statement_type)` → `(base, statement slug)`;
+  `ledger_source_report` → the stored key `<base>__<slug>` (this document's §3.1 key, byte-for-byte —
+  `onboarding_intake.source_report_key` now dereferences it); `source_report_family` → the spellings a read filters
+  (`[canonical, bare]` for the default type: a bare pre-existing row reads as the base's default statement type);
+  `template_key` → what a picker lists (bare for the default type, `<base>__<slug>` otherwise — the §30.10 shape).
+- **Period** — `account/_period.canonical_period` (the month-NAME form) is stored; `period_keys` (canonical first, a
+  superset of before) is read. `parse_period` accepts `Aug 2026` / `Sept 2026` / `2026-8`.
+- **Lander** — `router._ledger_land_rows` for every route (the wizard, 3.9, the MA refresh): stamps the derived key and
+  the canonical period on every row, MEASURES what the family × period already holds (every spelling, every origin it
+  owns), wipes it, inserts, and the trace / the 3.9 result say *"replaced 973 rows landed on 2026-09-20 under the older key"*.
+- **Guard** — `commission_ledger.landings_for` / `landing_conflicts`: a landing is one (origin, stored key, stored period
+  spelling) tuple, derived from the columns every row carries (no migration). More than one landing of one statement ×
+  period is REFUSED by every summing reader — the ledger page, by-rep, observed-types, the per-rep statement buckets and
+  the P&L booking (`ledger_pnl.ledger_bookings` books nothing for it and says why on the line) — with *"July 2026 holds 2
+  landings of the commission statement (973 + 973 rows) — retire one under Onboarding → Intake"*.
+- **Retire** — the intake's `POST /onboarding/intake/retire` with `remove_landed` on a commission instance removes its
+  statement × period family (counted, confirmed); the Commission Ledger page retires ONE landing by its stored spelling
+  through `POST /commission-ledger/landings/retire` (the same counted core, #268).
+
+**What must not happen (foreclosed).** A second key composition, a ledger read filtered by a literal period or key, a
+second lander, an un-wired guard — `backend/harness_ledger_identity_lock.py` (CI) fails the build on each.
+**Proof.** `backend/harness_ledger_statement_identity.py` — 92 checks, the live shape as the fixture, every route through
+the REAL router, the REAL P&L builder, compatibility pins on the house org and the master-agent tenant, negative controls.
+
