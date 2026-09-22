@@ -85,3 +85,41 @@ registry), `ma_store_pnl.load_config` (the reader) / `rebate_route` / `REBATE_LI
 `consumers_for_table`, `ShowsIn` / `ScreenLink`, `PUT /commission-settings` (the one writer),
 `_period.period_keys` (both period spellings). NEW: `account/ledger_pnl.py`, one column (mig 1013),
 one read endpoint, one panel, two harnesses. Nothing else.
+
+## 6. 2026-09-22 — the reader reads ANY subset of its columns (index §4b.1)
+
+**What happened live.** The owner applied mig 1013 and chose the ledger; the row reads
+`pl_commission_source='ledger'`. `ma_store_pnl.load_config` returned `feeds`: the row lacks the mig-996 column
+`pl_device_margin_presentation`, so the 1013 block and the 996 block both failed and the ladder fell to the
+934 block, which predates the switch. `build_inputs` booked $0 commission and nothing said why.
+
+**The class, not the instance.** A reader that selects column SETS as blocks with a fallback to a smaller block
+lets one missing OLDER column hide every NEWER one. Nineteen such ladders existed. They are all gone, replaced by
+ONE reading rule in `backend/app/core/column_tolerant.py`:
+
+- a per-org CONFIG row is read with `select("*")` and the reader takes the keys present (`read_row`) —
+  byte-identical when every column exists;
+- a wide, hot DATA table keeps its explicit column list and PROBES each optional column on its own
+  (`present_columns` + `select_list`) before the one real select;
+- what is missing is RETURNED (`missing`) and SURFACED: `load_config` → `config_columns_missing` /
+  `config_migrations_missing` (`PL_CONFIG_COLUMNS`, the column ↔ migration map, one home); the panel's
+  `load_source_meta` now DEREFERENCES `load_config` (one reader for the panel and the statement, `ready` = the
+  1013 column present); `divergence` puts `switch_ready` and the sentence *"the P&L commission-source switch
+  column is not applied on this database yet — apply migration 1013_pl_commission_source.sql"* on the line —
+  the read side says what the save side already refused.
+
+**Lock.** `harness_any_columns_lock.py` (CI): an AST scan fails the build on any for-ladder, try/except
+block-then-subset fallback or tier table under `backend/app`; the P&L reader must read through `read_row`;
+`load_source_meta` must dereference `load_config`; the three helper functions have one home; every named reader
+is on the rule; the two credential-holding rows (`_connector_status`, `data_source_pull_diagnostic`) are
+projected. **Proof** `harness_any_columns.py`: the live shape reads `ledger` and books the ledger while the
+REMOVED ladder, replayed over the same rows, reads `feeds`; the inverse shape reads `feeds`, reports
+`['pl_commission_source']` and names 1013 on the P&L and the panel; byte-identical under complete columns for
+every reader that changed.
+
+**Unapplied on live.** `996_pl_device_margin_presentation.sql` — the only `commission_org_config` column from
+migrations 210 → 1013 absent on the owner's `select *` row. Both the panel and the P&L now report it.
+
+**Money.** No figure changes where every column exists. On the live tenant the ledger books once the reader
+sees the switch — and the ledger holds DUPLICATE July 2026 copies (task #36, another agent), so the July
+figure is not to be judged until that lands. Ledger identity is untouched here.

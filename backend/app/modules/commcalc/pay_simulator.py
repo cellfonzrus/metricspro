@@ -166,17 +166,17 @@ def _memberships(client, uid):
     (pre-706 there is at most one row anyway). The public-schema retry is a defensive fallback for
     deployments that expose app_users there. NOT org-filtered on purpose — auth_id is the key and the
     rows themselves NAME the tenants."""
-    for cols in ("org_id,employee_id,store_code,store_codes,full_name,super_admin,is_default_org",
-                 "org_id,employee_id,store_code,store_codes,full_name,super_admin",
-                 "org_id,employee_id,store_code,store_codes,full_name"):
-        for _tbl in (lambda: client.schema("storeops").table("app_users"),
-                     lambda: client.table("app_users")):
-            try:
-                rows = (_tbl().select(cols).eq("auth_id", uid).execute().data) or []
-            except Exception:
-                continue
-            if rows:
-                return rows
+    # ANY SUBSET OF COLUMNS (§4b.1, 2026-09-22): the membership rows are read whole and the caller
+    # takes the mig-706/711 columns when present — the former column-set ladder let one un-run
+    # migration hide the columns of another. The two-schema retry (storeops, then public) stays.
+    for _tbl in (lambda: client.schema("storeops").table("app_users"),
+                 lambda: client.table("app_users")):
+        try:
+            rows = (_tbl().select("*").eq("auth_id", uid).execute().data) or []
+        except Exception:
+            continue
+        if rows:
+            return rows
     return []
 
 
@@ -384,15 +384,13 @@ def employee_roster(client, org_id, limit=2000):
     mid-month leaver still has period sales, exactly as `_read_employee_roles` treats them.
     Org-scoped; returns [] on any failure so the page degrades to self-only instead of erroring."""
     rows = []
-    for cols in ("id,name,email,epay_salesperson,home_store,is_active",
-                 "id,name,epay_salesperson,home_store",
-                 "id,name"):
-        try:
-            rows = (client.schema("storeops").table("employees").select(cols)
-                    .eq("org_id", org_id).order("name").execute().data) or []
-            break
-        except Exception:
-            continue
+    # ANY SUBSET OF COLUMNS (§4b.1): the roster is read whole; email / epay_salesperson / home_store /
+    # is_active are taken when present. The former ladder could drop a present column with an absent one.
+    try:
+        rows = (client.schema("storeops").table("employees").select("*")
+                .eq("org_id", org_id).order("name").execute().data) or []
+    except Exception:
+        rows = []
     out, seen = [], set()
     for e in rows:
         value = str(e.get("epay_salesperson") or e.get("name") or "").strip()

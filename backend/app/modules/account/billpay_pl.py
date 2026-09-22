@@ -58,17 +58,20 @@ def default_config():
 
 def load_config(client, org_id):
     """Per-org bill-pay presentation config, ADAPTIVE (pre-mig-939 schema or no row ⇒ defaults).
-    NEVER raises — each column its own defensive read (coa._account_config posture)."""
+    NEVER raises. ANY SUBSET OF COLUMNS (§4b.1): the row is read whole through the one reading rule
+    and each switch taken when present, so neither column's absence can hide the other's value."""
     cfg = default_config()
     try:
-        rows = (client.schema("commcalc").table("commission_org_config")
-                .select("pl_billpay_presentation,pl_billpay_settlement")
-                .eq("org_id", org_id).limit(1).execute().data) or []
-        if rows:
-            p = str(rows[0].get("pl_billpay_presentation") or "").strip().lower()
+        from app.core import column_tolerant as _ct
+        rd = _ct.read_row(lambda: client.schema("commcalc").table("commission_org_config"),
+                          lambda q: q.eq("org_id", org_id),
+                          expected=("pl_billpay_presentation", "pl_billpay_settlement"))
+        cfg["config_columns_missing"] = list(rd.missing)
+        if rd.row:
+            p = str(rd.row.get("pl_billpay_presentation") or "").strip().lower()
             if p in PRESENTATIONS:
                 cfg["presentation"] = p
-            s = str(rows[0].get("pl_billpay_settlement") or "").strip().lower()
+            s = str(rd.row.get("pl_billpay_settlement") or "").strip().lower()
             if s in SETTLEMENTS:
                 cfg["settlement"] = s
     except Exception:

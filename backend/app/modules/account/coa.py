@@ -535,13 +535,10 @@ def wages_by_store(client, org_id, period):
     nxt = f"{py + 1:04d}-01-01" if pm == 12 else f"{py:04d}-{pm + 1:02d}-01"
     so = client.schema("storeops")
     code2addr = store_code_to_address(client, org_id)
-    try:
-        emps = (so.table("employees")
-                .select("employee_id,pay_rate,home_store,pay_basis,pay_amount,is_active")
-                .eq("org_id", org_id).execute().data) or []
-    except Exception:   # pre-mig-416/417: salary columns absent → hourly-only, exactly as before
-        emps = (so.table("employees").select("employee_id,pay_rate,home_store")
-                .eq("org_id", org_id).execute().data) or []
+    # ANY SUBSET OF COLUMNS (§4b.1, 2026-09-22): the roster is read whole and derive_wage_cells takes
+    # the salary columns (migs 416/417) when they are present — a pre-416 schema is still hourly-only,
+    # exactly as before, and no other column's absence can hide them. Same rows, same money.
+    emps = (so.table("employees").select("*").eq("org_id", org_id).execute().data) or []
     shifts = (so.table("shifts")
               .select("employee_id,store_code,scheduled_hours,actual_hours,shift_date,is_deleted")
               .eq("org_id", org_id).eq("is_deleted", False).gte("shift_date", f"{month}-01").lt("shift_date", nxt)
@@ -1163,7 +1160,8 @@ def build_inputs(client, org_id, period):
                     _lp_feed_tally, _lb["by_line"], _lp_src, _lp_covered,
                     configured=(_ma314_cfg or {}).get("commission_source"),
                     unbooked=_lb["unbooked"], by_source_report=_lb["by_source_report"],
-                    ledger_line_count=_lb["line_count"]).items():
+                    ledger_line_count=_lb["line_count"],
+                    config_columns_missing=(_ma314_cfg or {}).get("config_columns_missing")).items():
                 if _line in L:
                     L[_line]["commission_source"] = _m
         except Exception as e:

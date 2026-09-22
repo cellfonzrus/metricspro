@@ -509,16 +509,17 @@ def _public_method_ok(path: str, method: str) -> bool:
 
 
 def _fetch_memberships(client, uid):
-    """Every app_users row for this auth_id, earliest first. Also selects role + twofa_enabled (used by
-    the 2FA gate). Tolerant of post-706/711 columns being un-run: falls back through progressively
-    leaner column lists so a missing column never breaks identity resolution (pre-706 there is at most
-    one row anyway; a missing twofa_enabled just means 2FA-off).
+    """Every app_users row for this auth_id, earliest first. The rows carry role + twofa_enabled (used
+    by the 2FA gate) when those columns exist. ANY SUBSET OF COLUMNS (index §4b.1, 2026-09-22): the
+    rows are read WHOLE (`select("*")`) and the callers take the mig-706/711 columns when present —
+    a missing twofa_enabled just means 2FA-off, exactly as before — so an un-run migration can never
+    break identity resolution AND can never hide another migration's column (the former column-set
+    ladder could: one absent older column dropped every newer one).
 
-    2026-08-03: the LADDER still swallows-and-retries (that is what makes an un-run mig 706/711
-    harmless), but the FINAL rung — a pre-706 `org_id,super_admin` select that cannot fail for a
-    schema reason — now RAISES IdentityBackendUnavailable instead of returning `[]`. Returning `[]`
-    there was read upstream as "verified user with no app_users row", which skips the org_id rewrite
-    and honors the CLIENT-SUPPLIED org_id: a DB hiccup used to silently downgrade tenant isolation.
+    2026-08-03 posture kept: a read that fails is a DB failure, not a schema one, and RAISES
+    IdentityBackendUnavailable instead of returning `[]`. Returning `[]` there was read upstream as
+    "verified user with no app_users row", which skips the org_id rewrite and honors the
+    CLIENT-SUPPLIED org_id: a DB hiccup used to silently downgrade tenant isolation.
     IDENTITY_BACKEND_503=0 restores the old `[]` exactly."""
     try:
         tbl = client.schema("storeops").table("app_users")
@@ -526,15 +527,8 @@ def _fetch_memberships(client, uid):
         if not _identity_503():
             return []
         raise IdentityBackendUnavailable(exc)
-    for cols in ("org_id,super_admin,is_default_org,role,twofa_enabled",
-                 "org_id,super_admin,is_default_org,role",
-                 "org_id,super_admin,is_default_org"):
-        try:
-            return (tbl.select(cols).eq("auth_id", uid).order("created_at").execute().data) or []
-        except Exception:
-            continue
     try:
-        return (tbl.select("org_id,super_admin").eq("auth_id", uid).execute().data) or []
+        return (tbl.select("*").eq("auth_id", uid).order("created_at").execute().data) or []
     except Exception as exc:
         if not _identity_503():
             return []                      # break-glass: pre-2026-08-03 behaviour, byte-for-byte
