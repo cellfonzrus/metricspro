@@ -55,6 +55,14 @@ name: carrier-vocab-guard
 # (backend/harness_pl_commission_source.py: the compatibility pin, the booking, the guard, the divergence)
 # runs locally like the other P&L proofs — it needs the app's dependencies.
 #
+# THE ANY-SUBSET-COLUMNS LOCK (index §4b.1, 2026-09-22) runs here too: a reader of a table whose columns
+# arrive by hand-applied migrations tolerates ANY subset of them — no column-block ladder anywhere under
+# backend/app (one missing OLDER column hid every NEWER one: the live P&L read `feeds` after the owner
+# chose the ledger), ONE reading rule (core/column_tolerant.py) every named reader dereferences, the
+# credential-holding rows projected (backend/harness_any_columns_lock.py; stdlib only). The PROOF
+# (backend/harness_any_columns.py: the live shape and its inverse, byte-identical under complete columns)
+# runs locally like the other P&L proofs.
+#
 # THE CONNECTOR-SCOPE LOCK (index §12a.2, mig 1014, 2026-09-21) runs here too: connectors carry a POS /
 # carrier scope in ONE registry (commcalc.connector_registry, mirror connector_registry.HOUSE_CONNECTORS —
 # parsed back from the seed), visibility is report_kinds' predicate one axis over (the `connector:` cap
@@ -98,6 +106,8 @@ on:
       - "backend/harness_line_class.py"
       - "backend/harness_tender_vocab_lock.py"
       - "backend/harness_pl_commission_source_lock.py"
+      - "backend/harness_any_columns_lock.py"
+      - "backend/app/core/column_tolerant.py"
       - "backend/app/modules/account/ledger_pnl.py"
       - "backend/app/modules/account/coa.py"
       - "backend/app/modules/account/engine.py"
@@ -198,6 +208,9 @@ jobs:
       - name: Run the P&L-commission-source lock (one resolver; the ledger booking dereferences the registry; a derived suppression set; one sum; every surface wired)
         working-directory: backend
         run: python3 harness_pl_commission_source_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the any-subset-columns lock (no column-block ladder anywhere; one reading rule; every named reader on it; credential rows projected)
+        working-directory: backend
+        run: python3 harness_any_columns_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the POS sales-from-reports lock (one receipt document shape, one importer, one renderer; the format follows the declared POS)
         working-directory: backend
         run: python3 harness_pos_sales_from_reports_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

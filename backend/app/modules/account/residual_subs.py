@@ -216,14 +216,18 @@ def load_ma_pnl_config(client, org_id):
     default rather than guessing."""
     cfg = default_ma_pnl_config()
     try:
-        rows = (client.schema("commcalc").table("commission_org_config")
-                .select("pl_merchant_discount_own_line,pl_ma_residual_order_types")
-                .eq("org_id", org_id).limit(1).execute().data) or []
-        if rows:
-            own = rows[0].get("pl_merchant_discount_own_line")
+        # ANY SUBSET OF COLUMNS (§4b.1): the row is read whole through the one reading rule and each
+        # switch taken when present, so neither column's absence can hide the other's value.
+        from app.core import column_tolerant as _ct
+        rd = _ct.read_row(lambda: client.schema("commcalc").table("commission_org_config"),
+                          lambda q: q.eq("org_id", org_id),
+                          expected=("pl_merchant_discount_own_line", "pl_ma_residual_order_types"))
+        cfg["config_columns_missing"] = list(rd.missing)
+        if rd.row:
+            own = rd.row.get("pl_merchant_discount_own_line")
             if isinstance(own, bool):
                 cfg["merchant_discount_own_line"] = own
-            ots = rows[0].get("pl_ma_residual_order_types")
+            ots = rd.row.get("pl_ma_residual_order_types")
             if isinstance(ots, list):
                 # An explicit EMPTY list is honored: it means "label family only" (the pre-309 filter).
                 cfg["residual_order_types"] = [str(t).strip() for t in ots if str(t).strip()]

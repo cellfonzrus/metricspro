@@ -58,6 +58,7 @@ comm-sheet components are the audited `_MA_COMPONENTS`. A retail_cost books AT M
 from app.modules.commcalc.calculator import safe_float
 from app.modules.commcalc.commission_ledger import month_leg_of
 from app.modules.account import residual_subs as _rs
+from app.core import column_tolerant as _ct      # the ONE reading rule for a config row (§4b.1)
 
 # ── comm-sheet component → P&L head (moved verbatim from coa.build_inputs' inline map so the pure
 # booking function below is the ONE place the routing lives; coa imports it). Owner rulings
@@ -131,37 +132,59 @@ def default_config():
         "rebate_presentation": "contra_cogs",
         "device_margin_presentation": "off",
         "commission_source": COMMISSION_SOURCE_FEEDS,
+        # what the reader found absent on the org's row (2026-09-22): [] until read, or complete
+        "config_columns_missing": [],
+        "config_migrations_missing": [],
     }
 
 
-_CFG_COLS_314 = ("pl_ma_store_attribution,pl_ma_month_spiff_source,"
-                 "pl_ma_spiff_order_types,pl_mdf_product_tokens,pl_line_labels")
-_CFG_COLS_934 = _CFG_COLS_314 + ",pl_rebate_presentation"
-_CFG_COLS_996 = _CFG_COLS_934 + ",pl_device_margin_presentation"
-_CFG_COLS_1013 = _CFG_COLS_996 + ",pl_commission_source"
+# THE COLUMNS THIS READER TAKES FROM THE ORG'S ROW, each with the migration that adds it — ONE list,
+# the home of "which P&L switches exist" (ledger_pnl dereferences the mig-1013 entry). Read through
+# core.column_tolerant.read_row: `select("*")`, take what is there, REPORT what is not. The former
+# newest-first column-set ladder (1013 → 996 → 934 → 314) let one missing OLDER column hide every
+# NEWER one — on the live tenant a missing mig-996 column made the mig-1013 switch read `feeds` after
+# the owner had chosen `ledger` (2026-09-22). Migrations are applied by hand and not always in order.
+PL_CONFIG_COLUMNS = (
+    ("pl_ma_store_attribution", "314_pl_ma_store_attribution.sql"),
+    ("pl_ma_month_spiff_source", "314_pl_ma_store_attribution.sql"),
+    ("pl_ma_spiff_order_types", "314_pl_ma_store_attribution.sql"),
+    ("pl_mdf_product_tokens", "314_pl_ma_store_attribution.sql"),
+    ("pl_line_labels", "314_pl_ma_store_attribution.sql"),
+    ("pl_rebate_presentation", "934_pl_rebate_presentation.sql"),
+    ("pl_device_margin_presentation", "996_pl_device_margin_presentation.sql"),
+    ("pl_commission_source", "1013_pl_commission_source.sql"),
+)
+PL_CONFIG_MIGRATION = dict(PL_CONFIG_COLUMNS)
+
+
+def config_migrations_missing(columns_missing):
+    """PURE: the migration files (deduped, in column order) that add the missing columns."""
+    out = []
+    for c in columns_missing or ():
+        m = PL_CONFIG_MIGRATION.get(c)
+        if m and m not in out:
+            out.append(m)
+    return out
 
 
 def load_config(client, org_id):
     """Per-org MA store-attribution config (commcalc.commission_org_config, mig 314), org-scoped,
     ADAPTIVE: missing table/columns (pre-314) or row ⇒ `default_config()`. NEVER raises. Values are
-    validated — an unknown spiff source or non-list/non-dict value keeps the default."""
+    validated — an unknown spiff source or non-list/non-dict value keeps the default.
+
+    ANY SUBSET OF COLUMNS (2026-09-22): the row is read whole (`select("*")`) and each switch is taken
+    when its column is present, so no column's absence can hide another's value. What is absent is
+    REPORTED on `config_columns_missing` / `config_migrations_missing` so the panel and the P&L can
+    say "apply migration X" instead of silently reading a default."""
     cfg = default_config()
     try:
-        # Column-set fallback, NEWEST first: selecting a column a live DB doesn't have yet is a
-        # PostgREST error for the WHOLE select, and falling all the way back to defaults would
-        # silently drop the mig-314 seeds an org already runs on. So: mig-1013 column set, then the
-        # mig-996 set, then the mig-934 set, then the mig-314 set, then defaults — each older set
-        # keeps every value it does carry.
-        rows = []
-        for _cols in (_CFG_COLS_1013, _CFG_COLS_996, _CFG_COLS_934, _CFG_COLS_314):
-            try:
-                rows = (client.schema("commcalc").table("commission_org_config")
-                        .select(_cols).eq("org_id", org_id).limit(1).execute().data) or []
-                break
-            except Exception:
-                continue
-        if rows:
-            r = rows[0]
+        rd = _ct.read_row(lambda: client.schema("commcalc").table("commission_org_config"),
+                          lambda q: q.eq("org_id", org_id),
+                          expected=[c for c, _m in PL_CONFIG_COLUMNS])
+        cfg["config_columns_missing"] = list(rd.missing)
+        cfg["config_migrations_missing"] = config_migrations_missing(rd.missing)
+        r = rd.row
+        if r:
             if isinstance(r.get("pl_ma_store_attribution"), bool):
                 cfg["store_attribution"] = r["pl_ma_store_attribution"]
             src = str(r.get("pl_ma_month_spiff_source") or "").strip().lower()

@@ -166,9 +166,14 @@ check("the value is case/whitespace tolerant (a human types this into config)",
       msp.device_margin_presentation({"device_margin_presentation": "  MARGIN_BLOCK "})
       == "margin_block")
 check("only the two declared routes exist", msp.DEVICE_MARGIN_ROUTES == ("off", "margin_block"))
-check("the mig-996 column set extends the mig-934 one rather than replacing it",
-      msp._CFG_COLS_996.startswith(msp._CFG_COLS_934)
-      and "pl_device_margin_presentation" in msp._CFG_COLS_996)
+# 2026-09-22 (index §4b.1): the column-set ladder is gone — the reader takes ANY subset of the row —
+# so the fact to pin is that the mig-996 column is in the ONE column registry, after the mig-934 one,
+# with its migration named (what `config_migrations_missing` reports when it is absent, as on live).
+_pl_cols = [c for c, _m in msp.PL_CONFIG_COLUMNS]
+check("the mig-996 column is registered in the one P&L config column list, after the mig-934 one, "
+      "and names its migration",
+      _pl_cols.index("pl_device_margin_presentation") > _pl_cols.index("pl_rebate_presentation")
+      and msp.PL_CONFIG_MIGRATION["pl_device_margin_presentation"] == "996_pl_device_margin_presentation.sql")
 VOCAB = ("verizon", "boost", "luxelink", "novawave", "vidapay", "total wireless", "apple",
          "samsung", "paramount")
 check("no carrier, tenant, vendor or product name appears in the route names, column keys or "

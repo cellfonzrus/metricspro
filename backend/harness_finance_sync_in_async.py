@@ -299,8 +299,12 @@ for rel, allowed in EXPECTED_DELTA.items():
 #   pl_commission_source resolves to the Commission Ledger, drops a feed booking whose line the
 #   ledger covers (so a line is never booked from both). Under the house default it calls `add`
 #   unchanged — byte-identical, pinned by backend/harness_pl_commission_source.py §A.
+#   coa.py {wages_by_store} (2026-09-22, index §4b.1) — the ANY-SUBSET column read: the storeops
+#   roster is read with `select("*")` instead of a salary-columns block falling back to an hourly
+#   block (the class that made the live P&L read `feeds` after the owner chose the ledger). Same rows
+#   into the same `derive_wage_cells`; harness_any_columns.py §C pins the wage cells byte-identical.
 MONEY_MODULE_DELTA = {
-    f"{MOD}/account/coa.py": ({"_account_config", "build_inputs"}, {"_lcov_mod", "build_inputs.add_comm"}),
+    f"{MOD}/account/coa.py": ({"_account_config", "build_inputs", "wages_by_store"}, {"_lcov_mod", "build_inputs.add_comm"}),
     f"{MOD}/account/autocompute.py": (set(), set()),
     f"{MOD}/account/statement_filter.py": (set(), set()),
 }
