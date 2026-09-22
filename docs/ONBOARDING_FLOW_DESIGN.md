@@ -432,3 +432,38 @@ a format is not registered yet) and writes nothing — never another POS's layou
 **Locked.** `backend/harness_pos_sales_from_reports_lock.py` (CI): a second document shape, a second importer, a second renderer, or a
 consumer that names a POS key / a tender class instead of reading the declaration and the vocabulary fails the build; the module is
 held by the carrier-vocab guard; the consumers map and ScreenLink carry the POS screen.
+
+## 13. Where a tenant's PLAN NAMES come from is per-org config over ONE registry — proposed from the tenant's own words, confirmed, locked (owner 2026-09-22)
+
+Owner, verbatim: *"we have enough plans in the system to bring over but it does not give an option to bring over"* — the POS wizard's
+"Add your plans & features" step read `commcalc.product_mrc` + `commcalc.raw_mi` and nothing else; the tenant had neither and 8,350
+landed sales lines under a rate-plan branch (3,165 of them rebates under the same branch) plus 1,494 commission-statement lines naming
+price plans. Index §23n.1 carries the measurements, the table of mechanisms, the proofs and the lock.
+
+**The class, again.** A wizard step derived a tenant fact from a fixed pair of per-feed tables. §10 fixed that class for the activation
+words (per-org words over the tenant's own vocabulary, proposed with counts, guarded when too broad, confirmed by the person); index §4b
+fixed it for the P&L commission source (a per-org switch, one resolver, suggested then confirmed). This is the same fix for plan names,
+and it obeys the §0 principles the same way:
+
+- **Config, never code.** ONE registry of the landed sources that can carry a plan name (`core/plan_sources.HOUSE_SOURCES`: the
+  mig-074 pair ON by default — today's behaviour, byte-identical — and the two line-level sources, the sales export and the commission
+  statement, OFF until the person confirms their words). Which are on, and the include / exclude words, are the org's
+  `pos.pos_settings['plan_sources']` row (mig 725 — the POS module's existing per-org kv; **no migration**). A tenant can never add a
+  table: a table is a registry entry, a word is config.
+- **Proposed from the file's own words, with the count each names.** The 2.5a engine is REUSED (`line_class.distinct_values` /
+  `candidate_words`, the same `BROAD_RATIO`), not copied: generic plan hints matched over the source's distinct values per field;
+  a word naming ≥ 80% of the lines is a heading, not a plan — reported, never proposed; exclude words ("rebate", "bonus", …)
+  measured over the lines the proposal would take, so the card can say "'rebate' would leave out 3,165 line(s)"; the preview is
+  THE predicate over the proposal, so the count shown is the count "Bring over" will create. The proposal is the ONLY seed of the
+  card's editable words; no hint list reaches the card.
+- **Confirmed by the person, guarded when saved.** The save measures the rules that WOULD be in force over the very rows the harvest
+  reads and refuses a too-broad word — nothing written, the word and its share named — unless attested by name (recorded with who,
+  when and the share). Then ONE writer (`pos/router.upsert_pos_setting`, which `PUT /pos/settings` also delegates to).
+- **One resolver, both doors.** `onboarding.resolve_service_plans` serves the preview AND the apply — every configured source, in
+  registry precedence (a catalogue rate beats a subscriber charge beats an unpriced name), each candidate carrying its provenance
+  (source, lines, first / last seen) and, where the source reports no charge, no invented fee — the row says where to price it.
+  The empty state names every source actually checked and what each held, never "neither source".
+- **Locked.** `backend/harness_plan_sources_lock.py` (CI): a literal plan table in the wizard, a second derivation, a second writer, a
+  save that writes before it measures, a card that seeds from a hint list or names a table / key, "Neither source" back in the copy,
+  a vendor word in the module or the card — each fails the build; the two siblings that harvest from reports are excused by name
+  (`_dealer_sync`: per-carrier config already; `catalog_suggest.own_signals`: the POS's own activations, a different question).

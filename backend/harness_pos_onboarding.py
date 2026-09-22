@@ -29,6 +29,12 @@ WHAT IT PROVES
           stale-public-shadow class that took POS down on 2026-08-08)
       P10 every route in onboarding.py takes org_id as a QUERY PARAM (never Form/body/constant) and
           every pos-schema insert stamps org_id (AGENT_CONTRACT §2, both halves)
+      P17 plan sources are per-org CONFIG over ONE registry (owner 2026-09-22, plan_sources.py): the
+          measured tenant (0 catalogue / 0 subscribers / 8,350 rate-plan sales lines incl. rebates /
+          statement lines) yields 0 under house defaults with an empty state naming all FOUR sources;
+          the words are proposed with counts and the rebate exclusion; after the person confirms, N
+          plans with provenance and no invented MRC; apply is additive; the too-broad guard refuses a
+          heading word unless attested by name; the mig-074 tenants are byte-identical (the pin)
 
     LIVE checks (need tools/sbsql.py; skipped with a loud SKIP when unavailable):
       L1  the _SNAPSHOT column definitions match the live database exactly — this is the anti-drift
@@ -563,6 +569,261 @@ check("P16a preview and apply share ONE plan derivation",
 check("P16b the dealer-code import delegates to the existing harvest, not a second copy",
       _ob_src.count("from app.modules.pos.router import _dealer_sync") == 2
       and "dealer_code_source_table" not in _ob_src)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+print("\n── PURE: plan sources are per-org CONFIG over one registry (owner 2026-09-22) ─────────")
+#
+# OWNER (2026-09-22, verbatim): "we have enough plans in the system to bring over but it does not give
+# an option to bring over" — under a card reading "0 record(s) … Neither source has anything yet".
+#
+# THE CLASS: the step derived the plan list from a FIXED PAIR of per-feed tables (product_mrc + raw_mi).
+# A tenant whose plan names live in another landed source — org f4f1c16e…: 0 + 0, but 8,350 sales-export
+# lines under a rate-plan branch (3,165 of them REBATES under the same branch) and 1,494 commission-
+# statement lines naming price plans — saw 0 and no way to bring anything over.
+#
+# THE FIX (plan_sources.py): ONE registry of the landed sources that can carry a plan name; which are
+# switched on and the words that mark a plan line are PER-ORG CONFIG (pos.pos_settings `plan_sources`,
+# mig 725 — no migration); the line-level sources are proposed from the tenant's own vocabulary with
+# counts, the too-broad guard, and the rebate words excluded; ONE resolver for preview and apply; the
+# empty state names every source checked. §P17 drives the REAL preview / save / apply over an in-memory
+# tenant shaped like the measured one.
+try:
+    from harness_intake_fakes import FakeDB as _FakeDB
+    from app.modules.core import plan_sources as _ps
+    _HAVE_FAKE = True
+except Exception as _e:                                          # pragma: no cover
+    _HAVE_FAKE = False
+    skip("P17 plan sources", f"fakes unavailable — {_e}")
+
+if _HAVE_FAKE:
+    _ORG = "f4f1c16e-0000-4000-8000-000000000001"
+    _OTHER = "854f6d7b-0000-4000-8000-000000000002"
+
+    def _tenant(*, catalogue=(), subscribers=(), sales=(), statement=(), config=None):
+        """An in-memory tenant. Every plan table is DECLARED so an empty table still answers a select
+        (Postgres 42703 on an unknown column, as the fake does)."""
+        db = _FakeDB()
+        db.declared["product_mrc"] = ["id", "org_id", "plan_pattern", "mrc", "carrier_id", "classification", "is_active"]
+        db.declared["raw_mi"] = ["id", "org_id", "period", "period_year", "period_month", "customer_plan",
+                                 "base_mrc", "commissionable_mrc", "salesforce_id"]
+        db.declared["commission_ledger"] = ["id", "org_id", "period", "source_report", "product_name", "order_type",
+                                            "category", "trans_date", "payout_total"]
+        db.declared["pos_settings"] = ["id", "org_id", "store_code", "key", "value", "updated_at"]
+        db.declared["service_plans"] = ["id", "org_id", "carrier", "plan_code", "plan_name", "plan_description",
+                                        "monthly_fee", "included_minutes", "service_area", "contract_type",
+                                        "contract_terms", "dealer_code", "status"]
+        db.seed("carrier", [{"org_id": _ORG, "name": "Carrier A"}, {"org_id": _OTHER, "name": "Carrier B"}])
+        db.seed("product_mrc", [{"org_id": _ORG, **r} for r in catalogue])
+        db.seed("raw_mi", [{"org_id": _ORG, **r} for r in subscribers])
+        db.seed("raw_sales", [{"org_id": _ORG, "period": "August 2026", **r} for r in sales])
+        db.seed("commission_ledger", [{"org_id": _ORG, "period": "July 2026", "source_report": "stmt", **r}
+                                      for r in statement])
+        # ANOTHER tenant's rows in every table — must never leak into this org's plans
+        db.seed("raw_sales", [{"org_id": _OTHER, "period": "August 2026", "department": "Plans",
+                               "category": ">> Rate Plans", "product_desc": "Other Tenant Rate Plan",
+                               "trans_date": "2026-08-01"}] * 50)
+        db.seed("commission_ledger", [{"org_id": _OTHER, "period": "July 2026", "source_report": "stmt",
+                                       "product_name": "Other Tenant Price Plan", "order_type": "", "category": "",
+                                       "trans_date": "2026-07-01"}] * 50)
+        db.seed("raw_mi", [{"org_id": _OTHER, "period": "August 2026", "period_year": 2026, "period_month": 8,
+                            "customer_plan": "Other Tenant Sub Plan", "base_mrc": 40.0}] * 5)
+        db.seed("product_mrc", [{"org_id": _OTHER, "plan_pattern": "Other Tenant Catalogue Plan", "mrc": 30.0}])
+        if config is not None:
+            db.seed("pos_settings", [{"org_id": _ORG, "store_code": None, "key": _ps.CONFIG_KEY, "value": config}])
+        return db
+
+    _P = ">> Activations (Price Sheet) >> Carrier A >> "
+
+    def _lines(cat, prod, n, d="2026-08-05"):
+        return [{"department": "Activations (Price Sheet)", "category": cat, "product_desc": prod,
+                 "trans_date": d} for _ in range(n)]
+
+    # THE MEASURED SHAPE (scaled 1:10): 8,350 rate-plan lines of 48,875 — 3 plan names + 3 rebate names
+    # under the same branch — plus phones and accessories; the statement: 2 price plans + spiffs.
+    _SALES = (_lines(_P + "Rate Plans", "iPhone Rate Plan (DPA)", 263)
+              + _lines(_P + "Rate Plans", "New Activation Rate Plan", 56, "2026-07-02")
+              + _lines(_P + "Rate Plans", "Smart Phone Rate Plan (DPA)", 30, "2026-08-20")
+              + _lines(_P + "Rate Plan Rebates", "DPA Upgrade iPhone (Rate Plan Rebate)", 159)
+              + _lines(_P + "Rate Plan Rebates", "DPA New Act iPhone (Rate Plan Rebate)", 104)
+              + _lines(_P + "Rate Plan Rebates", "New Activation (Rate Plan Rebate)", 53)
+              + _lines(_P + "SmartPhones >> Maker", "Phone model X", 2000)
+              + _lines(">> Accessories >> Cases", "Case", 2050))
+    _STMT = ([{"product_name": "Unlimited Plus Price Plan - New", "order_type": "Activation", "category": "commission",
+               "trans_date": "2026-07-10"}] * 30
+             + [{"product_name": "Unlimited Welcome Price Plan - Upgrade", "order_type": "Upgrade",
+                 "category": "commission", "trans_date": "2026-07-11"}] * 20
+             + [{"product_name": "Device Bonus", "order_type": "Spiff", "category": "spiff", "trans_date": "2026-07-11"}] * 10
+             + [{"product_name": "Accessory Spiff", "order_type": "Spiff", "category": "spiff", "trans_date": "2026-07-12"}] * 90)
+
+    _real_sb = ob.sb
+
+    # P17a — THE REGISTRY is the one home: four landed sources, the mig-074 pair ON, the line sources OFF
+    check("P17a the registry lists the mig-074 pair ON and the line-level sources OFF (house = today)",
+          [(s["key"], s["kind"], s["enabled"]) for s in _ps.HOUSE_SOURCES]
+          == [("catalogue", "catalogue", True), ("subscribers", "subscribers", True),
+              ("sales_lines", "lines", False), ("statement_lines", "lines", False)])
+    check("P17b every registry entry names a schema-qualified table and its name field",
+          all("." in s["table"] and s.get("name_field") for s in _ps.HOUSE_SOURCES))
+    check("P17c a line-level source with no confirmed words matches NOTHING (nothing is guessed)",
+          not _ps.line_matches({"category": "Rate Plans", "product_desc": "X Rate Plan"},
+                               _ps.source_of(None, "sales_lines")))
+
+    # P17d–h — THE REPORTED DEFECT: the measured tenant under house defaults
+    _db = _tenant(sales=_SALES, statement=_STMT)
+    ob.sb = lambda: _db
+    try:
+        _pv = ob.preview_import(ob.PLAN_SOURCE_KEY, _ORG)
+        check("P17d house defaults still yield 0 for the measured tenant (the line sources are off)",
+              _pv["count"] == 0, str(_pv["count"]))
+        _srcs = {s["key"]: s for s in _pv["sources"]}
+        check("P17e …but the card now lists all FOUR sources with what each holds",
+              set(_srcs) == {"catalogue", "subscribers", "sales_lines", "statement_lines"}
+              and _srcs["sales_lines"]["rows"] == len(_SALES) and _srcs["statement_lines"]["rows"] == len(_STMT),
+              str({k: v.get("rows") for k, v in _srcs.items()}))
+        _er = _pv.get("empty_reason") or ""
+        check("P17f the empty state names every source ACTUALLY checked — never 'neither source'",
+              "Neither source" not in _er and all(t in _er for t in ("commcalc.product_mrc", "commcalc.raw_mi",
+                                                                      "commcalc.raw_sales", "commcalc.commission_ledger"))
+              and "not switched on yet" in _er, _er[:300])
+        check("P17g the next step tells the person to tick the source and confirm the words",
+              "confirm the words" in (_pv.get("empty_next") or ""), _pv.get("empty_next"))
+        _sg = _srcs["sales_lines"]["suggest"]
+        check("P17h the sales export proposes its own word with the count it names, from the tenant's vocabulary",
+              _sg["proposal"]["include"] == ["rate plan"]
+              and any(c["token"] == "rate plan" and c["lines"] == 665 for c in _sg["include"]),
+              str(_sg["proposal"]) + " " + str([(c["token"], c["lines"]) for c in _sg["include"]]))
+        check("P17i the rebate word is proposed as an EXCLUSION with what it removes (a rebate is not a plan)",
+              _sg["proposal"]["exclude"] == ["rebate"]
+              and any(e["token"] == "rebate" and e["removes"] == 316 for e in _sg["exclude"]),
+              str(_sg["exclude"]))
+        check("P17j the preview is THE predicate over the proposal: 349 plan lines, 3 names",
+              _sg["preview"] == {"lines": 349, "plans": 3}, str(_sg["preview"]))
+        check("P17k the bare word 'plan' is not proposed twice for the same lines (one word per set)",
+              "plan" not in _sg["proposal"]["include"])
+        _st = _srcs["statement_lines"]["suggest"]
+        check("P17l the commission statement proposes its plan word too (price plan → 2 names)",
+              _st["proposal"]["include"] == ["price plan"] and _st["preview"]["plans"] == 2, str(_st["proposal"]))
+        check("P17m the preview payload says where the rules live and that the card can save them",
+              _pv.get("configurable") is True and _pv["config"]["home"] == "pos.pos_settings"
+              and _pv["config"]["key"] == "plan_sources" and _pv["config"]["source"] == "house")
+
+        # P17n–u — THE PERSON CONFIRMS: save → the plans appear with provenance; apply is additive
+        _body = {"sources": {"sales_lines": {"enabled": True, "include": ["rate plan"], "exclude": ["rebate"]},
+                             "statement_lines": {"enabled": True, "include": ["price plan"], "exclude": ["bonus", "spiff"]}}}
+        _pv2 = ob.save_plan_sources(_db, _ORG, _body, actor="owner@example.test")
+        check("P17n after confirming, the preview offers the 5 plans (3 from the sales export, 2 from the statement)",
+              _pv2["count"] == 5 and sorted(p["source"] for p in _pv2["sample"]) == ["sales_lines"] * 3 + ["statement_lines"] * 2,
+              str([(p["plan_name"], p["source"]) for p in _pv2["sample"]]))
+        _names = [p["plan_name"] for p in _pv2["sample"]]
+        check("P17o the rebate lines are EXCLUDED — no '(Rate Plan Rebate)' name is a plan",
+              not any("rebate" in n.lower() for n in _names), str(_names))
+        _first = _pv2["sample"][0]
+        check("P17p each candidate carries its provenance: source, line count, first / last seen",
+              _first["plan_name"] == "iPhone Rate Plan (DPA)" and _first["lines"] == 263
+              and _first["source_label"] == "Your sales export (line level)"
+              and _first["first_seen"] == "2026-08-05" and _first["last_seen"] == "2026-08-05", str(_first))
+        _nar = next(p for p in _pv2["sample"] if p["plan_name"] == "New Activation Rate Plan")
+        check("P17q first / last seen are the MIN / MAX dates on the lines",
+              _nar["first_seen"] == "2026-07-02" and _nar["last_seen"] == "2026-07-02")
+        check("P17r a line-level source reports no charge: monthly_fee is blank and the row says where to price it",
+              all(p["monthly_fee"] is None and p["mrc_next"] == _ps.MRC_NEXT for p in _pv2["sample"]))
+        check("P17s the plans the tenant sells most come first", _names[:3] == ["iPhone Rate Plan (DPA)",
+              "New Activation Rate Plan", "Smart Phone Rate Plan (DPA)"], str(_names))
+        _saved = [r for r in _db.tables["pos_settings"] if r["org_id"] == _ORG and r["key"] == "plan_sources"]
+        check("P17t the rules were saved as ONE org-level pos_settings row (mig 725) — no new table, no migration",
+              len(_saved) == 1 and _saved[0]["store_code"] is None
+              and _saved[0]["value"]["sources"]["sales_lines"] == {"enabled": True, "include": ["rate plan"], "exclude": ["rebate"]},
+              str(_saved))
+        check("P17u the saved preview now reads `tenant` rules", _pv2["config"]["source"] == "tenant")
+        _ap = ob.apply_import(ob.PLAN_SOURCE_KEY, _ORG)
+        _rows = [r for r in _db.tables["service_plans"] if r["org_id"] == _ORG]
+        check("P17v apply creates exactly the 5 previewed rows in pos.service_plans, org-stamped",
+              _ap["created"] == 5 and _ap["considered"] == 5 and len(_rows) == 5
+              and all(r["org_id"] == _ORG for r in _rows), str(_ap))
+        check("P17w nothing the preview shows that pos.service_plans cannot store reaches the insert",
+              all(set(r) - {"id", "org_id"} <= ob.SERVICE_PLAN_IMPORT_COLS for r in _rows), str(sorted(_rows[0])))
+        _ap2 = ob.apply_import(ob.PLAN_SOURCE_KEY, _ORG)
+        check("P17x re-running is ADDITIVE: 0 created, 5 skipped, still 5 rows",
+              _ap2["created"] == 0 and _ap2["skipped"] == 5
+              and len([r for r in _db.tables["service_plans"] if r["org_id"] == _ORG]) == 5, str(_ap2))
+        check("P17y the other tenant's rows in every table never leak into this org's plans",
+              not any("Other Tenant" in r["plan_name"] for r in _rows))
+        # the preview after apply says "already in your POS" rather than 0 with no reason? — plans are
+        # still offered (the apply skips them), which is what the existing sources do too; pinned
+        _pv3 = ob.preview_import(ob.PLAN_SOURCE_KEY, _ORG)
+        check("P17z preview and apply share ONE derivation — the count after apply is the same set", _pv3["count"] == 5)
+
+        # P17aa–ad — THE GUARD: a word naming ≥ 80% of a source's lines is refused, unless attested by name
+        _db2 = _tenant(statement=[{"product_name": "Unlimited Plus Price Plan - New", "order_type": "", "category": "",
+                                   "trans_date": "2026-07-10"}] * 90
+                       + [{"product_name": "Device Bonus", "order_type": "", "category": "", "trans_date": "2026-07-11"}] * 10)
+        ob.sb = lambda: _db2
+        try:
+            ob.save_plan_sources(_db2, _ORG, {"sources": {"statement_lines": {"enabled": True, "include": ["plan"]}}})
+            bad("P17aa a saved word naming 90% of the statement's lines is REFUSED")
+        except Exception as _e:
+            _d = getattr(_e, "detail", None) or {}
+            check("P17aa a saved word naming 90% of the statement's lines is REFUSED, naming the word and its share",
+                  isinstance(_d, dict) and _d.get("attest_keys") == ["statement_lines:plan"]
+                  and "90%" in _d.get("message", ""), str(_d)[:300])
+        check("P17ab …and NOTHING was written", not [r for r in _db2.tables.get("pos_settings") or [] if r["org_id"] == _ORG])
+        _pv4 = ob.save_plan_sources(_db2, _ORG, {"sources": {"statement_lines": {"enabled": True, "include": ["plan"]}},
+                                                 "broad_ok": ["statement_lines:plan"]}, actor="owner@example.test")
+        _att = _db2.tables["pos_settings"][0]["value"].get("broad_attested") or {}
+        check("P17ac the person can attest the word BY NAME — recorded with who, when and the measured share (1 plan: the bonus line carries no plan word)",
+              _pv4["count"] == 1 and _att.get("statement_lines:plan", {}).get("by") == "owner@example.test"
+              and _att["statement_lines:plan"]["ratio"] == 0.9, str(_att))
+        _src_hint = next(s for s in _pv4["sources"] if s["key"] == "statement_lines")
+        check("P17ad the proposal never offers a too-broad word; it is reported under too_broad instead",
+              "plan" not in [c["token"] for c in _src_hint["suggest"]["include"]]
+              and any(c["token"] == "plan" for c in _src_hint["suggest"]["too_broad"]))
+    finally:
+        ob.sb = _real_sb
+
+    # P17ae–ah — THE COMPATIBILITY PIN: a tenant with a subscriber report / a catalogue is byte-identical
+    _MI = ([{"period": "August 2026", "period_year": 2026, "period_month": 8, "customer_plan": "Unlimited +", "base_mrc": 55.0}] * 12
+           + [{"period": "August 2026", "period_year": 2026, "period_month": 8, "customer_plan": "Unlimited +", "base_mrc": 0.0}] * 8
+           + [{"period": "August 2026", "period_year": 2026, "period_month": 8, "customer_plan": "Tablet Plan", "base_mrc": 20.0}] * 2
+           + [{"period": "July 2026", "period_year": 2026, "period_month": 7, "customer_plan": "Old Plan", "base_mrc": 10.0}] * 3)
+    _CAT = [{"plan_pattern": "Unlimited +", "mrc": 60.0, "classification": "premium", "is_active": True},
+            {"plan_pattern": "Catalogue Only", "mrc": 15.0, "is_active": False}]
+    _expect_house = [{"plan_name": "Unlimited +", "monthly_fee": 60.0, "carrier": "Carrier A", "plan_description": "premium",
+                      "status": "active", "source": "catalogue"},
+                     {"plan_name": "Catalogue Only", "monthly_fee": 15.0, "carrier": "Carrier A", "plan_description": None,
+                      "status": "inactive", "source": "catalogue"},
+                     {"plan_name": "Tablet Plan", "monthly_fee": 20.0, "carrier": "Carrier A", "plan_description": None,
+                      "status": "active", "subscribers": 2, "source": "subscribers"}]
+    _db3 = _tenant(catalogue=_CAT, subscribers=_MI, sales=_SALES, statement=_STMT)
+    _plans3, _diag3 = ob.resolve_service_plans(_db3, _ORG)
+    check("P17ae PIN: a tenant with a catalogue + a subscriber report gets EXACTLY the pre-change rows "
+          "(catalogue wins the collision, newest period only, no new keys on those rows)",
+          _plans3 == _expect_house, str(_plans3))
+    check("P17af PIN: the diag keeps its pre-change keys (period / rows / catalogue / observed / carriers)",
+          _diag3["period"] == "August 2026" and _diag3["rows"] == 22 and _diag3["catalogue"] == 2
+          and _diag3["observed"] == 2 and _diag3["carriers"] == 1, str({k: v for k, v in _diag3.items() if k != "sources"}))
+    check("P17ag PIN: with the line sources off, the landed sales / statement rows change nothing",
+          all(s["plans"] == 0 for s in _diag3["sources"] if s["kind"] == "lines"))
+    _db4 = _tenant(catalogue=_CAT, subscribers=_MI,
+                   config={"sources": {"subscribers": {"enabled": False}}})
+    _plans4, _diag4 = ob.resolve_service_plans(_db4, _ORG)
+    check("P17ah a tenant can switch a house source OFF (the catalogue-only shape by choice)",
+          [p["plan_name"] for p in _plans4] == ["Unlimited +", "Catalogue Only"] and _diag4["observed"] == 0)
+    _cfg_bad = _ps.resolve_config({"sources": {"my_table": {"enabled": True, "table": "public.users"}}})
+    check("P17ai a tenant row cannot ADD a table — an unknown key is ignored, the registry is the only list",
+          [s["key"] for s in _cfg_bad["sources"]] == _ps.source_keys() and not _cfg_bad["declared"])
+    _raw = _ps.merge_into_raw({"sources": {"sales_lines": {"enabled": True, "include": ["rate plan"], "exclude": ["rebate"]}}},
+                              {"statement_lines": {"enabled": True, "include": ["price plan"]}, "nope": {"enabled": True}})
+    check("P17aj a partial save merges PER SOURCE — another source's words survive; an unknown key is dropped",
+          _raw["sources"]["sales_lines"]["include"] == ["rate plan"] and "nope" not in _raw["sources"]
+          and _raw["sources"]["statement_lines"] == {"enabled": True, "include": ["price plan"]})
+    check("P17ak the mig-074 rows are byte-identical through merge_plan_sources with the new sources appended",
+          ob.merge_plan_sources(_expect_house[:2], _expect_house[2:], [{"plan_name": "unlimited +", "source": "sales_lines"},
+                                                                       {"plan_name": "New One", "source": "sales_lines"}])
+          == _expect_house + [{"plan_name": "New One", "source": "sales_lines"}])
+    check("P17al a read error on a line source is REPORTED on that source, never swallowed into 'empty'",
+          "could not be read" in _ps.source_sentence({"key": "sales_lines", "kind": "lines", "label": "Your sales export",
+                                                       "table": "commcalc.raw_sales", "error": "boom"}))
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════

@@ -43,6 +43,7 @@ from fastapi import APIRouter, Header, HTTPException
 
 from app.core.database import get_supabase
 from app.core.schemas import LaxModel
+from app.modules.core import plan_sources as _ps      # WHERE plan names come from: one registry, per-org config
 
 router = APIRouter(prefix="/onboarding", tags=["Core / Onboarding"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"   # middleware rewrites the query param
@@ -833,8 +834,10 @@ IMPORT_SOURCES = {
         creates="pos.products"),
     "service_plans_from_product_mrc": dict(
         title="Plans from your carrier data",
-        detail="Your configured rate-plan catalogue, PLUS every plan your subscribers are actually "
-               "on, with the monthly recurring charge the carrier reports for it.",
+        detail="Every place MetricsPro already holds your plan names: your rate-plan catalogue, your "
+               "subscriber report, and — once you confirm the words that mark a plan line — your "
+               "sales export and your commission statement. The monthly charge comes along when the "
+               "source reports one.",
         creates="pos.service_plans"),
     "dealer_codes_from_carrier_reports": dict(
         title="Dealer codes from your carrier reports",
@@ -874,32 +877,42 @@ def _page(client, schema, table, cols, org_id, extra=None, cap=20000, size=1000)
     return out
 
 
-# ── PLANS & FEATURES: the two halves of one already-defined pairing ───────────────────────────
-# WHY THIS READS TWO TABLES (owner report 2026-09-08: "fix the bring over of plans and features …
-# in cellfonz rus as nothing shows up to be brought over").
+# ── PLANS & FEATURES: every landed source that carries a plan name, per-org config ────────────
+# WHY THIS NO LONGER READS A FIXED PAIR (owner 2026-09-22: "we have enough plans in the system to bring
+# over but it does not give an option to bring over").
 #
-# This source used to read commcalc.product_mrc ALONE. product_mrc (mig 074) is not the plan list —
-# it is a CATALOGUE OF MRCs "keyed on raw_mi.customer_plan", built for carriers whose statement
-# carries no per-subscriber MRC (mig 078: Total Wireless). A carrier that DOES report the charge per
-# subscriber never needs a catalogue row, so the catalogue stays empty and reading it alone returns
-# nothing — while the tenant's own subscriber feed names every plan they sell and what it costs.
+# 2026-09-08 widened this source from commcalc.product_mrc ALONE to the pairing mig 074 defined
+# (product_mrc keyed on raw_mi.customer_plan) — see index §23n — and a tenant with a subscriber report
+# got its plans. A tenant with NEITHER still saw "0": org f4f1c16e… holds 0 catalogue rows and 0
+# subscriber rows, and 8,350 landed sales lines whose category path names a rate plan plus 1,494
+# commission-statement lines naming price plans. Its plan names were in the system; the step could not
+# see them because WHICH tables carry a plan name was a pair fixed in code.
 #
-# Live proof, 2026-09-08, org-scoped:
-#   Cellfonz R Us  commcalc.product_mrc = 0 rows · commcalc.raw_mi = 234,724 rows / 77 distinct
-#                  customer_plan values, each with a reported base_mrc ("Unlimited Premium." → 65.00)
-#   Luxelink       commcalc.product_mrc = 1,017 rows · commcalc.raw_mi = 0 rows  ← catalogue-only,
-#                  which is why Luxelink's wizard completed this step and Cellfonz's could not
+# THE CLASS: a wizard step derives a tenant fact from a fixed pair of per-feed tables. THE FIX (the same
+# shape as #273 for the P&L commission source and #267/#271 for the activation words): which sources
+# carry plan names is per-org CONFIG over ONE registry (plan_sources.HOUSE_SOURCES — the four landed
+# sources, in precedence order; house defaults = the mig-074 pair, byte-identical); the line-level
+# sources are OFF until the person confirms the words that mark a plan line (proposed from the tenant's
+# own vocabulary with counts, the too-broad guard, the rebate words excluded); ONE resolver
+# (resolve_service_plans) reads every configured source for BOTH preview and apply; the empty state
+# names the sources ACTUALLY checked and what each held.
 #
-# So the fix is not a second import source keyed off the carrier's name (RULE TWO) — it is to read
-# BOTH HALVES of the pairing mig 074 already defined. The catalogue still wins on a name collision:
-# a rate the operator confirmed beats one observed on a statement line.
+# Live proof, org-scoped:
+#   Cellfonz R Us  product_mrc 0 · raw_mi 234,724 rows / 77 plans (each with a base_mrc)     ← subscribers
+#   Luxelink       product_mrc 1,017 · raw_mi 0                                            ← catalogue
+#   f4f1c16e…      product_mrc 0 · raw_mi 0 · raw_sales 8,350 rate-plan lines / 32 names (3,165 of them
+#                  rebates) · commission_ledger 1,494 statement lines                        ← lines sources
 MI_PLAN_COLS = "customer_plan,base_mrc,commissionable_mrc"
 MI_SCAN_CAP = 120000          # ≈3 pages of a big tenant's newest period; truncation is REPORTED
+PLAN_SCAN_CAP = MI_SCAN_CAP   # a line-level source is paged to the same cap; truncation is REPORTED
+PLAN_SOURCE_KEY = "service_plans_from_product_mrc"
 
 # What the preview shows about a plan and what pos.service_plans can actually STORE are not the same
-# list: `source` and `subscribers` exist to let the operator judge the row ("2,686 subscribers, from
-# your subscribers report") and are dropped on the way in. Keeping the filter next to the columns it
-# mirrors is what stops the next added preview field from 400-ing every import.
+# list: `source`, `subscribers`, `lines`, `first_seen` / `last_seen` and `mrc_next` exist to let the
+# operator judge the row ("2,686 subscribers, from your subscribers report"; "2,632 lines in your sales
+# export — price it under Payout Schedules → Plan MRC") and are dropped on the way in. Keeping the
+# filter next to the columns it mirrors is what stops the next added preview field from 400-ing every
+# import.
 SERVICE_PLAN_IMPORT_COLS = {"plan_name", "carrier", "plan_code", "plan_description", "monthly_fee",
                             "included_minutes", "service_area", "contract_type", "contract_terms",
                             "dealer_code", "status"}
@@ -946,12 +959,14 @@ def fold_subscriber_plans(rows) -> list:
     return out
 
 
-def merge_plan_sources(catalog: list, observed: list) -> list:
-    """PURE. The catalogue and the observed plans as ONE list, catalogue first, deduped by name
-    (case-insensitively). A plan the operator has already priced in the catalogue is never replaced
-    by a charge scraped off a statement line."""
+def merge_plan_sources(catalog: list, observed: list, *more) -> list:
+    """PURE. Every source's plans as ONE list in registry precedence — the catalogue first, then the
+    subscriber feed, then each confirmed line-level source — deduped by name (case-insensitively). A
+    plan the operator has already priced in the catalogue is never replaced by a charge scraped off a
+    statement line, and a name the subscriber feed prices is never replaced by an unpriced one."""
     out, seen = [], set()
-    for p in list(catalog or []) + list(observed or []):
+    lists = [list(catalog or []), list(observed or [])] + [list(m or []) for m in more]
+    for p in (p for lst in lists for p in lst):
         name = str(p.get("plan_name") or "").strip()
         key = name.lower()
         if not name or key in seen:
@@ -961,17 +976,38 @@ def merge_plan_sources(catalog: list, observed: list) -> list:
     return out
 
 
-def _catalog_plans(c, org_id: str, cmap: dict, default_carrier: str) -> list:
-    """Half one: commcalc.product_mrc, the confirmed rate catalogue (mig 074)."""
-    rows = _page(c, "commcalc", "product_mrc",
-                 "plan_pattern,mrc,carrier_id,classification,is_active", org_id)
+def _split_table(src: dict):
+    schema, _, table = str(src.get("table") or "").partition(".")
+    return schema, table
+
+
+def load_plan_sources(c, org_id: str) -> dict:
+    """The org's plan-source rules in force: the `plan_sources` row of pos.pos_settings (mig 725 — the
+    POS module's per-org config kv, org row) resolved over the house registry. A missing row, table or
+    column → the house defaults (the mig-074 pair), so a tenant that never opened the card is
+    byte-identical to before."""
+    raw = None
+    try:
+        rows = (c.schema("pos").table("pos_settings").select("value").eq("org_id", org_id)
+                .eq("key", _ps.CONFIG_KEY).is_("store_code", "null").limit(1).execute().data) or []
+        raw = rows[0].get("value") if rows else None
+    except Exception:
+        raw = None
+    return _ps.resolve_config(raw)
+
+
+def _catalog_plans(c, org_id: str, cmap: dict, default_carrier: str, src: dict = None) -> list:
+    """Kind `catalogue`: the confirmed rate catalogue (mig 074) — the registry says which table."""
+    src = src or _ps.source_of(None, "catalogue")
+    rows = _page(c, *_split_table(src),
+                 f"{src['name_field']},{src['mrc_field']},carrier_id,classification,is_active", org_id)
     out, seen = [], set()
     for r in rows:
-        n = (r.get("plan_pattern") or "").strip()
+        n = (r.get(src["name_field"]) or "").strip()
         if not n or n.lower() in seen:
             continue
         seen.add(n.lower())
-        out.append({"plan_name": n[:120], "monthly_fee": r.get("mrc"),
+        out.append({"plan_name": n[:120], "monthly_fee": r.get(src["mrc_field"]),
                     "carrier": cmap.get(r.get("carrier_id")) or default_carrier,
                     "plan_description": r.get("classification") or None,
                     "status": "active" if r.get("is_active") is not False else "inactive",
@@ -979,16 +1015,18 @@ def _catalog_plans(c, org_id: str, cmap: dict, default_carrier: str) -> list:
     return out
 
 
-def _observed_plans(c, org_id: str, default_carrier: str):
-    """Half two: the plans this tenant's own subscribers are on, from commcalc.raw_mi.
+def _observed_plans(c, org_id: str, default_carrier: str, src: dict = None):
+    """Kind `subscribers`: the plans this tenant's own subscribers are on — the registry says which table.
 
     Scans the NEWEST period only. The wizard is seeding what the tenant sells now, and a full-history
     scan is 234k rows on the live house tenant against 42k for its newest month — for four extra
     plan names last seen in 2025. The period scanned is returned and shown, so this is a stated
     choice rather than a silent cap. Returns (plans, diag)."""
+    src = src or _ps.source_of(None, "subscribers")
+    schema, table = _split_table(src)
     diag = {"period": None, "rows": 0, "truncated": False}
     try:
-        newest = (c.schema("commcalc").table("raw_mi").select("period,period_year,period_month")
+        newest = (c.schema(schema).table(table).select("period,period_year,period_month")
                   .eq("org_id", org_id).order("period_year", desc=True)
                   .order("period_month", desc=True).limit(1).execute().data) or []
     except Exception as e:
@@ -998,7 +1036,7 @@ def _observed_plans(c, org_id: str, default_carrier: str):
         return [], diag
     period = (newest[0].get("period") or "").strip()
     diag["period"] = period or None
-    rows = _page(c, "commcalc", "raw_mi", MI_PLAN_COLS, org_id,
+    rows = _page(c, schema, table, MI_PLAN_COLS, org_id,
                  extra=(lambda q: q.eq("period", period)) if period else None,
                  cap=MI_SCAN_CAP, size=10000)
     diag["rows"] = len(rows)
@@ -1009,23 +1047,91 @@ def _observed_plans(c, org_id: str, default_carrier: str):
             for p in fold_subscriber_plans(rows)], diag
 
 
+def _plan_source_rows(c, org_id: str, src: dict):
+    """THE one reader of a `lines` source: the name field, the words fields and the date, paged to
+    PLAN_SCAN_CAP (truncation returned, never silent). Called by the harvest (through the resolver) and
+    by the save's too-broad guard — so both measure the same rows."""
+    cols = list(dict.fromkeys([src["name_field"], *(src.get("fields") or ()),
+                               *([src["date_field"]] if src.get("date_field") else [])]))
+    rows = _page(c, *_split_table(src), ",".join(cols), org_id, cap=PLAN_SCAN_CAP, size=10000)
+    return rows, len(rows) >= PLAN_SCAN_CAP
+
+
+def _harvest_plans(c, org_id: str, src: dict, default_carrier: str, cfg: dict):
+    """Kind `lines`: the plan names on a landed line-level source, through THE predicate
+    (plan_sources.line_matches) over the org's confirmed words. ALWAYS scanned — a source that is not
+    switched on still reports what it holds and proposes its words, so the card can say "8,350 lines
+    carry a plan word, not switched on yet" instead of "0". Harvests ONLY when switched on and no word in
+    force is refused as too broad. Returns (plans, info)."""
+    info = {k: src.get(k) for k in ("key", "kind", "table", "label", "where", "enabled", "declared",
+                                    "name_field", "fields", "include", "exclude")}
+    info.update(rows=0, truncated=False, matched=0, plans=0, refused=[], suggest=None)
+    try:
+        rows, truncated = _plan_source_rows(c, org_id, src)
+    except Exception as e:
+        info["error"] = str(e)[:200]
+        return [], info
+    sug = _ps.suggest_source(rows, src, cfg.get("hints"), cfg.get("broad_attested"))
+    info.update(rows=len(rows), truncated=truncated, suggest=sug, matched=sug["current"]["lines"],
+                refused=sug["refused"])
+    plans = []
+    if src.get("enabled") and not sug["refused"]:
+        plans = _ps.plan_rows(_ps.fold_plan_lines(rows, src), src, default_carrier)
+    info["plans"] = len(plans)
+    return plans, info
+
+
 def resolve_service_plans(c, org_id: str):
-    """The FULL plan set this tenant can bring over, used by BOTH preview and apply so the two can
-    never disagree about what "bring over 77" meant. Returns (plans, diag)."""
+    """THE resolver: the FULL plan set this tenant can bring over, from EVERY source its config names,
+    used by BOTH preview and apply so the two can never disagree about what "bring over 77" meant.
+    Returns (plans, diag); diag['sources'] is one entry per source checked — its table, whether it is
+    switched on, how many rows it held, how many plans it yielded, and (line-level) the proposal."""
     carriers = _page(c, "commcalc", "carrier", "id,name", org_id)
     cmap = {r["id"]: r.get("name") for r in carriers}
     default_carrier = (carriers[0].get("name") if carriers else "") or ""
-    catalog = _catalog_plans(c, org_id, cmap, default_carrier)
-    observed, diag = _observed_plans(c, org_id, default_carrier)
-    diag.update(catalogue=len(catalog), observed=len(observed), carriers=len(carriers))
-    return merge_plan_sources(catalog, observed), diag
+    cfg = load_plan_sources(c, org_id)
+    diag = {"period": None, "rows": 0, "truncated": False, "catalogue": 0, "observed": 0,
+            "carriers": len(carriers), "sources": [],
+            "config": {"home": _ps.CONFIG_HOME, "key": _ps.CONFIG_KEY, "source": cfg["source"],
+                       "hints": cfg["hints"], "broad_attested": sorted(cfg["broad_attested"])}}
+    lists = []
+    for src in cfg["sources"]:
+        info = {k: src.get(k) for k in ("key", "kind", "table", "label", "where", "enabled", "declared")}
+        plans = []
+        if src["kind"] == "catalogue":
+            if src["enabled"]:
+                try:
+                    plans = _catalog_plans(c, org_id, cmap, default_carrier, src)
+                except Exception as e:
+                    info["error"] = str(e)[:200]
+            info.update(rows=len(plans), plans=len(plans))
+            diag["catalogue"] = len(plans)
+        elif src["kind"] == "subscribers":
+            if src["enabled"]:
+                plans, odiag = _observed_plans(c, org_id, default_carrier, src)
+                diag.update({k: odiag[k] for k in ("period", "rows", "truncated")})
+                if odiag.get("error"):
+                    diag["error"] = odiag["error"]
+                    info["error"] = odiag["error"]
+                info.update(rows=odiag["rows"], plans=len(plans), period=odiag["period"],
+                            truncated=odiag["truncated"])
+            else:
+                info.update(rows=0, plans=0)
+            diag["observed"] = len(plans)
+        else:
+            plans, info = _harvest_plans(c, org_id, src, default_carrier, cfg)
+        diag["sources"].append(info)
+        lists.append(plans)
+    return merge_plan_sources(*lists), diag
 
 
 def plans_empty_reason(diag: dict) -> dict:
     """PURE. Why a tenant sees zero plans, and what to do about it. A green "0 records" with no
     explanation is the defect this whole change exists to kill: the operator cannot tell an empty
-    tenant from a broken importer, so they file the second and get told the first."""
-    if diag.get("error"):
+    tenant from a broken importer, so they file the second and get told the first. Names EVERY
+    source that was checked and what it held (plan_sources.empty_sentence) — never "neither source"
+    when four were read."""
+    if diag.get("error") and not diag.get("sources"):
         return {"empty_reason": "Your subscriber report could not be read: "
                                 + str(diag["error"])[:160],
                 "empty_next": "Re-run the import, or tell support if it keeps failing."}
@@ -1033,13 +1139,76 @@ def plans_empty_reason(diag: dict) -> dict:
         return {"empty_reason": "No carrier is attached to this tenant yet, so there is nothing to "
                                 "take plans from.",
                 "empty_next": "Attach a carrier first (Configurations → Carriers), then re-check."}
-    return {"empty_reason": "Neither source has anything yet: your rate-plan catalogue "
-                            "(commcalc.product_mrc) is empty and MetricsPro holds no subscriber "
-                            "report (commcalc.raw_mi) for this tenant, which is where plan names "
-                            "and their monthly charge come from.",
-            "empty_next": "Upload a carrier subscriber/MI report, or price your plans under "
-                          "Payout Schedules → Plan MRC — either one fills this list. Until then, "
-                          "use the CSV template below."}
+    return _ps.empty_sentence(diag.get("sources"))
+
+
+def plan_sources_panel(diag: dict) -> list:
+    """PURE. What the wizard card renders per source: the registry entry, whether it is on, what it
+    held, and — for a line-level source — the words in force and the engine's proposal (the ONLY seed
+    of the card's editable words), the too-broad refusals, the exclude words with what each removes."""
+    out = []
+    for info in (diag or {}).get("sources") or []:
+        row = {k: info.get(k) for k in ("key", "kind", "table", "label", "where", "enabled", "declared",
+                                        "rows", "plans", "error", "period", "truncated")}
+        if info.get("kind") == "lines":
+            sug = info.get("suggest") or {}
+            row.update(name_field=info.get("name_field"), fields=list(info.get("fields") or ()),
+                       include=list(info.get("include") or ()), exclude=list(info.get("exclude") or ()),
+                       matched=info.get("matched"), refused=info.get("refused") or [],
+                       refusal_note=_ps.refusal_sentence(info.get("refused") or [], info.get("label")),
+                       suggest=({k: sug.get(k) for k in ("scanned", "distinct", "include", "too_broad",
+                                                         "exclude", "proposal", "preview", "current")}
+                                if sug else None))
+        out.append(row)
+    return out
+
+
+def save_plan_sources(c, org_id: str, body: dict, actor: str = "") -> dict:
+    """The ONE save of the org's plan-source rules (the wizard card's auto-save). Body:
+    {sources: {key: {enabled?, include?, exclude?}}, broad_ok?: ['<source>:<word>', …]}.
+    Everything is VALIDATED FIRST: the rules that WOULD be in force are measured over the very rows the
+    harvest reads (_plan_source_rows), and a switched-on source whose include word names ≥ BROAD_RATIO of
+    its lines is REFUSED (400, nothing written, each word named with its share) unless attested by name.
+    Then written through the POS module's own settings writer (pos.router.upsert_pos_setting) — never a
+    second writer — and the preview returned so the card re-renders from one call."""
+    if not org_id:
+        raise HTTPException(400, "org_id required")
+    body = body if isinstance(body, dict) else {}
+    try:
+        rows = (c.schema("pos").table("pos_settings").select("value").eq("org_id", org_id)
+                .eq("key", _ps.CONFIG_KEY).is_("store_code", "null").limit(1).execute().data) or []
+    except Exception as e:
+        raise HTTPException(503, f"could not read {_ps.CONFIG_HOME} (has migration 725 been run?) — {e}")
+    current_raw = rows[0].get("value") if rows else None
+    probe = _ps.resolve_config(_ps.merge_into_raw(current_raw, body.get("sources"), body.get("broad_ok"),
+                                                  by=actor or None))
+    refused, shares = [], []
+    for src in probe["sources"]:
+        if src["kind"] != "lines" or not src.get("enabled") or not src.get("include"):
+            continue
+        try:
+            srows, _trunc = _plan_source_rows(c, org_id, src)
+        except Exception as e:
+            raise HTTPException(503, f"could not read {src['table']} to check the words — {e}")
+        sh, _n = _ps.word_shares(srows, src)
+        shares += [{"source": src["key"], "word": w, **v} for w, v in sh.items()]
+        refused += [{**r, "label": src.get("label")}
+                    for r in _ps.refused_words(srows, src, probe["broad_attested"])]
+    if refused:
+        raise HTTPException(400, {"message": _ps.refusal_sentence(refused), "refused": refused,
+                                  "attest_keys": [_ps.attest_key(r["source"], r["word"]) for r in refused]})
+    new_raw = _ps.merge_into_raw(current_raw, body.get("sources"), body.get("broad_ok"),
+                                 by=actor or None, shares=shares)
+    from app.modules.pos.router import upsert_pos_setting
+    try:
+        upsert_pos_setting(c, org_id, _ps.CONFIG_KEY, new_raw)
+    except Exception as e:
+        raise HTTPException(503, f"could not save to {_ps.CONFIG_HOME} — {e}")
+    return preview_import(PLAN_SOURCE_KEY, org_id)
+
+
+# the import sources whose "bring over" reads per-org rules the card can save (key → saver)
+CONFIGURABLE_SOURCES = {PLAN_SOURCE_KEY: save_plan_sources}
 
 
 def dealer_codes_empty_reason(carriers: list, unconfigured: list, errored: list) -> dict:
@@ -1107,10 +1276,14 @@ def preview_import(source: str, org_id: str, variant: str = "") -> dict:
         return {**meta, "source": source, "count": len(items),
                 "sample": items[:25], "variant": variant}
 
-    if source == "service_plans_from_product_mrc":
+    if source == PLAN_SOURCE_KEY:
         plans, diag = resolve_service_plans(c, org_id)
+        panel = plan_sources_panel(diag)
         out = {**meta, "source": source, "count": len(plans), "sample": plans[:25],
-               "variant": variant, "diagnostic": diag}
+               "variant": variant,
+               "diagnostic": {k: v for k, v in diag.items() if k != "sources"},
+               "sources": panel, "config": diag.get("config"),
+               "configurable": source in CONFIGURABLE_SOURCES, "mrc_next": _ps.MRC_NEXT}
         if diag.get("period"):
             out["detail"] = (meta["detail"] + f" Subscriber plans read from {diag['period']} "
                              f"({diag['rows']:,} subscriber rows).")
@@ -1295,7 +1468,7 @@ def apply_import(source: str, org_id: str, variant: str = "", actor: str = "") -
                         "cost": costs.get(k, 0)})
         insert("products", new)
 
-    elif source == "service_plans_from_product_mrc":
+    elif source == PLAN_SOURCE_KEY:
         have = existing("service_plans", "plan_name")
         allp, _diag = resolve_service_plans(c, org_id)
         new = [{k: v for k, v in p.items() if k in SERVICE_PLAN_IMPORT_COLS}
@@ -1546,6 +1719,26 @@ def list_import_sources():
 @router.get("/import-sources/{source}/preview")
 def import_preview(source: str, org_id: str = ORG_ID, variant: str = ""):
     return preview_import(source, org_id, variant)
+
+
+class ImportConfigIn(LaxModel):
+    sources: Any = None
+    broad_ok: Any = None
+
+
+@router.put("/import-sources/{source}/config")
+def import_config(source: str, body: ImportConfigIn = None, authorization: str = Header(default=""),
+                  org_id: str = ORG_ID):
+    """Save the per-org rules a 'bring over' source reads (today: which landed sources carry plan names
+    and the words that mark a plan line), validated first, written through the one writer, and the
+    refreshed preview returned. Same gate as apply — this changes what the wizard will create."""
+    _require_setup_rights(authorization, org_id)
+    saver = CONFIGURABLE_SOURCES.get(source)
+    if not saver:
+        raise HTTPException(404, f"import source '{source}' has no rules to save")
+    b = body or ImportConfigIn()
+    return saver(sb(), org_id, {"sources": b.sources, "broad_ok": b.broad_ok},
+                 actor=_actor(authorization, org_id))
 
 
 class ImportApplyIn(LaxModel):
