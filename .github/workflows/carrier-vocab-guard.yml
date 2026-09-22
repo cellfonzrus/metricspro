@@ -62,6 +62,13 @@ name: carrier-vocab-guard
 # homes pinned equal, no page keeps a connector list, and the connector modules' copy spells no vendor
 # (the #262 seam, closed in the guard's POS axis) — backend/harness_connector_scope_lock.py; stdlib only.
 #
+# THE PLAN-SOURCES LOCK (index §23n, 2026-09-22) runs here too: which landed sources carry a tenant's
+# plan names is ONE registry (core/plan_sources.HOUSE_SOURCES) resolved over per-org config (pos.pos_settings
+# `plan_sources`, mig 725); ONE resolver (onboarding.resolve_service_plans) serves preview AND apply; the
+# rules are written through ONE writer (pos.router.upsert_pos_setting) after the too-broad guard; the
+# wizard card lists the sources from the payload and seeds its words from the proposal only; no carrier
+# or POS vendor word in the module or the card (backend/harness_plan_sources_lock.py; stdlib only).
+#
 # THE REPORT-LINKS LOCK (index §30.11, 2026-09-20) runs here too: ONE device / phone-number pairing
 # implementation (inventory_sold_recon.line_pairings, folded by activation_index, called by
 # report_links) with the key normalisers in their homes; a second copy anywhere in commcalc, or a
@@ -194,3 +201,6 @@ jobs:
       - name: Run the POS sales-from-reports lock (one receipt document shape, one importer, one renderer; the format follows the declared POS)
         working-directory: backend
         run: python3 harness_pos_sales_from_reports_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the plan-sources lock (one registry of plan-name sources; one resolver for preview and apply; one writer; the card seeds from the proposal; no vendor)
+        working-directory: backend
+        run: python3 harness_plan_sources_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
