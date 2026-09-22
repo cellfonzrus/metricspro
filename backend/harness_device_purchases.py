@@ -322,7 +322,12 @@ import harnesslib                                                               
 # attribution function must be byte-identical, AND the set of functions that changed at all must be
 # exactly the two sanctioned ones. Anything unexplained still fails. The assertion is not weakened
 # and is not deleted — it is made to say what it always meant.
-COA_SANCTIONED = ("build_inputs", "_account_config")
+# SANCTIONED 2026-09-22 (index §4b.1, the ANY-SUBSET column read): `wages_by_store` reads the
+# storeops roster with `select("*")` instead of a salary-columns block falling back to an hourly
+# block — the class that made the live P&L read `feeds` after the owner chose the ledger. Same rows,
+# same `derive_wage_cells`, same money: harness_any_columns.py §C pins the wage cells byte-identical
+# with and without the mig-416/417 columns.
+COA_SANCTIONED = ("build_inputs", "_account_config", "wages_by_store")
 _coa_base = _git("show", "%s:%s" % (base or "HEAD", coa_path)).stdout
 _coa_now = open(os.path.join(HERE, "app/modules/account/coa.py"), encoding="utf-8").read()
 if _coa_base.strip():
@@ -378,7 +383,16 @@ check("B3 …and the only account-module file this work touches at all, besides 
                     # BOOKING function byte-identical). coa.py's change is inside the sanctioned
                     # build_inputs (B2a-B2c). Proven by backend/harness_pl_commission_source.py.
                     "backend/app/modules/account/engine.py",
-                    "backend/app/modules/account/ledger_pnl.py"}, mods)
+                    "backend/app/modules/account/ledger_pnl.py",
+                    # RE-BASELINED 2026-09-22 (index §4b.1 — a config reader tolerates ANY subset of
+                    # its columns; owner defect: the ledger chosen on the panel, `feeds` read by the
+                    # P&L). The per-org config READERS in these two files (billpay_pl.load_config,
+                    # residual_subs.load_ma_pnl_config) read the row whole through
+                    # core.column_tolerant.read_row instead of a column block; no booking function
+                    # changed (harness_any_columns.py pins each reader's values byte-identical when
+                    # every column exists). coa.py's change is the sanctioned wages_by_store (B2b).
+                    "backend/app/modules/account/billpay_pl.py",
+                    "backend/app/modules/account/residual_subs.py"}, mods)
 
 # ── B2d: ma_store_pnl.py — ADDITIONS ONLY ───────────────────────────────────────────────────────
 # Everything that decides WHERE an MA dollar books (ma_commission_bookings, ma_tx_bookings,

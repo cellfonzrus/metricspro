@@ -139,7 +139,10 @@ class _Q:
             raise RuntimeError(f'42P01 relation "commcalc.{self.table}" does not exist')
         t = self.db.tables.setdefault(self.table, [])
         if self.op == "select":
-            out = [dict(r) for r in t if self._match(r)]
+            # a column the database does not have can never come back — a `select("*")` row lacks it
+            # (this is the live shape of 2026-09-22: the row exists, one column does not)
+            missing = self.db.missing.get(self.table) or set()
+            out = [{k: v for k, v in r.items() if k not in missing} for r in t if self._match(r)]
             if self._range:
                 out = out[self._range[0]:self._range[1] + 1]
             if self._limit is not None:
