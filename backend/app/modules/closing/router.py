@@ -974,13 +974,11 @@ def _closing_summary_org_ctx(client, org_id) -> dict:
         stores = []
         _roster_ok = False
     store_meta = {s.get("store_code"): s for s in stores if s.get("store_code")}
-    try:
-        tcfg = (client.schema("storeops").table("tenants").select("closing_mode,closing_tender_basis")
-                .eq("org_id", org_id).limit(1).execute().data or [{}])
-    except Exception:
-        # pre-1012 (no closing_tender_basis column): the original read, the house-default basis
-        tcfg = (client.schema("storeops").table("tenants").select("closing_mode")
-                .eq("org_id", org_id).limit(1).execute().data or [{}])
+    # ANY SUBSET OF COLUMNS (index §4b.1, 2026-09-22): the tenant row is read whole; closing_mode and
+    # the mig-1012 closing_tender_basis are taken when present (pre-1012 → the house-default basis,
+    # as before). The former block-then-fallback read could drop closing_mode with the basis column.
+    tcfg = (client.schema("storeops").table("tenants").select("*")
+            .eq("org_id", org_id).limit(1).execute().data or [{}])
     closing_mode = (tcfg[0].get("closing_mode") if tcfg else None) or "per_rep"
     # the TENDER BASIS (2026-09-21) — resolved ONCE per request from the same row, threaded to every date
     tender_basis_ctx = tender_basis_from_row(tcfg[0] if tcfg else None)

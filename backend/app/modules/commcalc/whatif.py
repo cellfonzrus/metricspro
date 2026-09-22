@@ -1060,19 +1060,15 @@ LEGACY_MA_INCOME_SOURCE = "ma"          # legacy thin source (raw_ma_commission 
 LEDGER_INCOME_BUCKETS = {"commission": "COMMISSION", "spiff": "SPIFF",
                          "equipment_rebate": "EQUIPMENT_REBATE"}
 LEDGER_RESIDUAL_BUCKETS = ("residual_monthly", "autopay_residual")
-_LEDGER_COLS = ("period,source_report,origin,order_type,category,commission,spiff,equipment_rebate,"
-                "residual_monthly,autopay_residual,payout_total")
-_LEDGER_COLS_PRE251 = ("period,source_report,order_type,category,commission,spiff,equipment_rebate,"
-                       "residual_monthly,autopay_residual,payout_total")
 # `product_name` is read so the residual double-count guard can compose with the PRODUCT-CLASS residual
 # leg (a row can never appear in both a ledger income bucket and the residual leg). It is a label, never
-# summed; reading one extra column changes no displayed figure, and the tiers below degrade if a tenant's
+# summed; reading one extra column changes no displayed figure, and the read degrades if a tenant's
 # ledger predates it.
-_LEDGER_COLS_CLASS = _LEDGER_COLS + ",product_name"
-_LEDGER_COLS_PRE251_CLASS = _LEDGER_COLS_PRE251 + ",product_name"
-# (columns, origin_ready, name_ready) — tried in order, first one the database accepts wins.
-_LEDGER_COL_TIERS = ((_LEDGER_COLS_CLASS, True, True), (_LEDGER_COLS, True, False),
-                     (_LEDGER_COLS_PRE251_CLASS, False, True), (_LEDGER_COLS_PRE251, False, False))
+# The two OPTIONAL columns are probed individually (core.column_tolerant, index §4b.1) before the one
+# real select — never a tier table of blocks, where one absent column dropped another present one.
+_LEDGER_REQUIRED = ("period", "source_report", "order_type", "category", "commission", "spiff",
+                    "equipment_rebate", "residual_monthly", "autopay_residual", "payout_total")
+_LEDGER_OPTIONAL = ("origin", "product_name")
 
 
 def _ledger_income_rows(client, org_id):
@@ -1081,24 +1077,24 @@ def _ledger_income_rows(client, org_id):
     ORG-SCOPED on every page (RULE ONE). `ready` is False only when the table itself cannot be read
     (migration 071 never run) — the caller then keeps the legacy source and SAYS so, instead of showing a
     fabricated $0. `origin_ready` is False before migration 251 (no provenance column) and `name_ready`
-    is False if the label column cannot be read; the read walks DOWN _LEDGER_COL_TIERS and simply reports
-    which capabilities it lost. No money column is ever in the degraded set."""
-    rows, start, page = [], 0, 1000
-    tier, ready = 0, False
-    cols, origin_ready, name_ready = _LEDGER_COL_TIERS[0]
+    is False if the label column cannot be read; each optional column is PROBED ON ITS OWN, so the read
+    reports exactly which capabilities it lost and never loses one because of the other. No money
+    column is ever optional."""
+    from app.core import column_tolerant as _ct
+    table = lambda: client.schema("commcalc").table("commission_ledger")      # noqa: E731
+    scope = lambda q: q.eq("org_id", org_id)                                  # noqa: E731
+    present = _ct.present_columns(table, scope, _LEDGER_OPTIONAL)
+    origin_ready, name_ready = "origin" in present, "product_name" in present
+    cols = _ct.select_list(_LEDGER_REQUIRED, _LEDGER_OPTIONAL, present)
+    rows, start, page, ready = [], 0, 1000, False
     while True:
         try:
             # .order("id") makes the PAGING deterministic. An unordered range() query can hand back
             # overlapping or skipped pages, which on a money figure is a silent miscount — the ledger is
             # the one table here that can realistically exceed one page.
-            chunk = (client.schema("commcalc").table("commission_ledger").select(cols)
-                     .eq("org_id", org_id).order("id")
+            chunk = (scope(table().select(cols)).order("id")
                      .range(start, start + page - 1).execute().data) or []
         except Exception:
-            tier += 1
-            if tier < len(_LEDGER_COL_TIERS):        # retry the SAME page with fewer optional columns
-                cols, origin_ready, name_ready = _LEDGER_COL_TIERS[tier]
-                continue
             return rows, ready, origin_ready, name_ready
         ready = True
         rows.extend(chunk)
