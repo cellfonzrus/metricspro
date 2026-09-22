@@ -462,8 +462,16 @@ check("the read endpoints derive the statement type (and the carrier) from the s
       (s_c["convention_meta"], s_r["convention_meta"]))
 check("…and each summary's payout total is its own statement's", s_c["payout_total"] == COMMISSION_TOTAL and s_r["payout_total"] == RESIDUAL_NET)
 tm = R.commission_ledger_templates(org_id=ORG)["templates"]
-check("the Commission Ledger page's template picker lists BOTH statements' source_report values FROM THE DATA (no hardcoded name)",
-      {"northwind__commission_statement", "northwind__residual_statement"} <= {t["key"] for t in tm})
+# §30.15 (the ledger statement identity): the picker lists ONE entry per statement identity, keyed by
+# `commission_ledger.template_key` — the bare base for the default statement type, `<base>__<slug>`
+# otherwise — derived from the stored keys in the data, never spelled here.
+_picked = {CL.template_key("northwind__commission_statement"), CL.template_key("northwind__residual_statement")}
+check("the Commission Ledger page's template picker lists BOTH statements FROM THE DATA, one entry per statement identity (template_key; no hardcoded name)",
+      len(_picked) == 2 and _picked <= {t["key"] for t in tm}, ({t["key"] for t in tm}, _picked))
+s_pick = {k: R.commission_ledger_summary(source_report=k, org_id=ORG)["payout_total"] for k in _picked}
+check("…and each picked key reads ITS OWN statement (the default type's bare key reads the commission statement's family)",
+      s_pick.get(CL.template_key("northwind__commission_statement")) == COMMISSION_TOTAL
+      and s_pick.get(CL.template_key("northwind__residual_statement")) == RESIDUAL_NET, s_pick)
 check("the confirmed layouts are learned under their statement type's card (pre-1010 here: the kind is resolved, learning degrades honestly)",
       c_c["report_kind"].get("kind") == "commission_statement" and c_r["report_kind"].get("kind") == "residual_statement"
       and c_r["report_kind"]["learned"] is False and RK.MIGRATION in c_r["report_kind"]["reason"], (c_c["report_kind"], c_r["report_kind"]))

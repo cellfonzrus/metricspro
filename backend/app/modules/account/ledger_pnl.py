@@ -82,6 +82,7 @@ UNBOOKED_NO_LINE = "no P&L line chosen for this bucket (Category → Bucket Map 
 UNBOOKED_UNMAPPED = "unmapped payout ('other') — assign these labels a bucket on the Category → Bucket Map"
 UNBOOKED_UNLISTED = "filed under a bucket key the registry no longer lists"
 UNBOOKED_UNKNOWN_LINE = "the bucket names a P&L line the chart does not have"
+UNBOOKED_LANDINGS = "landed more than once for this period — nothing is booked from it until one landing is retired"
 
 
 def _money(x):
@@ -155,6 +156,28 @@ def ledger_bookings(rows, buckets, sections, cfg=None):
        "line_count": n}
     The amounts are `commission_ledger.summarize`'s — this function never sums a payout_total."""
     rows = list(rows or [])
+    # THE LANDINGS GUARD (index §30.15) — DEREFERENCED from the ledger's own `landing_conflicts`: a
+    # statement × period the ledger holds MORE THAN ONE LANDING of (the same statement under two keys,
+    # two spellings of the period, or two origins) books NOTHING — its rows are set aside, reported
+    # under `unbooked` with the ledger's sentence, and `conflicts` carries the evidence; every other
+    # statement in the period books as usual. Summing two copies is the defect this closes.
+    conflicts = _cl.landing_conflicts(rows)
+    held = {(g["key"], g["period"]) for g in conflicts}
+    unbooked = {}
+    if held:
+        kept = []
+        for r in rows:
+            key = (_cl.identity_key(str(r.get("source_report") or "")), _cl.canonical_period(str(r.get("period") or "").strip()))
+            if key in held:
+                continue
+            kept.append(r)
+        rows = kept
+        for g in conflicts:
+            unbooked[("landings", g["key"], g["period"])] = {
+                "what": f"{g['statement_type']} ({g['base']}) — {g['period']}",
+                "amount": _money(g.get("payout_total")),          # the ledger's own Σ — never summed here
+                "reason": f"{UNBOOKED_LANDINGS}: {g['sentence']}", "lines": int(g.get("rows") or 0),
+                "landings": g["landings"]}
     groups, order = {}, []
     for r in rows:
         st = _store_of(r)
@@ -162,7 +185,7 @@ def ledger_bookings(rows, buckets, sections, cfg=None):
             groups[st] = []
             order.append(st)
         groups[st].append(r)
-    bookings, by_line, by_bucket, unbooked = [], {}, {}, {}
+    bookings, by_line, by_bucket = [], {}, {}
     by_src = {}
     for st in order:
         s = _cl.summarize(groups[st], buckets=buckets)
@@ -209,7 +232,8 @@ def ledger_bookings(rows, buckets, sections, cfg=None):
     for k, rs in by_report.items():
         by_src[k] = _cl.summarize(rs, buckets=buckets)["payout_total"]
     return {"bookings": bookings, "by_line": by_line, "by_bucket": by_bucket,
-            "by_source_report": by_src, "unbooked": list(unbooked.values()), "line_count": len(rows)}
+            "by_source_report": by_src, "unbooked": list(unbooked.values()), "line_count": len(rows),
+            "conflicts": conflicts, "held_lines": sum(int(g.get("rows") or 0) for g in conflicts)}
 
 
 # ── 4. THE GUARD ─────────────────────────────────────────────────────────────────────────────────
@@ -229,7 +253,7 @@ def _fmt(x):
 
 
 def divergence(feed_by_line, ledger_by_line, source, covered, configured=None, unbooked=None,
-               by_source_report=None, ledger_line_count=0, config_columns_missing=None):
+               by_source_report=None, ledger_line_count=0, config_columns_missing=None, conflicts=None):
     """PURE. {line: commission_source-meta} for every line either source names. Under 'ledger' a
     covered line says what the ledger booked and what the feeds WOULD have booked (suppressed); under
     'feeds' a line the ledger also holds says what the feeds booked and what the ledger holds —
@@ -250,7 +274,13 @@ def divergence(feed_by_line, ledger_by_line, source, covered, configured=None, u
         f, l = feed_by_line.get(line, 0.0), ledger_by_line.get(line, 0.0)
         booked_from_ledger = source == SOURCE_LEDGER and line in covered
         diff = _money(l - f)
-        if booked_from_ledger:
+        if booked_from_ledger and conflicts:
+            # the ledger REFUSED (a statement landed more than once): nothing booked, the feeds still
+            # switched off on this covered line, and the sentence says exactly why (index §30.15)
+            words = ("Nothing booked from the Commission Ledger on this line" + (f" beyond {_fmt(l)}" if l else "") +
+                     ": " + "; ".join(g["sentence"] for g in conflicts) + ". The feed booking" +
+                     (f" ({_fmt(f)})" if f else "") + " stays switched off so nothing is counted twice.")
+        elif booked_from_ledger:
             if f:
                 words = (f"Booked from the Commission Ledger ({_fmt(l)}). The feed tables would have booked "
                          f"{_fmt(f)} this month — a difference of {_fmt(diff)}; the feed booking is switched off "
@@ -279,7 +309,8 @@ def divergence(feed_by_line, ledger_by_line, source, covered, configured=None, u
                      "words": words,
                      "ledger_lines": int(ledger_line_count or 0),
                      "by_source_report": dict(by_source_report or {}),
-                     "unbooked": list(unbooked or []) if source == SOURCE_LEDGER else []}
+                     "unbooked": list(unbooked or []) if source == SOURCE_LEDGER else [],
+                     "landing_conflicts": [g["sentence"] for g in (conflicts or [])]}
     return out
 
 
@@ -338,7 +369,8 @@ def suggest_source(configured, feed_tables_with_rows, ledger_line_count):
 # ── 8. I/O — the only two readers ───────────────────────────────────────────────────────────────
 # The ledger is a wide, hot table, so it keeps an explicit column list; the OPTIONAL column (`origin`,
 # mig 251) is probed on its own before the one real select (core.column_tolerant, §4b.1) — never a
-# block whose failure on one column drops another.
+# block whose failure on one column drops another. The N-landings guard (§30.15) derives a landing from
+# source_report / period / origin, all read here; the landing's date is decoration the P&L does not need.
 _LEDGER_REQUIRED = ("category", "payout_total", "store", "source_report", "is_payout", "raw_amount",
                     "payment_month", "product_name", "period")
 _LEDGER_OPTIONAL = ("origin",)
