@@ -74,7 +74,9 @@ type CommitResp = {
   ok: boolean; problems: string[]; saved: number; source_report: string; period: string
   carrier: { id: string; name: string; code: string }; mapping_saved: string[]; sign_convention: string
   rules_saved: number; identity_written?: { aliases: [string, string][]; stores_created: string[] }
-  verified_numbers: { rows_in_file: number; rows_usable: number; footer_rows_dropped: number; rows_built: number; rows_landed: number; rows_inserted: number; totals: Totals; tie: LedgerTie; attestation: { reason: string } | null; confirmed_by: string | null; confirmed_at: string }
+  verified_numbers: { rows_in_file: number; rows_usable: number; footer_rows_dropped: number; rows_built: number; rows_landed: number; rows_inserted: number; totals: Totals; tie: LedgerTie; attestation: { reason: string } | null; confirmed_by: string | null; confirmed_at: string
+                      replaced_note?: string | null }   // §30.15: what this landing REPLACED (an earlier copy under the older key / another period spelling)
+  instance_key?: string
   state: { saved: boolean; reason?: string }
   shows_in?: ShowsInPayload           // where this statement shows up — incl. the P&L lines its buckets book to (mig 1013)
 }
@@ -389,6 +391,28 @@ export default function OnboardingIntakePage() {
     setFile(f); setFilename(f.name); setCommitRes(null)
   }
 
+  // RETIRE THIS STATEMENT (index §30.15): the intake's own counted remove (POST /retire, remove_landed) over
+  // the instance's slice — its statement × period, every copy under its key and its legacy key — the exact
+  // row count confirmed, the line retired on the record with the reason.
+  async function retireStatement() {
+    const ik = commitRes?.instance_key || instanceKey
+    if (!ik) { flash('No statement to retire.'); return }
+    const reason = window.prompt('Why retire this statement (recorded with your name)? Every row it landed for this period is removed after you confirm the exact count.', '')
+    if (!reason || !reason.trim()) { flash('Nothing retired.'); return }
+    setBusy(true)
+    try {
+      const body: Record<string, unknown> = { instance_key: ik, reason: reason.trim(), by: who, remove_landed: '1' }
+      let r = await api(`${BASE}/retire`, { method: 'POST', body: JSON.stringify(body) })
+      if (r?.dry_run) {
+        const n: number = r.would_remove?.rows ?? 0
+        if (!window.confirm(`This statement landed ${n.toLocaleString('en-US')} row(s) for this period (every copy under its key and its older key). Remove exactly these ${n.toLocaleString('en-US')} row(s) and retire the line?`)) { flash('Nothing retired, nothing removed.'); return }
+        r = await api(`${BASE}/retire`, { method: 'POST', body: JSON.stringify({ ...body, confirm_rows: String(n) }) })
+      }
+      flash(r?.retired?.removed ? `Retired; ${(r.retired.removed.rows as number).toLocaleString('en-US')} row(s) it had landed were removed.` : 'Retired — on the record, out of the verify table.')
+      resetForAnother()
+    } catch (e: unknown) { flash((e as Error)?.message || 'Could not retire') }
+    finally { setBusy(false) }
+  }
   function resetForAnother() {
     setStep('3.1'); setFile(null); setFilename(''); setKept(null); setAnalysis(null); setColumnMap({}); setSheet(''); setHeaderRow(''); setFooterMode('auto')
     setSignAnswer(null); setAssign({}); setReversal({}); setDecisions({}); setPeriod(''); setTypedTotal(''); setAttest(''); setCommitRes(null); setCarrierId('')
@@ -878,14 +902,16 @@ export default function OnboardingIntakePage() {
                   </tbody>
                 </table>
                 {commitRes.verified_numbers.attestation && <div style={{ ...note, marginBottom: 8 }}>Attested: &quot;{commitRes.verified_numbers.attestation.reason}&quot; — {commitRes.verified_numbers.confirmed_by}</div>}
+                {commitRes.verified_numbers.replaced_note && <div style={{ ...note, marginBottom: 8, color: '#b45309' }}>This landing {commitRes.verified_numbers.replaced_note}.</div>}
                 {/* WHERE THIS STATEMENT SHOWS UP (mig 1013): the ledger's consumers from the one map, the P&L
                     entry naming the lines its buckets book to; and the source switch, so the person who just
                     took the statement in can make it reach the P&L — suggested, confirmed here, never silent */}
                 {commitRes.shows_in && <ShowsIn info={commitRes.shows_in} lead="This statement will show in" />}
                 <PlCommissionSourcePanel compact lead="Which source books the P&L's commission lines for this company?" />
-                <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button style={primary} onClick={resetForAnother}>Another carrier?</button>
                   <a href="/commcalc/commission-ledger" style={{ ...ghost, textDecoration: 'none', display: 'inline-block' }}>Open the Commission Ledger</a>
+                  <button style={{ ...ghost, color: '#b91c1c' }} disabled={busy} onClick={retireStatement} title="Remove every row this statement landed for this period (its own slice: every copy under its key and its legacy key), counted first and confirmed — then the line is retired on the record">Retire this statement</button>
                   <button style={ghost} onClick={() => openStage('4')}>Verify everything →</button>
                   {!commitRes.ok && <button style={ghost} onClick={() => { setCommitRes(null); setStep('3.8') }}>Back to the totals</button>}
                 </div>

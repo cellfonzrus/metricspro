@@ -15,6 +15,10 @@ finance tree without a shared-file escalation.
 
 _MONTHS = ["", "January", "February", "March", "April", "May", "June", "July",
            "August", "September", "October", "November", "December"]
+# every spelling of a month name a person types: the full name, its 3-letter abbreviation, 'sept'
+_MONTH_LOOKUP = {m.lower(): i for i, m in enumerate(_MONTHS) if m}
+_MONTH_LOOKUP.update({m[:3].lower(): i for i, m in enumerate(_MONTHS) if m})
+_MONTH_LOOKUP["sept"] = 9
 
 
 def parse_period(period: str):
@@ -23,38 +27,68 @@ def parse_period(period: str):
     Returns (month, year); (0, 0) when unparseable. Robust across BOTH spellings — unlike the
     month-name-only `commcalc.calculator.parse_period`, the numeric form is parsed correctly
     (that variant returned month=1 for '2026-06'). Behaviour is byte-identical to the previous
-    `coa.parse_period` (which this replaces as the finance-wide canonical parser)."""
-    months = {"january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
-              "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12}
+    `coa.parse_period` (which this replaces as the finance-wide canonical parser).
+
+    Since 2026-09-22 (index §30.15) an ABBREVIATED month name ('Aug 2026', 'aug 2026', 'Sept 2026')
+    and a one-digit month ('2026-8') parse too — a spelling the platform accepted at a landing must
+    be one it can read back. Everything that parsed before parses to the same answer."""
     p = (period or "").strip().lower()
     if "-" in p and p.split("-")[0].isdigit():
         y, m = p.split("-")[:2]
-        return int(m), int(y)
+        try:
+            return int(m), int(y)
+        except ValueError:
+            return 0, 0
     parts = p.split()
-    mo = months.get(parts[0], 0) if parts else 0
+    mo = _MONTH_LOOKUP.get(parts[0], 0) if parts else 0
     yr = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
     return mo, yr
 
 
+def canonical_period(period):
+    """THE ONE spelling of a month-period the platform STORES: the month-NAME form ('August 2026' —
+    the first entry `period_keys` lists). A string that is not a month-period (or is blank) comes
+    back stripped, unchanged: this never invents a period. Every ledger landing canonicalises through
+    this (commission_ledger.canonical_period dereferences it), so 'Aug 2026' / 'aug 2026' / '2026-08'
+    typed at an upload all land as 'August 2026' and every reader finds them (index §30.15)."""
+    raw = str(period or "").strip()
+    pm, py = parse_period(raw)
+    if 1 <= pm <= 12 and py:
+        return f"{_MONTHS[pm]} {py}"
+    return raw
+
+
+def is_canonical_period(period):
+    """True when `period` is spelled exactly the way canonical_period would store it (or is not a
+    month-period at all). A stored spelling that is NOT canonical is an ORPHAN no period_keys()
+    reader finds — the class of the 'aug 2026' copies (index §30.15)."""
+    raw = str(period or "").strip()
+    return canonical_period(raw) == raw
+
+
 def period_keys(period):
     """Every period-string spelling a `.in_("period", …)` filter must match for `period`:
-    the literal input string, PLUS the month-name form ('June 2026'), PLUS the zero-padded
-    numeric form ('2026-06').
+    the month-name form ('June 2026' — the CANONICAL spelling, listed FIRST), the zero-padded
+    numeric form ('2026-06'), PLUS the literal input string when it is neither.
 
     This ONLY EVER ADDS the missing spelling — the caller's literal input is always kept, so a
     query that already matched a set of rows never loses one; it can only pick up the same month
-    written under the other spelling (the whole point of the fix). Order-insensitive: the value
-    feeds an IN clause. Superset of the previous per-file constructions:
+    written under the other spelling (the whole point of the fix). The ORDER is deterministic since
+    2026-09-22 (canonical first) so `period_keys(p)[0]` is the spelling a landing stores; as the
+    value of an IN clause the order is irrelevant. Superset of the previous per-file constructions:
       • coa.build_inputs  {period} | {month-name}          → adds numeric
       • recon._period_keys {period} | {month-name}          → adds numeric
       • residual._recent_labels {month-name, numeric}        → identical (per month)
     """
-    keys = {period}
-    pm, py = parse_period(period)
+    raw = str(period or "").strip() if period is not None else period
+    pm, py = parse_period(raw or "")
     if 1 <= pm <= 12 and py:
-        keys.add(f"{_MONTHS[pm]} {py}")
-        keys.add(f"{py}-{pm:02d}")
-    return list(keys)
+        keys = [f"{_MONTHS[pm]} {py}", f"{py}-{pm:02d}"]
+        for lit in (period, raw):
+            if lit not in keys:
+                keys.append(lit)
+        return keys
+    return [period] if period == raw else [period, raw]
 
 
 def recent_period_keys(latest_y, latest_m, n):

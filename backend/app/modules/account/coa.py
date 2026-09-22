@@ -1160,7 +1160,7 @@ def build_inputs(client, org_id, period):
                     _lp_feed_tally, _lb["by_line"], _lp_src, _lp_covered,
                     configured=(_ma314_cfg or {}).get("commission_source"),
                     unbooked=_lb["unbooked"], by_source_report=_lb["by_source_report"],
-                    ledger_line_count=_lb["line_count"],
+                    ledger_line_count=_lb["line_count"], conflicts=_lb.get("conflicts"),
                     config_columns_missing=(_ma314_cfg or {}).get("config_columns_missing")).items():
                 if _line in L:
                     L[_line]["commission_source"] = _m

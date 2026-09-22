@@ -4930,15 +4930,79 @@ def _ledger_origin_ready(client, org_id):
         return False
 
 
-def _ledger_delete_scoped(client, org_id, source_report, period, origin):
-    """Delete a period's ledger rows for ONE origin. Post-251 the wipe is origin-scoped (a 'file' wipe also
-    takes legacy NULL-origin rows, which are file imports by definition — the migration backfills them, but
-    a partially-migrated table must never leave duplicates behind). Pre-251 (no origin column) a 'file' wipe
-    degrades to today's exact un-scoped statement; an 'ma_sync' wipe RAISES, because without provenance the
-    sync cannot isolate its own rows and must refuse rather than risk a file import."""
+def _ledger_query(client, org_id, source_report="", period="", origin="", cols="*"):
+    """THE one place a ledger read spells its identity filters (index §30.15): org-scoped, the statement's
+    whole FAMILY (`commission_ledger.source_report_family` — the canonical `<base>__<type>` key AND the
+    legacy bare key every pre-existing row carries) and EVERY spelling of the period
+    (`commission_ledger.ledger_period_keys` → `_period.period_keys`). A blank `source_report` / `period` /
+    `origin` adds no filter. Every ledger reader in this module builds on this; the lock fails the build
+    on a `.eq("source_report" …)` / `.eq("period" …)` against the ledger anywhere else."""
+    q = client.schema("commcalc").table("commission_ledger").select(cols).eq("org_id", org_id)
+    if source_report:
+        q = q.in_("source_report", commission_ledger.source_report_family(source_report))
+    if period:
+        q = q.in_("period", commission_ledger.ledger_period_keys(period))
+    if origin:
+        q = q.eq("origin", origin)
+    return q
+
+
+def _ledger_landings_present(client, org_id, source_report, period, origin="", page=1000, cap=200000):
+    """What the ledger ALREADY holds for this statement × period, per landing — the statement's whole
+    FAMILY read across EVERY stored period spelling (paged, org-scoped) and grouped by
+    `commission_ledger.landings_for(rows, period)`, so the landings of THIS canonical period are found
+    whatever spelling they were stored under ('Aug 2026', 'aug 2026' — the orphans no period_keys reader
+    lists) and a replace can wipe them and SAY what it replaced. ANY SUBSET OF COLUMNS (§4b.1): the
+    optional columns (`origin` / `synced_at`, mig 251; `created_at` for a fake that carries none) are
+    probed on their own and the ONE real select carries what exists — never a block that can fail on an
+    unrelated column. Never raises: an unreadable ledger reports [] with `measured=False`."""
+    present = _ct.present_columns(lambda: client.schema("commcalc").table("commission_ledger"),
+                                  lambda q: q.eq("org_id", org_id), ("origin", "synced_at", "created_at"))
+    cols = _ct.select_list(("source_report", "period", "payout_total"), ("origin", "synced_at", "created_at"), present)
+    rows, start = [], 0
+    try:
+        while start < cap:
+            chunk = (_ledger_query(client, org_id, source_report, cols=cols)
+                     .range(start, start + page - 1).execute().data) or []
+            rows.extend(chunk)
+            if len(chunk) < page:
+                break
+            start += page
+    except Exception:
+        return [], False
+    if origin:
+        rows = [r for r in rows if (r.get("origin") or ledger_ma_sync.ORIGIN_FILE) == origin]
+    groups = commission_ledger.landings_for(rows, period)
+    return [L for g in groups for L in g["landings"]], True
+
+
+def _ledger_delete_scoped(client, org_id, source_report, period, origin, meta=None):
+    """Delete a statement × period's ledger rows for ONE origin — the statement's WHOLE FAMILY (its canonical
+    key and its legacy bare key) under EVERY spelling of the period (index §30.15), so a landing of the same
+    statement × period under any prior key or spelling is REPLACED, never left as a silent second copy (the
+    #264 posture). What was there is MEASURED first (`meta['replaced']`, per landing: rows, net, when, under
+    which key / spelling) so the trace and the 3.9 result can say "replaced 973 rows landed on 2026-09-20
+    under the older key". Post-251 the wipe is origin-scoped (a 'file' wipe also takes legacy NULL-origin
+    rows, which are file imports by definition — the migration backfills them, but a partially-migrated table
+    must never leave duplicates behind). Pre-251 (no origin column) a 'file' wipe degrades to the un-scoped
+    family × period; an 'ma_sync' wipe RAISES, because without provenance the sync cannot isolate its own rows
+    and must refuse rather than risk a file import."""
+    family = commission_ledger.source_report_family(source_report)
+    keys = commission_ledger.ledger_period_keys(period)
+    # MEASURE FIRST: every landing of this statement × canonical period, under whatever key / period
+    # spelling it was stored — those spellings join the wipe, so an orphan copy ('aug 2026') of the
+    # period being landed is replaced too, never left beside the new one
+    present, measured = _ledger_landings_present(client, org_id, source_report, period, origin)
+    for L in present:
+        if L.get("period") and L["period"] not in keys:
+            keys.append(L["period"])
+    if meta is not None:
+        meta["replaced"], meta["replaced_measured"] = present, measured
+        meta["scope"] = {"source_report": family, "period": keys, "origin": origin}
+
     def _base():
         return (client.schema("commcalc").table("commission_ledger").delete()
-                .eq("org_id", org_id).eq("source_report", source_report).eq("period", period))
+                .eq("org_id", org_id).in_("source_report", family).in_("period", keys))
     if _ledger_origin_ready(client, org_id):
         _base().eq("origin", origin).execute()
         if origin == ledger_ma_sync.ORIGIN_FILE:
@@ -4966,25 +5030,44 @@ def _ledger_map_records(records, hdr_rules):
     return mapped
 
 
-def _ledger_land_rows(client, org_id, rows, source_report, period, filename=None, source="ledger-import"):
-    """THE one landing path for built ledger rows: the slice-scoped wipe, the chunked insert, the
-    upload_log row and the mig-202 trace. Returns the number of rows inserted. Factored out of
-    /commission-ledger/import (2026-09-20) so the onboarding intake commits through exactly the same
-    code — a second landing path would be the drift the house rules forbid."""
-    # GUARD: only clear once we have rows; scope the wipe to this source_report + period — and, once
-    # migration 251 is applied, to THIS ORIGIN ('file'), so re-uploading a file can never delete the rows
-    # a MA-data refresh derived (and vice-versa). Pre-251 there is no origin column: the delete falls back
-    # to today's exact statement, so behaviour is byte-identical until the migration runs.
+def _ledger_land_rows(client, org_id, rows, source_report, period, filename=None, source="ledger-import",
+                      origin=ledger_ma_sync.ORIGIN_FILE, statement_type="", meta=None, note=None, trace_extra=None):
+    """THE one landing path for built ledger rows — every route (the older wizard's /import, the onboarding
+    intake's 3.9, the MA refresh) lands through here: the statement's IDENTITY and PERIOD stamped
+    canonically on every row, the family-scoped wipe, the chunked insert, the upload_log row (file
+    origin) and the mig-202 trace that SAYS what was replaced. Returns the number of rows inserted;
+    `meta` (a dict, optional) is filled with `source_report` / `period` (as stored), `replaced` (the
+    landings this one replaced, per key / spelling / origin) and `replaced_note` (the sentence).
+    Factored out of /commission-ledger/import (2026-09-20) so the intake commits through exactly the
+    same code; since 2026-09-22 (index §30.15) the identity is derived here, never by the caller: the
+    stored key is `commission_ledger.ledger_source_report(source_report, statement_type)` (the intake's
+    `<base>__<type>` form — a bare carrier code the older wizard sends becomes that carrier's default
+    statement type, exactly what the intake would have written) and the stored period is
+    `commission_ledger.canonical_period(period)` ('aug 2026' → 'August 2026')."""
     if not rows:
         raise HTTPException(400, "No usable rows — check the column mapping for this file.")
+    try:
+        stored_key = commission_ledger.ledger_source_report(source_report, statement_type)
+    except ValueError:
+        raise HTTPException(400, "source_report (a carrier code or template key) is required")
+    stored_period = commission_ledger.canonical_period(period) if period else period
+    for r in rows:                                       # ONE identity, ONE spelling, on every row
+        r["source_report"] = stored_key
+        if period:
+            r["period"] = stored_period
     _ledger_bucket_guard(client, org_id, rows)          # BEFORE the wipe: refuse, never half-land
+    m = meta if meta is not None else {}
+    # scope the wipe to this statement's FAMILY × every spelling of the period — and, once migration 251
+    # is applied, to THIS ORIGIN, so re-uploading a file can never delete the rows a MA-data refresh
+    # derived (and vice-versa). Pre-251 there is no origin column: the file delete falls back to the
+    # un-scoped family × period.
     if period:
         try:
-            _ledger_delete_scoped(client, org_id, source_report, period, ledger_ma_sync.ORIGIN_FILE)
+            _ledger_delete_scoped(client, org_id, stored_key, stored_period, origin, meta=m)
         except HTTPException:
             raise                                   # keep an explicit 4xx refusal as itself, not a 500
         except Exception as e:
-            raise HTTPException(500, f"Failed to clear existing ledger for {source_report}/{period}: {e}")
+            raise HTTPException(500, f"Failed to clear existing ledger for {stored_key}/{stored_period}: {e}")
     saved = 0
     for i in range(0, len(rows), 500):
         try:
@@ -4992,18 +5075,27 @@ def _ledger_land_rows(client, org_id, rows, source_report, period, filename=None
             saved += len(rows[i:i + 500])
         except Exception as e:
             raise HTTPException(500, f"Insert into commission_ledger failed at row {i}: {e} — is migration 071 applied?")
-    try:
-        client.schema("commcalc").table("upload_log").insert(
-            {"org_id": org_id, "file_type": "commission_ledger", "period": period or None,
-             "filename": filename, "rows_saved": saved}).execute()
-    except Exception as e:
-        print(f"WARN upload_log insert failed: {e}")
-    # mig-202 upload_trace keyed on the SOURCE report (e.g. ma_daily_tx), which is the feed an admin is
-    # actually satisfying by hand when they upload here — see the note on /vip/upload.
+    new_total = round(sum(safe_float(r.get("payout_total")) for r in rows), 2)
+    replaced_note = commission_ledger.replaced_sentence(m.get("replaced") or [], saved, new_total)
+    m.update({"source_report": stored_key, "period": stored_period, "origin": origin, "rows": saved,
+              "payout_total": new_total, "replaced_note": replaced_note or None})
+    if origin == ledger_ma_sync.ORIGIN_FILE:
+        try:
+            client.schema("commcalc").table("upload_log").insert(
+                {"org_id": org_id, "file_type": "commission_ledger", "period": stored_period or None,
+                 "filename": filename, "rows_saved": saved}).execute()
+        except Exception as e:
+            print(f"WARN upload_log insert failed: {e}")
+    # mig-202 upload_trace keyed on the statement's STORED key (one key per statement whichever route
+    # landed it), with what this landing replaced spelled out — never a silent second copy.
+    base_note = note or "classified into the canonical ledger"
     _write_upload_trace(org_id, source=source, filename=filename,
-                        upload_type=source_report, period=period,
-                        result={"saved": saved, "note": "classified into the canonical ledger",
-                                "_trace": {"rows_in": len(rows), "target_table": "commission_ledger"}})
+                        upload_type=stored_key, period=stored_period,
+                        result={"saved": saved,
+                                "note": base_note + (" — " + replaced_note if replaced_note else ""),
+                                "_trace": {"rows_in": len(rows), "target_table": "commission_ledger",
+                                           "periods": ({stored_period: saved} if stored_period else None),
+                                           "replaced": m.get("replaced") or [], **(trace_extra or {})}})
     return saved
 
 
@@ -5046,10 +5138,15 @@ async def commission_ledger_import(
     rows = [commission_ledger.build_row(src, base, cat_rules, conv, buckets) for src in mapped]
     if not rows:
         raise HTTPException(400, "No usable rows — check the column mapping for this file.")
+    land = {}
     saved = _ledger_land_rows(client, org_id, rows, source_report, period,
-                              filename=getattr(file, "filename", None), source="ledger-import")
+                              filename=getattr(file, "filename", None), source="ledger-import",
+                              statement_type=statement_type, meta=land)
     summary = commission_ledger.summarize(rows, rules=cat_rules, conv=conv, buckets=buckets, buckets_meta=bmeta)
-    return {"saved": saved, "source_report": source_report, "period": period, "summary": summary,
+    return {"saved": saved, "source_report": land.get("source_report") or source_report,
+            "period": land.get("period") or period, "summary": summary,
+            "requested": {"source_report": source_report, "period": period},
+            "replaced": land.get("replaced") or [], "replaced_note": land.get("replaced_note"),
             "report_key": rk, "statement_type": (statement_type or "").strip() or None,
             "rules_source": rules_source, "convention": conv, "convention_meta": conv_meta,
             "footer_rows_dropped": footer_rows,
@@ -5309,7 +5406,8 @@ def _intake_house_defaults(client, org_id, code, source_report, report_key):
         cols = [r for r in column_mapping.load_rules(client, ORG_ID, report_key, hid)
                 if r.get("carrier_id") == hid]
         cats = (client.schema("commcalc").table("commission_category_map").select("*")
-                .eq("org_id", ORG_ID).eq("source_report", source_report).execute().data) or []
+                .eq("org_id", ORG_ID).in_("source_report", commission_ledger.source_report_family(source_report))
+                .execute().data) or []
         return cols, cats
     except Exception:
         return [], []
@@ -6412,6 +6510,14 @@ def _intake_landed_slice_of(inst):
     strings that landed (not 'not ours') and the date span. None when the record cannot name a slice."""
     vn = inst.get("verified_numbers") or {}
     p = inst.get("payload") or {}
+    # a COMMISSION instance (stage 3) landed in the ledger: its slice is its statement × period — the
+    # whole FAMILY (canonical key + the legacy bare key) under every spelling of the period, origin
+    # 'file' — exactly what a re-land of the same statement replaces (index §30.15)
+    if _intake.kind_of_instance(str(inst.get("instance_key") or "")) == "commission":
+        sr, per = str(vn.get("source_report") or p.get("source_report") or ""), str(vn.get("period") or p.get("period") or "")
+        if not (sr and per):
+            return None
+        return _ledger_landing_slice(sr, per, ledger_ma_sync.ORIGIN_FILE)
     table = vn.get("target_table") or p.get("target_table")
     kind = vn.get("report_key") or p.get("layout")
     stores = [str(r.get("value")) for r in ((vn.get("identity") or {}).get("stores") or [])
@@ -6424,18 +6530,42 @@ def _intake_landed_slice_of(inst):
             "stores": sorted(set(stores)), "from": span["from"], "to": span["to"], "child": column_mapping.CHILD_TABLE_MAP.get(kind or "")}
 
 
-def _intake_remove_landed(client, org_id, slice_, confirm_rows=None):
+def _ledger_landing_slice(source_report, period, origin="", exact=False):
+    """The slice ONE ledger landing (or a whole statement × period) occupies, in the shape
+    `_intake_remove_landed` counts and removes: `exact=True` names ONE landing by its STORED spelling
+    (source_report + period + origin as the rows carry them — what the ledger page retires); otherwise
+    the statement's whole family under every spelling of the period (what the intake's instance owns)."""
+    if exact:
+        return {"table": "commission_ledger", "kind": "commission", "ledger": True, "exact": True,
+                "source_report": [source_report], "period": [period], "origin": origin or ""}
+    return {"table": "commission_ledger", "kind": "commission", "ledger": True, "exact": False,
+            "source_report": commission_ledger.source_report_family(source_report),
+            "period": commission_ledger.ledger_period_keys(period), "origin": origin or ""}
+
+
+def _intake_remove_landed(client, org_id, slice_, confirm_rows=None, note=None):
     """DRY RUN (confirm_rows None): count the rows the slice holds per table, nothing touched. CONFIRMED
     (confirm_rows == the dry run's total): delete exactly those rows by their ids, per table, and record it.
     A count that no longer matches is refused — the owner approves a NUMBER, never 'whatever is there'."""
     counts, ids_by_table = {}, {}
-    for table in [slice_["table"]] + ([slice_["child"]] if slice_.get("child") else []):
-        q = (client.schema("commcalc").table(table).select("id").eq("org_id", org_id)
-             .in_(slice_["partition_col"], slice_["stores"]).gte(slice_["date_col"], slice_["from"]).lte(slice_["date_col"], slice_["to"]))
-        q = _landing.apply_kind_filter(q, table, slice_["kind"], column_mapping.TABLE_MAP)
-        rows = q.limit(100000).execute().data or []
-        ids_by_table[table] = [r["id"] for r in rows if r.get("id")]
-        counts[table] = len(ids_by_table[table])
+    if slice_.get("ledger"):
+        # a ledger landing / statement × period (index §30.15): the family (or the ONE stored spelling)
+        # under the period spellings, one origin when named — through the one ledger query
+        q = (client.schema("commcalc").table("commission_ledger").select("id").eq("org_id", org_id)
+             .in_("source_report", slice_["source_report"]).in_("period", slice_["period"]))
+        if slice_.get("origin"):
+            q = q.eq("origin", slice_["origin"])
+        rows = q.limit(200000).execute().data or []
+        ids_by_table["commission_ledger"] = [r["id"] for r in rows if r.get("id")]
+        counts["commission_ledger"] = len(ids_by_table["commission_ledger"])
+    else:
+        for table in [slice_["table"]] + ([slice_["child"]] if slice_.get("child") else []):
+            q = (client.schema("commcalc").table(table).select("id").eq("org_id", org_id)
+                 .in_(slice_["partition_col"], slice_["stores"]).gte(slice_["date_col"], slice_["from"]).lte(slice_["date_col"], slice_["to"]))
+            q = _landing.apply_kind_filter(q, table, slice_["kind"], column_mapping.TABLE_MAP)
+            rows = q.limit(100000).execute().data or []
+            ids_by_table[table] = [r["id"] for r in rows if r.get("id")]
+            counts[table] = len(ids_by_table[table])
     total = sum(counts.values())
     if confirm_rows is None:
         return {"dry_run": True, "rows": total, "per_table": counts, "slice": slice_,
@@ -6449,8 +6579,10 @@ def _intake_remove_landed(client, org_id, slice_, confirm_rows=None):
             client.schema("commcalc").table(table).delete().eq("org_id", org_id).in_("id", ids[i:i + 500]).execute()
             n += len(ids[i:i + 500])
         removed[table] = n
-    _write_upload_trace(org_id, source="onboarding-intake", filename=None, upload_type=slice_.get("kind") or "retire", period="",
-                        result={"saved": 0, "note": f"retired line: removed {total:,} row(s) it had landed — " + ", ".join(f"{t} {n:,}" for t, n in removed.items()),
+    _write_upload_trace(org_id, source=("ledger-retire" if slice_.get("ledger") and note else "onboarding-intake"), filename=None,
+                        upload_type=(slice_["source_report"][0] if slice_.get("ledger") else (slice_.get("kind") or "retire")),
+                        period=(slice_["period"][0] if slice_.get("ledger") else ""),
+                        result={"saved": 0, "note": (note or "retired line") + f": removed {total:,} row(s) it had landed — " + ", ".join(f"{t} {n:,}" for t, n in removed.items()),
                                 "_trace": {"rows_in": 0, "target_table": slice_["table"]}})
     return {"dry_run": False, "rows": total, "per_table": removed, "slice": slice_}
 
@@ -6768,12 +6900,10 @@ def _intake_reread(client, org_id, source_report, period):
     origin_ok = _ledger_origin_ready(client, org_id)
     rows, lo = [], 0
     while True:
-        q = (client.schema("commcalc").table("commission_ledger")
-             .select("category,payout_total,raw_amount,product_name,order_type,is_payout,"
-                     "account_id,order_number,store,rep_user,trans_date")      # + the Stage-D link fields (§30.11)
-             .eq("org_id", org_id).eq("source_report", source_report).eq("period", period))
-        if origin_ok:
-            q = q.eq("origin", ledger_ma_sync.ORIGIN_FILE)
+        q = _ledger_query(client, org_id, source_report, period,
+                          origin=(ledger_ma_sync.ORIGIN_FILE if origin_ok else ""),
+                          cols="category,payout_total,raw_amount,product_name,order_type,is_payout,"
+                               "account_id,order_number,store,rep_user,trans_date")      # + the Stage-D link fields (§30.11)
         page = (q.range(lo, lo + _INTAKE_REREAD_PAGE - 1).execute().data) or []
         rows.extend(page)
         if len(page) < _INTAKE_REREAD_PAGE:
@@ -8003,8 +8133,10 @@ def _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who
         raise HTTPException(400, f"With the rules as saved, our total {expected_tie['our_total']:,.2f} differs "
                                  f"from the file's {expected_tie['file_total']:,.2f} by {expected_tie['difference']:,.2f} "
                                  "— nothing was imported.")
+    land = {}
     saved = _ledger_land_rows(client, org_id, rows, source_report, per,
-                              filename=fname, source="onboarding-intake")
+                              filename=fname, source="onboarding-intake", meta=land)
+    per = land.get("period") or per                      # the period as STORED (canonical spelling)
     # (e) RE-READ what landed. What we show is what is in the table, not what was in memory.
     landed = _intake_reread(client, org_id, source_report, per)
     totals = _intake.bucket_totals(landed, ctx["buckets"])
@@ -8026,6 +8158,9 @@ def _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who
                      "written": identity_written},
         "sign_convention": conv_name, "source_report": source_report, "period": per,
         "confirmed_by": who, "confirmed_at": _intake.now_iso(),
+        # what this landing REPLACED (index §30.15): an earlier copy under the older key / another
+        # spelling of the period is gone, and the record says so — never a silent second copy
+        "replaced": land.get("replaced") or [], "replaced_note": land.get("replaced_note"),
     }
     problems = []
     if not count_ok:
@@ -8087,31 +8222,48 @@ def commission_ledger_summary(source_report: str = "ma_daily_tx", period: str = 
     'ma_sync' (derived from the raw MA tables) — so a period populated by both can be read one source at a
     time instead of silently summing them. Default '' = every origin: byte-identical to before."""
     require_org(org_id)
+    _client = sb()
     try:
-        q = (sb().schema("commcalc").table("commission_ledger").select("*")
-             .eq("org_id", org_id).eq("source_report", source_report))
-        if period:
-            q = q.eq("period", period)
-        if origin:
-            q = q.eq("origin", origin)
-        rows = q.execute().data or []
+        rows = _ledger_query(_client, org_id, source_report, period, origin).execute().data or []
     except Exception:
         rows = []
     # COMMISSION LEG dimension (owner 2026-08-04): the same payout money also split 1st-month vs
     # M2–M12. Passing the ACTIVE rules lets a Category → Bucket Map rule override the leg for the lines
     # it classifies; without them the leg still derives from each line's payment month / label.
-    _client = sb()
     try:
         _rules, _rules_source = commission_ledger.load_rules_meta(_client, org_id, source_report)
     except Exception:
         _rules, _rules_source = None, None
     _conv, _conv_meta = _ledger_convention_for(_client, org_id, source_report=source_report)
     _buckets, _bmeta = _ledger_buckets(_client, org_id)
-    return {"source_report": source_report, "period": period, "origin": origin or None,
-            "rules_source": _rules_source, "convention": _conv, "convention_meta": _conv_meta,
-            **commission_ledger.summarize(rows, rules=_rules, conv=_conv,
-                                          legcls=_org_leg_classifier(_client, org_id),
-                                          buckets=_buckets, buckets_meta=_bmeta)}
+    head = {"source_report": source_report, "period": period, "origin": origin or None,
+            "rules_source": _rules_source, "convention": _conv, "convention_meta": _conv_meta}
+    # THE LANDINGS GUARD (index §30.15): more than one landing of one statement × period is REFUSED —
+    # the tiles read nothing and the page says which landings exist and how to retire one
+    return {**head, **_ledger_guarded_summary(rows, rules=_rules, conv=_conv,
+                                              legcls=_org_leg_classifier(_client, org_id),
+                                              buckets=_buckets, buckets_meta=_bmeta)}
+
+
+def _ledger_guarded_summary(rows, **kw):
+    """`commission_ledger.summarize` — unless the rows hold MORE THAN ONE LANDING of one statement ×
+    period (index §30.15), in which case the summary of NO rows is returned (every money key 0, line_count
+    = the rows counted, `landing_conflict` = the sentence, `landings` = the evidence) so no tile, export or
+    P&L booking can add two copies together. One helper, so the ledger page's every summing payload
+    refuses the same way."""
+    conflicts = commission_ledger.landing_conflicts(rows)
+    if not conflicts:
+        return commission_ledger.summarize(rows, **kw)
+    out = commission_ledger.summarize([], **kw)
+    out.update({"line_count": len(rows), "landings": commission_ledger.landings_for(rows),
+                "landing_conflict": "; ".join(g["sentence"] for g in conflicts),
+                "landing_conflicts": conflicts, "refused": True,
+                "refusal_basis": ("Nothing is summed: the same statement was landed more than once for this "
+                                  "period (under another key, another spelling of the period, or another "
+                                  "source). Retire the copy you do not want — Onboarding → Intake (the "
+                                  "statement's card) or the landings list on this page — and the totals "
+                                  "return.")})
+    return out
 
 
 @router.get("/commission-ledger/rows")
@@ -8121,20 +8273,16 @@ def commission_ledger_rows(source_report: str = "ma_daily_tx", period: str = "",
     `origin` (mig 251) narrows to one provenance; default '' = every origin (unchanged)."""
     require_org(org_id)
     try:
-        q = (sb().schema("commcalc").table("commission_ledger").select("*")
-             .eq("org_id", org_id).eq("source_report", source_report))
-        if period:
-            q = q.eq("period", period)
+        q = _ledger_query(sb(), org_id, source_report, period, origin)
         if category:
             q = q.eq("category", category)
         if rep_user:
             q = q.eq("rep_user", rep_user)
-        if origin:
-            q = q.eq("origin", origin)
         rows = q.order("payout_total", desc=True).limit(min(int(limit or 2000), 5000)).execute().data or []
     except Exception:
         rows = []
-    return {"rows": rows, "count": len(rows)}
+    return {"rows": rows, "count": len(rows),
+            "landing_conflict": commission_ledger.summarize(rows).get("landing_conflict")}
 
 
 @router.get("/commission-ledger/observed-types")
@@ -8145,14 +8293,17 @@ def commission_ledger_observed_types(source_report: str = "ma_daily_tx", period:
     require_org(org_id)
     client = sb()
     try:
-        q = (client.schema("commcalc").table("commission_ledger")
-             .select("order_type,product_name,category,payout_total,is_payout")
-             .eq("org_id", org_id).eq("source_report", source_report))
-        if period:
-            q = q.eq("period", period)
-        rows = q.limit(20000).execute().data or []
+        rows = _ledger_query(client, org_id, source_report, period,
+                             cols="order_type,product_name,category,payout_total,is_payout,source_report,period,origin"
+                             ).limit(20000).execute().data or []
     except Exception:
         rows = []
+    # THE LANDINGS GUARD (index §30.15): two copies of one statement would double every label's sum
+    _conflicts = commission_ledger.landing_conflicts(rows)
+    if _conflicts:
+        return {"types": [], "count": 0, "leg_labels": commission_ledger.LEG_LABELS,
+                "leg_buckets": list(commission_ledger.LEG_BUCKETS), "refused": True,
+                "landing_conflict": "; ".join(g["sentence"] for g in _conflicts), "landing_conflicts": _conflicts}
     agg = {}
     for r in rows:
         key = (r.get("order_type") or "", r.get("product_name") or "")
@@ -8203,16 +8354,19 @@ def commission_ledger_by_rep(source_report: str = "ma_daily_tx", period: str = "
     COLS = [c for c in CATS if c in commission_ledger.COLUMN_BACKED]
     # 1. ledger payouts for this template/period, grouped by canonical rep
     try:
-        q = (client.schema("commcalc").table("commission_ledger")
-             .select("rep_user,payout_total,category," + ",".join(COLS))
-             .eq("org_id", org_id).eq("source_report", source_report))
-        if period:
-            q = q.in_("period", _pvariants(period))
-        if origin:
-            q = q.eq("origin", origin)
-        lrows = q.limit(100000).execute().data or []
+        lrows = _ledger_query(client, org_id, source_report, period, origin,
+                              cols="rep_user,payout_total,category,source_report,period,origin," + ",".join(COLS)
+                              ).limit(100000).execute().data or []
     except Exception:
         lrows = []
+    # THE LANDINGS GUARD (index §30.15): a rep's payout is never the sum of two copies of one statement
+    _conflicts = commission_ledger.landing_conflicts(lrows)
+    if _conflicts:
+        return {"source_report": source_report, "period": period, "reps": [], "totals": {},
+                "categories": CATS, "category_labels": commission_ledger.bucket_labels(buckets),
+                "buckets": buckets, "bucket_meta": bmeta, "matched_count": 0, "rep_count": 0,
+                "refused": True, "landing_conflict": "; ".join(g["sentence"] for g in _conflicts),
+                "landing_conflicts": _conflicts}
     cmap = _rep_canon_map(client, org_id)
     reps = {}
     for r in lrows:
@@ -8368,12 +8522,9 @@ def _ledger_existing_by_origin(client, org_id, source_report, period):
                                    lambda q: q.eq("org_id", org_id), ("origin", "synced_at"))
     ready = "origin" in _present
     try:
-        q = (client.schema("commcalc").table("commission_ledger")
-             .select(_ct.select_list(("payout_total", "created_at"), ("origin", "synced_at"), _present))
-             .eq("org_id", org_id).eq("source_report", source_report))
-        if period:
-            q = q.in_("period", _pvariants(period))
-        rows = q.limit(100000).execute().data or []
+        rows = _ledger_query(client, org_id, source_report, period,
+                             cols=_ct.select_list(("payout_total", "created_at"), ("origin", "synced_at"), _present)
+                             ).limit(100000).execute().data or []
     except Exception:
         rows = []
     for r in rows:
@@ -8511,7 +8662,11 @@ def _ledger_ma_payload(client, org_id, source_report, period, carrier_id="", rep
         "source_report": source_report, "period": period, "carrier_id": carrier_id or None,
         "ready": ready, "migration": None if ready else "251_commission_ledger_ma_sync.sql",
         "would_write": len(rows),
-        "delete_scope": {"org_id": org_id, "source_report": source_report, "period": period,
+        # what the refresh wipes: the statement's whole FAMILY under every spelling of the period (§30.15)
+        "delete_scope": {"org_id": org_id, "source_report": commission_ledger.source_report_family(source_report),
+                         "period": commission_ledger.ledger_period_keys(period),
+                         "stored_as": {"source_report": commission_ledger.ledger_source_report(source_report),
+                                       "period": commission_ledger.canonical_period(period)},
                          "origin": ledger_ma_sync.ORIGIN_SYNC},
         "sources": sources, "summary": summary, "observed": observed,
         "unmapped": [o for o in observed if o.get("category") == "other"],
@@ -8565,24 +8720,90 @@ def commission_ledger_ma_sync(source_report: str = "ma_daily_tx", period: str = 
                             (payload["warnings"][0] if payload["warnings"] else
                              "Check the period and the source tables."))
     _ledger_bucket_guard(client, org_id, rows)          # BEFORE the wipe: refuse, never half-land
-    _ledger_delete_scoped(client, org_id, source_report, period, ledger_ma_sync.ORIGIN_SYNC)
-    saved = 0
-    for i in range(0, len(rows), 500):
-        try:
-            client.schema("commcalc").table("commission_ledger").insert(rows[i:i + 500]).execute()
-            saved += len(rows[i:i + 500])
-        except Exception as e:
-            raise HTTPException(500, f"Insert into commission_ledger failed at row {i}: {e}")
-    _write_upload_trace(org_id, source="ledger-ma-sync", filename=None, upload_type=source_report,
-                        period=period,
-                        result={"saved": saved,
-                                "note": f"ledger refreshed from {', '.join(s['source_table'] for s in payload['sources'])}",
-                                "_trace": {"rows_in": payload["guard"]["rows_in"],
-                                           "target_table": "commission_ledger",
-                                           "periods": {period: saved}}})
+    # THE ONE LANDER (index §30.15): the refresh lands like a file — the statement's canonical identity
+    # and period on every row, the family × period wipe scoped to ITS origin, the trace saying what it
+    # replaced. `_ledger_land_rows` runs the bucket guard again (idempotent) before the wipe.
+    land = {}
+    saved = _ledger_land_rows(client, org_id, rows, source_report, period, source="ledger-ma-sync",
+                              origin=ledger_ma_sync.ORIGIN_SYNC, meta=land,
+                              note=f"ledger refreshed from {', '.join(s['source_table'] for s in payload['sources'])}",
+                              trace_extra={"rows_in": payload["guard"]["rows_in"],
+                                           "periods": {commission_ledger.canonical_period(period): len(rows)}})
     after, _r = _ledger_existing_by_origin(client, org_id, source_report, period)
     return {**payload, "saved": saved, "existing_by_origin": list(after.values()),
+            "stored": {"source_report": land.get("source_report"), "period": land.get("period")},
+            "replaced": land.get("replaced") or [], "replaced_note": land.get("replaced_note"),
             "refreshed_at": rows[0].get("synced_at") if rows else None}
+
+
+@router.get("/commission-ledger/landings")
+def commission_ledger_landings(source_report: str = "ma_daily_tx", period: str = "", org_id: str = ORG_ID):
+    """Every LANDING of a statement (its whole family) per canonical period — under which stored key,
+    which period spelling, which origin, how many rows, its net and when — and the refusal sentence
+    for a period that holds more than one (index §30.15). The evidence behind the ledger page's and
+    the P&L's "holds 2 landings" refusal, and the list a person retires one from. READ-ONLY."""
+    require_org(org_id)
+    client = sb()
+    try:
+        rows = _ledger_query(client, org_id, source_report, period,
+                             cols="source_report,period,origin,payout_total,created_at,synced_at").limit(200000).execute().data or []
+    except Exception:
+        try:
+            rows = _ledger_query(client, org_id, source_report, period,
+                                 cols="source_report,period,payout_total,created_at").limit(200000).execute().data or []
+        except Exception:
+            rows = []
+    groups = commission_ledger.landings_for(rows)
+    return {"source_report": source_report, "period": period or None,
+            "stored_as": commission_ledger.ledger_source_report(source_report) if source_report else None,
+            "family": commission_ledger.source_report_family(source_report) if source_report else [],
+            "template_key": commission_ledger.template_key(source_report) if source_report else None,
+            "groups": groups, "conflicts": [g for g in groups if g["conflict"]],
+            "orphan_periods": sorted({L["period"] for g in groups for L in g["landings"] if L.get("orphan_period")}),
+            "how": ("A landing is one import of one statement for one period. Two landings of the same "
+                    "statement × period are never summed: retire the one you do not want (dry run first — "
+                    "the exact row count is confirmed) and the totals return.")}
+
+
+class LedgerLandingRetireIn(LaxModel):
+    source_report: str = ""       # the landing's STORED key, exactly as the landings list shows it
+    period: str = ""              # the landing's STORED period spelling, exactly as shown
+    origin: Any = None            # file | ma_sync (blank = file)
+    reason: Any = None
+    by: Any = None
+    confirm_rows: Any = None      # the exact row count the dry run reported — the owner approves a NUMBER
+
+
+@router.post("/commission-ledger/landings/retire")
+def commission_ledger_landing_retire(body: LedgerLandingRetireIn, org_id: str = ORG_ID,
+                                     authorization: str = Header(default="")):
+    """RETIRE one landing of a statement × period — remove exactly the rows landed under THAT stored key
+    and THAT period spelling and origin, two-step: a dry run counts them, the caller confirms the exact
+    count, then they are deleted by id and the removal is traced with the reason and the name (the #268
+    counted-remove posture, the SAME core the intake's retire uses). Admin-gated: it moves money off the
+    ledger. Never touches another landing, another statement or another period."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    sr, per = (body.source_report or "").strip(), (body.period or "").strip()
+    reason = str(body.reason or "").strip()
+    if not sr or not per:
+        raise HTTPException(400, "source_report and period are required — exactly as the landings list shows them")
+    if not reason:
+        raise HTTPException(400, "Say why this landing is retired (recorded with your name) — e.g. 'landed twice under the older key'.")
+    origin = str(body.origin or "").strip() or ledger_ma_sync.ORIGIN_FILE
+    if origin not in ledger_ma_sync.ORIGINS:
+        raise HTTPException(400, "origin must be one of " + "|".join(ledger_ma_sync.ORIGINS))
+    client = sb()
+    slice_ = _ledger_landing_slice(sr, per, origin if _ledger_origin_ready(client, org_id) else "", exact=True)
+    who = str(body.by or "").strip() or None
+    confirm = None if body.confirm_rows in (None, "") else int(body.confirm_rows)
+    removal = _intake_remove_landed(client, org_id, slice_, confirm,
+                                    note=f"retired landing '{sr}' / '{per}' ({origin}) — {reason}" + (f" — by {who}" if who else ""))
+    out = {"dry_run": bool(removal.get("dry_run")), "landing": {"source_report": sr, "period": per, "origin": origin},
+           "removal": removal, "reason": reason, "by": who}
+    if not removal.get("dry_run"):
+        out["landings"] = commission_ledger_landings(source_report=sr, period=commission_ledger.canonical_period(per), org_id=org_id)
+    return out
 
 
 @router.get("/commission-ledger/provenance")
@@ -8598,16 +8819,25 @@ def commission_ledger_provenance(source_report: str = "ma_daily_tx", org_id: str
                                    lambda q: q.eq("org_id", org_id), ("origin", "synced_at"))
     ready = "origin" in _present
     try:
-        rows = (client.schema("commcalc").table("commission_ledger")
-                .select(_ct.select_list(("period", "payout_total", "created_at"), ("origin", "synced_at"), _present))
-                .eq("org_id", org_id).eq("source_report", source_report).limit(100000).execute().data) or []
+        rows = _ledger_query(client, org_id, source_report,
+                             cols=_ct.select_list(("period", "source_report", "payout_total", "created_at"), ("origin", "synced_at"), _present)
+                             ).limit(100000).execute().data or []
     except Exception:
         rows = []
+    # THE LANDINGS (index §30.15): per canonical period, every landing of this statement — under which
+    # key, which spelling, which origin — and whether the period holds more than one (the refusal); a
+    # period spelled non-canonically ('aug 2026') is an ORPHAN no period reader finds and is said so
+    landings = commission_ledger.landings_for(rows)
+    by_canon = {g["period"]: g for g in landings}
     per = {}
     for r in rows:
         p = (r.get("period") or "").strip() or "(no period)"
         o = (r.get("origin") or ledger_ma_sync.ORIGIN_FILE) if ready else ledger_ma_sync.ORIGIN_FILE
-        a = per.setdefault(p, {"period": p, "lines": 0, "payout_total": 0.0, "origins": {}})
+        a = per.setdefault(p, {"period": p, "lines": 0, "payout_total": 0.0, "origins": {},
+                               "canonical": commission_ledger.canonical_period(p) if p != "(no period)" else None,
+                               "orphan": commission_ledger.is_orphan_period(p) if p != "(no period)" else False,
+                               "landings": (by_canon.get(commission_ledger.canonical_period(p)) or {}).get("landings") or [],
+                               "landing_conflict": (by_canon.get(commission_ledger.canonical_period(p)) or {}).get("sentence")})
         a["lines"] += 1
         a["payout_total"] = round(a["payout_total"] + safe_float(r.get("payout_total")), 2)
         b = a["origins"].setdefault(o, {"origin": o, "label": ledger_ma_sync.ORIGIN_LABELS.get(o, o),
@@ -8652,7 +8882,9 @@ def commission_ledger_provenance(source_report: str = "ma_daily_tx", org_id: str
     keys = set(per) | set(raw_avail)
     out = []
     for p in keys:
-        a = per.get(p) or {"period": p, "lines": 0, "payout_total": 0.0, "origins": {}}
+        a = per.get(p) or {"period": p, "lines": 0, "payout_total": 0.0, "origins": {},
+                           "canonical": commission_ledger.canonical_period(p), "orphan": False,
+                           "landings": [], "landing_conflict": None}
         a = dict(a)
         a["origins"] = list((per.get(p) or {}).get("origins", {}).values())
         a["raw_available"] = raw_avail.get(p) or {}
@@ -8678,8 +8910,11 @@ def get_commission_category_map(source_report: str = "ma_daily_tx", org_id: str 
     require_org(org_id)
     client = sb()
     try:
+        # THE FAMILY (index §30.15): the rules under the canonical key and under the legacy bare key are
+        # ONE rule-set; each row keeps the key it was saved under (the editor updates by id)
         rows = (client.schema("commcalc").table("commission_category_map").select("*")
-                .eq("org_id", org_id).eq("source_report", source_report).order("priority").execute().data) or []
+                .eq("org_id", org_id).in_("source_report", commission_ledger.source_report_family(source_report))
+                .order("priority").execute().data) or []
         ready = True
     except Exception:
         rows, ready = [], False
@@ -9370,10 +9605,7 @@ def _mcw_ledger_rows(client, org_id, source_report="ma_daily_tx", period="", cap
     use = cols
     while True:
         try:
-            q = (client.schema("commcalc").table("commission_ledger").select(use)
-                 .eq("org_id", org_id).eq("source_report", source_report).order("id"))
-            if period:
-                q = q.in_("period", _pvariants(period))
+            q = _ledger_query(client, org_id, source_report, period, cols=use).order("id")
             chunk = q.range(start, start + page - 1).execute().data or []
         except Exception as e:
             if use == cols:
@@ -18892,15 +19124,13 @@ def _statement_buckets(client, org_id, period, rep, source_report="ma_daily_tx")
     from app.modules.commcalc.commission_engine import _canon_person
     CATS = commission_ledger.CATEGORIES
     try:
-        q = (client.schema("commcalc").table("commission_ledger")
-             .select("rep_user," + ",".join(CATS))
-             .eq("org_id", org_id).eq("source_report", source_report))
-        if period:
-            q = q.in_("period", _pvariants(period))
-        lrows = q.limit(100000).execute().data or []
+        lrows = _ledger_query(client, org_id, source_report, period,
+                              cols="rep_user,source_report,period,origin," + ",".join(CATS)).limit(100000).execute().data or []
     except Exception:
         return None
     if not lrows:
+        return None
+    if commission_ledger.landing_conflicts(lrows):      # two copies of one statement: no bucket figure (§30.15)
         return None
     cmap = _rep_canon_map(client, org_id)
     want = _canon_person(rep)
