@@ -88,18 +88,14 @@ def canonical_period(period):
     which leniently maps an unrecognized spelling to JANUARY ('2026-08' → 'January 2026' variants —
     the exact trap router._pvariants documents). POST /discrepancy/run sends 'YYYY-MM', so without
     this the recon would read January's MA statements for an August run. Unparseable input passes
-    through unchanged (never guesses a month). PURE."""
-    p = str(period or "").strip()
-    if len(p) >= 7 and p[:4].isdigit() and p[4] == "-" and p[5:7].isdigit():
-        y, m = int(p[:4]), int(p[5:7])
-        if 1 <= m <= 12:
-            return f"{calendar.month_name[m]} {y}"
-        return p
-    parts = p.split()
-    names = {n.lower(): i for i, n in enumerate(calendar.month_name) if n}
-    if len(parts) == 2 and parts[0].lower() in names and parts[1].isdigit():
-        return f"{calendar.month_name[names[parts[0].lower()]]} {parts[1]}"
-    return p
+    through unchanged (never guesses a month). PURE.
+
+    Since 2026-09-22 (index §30.15) this DEREFERENCES the platform's ONE period home,
+    `account/_period.canonical_period` — the same function every ledger landing stores its period
+    through — instead of carrying a second copy of the rule. Byte-identical on every input this
+    accepted before ('2026-08', 'august 2026'; an unknown spelling passes through)."""
+    from app.modules.account import _period as _pd
+    return _pd.canonical_period(period)
 
 
 # ── PURE: sold side ────────────────────────────────────────────────────────────────────────────────

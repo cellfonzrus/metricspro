@@ -151,7 +151,7 @@ KIND_REQUIRED = {"sales": ("store", "trans_date", "ext_price"), "pos": ("store",
                  "x_report": (), "merchant_payments": ()}
 BILLPAY_LAYOUT_REQUIRED = {"ma_daily_tx": ("account_id", "tx_date", "retail_cost", "product_name"),
                            "epay_daily_tx": ("terminal_id", "settlement_date", "retail", "transaction_id")}
-STATEMENT_TYPE_DEFAULT = "commission statement"
+STATEMENT_TYPE_DEFAULT = CL.LEDGER_STATEMENT_TYPE_DEFAULT      # ONE home (commission_ledger; index §30.15)
 INVENTORY_NONE_KEY = "inventory:none:none"          # the explicit "no inventory export" choice (design §6.6)
 
 STAGE_COMMISSION = "3"
@@ -314,20 +314,20 @@ def is_number_text(s):
 
 
 def slug(text):
-    """A stable key from a display string: lower, [a-z0-9_] only, no leading/trailing '_'."""
-    t = re.sub(r"[^a-z0-9]+", "_", _s(text).lower())
-    return t.strip("_")
+    """A stable key from a display string: lower, [a-z0-9_] only, no leading/trailing '_'. DEREFERENCES
+    the ledger's one slug (commission_ledger.ledger_slug) — the intake's keys and the ledger's identity
+    are built from the same function (index §30.15)."""
+    return CL.ledger_slug(text)
 
 
 def source_report_key(carrier_code, statement_type=STATEMENT_TYPE_DEFAULT):
     """The tenant's OWN rule-set namespace for (carrier, statement type) — the commission_category_map
     `source_report` and the commission_ledger `source_report` this intake writes under. A statement
     type is a ROW-LIKE key, not a branch: a carrier that sends a separate residual file gets a second
-    key the same way (design §3.1)."""
-    c, t = slug(carrier_code), slug(statement_type or STATEMENT_TYPE_DEFAULT)
-    if not c:
-        raise ValueError("carrier code required")
-    return f"{c}__{t or slug(STATEMENT_TYPE_DEFAULT)}"
+    key the same way (design §3.1). DEREFERENCES the ONE ledger identity derivation
+    (commission_ledger.ledger_source_report, index §30.15) — the older wizard and the MA refresh land
+    under the same key through the same function."""
+    return CL.ledger_source_report(carrier_code, statement_type or STATEMENT_TYPE_DEFAULT)
 
 
 def instance_key(source_kind, carrier_id, statement_type=STATEMENT_TYPE_DEFAULT):

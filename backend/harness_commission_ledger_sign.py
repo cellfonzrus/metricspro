@@ -987,9 +987,13 @@ except R.HTTPException:
 check("...and does NOT refuse the five column-backed buckets pre-migration, nor anything once the table exists", _ok)
 land_src = inspect.getsource(R._ledger_land_rows)
 sync_src = inspect.getsource(R.commission_ledger_ma_sync)
+# 2026-09-22 (index §30.15): the MA refresh lands THROUGH _ledger_land_rows (the one lander), so its
+# guard-before-wipe order is the lander's; the refresh still runs the guard itself before calling it
 check("the guard is WIRED into both landing paths (file import + MA refresh), BEFORE the slice wipe",
       "_ledger_bucket_guard(" in land_src and land_src.index("_ledger_bucket_guard(") < land_src.index("_ledger_delete_scoped(")
-      and "_ledger_bucket_guard(" in sync_src and sync_src.index("_ledger_bucket_guard(") < sync_src.index("_ledger_delete_scoped("))
+      and "_ledger_bucket_guard(" in sync_src and "_ledger_land_rows(" in sync_src
+      and sync_src.index("_ledger_bucket_guard(") < sync_src.index("_ledger_land_rows(")
+      and ".insert(rows[i:i + 500])" not in sync_src)
 check("the registry endpoints are mounted and the Category Map / templates / summary / by-rep payloads carry the registry",
       all(p in [rt.path for rt in R.router.routes] for p in ("/commcalc/commission-buckets", "/commcalc/commission-buckets/{key}"))
       and all('"buckets"' in inspect.getsource(getattr(R, f)) for f in ("get_commission_category_map", "commission_ledger_templates", "commission_ledger_by_rep"))
