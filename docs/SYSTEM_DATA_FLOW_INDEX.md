@@ -39,6 +39,7 @@ Primary code homes:
 | 13 | **Org hierarchy & store resolution** | "Which stores does a manager see? How is a raw store string canonicalized to a store_code?" |
 | 14 | **Employees & scheduling** | "Do shifts feed pay? Rep→employee name mapping. Hours in targets." |
 | 15 | **Other commission subsystems** | MA (master-agent) commission, VIP, epay, chargebacks, expenses, agency, financing, accrual/payout ledger. |
+| 15z | **Zero sales — no activation, no upgrade** | "Which stores (and which reps) sold nothing for how many days running — and which of those 'zeros' are really a feed that never arrived?" |
 | 16 | **Cross-reference: by TABLE** | table → sections/functions that read & write it. |
 | 17 | **Cross-reference: by ENDPOINT** | endpoint → handler/section. |
 | 18 | **Cross-reference: by METRIC/KPI** | metric → source table → reader function. |
@@ -3335,8 +3336,14 @@ be a seaprate box in the p&l under wages"
     Ingest / Workforce Compliance / Cash & Closing Compliance) with the exact /hub/[group] RBAC
     predicates. `/commcalc/ingest-guard` gained its FIRST NAV home here (page pre-existed,
     menu-less; scopes `['all']`).
-  - **Frontend registration:** `rbac.ts` (two groups + REPORT_TREES `/commcalc/kpi-failing` +
-    REPORT_DIRECTORY rows), `reports.ts` (Failing KPIs, Current Monetary Liabilities);
+  - **Later tiles on the SAME house layout** (each an APPEND, never a rebuild, and each leaving a
+    tenant's own designed layout alone): **All Flags** mig `1002` (owner 2026-09-10) and
+    **Zero Sales** mig `1016` (owner 2026-09-22, §15z — `/commcalc/zero-sales`, the store-days and
+    rep-days with no activation and no upgrade, where a day with no feed reads "not reported" and
+    never zero).
+  - **Frontend registration:** `rbac.ts` (two groups + REPORT_TREES `/commcalc/kpi-failing`,
+    `/commcalc/zero-sales` + REPORT_DIRECTORY rows), `reports.ts` (Failing KPIs, Current Monetary
+    Liabilities, Zero Sales);
     `prove_tile_hubs.mjs` (17 hub groups) + `prove_import_health_nav.mjs` (B6 duplicate) updated.
     ALL THREE NEW SCREENS (kpi-failing · liabilities-due · compliance) AWAIT OWNER PREVIEW
     (merge policy Option B). Display config, not a feed → NO lineage entry.
@@ -3476,6 +3483,124 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | **ATU opportunity** | mig `295` | `atu_opportunity.py`; `/atu-opportunity` `28410` |
 | **Activation TYPE of a POS sale line — THE predicate (2026-09-21)** | `raw_sales` / `daily_sales_feed` lines (any column: `contract_type`, `category` path, `product_desc`, `department`, `trans_type`) × `accessory_config.activation_details_rules` (`fields` / `tokens` / `exact` / `auto_activation_tokens` / `hints` / `metric_hints` / `broad_attested` — extended mig-313 JSON, NO migration; house defaults = the retired classifiers; THE NO-LEAK RULE: house tokens fill an undeclared class only under the house field) | `commcalc/line_class.py` (PURE: `activation_class` / `classify_line` / `bucket_of` / `resolve_rules` (`house_fill`) / `count_classes` (+ `broad` / `refused`) / `gate_open` / `token_shares` / `broad_tokens` / `refused_tokens` / `rules_refused` / `refusal_sentence` / `norm_broad_ok` / `suggest_rules` / `suggest_metric_rules` / `merge_into_raw`); resolved ONCE by `router._line_rules_resolve` (the loader `_accessory_config_uncached` → `acfg['line_rules']`, and the 2.5a save's guard — no second resolution; + `_line_rules_of`, `_line_skip`); dereferenced by `calculator.calc_rep_commissions` (`cfg['line_class_rules']`, threaded by the calc endpoint + `payout_accrual`), `commission_engine._activation_buckets` / `_read_ct_classification_config`, `plan_options._resolved_bucket`, `router._sales_cell_agg` (Sales Report / Exec MTD / Daily Targets; the Port sub-split is the predicate's `'port'`), `_blank_ct_bucket_map` (the mig-224 transaction rescue SUPPLEMENTS it), `_classification_gaps`, `/sales-report/detail`, `whatif._byod_mdns` / `accessory_byod_correlation`, `sales_comparison.tally` (`line_rules`), `closing.router._b2b_counts_by_store` (+ the tender split) via `_line_rules`, `marketing/event_sales.org_classifier`; written ONLY by `PUT /accessory-config` (`activation_details_rules`, merged — the AD-basis keys beside it untouched) which the intake's `PUT /onboarding/intake/line-class` calls. Proof `harness_line_class.py` (47: predicate, the money pin, the suggestion engine over the measured vocabulary, the aggregation + pay path counting 39/25/23 by distinct invoice, §G the too-broad guard / no-leak / seed); lock `harness_line_class_lock.py` (29) |
 | **Activation-Details basis (b2b activation TYPE buckets)** | `raw_custom_import` (signature-detected sheet: `Serial#`+`Contract Type`); config `accessory_config.activation_details_rules` — mig `313_activation_details_bucket_rules` (per-org token rules; RULE TWO) | `activation_bucketing.py` (PURE: `activation_details_bucket`/`resolve_rules`/`BUCKET_RANK`/`TOTAL_ACTIVATION_EXCLUDED`) ← delegated to by `router._activation_details_bucket`; rules loaded per-org by `_activation_details_rules` (defensive, mig-214 posture); resolver `_cr_resolve_activation_details` (serial-dedup by rank); consumers `_ad_cells_full` → `_apply_activation_basis` (Exec MTD + Sales Report), `_ad_activation_buckets` (metric recon), `GET /activation-counts/{period}`; proof `harness_activation_bucketing.py`. HOUSE DEFAULTS (2026-09-01 approved fix): Edge = whole-word `edge` in CONTRACT TYPE only (`edge_name_tokens` opts device-name matching back in per org — the Motorola-Edge over-match trade-off); `BYOD Upgrade` = its own hidden bucket (excluded from Total Activation exactly like Upgrade, NOT shown in the Upgrade column; `upgrade_hidden_contract_tokens: []` restores one family) |
+| **ZERO SALES — store-days / rep-days with NO activation and NO upgrade** §15z | mig `1016` (`commcalc.zero_sales_config`, **NOT applied**; absent ⇒ `zero_sales.HOUSE_CONFIG`, the shipped behaviour) | `commcalc/zero_sales.py` (PURE; five day states, runs, alert items) + `commcalc/manager_digest.py` (the ONE alert fan-out); `GET /commcalc/zero-sales`, `GET/PUT /commcalc/zero-sales-config`, `POST /commcalc/zero-sales/alerts/run-due|run-now`. READ-ONLY, `books_to` = []. Proofs `harness_zero_sales.py` (79) + lock `harness_zero_sales_lock.py` (39) |
+
+## 15z. ZERO SALES — a store-day with no activation, and the three answers it can have (owner 2026-09-22)
+
+> OWNER (verbatim): *"need a zero sales report in management overview dashboard capturing no
+> activations or upgrades using standard filters and date range and notification options"*.
+> Grain and trigger answered the same day: **both store and rep** (a store row with its rep rows
+> underneath, drill between them), and **alert after N consecutive zero days**, N config, house
+> default **2**.
+
+**THE CORRECTNESS PROBLEM.** A store whose feed did not land is NOT a store with zero sales. Printing
+it as zero sends a manager to chase a rep who sold fine, and the report is never trusted again.
+Measured live 2026-09-22 over a 30-day window across the three live tenants: **164 store-days had no
+feed at all** (Vzone 22, Cellfonz 120, LuxeLink 22) and **5 stores had no feed for the whole window**
+(LuxeLink `CICERO`, `IRVING PARK`; Cellfonz `B-2778`, `B-60TH`, `Cellular Services`). Every one of
+those 164 would have rendered as "zero sales" on a two-state report.
+
+**FIVE STATES, NEVER TWO** (`zero_sales.STATE_NOTES`, returned in the payload and rendered as the
+page's legend — the `carrier_vs_pay` / `labour_coverage` / §30.12 vocabulary, no third notion of
+"no data"):
+
+| state | meaning | carries a number? |
+|---|---|---|
+| `had_sales` | the counted buckets have ≥ 1 distinct transaction | yes |
+| `measured_zero` | rows DID land for that store that day and none is an activation or upgrade — **the finding** | yes (`0`) |
+| `not_reported` | nothing landed; nothing is known | **no — `null`, never `0`** |
+| `closed` | the store was not trading (see trading days) | no |
+| `in_progress` | the day is not over | no |
+| `off` (rep grain) | the person had no scheduled shift | no |
+| `rule_refused` (org) | the org's activation rule is refused as too broad (#271) → the report claims nothing and says why | no |
+
+**THE PREDICATE IS READ, NEVER RESTATED.** `zero_sales.py` classifies no sale line. Counts come from
+`router._sales_cell_agg` — the ONE aggregation (§3), over the ONE predicate `line_class` resolved by
+`router._line_rules_resolve` — and the module only says WHICH BUCKETS count. `count_classes` is
+config, house default **all three** `line_class.BUCKETS` (`premium` = new activation + port,
+`upgrade`, `byod`): a BYOD line IS an activation. A bucket name the report cannot count is REFUSED at
+resolve time, never honoured — a typo that made every store read zero would be this report's own
+silent zero. Sales rows are the SAME `_sales_rows_union` feed∪raw_sales the Sales Report displays.
+
+**ABSENCE EVIDENCE IS A STORE'S OWN ROWS.** `landed` is built from the RAW union rows BEFORE the
+aggregation's skip rules, so a store-day whose only rows were voided/returns still proves the feed
+arrived. Other stores reporting that day is explicitly NOT evidence about this one — the July 2026
+partial-feed incident (§2/§3) is exactly a feed carrying 6 of 19 stores.
+
+**A REP INHERITS THE STORE'S NOT-REPORTED STATE.** `rep_day_state` reads the store day's state rather
+than re-deriving absence: if the store's feed did not land, every rep under it is `not_reported`,
+never `measured_zero` and never zero. A missing feed surfaces as ONE store problem, not as every rep
+appearing to have sold nothing.
+
+**TRADING DAYS ARE DEREFERENCED, NOT INVENTED.** There is **no store trading-calendar table** on this
+platform (`storeops.stores` carries no hours/open-days column — mig `003` + every later ALTER,
+checked 2026-09-22). What exists is the SCHEDULE, and `targets_engine.scope_hours_by_day` (§5) already
+treats scheduled hours > 0 as the store being open for the Daily Targets `open_days`. This report
+reads that same fact through `labour_coverage.load_shift_hours_range` (NEW — the range-grain sibling
+the month-grain `load_shift_hours` now delegates to, so there is ONE `storeops.shifts` read on this
+path). `trading_day_source` = `schedule` (house default) | `all_days`, plus a per-org
+`excluded_weekdays` list. **Honesty fallback:** a store with NO scheduled hours anywhere in the window
+has an UNKNOWN calendar, not a closed one — every day is evaluated and the row says
+`trading_calendar='unknown'` (live: **13 of 54 stores**, almost all Cellfonz). Calling them closed
+would have silenced exactly the stores whose data is thinnest.
+
+**CONSECUTIVE DAYS, AND WHAT AN UNKNOWN DAY DOES TO A RUN** (`walk_run`). `closed` / `in_progress` /
+`off` days are STEPPED OVER — they neither count nor break, because Saturday and Monday are
+consecutive *trading* days for a store shut on Sunday. `had_sales` resets; `measured_zero` extends.
+A `not_reported` day is config (`gap_policy`):
+- **`break` (HOUSE DEFAULT)** — the run ends at the gap: consecutiveness cannot be asserted across a
+  day nobody measured. The gap is NOT silent — the row carries `gap_days` / `ended_by_gap` and the
+  note reads *"an earlier run ended at a not-reported day (2026-09-15) rather than at a sale"*.
+- **`bridge`** — the run continues; the unknown day adds NOTHING to the count, and every alert built
+  from a bridged run NAMES the gap (item `gap_days` → the digest prints it).
+- **`count` is REFUSED**, by name, in the code (`zero_sales.GAP_REFUSED`) AND by a CHECK constraint in
+  mig `1016`. Counting an unmeasured day as a zero is the silent zero this report exists to prevent,
+  and a config row that switched it back on would be the defect wearing a hat.
+
+**NOTIFICATIONS ARE A NEW KIND ON THE EXISTING PATH — and the path now has ONE home.** The DM ∪
+above-DM fan-out, the one-digest-per-manager rule, the skip-managers-with-no-email rule, the
+dedup-per-recipient rule and the `ref_key` SPELLING were only ever implemented inside
+`epay_alerts.plan_emails`. They are now `commcalc/manager_digest.py`
+(`ref_key(scope, today, email, *parts)` · `recipients_for` · `plan_digests`), which **both**
+`epay_alerts` and `zero_sales` dereference — ePay's key is byte-identical (pinned,
+`harness_zero_sales_lock.py` c10 + `harness_epay_alerts.py`). Zero-sales writes
+`storeops.alert_log` scope `'zero_sales'` through the SAME `_lateness_already_sent` /
+`_lateness_record_sent` helpers; no new alert table, no second dedup rule, no second recipient
+resolution. **A `not_reported` scope is NEVER emailed as a sales alert** — that is a pipeline failure
+with its own surface (§20 import health); the digest footer states how many scopes could not be
+assessed, so a thin email is never read as a healthy estate.
+
+**DAY-ONE LOUDNESS (measured 2026-09-22, read-only, `backend/scratchpad/zero_sales_liveness_probe.py`
+— it calls the REAL `router._zero_sales_core`, no second implementation).** Window 2026-08-23 →
+2026-09-21, 54 stores, 252 reps, 33,567 sales lines: **1,087** store-days had sales · **300** measured
+zero · **164 NOT REPORTED** · 69 closed. Currently alerting at N=2: **2 stores** (`B-3565` 3d,
+`B-6011` 2d). Replayed as if the sweep had run every morning: **69 store-day alert rows over 30 days
+from 48 distinct runs** ≈ 2.3 rows/day platform-wide — N=2 is a signal, not a siren.
+
+**RULE TWO.** Grain (a scope key, never a branch), counted buckets, N, gap policy, trading-day source,
+excluded weekdays, `rep_requires_shift`, `include_today` and `alerts_enabled` are all per-org config
+with house defaults; no carrier, tenant, store or product name appears in executable code
+(`harness_zero_sales.py` §G scans the code with docstrings and comments stripped).
+
+**SURFACES.** Page `frontend/src/app/(platform)/commcalc/zero-sales/page.tsx` — `StandardFilterBar`
+in `periodMode="range"` with market/store/rep (the platform's standard filters, reused not rebuilt),
+a per-day state strip, store rows expanding to rep rows, the three-state legend rendered FROM the
+payload's own words, and a dry-run digest preview. Registered in `rbac.ts` (NAV Management Overview
+group `tileOnly` + REPORT_TREES + REPORT_DIRECTORY `sales`) and `reports.ts` (Commissions category).
+Management Overview tile = mig `1016` §b, the mig-`1002` "All Flags" append precedent verbatim
+(house row only; a tenant's own designed layout is never reached into).
+
+**DUPLICATE CHECK (stated for the build gate).** Reused, not rebuilt: the predicate (`line_class` /
+`_line_rules_resolve`), the aggregation (`_sales_cell_agg`), the sales source (`_sales_rows_union`),
+store canonicalisation + market (`_canonical_store_key_fn` / `_store_code_resolver` /
+`_store_market_resolver`, §13), rep identity (`_rep_canon_map` + `targets_engine.name_key`), trading
+days (`targets_engine`'s scheduled-hours fact via the now-shared `load_shift_hours_range`), the
+absence vocabulary (`carrier_vs_pay` / `labour_coverage` / §30.12), the alert path
+(`manager_digest` ← factored out of `epay_alerts`), the filter bar and the date-range control.
+Nothing new was derived twice. `/commcalc/sales-report` answers the opposite question from the same
+cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 import health answers
+"is the feed late", which is why a missing feed here is reported and not alerted.
+
 
 ## 16. Cross-reference: by TABLE
 
@@ -3557,6 +3682,9 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `core.module_price` (mig `975`; price per plan x module, effective-dated; UNPRICED = the ABSENCE of a row) | `PUT /billing/module-pricing` (super-admin, `changed_by`) | `statement.price_for` → `module_line` / `pricing_grid` |
 | `core.billing_statement` (mig `975`; FROZEN itemized statements incl. the `complete` flag) | `POST /billing/statement/close` | `statement.build_statement(frozen=)` — read, NEVER recomputed |
 | `storeops.pricing_package` / `storeops.tenants.package_key` (mig `908`, REUSED) | existing `/billing/*` pricing endpoints | the PLAN TIERS (free/starter/premium are ROWS, not an enum) + the monthly-fee line on every statement |
+| `commcalc.zero_sales_config` (mig `1016`, **NOT applied**; HOUSE row = the default every tenant inherits, tenant row wins — `.in_("org_id", [org, HOUSE_ORG])`. Absent/unreadable ⇒ `zero_sales.HOUSE_CONFIG`, the shipped behaviour, so the report works before the migration) | `PUT /commcalc/zero-sales-config` (THE one writer; validates through `zero_sales.resolve_config` BEFORE writing, so a refused value is a 400 and never a stored row) | `router._zero_sales_config` → `_zero_sales_core` (`GET /commcalc/zero-sales`) and `_run_zero_sales_alerts` (§15z) |
+| `storeops.alert_log` — **scope `'zero_sales'`** (mig `433` table, no new table) | `router._run_zero_sales_alerts` via the EXISTING `storeops.router._lateness_record_sent` | `_lateness_already_sent` — dedup per (recipient, store, last-zero-day, grain:scope); the ref_key SPELLING is `manager_digest.ref_key`, the one home both this and scope `'epay_discrepancy'` dereference (§15z) |
+| `storeops.shifts` — **as the TRADING-DAY fact** (§15z) | storeops scheduling (§14) | THE one read on this path is `labour_coverage.load_shift_hours_range` (mig-free); `load_shift_hours` (month grain, §4 labour coverage) delegates to it, and `router._zero_sales_core` calls it for the range grain. `targets_engine.scope_hours_by_day` (§5) is the same fact for Daily Targets' `open_days`. There is NO store trading-calendar table |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
 | `commcalc.daily_closing` | closing sweep `033` | `deposit_recon.closing_cash_raw_by_store_day:147`, MI cash gate; **BS `store_cash_on_hand` line via `_cash_position_core` → `balance_sheet.store_cash_cells`** (mig `938`, basis-gated); **P&L bill-pay carve-out** (`account/billpay_pl.billpay_cells` on `epay_on_cash`/`epay_on_credit`, mig `939`, presentation-gated); **bill-pay coverage recon** (`_closing_collected_by_store_day` → `/billpay-coverage/{period}`); **CARD SETTLEMENT RECON** (`external_credit_recon.declared_cells` on the tender columns the org's `closing_tender_def.processor_key` routes — house map `t_ext_cc`→external_cc, `t_credit`→pos_merchant — → `GET /closing/external-credit-recon`, mig `960`/`961`, §12) |
 | `commcalc.billpay_pickup` (mig `942`, sibling of `cash_pickup`) | `POST /closing/billpay-pickup` (+`/undo`, `/deposit` — the parameterized cash-pickup machinery pointed at this table) | `GET /closing/billpay-pickups` (`_billpay_position_core`: declared `epay_on_cash` − picked = pending remittance), `GET /closing/cash-recon-management`; folds into `_cash_position_core` general outflows ONLY under `cash_pickup_config.billpay_relieves_cash` (default false — no double-count; §12) |
@@ -3701,6 +3829,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `GET /account/device-payable` (`as_at` = 'YYYY-MM-DD', DAY granularity; default = today) | `account/router.device_payable` → `account/device_payable.compute` (pure core `aggregate`) | §23z Device Payable as at a date — of the units BILLED on or before `as_at`, those whose per-unit payment date falls after it or is absent, by company × store. A **backdated** payable, which `GET /account/liabilities-due` and the BS `owed_vip` (§4/§23n — current state off the ledger STATUS column, which cannot be backdated) structurally cannot answer. Coverage is derived from the data; an `as_at` outside it returns `coverage.state='not_measured'` with `payable_amount: null`, never $0.00. Non-device items are a separate, billed-basis section. Books nothing, writes nothing |
 | `GET /sales-report` | `15792` | §3 |
 | `GET /ma-commission/summary` — per-store MA roll-up. `by_store[].store` and the store picker name the real STORE via `ma_store_pnl.canonical_store_index` (mig 314); `spiff_by_month` is the EARNED ladder and `legs.received` the CASH ladder, both from the one home, neither with a hardcoded month count | `router.ma_commission_summary` | §4a |
+| `GET /commcalc/zero-sales` (`date_from`/`date_to`/`market`/`store`/`rep`) · `GET/PUT /commcalc/zero-sales-config` · `POST /commcalc/zero-sales/alerts/run-due` (secret-gated cron) · `POST /commcalc/zero-sales/alerts/run-now?send=` (defaults to a DRY RUN) | `router.zero_sales_report` / `get_zero_sales_config` / `put_zero_sales_config` / `zero_sales_alerts_run_due` / `zero_sales_alerts_run_now` → `_zero_sales_core` + `_run_zero_sales_alerts` | §15z Zero sales (READ-ONLY; `books_to` = []) |
 | `GET /gp/{period}` (payload also carries `expenses_carried_from`, **`labour_coverage`** and **`labour_double_booked`** — the salary silent-zero / month-grain / double-book detectors, display-only — plus **`labour_commission_suppressed`**, the per-store record of which commission expense rows STOPPED booking and what `rep_commissions` books in their place; that one is NOT display-only, `exp_total`/`net_profit` move with it) | `14750` | §4 |
 | `GET/PUT /targets/{period}` | `19005/19071` | §5 |
 | `GET /targets/{period}/summary` | `19440` | §5 |
@@ -3835,6 +3964,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | Platform health lamp (per subsystem, per tenant, and the roll-up) | `control_box.evaluate_check` → `roll_up`; composed from `import_health.collect_attention` + `portal_session_health.summarize` + scheduler heartbeats. Ladder `green < unmonitored < amber < unknown < red`; `unmonitored` is NEVER counted as green and the coverage fraction is stated out loud | `GET /core/control-box`, `core.system_check_run.lamp`; §20 |
 | External credit-card settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='external_cc'` | `merchant_portals.totals_by_store_day`; tallied against `daily_closing.t_ext_cc` by `closing/external_credit_recon` (§12a) |
 | POS-merchant settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='pos_merchant'` | same reader, `pos_merchant` role (§12a) |
+| **Zero-sales day state** (`had_sales` / `measured_zero` / `not_reported` / `closed` / `in_progress` / `off` / `rule_refused`) and **consecutive zero days** | `daily_sales_feed` ∪ `raw_sales` per (store × day) via `_sales_rows_union`, classified by `line_class` inside `_sales_cell_agg`; feed COVERAGE from the raw rows before the skip rules; trading days from `storeops.shifts.scheduled_hours` | `zero_sales.store_day_state` / `rep_day_state` / `walk_run` ← `router._zero_sales_core` → `GET /commcalc/zero-sales`. **An unmeasured day's count is `null`, never `0`** — armed negative control in `harness_zero_sales.py` §A. Alert threshold `consecutive_days` (config, house default 2) → `zero_sales.alert_items` → `manager_digest` → `storeops.alert_log` scope `'zero_sales'` (§15z) |
 | Exec-MTD LINE metrics (Bill Payment Qty/$ · Total Phones · Activation Fee · Total Protect) | `raw_sales.department` / `.category` / `.product_desc` matched against `commcalc.exec_metric_config.rules` (EXACT membership for dept/cat, substring for `product_desc_contains`) | `exec_metric_defs.resolve` (tenant row > house `carrier` PRESET > `CODE_DEFAULTS`, mig `962`) → `exec_metric_defs.line_match` inside `_sales_cell_agg`; silent-zero detector `bucket_coverage` → `GET /exec-mtd/*` key `metric_coverage` → Exec-MTD banner. Also the SECONDARY basis for `/metric-recon` and Leg B of the mig-`944` 3-way bill-pay recon; the mig-`939` P&L carve-out does NOT read it. Proof `harness_exec_metric_defs.py` (§3) |
 | Which of THE TWO WAYS a plan pays employee commission through (Option 1 flat from Executive MTD \| Option 2 customised rules) — and the order every surface presents them in | `commcalc.commission_plan.commission_basis` (mig `298`: `'exec_mtd'` \| `'rules'` default) | `_lib/commissionWays.wayForBasis` (READ-ONLY on the structure page + plan editor header; the plan editor's checkbox is the only writer); order + header = `COMMISSION_WAYS` (one home, §6e); pay path unchanged: `_resolve_plan_by_rep` → `_override_plan_by_rep_with_mtd` (§6c) |
 | Which uploads FEED a given report screen (the way back from a report to its upload pages, frontend) | `GET /commcalc/report-kinds` `kinds[].shows_in.consumers[].screen` + `kinds[].where` (from the one `landing_identity.CONSUMERS` map) | `lib/report-kinds.feedsForScreen` / `useReportKinds().feedsFor('exec_mtd')` → `CommissionWaysHeader.ExecMtdFeeds` (§6e); the Executive MTD page itself uses the backend twin `feeds_for_table` on its own `landing` payload (§32) |

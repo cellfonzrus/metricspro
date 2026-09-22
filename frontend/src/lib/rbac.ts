@@ -127,6 +127,7 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/sales-comparison', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
   ['/commcalc/kpi-failing', 'commissions'],
+  ['/commcalc/zero-sales', 'commissions'],
   ['/commcalc/discrepancy', 'commissions'], ['/commcalc/sales-recon', 'commissions'],
   ['/commcalc/epay-fee-recon', 'commissions'],
   ['/commcalc/processor-ledger', 'asset'],
@@ -404,6 +405,9 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // NEW report (2026-09-03): high-level overview of every KPI below target, store → rep drill-down.
     { href: '/commcalc/kpi-failing', label: 'Failing KPIs', icon: '🎯', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // NEW report (owner 2026-09-22): store-days and rep-days with no activation and no upgrade. A
+    // store whose feed did not land reads "not reported", never zero — see commcalc/zero_sales.py.
+    { href: '/commcalc/zero-sales', label: 'Zero Sales', icon: '🚫', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     // NEW report (2026-09-03): owed-to-distributor + payments/payroll/rents due this week per store.
     { href: '/accounts/liabilities-due', label: 'Current Monetary Liabilities', icon: '💳', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
@@ -1011,7 +1015,7 @@ export const REPORT_CATEGORIES: { key: string; label: string }[] = [
 export const REPORT_DIRECTORY: [string, string][] = [
   // Sales
   ['/commcalc/sales-report', 'sales'], ['/commcalc/custom-report', 'sales'],
-  ['/commcalc/sales-comparison', 'sales'],
+  ['/commcalc/sales-comparison', 'sales'], ['/commcalc/zero-sales', 'sales'],
   ['/commcalc/sales-analyzer', 'sales'], ['/commcalc/sales-recon', 'sales'],
   ['/commcalc/bill-payments', 'sales'],
   ['/crm/reports', 'sales'],
