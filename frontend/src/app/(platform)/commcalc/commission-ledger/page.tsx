@@ -16,9 +16,17 @@ import PlCommissionSourcePanel from '@/components/PlCommissionSourcePanel'
 // THE BUCKETS ARE THE ORG'S REGISTRY (commcalc.commission_bucket, mig 1009) — `buckets` on every payload,
 // in the org's order, with each bucket's KIND (earned | deduction). No bucket key is named in this file.
 type BucketRow = { key: string; label: string; kind: string; is_active: boolean; column_backed?: boolean; pl_line_key?: string | null }
+// A LANDING (index §30.15) = one import of one statement for one period, derived by the backend from the
+// stored key / period spelling / origin every row carries. Two landings of one statement × period are
+// REFUSED (nothing summed) until one is retired — here, per landing, with the exact row count confirmed.
+type Landing = { origin: string; source_report: string; period: string; rows: number; payout_total: number
+  landed_at: string | null; legacy_key: boolean; orphan_period: boolean }
+type LandingGroup = { key: string; base: string; statement_type: string; period: string; rows: number; payout_total: number
+  conflict: boolean; sentence: string | null; landings: Landing[] }
 type Summ = {
   source_report: string; period: string; line_count: number; payout_total: number; charge_total: number
   other_total: number; other_count: number
+  landings?: LandingGroup[]; landing_conflict?: string | null; landing_conflicts?: LandingGroup[]; refused?: boolean; refusal_basis?: string
   categories: Record<string, { total: number; count: number; kind?: string; label?: string; active?: boolean }>
   category_labels: Record<string, string>; by_month: Record<string, number>
   buckets?: BucketRow[]; bucket_source?: string; bucket_ready?: boolean; bucket_migration?: string
@@ -44,7 +52,9 @@ type Tmpl = { key: string; label: string; builtin: boolean; rule_count: number; 
 // raw MA tables for that period — so a period whose feed has moved on while the ledger hasn't is visible.
 type OriginRow = { origin: string; label: string; lines: number; payout_total: number; last_at: string | null }
 type ProvPeriod = { period: string; lines: number; payout_total: number; origins: OriginRow[]
-  raw_available: Record<string, number>; raw_rows: number; overlap: boolean; synced: boolean; stale: boolean }
+  raw_available: Record<string, number>; raw_rows: number; overlap: boolean; synced: boolean; stale: boolean
+  // §30.15: the canonical spelling of this stored period; `orphan` = stored under a spelling no period reader finds
+  canonical?: string | null; orphan?: boolean; landings?: Landing[]; landing_conflict?: string | null }
 type Prov = { ready: boolean; migration: string | null; periods: ProvPeriod[]
   raw_sources: { report_key: string; source_table: string; missing: boolean; periods: number; rows: number; truncated?: boolean }[] }
 type SyncField = { target_field: string; header: string; col: string; confidence: string; label: string }
@@ -132,6 +142,42 @@ export default function CommissionLedgerPage() {
       setProv(await api(`/api/v1/commcalc/commission-ledger/provenance?source_report=${encodeURIComponent(src)}`))
     } catch { setProv(null) }
   }
+  // RETIRE ONE LANDING (index §30.15): the backend counts exactly the rows under THAT stored key / period
+  // spelling / origin (dry run), the person confirms that number, then they are removed by id and traced
+  // with the reason. Nothing else — no other landing, statement or period — is touched.
+  async function retireLanding(l: Landing) {
+    const reason = window.prompt(`Why retire this landing (${l.rows.toLocaleString('en-US')} rows under '${l.source_report}' / '${l.period}', ${l.origin})? Recorded with your name.`, l.legacy_key ? 'landed twice — the copy under the older key' : l.orphan_period ? 'landed under a period spelling no report reads' : '')
+    if (!reason || !reason.trim()) { flash('Nothing retired.'); return }
+    setBusy(true)
+    try {
+      const body: Record<string, unknown> = { source_report: l.source_report, period: l.period, origin: l.origin, reason: reason.trim() }
+      let r = await api('/api/v1/commcalc/commission-ledger/landings/retire', { method: 'POST', body: JSON.stringify(body) })
+      if (r?.dry_run) {
+        const n: number = r.removal?.rows ?? 0
+        if (!window.confirm(`Exactly ${n.toLocaleString('en-US')} row(s) sit under '${l.source_report}' / '${l.period}' (${l.origin}). Remove exactly these ${n.toLocaleString('en-US')} row(s)? No other landing is touched.`)) { flash('Nothing retired.'); return }
+        r = await api('/api/v1/commcalc/commission-ledger/landings/retire', { method: 'POST', body: JSON.stringify({ ...body, confirm_rows: String(n) }) })
+      }
+      flash(`Retired: ${(r?.removal?.rows ?? 0).toLocaleString('en-US')} row(s) removed from '${l.source_report}' / '${l.period}'.`)
+      await loadSummary(); await loadProvenance(); if (view === 'rep') await loadByRep()
+    } catch (e: unknown) { flash((e as Error)?.message || 'Could not retire this landing') }
+    finally { setBusy(false) }
+  }
+  const LandingsTable = ({ rows }: { rows: Landing[] }) => (
+    <table style={{ fontSize: 12, borderCollapse: 'collapse', marginTop: 6 }}>
+      <thead><tr style={{ color: 'var(--text3)', textAlign: 'left' }}><th style={{ padding: '3px 8px' }}>Stored under</th><th style={{ padding: '3px 8px' }}>Period spelling</th><th style={{ padding: '3px 8px' }}>Source</th><th style={{ padding: '3px 8px', textAlign: 'right' }}>Rows</th><th style={{ padding: '3px 8px', textAlign: 'right' }}>Net</th><th style={{ padding: '3px 8px' }}>Landed</th><th /></tr></thead>
+      <tbody>{rows.map((l, i) => (
+        <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
+          <td style={{ padding: '3px 8px', fontFamily: 'monospace' }}>{l.source_report}{l.legacy_key && <span style={{ color: '#b45309' }}> · older key</span>}</td>
+          <td style={{ padding: '3px 8px' }}>{l.period}{l.orphan_period && <span style={{ color: '#b45309' }}> · spelling no report reads</span>}</td>
+          <td style={{ padding: '3px 8px' }}>{l.origin}</td>
+          <td style={{ padding: '3px 8px', textAlign: 'right' }}>{l.rows.toLocaleString('en-US')}</td>
+          <td style={{ padding: '3px 8px', textAlign: 'right' }}>{money(l.payout_total)}</td>
+          <td style={{ padding: '3px 8px', color: 'var(--text3)' }}>{l.landed_at ? String(l.landed_at).slice(0, 16).replace('T', ' ') : '—'}</td>
+          <td style={{ padding: '3px 8px' }}><button style={{ ...inp, cursor: 'pointer', color: '#b91c1c', fontWeight: 600 }} disabled={busy} onClick={() => retireLanding(l)}>Retire this landing</button></td>
+        </tr>))}</tbody>
+    </table>
+  )
+  const orphanPeriods = (prov?.periods || []).filter(p => p.orphan && p.lines > 0)
   useEffect(() => { loadTemplates() }, [])            // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadSummary(); setDrill(null); setSelReps([]) }, [src, period, origin])  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setPrev(null); loadProvenance() }, [src])  // eslint-disable-line react-hooks/exhaustive-deps
@@ -296,8 +342,16 @@ export default function CommissionLedgerPage() {
           </div>
           {provPeriod?.overlap && (
             <div style={{ marginTop: 6, color: '#9a3412' }}>
-              ⚠️ Two sources populated this period — the tiles below <b>add them together</b>. Use the source
-              filter above to read one at a time.
+              ⚠️ Two sources populated this period — two landings of one statement, so the tiles below <b>refuse to add them</b>.
+              Use the source filter above to read one at a time, or retire the one you do not want.
+            </div>
+          )}
+          {orphanPeriods.length > 0 && (
+            <div style={{ marginTop: 6, color: '#9a3412' }}>
+              ⚠️ {orphanPeriods.length} period(s) of this template are stored under a spelling no report reads
+              ({orphanPeriods.map(p => `'${p.period}' → ${p.canonical}, ${p.lines.toLocaleString('en-US')} rows`).join('; ')}) —
+              they count nowhere and should be retired or re-imported under the month name.
+              {orphanPeriods.map(p => <LandingsTable key={p.period} rows={(p.landings || []).filter(l => l.period === p.period)} />)}
             </div>
           )}
           {provPeriod?.stale && (
@@ -426,6 +480,17 @@ export default function CommissionLedgerPage() {
 
       {!summ || summ.line_count === 0 ? (
         <div style={{ color: 'var(--text3)', fontSize: 13 }}>No ledger data for this template/period yet — import a file above.</div>
+      ) : summ.refused ? (
+        <div style={{ background: 'rgba(239,68,68,.06)', border: '1px solid #ef4444', borderRadius: 10, padding: '12px 14px', fontSize: 13 }}>
+          <div style={{ fontWeight: 700, color: '#b91c1c', marginBottom: 4 }}>⚠️ {summ.landing_conflict}</div>
+          <div style={{ color: 'var(--text2)', marginBottom: 6 }}>{summ.refusal_basis}</div>
+          {(summ.landing_conflicts || []).map(g => (
+            <div key={g.key + g.period} style={{ marginTop: 8 }}>
+              <div style={{ fontWeight: 600 }}>{g.statement_type} ({g.base}) — {g.period}</div>
+              <LandingsTable rows={g.landings} />
+            </div>
+          ))}
+        </div>
       ) : (
         <>
           {summ.other_count > 0 && (
