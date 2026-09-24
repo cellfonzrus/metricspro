@@ -1,0 +1,45 @@
+{
+  "_help": "One block per vendor. Add a vendor by copying a block and changing key/name/URLs. Nothing about a vendor lives in the code. Optional: 'selectors' (CSS) when a vendor's products come out wrong, 'follow_patterns'/'skip_patterns' (regex on URLs) to steer which pages are read, 'strip_params' (session ids in links), 'max_pages', 'delay_seconds', 'snapshot_pages', 'enabled': false to switch a vendor off.",
+  "vendors": [
+    {
+      "key": "afflink",
+      "name": "AFFLINK",
+      "enabled": true,
+      "login": {
+        "url": "https://new.afflink.com/scripts/cgiip.exe/WService=memord/shopfront3.0/default.htm",
+        "open_login_link_text": "log ?in|sign ?in|member login"
+      },
+      "start_urls": [
+        "https://new.afflink.com/scripts/cgiip.exe/WService=memord/shopfront3.0/default.htm"
+      ],
+      "follow_patterns": [],
+      "skip_patterns": ["help", "contact", "privacy", "terms"],
+      "strip_params": [],
+      "max_pages": 400,
+      "delay_seconds": 0.6,
+      "snapshot_pages": 40
+    },
+    {
+      "key": "myboxchoice",
+      "name": "My Box Choice",
+      "enabled": true,
+      "login": {
+        "url": "https://www.myboxchoice.com/index.php?main_page=login",
+        "username_selector": "form[name=login] input[name=email_address]",
+        "password_selector": "form[name=login] input[name=password]"
+      },
+      "start_urls": [
+        "https://www.myboxchoice.com/index.php?main_page=index&cPath=1_115",
+        "https://www.myboxchoice.com/index.php?main_page=products_all",
+        "https://www.myboxchoice.com/index.php?main_page=site_map"
+      ],
+      "follow_patterns": ["main_page=(index|product_info|products_all|site_map|products_new|specials)"],
+      "skip_patterns": ["sort=", "alpha_filter", "disp_order", "main_page=(login|logoff|account|shopping_cart|checkout|contact_us|privacy|conditions|shippinginfo)"],
+      "strip_params": ["zenid"],
+      "selectors": {},
+      "max_pages": 600,
+      "delay_seconds": 0.6,
+      "snapshot_pages": 40
+    }
+  ]
+}

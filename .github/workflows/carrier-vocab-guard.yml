@@ -232,6 +232,8 @@ on:
       - "database/migrations/1004_pos_feed_shape_ingest.sql"
       - "database/migrations/1012_sales_by_invoice.sql"
       - ".github/workflows/carrier-vocab-guard.yml"
+      - "tools/vendor_price_compare/**"
+      - "backend/harness_vendor_price_compare.py"
   push:
     branches: [main]
     paths:
@@ -322,6 +324,9 @@ jobs:
       - name: Run the multi-month ledger upload lock (the batch is N single imports — one reader/mapper, one lander, one month detector, one canonicaliser — index §30.17)
         working-directory: backend
         run: python3 harness_ledger_batch_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the vendor price-compare proof (price / pack / stock reading, cross-vendor matching, cheapest in stock; no vendor or password in code; the crawler refuses cart / order links — index §34)
+        working-directory: backend
+        run: python3 harness_vendor_price_compare.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CUSTOMER-MASTER PROOF (index §30.16) drives the REAL matcher, rebuild, line writer and /pos endpoints over the
   # in-memory client (harness_intake_fakes) — it imports the app, so it runs in its own job with the backend's
