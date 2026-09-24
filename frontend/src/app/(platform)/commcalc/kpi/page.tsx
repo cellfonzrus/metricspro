@@ -7,14 +7,29 @@ import { SendReportButton } from '@/lib/send-report'
 
 // KPI definitions. repKey = key inside rep_commissions.kpi_values; storeKey = raw_dlar_store column.
 // All values are whole-number percents (e.g. 70.6), compared directly to the target.
+//
+// SEVEN, not six (owner 2026-09-24: "what are the seven kpis, it shows only 6"). The commission tier
+// is scored over the seven in calculator.py's KPI dict — the same seven the Settings → KPI tab edits
+// and mig 002 stores as kpi_*_target — so a rep read "4/7" against six columns and could not see
+// which one they missed. `boostapp` was the missing one.
+//
+// storeKey is NULL for it ON PURPOSE. raw_dlar_store carries no column for this metric — the same
+// reason kpi_failing.STORE_KPI_COLUMNS omits it — so at STORE grain it has no measurement and the
+// cell says so, rather than rendering a 0 that would read as "they sold none". At REP grain it is
+// measured, in rep_commissions.kpi_values, and shows like any other.
 const KPIS = [
   { k: 'atu',        label: 'ATU %',         repKey: 'atu',        storeKey: 'atu',             tcfg: 'kpi_atu_target',        def: 55 },
   { k: 'protect',    label: 'Protect %',     repKey: 'protect',    storeKey: 'protect_pct',     tcfg: 'kpi_protect_target',    def: 80 },
+  { k: 'boostapp',   label: 'Carrier App %', repKey: 'boostapp',   storeKey: null,              tcfg: 'kpi_boostapp_target',   def: 65 },
   { k: 'byod',       label: 'BYOD %',        repKey: 'byod',       storeKey: 'byod_pct',        tcfg: 'kpi_byod_target',       def: 35 },
   { k: 'familyplan', label: 'Family Plan %', repKey: 'familyplan', storeKey: 'family_plan_pct', tcfg: 'kpi_familyplan_target', def: 45 },
   { k: 'tmr3',       label: '3MR %',         repKey: 'tmr3',       storeKey: 'tmr3',            tcfg: 'kpi_tmr3_target',       def: 70 },
   { k: 'aal',        label: 'AAL %',         repKey: 'aal',        storeKey: 'aal_conversion',  tcfg: 'kpi_aal_target',        def: 5 },
 ]
+
+// The KPIs that have a store-grain measurement. The store view counts and scores over THESE, so its
+// "KPIs met" denominator is what was actually measurable at that grain — never a fixed number.
+const STORE_KPIS = KPIS.filter(d => d.storeKey)
 
 const cellBase = { textAlign: 'right' as const, padding: '8px 10px', borderBottom: '1px solid var(--border)' }
 
@@ -108,13 +123,13 @@ export default function KPIPage() {
       cols = [
         { header: 'Store', get: s => s.address || s.location },
         { header: 'Dealer', get: s => s.location },
-        ...KPIS.map(d => ({
+        ...STORE_KPIS.map(d => ({
           header: d.label, align: 'right' as const,
-          get: (s: any) => { const n = Number(s[d.storeKey]); return isNaN(n) ? '' : Math.round(n * 10) / 10 },
+          get: (s: any) => { const n = Number(s[d.storeKey as string]); return isNaN(n) ? '' : Math.round(n * 10) / 10 },
         })),
         { header: 'Conv %', align: 'right', get: s => { const n = Number(s.conversion_rate); return isNaN(n) ? '' : Math.round(n * 10) / 10 } },
         { header: 'Total Acts', align: 'right', get: s => s.total_acts ?? '' },
-        { header: 'KPIs Met', align: 'right', get: s => `${metCount(KPIS.map(d => { const n = Number(s[d.storeKey]); return isNaN(n) ? undefined : n }))}/6` },
+        { header: 'KPIs Met', align: 'right', get: s => `${metCount(STORE_KPIS.map(d => { const n = Number(s[d.storeKey as string]); return isNaN(n) ? undefined : n }))}/${STORE_KPIS.length}` },
       ]
       rows = storeRows
       sheetName = 'KPI by Store'
@@ -223,7 +238,7 @@ export default function KPIPage() {
             <thead>
               <tr>
                 <th>Store</th>
-                {KPIS.map(d => <th key={d.k} style={{ textAlign: 'right' }}>{d.label}</th>)}
+                {STORE_KPIS.map(d => <th key={d.k} style={{ textAlign: 'right' }}>{d.label}</th>)}
                 <th style={{ textAlign: 'right' }}>Conv %</th>
                 <th style={{ textAlign: 'right' }}>Total Acts</th>
                 <th style={{ textAlign: 'right' }}>KPIs Met</th>
@@ -231,7 +246,7 @@ export default function KPIPage() {
             </thead>
             <tbody>
               {storeRows.map((s, i) => {
-                const vals = KPIS.map(d => { const n = Number(s[d.storeKey]); return isNaN(n) ? undefined : n })
+                const vals = STORE_KPIS.map(d => { const n = Number(s[d.storeKey as string]); return isNaN(n) ? undefined : n })
                 const met = metCount(vals)
                 return (
                   <tr key={i}>
@@ -239,11 +254,11 @@ export default function KPIPage() {
                       {s.address || s.location}
                       {s.location && <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400 }}>{s.location}</div>}
                     </td>
-                    {KPIS.map((d, j) => <KPICell key={d.k} val={vals[j]} target={targets[d.k]} />)}
+                    {STORE_KPIS.map((d, j) => <KPICell key={d.k} val={vals[j]} target={targets[d.k]} />)}
                     <td style={{ ...cellBase, fontSize: 13 }}>{s.conversion_rate != null ? Number(s.conversion_rate).toFixed(1) + '%' : '—'}</td>
                     <td style={{ ...cellBase, fontSize: 13 }}>{s.total_acts ?? '—'}</td>
                     <td style={{ ...cellBase, fontWeight: 700 }}>
-                      <span style={{ color: met >= 6 ? 'var(--green)' : met >= 4 ? 'var(--amber)' : 'var(--red)' }}>{met}/6</span>
+                      <span style={{ color: met >= STORE_KPIS.length ? 'var(--green)' : met >= STORE_KPIS.length - 2 ? 'var(--amber)' : 'var(--red)' }}>{met}/{STORE_KPIS.length}</span>
                     </td>
                   </tr>
                 )

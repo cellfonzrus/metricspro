@@ -54,9 +54,31 @@ body {
 .input:focus { border-color: var(--accent2); box-shadow: var(--ring); }
 .select { padding: 8px 12px; border: 1px solid var(--border2); border-radius: var(--radius-sm); font-size: 14px; background: var(--surface); color: var(--text); cursor: pointer; transition: border-color 0.14s ease, box-shadow 0.14s ease; }
 .select:focus { border-color: var(--accent2); box-shadow: var(--ring); outline: none; }
-.table-wrapper { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--border); }
+/* TABLE SCROLLING (owner 2026-09-24: "we need to scroll all the way down to move to the right —
+   must have the headers fixed and the scroll bar on the page to move top to bottom and left to
+   right"). `overflow-x: auto` alone puts the horizontal bar at the bottom of the WHOLE table, so a
+   wide 300-row table can only be scrolled sideways from its last row. It also creates a scroll
+   container, which is why `position: sticky` on the header never stuck.
+   Both are fixed here, in the ONE class all 57 table pages already use, rather than per page:
+     • `overflow: auto` + a viewport-relative max-height makes the wrapper the scroll box, so the
+       horizontal bar sits at the bottom of what you can SEE and both axes move together.
+     • the header is sticky INSIDE that box, so it stays while the rows move.
+   A table shorter than the box is untouched: max-height only binds once the content exceeds it, so
+   short tables render exactly as before with no scrollbar and no sticky behaviour to notice. */
+.table-wrapper {
+  overflow: auto;
+  max-height: calc(100vh - 220px);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { background: var(--surface2); color: var(--text2); font-weight: 650; padding: 10px 14px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.045em; border-bottom: 1px solid var(--border); }
+/* Sticky needs its own opaque background (th already has one) or rows show through as they pass
+   under, and a z-index above the cells. `border-collapse` stays COLLAPSE — switching it to separate
+   would restyle all 57 tables — so the header's bottom rule is redrawn as an inset shadow, which is
+   painted on the cell and therefore travels with it; a collapsed border belongs to the table and
+   would scroll away. */
+.table-wrapper thead th { position: sticky; top: 0; z-index: 2; box-shadow: inset 0 -1px 0 var(--border); }
 td { padding: 10px 14px; border-bottom: 1px solid var(--border); }
 tr:last-child td { border-bottom: none; }
 tbody tr { transition: background 0.1s ease; }
