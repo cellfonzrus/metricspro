@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import { supabase, api } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import { safeHomeFor } from '@/lib/rbac'
+import Mark from '@/components/Mark'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -67,8 +68,7 @@ export default function LoginPage() {
         background: 'linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%)', padding: 20 }}>
         <div style={{ width: '100%', maxWidth: 400, background: 'white', borderRadius: 14, padding: '30px',
           boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
-          <div style={{ textAlign: 'center', marginBottom: 6, fontSize: 18, fontWeight: 800, color: '#1e3a5f' }}>
-            Choose a company
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 6, fontSize: 18, fontWeight: 800, color: '#1e3a5f' }}><Mark size={20} />Choose a company
           </div>
           <div style={{ textAlign: 'center', fontSize: 13, color: '#64748b', marginBottom: 18 }}>
             Your login works for {tenants.length} companies. Pick the one to work in — you can switch anytime from the top bar.
@@ -105,8 +105,7 @@ export default function LoginPage() {
   if (!loading && session && provisioned && active && !needsTenantChoice && !pendingConnections.length && needs2fa) {
     return (
       <Shell>
-        <div style={{ textAlign: 'center', fontSize: 18, fontWeight: 800, color: '#1e3a5f', marginBottom: 6 }}>
-          Verify it's you
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 18, fontWeight: 800, color: '#1e3a5f', marginBottom: 6 }}><Mark size={20} />Verify it's you
         </div>
         <div style={{ fontSize: 13, color: '#334155', margin: '4px 0 14px' }}>
           Enter the one-time code we sent to your {(twofa.user_channels || ['email'])[0] === 'whatsapp' ? 'WhatsApp' : 'email'}.
@@ -155,8 +154,7 @@ export default function LoginPage() {
     if (disabledInfo) {
       return (
         <Shell>
-          <div style={{ textAlign: 'center', fontSize: 18, fontWeight: 800, color: '#1e3a5f', marginBottom: 6 }}>
-            Your new login is ready
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 18, fontWeight: 800, color: '#1e3a5f', marginBottom: 6 }}><Mark size={20} />Your new login is ready
           </div>
           <div style={{ fontSize: 13, color: '#334155', margin: '4px 0 14px' }}>
             Sign in with the login and access code below for <strong>{invite.tenant_name}</strong>.
@@ -175,8 +173,7 @@ export default function LoginPage() {
     }
     return (
       <Shell>
-        <div style={{ textAlign: 'center', fontSize: 18, fontWeight: 800, color: '#1e3a5f', marginBottom: 6 }}>
-          Connect a company
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 18, fontWeight: 800, color: '#1e3a5f', marginBottom: 6 }}><Mark size={20} />Connect a company
         </div>
         <div style={{ fontSize: 13, color: '#334155', margin: '4px 0 14px' }}>
           <strong>{invite.tenant_name}</strong> has invited this email to access MetricsPro. Enter the
@@ -272,8 +269,7 @@ export default function LoginPage() {
   if (!session && (mode === 'forgot' || mode === 'reset')) {
     return (
       <Shell>
-        <div style={{ textAlign: 'center', fontSize: 18, fontWeight: 800, color: '#1e3a5f', marginBottom: 6 }}>
-          Reset your password
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 18, fontWeight: 800, color: '#1e3a5f', marginBottom: 6 }}><Mark size={20} />Reset your password
         </div>
         {mode === 'forgot' ? (
           <>

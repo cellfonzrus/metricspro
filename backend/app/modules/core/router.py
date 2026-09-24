@@ -855,7 +855,8 @@ def list_tenants(authorization: str = Header(default="")):
     return {"tenants": tens}
 
 
-def _provision_tenant(client, name, admin_email, admin_name=None, password=None, slug=None, must_reset=True):
+def _provision_tenant(client, name, admin_email, admin_name=None, password=None, slug=None, must_reset=True,
+                      package_key=None):
     """Create a tenant (org_id) + seed base roles + module entitlements + provision its first admin
     login. Shared by super-admin create-tenant AND self-serve signup. Returns the temp password only
     when one was auto-generated (super-admin flow), not when the caller chose it (signup)."""
@@ -871,6 +872,13 @@ def _provision_tenant(client, name, admin_email, admin_name=None, password=None,
         tenant_row.update(_trial.start_trial_fields(client))
     except Exception:
         pass
+    # The plan the signer-up picked on the intake form (mig 908 gave tenants.package_key a home and
+    # nothing had ever written to it). Recorded, NOT charged — the trial is card-free by design and
+    # the marketing site promises exactly that, so this says which plan they intend to land on when
+    # the trial ends. Same best-effort contract as the trial fields above: the pre-908 retry below
+    # drops it rather than failing provisioning.
+    if package_key:
+        tenant_row["package_key"] = package_key
     try:
         client.schema("storeops").table("tenants").insert(tenant_row).execute()
     except Exception:
@@ -1038,6 +1046,7 @@ class SignupIn(LaxModel):
     admin_email: Any = None
     password: Any = None
     admin_name: Any = None
+    package_key: Any = None
 
 
 @router.post("/signup")
@@ -1061,8 +1070,19 @@ def signup(body: SignupIn):
     client = sb()
     if client.schema("storeops").table("app_users").select("id").eq("email", admin_email).limit(1).execute().data:
         raise HTTPException(409, "an account with this email already exists")
-    res = _provision_tenant(client, name, admin_email, body.admin_name, password=password, must_reset=False)
+    # A plan is OPTIONAL and never trusted from the client: it is accepted only when it is one the
+    # operator actually published, read from the same table the public price list is served from.
+    # Anything else is rejected rather than quietly stored, so tenants.package_key can only ever
+    # hold a key that was on sale at the moment they signed up.
+    package_key = (str(body.package_key).strip() if body.package_key else "") or None
+    if package_key:
+        from app.modules.billing.pricing import published_package_keys  # lazy: billing imports core
+        if package_key not in published_package_keys(client):
+            raise HTTPException(400, "that plan is not available")
+    res = _provision_tenant(client, name, admin_email, body.admin_name, password=password,
+                            must_reset=False, package_key=package_key)
     return {"org_id": res["org_id"], "name": name, "admin_email": admin_email,
+            "package_key": package_key,
             "message": "Company created — sign in with your email and password."}
 
 

@@ -46,6 +46,24 @@ def _public_row(row: dict) -> dict:
     return {k: row.get(k) for k in PUBLIC_FIELDS}
 
 
+def published_package_keys(client) -> set:
+    """The package keys a NEW tenant may choose at signup — exactly what the operator published.
+
+    Shared with core.signup so the intake form, the public price list and what signup will ACCEPT
+    can never disagree about what is on sale. Core imports this lazily (billing already imports
+    core for _require_super_admin, so a module-level import here would be a cycle).
+
+    Degrades to an empty set when migration 908 is absent, which makes signup reject any plan
+    rather than accept an unverifiable one.
+    """
+    try:
+        rows = (client.schema("storeops").table("pricing_package").select("key")
+                .eq("is_public", True).execute().data) or []
+        return {r["key"] for r in rows if r.get("key")}
+    except Exception:
+        return set()
+
+
 # ── PUBLIC: the price list the marketing site renders ─────────────────────────────────────────
 @router.get("/public-pricing")
 async def public_pricing():

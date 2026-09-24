@@ -5065,6 +5065,44 @@ starter, premium etc"*.
 | `core.access_log`'s middleware | The hook point for module counters — it already has the resolved actor + validated acting org and is already off the response path |
 | `billing/` module (pricing.py, platform_costs.py, trial.py) | The existing home for tenant billing; the new code lives there, not in a new module |
 
+### 21a. SELF-SERVE INTAKE writes `tenants.package_key` — the plan the signer-up chose (2026-09-24)
+
+`tenants.package_key` has existed since mig `908` and §21 above already names it as the tenant→plan
+assignment, but until now **nothing ever wrote it** — only a super-admin could set a plan. The public
+intake form (`/signup`) now captures one.
+
+**DUPLICATE CHECK (build gate) — searched, and REUSED rather than rebuilt:**
+
+| Reused | Instead of |
+|---|---|
+| `GET /billing/public-pricing` (mig `908`) — the same anonymous feed the marketing site renders | a second price list in the signup page. A hardcoded price there would be a second derivation of what the operator publishes and would drift the first time a price changed |
+| `storeops.tenants.package_key` (mig `908`) | a new plan-choice column or table |
+| `core._provision_tenant` — THE one tenant-creation path | a second signup path |
+| `POST /core/signup` + `GET /core/signup-status` | a new intake endpoint |
+
+**NEW, and registered here:**
+
+| New | Where | What it answers |
+|---|---|---|
+| `billing.pricing.published_package_keys(client)` | `backend/app/modules/billing/pricing.py` | "which plan keys is the operator actually selling right now?" — the ONE answer shared by the public price list and by what signup will ACCEPT, so the form and the gate can never disagree |
+
+**THE PLAN IS NEVER TRUSTED FROM THE CLIENT.** `POST /core/signup` accepts `package_key` only when it
+is in `published_package_keys()`, read from the same table the public feed is served from; anything
+else is a 400 rather than a quietly stored value. `published_package_keys` returns an EMPTY SET when
+mig 908 is absent, so a pre-908 database rejects every plan rather than accepting an unverifiable one.
+Core imports it lazily inside the handler — `billing.pricing` already imports `core.router` for
+`_require_super_admin`, so a module-level import would be a cycle.
+
+**NO CARD IS TAKEN AT INTAKE, by design.** The trial is card-free and the marketing site says so in as
+many words, so `package_key` records the plan the tenant INTENDS to land on when the trial ends. It is
+a declaration, not a charge; nothing in billing reads it as payment authority. Charging at conversion
+is a separate build.
+
+**DEGRADATION.** The plan step is best-effort in both directions: if the price feed is unreachable or
+nothing is published, the form still creates the company and simply offers no plan — signing up never
+depends on the price list. On the write side `package_key` rides the same pre-908 retry as the trial
+fields in `_provision_tenant`, so provisioning can never fail because of it.
+
 **WHY THE AI COST FUNCTION IS NOT `fix_pipeline.compute_cost`** (a documented divergence, not a fork):
 `compute_cost` prices ONE total token count with a BLENDED rate because agent metadata has no in/out
 split. `core.ai_call_audit` DOES carry the split, and output costs ~5x input, so blending would
