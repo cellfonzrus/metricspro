@@ -81,3 +81,15 @@ jobs:
         uses: trufflesecurity/trufflehog@main
         with:
           extra_args: --only-verified
+
+  pos-pii-grants:
+    # Enforcing (not report-only): migration 909 switched the SSN / DL functions off; a copied schema-wide GRANT in
+    # 1017 re-opened them to service_role (repaired by 1019). This fails the build if any later migration does it again.
+    name: PII functions stay switched off (migration lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: harness_pos_grants_lock
+        run: python backend/harness_pos_grants_lock.py
