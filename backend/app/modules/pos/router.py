@@ -275,21 +275,30 @@ def delete_system_category(cat_id: str, org_id: str = ORG_ID):
 
 
 # ── Products ───────────────────────────────────────────────────────────────────────────────────────
+# Filtering lives in ONE place — pos/product_filters.py — for the register's product picker and the
+# catalog page alike (owner 2026-09-24). Every param is optional; with none of the new ones the query
+# is the one this handler always built.
+from app.modules.pos import product_filters as _pf
+
+
 @router.get("/products")
 def list_products(search: str = "", department_id: str = "", system_category: str = "",
-                  active_only: bool = True, org_id: str = ORG_ID):
+                  active_only: bool = True, category_id: str = "", manufacturer: str = "",
+                  inventory_type: str = "", in_stock: bool = False, store_code: str = "",
+                  org_id: str = ORG_ID):
+    """The org's products, newest first, capped at 500. Optional filters (blank = any):
+    department_id, category_id, system_category, manufacturer (exact), inventory_type
+    (standard / serial), in_stock (a serial unit `in_stock` or standard qty_on_hand > 0 — at
+    `store_code` when given), combined with `search` (name / full name / UPC)."""
+    if inventory_type and inventory_type not in _pf.INVENTORY_TYPES:
+        raise HTTPException(400, f"inventory_type must be one of {', '.join(_pf.INVENTORY_TYPES)}")
     client = sb()
-    q = client.schema("pos").table("products").select("*").eq("org_id", org_id)
-    if active_only:
-        q = q.eq("is_active", True)
-    if department_id:
-        q = q.eq("department_id", department_id)
-    if system_category:
-        q = q.eq("system_category", system_category)
-    if search.strip():
-        s = search.strip().replace("%", "").replace(",", " ")
-        q = q.or_(f"short_name.ilike.%{s}%,full_name.ilike.%{s}%,upc.ilike.%{s}%")
-    rows = q.order("product_code", desc=True).limit(500).execute().data or []
+    rows = _pf.list_rows(
+        client, org_id, search=search, active_only=active_only,
+        filters=_pf.clean(department_id=department_id, category_id=category_id,
+                          system_category=system_category, manufacturer=manufacturer,
+                          inventory_type=inventory_type),
+        in_stock=in_stock, store_code=store_code)
     # Resolve department/category names in Python (cheap: both lists are small) rather than
     # relying on PostgREST embeds from a non-default schema.
     cat = catalog(org_id)
@@ -299,6 +308,12 @@ def list_products(search: str = "", department_id: str = "", system_category: st
         r["department_name"] = dname.get(r.get("department_id"))
         r["category_name"] = cname.get(r.get("category_id"))
     return {"products": rows}
+
+
+@router.get("/products/manufacturers")
+def list_product_manufacturers(active_only: bool = True, org_id: str = ORG_ID):
+    """The Manufacturer filter's options: the org's distinct non-blank manufacturers, A→Z."""
+    return {"manufacturers": _pf.manufacturers(sb(), org_id, active_only)}
 
 
 @router.post("/products")
@@ -344,9 +359,9 @@ def _special_order_products(org_id, search="", active_only=True):
          .eq("org_id", org_id).eq("is_special_order", True))
     if active_only:
         q = q.eq("is_active", True)
-    if (search or "").strip():
-        s = search.strip().replace("%", "").replace(",", " ")
-        q = q.or_(f"short_name.ilike.%{s}%,full_name.ilike.%{s}%,upc.ilike.%{s}%")
+    clause = _pf.search_clause(search)     # the one product search clause (pos/product_filters)
+    if clause:
+        q = q.or_(clause)
     return q.order("short_name").limit(500).execute().data or []
 
 

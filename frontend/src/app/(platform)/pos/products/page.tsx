@@ -1,8 +1,9 @@
 'use client'
 // POS module — Phase 0: Products & Services catalog (ported from the standalone pos-system app;
 // data access rewired from direct Supabase to the FastAPI /pos router, mig 724).
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/client'
+import ProductFilters, { EMPTY_PRODUCT_FILTERS, ProductFilterValue, fetchManufacturers, hasProductFilters, productFilterParams } from '../product-filters'
 
 interface Product {
   id: string; product_code: number; upc: string | null
@@ -41,9 +42,11 @@ export default function PosProductsPage() {
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState('')
   const [search, setSearch] = useState('')
-  const [filterDept, setFilterDept] = useState('')
-  const [filterSysCat, setFilterSysCat] = useState('')
+  // The ONE shared product filter set (../product-filters) — the same one the register's picker uses.
+  const [filters, setFilters] = useState<ProductFilterValue>(EMPTY_PRODUCT_FILTERS)
+  const [manufacturers, setManufacturers] = useState<string[]>([])
   const [activeOnly, setActiveOnly] = useState(true)
+  const loadTicket = useRef(0)   // an older, slower response must never replace a newer one (index §23k)
   const [selected, setSelected] = useState<Product | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [editMode, setEditMode] = useState(false)
@@ -67,6 +70,7 @@ export default function PosProductsPage() {
     // keeps its own try/catch so its seed-on-first-read fallback behaviour is unchanged.
     const pCatalog = api('/api/v1/pos/catalog')
     const pSys = api('/api/v1/pos/system-categories')
+    fetchManufacturers().then(setManufacturers)
     const c = await pCatalog
     setDepartments(c.departments || []); setCategories(c.categories || [])
     // Separate call: the endpoint SEEDS the four builtins on first read, so a tenant that has
@@ -108,18 +112,27 @@ export default function PosProductsPage() {
     finally { setDeptCatBusy(false) }
   }
 
-  async function loadProducts(q = { search, filterDept, filterSysCat, activeOnly }) {
+  async function loadProducts(q = { search, filters, activeOnly }) {
+    const ticket = ++loadTicket.current
     setLoading(true); setMsg('')
     try {
-      const params = new URLSearchParams()
+      const params = productFilterParams(q.filters, new URLSearchParams())
       if (q.search.trim()) params.set('search', q.search.trim())
-      if (q.filterDept) params.set('department_id', q.filterDept)
-      if (q.filterSysCat) params.set('system_category', q.filterSysCat)
       params.set('active_only', String(q.activeOnly))
       const r = await api(`/api/v1/pos/products?${params}`)
+      if (ticket !== loadTicket.current) return
       setProducts(r.products || [])
-    } catch (err: any) { setMsg('Load failed: ' + (err?.message || err)) }
+    } catch (err: any) {
+      if (ticket !== loadTicket.current) return
+      setMsg('Load failed: ' + (err?.message || err))
+    }
     setLoading(false)
+  }
+
+  // A filter change applies at once (the text search still waits for Enter / Search).
+  function changeFilters(v: ProductFilterValue) {
+    setFilters(v)
+    loadProducts({ search, filters: v, activeOnly })
   }
 
   useEffect(() => { loadCatalog().catch(() => {}); loadProducts() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
@@ -131,6 +144,7 @@ export default function PosProductsPage() {
       if (editMode && selected) await api(`/api/v1/pos/products/${selected.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
       else await api('/api/v1/pos/products', { method: 'POST', body: JSON.stringify(payload) })
       setShowForm(false); setEditMode(false)
+      fetchManufacturers().then(setManufacturers)   // a new maker becomes filterable straight away
       await loadProducts()
     } catch (err: any) { alert('Failed to save product: ' + (err?.message || err)) }
     setSaving(false)
@@ -210,20 +224,16 @@ export default function PosProductsPage() {
       <div style={{ ...panel, marginBottom: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === 'Enter' && loadProducts()}
           placeholder="Search by name, UPC, description…" style={{ ...input, flex: 1, minWidth: 200 }} />
-        <select value={filterDept} onChange={e => setFilterDept(e.target.value)} style={{ ...input, width: 170 }}>
-          <option value="">Department: any</option>
-          {departments.map(d => <option key={d.id} value={d.id}>{d.short_name}</option>)}
-        </select>
-        <select value={filterSysCat} onChange={e => setFilterSysCat(e.target.value)} style={{ ...input, width: 190 }}>
-          <option value="">System category: any</option>
-          {sysCats.map(c => <option key={c.id}>{c.name}</option>)}
-        </select>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>
           <input type="checkbox" checked={activeOnly} onChange={e => setActiveOnly(e.target.checked)} />
           Active only
         </label>
         <button className="btn btn-primary" onClick={() => loadProducts()}>Search</button>
-        <button className="btn btn-secondary" onClick={() => { setSearch(''); setFilterDept(''); setFilterSysCat(''); loadProducts({ search: '', filterDept: '', filterSysCat: '', activeOnly }) }}>Clear</button>
+        <button className="btn btn-secondary" onClick={() => { setSearch(''); setFilters(EMPTY_PRODUCT_FILTERS); loadProducts({ search: '', filters: EMPTY_PRODUCT_FILTERS, activeOnly }) }}>Clear</button>
+        <ProductFilters value={filters} onChange={changeFilters} includeInactiveSystemCategories
+          inStockLabel="In stock (any store)"
+          options={{ departments, categories, systemCategories: sysCats, manufacturers }}
+          style={{ flexBasis: '100%' }} />
       </div>
 
       {/* Table */}
@@ -233,7 +243,7 @@ export default function PosProductsPage() {
         <div className="table-wrapper" style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1000, fontSize: 13 }}>
             <thead><tr style={{ background: 'var(--surface2)' }}>
-              {['Product #', 'UPC', 'Short Description', 'Department', 'Category', 'System Category', 'Retail', 'Cost', 'Taxable', 'Type', 'Active'].map(h =>
+              {['Product #', 'UPC', 'Short Description', 'Department', 'Category', 'System Category', 'Manufacturer', 'Retail', 'Cost', 'Taxable', 'Type', 'Active'].map(h =>
                 <th key={h} style={{ textAlign: 'left', padding: 8, fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>)}
             </tr></thead>
             <tbody>
@@ -246,6 +256,7 @@ export default function PosProductsPage() {
                   <td style={{ ...cell, color: 'var(--text2)' }}>{p.department_name || ''}</td>
                   <td style={{ ...cell, color: 'var(--text2)' }}>{p.category_name || ''}</td>
                   <td style={cell}>{p.system_category || ''}</td>
+                  <td style={{ ...cell, color: 'var(--text2)' }}>{p.manufacturer || ''}</td>
                   <td style={cell}>${Number(p.retail_price || 0).toFixed(2)}</td>
                   <td style={{ ...cell, color: 'var(--text2)' }}>${Number(p.cost || 0).toFixed(2)}</td>
                   <td style={cell}>{p.is_taxable ? 'Yes' : 'No'}</td>
@@ -254,8 +265,8 @@ export default function PosProductsPage() {
                 </tr>
               ))}
               {products.length === 0 && (
-                <tr><td colSpan={11} style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>
-                  No products found. Click “+ New” to add your first product.
+                <tr><td colSpan={12} style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>
+                  No products found{hasProductFilters(filters) || search.trim() ? ' for this search / these filters' : '. Click “+ New” to add your first product'}.
                 </td></tr>
               )}
             </tbody>

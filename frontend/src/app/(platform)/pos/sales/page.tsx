@@ -20,6 +20,10 @@ import RegisterLock from '@/components/pos/RegisterLock'
 import { getActiveStore, setActiveStore } from '@/lib/pos-store'
 import { PosConfigValues, loadEffectivePosConfig, resolvePosConfig, getRegisterNumber } from '@/lib/pos-config'
 import { LinkedText } from '@/components/ScreenLink'
+import ProductFilters, {
+  EMPTY_FILTER_OPTIONS, EMPTY_PRODUCT_FILTERS, ProductFilterOptions, ProductFilterValue,
+  fetchProductFilterOptions, hasProductFilters, productFilterParams,
+} from '../product-filters'
 
 interface Product {
   id: string
@@ -136,6 +140,13 @@ export default function PosSalesPage() {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
   const [products, setProducts] = useState<Product[]>([])                 // default catalog (quick-scan matching)
   const [pickerResults, setPickerResults] = useState<Product[] | null>(null) // server search results while typing
+  // Product picker filters (owner 2026-09-24) — the ONE shared filter set (../product-filters), applied
+  // server-side through the same GET /pos/products call as the search, so they reach past the 500 cap.
+  const [pickerFilters, setPickerFilters] = useState<ProductFilterValue>(EMPTY_PRODUCT_FILTERS)
+  const [filterOptions, setFilterOptions] = useState<ProductFilterOptions | null>(null)
+  const pickerTicket = useRef(0)   // a slower, older response must never replace a newer one (index §23k)
+  const [pickerPending, setPickerPending] = useState(false)
+  const [pickerError, setPickerError] = useState('')
   const [sales, setSales] = useState<Sale[]>([])
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null)
   const [loading, setLoading] = useState(false)
@@ -441,18 +452,36 @@ export default function PosSalesPage() {
     } catch { setProducts([]) }
   }
 
-  // Server-side product search for the picker (the default catalog list caps at 500 rows).
+  // The filter option lists load the first time the picker opens (not on every register visit).
+  useEffect(() => {
+    if (!showProductPicker || filterOptions) return
+    fetchProductFilterOptions().then(setFilterOptions).catch(() => setFilterOptions(EMPTY_FILTER_OPTIONS))
+  }, [showProductPicker, filterOptions])
+
+  // Server-side product search + filters for the picker (the default catalog list caps at 500 rows).
+  // "In stock" means on hand at this register's active store.
   useEffect(() => {
     if (!showProductPicker) return
     const q = productSearch.trim()
-    if (!q) { setPickerResults(null); return }
+    const ticket = ++pickerTicket.current
+    if (!q && !hasProductFilters(pickerFilters)) { setPickerResults(null); setPickerPending(false); setPickerError(''); return }
+    setPickerPending(true); setPickerError('')
+    const filtered = hasProductFilters(pickerFilters)
     const t = setTimeout(() => {
-      api(`/api/v1/pos/products?search=${encodeURIComponent(q)}`)
-        .then(r => setPickerResults(r.products || []))
-        .catch(() => setPickerResults(null))
+      const params = productFilterParams(pickerFilters, new URLSearchParams(), activeStore)
+      if (q) params.set('search', q)
+      api(`/api/v1/pos/products?${params}`)
+        .then(r => { if (ticket === pickerTicket.current) setPickerResults(r.products || []) })
+        .catch((err: unknown) => {
+          if (ticket !== pickerTicket.current) return
+          // A failed FILTERED load shows nothing (and says why) — never the unfiltered list.
+          setPickerResults(filtered ? [] : null)
+          if (filtered) setPickerError(`Could not load filtered products: ${err instanceof Error ? err.message : String(err)}`)
+        })
+        .finally(() => { if (ticket === pickerTicket.current) setPickerPending(false) })
     }, 250)
     return () => clearTimeout(t)
-  }, [productSearch, showProductPicker])
+  }, [productSearch, showProductPicker, pickerFilters, activeStore])
 
   async function loadSales() {
     setLoading(true)
@@ -1281,16 +1310,29 @@ export default function PosSalesPage() {
       {/* PRODUCT PICKER MODAL */}
       {showProductPicker && (
         <div style={modalOverlay}>
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, width: 700, maxHeight: '85vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, width: 900, maxWidth: '100%', maxHeight: '85vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <b style={{ fontSize: 14 }}>Select Product</b>
               <button onClick={() => setShowProductPicker(false)} style={{ background: 'none', border: 'none', color: 'var(--text2)', fontSize: 20, cursor: 'pointer' }}>×</button>
             </div>
             <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)' }}>
               <input value={productSearch} onChange={e => setProductSearch(e.target.value)} placeholder="Search products..." style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }} autoFocus />
+              <ProductFilters value={pickerFilters} onChange={setPickerFilters} options={filterOptions || EMPTY_FILTER_OPTIONS}
+                inStockLabel={activeStore ? `In stock at ${activeStore}` : 'In stock only'} style={{ marginTop: 10 }} />
+              {pickerPending && hasProductFilters(pickerFilters) && (
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>Filtering…</div>
+              )}
+              {pickerError && <div style={{ fontSize: 11, color: 'var(--red, #dc2626)', marginTop: 8 }}>{pickerError}</div>}
+              {!pickerPending && !pickerError && pickerResults && (
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
+                  {pickerResults.length === 0 ? 'No products match.' : `${pickerResults.length}${pickerResults.length >= 500 ? '+' : ''} match${pickerResults.length === 1 ? '' : 'es'}${pickerResults.length > 100 ? ' · showing the first 100 — narrow the search or filters' : ''}`}
+                </div>
+              )}
             </div>
             <div style={{ overflowY: 'auto', flex: 1 }}>
-              {(pickerResults ?? products.filter(p => !productSearch || p.short_name.toLowerCase().includes(productSearch.toLowerCase()) || (p.upc && p.upc.includes(productSearch)))).slice(0, 100).map(p => (
+              {/* While a FILTERED request is in flight, show nothing rather than the unfiltered list —
+                  a click on a row the filters exclude would ring up the wrong product. */}
+              {(pickerPending && hasProductFilters(pickerFilters) ? [] : pickerResults ?? products.filter(p => !productSearch || p.short_name.toLowerCase().includes(productSearch.toLowerCase()) || (p.upc && p.upc.includes(productSearch)))).slice(0, 100).map(p => (
                 <div key={p.id} onClick={() => addToCart(p)}
                   style={{ padding: '10px 20px', borderBottom: '1px solid var(--border)', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
