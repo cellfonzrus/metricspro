@@ -41,8 +41,8 @@ name: carrier-vocab-guard
 # predicate (commcalc/line_class.activation_class) and ONE per-org rules home
 # (accessory_config.activation_details_rules); every classifier dereferences it, no second token list,
 # the 2.5a intake step writes only through the two config writers, the Exec MTD page renders the
-# "no line could be told apart" way-back (backend/harness_line_class_lock.py + harness_line_class.py, the
-# money compatibility pin; stdlib only).
+# "no line could be told apart" way-back (backend/harness_line_class_lock.py, stdlib only, + harness_line_class.py, the
+# money compatibility pin — it imports the app, so it runs in the customer-master-proof job).
 #
 # THE TENDER-VOCAB LOCK (index §30.13, 2026-09-21) runs here too: the tender classes have ONE home
 # (closing.router.TENDER_VOCAB, from which the closing axis is derived, and the one ladder tender_class);
@@ -88,7 +88,8 @@ name: carrier-vocab-guard
 # `plan_sources`, mig 725); ONE resolver (onboarding.resolve_service_plans) serves preview AND apply; the
 # rules are written through ONE writer (pos.router.upsert_pos_setting) after the too-broad guard; the
 # wizard card lists the sources from the payload and seeds its words from the proposal only; no carrier
-# or POS vendor word in the module or the card (backend/harness_plan_sources_lock.py; stdlib only).
+# or POS vendor word in the module or the card (backend/harness_plan_sources_lock.py — its behavioural
+# section imports the app, so it runs in the customer-master-proof job).
 #
 # THE CUSTOMER-MASTER LOCK (index §30.16, 2026-09-24) runs here too: who a sale's customer is has ONE matcher
 # (receipt_import.match_or_create, the only creator from a sale) over ONE pure decision (customer_identity.decide:
@@ -241,6 +242,13 @@ concurrency:
   group: carrier-vocab-guard-${{ github.ref }}
   cancel-in-progress: true
 
+# Every step runs under `bash -eo pipefail` (GitHub's explicit-bash shell). Without this, the default
+# `bash -e` has NO pipefail, so `python3 harness_x.py | tee …` passed even when the harness failed — every lock
+# here was silently unenforced until 2026-09-24. Locked by backend/harness_ci_pipefail_lock.py.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   carrier-vocab-guard:
     name: No cross-side carrier vocabulary in page copy
@@ -273,9 +281,6 @@ jobs:
       - name: Run the line-class lock (one activation-type predicate; one rules home; every caller dereferences it)
         working-directory: backend
         run: python3 harness_line_class_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the line-class proof (the money compatibility pin + the suggestion engine over the measured vocabulary)
-        working-directory: backend
-        run: python3 harness_line_class.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the tender-vocab lock (one tender vocabulary; every classifier dereferences it)
         working-directory: backend
         run: python3 harness_tender_vocab_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -304,9 +309,6 @@ jobs:
       - name: Run the POS product-filters lock (one filter helper behind GET /pos/products; one filter component on both POS product screens; one spelling of the params — index §33)
         working-directory: backend
         run: python3 harness_pos_product_filters_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the plan-sources lock (one registry of plan-name sources; one resolver for preview and apply; one writer; the card seeds from the proposal; no vendor)
-        working-directory: backend
-        run: python3 harness_plan_sources_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the ledger statement-identity lock (one identity derivation, one period home, one lander; every ledger read on the family; N landings refused — index §30.15)
         working-directory: backend
         run: python3 harness_ledger_identity_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -329,6 +331,14 @@ jobs:
       - name: Run the customer-master proof (one matcher; a line per phone number with its device and plan; what the customer paid; reversible merges; safe before mig 1017)
         working-directory: backend
         run: python3 harness_customer_master.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # These two import the app (FastAPI) — they run here, where the backend's dependencies are installed. In the
+      # dependency-free guard job they crashed on every run, and the missing pipefail hid it (index §19.25).
+      - name: Run the line-class proof (the money compatibility pin + the suggestion engine over the measured vocabulary)
+        working-directory: backend
+        run: python3 harness_line_class.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the plan-sources lock (one registry of plan-name sources; one resolver for preview and apply; one writer; the card seeds from the proposal; no vendor)
+        working-directory: backend
+        run: python3 harness_plan_sources_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       # index §33 — the POS product filters over the REAL handler (same in-memory pattern, same deps).
       - name: Run the POS product-filters proof (each filter narrows; they combine with search; no new param = the old answer; in stock; past the 500 cap; org-scoped)
         working-directory: backend

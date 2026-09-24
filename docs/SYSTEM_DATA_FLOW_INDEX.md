@@ -4976,6 +4976,16 @@ one by one, what is missing REPORTED) wired into every reader and locked (`harne
 fails the build on any ladder under `backend/app`). Live: `996_pl_device_margin_presentation.sql` is the
 unapplied migration the ladder revealed; the panel and the P&L now say so.
 
+§19.25 **A FAILING HARNESS PASSED CI — every gate step ran without pipefail (fixed 2026-09-24).** GitHub Actions runs a
+step with no `shell:` as `bash -e {0}`, which has NO pipefail; every gate was `python3 harness_x.py | tee -a "$GITHUB_STEP_SUMMARY"`,
+so the step took tee's exit status and a RED harness passed. Every lock in `carrier-vocab-guard.yml`, `lineage-guard.yml` and
+`org-scope-guard.yml` was unenforced. Measured the same day: all 25 harnesses those workflows run were green on `main`, so
+nothing had slipped through. Fixed as a class: the four workflows that run a harness declare `defaults: run: shell: bash`
+(`-eo pipefail`); locked by `backend/harness_ci_pipefail_lock.py` (CI `security.yml` job `ci-pipefail`, enforcing) — any
+workflow that runs a `harness_*.py` without that default fails the build. `deploy-website.yml` runs no harness and is
+unchanged (its `printf | grep -q` pipes would misbehave under pipefail). Found by the commission agent while wiring the
+multi-period ledger upload.
+
 ---
 
 ## 20. Super-admin CONTROL BOX — platform red/green board + the daily check

@@ -21,6 +21,13 @@ concurrency:
   group: security-${{ github.ref }}
   cancel-in-progress: true
 
+# Every step runs under `bash -eo pipefail` (GitHub's explicit-bash shell). Without this, the default
+# `bash -e` has NO pipefail, so `python3 harness_x.py | tee …` passed even when the harness failed — every lock
+# here was silently unenforced until 2026-09-24. Locked by backend/harness_ci_pipefail_lock.py.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   python-sast:
     name: Python SAST (bandit)
@@ -93,3 +100,15 @@ jobs:
         with: { python-version: "3.11" }
       - name: harness_pos_grants_lock
         run: python backend/harness_pos_grants_lock.py
+
+  ci-pipefail:
+    # Enforcing: a failing harness must fail CI (index §19.25). Before 2026-09-24 every
+    # `python3 harness_x.py | tee …` step ran without pipefail and passed on a red harness.
+    name: A failing harness fails CI (pipefail lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: harness_ci_pipefail_lock
+        run: python backend/harness_ci_pipefail_lock.py
