@@ -515,6 +515,133 @@ def rebuild(client, org_id, lo, hi, stores=None, who=None, dry_run=False):
                          "lines": {"table": line_table, "rows": len(lines)}}}
 
 
+# ── A LARGE REBUILD RUNS IN THE BACKGROUND (owner 2026-09-24: "i dont see receipts") ────────────────────
+# Measured: the commit of a 10,823-invoice file rebuilt every invoice INSIDE the request (~0.2 s each ≈ 40 min),
+# the request timed out, the intake card never finished and no receipt was written. One entry point for every
+# caller — `rebuild_or_start`: a slice of up to SYNC_MAX_INVOICES invoices rebuilds while you wait (as before);
+# a larger one runs month by month off the request, its progress kept in ONE row (pos.pos_settings key JOB_KEY,
+# written only through pos.router.upsert_pos_setting) that the POS receipts page reads. Never two at once.
+JOB_KEY = "sales_from_reports_job"
+SYNC_MAX_INVOICES = 300
+JOB_STALE_SECONDS = 3 * 3600
+
+
+def _now_iso():
+    return _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def month_slices(lo, hi):
+    """[lo..hi] cut at month ends → [(from, to), …] (inclusive ISO dates)."""
+    a, b = _dt.date.fromisoformat(lo[:10]), _dt.date.fromisoformat(hi[:10])
+    out = []
+    while a <= b:
+        nxt = (a.replace(day=28) + _dt.timedelta(days=4)).replace(day=1)
+        end = min(b, nxt - _dt.timedelta(days=1))
+        out.append((a.isoformat(), end.isoformat()))
+        a = nxt
+    return out
+
+
+def count_invoices(client, org_id, lo, hi, stores=None):
+    """How many invoice headers the slice holds (the invoice landing, org × dates [× stores])."""
+    from app.modules.commcalc import column_mapping as _cm
+    from app.modules.commcalc import onboarding_intake as _oi
+    q = (client.schema("commcalc").table(_cm.TABLE_MAP[_oi.REPORT_KEY_BY_KIND["invoice"]]).select("id", count="exact")
+         .eq("org_id", org_id).gte("trans_date", lo).lte("trans_date", hi))
+    if stores:
+        q = q.in_("store", list(stores))
+    try:
+        r = q.limit(1).execute()
+        return int(getattr(r, "count", None) or 0)
+    except Exception:
+        return 0
+
+
+def load_job(client, org_id):
+    """The org's rebuild job row (or None)."""
+    try:
+        rows = (client.schema("pos").table("pos_settings").select("value").eq("org_id", org_id)
+                .eq("key", JOB_KEY).is_("store_code", "null").limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    v = rows[0].get("value") if rows else None
+    return v if isinstance(v, dict) else None
+
+
+def _save_job(client, org_id, job):
+    from app.modules.pos import router as _pr
+    _pr.upsert_pos_setting(client, org_id, JOB_KEY, job)
+    return job
+
+
+def job_running(job, now=None):
+    """A job counts as running until it finishes — or until JOB_STALE_SECONDS pass without a finish (a worker
+    restart leaves a 'running' row behind; a stale one never blocks a new start)."""
+    if not job or job.get("state") != "running":
+        return False
+    try:
+        started = _dt.datetime.strptime(job.get("updated_at") or job.get("started_at"), "%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return False
+    return ((now or _dt.datetime.utcnow()) - started).total_seconds() < JOB_STALE_SECONDS
+
+
+def run_job(client, org_id, lo, hi, stores=None, who=None):
+    """The background body: the slice month by month through `rebuild`, the running totals saved after each
+    month. Never raises — a failure is the job's state, in words."""
+    months = month_slices(lo, hi)
+    job = dict(load_job(client, org_id) or {})
+    tot = {"invoices": 0, "created": 0, "replaced": 0, "failed": 0, "vendor_paid_count": 0}
+    try:
+        for i, (a, b) in enumerate(months, 1):
+            r = rebuild(client, org_id, a, b, stores=stores, who=who)
+            if not r.get("ran"):
+                job.update({"state": "failed", "finished_at": _now_iso(), "updated_at": _now_iso(),
+                            "words": [r.get("reason") or "the rebuild could not run"]})
+                _save_job(client, org_id, job)
+                return job
+            for k in ("invoices", "created", "replaced", "failed"):
+                tot[k] += int(r.get(k) or 0)
+            tot["vendor_paid_count"] += int(((r.get("vendor_paid") or {}).get("lines")) or 0)
+            job.update({"months_done": i, "current": b, "updated_at": _now_iso(), **tot})
+            _save_job(client, org_id, job)
+        job.update({"state": "done", "finished_at": _now_iso(), "updated_at": _now_iso(), **tot,
+                    "words": [f"rebuilt {tot['invoices']:,} invoice(s) from {lo} to {hi}: {tot['created']:,} created, "
+                              f"{tot['replaced']:,} replaced, {tot['failed']:,} failed"]})
+    except Exception as e:  # the job's state says it; the rows written so far stay (a re-run replaces them)
+        job.update({"state": "failed", "finished_at": _now_iso(), "updated_at": _now_iso(),
+                    "words": [f"the rebuild stopped at {job.get('current') or lo}: {str(e)[:200]} — rows written so far are kept; run it again to finish"]})
+    _save_job(client, org_id, job)
+    return job
+
+
+def _thread_start(fn):
+    import threading
+    threading.Thread(target=fn, daemon=True).start()
+
+
+def rebuild_or_start(client, org_id, lo, hi, stores=None, who=None, dry_run=False, start=None):
+    """THE entry point every caller uses (the rebuild endpoint, the intake commit). A slice of up to
+    SYNC_MAX_INVOICES invoices (or a dry run) rebuilds now and answers as `rebuild` does; a larger one starts
+    the background job (or reports the one already running) and answers at once with `background: True`."""
+    n = count_invoices(client, org_id, lo, hi, stores)
+    if dry_run or n <= SYNC_MAX_INVOICES:
+        return rebuild(client, org_id, lo, hi, stores=stores, who=who, dry_run=dry_run)
+    cur = load_job(client, org_id)
+    if job_running(cur):
+        return {"ok": True, "ran": False, "background": True, "job": cur,
+                "words": [f"a rebuild is already running ({cur.get('from')} – {cur.get('to')}, month {cur.get('months_done', 0)} of "
+                          f"{cur.get('months_total')}) — its progress shows on the receipts page; start another when it finishes"]}
+    months = month_slices(lo, hi)
+    job = {"state": "running", "from": lo, "to": hi, "stores": stores, "by": who, "invoices_expected": n,
+           "months_total": len(months), "months_done": 0, "started_at": _now_iso(), "updated_at": _now_iso(), "words": []}
+    _save_job(client, org_id, dict(job))
+    (start or _thread_start)(lambda: run_job(client, org_id, lo, hi, stores=stores, who=who))
+    return {"ok": True, "ran": False, "background": True, "job": dict(job), "invoices": n,
+            "words": [f"{n:,} invoice(s) from {lo} to {hi} — too many to rebuild while you wait, so they are rebuilding in the "
+                      f"background, one month at a time ({len(months)} month(s)); the progress shows on the receipts page"]}
+
+
 def list_rebuilt(client, org_id, lo=None, hi=None, limit=2000):
     """The POS sales rebuilt from the reports (receipt_imports rows whose document says provenance
     'reports'), newest first: invoice #, date, store, customer, total, the payment lines, lines found,

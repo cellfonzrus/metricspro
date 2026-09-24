@@ -7025,10 +7025,12 @@ def _intake_pos_rebuild_after_landing(client, org_id, stores, lo, hi, who=None):
     invoice, imported through the one importer, reprintable in the declared POS's format
     (pos/sales_from_reports.rebuild, index §30.14). Runs on the commit of EITHER kind; keyed org ×
     invoice #, so a second commit replaces, never duplicates. A failure is reported on the commit's
-    cross-checks, never raised into the landing (the rows are already saved and verified)."""
+    cross-checks, never raised into the landing (the rows are already saved and verified). A large slice
+    (a whole history) is handed to the background job (`rebuild_or_start`, owner 2026-09-24) so the commit
+    answers at once instead of timing out."""
     try:
         from app.modules.pos import sales_from_reports as _sfr
-        return _sfr.rebuild(client, org_id, lo, hi, stores=list(stores) if stores else None, who=who)
+        return _sfr.rebuild_or_start(client, org_id, lo, hi, stores=list(stores) if stores else None, who=who)
     except Exception as e:
         return {"ok": False, "ran": False, "reason": f"the POS rebuild did not run: {str(e)[:200]}"}
 

@@ -3985,6 +3985,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `POST /commcalc/onboarding/intake/analyze` + `/commit` — the `invoice` kind (2026-09-21, §30.13): form fields `tender_columns` (JSON `{header: {role, tender_class, keyed_manually}}`), `tie_field` (one of `INVOICE_TIE_FIELDS`), `tender_basis` (commit only; one of `closing.router.TENDER_BASES`); `use_stored=1` + a RETIRED line's `instance_key` re-reads its kept file under this kind and CARRIES the reference (`_intake_carry_kept_file`). Analyze carries `tender_columns` (the 2.5b block: columns with role / class / keyed / Σ, the vocabulary, errors), `tender_tie`, `tie_field`; commit lands parent + child through `_ingest_mapped_df`, writes the tender map + the basis (read back, refused if not stuck), re-reads both, records `tender_recon` (`_intake_invoice_tender_recon`: the invoice leg vs the X-report leg per store-day) + `tender_basis` + `tender_map` | `_intake_prepare_stage2` (invoice branch) → `_intake_tender_columns_block` / `_intake_tender_resolver`; `_intake_land` (invoice); `_intake_commit_stage2` (invoice branch) → `_intake_write_tender_map`, `closing.router.put_tender_basis`, `_intake_reread_invoice` / `_intake_reread_invoice_tenders` | §30.13; proof `harness_sales_by_invoice.py` |
 | `POST /commcalc/onboarding/intake/retire` (`instance_key`, `reason`, `by`; optional `remove_landed` + `confirm_rows`) — RETIRE a mis-filed line: status `retired`, the reason on the row, out of the verify table / runbook / sign-off, listed under `rail.retired` with its kept file; with `remove_landed` a DRY RUN counts the rows the line landed (its recorded slice: table × stores × dates × kind, parent + child) and nothing changes until the call is repeated with `confirm_rows` = that count (409 if the count moved); the removal is recorded on the row and in `upload_trace` | `router.onboarding_intake_retire` → `_intake_landed_slice_of` / `_intake_remove_landed` → `_intake_save_state` | §30.13 |
 | `POST /pos/sales-from-reports/rebuild` (`from`, `to` YYYY-MM-DD; optional `stores[]`, `dry_run`) — REBUILD the POS sales of a period from the two landed sales reports: every invoice header (`raw_sales_invoice`, kind `sales_by_invoice`) joined to its lines (`raw_sales`, kind `sales`) and tender rows by invoice number → one structured receipt document per invoice (`base.new_document`, the DECLARED POS's format) → `receipt_import.upsert_structured` (keyed org × POS × invoice #, provenance `reports`: a re-run replaces, never duplicates). Answers the counts (invoices / with lines / without / created / replaced / failed), the ties in words, the per-invoice reports, the line-only invoice numbers with no header; no POS declared or no registered format → `ran:false` with a plain sentence, nothing written | `pos.router.sales_from_reports_rebuild` → `sales_from_reports.rebuild` (→ `resolve_format` → `report_kinds.tenant_declaration` + `receipt_formats.registry.get`; the three intake re-reads with `stores=None`; `_intake_store_resolver`, `_intake_rep_resolver.employee_ids`, `receipt_import.find_customer`, `pos.receipt_templates` footer; `closing.router.is_customer_payment`) | §30.14 |
+| `GET /pos/sales-from-reports/job` — the BACKGROUND rebuild's state (running / done / failed, months done of total, counts, words; `running` false once finished or stale) — what the receipts page shows while a large slice rebuilds. `POST …/rebuild` and the intake commit both go through `sales_from_reports.rebuild_or_start`: ≤ 300 invoices now, more in the background month by month | `pos.router.sales_from_reports_job` → `sales_from_reports.load_job` / `job_running` (`pos.pos_settings['sales_from_reports_job']`, written by `run_job` through `upsert_pos_setting`) | §30.14b |
 | `GET /pos/sales-from-reports/vendor-paid-lines` (`from`, `to`) + `PUT` (`{from, to, tokens[]}`) — WHICH LINES THE VENDOR PAYS (owner 2026-09-24: "$0.00 like register"): GET answers the saved rule with its proof over the period and the PROPOSAL learned from the period's own lines (the category segments whose lines add up to each invoice's vendor-paid tenders; a segment on any costed line is never proposed); PUT saves the confirmed segments — refused (400, the sentences) when a segment also names goods with a cost, or the rule ties no more invoices than none — through the one writer, READ BACK; `[]` clears it | `pos.router.sales_from_reports_vendor_paid` / `_save` → `sales_from_reports.vendor_paid_evidence` (the three intake re-reads, `vendor_paid_lines.non_customer_by_invoice` over `closing.router.is_customer_payment`, `propose` / `proof` / `check_save`) → `upsert_pos_setting` → `load_vendor_paid_rule` | §30.14a |
 | `GET /pos/sales-from-reports` (`from`, `to`) — the sales rebuilt from the reports in a date range, newest first: invoice #, date, store, customer, total, the payment lines, lines found, the lines / tenders tie flags and the words; plus the declared POS, its format label, or the reason no format serves it | `pos.router.sales_from_reports_list` → `sales_from_reports.resolve_format` + `list_rebuilt` (org-scoped; `document->provenance->>kind = reports`) | §30.14 |
 | `GET /closing/summary` · `GET /closing/deposit-recon` · `GET /closing/cash-recon-management` · `GET /closing/pickups` family — now carry **`tender_basis`** (`closing.router.tender_basis_info`: basis, label, source, the upload kind, screen `onboarding_intake`); the summary's per-store `money_recon.tender_source` is the LEG read (`x_report` \| `invoice` \| `sales_feed`) | the one resolver `_tender_split_by_store` | §30.13 |
@@ -9921,6 +9922,41 @@ V4 house default byte-identical; V5 the refusals; V6 no default; V7 RULE TWO; V8
 **Still open (a live-data gap, REPORTED).** The tenant's line-level export was filtered to one category branch, so accessory lines are
 absent: e.g. an invoice with a 59.98 subtotal prints 0.00 of lines — the receipt says *"lines the line-level export does not carry"*.
 Re-export the sales-by-product report with every category.
+
+#### 30.14b ONE CUSTOMER PER PERSON, AND A LARGE REBUILD OFF THE REQUEST (owner 2026-09-24: *"i dont see receipts"*)
+
+**Measured (live).** The invoice card's commit landed 10,823 invoices and then rebuilt every one INSIDE the request (≈0.2 s each ≈
+40 min): the request timed out, the card stayed "in progress", no receipt was written. The owner's Rebuild of one month (23 invoices)
+then CREATED 23 customers: `receipt_import.find_customer` selected `pos.customers.notes`, a column mig 725 never created — the select
+failed, the failure read as "not found", so every receipt created its customer (ZOYA PEYSAKHOV ×3, RANDI GOODSTEIN ×2) and the POS's
+placeholder bill-to 'Walk In' became a customer ×4. The proof's fake had declared `notes`, so it could not see it.
+
+**The fix.**
+- **`pos/customer_identity.py`** (pure) — the one home of *who the customer is*: `norm_name`, `split_name`, `same_name`,
+  `is_placeholder` over HOUSE_PLACEHOLDERS (generic POS words) + the org's own list (`pos.pos_settings['customer_identity']`).
+- **`receipt_import.find_customer` / `_match_or_create_customer`** read the customer through `_customer_cols` — the required
+  mig-725 columns plus the OPTIONAL `notes`, probed per column (`core.column_tolerant.present_columns`, cached per client × org);
+  a placeholder bill-to is never matched and never created (the sale is rebuilt with no customer); names compare normalised; a
+  one-word name is stored as the last name so it is found again.
+- **`sales_from_reports.rebuild_or_start`** — THE entry point for every rebuild caller (`POST /pos/sales-from-reports/rebuild`,
+  the intake commit's `_intake_pos_rebuild_after_landing`): up to `SYNC_MAX_INVOICES` (300) rebuilds while you wait, as before; a
+  larger slice runs month by month in the background (`run_job` over the SAME `rebuild`), its state in ONE row —
+  `pos.pos_settings['sales_from_reports_job']` (running / done / failed, months done of total, counts, words) written through
+  `upsert_pos_setting`; never two at once; a row left running by a worker restart goes stale after 3 h. `GET
+  /pos/sales-from-reports/job` + the receipts page's progress line (polled every 5 s while running).
+- The page is **POS sales / receipts** (menu `lib/rbac.ts` and heading — one name with `ScreenLink`), the rebuilt sales FIRST.
+
+**Siblings.** `vendor_rebate_report._split_name` / its customer insert (§27.4 — no UI, known wrong four ways) is excused by name;
+the phone normalisers that disagree (`crm.pipeline_core.normalize_phone` first-10, `inventory_sold_recon.mobile_key` last-10,
+`receipt_import._digits` all) are the customer-master work's to fold (next PR, with the owner's customer rules). **Not repaired
+here (live data, reported):** the 23 customers already created (4 'Walk In', 3 duplicated names) — the customer merge in the next
+PR combines them; the rebuilt sales keep their customer link until then.
+
+**Lock.** `harness_pos_sales_from_reports_lock.py` (i) + N12–N14: no `_sfr.rebuild(` in a router (every caller through
+`rebuild_or_start`), the placeholder words only in `customer_identity`, the matcher asks `is_placeholder` and never requires
+`notes`. **Proof.** `harness_pos_sales_from_reports.py` §K (K1 the live defect reproduced with the fake corrected to mig 725 → closed;
+K2 no placeholder customer; K3 one-word names; K4 config; K5 normalised names) and §J (J1 slices; J2 small = now; J3 large =
+background at once; J4 never two; J5 month by month through the same rebuild; J6 stale). 82/0.
 
 ### 30.15 ONE STATEMENT IDENTITY, ONE PERIOD SPELLING, ONE LANDER, ONE GUARD — the ledger's landings (owner 2026-09-22)
 

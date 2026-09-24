@@ -286,7 +286,7 @@ export const NAV: NavGroup[] = [
     { href: '/pos/vendors', label: 'Vendors', icon: '🏭', module: 'pos', scopes: ['all', 'market'], tileOnly: true },
     { href: '/pos/reports', label: 'POS Reports', icon: '📈', module: 'pos', scopes: ['all', 'market'], tileOnly: true },
     { href: '/pos/import', label: 'Import', icon: '📥', module: 'pos', scopes: ['all'], tileOnly: true },
-    { href: '/pos/receipts', label: 'Receipt Import', icon: '🧾', module: 'pos', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/pos/receipts', label: 'POS sales / receipts', icon: '🧾', module: 'pos', scopes: ['all', 'market', 'store'], tileOnly: true },
     { href: '/pos/activation-report', label: 'Activation / Rebate Report', icon: '📶', module: 'pos', scopes: ['all', 'market'], tileOnly: true },
     { href: '/pos/settings', label: 'POS Settings', icon: '⚙️', module: 'pos', scopes: ['all', 'market'], tileOnly: true },
   ]},

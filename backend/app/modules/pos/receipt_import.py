@@ -164,16 +164,42 @@ def normalize_receipt(raw: dict | None) -> dict:
 
 
 # ── Layer 3: import (customer match/create + sale + audit row) ────────────────────────────────────
-def _split_name(full: str | None) -> tuple[str, str]:
-    parts = (full or "").strip().split()
-    if not parts:
-        return ("", "")
-    if len(parts) == 1:
-        return (parts[0], "")
-    return (parts[0], " ".join(parts[1:]))
+# The columns the matcher reads. `notes` is OPTIONAL: mig 725 never created it, and selecting it made every
+# lookup fail — read as "not found" — so every rebuilt receipt CREATED a customer (live, 2026-09-24). Each
+# optional column is probed on its own (core.column_tolerant, the one reading rule) and cached per client × org.
+_CUSTOMER_REQUIRED = ("id", "first_name", "last_name", "address_1", "address_2", "city", "state", "zip", "phone_primary")
+_CUSTOMER_OPTIONAL = ("notes",)
+_CUSTOMER_PRESENT: dict = {}
+_IDENTITY_CFG: dict = {}
 
 
-_CUSTOMER_COLS = "id,notes,first_name,last_name,address_1,address_2,city,state,zip,phone_primary"
+def _customer_present(client, org_id: str) -> frozenset:
+    from app.core import column_tolerant as _ct
+    k = (id(client), org_id)
+    if k not in _CUSTOMER_PRESENT:
+        _CUSTOMER_PRESENT[k] = _ct.present_columns(lambda: client.schema("pos").table("customers"),
+                                                   lambda q: q.eq("org_id", org_id), _CUSTOMER_OPTIONAL)
+    return _CUSTOMER_PRESENT[k]
+
+
+def _customer_cols(client, org_id: str) -> str:
+    from app.core import column_tolerant as _ct
+    return _ct.select_list(_CUSTOMER_REQUIRED, _CUSTOMER_OPTIONAL, _customer_present(client, org_id))
+
+
+def identity_config(client, org_id: str) -> dict:
+    """The org's customer-identity config (placeholder bill-to words) — pos.pos_settings key
+    customer_identity.CONFIG_KEY through customer_identity.resolve_config; cached per client × org."""
+    from app.modules.pos import customer_identity as _cid
+    k = (id(client), org_id)
+    if k not in _IDENTITY_CFG:
+        try:
+            rows = (client.schema("pos").table("pos_settings").select("value").eq("org_id", org_id)
+                    .eq("key", _cid.CONFIG_KEY).is_("store_code", "null").limit(1).execute().data) or []
+        except Exception:
+            rows = []
+        _IDENTITY_CFG[k] = _cid.resolve_config(rows[0].get("value") if rows else None)
+    return _IDENTITY_CFG[k]
 
 
 def find_customer(client, org_id: str, parsed: dict) -> dict | None:
@@ -182,27 +208,26 @@ def find_customer(client, org_id: str, parsed: dict) -> dict | None:
     customer named 'Singh' took every later Singh's receipt (found while rebuilding sales from the
     reports, 2026-09-21; fixed here for the OCR path too). A one-word name matches a customer whose
     last name is that word and whose first name is empty. Returns the row or None; never raises."""
+    from app.modules.pos import customer_identity as _cid
     phone = parsed.get("phone")
     name = (parsed.get("customer_name") or "").strip()
-    tbl = client.schema("pos").table("customers")
+    if name and _cid.is_placeholder(name, identity_config(client, org_id)):
+        name = ""                                   # a placeholder bill-to ('Walk In') names nobody — never matched
+    tbl = lambda: client.schema("pos").table("customers")      # noqa: E731 — a builder is single-use
+    cols = _customer_cols(client, org_id)
     try:
         if phone:
-            rows = (tbl.select(_CUSTOMER_COLS).eq("org_id", org_id).eq("phone_primary", phone)
+            rows = (tbl().select(cols).eq("org_id", org_id).eq("phone_primary", phone)
                     .limit(1).execute().data) or []
             if rows:
                 return rows[0]
         if name:
-            first, last = _split_name(name)
-            if last:
-                rows = (tbl.select(_CUSTOMER_COLS).eq("org_id", org_id).ilike("last_name", last)
-                        .limit(50).execute().data) or []
-                rows = [r for r in rows if (r.get("first_name") or "").strip().lower() == first.lower()
-                        and (r.get("last_name") or "").strip().lower() == last.lower()]
-            else:
-                rows = (tbl.select(_CUSTOMER_COLS).eq("org_id", org_id).ilike("last_name", first)
-                        .limit(50).execute().data) or []
-                rows = [r for r in rows if not (r.get("first_name") or "").strip()
-                        and (r.get("last_name") or "").strip().lower() == first.lower()]
+            first, last = _cid.split_name(name)
+            if not last:                            # a one-word name is stored as the LAST name (see the insert)
+                first, last = "", first
+            rows = (tbl().select(cols).eq("org_id", org_id).ilike("last_name", last)
+                    .order("id").limit(200).execute().data) or []
+            rows = [r for r in rows if _cid.same_name(r, first, last)]
             return rows[0] if rows else None
     except Exception:
         return None
@@ -212,22 +237,28 @@ def find_customer(client, org_id: str, parsed: dict) -> dict | None:
 def _match_or_create_customer(client, org_id: str, parsed: dict, note: str | None) -> str | None:
     """Find a customer (find_customer: phone, else the full name); create one when neither hits.
     Appends `note` to the customer's notes. Returns customer_id or None (never raises fatally)."""
+    from app.modules.pos import customer_identity as _cid
     phone = parsed.get("phone")
     name = parsed.get("customer_name")
+    if name and _cid.is_placeholder(name, identity_config(client, org_id)):
+        name = None                                 # 'Walk In' / 'No Customer' never becomes a customer
     tbl = client.schema("pos").table("customers")
+    has_notes = "notes" in _customer_present(client, org_id)
     try:
-        found = find_customer(client, org_id, parsed)
+        found = find_customer(client, org_id, {**parsed, "customer_name": name})
         if found:
-            if note:
+            if note and has_notes:
                 merged = ((found.get("notes") or "") + f"\n[receipt import] {note}").strip()
-                tbl.update({"notes": merged}).eq("id", found["id"]).execute()
+                tbl.update({"notes": merged}).eq("id", found["id"]).eq("org_id", org_id).execute()
             return found["id"]
         if not (phone or name):
             return None
-        first, last = _split_name(name)
+        first, last = _cid.split_name(name)
+        if not last:                                # one word → the last name, so find_customer finds it next time
+            first, last = "", first
         ins = {"org_id": org_id, "first_name": first or None, "last_name": last or None,
                "phone_primary": phone, "email": parsed.get("email"),
-               "notes": (f"[receipt import] {note}" if note else None)}
+               "notes": (f"[receipt import] {note}" if note and has_notes else None)}
         r = tbl.insert({k: v for k, v in ins.items() if v is not None} | {"org_id": org_id}).execute()
         return (r.data or [{}])[0].get("id")
     except Exception:

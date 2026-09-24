@@ -3031,7 +3031,15 @@ def sales_from_reports_rebuild(body: dict, authorization: str = Header(default="
         raise HTTPException(400, "from and to (YYYY-MM-DD, from ≤ to) are required")
     stores = body.get("stores") if isinstance(body.get("stores"), list) and body.get("stores") else None
     who = _caller_employee(authorization, org_id) or None
-    return _sfr.rebuild(sb(), org_id, lo, hi, stores=stores, who=who, dry_run=bool(body.get("dry_run")))
+    return _sfr.rebuild_or_start(sb(), org_id, lo, hi, stores=stores, who=who, dry_run=bool(body.get("dry_run")))
+
+
+@router.get("/sales-from-reports/job")
+def sales_from_reports_job(org_id: str = ORG_ID):
+    """The background rebuild's state (running / done / failed, months done of total, the running counts,
+    the words) — what the receipts page shows while a large rebuild runs. Read-only."""
+    job = _sfr.load_job(sb(), org_id)
+    return {"job": job, "running": _sfr.job_running(job)}
 
 
 @router.get("/sales-from-reports")

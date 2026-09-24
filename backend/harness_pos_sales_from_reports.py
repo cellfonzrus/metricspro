@@ -543,6 +543,62 @@ check("V8 end to end: with no rule the rebuild SAYS where to confirm it; the evi
       and [i["cells"]["total"] for i in doc1["items"] if i["cells"]["sku"] == "HS-9"] == ["$840.00", "$840.00"]
       and all(i["cells"]["total"] == "$0.00" for i in doc1["items"] if i["cells"]["sku"].startswith("RB-")), (o0.get("words"), o1.get("vendor_paid"), back))
 
+section("§K ONE CUSTOMER PER PERSON — no duplicate per receipt, no placeholder customer (live defect 2026-09-24)")
+# Live: the first rebuild of 23 invoices created 23 customers — the matcher selected pos.customers.notes, a column
+# mig 725 never created, so every lookup failed and read as "not found"; 'Walk In' became a customer 4 times.
+from app.modules.pos import customer_identity as CID                                # noqa: E402
+kdb = use(fresh_db())
+kdb.tables["raw_sales_invoice"].append({**kdb.tables["raw_sales_invoice"][2], "id": "inv-wi", "trans_id": "INV-9005", "customer": "Walk In"})
+kdb.tables["raw_sales_invoice"].append({**kdb.tables["raw_sales_invoice"][2], "id": "inv-one", "trans_id": "INV-9006", "customer": "MADONNA"})
+_c0 = len(kdb.tables["customers"])
+SFR.rebuild(kdb, ORG, "2026-08-01", "2026-08-31", who="E1")
+_c1 = [(c.get("first_name"), c.get("last_name")) for c in kdb.tables["customers"]]
+SFR.rebuild(kdb, ORG, "2026-08-01", "2026-08-31", who="E1")
+_c2 = [(c.get("first_name"), c.get("last_name")) for c in kdb.tables["customers"]]
+check("K1 REPRODUCED → CLOSED: the customers table has no `notes` column (mig 725, as live) and the existing Jane Doe is FOUND, not created again; a re-run creates nobody",
+      "notes" not in kdb.columns("customers") and _c1.count(("Jane", "Doe")) == 1 and ("JANE", "DOE") not in _c1 and _c1 == _c2, (_c1, _c2))
+check("K2 a placeholder bill-to ('Walk In') never becomes a customer: its sale is rebuilt with no customer attached",
+      not any(CID.norm_name(f"{a or ''} {b or ''}") == "walk in" for a, b in _c1)
+      and next(r for r in kdb.tables["receipt_imports"] if r["invoice_no"] == "INV-9005").get("customer_id") in (None, ""))
+check("K3 a one-word name is stored as the LAST name and found again next time (created once): MADONNA",
+      _c1.count((None, "MADONNA")) == 1 and _c2.count((None, "MADONNA")) == 1, _c1)
+check("K4 the placeholder words are generic and the org adds its own through config (pos_settings key customer_identity)",
+      CID.is_placeholder("  walk-in ") and CID.is_placeholder("No Customer") and CID.is_placeholder("")
+      and not CID.is_placeholder("Grand Market Intl Corporation")
+      and CID.is_placeholder("House Account", CID.resolve_config({"placeholders": ["House Account"]}))
+      and not CID.is_placeholder("House Account", CID.resolve_config(None)))
+check("K5 names compare normalised (case, spacing, punctuation): 'Sherri  Stevens' = 'SHERRI STEVENS'",
+      CID.same_name({"first_name": "Sherri", "last_name": " Stevens"}, "SHERRI", "STEVENS") and CID.norm_name("O'Brien,  Robert") == "o brien robert")
+
+section("§J A LARGE REBUILD RUNS IN THE BACKGROUND, month by month (live: a 10,823-invoice commit timed out, 2026-09-24)")
+check("J1 month_slices cuts a span at month ends (inclusive)",
+      SFR.month_slices("2025-01-15", "2025-03-02") == [("2025-01-15", "2025-01-31"), ("2025-02-01", "2025-02-28"), ("2025-03-01", "2025-03-02")])
+jdb = use(fresh_db())
+r_now = SFR.rebuild_or_start(jdb, ORG, "2026-08-01", "2026-08-31", who="E1")
+check("J2 a slice within SYNC_MAX_INVOICES rebuilds while you wait, exactly as before (3 invoices, ran, no job)",
+      r_now.get("ran") and r_now.get("invoices") == 3 and not r_now.get("background") and SFR.load_job(jdb, ORG) is None, r_now.get("words"))
+_old = SFR.SYNC_MAX_INVOICES
+SFR.SYNC_MAX_INVOICES = 1
+jdb2 = use(fresh_db())
+_ran = []
+r_bg = copy.deepcopy(SFR.rebuild_or_start(jdb2, ORG, "2026-07-15", "2026-08-31", who="E1", start=lambda fn: _ran.append(fn)))
+_job0 = copy.deepcopy(SFR.load_job(jdb2, ORG))
+_blocked = SFR.rebuild_or_start(jdb2, ORG, "2026-07-15", "2026-08-31", who="E1", start=lambda fn: _ran.append(fn))
+_ran[0]()
+_job1 = copy.deepcopy(SFR.load_job(jdb2, ORG))
+SFR.SYNC_MAX_INVOICES = _old
+check("J3 a larger slice answers AT ONCE with background: True, the job saved as running (2 months), nothing rebuilt yet",
+      r_bg.get("background") and not r_bg.get("ran") and _job0["state"] == "running" and _job0["months_total"] == 2
+      and _job0["months_done"] == 0 and any("in the background" in w for w in r_bg["words"]), (r_bg, _job0))
+check("J4 never two at once: a second start while one runs reports the running job and starts nothing",
+      _blocked.get("background") and "already running" in " ".join(_blocked["words"]) and len(_ran) == 1, _blocked)
+check("J5 the job runs month by month through the SAME rebuild: done, 2 of 2 months, 3 invoices, 3 created — the receipts exist",
+      _job1["state"] == "done" and _job1["months_done"] == 2 and _job1["invoices"] == 3 and _job1["created"] == 3
+      and len(jdb2.tables.get("receipt_imports") or []) == 3, _job1)
+check("J6 a job left 'running' by a worker restart goes stale and never blocks a new start",
+      not SFR.job_running({"state": "running", "updated_at": "2020-01-01T00:00:00Z"}) and SFR.job_running(_job0)
+      and not SFR.job_running(_job1))
+
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("§E the lock (harness_pos_sales_from_reports_lock.py) + the page + registration")
 import harness_pos_sales_from_reports_lock as LOCK                                   # noqa: E402
