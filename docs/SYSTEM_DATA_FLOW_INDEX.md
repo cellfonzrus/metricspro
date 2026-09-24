@@ -59,6 +59,7 @@ Primary code homes:
 | 11a | **Inventory vs Sold** | "My snapshot says this phone is in stock — was it already sold? Which units do I clear out, which sales do I adjust, and why is a sold-then-refunded unit not on the list?" |
 | 11b | **Inventory integrity (POS units)** | "383 phones say in stock — which were really sold (sales report by invoice, commission report), to WHICH customer, and how do I move one out with one click and have a manager confirm it? Why did receiving this IMEI pop up a duplicate warning? How do I adjust a unit in or out, and where is that recorded?" |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
+| 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 
 ---
 
@@ -10921,3 +10922,58 @@ into POS inventory is not "in stock" — by design, and why the toggle is off by
 and does not narrow by the viewer's store span (it returns catalog rows, never units). (2) The manufacturer match is EXACT (free text
 as stored): "Maker A" and "maker a " are two options until the catalog is cleaned. (3) The register's picker still shows at most 100 rows;
 it says how many matched and asks to narrow when more.
+
+---
+
+## 34. VENDOR PRODUCT PRICING — log in to each supply vendor, read the catalog, compare (owner request 2026-09-24, UPS Store tenant)
+
+Owner, verbatim (abridged): *"UPS store … a new tenant … keep them gated from wireless vendors if ups store is selected …
+ordering is done from different vendors and both vendors have prices which are higher and lower, so we need to add a module
+for product pricing and add custom links for those with autonomous login and scraping the data for the various products
+available, make a list and compare pricing and availability … vendors … not to be hard coded but made available … create one
+downloadable template to test out of the app so I can validate and place one order right now."*
+
+**PHASE 1 (this section) — a standalone kit the owner runs on their own machine: `tools/vendor_price_compare/`.** The vendor
+portals are not reachable from the build environment (egress policy denied both hosts), so the kit was built against two
+local fakes shaped like the two platforms the URLs identify (a Zen Cart store; a frameset WebSpeed shopfront) and proven
+there end to end: both logins, catalog walk, listing ↔ detail-page merge, cross-vendor match, cheapest-in-stock pick, order
+plan; the fakes' access log shows the ONLY form submitted was the login and no cart / buy-now / order / logout / sort link
+was requested. The kit keeps page snapshots so a vendor whose layout the generic reader misses can be pinned with
+`selectors` in `vendors.json` (config) — never code.
+
+- **Pure logic:** `pricecompare/core.py` — `parse_money`, `all_money`, `parse_pack` (a dimension is never a pack),
+  `classify_availability` (→ `in_stock|backorder|out_of_stock|unknown`; **unknown is never in stock**), `normalize_sku`,
+  `dimensions`, `tokens`, `numbers`, `product_features`, `match_score` (same part/item number = exact; different size = never;
+  else words + numbers + size), `confidence_label`, `group_products` (≤1 row per vendor per group, blocked, deterministic),
+  `unit_price`, `comparison_rows` (per-unit basis only when every member states its pack; out of stock never wins; a cheaper
+  out-of-stock option is SAID), `search_score`, `plan_order`.
+- **Browser (read-only):** `pricecompare/scrape.py` — `VendorScraper.login` (configured selectors first, generic password-box
+  detection second, a human finishes the login in the same window third — captcha / 2FA are never automated), `crawl`
+  (plain `<a href>` only; `SAFE_SKIP` refuses cart / checkout / order / logout / `action=` links; `clean_url` strips session
+  ids named in `strip_params`), `EXTRACT_JS` (price-anchored container reader across frames), `_dedupe_keys` / `_merge`.
+- **Output:** `pricecompare/report.py` → `price_comparison.xlsx` (Summary · Comparison · All products · One vendor only ·
+  Order plan) + `products.csv` + `products.json` (re-comparable with `--compare-only`).
+- **RULE TWO / secrets:** vendors are rows in `vendors.json`; logins live only in the owner's local `credentials.csv`
+  (git-ignored with `output/`); the template carries no password. Pinned by the harness §G, including negative controls.
+- **Proof:** `backend/harness_vendor_price_compare.py` (59; stdlib; in `carrier-vocab-guard.yml`).
+- **No table, endpoint or migration** in phase 1 — nothing to add to §16 / §17.
+
+**DUPLICATE CHECK (build gate).** Searched: §12a merchant-processor portals (`merchant_portal_sweep`, `live_login`,
+`data_source` login rows + `_SOURCE_SECRETS`), §12a.2 `connector_registry` (mig 1014), §19.23a browser sweeps, §27 vendor rebate
+history, `commcalc.po_vendor` / `purchase_order*` (mig 301, the Purchase Orders vendor roster), `commcalc.distributors`
+(mig 058). None answers "what does vendor X charge for item Y today, and is it in stock": the portal sweeps pull SETTLEMENT /
+REPORT files, not catalogs; `po_vendor` is a roster with no portal or price; `distributors` is wireless-device supply terms.
+Phase 1 therefore reuses nothing at runtime (it runs off-platform by design), and phase 2 is planned ON these homes, not
+beside them:
+
+**PHASE 2 (planned, not built — each migration surfaced for approval first).** (1) *The vendor* = `commcalc.po_vendor`
+gains `portal_url`, `catalog_urls[]`, `portal_config jsonb` (the same shape as a `vendors.json` block) — one vendor roster
+for ordering AND pricing. (2) *The login* = a `commcalc.data_source` row (`processor` = the vendor's connector key), secrets
+through the existing `_SOURCE_SECRETS` handling, login + human-finished 2FA through `live_login.start_session` — no second
+login engine. (3) *The run* = a `connector_registry` row per vendor `kind='portal'` with the tenant's scope, dispatched by
+the existing `/data-sources/sweep/run-due` on the browser service (`assert_browser_allowed`). (4) *The data* = one
+`vendor_catalog_price` snapshot table (org, vendor, item, price, pack, availability, seen_at) read by one comparison
+endpoint that calls `pricecompare/core.py` moved into `backend/app/modules/asset/` (the kit then imports it — one copy).
+(5) *The UPS Store gate* = the tenant declares no wireless carrier, so every carrier-scoped connector / report kind is
+already withheld by `report_kinds.visible_kinds` / `connector_registry.visible`; the wireless NAV modules are gated through
+the existing `NAV_CARRIERS` / package mechanism — to be verified per page, not assumed.

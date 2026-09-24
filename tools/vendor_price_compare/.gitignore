@@ -1,0 +1,5 @@
+# Your logins and your results stay on your computer — never committed.
+credentials.csv
+shopping_list.csv
+output/
+.venv/
