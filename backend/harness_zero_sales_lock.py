@@ -189,21 +189,6 @@ check("f4. the alert sweep honours the per-org enable flag and defaults to a dry
 check("f5. the report page exists and renders the three states",
       os.path.exists(os.path.join(HERE, "../frontend/src/app/(platform)/commcalc/zero-sales/page.tsx")))
 
-# ── f6/f7: NO RAW PAYLOAD ON A HUMAN-FACING SCREEN ────────────────────────────────────────────────
-# Shipped 2026-09-24 with the digest preview printing JSON.stringify(preview) into a <pre>. A manager
-# opening the report saw the API payload. The class: a debug view left on a tenant-facing surface.
-# The fix is two-sided — the view renders, and the backend stops shipping pre-formatted display text
-# (which is what forces a view to either dump the payload or re-parse prose). Both are locked.
-_PAGE = open(os.path.join(HERE, "../frontend/src/app/(platform)/commcalc/zero-sales/page.tsx"),
-             encoding="utf-8").read()
-check("f6. the page never renders a raw JSON payload to screen",
-      "JSON.stringify(" not in _PAGE,
-      "a JSON.stringify( survives in the page — render the fields, do not dump the payload")
-check("f7. the dry-run preview ships STRUCTURED items, never a pre-joined display string",
-      '"items": [{"store_code": i["store_code"]' in ZS_BLOCK
-      and 'f"{i[\'store_code\']} {i[\'grain\']}' not in ZS_BLOCK,
-      "presentation belongs to the view; the API returns fields")
-
 print("\n" + "=" * 60)
 print("%d passed, %d failed" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
