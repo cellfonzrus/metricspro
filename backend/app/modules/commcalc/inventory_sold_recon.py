@@ -650,7 +650,11 @@ def customer_of(sale, commission):
 
 
 def _unit_day(u):
-    return _day((u or {}).get("date_received")) or _day((u or {}).get("created_at"))
+    # The day the unit ARRIVED is `date_received` — nothing else. `created_at` is when the RECORD was written: a
+    # bring-over / import writes it on the import day, so reading it as "received" made every sold unit of a
+    # 2026-09-24 bring-over look "received after it was sold" and hid the sold-no-receipt / still-on-hand split
+    # (measured live, 383 units, date_received NULL on all). Unknown arrival → received-after-sold is not decided.
+    return _day((u or {}).get("date_received"))
 
 
 def integrity(units, sale_rows, commission_rows, key_of, is_live, invoice_customers=None):

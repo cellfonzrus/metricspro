@@ -160,6 +160,19 @@ _sh = [r for r in REP["rows"] if r["kind"] == "sold_still_on_hand"]
 check("B4 a sold-still-on-hand flag carries its sale LINE by invoice (invoice, date, qty) beside the commission",
       all(r["sale"]["lines"][0]["invoice"].startswith("INV-") and r["sale"]["net"] == 1 and r["commission"]["kept"] for r in _sh))
 check("B5 cost of the flagged units is summed (12 × 500)", T["flagged_cost"] == 6000.0, T["flagged_cost"])
+# B8 — THE LIVE SHAPE (measured 2026-09-24): a bring-over writes every unit with date_received NULL and created_at =
+# the import day, AFTER every sale. The record's creation is not the unit's arrival: the 4 / 6 / 2 split must hold.
+_bring = [{**u, "date_received": None, "created_at": "2026-09-24T18:00:00Z"} for u in UNITS]
+_T6 = isr.integrity(_bring, SALES, COM, device_key, ii.is_live)["totals"]
+check("B8 units brought over with NO received date (created on the import day, after every sale) still read 4 / 6 / 2 — "
+      "the record's creation date is never read as the day the unit arrived",
+      _T6["by_kind"] == {"sold_no_receipt": 4, "sold_still_on_hand": 6, "returned_commission_kept": 2,
+                         "received_after_sold": 0, "duplicate_on_hand": 0}, _T6["by_kind"])
+_late = [{**u, "date_received": "2026-09-24"} if u["id"] in ("u-0001", "u-0005") else u for u in UNITS]
+_T7 = isr.integrity(_late, SALES, COM, device_key, ii.is_live)["totals"]
+check("B9 a unit whose RECEIVED date is after its sale is still received_after_sold (the kind survives, it just needs a real date)",
+      _T7["by_kind"]["received_after_sold"] == 2 and _T7["by_kind"]["sold_no_receipt"] == 3 and _T7["by_kind"]["sold_still_on_hand"] == 5,
+      _T7["by_kind"])
 check("B6 deterministic: the same data twice gives the same rows", isr.integrity(UNITS, SALES, COM, device_key, ii.is_live)["rows"] == REP["rows"])
 # negative controls — the two netting rules are what make the report usable
 _real_net = isr.net_sold
