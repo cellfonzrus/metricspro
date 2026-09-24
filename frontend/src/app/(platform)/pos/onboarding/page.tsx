@@ -364,7 +364,8 @@ function TemplateBlock({ templateKey }: { templateKey: string }) {
 // count and a sample before anything is written.
 function ImportFromExisting({ source, onChanged }: { source: string; onChanged: () => void }) {
   const NEEDS_VARIANT = source === 'inventory_from_metricspro'
-  const [variant, setVariant] = useState(NEEDS_VARIANT ? 'asset_ledger' : '')
+  // '' = let the server pick the source that holds the tenant's units (it says which, and why)
+  const [variant, setVariant] = useState('')
   const [preview, setPreview] = useState<any>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -407,18 +408,21 @@ function ImportFromExisting({ source, onChanged }: { source: string; onChanged: 
       </div>
       <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 10 }}>{preview?.detail}</div>
 
-      {NEEDS_VARIANT && (
+      {/* the sources and their labels come from the payload (never a distributor or POS name typed here) */}
+      {NEEDS_VARIANT && (preview?.variants || []).length > 0 && (
         <div style={{ display: 'flex', gap: 14, marginBottom: 10, fontSize: 13, flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
-            <input type="radio" checked={variant === 'asset_ledger'}
-              onChange={() => setVariant('asset_ledger')} />
-            VIP consignment ledger (unsold, on inventory)
-          </label>
-          <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
-            <input type="radio" checked={variant === 'inventory_aging'}
-              onChange={() => setVariant('inventory_aging')} />
-            Existing POS inventory snapshot
-          </label>
+          {(preview.variants as { key: string; label: string; count: number; note?: string }[]).map(o => (
+            <label key={o.key} style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+              <input type="radio" checked={(variant || preview?.variant) === o.key} onChange={() => setVariant(o.key)} />
+              {o.label} — <b>{o.count}</b> unit(s){o.note ? ` (${o.note})` : ''}
+            </label>
+          ))}
+        </div>
+      )}
+      {preview?.upload && (
+        <div style={{ fontSize: 12.5, marginBottom: 10, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <a href={preview.upload.href} className="btn btn-secondary" style={{ fontSize: 12.5 }}>{preview.upload.label} →</a>
+          <span style={{ color: 'var(--text2)' }}>{preview.upload.detail}</span>
         </div>
       )}
 
@@ -439,6 +443,13 @@ function ImportFromExisting({ source, onChanged }: { source: string; onChanged: 
               what to do about it, and this renders that instead of a shrug. */}
           {preview.count === 0 && !preview.empty_reason &&
             ' Nothing found for your tenant — use the template instead.'}
+          {preview.count > 0 && preview.matched_products != null && (
+            <div style={{ marginTop: 4, color: 'var(--text2)' }}>
+              {preview.matched_products} of {preview.count} match a product in your catalog
+              {preview.unmatched_note ? <> — <span style={{ color: '#b45309' }}>{preview.unmatched_note}</span></> : ''}
+            </div>
+          )}
+          {preview.unresolved_note && <div style={{ marginTop: 4, color: '#b45309' }}>{preview.unresolved_note}</div>}
           {preview.count === 0 && preview.empty_reason && (
             <div style={{ marginTop: 8, background: '#fffbeb', border: '1px solid #fde68a',
               borderRadius: 8, padding: '8px 10px', color: '#78350f' }}>
