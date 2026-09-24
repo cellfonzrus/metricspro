@@ -10,9 +10,24 @@ import UnsafeLinkGuard from '@/components/UnsafeLinkGuard'
 // which globals.css uses as the body family. `tabular-nums` on the same face is what lines the numbers up.
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' })
 
+// Branding (2026-09-24). icon.svg / apple-icon.png / favicon.ico live beside this file and the app
+// router wires them automatically — they are the same Fold mark the marketing site serves, copied
+// rather than re-drawn so the two can never diverge. metadataBase makes the og:image absolute,
+// which is what link previews require; without it Next emits a relative path and previews go blank.
+const SITE = process.env.NEXT_PUBLIC_SITE_URL || 'https://metricspro.tech'
+
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE),
   title: 'MetricsPro — Commission Intelligence',
-  description: 'Commission Intelligence & Business Operations',
+  description: 'Commissions, point of sale, inventory, workforce and cash — reconciled against each other.',
+  openGraph: {
+    type: 'website',
+    siteName: 'MetricsPro',
+    title: 'MetricsPro — Commission Intelligence',
+    description: 'Commissions, point of sale, inventory, workforce and cash — reconciled against each other.',
+    images: [{ url: '/og.png', width: 1200, height: 630 }],
+  },
+  twitter: { card: 'summary_large_image' },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
