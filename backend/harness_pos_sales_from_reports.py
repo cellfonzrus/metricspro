@@ -13,7 +13,7 @@ customer paid (the vendor-paid difference); a third with no lines; a line-only i
      CONTRACT_SECTION / PRINT_LAYOUT; the parser reads the payment lines generically (a card tender, not just
      'Cash'), the contract table as PAIRS, and 'Tendered At' without landing on a surname
   §B THE PURE BUILDER — header, items in a deterministic order, financed lines, totals from the invoice header,
-     the payment lines = the tender classes with a place on the closing axis (fold_to_axis INJECTED; a vendor
+     the payment lines = the tender classes the customer paid (is_customer_payment INJECTED; a vendor
      rebate is not one), the tax residual, contract pairs, the report in words; idempotent (same rows → same
      document); coverage both ways
   §C THE ROUND TRIP — document → render_words (the format's PRINT_LAYOUT) → the format's parse → the SAME
@@ -208,7 +208,7 @@ def customer_lines(name):
 
 
 CTX = dict(store_header=store_header, customer_lines=customer_lines, footer_text=f"{FMT.FOOTER_ANCHOR}\nReturns within 30 days.",
-           axis_of=CR.fold_to_axis, built_at="2026-09-21T00:00:00Z", built_by="tester",
+           pays=CR.is_customer_payment, built_at="2026-09-21T00:00:00Z", built_by="tester",
            sources={"invoice": {"table": "raw_sales_invoice", "kind": "sales_by_invoice"}, "tenders": {"table": "raw_sales_invoice_tender", "kind": "sales_by_invoice"},
                     "lines": {"table": "raw_sales", "kind": "sales"}})
 res = SFR.build_documents(invoices, tenders, lines, FMT, **CTX)
@@ -234,8 +234,8 @@ tot = {t["key"]: t["amount"] for t in d1["totals"]}
 check("B5 the totals from the INVOICE header: subtotal 0.00, sales tax = the residual, financed = -Σ financed lines (3,800.00), total = the invoice total, change 0.00; in the format's order",
       tot == {"subtotal": 0.0, "sales_tax": TOTAL_9001, "financed": 3800.0, "total": TOTAL_9001, "change": 0.0}
       and [t["key"] for t in d1["totals"]] == [t["key"] for t in FMT.TOTALS], tot)
-check("B6 the payment lines are the tender rows whose class has a place on the closing axis (injected fold_to_axis): Cash yes, the vendor rebate NO",
-      d1["payments"] == [{"label": "Cash", "amount": TOTAL_9001}] and CR.fold_to_axis("vendor_rebate") is None and CR.fold_to_axis("cash") == "cash", d1["payments"])
+check("B6 the payment lines are the tender rows whose class has a place on the closing axis (injected is_customer_payment): Cash yes, the vendor rebate NO",
+      d1["payments"] == [{"label": "Cash", "amount": TOTAL_9001}] and CR.is_customer_payment("vendor_rebate") is False and CR.is_customer_payment("cash") is True, d1["payments"])
 check("B7 the contract details: distinct (tracking #, contract #) pairs incl. the blank-tracking pair, as a table in the format's columns",
       d1["sections"][0]["kind"] == "table" and [c["key"] for c in d1["sections"][0]["columns"]] == ["tracking", "contract"]
       and d1["sections"][0]["rows"][0] == ["", CONTRACT] and len(d1["sections"][0]["rows"]) == 1 + 4 + 4 + 1
@@ -263,10 +263,10 @@ check("B14 the provenance stamp names both landings (table + kind), the header r
       d1[B.PROVENANCE_KEY]["kind"] == SFR.PROVENANCE_KIND and d1[B.PROVENANCE_KEY]["invoice"] == {"table": "raw_sales_invoice", "kind": "sales_by_invoice", "row_id": "inv-1", "trans_id": "INV-9001", "trans_date": "2026-08-05", "store": STORE}
       and d1[B.PROVENANCE_KEY]["lines"]["rows"] == 17 and len(d1[B.PROVENANCE_KEY]["lines"]["row_ids"]) == 17 and d1[B.PROVENANCE_KEY]["tenders"]["row_ids"] == ["t-1", "t-2"]
       and d1[B.PROVENANCE_KEY]["built_by"] == "tester" and d1[B.PROVENANCE_KEY]["report"]["invoice_no"] == "INV-9001")
-check("B15 a tender class list is not spelled here: the builder asks the injected axis; with a classifier that puts the vendor rebate ON the axis it becomes a payment line (the fact lives in the vocabulary)",
+check("B15 a tender class list is not spelled here: the builder asks the injected predicate; with one that calls the vendor rebate the customer's it becomes a payment line (the fact lives in the vocabulary)",
       (lambda d: d["payments"] == [{"label": "Cash", "amount": TOTAL_9001}, {"label": "Ven Reb Act", "amount": 3800.0}])(
           SFR.build_document(invoices[0], [t for t in tenders if t["trans_id"] == "INV-9001"], [ln for ln in lines if ln["trans_id"] == "INV-9001"], FMT,
-                             **{**CTX, "axis_of": lambda c: c})[0]))
+                             **{**CTX, "pays": lambda c: True})[0]))
 
 
 # ══ §C the round trip ═══════════════════════════════════════════════════════════════════════════════

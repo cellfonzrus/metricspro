@@ -32,7 +32,8 @@ export type TenderDecision = { role: 'tender' | 'tax' | 'ignore'; tender_class?:
 export type TenderTie = { our_total: number; file_total: number | null; file_total_source: string; difference: number | null; match: boolean | null; words: string } | null
 export type TenderNumbers = {
   rows: number; distinct_txns: number; sum_amount: number; sum_invoice_total: number | null; sum_net_sales: number; sum_gp: number; sum_tax: number | null
-  tenders: { rows: number; sum: number; by_class: Record<string, number>; by_label: Record<string, number>; invoices_with_tenders: number
+  tenders: { rows: number; sum: number; customer_sum?: number; by_class: Record<string, number>; by_label: Record<string, number>; invoices_with_tenders: number
+    not_customer?: { sum: number; by_label: Record<string, number>; invoices: number }
     difference: number | null; invoices_off: number; invoices_off_sample: { trans_id: string; invoice_total: number; tenders: number; difference: number }[]; words: string; match: boolean | null }
   tax: { sum: number | null; components: Record<string, number>; component_rows: number; components_sum: number; words: string }
   tie_field?: string
@@ -118,15 +119,16 @@ export function TenderColumnsStep({ block, numbers, tie, decisions, setDecisions
       </table>
       {numbers && (
         <div style={{ ...card, background: 'var(--bg,transparent)', fontSize: 13, marginBottom: 10 }}>
-          <div><b>Do the tender columns add up to the invoice totals?</b> {numbers.tenders.words}.</div>
+          <div><b>Do the customer's payments add up to the invoice totals?</b> {numbers.tenders.words}.</div>
           <div style={{ ...note, marginTop: 4 }}>
-            Σ tenders {money(numbers.tenders.sum)} over {num(numbers.tenders.rows)} row(s) on {num(numbers.tenders.invoices_with_tenders)} invoice(s)
+            Σ customer payments {money(numbers.tenders.customer_sum ?? numbers.tenders.sum)} on {num(numbers.tenders.invoices_with_tenders)} invoice(s)
+            {!!numbers.tenders.not_customer?.sum && <>{' · '}paid by the vendor / a promotion (lands beside, not part of the invoice total) {money(numbers.tenders.not_customer.sum)} on {num(numbers.tenders.not_customer.invoices)} invoice(s)</>}
             {' · '}Σ invoice total {money(numbers.sum_invoice_total)}
             {numbers.tenders.difference !== null && <> · difference <span style={{ color: ok ? '#16a34a' : '#ef4444', fontWeight: 700 }}>{money(numbers.tenders.difference)}</span></>}
             {' · '}by kind: {Object.entries(numbers.tenders.by_class).map(([k, v]) => `${vocabLabel(k)} ${money(v)}`).join(' · ') || 'none'}
           </div>
           {numbers.tenders.invoices_off > 0 && <div style={{ ...note, fontSize: 12, marginTop: 4, color: '#b45309' }}>
-            {num(numbers.tenders.invoices_off)} invoice(s) whose tenders do not add up (first {numbers.tenders.invoices_off_sample.length}): {numbers.tenders.invoices_off_sample.map(o => `${o.trans_id} total ${money(o.invoice_total)} vs tenders ${money(o.tenders)} (${money(o.difference)})`).join(' · ')}
+            {num(numbers.tenders.invoices_off)} invoice(s) whose customer payments do not add up (first {numbers.tenders.invoices_off_sample.length}): {numbers.tenders.invoices_off_sample.map(o => `${o.trans_id} total ${money(o.invoice_total)} vs tenders ${money(o.tenders)} (${money(o.difference)})`).join(' · ')}
             — fix the columns above, or attest the difference with a reason at 2.5.
           </div>}
           <div style={{ marginTop: 6 }}><b>Tax:</b> {numbers.tax.words}{numbers.tax.component_rows > 0 && <> — {num(numbers.tax.component_rows)} component row(s) land with their label</>}.</div>

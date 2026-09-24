@@ -7542,6 +7542,26 @@ def fold_to_axis(cls):
     return TENDER_FOLDS_TO.get(cls)
 
 
+def is_customer_payment(cls) -> bool:
+    """THE one answer to "is this tender class money the CUSTOMER paid?" (owner 2026-09-24: "i cant get
+    the uploaded data to convert in to receipts"). A class the closing sheet has a place for (`fold_to_axis`)
+    is the customer's payment; a vendor rebate or coupon applied as a tender is money the vendor or a
+    promotion covered — the invoice total does not include it, Cash Collected does not count it, a receipt
+    does not print it as a payment. An unclassed tender is not claimed as the customer's. Readers — every
+    one DEREFERENCES this, none re-derives it: the intake's 2.5b tie (invoice_tenders.invoice_verify,
+    injected), the receipts built from the reports (pos.sales_from_reports, injected), and Cash Collected
+    under the invoice basis (`_invoice_tenders_by_store`). Locked by harness_tender_vocab_lock.py (f)."""
+    return fold_to_axis(str(cls or "").strip().lower() or None) is not None
+
+
+def is_vendor_paid_label(raw) -> bool:
+    """A raw tender LABEL (an X-report line) that the vocabulary positively places as a class the customer
+    did not pay (`is_customer_payment` false — a vendor rebate / coupon applied as a tender). A label the
+    vocabulary does not place is NOT claimed: it keeps the cash / card / other stamp it landed with."""
+    c = tender_class(raw)
+    return c is not None and not is_customer_payment(c)
+
+
 def _canon_tender(raw: str):
     """Map any source's raw tender string to one of the closing-axis tenders (or None = unmapped) —
     `tender_class` folded to the axis. Byte-identical to the retired seven-way ladder for every
@@ -7998,7 +8018,10 @@ def _invoice_tenders_by_store(client, org_id: str, date: str) -> dict:
     kind). The store STRING resolves through _addr_resolver (the same chain the X-report's does), the
     class folds to the cash / card / other gate through TENDER_RECON_CLASS (one home). Returns {} when no
     invoice tender row exists for that day; an unresolved store is named, never guessed. `by_class` rides
-    each agg (additive) so the intake's tie-out can show the split per class."""
+    each agg (additive) so the intake's tie-out can show the split per class. Only the CUSTOMER's payments
+    are collected cash (`is_customer_payment`, the one predicate): a vendor rebate / coupon tender row is
+    kept out of cash / card / other / total and reported beside them as `not_customer` (the key is present
+    only when such a row exists — every other day's shape is unchanged)."""
     try:
         rows = (client.schema("commcalc").table("raw_sales_invoice_tender")
                 .select("store,tender_class,amount,role").eq("org_id", org_id)
@@ -8018,6 +8041,9 @@ def _invoice_tenders_by_store(client, org_id: str, date: str) -> dict:
         gate = TENDER_RECON_CLASS.get(cls) or "other"
         agg = out.setdefault(code, {"cash": 0.0, "card": 0.0, "other": 0.0, "total": 0.0, "by_class": {}})
         amt = _f(r.get("amount"))
+        if not is_customer_payment(cls):
+            agg["not_customer"] = round(agg.get("not_customer", 0.0) + amt, 2)
+            continue
         agg[gate] += amt
         agg["total"] += amt
         agg["by_class"][cls] = round(agg["by_class"].get(cls, 0.0) + amt, 2)
@@ -8034,10 +8060,13 @@ def _invoice_tenders_by_store(client, org_id: str, date: str) -> dict:
 def _xreport_rows_by_store(client, org_id: str, date: str) -> dict:
     """The X-REPORT leg: cash/card/other per store_code from commcalc.pos_tender_summary for `date`
     (the daily sales feed omits Tender Type). Returns {} when no X-report has been imported for that day
-    (then the recon falls back to the feed / shows pending). Read ONLY through _tender_split_by_store."""
+    (then the recon falls back to the feed / shows pending). Read ONLY through _tender_split_by_store.
+    A line whose LABEL the vocabulary places as money the customer did not pay (`is_vendor_paid_label` —
+    a vendor rebate / coupon printed on the X-report) is kept out of cash / card / other / total and reported
+    beside them as `not_customer` (present only when such a line exists), exactly as the invoice leg does."""
     try:
         rows = (client.schema("commcalc").table("pos_tender_summary")
-                .select("store,tender_class,amount").eq("org_id", org_id)
+                .select("store,tender_type,tender_class,amount").eq("org_id", org_id)
                 .eq("close_date", date).execute().data) or []
     except Exception:
         rows = []
@@ -8060,6 +8089,9 @@ def _xreport_rows_by_store(client, org_id: str, date: str) -> dict:
             cls = "other"
         agg = out.setdefault(code, {"cash": 0.0, "card": 0.0, "other": 0.0, "total": 0.0})
         amt = _f(r.get("amount"))
+        if is_vendor_paid_label(r.get("tender_type")):
+            agg["not_customer"] = agg.get("not_customer", 0.0) + amt
+            continue
         agg[cls] += amt
         agg["total"] += amt
     for a in out.values():
