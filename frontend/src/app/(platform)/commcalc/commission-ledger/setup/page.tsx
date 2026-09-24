@@ -9,11 +9,14 @@ import { STATEMENT_TYPE_DEFAULT } from '@/lib/statement-type'
 // (nothing saved yet) → set a period and import. Plain-language instructions at every step. Read-only
 // preview uses /commission-ledger/analyze; the final step calls /commission-ledger/import.
 
-type Tmpl = { key: string; label: string; builtin: boolean; rule_count: number }
+type Tmpl = { key: string; label: string; builtin: boolean; rule_count: number; carrier_id?: string | null }
 type Analysis = {
   row_count: number; usable_rows: number; headers: string[]; amount_source: string
   // THE MAPPING KEY IS PER STATEMENT TYPE (index §30.10) — the backend derives it; this page saves under it, never spells it
   report_key: string; statement_type?: string | null
+  // WHICH MAPPING APPLIES (index §30.17a): the set the import reads, and where a column choice must be SAVED so
+  // the import reads it (the carrier's own set when it has one — a global row would be shadowed by it)
+  mapping_source?: string; save_carrier_id?: string | null
   suggestions: { target_field: string; label: string; suggested_source: string; confidence: string }[]
   summary: { payout_total: number; charge_total: number; other_total: number; other_count: number; line_count: number
     categories: Record<string, { total: number; count: number; kind?: string }>; earned_total?: number; deductions_total?: number }
@@ -54,11 +57,14 @@ export default function CommissionLedgerSetupPage() {
 
   useEffect(() => { api('/api/v1/commcalc/commission-ledger/templates').then(d => setTmpls(d?.templates || [])).catch(() => {}) }, [])
   function flash(m: string) { setMsg(m); setTimeout(() => setMsg(''), 4500) }
+  // the picked template's carrier (backend-derived, index §30.17a) — every analyze / import reads that carrier's mapping
+  const carrierId = tmpls.find(t => t.key === src)?.carrier_id || ''
 
   async function analyze(f: File) {
     setBusy(true); setMsg('')
     try {
       const fd = new FormData(); fd.append('file', f); fd.append('source_report', src); fd.append('statement_type', statementType)
+      if (carrierId) fd.append('carrier_id', carrierId)
       const a: Analysis = await apiUpload('/api/v1/commcalc/commission-ledger/analyze', fd)
       setAnalysis(a)
       const fm: Record<string, string> = {}
@@ -78,9 +84,10 @@ export default function CommissionLedgerSetupPage() {
       if (!rk) { flash('Re-check the file first — the mapping key comes from the preview'); setBusy(false); return }
       for (const k of KEY_FIELDS) {
         const sh = fieldMap[k.tf]
-        if (sh) await api('/api/v1/commcalc/column-mapping', { method: 'POST', body: JSON.stringify({ report_key: rk, target_field: k.tf, source_header: sh, transform: k.transform }) })
+        if (sh) await api('/api/v1/commcalc/column-mapping', { method: 'POST', body: JSON.stringify({ report_key: rk, target_field: k.tf, source_header: sh, transform: k.transform, carrier_id: analysis?.save_carrier_id || undefined }) })
       }
       const fd = new FormData(); fd.append('file', file); fd.append('source_report', src); fd.append('statement_type', statementType)
+      if (carrierId) fd.append('carrier_id', carrierId)
       const a: Analysis = await apiUpload('/api/v1/commcalc/commission-ledger/analyze', fd)
       setAnalysis(a); flash('Updated the preview with your column choices')
     } catch (e) { flash((e as Error)?.message || 'Re-check failed') }
@@ -92,6 +99,7 @@ export default function CommissionLedgerSetupPage() {
     setBusy(true)
     try {
       const fd = new FormData(); fd.append('file', file); fd.append('source_report', src); fd.append('period', period); fd.append('statement_type', statementType)
+      if (carrierId) fd.append('carrier_id', carrierId)
       const r = await apiUpload('/api/v1/commcalc/commission-ledger/import', fd)
       setResult(r); setStep(3)
     } catch (e) { flash((e as Error)?.message || 'Import failed — is migration 071 applied?') }

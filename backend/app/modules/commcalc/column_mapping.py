@@ -640,6 +640,38 @@ def load_rules(client, org_id, report_key, carrier_id=None):
     return list(by_field.values())
 
 
+# ── WHICH MAPPING APPLIES TO THIS STATEMENT — ONE answer, every route (owner 2026-09-24; index §30.17a) ─
+# THE CLASS: "which column mapping reads this statement" had TWO answers. The onboarding intake maps a
+# carrier's statement with that CARRIER's own saved set (it prefills from, saves to and verifies against
+# the carrier-scoped rows only). The Commission Ledger page's import sent no carrier, so `load_rules`
+# returned the org's GLOBAL (carrier-NULL) rows — an older setup's answer. Measured live (2026-09-24): one
+# org holds 7 carrier rows and 5 global rows under the same key, disagreeing on the label / sub-label
+# columns and on which sign is money earned — the same file mapped two ways depending on the page. And
+# `load_rules(carrier)` MERGES the two per field, a third answer neither setup gave. Now:
+#     the carrier has its own set  →  that set, whole (never topped up field-by-field from the global set)
+#     otherwise                    →  the global set (today's answer, byte-for-byte)
+# `carrier_rules` is the ONE "the carrier's own set" filter (the intake's prefill and its read-back use it);
+# `statement_rules` is the ONE resolver every ledger import / preview / convention read dereferences.
+# harness_ledger_batch_lock.py fails the build on a ledger mapping read that bypasses it.
+def carrier_rules(rules, carrier_id):
+    """The rules that belong to THIS carrier (carrier_id set and equal). [] for no carrier. PURE."""
+    cid = str(carrier_id or "").strip()
+    return [r for r in rules or [] if cid and str(r.get("carrier_id") or "") == cid]
+
+
+def statement_rules(rules, carrier_id):
+    """(rules, source) — THE mapping that reads a statement from `carrier_id`, given the effective rules
+    `load_rules(client, org, report_key, carrier_id)` returned: the carrier's own set when it has one
+    (source 'carrier'), else the global set (source 'global'), else [] (source 'none' — the caller falls
+    back to the built-in layout). With no carrier, or a carrier with no rows of its own, this is exactly
+    what `load_rules` returned. PURE."""
+    own = carrier_rules(rules, carrier_id)
+    if own:
+        return own, "carrier"
+    glob = [r for r in rules or [] if not r.get("carrier_id")]
+    return glob, ("global" if glob else "none")
+
+
 def apply_mapping(row, rules, base):
     """Build a target-table row from a source spreadsheet row using the mapping rules.
     Header match is case-insensitive. `base` carries org_id + period fields."""

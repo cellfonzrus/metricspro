@@ -4263,6 +4263,15 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
     replace; snapshot/restore so a failed insert never leaves the period emptier than before; upload_log;
     upload_trace). Extracted verbatim from upload_mapped so BOTH callers apply byte-identical invariants —
     the single-source rule (migs 208/923), not a second copy that can drift."""
+    # A COMMISSION STATEMENT HAS ONE LANDER (index §30.15 / §30.17a). The ledger layouts are in
+    # column_mapping.TABLE_MAP, so /upload-mapped (the Implementation wizard's "Import") could send a
+    # statement here — raw mapped rows with no statement identity, no canonical period, no bucket, no
+    # footer rule and a mapping merged per field: a second landing path answering the question the
+    # Commission Ledger's import answers. Refused, naming the page; nothing is written.
+    if (table or "").strip() == commission_ledger.LEDGER_TABLE:
+        raise HTTPException(400, "A commission statement lands through the Commission Ledger page "
+                                 "(Import file, or Upload several months) or the onboarding intake — the one "
+                                 "path that classifies it, keys it and replaces a month cleanly. Nothing was written.")
     pm = parse_period(period) if period else {"month": 0, "year": 0}
     base = {"org_id": org_id}
     if period:
@@ -4809,17 +4818,29 @@ def _ledger_mapping_key(client, org_id, statement_type="", source_report=""):
     return commission_ledger.mapping_report_key(st, rows)
 
 
-def _ledger_carrier_of_source_report(client, org_id, source_report):
-    """The org's carrier row whose normalised code is the `<carrier>` prefix of an intake-written
-    `source_report`, or '' — so a READ endpoint reads the CARRIER-scoped mapping (the intake saves
-    carrier rows) instead of the global slot. Org-scoped; never raises."""
-    code, _st = column_mapping.split_report_key(source_report or "")
-    if not _st or not code:
+def _ledger_carrier_for(carriers, source_report):
+    """PURE. This org's carrier id for a ledger template / `source_report`, or '' — the INVERSE of the
+    intake's derivation (`onboarding_intake.source_report_key(normalize_carrier_code(carrier), type)`):
+    the statement identity's base (`commission_ledger.ledger_identity`, so the bare template key the
+    Ledger page's picker lists — '<carrier>' — and the intake's '<carrier>__<type>' both resolve) matched
+    through `implementation_spine.carrier_id_by_code` with the same normaliser. A template that names no
+    carrier of this org ('ma_daily_tx') resolves to '' — the global mapping, exactly as before."""
+    base = commission_ledger.ledger_identity(source_report or "")[0]
+    if not base:
         return ""
+    return implementation_spine.carrier_id_by_code(carriers, base, code=_report_labels.normalize_carrier_code) or ""
+
+
+def _ledger_carrier_of_source_report(client, org_id, source_report):
+    """The org's carrier for a ledger template (`_ledger_carrier_for` over this org's carrier rows) —
+    so every ledger route reads the mapping of the carrier whose statement it is (index §30.17a), the
+    same carrier the intake mapped it for. Since 2026-09-24 a BARE template key resolves too (it used to
+    return '' unless the key carried a `__<type>` suffix, so the Ledger page's own picker never found
+    the carrier). Org-scoped; never raises."""
     try:
         rows = (client.schema("commcalc").table("carrier").select("id,name,code")
                 .eq("org_id", org_id).execute().data) or []
-        return implementation_spine.carrier_id_by_code(rows, code, code=_report_labels.normalize_carrier_code) or ""
+        return _ledger_carrier_for(rows, source_report)
     except Exception:
         return ""
 
@@ -4829,12 +4850,21 @@ def _ledger_source_rules(client, org_id, carrier_id="", report_key=""):
     built-in MA Daily Tx default layout — so a fresh tenant's MA file imports with zero configuration.
     `report_key` = the statement type's mapping key from `_ledger_mapping_key`; blank = the default
     type (today's key)."""
+    return _ledger_source_rules_meta(client, org_id, carrier_id, report_key)[0]
+
+
+def _ledger_source_rules_meta(client, org_id, carrier_id="", report_key=""):
+    """(rules, source) — WHICH MAPPING APPLIES TO THIS STATEMENT (index §30.17a): the carrier's own saved
+    set when it has one ('carrier' — what the intake mapped it with), else the org's global set ('global'
+    — today's answer for a carrier-less import, byte-for-byte), else the built-in layout ('default').
+    Dereferences `column_mapping.statement_rules`, THE resolver; never a per-field merge of two sets."""
     rk = report_key or commission_ledger.mapping_report_key("")
-    rules = column_mapping.load_rules(client, org_id, rk, carrier_id or None)
+    rules, source = column_mapping.statement_rules(
+        column_mapping.load_rules(client, org_id, rk, carrier_id or None), carrier_id)
     if rules:
-        return rules
-    return [{"target_field": d["target_field"], "source_header": d["source_header"], "transform": d["transform"]}
-            for d in column_mapping.default_mapping(rk)]
+        return rules, source
+    return ([{"target_field": d["target_field"], "source_header": d["source_header"], "transform": d["transform"]}
+             for d in column_mapping.default_mapping(rk)], "default")
 
 
 def _ledger_convention(hdr_rules):
@@ -4914,11 +4944,19 @@ def _ledger_footer_drop(rows, client, org_id, report_key=""):
     Measured on the statement that exposed it: 522 lines in, one of them the file's own net total
     (86,970.34 = the other 521 lines' 94,366.61 earned less 7,396.27 charged back), which the ledger
     counted a second time. The count is RETURNED, never swallowed — callers report it.
-    `report_key` = the statement type's mapping key (its identity fields); blank = the default type."""
+    `report_key` = the statement type's mapping key (its identity fields); blank = the default type.
+
+    ONE FOOTER RULE FOR A STATEMENT, every route (2026-09-24, index §30.17a): this DEREFERENCES the
+    intake's `onboarding_intake.split_footer`, whose rule 1 IS the mig-1004 predicate above (the same
+    `feed_shape.is_footer_row` over the same identity list — unchanged for every file it caught) and
+    whose rules 2–3 catch the total a statement STAMPS with a store or a date ('Commission Grand
+    Totals' in the Store column): a label cell that is exactly 'total' / 'grand total' / 'subtotal', or a
+    label-less row equal to the sum of every other row to the cent. Measured on the live tenant's kept
+    July statement: once the Ledger page reads the carrier's own mapping (which maps Store), rule 1
+    alone kept that total as a 974th line and booked 165,997.59 a SECOND time; the intake dropped it."""
     rk = report_key or commission_ledger.mapping_report_key("")
-    return column_mapping.drop_footer_rows(
-        rows, rk, None, client, org_id,
-        fields=column_mapping.identity_fields(rk, client, org_id))
+    kept, footers = _intake.split_footer(rows, column_mapping.identity_fields(rk, client, org_id))
+    return kept, len(footers)
 
 
 def _ledger_origin_ready(client, org_id):
@@ -4950,15 +4988,14 @@ def _ledger_query(client, org_id, source_report="", period="", origin="", cols="
     return q
 
 
-def _ledger_landings_present(client, org_id, source_report, period, origin="", page=1000, cap=200000):
-    """What the ledger ALREADY holds for this statement × period, per landing — the statement's whole
-    FAMILY read across EVERY stored period spelling (paged, org-scoped) and grouped by
-    `commission_ledger.landings_for(rows, period)`, so the landings of THIS canonical period are found
-    whatever spelling they were stored under ('Aug 2026', 'aug 2026' — the orphans no period_keys reader
-    lists) and a replace can wipe them and SAY what it replaced. ANY SUBSET OF COLUMNS (§4b.1): the
-    optional columns (`origin` / `synced_at`, mig 251; `created_at` for a fake that carries none) are
-    probed on their own and the ONE real select carries what exists — never a block that can fail on an
-    unrelated column. Never raises: an unreadable ledger reports [] with `measured=False`."""
+def _ledger_family_rows(client, org_id, source_report, page=1000, cap=200000):
+    """(rows, measured) — the statement's WHOLE FAMILY (every stored key) under EVERY stored period
+    spelling, paged and org-scoped, carrying only the columns a landing is measured by
+    (`source_report`, `period`, `payout_total`, and `origin` / `synced_at` / `created_at` where they
+    exist — §4b.1, any subset). Factored out of `_ledger_landings_present` (2026-09-24) so the batch
+    import's preview measures "already landed" for twelve months with ONE read instead of twelve — the
+    same rows, grouped by the same `commission_ledger.landings_for`. Never raises: an unreadable ledger
+    returns ([], False)."""
     present = _ct.present_columns(lambda: client.schema("commcalc").table("commission_ledger"),
                                   lambda q: q.eq("org_id", org_id), ("origin", "synced_at", "created_at"))
     cols = _ct.select_list(("source_report", "period", "payout_total"), ("origin", "synced_at", "created_at"), present)
@@ -4972,6 +5009,21 @@ def _ledger_landings_present(client, org_id, source_report, period, origin="", p
                 break
             start += page
     except Exception:
+        return [], False
+    return rows, True
+
+
+def _ledger_landings_present(client, org_id, source_report, period, origin="", page=1000, cap=200000):
+    """What the ledger ALREADY holds for this statement × period, per landing — the statement's whole
+    FAMILY read across EVERY stored period spelling (paged, org-scoped) and grouped by
+    `commission_ledger.landings_for(rows, period)`, so the landings of THIS canonical period are found
+    whatever spelling they were stored under ('Aug 2026', 'aug 2026' — the orphans no period_keys reader
+    lists) and a replace can wipe them and SAY what it replaced. ANY SUBSET OF COLUMNS (§4b.1): the
+    optional columns (`origin` / `synced_at`, mig 251; `created_at` for a fake that carries none) are
+    probed on their own and the ONE real select carries what exists — never a block that can fail on an
+    unrelated column. Never raises: an unreadable ledger reports [] with `measured=False`."""
+    rows, measured = _ledger_family_rows(client, org_id, source_report, page=page, cap=cap)
+    if not measured:
         return [], False
     if origin:
         rows = [r for r in rows if (r.get("origin") or ledger_ma_sync.ORIGIN_FILE) == origin]
@@ -5102,6 +5154,78 @@ def _ledger_land_rows(client, org_id, rows, source_report, period, filename=None
     return saved
 
 
+def _ledger_prepare_file(client, org_id, contents, filename, source_report, carrier_id="", statement_type=""):
+    """READ + MAP + FOOTER-DROP one statement file — everything a ledger import does BEFORE it knows the
+    period, and nothing that writes. Factored out of `/commission-ledger/import` (2026-09-24, index §30.17)
+    so the batch import reads each month's file through exactly this code: the mapping key per
+    statement type (§30.10), the saved header→field mapping and its sign convention (§25.12), the
+    bucket rules (+ the MA product-class wiring), the bucket registry, `_ledger_map_records` and the
+    statement-footer drop. Raises 400 on an unreadable file (as the single import always has)."""
+    try:
+        df = _read_upload_df(contents, filename or "")
+    except Exception as e:
+        raise HTTPException(400, f"Could not read file: {e}")
+    # THE MAPPING KEY IS PER STATEMENT TYPE (index §30.10): the type the caller states, else the type
+    # the template's `source_report` carries, else the default — the same derivation the intake uses
+    rk = _ledger_mapping_key(client, org_id, statement_type, source_report)
+    # WHICH MAPPING (index §30.17a): the carrier whose statement this is — the one the page sends, else
+    # the template's own carrier (the inverse of the intake's key) — through THE resolver, so this page
+    # maps a statement exactly as the intake mapped it; a carrier-less template reads the global set
+    cid = (carrier_id or "").strip() if isinstance(carrier_id, str) else ""
+    cid = cid or _ledger_carrier_of_source_report(client, org_id, source_report)
+    hdr_rules, mapping_source = _ledger_source_rules_meta(client, org_id, cid, report_key=rk)
+    cat_rules, rules_source = commission_ledger.load_rules_meta(client, org_id, source_report)
+    conv, conv_meta = _ledger_convention(hdr_rules)
+    # MA PRODUCT-CLASS WIRING (mig 265, default 'legacy'): in legacy mode this returns the rules
+    # UNTOUCHED, so classification is byte-identical. In 'class' mode it attaches the tenant's CONFIRMED
+    # product-class index to any product_class rule.
+    cat_rules, class_meta = ma_class_wiring.ledger_rules_with_class(client, org_id, source_report, cat_rules)
+    buckets, bmeta = _ledger_buckets(client, org_id)
+    mapped = _ledger_map_records(df.to_dict("records"), hdr_rules)
+    mapped, footer_rows = _ledger_footer_drop(mapped, client, org_id, report_key=rk)
+    return {"filename": filename, "headers": [str(h).strip() for h in df.columns if str(h).strip()],
+            "row_count": int(len(df)), "rk": rk, "hdr_rules": hdr_rules, "cat_rules": cat_rules,
+            "carrier_id": cid or None, "mapping_source": mapping_source,
+            "rules_source": rules_source, "conv": conv, "conv_meta": conv_meta, "class_meta": class_meta,
+            "buckets": buckets, "bmeta": bmeta, "mapped": mapped, "footer_rows": footer_rows}
+
+
+def _ledger_build_rows(org_id, prep, source_report, period=""):
+    """The ledger rows of a PREPARED file (`commission_ledger.build_row` over its mapped lines) — the one
+    build both the single import and every file of a batch use. PURE given `prep`."""
+    base = {"org_id": org_id, "source_report": source_report}
+    if period:
+        base["period"] = period
+    return [commission_ledger.build_row(src, base, prep["cat_rules"], prep["conv"], prep["buckets"])
+            for src in prep["mapped"]]
+
+
+def _ledger_import_prepared(client, org_id, prep, source_report, period, statement_type="", trace_extra=None):
+    """BUILD + LAND one prepared statement file for `period` through THE one lander
+    (`_ledger_land_rows`, index §30.15) and return the import payload. The body of
+    `/commission-ledger/import` (factored 2026-09-24, index §30.17) — the batch import calls it once per
+    file, so a batch of N months is, row for row, N single imports."""
+    rows = _ledger_build_rows(org_id, prep, source_report, period)
+    if not rows:
+        raise HTTPException(400, "No usable rows — check the column mapping for this file.")
+    land = {}
+    saved = _ledger_land_rows(client, org_id, rows, source_report, period,
+                              filename=prep["filename"], source="ledger-import",
+                              statement_type=statement_type, meta=land, trace_extra=trace_extra)
+    cat_rules, conv, buckets, bmeta = prep["cat_rules"], prep["conv"], prep["buckets"], prep["bmeta"]
+    summary = commission_ledger.summarize(rows, rules=cat_rules, conv=conv, buckets=buckets, buckets_meta=bmeta)
+    return {"saved": saved, "source_report": land.get("source_report") or source_report,
+            "period": land.get("period") or period, "summary": summary,
+            "requested": {"source_report": source_report, "period": period},
+            "replaced": land.get("replaced") or [], "replaced_note": land.get("replaced_note"),
+            "report_key": prep["rk"], "statement_type": (statement_type or "").strip() or None,
+            "carrier_id": prep["carrier_id"], "mapping_source": prep["mapping_source"],
+            "rules_source": prep["rules_source"], "convention": conv, "convention_meta": prep["conv_meta"],
+            "footer_rows_dropped": prep["footer_rows"],
+            "categories": commission_ledger.bucket_keys(buckets), "category_labels": commission_ledger.bucket_labels(buckets),
+            "buckets": buckets, "bucket_meta": bmeta}
+
+
 @router.post("/commission-ledger/import")
 async def commission_ledger_import(
     file: UploadFile = File(...),
@@ -5114,47 +5238,164 @@ async def commission_ledger_import(
     """Upload a commission/tx file → map its headers → CLASSIFY each line into the five canonical buckets
     (via commission_category_map / DEFAULT_RULES) → persist to commcalc.commission_ledger. Negative amounts
     are payouts; positives are bill/activation payments (is_payout=false, no bucket). Re-upload for a period
-    replaces it (never wipes on an empty/misaligned file)."""
+    replaces it (never wipes on an empty/misaligned file). Several months at once: `/import-batch`, which
+    runs this same prepare + land per file (index §30.17)."""
     require_org(org_id)
     contents = await file.read()
-    try:
-        df = _read_upload_df(contents, getattr(file, "filename", ""))
-    except Exception as e:
-        raise HTTPException(400, f"Could not read file: {e}")
+    fname = getattr(file, "filename", None)
     client = sb()
-    # THE MAPPING KEY IS PER STATEMENT TYPE (index §30.10): the type the caller states, else the type
-    # the template's `source_report` carries, else the default — the same derivation the intake uses
-    rk = _ledger_mapping_key(client, org_id, statement_type, source_report)
-    hdr_rules = _ledger_source_rules(client, org_id, carrier_id, report_key=rk)
-    cat_rules, rules_source = commission_ledger.load_rules_meta(client, org_id, source_report)
-    conv, conv_meta = _ledger_convention(hdr_rules)
-    # MA PRODUCT-CLASS WIRING (mig 265, default 'legacy'): in legacy mode this returns the rules
-    # UNTOUCHED, so classification is byte-identical. In 'class' mode it attaches the tenant's CONFIRMED
-    # product-class index to any product_class rule.
-    cat_rules, _class_meta = ma_class_wiring.ledger_rules_with_class(client, org_id, source_report, cat_rules)
-    buckets, bmeta = _ledger_buckets(client, org_id)
-    base = {"org_id": org_id, "source_report": source_report}
-    if period:
-        base["period"] = period
-    mapped = _ledger_map_records(df.to_dict("records"), hdr_rules)
-    mapped, footer_rows = _ledger_footer_drop(mapped, client, org_id, report_key=rk)
-    rows = [commission_ledger.build_row(src, base, cat_rules, conv, buckets) for src in mapped]
-    if not rows:
-        raise HTTPException(400, "No usable rows — check the column mapping for this file.")
-    land = {}
-    saved = _ledger_land_rows(client, org_id, rows, source_report, period,
-                              filename=getattr(file, "filename", None), source="ledger-import",
-                              statement_type=statement_type, meta=land)
-    summary = commission_ledger.summarize(rows, rules=cat_rules, conv=conv, buckets=buckets, buckets_meta=bmeta)
-    return {"saved": saved, "source_report": land.get("source_report") or source_report,
-            "period": land.get("period") or period, "summary": summary,
-            "requested": {"source_report": source_report, "period": period},
-            "replaced": land.get("replaced") or [], "replaced_note": land.get("replaced_note"),
-            "report_key": rk, "statement_type": (statement_type or "").strip() or None,
-            "rules_source": rules_source, "convention": conv, "convention_meta": conv_meta,
-            "footer_rows_dropped": footer_rows,
-            "categories": commission_ledger.bucket_keys(buckets), "category_labels": commission_ledger.bucket_labels(buckets),
-            "buckets": buckets, "bucket_meta": bmeta}
+    prep = _ledger_prepare_file(client, org_id, contents, fname, source_report, carrier_id, statement_type)
+    return _ledger_import_prepared(client, org_id, prep, source_report, period, statement_type)
+
+
+# ── MANY MONTHS AT ONCE (owner 2026-09-24, index §30.17) ────────────────────────────────────────────
+# "give me an option to upload commission for multiple periods at the same time since they only give
+# monthly commission reports". The carrier issues ONE statement per month; the owner picks N monthly
+# files on the Commission Ledger page and lands them in one go, each under its OWN month. NOT a second
+# ingest path: each file is read by `_ledger_prepare_file` and landed by `_ledger_import_prepared` →
+# `_ledger_land_rows` — the single import's own two steps — so the batch is, row for row, N single
+# imports. The PLAN (which month, already landed?, what refuses) is `ledger_batch.plan_batch` (PURE);
+# the month comes from the statement's own dates (the intake's `period_proposal`) spelled by THE
+# canonicaliser; "already landed" is the lander's own measure (`landings_for` over the family rows).
+def _ledger_batch_periods(text, n):
+    """The per-file month overrides (JSON list aligned with the files; '' = detect), or a 400 naming the
+    field. Never a 500 on a malformed body."""
+    raw = _intake_json(text, "periods", [])
+    if not isinstance(raw, list):
+        raise HTTPException(400, "periods must be a JSON list — one entry per file, '' to detect the month")
+    vals = [str(v or "").strip() for v in raw]
+    return (vals + [""] * n)[:n]
+
+
+def _ledger_batch_plan(client, org_id, uploads, source_report, carrier_id, statement_type, overrides):
+    """(plan, preps) — every file PREPARED through the single import's own reader/mapper, its month
+    detected, its headers compared, and every resolved month checked against what the ledger already
+    holds (ONE family read). Writes nothing. `uploads` = [(filename, bytes)]."""
+    from app.modules.commcalc import ledger_batch as _lb
+    try:
+        stored_key = commission_ledger.ledger_source_report(source_report, statement_type)
+    except ValueError:
+        raise HTTPException(400, "source_report (a carrier code or template key) is required")
+    preps, entries = [], []
+    for fname, contents in uploads:
+        entry = {"filename": fname, "error": None, "rows": 0, "payout_total": 0.0, "net_total": 0.0,
+                 "footer_rows": 0, "detection": None, "shape": None}
+        try:
+            prep = _ledger_prepare_file(client, org_id, contents, fname, source_report, carrier_id, statement_type)
+        except HTTPException as e:
+            preps.append(None)
+            entry["error"] = str(e.detail)
+            entries.append(entry)
+            continue
+        preps.append(prep)
+        rows = _ledger_build_rows(org_id, prep, source_report)
+        summ = commission_ledger.summarize(rows, rules=prep["cat_rules"], conv=prep["conv"],
+                                           buckets=prep["buckets"], buckets_meta=prep["bmeta"])
+        date_field = column_mapping.period_source_field(prep["rk"], client, org_id) or "trans_date"
+        entry.update({"rows": len(rows), "payout_total": summ.get("payout_total"),
+                      "net_total": summ.get("net_total", summ.get("payout_total")),
+                      "footer_rows": prep["footer_rows"],
+                      "detection": _lb.detect_period(prep["mapped"], date_field),
+                      "shape": _lb.mapping_shape(prep["headers"], prep["hdr_rules"])})
+        if not rows:
+            entry["error"] = "No usable rows — check the column mapping for this file."
+        entries.append(entry)
+    family, measured = _ledger_family_rows(client, org_id, stored_key)
+    first = next((p for p in preps if p), None)
+    rk = first["rk"] if first else _ledger_mapping_key(client, org_id, statement_type, source_report)
+    plan = _lb.plan_batch(entries, overrides, family, required_fields=column_mapping.required_fields(rk, client, org_id),
+                          origin=ledger_ma_sync.ORIGIN_FILE)
+    plan.update({"source_report": stored_key, "report_key": rk,
+                 "requested": {"source_report": source_report, "statement_type": (statement_type or "").strip() or None},
+                 "landings_measured": measured})
+    return plan, preps
+
+
+async def _ledger_batch_read(files):
+    """[(filename, bytes)] for every uploaded file, or a 400 when none was sent."""
+    out = []
+    for f in files or []:
+        out.append((getattr(f, "filename", None), await f.read()))
+    if not out:
+        raise HTTPException(400, "Pick at least one statement file.")
+    return out
+
+
+@router.post("/commission-ledger/import-batch/preview")
+async def commission_ledger_import_batch_preview(
+    files: List[UploadFile] = File(...),
+    source_report: str = Form("ma_daily_tx"),
+    carrier_id: str = Form(""),
+    statement_type: str = Form(""),
+    periods: str = Form(""),
+    org_id: str = ORG_ID,
+):
+    """PREVIEW a batch of monthly statements — per file: the month detected from its own dates (or the
+    one set), rows and total, whether that month is ALREADY landed (and what would be replaced), and
+    what blocks it (two files for one month, a month that cannot be determined, columns that differ).
+    Writes nothing (index §30.17)."""
+    require_org(org_id)
+    uploads = await _ledger_batch_read(files)
+    client = sb()
+    overrides = _ledger_batch_periods(periods, len(uploads))
+    plan, _preps = _ledger_batch_plan(client, org_id, uploads, _fstr(source_report) or "ma_daily_tx",
+                                      _fstr(carrier_id), _fstr(statement_type), overrides)
+    return plan
+
+
+@router.post("/commission-ledger/import-batch")
+async def commission_ledger_import_batch(
+    files: List[UploadFile] = File(...),
+    source_report: str = Form("ma_daily_tx"),
+    carrier_id: str = Form(""),
+    statement_type: str = Form(""),
+    periods: str = Form(""),
+    confirm_replace: str = Form(""),
+    confirm_other_origin: str = Form(""),
+    org_id: str = ORG_ID,
+):
+    """LAND a batch of monthly statements, each under its own month, through the single import's own
+    prepare + land (`_ledger_import_prepared` → `_ledger_land_rows`). The plan is re-derived from the
+    files sent (never trusted from the client); ANY blocked file refuses the WHOLE batch with nothing
+    written; replacing an already-landed month needs `confirm_replace`, landing beside another origin's
+    landing needs `confirm_other_origin`. Files then land one at a time in upload order; a failure on one
+    is reported and rolls back NO other — the result names exactly which files landed (index §30.17)."""
+    from app.modules.commcalc import ledger_batch as _lb
+    require_org(org_id)
+    uploads = await _ledger_batch_read(files)
+    client = sb()
+    src, cid, st = _fstr(source_report) or "ma_daily_tx", _fstr(carrier_id), _fstr(statement_type)
+    overrides = _ledger_batch_periods(periods, len(uploads))
+    plan, preps = _ledger_batch_plan(client, org_id, uploads, src, cid, st, overrides)
+    refusals = _lb.commit_refusals(plan, _ledger_yes(confirm_replace), _ledger_yes(confirm_other_origin))
+    if refusals:
+        raise HTTPException(400, "Nothing was landed — " + " | ".join(refusals))
+    results, n = [], len(plan["files"])
+    for p in plan["files"]:
+        rec = {"index": p["index"], "filename": p["filename"], "period": p["period"],
+               "period_source": p["period_source"], "ok": False}
+        try:
+            imp = _ledger_import_prepared(client, org_id, preps[p["index"]], src, p["period"], st,
+                                          trace_extra={"batch": {"file": p["index"] + 1, "of": n,
+                                                                 "period_source": p["period_source"]}})
+            rec.update({"ok": True, "saved": imp["saved"], "period": imp["period"],
+                        "source_report": imp["source_report"],
+                        "payout_total": (imp.get("summary") or {}).get("payout_total"),
+                        "replaced": imp.get("replaced") or [], "replaced_note": imp.get("replaced_note")})
+        except HTTPException as e:
+            rec["error"] = str(e.detail)
+        except Exception as e:                                   # one file's failure is ITS failure only
+            rec["error"] = f"{type(e).__name__}: {str(e)[:300]}"
+        results.append(rec)
+    return {"results": results, "landed": [r for r in results if r["ok"]],
+            "failed": [r for r in results if not r["ok"]],
+            "sentence": _lb.result_sentence(results), "source_report": plan["source_report"],
+            "plan": plan}
+
+
+def _ledger_yes(v):
+    """A form checkbox as a bool ('1' / 'true' / 'yes' / 'on'); a Form default object reads False."""
+    return _fstr(v).lower() in ("1", "true", "yes", "on")
 
 
 @router.post("/commission-ledger/analyze")
@@ -5178,9 +5419,13 @@ async def commission_ledger_analyze(
     headers = [str(h).strip() for h in df.columns if str(h).strip()]
     # the same per-statement-type mapping key the import and the intake derive (index §30.10)
     rk = _ledger_mapping_key(client, org_id, statement_type, source_report)
-    saved = column_mapping.load_rules(client, org_id, rk, carrier_id or None)
+    # the SAME carrier and the SAME resolver the import uses (index §30.17a) — the preview shows the
+    # mapping the import will apply, and says which set that is so the wizard SAVES into it
+    cid = (carrier_id or "").strip() if isinstance(carrier_id, str) else ""
+    cid = cid or _ledger_carrier_of_source_report(client, org_id, source_report)
+    saved, saved_source = column_mapping.statement_rules(column_mapping.load_rules(client, org_id, rk, cid or None), cid)
     suggestions = column_mapping.suggest(headers, rk, saved, client, org_id)
-    hdr_rules = _ledger_source_rules(client, org_id, carrier_id, report_key=rk)
+    hdr_rules, mapping_source = _ledger_source_rules_meta(client, org_id, cid, report_key=rk)
     cat_rules, rules_source = commission_ledger.load_rules_meta(client, org_id, source_report)
     conv, conv_meta = _ledger_convention(hdr_rules)
     cat_rules, class_meta = ma_class_wiring.ledger_rules_with_class(client, org_id, source_report, cat_rules)
@@ -5202,7 +5447,10 @@ async def commission_ledger_analyze(
             "suggestions": suggestions, "amount_source": amount_src,
             # the key the wizard must SAVE its column choices under (the page never spells it)
             "report_key": rk, "statement_type": (statement_type or "").strip() or None,
-            "carrier_id": carrier_id or None,
+            "carrier_id": cid or None, "mapping_source": mapping_source,
+            # where the wizard's column choices must be SAVED so the import reads them: the carrier's own
+            # set when it has one (a global row would be shadowed by it), else the global set as today
+            "save_carrier_id": (cid or None) if mapping_source == "carrier" else None,
             "summary": commission_ledger.summarize(rows, rules=cat_rules, conv=conv, buckets=buckets, buckets_meta=bmeta),
             "observed": observed, "class_wiring": class_meta,
             "rules_source": rules_source, "convention": conv, "convention_meta": conv_meta,
@@ -5477,8 +5725,8 @@ def _intake_prepare_commission(client, org_id, contents, filename, carrier_id, s
     fields = column_mapping.target_fields(report_key, client, org_id)
     # the tenant's OWN saved rows for THIS carrier and THIS statement type — a row saved for another
     # carrier, or for another statement type of this carrier, never prefills
-    saved = [r for r in column_mapping.load_rules(client, org_id, report_key, carrier["id"])
-             if r.get("carrier_id") == carrier["id"]]
+    saved = column_mapping.carrier_rules(column_mapping.load_rules(client, org_id, report_key, carrier["id"]),
+                                         carrier["id"])
     house_cols, house_cats = _intake_house_defaults(client, org_id, code, source_report, report_key)
     suggestions = column_mapping.suggest(headers, report_key, saved, client, org_id)
     overrides = _intake_json(column_map_json, "column_map", {})
@@ -8123,8 +8371,8 @@ def _intake_commit_commission(client, org_id, ctx, att, period, typed_total, who
             raise HTTPException(400, f"Saving the column map for '{p['target_field']}' failed: {msg[:200]}")
         saved_fields.append(p["target_field"])
     # the save guarantee for the mapping: read it back and check it says what was confirmed
-    reloaded = [r for r in column_mapping.load_rules(client, org_id, report_key, carrier["id"])
-                if r.get("carrier_id") == carrier["id"]]
+    reloaded = column_mapping.carrier_rules(column_mapping.load_rules(client, org_id, report_key, carrier["id"]),
+                                            carrier["id"])
     back = {r["target_field"]: r for r in reloaded}
     wrong = [tf for tf in saved_fields
              if str((back.get(tf) or {}).get("source_header") or "").strip().lower()
@@ -8444,6 +8692,15 @@ def commission_ledger_templates(org_id: str = ORG_ID):
     client = sb()
     cfg = _ledger_sync_config_rows(client, org_id)
     tmpls = commission_ledger.list_templates(client, org_id)
+    # the carrier whose statement each template is (index §30.17a) — the page sends it with an import so
+    # the mapping read is the carrier's; additive field, '' when the template names no carrier
+    try:
+        _carriers = (client.schema("commcalc").table("carrier").select("id,name,code")
+                     .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        _carriers = []
+    for t in tmpls:
+        t["carrier_id"] = _ledger_carrier_for(_carriers, t.get("key")) or None
     # Which templates can be REFRESHED from the raw MA tables (mig 083) rather than a hand-uploaded file.
     # Additive field — every existing consumer keys off {key,label,builtin,rule_count} and is unaffected.
     for t in tmpls:

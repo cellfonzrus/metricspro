@@ -778,21 +778,34 @@ check("RESTORED — every shipped feed is byte-identical again", rerun(probe_ide
 section("H. THE FIX IS WIRED — the import path really uses all of it")
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # A rule nothing calls proves nothing. These read the REAL endpoint bodies back off the module.
-imp = inspect.getsource(R.commission_ledger_import)
+# PIN CHANGED 2026-09-24 (index §30.17): the import's body was FACTORED into _ledger_prepare_file (read, map,
+# convention, footer) + _ledger_build_rows + _ledger_import_prepared (land, payload) so the batch import runs
+# the very same steps per file — the endpoint is read together with the three it calls, and must call them.
+imp = "\n".join(inspect.getsource(f) for f in (R.commission_ledger_import, R._ledger_prepare_file,
+                                              R._ledger_build_rows, R._ledger_import_prepared))
+check("POST /commission-ledger/import runs the factored prepare + land (the batch import's per-file path)",
+      "_ledger_prepare_file(" in inspect.getsource(R.commission_ledger_import)
+      and "_ledger_import_prepared(" in inspect.getsource(R.commission_ledger_import))
 ana = inspect.getsource(R.commission_ledger_analyze)
 for nm, src in (("import", imp), ("analyze", ana)):
     check("POST /commission-ledger/" + nm + " reads the convention off the MAPPING it just loaded",
           "_ledger_convention(hdr_rules)" in src)
     # PIN CHANGED 2026-09-20: build_row also takes the org's bucket REGISTRY (mig 1009)
     check("POST /commission-ledger/" + nm + " passes it — and the bucket registry — into every row it builds",
-          "cat_rules, conv, buckets)" in src and "_ledger_buckets(client, org_id)" in src)
+          ("cat_rules, conv, buckets)" in src or 'prep["cat_rules"], prep["conv"], prep["buckets"])' in src)
+          and "_ledger_buckets(client, org_id)" in src)
     check("POST /commission-ledger/" + nm + " drops the file's own total row through the shared "
           "feed-shape rule",
           "_ledger_footer_drop(" in src)
     check("POST /commission-ledger/" + nm + " reports what it dropped and which rules it used",
           "footer_rows_dropped" in src and "rules_source" in src)
-check("the footer drop delegates to column_mapping (one footer rule in the codebase, not two)",
-      "drop_footer_rows(" in inspect.getsource(R._ledger_footer_drop))
+# PIN CHANGED 2026-09-24 (index §30.17a): ONE footer rule per statement, every route — the ledger's footer drop
+# now dereferences the intake's split_footer, whose rule 1 IS the mig-1004 predicate (feed_shape.is_footer_row,
+# the one column_mapping.drop_footer_rows applies) and whose rules 2–3 catch a total stamped with a store.
+check("the footer drop delegates to the ONE statement footer rule (the intake's split_footer; its rule 1 is the mig-1004 predicate)",
+      "_intake.split_footer(" in inspect.getsource(R._ledger_footer_drop)
+      and "is_footer_row(" in inspect.getsource(R._intake.split_footer)
+      and "is_footer_row(" in inspect.getsource(R.column_mapping.drop_footer_rows))
 check("GET /commission-ledger/summary reports the convention it summarised under",
       "convention" in inspect.getsource(R.commission_ledger_summary))
 check("the Category Map page is told when a report inherits no rules at all",
