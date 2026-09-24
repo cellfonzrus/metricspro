@@ -22,6 +22,8 @@ day sends a fresh digest of only the new items. Everything here is pure so the h
 no DB. Managers with no email are skipped.
 """
 
+from app.modules.commcalc import manager_digest as _md
+
 _KIND_LABEL = {"fee": "Fee", "payment": "Payment"}
 
 
@@ -58,12 +60,23 @@ def _variance_note(item):
     return "matches"
 
 
+ALERT_SCOPE = "epay_discrepancy"
+
+
+def _key_parts(item):
+    """This alert's identity INSIDE a store-day: the store, the closing date and the kind."""
+    return (item.get("store_code"), item.get("close_date"), str(item.get("kind") or "").lower())
+
+
 def ref_key_for(today, email, item):
     """Stable per-(store, date, kind) dedup key for ONE recipient — the caller stores it in
-    storeops.alert_log (scope 'epay_discrepancy') so a given discrepancy escalates once per day."""
-    return "epay_discrepancy|{d}|{e}|{s}|{dt}|{k}".format(
-        d=today, e=str(email or "").strip().lower(),
-        s=item.get("store_code"), dt=item.get("close_date"), k=str(item.get("kind") or "").lower())
+    storeops.alert_log (scope 'epay_discrepancy') so a given discrepancy escalates once per day.
+
+    The SPELLING lives in `manager_digest.ref_key` (the one home for every alert kind's dedup key);
+    this function only says which parts identify an ePay finding. Byte-identical to the string this
+    built before the fan-out was factored out — `harness_epay_alerts.py` pins it.
+    """
+    return _md.ref_key(ALERT_SCOPE, today, email, *_key_parts(item))
 
 
 def _item_rows_html(items):
@@ -125,38 +138,18 @@ def plan_emails(flags, hierarchy_by_store, today):
       hierarchy_by_store: {store_code: {"dm":[{name,email,...}], "above":[{name,email,...}]}}
     Every District Manager AND every manager above the DM for a flagged store receives ONE digest of the
     store-days they oversee. Returns {"digests": [ {kind, to, to_name, subject, html,
-      items:[{...,ref_key}]} ]}. Managers with no email are skipped."""
-    by_store = {}
-    for f in flags:
-        by_store.setdefault(f.get("store_code"), []).append(f)
+      items:[{...,ref_key}]} ]}. Managers with no email are skipped.
 
-    mgr = {}   # lower(email) -> {"name","email","items":[...]}
-    for store, items in by_store.items():
-        h = hierarchy_by_store.get(store) or {"dm": [], "above": []}
-        recipients = list(h.get("dm") or []) + list(h.get("above") or [])
-        for m in recipients:
-            em = (m.get("email") or "").strip()
-            if not em:
-                continue
-            slot = mgr.setdefault(em.lower(), {"name": m.get("name") or em, "email": em, "items": []})
-            for it in items:
-                slot["items"].append({**it, "ref_key": ref_key_for(today, em, it)})
-
-    digests = []
-    for slot in mgr.values():
-        # A recipient could oversee the same store via both the DM node and an ancestor — dedup items by
-        # ref_key so a store-day isn't listed twice in their digest.
-        seen, items = set(), []
-        for it in slot["items"]:
-            if it["ref_key"] in seen:
-                continue
-            seen.add(it["ref_key"])
-            items.append(it)
-        built = build_digest(slot["name"], items)
-        digests.append({"kind": "epay_digest", "to": slot["email"], "to_name": slot["name"],
-                        "subject": built["subject"], "html": built["html"], "items": items})
-    digests.sort(key=lambda d: d["to"].lower())
-    return {"digests": digests}
+    THE FAN-OUT ITSELF IS NOT HERE. Who receives an alert about a store, that a recipient with no
+    email is skipped, that one recipient gets one digest, that an item reachable by two hierarchy
+    paths is listed once, and the ref_key spelling are the HOUSE rule and live in
+    `manager_digest.plan_digests` — this function supplies only what is ePay-specific: the scope, the
+    item identity and the subject/HTML builder. The zero-sales alert (`zero_sales.py`) is a second
+    CALLER of that one fan-out, not a second copy of it. Output is byte-identical to the previous
+    local implementation; `harness_epay_alerts.py` pins it."""
+    return _md.plan_digests(flags, hierarchy_by_store, today,
+                            scope=ALERT_SCOPE, build=build_digest, key_parts=_key_parts,
+                            kind="epay_digest")
 
 
 if __name__ == "__main__":

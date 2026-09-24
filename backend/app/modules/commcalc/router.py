@@ -17,6 +17,8 @@ from app.core import import_batches as _import_batches   # DDIA Phase 1 idempote
 from app.core import column_tolerant as _ct    # 2026-09-22 — ANY-SUBSET column reads, the one reading rule (index §4b.1)
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
+from app.modules.commcalc import zero_sales as _zs   # 2026-09-22 — zero-sales states/runs/alerts (pure)
+from app.modules.commcalc import labour_coverage as _labour  # shared shift reader + the silent-zero shape
 from app.modules.commcalc import invoice_tenders as _invt   # 2026-09-21 — the invoice tender split (pure; classes injected from closing)
 from app.modules.commcalc import whatif
 # The tenant-implementation spine (owner 2026-09-12): the ONE ordered, carrier-scoped setup flow, and
@@ -30,7 +32,8 @@ from app.modules.commcalc import exec_metric_defs as _emd   # mig 962 — ONE bu
 from app.modules.commcalc import whatif_gates
 from app.modules.commcalc import pay_simulator
 from app.modules.commcalc.gp_report import (calc_gp_report, VOID_TOKENS as _GP_VOID_TOKENS,
-                                             is_voided as _gp_is_voided)
+                                             is_voided as _gp_is_voided,
+                                             countable_sale_skip_reason as _gp_skip_reason)
 from app.modules.commcalc.flags import calc_flags
 from app.modules.commcalc.portout_flags import calc_portout_flags
 from app.modules.commcalc import flag_store_resolver   # mig 285 — resolve a flag's store for DM routing
@@ -42198,3 +42201,394 @@ def put_epay_alert_config(body: EpayAlertConfigIn, authorization: str = Header(d
     except Exception:
         raise HTTPException(400, "Couldn't save — is migration 905 applied?")
     return get_epay_alert_config(authorization=authorization, org_id=org_id)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# ZERO SALES — store-days and rep-days with no activation and no upgrade (owner 2026-09-22).
+#
+# "need a zero sales report in management overview dashboard capturing no activations or upgrades
+#  using standard filters and date range and notification options"
+#
+# DUPLICATE CHECK (CLAUDE.md build gate) — nothing below is a second derivation:
+#   • the activation/upgrade PREDICATE          `line_class` via `_line_rules_resolve` (§3, #267/#271)
+#   • the aggregation that applies it           `_sales_cell_agg` (§3) — the same cells the Sales
+#                                               Report, Executive MTD and Daily Targets count
+#   • the sales SOURCE                          `_sales_rows_union` (§3) — the same feed∪raw_sales
+#                                               per (day × store) cell the Sales Report displays
+#   • store canonicalisation / market           `_canonical_store_key_fn` + `_store_code_resolver` +
+#                                               `_store_market_resolver` (§13)
+#   • rep identity                              `_rep_canon_map`/`_canon` + `targets_engine.name_key`
+#   • "is the store open that day"              `targets_engine.scope_hours_by_day` (§5) — the ONLY
+#                                               place the platform knows a store's trading days
+#   • the three-state absence vocabulary        `carrier_vs_pay` / `labour_coverage` / §30.12
+#   • the alert fan-out, dedup and recipients   `manager_digest` (factored out of `epay_alerts`)
+# The RULES are `commcalc/zero_sales.py` (PURE, `harness_zero_sales.py`). This block is I/O only.
+# READ-ONLY: it recomputes nothing, writes no payout, and books nothing.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+_ZERO_SALES_CFG_TABLE = "zero_sales_config"
+
+
+def _zero_sales_config(client, org_id):
+    """(config, source) — the org's zero-sales config, house defaults filling every missing key.
+
+    RULE TWO: grain, counted buckets, N consecutive days, the gap policy, the trading-day source and
+    the excluded weekdays are per-org CONFIG rows (mig `zero_sales_config`), tenant row over the
+    house row (`_zs.HOUSE_ORG`), exactly like `report_pull_map` (mig 207). DEGRADES: before the
+    migration is applied — or if the table is unreadable — every org resolves to the code-level house
+    defaults in `zero_sales.HOUSE_CONFIG`, which ARE the documented shipped behaviour. A stored value
+    the module refuses (an unknown grain, a bucket it cannot count, "count a gap as a zero") raises
+    `ConfigRefused`, which the endpoint turns into a 400 naming the value — never a silently empty
+    report."""
+    rows = []
+    try:
+        rows = (client.schema("commcalc").table(_ZERO_SALES_CFG_TABLE).select("*")
+                .in_("org_id", sorted({str(org_id), _zs.HOUSE_ORG})).limit(2).execute().data) or []
+    except Exception:
+        rows = []
+    tenant = next((r for r in rows if str(r.get("org_id")) == str(org_id)
+                   and str(org_id) != _zs.HOUSE_ORG), None)
+    house = next((r for r in rows if str(r.get("org_id")) == _zs.HOUSE_ORG), None)
+    row = tenant or house
+    source = "tenant" if tenant else ("house" if house else "house_default")
+    return _zs.resolve_config(row), source
+
+
+def _zero_sales_months(date_from, date_to):
+    """The period labels spanned by the window. `raw_sales` / `daily_sales_feed` are period-scoped,
+    so a range crossing a month boundary reads each month and the day filter does the rest.
+    `_pvariants` (inside `_sales_rows_union`) already matches both stored spellings."""
+    a, b = _date.fromisoformat(date_from), _date.fromisoformat(date_to)
+    out, y, m = [], a.year, a.month
+    while (y, m) <= (b.year, b.month):
+        out.append(_date(y, m, 1).strftime("%B %Y"))
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return out
+
+
+def _zero_sales_core(client, org_id, date_from, date_to, stores=None, markets=None, reps=None,
+                     as_of=None):
+    """Build the zero-sales report for ONE org over ONE date range. Every read is `.eq('org_id',…)`.
+
+    THE ABSENCE EVIDENCE. `landed` is built from the RAW union rows, BEFORE `_sales_cell_agg`'s skip
+    rules — a store-day whose only rows were voided, returns or admin lines still proves the feed
+    arrived for that store. Coverage is always a store's OWN rows: other stores reporting that day is
+    not evidence about this one (§2/§3, the partial-feed incident)."""
+    from app.modules.commcalc import targets_engine as _te
+    cfg, cfg_source = _zero_sales_config(client, org_id)
+    days = _zs.day_range(date_from, date_to)
+    if not days:
+        raise HTTPException(400, "date_from / date_to must be ISO dates with date_to >= date_from")
+    if len(days) > 186:
+        raise HTTPException(400, "date range is capped at 186 days")
+
+    # ── the org's activation rules, and #271's refusal state ────────────────────────────────────
+    acfg = _accessory_config(client, org_id)
+    line_rules = _line_rules_of(acfg)
+    rules_refused, refusal_note = False, None
+
+    # ── the SAME sales source the Sales Report displays, per month in the window ────────────────
+    rows = []
+    for period in _zero_sales_months(date_from, date_to):
+        try:
+            prows, _meta = _sales_rows_union(client, org_id, period, cols=_ACTUALS_COLS)
+        except Exception as e:
+            print(f"WARN zero-sales union read failed for {period}: {e}")
+            prows = []
+        rows.extend(prows)
+    in_window = set(days)
+    rows = [r for r in rows if str(r.get("trans_date") or "")[:10] in in_window]
+
+    # A refused activation rule means no zero is claimable for this org (#271). Measured over the
+    # rows in hand by the SAME guard the intake uses — never a second measurement.
+    try:
+        counts = _lc.count_classes(rows, line_rules,
+                                   skip=lambda r: bool(_gp_skip_reason(r)))
+        rules_refused = bool(_lc.rules_refused(counts))
+        if rules_refused:
+            refusal_note = _lc.refusal_sentence(counts.get("refused") or [], counts.get("scanned"),
+                                                step_label="Onboarding — step 2.5a")
+    except Exception as e:
+        print(f"WARN zero-sales rule-refusal check skipped: {e}")
+
+    # ── identity: the canonical store code + the canonical rep name, the existing resolvers ─────
+    _resolve_code = _store_code_resolver(client, org_id)
+    resolve_market, all_markets = _store_market_resolver(client, org_id)
+    cmap = _rep_canon_map(client, org_id)
+    cells = _sales_cell_agg(rows, acfg, store_key=_canonical_store_key_fn(client, org_id))
+
+    def _code_of(cell_key, cell):
+        return _resolve_code((cell or {}).get("store") or cell_key[0])
+
+    def _rep_of(cell_key, cell):
+        nm = _canon(cell_key[1], cmap)
+        return (_code_of(cell_key, cell), _te.name_key(nm)) if nm else None
+
+    store_counts = _zs.counts_from_cells(cells, cfg["count_classes"], _code_of)
+    rep_counts = _zs.counts_from_cells(cells, cfg["count_classes"], _rep_of)
+
+    store_landed, rep_landed, rep_label = set(), set(), {}
+    for r in rows:
+        d = str(r.get("trans_date") or "")[:10]
+        if d not in in_window:
+            continue
+        code = _resolve_code(str(r.get("store") or ""))
+        if not code:
+            continue
+        store_landed.add((code, d))
+        nm = _canon(str(r.get("salesperson") or "").strip(), cmap)
+        if nm and nm.lower() != "admin":
+            key = (code, _te.name_key(nm))
+            rep_landed.add((key, d))
+            rep_label.setdefault(key, nm)
+
+    # ── trading days: the SCHEDULE, the only place the platform knows a store's open days ───────
+    shifts = _labour.load_shift_hours_range(client, org_id, date_from, date_to, with_names=True)
+    store_hours, rep_hours, store_codes_sched = {}, {}, set()
+    for s in shifts:
+        code = str(s.get("store_code") or "").strip()
+        d = str(s.get("shift_date") or "")[:10]
+        h = safe_float(s.get("scheduled_hours"))
+        if not code or d not in in_window or h <= 0:
+            continue
+        store_codes_sched.add(code)
+        store_hours[(code, d)] = store_hours.get((code, d), 0.0) + h
+        nm = _canon(str(s.get("employee_name") or "").strip(), cmap)
+        if nm:
+            key = (code, _te.name_key(nm))
+            rep_hours[(key, d)] = rep_hours.get((key, d), 0.0) + h
+            rep_label.setdefault(key, nm)
+
+    # ── the scopes in view, AFTER the standard filters (org-scoped by construction) ─────────────
+    want_stores = {str(s).strip() for s in (stores or []) if str(s).strip()}
+    want_markets = {str(m).strip().lower() for m in (markets or []) if str(m).strip()}
+    want_reps = {_te.name_key(_canon(str(x).strip(), cmap)) for x in (reps or []) if str(x).strip()}
+
+    all_store_codes = ({c for c, _ in store_landed} | {c for c, _ in store_counts}
+                       | store_codes_sched)
+    try:
+        roster = (client.schema("storeops").table("stores").select("store_code")
+                  .eq("org_id", org_id).limit(5000).execute().data) or []
+        all_store_codes |= {str(r.get("store_code") or "").strip() for r in roster
+                            if str(r.get("store_code") or "").strip()}
+    except Exception:
+        pass
+
+    def _keep_store(code):
+        if want_stores and code not in want_stores:
+            return False
+        if want_markets and str(resolve_market(code) or "").strip().lower() not in want_markets:
+            return False
+        return True
+
+    store_scope = sorted(c for c in all_store_codes if c and _keep_store(c))
+    keep = set(store_scope)
+    rep_scope = sorted({k for k in (set(rep_label) | {k for k, _ in rep_counts})
+                        if k[0] in keep and (not want_reps or k[1] in want_reps)})
+
+    report = _zs.build_report(
+        days,
+        {"store": store_scope, "rep": rep_scope},
+        {"store": store_counts, "rep": rep_counts},
+        {"store": store_landed, "rep": rep_landed},
+        {"store": store_hours, "rep": rep_hours},
+        cfg, rules_refused=rules_refused, refusal_note=refusal_note, as_of=as_of,
+        parent_of={k: k[0] for k in rep_scope},
+        labels={"store": {c: c for c in store_scope},
+                "rep": {k: rep_label.get(k, k[1]) for k in rep_scope}})
+    report["config_source"] = cfg_source
+    report["date_from"], report["date_to"] = date_from, date_to
+    report["markets"] = all_markets
+    report["market_of"] = {c: resolve_market(c) or "" for c in store_scope}
+    report["scanned_rows"] = len(rows)
+    return report
+
+
+@router.get("/zero-sales")
+def zero_sales_report(date_from: str = "", date_to: str = "", market: str = "", store: str = "",
+                      rep: str = "", org_id: str = ORG_ID):
+    """ZERO SALES — every store-day (and rep-day) with no activation and no upgrade. READ-ONLY.
+
+    Owner 2026-09-22. Standard filters (market / store / rep, comma-separated) + a date range; the
+    grain, the counted buckets, the trading-day source and the consecutive-day threshold are per-org
+    config with house defaults (`commcalc/zero_sales.py`).
+
+    ABSENCE IS NOT ZERO. A store-day whose feed did not land reads **not reported**, with a null
+    count — never 0, never a zero day, never part of a run and never an alert. See
+    `zero_sales.STATE_NOTES`, returned in the payload so the page states it in words.
+
+    The activation/upgrade predicate is `line_class` through `_sales_cell_agg` — READ, never
+    restated; if the org's rule is refused as too broad (#271) the report claims nothing and says
+    so."""
+    require_org(org_id)
+    today = _date.today()
+    date_to = (date_to or today.isoformat())[:10]
+    date_from = (date_from or (_date.fromisoformat(date_to) - _timedelta(days=29)).isoformat())[:10]
+    try:
+        return _zero_sales_core(
+            sb(), org_id, date_from, date_to,
+            stores=[s for s in (store or "").split(",") if s.strip()],
+            markets=[m for m in (market or "").split(",") if m.strip()],
+            reps=[r for r in (rep or "").split(",") if r.strip()],
+            as_of=today.isoformat())
+    except _zs.ConfigRefused as e:
+        raise HTTPException(400, f"Zero-sales config refused: {e}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class ZeroSalesConfigIn(LaxModel):
+    grains: list[str] | None = None
+    count_classes: list[str] | None = None
+    trading_day_source: str | None = None
+    excluded_weekdays: list[int] | None = None
+    consecutive_days: int | None = None
+    gap_policy: str | None = None
+    rep_requires_shift: bool | None = None
+    include_today: bool | None = None
+    alerts_enabled: bool | None = None
+
+
+@router.get("/zero-sales-config")
+def get_zero_sales_config(org_id: str = ORG_ID):
+    """The resolved zero-sales config for this org, plus where each layer came from and the choices
+    the report refuses to offer (with the reason) — so the settings screen can say why."""
+    require_org(org_id)
+    cfg, source = _zero_sales_config(sb(), org_id)
+    return {"config": cfg, "source": source, "house_default": dict(_zs.HOUSE_CONFIG),
+            "grains": list(_zs.GRAINS), "count_classes": list(_lc.BUCKETS),
+            "gap_policies": list(_zs.GAP_POLICIES), "gap_refused": dict(_zs.GAP_REFUSED),
+            "trading_day_sources": list(_zs.TRADING_SOURCES)}
+
+
+@router.put("/zero-sales-config")
+def put_zero_sales_config(body: ZeroSalesConfigIn, authorization: str = Header(default=""),
+                          org_id: str = ORG_ID):
+    """Save this tenant's zero-sales config. Validated through `zero_sales.resolve_config` BEFORE it
+    is written, so a value the report refuses (an unknown grain, a bucket it cannot count, "count a
+    not-reported day as a zero") is a 400 naming the value rather than a stored row that would make
+    every store read zero."""
+    from app.modules.storeops.router import _require_manager
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    sent = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not sent:
+        raise HTTPException(400, "Nothing to update.")
+    current, _src = _zero_sales_config(sb(), org_id)
+    try:
+        _zs.resolve_config({**current, **sent})
+    except _zs.ConfigRefused as e:
+        raise HTTPException(400, str(e))
+    try:
+        (sb().schema("commcalc").table(_ZERO_SALES_CFG_TABLE)
+         .upsert({"org_id": org_id, **sent, "updated_at": _datetime.now(_timezone.utc).isoformat()},
+                 on_conflict="org_id").execute())
+    except Exception:
+        raise HTTPException(400, "Couldn't save — is the zero_sales_config migration applied?")
+    return get_zero_sales_config(org_id=org_id)
+
+
+async def _run_zero_sales_alerts(org_id_filter=None, respect_enabled=True, dry_run=False):
+    """The daily zero-sales sweep. Iterates tenants; skips unless the org's config says
+    `alerts_enabled`; builds the report over the trailing window the org's N needs; plans ONE digest
+    per manager (DM ∪ above-DM) through `manager_digest` — the SAME fan-out, dedup and recipient
+    resolution ePay uses — and sends them deduped through `storeops.alert_log` under scope
+    'zero_sales'. NEVER raises.
+
+    A scope in the 'not reported' state produces NO email: a missing feed is a pipeline failure with
+    its own surface (§20 import health), and mailing a District Manager about it as if it were a
+    sales figure is exactly the false chase this report exists to prevent. The count of such scopes
+    rides in the digest footer so a thin email is never read as a healthy estate."""
+    from app.modules.storeops.router import (_managers_above_dm, _biz_tz_for,
+                                             _lateness_already_sent, _lateness_record_sent)
+    from app.modules.notify.channels import email_resend
+    root = get_supabase()
+    so = root.schema("storeops")
+    try:
+        tenants = so.table("tenants").select("org_id").execute().data or []
+    except Exception:
+        tenants = []
+    if org_id_filter:
+        tenants = [t for t in tenants if str(t.get("org_id")) == str(org_id_filter)]
+    email_ok = email_resend.is_configured()
+    results = []
+    for t in tenants:
+        oid = t.get("org_id")
+        if not oid:
+            continue
+        try:
+            cfg, _src = _zero_sales_config(root, oid)
+        except _zs.ConfigRefused as e:
+            results.append({"org_id": oid, "skipped": "config refused", "detail": str(e)})
+            continue
+        if respect_enabled and not cfg["alerts_enabled"]:
+            continue
+        today = _datetime.now(_timezone.utc).astimezone(_biz_tz_for(oid)).date()
+        # The window must be long enough to SEE a run of N, with room for closed days and gaps.
+        span = max(14, cfg["consecutive_days"] * 4)
+        try:
+            rep = _zero_sales_core(root, oid, (today - _timedelta(days=span)).isoformat(),
+                                   today.isoformat(), as_of=today.isoformat())
+        except Exception as e:
+            results.append({"org_id": oid, "error": str(e)[:200]})
+            continue
+        items = _zs.alert_items(rep, cfg)
+        not_assessed = sum(1 for r in rep["rows"]
+                           if r["grain"] == "store" and r["state"] == _zs.NOT_REPORTED)
+        if not items:
+            results.append({"org_id": oid, "sent": 0, "skipped": 0, "flagged": 0,
+                            "not_assessed": not_assessed})
+            continue
+        stores = {i["store_code"] for i in items if i.get("store_code")}
+        hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
+        plan = _zs.plan_emails(items, hierarchy, today.isoformat(), not_assessed=not_assessed)
+        sent = skipped = 0
+        planned = []
+        for dg in plan["digests"]:
+            new_items = [it for it in dg["items"]
+                         if not _lateness_already_sent(so, oid, _zs.ALERT_SCOPE, it["ref_key"])]
+            if not new_items:
+                skipped += 1
+                planned.append({"to": dg["to"], "subject": dg["subject"], "already_sent": True})
+                continue
+            built = _zs.build_digest(dg["to_name"], new_items, not_assessed=not_assessed)
+            planned.append({"to": dg["to"], "subject": built["subject"], "already_sent": False,
+                            "items": [f"{i['store_code']} {i['grain']} {i['label']} "
+                                      f"{i['zero_days']}d" for i in new_items]})
+            if dry_run:
+                continue
+            if email_ok:
+                try:
+                    await email_resend.send_email(to=dg["to"], subject=built["subject"],
+                                                  html=built["html"])
+                    for it in new_items:
+                        _lateness_record_sent(so, oid, _zs.ALERT_SCOPE, it["ref_key"], dg["to"])
+                    sent += 1
+                except Exception:
+                    pass
+        results.append({"org_id": oid, "sent": sent, "skipped": skipped, "flagged": len(items),
+                        "not_assessed": not_assessed, "email_configured": email_ok,
+                        "planned": planned if dry_run else None})
+    return {"ran": len(results), "dry_run": dry_run, "results": results}
+
+
+@router.post("/zero-sales/alerts/run-due")
+async def zero_sales_alerts_run_due(x_notify_secret: str = Header(default="")):
+    """Secret-gated DAILY pg_cron entrypoint. Mirrors `/epay/alerts/run-due` exactly — same dedup
+    table, same recipient rule, same digest shape. See the zero-sales migration for the cron
+    registration."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+    return await _run_zero_sales_alerts(respect_enabled=True, dry_run=False)
+
+
+@router.post("/zero-sales/alerts/run-now")
+async def zero_sales_alerts_run_now(send: bool = False, authorization: str = Header(default=""),
+                                    org_id: str = ORG_ID):
+    """Manager/admin manual trigger for THIS tenant, bypassing the enable gate. DEFAULTS TO A DRY RUN
+    — it returns exactly who WOULD be emailed and about which stores, sending nothing. Dedup is
+    always honoured, so a real send cannot duplicate the daily run."""
+    from app.modules.storeops.router import _require_manager
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    return await _run_zero_sales_alerts(org_id_filter=org_id, respect_enabled=False,
+                                        dry_run=(not send))

@@ -61,6 +61,7 @@ vocabularies are handed in by the caller from per-org config
 Proof: backend/harness_labour_coverage.py (DB-free).
 Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §4.
 """
+from datetime import date, timedelta
 
 # The producer tokens that carry an EXACT gross payroll and therefore make a period authoritative.
 # Kept in lockstep with `account/coa._WAGES_AUTHORITATIVE_KEYS` — 'additional_payroll' is an excess
@@ -521,26 +522,42 @@ def suppresses_row(index, expense_name, key):
 
 
 # ── the ONE hours reader both surfaces go through (I/O; pure logic above is DB-free) ──────────────
+def load_shift_hours_range(client, org_id, date_from, date_to, with_names=False):
+    """I/O: the non-deleted shifts overlapping an ISO DATE RANGE. THE one shift read on this path.
+
+    `load_shift_hours` (period grain) delegates here, so there is ONE query that answers "what was
+    scheduled" for both the month-grain labour coverage and any date-range caller (the zero-sales
+    report's trading days, §15). `with_names=True` additionally selects `employee_name`, which a
+    per-person grain needs and the money path does not.
+
+    Org-scoped (multi-tenant contract §2). Never raises — a missing table or column degrades to [],
+    which yields NOT_MEASURED / an unknown trading calendar rather than a fabricated zero, the honest
+    answer when a feed cannot be read.
+
+    Deliberately NOT a second copy of `coa.wages_by_store`'s employee-joined read: that one exists to
+    compute MONEY and must keep its exact shape."""
+    cols = "store_code,scheduled_hours,actual_hours,shift_date,is_deleted"
+    if with_names:
+        cols += ",employee_name"
+    try:
+        return (client.schema("storeops").table("shifts").select(cols)
+                .eq("org_id", org_id).eq("is_deleted", False)
+                .gte("shift_date", str(date_from)[:10]).lte("shift_date", str(date_to)[:10])
+                .range(0, 19999).execute().data) or []
+    except Exception:
+        return []
+
+
 def load_shift_hours(client, org_id, period):
     """I/O: the period's non-deleted shifts, hours columns only, for `hours_basis_by_code`.
 
     `period` is either house spelling ('August 2026' or '2026-08') — parsed by the ONE shared
-    parser `expenses_effective.period_sort_key`, never a second copy of it. Org-scoped
-    (multi-tenant contract §2). Never raises — a missing table or column degrades to [], which
-    yields NOT_MEASURED rather than a fabricated zero, the honest answer when a feed cannot be read.
-
-    Deliberately its own narrow select rather than a second copy of `coa.wages_by_store`'s
-    employee-joined read: that one exists to compute MONEY and must keep its exact shape."""
+    parser `expenses_effective.period_sort_key`, never a second copy of it. The read itself is
+    `load_shift_hours_range` (above): one query, one home, so a month-grain and a range-grain caller
+    can never disagree about what was scheduled."""
     from app.modules.commcalc.expenses_effective import period_sort_key
     y, m = period_sort_key(period)
     if not y or not m:
         return []
-    nxt = f"{y + 1:04d}-01-01" if m == 12 else f"{y:04d}-{m + 1:02d}-01"
-    try:
-        return (client.schema("storeops").table("shifts")
-                .select("store_code,scheduled_hours,actual_hours,shift_date,is_deleted")
-                .eq("org_id", org_id).eq("is_deleted", False)
-                .gte("shift_date", f"{y:04d}-{m:02d}-01").lt("shift_date", nxt)
-                .range(0, 19999).execute().data) or []
-    except Exception:
-        return []
+    last = (date(y + 1, 1, 1) if m == 12 else date(y, m + 1, 1)) - timedelta(days=1)
+    return load_shift_hours_range(client, org_id, f"{y:04d}-{m:02d}-01", last.isoformat())
