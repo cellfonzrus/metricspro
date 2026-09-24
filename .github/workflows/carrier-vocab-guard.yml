@@ -77,6 +77,12 @@ name: carrier-vocab-guard
 # homes pinned equal, no page keeps a connector list, and the connector modules' copy spells no vendor
 # (the #262 seam, closed in the guard's POS axis) — backend/harness_connector_scope_lock.py; stdlib only.
 #
+# THE INVENTORY-INTEGRITY LOCK (index §11b, mig 1018, 2026-09-24) runs here too: the POS's units are checked by ONE engine
+# (inventory_sold_recon — classify_unit), every path that lands a serial unit asks THE duplicate / already-sold guard first, every
+# status change goes through the one writer that writes the adjustment ledger, no second IMEI normaliser, and the commission-per-
+# device feed is one registry fact every reader dereferences (backend/harness_inventory_integrity_lock.py; stdlib only). The PROOF
+# (backend/harness_inventory_integrity.py: the anonymised 383-unit regression end to end) runs in the inventory-integrity-proof job.
+#
 # THE PLAN-SOURCES LOCK (index §23n, 2026-09-22) runs here too: which landed sources carry a tenant's
 # plan names is ONE registry (core/plan_sources.HOUSE_SOURCES) resolved over per-org config (pos.pos_settings
 # `plan_sources`, mig 725); ONE resolver (onboarding.resolve_service_plans) serves preview AND apply; the
@@ -159,6 +165,13 @@ on:
       - "database/migrations/1017_pos_customer_identity.sql"
       - "backend/app/modules/pos/receipt_formats/**"
       - "backend/harness_intake_fakes.py"
+      - "backend/harness_inventory_integrity_lock.py"
+      - "backend/harness_inventory_integrity.py"
+      - "backend/app/modules/pos/inventory_integrity.py"
+      - "backend/app/modules/pos/inventory_integrity_router.py"
+      - "backend/app/modules/pos/router.py"
+      - "backend/app/modules/commcalc/data_lineage_registry.py"
+      - "database/migrations/1018_pos_inventory_integrity.sql"
       - "backend/harness_ma_income_one_home_guard.py"
       - "backend/harness_ma_month_columns.py"
       - "backend/app/modules/commcalc/commission_legs.py"
@@ -283,6 +296,9 @@ jobs:
       - name: Run the ledger statement-identity lock (one identity derivation, one period home, one lander; every ledger read on the family; N landings refused — index §30.15)
         working-directory: backend
         run: python3 harness_ledger_identity_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the inventory-integrity lock (one engine; every serial landing asks the duplicate guard; one status writer with its ledger row; one IMEI key; the commission feed one registry fact — index §11b)
+        working-directory: backend
+        run: python3 harness_inventory_integrity_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CUSTOMER-MASTER PROOF (index §30.16) drives the REAL matcher, rebuild, line writer and /pos endpoints over the
   # in-memory client (harness_intake_fakes) — it imports the app, so it runs in its own job with the backend's
@@ -299,3 +315,19 @@ jobs:
       - name: Run the customer-master proof (one matcher; a line per phone number with its device and plan; what the customer paid; reversible merges; safe before mig 1017)
         working-directory: backend
         run: python3 harness_customer_master.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE INVENTORY-INTEGRITY PROOF (index §11b) drives the REAL engine, landing guard, status writer and /pos endpoints over
+  # the in-memory client (harness_intake_fakes) with the anonymised 383-unit regression fixture — it imports the app, so it
+  # runs in its own job with the backend's dependencies installed, like the customer-master proof. DB-free.
+  inventory-integrity-proof:
+    name: Inventory integrity proof (DB-free, the real functions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the inventory-integrity proof (sales lines + commission report; flags, one-click assign, verify; the 409 guard on every landing path; the ledger on every status change)
+        working-directory: backend
+        run: python3 harness_inventory_integrity.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

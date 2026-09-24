@@ -49,6 +49,29 @@ EPAY_DAILY = "raw_epay_daily_tx"          # Boost ePay settlement
 MA_DAILY_TX = "raw_ma_daily_tx"           # VidaPay / Total MA daily transactions
 DAILY_CLOSING = "daily_closing"           # employee cash + tender declaration (owned by the closing module)
 
+# ── THE COMMISSION-PER-DEVICE FEED — which table says "the carrier paid (or clawed back) on this IMEI" ─
+# Owner 2026-09-24 (index §11b): inventory is "crashed against the sales report by invoice and the
+# commission received reports". ONE fact, ONE home: the per-line vendor rebate / commission history
+# (mig 1005) — one row per rebate COMPONENT per line, the device IMEI on every row, `earned_amount`
+# SIGNED (a reversal / chargeback line is negative), the customer and invoice as the carrier states them.
+# Every reader (the inventory-integrity engine, its router, the Inventory-vs-Sold report) DEREFERENCES
+# these names; `harness_inventory_integrity_lock.py` fails the build on a copied table literal.
+COMMISSION_PER_DEVICE_FEED = "raw_vendor_rebate"
+# The columns a per-device reader takes from it, and what each MEANS (the header lies on two of them —
+# §27.6: `imei` is the file's 'Related Tracking Number', `mdn` its 'Tracking Number'). `earned` is the ONLY
+# money column summed (never `unit_amount`, which is unsigned — §27.7); `reversal_flag` is the feed's own
+# chargeback cell, read as evidence beside the sign.
+COMMISSION_PER_DEVICE_COLUMNS = {
+    "device": "imei", "mobile": "mdn", "customer": "customer_name", "customer_ref": "customer_ref",
+    "invoice": "invoice_no", "sold_on": "sold_on", "earned": "earned_amount", "reversal_flag": "charge_back",
+    "device_name": "device_name", "device_sku": "device_sku", "rate_plan": "rate_plan", "store": "store",
+}
+
+
+def commission_per_device_select() -> str:
+    """The select list a per-device commission reader uses — derived from COMMISSION_PER_DEVICE_COLUMNS."""
+    return ",".join(dict.fromkeys(COMMISSION_PER_DEVICE_COLUMNS.values()))
+
 # ── LIVE-vs-MONTHLY PAIRS — the freshness trap, per feed ──────────────────────────────────────────
 # A freshness / "is data flowing?" check must read the LIVE (first) table, NEVER the monthly (second).
 # Reading the monthly table is the 2026-08-30 false alarm this registry guards against. Each new pair a
@@ -88,7 +111,8 @@ INGEST_TABLES_BY_MODULE = {
         # while "is an earned rebate a receivable?" is an open owner decision. Distinct from the
         # `pos` module's activation_rebate_ledger below, which is the AGGREGATE that books — two
         # edges because they answer two different questions, not two paths to one answer.
-        "raw_vendor_rebate",
+        # (Dereferenced — it is THE commission-per-device feed named above, not a second spelling.)
+        COMMISSION_PER_DEVICE_FEED,
         # The POS by-product sales aggregate's OWN table (mig 1011, landing identity 2026-09-20) —
         # layout pos_product_sales through the mapped ingest / the intake's `pos` kind. Product-level
         # rows (SKU, cost, selling price); never summed beside raw_sales (double count). Read by the

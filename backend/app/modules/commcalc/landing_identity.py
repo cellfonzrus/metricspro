@@ -88,6 +88,8 @@ CONSUMERS = {
          "why": "sales tax collected is summed from the tax column when the export carries one"},
         {"screen": "inventory_sold_recon", "label": "Inventory vs Sold", "needs": ["serial_1", "mdn"], "gate": False,
          "why": "sold units are paired to on-hand inventory by IMEI / serial, else by the phone number on the line"},
+        {"screen": "pos_inventory", "label": "POS Inventory — integrity flags", "needs": ["serial_1", "quantity"], "gate": False,
+         "why": "a POS unit still in stock that the sale lines net as sold is flagged (a refund nets to zero) — index §11b"},
         {"screen": "imei_recon", "label": "IMEI Reconciliation", "needs": ["serial_1"], "gate": False,
          "why": "sold IMEIs are matched against the carrier's rebate and inventory feeds"},
         {"screen": "pl_statement", "label": "P&L Statement", "needs": ["ext_price", "gp"], "gate": False,
@@ -176,6 +178,11 @@ CONSUMERS = {
     "raw_vendor_rebate": [
         {"screen": "vendor_rebates", "label": "Vendor Rebate History", "needs": ["earned_amount"], "gate": False,
          "why": "earned per line, reported beside collected — never summed"},
+        # index §11b (owner 2026-09-24): the commission report is a sold-source for inventory — per IMEI, net of chargebacks
+        {"screen": "pos_inventory", "label": "POS Inventory — integrity flags", "needs": ["imei", "earned_amount"], "gate": False,
+         "why": "a unit still in stock whose IMEI kept its commission is flagged, with the customer the report names"},
+        {"screen": "inventory_sold_recon", "label": "Inventory vs Sold", "needs": ["imei", "earned_amount"], "gate": False,
+         "why": "an on-hand unit with kept commission and no sale line is reported (sold, no receipt)"},
     ],
     "raw_custom_import": [
         {"screen": "activations", "label": "Activations", "needs": [], "gate": False,

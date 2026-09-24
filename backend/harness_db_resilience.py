@@ -897,7 +897,14 @@ _all_routes = _flatten_routes(real_app.routes)
 # reads rep_commissions as stored. It books NOTHING — meta.books_to is empty and no P&L / payout /
 # accrual path reads it. Dealer REVENUE and payroll EXPENSE are reported side by side and never
 # summed. Proof backend/harness_carrier_vs_pay.py (54 checks).
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1596"))
+# Re-pinned to 1627 on 2026-09-24 (wip/inventory-integrity, index §11b). Measured, not assumed:
+#     1620  origin/main 6e7c12f  (the pin still read 1596 — packages since #257 added routes without re-pinning;
+#                                 the guard was already red when this work started)
+#     1627  + the 7 routes of app/modules/pos/inventory_integrity_router.py (GET /pos/inventory/integrity,
+#             POST …/integrity/scan, POST /pos/inventory/flags/{id}/assign|verify|dismiss, POST /pos/inventory/adjust,
+#             GET /pos/inventory/adjustments) — counted by endpoint module; POST/PATCH /pos/inventory/serial are unchanged
+#             routes that now delegate to it
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1627"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

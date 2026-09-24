@@ -293,6 +293,25 @@ class FakeDB:
                               "processor", "created_at"],                                                               # mig 725
             "customer_aliases": ["id", "org_id", "customer_id", "alias_name", "alias_norm", "source", "first_seen", "last_seen",
                                  "created_at"],                                                                         # mig 1017
+            # ── inventory integrity (index §11b, 2026-09-24) — each exactly as its migration creates it ──
+            "inventory_serial": ["id", "org_id", "product_id", "store_code", "serial_number", "imei", "sim_card", "color",
+                                 "storage", "condition", "status", "cost", "date_received", "po_number", "sold_at",
+                                 "sold_in_sale_id", "created_at", "updated_at"],                          # mig 725
+            "raw_vendor_rebate": ["id", "org_id", "carrier_id", "source_id", "period", "period_month", "period_year",
+                                  "invoice_no", "mdn", "original_invoice_no", "rebate_sku", "rebate_name", "quantity",
+                                  "unit_amount", "earned_amount", "collected_amount", "balance_amount", "tax_amount",
+                                  "device_sku", "device_name", "imei", "device_cost", "device_price", "rate_plan",
+                                  "term_code", "sold_on", "customer_name", "customer_ref", "postal_code", "port_number",
+                                  "contract_no", "soc_code", "salesperson", "salesperson_id", "store", "invoiced_by",
+                                  "vendor_account", "channel", "district", "region_label", "charge_back", "adjusted",
+                                  "reconciled", "flagged", "created_at"],                                   # mig 1005
+            "inventory_flags": ["id", "org_id", "unit_id", "imei_key", "kind", "evidence", "evidence_hash", "customer_name",
+                                "invoice_no", "sold_on", "status", "assigned_customer_id", "assigned_by", "assigned_at",
+                                "verified_by", "verified_at", "dismissed_by", "dismissed_at", "note", "last_seen_at",
+                                "created_at", "updated_at"],                                                # mig 1018
+            "inventory_adjustments": ["id", "org_id", "unit_id", "imei_key", "store_code", "direction", "reason",
+                                      "from_status", "to_status", "flag_id", "customer_id", "note", "created_by",
+                                      "created_at"],                                                        # mig 1018
         }
         # the unique indexes the migrations leave on a table TODAY (a conflict target must name one — 42P10
         # otherwise, as Postgres does); a table not listed accepts any target, as the fake always did

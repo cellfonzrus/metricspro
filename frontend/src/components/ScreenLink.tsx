@@ -48,6 +48,8 @@ export type ScreenKey =
   | 'activations' | 'pay_discrepancy' | 'kpi' | 'ma_handsets'
   // the POS sales / receipts rebuilt from the two landed sales reports (index §30.14, 2026-09-21)
   | 'pos_receipts'
+  // the POS inventory page — its Integrity flags tab reads the sales lines and the commission report (index §11b, 2026-09-24)
+  | 'pos_inventory'
   // the two surfaces that present THE TWO WAYS to calculate employee commission (commcalc/_lib/commissionWays.ts, 2026-09-20)
   | 'commission_structure' | 'incentive_plans'
 
@@ -182,6 +184,7 @@ export const SCREENS: Record<ScreenKey, ScreenDest> = {
   kpi: { href: '/commcalc/kpi', label: 'KPI Metrics', blurb: 'KPI Metrics: the carrier portal\'s rep and store figures', aliases: ['KPI Metrics'] },
   ma_handsets: { href: '/commcalc/ma-handsets', label: 'Marketplace Handset COGS', blurb: 'Marketplace Handset COGS: handset fulfillment orders', aliases: ['Marketplace Handset COGS'] },
   pos_receipts: { href: '/pos/receipts', label: 'POS sales / receipts', blurb: 'POS sales / receipts: the sales rebuilt from the two landed sales reports, printable in the declared POS\'s receipt format', aliases: ['POS sales / receipts', 'Receipt Import'] },
+  pos_inventory: { href: '/pos/inventory', label: 'POS Inventory — integrity flags', blurb: 'POS Inventory: units still in stock that the sales lines or the commission report say were sold, duplicates, and the adjust in / out ledger', aliases: ['POS Inventory', 'Integrity flags'] },
   // ── the two ways to calculate employee commission are presented on these two screens; each links the other ──
   commission_structure: { href: '/commcalc/commission-structure', label: 'Employee Commission Structure', blurb: 'Employee Commission Structure: the two ways to calculate employee commission, set up step by step', aliases: ['Employee Commission Structure', 'Commission Structure'] },
   incentive_plans: { href: '/commcalc/commission-plans', label: 'Incentive Plans', blurb: 'Incentive Plans: the plan editor — rules, tiers, assignments, and each plan\'s commission basis', aliases: ['Incentive Plans', 'plan editor'] },

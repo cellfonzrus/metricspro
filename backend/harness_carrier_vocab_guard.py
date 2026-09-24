@@ -202,6 +202,9 @@ POS_BACKEND_LOGIC = ["commcalc/report_kinds.py", "commcalc/onboarding_intake.py"
                      "pos/vendor_paid_lines.py",        # 2026-09-24 — the lines the vendor pays: learned category segments, no vendor, no carrier word
                      "pos/customer_identity.py",        # 2026-09-24 — who the customer is (§30.16): generic placeholder words, no vendor, no carrier
                      "pos/customer_master.py",          # 2026-09-24 — the customer's lines / merge / page payloads (§30.16): no vendor, no carrier
+                     "pos/inventory_integrity.py",      # 2026-09-24 — inventory integrity flags / adjust reasons (§11b): generic stock words only
+                     "pos/inventory_integrity_router.py",  # 2026-09-24 — its endpoints + the landing guard (§11b): no vendor, no carrier
+                     "commcalc/inventory_sold_recon.py",   # 2026-09-24 — THE engine (+ the commission source, §11b): no vendor, no carrier
                      "core/plan_sources.py"]            # 2026-09-22 — the plan-name source registry + hint words (generic vocabulary; no vendor, no carrier)
 POS_BACKEND_COPY = [
     "commcalc/router.py", "commcalc/sales_recon.py", "commcalc/imei_rebate_report.py", "commcalc/report_labels.py",

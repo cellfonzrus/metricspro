@@ -1462,27 +1462,37 @@ def apply_import(source: str, org_id: str, variant: str = "", actor: str = "") -
         variant = (variant or "").strip() or inventory_default_variant(c, org_id)
         units, _unres = _resolve_unit_stores(_all_units(c, org_id, variant), _store_resolver(c, org_id))
         match = _product_matcher(_page(c, "pos", "products", "id,upc,product_code,short_name,full_name", org_id))
-        have = {(r.get("serial_number") or "").strip().lower()
-                for r in _page(c, "pos", "inventory_serial", "serial_number", org_id)}
+        # THE LANDING GUARD (index §11b, owner 2026-09-24: "if they are duplicated by the way of import that report
+        # should be generated and checked against the imei received and already sold"). The SAME check the single
+        # receive asks, per unit, against every existing unit (by device key, any status) and the batch so far: a
+        # duplicate is skipped and REPORTED, an already-sold device lands and is REPORTED — then the flags scan
+        # picks it up so it can be adjusted out with one click.
+        from app.modules.pos import inventory_integrity_router as _iir
+        guard = _iir.guard_import(c, org_id, [{**u, "serial_number": (u.get("serial_number") or "").strip()} for u in units])
+        skipped += len(guard["skip"])
         new, unmatched = [], 0
-        for u in units:
-            sn = (u.get("serial_number") or "").strip()
-            if not sn or sn.lower() in have:
-                skipped += 1
-                continue
+        for u in guard["land"]:
             pid = match(u)
             if not pid:
                 unmatched += 1
                 continue
-            have.add(sn.lower())
-            new.append({"product_id": pid, "serial_number": sn, "imei": u.get("imei"),   # store_code = the RESOLVED code
+            new.append({"product_id": pid, "serial_number": u["serial_number"], "imei": u.get("imei"),   # store_code = the RESOLVED code
                         "store_code": u.get("store_code"), "cost": u.get("cost"),
                         "date_received": u.get("date_received"),
                         "condition": "new", "status": "in_stock"})
+        before = created
         insert("inventory_serial", new)
+        landing = {"report": guard["report"], "skipped": [{"serial_number": s["unit"].get("serial_number"), "reason": s["reason"]}
+                                                          for s in guard["skip"]][:500]}
+        if created > before:
+            landing["ledger"] = _iir.record_landing(c, org_id, _iir.landed_units(c, org_id, [u["serial_number"] for u in new]),
+                                                    "import", actor or None, note="onboarding bring-over")
+            landing["flags"] = _iir.scan_after_landing(c, org_id)
         if unmatched:
             errors.append(f"{unmatched} unit(s) had no matching product in the POS catalog — "
                           "import your products first, then re-run this.")
+        return {"source": source, "variant": variant, "created": created, "skipped": skipped,
+                "errors": errors, "considered": prev["count"], "landing": landing}
 
     return {"source": source, "variant": variant, "created": created, "skipped": skipped,
             "errors": errors, "considered": prev["count"]}

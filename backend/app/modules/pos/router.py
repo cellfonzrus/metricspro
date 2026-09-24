@@ -1305,30 +1305,20 @@ def list_inventory_serial(search: str = "", store_code: str = "", status: str = 
 
 
 @router.post("/inventory/serial")
-def add_inventory_serial(body: dict, org_id: str = ORG_ID):
-    ins = {k: body[k] for k in SERIAL_FIELDS if k in body}
-    for k in ("imei", "sim_card", "color", "storage", "cost", "date_received", "po_number",
-              "store_code"):
-        if k in ins and ins[k] == "":
-            ins[k] = None
-    if not (ins.get("product_id") and (ins.get("serial_number") or "").strip()):
-        raise HTTPException(400, "product_id and serial_number required")
-    ins["serial_number"] = ins["serial_number"].strip()
-    ins["org_id"] = org_id
-    r = sb().schema("pos").table("inventory_serial").insert(ins).execute()
-    return {"unit": (r.data or [{}])[0]}
+def add_inventory_serial(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Receive one serialised unit — through THE landing guard (index §11b): a duplicate IMEI or an already-sold
+    device answers 409 with the evidence unless the body carries confirm_duplicate: true."""
+    from app.modules.pos import inventory_integrity_router as _iir
+    return _iir.receive_unit(body, authorization, org_id)
 
 
 @router.patch("/inventory/serial/{unit_id}")
-def update_inventory_serial(unit_id: str, body: dict, org_id: str = ORG_ID):
-    upd = {k: body[k] for k in SERIAL_FIELDS if k in body}
-    if not upd:
-        raise HTTPException(400, "nothing to update")
-    r = (sb().schema("pos").table("inventory_serial").update(upd)
-         .eq("org_id", org_id).eq("id", unit_id).execute())
-    if not r.data:
-        raise HTTPException(404, "not found")
-    return {"unit": r.data[0]}
+def update_inventory_serial(unit_id: str, body: dict, authorization: str = Header(default=""),
+                            org_id: str = ORG_ID):
+    """Edit one unit — a status change goes through the adjustment ledger, a new serial / IMEI through the landing
+    guard, an integrity field needs pos_inventory_adjust (index §11b)."""
+    from app.modules.pos import inventory_integrity_router as _iir
+    return _iir.edit_unit(unit_id, body, authorization, org_id)
 
 
 @router.get("/inventory/standard")
