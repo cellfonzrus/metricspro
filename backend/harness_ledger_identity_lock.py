@@ -266,7 +266,7 @@ def main():
           and "ledger_period_keys(" in rf.get("_ledger_query", ""))
     readers = ("commission_ledger_summary", "commission_ledger_rows", "commission_ledger_observed_types",
                "commission_ledger_by_rep", "_intake_reread", "_ledger_existing_by_origin", "commission_ledger_provenance",
-               "_mcw_ledger_rows", "_statement_buckets", "commission_ledger_landings", "_ledger_landings_present")
+               "_mcw_ledger_rows", "_statement_buckets", "commission_ledger_landings", "_ledger_family_rows")
     check("(b) every ledger reader in the router builds on _ledger_query",
           all("_ledger_query(" in rf.get(fn, "") for fn in readers), [fn for fn in readers if "_ledger_query(" not in rf.get(fn, "")])
     check("(b) the P&L reader filters period through _period.period_keys (in_), never a literal",
@@ -283,8 +283,15 @@ def main():
     sync = rf.get("commission_ledger_ma_sync", "")
     check("(c) the MA refresh lands THROUGH the lander (origin ma_sync) and holds no insert of its own",
           "_ledger_land_rows(" in sync and "origin=ledger_ma_sync.ORIGIN_SYNC" in sync and not INSERT.search(strip_comments(sync)))
-    check("(c) the older wizard and the intake commit land through the lander",
-          "_ledger_land_rows(" in rf.get("commission_ledger_import", "") and "_ledger_land_rows(" in rf.get("_intake_commit_commission", ""))
+    # PIN CHANGED 2026-09-24 (index §30.17): the older wizard's body is factored into _ledger_import_prepared
+    # (the batch import's per-file path); the family read of _ledger_landings_present into _ledger_family_rows
+    check("(c) the older wizard (via _ledger_import_prepared), the batch import and the intake commit land through the lander",
+          "_ledger_import_prepared(" in rf.get("commission_ledger_import", "")
+          and "_ledger_import_prepared(" in rf.get("commission_ledger_import_batch", "")
+          and "_ledger_land_rows(" in rf.get("_ledger_import_prepared", "")
+          and "_ledger_land_rows(" in rf.get("_intake_commit_commission", ""))
+    check("(b) _ledger_landings_present measures through the shared family read (_ledger_family_rows)",
+          "_ledger_family_rows(" in rf.get("_ledger_landings_present", ""))
     land = rf.get("_ledger_land_rows", "")
     check("(c) the lander stamps the derived identity and the canonical period on EVERY row, and wipes through _ledger_delete_scoped",
           "commission_ledger.ledger_source_report(" in land and "commission_ledger.canonical_period(" in land

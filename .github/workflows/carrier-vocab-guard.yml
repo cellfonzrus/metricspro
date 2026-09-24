@@ -156,6 +156,10 @@ on:
       - "database/migrations/1013_pl_commission_source.sql"
       - "backend/harness_pos_sales_from_reports_lock.py"
       - "backend/harness_ledger_identity_lock.py"
+      - "backend/harness_ledger_batch_lock.py"
+      - "backend/harness_ledger_batch.py"
+      - "backend/harness_intake_fakes.py"
+      - "backend/app/modules/commcalc/ledger_batch.py"
       - "backend/app/modules/commcalc/commission_ledger.py"
       - "backend/app/modules/account/_period.py"
       - "backend/app/modules/account/ledger_pnl.py"
@@ -315,6 +319,9 @@ jobs:
       - name: Run the inventory-integrity lock (one engine; every serial landing asks the duplicate guard; one status writer with its ledger row; one IMEI key; the commission feed one registry fact — index §11b)
         working-directory: backend
         run: python3 harness_inventory_integrity_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the multi-month ledger upload lock (the batch is N single imports — one reader/mapper, one lander, one month detector, one canonicaliser — index §30.17)
+        working-directory: backend
+        run: python3 harness_ledger_batch_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CUSTOMER-MASTER PROOF (index §30.16) drives the REAL matcher, rebuild, line writer and /pos endpoints over the
   # in-memory client (harness_intake_fakes) — it imports the app, so it runs in its own job with the backend's
@@ -359,3 +366,21 @@ jobs:
       - name: Run the inventory-integrity proof (sales lines + commission report; flags, one-click assign, verify; the 409 guard on every landing path; the ledger on every status change)
         working-directory: backend
         run: python3 harness_inventory_integrity.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE MULTI-MONTH LEDGER UPLOAD PROOF (index §30.17) drives the REAL /commission-ledger/import and /import-batch
+  # endpoints over the in-memory client (harness_intake_fakes): N files through the batch land byte-identical
+  # ledger rows to N single imports; one month twice, an undeterminable month and differing columns are refused;
+  # an already-landed month follows the lander's replace rule; one file's failure rolls back no other. It imports
+  # the app, so it runs in its own job with the backend's dependencies.
+  ledger-batch-proof:
+    name: Multi-month ledger upload proof (DB-free, the real endpoints)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the multi-month ledger upload proof (batch == N single imports; refusals; replace rule; per-file isolation)
+        working-directory: backend
+        run: python3 harness_ledger_batch.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"

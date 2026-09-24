@@ -5,6 +5,7 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import EntityPicker from '@/components/EntityPicker'
 import { optionsFromRows } from '@/lib/standard-filters'
 import PlCommissionSourcePanel from '@/components/PlCommissionSourcePanel'
+import LedgerBatchUpload from '@/components/LedgerBatchUpload'
 
 // Canonical Commission Ledger (SAP-style) — normalise ANY carrier's commission/tx file into FIVE canonical
 // buckets: Commission / Spiff / Equipment rebate / Residual-monthly / Auto Pay residual. A payout paid over
@@ -47,7 +48,9 @@ type Summ = {
 }
 const LEG_ORDER = ['m1', 'trailing', 'unsplit']
 const LEG_FALLBACK: Record<string, string> = { m1: '1st Month', trailing: 'M2–M12', unsplit: 'Unsplit' }
-type Tmpl = { key: string; label: string; builtin: boolean; rule_count: number; ma_syncable?: boolean; ma_sources?: string[] }
+// carrier_id: the carrier whose statement this template is (backend-derived, index §30.17a) — sent with every
+// import so the mapping read is the carrier's own set, the one the intake mapped this statement with
+type Tmpl = { key: string; label: string; builtin: boolean; rule_count: number; ma_syncable?: boolean; ma_sources?: string[]; carrier_id?: string | null }
 // Provenance: which ingest populated a period, and when. `raw_available` counts the rows sitting in the
 // raw MA tables for that period — so a period whose feed has moved on while the ledger hasn't is visible.
 type OriginRow = { origin: string; label: string; lines: number; payout_total: number; last_at: string | null }
@@ -190,6 +193,7 @@ export default function CommissionLedgerPage() {
     try {
       const fd = new FormData()
       fd.append('file', file); fd.append('source_report', src); fd.append('period', period)
+      if (tmpl?.carrier_id) fd.append('carrier_id', tmpl.carrier_id)
       const r = await apiUpload('/api/v1/commcalc/commission-ledger/import', fd)
       flash(`Imported ${r?.saved} lines — payouts ${money(r?.summary?.payout_total)}${r?.summary?.other_count ? `, ${r.summary.other_count} unmapped` : ''}`)
       loadSummary()
@@ -298,6 +302,10 @@ export default function CommissionLedgerPage() {
           <input type="file" accept=".xls,.xlsx,.csv,.txt" style={{ display: 'none' }} disabled={busy}
             onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.currentTarget.value = '' }} />
         </label>
+        {/* SEVERAL MONTHS AT ONCE (owner 2026-09-24, index §30.17): the carrier issues one statement per month —
+            pick them all, preview the month each one lands under, fix any month, Upload all. The same import path
+            as the single file above, once per file. */}
+        <LedgerBatchUpload source={src} carrierId={tmpl?.carrier_id || ''} disabled={busy} onLanded={() => { loadSummary(); loadProvenance() }} />
         {/* Refresh the ledger from the raw MA tables that already flow (raw_ma_daily_tx /
             raw_ma_commission) instead of waiting on a hand-uploaded file. Preview first — this button
             writes nothing. */}

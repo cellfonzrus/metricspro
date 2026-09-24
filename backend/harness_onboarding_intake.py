@@ -1162,7 +1162,10 @@ check("the four endpoints are mounted",
       all(p in paths for p in ("/commcalc/onboarding/intake/state", "/commcalc/onboarding/intake/analyze", "/commcalc/onboarding/intake/commit"))
       and sum(1 for p in paths if p == "/commcalc/onboarding/intake/state") == 2)
 commit_src = inspect.getsource(R.onboarding_intake_commit) + inspect.getsource(R._intake_commit_commission)
-imp_src = inspect.getsource(R.commission_ledger_import)
+# PIN CHANGED 2026-09-24 (index §30.17): the import's body is factored into _ledger_prepare_file +
+# _ledger_import_prepared (the batch import's per-file path); read together with the endpoint
+imp_src = "\n".join(inspect.getsource(f) for f in (R.commission_ledger_import, R._ledger_prepare_file,
+                                                  R._ledger_import_prepared))
 check("the commit saves through the ONE mapping writer and the Category Map's own writer, lands through the import's own path, and re-reads",
       all(t in commit_src for t in ("upsert_column_mapping(", "upsert_commission_category_map(", "_ledger_land_rows(", "_intake_reread(")))
 check("/commission-ledger/import lands through the SAME helper (factored, not duplicated)",
