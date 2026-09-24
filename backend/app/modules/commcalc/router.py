@@ -42839,9 +42839,13 @@ async def _run_zero_sales_alerts(org_id_filter=None, respect_enabled=True, dry_r
                 planned.append({"to": dg["to"], "subject": dg["subject"], "already_sent": True})
                 continue
             built = _zs.build_digest(dg["to_name"], new_items, not_assessed=not_assessed)
+            # STRUCTURED, never a pre-joined display string. The dry-run preview is rendered by a
+            # human-facing screen, and a backend that ships formatted text forces that screen to
+            # either print the raw payload or re-parse prose. The view owns presentation.
             planned.append({"to": dg["to"], "subject": built["subject"], "already_sent": False,
-                            "items": [f"{i['store_code']} {i['grain']} {i['label']} "
-                                      f"{i['zero_days']}d" for i in new_items]})
+                            "items": [{"store_code": i["store_code"], "grain": i["grain"],
+                                       "label": i["label"], "zero_days": i["zero_days"]}
+                                      for i in new_items]})
             if dry_run:
                 continue
             if email_ok:

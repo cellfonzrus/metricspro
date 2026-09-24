@@ -112,6 +112,98 @@ function DayCell({ day, state, count, notes }: {
   )
 }
 
+/** The dry-run digest, rendered as what it is: the emails that WOULD go out, who gets each one and
+ *  which store-days it would name. This panel used to print the raw API payload, which is a debug
+ *  view and not something a manager should ever be shown. The backend returns structured items and
+ *  this component owns every word on screen. Nothing here sends anything. */
+function DigestPreview({ preview }: { preview: any }) {
+  if (preview.loading) {
+    return <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 8 }}>Building preview&hellip;</div>
+  }
+  if (preview.error) {
+    return (
+      <div style={{ fontSize: 13, color: '#b91c1c', marginTop: 8 }}>
+        The preview could not be built: {String(preview.error)}
+      </div>
+    )
+  }
+  // One entry per tenant the run covered; this screen is single-org, so there is normally one.
+  const res: any[] = Array.isArray(preview.results) ? preview.results : []
+  const refused = res.filter(r => typeof r.skipped === 'string' || r.error)
+  const digests = res.flatMap((r: any) => (r.planned || []).map((p: any) => ({ ...p, org: r.org_id })))
+  const flagged = res.reduce((n, r) => n + (Number(r.flagged) || 0), 0)
+  const notAssessed = res.reduce((n, r) => n + (Number(r.not_assessed) || 0), 0)
+  const emailOff = res.some(r => r.email_configured === false)
+
+  return (
+    <div style={{ marginTop: 10, fontSize: 13 }}>
+      {refused.map((r, i) => (
+        <div key={`refused-${i}`} style={{ color: '#6d28d9', marginBottom: 6 }}>
+          Nothing was planned for this organisation &mdash; {String(r.skipped || r.error)}
+          {r.detail ? `: ${r.detail}` : ''}
+        </div>
+      ))}
+
+      {!refused.length && !digests.length && (
+        <div style={{ color: 'var(--text2)' }}>
+          <strong>No digest would go out.</strong> No store has reached the threshold of consecutive
+          zero trading days.
+        </div>
+      )}
+
+      {digests.length > 0 && (
+        <div style={{ color: 'var(--text2)', marginBottom: 8 }}>
+          <strong>{digests.length}</strong> {digests.length === 1 ? 'email' : 'emails'} would go out,
+          covering <strong>{flagged}</strong> flagged {flagged === 1 ? 'scope' : 'scopes'}.
+        </div>
+      )}
+
+      {digests.map((d: any, i: number) => (
+        <div key={`${d.to}-${i}`} style={{ ...card, marginBottom: 8, background: 'var(--bg2)' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+            <strong>{d.to}</strong>
+            {d.already_sent && (
+              <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 999,
+                             background: 'var(--bg1)', color: 'var(--text3)',
+                             border: '1px solid var(--border)' }}>
+                already sent today &mdash; would not send again
+              </span>
+            )}
+          </div>
+          <div style={{ color: 'var(--text2)', marginTop: 2 }}>{d.subject}</div>
+          {Array.isArray(d.items) && d.items.length > 0 && (
+            <ul style={{ margin: '6px 0 0', paddingLeft: 18, color: 'var(--text2)' }}>
+              {d.items.map((it: any, j: number) => (
+                <li key={j}>
+                  <strong>{it.store_code}</strong>
+                  {it.grain === 'rep' ? ` — ${it.label}` : ''}
+                  {' · '}
+                  {it.zero_days} consecutive zero {it.zero_days === 1 ? 'day' : 'days'}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+
+      {/* A thin preview must never read as a healthy estate — the same reason the digest footer
+          carries this count. */}
+      {notAssessed > 0 && (
+        <div style={{ color: '#92400e', marginTop: 4 }}>
+          {notAssessed} store-{notAssessed === 1 ? 'day' : 'days'} in the window could not be
+          assessed because no feed landed. Those are never emailed as a sales problem &mdash; they
+          are a data gap, reported on this screen and in import health.
+        </div>
+      )}
+      {emailOff && (
+        <div style={{ color: 'var(--text3)', marginTop: 4 }}>
+          No email provider is configured, so nothing could be delivered even with alerts on.
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ZeroSalesPage() {
   const today = new Date()
   const iso = (d: Date) => d.toISOString().slice(0, 10)
@@ -248,12 +340,7 @@ export default function ZeroSalesPage() {
                 Preview today&rsquo;s digest (sends nothing)
               </button>
             </div>
-            {preview && (
-              <pre style={{ marginTop: 8, fontSize: 11, maxHeight: 200, overflow: 'auto',
-                            background: 'var(--bg2)', padding: 8, borderRadius: 6 }}>
-                {JSON.stringify(preview, null, 2)}
-              </pre>
-            )}
+            {preview && <DigestPreview preview={preview} />}
           </div>
 
           <div style={{ marginTop: 20, overflowX: 'auto' }}>
