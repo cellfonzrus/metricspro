@@ -272,8 +272,8 @@ class FakeDB:
                                 "pos_source", "invoice_no", "salesperson", "document", "imei_bidx", "phone_bidx", "search_bidx"],
             "customers": ["id", "org_id", "cust_number", "account_type", "company_name", "first_name", "last_name", "middle_initial", "dob",
                           "driver_license_state", "primary_account_no", "password", "email", "phone_primary", "phone_secondary", "address_1",
-                          "address_2", "city", "state", "zip", "referral_source", "credit_limit", "accept_checks", "is_active", "notes",
-                          "created_at", "updated_at"],
+                          "address_2", "city", "state", "zip", "referral_source", "credit_limit", "accept_checks", "is_active",
+                          "created_at", "updated_at"],   # mig 725 exactly — NO `notes` column (the live table has none; 2026-09-24)
         }
         # the unique indexes the migrations leave on a table TODAY (a conflict target must name one — 42P10
         # otherwise, as Postgres does); a table not listed accepts any target, as the fake always did

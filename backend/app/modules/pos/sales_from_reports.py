@@ -41,6 +41,7 @@ from __future__ import annotations
 import datetime as _dt
 import re
 
+from app.modules.pos import vendor_paid_lines as _vpl
 from app.modules.pos.receipt_formats import base as _base
 
 PROVENANCE_KIND = "reports"
@@ -100,7 +101,7 @@ def _words_diff(a, b, what_a, what_b):
     return f"{what_a} are {a:,.2f} and {what_b} {b:,.2f} — a difference of {d:,.2f}"
 
 
-def build_document(inv, tenders, lines, fmt, *, store_header, customer_lines, footer_text, pays,
+def build_document(inv, tenders, lines, fmt, *, store_header, customer_lines, footer_text, pays, vendor_paid,
                    built_at=None, built_by=None, sources=None):
     """ONE invoice → (document, report). `fmt` = the registered format module (COLUMNS, TOTALS, TITLE,
     DATE_FORMAT, FINANCED_ITEMS, CONTRACT_SECTION, POS_SOURCE, LABEL). Injected:
@@ -109,6 +110,9 @@ def build_document(inv, tenders, lines, fmt, *, store_header, customer_lines, fo
       footer_text → the org's receipt-template footer (config) or None
       pays(tender_class) → is it the CUSTOMER's payment (closing.router.is_customer_payment — the one answer the
         intake's 2.5b tie and Cash Collected give too)
+      vendor_paid(line) → did the VENDOR pay this line (pos.vendor_paid_lines.matcher over the org's saved rule —
+        config, never code): such a line prints at $0.00 as the register prints it; its amount is kept in the
+        report beside the vendor-paid tenders (owner 2026-09-24: "$0.00 like register")
     `sources` names the landings the rows came from (table / kind), for the provenance stamp."""
     cols = [{"key": c["key"], "label": c["label"], "kind": c["kind"],
              "align": "right" if c["kind"] in (_base.KIND_MONEY, _base.KIND_TOTAL, _base.KIND_QTY) else "left"}
@@ -162,11 +166,16 @@ def build_document(inv, tenders, lines, fmt, *, store_header, customer_lines, fo
     sum_lines = 0.0
     financed = 0.0
     refund_lines = 0
+    vp_sum, vp_lines = 0.0, 0
     for ln in ordered:
         qty = _f(ln.get("quantity"))
         total = money(_f(ln.get("ext_price")))
-        unit = money(total / qty) if qty not in (0, 0.0) else total
         sum_lines += total
+        if vendor_paid(ln):
+            vp_sum += total
+            vp_lines += 1
+            total = 0.0
+        unit = money(total / qty) if qty not in (0, 0.0) else total
         if _is_financed(ln, fin_rule):
             financed += -total
         if _s(ln.get("voided")).lower() in ("yes", "y", "true", "1"):
@@ -176,6 +185,8 @@ def build_document(inv, tenders, lines, fmt, *, store_header, customer_lines, fo
         doc["items"].append(_base.item({c["key"]: cells.get(c["key"], "") for c in cols}, cols))
     sum_lines = money(sum_lines)
     financed = money(financed)
+    vp_sum = money(vp_sum)
+    sum_printed = money(sum_lines - vp_sum)
 
     subtotal = money(_f(inv.get("subtotal")))
     inv_total = money(_f(inv.get("invoice_total")))
@@ -228,7 +239,18 @@ def build_document(inv, tenders, lines, fmt, *, store_header, customer_lines, fo
     else:
         words.append(f"invoice {inv_no}: {len(ordered)} line(s) found" + (f", {refund_lines} flagged as a refund / offset" if refund_lines else ""))
     d_sub = money(sum_lines - subtotal)
-    if ordered:
+    d_print = money(sum_printed - subtotal)
+    if vp_lines:
+        words.append(f"{vp_lines} line(s) the vendor paid print at $0.00, as the register prints them (their amounts add up to {vp_sum:,.2f}; "
+                     + (_words_diff(vp_sum, other_sum, "they", "the invoice's vendor-paid tenders") if other else "the invoice carries no vendor-paid tender")
+                     + ")")
+    if ordered and vp_lines:
+        if abs(d_print) < 0.005:
+            words.append(f"the printed lines add up to the invoice subtotal to the cent ({sum_printed:,.2f})")
+        else:
+            words.append(f"the printed lines add up to {sum_printed:,.2f}; the invoice subtotal is {subtotal:,.2f} — a difference of {d_print:,.2f} "
+                         "(lines the line-level export does not carry, e.g. a category it was filtered to leave out)")
+    elif ordered:
         if abs(d_sub) < 0.005:
             words.append(f"the lines add up to the invoice subtotal to the cent ({sum_lines:,.2f})")
         elif abs(money(d_sub - other_sum)) < 0.005 and other:
@@ -256,7 +278,8 @@ def build_document(inv, tenders, lines, fmt, *, store_header, customer_lines, fo
               "lines_found": len(ordered), "refund_lines": refund_lines, "sum_lines": sum_lines, "subtotal": subtotal,
               "net_sales": net_sales, "invoice_total": inv_total, "customer_tenders": pay_sum, "other_tenders": other,
               "tax_residual": tax_residual, "tax_landed": tax_landed, "financed": financed,
-              "lines_tie": abs(d_sub) < 0.005 or (bool(other) and abs(money(d_sub - other_sum)) < 0.005),
+              "vendor_paid_count": vp_lines, "vendor_paid_sum": vp_sum, "sum_printed": sum_printed,
+              "lines_tie": abs(d_sub) < 0.005 or (bool(other) and abs(money(d_sub - other_sum)) < 0.005) or (bool(vp_lines) and abs(d_print) < 0.005),
               "tenders_tie": abs(money(pay_sum - inv_total)) < 0.005, "words": words}
     doc[_base.PROVENANCE_KEY] = {
         "kind": PROVENANCE_KIND, "built_at": built_at or _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"), "built_by": built_by,
@@ -288,7 +311,9 @@ def build_documents(invoices, tenders, lines, fmt, **ctx):
     return {"documents": out, "invoices": len(seen), "with_lines": sum(1 for d, r in out if r["lines_found"]),
             "without_lines": sum(1 for d, r in out if not r["lines_found"]), "line_invoices_without_header": orphan_lines,
             "lines_tie": sum(1 for d, r in out if r["lines_tie"] and r["lines_found"]),
-            "tenders_tie": sum(1 for d, r in out if r["tenders_tie"])}
+            "tenders_tie": sum(1 for d, r in out if r["tenders_tie"]),
+            "vendor_paid_count": sum(r.get("vendor_paid_count", 0) for d, r in out),
+            "vendor_paid_sum": money(sum(r.get("vendor_paid_sum", 0.0) for d, r in out))}
 
 
 def summary_words(res):
@@ -300,6 +325,8 @@ def summary_words(res):
         w.append(f"the lines tie to the invoice subtotal (or the difference is the vendor-paid tenders) on {res['lines_tie']:,} of {res['with_lines']:,}")
     if n:
         w.append(f"the customer tenders equal the invoice total on {res['tenders_tie']:,} of {n:,}")
+    if res.get("vendor_paid_count"):
+        w.append(f"{res['vendor_paid_count']:,} line(s) the vendor paid print at $0.00, as the register prints them (Σ {res['vendor_paid_sum']:,.2f})")
     return w
 
 
@@ -384,6 +411,41 @@ def _footer_text(client, org_id):
     return None
 
 
+def load_vendor_paid_rule(client, org_id):
+    """The org's saved vendor-paid line rule (pos.pos_settings key `vendor_paid_lines`, the org row) through
+    vendor_paid_lines.resolve_config; no row / unreadable → the house default (no line is vendor-paid)."""
+    try:
+        rows = (client.schema("pos").table("pos_settings").select("value").eq("org_id", org_id)
+                .eq("key", _vpl.CONFIG_KEY).is_("store_code", "null").limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    return _vpl.resolve_config(rows[0].get("value") if rows else None)
+
+
+def vendor_paid_evidence(client, org_id, lo, hi, tokens=None):
+    """The POS page card's payload for (org × lo..hi): the saved rule and its proof, the PROPOSAL learned
+    from these lines, and — when `tokens` is given — the refusals for saving them. Reads the two landings
+    through the intake's own re-reads (the same rows the rebuild reads); writes nothing."""
+    from app.modules.commcalc import router as _cr
+    from app.modules.commcalc import column_mapping as _cm
+    from app.modules.commcalc import onboarding_intake as _oi
+    from app.modules.closing import router as _closing
+    inv_kind, line_kind = _oi.REPORT_KEY_BY_KIND["invoice"], _oi.REPORT_KEY_BY_KIND["sales"]
+    invoices = _cr._intake_reread_invoice(client, org_id, None, lo, hi, kind=inv_kind)
+    tenders = _cr._intake_reread_invoice_tenders(client, org_id, None, lo, hi, kind=inv_kind)
+    lines = _cr._intake_reread_sales(client, org_id, None, lo, hi, table=_cm.TABLE_MAP[line_kind], kind=line_kind)
+    nums = [_s(i.get("trans_id")) for i in invoices if _s(i.get("trans_id"))]
+    nc = _vpl.non_customer_by_invoice(tenders, _closing.is_customer_payment)
+    saved = load_vendor_paid_rule(client, org_id)
+    out = {"from": lo, "to": hi, "invoices": len(nums), "lines": len(lines), "saved": saved,
+           "saved_proof": _vpl.proof(lines, nums, nc, saved) if saved["tokens"] else None,
+           "proposal": _vpl.propose(lines, nums, nc) if nums and lines else None}
+    if tokens is not None:
+        out["refusals"] = _vpl.check_save(tokens, lines, nums, nc)
+        out["candidate_proof"] = _vpl.proof(lines, nums, nc, {"tokens": tokens})
+    return out
+
+
 def rebuild(client, org_id, lo, hi, stores=None, who=None, dry_run=False):
     """Rebuild every invoice of (org × trans_date lo..hi [× stores]) from the two landings and import each
     through receipt_import.upsert_structured under the declared POS. Returns the summary (counts, ties in
@@ -397,6 +459,7 @@ def rebuild(client, org_id, lo, hi, stores=None, who=None, dry_run=False):
     fmt = resolve_format(client, org_id)
     if not fmt["ok"]:
         return {"ok": False, "ran": False, "reason": fmt["reason"], "pos": fmt["pos"], "invoices": 0, "created": 0, "replaced": 0}
+    vp_rule = load_vendor_paid_rule(client, org_id)
     inv_kind = _oi.REPORT_KEY_BY_KIND["invoice"]
     line_kind = _oi.REPORT_KEY_BY_KIND["sales"]
     inv_table = _cm.TABLE_MAP[inv_kind]
@@ -409,7 +472,8 @@ def rebuild(client, org_id, lo, hi, stores=None, who=None, dry_run=False):
     res = build_documents(
         invoices, tenders, lines, fmt["format"]["module"],
         store_header=_store_header_fn(client, org_id), customer_lines=_customer_lines_fn(client, org_id),
-        footer_text=_footer_text(client, org_id), pays=_closing.is_customer_payment, built_at=now, built_by=who,
+        footer_text=_footer_text(client, org_id), pays=_closing.is_customer_payment, vendor_paid=_vpl.matcher(vp_rule),
+        built_at=now, built_by=who,
         sources={"invoice": {"table": inv_table, "kind": inv_kind, "from": lo, "to": hi},
                  "tenders": {"table": tender_table, "kind": inv_kind}, "lines": {"table": line_table, "kind": line_kind}})
     rep_resolve = _cr._intake_rep_resolver(client, org_id)
@@ -436,15 +500,146 @@ def rebuild(client, org_id, lo, hi, stores=None, who=None, dry_run=False):
             failed += 1
             failures.append({"invoice_no": report["invoice_no"], "error": str(e)[:200]})
     words = summary_words(res)
+    if not vp_rule["tokens"]:
+        words.append("no vendor-paid line rule is saved for this company — the lines the vendor paid print their amounts; "
+                     "confirm the proposed rule under POS → Receipts → 'Lines the vendor pays', then rebuild")
     words.append(f"{created:,} POS sale(s) created, {replaced:,} replaced (re-run), {failed:,} failed" if not dry_run else "dry run — nothing written")
     return {"ok": failed == 0, "ran": True, "pos": fmt["pos"], "format_label": fmt["format"]["label"], "from": lo, "to": hi,
             "stores": stores, "invoices": res["invoices"], "with_lines": res["with_lines"], "without_lines": res["without_lines"],
             "line_invoices_without_header": res["line_invoices_without_header"][:50],
             "lines_tie": res["lines_tie"], "tenders_tie": res["tenders_tie"],
+            "vendor_paid": {"tokens": vp_rule["tokens"], "lines": res["vendor_paid_count"], "sum": res["vendor_paid_sum"]},
             "created": created, "replaced": replaced, "failed": failed, "failures": failures[:50],
             "words": words, "reports": reports[:200], "reports_total": len(reports),
             "landings": {"invoice": {"table": inv_table, "rows": len(invoices)}, "tenders": {"table": tender_table, "rows": len(tenders)},
                          "lines": {"table": line_table, "rows": len(lines)}}}
+
+
+# ── A LARGE REBUILD RUNS IN THE BACKGROUND (owner 2026-09-24: "i dont see receipts") ────────────────────
+# Measured: the commit of a 10,823-invoice file rebuilt every invoice INSIDE the request (~0.2 s each ≈ 40 min),
+# the request timed out, the intake card never finished and no receipt was written. One entry point for every
+# caller — `rebuild_or_start`: a slice of up to SYNC_MAX_INVOICES invoices rebuilds while you wait (as before);
+# a larger one runs month by month off the request, its progress kept in ONE row (pos.pos_settings key JOB_KEY,
+# written only through pos.router.upsert_pos_setting) that the POS receipts page reads. Never two at once.
+JOB_KEY = "sales_from_reports_job"
+SYNC_MAX_INVOICES = 300
+JOB_STALE_SECONDS = 3 * 3600
+
+
+def _now_iso():
+    return _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def month_slices(lo, hi):
+    """[lo..hi] cut at month ends → [(from, to), …] (inclusive ISO dates)."""
+    a, b = _dt.date.fromisoformat(lo[:10]), _dt.date.fromisoformat(hi[:10])
+    out = []
+    while a <= b:
+        nxt = (a.replace(day=28) + _dt.timedelta(days=4)).replace(day=1)
+        end = min(b, nxt - _dt.timedelta(days=1))
+        out.append((a.isoformat(), end.isoformat()))
+        a = nxt
+    return out
+
+
+def count_invoices(client, org_id, lo, hi, stores=None):
+    """How many invoice headers the slice holds (the invoice landing, org × dates [× stores])."""
+    from app.modules.commcalc import column_mapping as _cm
+    from app.modules.commcalc import onboarding_intake as _oi
+    q = (client.schema("commcalc").table(_cm.TABLE_MAP[_oi.REPORT_KEY_BY_KIND["invoice"]]).select("id", count="exact")
+         .eq("org_id", org_id).gte("trans_date", lo).lte("trans_date", hi))
+    if stores:
+        q = q.in_("store", list(stores))
+    try:
+        r = q.limit(1).execute()
+        return int(getattr(r, "count", None) or 0)
+    except Exception:
+        return 0
+
+
+def load_job(client, org_id):
+    """The org's rebuild job row (or None)."""
+    try:
+        rows = (client.schema("pos").table("pos_settings").select("value").eq("org_id", org_id)
+                .eq("key", JOB_KEY).is_("store_code", "null").limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    v = rows[0].get("value") if rows else None
+    return v if isinstance(v, dict) else None
+
+
+def _save_job(client, org_id, job):
+    from app.modules.pos import router as _pr
+    _pr.upsert_pos_setting(client, org_id, JOB_KEY, job)
+    return job
+
+
+def job_running(job, now=None):
+    """A job counts as running until it finishes — or until JOB_STALE_SECONDS pass without a finish (a worker
+    restart leaves a 'running' row behind; a stale one never blocks a new start)."""
+    if not job or job.get("state") != "running":
+        return False
+    try:
+        started = _dt.datetime.strptime(job.get("updated_at") or job.get("started_at"), "%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return False
+    return ((now or _dt.datetime.utcnow()) - started).total_seconds() < JOB_STALE_SECONDS
+
+
+def run_job(client, org_id, lo, hi, stores=None, who=None):
+    """The background body: the slice month by month through `rebuild`, the running totals saved after each
+    month. Never raises — a failure is the job's state, in words."""
+    months = month_slices(lo, hi)
+    job = dict(load_job(client, org_id) or {})
+    tot = {"invoices": 0, "created": 0, "replaced": 0, "failed": 0, "vendor_paid_count": 0}
+    try:
+        for i, (a, b) in enumerate(months, 1):
+            r = rebuild(client, org_id, a, b, stores=stores, who=who)
+            if not r.get("ran"):
+                job.update({"state": "failed", "finished_at": _now_iso(), "updated_at": _now_iso(),
+                            "words": [r.get("reason") or "the rebuild could not run"]})
+                _save_job(client, org_id, job)
+                return job
+            for k in ("invoices", "created", "replaced", "failed"):
+                tot[k] += int(r.get(k) or 0)
+            tot["vendor_paid_count"] += int(((r.get("vendor_paid") or {}).get("lines")) or 0)
+            job.update({"months_done": i, "current": b, "updated_at": _now_iso(), **tot})
+            _save_job(client, org_id, job)
+        job.update({"state": "done", "finished_at": _now_iso(), "updated_at": _now_iso(), **tot,
+                    "words": [f"rebuilt {tot['invoices']:,} invoice(s) from {lo} to {hi}: {tot['created']:,} created, "
+                              f"{tot['replaced']:,} replaced, {tot['failed']:,} failed"]})
+    except Exception as e:  # the job's state says it; the rows written so far stay (a re-run replaces them)
+        job.update({"state": "failed", "finished_at": _now_iso(), "updated_at": _now_iso(),
+                    "words": [f"the rebuild stopped at {job.get('current') or lo}: {str(e)[:200]} — rows written so far are kept; run it again to finish"]})
+    _save_job(client, org_id, job)
+    return job
+
+
+def _thread_start(fn):
+    import threading
+    threading.Thread(target=fn, daemon=True).start()
+
+
+def rebuild_or_start(client, org_id, lo, hi, stores=None, who=None, dry_run=False, start=None):
+    """THE entry point every caller uses (the rebuild endpoint, the intake commit). A slice of up to
+    SYNC_MAX_INVOICES invoices (or a dry run) rebuilds now and answers as `rebuild` does; a larger one starts
+    the background job (or reports the one already running) and answers at once with `background: True`."""
+    n = count_invoices(client, org_id, lo, hi, stores)
+    if dry_run or n <= SYNC_MAX_INVOICES:
+        return rebuild(client, org_id, lo, hi, stores=stores, who=who, dry_run=dry_run)
+    cur = load_job(client, org_id)
+    if job_running(cur):
+        return {"ok": True, "ran": False, "background": True, "job": cur,
+                "words": [f"a rebuild is already running ({cur.get('from')} – {cur.get('to')}, month {cur.get('months_done', 0)} of "
+                          f"{cur.get('months_total')}) — its progress shows on the receipts page; start another when it finishes"]}
+    months = month_slices(lo, hi)
+    job = {"state": "running", "from": lo, "to": hi, "stores": stores, "by": who, "invoices_expected": n,
+           "months_total": len(months), "months_done": 0, "started_at": _now_iso(), "updated_at": _now_iso(), "words": []}
+    _save_job(client, org_id, dict(job))
+    (start or _thread_start)(lambda: run_job(client, org_id, lo, hi, stores=stores, who=who))
+    return {"ok": True, "ran": False, "background": True, "job": dict(job), "invoices": n,
+            "words": [f"{n:,} invoice(s) from {lo} to {hi} — too many to rebuild while you wait, so they are rebuilding in the "
+                      f"background, one month at a time ({len(months)} month(s)); the progress shows on the receipts page"]}
 
 
 def list_rebuilt(client, org_id, lo=None, hi=None, limit=2000):
