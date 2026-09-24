@@ -5,11 +5,17 @@
 // with item picking, ship/receive/cancel — all inventory movement is server-side) and Purchase Orders
 // (header-only list + Enter Order form, matching the standalone UI). The source's Receiving/Adjustment
 // form was a mock (alert-only) and is intentionally not ported.
+// 2026-09-24 (index §11b): the Integrity flags tab (units the sales / commission reports say were sold, duplicates),
+// the manual Adjust in / out modal (every status change writes the adjustment ledger), and the duplicate-IMEI pop-up
+// when a receive or an edit answers 409 from the landing guard.
 import { useEffect, useState } from 'react'
 import { api, localToday } from '@/lib/client'
 import { apiCached } from '@/lib/cache'
 import { getActiveStore, setActiveStore } from '@/lib/pos-store'
 import { useAuth } from '@/lib/auth-context'
+import IntegrityFlags from './integrity-flags'
+import AdjustModal from './adjust-modal'
+import DuplicateModal, { type DuplicateDetail } from './duplicate-modal'
 
 interface SerialUnit {
   id: string; product_id: string; store_code: string | null
@@ -60,7 +66,7 @@ interface PurchaseOrder {
 
 interface Vendor { id: string; legal_name: string }
 
-const SERIAL_STATUSES = ['in_stock', 'in_transit', 'sold', 'returned', 'transferred', 'rma', 'lost', 'stolen']
+const SERIAL_STATUSES = ['in_stock', 'in_transit', 'sold', 'returned', 'transferred', 'rma', 'lost', 'stolen', 'adjusted_out']
 const CONDITIONS = ['new', 'refurbished', 'used', 'damaged']
 
 const emptySerialForm = {
@@ -78,7 +84,7 @@ const badge: React.CSSProperties = { fontSize: 11, padding: '2px 8px', borderRad
 
 const statusColor = (s: string) => ({
   in_stock: '#27ae60', in_transit: '#9b59b6', sold: '#3498db', returned: '#e67e22',
-  transferred: '#9b59b6', rma: '#f39c12', lost: '#e74c3c', stolen: '#c0392b',
+  transferred: '#9b59b6', rma: '#f39c12', lost: '#e74c3c', stolen: '#c0392b', adjusted_out: '#7f8c8d',
 }[s] || '#6b7280')
 
 const transferStatusColor = (s: string) => ({
@@ -98,7 +104,7 @@ const fmtDate = (d: string | null | undefined) => d ? new Date(d).toLocaleDateSt
 
 export default function PosInventoryPage() {
   const { user } = useAuth()
-  const [tab, setTab] = useState<'serial' | 'standard' | 'transfers' | 'po'>('serial')
+  const [tab, setTab] = useState<'serial' | 'standard' | 'transfers' | 'po' | 'integrity'>('serial')
   const [stores, setStores] = useState<Store[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [msg, setMsg] = useState('')
@@ -121,6 +127,9 @@ export default function PosInventoryPage() {
   const [editMode, setEditMode] = useState(false)
   const [serialForm, setSerialForm] = useState({ ...emptySerialForm })
   const [saving, setSaving] = useState(false)
+  // the duplicate-IMEI pop-up (a 409 from the landing guard) and the manual adjust in / out modal
+  const [dup, setDup] = useState<{ detail: DuplicateDetail; payload: Record<string, unknown>; unitId: string | null } | null>(null)
+  const [showAdjust, setShowAdjust] = useState(false)
 
   // ---- Store Transfers (Phase 2) ----
   const [transfers, setTransfers] = useState<Transfer[]>([])
@@ -255,19 +264,32 @@ export default function PosInventoryPage() {
       // Receiving stamps the terminal's active store — same as the source stamped location_id.
       store_code: editMode ? (selected?.store_code ?? null) : (activeStore || null),
     }
+    await sendSerial(payload, editMode && selected ? selected.id : null)
+    setSaving(false)
+  }
+
+  // POST (receive) or PATCH (edit). A 409 from THE landing guard is the duplicate-IMEI pop-up, not an error:
+  // "Receive anyway" re-sends with confirm_duplicate: true.
+  async function sendSerial(payload: Record<string, unknown>, unitId: string | null) {
     try {
-      if (editMode && selected) await api(`/api/v1/pos/inventory/serial/${selected.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
+      if (unitId) await api(`/api/v1/pos/inventory/serial/${unitId}`, { method: 'PATCH', body: JSON.stringify(payload) })
       else await api('/api/v1/pos/inventory/serial', { method: 'POST', body: JSON.stringify(payload) })
+      setDup(null)
       setShowSerialForm(false); setEditMode(false); setSelected(null)
       setSerialForm({ ...emptySerialForm })
       await loadSerial()
-    } catch (err: any) { alert('Could not save serial item: ' + (err?.message || err)) }
-    setSaving(false)
+    } catch (err: any) {
+      if (err?.status === 409 && err?.detail?.code === 'inventory_duplicate') { setDup({ detail: err.detail, payload, unitId }); return }
+      const m = String(err?.message || err)
+      alert(m.includes('does not allow')
+        ? 'Your role does not allow changing the status, serial, IMEI, store or cost of a unit (pos_inventory_adjust) — use Adjust in / out, or ask a manager.'
+        : 'Could not save serial item: ' + m)
+    }
   }
 
   const serialProducts = products.filter(p => p.inventory_type === 'serial')
 
-  function selectTab(key: 'serial' | 'standard' | 'transfers' | 'po') {
+  function selectTab(key: 'serial' | 'standard' | 'transfers' | 'po' | 'integrity') {
     setTab(key)
     if (key === 'transfers') loadTransfers()
     if (key === 'po') { loadPurchaseOrders(); if (vendors.length === 0) loadVendors() }
@@ -505,6 +527,7 @@ export default function PosInventoryPage() {
           </select>
           {tab === 'serial' && <button className="btn btn-primary" onClick={openNewSerial}>+ Add Serial Item</button>}
           {tab === 'serial' && selected && <button className="btn btn-secondary" onClick={openEditSerial}>View/Edit</button>}
+          {tab === 'serial' && selected && <button className="btn btn-secondary" onClick={() => setShowAdjust(true)}>Adjust in / out</button>}
           {tab === 'transfers' && <button className="btn btn-primary" onClick={openTransferForm}>+ New Transfer</button>}
           {tab === 'po' && <button className="btn btn-primary" onClick={() => setShowPOForm(true)}>+ New PO</button>}
         </div>
@@ -512,7 +535,7 @@ export default function PosInventoryPage() {
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
-        {([['serial', '📱 Serialized'], ['standard', '📦 Standard'], ['transfers', '🚚 Transfers'], ['po', '📋 Purchase Orders']] as const).map(([key, lbl]) => (
+        {([['serial', '📱 Serialized'], ['standard', '📦 Standard'], ['transfers', '🚚 Transfers'], ['po', '📋 Purchase Orders'], ['integrity', '🚩 Integrity flags']] as const).map(([key, lbl]) => (
           <button key={key} onClick={() => selectTab(key)} className={tab === key ? 'btn btn-primary' : 'btn btn-secondary'}>
             {lbl}
           </button>
@@ -581,6 +604,9 @@ export default function PosInventoryPage() {
           )}
         </div>
       )}
+
+      {/* ===== INTEGRITY FLAGS (index §11b — units the sales / commission reports say were sold; duplicates) ===== */}
+      {tab === 'integrity' && <IntegrityFlags storeCode={stockStore} />}
 
       {/* ===== STANDARD (read-only — quantities move via checkout/void) ===== */}
       {tab === 'standard' && (
@@ -840,6 +866,18 @@ export default function PosInventoryPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* The duplicate-IMEI pop-up — the landing guard's 409 on receive or edit */}
+      {dup && (
+        <DuplicateModal detail={dup.detail} busy={saving} onCancel={() => setDup(null)}
+          onConfirm={async () => { setSaving(true); await sendSerial({ ...dup.payload, confirm_duplicate: true }, dup.unitId); setSaving(false) }} />
+      )}
+
+      {/* Manual adjust in / out — every status change writes the adjustment ledger */}
+      {showAdjust && selected && (
+        <AdjustModal unit={selected} onClose={() => setShowAdjust(false)}
+          onDone={async m => { setShowAdjust(false); setSelected(null); setMsg(''); await loadSerial(); alert(m) }} />
       )}
 
       {/* New store transfer modal (draft item picking; save is atomic server-side) */}

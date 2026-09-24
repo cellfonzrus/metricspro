@@ -240,6 +240,32 @@ def _entity_enum_guard():
           f"{counts['count']} org-scoped count probe(s); no sibling enumerations")
 
 
+# ── LEAK CLASS 4: THE POS INVENTORY-INTEGRITY ROUTER (index §11b, 2026-09-24) ─────────────────────────────
+# It reads the POS units AND the commcalc sales lines and commission report, and writes flags and the adjustment
+# ledger — every table it touches is per-org, and several are named through the lineage registry (not a literal),
+# so the SENSITIVE literal scan above cannot see them. Here EVERY `.table(` chain in the file must be org-scoped
+# (an insert carries org_id in its payload — the rows are built by inventory_integrity.flag_row / ledger_row).
+POS_INTEGRITY_FILES = (os.path.join("modules", "pos", "inventory_integrity_router.py"),)
+
+
+def _pos_integrity_guard():
+    n, bad = 0, []
+    for rel in POS_INTEGRITY_FILES:
+        src = open(os.path.join(_APP_DIR, rel), encoding="utf-8").read()
+        for m in re.finditer(r"\.table\(", src):
+            seg = src[m.start(): m.start() + _WINDOW]
+            exec_at = seg.find(".execute(")
+            chain = seg if exec_at == -1 else seg[: exec_at + len(".execute(")]
+            n += 1
+            if classify(chain) == "violation":
+                bad.append((rel, src.count("\n", 0, m.start()) + 1, " ".join(chain.split())[:110]))
+    for rel, ln, snip in bad:
+        print(f"  ✗ {rel}:{ln}  a query with NO org_id scope:  {snip} …")
+    ok(not bad, f"{len(bad)} unscoped quer(ies) in the POS inventory-integrity router")
+    ok(n >= 15, f"the POS inventory-integrity scan found too few chains ({n}) — detection may be broken")
+    print(f"pos inventory-integrity guard — {n} chain(s) inspected, every one org-scoped")
+
+
 def main():
     src = open(_ROUTER, encoding="utf-8").read()
     # Precompute line numbers by character offset.
@@ -299,6 +325,7 @@ def main():
 
     _ingest_screen_guard(src, lineno)
     _entity_enum_guard()
+    _pos_integrity_guard()
 
     _self_test()
     _ingest_screen_self_test()

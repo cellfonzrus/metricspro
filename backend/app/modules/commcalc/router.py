@@ -7218,6 +7218,16 @@ def _intake_billpay_extract_after_sales(client, org_id, stores, lo, hi, rows=Non
         return {"basis": None, "error": f"bill-pay extraction did not run: {str(e)[:200]}"}
 
 
+def _inventory_commission_rows(client, org_id):
+    """THE COMMISSION REPORT as an inventory sold-source (index §11b, owner 2026-09-24) — the lineage registry's
+    COMMISSION_PER_DEVICE_FEED and its columns, DEREFERENCED (never a table literal here), through the existing
+    org-scoped paged reader. (rows, read_ok, truncated); a missing table → read_ok False → the report runs
+    without it and says so."""
+    return _dcr_paged(client, _lineage.COMMISSION_PER_DEVICE_FEED,
+                      _lineage.commission_per_device_select(),
+                      lambda q: q.eq("org_id", org_id), 400000, "commission")
+
+
 def _intake_sold_check_after_inventory(client, org_id, stores, as_of):
     """After an inventory listing lands: the inventory-vs-sold reconciliation over the file's stores
     (`inventory_sold_recon.reconcile`, the SAME pure module GET /inventory-sold-recon runs) with the
@@ -7231,9 +7241,14 @@ def _intake_sold_check_after_inventory(client, org_id, stores, as_of):
         sales, s_ok, s_cut = _dcr_paged(client, "raw_sales", "serial_1,quantity,trans_date,store,mdn,trans_id",
                                         lambda q: q.eq("org_id", org_id), 200000, "sales")
         acts, a_ok = _intake_activation_rows(client, org_id, None)
-        out = _isr.reconcile(sales, inv, _dcr.device_key, activation_rows=(acts if a_ok else None))
+        com, c_ok, _c_cut = _inventory_commission_rows(client, org_id)
+        out = _isr.reconcile(sales, inv, _dcr.device_key, activation_rows=(acts if a_ok else None),
+                             commission_rows=(com if c_ok else None))
         t = out["totals"]
-        return {"basis": "inventory_sold_recon.reconcile over the landed stores' on-hand rows × raw_sales × the activation feed",
+        return {"basis": "inventory_sold_recon.reconcile over the landed stores' on-hand rows × raw_sales × the activation feed"
+                         " × the commission report",
+                "sold_no_receipt": t.get("sold_no_receipt"), "returned_commission_kept": t.get("returned_commission_kept"),
+                "commission_read_ok": c_ok,
                 "sold_not_cleared": t["to_clear"], "sold_not_cleared_cost": t["to_clear_cost"],
                 "activated_not_rung_out": t["activated_not_rung_out"], "activated_not_rung_out_cost": t["activated_not_rung_out_cost"],
                 "activated_by_mobile": t["activated_by_mobile"], "activations_unpairable": t["activations_unpairable"],
@@ -40329,8 +40344,12 @@ def inventory_sold_recon_endpoint(limit: int = 500, period: str = "", org_id: st
     # — `_cr_resolve_activation_details` (raw_custom_import, one row per device, the mig-313 buckets),
     # every period unless one is named. A read that fails is stated as 'no activation feed'.
     acts, acts_ok = _intake_activation_rows(client, org_id, period or "")
+    # THE THIRD SOLD-SOURCE (owner 2026-09-24, §11b): the commission report per IMEI, net of chargebacks — the
+    # same `classify_unit` the POS inventory-integrity flags use (sold, no receipt / returned, commission kept).
+    com, com_ok, com_cut = _inventory_commission_rows(client, org_id)
 
-    out = _isr.reconcile(sales, inv, _dcr.device_key, activation_rows=(acts if acts_ok else None))
+    out = _isr.reconcile(sales, inv, _dcr.device_key, activation_rows=(acts if acts_ok else None),
+                         commission_rows=(com if com_ok else None))
     rows = out["rows"][:cap]
     return {
         "rows": rows,
@@ -40349,6 +40368,8 @@ def inventory_sold_recon_endpoint(limit: int = 500, period: str = "", org_id: st
                           "pairs_on": "serial_1 (device key) · mdn (mobile number, for pairing unkeyed activations)"},
                 "inventory": {"table": "inventory_aging_device", "read_ok": inv_ok, "truncated": inv_cut, "rows": len(inv),
                               "pairs_on": "imei, else serial"},
+                "commission": {"table": _lineage.COMMISSION_PER_DEVICE_FEED, "read_ok": com_ok, "truncated": com_cut,
+                               "rows": len(com), "pairs_on": "the device IMEI; net earned after chargebacks — kept when > 0"},
                 "activations": {"table": "raw_custom_import (Activation Details, per device)", "read_ok": acts_ok,
                                 "rows": len(acts), "period": period or "all periods",
                                 "carries_device_key": out["activations"]["carries_device_key"],

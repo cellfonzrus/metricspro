@@ -14,11 +14,13 @@ on:
     paths:
       - "backend/app/modules/commcalc/router.py"
       - "backend/harness_org_scope_guard.py"
+      - "backend/app/modules/pos/inventory_integrity_router.py"
       - ".github/workflows/org-scope-guard.yml"
   push:
     branches: [main]
     paths:
       - "backend/app/modules/commcalc/router.py"
+      - "backend/app/modules/pos/inventory_integrity_router.py"
   workflow_dispatch:
 
 permissions:
