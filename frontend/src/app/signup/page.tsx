@@ -139,7 +139,9 @@ export default function SignupPage() {
                     <div style={{ marginTop: 6, fontVariantNumeric: 'tabular-nums' }}>
                       {Number(p.price) > 0
                         ? <><span style={{ fontSize: 21, fontWeight: 700, color: '#0f172a' }}>{money(Number(p.price), p.currency)}</span>
-                            <span style={{ fontSize: 11.5, color: '#64748b', marginLeft: 4 }}>{p.unit_label || `per ${p.cycle === 'annual' ? 'year' : 'month'}`}</span></>
+                            {/* Own line: "per store / month" is long enough to break mid-phrase
+                                beside the figure at this card width, which reads as a typo. */}
+                            <span style={{ display: 'block', fontSize: 11.5, color: '#64748b', marginTop: 2 }}>{p.unit_label || `per ${p.cycle === 'annual' ? 'year' : 'month'}`}</span></>
                         : <span style={{ fontSize: 15, fontWeight: 600, color: '#475569' }}>Talk to us</span>}
                     </div>
                     {p.tagline && <div style={{ fontSize: 12, color: '#64748b', marginTop: 6, lineHeight: 1.45 }}>{p.tagline}</div>}
