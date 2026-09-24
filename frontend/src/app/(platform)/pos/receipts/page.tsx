@@ -7,6 +7,7 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import { api, apiPrintHtml } from '@/lib/client'
 import { usePosTerm } from '@/lib/report-labels'
 import ScreenLink from '@/components/ScreenLink'
+import VendorPaidCard from './vendor-paid-card'   // the lines the vendor pays print at $0.00 (owner 2026-09-24, §30.14a)
 
 type Fmt = { source: string; label: string }
 type Col = { key: string; label: string; kind: string; align?: string }
@@ -321,6 +322,7 @@ export default function ReceiptImportPage() {
           <button className="btn btn-primary" disabled={busy === 'rebuild'} onClick={rebuild}>{busy === 'rebuild' ? 'Rebuilding…' : 'Rebuild sales from the landed reports'}</button>
           <button className="btn btn-secondary" onClick={() => loadRebuilt()}>Show rebuilt sales</button>
         </div>
+        <VendorPaidCard from={rbFrom} to={rbTo} />
         {rbResult && (
           <div style={{ marginTop: 10, fontSize: 13, background: rbResult.ran && rbResult.ok ? 'var(--bg)' : '#fff4e5', padding: '8px 12px', borderRadius: 6 }}>
             {!rbResult.ran && <div style={{ color: '#9b1c1c' }}>{rbResult.reason}</div>}

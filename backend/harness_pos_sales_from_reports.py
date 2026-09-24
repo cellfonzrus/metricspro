@@ -44,6 +44,7 @@ os.environ.setdefault("SUPABASE_SERVICE_KEY", "fake")
 from harness_intake_fakes import FakeDB                                              # noqa: E402
 from app.modules.pos.receipt_formats import base as B, engine as E, render as RD, registry as REG   # noqa: E402
 from app.modules.pos import sales_from_reports as SFR                                # noqa: E402
+from app.modules.pos import vendor_paid_lines as VPL                                 # noqa: E402
 from app.modules.pos import receipt_import as RI                                     # noqa: E402
 from app.modules.pos import router as PR                                             # noqa: E402
 from app.modules.commcalc import router as R                                         # noqa: E402
@@ -67,6 +68,14 @@ def check(name, cond, extra=""):
     else:
         _fail += 1
         print(f"  FAIL  {name}" + (f"  — {str(extra)[:400]}" if extra != "" else ""))
+
+
+def _raises(fn):
+    try:
+        fn()
+    except Exception as e:  # noqa: BLE001
+        return type(e)
+    return None
 
 
 def section(t):
@@ -208,7 +217,7 @@ def customer_lines(name):
 
 
 CTX = dict(store_header=store_header, customer_lines=customer_lines, footer_text=f"{FMT.FOOTER_ANCHOR}\nReturns within 30 days.",
-           pays=CR.is_customer_payment, built_at="2026-09-21T00:00:00Z", built_by="tester",
+           pays=CR.is_customer_payment, vendor_paid=lambda ln: False, built_at="2026-09-21T00:00:00Z", built_by="tester",
            sources={"invoice": {"table": "raw_sales_invoice", "kind": "sales_by_invoice"}, "tenders": {"table": "raw_sales_invoice_tender", "kind": "sales_by_invoice"},
                     "lines": {"table": "raw_sales", "kind": "sales"}})
 res = SFR.build_documents(invoices, tenders, lines, FMT, **CTX)
@@ -450,6 +459,91 @@ check("D21 the `sales` layout maps the contract number (additive alias) so the p
 
 
 # ══ §E the lock is a separate stdlib file (CI); here it is dereferenced, and the page / registration checked ═
+section("§V THE LINES THE VENDOR PAYS print at $0.00 like the register (owner 2026-09-24; §30.14a)")
+# The owner's complaint, in miniature: the receipt showed "the commission earned for each line but not the cost of phone
+# charged to the customer". The measured shape (live invoice Z1321IN11330): two handsets at 840.00 with their financed
+# offsets, and the vendor-paid lines — installment rebate amount, financing fee, rate-plan rebates, kickers, a perk — whose
+# amounts add up to the invoice's vendor-rebate tender (2,009.60). The register prints the handsets and $0.00 for the rest.
+SEG = ">> Price Sheet >> Carrier X >> "
+def VL(inv, sku, name, cat, total, cost=0.0, qty=1, tracking=""):
+    _i[0] += 1
+    return {"id": f"v-{_i[0]}", "trans_id": inv, "trans_date": "2026-08-10", "store": STORE, "salesperson": "Jane R", "sku": sku,
+            "product_desc": name, "serial_1": tracking, "quantity": qty, "ext_price": total, "total_cost": cost, "category": SEG + cat,
+            "contract_no": "", "voided": "No", "source": "sales"}
+vlines = []
+for k in range(2):
+    vlines += [VL("V-1", "HS-9", "PHONE MODEL 9 256GB", "Cellular Equipment >> SmartPhones", 840.0, cost=840.0, tracking=IMEIS[k]),
+               VL("V-1", "FN-1", "Device Payment Agreement Financed Amount", "Integration SKUs >> Installment Offset", -840.0, qty=-1, tracking=PHONES[k]),
+               VL("V-1", "RB-2", "Device Payment Agreement Rebate Amount", "Integration SKUs >> Other Installment SKUs", 840.0, tracking=PHONES[k]),
+               VL("V-1", "RB-3", "Device Payment Agreement Financing Fee", "Integration SKUs >> Other Installment SKUs", -25.2, qty=-1, tracking=PHONES[k]),
+               VL("V-1", "RB-4", "Upgrade (Rate Plan Rebate)", "Rate Plan Rebates", 155.0, tracking=PHONES[k]),
+               VL("V-1", "RB-5", "Unlimited Plus - Upg", "Kickers", 25.0, tracking=PHONES[k])]
+vlines += [VL("V-1", "RB-6", "Cloud - Perk", "Features >> Features - Perk", 20.0, tracking=PHONES[0]),
+           VL("V-2", "NS-1", "Customer Owned Device", "Cellular Equipment >> Customer Provided Device", 0.0, tracking=IMEIS[2]),
+           VL("V-2", "RB-7", "New Activation (Rate Plan Rebate)", "Rate Plan Rebates", 150.0, tracking=PHONES[2]),
+           VL("V-2", "RB-8", "Volume Bonus", "Kickers", 24.0, tracking=PHONES[2]),
+           VL("V-3", "AC-9", "Phone Case", "Accessories >> Cases", 29.99, cost=12.0)]
+VP_SUM_1 = round(840 * 2 - 25.2 * 2 + 155 * 2 + 25 * 2 + 20, 2)          # 2,009.60 — the live invoice's number
+vinv = [{"id": f"vi-{n}", "trans_id": n, "trans_date": "2026-08-10", "store": STORE, "salesperson": "Jane R", "tendered_by": "Jane R", "customer": "JANE DOE",
+         "subtotal": sub, "net_sales": ns, "invoice_total": tot, "tax": 0.0, "extra_charges": 0, "donations": 0, "source": "sales_by_invoice"}
+        for n, sub, ns, tot in (("V-1", 0.0, VP_SUM_1, 149.18), ("V-2", 0.0, 174.0, 0.0), ("V-3", 29.99, 29.99, 32.65))]
+vten = [{"id": f"vt-{n}-{c}", "trans_id": n, "trans_date": "2026-08-10", "store": STORE, "role": "tender", "tender_label": lab, "tender_class": c, "amount": a, "source": "sales_by_invoice"}
+        for n, lab, c, a in (("V-1", "Visa", "credit", 149.18), ("V-1", "Ven Reb Act", "vendor_rebate", VP_SUM_1),
+                             ("V-2", "Ven Reb Act", "vendor_rebate", 174.0), ("V-3", "Cash", "cash", 32.65))]
+vnums = [i["trans_id"] for i in vinv]
+vnc = VPL.non_customer_by_invoice(vten, CR.is_customer_payment)
+prop = VPL.propose(vlines, vnums, vnc)
+m = VPL.matcher({"tokens": prop["tokens"]})
+matched = [ln for ln in vlines if m(ln)]
+check("V1 the proposal is LEARNED from the lines: every invoice's vendor-paid lines add up to its vendor-paid tender (3 of 3; 1 with no rule) — "
+      "and it never takes a segment that names goods with a cost (the handset, the case, the path above them)",
+      prop["proof"]["tied"] == 3 and prop["proof"]["tied_without_rule"] == 1 and len(matched) == 11
+      and not set(prop["tokens"]) & VPL.costed_segments(vlines) and "smartphones" in VPL.costed_segments(vlines)
+      and not any(ln["sku"] in ("HS-9", "FN-1", "AC-9", "NS-1") for ln in matched), (prop["tokens"], prop["proof"]))
+CTXV = {**CTX, "vendor_paid": m}
+dv, rv = SFR.build_document(vinv[0], [t for t in vten if t["trans_id"] == "V-1"], [ln for ln in vlines if ln["trans_id"] == "V-1"], FMT, **CTXV)
+cells = [i["cells"] for i in dv["items"]]
+check("V2 REPRODUCED → CLOSED: the handsets print their price (840.00 each), the financed offsets print, and every vendor-paid line prints $0.00 as the register does",
+      [c["total"] for c in cells if c["sku"] == "HS-9"] == ["$840.00", "$840.00"] and [c["total"] for c in cells if c["sku"] == "FN-1"] == ["($840.00)", "($840.00)"]
+      and all(c["total"] == "$0.00" and c["price"] == "$0.00" for c in cells if c["sku"].startswith("RB-")), cells)
+check("V3 the vendor-paid amounts are not lost: the report counts them (9 lines, 2,009.60) and says they equal the invoice's vendor-paid tenders to the cent",
+      rv["vendor_paid_count"] == 9 and rv["vendor_paid_sum"] == VP_SUM_1 and rv["sum_lines"] == VP_SUM_1
+      and any("9 line(s) the vendor paid print at $0.00" in w and "equal the invoice's vendor-paid tenders to the cent (2,009.60)" in w for w in rv["words"]), rv["words"])
+_before = SFR.build_document(vinv[0], [t for t in vten if t["trans_id"] == "V-1"], [ln for ln in vlines if ln["trans_id"] == "V-1"], FMT, **{**CTX, "vendor_paid": lambda ln: False})
+_house = SFR.build_document(vinv[0], [t for t in vten if t["trans_id"] == "V-1"], [ln for ln in vlines if ln["trans_id"] == "V-1"], FMT, **{**CTX, "vendor_paid": VPL.matcher(VPL.resolve_config(None))})
+check("V4 HOUSE DEFAULT = TODAY: no saved rule → the matcher answers False for every line → the documents are byte-identical to the builder without the rule",
+      json.dumps(_before[0], sort_keys=True, default=str) == json.dumps(_house[0], sort_keys=True, default=str) and _house[1]["vendor_paid_count"] == 0)
+check("V5 the save refusals: a word that also names goods with a cost is refused with the sentence; a rule that ties no more invoices than none is refused; the proposal is accepted",
+      any("'smartphones'" in r and "print merchandise at $0.00" in r for r in VPL.check_save(prop["tokens"] + ["smartphones"], vlines, vnums, vnc))
+      and any("no more than with no rule" in r for r in VPL.check_save(["installment offset"], vlines, vnums, vnc))
+      and VPL.check_save(prop["tokens"], vlines, vnums, vnc) == [])
+check("V6 the builder has NO default for the rule — a caller that forgets it fails loudly (never prints vendor-paid lines by accident)",
+      _raises(lambda: SFR.build_document(vinv[0], [], [], FMT, **{k: v for k, v in CTX.items() if k != "vendor_paid"})) is TypeError)
+check("V7 RULE TWO: the module spells no category word — the segments are learned from the lines and saved as config (pos.pos_settings key vendor_paid_lines)",
+      VPL.CONFIG_KEY == "vendor_paid_lines" and not any(w in re.sub(r'"""[\s\S]*?"""|#[^\n]*', "", read("backend/app/modules/pos/vendor_paid_lines.py")).lower()
+              for w in ("rebate", "kicker", "spiff", "rate plan", "commission", "perk", "installment")))
+# end to end over the fake client: nothing saved → the rebuild says so; the proposal saved through the ONE writer → read back → the rebuild prints $0.00
+vdb = fresh_db()
+period = lambda d: {"period": d[:7], "period_month": int(d[5:7]), "period_year": int(d[:4])}
+vdb.tables["raw_sales_invoice"] = [{**{k: v for k, v in r.items() if k != "id"}, "id": r["id"], "org_id": ORG, **period(r["trans_date"]), "invoiced_by": STORE, "coupons": 0} for r in vinv]
+vdb.tables["raw_sales_invoice_tender"] = [{**{k: v for k, v in r.items() if k != "id"}, "id": r["id"], "org_id": ORG, **period(r["trans_date"]), "salesperson": "Jane R", "keyed_manually": False} for r in vten]
+vdb.tables["raw_sales"] = [{**r, "org_id": ORG, **period(r["trans_date"]), "user_login": "jrep"} for r in vlines]
+use(vdb)
+o0 = SFR.rebuild(vdb, ORG, "2026-08-01", "2026-08-31", who="E1")
+ev = SFR.vendor_paid_evidence(vdb, ORG, "2026-08-01", "2026-08-31")
+PR.upsert_pos_setting(vdb, ORG, VPL.CONFIG_KEY, {"tokens": ev["proposal"]["tokens"], "confirmed_by": "E1"})
+back = SFR.load_vendor_paid_rule(vdb, ORG)
+o1 = SFR.rebuild(vdb, ORG, "2026-08-01", "2026-08-31", who="E1")
+doc1 = next(r["document"] for r in vdb.tables["receipt_imports"] if r["invoice_no"] == "V-1")
+check("V8 end to end: with no rule the rebuild SAYS where to confirm it; the evidence proposes the same words from the landed rows; saved through upsert_pos_setting and read back; "
+      "the re-run REPLACES the 3 sales and prints the vendor-paid lines at $0.00 (11 lines, 2,183.60) with the handsets at their price",
+      o0["vendor_paid"]["lines"] == 0 and any("no vendor-paid line rule is saved" in w for w in o0["words"])
+      and ev["proposal"]["tokens"] == prop["tokens"] and ev["invoices"] == 3 and back["tokens"] == prop["tokens"]
+      and o1["replaced"] == 3 and o1["vendor_paid"] == {"tokens": prop["tokens"], "lines": 11, "sum": round(VP_SUM_1 + 174.0, 2)}
+      and [i["cells"]["total"] for i in doc1["items"] if i["cells"]["sku"] == "HS-9"] == ["$840.00", "$840.00"]
+      and all(i["cells"]["total"] == "$0.00" for i in doc1["items"] if i["cells"]["sku"].startswith("RB-")), (o0.get("words"), o1.get("vendor_paid"), back))
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("§E the lock (harness_pos_sales_from_reports_lock.py) + the page + registration")
 import harness_pos_sales_from_reports_lock as LOCK                                   # noqa: E402
 viol = LOCK.lock_violations(LOCK.scan_files(LOCK.BE))

@@ -6924,7 +6924,7 @@ def _intake_reread_sales(client, org_id, stores, lo, hi, table=None, kind=None):
     kind_col = _landing.stamp_column(table)
     cols = ("id,store,salesperson,trans_id,trans_date,ext_price,gp,voided,"
             "department,category,product_desc,tender_type,trans_type,contract_type,"
-            "mdn,serial_1,user_login,sku,quantity,contract_no")      # + the Stage-D link fields (§30.11) + the activation-type fields (2.5a) + the receipt fields (§30.14)
+            "mdn,serial_1,user_login,sku,quantity,contract_no,total_cost")      # + the Stage-D link fields (§30.11) + the activation-type fields (2.5a) + the receipt fields (§30.14) + the cost guard of the vendor-paid line rule (§30.14a)
     if table != _intake.SOURCE_KIND_TARGET["sales"]:
         cols = "id,store,salesperson,trans_id,trans_date,ext_price,gp,voided,product_desc,sku,quantity,total_cost,serial_1,user_login"
     if kind_col and kind:

@@ -3017,6 +3017,7 @@ def receipt_import_print(import_id: str, editable: bool = False, org_id: str = O
 # for the tenant's DECLARED POS. The rebuild also runs on every intake commit of either kind; this
 # endpoint is the same consumer offered for a period ("Rebuild sales from the landed reports").
 from app.modules.pos import sales_from_reports as _sfr
+from app.modules.pos import vendor_paid_lines as _vpl
 
 
 @router.post("/sales-from-reports/rebuild")
@@ -3041,6 +3042,47 @@ def sales_from_reports_list(from_: str = Query("", alias="from"), to: str = "", 
     fmt = _sfr.resolve_format(sb(), org_id)
     return {"pos": fmt["pos"], "format_label": (fmt["format"] or {}).get("label") if fmt["ok"] else None,
             "format_reason": fmt["reason"], "sales": _sfr.list_rebuilt(sb(), org_id, from_ or None, to or None)}
+
+
+@router.get("/sales-from-reports/vendor-paid-lines")
+def sales_from_reports_vendor_paid(from_: str = Query("", alias="from"), to: str = "", org_id: str = ORG_ID):
+    """WHICH LINES THE VENDOR PAYS (owner 2026-09-24: "$0.00 like register"; index §30.14a): the saved rule
+    (pos.pos_settings key `vendor_paid_lines`) with its proof over the period, and the PROPOSAL learned from
+    the period's own lines — the category segments whose lines add up to each invoice's vendor-paid tenders.
+    Read-only."""
+    lo, hi = (from_ or "").strip()[:10], (to or "").strip()[:10]
+    if not (lo and hi) or lo > hi:
+        raise HTTPException(400, "from and to (YYYY-MM-DD, from ≤ to) are required")
+    return _sfr.vendor_paid_evidence(sb(), org_id, lo, hi)
+
+
+@router.put("/sales-from-reports/vendor-paid-lines")
+def sales_from_reports_vendor_paid_save(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Body: {from, to, tokens: [category segments]}. Saves the rule the person confirmed — refused (400, the
+    sentences) when a segment also names goods with a cost, or when the rule ties no more invoices than no
+    rule over the period. Written through `upsert_pos_setting` (the one writer) and READ BACK. An empty
+    list clears the rule (every line prints its amount again)."""
+    _require_pos_perm(authorization, org_id, "pos_settings")
+    lo, hi = (body.get("from") or "").strip()[:10], (body.get("to") or "").strip()[:10]
+    toks = body.get("tokens")
+    if not isinstance(toks, list):
+        raise HTTPException(400, "tokens (a list of category words) is required")
+    toks = _vpl.resolve_config({"tokens": toks})["tokens"]
+    if toks:
+        if not (lo and hi) or lo > hi:
+            raise HTTPException(400, "from and to (YYYY-MM-DD, from ≤ to) are required to prove the rule")
+        ev = _sfr.vendor_paid_evidence(sb(), org_id, lo, hi, tokens=toks)
+        if ev["refusals"]:
+            raise HTTPException(400, " ".join(ev["refusals"]))
+    from datetime import datetime as _dt
+    who = _caller_employee(authorization, org_id) or None
+    upsert_pos_setting(sb(), org_id, _vpl.CONFIG_KEY,
+                       {"tokens": toks, "confirmed_by": who, "confirmed_at": _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")})
+    back = _sfr.load_vendor_paid_rule(sb(), org_id)
+    if back["tokens"] != toks:
+        raise HTTPException(500, "the rule did not read back as saved — nothing changed on the receipts; try again")
+    return {"saved": back, "words": (f"saved: {len(toks)} word(s) — rebuild the period so the receipts print those lines at $0.00"
+                                     if toks else "cleared: every line prints its amount again — rebuild the period")}
 
 
 # ── Vendor rebate / activation report (carrier commission + rebate history XLSX) ───────────────────
