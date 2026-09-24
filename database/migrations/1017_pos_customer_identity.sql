@@ -80,7 +80,8 @@ BEGIN
   EXECUTE 'REVOKE ALL ON ALL FUNCTIONS IN SCHEMA pos FROM anon, authenticated';
   EXECUTE 'GRANT ALL ON ALL TABLES    IN SCHEMA pos TO service_role';
   EXECUTE 'GRANT ALL ON ALL SEQUENCES IN SCHEMA pos TO service_role';
-  EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA pos TO service_role';
+  -- NO schema-wide function grant here: it re-opened the PII functions migration 909 switched off (repaired by
+  -- 1019, locked by backend/harness_pos_grants_lock.py). This migration creates no function, so it grants none.
 END $$;
 -- pos.pii_key must stay callable ONLY from inside the sibling definer functions (as mig 725 leaves it).
 DO $$ BEGIN
