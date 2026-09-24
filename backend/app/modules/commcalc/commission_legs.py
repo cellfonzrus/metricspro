@@ -436,3 +436,99 @@ def to_public(prefix, split):
     return {k1: round(_safe_float(split.get(M1)), 2),
             k2: round(_safe_float(split.get(TRAILING)), 2),
             ku: round(_safe_float(split.get(UNSPLIT)), 2)}
+
+
+# ── THE MONTH LADDER — ONE HOME for "which month-of-life rungs exist" (owner report 2026-09-21) ──
+# Owner: "display each months commission in separate column so we see what is going on".
+#
+# The two-bucket split above answers "1st month or later"; a COLUMN PER MONTH answers "later, but
+# how much later" — which is the only shape in which the contract (M1 = 50% of MRC, M2..M6 = 75%
+# each) can be read off the report at all. `commission_ledger.month_leg_of` already owns WHICH leg a
+# row is; nothing here re-derives that. What lives here is the other half of the same fact: the KEY
+# a rung is stored under, the ORDER the rungs are read in, and WHICH rungs a payload should show.
+#
+# WHY IT IS HERE AND NOT IN THREE PLACES. Before this, three modules each wrote their own copy:
+# `gp_report._leg_ladder_add` ("'unknown' if leg_month in (None,'','unknown')"),
+# `ma_store_pnl._ladder_add` (its own MONTH_UNKNOWN literal) and `router._ma_leg_trend`
+# (`sorted({int(k) for ... if k != 'unknown'})` plus a private `_int_or` sort key). Three copies of
+# one convention is the divergence the house rules forbid, and it is exactly how a rung that exists
+# in the data ends up invisible on one surface and present on another. They all dereference this now,
+# and CHECK 2c in harness_ma_income_one_home_guard.py fails the build if a fourth copy appears.
+#
+# RULE TWO: no month COUNT lives here. `months_present` reports the rungs the DATA carries, so an
+# M7 — or an M13 — is carried the day it arrives, and a rung that exists can never be invisible.
+LADDER_UNKNOWN = "unknown"              # the honest "this row's label states no month-of-life"
+LADDER_UNKNOWN_LABEL = "Unlabelled"     # how that bucket is NAMED on a surface — never "M0", never
+                                        # folded into a month, never dropped.
+_LADDER_UNKNOWN_SORT = 10 ** 6          # sorts last, always
+
+
+def ladder_key(leg_month):
+    """PURE: the ladder key for a month-of-life leg. `None`/''/'unknown' -> LADDER_UNKNOWN, anything
+    integer-ish -> its decimal string ('1', '2', … '12', '13' …). A value that is neither is the
+    unknown bucket rather than a crash — a surface must never lose a dollar to a bad key."""
+    if leg_month in (None, "", LADDER_UNKNOWN):
+        return LADDER_UNKNOWN
+    try:
+        return str(int(leg_month))
+    except (TypeError, ValueError):
+        return LADDER_UNKNOWN
+
+
+def ladder_sort_key(key):
+    """PURE: sort key for a ladder key — the number when it is one, otherwise last (the unknown
+    bucket). This is the ONE ordering; no caller writes its own."""
+    try:
+        return int(key)
+    except (TypeError, ValueError):
+        return _LADDER_UNKNOWN_SORT
+
+
+def months_present(*ladders, include_unknown=True):
+    """PURE: the ordered ladder keys that carry a NON-ZERO dollar in any of the given ladders
+    ({key: amount} dicts, or dicts of those). Numeric rungs ascending, LADDER_UNKNOWN last.
+
+    Driven entirely by the data: no `range(1, 7)`, no max-month config, no hardcoded 12. A rung the
+    feed carries is a column; a rung it does not carry is not invented."""
+    seen = set()
+    for lad in ladders:
+        for k, v in (lad or {}).items():
+            if isinstance(v, dict):                       # a {prefix: {key: amount}} ladder map
+                for k2, v2 in v.items():
+                    if _safe_float(v2):
+                        seen.add(ladder_key(k2))
+                continue
+            if _safe_float(v):
+                seen.add(ladder_key(k))
+    if not include_unknown:
+        seen.discard(LADDER_UNKNOWN)
+    return sorted(seen, key=ladder_sort_key)
+
+
+def ladder_column(prefix, key):
+    """PURE: the public payload/column key for one rung, e.g. ('comm','3') -> 'comm_month_3' and
+    ('comm', LADDER_UNKNOWN) -> 'comm_month_unlabelled'.
+
+    `_month_` and NOT `_m` deliberately: `public_keys()` already owns `comm_m1` for the 1st-month
+    LEG bucket, and the leg bucket is not the same fact as rung 1 — a label the org has mapped to
+    the M1 leg can still state no month-of-life, so its dollars are in `comm_m1` and in the
+    Unlabelled rung. A ladder column named `comm_m1` would silently overwrite the leg column with a
+    number that means something else. The two namespaces stay apart, and CHECK 2c pins it."""
+    k = ladder_key(key)
+    return f"{prefix}_month_unlabelled" if k == LADDER_UNKNOWN else f"{prefix}_month_{k}"
+
+
+def ladder_label(key):
+    """PURE: how a rung is LABELLED on a surface — 'M3', or LADDER_UNKNOWN_LABEL. Never 'M0'."""
+    k = ladder_key(key)
+    return LADDER_UNKNOWN_LABEL if k == LADDER_UNKNOWN else f"M{k}"
+
+
+def ladder_to_public(prefix, ladder, months=None):
+    """PURE: {'comm_m1': …, 'comm_m2': …, 'comm_m_unlabelled': …} for the rungs in `months`
+    (default: the rungs this ladder itself carries). A rung listed in `months` but absent from this
+    ladder is emitted as 0.0, so every row of a table has every column and a store with no M4 reads
+    as $0.00 rather than as a hole."""
+    keys = months if months is not None else months_present(ladder)
+    lad = {ladder_key(k): _safe_float(v) for k, v in (ladder or {}).items()}
+    return {ladder_column(prefix, k): round(lad.get(ladder_key(k), 0.0), 2) for k in keys}

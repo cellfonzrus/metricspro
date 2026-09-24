@@ -175,7 +175,7 @@ def _leg_ladder_add(ladder, prefix, leg_month, amt):
     legs and a leg only lands if the subscriber survived that month, so `comm` at leg 2/3 IS the money
     3-month retention produced and legs 4–6 are the 6-month tail. Display only — the two/three bucket
     columns above are what the money identity is proven on. PURE."""
-    key = 'unknown' if leg_month in (None, '', 'unknown') else str(int(leg_month))
+    key = _legs.ladder_key(leg_month)   # ONE home for the rung key (commission_legs, §4a.2)
     d = ladder.setdefault(prefix, {})
     d[key] = round(d.get(key, 0.0) + safe_float(amt), 2)
 
@@ -549,6 +549,12 @@ def calc_gp_report(
 
         pay = pay_by_num.get(num, {})
         comm_legs      = pay.get('comm_legs') or _legs.empty_split()
+        # PER-ROW month ladder (owner report 2026-09-21: "display each months commission in separate
+        # column so we see what is going on"). Fed from the SAME per-store parts that are merged into
+        # the report-wide ladder one line below — one derivation, read twice, so a store row and the
+        # header can never state different months.
+        _row_ladder: dict[str, float] = {}
+        _leg_ladder_merge({'comm': _row_ladder}, 'comm', (pay.get('comm_ladder') or {}).get('l'))
         _leg_ladder_merge(leg_ladder, 'comm', (pay.get('comm_ladder') or {}).get('l'))
         comm_recv  = pay.get('comm', 0)
         reimb      = pay.get('reimb', 0)
@@ -589,7 +595,8 @@ def calc_gp_report(
             comm_legs[_legs.TRAILING] = round(comm_legs.get(_legs.TRAILING, 0.0) + _ma_cell.get('trailing', 0.0), 2)
             comm_legs[_legs.UNSPLIT]  = round(comm_legs.get(_legs.UNSPLIT, 0.0) + _ma_cell.get('unsplit', 0.0), 2)
             for _mk, _mv in (_ma_cell_months or {}).items():
-                _leg_ladder_add(leg_ladder, 'comm', None if _mk == 'unknown' else _mk, _mv)
+                _leg_ladder_add(leg_ladder, 'comm', _mk, _mv)
+                _leg_ladder_add({'comm': _row_ladder}, 'comm', _mk, _mv)
             # The MA residual and airtime margin state no month-of-life anywhere in their feed, so
             # they land in the honest `unsplit` bucket — never guessed into 1st Month. Keeping them
             # in the split at all is what holds the report's own promise that, for every source,
@@ -628,6 +635,10 @@ def calc_gp_report(
             'comp_comm': comp_comm, 'comp_reimb': comp_reimb, 'comp_mdf': comp_mdf,
             'chargeback': chargeback, 'unmapped': unmapped,
             'mi': mi_amt, 'atu': atu_amt,
+            # ── commission MONTH LADDER (owner 2026-09-21) — {rung: $} for THIS store, keys from
+            # the ONE home (commission_legs.ladder_key). No month count: a rung exists here because
+            # the feed carried it. `_m_unlabelled` is its own rung and is never folded into a month.
+            'comm_ladder': {k: round(v, 2) for k, v in _row_ladder.items()},
             # ── commission LEG split (owner 2026-08-04) — pure decomposition, adds no money ──
             **_legs.to_public('comm', comm_legs),
             **_legs.to_public('comp_comm', comp_comm_legs),
@@ -682,7 +693,7 @@ def calc_gp_report(
         _atu_split = dict(_legs.empty_split())
         _atu_split[_legs.UNSPLIT] = round(safe_float(_cell.get('atu')), 2)
         for _lk, _lv in _months.items():
-            _leg_ladder_add(leg_ladder, 'comm', None if _lk == 'unknown' else _lk, _lv)
+            _leg_ladder_add(leg_ladder, 'comm', _lk, _lv)
         _leg_ladder_add(leg_ladder, 'mi', None, safe_float(_cell.get('mi')))
         _leg_ladder_add(leg_ladder, 'atu', None, safe_float(_cell.get('atu')))
         _c, _mi2 = safe_float(_cell.get('comm')), safe_float(_cell.get('mi'))
@@ -695,6 +706,8 @@ def calc_gp_report(
             'comm': _c, 'reimb': 0.0, 'mdf': _md,
             'comp_comm': 0.0, 'comp_reimb': 0.0, 'comp_mdf': 0.0,
             'chargeback': 0.0, 'unmapped': _um, 'mi': _mi2, 'atu': _a,
+            'comm_ladder': {_legs.ladder_key(_lk): round(safe_float(_lv), 2)
+                            for _lk, _lv in _months.items()},
             **_legs.to_public('comm', _legs_split),
             **_legs.to_public('comp_comm', _legs.empty_split()),
             **_legs.to_public('mi', _mi_split),
@@ -773,6 +786,26 @@ def calc_gp_report(
     for _p in ('comm', 'comp_comm', 'mi', 'atu'):
         for _k in _legs.public_keys(_p):
             totals[_k] = round(sum(r.get(_k, 0.0) for r in store_rows), 2)
+
+    # ── THE MONTH COLUMNS (owner report 2026-09-21) ───────────────────────────────────────────────
+    # "the m2-m6 commission is 375% of the mrc … research where this is going wrong and display each
+    # months commission in separate column so we see what is going on".
+    #
+    # `ladder_months` is the column LIST: the rungs the DATA carries, from the one home
+    # (commission_legs.months_present) — not 6, not 12, not a config max. A rung that exists can
+    # therefore never be invisible, which is the whole point: an M7 on a schedule the owner believes
+    # runs to M6 is a FINDING, and it shows up as a column rather than being folded away.
+    # The Unlabelled rung is a column of its own and is never folded into a month.
+    ladder_months = _legs.months_present(*[r.get('comm_ladder') for r in store_rows])
+    totals['comm_ladder'] = {k: round(sum(safe_float((r.get('comm_ladder') or {}).get(k))
+                                          for r in store_rows), 2)
+                             for k in ladder_months}
+    # FLAT columns beside the dict, so an export/CSV that walks `totals` keys carries the months too
+    # (WYSIWYG: what the page shows is what the export ships). Every row gets every column, so a
+    # store with no M4 reads $0.00 rather than as a hole.
+    for _r in store_rows:
+        _r.update(_legs.ladder_to_public('comm', _r.get('comm_ladder') or {}, ladder_months))
+    totals.update(_legs.ladder_to_public('comm', totals['comm_ladder'], ladder_months))
 
     # ── GP bucket TRANSPARENCY (owner 2026-07-24: "'Other' does not detail any information") ──────────
     # Per-GP-bucket DEPARTMENT composition over ALL sale lines — so the GP page can show WHAT is inside
@@ -887,6 +920,12 @@ def calc_gp_report(
                if (_p == 'comm' and _ma_leg_note) else {}),
         })
     commission_legs_block = {
+        # The column list for the per-month display, from the ONE home. `ladder_month_labels` is how
+        # each rung is NAMED ('M1' … 'Unlabelled'), so no surface writes 'M' + n itself.
+        'ladder_months': ladder_months,
+        'ladder_month_labels': {k: _legs.ladder_label(k) for k in ladder_months},
+        'ladder_columns': {k: _legs.ladder_column('comm', k) for k in ladder_months},
+        'ladder_unknown_key': _legs.LADDER_UNKNOWN,
         'sources': leg_sources,
         'headline': next((s for s in leg_sources if s['key'] == 'comm'), None),
         'ladder': leg_ladder,

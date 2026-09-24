@@ -1119,6 +1119,97 @@ reads.
   `harness_device_purchases.py` B2d sanctions the two changed booking functions BY NAME and B2f proves
   their `(line, amount)` sequence is unchanged — only the `M<n>` detail label moves.
 
+### 4a.2 A COLUMN PER MONTH-OF-LIFE — and where the M1 money actually is (owner report 2026-09-21)
+
+Owner: *"something is still off the m2-m6 commission is 375% of the mrc considereing 75% each for 5
+months the numbers still dont match … the m1 commssion is 98656 and m2-m12 is 92536 reacharch where
+this is going worng and display each months commission in separate column so we see what is going
+on"*. Contract shape: M1 = 50% of MRC, M2–M6 = 75% each → a 7.5× trailing-to-M1 ratio. Observed
+15.3×.
+
+**THE PERIOD-TOTAL RATIO IS NOT A TEST OF THE CONTRACT, and saying so is part of the answer.** The
+six rungs in one month's column arrive from six different ACTIVATION cohorts. 7.5× only holds when
+cohort sizes are flat; this feed steps from ~155 daily-tx rows/day (Feb–Jul) to 668/day in August.
+The ratio is a mix statistic. What it factorises into is the finding:
+
+```
+15.30x  =  (3,624 trailing rows / 508 M1 rows)  x  ($25.54 per trailing row / $11.91 per M1 row)
+        =            7.134                      x               2.144
+ 7.50x  =            5.000  (five legs)         x               1.500  (75% / 50%)
+excess  =            1.427                      x               1.429      ← half each, measured
+```
+
+**MEASURED, org `854f6d7b-…`, read-only, all 8 periods (Feb–Sep 2026):**
+- **M7–M12 is EMPTY in every period.** The schedule does not run longer than the owner states and no
+  non-residual money is filed into a high rung. Only `PostPaid Additional Spiff` and `Retroactive
+  Postpaid Spiff` reach `carrier_comm` (`pl_ma_spiff_order_types`), and inside those families the
+  negative controls — `Total Wireless Upgrade Commission`, `Total MAX 5G Plan $55 RTR`, `Total
+  Wireless Edge Upgrade Processing Fee`, bare `TW EDGE SPF` — all land in the Unlabelled rung
+  (August: 3 rows, $70.00). `Subsidy` ($262,315.23 in August) is not a spiff order type and reaches
+  no rung at all.
+- **The trailing legs pay the contract rate.** Against **LIST** MRC (`mrc_net_discount` / 0.915 —
+  the netted column already has the 8.5% bill-pay commission out, and deducting it twice understates)
+  the trailing modal amounts are exactly 75%: `41.25` on $55, `48.75` on $65, `30.00` on $40,
+  `22.50` on $30, `18.75` on $25.
+- **M1 is where it goes wrong, and it is not a third label form.** The commission SHEET says August's
+  activations EARNED **$23,271.90** of M1 across **1,163** rows — a median of **exactly 0.500** of
+  list MRC (mode 0.50 on 702 of 1,183), i.e. the contract. The cash feed carries **$6,049.96** across
+  **508** rows. Both the count and the per-row amount are short, in every measurable month (June:
+  236 rows both sides but $2,605.54 cash vs $4,835.41 earned; July: 128 / $1,275.19 vs 707 /
+  $13,602.70). Measured against the SHEET's earned M1 the trailing money is **3.98×** — *below* the
+  7.5× ceiling. The unlabelled bucket is $70.00, so the missing M1 is not hiding under "no month".
+- **THE RECONCILIATION GAP that prevents closing this, stated as itself:** a payment row cannot be
+  traced to its activation. `raw_ma_daily_tx.order_number` and `raw_ma_commission.activation_order`
+  occupy DISJOINT id spaces — **0 of 13,087** spiff rows match any of 2,779 sheet activation orders —
+  and inside `raw_ma_daily_tx` every `order_type` family has its own disjoint order-number space, so
+  `order_number` is a transaction id, not an activation key. A true per-device cohort chain is
+  therefore **not computable from these feeds today**, and "carrier short-paid M1" vs "the cash feed
+  is missing M1 rows" cannot be distinguished from the data. That is reported, not guessed
+  (`ma_payout_attribution`'s `ATTRIBUTION_NO_ACTIVATION_REASON` is the same honest absence).
+
+**THE LADDER'S RUNG CONVENTION — ONE HOME, `commcalc/commission_legs.py`.** A column per rung is only
+safe if every surface agrees what a rung IS. Four modules each carried their own copy
+(`gp_report._leg_ladder_add`, `ma_store_pnl._ladder_add`, `router._ma_leg_trend` + `_int_or`, and
+`commission_ledger.summarize` — the fourth found by the new guard, not by reading). All four now
+dereference:
+| function | what it answers |
+|---|---|
+| `ladder_key(leg_month)` | the rung key: `'4'`, or `LADDER_UNKNOWN` for None/''/junk — never a crash, never a lost dollar |
+| `ladder_sort_key(key)` | the ONE ordering: numeric ascending, unknown last (so M10 follows M9) |
+| `months_present(*ladders, include_unknown=True)` | the COLUMN LIST — the rungs the DATA carries. No `range(1,7)`, no max-month config, no 12 |
+| `ladder_column(prefix, key)` | `comm_month_3` / `comm_month_unlabelled` — a namespace deliberately apart from `public_keys()`'s `comm_m1` LEG bucket, which is a different fact |
+| `ladder_label(key)` | `M3`, or `Unlabelled` — never `M0` |
+| `ladder_to_public(prefix, ladder, months)` | flat columns for a row/export; a rung a store lacks reads `$0.00`, never a hole |
+
+**WHAT THE REPORT NOW SHOWS.** `gp_report.calc_gp_report` emits `comm_ladder` `{rung: $}` on EVERY
+store row (fed from the same per-store parts already merged into the report-wide ladder — one
+derivation, read twice), `totals['comm_ladder']` rung by rung, the flat `comm_month_<n>` companions
+so the CSV/XLSX carry them, and on the `commission_legs` block `ladder_months` /
+`ladder_month_labels` / `ladder_columns` / `ladder_unknown_key`. The GP page has a **📅 Months**
+toggle that splices those columns in after the Commission block, and a **"Commission by
+month-of-life"** card showing EARNED (sheet) above RECEIVED (cash) over the same rungs with the
+booked basis marked — which is where the M1 gap reads off the screen. The Unlabelled rung is always
+its own column and is never folded into a month.
+
+**AUGUST 2026, live through `/gp/{period}`:** M1 `6,049.96` + M2 `18,776.69` + M3 `20,256.94` +
+M4 `19,792.24` + M5 `15,931.79` + M6 `17,778.75` + Unlabelled `70.00` = `98,656.37` = the P&L's
+`carrier_comm`, across 20 stores with the per-store identity holding on all 20.
+
+**CONFIG, NOT CODE — surfaced, not applied:** `database/migrations/1015_ma_leg_rate_schedule.sql` (numbered **1015**: it was drafted as 1013 and collided with #273, renumbered to 1014 and collided with #275 — both times because it sat UNAPPLIED awaiting owner approval while other migrations merged past it, which is the normal cost of surfacing a money-adjacent migration rather than applying it. Mig `1013` is #273's `pl_commission_source` on this SAME table — different columns, both `ADD COLUMN IF NOT EXISTS`, applicable in either order; mig `1014` is #275's `connector_registry`, a different table this never touches)
+adds `commission_org_config.ma_leg_rate_schedule` (jsonb `{rung: fraction of LIST MRC}`) and
+`ma_mrc_list_divisor` (0.915), per org with a house default, so the contract the owner had to state
+in his own question can be held as data instead of re-derived by hand. **No month count is stored** —
+the ladder still comes from the feed, so a paid rung with no configured rate is a finding rather than
+invisible. Blast radius until a row is written: zero.
+
+**LOCKS:** `backend/harness_ma_month_columns.py` (58 checks, DB-free stdlib — the rung convention,
+the data-driven column list including an M7 and an M13, the negative controls staying out of every
+month rung, and the August split pinned per store and in total) + **CHECK 2c** in
+`harness_ma_income_one_home_guard.py`, which FAILS THE BUILD if a fifth local copy of the rung
+convention appears; `harness_gp_totals_reconcile.py` B1a/B1b (a dict-valued money column must be
+totalled rung by rung, not excused); `harness_device_purchases.py` B2g (the shared rung key is
+byte-identical to the local rule it replaced, so no dollar changes rung).
+
 **LOCKS:** `backend/harness_gp_pnl_commission_parity.py` (65 checks, DB-free — parity under BOTH
 bases, the two exclusions with their rulings, store grain, the August regression, and an ARMED
 negative control proving a leading-street-number join splits `218-80 Hempstead Avenue` from the MA
@@ -3732,7 +3823,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.raw_dlar_rep` | `dlar_sweep` (replace), upload | rep KPI, comp trend `15238` |
 | `commcalc.raw_catalog` | upload `/product-mrc/import` region, catalog | GP, device COGS, installment MRC |
 | `commcalc.payout_config` | `/config/{period}` `10474`, `/commission-settings` `10517` | `calc_rep_commissions` (spiffs/tiers), installment base rates |
-| `commcalc.commission_org_config` | `/commission-settings` (incl. **`pl_commission_source`**, mig `1013` — its own statement, validated, READ BACK, refuses naming the migration when the column is absent), migrations (`209`,`306`,`308`,`309`,`314`,`934`,`939`,`992`,`996`,**`1013`** written NOT applied) | THE per-org money-policy row (RULE TWO). Readers: `ma_store_pnl.load_config` (store attribution · month-spiff source/order types · MDF tokens · line labels · rebate presentation · device-margin presentation · **P&L commission source** `feeds`\|`ledger`\|`ledger_else_feeds`, mig 1013, resolved by `ledger_pnl.resolve_source` — the row read WHOLE through `core.column_tolerant.read_row`, §4b.1: ANY subset of columns; a pre-1013 DB reads `feeds` AND reports `config_columns_missing=['pl_commission_source']`) · `ma_store_pnl.load_unbooked_reasons` (`pl_ma_unbooked_reasons`, mig 994) · `residual_subs.load_ma_pnl_config` (`pl_merchant_discount_own_line`, `pl_ma_residual_order_types`) · `residual_subs.load_residual_report_config` (`residual_report_components`, mig 994) · `billpay_pl` (`pl_billpay_presentation`/`pl_billpay_settlement`) · the installment/plan engines (`installment_mrc_basis`, `plan_pay_gate`, `sales_source`) · `setup_fee_pay.load_pay_config` → `resolve_for_scope` (`setup_fee_pay`: `default` / `by_carrier` / `by_market` / `all_markets`, §6a). EVERY reader is org-scoped and ADAPTIVE — a missing column/row degrades to the code defaults, never raises — and since 2026-09-22 (§4b.1) NO reader selects a column block: each reads the row whole (`read_row`) and reports what is absent |
+| `commcalc.commission_org_config` | `/commission-settings` (incl. **`pl_commission_source`**, mig `1013` — its own statement, validated, READ BACK, refuses naming the migration when the column is absent), migrations (`209`,`306`,`308`,`309`,`314`,`934`,`939`,`992`,`996`,**`1013`**, **`1015` WRITTEN NOT APPLIED — `ma_leg_rate_schedule` + `ma_mrc_list_divisor`, §4a.2, surfaced for owner approval; both are `ADD COLUMN IF NOT EXISTS` on this same table and coexist with mig 1013's `pl_commission_source` (different columns, either order); zero blast radius until a row is written**) | THE per-org money-policy row (RULE TWO). Readers: `ma_store_pnl.load_config` (store attribution · month-spiff source/order types · MDF tokens · line labels · rebate presentation · device-margin presentation · **P&L commission source** `feeds`\|`ledger`\|`ledger_else_feeds`, mig 1013, resolved by `ledger_pnl.resolve_source` — the row read WHOLE through `core.column_tolerant.read_row`, §4b.1: ANY subset of columns; a pre-1013 DB reads `feeds` AND reports `config_columns_missing=['pl_commission_source']`) · `ma_store_pnl.load_unbooked_reasons` (`pl_ma_unbooked_reasons`, mig 994) · `residual_subs.load_ma_pnl_config` (`pl_merchant_discount_own_line`, `pl_ma_residual_order_types`) · `residual_subs.load_residual_report_config` (`residual_report_components`, mig 994) · `billpay_pl` (`pl_billpay_presentation`/`pl_billpay_settlement`) · the installment/plan engines (`installment_mrc_basis`, `plan_pay_gate`, `sales_source`) · `setup_fee_pay.load_pay_config` → `resolve_for_scope` (`setup_fee_pay`: `default` / `by_carrier` / `by_market` / `all_markets`, §6a). EVERY reader is org-scoped and ADAPTIVE — a missing column/row degrades to the code defaults, never raises — and since 2026-09-22 (§4b.1) NO reader selects a column block: each reads the row whole (`read_row`) and reports what is absent |
 | `commcalc.rep_commissions` | `_run_calculation`/`_apply_new_engines` `9183` | `/commissions/{period}` `10222`, GP report, commission-by-store, statements, MI (indirect) |
 | `commcalc.store_kpis` | KPI ingest/snapshot | tiers, exec |
 | `commcalc.carrier_kpi_metric` | `/carrier-kpi-metrics` POST `19773` | KPI/tier config resolution |
@@ -3851,6 +3942,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /commcalc/data-sources` **`sources[].connector_scope`**, `GET /commcalc/connectors` **`[].connector_scope`** (§12a.2) | `router._strip_source_pw(row, prows, scope_ctx)` / `list_connectors` | `commcalc/email-imports` (a login row says "not applicable to this tenant — why"), `commcalc/connectors` (a withheld instance renders without status / Run now) |
 | `GET /commcalc/pl-commission-source` (mig `1013`, §4b — READ-ONLY: `value`, `ready` + `not_ready_note`, `config_columns_missing` / `config_migrations_missing` (§4b.1 — the same reader the P&L uses), `options` in layman words, `suggestion` = `ledger_pnl.suggest_source` over `evidence` = `ledger_pnl.load_source_evidence` (which feed tables hold rows, ledger lines per period), `pl_link` (the P&L lines the buckets book to), `shows_in`) | `router.get_pl_commission_source` → `ledger_pnl.load_source_meta` / `load_source_evidence` / `suggest_source`, `router._ledger_pl_link`, `landing_identity.shows_in(…, pl_link)` | `components/PlCommissionSourcePanel.tsx` (on `/commcalc/commission-ledger` and the intake 3.9 card); the ONE writer is `PUT /commcalc/commission-settings {pl_commission_source}` |
 | `PUT /commcalc/commission-settings` **`pl_commission_source`** (mig `1013`) — 💰 which source books the P&L commission lines: validated against `ma_store_pnl.COMMISSION_SOURCES`, written in its own statement, READ BACK through `ledger_pnl.load_source_meta`; an unknown word → 400, a missing column → 400 naming `1013_pl_commission_source.sql` (never a silent non-save) | `router.put_commission_settings`; `_commission_org_config` returns it | takes effect on the next `/account/compute`; the P&L line's `commission_source` shows both sources' figures |
+| `GET /gp/{period}` — **the month-of-life COLUMNS** (owner report 2026-09-21): every store row carries `comm_ladder` `{rung: $}` plus flat `comm_month_<n>` / `comm_month_unlabelled` companions, `totals.comm_ladder` is summed rung by rung, and `commission_legs` carries `ladder_months` / `ladder_month_labels` / `ladder_columns` / `ladder_unknown_key` — the COLUMN LIST from the data, never a hardcoded 6 or 12 | `router._compute_gp` → `gp_report.calc_gp_report` → `commission_legs.months_present` / `ladder_to_public` (the one home) | §4a.2 — rendered by the GP page's 📅 Months toggle and its 'Commission by month-of-life' card (EARNED sheet above RECEIVED cash, booked basis marked); both exports follow the visible columns (WYSIWYG) and a 'Commission by month-of-life' sheet always ships. Locked by `harness_ma_month_columns.py` + CHECK 2c |
 | `GET /commcalc/commission-mtd/{period}` (`?plan_id=&rates=<cat:$,…>&acc_pct=`) — Option 1's READ-ONLY preview: each rep's flat $ per activation type + accessory % over the Exec MTD numbers for the plan's stores (`_commission_mtd_result`); `POST …/save` records it (plan editor only), `GET …/saved` reads the record | `router.commission_mtd` `19739` / `19778` / `19816` → `_commission_mtd_result` `19603` → `_exec_mtd` | §6e — the Employee Commission Structure page's **Option 1** card (top; formerly the bottom card, unchanged call) and the plan editor's "Calculate from Executive MTD" box |
 | **`/commcalc/commission-structure`** — Employee Commission Structure (the front door, `tileOnly`): "There are 2 ways to calculate employee commission" → Option 1 (Exec MTD flat) → Option 2 (custom steps 1–6) → Apply | reads `GET /commission-plans`, `/accessory-config`, `/accessory-definition`, `/commission-plans/preview`, `/commission-mtd/{period}`, `/report-kinds`; writes ONLY `POST /commission-plans` (activation_source) + `PUT /accessory-config` — as before | §6e; header + order from `_lib/commissionWays.ts` via `_lib/CommissionWaysHeader.tsx` (also mounted on `/commcalc/commission-plans`). Proof `frontend/prove_commission_structure_order.mjs` |
 | `POST /commcalc/report-kinds/detect` (multipart file) — "This looks like your <kind> — right?": header names only, nothing stored; `mode` confirm\|ask\|none + candidates with confidence and evidence | `router.report_kinds_detect` → `_read_upload_grids` → `onboarding_intake.stitch_sheets` → `report_kinds.detect_report_kind` over `visible_kinds` + the confirmed signatures → `decide` | §30.9; the intake's `KindDetectZone`. Proof `harness_report_kinds.py` §E/§G |
@@ -4035,6 +4127,10 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Which CONNECTORS apply to a tenant (every connector surface: the Inventory Values portal form, the auto-import tiles, the wizard's connector steps, the Connectors page, the processor-login picker, the per-vendor sweep pages, the health scan / lamp / attention providers) — and why each other one is withheld | `commcalc.connector_registry.applies_to_pos / applies_to_carrier / is_active` ∩ the SAME declaration + `ui_label_override` scope 'cap' `connector:<key>` | `connector_registry.scope` / `visible` (= `report_kinds.visible_kinds`, `connector:` namespace) ≡ `carrier-scope.reportKindsVisible(rows, decl, caps, 'connector:')` → `GET /commcalc/connector-registry` → `useConnectors`; `connector_scope` on the per-connector payloads; §12a.2. Not a list anywhere in a page (locked) |
 | Which report kinds a tenant is OFFERED (every upload surface) — and why each other kind is withheld | `commcalc.report_kind.applies_to_pos / applies_to_carrier / is_active / defined_by` ∩ the declaration (`ui_label_override` `report_term` `pos_system` term / `pos_profile.pos_key` + `commcalc.carrier.code`) + `ui_label_override` scope 'cap' `kind:<key>` | `report_kinds.visible_kinds` ≡ `carrier-scope.reportKindsVisible` → `GET /commcalc/report-kinds` → `useReportKinds`; §30.9. Not a list anywhere in a page (locked). Confidence of "this looks like your X" = `detect_report_kind` (fingerprint 1.0 > overlap 0.8–0.99 > signals 0.4–0.79) |
 | Which month-of-life LEG a carrier payment row states | `raw_ma_daily_tx.product_name` — a month TOKEN (`MONTH 4`, `M1`) or the ACTIVATION-COMMISSION form, which carries no token | **ONE home** `commission_ledger.month_leg_of`; `parse_payment_month` answers only the token question and is private to that module (CHECK 2b in `harness_ma_income_one_home_guard.py`). §4a.1 — reading the token alone hid 1,218 rows / $19,292.54 of M1 and read August's M1 as $2,300.40 against $6,049.96. Strictly additive; no payout moved (measured 0 orders) |
+| Which month-of-life RUNGS a report may show — the column list, the key, the order and the label | the LADDER the data carries (`raw_ma_daily_tx` spiff rows via `month_leg_of`; the sheet's `spiff_m1..m6` via `ma_field_leg`) — never a month COUNT, never `range(1, 7)`, never 12 | **ONE home** `commission_legs.months_present` / `ladder_key` / `ladder_sort_key` / `ladder_column` / `ladder_label` / `ladder_to_public`; CHECK 2c in `harness_ma_income_one_home_guard.py` fails the build on a fifth local copy. §4a.2 — four modules each carried their own copy, which is how a rung that exists in the data becomes visible on one surface and invisible on another |
+| Commission per month-of-life, per STORE, on the Gross Profit report — EARNED (sheet) beside RECEIVED (cash) | `store_rows[].comm_ladder` `{rung: $}` + the flat `comm_month_<n>` / `comm_month_unlabelled` companions; `totals.comm_ladder`; `commission_legs.ladder_months` / `ladder_month_labels` / `ladder_columns` / `ladder_unknown_key` | `gp_report.calc_gp_report` (fed from the same per-store parts already merged into the report-wide ladder — one derivation, read twice) → `GET /gp/{period}` → the GP page's 📅 Months toggle and 'Commission by month-of-life' card. §4a.2. August 2026: M1 6,049.96 + M2 18,776.69 + M3 20,256.94 + M4 19,792.24 + M5 15,931.79 + M6 17,778.75 + Unlabelled 70.00 = 98,656.37, 20/20 stores identity-clean. The Unlabelled rung is ALWAYS its own column and is never folded into a month |
+| The contract RATE each rung should pay, and the base it is a fraction of | `commission_org_config.ma_leg_rate_schedule` (jsonb `{rung: fraction of LIST MRC}`) + `ma_mrc_list_divisor` (0.915) — **mig `1015`, WRITTEN NOT APPLIED, surfaced for owner approval** | §4a.2. Measured today: trailing rungs pay exactly 75% of LIST MRC (modes 41.25/$55, 48.75/$65, 30.00/$40, 22.50/$30); the sheet's own M1 is a median of exactly 0.500 of list. LIST = `mrc_net_discount` / 0.915 — the netted column already has the 8.5% bill-pay commission out and deducting it twice understates every stated rate |
+| Whether a cash payment row can be traced to its ACTIVATION (the cohort question) | `raw_ma_daily_tx.order_number` vs `raw_ma_commission.activation_order` | **IT CANNOT — measured, reported, not papered over.** 0 of 13,087 spiff rows match any of 2,779 sheet activation orders (disjoint id spaces), and inside `raw_ma_daily_tx` every `order_type` family has its own disjoint order-number space. So a per-device cohort chain is not computable from these feeds, and "carrier short-paid M1" vs "the cash feed is missing M1 rows" cannot be distinguished. §4a.2; same honest-absence posture as `ma_store_pnl.ATTRIBUTION_NO_ACTIVATION_REASON` |
 | MA/VidaPay commission RECEIVED, on the Gross Profit report AND the P&L — and its M1..M12+ ladder | `raw_ma_commission` spiff columns (EARNED, activation month) and `raw_ma_daily_tx` spiff-family rows (RECEIVED, cash month); which one is MONEY is `commission_org_config.pl_ma_month_spiff_source`; store from the mig-314 account→store index | **ONE home** `ma_store_pnl.gp_carrier_income` → GP columns, and the same bookings → `coa.build_inputs` → the P&L. §4a. Both bases always reported, labelled; only the cash basis reaches M7..M12 (the sheet has six spiff columns). Rebate and wallet funding are NOT commission on either report (owner 2026-09-08 / 2026-08-10) — `commission_received_lines()` is the ruling, and `assert_commission_column_is_commission()` the checked invariant **Since mig `1013` (§4b) this is the `feeds` source; under `pl_commission_source='ledger'` the covered lines book from `commcalc.commission_ledger` instead and these feed bookings are suppressed on them (recorded on the line's `commission_source`)** |
 | **Commission received — WHICH SOURCE books it (owner 2026-09-21: "p&l is not showing the commission received, it shows in the commission ledger but not populating the p&l")** | `commission_org_config.pl_commission_source` (`feeds` house default \| `ledger` \| `ledger_else_feeds`, mig `1013`) resolved per period by `ledger_pnl.resolve_source`. `ledger`: Σ per bucket per store from `commcalc.commission_ledger` via `commission_ledger.summarize` (the amounts are the commission module's — finance never re-sums `payout_total`) → the line each bucket's registry row names (`commission_bucket.pl_line_key`), the chart's sign per section (deductions positive on their expense line; rebates through `rebate_route`); the five commission-feed paths are suppressed on the covered lines (`ledger_pnl.covered_lines`, derived) and never elsewhere | `coa.build_inputs` (`add_comm` guarded adder + the ledger block) → `engine._assemble` `commission_source` passthrough → `/accounts/pl` ("from the feed tables" / "from the Commission Ledger" + the other source's figure and the difference in words + unbooked money with reasons + the way back to the ledger). Guard `ledger_pnl.double_booked` (raises). Proof `harness_pl_commission_source.py` (73); lock `harness_pl_commission_source_lock.py` (CI). The switch is READ through `ma_store_pnl.load_config` — the row whole, any subset of columns (§4b.1) |
 | **Which columns of a per-org config table exist on the live database — what to apply before a switch takes effect (2026-09-22)** | `commission_org_config` read WHOLE (`core.column_tolerant.read_row`) against `ma_store_pnl.PL_CONFIG_COLUMNS` (column ↔ migration) | `ma_store_pnl.load_config` → `cfg["config_columns_missing"]` / `cfg["config_migrations_missing"]`; surfaced by `GET /commcalc/pl-commission-source` (the panel) and on each commission line's `commission_source.words` / `switch_ready` (the P&L). §4b.1; proof `harness_any_columns.py`; lock `harness_any_columns_lock.py` |

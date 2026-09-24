@@ -67,7 +67,18 @@ tot_keys |= {"comm_m1", "comm_m2_12", "comm_unsplit", "comp_comm_m1", "comp_comm
 # Identity/label columns are not money and are not expected in a totals row.
 NOT_MONEY = {"store", "store_code", "address", "market", "unmapped", "rep", "name",
              "net_profit_target", "net_profit_attainment"}
-missing = sorted(k for k in row_keys - tot_keys - NOT_MONEY)
+# DICT-valued money columns (the per-month ladder, owner 2026-09-21) are money and MUST be totalled —
+# but rung by rung, not as one scalar. They are checked by the stronger rule below instead of being
+# excused here: the key must exist in `totals` AND its rungs must re-add. Listing one here without
+# adding it to DICT_MONEY would fail that rule, so it cannot be used as an escape hatch.
+DICT_MONEY = {"comm_ladder"}
+for _k in DICT_MONEY:
+    _pat = "totals['%s']" % _k
+    check("B1a the dict-valued money column %r is totalled rung by rung, not dropped" % _k,
+          _pat in SRC, True)
+    check("B1b …and its rungs are published as flat columns too, so an export carries them",
+          "ladder_to_public" in SRC, True)
+missing = sorted(k for k in row_keys - tot_keys - NOT_MONEY - DICT_MONEY)
 check("B1 EVERY money column on a store row is summed into totals — the rule that stops a "
       "subtraction disappearing from the header again", not missing, f"missing from totals: {missing}")
 

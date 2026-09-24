@@ -419,7 +419,14 @@ if _msp_base.strip():
     # (newest column set first, adaptive) — because that is where every other P&L switch is read and a
     # sibling config home is the duplicate the index forbids. Neither decides where a dollar books; B2g
     # below pins every function that DOES. Proven by backend/harness_pl_commission_source.py.
-    MSP_SANCTIONED = ("ma_tx_bookings", "ma_received_month_ladder", "default_config", "load_config")
+    # ALSO SANCTIONED 2026-09-21 (mig 1015, the month-of-life COLUMNS — owner: "display each months
+    # commission in separate column so we see what is going on"): `_ladder_add` now dereferences the
+    # ONE home for a ladder RUNG KEY (commission_legs.ladder_key) instead of carrying its own copy of
+    # the convention, because a column per rung is only safe if every surface agrees what a rung is.
+    # It is a read-out helper: it books nothing, and B2h below proves the keys it produces are
+    # byte-identical to the local rule it replaced.
+    MSP_SANCTIONED = ("ma_tx_bookings", "ma_received_month_ladder", "default_config", "load_config",
+                      "_ladder_add")
     _msp_unsanctioned = [f for f in _msp_changed if f not in MSP_SANCTIONED]
     check("B2d ma_store_pnl.py — no pre-existing function changed except the two sanctioned by the "
           "2026-09-21 M1-leg correction and the config-reader pair sanctioned by mig 1013, so no MA "
@@ -460,6 +467,16 @@ if _msp_base.strip():
     check("B2g …and every other function that decides WHERE an MA dollar books is byte-identical to the "
           "branch point (the sheet booking rules, the rebate route, the account->store index, the GP "
           "read-out, the commission-received family)", _msp_booking_moved == [], _msp_booking_moved)
+
+    # B2h — what the `_ladder_add` sanction is worth: the rung KEY it writes is byte-identical to
+    # the convention it replaced, for every input the old local rule could see, so no dollar moves
+    # rung. The old rule was: 'unknown' if month in (None, '', 'unknown') else str(int(month)).
+    from app.modules.commcalc import commission_legs as _cl_keys
+    _old_key = (lambda m: "unknown" if m in (None, "", "unknown") else str(int(m)))
+    _key_inputs = [None, "", "unknown", 0, 1, "1", 6, 7, 12, 13, 99]
+    _key_diff = [m for m in _key_inputs if _cl_keys.ladder_key(m) != _old_key(m)]
+    check("B2h …and the rung key the shared home writes is identical to the local rule it replaced, "
+          "so no dollar changes rung", _key_diff == [], _key_diff)
 else:
     check("B2d ma_store_pnl.py baseline unavailable (git-less CI) — skipped, not silently passed",
           True)
