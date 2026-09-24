@@ -41,6 +41,10 @@ from __future__ import annotations
 import datetime as _dt
 import re
 
+from app.modules.commcalc import device_cost_recon as _dcr               # the device key's home (§30.11)
+from app.modules.commcalc import inventory_sold_recon as _isr            # THE device <-> phone-number pairing rule (§30.11)
+from app.modules.pos import customer_identity as _cid                    # who the customer is + one invoice's phone lines (§30.16)
+from app.modules.pos import customer_master as _cmr                      # the lines onto the customer (§30.16)
 from app.modules.pos import vendor_paid_lines as _vpl
 from app.modules.pos.receipt_formats import base as _base
 
@@ -330,6 +334,32 @@ def summary_words(res):
     return w
 
 
+_RULE_WORDS = {
+    _cid.RULE_PHONE_NAME: "matched an existing customer on a phone line and the name",
+    _cid.RULE_PHONE_COMBINE: "combined with the customer already on that phone line under another name (within two years)",
+    _cid.RULE_NAME: "matched an existing customer on the full name",
+    _cid.RULE_NAME_AMBIGUOUS: "matched the first of several customers with the same name (merge them on the customer page)",
+    _cid.RULE_CREATE: "created a new customer",
+    _cid.RULE_PLACEHOLDER: "a placeholder bill-to — no customer",
+    _cid.RULE_EMPTY: "no customer name — no customer",
+    "kept": "kept the customer the sale already had (re-run)",
+    "unreadable": "the customer records could not be read — no customer attached",
+}
+
+
+def customer_words(cust):
+    """The rebuild's customer outcome in words: how many sales matched by which rule, the lines recorded."""
+    w = []
+    for rule, n in sorted((cust or {}).get("rules", {}).items(), key=lambda kv: -kv[1]):
+        w.append(f"{n:,} sale(s): {_RULE_WORDS.get(rule, rule)}")
+    if cust.get("lines_written") or cust.get("lines_updated"):
+        w.append(f"{cust['lines_written']:,} phone line(s) recorded on customers, {cust['lines_updated']:,} brought up to date")
+    if cust.get("line_words"):
+        w.append(f"{cust['line_words']:,} invoice(s) carry a phone line with no device paired, or no customer — see the customer page")
+    w.extend(cust.get("alias_words") or [])
+    return w
+
+
 # ── The consumer (I/O): the landed slices → documents → the ONE importer ─────────────────────────────
 def resolve_format(client, org_id):
     """The format registered for the tenant's DECLARED POS — read through report_kinds.tenant_declaration
@@ -479,6 +509,14 @@ def rebuild(client, org_id, lo, hi, stores=None, who=None, dry_run=False):
     rep_resolve = _cr._intake_rep_resolver(client, org_id)
     created = replaced = failed = 0
     failures, reports = [], []
+    # THE CUSTOMER MASTER (§30.16): each invoice's phone lines (the MDNs in its lines' tracking #) are handed to the ONE
+    # matcher with the invoice date, and its lines land on the customer the sale settles on — invoice by invoice in date
+    # order, so a later invoice sees the lines an earlier one recorded.
+    lines_by_inv = {}
+    for ln in lines:
+        lines_by_inv.setdefault(_s(ln.get("trans_id")), []).append(ln)
+    plan_line = None if dry_run else _cmr.plan_line_predicate(client, org_id)
+    cust = {"rules": {}, "lines_written": 0, "lines_updated": 0, "alias_words": [], "line_words": 0}
     for doc, report in res["documents"]:
         reports.append(report)
         if dry_run:
@@ -490,12 +528,25 @@ def rebuild(client, org_id, lo, hi, stores=None, who=None, dry_run=False):
                 emp = (getattr(rep_resolve, "employee_ids", {}) or {}).get(str(name or "").lower()) if name else None
             except Exception:
                 emp = None
+            inv_lines = lines_by_inv.get(_s(report.get("invoice_no")), [])
+            phones = sorted({ln["mdn"] for ln in _cid.invoice_lines(inv_lines, _isr.line_pairings, _dcr.device_key)})
             r = _ri.upsert_structured(client, org_id=org_id, pos_source=fmt["pos"], document=doc, uploaded_by=who,
-                                      store_code=report.get("store_code"), notes=None, employee_id=emp)
+                                      store_code=report.get("store_code"), notes=None, employee_id=emp,
+                                      identity={"phones": phones, "sale_date": report.get("trans_date")})
             if r.get("replaced"):
                 replaced += 1
             else:
                 created += 1
+            cm = r.get("customer_match") or {}
+            rule = (cm.get("decision") or {}).get("rule") or "kept"
+            cust["rules"][rule] = cust["rules"].get(rule, 0) + 1
+            cust["alias_words"] += [w for w in cm.get("words") or [] if w not in cust["alias_words"]]
+            sl = _cmr.sync_invoice_lines(client, org_id, sale_id=r.get("sale_id"), customer_id=r.get("customer_id"), rows=inv_lines,
+                                        sale_date=report.get("trans_date"), store_code=report.get("store_code"), employee_id=emp,
+                                        invoice_no=report.get("invoice_no"), plan_line=plan_line)
+            cust["lines_written"] += sl["written"]
+            cust["lines_updated"] += sl["updated"]
+            cust["line_words"] += 1 if sl["words"] else 0
         except Exception as e:  # one invoice never sinks the run — it is listed
             failed += 1
             failures.append({"invoice_no": report["invoice_no"], "error": str(e)[:200]})
@@ -504,12 +555,14 @@ def rebuild(client, org_id, lo, hi, stores=None, who=None, dry_run=False):
         words.append("no vendor-paid line rule is saved for this company — the lines the vendor paid print their amounts; "
                      "confirm the proposed rule under POS → Receipts → 'Lines the vendor pays', then rebuild")
     words.append(f"{created:,} POS sale(s) created, {replaced:,} replaced (re-run), {failed:,} failed" if not dry_run else "dry run — nothing written")
+    if not dry_run:
+        words.extend(customer_words(cust))
     return {"ok": failed == 0, "ran": True, "pos": fmt["pos"], "format_label": fmt["format"]["label"], "from": lo, "to": hi,
             "stores": stores, "invoices": res["invoices"], "with_lines": res["with_lines"], "without_lines": res["without_lines"],
             "line_invoices_without_header": res["line_invoices_without_header"][:50],
             "lines_tie": res["lines_tie"], "tenders_tie": res["tenders_tie"],
             "vendor_paid": {"tokens": vp_rule["tokens"], "lines": res["vendor_paid_count"], "sum": res["vendor_paid_sum"]},
-            "created": created, "replaced": replaced, "failed": failed, "failures": failures[:50],
+            "created": created, "replaced": replaced, "failed": failed, "failures": failures[:50], "customers": cust,
             "words": words, "reports": reports[:200], "reports_total": len(reports),
             "landings": {"invoice": {"table": inv_table, "rows": len(invoices)}, "tenders": {"table": tender_table, "rows": len(tenders)},
                          "lines": {"table": line_table, "rows": len(lines)}}}

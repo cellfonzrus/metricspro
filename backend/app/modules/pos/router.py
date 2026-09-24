@@ -1095,20 +1095,30 @@ CUSTOMER_DETAIL_COLS = CUSTOMER_READ_COLS + ",password"
 @router.get("/customers")
 def list_customers(search: str = "", active_only: bool = True, org_id: str = ORG_ID,
                    authorization: str = Header(default="")):
+    """The customer book — the POS sale screen's customer search and the Account Manager list. The text finds a
+    customer by any one column (as before), by the FULL name ('Jane Doe' — first AND last; the single-column ILIKE
+    found nobody), by a phone number on the customer's LINES, by an also-known-as name, or by the customer #
+    (`customer_master.search_ids`, org-scoped). A customer merged into another is never listed (its sales and
+    lines live on the survivor)."""
     _require_member(authorization, org_id)
-    q = sb().schema("pos").table("customers").select(CUSTOMER_READ_COLS).eq("org_id", org_id)
-    if active_only:
-        q = q.eq("is_active", True)
-    s = search.strip().replace("%", "").replace(",", " ")
-    if s:
-        ors = (f"first_name.ilike.%{s}%,last_name.ilike.%{s}%,company_name.ilike.%{s}%,"
-               f"phone_primary.ilike.%{s}%,phone_secondary.ilike.%{s}%,email.ilike.%{s}%,"
-               f"primary_account_no.ilike.%{s}%")
-        if s.isdigit():
-            ors += f",cust_number.eq.{s}"
-        q = q.or_(ors)
-    rows = q.order("created_at", desc=True).limit(300).execute().data or []
-    return {"customers": rows}
+    client = sb()
+    ids = _cmaster.search_ids(client, org_id, search)
+    hide_merged = _cmaster.identity_schema(client, org_id)["merged_into"]
+
+    def base():
+        q = client.schema("pos").table("customers").select(CUSTOMER_READ_COLS).eq("org_id", org_id)
+        if active_only:
+            q = q.eq("is_active", True)
+        return q.is_("merged_into", "null") if hide_merged else q
+
+    if ids is None:
+        rows = base().order("created_at", desc=True).limit(300).execute().data or []
+    else:
+        rows = []
+        for chunk in _cmaster.in_chunks(ids):
+            rows += base().in_("id", chunk).execute().data or []
+        rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+    return {"customers": rows[:300]}
 
 
 @router.get("/customers/{customer_id}")
@@ -1170,6 +1180,89 @@ def add_customer_note(customer_id: str, body: dict,
         "employee_id": _caller_employee(authorization, org_id) or None,
     }).execute()
     return {"note": (r.data or [{}])[0]}
+
+
+# ── The customer master (owner 2026-09-24; index §30.16) ─────────────────────────────────────────────
+# One entry per phone number the customer carries (its device, its plan, the dated sales on it — each opens, edits
+# through PATCH /pos/activations/{id} and takes notes through /pos/activations/{id}/notes), what they paid per
+# invoice, the other names they went by, and merge / un-merge. The decisions live in pos/customer_identity; the
+# reads and writes in pos/customer_master. Merging needs migration 1017 — without it the answer says so.
+from app.modules.pos import customer_master as _cmaster
+
+
+def _customer_or_404(customer_id: str, org_id: str):
+    rows = (sb().schema("pos").table("customers").select("id").eq("org_id", org_id).eq("id", customer_id)
+            .limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "customer not found")
+
+
+@router.get("/customers/{customer_id}/lines")
+def customer_lines(customer_id: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """ONE ENTRY PER PHONE NUMBER: the number, its device (IMEI), its plan, first / last date, and the dated sales on
+    that line (invoice #, the receipt to print, the sale total, what the receipt prints for the line, notes count)."""
+    _require_member(authorization, org_id)
+    _customer_or_404(customer_id, org_id)
+    return _cmaster.lines_payload(sb(), org_id, customer_id)
+
+
+@router.get("/customers/{customer_id}/invoices")
+def customer_invoices(customer_id: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """PER INVOICE what the customer paid (Σ the customer's payment lines), the total, the balance, the receipt."""
+    _require_member(authorization, org_id)
+    _customer_or_404(customer_id, org_id)
+    return _cmaster.invoices_payload(sb(), org_id, customer_id)
+
+
+@router.get("/customers/{customer_id}/aliases")
+def customer_aliases(customer_id: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """The other names this customer went by (combined on a shared phone line, or merged), the customers merged
+    into it, the customer it was merged into; says "apply migration 1017" until the table exists."""
+    _require_member(authorization, org_id)
+    _customer_or_404(customer_id, org_id)
+    return _cmaster.aliases_payload(sb(), org_id, customer_id)
+
+
+@router.post("/customers/{customer_id}/merge")
+def customer_merge(customer_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Merge THIS customer into `into`: its sales, receipts, phone lines, trade-ins, special orders, notes and names
+    move to `into`; this one is kept (inactive, merged_into = into) with the list of what moved, so Un-merge puts
+    exactly that back. Body: {into, reason?}. Gated `pos_customers_merge` (a full-scope admin by default)."""
+    _require_pos_perm(authorization, org_id, "pos_customers_merge")
+    into = str(body.get("into") or "").strip()
+    who = _caller_employee(authorization, org_id) or None
+    out = _cmaster.merge_customers(sb(), org_id, customer_id, into, who=who, reason=(body.get("reason") or "").strip() or None)
+    if not out["ok"]:
+        raise HTTPException(409 if _cmaster.MIGRATION_WORDS in out["words"] else 400, " ".join(out["words"]))
+    return out
+
+
+@router.post("/customers/{customer_id}/unmerge")
+def customer_unmerge(customer_id: str, body: dict = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Undo a merge (or a placeholder detach) of THIS customer from its recorded move list. Body: {reason?}."""
+    _require_pos_perm(authorization, org_id, "pos_customers_merge")
+    who = _caller_employee(authorization, org_id) or None
+    out = _cmaster.unmerge(sb(), org_id, customer_id, who=who, reason=((body or {}).get("reason") or "").strip() or None)
+    if not out["ok"]:
+        raise HTTPException(409 if _cmaster.MIGRATION_WORDS in out["words"] else 400, " ".join(out["words"]))
+    return out
+
+
+@router.post("/customers/dedupe")
+def customers_dedupe(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The one-time cleanup of customers created before the matcher (the house counted-confirm): {dry_run: true} (or
+    no confirm_count) PLANS — exact same-name duplicates merged into the first created, placeholder customers
+    ('Walk In') detached — and writes nothing; send it again with confirm_count = the planned count to apply (a
+    different count is refused with the fresh plan). Every change can be undone with Un-merge. Gated like merge."""
+    _require_pos_perm(authorization, org_id, "pos_customers_merge")
+    confirm = body.get("confirm_count")
+    if body.get("dry_run", True) is not False or confirm in (None, ""):
+        return {"dry_run": True, **_cmaster.dedupe_plan(sb(), org_id)}
+    who = _caller_employee(authorization, org_id) or None
+    out = _cmaster.dedupe_apply(sb(), org_id, int(confirm), who=who, reason=(body.get("reason") or "").strip() or None)
+    if not out.get("applied"):
+        raise HTTPException(409, " ".join(out["words"]))
+    return {"dry_run": False, **out}
 
 
 # ── Inventory ──────────────────────────────────────────────────────────────────────────────────────

@@ -165,21 +165,23 @@ def normalize_receipt(raw: dict | None) -> dict:
 
 # ── Layer 3: import (customer match/create + sale + audit row) ────────────────────────────────────
 # The columns the matcher reads. `notes` is OPTIONAL: mig 725 never created it, and selecting it made every
-# lookup fail — read as "not found" — so every rebuilt receipt CREATED a customer (live, 2026-09-24). Each
-# optional column is probed on its own (core.column_tolerant, the one reading rule) and cached per client × org.
-_CUSTOMER_REQUIRED = ("id", "first_name", "last_name", "address_1", "address_2", "city", "state", "zip", "phone_primary")
-_CUSTOMER_OPTIONAL = ("notes",)
+# lookup fail — read as "not found" — so every rebuilt receipt CREATED a customer (live, 2026-09-24). `merged_into`
+# (mig 1017) is optional the same way. Each optional column is probed on its own (core.column_tolerant, the one
+# reading rule), cached per client × org for customer_master.SCHEMA_TTL_SECONDS (a migration applied by hand is
+# seen without a restart).
+_CUSTOMER_REQUIRED = ("id", "first_name", "last_name", "company_name", "address_1", "address_2", "city", "state", "zip",
+                      "phone_primary", "phone_secondary", "email", "is_active", "created_at", "updated_at")
+_CUSTOMER_OPTIONAL = ("notes", "merged_into")
 _CUSTOMER_PRESENT: dict = {}
 _IDENTITY_CFG: dict = {}
 
 
 def _customer_present(client, org_id: str) -> frozenset:
     from app.core import column_tolerant as _ct
-    k = (id(client), org_id)
-    if k not in _CUSTOMER_PRESENT:
-        _CUSTOMER_PRESENT[k] = _ct.present_columns(lambda: client.schema("pos").table("customers"),
-                                                   lambda q: q.eq("org_id", org_id), _CUSTOMER_OPTIONAL)
-    return _CUSTOMER_PRESENT[k]
+    from app.modules.pos import customer_master as _cm
+    return _cm.ttl_cached(_CUSTOMER_PRESENT, (id(client), org_id),
+                          lambda: _ct.present_columns(lambda: client.schema("pos").table("customers"),
+                                                      lambda q: q.eq("org_id", org_id), _CUSTOMER_OPTIONAL))
 
 
 def _customer_cols(client, org_id: str) -> str:
@@ -202,67 +204,150 @@ def identity_config(client, org_id: str) -> dict:
     return _IDENTITY_CFG[k]
 
 
-def find_customer(client, org_id: str, parsed: dict) -> dict | None:
-    """THE customer match every receipt import uses: by phone (the strongest key), else by the FULL
-    name — first AND last, case-insensitive. It used to match the last name alone, so the first
-    customer named 'Singh' took every later Singh's receipt (found while rebuilding sales from the
-    reports, 2026-09-21; fixed here for the OCR path too). A one-word name matches a customer whose
-    last name is that word and whose first name is empty. Returns the row or None; never raises."""
+def _incoming(parsed: dict) -> dict:
+    """A sale's identity as the pure decision reads it: the bill-to name, every phone it carries (the receipt's
+    phone + the invoice's line numbers), the sale date, the address and e-mail when the source has them."""
+    phones = [parsed.get("phone")] + list(parsed.get("phones") or [])
+    return {"name": (parsed.get("customer_name") or "").strip(), "phones": [p for p in phones if p],
+            "date": parsed.get("sale_date"), "address": parsed.get("address"), "email": parsed.get("email")}
+
+
+def _candidates(client, org_id: str, inc: dict) -> tuple[list, dict]:
+    """EVERY customer the decision must weigh — org-scoped reads, nothing decided here: the customers whose LINES
+    (`pos.activations.cell_number`) or phone fields carry one of the sale's numbers, the customers carrying the
+    name (full name compared normalised) or an also-known-as name (mig 1017). A merged-away customer is followed
+    to the customer it was merged into. Returns (candidate dicts for `customer_identity.decide`, rows by id)."""
     from app.modules.pos import customer_identity as _cid
-    phone = parsed.get("phone")
-    name = (parsed.get("customer_name") or "").strip()
-    if name and _cid.is_placeholder(name, identity_config(client, org_id)):
-        name = ""                                   # a placeholder bill-to ('Walk In') names nobody — never matched
+    from app.modules.pos import customer_master as _cm
     tbl = lambda: client.schema("pos").table("customers")      # noqa: E731 — a builder is single-use
     cols = _customer_cols(client, org_id)
-    try:
-        if phone:
-            rows = (tbl().select(cols).eq("org_id", org_id).eq("phone_primary", phone)
-                    .limit(1).execute().data) or []
-            if rows:
-                return rows[0]
-        if name:
-            first, last = _cid.split_name(name)
-            if not last:                            # a one-word name is stored as the LAST name (see the insert)
-                first, last = "", first
-            rows = (tbl().select(cols).eq("org_id", org_id).ilike("last_name", last)
-                    .order("id").limit(200).execute().data) or []
-            rows = [r for r in rows if _cid.same_name(r, first, last)]
-            return rows[0] if rows else None
-    except Exception:
-        return None
-    return None
+    phones = sorted({p for p in (_cid.norm_phone(x) for x in inc["phones"]) if p})
+    nn = _cid.norm_name(inc["name"])
+    line_dates: dict = {}                                       # customer id → {mdn: [dates]}
+    rows: dict = {}
+    if phones:
+        for a in (client.schema("pos").table("activations").select("customer_id,cell_number,activation_date")
+                  .eq("org_id", org_id).in_("cell_number", phones).limit(5000).execute().data) or []:
+            if a.get("customer_id"):
+                line_dates.setdefault(a["customer_id"], {}).setdefault(_cid.norm_phone(a.get("cell_number")), []).append(a.get("activation_date"))
+        for col in ("phone_primary", "phone_secondary"):
+            for r in (tbl().select(cols).eq("org_id", org_id).in_(col, phones).limit(200).execute().data) or []:
+                rows[r["id"]] = r
+    if nn:
+        last = nn.split()[-1]
+        for r in (tbl().select(cols).eq("org_id", org_id).ilike("last_name", f"%{last}%").order("id").limit(500).execute().data) or []:
+            if _cid.norm_name(_cid.display_name(r)) == nn:
+                rows[r["id"]] = r
+    want = (set(line_dates) | set(_cm.alias_owners(client, org_id, inc["name"]))) - set(rows)
+    for chunk in _cm.in_chunks(sorted(want)):
+        for r in (tbl().select(cols).eq("org_id", org_id).in_("id", chunk).execute().data) or []:
+            rows[r["id"]] = r
+    for _hop in range(5):                                       # a merged-away customer → the survivor (its lines moved there)
+        away = {r["id"]: r.get("merged_into") for r in rows.values() if r.get("merged_into")}
+        if not away:
+            break
+        for rid, into in away.items():
+            rows.pop(rid, None)
+            line_dates.setdefault(into, {}).update(line_dates.pop(rid, {}))
+            if into not in rows:
+                got = (tbl().select(cols).eq("org_id", org_id).eq("id", into).limit(1).execute().data) or []
+                if got:
+                    rows[into] = got[0]
+    aliases = _cm.aliases_of(client, org_id, list(rows))
+    cands = []
+    for rid, r in rows.items():
+        ph = {m: max((str(d)[:10] for d in ds if d), default=None) for m, ds in line_dates.get(rid, {}).items() if m}
+        for col in ("phone_primary", "phone_secondary"):
+            m = _cid.norm_phone(r.get(col))
+            if m and m in phones and not ph.get(m):             # a number typed on the record, no line yet: dated by the record
+                ph[m] = str(r.get("updated_at") or r.get("created_at") or "")[:10] or None
+        cands.append({"id": rid, "name": _cid.display_name(r), "aliases": [a.get("alias_name") for a in aliases.get(rid, [])],
+                      "address": _cid.norm_address(r), "merged_into": None, "created_at": r.get("created_at"), "phones": ph})
+    return cands, rows
 
 
-def _match_or_create_customer(client, org_id: str, parsed: dict, note: str | None) -> str | None:
-    """Find a customer (find_customer: phone, else the full name); create one when neither hits.
-    Appends `note` to the customer's notes. Returns customer_id or None (never raises fatally)."""
+def match_customer(client, org_id: str, parsed: dict) -> dict:
+    """THE MATCHER's read half: the sale's identity → `customer_identity.decide` over `_candidates`. Returns
+    {"decision": {...}, "row": the matched row | None, "incoming": {...}}. Never raises (a failed read → a
+    decision of `none` that says so — it never reads as "not found → create")."""
     from app.modules.pos import customer_identity as _cid
-    phone = parsed.get("phone")
-    name = parsed.get("customer_name")
-    if name and _cid.is_placeholder(name, identity_config(client, org_id)):
-        name = None                                 # 'Walk In' / 'No Customer' never becomes a customer
+    inc = _incoming(parsed)
+    cfg = identity_config(client, org_id)
+    if _cid.is_placeholder(inc["name"], cfg):                   # 'Walk In' names nobody — decided before any read
+        return {"decision": _cid.decide(inc, [], config=cfg), "row": None, "incoming": inc}
+    try:
+        cands, rows = _candidates(client, org_id, inc)
+    except Exception as e:
+        return {"decision": {"action": "none", "customer_id": None, "rule": "unreadable", "alias_to_add": None, "reassigned": [],
+                             "reason": f"the customer records could not be read ({str(e)[:120]}) — no customer attached, none created"},
+                "row": None, "incoming": inc}
+    d = _cid.decide(inc, cands, config=cfg)
+    return {"decision": d, "row": rows.get(d.get("customer_id")) if d["action"] == "match" else None, "incoming": inc}
+
+
+def find_customer(client, org_id: str, parsed: dict) -> dict | None:
+    """THE customer match every import uses (the OCR path, the structured PDF, the sales rebuilt from the reports):
+    `match_customer` → the matched row or None. Phone number and name first (a line the customer already carries,
+    under the same name — or, within two years, under another name: combined), else the FULL name (first AND last,
+    normalised; the last-name-only match that handed every 'Singh' the first Singh's receipt is gone), never a
+    placeholder bill-to. Never raises."""
+    return match_customer(client, org_id, parsed)["row"]
+
+
+def match_or_create(client, org_id: str, parsed: dict, note: str | None = None) -> dict:
+    """THE MATCHER's write half — the one path that creates a customer from a sale. match → fill the customer's
+    EMPTY fields only (`customer_identity.fill_patch`; a filled field is never overwritten), record a different name
+    as an also-known-as name (mig 1017 — when it is not applied the answer says so), append the note; create →
+    one new customer (the first phone number as the primary phone); a placeholder → no customer.
+    Returns {"customer_id", "decision", "created", "filled", "alias", "words"}; never raises fatally."""
+    from app.modules.pos import customer_identity as _cid
+    from app.modules.pos import customer_master as _cm
+    out = {"customer_id": None, "decision": None, "created": False, "filled": {}, "alias": None, "words": []}
+    m = match_customer(client, org_id, parsed)
+    d, inc = m["decision"], m["incoming"]
+    out["decision"] = d
     tbl = client.schema("pos").table("customers")
     has_notes = "notes" in _customer_present(client, org_id)
     try:
-        found = find_customer(client, org_id, {**parsed, "customer_name": name})
-        if found:
+        if d["action"] == "match" and m["row"]:
+            row = m["row"]
+            patch = _cid.fill_patch(row, inc)
             if note and has_notes:
-                merged = ((found.get("notes") or "") + f"\n[receipt import] {note}").strip()
-                tbl.update({"notes": merged}).eq("id", found["id"]).eq("org_id", org_id).execute()
-            return found["id"]
-        if not (phone or name):
-            return None
-        first, last = _cid.split_name(name)
-        if not last:                                # one word → the last name, so find_customer finds it next time
+                patch["notes"] = ((row.get("notes") or "") + f"\n[receipt import] {note}").strip()
+            if patch:
+                tbl.update(patch).eq("id", row["id"]).eq("org_id", org_id).execute()
+                out["filled"] = {k: v for k, v in patch.items() if k != "notes"}
+            if d.get("alias_to_add"):
+                a = _cm.add_alias(client, org_id, row["id"], d["alias_to_add"], "upload", inc.get("date"))
+                out["alias"] = a if a else None
+                if a is False:
+                    out["words"].append(f"'{d['alias_to_add']}' was combined into this customer but not recorded as an also-known-as name — "
+                                        + _cm.MIGRATION_WORDS)
+            out["customer_id"] = row["id"]
+            return out
+        if d["action"] != "create" or _cid.is_placeholder(inc["name"], identity_config(client, org_id)):
+            return out                                          # 'Walk In' / 'No Customer' never becomes a customer
+        first, last = _cid.split_name(inc["name"])
+        if not last:                                            # one word → the last name, so the matcher finds it next time
             first, last = "", first
+        phones = [p for p in (_cid.norm_phone(x) for x in inc["phones"]) if p]
+        phones = list(dict.fromkeys(phones))
         ins = {"org_id": org_id, "first_name": first or None, "last_name": last or None,
-               "phone_primary": phone, "email": parsed.get("email"),
+               "phone_primary": phones[0] if phones else None, "phone_secondary": phones[1] if len(phones) > 1 else None,
+               "email": parsed.get("email"), "is_active": True,
                "notes": (f"[receipt import] {note}" if note and has_notes else None)}
         r = tbl.insert({k: v for k, v in ins.items() if v is not None} | {"org_id": org_id}).execute()
-        return (r.data or [{}])[0].get("id")
-    except Exception:
-        return None  # a customer-link failure must not sink the whole import
+        out["customer_id"] = (r.data or [{}])[0].get("id")
+        out["created"] = bool(out["customer_id"])
+        return out
+    except Exception as e:
+        out["words"].append(f"the customer link failed ({str(e)[:120]}) — the sale is kept without a customer")
+        return out                                              # a customer-link failure must not sink the whole import
+
+
+def _match_or_create_customer(client, org_id: str, parsed: dict, note: str | None) -> str | None:
+    """The customer id `match_or_create` settles on (or None) — the shape every older caller reads."""
+    return match_or_create(client, org_id, parsed, note)["customer_id"]
 
 
 # ── Encryption at rest (import ledger) ─────────────────────────────────────────────────────────────
@@ -397,7 +482,7 @@ def _sale_row(document: dict, der: dict, *, org_id, store_code, employee_id, upl
 
 def import_structured(client, *, org_id: str, pos_source: str, document: dict,
                       uploaded_by: str | None, store_code: str | None, notes: str | None,
-                      image_path: str | None = None, employee_id: str | None = None) -> dict:
+                      image_path: str | None = None, employee_id: str | None = None, identity: dict | None = None) -> dict:
     """Store a parsed structured receipt: the customer (matched or created from the document's bill-to
     name), a summary sale carrying the document's own subtotal / tax / total, dated on the receipt's
     date, + the receipt_imports row carrying the editable `document`. Returns {import_id, sale_id,
@@ -405,7 +490,8 @@ def import_structured(client, *, org_id: str, pos_source: str, document: dict,
     path and the sales rebuilt from the landed reports both come through here."""
     der = (document or {}).get("derived") or _derived(document)
     total = der.get("total") or 0.0
-    customer_id = _match_or_create_customer(client, org_id, {"customer_name": der.get("customer_name"), "phone": der.get("phone")}, notes)
+    cm = match_or_create(client, org_id, _identity_of(der, identity), notes)
+    customer_id = cm["customer_id"]
 
     sale_row = _sale_row(document, der, org_id=org_id, store_code=store_code, employee_id=employee_id,
                          uploaded_by=uploaded_by, notes=notes, pos_source=pos_source)
@@ -426,7 +512,7 @@ def import_structured(client, *, org_id: str, pos_source: str, document: dict,
     row = _encrypt_import_row({k: v for k, v in imp.items() if not (k == "customer_id" and v is None)})
     ir = client.schema("pos").table("receipt_imports").insert(row).execute()
     return {"import_id": (ir.data or [{}])[0].get("id"), "sale_id": sale_id,
-            "transaction_id": transaction_id, "customer_id": customer_id, "created": True}
+            "transaction_id": transaction_id, "customer_id": customer_id, "created": True, "customer_match": cm}
 
 
 def _sync_sale(client, org_id: str, sale_id: str | None, document: dict, der: dict, **kw) -> None:
@@ -506,8 +592,15 @@ def find_structured(client, org_id: str, pos_source: str, invoice_no: str, prove
     return None
 
 
+def _identity_of(der: dict, identity: dict | None) -> dict:
+    """The sale identity the matcher reads: the document's bill-to name + phone, and what the caller knows beyond
+    the document (the invoice's phone-line numbers and date from the sales reports: `identity`)."""
+    return {"customer_name": der.get("customer_name"), "phone": der.get("phone"), "sale_date": der.get("sale_date"), **(identity or {})}
+
+
 def upsert_structured(client, *, org_id: str, pos_source: str, document: dict, uploaded_by: str | None,
-                      store_code: str | None, notes: str | None, employee_id: str | None = None) -> dict:
+                      store_code: str | None, notes: str | None, employee_id: str | None = None,
+                      identity: dict | None = None) -> dict:
     """Import a structured document ONCE per org × POS × invoice number (× provenance kind): the first
     run creates the sale + import row through import_structured; every later run REPLACES that row's
     document and its sale's money / store / rep / customer — never a second sale for the same invoice.
@@ -517,10 +610,13 @@ def upsert_structured(client, *, org_id: str, pos_source: str, document: dict, u
     existing = find_structured(client, org_id, pos_source, der.get("invoice_no"), prov_kind)
     if not existing:
         return import_structured(client, org_id=org_id, pos_source=pos_source, document=document, uploaded_by=uploaded_by,
-                                 store_code=store_code, notes=notes, employee_id=employee_id)
-    customer_id = existing.get("customer_id") or _match_or_create_customer(
-        client, org_id, {"customer_name": der.get("customer_name"), "phone": der.get("phone")}, None)
+                                 store_code=store_code, notes=notes, employee_id=employee_id, identity=identity)
+    cm = None
+    customer_id = existing.get("customer_id")
+    if not customer_id:                     # a re-run KEEPS the customer the sale already has (a merge may have moved it)
+        cm = match_or_create(client, org_id, _identity_of(der, identity), None)
+        customer_id = cm["customer_id"]
     update_structured_document(client, org_id, existing["id"], document, sale_id=existing.get("sale_id"),
                                pos_source=pos_source, store_code=store_code, employee_id=employee_id, customer_id=customer_id)
     return {"import_id": existing["id"], "sale_id": existing.get("sale_id"), "transaction_id": None,
-            "customer_id": customer_id, "created": False, "replaced": True}
+            "customer_id": customer_id, "created": False, "replaced": True, "customer_match": cm}

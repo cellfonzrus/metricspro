@@ -366,9 +366,17 @@ check("D3 the sale row: source receipt_import, the document's subtotal / tax / t
       and sale1["receipt"]["payments"] == [{"label": "Cash", "amount": TOTAL_9001}] and sale1["receipt"]["invoice_no"] == "INV-9001"
       and sale1["receipt"]["provenance"]["lines"]["rows"] == 17 and "report" not in sale1["receipt"]["provenance"], sale1)
 jane = next((c for c in custs if (c.get("first_name"), c.get("last_name")) == ("Jane", "Doe")), None)
-check("D4 the customer is matched by the FULL name (Jane Doe, not Bob Doe who sits first in the roster); the bill-to carries her address; a new name (JOHN ROE) is created once",
+# PIN CHANGED (2026-09-24, the customer master §30.16 — owner: "if in the last 2 years data a customer came in twice to get
+# phones on different names they should be combined"): INV-9002 (JOHN ROE, 06-Aug) carries phone line 5550001111, which
+# INV-9001 (JANE DOE, 05-Aug) recorded on Jane a day earlier — the SAME customer under another name: combined into Jane,
+# 'JOHN ROE' kept as her also-known-as name. It used to create JOHN ROE as a third customer.
+_sale2 = next(s for s in sales if s["id"] == next(r for r in imps if r.get("invoice_no") == "INV-9002")["sale_id"])
+check("D4 the customer is matched by the FULL name (Jane Doe, not Bob Doe who sits first in the roster); the bill-to carries her address; "
+      "JOHN ROE shares Jane's phone line 5550001111 a day later → combined into Jane (an alias), not a third customer",
       jane and sale1["customer_id"] == jane["id"] and imp1["document"]["bill_to"]["lines"] == ["JANE DOE", "2 Sample Ave", "Sampletown NY 20000"]
-      and sum(1 for c in custs if (c.get("first_name"), c.get("last_name")) == ("JOHN", "ROE")) == 1 and len(custs) == 3, [(c.get("first_name"), c.get("last_name")) for c in custs])
+      and not any((c.get("first_name"), c.get("last_name")) == ("JOHN", "ROE") for c in custs) and len(custs) == 2
+      and _sale2["customer_id"] == jane["id"] and [a["alias_name"] for a in db.tables.get("customer_aliases") or []] == ["JOHN ROE"],
+      [(c.get("first_name"), c.get("last_name")) for c in custs])
 check("D4b find_customer (the one matcher, used by the OCR path too): full name → Jane; a last name alone → nobody (never the first Doe)",
       RI.find_customer(db, ORG, {"customer_name": "Jane Doe"})["address_1"] == "2 Sample Ave" and RI.find_customer(db, ORG, {"customer_name": "Doe"}) is None
       and RI.find_customer(db, ORG, {"customer_name": "Zed Doe"}) is None)
@@ -380,8 +388,9 @@ check("D6 the footer is the org's receipt-template footer (config), and the docu
 
 # re-run → replace, never duplicate; a changed line shows in the replaced document
 out2 = SFR.rebuild(db, ORG, "2026-08-01", "2026-08-31", who="E1")
-check("D7 a re-run REPLACES: 0 created, 3 replaced; still 3 imports, 3 sales, 3 customers",
-      out2["created"] == 0 and out2["replaced"] == 3 and len(db.tables["receipt_imports"]) == 3 and len(db.tables["sales"]) == 3 and len(db.tables["customers"]) == 3, out2)
+check("D7 a re-run REPLACES: 0 created, 3 replaced; still 3 imports, 3 sales, 2 customers (pin changed with D4: JOHN ROE is Jane), the same phone lines",
+      out2["created"] == 0 and out2["replaced"] == 3 and len(db.tables["receipt_imports"]) == 3 and len(db.tables["sales"]) == 3 and len(db.tables["customers"]) == 2
+      and out2["customers"]["lines_written"] == 0, out2)
 ln = next(r for r in db.tables["raw_sales"] if r["trans_id"] == "INV-9001" and r["sku"] == "HS-3")
 ln["product_desc"] = "PHONE MODEL 3 512GB"
 out3 = SFR.rebuild(db, ORG, "2026-08-05", "2026-08-05", who="E2")
