@@ -4014,7 +4014,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `POST /marketing/events/{id}/checkin` · `POST .../checkout` · `GET /marketing/my-checkins` · `GET /marketing/checkin-retention` | `marketing/router.py`; pure decision `core/geo.evaluate_checkin` | §23 GPS attendance. Check-out stores a TIMESTAMP only; `my-checkins` is filtered to the caller's own employee id and cannot be pointed at anyone else |
 | `GET /marketing/events/{id}/actuals` | `marketing/actuals.event_actuals` → `commcalc.router._compute_feed_actuals_py` → `_sales_cell_agg` | §23 planned-vs-actual, DERIVED from the §3 shared pass. Carries a mandatory `attribution` block: store performance over the window, NOT sales caused by the event |
 | `GET /marketing/summary` | `marketing/router.py` | §23 dashboard — uses the SAME `event_logic.event_readiness` as the event page and the attention providers, so the three cannot disagree |
-| `GET /core/onboarding/{module_key}` (wizard state; seeds + backfills the tenant registry) · `GET /core/onboarding/import-sources/{source}/preview` · `POST .../apply` · **`PUT .../config`** (2026-09-22) | `core/onboarding.py` (`build_status`, `preview_import`/`apply_import`; plans via the ONE resolver `resolve_service_plans` = every source the org's `plan_sources` rules name over the registry `core/plan_sources.HOUSE_SOURCES` — `product_mrc` + `raw_mi` by default, `raw_sales` / `commission_ledger` once the words are confirmed; the preview carries `sources[]` (table, on/off, counts, `suggest` = the proposal) and `configurable`; `PUT …/config` → `save_plan_sources` (the too-broad guard, then `pos/router.upsert_pos_setting`, then the refreshed preview) for the sources in `CONFIGURABLE_SOURCES`; dealer codes DELEGATE to `pos/router._dealer_sync`) | §23n / §23n.1 — "bring it over" preview-then-apply, the sources and their words per org. Every zero carries an `empty_reason`/`empty_next` naming every source checked and the fix |
+| `GET /core/onboarding/{module_key}` (wizard state; seeds + backfills the tenant registry) · `GET /core/onboarding/import-sources/{source}/preview` · `POST .../apply` · **`PUT .../config`** (2026-09-22) | `core/onboarding.py` (`build_status`, `preview_import`/`apply_import`; plans via the ONE resolver `resolve_service_plans` = every source the org's `plan_sources` rules name over the registry `core/plan_sources.HOUSE_SOURCES` — `product_mrc` + `raw_mi` by default, `raw_sales` / `commission_ledger` once the words are confirmed; the preview carries `sources[]` (table, on/off, counts, `suggest` = the proposal) and `configurable`; `PUT …/config` → `save_plan_sources` (the too-broad guard, then `pos/router.upsert_pos_setting`, then the refreshed preview) for the sources in `CONFIGURABLE_SOURCES`; dealer codes DELEGATE to `pos/router._dealer_sync`) | §23n / §23n.1 / §23n.2 (inventory: the source picked from the data, the store resolved, the product match shown, the upload link) — "bring it over" preview-then-apply, the sources and their words per org. Every zero carries an `empty_reason`/`empty_next` naming every source checked and the fix |
 | `GET /commcalc/onboarding` · `PUT /commcalc/onboarding/{step}` (now carries `implementation`: the carrier-scoped blocks + the ordered spine) | `router._onboarding_wizard` → `implementation_spine.build` (PURE); carrier pick-list from `commcalc.carrier` via `_onboarding_profile_step` | **§26 — THE implementation spine.** Not a sixth wizard: the flow extends the questionnaire that already existed |
 | `GET /commcalc/upload-registry` | `router.upload_registry` → `implementation_spine.upload_scope_map`; `report_definitions.carrier_id` (mig `291`) + `connector_instances.carrier_id` | §26.3 — the DATA that replaced `carrier?: 'boost' \| 'total'` on the Upload page. A tile ABSENT from `scope` is carrier-agnostic and must be SHOWN |
 | `GET /commcalc/upload-registry` → `reports` | same handler, EXTENDED §27.8 | The tenant's registered `report_definitions` rows, so a report that exists only as a ROW is REACHABLE from the Upload page — the §26.7-item-3 dead end. No new endpoint |
@@ -6382,6 +6382,33 @@ with "rate plan" proposed (8,350 lines) and "rebate" proposed as the exclusion (
 non-rebate names among the 32 (the three measured rebate names drop out) · commission statement 1,494 lines with its own proposal. Owner's clicks: tick the sales export
 (and the statement if its proposal reads right) → Save & re-check → Bring over N. No MRC on those rows: each says where to
 price it. **Migrations: none.** Money: none — the wizard seeds `pos.service_plans` names; nothing is computed from them.
+
+### 23n.2 ADDENDUM 2026-09-24 — INVENTORY IS PICKED FROM THE DATA; THE CARD SAYS WHERE TO LAND A POS EXPORT
+
+Owner: *"it should not mention VIP consignment ledger it should be your distributor ledger, also there should be a link to upload the
+products in the format the pos gives and then match up with the fields we have … we have everything built but it is not seamless"*.
+
+**Measured (live tenant).** The "Inventory MetricsPro already holds for you" card opened on the distributor ledger (0 units) and said
+*"Nothing found — use the template instead"* while the intake had landed the tenant's POS inventory export (`inventory_aging_device`,
+455 rows, **383 on hand**, 'Inventory Listing Report.csv'); the copy named one distributor ("VIP") in code and on the page; the units
+carried the store as the POS spells it ('… Brooklyn WZ1321') where `pos.inventory_serial.store_code` takes a CODE; and the preview and
+the apply each derived the units themselves (two copies).
+
+**The fix (`core/onboarding.py`).** `INVENTORY_VARIANTS` (the two sources and their generic labels — no distributor or carrier name),
+`inventory_preview` — every source COUNTED, the one holding units PICKED (the POS export first, then the distributor ledger;
+`inventory_default_variant`), the counts on the choice, the latest landing named (`upload_trace` → file + date), the PRODUCT MATCH shown
+before anything is written (`_product_matcher`: code → `product_code`/`upc`, else the normalised short/full name — non-breaking and
+doubled spaces folded), each unit's store resolved through the intake's ONE resolver (`commcalc._intake_store_resolver`; an unmapped
+string is NAMED, never written raw), and `INVENTORY_UPLOAD` — the link to the intake's inventory card (any POS layout, columns matched
+there) on the card and in the empty state (`empty_reason` / `empty_next`). ONE unit reader `_all_units` for preview AND apply; the apply
+takes the same default and the same matcher. The page renders the sources, labels and link from the payload.
+
+**Live (read-only replay):** the card now picks the POS export — 383 units, 'Inventory Listing Report.csv', 383 of 383 match a product,
+every store resolves to its code — where it showed 0.
+
+**Proof.** `harness_pos_onboarding.py` §P18 (P18a–j: picked from the data, the sold unit excluded; store code via the alias; the product
+match by normalised name; the upload link; apply writes the resolved store + product, re-run adds none; ledger-only tenant; empty tenant
+told what to do; unmapped store named; RULE TWO; one reader / one matcher) — 241 pass. No migration.
 
 ## 23o. A NAMED SCREEN THAT IS NOT A LINK (owner directive 2026-09-08)
 

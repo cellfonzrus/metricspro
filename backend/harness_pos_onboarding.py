@@ -938,6 +938,92 @@ try:
 except Exception as e:
     skip("M1-M4 onboarding module", str(e)[:140])
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# §P18 INVENTORY IS PICKED FROM THE DATA, AND THE CARD SAYS WHERE TO LAND A POS EXPORT (owner 2026-09-24:
+# "it should not mention VIP consignment ledger, it should be your distributor ledger, also there should be a
+# link to upload the products in the format the pos gives … we have everything built but it is not seamless").
+# Live: the card opened on the (empty) distributor ledger and said "Nothing found — use the template" to a
+# tenant whose POS inventory export (383 units on hand) the intake had landed; units carried the store as the
+# POS spells it, not the store code. Drives the REAL preview / apply over the in-memory client.
+if _HAVE_FAKE:
+    _ORG18 = "f4f1c16e-0000-4000-8000-000000000018"
+
+    def _inv_tenant(aging=(), ledger=(), products=(), alias=True):
+        db = _FakeDB()
+        db.declared["asset_ledger"] = ["id", "org_id", "esn_imei", "device_model", "store", "acquired_date", "owed_to_vip",
+                                       "category", "date_sold"]
+        db.declared["products"] = ["id", "org_id", "upc", "product_code", "short_name", "full_name"]
+        db.declared["inventory_serial"] = ["id", "org_id", "product_id", "store_code", "serial_number", "imei", "sim_card", "color",
+                                           "storage", "condition", "status", "cost", "date_received", "po_number", "sold_at",
+                                           "sold_in_sale_id", "created_at", "updated_at"]
+        db.declared["upload_trace"] = ["id", "org_id", "created_at", "source", "filename", "upload_type", "target_table", "rows_in",
+                                       "rows_saved", "status"]
+        db.seed("stores", [{"org_id": _ORG18, "store_code": "S-01", "address": "1 Test Ave", "market": "NY", "is_active": True}])
+        if alias:
+            db.seed("store_aliases", [{"org_id": _ORG18, "alias": "Test Wireless Store 01", "store_code": "S-01"}])
+        db.seed("inventory_aging_device", [{"org_id": _ORG18, **r} for r in aging])
+        db.seed("asset_ledger", [{"org_id": _ORG18, **r} for r in ledger])
+        db.seed("products", [{"org_id": _ORG18, **r} for r in products])
+        if aging:
+            db.seed("upload_trace", [{"org_id": _ORG18, "created_at": "2026-09-21T01:50:09Z", "source": "onboarding-intake",
+                                      "filename": "Inventory Listing Report.csv", "target_table": "inventory_aging_device",
+                                      "rows_in": 3, "rows_saved": 3, "status": "ok"}])
+        return db
+
+    _AGING = [{"imei": "356140774556652", "serial": "356140774556652", "sku": "CLX-1", "item": "PHONE MODEL 16 128GB",
+               "store": "Test Wireless Store 01", "unit_cost": 840.0, "on_hand": True, "as_of_date": "2026-09-21"},
+              {"imei": "355688663607235", "serial": "355688663607235", "sku": "CLX-2", "item": "PHONE  MODEL\xa016 PRO",
+               "store": "Test Wireless Store 01", "unit_cost": 1210.0, "on_hand": True, "as_of_date": "2026-09-21"},
+              {"imei": "350000000000001", "serial": "350000000000001", "sku": "CLX-3", "item": "SOLD PHONE",
+               "store": "Test Wireless Store 01", "unit_cost": 500.0, "on_hand": False, "as_of_date": "2026-09-21"}]
+    _PRODS = [{"id": "p-1", "upc": "195950642858", "product_code": None, "short_name": "PHONE MODEL 16 128GB", "full_name": "PHONE MODEL 16 128GB"},
+              {"id": "p-2", "upc": None, "product_code": None, "short_name": "PHONE MODEL 16 PRO", "full_name": "PHONE MODEL 16 PRO"}]
+    try:
+        _db18 = _inv_tenant(aging=_AGING, products=_PRODS)
+        ob.sb = lambda: _db18
+        _pv18 = ob.preview_import("inventory_from_metricspro", _ORG18, "")
+        check("P18a the source that HOLDS units is picked for you (the POS export, 2 on hand — the sold one excluded), with the counts on both choices",
+              _pv18["variant"] == "inventory_aging" and _pv18["count"] == 2
+              and [(x["key"], x["count"]) for x in _pv18["variants"]] == [("inventory_aging", 2), ("asset_ledger", 0)]
+              and "picked for you" in _pv18["detail"] and "Inventory Listing Report.csv" in _pv18["detail"], _pv18.get("detail"))
+        check("P18b the store as the POS spells it resolves to the store CODE through the intake's one resolver (alias)",
+              [u["store_code"] for u in _pv18["sample"]] == ["S-01", "S-01"] and _pv18["unresolved_stores"] == {}, _pv18["sample"])
+        check("P18c the product match is shown BEFORE anything is written — by name, normalised (double / non-breaking spaces): 2 of 2",
+              _pv18["matched_products"] == 2 and _pv18["unmatched_products"] == 0)
+        check("P18d the card carries the upload link to the intake's inventory card (any layout; columns matched there)",
+              _pv18["upload"]["href"] == "/onboarding/intake" and "Any layout" in _pv18["upload"]["detail"])
+        _ap18 = ob.apply_import("inventory_from_metricspro", _ORG18, "")
+        _inv = _db18.tables.get("inventory_serial") or []
+        check("P18e Bring over writes the 2 units with the resolved store code and their product, org-stamped; a re-run adds none",
+              _ap18["created"] == 2 and sorted((r["store_code"], r["product_id"]) for r in _inv) == [("S-01", "p-1"), ("S-01", "p-2")]
+              and all(r["org_id"] == _ORG18 for r in _inv) and ob.apply_import("inventory_from_metricspro", _ORG18, "")["created"] == 0, _ap18)
+        _db18b = _inv_tenant(ledger=[{"esn_imei": "359999999999999", "device_model": "PHONE MODEL 16 128GB", "store": "Test Wireless Store 01",
+                                      "category": "On Inventory", "date_sold": None, "owed_to_vip": 700.0}], products=_PRODS)
+        ob.sb = lambda: _db18b
+        _pv18b = ob.preview_import("inventory_from_metricspro", _ORG18, "")
+        check("P18f a tenant whose units sit only in the distributor ledger gets the ledger picked", _pv18b["variant"] == "asset_ledger" and _pv18b["count"] == 1)
+        _db18c = _inv_tenant(products=_PRODS)
+        ob.sb = lambda: _db18c
+        _pv18c = ob.preview_import("inventory_from_metricspro", _ORG18, "")
+        check("P18g an empty tenant is told what to do — land the POS's export through the intake (any layout) — never a bare 'use the template'",
+              _pv18c["count"] == 0 and "Neither" in _pv18c["empty_reason"] and "Onboarding → Intake → Inventory" in _pv18c["empty_next"])
+        _db18d = _inv_tenant(aging=_AGING, products=_PRODS, alias=False)
+        ob.sb = lambda: _db18d
+        _pv18d = ob.preview_import("inventory_from_metricspro", _ORG18, "")
+        check("P18h an unmapped store string is NAMED (never written as the raw string, never a default)",
+              _pv18d["unresolved_stores"] == {"Test Wireless Store 01": 2} and "Store matching" in _pv18d["unresolved_note"]
+              and all(u["store_code"] is None for u in _pv18d["sample"]))
+    finally:
+        ob.sb = _real_sb
+    _ob_src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "app/modules/core/onboarding.py")).read()
+    _pg_src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../frontend/src/app/(platform)/pos/onboarding/page.tsx")).read()
+    check("P18i RULE TWO: no distributor name in the card's copy (backend or page) — the labels come from the payload",
+          "VIP" not in _pg_src and not any("VIP" in ln for ln in _ob_src.splitlines() if not ln.strip().startswith("#") and "owed_to_vip" not in ln)
+          and "preview.variants" in _pg_src)
+    check("P18j ONE unit reader for preview AND apply (_all_units), ONE product matcher (_product_matcher)",
+          _ob_src.count("def _all_units(") == 1 and "_all_units(c, org_id, k)" in _ob_src and "_all_units(c, org_id, variant)" in _ob_src
+          and _ob_src.count("def _product_matcher(") == 1 and _ob_src.count("_product_matcher(_page(") == 2)
+
 _lay = None
 for _p in ("../frontend/src/app/(platform)/pos/layout.tsx",):
     try:

@@ -851,8 +851,9 @@ IMPORT_SOURCES = {
         creates="pos.vendors"),
     "inventory_from_metricspro": dict(
         title="Inventory MetricsPro already holds for you",
-        detail="Two sources, pick one: your VIP consignment ledger (unsold, on-inventory units) or "
-               "your latest POS inventory-aging snapshot. Both are serialised units.",
+        detail="Two sources: your POS's inventory export (what is on the shelf now) or your distributor "
+               "ledger (unsold, on-inventory units). Both are serialised units; the one that holds your units "
+               "is picked for you.",
         creates="pos.inventory_serial"),
 }
 
@@ -1334,44 +1335,7 @@ def preview_import(source: str, org_id: str, variant: str = "") -> dict:
                 "variant": variant}
 
     if source == "inventory_from_metricspro":
-        v = (variant or "asset_ledger").strip()
-        if v == "asset_ledger":
-            rows = _page(c, "commcalc", "asset_ledger",
-                         "esn_imei,device_model,store,acquired_date,owed_to_vip,category,date_sold",
-                         org_id,
-                         extra=lambda q: q.is_("date_sold", "null").ilike("category",
-                                                                         "%On Inventory%"))
-            units = [{"serial_number": (r.get("esn_imei") or "").strip(),
-                      "imei": (r.get("esn_imei") or "").strip(),
-                      "product_name": (r.get("device_model") or "").strip(),
-                      "store_code": (r.get("store") or "").strip() or None,
-                      "cost": r.get("owed_to_vip"),
-                      "date_received": r.get("acquired_date")}
-                     for r in rows if (r.get("esn_imei") or "").strip()]
-            meta["detail"] = ("VIP consignment ledger — units with no sale date whose category is "
-                              "'On Inventory'. This is the asset module's own definition of unsold, "
-                              "ready-to-sell stock (the same filter the Inventory Aging report uses).")
-        elif v == "inventory_aging":
-            rows = _page(c, "commcalc", "inventory_aging_device",
-                         "imei,serial,sku,item,store,unit_cost,received_date,as_of_date,on_hand", org_id)
-            # Seed POS from what is CURRENTLY on the shelf. A row the latest Inventory Aging export no
-            # longer lists is a sold/transferred device kept only for its cost (mig 294) — seeding it
-            # would put ~50% already-sold handsets into a new tenant's opening stock. `is not False`
-            # keeps pre-294 rows, which have no flag.
-            rows = [r for r in rows if r.get("on_hand") is not False]
-            units = [{"serial_number": (r.get("serial") or r.get("imei") or "").strip(),
-                      "imei": (r.get("imei") or "").strip() or None,
-                      "product_name": (r.get("item") or "").strip(),
-                      "upc": (r.get("sku") or "").strip() or None,
-                      "store_code": (r.get("store") or "").strip() or None,
-                      "cost": r.get("unit_cost"),
-                      "date_received": r.get("received_date")}
-                     for r in rows if (r.get("serial") or r.get("imei") or "").strip()]
-            meta["detail"] = ("Latest POS inventory-aging snapshot — what your existing POS reported "
-                              "as on-hand. Use this when you are MOVING an existing store over.")
-        else:
-            raise HTTPException(400, "variant must be 'asset_ledger' or 'inventory_aging'")
-        return {**meta, "source": source, "variant": v, "count": len(units), "sample": units[:25]}
+        return {**meta, "source": source, **inventory_preview(c, org_id, variant)}
 
     raise HTTPException(404, f"unknown import source '{source}'")
 
@@ -1495,10 +1459,9 @@ def apply_import(source: str, org_id: str, variant: str = "", actor: str = "") -
         insert("vendors", new)
 
     elif source == "inventory_from_metricspro":
-        units = _all_units(c, org_id, variant or "asset_ledger")
-        prods = _page(c, "pos", "products", "id,upc,short_name", org_id)
-        by_upc = {(p.get("upc") or "").strip(): p["id"] for p in prods if (p.get("upc") or "").strip()}
-        by_name = {(p.get("short_name") or "").strip().lower(): p["id"] for p in prods}
+        variant = (variant or "").strip() or inventory_default_variant(c, org_id)
+        units, _unres = _resolve_unit_stores(_all_units(c, org_id, variant), _store_resolver(c, org_id))
+        match = _product_matcher(_page(c, "pos", "products", "id,upc,product_code,short_name,full_name", org_id))
         have = {(r.get("serial_number") or "").strip().lower()
                 for r in _page(c, "pos", "inventory_serial", "serial_number", org_id)}
         new, unmatched = [], 0
@@ -1507,13 +1470,12 @@ def apply_import(source: str, org_id: str, variant: str = "", actor: str = "") -
             if not sn or sn.lower() in have:
                 skipped += 1
                 continue
-            pid = by_upc.get((u.get("upc") or "").strip()) \
-                or by_name.get((u.get("product_name") or "").strip().lower())
+            pid = match(u)
             if not pid:
                 unmatched += 1
                 continue
             have.add(sn.lower())
-            new.append({"product_id": pid, "serial_number": sn, "imei": u.get("imei"),
+            new.append({"product_id": pid, "serial_number": sn, "imei": u.get("imei"),   # store_code = the RESOLVED code
                         "store_code": u.get("store_code"), "cost": u.get("cost"),
                         "date_received": u.get("date_received"),
                         "condition": "new", "status": "in_stock"})
@@ -1601,6 +1563,138 @@ def _all_units(c, org_id, variant):
              "store_code": (r.get("store") or "").strip() or None,
              "cost": r.get("owed_to_vip"), "date_received": r.get("acquired_date")}
             for r in rows if (r.get("esn_imei") or "").strip()]
+
+
+# ── INVENTORY: which source holds the tenant's units, picked from the data (owner 2026-09-24: "we have
+#    everything built but it is not seamless") ─────────────────────────────────────────────────────
+# The card used to open on the distributor ledger whatever the tenant had, and said "Nothing found — use the
+# template" to a tenant whose POS inventory export (455 rows, 383 on hand) the intake had already landed.
+# Now: every source is counted, the one holding units is chosen (the POS export first — it is the tenant's
+# own shelf — then the distributor ledger), the counts are shown on the choice, the product match is shown
+# BEFORE anything is written, and the way to land a POS export (the intake's inventory card, which maps any
+# layout to our fields) is on the card. ONE unit reader (`_all_units`) serves preview AND apply; ONE product
+# matcher (`_product_matcher`). The labels live here (no distributor or carrier name — RULE TWO).
+INVENTORY_VARIANTS = (
+    ("inventory_aging", "Your POS's inventory export (on hand)"),
+    ("asset_ledger", "Your distributor ledger (unsold, on inventory)"),
+)
+INVENTORY_UPLOAD = {
+    "screen": "onboarding_intake", "href": "/onboarding/intake",
+    "label": "Upload your POS's inventory export",
+    "detail": "Any layout your POS gives: Onboarding → Intake → Inventory reads the file, matches its columns to "
+              "ours (you confirm), and lands it here — then click Re-check.",
+}
+
+
+def _norm_label(v):
+    """A product name / code for matching: non-breaking spaces and runs of spaces → one space, lower case."""
+    return " ".join(str(v or "").replace("\xa0", " ").split()).lower()
+
+
+def _product_matcher(prods):
+    """unit → the POS product id: its code (the POS SKU) against product_code or UPC, else its name against
+    the product's short or full name (normalised). None when nothing matches."""
+    by_code, by_name = {}, {}
+    for p in prods or []:
+        for k in (p.get("product_code"), p.get("upc")):
+            if _norm_label(k):
+                by_code.setdefault(_norm_label(k), p["id"])
+        for k in (p.get("short_name"), p.get("full_name")):
+            if _norm_label(k):
+                by_name.setdefault(_norm_label(k), p["id"])
+    return lambda u: by_code.get(_norm_label(u.get("upc"))) or by_name.get(_norm_label(u.get("product_name")))
+
+
+def _latest_inventory_upload(c, org_id):
+    """The latest landing of a POS inventory export (upload_trace → inventory_aging_device): file, when, rows."""
+    try:
+        rows = (c.schema("commcalc").table("upload_trace").select("filename,created_at,rows_saved,source")
+                .eq("org_id", org_id).eq("target_table", "inventory_aging_device").eq("status", "ok")
+                .order("created_at", desc=True).limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    return rows[0] if rows else None
+
+
+def _store_resolver(c, org_id):
+    """The ONE store resolver the intake uses (commcalc._intake_store_resolver: alias > address > code) — the
+    inventory export carries the store as the POS spells it ('… Brooklyn WZ1321'), the POS stores a CODE.
+    Unresolvable → None (never the raw string, never a default)."""
+    try:
+        from app.modules.commcalc import router as _cr
+        res = _cr._intake_store_resolver(c, org_id)
+        return lambda raw: (res(raw) or (None, None))[0]
+    except Exception:
+        return lambda raw: None
+
+
+def _resolve_unit_stores(units, resolve):
+    """Each unit's store string → the store code; returns (units, {unresolved string: count})."""
+    unresolved = {}
+    out = []
+    for u in units:
+        raw = u.get("store_code")
+        code = resolve(raw) if raw else None
+        if raw and not code:
+            unresolved[raw] = unresolved.get(raw, 0) + 1
+        out.append({**u, "store_code": code, "store_as_exported": raw})
+    return out, unresolved
+
+
+def inventory_default_variant(c, org_id, counts=None):
+    """The source that holds units: the POS export first, then the distributor ledger; the POS export when
+    neither does (the one a new tenant lands through the intake)."""
+    counts = counts or {k: len(_all_units(c, org_id, k)) for k, _l in INVENTORY_VARIANTS}
+    for k, _l in INVENTORY_VARIANTS:
+        if counts.get(k):
+            return k
+    return INVENTORY_VARIANTS[0][0]
+
+
+def inventory_preview(c, org_id, variant=""):
+    """The inventory card's payload: every source counted, the chosen one's units, the product match, the
+    upload link, and — when nothing is held — where to land the export."""
+    units_by = {k: _all_units(c, org_id, k) for k, _l in INVENTORY_VARIANTS}
+    counts = {k: len(v) for k, v in units_by.items()}
+    v = (variant or "").strip()
+    if v and v not in counts:
+        raise HTTPException(400, "variant must be one of " + ", ".join(counts))
+    chosen = v or inventory_default_variant(c, org_id, counts)
+    units, unresolved = _resolve_unit_stores(units_by[chosen], _store_resolver(c, org_id))
+    try:
+        match = _product_matcher(_page(c, "pos", "products", "id,upc,product_code,short_name,full_name", org_id))
+        matched = sum(1 for u in units if match(u))
+    except Exception:
+        matched = None
+    up = _latest_inventory_upload(c, org_id)
+    labels = dict(INVENTORY_VARIANTS)
+    variants = []
+    for k, label in INVENTORY_VARIANTS:
+        note = ""
+        if k == "inventory_aging" and up:
+            note = f"'{up.get('filename') or 'your export'}', landed {str(up.get('created_at') or '')[:10]}"
+        variants.append({"key": k, "label": label, "count": counts[k], "note": note})
+    note_chosen = next((x["note"] for x in variants if x["key"] == chosen), "")
+    detail = f"{labels[chosen]}: {counts[chosen]:,} serialised unit(s)" + (f" — {note_chosen}" if note_chosen else "")
+    if not v and counts[chosen]:
+        detail += " (picked for you: the source that holds your units)"
+    out = {"variant": chosen, "variants": variants, "count": len(units), "sample": units[:25], "detail": detail,
+           "upload": INVENTORY_UPLOAD, "matched_products": matched,
+           "unmatched_products": (len(units) - matched) if matched is not None else None,
+           "unresolved_stores": unresolved}
+    if unresolved:
+        out["unresolved_note"] = ("The store on " + ", ".join(f"{n:,} unit(s) ('{k}')" for k, n in sorted(unresolved.items()))
+                                  + " matches none of your stores — map the name under Store matching, then Re-check; "
+                                  "until then those units are brought over with no store.")
+    if not units:
+        out["empty_reason"] = ("Neither your POS's inventory export nor your distributor ledger holds a unit yet."
+                               if not any(counts.values()) else
+                               f"{labels[chosen]} holds no unit — the other source holds {max(counts.values()):,}; pick it above.")
+        out["empty_next"] = INVENTORY_UPLOAD["label"] + " — " + INVENTORY_UPLOAD["detail"]
+    elif matched is not None and len(units) - matched:
+        out["unmatched_note"] = (f"{len(units) - matched:,} unit(s) match no product in your POS catalog by code or name — "
+                                 "they are skipped until the product exists (import your products first).")
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
