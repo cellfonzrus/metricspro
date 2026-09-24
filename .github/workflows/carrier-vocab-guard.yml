@@ -241,6 +241,13 @@ concurrency:
   group: carrier-vocab-guard-${{ github.ref }}
   cancel-in-progress: true
 
+# Every step runs under `bash -eo pipefail` (GitHub's explicit-bash shell). Without this, the default
+# `bash -e` has NO pipefail, so `python3 harness_x.py | tee …` passed even when the harness failed — every lock
+# here was silently unenforced until 2026-09-24. Locked by backend/harness_ci_pipefail_lock.py.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   carrier-vocab-guard:
     name: No cross-side carrier vocabulary in page copy
