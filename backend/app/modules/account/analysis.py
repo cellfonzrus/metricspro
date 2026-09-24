@@ -85,14 +85,32 @@ def _line_amount(payload, sec_type, keys):
                    if ln.get("key") in want))
 
 
+# ── THE ONE HOME: which statement sections ARE "expenses" (owner request 2026-09-21) ────────────
+# The Account hub grew an Expenses column, and the only defensible number for it is the one the P&L
+# already reports for that same scope and period. So "expenses" is DEFINED here, once, as the
+# statement sections that sit BELOW gross profit — the sections `engine._assemble` subtracts from
+# gross profit to reach net income (statement_engine.PL_SECTIONS: Operating Expenses + Other).
+# Identity, and it is the proof: gross_profit − expenses == net_income, for every scope, always.
+#
+# Nothing re-sums a source table to answer this question. If a future ruling reclassifies a dollar
+# between `store_opex` and (say) `wages`, or adds a whole new expense SECTION, the hub moves with the
+# P&L in the same recompute because both read this. `harness_account_expenses_one_home.py` fails the
+# build if a caller stops dereferencing this tuple or a new below-GP section appears unregistered.
+EXPENSE_SECTIONS = ("opex", "other")
+
+
 def pl_totals(payload):
     """Headline P&L numbers straight from a stored snapshot payload (subtotals recomputed from the
-    sections exactly like /account/overview does, so this can never disagree with the dashboard)."""
+    sections exactly like /account/overview does, so this can never disagree with the dashboard).
+
+    `expenses` = Σ EXPENSE_SECTIONS subtotals — the statement's OWN expense total (Operating
+    Expenses + Other), the single figure every expense surface in the finance hub reads."""
     rev = _sec_subtotal(payload, "revenue")
     cogs = _sec_subtotal(payload, "cogs")
     opex = _sec_subtotal(payload, "opex")
     other = _sec_subtotal(payload, "other")
     return {"revenue": rev, "cogs": cogs, "opex": opex, "other": other,
+            "expenses": _r2(sum(_sec_subtotal(payload, t) for t in EXPENSE_SECTIONS)),
             "gross_profit": _r2((payload or {}).get("gross_profit")),
             "net_income": _r2((payload or {}).get("net_income"))}
 

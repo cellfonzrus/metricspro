@@ -1,10 +1,15 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { Fragment, useState, useEffect } from 'react'
 import Link from 'next/link'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import NarrativeBanner from '@/components/NarrativeBanner'
+import {
+  EXPENSE_SECTION_TITLE, expenseSections, expenseTieOut, isStoreScope, marginIdentity,
+  scopeBalanceSheetHref, scopeDetailHref, scopeExpenses, scopeStatementPath,
+  type ScopeRow, type Statement,
+} from './_components/scopeFinancials'
 
 export default function AccountsDashboard() {
   const { period } = usePeriod()
@@ -43,6 +48,10 @@ export default function AccountsDashboard() {
     { header: 'Scope', get: (r: any) => r.scope_label || r.scope_key },
     { header: 'Revenue', get: (r: any) => r.revenue, money: true },
     { header: 'Gross Profit', get: (r: any) => r.gross_profit, money: true },
+    // Owner request 2026-09-21. The statement's OWN expense total for this scope (backend
+    // `analysis.pl_totals`), never re-derived here. ABSENT (no computed P&L) exports BLANK — the
+    // money formatter already refuses to write $0.00 for a figure nobody measured.
+    { header: 'Expenses', get: (r: any) => (scopeExpenses(r).reported ? r.expenses : null), money: true },
     { header: 'Net Income', get: (r: any) => r.net_income, money: true },
     { header: 'Assets', get: (r: any) => r.assets, money: true },
     { header: 'Balanced', get: (r: any) => (r.balanced ? 'Yes' : 'No') },
@@ -51,6 +60,7 @@ export default function AccountsDashboard() {
     const summary = [
       { k: 'Revenue', v: fmt(consolidated?.revenue || 0) },
       { k: 'Gross Profit', v: fmt(consolidated?.gross_profit || 0) },
+      { k: 'Expenses', v: scopeExpenses(consolidated).reported ? fmt(scopeExpenses(consolidated).amount) : 'not reported' },
       { k: 'Net Income', v: fmt(consolidated?.net_income || 0) },
       { k: 'Total Assets', v: fmt(consolidated?.assets || 0) },
       { k: 'Balance sheet balances', v: consolidated?.balanced ? 'Yes' : 'No' },
@@ -109,6 +119,7 @@ export default function AccountsDashboard() {
               <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
                 <Tile label="Revenue" v={consolidated.revenue} />
                 <Tile label="Gross Profit" v={consolidated.gross_profit} />
+                <ExpenseTile row={consolidated} />
                 <Tile label="Net Income" v={consolidated.net_income} accent />
                 <Tile label="Total Assets" v={consolidated.assets} />
                 <div style={{ alignSelf: 'center' }}>
@@ -127,8 +138,8 @@ export default function AccountsDashboard() {
             </div>
           )}
 
-          {companyScopes.length > 0 && <ScopeTable title="By Company" rows={companyScopes} />}
-          {storeScopes.length > 0 && <ScopeTable title="By Store" rows={storeScopes} />}
+          {companyScopes.length > 0 && <ScopeTable title="By Company" rows={companyScopes} period={period} />}
+          {storeScopes.length > 0 && <ScopeTable title="By Store" rows={storeScopes} period={period} />}
         </>
       )}
     </div>
@@ -386,17 +397,51 @@ function Tile({ label, v, accent }: { label: string; v: number; accent?: boolean
   )
 }
 
-function ScopeTable({ title, rows }: { title: string; rows: any[] }) {
+// ── NOT-REPORTED, never $0.00 ────────────────────────────────────────────────────────────────────
+// A scope with no computed P&L has no expense figure. Printing "$0.00" there would assert that this
+// store spent nothing, which is a different and much stronger claim than "we have not computed it".
+// A MEASURED zero still prints $0.00.
+function ExpenseCell({ row }: { row: ScopeRow }) {
+  const e = scopeExpenses(row)
+  if (!e.reported) {
+    return <span title="No computed P&L for this scope and period — nothing to report, which is not the same as zero."
+      style={{ fontSize: 11, color: 'var(--text3)', background: 'var(--surface2, #f1f5f9)', padding: '1px 6px', borderRadius: 999 }}>not reported</span>
+  }
+  return <>{fmt(e.amount)}</>
+}
+
+function ExpenseTile({ row }: { row: ScopeRow }) {
+  const e = scopeExpenses(row)
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.4 }}>Expenses</div>
+      <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)' }}>
+        {e.reported ? fmt(e.amount) : <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text3)' }}>not reported</span>}
+      </div>
+    </div>
+  )
+}
+
+function ScopeTable({ title, rows, period }: { title: string; rows: ScopeRow[]; period: string }) {
+  // Which row is expanded. One at a time: the panel is a focused read, and only the open row fetches.
+  const [openKey, setOpenKey] = useState<string | null>(null)
   return (
     <div className="card" style={{ padding: 0, marginBottom: 18, overflow: 'hidden' }}>
       <div style={{ padding: '10px 16px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>{title}</div>
       <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 680 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
           <thead>
             <tr style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>
               <th style={{ textAlign: 'left', padding: '8px 16px' }}>Scope</th>
               <th style={{ textAlign: 'right', padding: '8px 12px' }}>Revenue</th>
               <th style={{ textAlign: 'right', padding: '8px 12px' }}>Gross Profit</th>
+              {/* Owner request 2026-09-21. The P&L's own expense total for this scope + period
+                  (Operating Expenses + Other) — the figure the statement subtracts from gross
+                  profit to reach net income, so the three columns read across as an equation. */}
+              <th style={{ textAlign: 'right', padding: '8px 12px' }}
+                  title="Operating Expenses + Other, exactly as the P&L reports them for this scope and period. Gross Profit − Expenses = Net Income.">
+                Expenses
+              </th>
               <th style={{ textAlign: 'right', padding: '8px 12px' }}>Net Income</th>
               <th style={{ textAlign: 'right', padding: '8px 12px' }}>Assets</th>
               <th style={{ textAlign: 'center', padding: '8px 12px' }}>Bal.</th>
@@ -404,23 +449,178 @@ function ScopeTable({ title, rows }: { title: string; rows: any[] }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((s: any) => (
-              <tr key={s.scope_key} style={{ borderTop: '1px solid var(--border)', fontSize: 13 }}>
-                <td style={{ padding: '8px 16px', fontWeight: 500 }}>{(s.scope_label || s.scope_key).substring(0, 48)}</td>
-                <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(s.revenue || 0)}</td>
-                <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(s.gross_profit || 0)}</td>
-                <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: (s.net_income || 0) >= 0 ? '#16a34a' : '#dc2626' }}>{fmt(s.net_income || 0)}</td>
-                <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(s.assets || 0)}</td>
-                <td style={{ padding: '8px 12px', textAlign: 'center' }}>{s.balanced ? '✓' : '⚠'}</td>
-                <td style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>
-                  <Link href={`/accounts/pl?scope=${encodeURIComponent(s.scope_key)}`} style={{ fontSize: 12, marginRight: 10 }}>P&amp;L</Link>
-                  <Link href={`/accounts/balance-sheet?scope=${encodeURIComponent(s.scope_key)}`} style={{ fontSize: 12 }}>BS</Link>
-                </td>
-              </tr>
-            ))}
+            {rows.map((s: ScopeRow) => {
+              const open = openKey === s.scope_key
+              const label = String(s.scope_label || s.scope_key)
+              return (
+                <Fragment key={s.scope_key}>
+                  <tr style={{ borderTop: '1px solid var(--border)', fontSize: 13, background: open ? 'var(--surface2, #f8fafc)' : undefined }}>
+                    <td style={{ padding: '8px 16px', fontWeight: 500 }}>
+                      {/* THE DRILL-DOWN HANDLE — same mechanism for every scope row, no per-tenant
+                          or per-store branching. Expanding reads the canonical stored statement. */}
+                      <button onClick={() => setOpenKey(open ? null : s.scope_key)}
+                        aria-expanded={open}
+                        title={open ? 'Hide the detail' : 'Show this scope\u2019s expense detail'}
+                        style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 11, marginRight: 6, padding: 0, color: 'var(--text2)' }}>
+                        {open ? '\u25be' : '\u25b8'}
+                      </button>
+                      {label.substring(0, 48)}
+                    </td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(s.revenue || 0)}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(s.gross_profit || 0)}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right' }}><ExpenseCell row={s} /></td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: (s.net_income || 0) >= 0 ? '#16a34a' : '#dc2626' }}>{fmt(s.net_income || 0)}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(s.assets || 0)}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'center' }}>{s.balanced ? '\u2713' : '\u26a0'}</td>
+                    <td style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>
+                      <Link href={scopeDetailHref(s.scope_key)} style={{ fontSize: 12, marginRight: 10 }}>P&amp;L</Link>
+                      <Link href={scopeBalanceSheetHref(s.scope_key)} style={{ fontSize: 12 }}>BS</Link>
+                    </td>
+                  </tr>
+                  {open && (
+                    <tr style={{ background: 'var(--surface2, #f8fafc)' }}>
+                      <td colSpan={8} style={{ padding: '0 16px 14px' }}>
+                        <ScopeDrillDown row={s} period={period} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              )
+            })}
           </tbody>
         </table>
       </div>
+    </div>
+  )
+}
+
+// ── THE DRILL-DOWN: a preview of the canonical statement, not a second computation ───────────────
+// Owner: *"let each store be drilled down to get more details"*. It fetches `GET /account/pl/{period}
+// ?scope=<scope_key>` — the SAME endpoint /accounts/pl reads, with no filter, so what renders here is
+// the stored snapshot byte for byte: the expense lines behind the column, each line's own stored
+// drill-down detail, and the declared-zero notes the statement carries. Everything deeper lives on
+// the P&L page, which is linked; this panel deliberately answers only "what makes up that number".
+function ScopeDrillDown({ row, period }: { row: ScopeRow; period: string }) {
+  const [st, setSt] = useState<Statement | null>(null)
+  const [state, setState] = useState<'loading' | 'ready' | 'uncomputed' | 'error'>('loading')
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    let live = true
+    setState('loading')
+    api(scopeStatementPath(period, row.scope_key, ORG_ID))
+      .then((d: { computed?: boolean; statement?: Statement } | null) => {
+        if (!live) return
+        if (!d?.computed) { setSt(null); setState('uncomputed'); return }
+        setSt(d.statement || null); setState('ready')
+      })
+      .catch((e: unknown) => { if (live) { setErr(e instanceof Error ? e.message : String(e)); setState('error') } })
+    return () => { live = false }
+  }, [period, row.scope_key])
+
+  const col = scopeExpenses(row)
+  const secs = expenseSections(st)
+  const tie = expenseTieOut(col, st)
+  const ident = marginIdentity(row)
+
+  return (
+    <div className="card" style={{ padding: 14, background: 'var(--surface, #fff)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
+        <div style={{ fontSize: 12, fontWeight: 700 }}>
+          Expenses — {String(row.scope_label || row.scope_key)} · {period}
+        </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Link className="btn" style={{ fontSize: 12, padding: '3px 10px' }} href={scopeDetailHref(row.scope_key)}>Full P&amp;L</Link>
+          <Link className="btn" style={{ fontSize: 12, padding: '3px 10px' }} href={scopeBalanceSheetHref(row.scope_key)}>Balance Sheet</Link>
+          {isStoreScope(row.scope_key) && (
+            <Link className="btn" style={{ fontSize: 12, padding: '3px 10px' }} href={`/accounts/cash-flow?scope=${encodeURIComponent(row.scope_key)}`}>Cash Flow</Link>
+          )}
+        </div>
+      </div>
+
+      {state === 'loading' && <div style={{ padding: 12, color: 'var(--text3)', fontSize: 12 }}>Reading the statement…</div>}
+      {state === 'error' && <div style={{ padding: 12, color: '#991b1b', fontSize: 12 }}>Could not read this scope&rsquo;s statement: {err}</div>}
+      {state === 'uncomputed' && (
+        <div style={{ padding: 12, color: 'var(--text3)', fontSize: 12 }}>
+          No P&amp;L computed for this scope and period — there is nothing to report, which is not the same as $0.00.
+          Use <strong>Compute statements</strong> above.
+        </div>
+      )}
+
+      {state === 'ready' && (
+        <>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <tbody>
+              {secs.length === 0 && (
+                <tr><td style={{ padding: '8px 4px', fontSize: 12, color: 'var(--text3)' }}>
+                  The computed P&amp;L carries no expense lines for this scope.
+                </td></tr>
+              )}
+              {secs.map(sec => (
+                <Fragment key={sec.type}>
+                  <tr>
+                    <td colSpan={2} style={{ padding: '8px 4px 4px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text2)' }}>
+                      {EXPENSE_SECTION_TITLE[String(sec.type)] || sec.type}
+                    </td>
+                  </tr>
+                  {(sec.lines || []).map((l, i) => (
+                    <Fragment key={String(l.key || l.label || i)}>
+                      <tr style={{ borderTop: '1px solid var(--border)' }}>
+                        <td style={{ padding: '6px 4px', fontSize: 12.5 }}>
+                          {l.label}
+                          {/* Ruling K3(b): a DECLARED zero must say so — the reader cannot tell a
+                              measured $0 from an unmeasured one by looking at the number. */}
+                          {l.note && (
+                            <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text3)', maxWidth: 560 }}>
+                              <span style={{ marginRight: 5, fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 999, whiteSpace: 'nowrap' }}>not measured</span>
+                              {l.note}
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ padding: '6px 4px', textAlign: 'right', fontSize: 12.5, color: l.amount ? 'var(--text)' : 'var(--text3)' }}>
+                          {l.amount ? fmt(l.amount) : '—'}
+                        </td>
+                      </tr>
+                      {Object.entries(l.detail || {}).map(([dl, dv]: [string, number]) => (
+                        <tr key={String(l.key) + ':' + dl}>
+                          <td style={{ padding: '3px 4px 3px 26px', fontSize: 11.5, color: 'var(--text2)' }}>↳ {dl}</td>
+                          <td style={{ padding: '3px 4px', textAlign: 'right', fontSize: 11.5, color: 'var(--text2)' }}>{fmt(dv)}</td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  ))}
+                  <tr style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={{ padding: '6px 4px', fontSize: 11.5, fontWeight: 600, color: 'var(--text2)' }}>
+                      Subtotal — {EXPENSE_SECTION_TITLE[String(sec.type)] || sec.type}
+                    </td>
+                    <td style={{ padding: '6px 4px', textAlign: 'right', fontSize: 12.5, fontWeight: 600 }}>{fmt(Number(sec.subtotal || 0))}</td>
+                  </tr>
+                </Fragment>
+              ))}
+              <tr style={{ borderTop: '2px solid var(--border)' }}>
+                <td style={{ padding: '8px 4px', fontSize: 13, fontWeight: 700 }}>Expenses (this scope, {period})</td>
+                <td style={{ padding: '8px 4px', textAlign: 'right', fontSize: 13, fontWeight: 700 }}>
+                  {col.reported ? fmt(col.amount) : <span style={{ fontSize: 12, color: 'var(--text3)' }}>not reported</span>}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          {/* The tie-out is stated, never assumed. The column and this panel come from the same
+              snapshot through the same definition, so a mismatch means something upstream changed
+              between the two reads — and the reader is told, not shown a quiet second number. */}
+          <div style={{ marginTop: 8, fontSize: 11.5, color: tie.checked && !tie.agree ? '#991b1b' : 'var(--text3)' }}>
+            {tie.checked && tie.agree && <>✓ Ties to the Expenses column above, and to the P&amp;L for this scope — one statement, read once.</>}
+            {tie.checked && !tie.agree && <>⚠ This detail sums to {fmt(tie.detail)} against {fmt(col.amount)} in the column ({fmt(tie.delta)} apart) — the snapshot changed between the two reads. Recompute, then re-open.</>}
+            {!tie.checked && <>Figures read from the stored statement for this scope.</>}
+            {ident.checked && !ident.agree && (
+              <div style={{ color: '#991b1b', marginTop: 3 }}>
+                ⚠ Gross Profit − Expenses does not equal Net Income for this scope ({fmt(ident.delta)} apart).
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   )
 }
