@@ -270,13 +270,19 @@ def rank_learned(dept_rows, cat_rows) -> list:
 # I/O layer — reads live data and assembles the suggestion payload. The functions above are pure so
 # the classification and ranking are unit-tested offline; everything below is thin glue over the DB.
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-def _page(client, schema, table, cols, org_id=None, cap=20000):
-    """Paged select. org_id=None reads across orgs (LEARNED taxonomy only — never for data)."""
+def _page(client, schema, table, cols, org_id=None, cap=20000, where=None):
+    """Paged select. org_id=None reads across orgs (LEARNED taxonomy only — never for data).
+
+    `where` (optional) narrows each page's query — `lambda q: q.eq(...)` — so a caller that needs a
+    filtered paged read (pos/product_filters: in-stock product ids, the manufacturer list) extends
+    THIS reader rather than keeping a second paging loop. Omitted, the read is byte-identical."""
     out, page = [], 0
     while page * 1000 < cap:
         q = client.schema(schema).table(table).select(cols)
         if org_id is not None:
             q = q.eq("org_id", org_id)
+        if where is not None:
+            q = where(q)
         rows = q.range(page * 1000, page * 1000 + 999).execute().data or []
         out.extend(rows)
         if len(rows) < 1000:

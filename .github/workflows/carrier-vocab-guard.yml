@@ -98,6 +98,13 @@ name: carrier-vocab-guard
 # other customer / activation inserters are NAMED siblings (backend/harness_customer_master_lock.py; stdlib only). The
 # PROOF (backend/harness_customer_master.py) runs in its own job below with the backend's dependencies.
 #
+# THE POS PRODUCT-FILTERS LOCK (index §33, 2026-09-24) runs here too: GET /pos/products filters through ONE helper
+# (pos/product_filters.py — EQ_FILTERS, apply, the one search clause, org-scoped reads) and both POS product screens (the
+# register's picker and the catalog) render ONE filter component (pos/product-filters.tsx) that alone spells the params;
+# a handler that grows its own filter chain, a second search clause, or a page with its own filters fails the build
+# (backend/harness_pos_product_filters_lock.py; stdlib only). The PROOF (backend/harness_pos_product_filters.py) runs in
+# the backend-deps job below.
+#
 # THE REPORT-LINKS LOCK (index §30.11, 2026-09-20) runs here too: ONE device / phone-number pairing
 # implementation (inventory_sold_recon.line_pairings, folded by activation_index, called by
 # report_links) with the key normalisers in their homes; a second copy anywhere in commcalc, or a
@@ -158,6 +165,10 @@ on:
       - "backend/harness_customer_master.py"
       - "backend/app/modules/pos/customer_identity.py"
       - "backend/app/modules/pos/customer_master.py"
+      - "backend/app/modules/pos/product_filters.py"
+      - "backend/app/modules/pos/catalog_suggest.py"
+      - "backend/harness_pos_product_filters.py"
+      - "backend/harness_pos_product_filters_lock.py"
       - "backend/app/modules/pos/router.py"
       - "backend/app/modules/pos/vendor_rebate_report.py"
       - "backend/app/modules/crm/router.py"
@@ -290,6 +301,9 @@ jobs:
       - name: Run the customer-master lock (one matcher, one decision, one phone rule, one placeholder home, one line writer — index §30.16)
         working-directory: backend
         run: python3 harness_customer_master_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the POS product-filters lock (one filter helper behind GET /pos/products; one filter component on both POS product screens; one spelling of the params — index §33)
+        working-directory: backend
+        run: python3 harness_pos_product_filters_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the plan-sources lock (one registry of plan-name sources; one resolver for preview and apply; one writer; the card seeds from the proposal; no vendor)
         working-directory: backend
         run: python3 harness_plan_sources_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -315,6 +329,10 @@ jobs:
       - name: Run the customer-master proof (one matcher; a line per phone number with its device and plan; what the customer paid; reversible merges; safe before mig 1017)
         working-directory: backend
         run: python3 harness_customer_master.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §33 — the POS product filters over the REAL handler (same in-memory pattern, same deps).
+      - name: Run the POS product-filters proof (each filter narrows; they combine with search; no new param = the old answer; in stock; past the 500 cap; org-scoped)
+        working-directory: backend
+        run: python3 harness_pos_product_filters.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE INVENTORY-INTEGRITY PROOF (index §11b) drives the REAL engine, landing guard, status writer and /pos endpoints over
   # the in-memory client (harness_intake_fakes) with the anonymised 383-unit regression fixture — it imports the app, so it
