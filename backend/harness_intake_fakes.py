@@ -273,13 +273,40 @@ class FakeDB:
             "customers": ["id", "org_id", "cust_number", "account_type", "company_name", "first_name", "last_name", "middle_initial", "dob",
                           "driver_license_state", "primary_account_no", "password", "email", "phone_primary", "phone_secondary", "address_1",
                           "address_2", "city", "state", "zip", "referral_source", "credit_limit", "accept_checks", "is_active",
-                          "created_at", "updated_at"],   # mig 725 exactly — NO `notes` column (the live table has none; 2026-09-24)
+                          "created_at", "updated_at",
+                          "merged_into", "merge_record"],   # mig 725 exactly — NO `notes` column (the live table has none; 2026-09-24) — + mig 1017
+            # ── the customer master (§30.16): the tables a customer's lines, notes and merges touch — columns per their migrations ──
+            "customer_notes": ["id", "org_id", "customer_id", "employee_id", "note", "severity", "created_at"],            # mig 725
+            "activations": ["id", "org_id", "activation_number", "sale_id", "customer_id", "store_code", "employee_id", "carrier",
+                            "activation_date", "service_plan_date", "service_plan_id", "plan_code", "plan_description", "monthly_fee",
+                            "included_minutes", "service_area", "contract_type", "contract_terms", "dealer_code", "cell_number",
+                            "phone_serial", "phone_model", "sim_card", "mobile_phone", "account_number", "deposit_amount", "memo",
+                            "description", "notes", "promotion_offered", "trade_in_credit", "special_promo", "status", "created_at",
+                            "updated_at"],                                                                             # mig 726
+            "activation_notes": ["id", "org_id", "activation_id", "employee_id", "note", "severity", "created_at"],        # mig 726
+            "trade_ins": ["id", "org_id", "activation_id", "sale_id", "customer_id", "device_description", "serial_number", "imei",
+                          "credit_amount", "status", "received_at", "sent_back_at", "notes", "created_at"],             # mig 726
+            "special_orders": ["id", "org_id", "order_no", "store_code", "ship_to_store", "customer_id", "customer_name", "employee_id",
+                               "product_id", "description", "qty", "sale_price", "captured_cost", "actual_cost", "sale_id", "status",
+                               "vendor", "vendor_order_ref", "tracking", "po_id", "notes", "created_at", "updated_at"],  # mig 865
+            "sale_payments": ["id", "org_id", "sale_id", "payment_method", "amount", "card_last_four", "check_number", "emv_status",
+                              "processor", "created_at"],                                                               # mig 725
+            "customer_aliases": ["id", "org_id", "customer_id", "alias_name", "alias_norm", "source", "first_seen", "last_seen",
+                                 "created_at"],                                                                         # mig 1017
         }
         # the unique indexes the migrations leave on a table TODAY (a conflict target must name one — 42P10
         # otherwise, as Postgres does); a table not listed accepts any target, as the fake always did
         self.unique_indexes = {
             "exec_metric_config": [("org_id", "bucket", "carrier")],      # mig 962 (NULLS NOT DISTINCT); mig 204's (org_id, bucket) DROPPED
+            "customer_aliases": [("org_id", "customer_id", "alias_norm")],  # mig 1017
         }
+
+    def drop_migration_1017(self):
+        """The live shape until migration 1017 is applied: no pos.customer_aliases table, no merged_into /
+        merge_record on pos.customers (a select of them raises 42703 / 42P01 as Postgres does)."""
+        self.declared["customers"] = [c for c in self.declared["customers"] if c not in ("merged_into", "merge_record")]
+        self.tables["customer_aliases"] = None
+        return self
 
     def columns(self, table):
         if table in self.declared:

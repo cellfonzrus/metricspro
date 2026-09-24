@@ -200,6 +200,8 @@ POS_BACKEND_LOGIC = ["commcalc/report_kinds.py", "commcalc/onboarding_intake.py"
                      "commcalc/connector_registry.py",  # 2026-09-21 — the connector registry: no vendor before its mirror marker
                      "pos/sales_from_reports.py",       # 2026-09-21 — sales rebuilt from the reports (the format is the DECLARED POS's, never a literal)
                      "pos/vendor_paid_lines.py",        # 2026-09-24 — the lines the vendor pays: learned category segments, no vendor, no carrier word
+                     "pos/customer_identity.py",        # 2026-09-24 — who the customer is (§30.16): generic placeholder words, no vendor, no carrier
+                     "pos/customer_master.py",          # 2026-09-24 — the customer's lines / merge / page payloads (§30.16): no vendor, no carrier
                      "core/plan_sources.py"]            # 2026-09-22 — the plan-name source registry + hint words (generic vocabulary; no vendor, no carrier)
 POS_BACKEND_COPY = [
     "commcalc/router.py", "commcalc/sales_recon.py", "commcalc/imei_rebate_report.py", "commcalc/report_labels.py",

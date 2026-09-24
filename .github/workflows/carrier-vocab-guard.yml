@@ -84,6 +84,14 @@ name: carrier-vocab-guard
 # wizard card lists the sources from the payload and seeds its words from the proposal only; no carrier
 # or POS vendor word in the module or the card (backend/harness_plan_sources_lock.py; stdlib only).
 #
+# THE CUSTOMER-MASTER LOCK (index §30.16, 2026-09-24) runs here too: who a sale's customer is has ONE matcher
+# (receipt_import.match_or_create, the only creator from a sale) over ONE pure decision (customer_identity.decide:
+# phone + name, a phone line within two years under another name combined, the name, create) with ONE phone rule
+# (customer_identity.norm_phone, dereferencing the CRM's national number) and ONE placeholder home; the rebuild records
+# each invoice's phone lines through ONE writer (customer_master.sync_invoice_lines, the pairing rule injected); the
+# other customer / activation inserters are NAMED siblings (backend/harness_customer_master_lock.py; stdlib only). The
+# PROOF (backend/harness_customer_master.py) runs in its own job below with the backend's dependencies.
+#
 # THE REPORT-LINKS LOCK (index §30.11, 2026-09-20) runs here too: ONE device / phone-number pairing
 # implementation (inventory_sold_recon.line_pairings, folded by activation_index, called by
 # report_links) with the key normalisers in their homes; a second copy anywhere in commcalc, or a
@@ -140,6 +148,15 @@ on:
       - "backend/app/modules/pos/sales_from_reports.py"
       - "backend/app/modules/pos/vendor_paid_lines.py"
       - "backend/app/modules/pos/receipt_import.py"
+      - "backend/harness_customer_master_lock.py"
+      - "backend/harness_customer_master.py"
+      - "backend/app/modules/pos/customer_identity.py"
+      - "backend/app/modules/pos/customer_master.py"
+      - "backend/app/modules/pos/router.py"
+      - "backend/app/modules/pos/vendor_rebate_report.py"
+      - "backend/app/modules/crm/router.py"
+      - "backend/app/modules/crm/pipeline_core.py"
+      - "database/migrations/1017_pos_customer_identity.sql"
       - "backend/app/modules/pos/receipt_formats/**"
       - "backend/harness_intake_fakes.py"
       - "backend/harness_ma_income_one_home_guard.py"
@@ -257,9 +274,28 @@ jobs:
       - name: Run the POS sales-from-reports lock (one receipt document shape, one importer, one renderer; the format follows the declared POS)
         working-directory: backend
         run: python3 harness_pos_sales_from_reports_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the customer-master lock (one matcher, one decision, one phone rule, one placeholder home, one line writer — index §30.16)
+        working-directory: backend
+        run: python3 harness_customer_master_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the plan-sources lock (one registry of plan-name sources; one resolver for preview and apply; one writer; the card seeds from the proposal; no vendor)
         working-directory: backend
         run: python3 harness_plan_sources_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the ledger statement-identity lock (one identity derivation, one period home, one lander; every ledger read on the family; N landings refused — index §30.15)
         working-directory: backend
         run: python3 harness_ledger_identity_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE CUSTOMER-MASTER PROOF (index §30.16) drives the REAL matcher, rebuild, line writer and /pos endpoints over the
+  # in-memory client (harness_intake_fakes) — it imports the app, so it runs in its own job with the backend's
+  # dependencies installed (the guard job above stays dependency-free). DB-free; no network beyond pip.
+  customer-master-proof:
+    name: Customer master proof (DB-free, the real functions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the customer-master proof (one matcher; a line per phone number with its device and plan; what the customer paid; reversible merges; safe before mig 1017)
+        working-directory: backend
+        run: python3 harness_customer_master.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

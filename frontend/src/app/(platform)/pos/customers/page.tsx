@@ -1,8 +1,8 @@
 'use client'
 // POS module — Phase 1: Customers / Account Manager (ported from the standalone pos-system app;
 // data access rewired from direct Supabase to the FastAPI /pos router).
-import { useEffect, useState } from 'react'
-import { api } from '@/lib/client'
+import { Fragment, useEffect, useState } from 'react'
+import { api, apiPrintHtml, fmt } from '@/lib/client'
 
 interface Customer {
   id: string
@@ -38,7 +38,67 @@ interface CustomerNote {
   employee_id: string | null
 }
 
-const SEVERITY_COLORS: Record<string, string> = { normal: '#6b7280', important: '#f39c12', urgent: '#e74c3c' }
+// The customer master (index §30.16): one entry per phone number the customer carries, its dated sales, what they
+// paid per invoice, the other names they went by. Served by /pos/customers/{id}/lines | /invoices | /aliases.
+interface LineSale {
+  activation_id: string
+  sale_id: string | null
+  date: string | null
+  invoice_no: string | number | null
+  receipt_import_id: string | null
+  sale_total: number | null
+  line_amount: number | null
+  imei: string | null
+  device: string | null
+  plan: string | null
+  contract_type: string | null
+  status: string | null
+  store_code: string | null
+  notes: number
+  voided: boolean
+}
+
+interface PhoneLine {
+  mdn: string
+  imei: string | null
+  imeis: string[]
+  plan: string | null
+  plans: string[]
+  device: string | null
+  status: string | null
+  first_date: string | null
+  last_date: string | null
+  notes: number
+  sales: LineSale[]
+}
+
+interface InvoiceRow {
+  sale_id: string
+  date: string | null
+  invoice_no: string | number | null
+  receipt_import_id: string | null
+  store_code: string | null
+  total: number
+  paid: number
+  balance: number
+  payments: { label: string; amount: number }[]
+  status: string | null
+}
+
+interface AliasInfo {
+  ready: boolean
+  words: string[]
+  aliases: { id: string; alias_name: string; source: string | null; first_seen: string | null; last_seen: string | null }[]
+  merged_from: { id: string; name: string; cust_number: number | null }[]
+  merged_into: { id: string; name: string; cust_number: number | null } | null
+}
+
+interface LineEdit { plan_description: string; phone_serial: string; contract_type: string; status: string }
+
+const fmtPhone = (d: string) => (/^\d{10}$/.test(d) ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : d)
+const money = (n: number | null | undefined) => (n === null || n === undefined ? '' : fmt(n))
+
+const SEVERITY_COLORS: Record<string, string> ={ normal: '#6b7280', important: '#f39c12', urgent: '#e74c3c' }
 
 function SeverityChip({ severity }: { severity: string }) {
   const color = SEVERITY_COLORS[severity] || SEVERITY_COLORS.normal
@@ -89,7 +149,24 @@ export default function PosCustomersPage() {
   const [showForm, setShowForm] = useState(false)
   const [formData, setFormData] = useState({ ...emptyForm })
   const [formTab, setFormTab] = useState('General')
-  const [detailTab, setDetailTab] = useState('Activations History')
+  const [detailTab, setDetailTab] = useState('Lines')
+  const [lines, setLines] = useState<PhoneLine[]>([])
+  const [linesWords, setLinesWords] = useState<string[]>([])
+  const [linesError, setLinesError] = useState('')
+  const [openLine, setOpenLine] = useState<string | null>(null)
+  const [invoices, setInvoices] = useState<InvoiceRow[]>([])
+  const [invoicesWords, setInvoicesWords] = useState<string[]>([])
+  const [invoicesError, setInvoicesError] = useState('')
+  const [aliasInfo, setAliasInfo] = useState<AliasInfo | null>(null)
+  const [editAct, setEditAct] = useState<{ id: string; form: LineEdit } | null>(null)
+  const [actNotesFor, setActNotesFor] = useState<LineSale | null>(null)
+  const [actNotes, setActNotes] = useState<CustomerNote[]>([])
+  const [actNoteText, setActNoteText] = useState('')
+  const [showMerge, setShowMerge] = useState(false)
+  const [mergeSearch, setMergeSearch] = useState('')
+  const [mergeHits, setMergeHits] = useState<Customer[]>([])
+  const [mergeReason, setMergeReason] = useState('')
+  const [busy, setBusy] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editMode, setEditMode] = useState(false)
   const [noteText, setNoteText] = useState('')
@@ -123,8 +200,118 @@ export default function PosCustomersPage() {
 
   async function selectCustomer(c: Customer) {
     setSelected(c)
-    setDetailTab('Activations History')
-    await loadNotes(c.id)
+    setDetailTab('Lines')
+    setOpenLine(null)
+    await Promise.all([loadNotes(c.id), loadMaster(c.id)])
+  }
+
+  async function loadMaster(customerId: string) {
+    setLinesError('')
+    setInvoicesError('')
+    const [l, i, a] = await Promise.allSettled([
+      api(`/api/v1/pos/customers/${customerId}/lines`),
+      api(`/api/v1/pos/customers/${customerId}/invoices`),
+      api(`/api/v1/pos/customers/${customerId}/aliases`),
+    ])
+    if (l.status === 'fulfilled') { setLines(l.value.lines || []); setLinesWords(l.value.words || []) }
+    else { setLines([]); setLinesWords([]); setLinesError(`Failed to load the phone lines: ${l.reason?.message || l.reason}`) }
+    if (i.status === 'fulfilled') { setInvoices(i.value.invoices || []); setInvoicesWords(i.value.words || []) }
+    else { setInvoices([]); setInvoicesWords([]); setInvoicesError(`Failed to load the invoices: ${i.reason?.message || i.reason}`) }
+    setAliasInfo(a.status === 'fulfilled' ? a.value : null)
+  }
+
+  async function printReceipt(importId: string | null) {
+    if (!importId) return
+    try { await apiPrintHtml(`/api/v1/pos/receipt-imports/${importId}/print`) }
+    catch (err: any) { alert(`Could not print the receipt: ${err?.message || err}`) }
+  }
+
+  async function saveLineEdit() {
+    if (!editAct || !selected) return
+    setBusy(true)
+    try {
+      await api(`/api/v1/pos/activations/${editAct.id}`, { method: 'PATCH', body: JSON.stringify(editAct.form) })
+      setEditAct(null)
+      await loadMaster(selected.id)
+    } catch (err: any) {
+      alert(`Failed to save the line: ${err?.message || err}`)
+    }
+    setBusy(false)
+  }
+
+  async function openActNotes(s: LineSale) {
+    setActNotesFor(s)
+    setActNoteText('')
+    try {
+      const r = await api(`/api/v1/pos/activations/${s.activation_id}/notes`)
+      setActNotes(r.notes || [])
+    } catch (err: any) {
+      setActNotes([])
+      alert(`Failed to load the notes: ${err?.message || err}`)
+    }
+  }
+
+  async function addActNote() {
+    if (!actNotesFor || !actNoteText.trim() || !selected) return
+    setBusy(true)
+    try {
+      await api(`/api/v1/pos/activations/${actNotesFor.activation_id}/notes`, {
+        method: 'POST', body: JSON.stringify({ note: actNoteText.trim(), severity: 'normal' }),
+      })
+      setActNoteText('')
+      await openActNotes(actNotesFor)
+      await loadMaster(selected.id)
+    } catch (err: any) {
+      alert(`Failed to save the note: ${err?.message || err}`)
+    }
+    setBusy(false)
+  }
+
+  async function findMergeTarget() {
+    if (!mergeSearch.trim()) return
+    try {
+      const r = await api(`/api/v1/pos/customers?${new URLSearchParams({ search: mergeSearch.trim(), active_only: 'true' })}`)
+      setMergeHits((r.customers || []).filter((c: Customer) => c.id !== selected?.id))
+    } catch (err: any) {
+      alert(`Search failed: ${err?.message || err}`)
+    }
+  }
+
+  async function mergeInto(target: Customer) {
+    if (!selected) return
+    const from = `${selected.first_name || ''} ${selected.last_name || ''}`.trim() || selected.company_name || `#${selected.cust_number}`
+    const into = `${target.first_name || ''} ${target.last_name || ''}`.trim() || target.company_name || `#${target.cust_number}`
+    if (!confirm(`Merge "${from}" into "${into}"? Its sales, phone lines and notes move to "${into}". You can undo this with Un-merge.`)) return
+    setBusy(true)
+    try {
+      const r = await api(`/api/v1/pos/customers/${selected.id}/merge`, {
+        method: 'POST', body: JSON.stringify({ into: target.id, reason: mergeReason.trim() || undefined }),
+      })
+      alert((r.words || []).join('\n'))
+      setShowMerge(false)
+      setMergeHits([])
+      setMergeSearch('')
+      setMergeReason('')
+      await loadCustomers()
+      await selectCustomer(target)
+    } catch (err: any) {
+      alert(`Merge failed: ${err?.message || err}`)
+    }
+    setBusy(false)
+  }
+
+  async function unmerge(customerId: string) {
+    if (!confirm('Un-merge this customer? Exactly the sales, phone lines and notes that moved in the merge go back to it.')) return
+    setBusy(true)
+    try {
+      const r = await api(`/api/v1/pos/customers/${customerId}/unmerge`, { method: 'POST', body: JSON.stringify({}) })
+      alert((r.words || []).join('\n'))
+      await loadCustomers()
+      if (selected) await loadMaster(selected.id)
+    } catch (err: any) {
+      alert(`Un-merge failed: ${err?.message || err}`)
+    }
+    setBusy(false)
   }
 
   async function loadNotes(customerId: string) {
@@ -250,8 +437,39 @@ export default function PosCustomersPage() {
           <button className="btn btn-primary" onClick={openNew}>+ New Customer</button>
           {selected && <button className="btn btn-secondary" onClick={openEdit}>View/Edit</button>}
           {selected && <button className="btn btn-secondary" onClick={() => setShowNotes(true)}>Cust. Care Notes</button>}
+          {selected && <button className="btn btn-secondary" disabled={busy} onClick={() => setShowMerge(true)}>Merge…</button>}
         </div>
       </div>
+
+      {/* Also known as / merged — the other names this customer went by (combined on a shared phone line, or merged) */}
+      {selected && aliasInfo && (aliasInfo.aliases.length > 0 || aliasInfo.merged_from.length > 0 || aliasInfo.merged_into || aliasInfo.words.length > 0) && (
+        <div style={{ ...panel, marginBottom: 14, fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {aliasInfo.aliases.length > 0 && (
+            <div>
+              <span style={{ color: 'var(--text2)' }}>Also known as: </span>
+              {aliasInfo.aliases.map(a => (
+                <span key={a.id} title={`${a.source === 'merge' ? 'merged record' : 'combined on a shared phone line'}${a.last_seen ? ` · last seen ${a.last_seen}` : ''}`}
+                  style={{ display: 'inline-block', border: '1px solid var(--border)', borderRadius: 4, padding: '0 6px', marginRight: 6 }}>
+                  {a.alias_name}
+                </span>
+              ))}
+            </div>
+          )}
+          {aliasInfo.merged_from.map(m => (
+            <div key={m.id}>
+              <span style={{ color: 'var(--text2)' }}>Merged into this record: </span>{m.name} (#{m.cust_number}){' '}
+              <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: 11 }} disabled={busy} onClick={() => unmerge(m.id)}>Un-merge</button>
+            </div>
+          ))}
+          {aliasInfo.merged_into && (
+            <div>
+              <span style={{ color: 'var(--text2)' }}>This record was merged into: </span>{aliasInfo.merged_into.name} (#{aliasInfo.merged_into.cust_number}){' '}
+              <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: 11 }} disabled={busy} onClick={() => unmerge(selected.id)}>Un-merge</button>
+            </div>
+          )}
+          {aliasInfo.words.map(w => <div key={w} style={{ color: '#b45309' }}>{w}</div>)}
+        </div>
+      )}
 
       {/* Search bar */}
       <div style={{ ...panel, marginBottom: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -308,20 +526,77 @@ export default function PosCustomersPage() {
         </div>
       )}
 
-      {/* Bottom tabs — Activations / Notes / Sales / Documents */}
+      {/* Bottom tabs — Lines (one per phone number) / Invoices (what they paid) / Notes / Documents */}
       <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--surface2)', flexWrap: 'wrap' }}>
-          {['Activations History','Notes','Sales History','Scanned Documents'].map(tab => (
+          {['Lines','Invoices','Notes','Scanned Documents'].map(tab => (
             <button key={tab} onClick={() => setDetailTab(tab)}
               style={{ padding: '10px 18px', fontSize: 12, fontWeight: detailTab === tab ? 700 : 400, color: detailTab === tab ? 'var(--text)' : 'var(--text2)', background: detailTab === tab ? 'var(--surface)' : 'transparent', border: 'none', borderBottom: detailTab === tab ? '2px solid var(--accent, #3498db)' : '2px solid transparent', cursor: 'pointer' }}>
-              {tab === 'Notes' && selected ? `Notes (${notes.length})` : tab}
+              {tab === 'Notes' && selected ? `Notes (${notes.length})`
+                : tab === 'Lines' && selected ? `Lines (${lines.length})`
+                : tab === 'Invoices' && selected ? `Invoices (${invoices.length})` : tab}
             </button>
           ))}
         </div>
 
-        {detailTab === 'Activations History' && (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
-            {selected ? 'Activations are not available yet in this module (coming in a later phase)' : 'Select a customer to view activations'}
+        {detailTab === 'Lines' && (
+          <div style={{ padding: 16 }}>
+            {!selected ? (
+              <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>Select a customer to view their phone lines</div>
+            ) : (
+              <>
+                {linesError && <div style={{ color: '#dc2626', fontSize: 12, marginBottom: 10 }}>{linesError}</div>}
+                {linesWords.map(w => <div key={w} style={{ color: 'var(--text2)', fontSize: 12, marginBottom: 8 }}>{w}</div>)}
+                {lines.length > 0 && (
+                  <div className="table-wrapper" style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900, fontSize: 13 }}>
+                      <thead><tr style={{ background: 'var(--surface2)' }}>
+                        {['', 'Phone #', 'IMEI', 'Device', 'Plan', 'First sale', 'Last sale', 'Sales', 'Notes'].map(h =>
+                          <th key={h} style={{ textAlign: 'left', padding: 8, fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>)}
+                      </tr></thead>
+                      <tbody>
+                        {lines.map(ln => (
+                          <Fragment key={ln.mdn}>
+                            <tr onClick={() => setOpenLine(openLine === ln.mdn ? null : ln.mdn)} style={{ cursor: 'pointer', background: openLine === ln.mdn ? 'var(--surface2)' : 'transparent' }}>
+                              <td style={{ ...cell, width: 20 }}>{openLine === ln.mdn ? '▾' : '▸'}</td>
+                              <td style={{ ...cell, fontWeight: 600 }}>{fmtPhone(ln.mdn)}</td>
+                              <td style={cell} title={ln.imeis.length > 1 ? `Every device seen on this number: ${ln.imeis.join(', ')}` : ''}>
+                                {ln.imei || <span style={{ color: 'var(--text3)' }}>—</span>}{ln.imeis.length > 1 ? ` (+${ln.imeis.length - 1})` : ''}
+                              </td>
+                              <td style={{ ...cell, color: 'var(--text2)' }}>{ln.device || ''}</td>
+                              <td style={cell}>{ln.plan || <span style={{ color: 'var(--text3)' }}>—</span>}</td>
+                              <td style={{ ...cell, color: 'var(--text2)' }}>{ln.first_date || ''}</td>
+                              <td style={{ ...cell, color: 'var(--text2)' }}>{ln.last_date || ''}</td>
+                              <td style={cell}>{ln.sales.length}</td>
+                              <td style={cell}>{ln.notes || ''}</td>
+                            </tr>
+                            {openLine === ln.mdn && ln.sales.map(s => (
+                              <tr key={s.activation_id} style={{ background: 'var(--surface2)', opacity: s.voided ? 0.55 : 1 }}>
+                                <td style={cell} />
+                                <td style={{ ...cell, color: 'var(--text2)' }}>{s.date || ''}</td>
+                                <td style={cell}>{s.imei || ''}</td>
+                                <td style={{ ...cell, color: 'var(--text2)' }}>Invoice {s.invoice_no ?? ''}{s.store_code ? ` · ${s.store_code}` : ''}</td>
+                                <td style={cell}>{s.plan || ''}{s.contract_type ? ` · ${s.contract_type}` : ''}</td>
+                                <td style={cell} title="What the receipt prints for this number's lines">{money(s.line_amount)}</td>
+                                <td style={{ ...cell, color: 'var(--text2)' }} title="The invoice total">{money(s.sale_total)}</td>
+                                <td style={cell} colSpan={2}>
+                                  <div style={{ display: 'flex', gap: 6 }}>
+                                    {s.receipt_import_id && <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => printReceipt(s.receipt_import_id)}>Receipt</button>}
+                                    <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: 11 }}
+                                      onClick={() => setEditAct({ id: s.activation_id, form: { plan_description: s.plan || '', phone_serial: s.imei || '', contract_type: s.contract_type || '', status: s.status || 'active' } })}>Edit</button>
+                                    <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => openActNotes(s)}>Notes{s.notes ? ` (${s.notes})` : ''}</button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </Fragment>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
 
@@ -364,9 +639,44 @@ export default function PosCustomersPage() {
           </div>
         )}
 
-        {detailTab === 'Sales History' && (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
-            {selected ? `Sales history for ${selected.first_name || ''} ${selected.last_name || ''}` : 'Select a customer to view sales history'}
+        {detailTab === 'Invoices' && (
+          <div style={{ padding: 16 }}>
+            {!selected ? (
+              <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>Select a customer to view what they paid per invoice</div>
+            ) : (
+              <>
+                {invoicesError && <div style={{ color: '#dc2626', fontSize: 12, marginBottom: 10 }}>{invoicesError}</div>}
+                {invoicesWords.map(w => <div key={w} style={{ color: 'var(--text2)', fontSize: 12, marginBottom: 8 }}>{w}</div>)}
+                {invoices.length > 0 && (
+                  <div className="table-wrapper" style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 800, fontSize: 13 }}>
+                      <thead><tr style={{ background: 'var(--surface2)' }}>
+                        {['Date', 'Invoice #', 'Store', 'Total', 'Paid', 'Balance', 'How they paid', ''].map(h =>
+                          <th key={h} style={{ textAlign: 'left', padding: 8, fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>)}
+                      </tr></thead>
+                      <tbody>
+                        {invoices.map(r => (
+                          <tr key={r.sale_id} style={{ opacity: r.status === 'voided' ? 0.55 : 1 }}>
+                            <td style={cell}>{r.date || ''}</td>
+                            <td style={{ ...cell, fontWeight: 600 }}>{r.invoice_no ?? ''}{r.status === 'voided' ? ' (voided)' : ''}</td>
+                            <td style={{ ...cell, color: 'var(--text2)' }}>{r.store_code || ''}</td>
+                            <td style={cell}>{fmt(r.total)}</td>
+                            <td style={{ ...cell, fontWeight: 600 }}>{fmt(r.paid)}</td>
+                            <td style={{ ...cell, color: Math.abs(r.balance) >= 0.005 ? '#b45309' : 'var(--text2)' }}>{fmt(r.balance)}</td>
+                            <td style={{ ...cell, color: 'var(--text2)', whiteSpace: 'normal' }}>
+                              {r.payments.length ? r.payments.map(p => `${p.label} ${fmt(p.amount)}`).join(' · ') : 'no payment lines recorded'}
+                            </td>
+                            <td style={cell}>
+                              {r.receipt_import_id && <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => printReceipt(r.receipt_import_id)}>Receipt</button>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
 
@@ -529,6 +839,90 @@ export default function PosCustomersPage() {
               <button className="btn btn-primary" disabled={saving} onClick={saveCustomer}>
                 {saving ? 'Saving…' : editMode ? 'Save' : 'Save & Close'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit one dated line (PATCH /pos/activations/{id} — the existing endpoint) */}
+      {editAct && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, width: 460, maxWidth: '100%', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <b style={{ fontSize: 14 }}>Edit line</b>
+              <button onClick={() => setEditAct(null)} style={{ background: 'none', border: 'none', color: 'var(--text2)', fontSize: 20, cursor: 'pointer' }}>×</button>
+            </div>
+            <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div><label style={label}>Plan</label><input value={editAct.form.plan_description} onChange={e => setEditAct({ ...editAct, form: { ...editAct.form, plan_description: e.target.value } })} style={input} /></div>
+              <div><label style={label}>IMEI</label><input value={editAct.form.phone_serial} onChange={e => setEditAct({ ...editAct, form: { ...editAct.form, phone_serial: e.target.value } })} style={input} /></div>
+              <div><label style={label}>Contract type</label><input value={editAct.form.contract_type} onChange={e => setEditAct({ ...editAct, form: { ...editAct.form, contract_type: e.target.value } })} style={input} /></div>
+              <div><label style={label}>Status</label>
+                <select value={editAct.form.status} onChange={e => setEditAct({ ...editAct, form: { ...editAct.form, status: e.target.value } })} style={input}>
+                  {['active', 'cancelled', 'transferred'].map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="btn btn-secondary" onClick={() => setEditAct(null)}>Cancel</button>
+              <button className="btn btn-primary" disabled={busy} onClick={saveLineEdit}>{busy ? 'Saving…' : 'Save'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Notes on one dated line of sales data (the existing /pos/activations/{id}/notes) */}
+      {actNotesFor && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, width: 500, maxWidth: '100%', maxHeight: '80vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <b style={{ fontSize: 14 }}>Notes — {actNotesFor.date || ''} · invoice {actNotesFor.invoice_no ?? ''}</b>
+              <button onClick={() => setActNotesFor(null)} style={{ background: 'none', border: 'none', color: 'var(--text2)', fontSize: 20, cursor: 'pointer' }}>×</button>
+            </div>
+            <div style={{ padding: 16, flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {actNotes.length === 0 && <div style={{ color: 'var(--text3)', fontSize: 13, textAlign: 'center', padding: 20 }}>No notes on this line yet</div>}
+              {actNotes.map(n => (
+                <div key={n.id} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px' }}>
+                  <div style={{ fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{n.note}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>
+                    <SeverityChip severity={n.severity || 'normal'} />
+                    {new Date(n.created_at).toLocaleString()}
+                    {n.employee_id ? ` — ${n.employee_id}` : ''}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }}>
+              <textarea value={actNoteText} onChange={e => setActNoteText(e.target.value)} placeholder="A note on this line…" style={{ ...input, resize: 'none', height: 60, flex: 1 }} />
+              <button className="btn btn-primary" style={{ alignSelf: 'flex-end' }} disabled={busy || !actNoteText.trim()} onClick={addActNote}>Add Note</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Merge this customer into another (POST /pos/customers/{id}/merge — undone with Un-merge) */}
+      {showMerge && selected && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, width: 560, maxWidth: '100%', maxHeight: '80vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <b style={{ fontSize: 14 }}>Merge {selected.first_name || ''} {selected.last_name || ''} into…</b>
+              <button onClick={() => setShowMerge(false)} style={{ background: 'none', border: 'none', color: 'var(--text2)', fontSize: 20, cursor: 'pointer' }}>×</button>
+            </div>
+            <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto' }}>
+              <div style={{ fontSize: 12, color: 'var(--text2)' }}>
+                This customer&apos;s sales, phone lines, notes and names move to the customer you pick; this record is kept (inactive) so the merge can be undone.
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input value={mergeSearch} onChange={e => setMergeSearch(e.target.value)} onKeyDown={e => e.key === 'Enter' && findMergeTarget()}
+                  placeholder="Search name, phone number…" style={{ ...input, flex: 1 }} />
+                <button className="btn btn-secondary" onClick={findMergeTarget}>Search</button>
+              </div>
+              <input value={mergeReason} onChange={e => setMergeReason(e.target.value)} placeholder="Why (recorded with your name) — optional" style={input} />
+              {mergeHits.map(c => (
+                <div key={c.id} style={{ ...panel, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px' }}>
+                  <span style={{ fontSize: 13 }}>#{c.cust_number} · {c.first_name || ''} {c.last_name || ''}{c.company_name ? ` · ${c.company_name}` : ''}{c.phone_primary ? ` · ${c.phone_primary}` : ''}</span>
+                  <button className="btn btn-primary" style={{ padding: '2px 10px', fontSize: 12 }} disabled={busy} onClick={() => mergeInto(c)}>Merge into</button>
+                </div>
+              ))}
             </div>
           </div>
         </div>
