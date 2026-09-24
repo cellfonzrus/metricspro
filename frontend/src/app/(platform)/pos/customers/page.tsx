@@ -3,6 +3,7 @@
 // data access rewired from direct Supabase to the FastAPI /pos router).
 import { Fragment, useEffect, useState } from 'react'
 import { api, apiPrintHtml, fmt } from '@/lib/client'
+import DedupeCard from './dedupe-card'
 
 interface Customer {
   id: string
@@ -163,6 +164,7 @@ export default function PosCustomersPage() {
   const [actNotes, setActNotes] = useState<CustomerNote[]>([])
   const [actNoteText, setActNoteText] = useState('')
   const [showMerge, setShowMerge] = useState(false)
+  const [showDedupe, setShowDedupe] = useState(false)
   const [mergeSearch, setMergeSearch] = useState('')
   const [mergeHits, setMergeHits] = useState<Customer[]>([])
   const [mergeReason, setMergeReason] = useState('')
@@ -438,8 +440,11 @@ export default function PosCustomersPage() {
           {selected && <button className="btn btn-secondary" onClick={openEdit}>View/Edit</button>}
           {selected && <button className="btn btn-secondary" onClick={() => setShowNotes(true)}>Cust. Care Notes</button>}
           {selected && <button className="btn btn-secondary" disabled={busy} onClick={() => setShowMerge(true)}>Merge…</button>}
+          <button className="btn btn-secondary" onClick={() => setShowDedupe(v => !v)}>Clean up duplicates</button>
         </div>
       </div>
+
+      {showDedupe && <DedupeCard onDone={() => loadCustomers()} />}
 
       {/* Also known as / merged — the other names this customer went by (combined on a shared phone line, or merged) */}
       {selected && aliasInfo && (aliasInfo.aliases.length > 0 || aliasInfo.merged_from.length > 0 || aliasInfo.merged_into || aliasInfo.words.length > 0) && (
