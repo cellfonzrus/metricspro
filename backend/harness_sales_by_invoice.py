@@ -109,6 +109,14 @@ def commit(db, data, filename, **form):
     return run(R.onboarding_intake_commit(file=FakeUpload(data, filename), **kw))
 
 
+def http_error_type(fn):
+    try:
+        fn()
+    except Exception as e:  # noqa: BLE001
+        return type(e)
+    return None
+
+
 def http_error(fn, *a, **kw):
     try:
         r = fn(*a, **kw)
@@ -138,12 +146,15 @@ EXPECT_KEYED = {h.strip() for h in TENDER_HEADERS if "Non-Integrated" in h}
 T = [h.strip() for h in TENDER_HEADERS]
 STORE_A, STORE_B = "10 Main St", "Kiosk 22"          # A = the roster address; B = an alias the intake writes at 2.4
 
-# (invoice, date, store, rep, net, total, tax, tax_nyc, {tender header: amount}) — Σ tenders == total on every invoice
+# (invoice, date, store, rep, net, total, tax, tax_nyc, {tender header: amount}) — Σ CUSTOMER tenders == total on every
+# invoice. The vendor rebate applied as a tender is NOT inside the invoice total (measured 2026-09-24 on the live
+# 10,823-invoice file: customer tenders tie on every invoice, Σ 1,032,971.45; 'Ven Reb Act' 6,854,517.80 on 7,948
+# invoices sits beside it). I1004 carried the opposite premise until then — re-baselined by name.
 INVOICES = [
     ("I1001", "2026-08-01", STORE_A, "alice", 100.00, 108.88, 8.88, 8.88, {"Cash": 108.88}),
     ("I1002", "2026-08-01", STORE_A, "bob",   250.00, 272.19, 22.19, 22.19, {"Visa": 200.00, "Cash": 72.19}),
     ("I1003", "2026-08-01", STORE_B, "carol", 80.00, 87.10, 7.10, 7.10, {"Debit PIN": 87.10}),
-    ("I1004", "2026-08-02", STORE_A, "alice", 400.00, 435.50, 35.50, 35.50, {"MasterCard Non-Integrated ": 300.00, "Ven Reb Act": 135.50}),
+    ("I1004", "2026-08-02", STORE_A, "alice", 400.00, 300.00, 35.50, 35.50, {"MasterCard Non-Integrated ": 300.00, "Ven Reb Act": 135.50}),
     ("I1005", "2026-08-02", STORE_B, "bob",   60.00, 65.33, 5.33, 5.33, {"American Express": 65.33}),
     ("I1006", "2026-08-03", STORE_A, "carol", 120.00, 130.65, 10.65, 10.65, {"Discover": 100.00, "Debit Non-Integrated ": 30.65}),
     ("I1007", "2026-08-03", STORE_B, "alice", 0.00, 0.00, 0.00, 0.00, {}),          # a zero invoice: no tender row
@@ -152,6 +163,8 @@ SUM_NET = round(sum(i[4] for i in INVOICES), 2)
 SUM_TOTAL = round(sum(i[5] for i in INVOICES), 2)
 SUM_TAX = round(sum(i[6] for i in INVOICES), 2)
 SUM_TENDERS = round(sum(sum(i[8].values()) for i in INVOICES), 2)
+SUM_VENDOR_PAID = round(sum(i[8].get("Ven Reb Act", 0.0) for i in INVOICES), 2)       # 135.50 — not the customer's
+SUM_CUSTOMER = round(SUM_TENDERS - SUM_VENDOR_PAID, 2)
 N_TENDER_ROWS = sum(len(i[8]) for i in INVOICES)                      # 9
 N_TAX_ROWS = sum(1 for i in INVOICES if i[7])                         # 6 (the zero invoice has none)
 
@@ -456,12 +469,18 @@ check("E2 V-10 on 08-01: invoice cash 181.07 / card 200.00 = the X-report to the
       rows_by.get(("V-10", "2026-08-01")))
 check("E3 V-22 on 08-01 (the kiosk, through the alias the intake wrote): invoice debit 87.10 counted as card beside the X-report's 90.00 → 'differs … card -2.90'",
       rows_by[("V-22", "2026-08-01")]["difference"]["card"] == -2.9 and "differs from the X-report by card -2.90" in rows_by[("V-22", "2026-08-01")]["verdict"], rows_by.get(("V-22", "2026-08-01")))
-check("E4 V-10 on 08-02: the vendor rebate is 'other' on both sides (135.50), the non-integrated card 300.00 → matches; the coupon class (changed at D14) is 'other' too",
-      rows_by[("V-10", "2026-08-02")]["verdict"] == "matches the X-report" and rows_by[("V-10", "2026-08-02")]["invoice"]["other"] == 135.5
-      and rows_by[("V-10", "2026-08-02")]["invoice_by_class"] == {"credit": 300.0, "coupon": 135.5})
+# RE-BASELINED 2026-09-24 (owner: "i cant get the uploaded data to convert in to receipts"): the vendor rebate /
+# coupon is NOT money the customer paid (closing.router.is_customer_payment, the one answer) — Cash Collected
+# no longer counts it as 'other' on EITHER leg; it is reported beside as not_customer. Before: 'other' 135.50.
+check("E4 V-10 on 08-02: the vendor rebate (re-classed coupon at D14) is not the customer's on EITHER side — kept out of both legs, 135.50 reported beside; the non-integrated card 300.00 → matches",
+      rows_by[("V-10", "2026-08-02")]["verdict"] == "matches the X-report" and rows_by[("V-10", "2026-08-02")]["invoice"]["other"] == 0.0
+      and rows_by[("V-10", "2026-08-02")]["invoice_by_class"] == {"credit": 300.0}
+      and CR._invoice_tenders_by_store(db, ORG, "2026-08-02")["V-10"]["not_customer"] == 135.5
+      and CR._xreport_rows_by_store(db, ORG, "2026-08-02")["V-10"] == {"cash": 0.0, "card": 300.0, "other": 0.0, "total": 300.0, "not_customer": 135.5},
+      (rows_by.get(("V-10", "2026-08-02")), CR._xreport_rows_by_store(db, ORG, "2026-08-02")))
 check("E5 08-03 has no X-report: 'no X-report for this day' — never a $0 comparison; the sums per side only over compared days; the sentence",
       all(r["verdict"] == "no X-report for this day" and r["xreport"] is None for r in rec["rows"] if r["date"] == "2026-08-03")
-      and rec["sum_xreport"]["total"] == round(381.07 + 90.0 + 435.5, 2) and rec["words"] == "3 of 5 store-day(s) have an X-report; 2 match to the cent", (rec.get("sum_xreport"), rec.get("words")))
+      and rec["sum_xreport"]["total"] == round(381.07 + 90.0 + 300.0, 2) and rec["words"] == "3 of 5 store-day(s) have an X-report; 2 match to the cent", (rec.get("sum_xreport"), rec.get("words")))
 st4 = R.onboarding_intake_state(org_id=ORG)
 row = next(r for r in st4["rail"]["verify_table"] if r["instance_key"] == IKEY)
 check("E6 the Stage-4 row carries the tender note and Σ tax (invoice-level, the Tax Collected report does not read it yet — said so)",
@@ -491,9 +510,9 @@ check("E14 put_tender_basis (the ONE writer) sets the org's basis and reads it b
       w == {"written": True, "basis": "invoice", "read_back": True} and CR.tender_basis(db, ORG) == {"basis": "invoice", "source": "your setting"}
       and "must be one of" in CR.put_tender_basis(db, ORG, "sales")["error"] and "no storeops.tenants row" in CR.put_tender_basis(fresh_db(), ORG, "invoice")["error"], w)
 inv = {d: CR._xreport_tenders_by_store(db, ORG, d) for d in ("2026-08-01", "2026-08-02", "2026-08-03")}
-check("E15 under basis 'invoice' the SAME resolver returns the invoice-derived split per store-day (the kiosk's debit 87.10 as card; the vendor rebate / coupon as other; 08-03 from the invoices), with by_class",
+check("E15 under basis 'invoice' the SAME resolver returns the invoice-derived split per store-day (the kiosk's debit 87.10 as card; the vendor rebate / coupon NOT collected — beside as not_customer; 08-03 from the invoices), with by_class",
       inv["2026-08-01"]["V-10"]["cash"] == 181.07 and inv["2026-08-01"]["V-10"]["card"] == 200.0 and inv["2026-08-01"]["V-22"]["card"] == 87.1
-      and inv["2026-08-02"]["V-10"]["other"] == 135.5 and inv["2026-08-02"]["V-10"]["by_class"] == {"credit": 300.0, "coupon": 135.5}
+      and inv["2026-08-02"]["V-10"]["other"] == 0.0 and inv["2026-08-02"]["V-10"]["not_customer"] == 135.5 and inv["2026-08-02"]["V-10"]["by_class"] == {"credit": 300.0}
       and inv["2026-08-03"]["V-10"] == {"cash": 0.0, "card": 130.65, "other": 0.0, "total": 130.65, "by_class": {"credit": 100.0, "debit": 30.65}}, inv)
 CR.put_tender_basis(db, ORG, "x_report_else_invoice")
 mix = CR._tender_split_by_store(db, ORG, "2026-08-01")
@@ -592,6 +611,43 @@ c_c = run(R.onboarding_intake_commit(file=None, source_kind="invoice", pos_sourc
                                      identity=IDENTITY, typed_total=f"{SUM_NET:.2f}", verified_by="owner", report_kind="sales_by_invoice", org_id=ORG))
 check("F11 …and commits from the carried file: 7 invoices + 15 child rows land in the invoice tables; raw_sales_product keeps its 1 remaining row untouched",
       c_c["ok"] and c_c["verified_numbers"]["rows_landed"] == 7 and len(db6.tables["raw_sales_invoice_tender"]) == N_TENDER_ROWS + N_TAX_ROWS and len(db6.tables["raw_sales_product"]) == 1, c_c.get("problems"))
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+section("§R THE REPORTED DEFECT (owner 2026-09-24: \"i cant get the uploaded data to convert in to receipts\") — the 2.5b tie counted a vendor rebate as the customer's payment")
+# The live card (10,823 invoices) stopped at 2.5b: "the tender columns add up to 7,887,489.25 and the invoice totals to
+# 1,032,971.45 — a difference of 6,854,517.80 on 7,948 invoice(s)" — exactly the 'Ven Reb Act' column, which the invoice
+# total does not include and which the receipt builder already did NOT print as a payment. One question, two answers.
+KF = OI.kind_fields("invoice")
+_kept = [{KF["txn"]: "R1", KF["store"]: STORE_A, KF["date"]: "2026-08-02", KF["amount"]: 400.0, KF["total"]: 300.0},
+         {KF["txn"]: "R2", KF["store"]: STORE_A, KF["date"]: "2026-08-02", KF["amount"]: 20.0, KF["total"]: 20.0}]
+_tr = [{"trans_id": "R1", "role": "tender", "tender_label": "MasterCard", "tender_class": "credit", "amount": 300.0},
+       {"trans_id": "R1", "role": "tender", "tender_label": "Ven Reb Act", "tender_class": "vendor_rebate", "amount": 135.5},
+       {"trans_id": "R2", "role": "tender", "tender_label": "Cash", "tender_class": "cash", "amount": 20.0}]
+_old = IT.invoice_verify(_kept, KF, _tr, pays=lambda c: True)          # the pre-fix answer: every tender is the customer's
+_new = IT.invoice_verify(_kept, KF, _tr, pays=CR.is_customer_payment)
+check("R1 REPRODUCED: counting every tender as the customer's (the pre-fix tie) refuses — 455.50 vs 320.00, 135.50 on 1 invoice — the owner's refusal in miniature",
+      _old["tenders"]["match"] is False and _old["tenders"]["difference"] == 135.5 and _old["tenders"]["invoices_off"] == 1
+      and any("tender columns do not add up" in r for r in OI.stage2_refusals("invoice", list(KF.values()), [], {"match": True, "our_total": 1, "file_total": 1}, None,
+                                                                               rows_to_land=2, tender_tie=IT.tender_tie(_old))), _old["tenders"])
+check("R2 CLOSED: the tie asks closing.router.is_customer_payment — the customer's 320.00 = the invoice totals to the cent, the rebate 135.50 reported BESIDE in words, no refusal",
+      _new["tenders"]["match"] is True and _new["tenders"]["customer_sum"] == 320.0 and _new["tenders"]["sum"] == 455.5
+      and _new["tenders"]["not_customer"] == {"sum": 135.5, "by_label": {"Ven Reb Act": 135.5}, "invoices": 1}
+      and "not counted as the customer's payment" in _new["tenders"]["words"] and "Ven Reb Act 135.50" in _new["tenders"]["words"]
+      and IT.tender_tie(_new)["our_total"] == 320.0
+      and not any("tender columns do not add up" in r for r in OI.stage2_refusals("invoice", list(KF.values()), [], {"match": True, "our_total": 1, "file_total": 1}, None,
+                                                                                   rows_to_land=2, tender_tie=IT.tender_tie(_new))), _new["tenders"])
+check("R3 the rebate still LANDS (the tender rows are unchanged — only the tie's question changed): Σ all tender rows 455.50 over 3 rows",
+      _new["tenders"]["rows"] == 3 and _new["tenders"]["sum"] == 455.5)
+check("R4 a real gap is still refused: a customer tender short by 5.00 → difference -5.00 on 1 invoice, refused",
+      (lambda v: v["tenders"]["match"] is False and v["tenders"]["difference"] == -5.0 and v["tenders"]["invoices_off"] == 1)(
+          IT.invoice_verify(_kept, KF, [dict(t, amount=15.0) if t["trans_id"] == "R2" else t for t in _tr], pays=CR.is_customer_payment)))
+check("R5 ONE ANSWER: is_customer_payment is true for every closing-axis class and false for the vendor rebate, the coupon and an unclassed tender; the X-report label twin places only a known vendor-paid label",
+      all(CR.is_customer_payment(k) for k in CR.CANON_TENDERS) and CR.is_customer_payment("debit")
+      and not CR.is_customer_payment("vendor_rebate") and not CR.is_customer_payment("coupon") and not CR.is_customer_payment(None)
+      and CR.is_vendor_paid_label("Ven Reb Act") and CR.is_vendor_paid_label("Vendor Rebate") and not CR.is_vendor_paid_label("Cash")
+      and not CR.is_vendor_paid_label("Financing") and not CR.is_vendor_paid_label(""))
+check("R6 invoice_verify has NO default predicate — a caller that forgets it fails loudly, never answers on its own",
+      http_error_type(lambda: IT.invoice_verify(_kept, KF, _tr)) is TypeError)
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("§G negative controls, registration, RULE TWO, the migration, CI")

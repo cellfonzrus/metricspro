@@ -214,11 +214,18 @@ def tender_rows(pairs, confirmed, fields, exclude=None):
 
 
 # ── 2.5 / 2.6 — OUR NUMBERS BESIDE THE FILE'S ────────────────────────────────────────────────────
-def invoice_verify(kept, fields, trows=None):
+def invoice_verify(kept, fields, trows=None, *, pays):
     """The verify numbers for an invoice-level export over mapped rows (built OR re-read — the same
     shape, so the commit compares like with like): rows = invoices, Σ of the tie field, Σ invoice
     total, Σ net sales, Σ tax, the date span, per store / per rep; the tender split per class and the
-    Σ tenders vs Σ invoice total difference, in words; the tax components."""
+    Σ CUSTOMER tenders vs Σ invoice total difference, in words; the tax components.
+
+    `pays(tender_class)` → is it money the CUSTOMER paid (closing.router.is_customer_payment — injected,
+    REQUIRED, never defaulted here). The invoice total is what the customer paid, so only those tenders
+    tie to it; a tender the vendor or a promotion covered (a rebate applied as payment) lands with the
+    rest but is reported BESIDE the tie (`not_customer`), never inside it — the same answer the
+    receipts built from these rows and Cash Collected give (owner 2026-09-24: the vendor-rebate column
+    held the invoice card at 2.5b for a file whose customer tenders tie on every invoice)."""
     f = fields
     kept = list(kept or [])
     trows = list(trows or [])
@@ -227,11 +234,18 @@ def invoice_verify(kept, fields, trows=None):
     tenders = [t for t in trows if t.get("role") == ROLE_TENDER]
     taxes = [t for t in trows if t.get("role") == ROLE_TAX]
     by_class, by_label, by_inv = {}, {}, {}
+    nc_label, nc_inv = {}, set()
     for t in tenders:
         by_class[t["tender_class"]] = money(by_class.get(t["tender_class"], 0.0) + _sf(t["amount"]))
         by_label[t["tender_label"]] = money(by_label.get(t["tender_label"], 0.0) + _sf(t["amount"]))
-        by_inv[t["trans_id"]] = by_inv.get(t["trans_id"], 0.0) + _sf(t["amount"])
+        if pays(t.get("tender_class")):
+            by_inv[t["trans_id"]] = by_inv.get(t["trans_id"], 0.0) + _sf(t["amount"])
+        else:
+            nc_label[t["tender_label"]] = money(nc_label.get(t["tender_label"], 0.0) + _sf(t["amount"]))
+            nc_inv.add(t["trans_id"])
     sum_tenders = money(sum(_sf(t["amount"]) for t in tenders))
+    sum_customer = money(sum(by_inv.values()))
+    sum_nc = money(sum(nc_label.values()))
     sum_total = money(sum(_sf(m.get(tot)) for m in kept)) if tot else None
     off = []
     if tot:
@@ -240,16 +254,20 @@ def invoice_verify(kept, fields, trows=None):
             d = money(by_inv.get(tid, 0.0) - _sf(m.get(tot)))
             if abs(d) >= 0.005:
                 off.append({"trans_id": tid, "invoice_total": money(_sf(m.get(tot))), "tenders": money(by_inv.get(tid, 0.0)), "difference": d})
-    diff = money(sum_tenders - sum_total) if sum_total is not None else None
+    diff = money(sum_customer - sum_total) if sum_total is not None else None
     tax_components = {}
     for t in taxes:
         tax_components[t["tender_label"]] = money(tax_components.get(t["tender_label"], 0.0) + _sf(t["amount"]))
+    beside = ""
+    if nc_label:
+        beside = ("; not counted as the customer's payment (paid by the vendor or a promotion — the invoice total does not include it): "
+                  + ", ".join(f"{k} {v:,.2f}" for k, v in sorted(nc_label.items())) + f" on {len(nc_inv):,} invoice(s) — it lands beside them")
     if tenders:
         if diff == 0.0:
-            words = f"the tender columns add up to the invoice totals to the cent ({sum_tenders:,.2f} over {len(inv_ids):,} invoices)"
+            words = f"the customer's tenders add up to the invoice totals to the cent ({sum_customer:,.2f} over {len(inv_ids):,} invoices)" + beside
         else:
-            words = (f"the tender columns add up to {sum_tenders:,.2f} and the invoice totals to {sum_total:,.2f} — "
-                     f"a difference of {diff:,.2f} on {len(off):,} invoice(s)")
+            words = (f"the customer's tenders add up to {sum_customer:,.2f} and the invoice totals to {sum_total:,.2f} — "
+                     f"a difference of {diff:,.2f} on {len(off):,} invoice(s)" + beside)
     else:
         words = "no tender column declared — the tender split is not captured"
     return {
@@ -262,7 +280,8 @@ def invoice_verify(kept, fields, trows=None):
         "date_span": _date_span(kept, dt),
         "per_store": _per(kept, st, amt), "per_rep": _per(kept, rep, amt) if rep else [],
         "storeless_rows": sum(1 for m in kept if not _s(m.get(st))),
-        "tenders": {"rows": len(tenders), "sum": sum_tenders, "by_class": by_class, "by_label": by_label,
+        "tenders": {"rows": len(tenders), "sum": sum_tenders, "customer_sum": sum_customer, "by_class": by_class, "by_label": by_label,
+                    "not_customer": {"sum": sum_nc, "by_label": nc_label, "invoices": len(nc_inv)},
                     "invoices_with_tenders": len(by_inv), "difference": diff,
                     "invoices_off": len(off), "invoices_off_sample": off[:25], "words": words,
                     "match": (diff == 0.0) if diff is not None else None},
@@ -299,11 +318,11 @@ def _per(kept, field, amt, cap=300):
 
 
 def tender_tie(vn):
-    """The Σ tenders vs Σ invoice total tie — the shape `simple_tie` has, so the refusal rule reads it."""
+    """The Σ CUSTOMER tenders vs Σ invoice total tie — the shape `simple_tie` has, so the refusal rule reads it."""
     t = (vn or {}).get("tenders") or {}
     if not t.get("rows"):
         return None
-    return {"our_total": t.get("sum"), "file_total": (vn or {}).get("sum_invoice_total"), "file_total_source": "invoice totals",
+    return {"our_total": t.get("customer_sum"), "file_total": (vn or {}).get("sum_invoice_total"), "file_total_source": "invoice totals",
             "difference": t.get("difference"), "match": t.get("match"), "words": t.get("words")}
 
 

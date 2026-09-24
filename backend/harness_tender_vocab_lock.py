@@ -27,6 +27,15 @@ WHAT FAILS THE BUILD
   (d) THE RECON IS NOT A SIBLING. `_intake_invoice_tender_recon` calls `_xreport_tenders_by_store(` and
       `_addr_resolver(` and never reads pos_tender_summary itself; the invoice map writer touches only
       report='invoice' rows.
+  (f) ONE ANSWER TO "DID THE CUSTOMER PAY THIS TENDER?" (owner 2026-09-24: "i cant get the uploaded data
+      to convert in to receipts" — the 2.5b tie counted a vendor rebate as the customer's payment while the
+      receipt builder did not, so the card refused a file whose customer tenders tie on every invoice).
+      `def is_customer_payment` exists exactly once, in the home, over `fold_to_axis`; invoice_tenders.
+      invoice_verify takes it as a REQUIRED keyword `pays` (no default) and calls it; every router call
+      passes `pays=_intake_tender_pays()`, which returns the home's predicate; the receipt builder injects
+      the same predicate; Cash Collected's invoice reader calls it and the X-report leg keeps a printed
+      vendor-paid label out through `is_vendor_paid_label` (which asks it); `fold_to_axis` is named nowhere
+      outside the home (a caller asking the axis directly is a second answer).
   (e) NEGATIVE CONTROLS: a second `TENDER_VOCAB` → RED; a literal CANON_TENDERS → RED; a tender word in
       invoice_tenders → RED; a new word list in a commcalc module → RED; a recon reading the table itself →
       RED; a stale allow entry → RED.
@@ -45,6 +54,7 @@ BE = os.path.join(ROOT, "backend", "app")
 HOME = "modules/closing/router.py"
 PURE = "modules/commcalc/invoice_tenders.py"
 CC_ROUTER = "modules/commcalc/router.py"
+SFR = "modules/pos/sales_from_reports.py"
 
 # LABEL words — what a header / label LADDER spells (brand names, label phrases). The axis KEYS (cash /
 # credit / ext_cc / gift …) are column keys the closing module uses everywhere and are NOT a ladder.
@@ -254,6 +264,31 @@ def scan(files, allow):
     for key in BASIS_READERS_ALLOW:
         if key[0] in files and not re.search(r"^\s*(?:async\s+)?def %s\s*\(" % re.escape(key[1]), code(files[key[0]]), re.M):
             findings.append((key[0], f"STALE allow entry `{key[1]}` — the def is gone; remove the entry"))
+    # (f) ONE ANSWER TO "DID THE CUSTOMER PAY THIS TENDER?"
+    n_pay = sum(len(re.findall(r"^def is_customer_payment\s*\(", code(x), re.M)) for x in files.values() if "def is_customer_payment" in x)
+    if n_pay != 1 or not re.search(r"^def is_customer_payment\s*\(", code(home), re.M):
+        findings.append((HOME, f"def is_customer_payment defined {n_pay} times (must be exactly once, in the home)"))
+    elif "fold_to_axis(" not in code(func_body(home, "is_customer_payment")):
+        findings.append((HOME, "is_customer_payment no longer reads the vocabulary's axis (fold_to_axis)"))
+    if not re.search(r"^def invoice_verify\([^)]*\*\s*,\s*pays\s*\)", pure, re.M):
+        findings.append((PURE, "invoice_verify must take the customer-payment predicate as a REQUIRED keyword `pays` (no default)"))
+    elif "pays(" not in code(func_body(files.get(PURE, ""), "invoice_verify")):
+        findings.append((PURE, "invoice_verify no longer asks the injected `pays` which tenders are the customer's"))
+    calls = re.findall(r"_invt\.invoice_verify\(([^\n]*)\)", code(rt))
+    if not calls or any("pays=_intake_tender_pays()" not in c for c in calls):
+        findings.append((CC_ROUTER, "an invoice_verify call does not pass pays=_intake_tender_pays() (the tie would answer on its own)"))
+    if "_cr.is_customer_payment" not in code(func_body(rt, "_intake_tender_pays")):
+        findings.append((CC_ROUTER, "_intake_tender_pays does not return the home's is_customer_payment"))
+    sfr = code(files.get(SFR, ""))
+    if "pays=_closing.is_customer_payment" not in sfr or "if pays(" not in sfr:
+        findings.append((SFR, "the receipt builder does not inject / ask closing.is_customer_payment for its payment lines"))
+    if "is_vendor_paid_label(" not in code(func_body(hb_raw, "_xreport_rows_by_store")) or "is_customer_payment(" not in code(func_body(hb_raw, "is_vendor_paid_label")):
+        findings.append((HOME, "_xreport_rows_by_store (the X-report leg) no longer keeps a vendor-paid label out through is_vendor_paid_label → is_customer_payment"))
+    if "is_customer_payment(" not in code(func_body(hb_raw, "_invoice_tenders_by_store")):
+        findings.append((HOME, "_invoice_tenders_by_store (Cash Collected, invoice basis) no longer keeps non-customer tenders out"))
+    for rel, src in files.items():
+        if rel != HOME and "fold_to_axis" in src and "fold_to_axis" in code(src):
+            findings.append((rel, "names fold_to_axis outside the home — ask is_customer_payment (the one answer), not the axis"))
     # (c) the siblings are named
     seen = set()
     for rel, src in files.items():
@@ -310,6 +345,20 @@ def main():
     f9 = scan({**base, "modules/commcalc/other.py": "def set_it(client, org_id):\n    client.schema('storeops').table('tenants').update({'closing_tender_basis': 'invoice'}).execute()\n"}, ALLOW)
     check("NEG a second writer of the basis column → RED", any("touches closing_tender_basis" in m for _r, m in f9), f9)
 
+    f10 = scan({**base, HOME: base[HOME] + "\n\ndef is_customer_payment(cls):\n    return True\n"}, ALLOW)
+    check("NEG a second is_customer_payment → RED", any("is_customer_payment defined 2" in m for _r, m in f10), f10)
+    f11 = scan({**base, PURE: base[PURE].replace("def invoice_verify(kept, fields, trows=None, *, pays):", "def invoice_verify(kept, fields, trows=None, *, pays=None):")}, ALLOW)
+    check("NEG invoice_verify with a defaulted predicate → RED", any("REQUIRED keyword" in m for _r, m in f11), f11)
+    f12 = scan({**base, CC_ROUTER: base[CC_ROUTER].replace("_invt.invoice_verify(land, kf, trows, pays=_intake_tender_pays())", "_invt.invoice_verify(land, kf, trows, pays=lambda c: True)")}, ALLOW)
+    check("NEG the intake tie counting every tender as the customer's → RED", any("does not pass pays=_intake_tender_pays()" in m for _r, m in f12), f12)
+    f13 = scan({**base, SFR: base[SFR].replace("pays=_closing.is_customer_payment", "pays=_closing.fold_to_axis")}, ALLOW)
+    check("NEG the receipt builder asking the axis directly → RED", any(r == SFR for r, _m in f13), f13)
+    f14 = scan({**base, HOME: base[HOME].replace("        if not is_customer_payment(cls):\n", "        if False:\n")}, ALLOW)
+    check("NEG Cash Collected counting a vendor rebate as collected → RED", any("_invoice_tenders_by_store (Cash Collected" in m for _r, m in f14), f14)
+    f15 = scan({**base, HOME: base[HOME].replace("        if is_vendor_paid_label(r.get(\"tender_type\")):\n", "        if False:\n")}, ALLOW)
+    check("NEG the X-report leg counting a printed vendor rebate as collected → RED", any("the X-report leg" in m for _r, m in f15), f15)
+    check("(f) one answer to 'did the customer pay this tender?': is_customer_payment in the home; the 2.5b tie, the receipts and Cash Collected all ask it",
+          not any(("is_customer_payment" in m or "pays" in m or "fold_to_axis outside" in m or "Cash Collected" in m or "X-report leg" in m) for _r, m in findings), findings)
     print("\n%d passed, %d failed" % (P, F))
     return 1 if F else 0
 

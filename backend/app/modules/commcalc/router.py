@@ -6232,7 +6232,7 @@ def _intake_prepare_stage2(client, org_id, contents, filename, kind, column_map_
         land_ids = {id(x) for x in land}
         trows = _invt.tender_rows([(r, m) for r, m in pairs if id(m) in land_ids], block["confirmed"], kf, exclude=excluded)
         base["tender_rows"] = trows
-        vn = _invt.invoice_verify(land, kf, trows)
+        vn = _invt.invoice_verify(land, kf, trows, pays=_intake_tender_pays())
         vn["tie_field"] = kf["amount"]
         our_total = vn["sum_amount"]
         base["tender_tie"] = _invt.tender_tie(vn)
@@ -7057,6 +7057,13 @@ def _intake_tender_resolver(client, org_id):
     resolve = make_resolver(maps, _invt.MAP_REPORT, _cr.tender_class, _cr.TENDER_CLASSES)
     earlier = _invt.earlier_from_map(maps)
     return resolve, _cr.keyed_manually, earlier
+
+
+def _intake_tender_pays():
+    """Which tender classes are the CUSTOMER's payment — closing.router.is_customer_payment, THE one
+    answer (the receipts and Cash Collected read the same function). Injected into invoice_tenders."""
+    from app.modules.closing import router as _cr
+    return _cr.is_customer_payment
 
 
 def _intake_tender_columns_block(client, org_id, headers, records, mapped_headers, tax_header, decisions):
@@ -7920,7 +7927,7 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
         span = vn0["date_span"]
         rows = _intake_reread_invoice(client, org_id, stores_landed, span["from"], span["to"], kind=report_key)
         trows = _intake_reread_invoice_tenders(client, org_id, stores_landed, span["from"], span["to"], kind=report_key)
-        vn = _invt.invoice_verify(rows, kf, trows)
+        vn = _invt.invoice_verify(rows, kf, trows, pays=_intake_tender_pays())
         vn["tie_field"] = kf["amount"]
         our = vn["sum_amount"]
         tl = (landed.get("detail") or {}).get("tenders") or {}

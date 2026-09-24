@@ -20,7 +20,7 @@ WHAT IS REUSED (the duplicate check, index §30.14):
     format REGISTERED for the tenant's declared POS (`registry.get(<pos_key>)`, the key read through
     `report_kinds.tenant_declaration` — never a literal).
   · the tender classes come from the landed tender rows (classed at intake step 2.5b through
-    closing.router.TENDER_VOCAB); which classes are CUSTOMER payments is `fold_to_axis` (a class with a
+    closing.router.TENDER_VOCAB); which classes are CUSTOMER payments is `is_customer_payment` (a class with a
     place on the closing axis) — injected, never a list here. A vendor rebate / coupon tender is NOT a
     payment line on a receipt; it explains why the lines add up to more than the customer paid.
   · the import is `receipt_import.upsert_structured` — `import_structured` on the first run, a REPLACE
@@ -100,14 +100,15 @@ def _words_diff(a, b, what_a, what_b):
     return f"{what_a} are {a:,.2f} and {what_b} {b:,.2f} — a difference of {d:,.2f}"
 
 
-def build_document(inv, tenders, lines, fmt, *, store_header, customer_lines, footer_text, axis_of,
+def build_document(inv, tenders, lines, fmt, *, store_header, customer_lines, footer_text, pays,
                    built_at=None, built_by=None, sources=None):
     """ONE invoice → (document, report). `fmt` = the registered format module (COLUMNS, TOTALS, TITLE,
     DATE_FORMAT, FINANCED_ITEMS, CONTRACT_SECTION, POS_SOURCE, LABEL). Injected:
       store_header(store_string) → {"lines": [...], "phone": str|None, "store_code": str|None, "how": str|None}
       customer_lines(name) → [address lines] (what the POS customer record knows; [] = name only)
       footer_text → the org's receipt-template footer (config) or None
-      axis_of(tender_class) → the closing-axis class or None (closing.router.fold_to_axis)
+      pays(tender_class) → is it the CUSTOMER's payment (closing.router.is_customer_payment — the one answer the
+        intake's 2.5b tie and Cash Collected give too)
     `sources` names the landings the rows came from (table / kind), for the provenance stamp."""
     cols = [{"key": c["key"], "label": c["label"], "kind": c["kind"],
              "align": "right" if c["kind"] in (_base.KIND_MONEY, _base.KIND_TOTAL, _base.KIND_QTY) else "left"}
@@ -200,7 +201,7 @@ def build_document(inv, tenders, lines, fmt, *, store_header, customer_lines, fo
         if abs(amt) < 0.005:
             continue
         cls = _s(t.get("tender_class")).lower()
-        if axis_of(cls):
+        if pays(cls):
             doc["payments"].append({"label": _s(t.get("tender_label")), "amount": amt})
             pay_sum += amt
         else:
@@ -408,7 +409,7 @@ def rebuild(client, org_id, lo, hi, stores=None, who=None, dry_run=False):
     res = build_documents(
         invoices, tenders, lines, fmt["format"]["module"],
         store_header=_store_header_fn(client, org_id), customer_lines=_customer_lines_fn(client, org_id),
-        footer_text=_footer_text(client, org_id), axis_of=_closing.fold_to_axis, built_at=now, built_by=who,
+        footer_text=_footer_text(client, org_id), pays=_closing.is_customer_payment, built_at=now, built_by=who,
         sources={"invoice": {"table": inv_table, "kind": inv_kind, "from": lo, "to": hi},
                  "tenders": {"table": tender_table, "kind": inv_kind}, "lines": {"table": line_table, "kind": line_kind}})
     rep_resolve = _cr._intake_rep_resolver(client, org_id)
