@@ -9,7 +9,7 @@
 // backend payload and the NAV registry.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
-import { NAV, hrefHiddenByVertical } from '@/lib/rbac'
+import { TENANT_NAV, hrefHiddenByVertical } from '@/lib/rbac'
 
 type Vertical = {
   key: string; label: string; is_default: boolean; uses_carriers: boolean
@@ -28,7 +28,7 @@ const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 const PAGES: { group: string; href: string; label: string }[] = (() => {
   const seen = new Set<string>()
   const out: { group: string; href: string; label: string }[] = []
-  for (const g of NAV) for (const it of g.items) {
+  for (const g of TENANT_NAV) for (const it of g.items) {
     if (seen.has(it.href)) continue
     seen.add(it.href)
     out.push({ group: g.group, href: it.href, label: it.label })

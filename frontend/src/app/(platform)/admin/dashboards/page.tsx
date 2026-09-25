@@ -20,7 +20,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { invalidateApiCache } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
-import { NAV, canSeeItem, isSuperAdmin, canEditSettingArea, type NavItem } from '@/lib/rbac'
+import { NAV, platformOK, canSeeItem, isSuperAdmin, canEditSettingArea, type NavItem } from '@/lib/rbac'
 import HubTiles, { type HubGroup, type HubItem } from '@/components/HubTiles'
 import { slugGroup, defaultHubGroups, layoutToHubGroups, hubGroupsToLayout,
          type TileLayout } from '@/lib/tile-hubs'
@@ -49,8 +49,11 @@ export default function DashboardDesignerPage() {
   // — only these callers may target the house row or a foreign tenant (server enforces the same).
   const platformSA = tenants.some(t => t.super_admin)
 
+  // The groups this designer may lay out: a platform-only group (the Super Admin Toolbox, index §38)
+  // is designable by the platform super admin alone — through the same platformOK the sidebar reads.
+  const designable = useMemo(() => NAV.filter(g => platformOK(g, { super_admin: platformSA })), [platformSA])
   const groupNames = useMemo(
-    () => NAV.map(g => g.group).filter(n => n !== 'Configuration' && n !== 'Reports'), [])
+    () => designable.map(g => g.group).filter(n => n !== 'Configuration' && n !== 'Reports'), [designable])
   const [groupName, setGroupName] = useState(groupNames[0] || '')
   // '' = my company · '__house__' = platform default (house row) · else a specific tenant org_id
   const [tenantSel, setTenantSel] = useState('')
@@ -65,7 +68,7 @@ export default function DashboardDesignerPage() {
   const [err, setErr] = useState('')
 
   const slug = slugGroup(groupName)
-  const navGroup = useMemo(() => NAV.find(g => g.group === groupName) || null, [groupName])
+  const navGroup = useMemo(() => designable.find(g => g.group === groupName) || null, [designable, groupName])
   // The pages available to place — the group's real items (never the '/hub/…' entry itself),
   // canSeeItem-filtered (a formality for the super admins this page serves, but kept so a
   // menu_layout-granted manager never designs with pages their own role cannot see).
@@ -82,7 +85,7 @@ export default function DashboardDesignerPage() {
   const pages = useMemo(() => {
     const own = (navGroup?.items || []).filter(it => !it.href.startsWith('/hub/'))
     const rest = crossModule
-      ? NAV.filter(g => g.group !== groupName)
+      ? designable.filter(g => g.group !== groupName)
           .flatMap(g => g.items.filter(it => !it.href.startsWith('/hub/'))
                                .map(it => ({ ...it, _from: g.group })))
       : []
@@ -90,7 +93,7 @@ export default function DashboardDesignerPage() {
     return [...own, ...rest]
       .filter(it => canSeeItem(permissions, it))
       .filter(it => (seen.has(it.href) ? false : (seen.add(it.href), true)))
-  }, [navGroup, groupName, crossModule, permissions])
+  }, [navGroup, groupName, crossModule, permissions, designable])
   const pageByHref = useMemo(() => new Map(pages.map(p => [p.href, p])), [pages])
   const placed = useMemo(() => new Set(tiles.flatMap(t => t.items.map(i => i.href))), [tiles])
 

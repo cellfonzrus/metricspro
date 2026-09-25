@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
 import { invalidateApiCache } from '@/lib/cache'
-import { NAV, NAV_CARRIERS, hrefHiddenByVertical } from '@/lib/rbac'
+import { TENANT_NAV, NAV_CARRIERS, hrefHiddenByVertical } from '@/lib/rbac'
 import { useReportKinds } from '@/lib/report-kinds'
 import { useAuth } from '@/lib/auth-context'
 
@@ -122,7 +122,7 @@ export default function DisplayLabelsPage() {
             )
           })}
           <div style={{ fontWeight: 600, fontSize: 13, margin: '12px 0 6px' }}>Pages your business type hides</div>
-          {NAV.flatMap(g => g.items).filter((it, i, all) => all.findIndex(x => x.href === it.href) === i)
+          {TENANT_NAV.flatMap(g => g.items).filter((it, i, all) => all.findIndex(x => x.href === it.href) === i)
             .filter(it => hrefHiddenByVertical(it.href, vert.nav_hidden) || (vert.hidden_modules || []).includes(it.module)
                           || caps['vertical:' + it.href] != null)
             .map(it => {
@@ -178,7 +178,7 @@ export default function DisplayLabelsPage() {
         </div>
       )}
 
-      {!loaded ? <div style={{ color: 'var(--text3)' }}>Loading…</div> : NAV.map(g => (
+      {!loaded ? <div style={{ color: 'var(--text3)' }}>Loading…</div> : TENANT_NAV.map(g => (
         <div key={g.group} className="card" style={{ padding: 16, marginBottom: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid var(--border)' }}>
             <div style={{ fontWeight: 700, fontSize: 14, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text2)' }}>{g.group}</div>

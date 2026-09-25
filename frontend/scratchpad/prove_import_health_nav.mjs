@@ -59,8 +59,9 @@ ok('B5 deliberately NOT in REPORT_DIRECTORY (it edits schedules; directory exclu
 // 2026-09-03 (mig 948): the Flags & Compliance group carries a tileOnly DUPLICATE of this item
 // (the Reports-directory duplicate precedent — same module, no scopes, zero RBAC change), so the
 // href now appears exactly twice: the Configuration original + the compliance-dashboard copy.
-ok('B6 NAV carries the Configuration original + the Flags & Compliance tileOnly copy',
-  (SRC.match(/href: '\/admin\/import-health'/g) || []).length === 2)
+// 2026-09-25 (index §38): + the Super Admin Toolbox tileOnly copy (platformOnly group) — three in all.
+ok('B6 NAV carries the Configuration original + the Flags & Compliance and Super Admin Toolbox tileOnly copies',
+  (SRC.match(/href: '\/admin\/import-health'/g) || []).length === 3)
 
 // ── C. persona matrix — the popup gate and the nav item must agree ──────────────────────────────────
 console.log('\nC. persona matrix (popup gate vs nav visibility)')

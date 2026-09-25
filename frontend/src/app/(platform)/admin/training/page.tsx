@@ -14,7 +14,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import EntityPicker from '@/components/EntityPicker'
 import { api } from '@/lib/client'
-import { NAV } from '@/lib/rbac'
+import { TENANT_NAV } from '@/lib/rbac'
 import { AUDIENCE_LABEL, MODULE_LABEL, Tour, TourStep, fetchTours, startTour } from '@/lib/tours'
 
 const ORG_HOUSE = '00000000-0000-0000-0000-000000000001'
@@ -43,7 +43,7 @@ export default function AdminTrainingPage() {
   // doesn't list (e.g. a detail page) is still reachable through the "create" affordance.
   const pageOptions = useMemo(() => {
     const seen = new Map<string, string>()
-    NAV.forEach(g => g.items.forEach(i => { if (!seen.has(i.href)) seen.set(i.href, `${i.label} — ${i.href}`) }))
+    TENANT_NAV.forEach(g => g.items.forEach(i => { if (!seen.has(i.href)) seen.set(i.href, `${i.label} — ${i.href}`) }))
     return [...seen.entries()].map(([href, label]) => ({ id: href, label }))
   }, [])
   const moduleOptions = useMemo(() =>

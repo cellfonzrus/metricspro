@@ -9,7 +9,7 @@ import AskBar from '@/components/AskBar'
 import { useAuth, useActiveCarrier } from '@/lib/auth-context'
 import { setActiveOrg } from '@/lib/client'
 import { apiCached, CONFIG } from '@/lib/cache'
-import { NAV, canSeeItem, canAccessPath, carrierOKActive, verticalOK, verticalPathOK, isSuperAdmin, safeHomeFor, applyNavLayout, carrierCode, REPORT_CATEGORIES, type NavItem, type NavLayout } from '@/lib/rbac'
+import { NAV, platformOK, canSeeItem, canAccessPath, carrierOKActive, verticalOK, verticalPathOK, isSuperAdmin, safeHomeFor, applyNavLayout, carrierCode, REPORT_CATEGORIES, type NavItem, type NavLayout } from '@/lib/rbac'
 import { carrierDisplayName } from '@/lib/carrier-scope'
 import { actingCompany, switcherOptions, switcherVisible, switchConfirmText } from '@/lib/tenant-scope'
 import HelpPanel from '@/components/HelpPanel'
@@ -238,12 +238,14 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
   // reference every render (e.g. on every search keystroke) would also defeat the `index` useMemo below.
   const filteredGroups = useMemo(
     () => (open ? NAV : NAV.map(g => ({ ...g, items: g.items.filter(it => canSeeItem(permissions, it)) })))
+      // Platform-only groups (the Super Admin Toolbox, index §38) reach the platform super admin alone.
+      .filter(g => platformOK(g, user))
       .map(g => ({ ...g, items: g.items.filter(capOK).filter(it => carrierOKActive(it.href, activeCarrier, caps))
         .filter(it => verticalOK(it, tenant?.vertical, caps)) }))
       .filter(g => g.items.length > 0),
     // `caps`/`capOK` derive from `navCfg` (a new `navCfg.capabilities || {}` each render would defeat
     // this memo), so they are themselves memoized on the stable `navCfg` state object.
-    [open, permissions, activeCarrier, caps, capOK, tenant?.vertical])
+    [open, permissions, activeCarrier, caps, capOK, tenant?.vertical, user])
   // Per-org admin layout override (move items between groups / hide) — applied AFTER all access gating,
   // so anything an admin hasn't touched keeps its built-in placement and a newly-enabled item still shows.
   const groups = useMemo(

@@ -122,6 +122,18 @@ function mergeUnplacedItems(groups, navItems) {
 }
 
 // ── parse the REAL NAV out of rbac.ts (same line-based parser as prove_reports_directory) ─────────
+// index §38 — NAV-declared default tiles (NavItem.tile)
+function subsFromItemTiles(items) {
+  const names = []
+  const byName = {}
+  for (const it of items) {
+    const t = (it.tile || '').trim()
+    if (!t) continue
+    if (!byName[t]) { byName[t] = []; names.push(t) }
+    byName[t].push(it)
+  }
+  return names.map(name => ({ name, items: byName[name] }))
+}
 function parseNav(src) {
   const start = src.indexOf('export const NAV: NavGroup[]')
   const end = src.indexOf('// Per-item override', start)
@@ -129,10 +141,10 @@ function parseNav(src) {
   const groups = []
   let cur = null
   for (const line of body.split('\n')) {
-    const gm = line.match(/\{\s*group:\s*'([^']+)',\s*module:\s*'([^']+)',\s*items:\s*\[/)
+    const gm = line.match(/\{\s*group:\s*'([^']+)',\s*module:\s*'([^']+)',(?:\s*platformOnly:\s*true,)?\s*items:\s*\[/)
     if (gm) { cur = { group: gm[1], module: gm[2], items: [] }; groups.push(cur) }
     const im = line.match(/\{\s*href:\s*'([^']+)',\s*label:\s*'([^']*)',\s*icon:\s*'([^']*)',\s*module:\s*'([^']+)'/)
-    if (im && cur) cur.items.push({ href: im[1], label: im[2], icon: im[3], module: im[4], tileOnly: /tileOnly:\s*true/.test(line) })
+    if (im && cur) cur.items.push({ href: im[1], label: im[2], icon: im[3], module: im[4], tileOnly: /tileOnly:\s*true/.test(line), tile: (line.match(/tile:\s*'([^']+)'/) || [])[1] })
   }
   return groups
 }
@@ -283,7 +295,8 @@ for (const g of NAV) {
 {
   const hubGroups = NAV.filter(g => g.items.some(it => it.href.startsWith('/hub/')))
   // 16 D2-converted groups + Management Overview (owner directive 2026-09-03, mig 948)
-  ok('17 groups carry a /hub dashboard entry', hubGroups.length === 17)
+  // + the Super Admin Toolbox (owner 2026-09-25, index §38 — platformOnly)
+  ok('18 groups carry a /hub dashboard entry', hubGroups.length === 18)
   let slugOK = true, first = true, restTileOnly = true, hubNotTileOnly = true
   for (const g of hubGroups) {
     const hubs = g.items.filter(it => it.href.startsWith('/hub/'))
@@ -299,6 +312,22 @@ for (const g of NAV) {
   const skip = ['Configuration', 'Reports', 'Approvals', 'Chat', 'Workforce', 'Payroll & HR']
   ok('skipped groups carry no hub entry', NAV.filter(g => skip.includes(g.group))
     .every(g => !g.items.some(it => it.href.startsWith('/hub/'))))
+}
+
+// ── 7. index §38 — the Super Admin Toolbox renders as its NAV-declared tiles ─────────────────────
+{
+  const tb = NAV.find(g => g.group === 'Super Admin Toolbox')
+  ok('§38 toolbox group parsed', !!tb)
+  const real = (tb?.items || []).filter(it => !it.href.startsWith('/hub/'))
+  const subs = subsFromItemTiles(real)
+  const tiles = defaultHubGroups('Super Admin Toolbox', real, subs)
+  ok('§38 toolbox renders one master tile per declared tile (>= 5)', tiles.length === subs.length && tiles.length >= 5)
+  ok('§38 no loose "<Group> pages" tile — every copy names its tile', !tiles.some(t => t.title.endsWith(' pages')))
+  ok('§38 every toolbox copy lands on exactly one tile',
+    eq(tiles.flatMap(t => t.items.map(i => i.href)).sort(), real.map(i => i.href).sort()))
+  ok('§38 tile order = first appearance', eq(tiles.map(t => t.title), [...new Set(real.map(i => i.tile))]))
+  ok('§38 items without tile stay loose', defaultHubGroups('G', [{ href: '/a', label: 'A', icon: 'x' }, { href: '/b', label: 'B', icon: 'y', tile: 'T' }],
+    subsFromItemTiles([{ href: '/a' }, { href: '/b', label: 'B', icon: 'y', tile: 'T' }])).map(t => t.title).join('|') === 'T|G pages')
 }
 
 console.log(`\ntile-hubs: ${pass} passed, ${fail} failed`)

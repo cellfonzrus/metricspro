@@ -281,6 +281,13 @@ on:
       - "tools/vendor_price_compare/**"
       - "backend/harness_vendor_price_compare.py"
       - "backend/harness_tenant_vertical.py"
+      - "backend/harness_super_admin_toolbox.py"
+      - "frontend/src/lib/rbac.ts"
+      - "frontend/src/lib/tile-hubs.ts"
+      - "frontend/src/components/ScreenLink.tsx"
+      - "frontend/src/app/(platform)/layout.tsx"
+      - "frontend/src/app/(platform)/hub/**"
+      - "frontend/src/app/(platform)/admin/**"
       - "backend/app/modules/core/verticals.py"
       - "backend/app/modules/core/entitlements.py"
       - "database/migrations/1020_tenant_vertical.sql"
@@ -397,6 +404,9 @@ jobs:
       - name: Run the tenant-vertical lock (one business-type declaration; every module / page / route / carrier gate asks it; mirror = seed; no vertical spelled in code — index §35)
         working-directory: backend
         run: python3 harness_tenant_vertical.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the Super Admin Toolbox lock (platform-only tiles are copies with a real home and a real route; one gate reads super_admin, never modules.admin; every NAV consumer asks platformOK or reads TENANT_NAV — index §38)
+        working-directory: backend
+        run: python3 harness_super_admin_toolbox.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the Paramount KPI column lock (one exact column table; an unknown header yields no value, never the neighbour's; the import writes every key it parsed — index §19.20)
         working-directory: backend
         run: python3 harness_paramount_kpi_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
