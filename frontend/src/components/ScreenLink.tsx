@@ -30,6 +30,7 @@ import { Fragment, useCallback, useMemo } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { NAV, canSeeItem } from '@/lib/rbac'
+import type { NavItem } from '@/lib/rbac'
 
 // ── THE REGISTRY ────────────────────────────────────────────────────────────────────────────────
 // One row per destination that user-facing copy actually names. `href` MUST be (or start with) a NAV
@@ -213,7 +214,7 @@ function gateHref(href: string): string {
 export function useCanOpen(): (href: string) => boolean {
   const { permissions, session, rbacEnabled } = useAuth()
   const byHref = useMemo(() => {
-    const m = new Map<string, any>()
+    const m = new Map<string, NavItem>()
     for (const g of NAV) for (const it of g.items) if (!m.has(it.href)) m.set(it.href, it)
     return m
   }, [])

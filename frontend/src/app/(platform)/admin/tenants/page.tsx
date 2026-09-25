@@ -7,6 +7,17 @@ import ScreenLink from '@/components/ScreenLink'
 
 // SaaS logins — super-admin onboarding: create a company (tenant) + provision its first admin login.
 type Tenant = { org_id: string; name: string; slug: string | null; is_active: boolean; created_at: string; users: number; logins: number }
+// The fields of the /core/* replies this page shows.
+type CreatedTenant = { name?: string; admin_email?: string; temp_password?: string; auth_error?: string | null }
+type PasswordReset = { email?: string; temp_password?: string }
+type TenantAdminReset = {
+  ok?: boolean; needs_email?: boolean; tenant?: string; org_id?: string; email?: string; temp_password?: string
+  admins?: { email: string; full_name?: string | null }[]
+}
+type SuperAdmin = { id: string; email: string; full_name?: string | null; role?: string | null; is_active?: boolean }
+type SuperAdminCreated = { elevated?: boolean; email?: string; temp_password?: string | null }
+// The message of whatever a failed call threw (api() throws Errors), if it has one.
+const errText = (e: unknown): string | undefined => (e as { message?: string } | null | undefined)?.message
 
 export default function TenantsAdmin() {
   const { user, loading } = useAuth()
@@ -18,17 +29,17 @@ export default function TenantsAdmin() {
   // Business types (mig 1020) — the vocabulary comes from the backend, so this page names none.
   const [verticals, setVerticals] = useState<{ key: string; label: string }[]>([])
   useEffect(() => { api('/api/v1/core/tenant-vertical').then((v: { choices?: { key: string; label: string }[] }) => setVerticals(v?.choices || [])).catch(() => {}) }, [])
-  const [created, setCreated] = useState<any>(null)
+  const [created, setCreated] = useState<CreatedTenant | null>(null)
   const [rp, setRp] = useState({ email: '', temp_password: '' })
-  const [reset, setReset] = useState<any>(null)
+  const [reset, setReset] = useState<PasswordReset | null>(null)
   const [rpBusy, setRpBusy] = useState(false)
   const [taBusy, setTaBusy] = useState('')          // org_id currently resetting
-  const [taReset, setTaReset] = useState<any>(null)  // last admin-reset result
-  const [taPick, setTaPick] = useState<any>(null)    // {org_id, name, admins[]} when a tenant has >1 admin login
-  const [supers, setSupers] = useState<any[]>([])    // platform super-admins (bypass tenant isolation)
+  const [taReset, setTaReset] = useState<TenantAdminReset | null>(null)  // last admin-reset result
+  const [taPick, setTaPick] = useState<TenantAdminReset | null>(null)    // {org_id, name, admins[]} when a tenant has >1 admin login
+  const [supers, setSupers] = useState<SuperAdmin[]>([])    // platform super-admins (bypass tenant isolation)
   const [sa, setSa] = useState({ email: '', full_name: '', temp_password: '' })
   const [saBusy, setSaBusy] = useState(false)
-  const [saCreated, setSaCreated] = useState<any>(null)
+  const [saCreated, setSaCreated] = useState<SuperAdminCreated | null>(null)
 
   // NAV-PERF 2026-08-04: MEASURED /core/tenants 368 ms + /core/super-admins 248 ms. Both are
   // slow-changing config. `cache` is true ONLY on mount — every reload after a WRITE on this page
@@ -37,11 +48,11 @@ export default function TenantsAdmin() {
   // is not an acceptable trade for 600 ms.
   const load = useCallback((cache = false) => {
     (cache ? apiCached('/api/v1/core/tenants', CONFIG) : api('/api/v1/core/tenants'))
-      .then((d: any) => setTenants(d.tenants || [])).catch(e => setErr(e?.message || 'Failed to load'))
+      .then((d: { tenants?: Tenant[] }) => setTenants(d.tenants || [])).catch(e => setErr(e?.message || 'Failed to load'))
   }, [])
   const loadSupers = useCallback((cache = false) => {
     (cache ? apiCached('/api/v1/core/super-admins', CONFIG) : api('/api/v1/core/super-admins'))
-      .then((d: any) => setSupers(d.super_admins || [])).catch(() => {})
+      .then((d: { super_admins?: SuperAdmin[] }) => setSupers(d.super_admins || [])).catch(() => {})
   }, [])
   useEffect(() => { if (isSuper) { load(true); loadSupers(true) } }, [isSuper, load, loadSupers])
 
@@ -51,7 +62,7 @@ export default function TenantsAdmin() {
     try {
       const r = await api('/api/v1/core/tenants', { method: 'POST', body: JSON.stringify(np) })
       setCreated(r); setNp({ name: '', admin_email: '', admin_name: '', temp_password: '', vertical: '' }); load()
-    } catch (e: any) { setErr(e?.message || 'Could not create company') } finally { setBusy(false) }
+    } catch (e) { setErr(errText(e) || 'Could not create company') } finally { setBusy(false) }
   }
   async function resetPassword() {
     if (!rp.email.trim()) { setErr('Enter the user\'s email to reset.'); return }
@@ -59,7 +70,7 @@ export default function TenantsAdmin() {
     try {
       const r = await api('/api/v1/core/users/reset-password', { method: 'POST', body: JSON.stringify(rp) })
       setReset(r); setRp({ email: '', temp_password: '' })
-    } catch (e: any) { setErr(e?.message || 'Could not reset password') } finally { setRpBusy(false) }
+    } catch (e) { setErr(errText(e) || 'Could not reset password') } finally { setRpBusy(false) }
   }
   async function addSuper() {
     if (!sa.email.trim()) { setErr('Enter an email to make a platform super-admin.'); return }
@@ -67,7 +78,7 @@ export default function TenantsAdmin() {
     try {
       const r = await api('/api/v1/core/super-admins', { method: 'POST', body: JSON.stringify(sa) })
       setSaCreated(r); setSa({ email: '', full_name: '', temp_password: '' }); loadSupers()
-    } catch (e: any) { setErr(e?.message || 'Could not create super-admin') } finally { setSaBusy(false) }
+    } catch (e) { setErr(errText(e) || 'Could not create super-admin') } finally { setSaBusy(false) }
   }
   async function revokeSuper(email: string) {
     if (!confirm(`Remove platform (cross-tenant) access from ${email}? They stay a normal tenant user — their login is not deleted.`)) return
@@ -75,16 +86,16 @@ export default function TenantsAdmin() {
     try {
       await api(`/api/v1/core/super-admins?email=${encodeURIComponent(email)}`, { method: 'DELETE' })
       loadSupers()
-    } catch (e: any) { setErr(e?.message || 'Could not revoke') }
+    } catch (e) { setErr(errText(e) || 'Could not revoke') }
   }
   async function resetTenantAdmin(t: Tenant, email?: string) {
     setTaBusy(t.org_id); setErr(''); setTaReset(null)
     try {
-      const r = await api(`/api/v1/core/tenants/${t.org_id}/reset-admin-password`, {
+      const r: TenantAdminReset | null = await api(`/api/v1/core/tenants/${t.org_id}/reset-admin-password`, {
         method: 'POST', body: JSON.stringify(email ? { email } : {}) })
       if (r?.needs_email) { setTaPick(r); return }   // >1 admin login — ask which
       setTaPick(null); setTaReset(r)
-    } catch (e: any) { setErr(e?.message || 'Could not reset the tenant admin password') }
+    } catch (e) { setErr(errText(e) || 'Could not reset the tenant admin password') }
     finally { setTaBusy('') }
   }
   async function rename(t: Tenant) {
@@ -154,9 +165,9 @@ export default function TenantsAdmin() {
       </div>
 
       <div className="card" style={{ padding: 16, marginBottom: 16 }}>
-        <div style={{ fontWeight: 700, marginBottom: 4 }}>🔑 Reset a user's password</div>
+        <div style={{ fontWeight: 700, marginBottom: 4 }}>🔑 Reset a user&apos;s password</div>
         <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
-          Works for <b>any tenant's</b> user (Luxelink, etc.) by email. Sets a temp password and forces a change on next login.
+          Works for <b>any tenant&apos;s</b> user (Luxelink, etc.) by email. Sets a temp password and forces a change on next login.
           The account must already have a login (created in <ScreenLink to="roles_access" />).
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -167,7 +178,7 @@ export default function TenantsAdmin() {
         {reset && (
           <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 14 }}>
             ✅ Password reset for <b>{reset.email}</b> · temp password: <code style={{ background: '#fff', padding: '2px 6px', borderRadius: 4 }}>{reset.temp_password}</code>
-            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>Hand this to the user — they'll be prompted to set a new password on next login.</div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>Hand this to the user — they&apos;ll be prompted to set a new password on next login.</div>
           </div>
         )}
       </div>
@@ -175,7 +186,7 @@ export default function TenantsAdmin() {
       <div className="card" style={{ padding: 16, marginBottom: 16, borderColor: '#fca5a5' }}>
         <div style={{ fontWeight: 700, marginBottom: 4 }}>🛡️ Platform super-admins</div>
         <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
-          These logins <b>bypass tenant isolation</b> and can see every tenant's data — keep the list to your internal operators only.
+          These logins <b>bypass tenant isolation</b> and can see every tenant&apos;s data — keep the list to your internal operators only.
           A new email gets a login created (temp password shown once); an existing email is just elevated (its password is left unchanged).
           A row flagged <b style={{ color: '#c0392b' }}>in red</b> holds platform access with a non-admin role — almost always a mistake to fix.
         </div>
@@ -228,7 +239,7 @@ export default function TenantsAdmin() {
         <div className="card" style={{ padding: 16, marginTop: 14, borderColor: '#fde68a', background: '#fffbeb' }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>{taPick.tenant} has more than one admin login — pick which to reset:</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {(taPick.admins || []).map((a: any) => (
+            {(taPick.admins || []).map(a => (
               <button key={a.email} className="btn btn-sm"
                 onClick={() => resetTenantAdmin({ org_id: taPick.org_id, name: taPick.tenant } as Tenant, a.email)}>
                 {a.full_name ? `${a.full_name} · ` : ''}{a.email}</button>
@@ -240,7 +251,7 @@ export default function TenantsAdmin() {
       {taReset?.ok && (
         <div className="card" style={{ marginTop: 14, padding: 12, borderRadius: 8, background: '#f0fdf4', borderColor: '#bbf7d0', fontSize: 14 }}>
           ✅ Admin login reset for <b>{taReset.tenant}</b> ({taReset.email}) · temp password: <code style={{ background: '#fff', padding: '2px 6px', borderRadius: 4 }}>{taReset.temp_password}</code>
-          <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>Hand this to the company admin who requested it — they'll be prompted to set a new password on next login.</div>
+          <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>Hand this to the company admin who requested it — they&apos;ll be prompted to set a new password on next login.</div>
         </div>
       )}
     </div>

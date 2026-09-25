@@ -14,12 +14,23 @@ const tdr: React.CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric
 const lastMonth = () => { const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 7) }
 const blank = { code: '', name: '', parent_code: '', external_ref: '', is_active: true }
 
+// The fields of the /account/centers payloads this page reads.
+type CenterDraft = typeof blank
+interface Center { code: string; name: string; parent_code?: string | null; external_ref?: string | null; is_active: boolean; center_type: string }
+interface PlLineRef { key: string; label: string; section: string }
+interface LineTag { pl_line_key: string; detail_label: string; cost_center_code: string | null }
+type TagDraft = { pl_line_key: string; detail_label: string; cost_center_code: string }
+interface CentersData { centers?: Center[]; pl_lines?: PlLineRef[]; line_tags?: LineTag[]; problems?: { cost?: string[] } }
+interface Totals { revenue: number; cogs: number; opex: number; other: number; net_income: number }
+interface CostViewCenter { code: string | null; name?: string; own: Totals; rolled_up: Totals; lines: { label: string; section: string; amount: number }[] }
+interface CostView { computed?: boolean; tie?: boolean; note?: string; unknown_codes?: string[]; centers: CostViewCenter[]; statement: Totals }
+
 export default function CostCentersPage() {
-  const [data, setData] = useState<any>(null)
-  const [draft, setDraft] = useState<any>(blank)
-  const [tag, setTag] = useState<any>({ pl_line_key: '', detail_label: '', cost_center_code: '' })
+  const [data, setData] = useState<CentersData | null>(null)
+  const [draft, setDraft] = useState<CenterDraft>(blank)
+  const [tag, setTag] = useState<TagDraft>({ pl_line_key: '', detail_label: '', cost_center_code: '' })
   const [period, setPeriod] = useState(lastMonth())
-  const [view, setView] = useState<any>(null)
+  const [view, setView] = useState<CostView | null>(null)
   const [openC, setOpenC] = useState<string | null>(null)
   const [err, setErr] = useState('')
   const load = useCallback(() => api('/api/v1/account/centers').then(setData).catch(e => setErr(e?.message || String(e))), [])
@@ -30,12 +41,12 @@ export default function CostCentersPage() {
     return () => { alive = false }
   }, [period])
   useEffect(() => loadView(), [loadView])
-  const centers = (data?.centers || []).filter((c: any) => c.center_type === 'cost')
-  const plName: Record<string, string> = Object.fromEntries((data?.pl_lines || []).map((l: any) => [l.key, l.label]))
+  const centers = (data?.centers || []).filter(c => c.center_type === 'cost')
+  const plName: Record<string, string> = Object.fromEntries((data?.pl_lines || []).map(l => [l.key, l.label]))
 
-  const save = (row: any) => api('/api/v1/account/centers', { method: 'PUT', body: JSON.stringify({ ...row, center_type: 'cost' }) })
+  const save = (row: CenterDraft | Center) => api('/api/v1/account/centers', { method: 'PUT', body: JSON.stringify({ ...row, center_type: 'cost' }) })
     .then(() => { setDraft(blank); load() }).catch(e => setErr(e?.message || String(e)))
-  const saveTag = (t: any) => api('/api/v1/account/centers/line-tag', { method: 'PUT', body: JSON.stringify(t) })
+  const saveTag = (t: TagDraft | LineTag) => api('/api/v1/account/centers/line-tag', { method: 'PUT', body: JSON.stringify(t) })
     .then(() => { setTag({ pl_line_key: '', detail_label: '', cost_center_code: '' }); load(); loadView() }).catch(e => setErr(e?.message || String(e)))
 
   return (
@@ -43,14 +54,14 @@ export default function CostCentersPage() {
       <h1 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 4px' }}>Cost Centers</h1>
       <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 10 }}>Tag P&L lines (or one detail of a line) to a cost center; the view below regroups the P&L Statement by center and ties to it to the cent.</div>
       {err && <div style={{ color: '#b91c1c', marginBottom: 8 }}>{err}</div>}
-      {data?.problems?.cost?.length > 0 && <div style={{ color: '#b45309', marginBottom: 8 }}>{data.problems.cost.join(' · ')}</div>}
+      {(data?.problems?.cost?.length ?? 0) > 0 && data?.problems?.cost && <div style={{ color: '#b45309', marginBottom: 8 }}>{data.problems.cost.join(' · ')}</div>}
 
       <div className="card" style={{ padding: 14, marginBottom: 14 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>Centers</div>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr><th style={th}>Code</th><th style={th}>Name</th><th style={th}>Parent</th><th style={th}>Franchisor reference</th><th style={th}>Active</th><th style={th}></th></tr></thead>
           <tbody>
-            {centers.map((c: any) => (
+            {centers.map(c => (
               <tr key={c.code}><td style={td}>{c.code}</td><td style={td}>{c.name}</td><td style={td}>{c.parent_code || ''}</td><td style={td}>{c.external_ref || ''}</td>
                 <td style={td}><input type="checkbox" checked={c.is_active} onChange={e => save({ ...c, is_active: e.target.checked })} /></td>
                 <td style={td}><button className="btn" onClick={() => window.confirm(`Delete cost center ${c.code}?`) && api(`/api/v1/account/centers/cost/${encodeURIComponent(c.code)}`, { method: 'DELETE' }).then(load)}>Delete</button></td></tr>
@@ -58,7 +69,7 @@ export default function CostCentersPage() {
             <tr>
               <td style={td}><input placeholder="code" value={draft.code} onChange={e => setDraft({ ...draft, code: e.target.value })} /></td>
               <td style={td}><input placeholder="name" value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} /></td>
-              <td style={td}><select value={draft.parent_code} onChange={e => setDraft({ ...draft, parent_code: e.target.value })}><option value="">—</option>{centers.map((c: any) => <option key={c.code} value={c.code}>{c.code}</option>)}</select></td>
+              <td style={td}><select value={draft.parent_code} onChange={e => setDraft({ ...draft, parent_code: e.target.value })}><option value="">—</option>{centers.map(c => <option key={c.code} value={c.code}>{c.code}</option>)}</select></td>
               <td style={td}><input placeholder="assigned code" value={draft.external_ref} onChange={e => setDraft({ ...draft, external_ref: e.target.value })} /></td>
               <td style={td}></td>
               <td style={td}><button className="btn btn-primary" disabled={!draft.code.trim()} onClick={() => save(draft)}>Add</button></td>
@@ -72,14 +83,14 @@ export default function CostCentersPage() {
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr><th style={th}>P&L line</th><th style={th}>Detail (blank = whole line)</th><th style={th}>Cost center</th><th style={th}></th></tr></thead>
           <tbody>
-            {(data?.line_tags || []).map((t: any) => (
+            {(data?.line_tags || []).map(t => (
               <tr key={t.pl_line_key + '|' + t.detail_label}><td style={td}>{plName[t.pl_line_key] || t.pl_line_key}</td><td style={td}>{t.detail_label || '—'}</td><td style={td}>{t.cost_center_code}</td>
                 <td style={td}><button className="btn" onClick={() => saveTag({ ...t, cost_center_code: null })}>Remove</button></td></tr>
             ))}
             <tr>
-              <td style={td}><select value={tag.pl_line_key} onChange={e => setTag({ ...tag, pl_line_key: e.target.value })}><option value="">— line —</option>{(data?.pl_lines || []).map((l: any) => <option key={l.key} value={l.key}>{l.label} ({l.section})</option>)}</select></td>
+              <td style={td}><select value={tag.pl_line_key} onChange={e => setTag({ ...tag, pl_line_key: e.target.value })}><option value="">— line —</option>{(data?.pl_lines || []).map(l => <option key={l.key} value={l.key}>{l.label} ({l.section})</option>)}</select></td>
               <td style={td}><input placeholder="e.g. Rent" value={tag.detail_label} onChange={e => setTag({ ...tag, detail_label: e.target.value })} /></td>
-              <td style={td}><select value={tag.cost_center_code} onChange={e => setTag({ ...tag, cost_center_code: e.target.value })}><option value="">— center —</option>{centers.map((c: any) => <option key={c.code} value={c.code}>{c.code} — {c.name}</option>)}</select></td>
+              <td style={td}><select value={tag.cost_center_code} onChange={e => setTag({ ...tag, cost_center_code: e.target.value })}><option value="">— center —</option>{centers.map(c => <option key={c.code} value={c.code}>{c.code} — {c.name}</option>)}</select></td>
               <td style={td}><button className="btn btn-primary" disabled={!tag.pl_line_key || !tag.cost_center_code} onClick={() => saveTag(tag)}>Tag</button></td>
             </tr>
           </tbody>
@@ -93,18 +104,18 @@ export default function CostCentersPage() {
           {view?.computed && <span style={{ fontSize: 12.5, color: view.tie ? '#15803d' : '#b91c1c' }}>{view.tie ? 'ties to the P&L Statement' : 'does NOT tie to the P&L Statement'}</span>}
         </div>
         {view && !view.computed && <div style={{ color: '#b45309' }}>{view.note}</div>}
-        {view?.unknown_codes?.length > 0 && <div style={{ color: '#b45309', fontSize: 13 }}>Tags name centers that do not exist: {view.unknown_codes.join(', ')}</div>}
+        {(view?.unknown_codes?.length ?? 0) > 0 && view?.unknown_codes && <div style={{ color: '#b45309', fontSize: 13 }}>Tags name centers that do not exist: {view.unknown_codes.join(', ')}</div>}
         {view?.computed && (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr><th style={th}>Center</th><th style={thr}>Revenue</th><th style={thr}>COGS</th><th style={thr}>Expenses</th><th style={thr}>Other</th><th style={thr}>Net (incl. children)</th><th style={th}></th></tr></thead>
             <tbody>
-              {view.centers.map((c: any) => (
+              {view.centers.map(c => (
                 <Fragment key={String(c.code)}>
                   <tr><td style={td}>{c.code ? `${c.code} — ${c.name}` : 'Untagged'}</td>
                     <td style={tdr}>{fmt(c.own.revenue)}</td><td style={tdr}>{fmt(c.own.cogs)}</td><td style={tdr}>{fmt(c.own.opex)}</td><td style={tdr}>{fmt(c.own.other)}</td>
                     <td style={tdr}>{fmt(c.rolled_up.net_income)}</td>
                     <td style={td}><button className="btn" onClick={() => setOpenC(openC === String(c.code) ? null : String(c.code))}>{openC === String(c.code) ? 'Hide' : 'Lines'}</button></td></tr>
-                  {openC === String(c.code) && c.lines.map((l: any, i: number) => (
+                  {openC === String(c.code) && c.lines.map((l, i) => (
                     <tr key={i}><td style={{ ...td, paddingLeft: 22 }} colSpan={5}>{l.label} <span style={{ color: 'var(--text3)' }}>({l.section})</span></td><td style={tdr}>{fmt(l.amount)}</td><td style={td}></td></tr>
                   ))}
                 </Fragment>

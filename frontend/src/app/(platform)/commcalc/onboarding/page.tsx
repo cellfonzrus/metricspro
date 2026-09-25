@@ -30,42 +30,79 @@ import { useCanOpen } from '@/components/ScreenLink'
 // scoping had moved back into code. The upload/automation pairing is likewise not computed here —
 // a report row already names its connector, and this only draws what that row says.
 const orgQ = () => { const o = getActiveOrg(); return o ? `?org_id=${encodeURIComponent(o)}` : '' }
+// The message of whatever a failed call threw (api() throws Errors), if it has one.
+const errText = (e: unknown): string | undefined => (e as { message?: string } | null | undefined)?.message
+
+// The fields of GET /commcalc/onboarding (+ /data-readiness) this page reads.
+type Answers = Record<string, string | string[] | undefined>
+interface ProfileQuestion { key: string; label: string; type: string; options?: string[] }
+interface WizStep {
+  key: string; kind: string; phase: string; title?: string; question?: string; status?: string; count?: number
+  done?: boolean; unlocked?: boolean; auto?: boolean; cta?: { href: string; label: string }
+  answers?: Answers; options?: ProfileQuestion[]
+}
+interface SpineStep { href: string; label: string; does?: string }
+interface ImplItem {
+  report_key: string; label: string
+  mapping: { ready?: boolean; required?: number; required_mapped?: number; sample_seen?: boolean }
+  upload: { href: string; fallback_href?: string | null }
+  automation?: { href: string; state?: string; vendor?: string } | null
+}
+interface ImplBlock {
+  carrier_id?: string | null; carrier_name: string; is_default?: boolean; shared?: boolean
+  ready: number; total: number; automated: number; empty_reason?: string; empty_next?: string; items: ImplItem[]
+}
+interface Implementation {
+  spine?: SpineStep[]; blocks?: ImplBlock[]
+  progress?: { feeds_mapped?: number; feeds?: number; feeds_automated?: number }
+}
+interface WizVertical { key?: string; label?: string; source?: string; registry_ready?: boolean; choices: { key: string; label: string }[] }
+interface Wizard { steps?: WizStep[]; ready?: number; total?: number; implementation?: Implementation; vertical?: WizVertical }
+interface DataReadiness {
+  ingested_count?: number; reports_powered?: number; reports_total?: number
+  ingested?: { source_key: string; source_label: string; present?: boolean; reports?: string[] }[]
+  reports?: { report: string; powered?: boolean; needs?: string[] }[]
+}
 
 export default function OnboardingPage() {
-  const [wiz, setWiz] = useState<any>(null)
-  const [dr, setDr] = useState<any>(null)
+  const [wiz, setWiz] = useState<Wizard | null>(null)
+  const [dr, setDr] = useState<DataReadiness | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
   const [saving, setSaving] = useState('')
 
-  const load = useCallback(() => {
-    setLoading(true); setErr(null)
+  const fetchWizard = useCallback(() => {
     Promise.all([
       api(`/api/v1/commcalc/onboarding${orgQ()}`),
       api(`/api/v1/commcalc/data-readiness${orgQ()}`).catch(() => null),
-    ]).then(([w, d]: any[]) => { setWiz(w); setDr(d) })
+    ]).then(([w, d]: [Wizard, DataReadiness | null]) => { setWiz(w); setDr(d) })
       .catch(e => setErr(e?.message || String(e))).finally(() => setLoading(false))
   }, [])
-  useEffect(() => { load() }, [load])
+  const load = useCallback(() => {
+    setLoading(true); setErr(null)
+    fetchWizard()
+  }, [fetchWizard])
+  // First load: `loading` already starts true and `err` null, so mounting only has to fetch.
+  useEffect(() => { fetchWizard() }, [fetchWizard])
 
-  const put = async (step: string, payload: any) => {
+  const put = async (step: string, payload: unknown) => {
     setSaving(step)
     try {
       await api(`/api/v1/commcalc/onboarding/${encodeURIComponent(step)}${orgQ()}`,
         { method: 'PUT', body: JSON.stringify(payload) })
       load()
-    } catch (e: any) { setErr(e?.message || String(e)) } finally { setSaving('') }
+    } catch (e) { setErr(errText(e) || String(e)) } finally { setSaving('') }
   }
 
-  const steps: any[] = wiz?.steps || []
+  const steps: WizStep[] = wiz?.steps || []
   const profileStep = steps.find(s => s.kind === 'profile')
-  const answers = profileStep?.answers || {}
+  const answers: Answers = profileStep?.answers || {}
   const flowSteps = steps.filter(s => s.kind !== 'profile')
   const ready = wiz?.ready ?? 0, total = wiz?.total ?? 0
   const pct = total ? Math.round((ready / total) * 100) : 0
 
   // group tailored steps by phase, preserving order
-  const phases: { name: string; steps: any[] }[] = []
+  const phases: { name: string; steps: WizStep[] }[] = []
   for (const s of flowSteps) {
     let p = phases.find(x => x.name === s.phase)
     if (!p) { p = { name: s.phase, steps: [] }; phases.push(p) }
@@ -73,7 +110,7 @@ export default function OnboardingPage() {
   }
 
   const impl = wiz?.implementation
-  const saveProfile = (patch: any) => put('profile', { answers: { ...answers, ...patch }, status: 'in_progress' })
+  const saveProfile = (patch: Answers) => put('profile', { answers: { ...answers, ...patch }, status: 'in_progress' })
   const toggleCarrier = (c: string) => {
     const cur: string[] = Array.isArray(answers.carriers) ? answers.carriers : []
     saveProfile({ carriers: cur.includes(c) ? cur.filter(x => x !== c) : [...cur, c] })
@@ -94,13 +131,13 @@ export default function OnboardingPage() {
       {/* WHAT KIND OF BUSINESS (mig 1020, index §35) — asked FIRST because it decides which modules, pages
           and profile questions exist at all. Its one home is the tenant record (PUT /core/tenant-vertical);
           the choices come from the backend vocabulary, so this file names no kind of business. */}
-      {!loading && wiz?.vertical?.choices?.length > 0 && (
+      {!loading && (wiz?.vertical?.choices?.length ?? 0) > 0 && wiz?.vertical && (
         <BusinessTypeCard vertical={wiz.vertical} onSaved={load} onError={setErr} />
       )}
 
       {/* THE ORDERED FLOW. Read from the backend spine, which is pinned equal to the runbook's own
           stage list — so the strip, the "what next" prompt and the training material are one order. */}
-      {!loading && impl?.spine?.length > 0 && <FlowStrip spine={impl.spine} here="/commcalc/onboarding" />}
+      {!loading && (impl?.spine?.length ?? 0) > 0 && impl?.spine && <FlowStrip spine={impl.spine} here="/commcalc/onboarding" />}
 
       {/* Progress */}
       {!loading && !err && (
@@ -120,7 +157,7 @@ export default function OnboardingPage() {
           <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 2 }}>{profileStep.phase}</div>
           <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 12 }}>{profileStep.question}</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            {(profileStep.options || []).map((q: any) => (
+            {(profileStep.options || []).map(q => (
               <div key={q.key}>
                 <label style={{ fontSize: 12, fontWeight: 700, display: 'block', marginBottom: 4 }}>{q.label}</label>
                 {q.type === 'text' && (
@@ -131,13 +168,14 @@ export default function OnboardingPage() {
                 {q.type === 'select' && (
                   <select style={{ ...inp, width: '100%' }} value={answers[q.key] || ''} onChange={e => saveProfile({ [q.key]: e.target.value })}>
                     <option value="">Select…</option>
-                    {(q.options || []).map((o: string) => <option key={o} value={o}>{o}</option>)}
+                    {(q.options || []).map(o => <option key={o} value={o}>{o}</option>)}
                   </select>
                 )}
                 {q.type === 'multiselect' && (
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {(q.options || []).map((o: string) => {
-                      const on = Array.isArray(answers[q.key]) && answers[q.key].includes(o)
+                    {(q.options || []).map(o => {
+                      const cur = answers[q.key]
+                      const on = Array.isArray(cur) && cur.includes(o)
                       return (
                         <button key={o} onClick={() => toggleCarrier(o)} disabled={saving === 'profile'}
                           style={{ fontSize: 12.5, fontWeight: 700, padding: '6px 12px', borderRadius: 999, cursor: 'pointer',
@@ -224,7 +262,7 @@ export default function OnboardingPage() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
               <div style={{ background: 'var(--surface2, #f8fafc)', padding: '7px 11px', fontSize: 12, fontWeight: 700 }}>Ingested feeds</div>
-              {(dr.ingested || []).map((s: any) => (
+              {(dr.ingested || []).map(s => (
                 <div key={s.source_key} style={{ padding: '7px 11px', borderTop: '1px solid var(--border)', fontSize: 12.5 }}>
                   <span style={{ marginRight: 6 }}>{s.present ? '✅' : '⬜'}</span><b>{s.source_label}</b>
                   {(s.reports || []).length > 0 && <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 2, marginLeft: 20 }}>powers: {(s.reports || []).slice(0, 5).join(' · ')}</div>}
@@ -233,7 +271,7 @@ export default function OnboardingPage() {
             </div>
             <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
               <div style={{ background: 'var(--surface2, #f8fafc)', padding: '7px 11px', fontSize: 12, fontWeight: 700 }}>Reports &amp; menus</div>
-              {(dr.reports || []).map((r: any, i: number) => (
+              {(dr.reports || []).map((r, i) => (
                 <div key={i} style={{ padding: '7px 11px', borderTop: '1px solid var(--border)', fontSize: 12.5 }}>
                   <span style={{ marginRight: 6 }}>{r.powered ? '🟢' : '🔴'}</span><b>{r.report}</b>
                   {!r.powered && (r.needs || []).length > 0 && <div style={{ fontSize: 11.5, color: '#92400e', marginTop: 2, marginLeft: 20 }}>needs: {(r.needs || []).join(' · ')}</div>}
@@ -262,7 +300,7 @@ export default function OnboardingPage() {
 // predicate the sidebar, ScreenLink and WorkflowNext use. A step this viewer may not open is shown
 // as plain text rather than a link they would be bounced out of, and is never silently dropped: a
 // flow with a hole in it reads as a mistake, whereas a greyed step reads as "not yours".
-function FlowStrip({ spine, here }: { spine: any[]; here: string }) {
+function FlowStrip({ spine, here }: { spine: SpineStep[]; here: string }) {
   const canOpen = useCanOpen()
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px', marginBottom: 16,
@@ -276,7 +314,7 @@ function FlowStrip({ spine, here }: { spine: any[]; here: string }) {
         </Link>
       </div>
       <ol style={{ display: 'flex', gap: 6, flexWrap: 'wrap', listStyle: 'none', margin: 0, padding: 0 }}>
-        {spine.map((s: any, i: number) => {
+        {spine.map((s, i) => {
           const open = canOpen(s.href)
           const cur = s.href === here
           const body = (
@@ -307,14 +345,14 @@ function FlowStrip({ spine, here }: { spine: any[]; here: string }) {
 // connector that fetches it since mig 039. This renders that existing field instead of inventing a
 // second way to relate the two.
 function CarrierFlow({ impl, onChanged, setErr }:
-  { impl: any; onChanged: () => void; setErr: (s: string | null) => void }) {
+  { impl: Implementation; onChanged: () => void; setErr: (s: string | null) => void }) {
   const canOpen = useCanOpen()
   const [adding, setAdding] = useState(false)
   const [name, setName] = useState('')
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
-  const blocks: any[] = impl?.blocks || []
-  const prog = impl?.progress || {}
+  const blocks: ImplBlock[] = impl?.blocks || []
+  const prog: NonNullable<Implementation['progress']> = impl?.progress || {}
 
   // ADD A CARRIER — a first-class action in the flow, not a trip to a settings page. It posts to the
   // carrier endpoint that already exists; this file stores no carrier config of its own.
@@ -326,7 +364,7 @@ function CarrierFlow({ impl, onChanged, setErr }:
       await api(`/api/v1/commcalc/carriers${orgQ()}`,
         { method: 'POST', body: JSON.stringify({ name: nm, code: code.trim() || undefined }) })
       setName(''); setCode(''); setAdding(false); onChanged()
-    } catch (e: any) { setErr(e?.message || String(e)) } finally { setBusy(false) }
+    } catch (e) { setErr(errText(e) || String(e)) } finally { setBusy(false) }
   }
 
   const link = (href: string, label: string, tone: 'primary' | 'plain') => {
@@ -390,7 +428,7 @@ function CarrierFlow({ impl, onChanged, setErr }:
         </div>
       )}
 
-      {blocks.map((b: any) => (
+      {blocks.map(b => (
         <div key={b.carrier_id || '__shared__'} style={{ border: '1px solid var(--border)', borderRadius: 10,
           marginBottom: 10, overflow: 'hidden' }}>
           <div style={{ background: 'var(--surface2, #f8fafc)', padding: '8px 12px', display: 'flex',
@@ -411,7 +449,7 @@ function CarrierFlow({ impl, onChanged, setErr }:
             </div>
           )}
 
-          {b.items.map((it: any) => (
+          {b.items.map(it => (
             <div key={it.report_key} style={{ padding: '10px 13px', borderTop: '1px solid var(--border)',
               display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               <div style={{ minWidth: 210, flex: 1 }}>

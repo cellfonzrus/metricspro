@@ -5,8 +5,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
-import { panel, input, btn, btnPrimary, th, cell, fmtMoney, fmtDate, addToCart, readCart,
+import { panel, input, btn, btnPrimary, th, cell, fmtMoney, fmtDate, addToCart, useStoredCart,
          AVAIL_LABEL, AVAIL_COLOR, type CompareRow } from '@/lib/supply'
+
+// The fields of GET /supply/compare this page reads.
+interface CompareResp {
+  rows?: CompareRow[]; vendors?: { id: string; name: string; catalog_seen_at?: string | null }[]
+  migrated?: boolean; note?: string
+}
 
 export default function SupplyComparePage() {
   const [rows, setRows] = useState<CompareRow[]>([])
@@ -15,19 +21,22 @@ export default function SupplyComparePage() {
   const [onlyCompared, setOnlyCompared] = useState(false)
   const [note, setNote] = useState('')
   const [qty, setQty] = useState<Record<number, string>>({})
-  const [cartN, setCartN] = useState(0)
-  const [loading, setLoading] = useState(false)
+  // The stored cart's size until an Add changes it (then the count addToCart returns).
+  const storedCart = useStoredCart()
+  const [addedCartN, setCartN] = useState<number | null>(null)
+  const cartN = addedCartN ?? storedCart?.length ?? 0
+  // A load runs on mount and whenever the search or the filter changes: `loading` starts true, and the
+  // two controls flip it on as they change their value (the effect itself never sets state synchronously).
+  const [loading, setLoading] = useState(true)
+  const changeQ = (v: string) => { if (v !== q) { setLoading(true); setQ(v) } }
+  const changeOnlyCompared = (v: boolean) => { if (v !== onlyCompared) { setLoading(true); setOnlyCompared(v) } }
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const r: any = await api(`/api/v1/supply/compare?q=${encodeURIComponent(q)}&only_compared=${onlyCompared}`)
-      setRows(r.rows || []); setVendors(r.vendors || []); setNote(r.migrated === false ? r.note : '')
-    } catch (e: any) { setNote(e?.message || String(e)) }
-    setLoading(false)
-  }, [q, onlyCompared])
+  // A promise chain (not async/await) so every setState visibly runs in a callback, after the fetch.
+  const load = useCallback(() => api(`/api/v1/supply/compare?q=${encodeURIComponent(q)}&only_compared=${onlyCompared}`)
+    .then((r: CompareResp) => { setRows(r.rows || []); setVendors(r.vendors || []); setNote(r.migrated === false ? r.note ?? '' : '') })
+    .catch(e => { setNote(e?.message || String(e)) })
+    .finally(() => setLoading(false)), [q, onlyCompared])
   useEffect(() => { load() }, [load])
-  useEffect(() => { setCartN(readCart().length) }, [])
 
   const names = useMemo(() => Object.fromEntries(vendors.map(v => [v.id, v.name])), [vendors])
 
@@ -57,9 +66,9 @@ export default function SupplyComparePage() {
       {note && <div style={{ ...panel, borderColor: '#f39c12', marginBottom: 12, fontSize: 13 }}>{note}</div>}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
         <input style={{ ...input, maxWidth: 320 }} placeholder="Search (e.g. 12x12x12 box, tape)" value={q}
-               onChange={e => setQ(e.target.value)} />
+               onChange={e => changeQ(e.target.value)} />
         <label style={{ fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
-          <input type="checkbox" checked={onlyCompared} onChange={e => setOnlyCompared(e.target.checked)} /> Only items sold by 2+ vendors
+          <input type="checkbox" checked={onlyCompared} onChange={e => changeOnlyCompared(e.target.checked)} /> Only items sold by 2+ vendors
         </label>
         {loading && <span style={{ fontSize: 12, color: 'var(--text2)' }}>Loading…</span>}
       </div>

@@ -17,24 +17,29 @@ const BLANK = {
   portal_url: '', catalog_urls: '', free_shipping_threshold: '', shipping_fee_below_threshold: '',
   delivery_days_min: '', delivery_days_max: '', portal_config: '{}',
 }
+// The vendor form: text inputs, except the numbers edit() copies in from a saved vendor.
+type VendorForm = Omit<typeof BLANK, 'free_shipping_threshold' | 'shipping_fee_below_threshold' | 'delivery_days_min' | 'delivery_days_max'> & {
+  free_shipping_threshold: string | number; shipping_fee_below_threshold: string | number
+  delivery_days_min: string | number; delivery_days_max: string | number
+}
+type LoginForm = { username: string; password: string; enabled: boolean; frequency: string; hour: number | string }
+type ApiError = { message?: string; status?: number } | null | undefined
 
 export default function SupplyVendorsPage() {
   const [rows, setRows] = useState<Vendor[]>([])
   const [note, setNote] = useState('')
-  const [form, setForm] = useState<any>(BLANK)
-  const [login, setLogin] = useState<any>({ username: '', password: '', enabled: false, frequency: 'daily', hour: 6 })
+  const [form, setForm] = useState<VendorForm>(BLANK)
+  const [login, setLogin] = useState<LoginForm>({ username: '', password: '', enabled: false, frequency: 'daily', hour: 6 })
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
   const [live, setLive] = useState<{ sid: string; title: string } | null>(null)
   const [uploadVendor, setUploadVendor] = useState('')
   const [uploadMsg, setUploadMsg] = useState('')
 
-  const load = useCallback(async () => {
-    try {
-      const r: any = await api('/api/v1/supply/vendors')
-      setRows(r.rows || []); setNote(r.migrated === false ? r.note : '')
-    } catch (e: any) { setNote(e?.message || String(e)) }
-  }, [])
+  // A promise chain (not async/await) so every setState visibly runs in a callback, after the fetch.
+  const load = useCallback(() => api('/api/v1/supply/vendors')
+    .then((r: { rows?: Vendor[]; migrated?: boolean; note?: string }) => { setRows(r.rows || []); setNote(r.migrated === false ? r.note ?? '' : '') })
+    .catch(e => { setNote(e?.message || String(e)) }), [])
   useEffect(() => { load() }, [load])
 
   function edit(v: Vendor) {
@@ -53,10 +58,10 @@ export default function SupplyVendorsPage() {
 
   async function saveVendor() {
     setBusy(true); setMsg('')
-    let cfg: any = {}
+    let cfg: unknown = {}
     try { cfg = form.portal_config.trim() ? JSON.parse(form.portal_config) : {} }
     catch { setMsg('❌ The portal config is not valid JSON.'); setBusy(false); return }
-    const body: any = {
+    const body: Record<string, unknown> = {
       name: form.name, contact_name: form.contact_name, email: form.email, phone: form.phone, terms: form.terms,
       notes: form.notes, is_price_source: form.is_price_source, portal_url: form.portal_url,
       catalog_urls: form.catalog_urls.split(/\s+/).filter(Boolean), portal_config: cfg,
@@ -66,36 +71,37 @@ export default function SupplyVendorsPage() {
     try {
       if (form.id) await api(`/api/v1/supply/vendors/${form.id}`, { method: 'PATCH', body: JSON.stringify(body) })
       else {
-        const r: any = await api('/api/v1/supply/vendors', { method: 'POST', body: JSON.stringify(body) })
-        setForm((f: any) => ({ ...f, id: r.vendor?.id || '' }))
+        const r: { vendor?: { id?: string } } = await api('/api/v1/supply/vendors', { method: 'POST', body: JSON.stringify(body) })
+        setForm(f => ({ ...f, id: r.vendor?.id || '' }))
       }
       setMsg('✅ Vendor saved.'); load()
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    } catch (e) { setMsg('❌ ' + ((e as ApiError)?.message || e)) }
     setBusy(false)
   }
 
   async function saveLogin() {
     if (!form.id) { setMsg('Save the vendor first.'); return }
     setBusy(true); setMsg('')
-    const body: any = { username: login.username, enabled: login.enabled, frequency: login.frequency, hour: Number(login.hour) }
+    const body: { username: string; enabled: boolean; frequency: string; hour: number; password?: string } = { username: login.username, enabled: login.enabled, frequency: login.frequency, hour: Number(login.hour) }
     if (login.password) body.password = login.password
     try {
       await api(`/api/v1/supply/vendors/${form.id}/login`, { method: 'PUT', body: JSON.stringify(body) })
-      setLogin((l: any) => ({ ...l, password: '' })); setMsg('✅ Login saved (the password is stored with the other portal logins and never shown again).'); load()
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+      setLogin(l => ({ ...l, password: '' })); setMsg('✅ Login saved (the password is stored with the other portal logins and never shown again).'); load()
+    } catch (e) { setMsg('❌ ' + ((e as ApiError)?.message || e)) }
     setBusy(false)
   }
 
   async function readCatalog(v: Vendor) {
     setMsg('')
     try {
-      const r: any = await api(`/api/v1/supply/vendors/${v.id}/catalog/read`, { method: 'POST', body: '{}' })
+      const r: { blocked?: boolean; requires_confirm?: boolean; phase?: string; message?: string; block_reason?: string; sid: string } = await api(`/api/v1/supply/vendors/${v.id}/catalog/read`, { method: 'POST', body: '{}' })
       if (r.blocked || r.requires_confirm || r.phase === 'route_disabled') { setMsg('⚠️ ' + (r.message || r.block_reason || 'The portal login is paused.')); return }
       setLive({ sid: r.sid, title: `Reading ${v.name}'s catalog` })
-    } catch (e: any) {
+    } catch (err) {
+      const e = err as ApiError
       setMsg('❌ ' + (e?.status === 503
         ? 'This server cannot open a browser (the vendor portal read runs on the browser worker, which is not configured here). Upload the price-compare kit\'s products file instead.'
-        : (e?.message || e)))
+        : (e?.message || err)))
     }
   }
 
@@ -107,17 +113,17 @@ export default function SupplyVendorsPage() {
     fd.append('file', f)
     if (uploadVendor) fd.append('vendor_id', uploadVendor)
     try {
-      const r: any = await apiUpload('/api/v1/supply/catalog/upload', fd)
+      const r: { landed?: { vendor_id: string; rows_ingested: number; rejected?: number }[]; unmapped?: { vendor_key: string; rows: number }[]; note?: string } = await apiUpload('/api/v1/supply/catalog/upload', fd)
       const names = Object.fromEntries(rows.map(v => [v.id, v.name]))
-      const parts = (r.landed || []).map((l: any) => `${names[l.vendor_id] || l.vendor_id}: ${l.rows_ingested} priced${l.rejected ? `, ${l.rejected} skipped` : ''}`)
-      const un = (r.unmapped || []).map((u: any) => `${u.vendor_key} (${u.rows} rows)`)
+      const parts = (r.landed || []).map(l => `${names[l.vendor_id] || l.vendor_id}: ${l.rows_ingested} priced${l.rejected ? `, ${l.rejected} skipped` : ''}`)
+      const un = (r.unmapped || []).map(u => `${u.vendor_key} (${u.rows} rows)`)
       setUploadMsg((parts.length ? '✅ ' + parts.join(' · ') : '⚠️ Nothing landed.') + (un.length ? ` — not matched to a vendor: ${un.join(', ')}. ${r.note || ''}` : ''))
       load()
-    } catch (e: any) { setUploadMsg('❌ ' + (e?.message || e)) }
+    } catch (e) { setUploadMsg('❌ ' + ((e as ApiError)?.message || e)) }
     ev.target.value = ''
   }
 
-  const f = (k: string) => (e: any) => setForm((p: any) => ({ ...p, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }))
+  const f = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setForm(p => ({ ...p, [k]: e.target.type === 'checkbox' ? (e.target as HTMLInputElement).checked : e.target.value }))
   const current = rows.find(r => r.id === form.id)
 
   return (
@@ -207,20 +213,20 @@ export default function SupplyVendorsPage() {
             <section style={{ ...panel, marginBottom: 14 }}>
               <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 10px' }}>Portal login — {form.name}</h2>
               <label style={label}>User id / email</label>
-              <input style={input} value={login.username} onChange={e => setLogin((l: any) => ({ ...l, username: e.target.value }))} autoComplete="off" />
+              <input style={input} value={login.username} onChange={e => setLogin(l => ({ ...l, username: e.target.value }))} autoComplete="off" />
               <label style={{ ...label, marginTop: 8 }}>Password</label>
               <input style={input} type="password" value={login.password} autoComplete="new-password"
                      placeholder={current?.login?.has_password ? 'saved — leave blank to keep it' : ''}
-                     onChange={e => setLogin((l: any) => ({ ...l, password: e.target.value }))} />
+                     onChange={e => setLogin(l => ({ ...l, password: e.target.value }))} />
               <label style={{ ...label, marginTop: 10, display: 'flex', gap: 6, alignItems: 'center' }}>
-                <input type="checkbox" checked={login.enabled} onChange={e => setLogin((l: any) => ({ ...l, enabled: e.target.checked }))} />
+                <input type="checkbox" checked={login.enabled} onChange={e => setLogin(l => ({ ...l, enabled: e.target.checked }))} />
                 Read prices automatically
               </label>
               {login.enabled && <div style={{ display: 'flex', gap: 8 }}>
-                <select style={input} value={login.frequency} onChange={e => setLogin((l: any) => ({ ...l, frequency: e.target.value }))}>
+                <select style={input} value={login.frequency} onChange={e => setLogin(l => ({ ...l, frequency: e.target.value }))}>
                   <option value="daily">Daily</option><option value="weekly">Weekly</option>
                 </select>
-                <input style={input} type="number" min={0} max={23} value={login.hour} onChange={e => setLogin((l: any) => ({ ...l, hour: e.target.value }))} />
+                <input style={input} type="number" min={0} max={23} value={login.hour} onChange={e => setLogin(l => ({ ...l, hour: e.target.value }))} />
               </div>}
               <button style={{ ...btnPrimary, marginTop: 10 }} disabled={busy || !login.username} onClick={saveLogin}>Save login</button>
               {current?.login?.auth_message && <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 6 }}>Last sign-in: {current.login.auth_message}</div>}
