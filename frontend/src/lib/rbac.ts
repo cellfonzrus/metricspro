@@ -925,6 +925,12 @@ export const NAV: NavGroup[] = [
     // explainer for anyone else) and every endpoint behind it gates independently — the one
     // exception being the anonymous read-only feed the marketing site uses.
     { href: '/admin/pricing', label: 'Pricing & Free Trial', icon: '🏷️', module: 'admin' },
+    // KPI Definitions (owner 2026-09-25) — the platform-wide registry (commcalc.carrier_kpi_metric,
+    // mig 060) that decides WHICH KPIs each tenant has. module 'admin' with NO `scopes`, the same
+    // shape as its /admin/pricing and /admin/roles siblings: an existing admin role already carries
+    // modules.admin, so this line adds NO new permission surface and needs no SEED_VERSION bump.
+    // The endpoints behind it are the pre-existing org-scoped /commcalc/carrier-kpi-metrics trio.
+    { href: '/admin/kpi-metrics', label: 'KPI Definitions', icon: '🎯', module: 'admin' },
     { href: '/admin/roles', label: 'Roles & Access', icon: '🔐', module: 'admin' },
     { href: '/admin/security', label: 'Security Settings', icon: '🛡️', module: 'admin' },
     { href: '/admin/access-log', label: 'Access Log', icon: '🧭', module: 'admin' },
