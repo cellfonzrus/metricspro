@@ -28539,9 +28539,14 @@ class ImportParamountMtdIn(LaxModel):
 
 @router.post("/kpi-import/paramount")
 def import_paramount_mtd(body: ImportParamountMtdIn, org_id: str = ORG_ID):
-    """Parse a Paramount Wireless MTD report (HTML email body) → store zulu / tmr3 / twp per door (Door
-    TSP = store_code) as source='email' KPI actuals. Body {period, html, dry_run?}. Feeds only the
-    qualifier gates — component counts stay on the rep-pay basis (owner decision)."""
+    """Parse a Paramount Wireless MTD report (HTML email body) → store every column the parser's one
+    exact table names, per door (Door TSP = store_code), as source='email' KPI actuals. Body
+    {period, html, dry_run?}.
+
+    This writes EVERY key the parser returns — adding a column is a one-line change in
+    paramount_kpi.QUALIFIER_COLUMNS and nothing here. A whitelist re-introduced below fails
+    harness_paramount_kpi_lock. Feeds KPI display and the qualifier gates; component counts stay on
+    the rep-pay basis (owner decision 2026-08-15)."""
     from app.modules.commcalc.paramount_kpi import parse_paramount_mtd_kpis
     period = (body.period or "").strip()
     html = body.html or ""

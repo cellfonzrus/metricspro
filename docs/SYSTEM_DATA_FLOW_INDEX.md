@@ -2032,6 +2032,29 @@ gates.
 - **Configurable KPI metric registry:** `commcalc.carrier_kpi_metric` (mig `060_carrier_kpi_metrics.sql:15`)
   — `carrier_id, metric_key, label, target_default, payout_config_col, sort`. Endpoints
   `/carrier-kpi-metrics` GET/POST/DELETE `router.py:19757,19773,19794`.
+- **KPI Definitions admin surface (owner 2026-09-25, PR #300 — registered here after the fact):**
+  `frontend/src/app/(platform)/admin/kpi-metrics/page.tsx`, nav line in `lib/rbac.ts` (Configuration,
+  `module: 'admin'`, no new scope). THE one place a KPI comes into existence per org/carrier — add,
+  relabel, retarget, reorder, remove. It is a VIEW over the endpoint trio above, never a sibling store.
+  Owner's visibility rule: *"hidden unless they are defined"* — so the page must also be the pathway to
+  define them, or hiding is permanent. It distinguishes `ready: false` (mig 060 unapplied — a store that
+  CANNOT answer) from an org with zero rows (a blank slate); removing a definition hides the KPI and
+  deletes no measured value. Live: HOUSE 7 metrics, LuxeLink `zulu` only, Vzone none.
+- **Measured KPI values:** `commcalc.kpi_actual` — `(org_id, scope, entity, period, metric_key, source)`,
+  `source` ∈ `manual` (`POST /kpi-actuals`, the hand-entry grid) | `email` (the door-report import below).
+- **Door-report KPI import (§19.26):** `POST /kpi-import/paramount` `router.py:28540` →
+  `commcalc/paramount_kpi.py`. The MA's MTD door report arrives as HTML in the email body; sections A..D
+  are `<table>`s keyed by `Door TSP` (= `store_code`). **Which column is which is a money decision and
+  lives in ONE pure function, `resolve_columns(header)`** — exact whitespace-stripped header match over
+  `QUALIFIER_COLUMNS` (17 metrics: `acts, pacing_acts, quota, pacing_quota, twp, twp_plus, tablets,
+  fwa_acts, upgrades, edge_apply, edge_approve, edge_acts, autopay_ta, autopay_all, tmr3, zulu`), no HTML
+  parser behind it. An unrecognised header resolves to NOTHING (the qualifier reports pending) rather
+  than to the neighbouring column. `door_column()` is the one place a substring match survives — the key
+  column carries no value, so a miss skips a row instead of paying a wrong number. The endpoint writes
+  EVERY key the resolver returns, so adding a column is a one-line change in the table and nothing else.
+  Lock: `harness_paramount_kpi_lock.py` (stdlib, DB-free, in `carrier-vocab-guard.yml`).
+  Component counts feed KPI display + the MI qualifier gate ONLY — the pay basis stays on `raw_sales`
+  (owner decision 2026-08-15).
 - **MI ATU-by-period RPC:** mig `032_mi_atu_by_period_rpc.sql`. Comp-report columns: mig `031`.
   Conversion: mig `013_conversion.sql`.
 - **Failing-KPI report (owner directive 2026-09-03, with the mig-948 dashboards):**
@@ -4153,6 +4176,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /targets/{period}/action-plan` | `21334` | §5 |
 | `GET /dlar-store/{period}` | `10278` | §10 |
 | `GET /carrier-kpi-metrics` | `19757` | §10 |
+| `POST /kpi-actuals` · `POST /kpi-import/paramount` | `28540` | §10 — measured KPI values (`kpi_actual`, source `manual` / `email`). The import's column choice is `paramount_kpi.resolve_columns`, exact-match, locked (§19.26) |
 | `GET /exec-overview/{period}` | `20103` | §10 |
 | `GET /device-history` | `17015` | §11 |
 | `GET /device-cost-recon` | `27338` | §11 |
@@ -5021,6 +5045,25 @@ nothing had slipped through. Fixed as a class: the four workflows that run a har
 workflow that runs a `harness_*.py` without that default fails the build. `deploy-website.yml` runs no harness and is
 unchanged (its `printf | grep -q` pipes would misbehave under pipefail). Found by the commission agent while wiring the
 multi-period ledger upload.
+
+§19.26 **A MONEY GATE CHOSE ITS COLUMN BY RESEMBLANCE — the qualifier read TWP+ while the rule is TWP ALL
+(owner defect 2026-09-25; fixed as a class).** `paramount_kpi` matched the SUBSTRING `"current twp"` against the
+door report's header row and took the FIRST column containing it. The real report carries TWO — `Current TWP+%`
+then `Current TWP ALL%` — so the Management-Incentive qualifier gated on TWP+ with no error and no warning
+(door 168872: 50.0% against the owner's 67.0%). **The class is not "TWP": it is that a column chosen by
+resemblance is a gate whose meaning changes when someone else's report grows a similarly-named column** — and
+the report is the MA's, gaining columns without telling us. So the fix is not reordering the table. Every column
+is now named EXACTLY, once, in one pure function (`resolve_columns(header)` — no HTML parser behind it, which is
+what lets a stdlib guard prove it), `twp` and `twp_plus` are separate metrics that can never collapse, and an
+unrecognised header resolves to NOTHING: **missing beats wrong on a money gate** — a pending qualifier gets
+looked at, a confidently wrong one gets paid. The one surviving substring is quarantined in `door_column()`,
+where the key column carries no value and a miss skips a row rather than paying a wrong number. Locked by
+`backend/harness_paramount_kpi_lock.py` (39 checks, stdlib, DB-free, in `carrier-vocab-guard.yml`): the
+behaviour over the owner's real header row, the missing-beats-wrong controls, header uniqueness, one home for
+the vocabulary, and the caller writing EVERY key it parsed — each with a negative control proving the guard can
+go red. Live blast radius at the time of the fix: **`kpi_actual` held 0 rows platform-wide**, so no historical
+score moved; the wider column set the owner asked for ("all of them") lands from the next import. Component
+counts feed KPI display and the qualifier ONLY — the pay basis stays on `raw_sales` (owner decision 2026-08-15).
 
 ---
 

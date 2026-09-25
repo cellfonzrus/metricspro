@@ -268,6 +268,8 @@ on:
       - "frontend/src/components/ClosingSubmitForm.tsx"
       - "backend/app/modules/supply/**"
       - "backend/harness_supply_ordering.py"
+      - "backend/harness_paramount_kpi_lock.py"
+      - "backend/app/modules/commcalc/paramount_kpi.py"
       - "backend/harness_browser_sweep_kinds.py"
       - "database/migrations/1021_supply_ordering.sql"
   push:
@@ -366,6 +368,9 @@ jobs:
       - name: Run the tenant-vertical lock (one business-type declaration; every module / page / route / carrier gate asks it; mirror = seed; no vertical spelled in code — index §35)
         working-directory: backend
         run: python3 harness_tenant_vertical.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the Paramount KPI column lock (one exact column table; an unknown header yields no value, never the neighbour's; the import writes every key it parsed — index §19.20)
+        working-directory: backend
+        run: python3 harness_paramount_kpi_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the supply-ordering proof (vendor setup incl. free-shipping threshold + delivery days; catalog ingest; the cart optimizer with thresholds / lead time / stock / packs; the order recipe never submits on its own; confirmation capture; one lander, one connector key, one pricing copy — index §36)
         working-directory: backend
         run: python3 harness_supply_ordering.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
