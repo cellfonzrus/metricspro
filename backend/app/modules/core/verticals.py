@@ -1,0 +1,199 @@
+"""THE TENANT VERTICAL — what kind of business a tenant is, and what that hides (mig 1020, index §35).
+
+ONE fact, ONE home: `storeops.tenants.vertical` (NULL = the default vertical) over the vocabulary
+`core.tenant_vertical`. Every gate reads it through `tenant_vertical()` / `vertical_context()`:
+  · entitlements.module_enabled / effective_modules — a module whose `applies_to_vertical` excludes the
+    tenant's vertical is not enabled (backend 403 via require_module, and off in tenant_modules);
+  · GET /core/me → `tenant.vertical` — the frontend reads `hidden_modules`, `nav_hidden` and
+    `uses_carriers` from it (lib/rbac.ts verticalOK) and spells no vertical itself.
+
+No vertical key is branched on in code (RULE TWO): the keys appear only in the seed and in the byte-equal
+mirror below, which `harness_tenant_vertical.py` §A parses back against the migration.
+"""
+from __future__ import annotations
+
+import re
+
+# ── MIRROR of mig 1020's seed (byte-equal; parsed back by the harness) ─────────────────────────────────
+HOUSE_VERTICALS = [
+    {"key": "wireless_retail", "label": "Wireless retail", "is_default": True, "uses_carriers": True,
+     "nav_hidden": [], "sort_order": 10},
+    {"key": "ups_store", "label": "The UPS Store (franchise)", "is_default": False, "uses_carriers": False,
+     "nav_hidden": [
+         "/pos/activations", "/pos/activation-report", "/hub/management-overview", "/commcalc/sales-report",
+         "/commcalc/exec", "/commcalc/sales-comparison", "/commcalc/kpi-failing", "/commcalc/zero-sales",
+         "/commcalc/flags", "/commcalc/accessory-flags", "/commcalc/chargebacks",
+         "/commcalc/commission-discrepancy", "/commcalc/discrepancy", "/commcalc/recovery",
+         "/commcalc/ingest-guard", "/hub/incentives", "/commcalc/pay-simulator", "/commcalc$",
+         "/commcalc/custom-report", "/commcalc/activations", "/commcalc/schematic", "/commcalc/reports-index",
+         "/commcalc/reports", "/commcalc/kpi", "/commcalc/device-history", "/commcalc/ma-handsets",
+         "/commcalc/device-cost-recon", "/commcalc/inventory-sold-recon", "/commcalc/bill-payments",
+         "/commcalc/productivity", "/commcalc/productivity-insights", "/commcalc/coaching",
+         "/commcalc/sales-analyzer", "/commcalc/whatif", "/commcalc/comp-trend", "/commcalc/commission-ledger",
+         "/commcalc/ma-commission", "/commcalc/ma-overview-recon", "/commcalc/commission-legs",
+         "/commcalc/accessory-cost-audit", "/commcalc/expected-commission", "/commcalc/daily-commission",
+         "/commcalc/imei-rebates", "/commcalc/carrier-vs-pay", "/commcalc/vendor-rebates",
+         "/commcalc/sales-recon", "/commcalc/epay-fee-recon", "/commcalc/imei-recon", "/commcalc/carrier-recon",
+         "/commcalc/agency", "/hub/incentive-payout-plans", "/commcalc/commission-structure",
+         "/commcalc/payout-plans", "/commcalc/commission-plans", "/commcalc/management-incentive",
+         "/commcalc/plan-installments", "/commcalc/payout-schedules", "/commcalc/settings",
+         "/commcalc/carrier-mapping", "/commcalc/commission-category-map", "/commcalc/ma-product-class",
+         "/commcalc/accessory-definition", "/commcalc/commission-import", "/hub/targets-coaching",
+         "/commcalc/targets", "/commcalc/financing", "/commcalc/atu-opportunity", "/employee", "/commcalc/gp",
+         "/accounts/device-purchases", "/accounts/device-payable", "/accounts/residual-per-sub", "/hub/assets",
+         "/commcalc/asset$", "/commcalc/asset/marketplace-purchases", "/commcalc/asset/dashboard",
+         "/commcalc/asset/owed-weekly", "/commcalc/asset/aging", "/commcalc/asset/missing-phones",
+         "/commcalc/asset/aging-rebate", "/commcalc/asset/on-inventory", "/commcalc/processor-ledger",
+         "/commcalc/asset/borrowed", "/commcalc/asset/lending", "/commcalc/asset/charges",
+         "/commcalc/asset/inventory-recon", "/commcalc/asset/hotsheet-recon", "/hub/distributors",
+         "/commcalc/distributors", "/commcalc/vip", "/closing/accessory-recon", "/closing/billpay-pickup",
+         "/closing/epay-recon", "/onboarding/intake", "/commcalc/carrier-comm-file", "/commcalc/epay",
+         "/commcalc/dlar", "/commcalc/gp-category-map",
+     ], "sort_order": 20},
+]
+
+# Module → verticals it belongs to (mirror of the mig-1020 module_catalog rows; '{}'/absent = any).
+HOUSE_MODULE_VERTICALS = {
+    "franchise_ops": ["ups_store"],
+    "supply_ordering": ["ups_store"],
+    "royalty": ["ups_store"],
+    "vip": ["wireless_retail"],
+}
+
+
+# ── PURE ──────────────────────────────────────────────────────────────────────────────────────────────
+def normalise_vertical(row):
+    return {
+        "key": str(row.get("key") or "").strip(),
+        "label": str(row.get("label") or row.get("key") or "").strip(),
+        "is_default": bool(row.get("is_default")),
+        "uses_carriers": row.get("uses_carriers") is not False,
+        "nav_hidden": [str(h).strip() for h in (row.get("nav_hidden") or []) if str(h).strip()],
+        "sort_order": int(row.get("sort_order") or 100),
+    }
+
+
+def default_vertical(vocab):
+    """The vocabulary row an unset tenant reads as — the one flagged is_default, else the first by order."""
+    rows = sorted((normalise_vertical(r) for r in vocab or []), key=lambda r: (r["sort_order"], r["key"]))
+    return next((r for r in rows if r["is_default"]), rows[0] if rows else None)
+
+
+def resolve_vertical(declared, vocab):
+    """The vocabulary row for a tenant's declared vertical. An unset OR unknown value reads as the default
+    (an unknown key is reported in `unknown`, never silently turned into another vertical's gates)."""
+    rows = [normalise_vertical(r) for r in vocab or []]
+    key = str(declared or "").strip()
+    hit = next((r for r in rows if r["key"] == key), None) if key else None
+    base = hit or default_vertical(rows) or normalise_vertical({"key": "", "label": ""})
+    out = dict(base)
+    out["declared"] = key or None
+    out["source"] = "tenant" if hit else ("unknown_value" if key else "default")
+    return out
+
+
+def module_applies(applies_to_vertical, vertical_key):
+    """'{}' / None = any vertical. Else the tenant's vertical must be listed."""
+    scope = [v for v in (applies_to_vertical or []) if v]
+    return not scope or vertical_key in scope
+
+
+def hidden_modules(module_scopes, vertical_key):
+    """Module keys that do NOT apply to this vertical, from {module_key: applies_to_vertical}."""
+    return sorted(k for k, scope in (module_scopes or {}).items() if not module_applies(scope, vertical_key))
+
+
+def href_hidden(href, nav_hidden):
+    """Does a nav_hidden list hide this page? 'x$' hides exactly x; 'x' hides x and everything under x/."""
+    h = (href or "").split("?")[0].rstrip("/") or "/"
+    for p in nav_hidden or []:
+        if p.endswith("$"):
+            if h == (p[:-1].rstrip("/") or "/"):
+                return True
+        elif h == p.rstrip("/") or h.startswith(p.rstrip("/") + "/"):
+            return True
+    return False
+
+
+def payload(vertical, module_scopes, vocab):
+    """What GET /core/me hands the frontend under tenant.vertical — everything the nav gate needs."""
+    return {
+        "key": vertical.get("key"),
+        "label": vertical.get("label"),
+        "source": vertical.get("source"),
+        "uses_carriers": vertical.get("uses_carriers", True),
+        "nav_hidden": list(vertical.get("nav_hidden") or []),
+        "hidden_modules": hidden_modules(module_scopes, vertical.get("key")),
+        "choices": [{"key": r["key"], "label": r["label"]} for r in
+                    sorted((normalise_vertical(x) for x in vocab or []), key=lambda r: (r["sort_order"], r["key"]))],
+    }
+
+
+_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
+
+
+def valid_choice(value, vocab):
+    v = str(value or "").strip()
+    return bool(_KEY_RE.match(v)) and any(normalise_vertical(r)["key"] == v for r in vocab or [])
+
+
+# ── I/O (every read org-scoped; every failure degrades to the mirror / the default, never to "hide all") ─
+def load_vocab(client):
+    try:
+        rows = (client.schema("core").table("tenant_vertical")
+                .select("key,label,is_default,uses_carriers,nav_hidden,sort_order,is_active")
+                .execute().data) or []
+        rows = [r for r in rows if r.get("is_active", True) is not False]
+        if rows:
+            return rows, True
+    except Exception:
+        pass
+    return [dict(r) for r in HOUSE_VERTICALS], False
+
+
+def load_module_scopes(client):
+    try:
+        rows = (client.schema("core").table("module_catalog").select("key,applies_to_vertical")
+                .execute().data) or []
+        if rows:
+            out = {r["key"]: list(r.get("applies_to_vertical") or []) for r in rows if r.get("key")}
+            for k, v in HOUSE_MODULE_VERTICALS.items():       # a module the DB does not know yet → mirror
+                out.setdefault(k, list(v))
+            return out
+    except Exception:
+        pass
+    return {k: list(v) for k, v in HOUSE_MODULE_VERTICALS.items()}
+
+
+def declared_vertical(client, org_id):
+    try:
+        rows = (client.schema("storeops").table("tenants").select("vertical")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        return (rows[0].get("vertical") if rows else None) or None
+    except Exception:
+        return None
+
+
+def tenant_vertical(client, org_id):
+    """THE reader: the resolved vertical row for one tenant."""
+    vocab, _ = load_vocab(client)
+    return resolve_vertical(declared_vertical(client, org_id), vocab)
+
+
+def vertical_context(client, org_id):
+    """One read of everything the gates need: {vertical, vocab, module_scopes, registry_ready}."""
+    vocab, ready = load_vocab(client)
+    return {"vertical": resolve_vertical(declared_vertical(client, org_id), vocab), "vocab": vocab,
+            "module_scopes": load_module_scopes(client), "registry_ready": ready}
+
+
+def module_applies_to_tenant(client, org_id, module_key):
+    ctx = vertical_context(client, org_id)
+    return module_applies(ctx["module_scopes"].get(module_key), ctx["vertical"]["key"])
+
+
+def me_payload(client, org_id):
+    ctx = vertical_context(client, org_id)
+    out = payload(ctx["vertical"], ctx["module_scopes"], ctx["vocab"])
+    out["registry_ready"] = ctx["registry_ready"]
+    return out
