@@ -23,6 +23,9 @@ import { slugGroup, defaultHubGroups, layoutToHubGroups, mergeUnplacedItems, sub
 
 type NavCfg = { labels?: Record<string, string>; capabilities?: Record<string, boolean | null>; layout?: NavLayout }
 type TileResp = { module: string; layout: TileLayout | null; resolved_from: 'tenant' | 'house' | null }
+// GET /commcalc/compliance-summary — one count per queue; count null = the probe could not run.
+type ComplianceCat = { key: string; label: string; href: string; count: number | null; note?: string | null }
+type ComplianceSummary = { period?: string | null; categories?: ComplianceCat[] }
 
 const GROUP_NAME = 'Flags & Compliance'
 const SLUG = slugGroup(GROUP_NAME) // 'flags-compliance' — the D1 tile-layout module key
@@ -30,7 +33,7 @@ const SLUG = slugGroup(GROUP_NAME) // 'flags-compliance' — the D1 tile-layout 
 export default function ComplianceDashboardPage() {
   const { permissions, session, rbacEnabled, tenant } = useAuth()
   const { activeCarrier } = useActiveCarrier()
-  const [summary, setSummary] = useState<any>(null)
+  const [summary, setSummary] = useState<ComplianceSummary | null>(null)
   const [sumErr, setSumErr] = useState('')
 
   useEffect(() => {
@@ -65,7 +68,7 @@ export default function ComplianceDashboardPage() {
     return defaultHubGroups(navGroup.group, visibleItems, subs)
   }, [navGroup, tileResp, visibleItems, navCfg])
 
-  const cats: any[] = summary?.categories || []
+  const cats: ComplianceCat[] = summary?.categories || []
   // only show count tiles whose target page the viewer can actually open
   const visibleHrefs = useMemo(() => new Set(visibleItems.map(i => i.href)), [visibleItems])
   const shownCats = cats.filter(c => visibleHrefs.has(c.href) || c.href === '/accounts/pl')

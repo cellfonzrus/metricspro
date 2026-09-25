@@ -1,6 +1,6 @@
 'use client'
 import { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type Session } from '@supabase/supabase-js'
 import { supabase, setSessionOrgId, getActiveOrg, setActiveOrg, set2faToken, get2faToken,
          onSessionInvalid, clearSessionInvalid,
          onTenantChoiceRequired, clearTenantChoiceRequired,
@@ -67,9 +67,22 @@ export type ImpersonationInfo = {
   started_at?: string | null; expires_at?: string | null; reason?: string | null
 }
 
+// What POST /core/disable-and-switch returns: the fresh login's credentials + the policy text.
+export type DisableAndSwitchResult = {
+  new_login_email?: string; access_code?: string; temp_password?: string; policy?: string
+}
+// What POST /core/me/2fa/start returns.
+export type TwoFactorStartResult = { sent?: boolean; channel?: string; masked_dest?: string; message?: string }
+// The /core/me payload (also embedded as `me` in /core/bootstrap) — the fields applyMe reads.
+type MePayload = {
+  user?: AppUser | null; permissions?: Permissions; provisioned?: boolean; active?: boolean
+  tenant?: TenantInfo | null; carriers?: CarrierRef[]; twofa?: TwoFactorState
+  password_policy?: PasswordPolicy | null; default_cc?: string; impersonation?: ImpersonationInfo | null
+}
+
 type AuthState = {
   loading: boolean
-  session: any | null
+  session: Session | null
   user: AppUser | null
   permissions: Permissions
   carriers: CarrierRef[]
@@ -91,7 +104,7 @@ type AuthState = {
   // Consent-based account linking (platform-core-11):
   pendingConnections: PendingConnection[]                       // unresolved invites to this login's email
   connectTenant: (orgId: string, code: string) => Promise<void> // attach the tenant onto this login
-  disableAndSwitch: (orgId: string, code: string) => Promise<any> // disable old login, take a fresh one
+  disableAndSwitch: (orgId: string, code: string) => Promise<DisableAndSwitchResult> // disable old login, take a fresh one
   dismissPending: (orgId: string) => void                       // "not now" — proceed, invite stays pending
   // Two-factor authentication (auth-hardening):
   twofa: TwoFactorState                                         // required/verified for the active tenant
@@ -105,7 +118,7 @@ type AuthState = {
   sessionInvalid: boolean
   passwordPolicy: PasswordPolicy | null                        // active tenant policy (client-side hints)
   defaultCc: string                                            // tenant default phone country code ('+1')
-  startTwoFactor: (channel?: string) => Promise<any>           // request an OTP over a channel
+  startTwoFactor: (channel?: string) => Promise<TwoFactorStartResult> // request an OTP over a channel
   verifyTwoFactor: (code: string, remember?: boolean) => Promise<void> // verify + store the marker
   // Admin "view as employee" (owner directive 2026-08-06):
   impersonation: ImpersonationState | null      // the grant this browser holds (null = not impersonating)
@@ -170,14 +183,13 @@ export function authEventNeedsReload(
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
-  const [session, setSession] = useState<any | null>(null)
+  const [session, setSession] = useState<Session | null>(null)
   const [user, setUser] = useState<AppUser | null>(null)
   const [permissions, setPermissions] = useState<Permissions>({})
   const [provisioned, setProvisioned] = useState(false)
   const [active, setActive] = useState(false)
   const [tenant, setTenant] = useState<TenantInfo | null>(null)
   const [carriers, setCarriers] = useState<CarrierRef[]>([])
-  const [activeCarrier, setActiveCarrierState] = useState<string>('boost')
   const [tenants, setTenants] = useState<TenantMembership[]>([])
   const [activeOrg, setActiveOrgState] = useState<string | null>(null)
   const [needsTenantChoice, setNeedsTenantChoice] = useState(false)
@@ -200,7 +212,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Apply a /core/me-shaped payload to the profile state. Shared by loadMe (the direct fetch) and
   // the ONE-call bootstrap path, so both populate EXACTLY the same state the same way.
-  const applyMe = useCallback((d: any) => {
+  const applyMe = useCallback((d: MePayload | null | undefined) => {
     if (!d) { resetProfile(); return }
     setUser(d.user || null)
     setSessionOrgId(d.user?.org_id)
@@ -282,7 +294,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // picker), then load the profile for that tenant. A single-membership login (the norm, and every
   // mig-088 aliased login) never sees a picker; a login belonging to >1 tenant with no valid saved
   // choice pauses at needsTenantChoice until it picks.
-  const loadProfile = useCallback(async (sess: any | null) => {
+  const loadProfile = useCallback(async (sess: Session | null) => {
     if (!sess?.access_token) {
       resetProfile(); setTenants([]); setActiveOrgState(null); setNeedsTenantChoice(false)
       return
@@ -494,7 +506,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // spinner ("stuck on loading"). try/finally covers throw/reject; the timeout race is a safety valve
     // so a slow/hung profile load can never spin more than ~15s — the app then renders and the profile
     // state fills in if the call lands later. This releases the gate; it never blocks the profile load.
-    const settle = async (sess: any) => {
+    const settle = async (sess: Session | null) => {
       try {
         await Promise.race([
           loadProfile(sess),
@@ -518,7 +530,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // same-identity re-fire (visibilitychange SIGNED_IN, hourly TOKEN_REFRESHED — supabase hands a
       // brand-new session object each time) does not bump `session`'s reference and re-render every
       // useAuth() consumer. A real token change (login, refresh to a new token) still updates it.
-      setSession((prev: any) => (prev?.access_token === sess?.access_token ? prev : sess))
+      setSession(prev => (prev?.access_token === sess?.access_token ? prev : sess))
       const uid = sess?.user?.id ?? null
       // DO NOT flash the whole app into the loading splash — or re-run the heavy profile bootstrap —
       // for an event that carries the SAME already-loaded identity (see authEventNeedsReload): the
@@ -559,7 +571,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const carrierUserKey = user ? (user.auth_id || user.id || null) : null
   const carrierOrgKey = activeOrg || user?.org_id || null
   const carrierStoreKey = carrierUserKey && carrierOrgKey ? `mp-active-carrier:${carrierUserKey}:${carrierOrgKey}` : null
-  useEffect(() => {
+  // Derived during render (no effect → setState cascade). `carriers` starts empty, so the server render
+  // and the first client render never touch localStorage (the >1-carrier branch cannot run yet).
+  const usesCarriers = tenant?.vertical?.uses_carriers
+  const resolvedCarrier = useMemo(() => {
     const def = defaultActiveCarrier(carriers, tenant?.vertical?.uses_carriers)
     const valid = new Set((carriers || []).map(c => carrierCode(c)).filter(Boolean))
     let chosen = def
@@ -569,15 +584,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (raw && valid.has(raw)) chosen = raw
       } catch { /* missing / blocked → default */ }
     }
-    setActiveCarrierState(chosen)
+    return chosen
   }, [carriers, carrierStoreKey, tenant?.vertical?.uses_carriers])
+  // An explicit pick (the header switcher) holds until any resolution input changes again — exactly
+  // when the old effect re-ran and re-resolved. It remembers the inputs it was made under.
+  const [carrierPick, setCarrierPick] = useState<{
+    code: string; carriers: CarrierRef[]; key: string | null; uses: boolean | undefined
+  } | null>(null)
+  const activeCarrier = carrierPick && carrierPick.carriers === carriers && carrierPick.key === carrierStoreKey
+    && carrierPick.uses === usesCarriers ? carrierPick.code : resolvedCarrier
 
   const setActiveCarrier = useCallback((code: string) => {
     const c = (code || '').toLowerCase().trim()
     if (!c) return
-    setActiveCarrierState(c)
+    setCarrierPick({ code: c, carriers, key: carrierStoreKey, uses: usesCarriers })
     try { if (carrierStoreKey) localStorage.setItem(carrierStoreKey, c) } catch { /* blocked → session-only */ }
-  }, [carrierStoreKey])
+  }, [carrierStoreKey, carriers, usesCarriers])
 
   // ── Dead client session (auth-ux hardening 2026-08-03) ──────────────────────────────────────────
   // client.ts latches this the first time a module call 401s with the middleware's "authentication

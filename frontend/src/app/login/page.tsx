@@ -1,10 +1,18 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase, api } from '@/lib/client'
-import { useAuth } from '@/lib/auth-context'
+import { useAuth, type DisableAndSwitchResult } from '@/lib/auth-context'
 import { safeHomeFor } from '@/lib/rbac'
 import Mark from '@/components/Mark'
+
+// The message of whatever a failed call threw (api()/auth-context throw Errors), if it has one.
+function errText(e: unknown): string | undefined {
+  return (e as { message?: string } | null | undefined)?.message
+}
+// The fields of the /core/auth/* JSON replies this page reads.
+type LoginPrecheck = { locked?: boolean; retry_after?: number }
+type AuthMessage = { message?: string }
 
 export default function LoginPage() {
   const router = useRouter()
@@ -21,14 +29,15 @@ export default function LoginPage() {
   const [code, setCode] = useState('')
   const [panelBusy, setPanelBusy] = useState(false)
   const [panelErr, setPanelErr] = useState('')
-  const [disabledInfo, setDisabledInfo] = useState<any>(null)
+  const [disabledInfo, setDisabledInfo] = useState<DisableAndSwitchResult | null>(null)
   // 2FA OTP screen (auth-hardening):
   const [otp, setOtp] = useState('')
   const [remember, setRemember] = useState(false)
   const [otpBusy, setOtpBusy] = useState(false)
   const [otpMsg, setOtpMsg] = useState('')
   const [otpErr, setOtpErr] = useState('')
-  const [otpSent, setOtpSent] = useState(false)
+  // Guards the one auto-send; never reset and never rendered, so a ref (not state) — no re-render needed.
+  const otpSent = useRef(false)
   // Forgot-password flow (auth-hardening): 'signin' → 'forgot' (request) → 'reset' (code + new pw).
   const [mode, setMode] = useState<'signin' | 'forgot' | 'reset'>('signin')
   const [fpEmail, setFpEmail] = useState('')
@@ -40,12 +49,12 @@ export default function LoginPage() {
 
   // Auto-send the first 2FA code once the OTP screen appears.
   useEffect(() => {
-    if (needs2fa && !otpSent && session) {
-      setOtpSent(true)
-      startTwoFactor().then((r: any) => setOtpMsg(r?.message || 'A code was sent.'))
-        .catch((e: any) => setOtpErr(e?.message || 'Could not send a code'))
+    if (needs2fa && !otpSent.current && session) {
+      otpSent.current = true
+      startTwoFactor().then(r => setOtpMsg(r?.message || 'A code was sent.'))
+        .catch((e: unknown) => setOtpErr(errText(e) || 'Could not send a code'))
     }
-  }, [needs2fa, otpSent, session, startTwoFactor])
+  }, [needs2fa, session, startTwoFactor])
 
   // Already signed in → bounce to the role's home (or password reset if required). Pause the redirect
   // while a pending account-link invite OR an unmet 2FA challenge is unresolved (handled by the panels).
@@ -105,7 +114,7 @@ export default function LoginPage() {
   if (!loading && session && provisioned && active && !needsTenantChoice && !pendingConnections.length && needs2fa) {
     return (
       <Shell>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 18, fontWeight: 800, color: '#1e3a5f', marginBottom: 6 }}><Mark size={20} />Verify it's you
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 18, fontWeight: 800, color: '#1e3a5f', marginBottom: 6 }}><Mark size={20} />Verify it&apos;s you
         </div>
         <div style={{ fontSize: 13, color: '#334155', margin: '4px 0 14px' }}>
           Enter the one-time code we sent to your {(twofa.user_channels || ['email'])[0] === 'whatsapp' ? 'WhatsApp' : 'email'}.
@@ -123,7 +132,7 @@ export default function LoginPage() {
           onClick={async () => {
             setOtpErr(''); setOtpBusy(true)
             try { await verifyTwoFactor(otp.trim(), remember) }
-            catch (e: any) { setOtpErr(e?.message || 'Invalid or expired code.') }
+            catch (e) { setOtpErr(errText(e) || 'Invalid or expired code.') }
             finally { setOtpBusy(false) }
           }}>
           {otpBusy ? 'Verifying…' : 'Verify'}
@@ -132,12 +141,12 @@ export default function LoginPage() {
           <button onClick={async () => {
             setOtpErr(''); setOtpMsg('Sending…')
             try { const r = await startTwoFactor(); setOtpMsg(r?.message || 'A new code was sent.') }
-            catch (e: any) { setOtpErr(e?.message || 'Could not send a code'); setOtpMsg('') }
+            catch (e) { setOtpErr(errText(e) || 'Could not send a code'); setOtpMsg('') }
           }} style={linkBtn}>Resend code</button>
           <button onClick={async () => {
             setOtpErr(''); setOtpMsg('Sending…')
             try { const r = await startTwoFactor('email'); setOtpMsg(r?.message || 'Code sent by email.') }
-            catch (e: any) { setOtpErr(e?.message || 'Could not send a code'); setOtpMsg('') }
+            catch (e) { setOtpErr(errText(e) || 'Could not send a code'); setOtpMsg('') }
           }} style={linkBtn}>Use email instead</button>
         </div>
         <button onClick={() => signOut()} style={{ marginTop: 16, width: '100%', background: 'none',
@@ -177,7 +186,7 @@ export default function LoginPage() {
         </div>
         <div style={{ fontSize: 13, color: '#334155', margin: '4px 0 14px' }}>
           <strong>{invite.tenant_name}</strong> has invited this email to access MetricsPro. Enter the
-          access code your administrator gave you to connect it to your current login — you'll switch
+          access code your administrator gave you to connect it to your current login — you&apos;ll switch
           between companies from the top bar.
         </div>
         <label style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>Access code</label>
@@ -187,14 +196,14 @@ export default function LoginPage() {
           onClick={async () => {
             setPanelErr(''); setPanelBusy(true)
             try { await connectTenant(invite.org_id, code.trim()); setCode('') }
-            catch (e: any) { setPanelErr(e?.message || 'Could not connect') }
+            catch (e) { setPanelErr(errText(e) || 'Could not connect') }
             finally { setPanelBusy(false) }
           }}>
           {panelBusy ? 'Connecting…' : `Connect ${invite.tenant_name}`}
         </button>
         <details style={{ marginTop: 14 }}>
           <summary style={{ fontSize: 12, color: '#64748b', cursor: 'pointer' }}>
-            This isn't the right account — use a separate login instead
+            This isn&apos;t the right account — use a separate login instead
           </summary>
           <div style={{ fontSize: 12, color: '#64748b', margin: '8px 0' }}>
             Disable your current login and get a brand-new, separate login for {invite.tenant_name}.
@@ -205,7 +214,7 @@ export default function LoginPage() {
               if (!confirm('Disable your current login and start fresh for this company? Only a super-admin can restore it.')) return
               setPanelErr(''); setPanelBusy(true)
               try { setDisabledInfo(await disableAndSwitch(invite.org_id, code.trim())) }
-              catch (e: any) { setPanelErr(e?.message || 'Could not switch logins') }
+              catch (e) { setPanelErr(errText(e) || 'Could not switch logins') }
               finally { setPanelBusy(false) }
             }}>
             Disable old login & start fresh
@@ -231,7 +240,7 @@ export default function LoginPage() {
             {provisioned ? 'Access disabled' : 'No access yet'}
           </div>
           <div style={{ fontSize: 13, color: '#64748b', margin: '8px 0 18px' }}>
-            You're signed in, but {provisioned ? 'your access has been turned off' : 'no role has been assigned to this account'}.
+            You&apos;re signed in, but {provisioned ? 'your access has been turned off' : 'no role has been assigned to this account'}.
             Please contact your administrator.
           </div>
           <button onClick={() => signOut()} className="btn">Sign out</button>
@@ -248,7 +257,7 @@ export default function LoginPage() {
     // refuses locally after repeated failures instead of hammering it, and records every attempt so
     // failed logins are visible. Both calls FAIL OPEN: a precheck/record fault never blocks a real login.
     try {
-      const pc: any = await api('/api/v1/core/auth/login-precheck', { method: 'POST', body: JSON.stringify({ email: em }) })
+      const pc: LoginPrecheck | null = await api('/api/v1/core/auth/login-precheck', { method: 'POST', body: JSON.stringify({ email: em }) })
       if (pc?.locked) {
         setBusy(false)
         const mins = Math.max(1, Math.ceil((pc.retry_after || 900) / 60))
@@ -274,7 +283,7 @@ export default function LoginPage() {
         {mode === 'forgot' ? (
           <>
             <div style={{ fontSize: 13, color: '#334155', margin: '4px 0 14px' }}>
-              Enter your email and we'll send a one-time code.
+              Enter your email and we&apos;ll send a one-time code.
             </div>
             <label style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>Email</label>
             <input type="email" value={fpEmail} onChange={e => setFpEmail(e.target.value)} autoFocus style={inp} placeholder="you@company.com" />
@@ -284,10 +293,10 @@ export default function LoginPage() {
               onClick={async () => {
                 setFpErr(''); setFpBusy(true)
                 try {
-                  const r = await api('/api/v1/core/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email: fpEmail.trim() }) })
+                  const r: AuthMessage | null = await api('/api/v1/core/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email: fpEmail.trim() }) })
                   setFpMsg(r?.message || 'If this email has an account, a code has been sent.')
                   setMode('reset')
-                } catch (e: any) { setFpErr(e?.message || 'Something went wrong') }
+                } catch (e) { setFpErr(errText(e) || 'Something went wrong') }
                 finally { setFpBusy(false) }
               }}>{fpBusy ? 'Sending…' : 'Send reset code'}</button>
           </>
@@ -309,11 +318,11 @@ export default function LoginPage() {
               onClick={async () => {
                 setFpErr(''); setFpBusy(true)
                 try {
-                  const r = await api('/api/v1/core/auth/reset-password', { method: 'POST',
+                  const r: AuthMessage | null = await api('/api/v1/core/auth/reset-password', { method: 'POST',
                     body: JSON.stringify({ email: fpEmail.trim(), code: fpCode.trim(), new_password: fpPw }) })
                   setFpMsg(r?.message || 'Your password has been updated.')
                   setTimeout(() => { setMode('signin'); setFpCode(''); setFpPw(''); setFpMsg('') }, 1200)
-                } catch (e: any) { setFpErr(e?.message || 'Invalid or expired code.') }
+                } catch (e) { setFpErr(errText(e) || 'Invalid or expired code.') }
                 finally { setFpBusy(false) }
               }}>{fpBusy ? 'Updating…' : 'Set new password'}</button>
           </>

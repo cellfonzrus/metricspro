@@ -10,6 +10,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/client'
 import { panel, btn, input } from '@/lib/supply'
 
+// The fields of the live-login /frame payload this panel reads.
+interface LiveFrame { phase?: string; message?: string; shot?: string | null; seq?: number; changed?: boolean }
+// An input event forwarded to the live session (/input).
+type LiveInput =
+  | { type: 'type'; text: string }
+  | { type: 'key'; key: string }
+  | { type: 'scroll'; deltaY: number }
+  | { type: 'click' | 'dblclick'; x: number; y: number }
+
 export default function LiveVendorWindow({ sid, title, onClose, children }: {
   sid: string; title: string; onClose: () => void; children?: React.ReactNode
 }) {
@@ -22,7 +31,7 @@ export default function LiveVendorWindow({ sid, title, onClose, children }: {
 
   const refresh = useCallback(async () => {
     try {
-      const r: any = await api(`${base}/frame?since=${seq.current}`)
+      const r: LiveFrame | null = await api(`${base}/frame?since=${seq.current}`)
       if (!r || (r.phase === 'idle' && !r.shot)) return
       seq.current = r.seq ?? seq.current
       setState(p => ({ ...p, phase: r.phase, message: r.message, ...(r.changed && r.shot ? { shot: r.shot } : {}) }))
@@ -36,7 +45,7 @@ export default function LiveVendorWindow({ sid, title, onClose, children }: {
     return () => clearInterval(iv)
   }, [refresh])
 
-  async function send(ev: any) {
+  async function send(ev: LiveInput) {
     try { await api(`${base}/input`, { method: 'POST', body: JSON.stringify(ev) }) } catch { /* the frame poll shows it */ }
     for (const d of [140, 400, 900]) setTimeout(refresh, d)
   }
@@ -91,6 +100,7 @@ export default function LiveVendorWindow({ sid, title, onClose, children }: {
       <div ref={view} tabIndex={0} onKeyDown={key} onWheel={wheel}
            style={{ outline: 'none', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden', background: '#111', minHeight: 120 }}>
         {state.shot
+          // eslint-disable-next-line @next/next/no-img-element -- live CDP screencast frame streamed as a data: URL; next/image cannot optimise data URLs
           ? <img alt="Live vendor window — click and type here" src={state.shot.startsWith('data:') ? state.shot : `data:image/jpeg;base64,${state.shot}`}
                  style={{ width: '100%', display: 'block', cursor: 'pointer' }}
                  onClick={e => { view.current?.focus(); send({ type: 'click', ...xy(e) }) }}
