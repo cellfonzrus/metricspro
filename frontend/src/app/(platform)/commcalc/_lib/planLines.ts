@@ -170,6 +170,80 @@ export function compareDate(a: string, b: string): number {
   return a < b ? -1 : 1
 }
 
+// ── PER ACTIVATION / PER UPGRADE (owner 2026-09-25) ──────────────────────────────────────────────
+// "commisison for teh reps need to be claculated per action and per upgrade as defined in teh incentive
+// payout, the system sis calculating per line item". The ENGINE decides what one activation / upgrade is
+// (backend `line_class.activation_events`, THE definition) and stamps every matched line with its event
+// (`event_id` / `event_key` / `event_type`). This module only GROUPS by that stamp — it never derives an
+// event from a product name, a phone number or a line count (harness_activation_event_lock.py pins it).
+
+/** The words an event type reads as. Display only; the type itself comes from the engine. */
+export const EVENT_TYPE_LABEL: Record<string, string> = {
+  activation: 'Activation', port: 'Port-in', byod: 'BYOD activation', upgrade: 'Upgrade',
+}
+/** The per-invoice counters the header shows, in order: new lines (activation + port + BYOD) and upgrades. */
+export const EVENT_COUNTERS: { key: string; label: string; types: string[] }[] = [
+  { key: 'activations', label: 'Activations', types: ['activation', 'port', 'byod'] },
+  { key: 'upgrades', label: 'Upgrades', types: ['upgrade'] },
+]
+
+export type EventGroup = {
+  id: string
+  /** the phone line (or device) the engine identified the event by; '' for a whole-invoice event */
+  key: string
+  key_kind: string
+  type: string
+  lines: PlanLine[]
+  /** Σ line $ across the event's lines — one payment per paying rule, the rest ⛔ */
+  amount: number
+}
+
+/** The engine's events among `lines`, in first-seen order, plus the lines that belong to none. PURE. */
+export function eventsOf(lines: PlanLine[]): { events: EventGroup[]; loose: PlanLine[]; counts: Record<string, number> } {
+  const byId = new Map<string, EventGroup>()
+  const loose: PlanLine[] = []
+  for (const l of lines || []) {
+    const id = String(l?.event_id ?? '').trim()
+    if (!id) { loose.push(l); continue }
+    let e = byId.get(id)
+    if (!e) {
+      e = { id, key: String(l?.event_key ?? ''), key_kind: String(l?.event_key_kind ?? ''),
+            type: String(l?.event_type ?? ''), lines: [], amount: 0 }
+      byId.set(id, e)
+    }
+    e.lines.push(l)
+  }
+  const events = Array.from(byId.values()).map(e => ({ ...e, amount: sumLines(e.lines) }))
+  const counts: Record<string, number> = {}
+  for (const c of EVENT_COUNTERS) counts[c.key] = events.filter(e => c.types.includes(e.type)).length
+  return { events, loose, counts }
+}
+
+/** The basis label for one engine line: a per-event rule reads "$ per activation" / "$ per upgrade". */
+export function basisLabel(rule: any, line: any, basisOfKind: Record<string, string>): string {
+  const kind = String(rule?.payout_kind ?? '')
+  if (String(rule?.unit_basis ?? '') === 'per_event' && line?.event_type) {
+    return '$ per ' + (EVENT_TYPE_LABEL[line.event_type] || line.event_type).toLowerCase()
+  }
+  return basisOfKind[kind] || kind
+}
+
+/**
+ * ONE engine rule line → the drill-down row both surfaces render (the reports modal and
+ * commission-explain). The event stamp rides along untouched. Display only.
+ */
+export function toPlanLine(rule: any, l: any, basisOfKind: Record<string, string>): PlanLine {
+  return {
+    rule: rule?.label, basis: basisLabel(rule, l, basisOfKind), date: l?.date, trans_id: l?.trans_id,
+    imei: l?.imei, mdn: l?.mdn, product: l?.product, contract_type: l?.contract_type,
+    ext_price: l?.ext_price, gp: l?.gp, amount: l?.flat_once ? null : l?.amount,
+    qualifies: l?.qualifies !== false, suppressed: !!l?.suppressed, suppressed_by: l?.suppressed_by || '',
+    suppressed_reason: l?.suppressed_reason || '', would_have_paid: l?.would_have_paid ?? 0,
+    event_id: l?.event_id || '', event_key: l?.event_key || '', event_key_kind: l?.event_key_kind || '',
+    event_type: l?.event_type || '',
+  }
+}
+
 export type TxnGroup = {
   key: string
   /** '' when the line carries no transaction id (such a line is its own group — never merged). */
@@ -183,6 +257,10 @@ export type TxnGroup = {
   flat_lines: number
   /** distinct rule labels this transaction paid on, in the order they appear. */
   categories: string[]
+  /** the engine's activation / upgrade events on this invoice (empty when no rule pays per event) */
+  events: EventGroup[]
+  /** per-invoice counters (EVENT_COUNTERS keys) — distinct events, never lines */
+  event_counts: Record<string, number>
 }
 
 /**
@@ -222,7 +300,12 @@ export function groupPlanLinesByTxn(rows: PlanLine[]): TxnGroup[] {
       ((firstSeen.get(lineIdentity(dated[a])) as number) - (firstSeen.get(lineIdentity(dated[b])) as number))
       || ((dated[a].suppressed === true ? 1 : 0) - (dated[b].suppressed === true ? 1 : 0))
       || (a - b))
-    const lines = order.map(i => dated[i])
+    let lines = order.map(i => dated[i])
+    // EVENT GROUPING (2026-09-25): when the engine stamped events, an event's lines sit together under
+    // it (events in first-seen order, lines keeping the order above; lines of no event last). A payload
+    // with no event stamp is untouched — this is the identity permutation for it.
+    const ev = eventsOf(lines)
+    if (ev.events.length) lines = [...ev.events.flatMap(e => e.lines), ...ev.loose]
     const cats: string[] = []
     for (const l of lines) { const c = categoryOf(l); if (!cats.includes(c)) cats.push(c) }
     return {
@@ -231,6 +314,8 @@ export function groupPlanLinesByTxn(rows: PlanLine[]): TxnGroup[] {
       units: lines.filter(isUnit).length,
       flat_lines: lines.filter(isFlatOnce).length,
       categories: cats,
+      events: ev.events,
+      event_counts: ev.counts,
     }
   })
 }

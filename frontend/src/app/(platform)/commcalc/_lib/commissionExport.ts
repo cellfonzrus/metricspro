@@ -83,6 +83,10 @@ export type CommissionExportInput = {
    *  the export stays WYSIWYG; absent ⇒ every payload is byte-identical to before this field existed.
    *  Carries NO money and is never summed. */
   ratingByRep?: Record<string, string>
+  /** OPTIONAL (owner 2026-09-25): which multi-month rows the rep's card shows — the page injects THE
+   *  predicate (`multimonthRows` over the org's multi-month status, _lib/multimonthOffer.ts) so the export
+   *  lists exactly the rows on screen. Absent ⇒ the pre-2026-09-25 rule (the $0 row always offered). */
+  multimonthRowsFor?: (instSale: number, instResid: number) => { sale: boolean; resid: boolean }
 }
 
 // identical to lib/client's `fmt` — duplicated (2 lines) so this module stays import-free & testable
@@ -208,10 +212,13 @@ function individualSheets(r: CommissionRow, i: CommissionExportInput): ExportPay
     ]
     const iSale = r.installment_comm_sale || 0, iResid = r.residual_installment_comm || 0
     const rows: LineRow[] = [{ item: `Plan incentive — ${r.plan_name || 'no plan assigned'}`, amount: r.plan_comm ?? 0 }]
-    // mirrors the card: the sale-triggered row renders even at $0 (it is the one with a drill path),
-    // unless the residual engine is the only payer — then a second $0 row would be meaningless
-    if (iSale !== 0 || iResid === 0) rows.push({ item: `Multi-month installments${iResid !== 0 ? ' (sale-triggered)' : ''}`, amount: iSale })
-    if (iResid !== 0) rows.push({ item: 'Multi-month installments (residual · raw_mi)', amount: iResid })
+    // mirrors the card through THE multi-month predicate the page injects: a non-zero amount always shows;
+    // the $0 sale-triggered row only when the org offers multi-month (and the residual engine is not the
+    // sole payer). Without the injection: the pre-2026-09-25 rule, byte-identical.
+    const mmRows = i.multimonthRowsFor ? i.multimonthRowsFor(iSale, iResid)
+      : { sale: iSale !== 0 || iResid === 0, resid: iResid !== 0 }
+    if (mmRows.sale) rows.push({ item: `Multi-month installments${iResid !== 0 ? ' (sale-triggered)' : ''}`, amount: iSale })
+    if (mmRows.resid) rows.push({ item: 'Multi-month installments (residual · raw_mi)', amount: iResid })
     rows.push({ item: 'Total Payout', amount: r.total_payout })
     sheets.push({ name: 'Line Items', columns: li, rows })
   }

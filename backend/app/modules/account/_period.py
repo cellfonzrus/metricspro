@@ -103,3 +103,32 @@ def recent_period_keys(latest_y, latest_m, n):
         if m == 0:
             m, y = 12, y - 1
     return out
+
+
+def month_range(period_from, period_to=None, max_months=None):
+    """THE ONE month enumeration: every month from `period_from` to `period_to` INCLUSIVE, oldest first,
+    each in the canonical stored spelling ('July 2026'). Either spelling is accepted on the way in (the
+    `parse_period` rules); a missing `period_to` is the single month `period_from`.
+
+    Raises ValueError — never guesses — on an unparseable bound, a reversed range, or more than
+    `max_months` months (None = no cap). Callers that loop a per-month computation over a range
+    (the Rep Incentive month range, the discrepancy appeals period filter) enumerate through this, so
+    no two ranges can disagree about which months a window holds. PURE."""
+    pf = str(period_from or "").strip()
+    pt = str(period_to or "").strip() or pf
+    m0, y0 = parse_period(pf)
+    m1, y1 = parse_period(pt)
+    if not (1 <= m0 <= 12 and y0):
+        raise ValueError(f"not a month period: {period_from!r} (use YYYY-MM)")
+    if not (1 <= m1 <= 12 and y1):
+        raise ValueError(f"not a month period: {period_to!r} (use YYYY-MM)")
+    n = (y1 - y0) * 12 + (m1 - m0) + 1
+    if n < 1:
+        raise ValueError("the from-month is after the to-month")
+    if max_months is not None and n > max_months:
+        raise ValueError(f"month range too long: {n} months (max {max_months})")
+    out = []
+    for i in range(n):
+        yy, mm = y0 + (m0 - 1 + i) // 12, (m0 - 1 + i) % 12 + 1
+        out.append(f"{_MONTHS[mm]} {yy}")
+    return out

@@ -21,11 +21,11 @@
 // plain sums of those amounts. Nothing here writes, recalculates or re-rates anything.
 // The visual language deliberately mirrors the multi-month (installments) drill-down — the grouped
 // header + inner table is the same shape as its per-device card — so the two read as one product.
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { fmt } from '@/lib/client'
 import {
-  categoryOf, crossRefFor, filterPlanLinesByCategory, groupPlanLinesByTxn, isFlatOnce, isUnit,
-  planCategories, planLineMembership, planLineTotals, type PlanLine,
+  categoryOf, crossRefFor, EVENT_COUNTERS, EVENT_TYPE_LABEL, filterPlanLinesByCategory, groupPlanLinesByTxn,
+  isFlatOnce, isUnit, planCategories, planLineMembership, planLineTotals, type PlanLine,
 } from './planLines'
 
 const COLS = ['Rule', 'Date', 'Trans ID', 'Product', 'Contract', 'Basis', 'Price', 'GP', 'Line $']
@@ -169,6 +169,14 @@ export default function PlanLineBreakdown({ rows, compact, children }: {
                       {' · '}{g.lines.length} line{g.lines.length === 1 ? '' : 's'}
                       {' · '}{g.categories.join(' · ')}
                     </span>
+                    {/* PER ACTIVATION / PER UPGRADE (2026-09-25): the engine's events on this invoice —
+                        counted as events, never as lines. Only when some rule pays per event. */}
+                    {g.events.length > 0 && (
+                      <span style={{ marginLeft: 8, fontWeight: 600 }}
+                        title="Counted once per activation / upgrade (one per phone line on the invoice), not per sale line">
+                        {EVENT_COUNTERS.map(c => `${c.label} ${g.event_counts[c.key] || 0}`).join(' · ')}
+                      </span>
+                    )}
                   </td>
                   <td style={{ ...td, textAlign: 'right', fontWeight: 700 }} title="Subtotal paid on this transaction">
                     {fmt(g.subtotal)}
@@ -178,8 +186,23 @@ export default function PlanLineBreakdown({ rows, compact, children }: {
                   // Same SALE LINE, other RULES. Non-empty only for a genuinely dual-membership line.
                   const x = crossRefFor(l, membership)
                   const dual = x.paidElsewhere.length > 0 || x.alsoSuppressed.length > 0
+                  // the first line of an engine EVENT opens it: type · phone line · lines · $ per event
+                  const ev = l.event_id && (i === 0 || g.lines[i - 1].event_id !== l.event_id)
+                    ? g.events.find(e => e.id === l.event_id) : undefined
                   return (
-                  <tr key={`${g.key}:${i}`} style={{ borderTop: '1px solid var(--border)' }}>
+                  <Fragment key={`${g.key}:${i}`}>
+                  {ev && (
+                    <tr style={{ borderTop: '1px solid var(--border)' }}>
+                      <td colSpan={COLS.length - 1} style={{ ...td, fontSize: 11, color: 'var(--text2)', paddingLeft: 14 }}>
+                        📱 <b>{EVENT_TYPE_LABEL[ev.type] || ev.type || 'Activation'}</b>
+                        {ev.key ? ` · ${ev.key_kind === 'device' ? 'device' : 'line'} ${ev.key}` : ' · whole invoice'}
+                        {` · ${ev.lines.length} line${ev.lines.length === 1 ? '' : 's'}`}
+                      </td>
+                      <td style={{ ...td, textAlign: 'right', fontSize: 11, fontWeight: 600 }}
+                        title="Paid on this activation / upgrade (once per paying rule)">{fmt(ev.amount)}</td>
+                    </tr>
+                  )}
+                  <tr style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={{ ...td, borderLeft: `3px solid ${dual ? 'var(--border)' : 'var(--surface2)'}` }}>
                       {categoryOf(l)}
                       {/* CROSS-REFERENCE — the same sale line under another rule, one muted line. */}
@@ -221,6 +244,7 @@ export default function PlanLineBreakdown({ rows, compact, children }: {
                       )}
                     </td>
                   </tr>
+                  </Fragment>
                 )})}
               </tbody>
             ))}

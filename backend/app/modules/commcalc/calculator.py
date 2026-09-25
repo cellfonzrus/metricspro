@@ -282,9 +282,17 @@ def calc_rep_commissions(
             if store_total > 0 and store_target > 0:
                 rep_acc_targets[rep_name] = (store_target / store_total) * rep_hours
     
+    # ── THE COUNT UNIT (2026-09-25) ─────────────────────────────
+    # What one activation / upgrade IS comes from line_class — the org's `event.count_unit`:
+    # 'transaction' (house default: the distinct trans ids below, byte-identical) or 'event' (one per
+    # phone line on the invoice). The trans-id spelling stays this path's own ('.0' trimmed).
+    _units = _lc.activation_units(
+        valid, _line_rules, txn_of=lambda _r: str(_r.get('trans_id', '')).replace('.0', '').strip(),
+        require_txn=False)
+
     # ── Build rep map ─────────────────────────────────────────
     rep_map = {}
-    for r in valid:
+    for _vi, r in enumerate(valid):
         login = str(r.get('user_login','')).lower().strip()
         rep = str(r.get('salesperson','')).strip()
         if not rep or rep.lower().strip() == 'admin': continue
@@ -310,10 +318,11 @@ def calc_rep_commissions(
         
         # THE one predicate over the whole ROW with the org's rules (cfg['line_class_rules'], threaded by
         # the caller from _accessory_config['line_rules']; None = house defaults = today's behaviour).
-        _cls = classify_line(r, _line_rules)
-        if _cls == 'byod': entry['byod_set'].add(tid)
-        elif _cls == 'upgrade': entry['upg_set'].add(tid)
-        elif _cls == 'premium': entry['prem_set'].add(tid)
+        _u = _units[_vi]
+        _cls, _uid = (_u[0], _u[1]) if _u else (None, None)
+        if _cls == 'byod': entry['byod_set'].add(_uid)
+        elif _cls == 'upgrade': entry['upg_set'].add(_uid)
+        elif _cls == 'premium': entry['prem_set'].add(_uid)
         
         if _is_acc(dept, cat, product):
             entry['acc_gp'] += gp

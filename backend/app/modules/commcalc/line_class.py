@@ -124,7 +124,36 @@ METRIC_FIELDS = (("category", "category_contains"), ("department", "department_c
 BROAD_RATIO = 0.8
 # the keys this module owns inside accessory_config.activation_details_rules (the Activation-Details
 # basis keys — edge_* / upgrade_hidden_* — live beside them and are never touched by a save here)
-OWNED_KEYS = ("fields", "tokens", "exact", "auto_activation_tokens", "hints", "metric_hints", "broad_attested")
+OWNED_KEYS = ("fields", "tokens", "exact", "auto_activation_tokens", "hints", "metric_hints", "broad_attested",
+              "event")
+
+# ── THE ACTIVATION EVENT (owner 2026-09-25) — what ONE activation / upgrade IS ─────────────────────
+# Owner, verbatim: *"commisison for teh reps need to be claculated per action and per upgrade as defined
+# in teh incentive payout, the system sis calculating per line item"*. The predicate above says WHICH
+# LINES are activation-type; an invoice carries several such lines per activation (the rate-plan rebate,
+# the tracking line, the plan line — each names the same phone line). The EVENT is the activation: the
+# phone line (MDN) the activation-type lines name; else the device they name; else the invoice.
+# Config (RULE TWO), per org, in the SAME JSON (`accessory_config.activation_details_rules.event`):
+#   keys       — which line identity makes one event, tried in order per invoice ('phone' = the line's
+#                `mdn` column or a phone-shaped tracking #; 'device' = a device-shaped tracking #, via
+#                `customer_identity.tracking_kind` — THE phone/device rule, never re-implemented). [] =
+#                one event per invoice.
+#   precedence — which class an event takes when its lines carry several (the line predicate's own
+#                precedence, byod > upgrade > port > activation, by default).
+#   count_unit — what the COUNTING surfaces (Sales Report / Executive MTD / Targets cells, the Boost
+#                calculator's activation counts, the daily closing) count per bucket: 'transaction' (the
+#                house default — distinct invoices per bucket, exactly as they always have) or 'event'
+#                (these events). A per-org config row flips it; the pay gate's `per_event` basis always
+#                pays events. Measured deltas per tenant are in the index §6f before anyone flips it.
+EVENT_KEY_KINDS = ("phone", "device")
+COUNT_UNITS = ("transaction", "event")
+HOUSE_EVENT = {"keys": ["phone", "device"], "precedence": ["byod", "upgrade", "port", "activation"],
+               "count_unit": "transaction"}
+# the bucket vocabulary the pay path stamps (engine `activation_bucket`) → the class an event reasons in
+CLASS_OF_BUCKET = {"premium": "activation", "upgrade": "upgrade", "byod": "byod"}
+EVENT_NO_KEY = "no phone line or device on the invoice's activation-type lines — counted once for the invoice"
+EVENT_EVIDENCE_SHARED = ("activation-type line(s) name no phone line of their own and the invoice has several "
+                         "activations — kept as evidence of the invoice, never as another activation")
 
 
 def _now_iso():
@@ -186,6 +215,33 @@ def _norm_exact(mapping, into):
     return into
 
 
+def resolve_event(raw=None):
+    """The org's EVENT config (`activation_details_rules.event`) → {'keys': [...], 'precedence': [...]}.
+    Missing / junk → the house default. `keys: []` is honoured (one event per invoice); unknown kinds are
+    dropped; a precedence list is completed with any class it omits, in the house order. PURE."""
+    raw = raw if isinstance(raw, dict) else {}
+    keys = list(HOUSE_EVENT["keys"])
+    if isinstance(raw.get("keys"), (list, tuple)):
+        keys = []
+        for k in raw["keys"]:
+            s = _s(k)
+            if s in EVENT_KEY_KINDS and s not in keys:
+                keys.append(s)
+    prec = []
+    if isinstance(raw.get("precedence"), (list, tuple)):
+        for c in raw["precedence"]:
+            s = _s(c)
+            if s in ACTIVATION_TYPE_CLASSES and s not in prec:
+                prec.append(s)
+    for c in HOUSE_EVENT["precedence"]:
+        if c not in prec:
+            prec.append(c)
+    unit = _s(raw.get("count_unit"))
+    return {"keys": keys, "precedence": prec,
+            "count_unit": unit if unit in COUNT_UNITS else HOUSE_EVENT["count_unit"],
+            "source": "tenant" if any(k in raw for k in ("keys", "precedence", "count_unit")) else "house"}
+
+
 def resolve_rules(raw=None, ct_map=None, legacy_activation=None):
     """The full rules dict for one org. PURE.
 
@@ -229,6 +285,7 @@ def resolve_rules(raw=None, ct_map=None, legacy_activation=None):
         "hints": {c: _norm_tokens(hints_raw.get(c), HOUSE_HINTS[c]) for c in CLASSES},
         "metric_hints": {b: _norm_tokens(mhints_raw.get(b), HOUSE_METRIC_HINTS[b]) for b in HOUSE_METRIC_HINTS},
         "broad_attested": _norm_attested(raw.get("broad_attested")),
+        "event": resolve_event(raw.get("event")),
         "declared": declared,
         "house_fill": house_fill,
         "source": "tenant" if (declared["fields"] or declared["tokens"] or declared["exact"]) else "house",
@@ -288,6 +345,186 @@ def bucket_of(cls):
 def classify_line(row, rules=None):
     """'premium' | 'upgrade' | 'byod' | None — the bucket every money and display surface sums on."""
     return BUCKET_OF.get(activation_class(row, rules))
+
+
+# ── THE ACTIVATION EVENT — one definition, dereferenced by every surface that pays or counts per
+#    activation (plan pay gate `per_event`, the rep breakdown, Exec MTD / Sales Report counts, the
+#    Boost calculator). `harness_activation_event_lock.py` fails the build on a second copy. ─────────
+def line_event_keys(row):
+    """{'phone': mdn | None, 'device': imei | None} — the identities ONE sale line names. The phone is the
+    line's own `mdn` column, else a phone-shaped tracking # (`serial_1`); the device is a device-shaped
+    tracking #. Both through `customer_identity` (THE phone key + THE phone-vs-device rule). PURE."""
+    from app.modules.pos import customer_identity as _ci      # pure; lazy so this module stays light
+    r = row or {}
+    kind, val = _ci.tracking_kind(r.get("serial_1"))
+    phone = _ci.norm_phone(r.get("mdn")) or (val if kind == "phone" else None)
+    return {"phone": phone, "device": val if kind == "device" else None}
+
+
+def _class_of(label):
+    s = _s(label)
+    if s in CLASS_OF_BUCKET:
+        return CLASS_OF_BUCKET[s]
+    return s if s in ACTIVATION_TYPE_CLASSES else None
+
+
+def _default_txn_of(row, txn_field="trans_id"):
+    return str((row or {}).get(txn_field) or "").strip()
+
+
+def activation_events(rows, rules=None, classes=None, skip=None, txn_field="trans_id", txn_of=None):
+    """THE activation / upgrade EVENTS in `rows` — what a per-activation or per-upgrade rate pays on and
+    what every activation count counts. PURE, never raises on odd rows.
+
+    Each activation-type line (THE predicate `activation_class`, or the caller's already-resolved label
+    per row in `classes` — a class or a pay bucket, e.g. the engine's `activation_bucket` incl. the mig-224
+    rescue) belongs to its invoice. Per invoice, the FIRST kind in the org's `event.keys` that any of its
+    activation-type lines names defines the events: one event per distinct value (one per phone line).
+    A line naming no value of that kind is EVIDENCE: attached to the invoice's only event, or — when the
+    invoice has several — kept unattributed (`row_event` None) and reported, never a new event. No line
+    names any configured kind → ONE event for the invoice. An event's class is its lines' strongest class
+    by `event.precedence`.
+
+    Returns {"events": [{id, trans_id, key, key_kind, cls, bucket, classes:{cls: lines}, lines:[i]}],
+             "row_event": {row index: event id | None}, "unattributed": [{trans_id, line, cls}],
+             "ambiguous": [{trans_id, code, detail, ...}], "config": {...}}
+    `id` = '<trans_id>|<kind>:<value>' (or '<trans_id>|invoice'); a line with no trans id is its own
+    invoice ('#row<i>'), so two sales are never merged by a missing id."""
+    r = rules or HOUSE_RULES
+    ecfg = r.get("event") or resolve_event(None)
+    keys = list(ecfg.get("keys") or [])
+    prec = list(ecfg.get("precedence") or HOUSE_EVENT["precedence"])
+    rank = {c: i for i, c in enumerate(prec)}
+    lines_by_txn, order = {}, []
+    for i, row in enumerate(rows or []):
+        try:
+            if skip is not None and skip(row):
+                continue
+            cls = _class_of(classes[i]) if classes is not None else activation_class(row, r)
+        except Exception:
+            cls = None
+        if cls not in ACTIVATION_TYPE_CLASSES:
+            continue
+        tid = (txn_of(row) if txn_of is not None else _default_txn_of(row, txn_field)) or f"#row{i}"
+        if tid not in lines_by_txn:
+            lines_by_txn[tid] = []
+            order.append(tid)
+        lines_by_txn[tid].append((i, cls, line_event_keys(row)))
+    events, row_event, unattributed, ambiguous = [], {}, [], []
+    for tid in order:
+        lns = lines_by_txn[tid]
+        kind = next((k for k in keys if any(ek.get(k) for _i, _c, ek in lns)), None)
+        groups = {}
+        if kind is None:
+            groups[("invoice", "")] = [(i, c) for i, c, _ek in lns]
+            if keys:
+                ambiguous.append({"trans_id": tid, "code": "event_no_key", "detail": EVENT_NO_KEY,
+                                  "lines": len(lns)})
+        else:
+            loose = []
+            for i, c, ek in lns:
+                v = ek.get(kind)
+                if v:
+                    groups.setdefault((kind, v), []).append((i, c))
+                else:
+                    loose.append((i, c))
+            if loose and len(groups) == 1:
+                next(iter(groups.values())).extend(loose)
+            elif loose:
+                for i, c in loose:
+                    row_event[i] = None
+                    unattributed.append({"trans_id": tid, "line": i, "cls": c})
+                ambiguous.append({"trans_id": tid, "code": "event_evidence_shared", "detail": EVENT_EVIDENCE_SHARED,
+                                  "lines": len(loose), "events": len(groups)})
+        for (k, v) in sorted(groups):
+            members = sorted(groups[(k, v)])
+            counts = {}
+            for _i, c in members:
+                counts[c] = counts.get(c, 0) + 1
+            cls = min(counts, key=lambda c: rank.get(c, len(rank)))
+            eid = f"{tid}|{k}:{v}" if k != "invoice" else f"{tid}|invoice"
+            if len(counts) > 1:
+                ambiguous.append({"trans_id": tid, "code": "event_mixed_classes", "event": eid,
+                                  "classes": dict(counts), "cls": cls,
+                                  "detail": (f"one activation's lines carry {', '.join(sorted(counts))} — "
+                                             f"counted once, as {cls} (event precedence)")})
+            events.append({"id": eid, "trans_id": tid, "key": v or None, "key_kind": k,
+                           "cls": cls, "bucket": BUCKET_OF.get(cls), "classes": counts,
+                           "lines": [i for i, _c in members]})
+            for i, _c in members:
+                row_event[i] = eid
+    # the same phone line / device as an event on SEVERAL invoices — each invoice is its own sale, so each
+    # is its own event; reported, never merged (a re-ring or a re-used number is for a person to judge)
+    seen_key = {}
+    for e in events:
+        if e["key_kind"] != "invoice":
+            seen_key.setdefault((e["key_kind"], e["key"], e["cls"]), []).append(e["trans_id"])
+    for (k, v, c), tids in sorted(seen_key.items()):
+        if len(tids) > 1:
+            ambiguous.append({"trans_id": tids[0], "code": "event_key_on_several_invoices", "key": v,
+                              "key_kind": k, "cls": c, "invoices": tids,
+                              "detail": (f"{k} {v} is a {c} on {len(tids)} invoices ({', '.join(tids)}) — each "
+                                         f"counted as its own sale; check for a re-ring")})
+    return {"events": events, "row_event": row_event, "unattributed": unattributed,
+            "ambiguous": ambiguous, "config": {"keys": keys, "precedence": prec,
+                                               "source": ecfg.get("source", "house")}}
+
+
+def count_unit_of(rules=None):
+    """'transaction' | 'event' — the org's configured counting unit (house: 'transaction')."""
+    return ((rules or HOUSE_RULES).get("event") or HOUSE_EVENT).get("count_unit") or HOUSE_EVENT["count_unit"]
+
+
+def activation_units(rows, rules=None, skip=None, txn_of=None, unit=None, require_txn=True):
+    """THE per-row COUNT key every activation-counting surface adds to its bucket set — parallel to `rows`:
+    (bucket, unit_id, cls) for a line that counts, else None. PURE.
+
+    unit 'transaction' (the house default): (classify bucket, trans id, class) for every classified line
+      with a trans id — byte-identical to the `classify_line(row) → set.add(tid)` every counting surface
+      has always done (the lock pins the replay).
+    unit 'event': (event bucket, event id, event class) for every line of an activation EVENT — so a set of
+      unit ids counts each activation / upgrade once, in ONE bucket (the event's). An unattributed evidence
+      line and a line with no trans id count nothing.
+    `unit` None → the org's `event.count_unit`. `txn_of(row)` → the caller's trans-id spelling (default:
+    stripped `trans_id`). `require_txn=False` keeps a line with a BLANK trans id counting (under
+    'transaction' as the one '' invoice — the Boost calculator's historic behaviour, kept byte-identical)."""
+    r = rules or HOUSE_RULES
+    u = unit if unit in COUNT_UNITS else count_unit_of(r)
+    rows = list(rows or [])
+    tof = txn_of if txn_of is not None else _default_txn_of
+    out = [None] * len(rows)
+    if u == "transaction":
+        for i, row in enumerate(rows):
+            if skip is not None and skip(row):
+                continue
+            tid = tof(row)
+            if not tid and require_txn:
+                continue
+            cls = activation_class(row, r)
+            b = BUCKET_OF.get(cls)
+            if b:
+                out[i] = (b, tid, cls)
+        return out
+    ev = activation_events(rows, r, skip=skip, txn_of=tof)
+    by_id = {e["id"]: e for e in ev["events"]}
+    for i, row in enumerate(rows):
+        eid = ev["row_event"].get(i)
+        e = by_id.get(eid) if eid else None
+        if e is None or not e.get("bucket") or (require_txn and not tof(row)):
+            continue
+        out[i] = (e["bucket"], eid, e["cls"])
+    return out
+
+
+def event_counts(events_result):
+    """{bucket: distinct events} and {class: distinct events} over an `activation_events` result — the
+    number a per-activation count shows. PURE."""
+    by_bucket, by_class = {}, {}
+    for e in (events_result or {}).get("events") or []:
+        if e.get("bucket"):
+            by_bucket[e["bucket"]] = by_bucket.get(e["bucket"], 0) + 1
+        by_class[e["cls"]] = by_class.get(e["cls"], 0) + 1
+    return {"by_bucket": by_bucket, "by_class": by_class}
 
 
 # ── the gate's measurement ───────────────────────────────────────────────────────────────────────
