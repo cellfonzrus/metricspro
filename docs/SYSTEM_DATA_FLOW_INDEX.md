@@ -2240,6 +2240,19 @@ gates.
   define them, or hiding is permanent. It distinguishes `ready: false` (mig 060 unapplied — a store that
   CANNOT answer) from an org with zero rows (a blank slate); removing a definition hides the KPI and
   deletes no measured value. Live: HOUSE 7 metrics, LuxeLink `zulu` only, Vzone none.
+- **THE BUILT-IN KPI SET — one home (§19.27):** `commcalc/kpi_failing.BUILTIN_KPI_DEFS` — the seven
+  `(metric_key, label, payout_config_col, target_default)` the pay engine tiers on. `router.ACTION_KPI_DEFS`
+  is an alias over it and `calculator.py` builds its `KPI` dict from it, so the **PAID** score and the
+  **SHOWN** score read one fact. Sibling feed maps in the same module: `STORE_KPI_COLUMNS`
+  (metric → `raw_dlar_store` column) and `REP_KPI_KEYS` (what lands in `rep_commissions.kpi_values`);
+  `auto_fed(metric_key)` derives from those two — **never** from `carrier_kpi_metric.source_mode`, which
+  defaults to `'manual'` and so reads WRONG for the built-ins. `GET /carrier-kpi-metrics` stamps
+  `auto_fed` + `store_column` on every row so no screen works it out. Lock:
+  `harness_kpi_registry_lock.py` (32 checks, stdlib, DB-free, in `carrier-vocab-guard.yml`).
+- **Hand-entry grid:** `ManualKpiSection` in `commcalc/kpi/page.tsx` offers exactly the metrics THIS org
+  has defined that no feed fills (`auto_fed: false`), and hides itself when there are none. It holds no
+  metric list and names no metric, carrier or tenant; its mode toggle edits a registry row it is already
+  showing, so it can never bring a metric into existence for a tenant that lacks one.
 - **Measured KPI values:** `commcalc.kpi_actual` — `(org_id, scope, entity, period, metric_key, source)`,
   `source` ∈ `manual` (`POST /kpi-actuals`, the hand-entry grid) | `email` (the door-report import below).
 - **Door-report KPI import (§19.26):** `POST /kpi-import/paramount` `router.py:28540` →
@@ -5274,6 +5287,29 @@ the vocabulary, and the caller writing EVERY key it parsed — each with a negat
 go red. Live blast radius at the time of the fix: **`kpi_actual` held 0 rows platform-wide**, so no historical
 score moved; the wider column set the owner asked for ("all of them") lands from the next import. Component
 counts feed KPI display and the qualifier ONLY — the pay basis stays on `raw_sales` (owner decision 2026-08-15).
+
+§19.27 **A FACT ABOUT WHICH KPIs EXIST, COPIED INTO THE SCREEN THAT SHOWS IT — two instances, one class
+(fixed 2026-09-25).** (1) Owner 2026-09-24: *"what are the seven kpis, it shows only 6"*. The seven keys,
+their config columns and their defaults were written out in FOUR places — `router.ACTION_KPI_DEFS`, a
+literal dict in `calculator.py` (**the pay engine**), `commcalc/kpi/page.tsx` and
+`components/EmployeeWidgets.impl.tsx`. The KPI report was fixed to seven and the rep's own card was NOT,
+so a rep tiered on seven kept reading their card as six — measured still broken when this lock was
+written, the sibling the design-fix rule says to find in the same change. (2) Owner 2026-09-25, on a
+Boost estate: *"Manual KPI entry — Zulu · TWP · Address Checks … these dont belong on boost tenant"*.
+Those three were a literal array in the page, so EVERY tenant was asked to hand-enter another tenant's
+metrics — and the mode toggle POSTed a definition, so touching it would have CREATED a TWP row for an
+org with no TWP. **The class: a copied fact whose copies are each internally consistent, so nothing
+fails while the displayed score drifts from the paid score.** Fixed as one: `BUILTIN_KPI_DEFS` is the
+only literal and the pay engine dereferences it (byte-identical dict, key order included — proven, no
+rule change); the hand-entry grid is driven by the org's own registry through a DERIVED `auto_fed`
+(the `source_mode` column reads wrong, and a wrong fact is worse than an absent one); the remaining
+frontend lists are pinned to the built-in set so a key added on one side and not the other fails the
+build. Locked by `backend/harness_kpi_registry_lock.py`.
+**Explicitly NOT done, and why:** the SCORED grid is still a frontend list rather than a registry read.
+LuxeLink defines 17 metrics and its 116 `rep_commissions` rows carry **empty** `kpi_values` — the pay
+engine scores the built-in seven for every tenant — so driving that grid from the registry today would
+show LuxeLink "0/17 KPIs met" against money tiered on something else: a page contradicting the pay.
+The pay engine must read the registry first (commission-agent work, §6), and the grid follows.
 
 ---
 

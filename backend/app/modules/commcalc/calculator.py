@@ -21,6 +21,7 @@ DEVICE_DEPTS = {'Android - XP', 'IPHONE - XP', 'TABLET - XP'}
 # BYTE-IDENTICAL BY CONSTRUCTION under house defaults: `harness_line_class.py` replays the retired
 # classifier over every contract-type spelling in the seeds and asserts equality.
 from app.modules.commcalc import line_class as _lc
+from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set (one home; pure, stdlib)
 
 
 def classify_line(row, rules=None):
@@ -196,15 +197,12 @@ def calc_rep_commissions(
             if p and any(k in p for k in _acc_kws):
                 return True
         return False
-    KPI = {
-        'atu':       float(cfg.get('kpi_atu_target') or 55),
-        'protect':   float(cfg.get('kpi_protect_target') or 80),
-        'boostapp':  float(cfg.get('kpi_boostapp_target') or 65),
-        'familyplan':float(cfg.get('kpi_familyplan_target') or 45),
-        'byod':      float(cfg.get('kpi_byod_target') or 35),
-        'tmr3':      float(cfg.get('kpi_tmr3_target') or 70),
-        'aal':       float(cfg.get('kpi_aal_target') or 5),
-    }
+    # The seven keys, their config columns and their defaults are ONE fact with ONE home
+    # (kpi_failing.BUILTIN_KPI_DEFS), which router.ACTION_KPI_DEFS and the KPI registry fallback read
+    # too. They used to be written out here a second time, so a change reaching the display set and
+    # not this one would have moved the SHOWN score away from the PAID score with nothing failing.
+    # Same keys, same columns, same defaults, same order — this is a dereference, not a rule change.
+    KPI = {k: float(cfg.get(col) or dflt) for (k, _label, col, dflt) in _kpi_failing.BUILTIN_KPI_DEFS}
     
     # ── Name map ─────────────────────────────────────────────
     name_lookup = {}  # epay_login → storeops_name

@@ -17,6 +17,7 @@ from app.core import import_batches as _import_batches   # DDIA Phase 1 idempote
 from app.core import column_tolerant as _ct    # 2026-09-22 — ANY-SUBSET column reads, the one reading rule (index §4b.1)
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
+from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import zero_sales as _zs   # 2026-09-22 — zero-sales states/runs/alerts (pure)
 from app.modules.commcalc import labour_coverage as _labour  # shared shift reader + the silent-zero shape
 from app.modules.commcalc import invoice_tenders as _invt   # 2026-09-21 — the invoice tender split (pure; classes injected from closing)
@@ -28393,17 +28394,12 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
             'setup_hint': setup_hint, 'collective': collective, 'scope': scope_block}
 
 
-# KPI → commission tier inputs (mirrors calculator.py KPI defaults).
-# Each is (key, label, payout_config column, default target %).
-ACTION_KPI_DEFS = [
-    ('atu', 'ATU', 'kpi_atu_target', 55),
-    ('protect', 'Protect', 'kpi_protect_target', 80),
-    ('boostapp', 'Carrier App', 'kpi_boostapp_target', 65),
-    ('familyplan', 'Family Plan', 'kpi_familyplan_target', 45),
-    ('byod', 'BYOD', 'kpi_byod_target', 35),
-    ('tmr3', 'TMR3', 'kpi_tmr3_target', 70),
-    ('aal', 'AAL', 'kpi_aal_target', 5),
-]
+# KPI → commission tier inputs. Each is (key, label, payout_config column, default target %).
+# It no longer MIRRORS calculator.py's defaults — it IS them: the built-in set is ONE fact with ONE
+# home (commcalc/kpi_failing.BUILTIN_KPI_DEFS) that the pay engine reads too, so the shown score and
+# the paid score cannot drift. "Mirrors" was the old comment, and a mirror is what went wrong.
+# This name is kept as the alias every existing caller already uses.
+ACTION_KPI_DEFS = [tuple(d) for d in _kpi_failing.BUILTIN_KPI_DEFS]
 _AP_CAT_LABEL = {'activations': 'Activations', 'upgrades': 'Upgrades',
                  'byod': 'BYOD', 'accessories': 'Accessories'}
 _KPI_DEFAULT_CARRIER = '00000000-0000-0000-0000-000000000000'  # nil carrier_id = the org default set
@@ -28447,6 +28443,15 @@ def list_carrier_kpi_metrics(carrier_id: str = "", org_id: str = ORG_ID):
                              for (k, l, c, d) in ACTION_KPI_DEFS]}
     if carrier_id:
         rows = [r for r in rows if r.get('carrier_id') in (_KPI_DEFAULT_CARRIER, carrier_id)]
+    # Each row says where its value COMES FROM, so a screen never has to carry its own idea of which
+    # metrics have a feed. `auto_fed` false = nobody fills this unless a person types it, which is
+    # exactly the set the manual-entry grid should offer — per ORG, so one tenant is never shown
+    # another tenant's metrics. Derived from the feed maps' one home, never from `source_mode`
+    # (that column defaults to 'manual' and reads wrong for the built-ins).
+    for r in rows:
+        k = r.get('metric_key')
+        r["auto_fed"] = _kpi_failing.auto_fed(k)
+        r["store_column"] = _kpi_failing.STORE_KPI_COLUMNS.get(k)
     return {"metrics": rows, "ready": True, "default_carrier": _KPI_DEFAULT_CARRIER}
 
 
