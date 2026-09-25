@@ -34953,11 +34953,25 @@ async def _merchant_portal_scraper(org_id, src_row):
 # b2bsoft (wsreports) reuses the identical Playwright session/2FA/proxy path via _b2bsoft_scraper.
 # The three merchant card portals register the same way — a new portal is a merchant_portals.PORTALS
 # entry plus one line here, never a branch in the calling code (RULE TWO).
+async def _supply_catalog_scraper(org_id, src_row):
+    """_SOURCE_SCRAPERS handler for a SUPPLY VENDOR's portal login (index §36, mig 1021): the scheduled,
+    read-only catalog read — supply/portal.run_catalog_sweep restores the saved session (or signs in with the
+    stored login), walks the vendor's catalog with THE one reader the owner's kit also runs, and lands the
+    prices through THE one lander (supply/store.land_catalog). Same VidaPayAuthError → needs-login contract."""
+    from app.modules.supply import portal as _sup
+    from fastapi.concurrency import run_in_threadpool
+    return await run_in_threadpool(_sup.run_catalog_sweep, sb(), org_id, dict(src_row or {}))
+
+
 _SOURCE_SCRAPERS = {"vidapay": _vidapay_scraper, "total_access": _vidapay_scraper,
                     "b2bsoft": _b2bsoft_scraper, "b2b": _b2bsoft_scraper,
                     "payanywhere": _merchant_portal_scraper,
                     "transfirst": _merchant_portal_scraper,
                     "businesstrack": _merchant_portal_scraper}
+# The supply-vendor connector KIND is named ONCE, by its module (supply/portal.SUPPLY_PROCESSOR) — never
+# re-spelled here (index §36; harness_supply_ordering.py §L pins the dereference).
+from app.modules.supply.portal import SUPPLY_PROCESSOR as _SUPPLY_PROCESSOR  # noqa: E402
+_SOURCE_SCRAPERS[_SUPPLY_PROCESSOR] = _supply_catalog_scraper
 
 
 def _strip_source_pw(row, policy_rows=None, scope_ctx=None):
@@ -36626,6 +36640,11 @@ def _live_pull(client, org_id, src_row):
             return vp.pull_b2bsoft_on_page(page, label=_connector_label(client, org_id, proc))
         # Merchant card portals (mig 955): pull their OWN report set on this live authenticated page,
         # which is the whole point of the live session — these portals re-challenge a cold restore.
+        # Supply-vendor logins (index §36): the live session's post-login pull is the read-only CATALOG
+        # read, never the VidaPay report list.
+        from app.modules.supply import portal as _sup
+        if _sup.is_supply_source(proc):
+            return _sup.catalog_pull_on_page(client, org_id, dict(src_row or {}), page, should_stop)
         from app.modules.commcalc import merchant_portals as _mp
         if _mp.is_portal(proc):
             from app.modules.commcalc import merchant_portal_sweep as _mps

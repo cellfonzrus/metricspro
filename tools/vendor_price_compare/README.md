@@ -157,10 +157,22 @@ Optional settings per vendor:
 | File | What it is |
 |------|------------|
 | `compare_prices.py` | The program |
-| `pricecompare/core.py` | Price, pack, stock reading and matching (proven by `backend/harness_vendor_price_compare.py`) |
-| `pricecompare/scrape.py` | Browser login and page reading (read-only) |
+| `pricecompare/core.py` | Loads the price, pack, stock and matching logic — the SAME code MetricsPro runs (`backend/app/modules/supply/pricing_core.py`; proven by `backend/harness_vendor_price_compare.py`) |
+| `pricecompare/scrape.py` | Loads the read-only browser page reader — the SAME code MetricsPro runs (`backend/app/modules/supply/catalog_scrape.py`) |
+| `pricecompare/_shared.py` | Finds those two files: in the repo by relative path, in the zip under `pricecompare/_bundled/` |
+| `build_zip.py` | Builds `dist/vendor_price_compare.zip` (bundles the two shared files; never packs your logins or results) |
 | `pricecompare/report.py` | Excel output |
 | `vendors.json` | Your vendor list |
 | `credentials_TEMPLATE.csv` | Copy this to `credentials.csv` and fill it in |
 | `shopping_list_TEMPLATE.csv` | Copy this to `shopping_list.csv` (optional) |
 | `run_windows.bat` / `run_mac_linux.sh` | One-click starters |
+
+## For developers — one copy of the logic
+
+Since phase 2 (index §36 — the Supply Ordering module in MetricsPro) the pricing logic and the catalog reader
+live ONCE in the backend. Run the kit from the repo and it loads them from there; to hand the kit to someone,
+run `python tools/vendor_price_compare/build_zip.py` and send `dist/vendor_price_compare.zip`. A second copy of
+the logic anywhere in the repo fails the build (`backend/harness_vendor_price_compare.py` §I).
+
+The kit's `products.json` / `products.csv` can be uploaded straight into MetricsPro (Supply → Vendors → Upload
+prices). Each row's `vendor` key is matched to the vendor whose portal config has the same `"key"`.

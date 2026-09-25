@@ -906,7 +906,11 @@ _all_routes = _flatten_routes(real_app.routes)
 #             routes that now delegate to it
 #     1628  + GET /pos/products/manufacturers (the POS product filters, index §33)
 #     1630  + POST /commcalc/commission-ledger/import-batch/preview and …/import-batch (the multi-month upload, §30.17)
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1630"))
+#     1632  2f2bdfd (tenant vertical foundation, §35) — measured: 1650 total minus the 18 supply routes below
+#     1650  + the 18 leaf routes of app/modules/supply/router.py (/supply/vendors GET+POST, PATCH /vendors/{id},
+#             /vendors/{id}/login|catalog/read|catalog, /catalog/upload, /compare, /cart/optimize|place, /orders,
+#             /orders/{id}, /orders/{id}/open-session|capture|submit|confirm-manual|status, /summary — index §36)
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1650"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

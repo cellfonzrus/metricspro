@@ -3,3 +3,5 @@ credentials.csv
 shopping_list.csv
 output/
 .venv/
+pricecompare/_bundled/
+dist/

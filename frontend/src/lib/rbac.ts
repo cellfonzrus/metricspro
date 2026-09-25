@@ -341,6 +341,18 @@ export const NAV: NavGroup[] = [
     { href: '/marketing/my-checkins', label: 'My Check-ins', icon: '📍', module: 'marketing', tileOnly: true },
     { href: '/marketing/settings', label: 'Marketing Settings', icon: '⚙️', module: 'marketing', scopes: ['all'], tileOnly: true },
   ]},
+  // Supply Ordering (mig 1021, index §36, owner request 2026-09-25) — the supply vendors (free-shipping
+  // threshold + delivery time set per vendor), price compare across vendors, the cart that picks the
+  // cheapest vendor INCLUDING shipping, and the orders placed at the vendor with the confirmation captured
+  // back. module 'supply_ordering' is the entitlement key; which tenants have it is DATA (core.module_catalog
+  // applies_to_vertical, mig 1020) — nothing here names a kind of tenant. Vendors (setup) is 'all'/'market',
+  // like every other roster/config surface; the backend's vendor-roster admin gate is the real guard.
+  { group: 'Supply Ordering', module: 'supply_ordering', items: [
+    { href: '/supply/compare', label: 'Price Compare', icon: '⚖️', module: 'supply_ordering', scopes: ['all', 'market', 'store'] },
+    { href: '/supply/cart', label: 'Supply Cart', icon: '🛒', module: 'supply_ordering', scopes: ['all', 'market', 'store'] },
+    { href: '/supply/orders', label: 'Supply Orders', icon: '📦', module: 'supply_ordering', scopes: ['all', 'market', 'store'] },
+    { href: '/supply/vendors', label: 'Supply Vendors', icon: '🏭', module: 'supply_ordering', scopes: ['all', 'market'] },
+  ]},
   // Referral (mig 850, owner directive 2026-08-13) — QR-code customer referrals + activation-gated,
   // approval-gated commission. Placed after CRM: it is a sibling top-of-funnel surface (a rep hands a
   // referrer a QR before any sale exists). Same shape as the CRM block, so regrouping/relabeling is a
@@ -1188,6 +1200,7 @@ export function moduleForPath(path: string): string {
   if (path.startsWith('/helpdesk')) return 'helpdesk'
   if (path.startsWith('/crm')) return 'crm'
   if (path.startsWith('/marketing')) return 'marketing'
+  if (path.startsWith('/supply')) return 'supply_ordering'
   if (path.startsWith('/remediation')) return 'helpdesk'
   if (path.startsWith('/commcalc/targets')) return 'targets'
   if (path.startsWith('/commcalc/asset')) return 'asset'

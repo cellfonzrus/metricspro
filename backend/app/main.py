@@ -33,6 +33,7 @@ from app.modules.approvals.router import router as approvals_router
 from app.modules.chat.router import router as chat_router
 from app.modules.crm.router import router as crm_router
 from app.modules.marketing.router import router as marketing_router
+from app.modules.supply.router import router as supply_router
 from app.modules.referral.router import router as referral_router
 from app.modules.vision.router import router as vision_router
 from app.modules.commcalc.processor_ledger_api import router as processor_ledger_router
@@ -259,6 +260,7 @@ app.include_router(pos_inventory_integrity_router, prefix="/api/v1")  # POS inve
 app.include_router(pos_vendor_api_router, prefix="/api/v1")  # POS special-order vendor-facing API (token-authed, mig 866)
 app.include_router(crm_router, prefix="/api/v1")          # CRM — sales pipeline + Customer 360 (mig 800)
 app.include_router(marketing_router, prefix="/api/v1")    # Marketing & Events — outside-store event management (migs 986/987)
+app.include_router(supply_router, prefix="/api/v1")       # Supply Ordering — vendor price compare, cart optimizer, assisted order (mig 1021, index §36)
 app.include_router(referral_router, prefix="/api/v1")     # Referral — QR referrals + gated commission (mig 850)
 app.include_router(approvals_router, prefix="/api/v1")    # Unified Approvals Engine (mig 867)
 app.include_router(chat_router, prefix="/api/v1")         # Internal Chat — Phase 1 (mig 868)

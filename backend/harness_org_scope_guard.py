@@ -266,6 +266,43 @@ def _pos_integrity_guard():
     print(f"pos inventory-integrity guard — {n} chain(s) inspected, every one org-scoped")
 
 
+# ── LEAK CLASS 5: THE SUPPLY-ORDERING PACKAGE (index §36, mig 1021) ────────────────────────────────────────
+# Vendor roster, logins, catalog prices and purchase orders — all per-org. Every query in the package goes
+# through supply/store.py (the `t(client, TABLE)` helper or a literal `.table(`), and EVERY chain there must be
+# org-scoped. The router and the browser module must hold NO query of their own (a query outside store.py is a
+# second place a scope could be forgotten).
+SUPPLY_STORE = os.path.join("modules", "supply", "store.py")
+SUPPLY_NO_QUERY = (os.path.join("modules", "supply", "router.py"), os.path.join("modules", "supply", "portal.py"),
+                   os.path.join("modules", "supply", "ordering_logic.py"))
+
+
+def _supply_guard():
+    src = open(os.path.join(_APP_DIR, SUPPLY_STORE), encoding="utf-8").read()
+    n, bad = 0, []
+    for m in re.finditer(r"\.table\(|\bt\(client,", src):
+        line_start = src.rfind("\n", 0, m.start()) + 1
+        if src[line_start:m.start()].lstrip().startswith(("def ", "return client.schema")):
+            continue          # the helper's own definition / body, not a query
+        seg = src[m.start(): m.start() + _WINDOW]
+        exec_at = seg.find(".execute(")
+        chain = seg if exec_at == -1 else seg[: exec_at + len(".execute(")]
+        n += 1
+        if classify(chain) == "violation":
+            bad.append((SUPPLY_STORE, src.count("\n", 0, m.start()) + 1, " ".join(chain.split())[:110]))
+    for rel, ln, snip in bad:
+        print(f"  ✗ {rel}:{ln}  a query with NO org_id scope:  {snip} …")
+    ok(not bad, f"{len(bad)} unscoped quer(ies) in the supply-ordering store")
+    ok(n >= 15, f"the supply-ordering scan found too few chains ({n}) — detection may be broken")
+    stray = []
+    for rel in SUPPLY_NO_QUERY:
+        path = os.path.join(_APP_DIR, rel)
+        if os.path.exists(path) and re.search(r"\.table\(|\.rpc\(", open(path, encoding="utf-8").read()):
+            stray.append(rel)
+    ok(not stray, f"supply modules other than store.py must not query the database directly: {stray}")
+    print(f"supply-ordering guard — {n} chain(s) inspected in store.py, every one org-scoped; "
+          f"router/portal/logic hold no query")
+
+
 def main():
     src = open(_ROUTER, encoding="utf-8").read()
     # Precompute line numbers by character offset.
@@ -326,6 +363,7 @@ def main():
     _ingest_screen_guard(src, lineno)
     _entity_enum_guard()
     _pos_integrity_guard()
+    _supply_guard()
 
     _self_test()
     _ingest_screen_self_test()

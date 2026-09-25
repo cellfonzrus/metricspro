@@ -18,7 +18,7 @@ type Load<T> = { state: 'loading' } | { state: 'ok'; data: T } | { state: 'off';
 type Issue = { severity: string; message: string }
 type CashResp = { totals?: { total_cash_on_hand?: number; today_declared?: number; stores?: number }; error?: string }
 type ReadyResp = { issues?: Issue[]; error?: string }
-type SupplyResp = { open_orders?: number; spend_mtd?: number; savings_found?: number; error?: string }
+type SupplyResp = { open_orders?: number; spend_mtd?: number; savings_mtd?: number; migrated?: boolean; note?: string; error?: string }
 type RoyaltyResp = { period?: string; total_due?: number; fees_due?: number; str_total?: number; subject_to_royalty?: number; error?: string }
 
 const panel: React.CSSProperties = {
@@ -73,7 +73,7 @@ const LINKS: { group: string; items: [string, string][] }[] = [
   { group: 'Reconcile', items: [['/closing/deposit-recon', 'Cash deposit recon'],
     ['/closing/external-credit-recon', 'Card settlement recon'], ['/closing/tender-recon-3way', '3-way tender recon'],
     ['/closing/imports', 'Auto-import']] },
-  { group: 'Supplies', items: [['/supply/prices', 'Compare prices'], ['/supply/cart', 'Build an order'],
+  { group: 'Supplies', items: [['/supply/compare', 'Compare prices'], ['/supply/cart', 'Build an order'],
     ['/supply/orders', 'Orders & confirmations'], ['/supply/vendors', 'Vendors']] },
   { group: 'Finance', items: [['/accounts/royalty', 'Royalty report'], ['/accounts/pl', 'P&L'],
     ['/accounts/cost-centers', 'Cost & profit centers'], ['/commcalc/expenses', 'Store expenses']] },
@@ -115,9 +115,10 @@ export default function StoreOperationsDashboard() {
           )}
         </Tile>
         <Tile title="Supply orders" href="/supply/orders" load={supply}>
-          {supply.state === 'ok' && (
-            <Big value={supply.data.open_orders ?? 0}
-                 sub={`open · spend this month ${money(supply.data.spend_mtd)} · savings found ${money(supply.data.savings_found)}`} />
+          {supply.state === 'ok' && (supply.data.migrated === false
+            ? <div style={{ color: 'var(--text2)', fontSize: 13 }}>{supply.data.note || 'not set up yet'}</div>
+            : <Big value={supply.data.open_orders ?? 0}
+                   sub={`open · spend this month ${money(supply.data.spend_mtd)} · savings this month ${money(supply.data.savings_mtd)}`} />
           )}
         </Tile>
         <Tile title="Royalty report" href="/accounts/royalty" load={royalty}>
