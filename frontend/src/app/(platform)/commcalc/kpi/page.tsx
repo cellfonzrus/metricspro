@@ -324,19 +324,36 @@ function ParamountImport({ period }: { period: string }) {
   )
 }
 
-// Metrics with no automated feed yet — captured by hand until their email import is wired.
-const EXTRA_METRICS = [
-  { key: 'zulu', label: 'Zulu' },
-  { key: 'twp', label: 'TWP' },
-  { key: 'address_checks', label: 'Address Checks' },
-]
+// WHICH metrics get a hand-entry box is the TENANT'S registry answer, not a list in this file.
+//
+// Owner (2026-09-25), looking at a Boost estate: "Manual KPI entry — Zulu · TWP · Address Checks …
+// these dont belong on boost tenant, remove from cellfnz rus". The three were a literal array here,
+// so EVERY tenant was asked to hand-enter another tenant's metrics — and the mode toggle POSTed a
+// definition, so touching it would have CREATED a TWP row for an org that has no TWP.
+//
+// The registry already knew better. This grid now shows the metrics THIS org has defined that no
+// feed fills (`auto_fed: false`, derived server-side from the feed maps' one home). Boost's seven
+// are all auto-fed → the grid has nothing to offer and hides itself. LuxeLink's door-report metrics
+// have no feed → they appear, for LuxeLink only. Nothing here names a metric, a carrier or a tenant.
+type ManualMetric = { key: string; label: string }
 
 function ManualKpiSection({ period, stores }: { period: string; stores: any[] }) {
+  const [metrics, setMetrics] = useState<ManualMetric[]>([])
   const [modes, setModes] = useState<Record<string, string>>({})
   const [rows, setRows] = useState<any[]>([])
   const [edits, setEdits] = useState<Record<string, string>>({})   // `${entity}|${metric}` -> value
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+
+  useEffect(() => {
+    api(`/api/v1/commcalc/carrier-kpi-metrics?org_id=${ORG_ID}`)
+      .then((r: any) => setMetrics(
+        (r?.metrics || [])
+          .filter((m: any) => m && m.is_active !== false && m.auto_fed === false)
+          .sort((a: any, b: any) => (a.sort ?? 0) - (b.sort ?? 0))
+          .map((m: any) => ({ key: String(m.metric_key), label: String(m.label || m.metric_key) }))))
+      .catch(() => setMetrics([]))
+  }, [])
 
   function load() {
     api(`/api/v1/commcalc/kpi-actuals?period=${encodeURIComponent(period)}&scope=store&org_id=${ORG_ID}`)
@@ -359,7 +376,9 @@ function ManualKpiSection({ period, stores }: { period: string; stores: any[] })
     try {
       await api(`/api/v1/commcalc/carrier-kpi-metrics?org_id=${ORG_ID}`, {
         method: 'POST',
-        body: JSON.stringify({ metric_key: metric, label: EXTRA_METRICS.find(x => x.key === metric)?.label || metric, source_mode: mode }),
+        // label comes from the registry row we are ALREADY showing — this edits a definition the
+        // org has, and can never bring a new metric into existence for a tenant that lacks it.
+        body: JSON.stringify({ metric_key: metric, label: metrics.find(x => x.key === metric)?.label || metric, source_mode: mode }),
       })
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
@@ -380,19 +399,26 @@ function ManualKpiSection({ period, stores }: { period: string; stores: any[] })
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
   }
 
+  // Every KPI this org has defined arrives on its own → there is nothing to hand-enter, so the whole
+  // section stays out of the page rather than rendering an empty table asking for nothing.
+  if (metrics.length === 0) return null
+
   return (
     <div className="card" style={{ marginTop: 24, padding: 16 }}>
-      <h2 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 4px' }}>Manual KPI entry — Zulu · TWP · Address Checks</h2>
+      <h2 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 4px' }}>
+        Manual KPI entry — {metrics.map(m => m.label).join(' · ')}
+      </h2>
       <p style={{ fontSize: 12.5, color: 'var(--text2)', margin: '0 0 12px' }}>
-        These have no automated feed yet. Enter values per store in <b>Manual</b> mode; flip a metric to <b>Email</b> once its
-        import is wired — both sources are kept, so switching never loses data. The Management-Incentive Pull reads these for the qualification gate.
+        These KPIs are defined for this tenant but no feed fills them yet. Enter values per store in <b>Manual</b> mode; flip a
+        metric to <b>Email</b> once its import is wired — both sources are kept, so switching never loses data. The
+        Management-Incentive Pull reads these for the qualification gate. Add or remove metrics on <b>KPI Definitions</b>.
       </p>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
           <thead>
             <tr>
               <th style={{ textAlign: 'left', padding: '6px 8px' }}>Store</th>
-              {EXTRA_METRICS.map(m => (
+              {metrics.map(m => (
                 <th key={m.key} style={{ textAlign: 'right', padding: '6px 8px' }}>
                   <div>{m.label}</div>
                   <div style={{ display: 'inline-flex', gap: 2, marginTop: 2 }}>
@@ -409,11 +435,11 @@ function ManualKpiSection({ period, stores }: { period: string; stores: any[] })
             </tr>
           </thead>
           <tbody>
-            {storeList.length === 0 && <tr><td colSpan={1 + EXTRA_METRICS.length} style={{ padding: 12, color: 'var(--text3)' }}>No stores for this period yet.</td></tr>}
+            {storeList.length === 0 && <tr><td colSpan={1 + metrics.length} style={{ padding: 12, color: 'var(--text3)' }}>No stores for this period yet.</td></tr>}
             {storeList.map(s => (
               <tr key={s.code} style={{ borderTop: '1px solid var(--border)' }}>
                 <td style={{ padding: '4px 8px' }}>{s.label.substring(0, 40)}</td>
-                {EXTRA_METRICS.map(m => {
+                {metrics.map(m => {
                   const manual = (modes[m.key] || 'manual') === 'manual'
                   const key = `${s.code}|${m.key}`
                   if (manual) return (
