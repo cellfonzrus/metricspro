@@ -207,6 +207,23 @@ CONSUMERS = {
         {"screen": "pl_statement", "label": "P&L Statement", "needs": [], "gate": False, "why": "commission received"},
     ],
     "raw_ma_fulfillment": [{"screen": "ma_handsets", "label": "Marketplace Handset COGS", "needs": [], "gate": False, "why": "handset fulfillment orders"}],
+    # the franchise royalty report (mig 1022, index §37): one kind, one pair of tables (header + lines) — single-kind,
+    # so no stamp; its readers are the P&L (each line books through the per-org line map) and the royalty recon
+    "royalty_report_line": [
+        {"screen": "royalty_report", "label": "Franchise Royalty Report", "needs": ["amount"], "gate": False,
+         "why": "the report as stored, checked against its own totals and the configured fee rule"},
+        {"screen": "pl_statement", "label": "P&L Statement", "needs": ["amount"], "gate": False,
+         "why": "each sales / commission / fee line books to the P&L line its vocabulary row names"},
+        {"screen": "royalty_recon", "label": "Royalty vs Daily Sales", "needs": ["amount"], "gate": False,
+         "why": "each sales line against the daily report(s) summed over the month"},
+    ],
+}
+
+# ── 3b. KINDS THAT LAND THROUGH THEIR OWN MODULE PAGE (landing 'module', no legacy upload route) ─────
+# The page (a ScreenLink key) and the table each such kind lands in. Keyed by the registry key — the ONE place a
+# module landing is resolved; landing_table_for / where_to_upload read it, and screen_keys() pins its screens.
+MODULE_PAGES = {
+    "royalty_report": {"screen": "royalty_report", "label": "Franchise Royalty Report", "table": "royalty_report_line"},
 }
 
 
@@ -368,6 +385,9 @@ def landing_table_for(row, table_map, route_tables=None, landing_tables=None):
     layout = _s((row or {}).get("layout"))
     if layout and (table_map or {}).get(layout):
         return table_map[layout]
+    mp = MODULE_PAGES.get(_s((row or {}).get("key")))
+    if mp:
+        return mp["table"]
     for u in (row or {}).get("upload_types") or []:
         t = (route_tables or {}).get(u)
         if t:
@@ -384,6 +404,9 @@ def where_to_upload(row):
     """The page an upload of this kind belongs on: the intake (a landing the intake takes) — else the
     Upload Files page through its route key(s). Screen keys of ScreenLink SCREENS."""
     r = row or {}
+    mp = MODULE_PAGES.get(_s(r.get("key")))
+    if mp:
+        return {"screen": mp["screen"], "label": mp["label"], "upload_types": []}
     if _s(r.get("landing")) in _rk.INTAKE_LANDINGS:
         return {"screen": "onboarding_intake", "label": "Onboarding — Commission Intake", "upload_types": list(r.get("upload_types") or [])}
     if r.get("upload_types"):
@@ -468,7 +491,7 @@ def looks_like_sentence(found):
 
 def screen_keys():
     """Every ScreenLink key this module names — the lock pins each exists in SCREENS."""
-    keys = {"onboarding_intake", "upload_files"}
+    keys = {"onboarding_intake", "upload_files"} | {m["screen"] for m in MODULE_PAGES.values()}
     for cons in CONSUMERS.values():
         for c in cons:
             keys.add(c["screen"])

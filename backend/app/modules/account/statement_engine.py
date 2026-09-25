@@ -495,10 +495,15 @@ def _journal_rows(client, org_id, period):
         return []
 
 
-def _scopes(inputs, companies, company_of, journal=None, matcher=None):
+def _scopes(inputs, companies, company_of, journal=None, matcher=None, profit_scopes=None):
     """Scope list. `all_stores` is every store any LINE places money at — plus (mig 954) every
     store a MANUAL entry is keyed to: a store whose only figure is a hand-entered cash balance had
-    no scope at all before, so "cash per store" could be entered and never render its own column."""
+    no scope at all before, so "cash per store" could be entered and never render its own column.
+
+    `profit_scopes` (mig 1022, index §37.1): the org's PROFIT CENTERS as one more scope family —
+    `centers.profit_center_scopes` tuples (`profit_center:<code>`, label, the center's stores, False),
+    exactly the shape of a company scope. None / [] (every org without profit centers) ⇒ the list is
+    byte-identical."""
     all_stores = set()
     for ln in inputs.values():
         if isinstance(ln, dict):
@@ -513,7 +518,35 @@ def _scopes(inputs, companies, company_of, journal=None, matcher=None):
         scopes.append((f"company:{c['id']}", c["name"], cstores, False))
     for s in sorted(all_stores):
         scopes.append((f"store:{s}", s, {s}, False))
+    for sk, label, stores, cw in (profit_scopes or []):
+        scopes.append((sk, label, set(stores or ()), bool(cw)))
     return scopes, all_stores
+
+
+def _profit_scopes(client, org_id):
+    """The org's profit-center scope family (centers.load_profit_scopes through the P&L's OWN store
+    resolver, so a center holds exactly the store keys the statement books under). [] on any failure."""
+    try:
+        from app.modules.account import centers as _centers
+        return _centers.load_profit_scopes(client, org_id, coa.store_resolver(client, org_id))
+    except Exception as e:
+        coa._warn("profit-center scopes unavailable — company/store scopes only", e)
+        return []
+
+
+def side_meta(inputs):
+    """The side entries coa attaches beside the lines (index §37): what the sales scan passed over
+    (`_unbooked_sales`) and the royalty report's booked / excluded / unmapped lines
+    (`_royalty_coverage`). Reported in statement META — never on the P&L payload, which stays
+    byte-identical."""
+    out = {}
+    u = inputs.get("_unbooked_sales") or {}
+    if u.get("unbooked") or u.get("suppressed") or u.get("mapped"):
+        out["unbooked_sales"] = {k: u.get(k) for k in ("unbooked", "unbooked_total", "suppressed", "mapped")}
+    r = inputs.get("_royalty_coverage")
+    if r:
+        out["royalty"] = {k: r.get(k) for k in ("reports", "book_pl", "booked", "excluded", "unmapped")}
+    return out
 
 
 def _assemble_scope(client, org_id, period, inputs, journal, matcher,
@@ -548,10 +581,12 @@ def statement(client, org_id, period, scope="consolidated", kinds=("pl", "balanc
     on-demand sends) and the API endpoint call this. Org-scoped end to end; an unknown company
     scope returns computed:false rather than another org's data (fail closed)."""
     inputs, cfg, meta = build_inputs_full(client, org_id, period)
+    meta.update(side_meta(inputs))
     journal = _journal_rows(client, org_id, period)
     company_of, _default, companies = coa.company_assignment(client, org_id)
     matcher = balance_sheet.journal_company_matcher(companies)
-    scopes, _stores = _scopes(inputs, companies, company_of, journal, matcher)
+    scopes, _stores = _scopes(inputs, companies, company_of, journal, matcher,
+                              _profit_scopes(client, org_id) if str(scope).startswith("profit_center:") else None)
     match = next((s for s in scopes if s[0] == scope), None)
     if match is None:
         return {"period": period, "scope": scope, "computed": False,
@@ -580,10 +615,12 @@ def compute_and_store(client, org_id, period):
     from app.core.config import settings
     from app.modules.account import engine
     inputs, cfg, meta = build_inputs_full(client, org_id, period)
+    meta.update(side_meta(inputs))
     journal = _journal_rows(client, org_id, period)
     company_of, _default, companies = coa.company_assignment(client, org_id)
     matcher = balance_sheet.journal_company_matcher(companies)
-    scopes, all_stores = _scopes(inputs, companies, company_of, journal, matcher)
+    scopes, all_stores = _scopes(inputs, companies, company_of, journal, matcher,
+                                 _profit_scopes(client, org_id))
 
     # Purge ALL prior snapshots for the period first (orphan-scope rule, same as engine.py).
     client.schema("commcalc").table("account_statements").delete() \

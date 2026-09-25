@@ -19,7 +19,7 @@ type Issue = { severity: string; message: string }
 type CashResp = { totals?: { total_cash_on_hand?: number; today_declared?: number; stores?: number }; error?: string }
 type ReadyResp = { issues?: Issue[]; error?: string }
 type SupplyResp = { open_orders?: number; spend_mtd?: number; savings_mtd?: number; migrated?: boolean; note?: string; error?: string }
-type RoyaltyResp = { period?: string; total_due?: number; fees_due?: number; str_total?: number; subject_to_royalty?: number; error?: string }
+type RoyaltyResp = { has_data?: boolean; period?: string; str?: number; fees_due?: number; centers?: number; error?: string }
 
 const panel: React.CSSProperties = {
   background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 16,
@@ -75,8 +75,9 @@ const LINKS: { group: string; items: [string, string][] }[] = [
     ['/closing/imports', 'Auto-import']] },
   { group: 'Supplies', items: [['/supply/compare', 'Compare prices'], ['/supply/cart', 'Build an order'],
     ['/supply/orders', 'Orders & confirmations'], ['/supply/vendors', 'Vendors']] },
-  { group: 'Finance', items: [['/accounts/royalty', 'Royalty report'], ['/accounts/pl', 'P&L'],
-    ['/accounts/cost-centers', 'Cost & profit centers'], ['/commcalc/expenses', 'Store expenses']] },
+  { group: 'Finance', items: [['/accounts/royalty', 'Royalty report'], ['/accounts/royalty/recon', 'Royalty vs daily sales'],
+    ['/accounts/pl', 'P&L'], ['/accounts/profit-centers', 'Profit centers'], ['/accounts/cost-centers', 'Cost centers'],
+    ['/commcalc/expenses', 'Store expenses']] },
   { group: 'People', items: [['/storeops/schedule', 'Schedule'], ['/storeops/payroll', 'Payroll'],
     ['/storeops/timeclock', 'Time clock'], ['/storeops/employees', 'Employees']] },
 ]
@@ -122,9 +123,10 @@ export default function StoreOperationsDashboard() {
           )}
         </Tile>
         <Tile title="Royalty report" href="/accounts/royalty" load={royalty}>
-          {royalty.state === 'ok' && (
-            <Big value={money(royalty.data.total_due ?? royalty.data.fees_due)}
-                 sub={`${royalty.data.period || 'latest period'} · subject to royalty ${money(royalty.data.str_total ?? royalty.data.subject_to_royalty)}`} />
+          {royalty.state === 'ok' && (royalty.data.has_data === false
+            ? <div style={{ color: 'var(--text2)', fontSize: 13 }}>No royalty report imported yet.</div>
+            : <Big value={money(royalty.data.fees_due)}
+                   sub={`fees due · ${royalty.data.period || 'latest period'} · subject to royalty ${money(royalty.data.str)}`} />
           )}
         </Tile>
       </div>

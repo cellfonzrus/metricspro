@@ -163,6 +163,13 @@ INGEST_TABLES_BY_MODULE = {
     "supply": (
         "vendor_catalog_price",
     ),
+    # account — the franchise royalty report (mig 1022, index §37): the franchisor's monthly statement per center,
+    # uploaded as a PDF / saved HTML / pasted text (or typed on the manual form) through /account/royalty/import |
+    # /manual. Header + lines, one report per org × center × month (a re-import replaces it). The account module was
+    # feed-less (a compute engine) until this; it now owns exactly these two tables and still derives everything else.
+    "account": (
+        "royalty_report", "royalty_report_line",
+    ),
     # Other modules are added in subsequent PRs, one by one.
 }
 
@@ -238,7 +245,7 @@ def replaces_whole_period(upload_type: str) -> bool:
 # is also in INGEST_TABLES_BY_MODULE (a module can't be both feed-owning and feed-less).
 MODULES_WITHOUT_EXTERNAL_FEEDS = (
     # compute / derive engines (read feeds, write computed tables — not feeds):
-    "account", "payables",
+    "payables",
     # core owns the freshness/feed REGISTRY infrastructure (core.import_feed), not an external feed itself:
     "core",
     # pure in-app feature modules (user-created data, no external file/API feed):

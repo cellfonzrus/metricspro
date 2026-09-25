@@ -781,6 +781,12 @@ def journal_scope_entries(journal, scope_key, stores_in_scope, matcher=None):
     if scope_key.startswith("store:"):
         addr = scope_key.split(":", 1)[1]
         return [j for j in (journal or []) if j.get("store_address") == addr]
+    if scope_key.startswith("profit_center:"):
+        # mig 1022 (index §37.1): a profit center is a SET OF STORES — it receives exactly the store-keyed
+        # entries of its stores (a company- or tenant-level entry is not a profit center's; the old
+        # fall-through below would have handed it every entry of the tenant).
+        ss = stores_in_scope or set()
+        return [j for j in (journal or []) if j.get("store_address") in ss]
     return list(journal or [])
 
 

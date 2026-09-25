@@ -1389,6 +1389,57 @@ async def company_valuation(authorization: str = Header(default=""), org_id: str
         raise HTTPException(500, f"valuation failed: {type(e).__name__}: {e}")
 
 
+# ── the sale line no classifier claims (mig 1022, index §37.4 — every tenant) ──────────────────
+@router.get("/pl-sales-map")
+def pl_sales_map(org_id: str = ORG_ID, period: str = ""):
+    """The org's rules routing an UNCLAIMED POS sale line to a revenue line, and — for a period — what the P&L's own
+    sales scan (coa.build_inputs, the one derivation) passed over: unbooked lines by department × category, lines a
+    rule booked, lines suppressed because the franchise royalty report books that line for the period."""
+    require_org(org_id)
+    client = sb()
+    try:
+        rules = (client.schema("commcalc").table("pl_sales_line_map").select("*")
+                 .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        rules = []
+    revenue = [{"key": k, "label": lbl} for k, lbl, sec, *_ in coa.PL_SPEC if sec == "revenue"]
+    out = {"rules": rules, "revenue_lines": revenue, "match_fields": ["product", "category", "department"]}
+    if period:
+        side = coa.build_inputs(client, org_id, period).get("_unbooked_sales") or {}
+        out["scan"] = {k: side.get(k) for k in ("unbooked", "unbooked_total", "mapped", "suppressed")}
+    return out
+
+
+class SalesMapIn(LaxModel):
+    match_field: str = "category"
+    match_value: str = ""
+    pl_line_key: str = ""
+
+
+@router.put("/pl-sales-map")
+def pl_sales_map_save(body: SalesMapIn, org_id: str = ORG_ID):
+    """Upsert (or, with a blank pl_line_key, remove) one rule. Only a REVENUE line of the chart is accepted."""
+    require_org(org_id)
+    f = (body.match_field or "").strip().lower()
+    v = (body.match_value or "").strip()
+    if f not in ("product", "category", "department") or not v:
+        raise HTTPException(400, "match_field is product / category / department and match_value is required")
+    q = sb().schema("commcalc").table("pl_sales_line_map")
+    try:
+        if not (body.pl_line_key or "").strip():
+            q.delete().eq("org_id", org_id).eq("match_field", f).eq("match_value", v).execute()
+            return {"ok": True, "removed": True}
+        if body.pl_line_key not in {k for k, _l, sec, *_ in coa.PL_SPEC if sec == "revenue"}:
+            raise HTTPException(400, f"'{body.pl_line_key}' is not a revenue line of the chart")
+        q.upsert({"org_id": org_id, "match_field": f, "match_value": v, "pl_line_key": body.pl_line_key,
+                  "is_active": True}, on_conflict="org_id,match_field,match_value").execute()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(409, f"migration 1022 is not applied yet ({str(e)[:120]})")
+    return {"ok": True}
+
+
 # ── health ──────────────────────────────────────────────────────────────────────────────────
 @router.get("/health")
 def health():

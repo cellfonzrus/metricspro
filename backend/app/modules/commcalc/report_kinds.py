@@ -54,13 +54,19 @@ POS-specific and carrier-specific kinds are NOT shown and the payload says why (
 """
 import re
 from datetime import datetime, timezone
+from app.modules.core.verticals import HOUSE_MODULE_VERTICALS as _HOUSE_MODULE_VERTICALS   # stdlib-only mirror (mig 1020)
 
 HOUSE_ORG = "00000000-0000-0000-0000-000000000001"
 MIGRATION = "1010_report_kind_registry.sql"
 # every migration that seeds HOUSE rows of commcalc.report_kind, in order — HOUSE_KINDS is the byte-equal
 # mirror of their VALUES blocks concatenated (harness_report_kinds.py §A parses each back); a new house
 # kind is a NEW numbered migration (never an edit of an earlier seed) and a row appended here
-SEED_MIGRATIONS = (MIGRATION, "1012_sales_by_invoice.sql")
+SEED_MIGRATIONS = (MIGRATION, "1012_sales_by_invoice.sql", "1022_franchise_royalty_cost_profit_centers.sql")
+# THE VERTICAL AXIS (mig 1022, index §37.2): `applies_to_vertical` — the tenant verticals (core/verticals, mig 1020) a
+# kind applies to; '{}' = any, so every kind seeded before it is unchanged. It is NOT one of `_COLS` (the 1010-shaped
+# seed INSERTs carry 18 columns): a house kind's vertical scope is seeded by an UPDATE in the migration that adds the
+# kind, mirrored in HOUSE_KINDS, and parsed back by harness_royalty.py §B.
+VERTICAL_MIGRATION = "1022_franchise_royalty_cost_profit_centers.sql"
 TABLE = "report_kind"
 SIGNATURE_TABLE = "report_signature"
 DEFINED_BY = ("house", "tenant")
@@ -92,6 +98,7 @@ _COLS = ("key", "label", "what_in_it", "recognisable_columns", "source_hint", "a
 
 def _k(**kw):
     row = {"recognisable_columns": [], "source_hint": None, "applies_to_pos": [], "applies_to_carrier": [],
+           "applies_to_vertical": [],
            "defined_by": "house", "statement_type": None, "layout": None, "signature_fields": [],
            "requires_columns": [], "excludes_columns": [], "upload_types": [], "custom_sheet_label": None,
            "is_active": True}
@@ -232,6 +239,17 @@ HOUSE_KINDS = [
        signature_fields=["trans_id", "invoice_total", "net_sales", "tax", "tendered_by"],
        requires_columns=["Invoice Total"], excludes_columns=["Product SKU", "SKU", "Tracking #", "Product Name", "IMEI", "Serial"],
        sort_order=25),
+    # ── mig 1022 (owner 2026-09-25: "Royalty report … only show up if a ups store is selected while onboarding") ──
+    # The franchisor's monthly royalty statement (one per center per month). It lands through its OWN module page
+    # (landing 'module', no legacy upload route — landing_identity.MODULE_PAGES names the page and the table), and its
+    # vertical scope is DEREFERENCED — the kind applies wherever the `royalty` module applies (mig 1020 module_catalog
+    # .applies_to_vertical, mirrored in core/verticals.HOUSE_MODULE_VERTICALS; 1022 seeds it by a sub-select, never a literal).
+    _k(key="royalty_report", label="Franchise royalty report (monthly)",
+       what_in_it="The franchisor's monthly royalty statement for one center: product and service sales, exclusions, "
+                  "commissions, the sales subject to royalty and the royalty, marketing and advertising-fund fees due.",
+       recognisable_columns=["Products / Services", "Total Gross Sales", "Exclusions", "Commissions", "Total STR", "Total Due"],
+       source_hint="from the franchisor's center-management portal (save the page as PDF or HTML, or paste it)",
+       landing="module", applies_to_vertical=list(_HOUSE_MODULE_VERTICALS.get("royalty") or []), sort_order=400),
 ]
 HOUSE_KEYS = [r["key"] for r in HOUSE_KINDS]
 
@@ -323,6 +341,8 @@ def normalise_row(row):
     for k in ("recognisable_columns", "signature_fields", "requires_columns", "excludes_columns", "upload_types"):
         out[k] = _list(out.get(k))
     out["applies_to_pos"] = [code(c) for c in _list(out.get("applies_to_pos")) if code(c)]
+    # vertical keys are the mig-1020 vocabulary's snake_case keys — compared as written, never squashed
+    out["applies_to_vertical"] = [_s(v).lower() for v in _list(row.get("applies_to_vertical")) if _s(v)]
     out["applies_to_carrier"] = [code(c) for c in _list(out.get("applies_to_carrier")) if code(c)]
     out["is_active"] = out.get("is_active") is not False
     out["sort_order"] = int(out.get("sort_order") or 100)
@@ -359,14 +379,16 @@ def house_mirror():
 
 
 # ── THE ONE DECLARATION READER ────────────────────────────────────────────────────────────────────
-def declaration_from(term_label, term_source, pos_profile_rows, carrier_rows, carrier_code_fn=None):
+def declaration_from(term_label, term_source, pos_profile_rows, carrier_rows, carrier_code_fn=None, vertical=None):
     """PURE: what this tenant declared, from where.
 
     POS: the `pos_system` vocabulary term (mig 953 — the Stage-1 answer: tenant override, else the
     carrier preset) is THE declaration when it resolved; else the org's active `pos_profile` rows
     (applying a POS standard is a declaration too); else unknown — and unknown HIDES the POS-specific
     kinds (design §7: show less and say why), never widens.
-    Carriers: the org's `commcalc.carrier` rows, squashed through the injected normaliser."""
+    Carriers: the org's `commcalc.carrier` rows, squashed through the injected normaliser.
+    Vertical (mig 1022): the tenant's resolved vertical key (core/verticals.tenant_vertical — the ONE reader of that
+    fact); None = not known, and an unknown vertical HIDES every vertical-scoped kind (show less, never more)."""
     reasons = []
     pos, pos_source = [], "unknown"
     if _s(term_label) and (term_source or "").startswith("report_term"):
@@ -384,8 +406,9 @@ def declaration_from(term_label, term_source, pos_profile_rows, carrier_rows, ca
     carriers = [c for c in carriers if c]
     if not carriers:
         reasons.append("no carrier declared — carrier-specific report kinds are not offered until a carrier row exists")
+    vkey = _s(vertical).lower() or None
     return {"pos": pos, "pos_source": pos_source, "carriers": carriers, "carrier_source": "carrier_rows",
-            "reasons": reasons}
+            "vertical": vkey, "vertical_source": "tenant_vertical" if vkey else "unknown", "reasons": reasons}
 
 
 def tenant_declaration(client, org_id):
@@ -407,15 +430,24 @@ def tenant_declaration(client, org_id):
                  .eq("org_id", org_id).execute().data) or []
     except Exception:
         crows = []
-    return declaration_from(label, source, prof, crows, _rl.normalize_carrier_code)
+    try:
+        from app.modules.core import verticals as _vert
+        vkey = _vert.tenant_vertical(client, org_id).get("key")
+    except Exception:
+        vkey = None
+    return declaration_from(label, source, prof, crows, _rl.normalize_carrier_code, vertical=vkey)
 
 
 # ── THE ONE VISIBILITY FUNCTION ───────────────────────────────────────────────────────────────────
 def applies(row, declaration):
-    """Does a row's applies-to intersect the declaration? Empty applies-to = any."""
+    """Does a row's applies-to intersect the declaration? Empty applies-to = any. Three axes: POS, carrier and (mig
+    1022) the tenant VERTICAL — a row without `applies_to_vertical` (every connector row, every kind seeded before
+    1022) applies to any vertical, so this is byte-identical for all of them."""
     pos_ok = not row["applies_to_pos"] or bool(set(row["applies_to_pos"]) & set(declaration.get("pos") or []))
     car_ok = not row["applies_to_carrier"] or bool(set(row["applies_to_carrier"]) & set(declaration.get("carriers") or []))
-    return pos_ok and car_ok
+    vs = row.get("applies_to_vertical") or []
+    ver_ok = not vs or (declaration.get("vertical") or None) in vs
+    return pos_ok and car_ok and ver_ok
 
 
 def cap_override(caps, key, cap_prefix=CAP_PREFIX):
@@ -484,6 +516,9 @@ def hidden_kinds(rows, declaration, caps=None, cap_prefix=CAP_PREFIX):
                 why.append("applies to POS " + "/".join(r["applies_to_pos"]) + " — you declared " + ("/".join(declaration.get("pos") or []) or "no POS"))
             if r["applies_to_carrier"] and not (set(r["applies_to_carrier"]) & set(declaration.get("carriers") or [])):
                 why.append("applies to carrier " + "/".join(r["applies_to_carrier"]) + " — you declared " + ("/".join(declaration.get("carriers") or []) or "no carrier"))
+            vs = r.get("applies_to_vertical") or []
+            if vs and (declaration.get("vertical") or None) not in vs:
+                why.append("applies to another kind of business than the one this tenant declared at onboarding")
             out.append({"key": r["key"], "label": r["label"], "why": "; ".join(why)})
     return out
 
@@ -782,7 +817,7 @@ def payload(rows, ready, declaration, caps, signature_rows, org_id, profile_rule
     vis = visible_kinds(rows, declaration, caps, org_id, conf)
     public = []
     for r in vis:
-        public.append({k: r.get(k) for k in _COLS + ("provenance", "provenance_text", "confirmations", "defined_by_org")})
+        public.append({k: r.get(k) for k in _COLS + ("applies_to_vertical", "provenance", "provenance_text", "confirmations", "defined_by_org")})
     caps_kind = {k: v for k, v in (caps or {}).items() if str(k).startswith(CAP_PREFIX)}
     return {
         "registry_ready": ready, "migration": MIGRATION,
@@ -795,5 +830,6 @@ def payload(rows, ready, declaration, caps, signature_rows, org_id, profile_rule
         "standard": standard,
         "caps": caps_kind,
         "all_keys": [{"key": r["key"], "label": r["label"], "applies_to_pos": r["applies_to_pos"],
-                      "applies_to_carrier": r["applies_to_carrier"]} for r in rows if r["is_active"]],
+                      "applies_to_carrier": r["applies_to_carrier"],
+                      "applies_to_vertical": r.get("applies_to_vertical") or []} for r in rows if r["is_active"]],
     }

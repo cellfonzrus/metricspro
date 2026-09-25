@@ -119,10 +119,36 @@ name: carrier-vocab-guard
 # period spelling through router._ledger_query, and more than one landing of one statement × period is
 # REFUSED by every summing reader — a literal-filtered ledger read, a second lander, a second key
 # composition or an un-wired guard fails the build (backend/harness_ledger_identity_lock.py; stdlib only).
+#
+# THE FRANCHISE ROYALTY LOCK (index §37, mig 1022, 2026-09-25) runs here too: the royalty-report line vocabulary has ONE
+# home (account/royalty.HOUSE_ROYALTY_LINES ↔ the 1022 seed), the fee rounding rule ONE function (royalty.fee_schedule),
+# the P&L booking ONE path (coa.build_inputs → royalty.pl_bookings), the tenant vertical is DATA (no vertical key in the
+# royalty / centers modules, router, pages or migration; the report kind dereferences the royalty module's scope; both
+# twins of `applies` carry the axis), every query is org-scoped, the router is gated on the royalty module, a profit
+# center is a scope of the ONE statement engine, and the unclaimed sale line is reported through sales_line_map
+# (backend/harness_royalty_lock.py; stdlib only). The stdlib PROOF (backend/harness_royalty.py: the synthetic report
+# parsed from text and HTML, the rounding remainder, validation flags, the P&L mapping, the recon, centers, the vertical
+# axis) runs here; the app-dependent PROOF (backend/harness_royalty_pl.py: byte-identity of the house P&L against the
+# frozen pre-change oracle, the booking, the scopes, the filter, the router) runs in the finance-royalty-proof job.
 
 on:
   pull_request:
     paths:
+      - "backend/app/modules/account/royalty.py"
+      - "backend/app/modules/account/royalty_router.py"
+      - "backend/app/modules/account/centers.py"
+      - "backend/app/modules/account/sales_line_map.py"
+      - "backend/app/modules/account/statement_filter.py"
+      - "backend/app/modules/account/balance_sheet.py"
+      - "backend/app/modules/commcalc/landing_identity.py"
+      - "backend/app/modules/core/verticals.py"
+      - "backend/app/main.py"
+      - "backend/harness_royalty.py"
+      - "backend/harness_royalty_lock.py"
+      - "backend/harness_royalty_pl.py"
+      - "backend/harness_royalty_pl_oracle.json"
+      - "database/migrations/1022_franchise_royalty_cost_profit_centers.sql"
+      - "docs/SYSTEM_DATA_FLOW_INDEX.md"
       - "frontend/src/**"
       - "backend/harness_account_expenses_one_home.py"
       - "backend/app/modules/account/analysis.py"
@@ -346,6 +372,12 @@ jobs:
       - name: Run the browser-work lock (the declared browser sweeps + every module outside commcalc that launches a browser equal what the code does; browser endpoints require the browser service — index §19.23a / §36)
         working-directory: backend
         run: python3 harness_browser_sweep_kinds.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the franchise royalty proof (synthetic report from text + HTML; the rounding remainder; flags kept, never corrected; P&L mapping; recon; centers; the vertical axis — index §37)
+        working-directory: backend
+        run: python3 harness_royalty.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the franchise royalty lock (one vocabulary, one rounding rule, one booking path, the vertical as data, org-scoped, gated, one engine — index §37)
+        working-directory: backend
+        run: python3 harness_royalty_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CUSTOMER-MASTER PROOF (index §30.16) drives the REAL matcher, rebuild, line writer and /pos endpoints over the
   # in-memory client (harness_intake_fakes) — it imports the app, so it runs in its own job with the backend's
@@ -408,3 +440,21 @@ jobs:
       - name: Run the multi-month ledger upload proof (batch == N single imports; refusals; replace rule; per-file isolation)
         working-directory: backend
         run: python3 harness_ledger_batch.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE FRANCHISE ROYALTY P&L PROOF (index §37) drives the REAL coa.build_inputs / engine._assemble / statement_engine /
+  # statement_filter / royalty router over an in-memory client: the house org's P&L is byte-identical to the frozen
+  # pre-change oracle (commit 2f2bdfd), the royalty report books its heads at the store its profit center names, the
+  # unclaimed sale line is reported and never double-counts the report, a profit center is a scope of the one engine,
+  # the filter fails closed. It imports the app, so it runs in its own job with the backend's dependencies.
+  finance-royalty-proof:
+    name: Franchise royalty P&L proof (DB-free, the real engine)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the franchise royalty P&L proof (house byte-identity; booking; suppression; scopes; filter; router)
+        working-directory: backend
+        run: python3 harness_royalty_pl.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
