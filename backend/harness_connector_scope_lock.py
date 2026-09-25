@@ -71,6 +71,8 @@ ALLOW = {
         "the FTP drop (ftp — an any-scope connector in the seed); the form is the mailbox/FTP pull's own config, not a vendor portal",
     ("app/(platform)/commcalc/targets/page.tsx", "surface"):
         "reads the DLAR sweep config only to show when KPI figures were last pulled — a KPI page, not a connector surface",
+    ("components/supply/LiveVendorWindow.tsx", "surface"):
+        "streams the live window of ONE supply-vendor login the supply page already resolved (the /data-sources/{sid}/live-login frame/input/submit/cancel endpoints, index §36) — it lists no connectors and decides no connector scope",
 }
 assert all(v for v in ALLOW.values()), "every allow entry carries a reason"
 
