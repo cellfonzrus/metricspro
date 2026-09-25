@@ -238,6 +238,8 @@ on:
       - "backend/app/modules/core/verticals.py"
       - "backend/app/modules/core/entitlements.py"
       - "database/migrations/1020_tenant_vertical.sql"
+      - "database/migrations/1024_vertical_closing_sections.sql"
+      - "frontend/src/components/ClosingSubmitForm.tsx"
   push:
     branches: [main]
     paths:

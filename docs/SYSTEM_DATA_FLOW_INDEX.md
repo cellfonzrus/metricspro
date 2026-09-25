@@ -11042,17 +11042,30 @@ untouched; the finance work in §37 adds the vertical to it for report kinds), `
 + `entitlements`, `NAV_CARRIERS` / `carrierOK` / `carrierOKActive`, the marketing module's dashboard pattern, `closing/summary`,
 `store-cash-on-hand`, `readiness`. Nothing answered "what kind of business is this"; the module gate and the nav gate were EXTENDED.
 
-**THE LOCK.** `backend/harness_tenant_vertical.py` (52, stdlib, in `carrier-vocab-guard.yml`): §A mirror = seed; §B pure rules; §C every
+**THE LOCK.** `backend/harness_tenant_vertical.py` (60, stdlib, in `carrier-vocab-guard.yml`): §A mirror = seed; §B pure rules; §C every
 `nav_hidden` entry is a real NAV page (none stale) and a pinned list of pages a non-carrier store runs on (closing, cash / card recon,
 uploads, imports, POs, expenses, P&L, payroll, schedule, POS register …) is never hidden; §D behaviour over a fake client (existing
 tenants unchanged, franchise tenant scoped, fail-open never crosses verticals, mirror fallback); §E every gate still asks (13 wires,
 backend + frontend); §F no vertical key spelled in `backend/app` or `frontend/src` outside the mirror; §G six negative controls.
 
-**Migration `1020` — SURFACED, NOT APPLIED.** Not money-touching. Until applied the mirror answers and saving a business type says
-"migration 1020 pending".
+**THE CLOSING FORM (mig `1024`, same PR).** Owner: *"Cash and credit needs to reconciled by the reps declaring the actual cash at the
+end of the day … most of this is already made but might need some tweaking."* Tenders (`tender_config`, mig 111) and transaction
+counts (`count_config`, mig 501) were already per-tenant config; four WIRELESS inputs were hard-wired into
+`components/ClosingSubmitForm.tsx`: the *Accessory Sale $* box, the *Bill Payments, already included above* section, the three
+built-in activation counts used when a tenant configured none, and the financing (lease) tender in the built-in tender fallback.
+They are now DATA on the vertical: **`core.tenant_vertical.closing_hidden[]`** (section keys `acc_sale` · `bill_payments` ·
+`activation_counts` · `tender:<built-in key>`; franchise seed hides all four), mirrored in `HOUSE_VERTICALS[*].closing_hidden`,
+carried by `me_payload` → `tenant.vertical.closing_hidden`, read by the form (`closingHidden`, `builtinTenders`). A hidden box submits
+empty — exactly a blank one today — so no recon, gate or stored value changes; a franchise tenant with no count fields sees a pointer
+to *Daily Closing → Count Fields* instead of wireless counts. `load_vocab` reads a database that has 1020 but not 1024 (closing_hidden
+from the mirror by key, registry still ready). Cash / card reconciliation itself (envelope + pickup + count, deposit recon, 3-way
+tender recon, external credit recon + the merchant-portal sweep, email / FTP auto-import) is REUSED unchanged — it is generic.
+
+**Migrations `1020` + `1024` — SURFACED, NOT APPLIED.** Not money-touching. Until applied the mirror answers and saving a business
+type says "migration 1020 pending".
 
 **Seams (stated, not hidden).** (1) A tenant's roles created BEFORE this change carry no grant for the three new modules — only a
 franchise tenant needs them, and it is new; an admin grants them on Roles & Access. (2) `nav_hidden` is per vertical, not per tenant;
 a single tenant exception rides the existing `caps['vertical:<href>']` override. (3) Backend endpoints of the hidden wireless PAGES are
 not vertical-gated (the page is unreachable from the UI and the data is the tenant's own); the vertical-scoped MODULES are
-(`require_module`). (4) The closing form's wireless fields (accessory $, bill payments, activation counts) are a separate change.
+(`require_module`). (4) `GET /closing/readiness` still words its count-config note as "built-in 3 activation-count fields" (an info note).

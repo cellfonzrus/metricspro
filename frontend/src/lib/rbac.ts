@@ -1378,6 +1378,7 @@ export function carrierOKActive(href: string, activeCarrier: string | undefined,
 export type VerticalInfo = {
   key?: string | null; label?: string | null; source?: string | null
   uses_carriers?: boolean; nav_hidden?: string[]; hidden_modules?: string[]
+  closing_hidden?: string[]   // mig 1024 — closing-form inputs this vertical does not use (ClosingSubmitForm)
   choices?: { key: string; label: string }[]; registry_ready?: boolean
 }
 // Mirror of core/verticals.href_hidden (harness_tenant_vertical.py §E compares the two).

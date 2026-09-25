@@ -85,12 +85,25 @@ def parse_seed(sql):
     return rows, mods
 
 
+MIG_CLOSING = "database/migrations/1024_vertical_closing_sections.sql"
+
+
+def parse_closing(sql):
+    body = sql.split("-- REVERT", 1)[0]
+    return {m.group(2): [x for x in m.group(1).split(",") if x]
+            for m in re.finditer(r"SET closing_hidden = '\{([^}]*)\}'\s*WHERE key = '([a-z_]+)'", body)}
+
+
 seed_rows, seed_mods = parse_seed(read(MIG))
+_closing = parse_closing(read(MIG_CLOSING))
+for _r in seed_rows:
+    _r["closing_hidden"] = _closing.get(_r["key"], [])
 check("A1 seed parsed (2 verticals)", len(seed_rows) == 2, seed_rows)
 check("A2 vertical rows byte-equal", seed_rows == [dict(r) for r in V.HOUSE_VERTICALS],
       [(a == b, a["key"]) for a, b in zip(seed_rows, V.HOUSE_VERTICALS)])
 check("A3 module scopes equal", seed_mods == V.HOUSE_MODULE_VERTICALS, (seed_mods, V.HOUSE_MODULE_VERTICALS))
 check("A4 exactly one default", sum(r["is_default"] for r in seed_rows) == 1)
+check("A6 mig 1024 closing_hidden parsed", _closing.get(UPS) == ["acc_sale", "bill_payments", "activation_counts", "tender:acima"], _closing)
 ent_src = read("backend/app/modules/core/entitlements.py")
 check("A5 every scoped module is in the entitlement catalog",
       all(f'"{k}":' in ent_src for k in V.HOUSE_MODULE_VERTICALS), [k for k in V.HOUSE_MODULE_VERTICALS if f'"{k}":' not in ent_src])
@@ -114,6 +127,8 @@ check("B11 query + trailing slash", V.href_hidden("/employee/?x=1", nh))
 check("B12 valid_choice", V.valid_choice(UPS, vocab) and not V.valid_choice("Robert'); DROP", vocab) and not V.valid_choice("", vocab))
 p = V.payload(V.resolve_vertical(UPS, vocab), V.HOUSE_MODULE_VERTICALS, vocab)
 check("B13 payload", p["uses_carriers"] is False and "vip" in p["hidden_modules"] and len(p["choices"]) == 2 and p["nav_hidden"])
+check("B14 payload carries closing_hidden", "bill_payments" in p["closing_hidden"]
+      and V.payload(V.resolve_vertical(None, vocab), V.HOUSE_MODULE_VERTICALS, vocab)["closing_hidden"] == [])
 
 # ── §C nav_hidden vs the real NAV ───────────────────────────────────────────────────────────────────────
 print("§C nav_hidden vs NAV")
@@ -198,6 +213,26 @@ check("D5 effective_modules", "vip" in E.effective_modules(c, A) and "royalty" n
 db3 = dict(db, _broken={("core", "tenant_vertical"), ("core", "module_catalog")})
 check("D6 registry unreadable → the mirror answers identically",
       V.tenant_vertical(Client(db3), B)["key"] == UPS and not V.module_applies_to_tenant(Client(db3), A, "royalty"))
+class _No1024(Q):
+    def select(self, cols="", **_k):
+        if "closing_hidden" in cols and self.key == ("core", "tenant_vertical"):
+            self.db = dict(self.db, _broken={("core", "tenant_vertical")})
+        return self
+
+
+class _S1024(S):
+    def table(self, t): return _No1024(self.db, self.schema_, t)
+
+
+class _C1024(Client):
+    def schema(self, s): return _S1024(self.db, s)
+
+
+db4 = dict(db)
+db4[("core", "tenant_vertical")] = [{k: v for k, v in r.items() if k != "closing_hidden"} for r in db[("core", "tenant_vertical")]]
+v4, ready4 = V.load_vocab(_C1024(db4))
+check("D9 1020 applied, 1024 not: registry read, closing_hidden from the mirror",
+      ready4 and next(r for r in v4 if r["key"] == UPS)["closing_hidden"] == ["acc_sale", "bill_payments", "activation_counts", "tender:acima"])
 mp = V.me_payload(c, B)
 check("D7 me_payload", mp["key"] == UPS and mp["uses_carriers"] is False and "vip" in mp["hidden_modules"] and mp["registry_ready"])
 check("D8 me_payload existing tenant hides only new modules",
@@ -228,6 +263,16 @@ WIRES += [
     ("compliance dashboard filters by verticalOK", comp, r"verticalOK\(it, tenant\?\.vertical, caps\)"),
     ("active carrier honours uses_carriers", auth, r"defaultActiveCarrier\(carriers, tenant\?\.vertical\?\.uses_carriers\)"),
     ("login redirect skips vertical-hidden pages", login, r"safeHomeFor\(permissions, tenant\?\.vertical\)"),
+    ("closing form reads closing_hidden", read("frontend/src/components/ClosingSubmitForm.tsx"),
+     r"tenant\?\.vertical\?\.closing_hidden"),
+    ("closing form gates the accessory box", read("frontend/src/components/ClosingSubmitForm.tsx"),
+     r"!closingHidden\.has\('acc_sale'\)"),
+    ("closing form gates the bill-payments section", read("frontend/src/components/ClosingSubmitForm.tsx"),
+     r"!closingHidden\.has\('bill_payments'\)"),
+    ("closing form gates the built-in activation counts", read("frontend/src/components/ClosingSubmitForm.tsx"),
+     r"closingHidden\.has\('activation_counts'\)"),
+    ("closing form filters built-in tenders", read("frontend/src/components/ClosingSubmitForm.tsx"),
+     r"closingHidden\.has\('tender:'"),
     ("defaultActiveCarrier returns no carrier when the vertical uses none", rbac, r"if \(usesCarriers === false\) return ''"),
     ("safeHomeFor consults verticalPathOK", rbac, r"export function safeHomeFor\(perms: Permissions, vertical\?[\s\S]{0,500}?verticalPathOK"),
 ]

@@ -17,7 +17,7 @@ import re
 # ── MIRROR of mig 1020's seed (byte-equal; parsed back by the harness) ─────────────────────────────────
 HOUSE_VERTICALS = [
     {"key": "wireless_retail", "label": "Wireless retail", "is_default": True, "uses_carriers": True,
-     "nav_hidden": [], "sort_order": 10},
+     "nav_hidden": [], "sort_order": 10, "closing_hidden": []},
     {"key": "ups_store", "label": "The UPS Store (franchise)", "is_default": False, "uses_carriers": False,
      "nav_hidden": [
          "/pos/activations", "/pos/activation-report", "/hub/management-overview", "/commcalc/sales-report",
@@ -49,7 +49,9 @@ HOUSE_VERTICALS = [
          "/commcalc/distributors", "/commcalc/vip", "/closing/accessory-recon", "/closing/billpay-pickup",
          "/closing/epay-recon", "/onboarding/intake", "/commcalc/carrier-comm-file", "/commcalc/epay",
          "/commcalc/dlar", "/commcalc/gp-category-map",
-     ], "sort_order": 20},
+     ], "sort_order": 20,
+     # mig 1024 — closing-form inputs this vertical does not use (the form's own section keys).
+     "closing_hidden": ["acc_sale", "bill_payments", "activation_counts", "tender:acima"]},
 ]
 
 # Module → verticals it belongs to (mirror of the mig-1020 module_catalog rows; '{}'/absent = any).
@@ -70,6 +72,7 @@ def normalise_vertical(row):
         "uses_carriers": row.get("uses_carriers") is not False,
         "nav_hidden": [str(h).strip() for h in (row.get("nav_hidden") or []) if str(h).strip()],
         "sort_order": int(row.get("sort_order") or 100),
+        "closing_hidden": [str(h).strip() for h in (row.get("closing_hidden") or []) if str(h).strip()],
     }
 
 
@@ -123,6 +126,7 @@ def payload(vertical, module_scopes, vocab):
         "source": vertical.get("source"),
         "uses_carriers": vertical.get("uses_carriers", True),
         "nav_hidden": list(vertical.get("nav_hidden") or []),
+        "closing_hidden": list(vertical.get("closing_hidden") or []),
         "hidden_modules": hidden_modules(module_scopes, vertical.get("key")),
         "choices": [{"key": r["key"], "label": r["label"]} for r in
                     sorted((normalise_vertical(x) for x in vocab or []), key=lambda r: (r["sort_order"], r["key"]))],
@@ -138,16 +142,24 @@ def valid_choice(value, vocab):
 
 
 # ── I/O (every read org-scoped; every failure degrades to the mirror / the default, never to "hide all") ─
+_VOCAB_COLS = "key,label,is_default,uses_carriers,nav_hidden,sort_order,is_active"
+
+
 def load_vocab(client):
-    try:
-        rows = (client.schema("core").table("tenant_vertical")
-                .select("key,label,is_default,uses_carriers,nav_hidden,sort_order,is_active")
-                .execute().data) or []
+    """(rows, registry_ready). Tries the full column set; a database with 1020 but not yet 1024 (no
+    closing_hidden column) still reads the registry, with closing_hidden taken from the mirror by key."""
+    mirror = {r["key"]: r for r in HOUSE_VERTICALS}
+    for cols, add_closing in ((_VOCAB_COLS + ",closing_hidden", False), (_VOCAB_COLS, True)):
+        try:
+            rows = (client.schema("core").table("tenant_vertical").select(cols).execute().data) or []
+        except Exception:
+            continue
         rows = [r for r in rows if r.get("is_active", True) is not False]
         if rows:
+            if add_closing:
+                rows = [dict(r, closing_hidden=list(mirror.get(r.get("key"), {}).get("closing_hidden") or []))
+                        for r in rows]
             return rows, True
-    except Exception:
-        pass
     return [dict(r) for r in HOUSE_VERTICALS], False
 
 
