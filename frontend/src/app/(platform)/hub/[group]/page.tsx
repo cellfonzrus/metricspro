@@ -22,7 +22,7 @@ import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { useAuth, useActiveCarrier } from '@/lib/auth-context'
 import { useCachedApi, CONFIG } from '@/lib/cache'
-import { NAV, canSeeItem, carrierOKActive, type NavItem, type NavLayout } from '@/lib/rbac'
+import { NAV, canSeeItem, carrierOKActive, verticalOK, type NavItem, type NavLayout } from '@/lib/rbac'
 import HubTiles from '@/components/HubTiles'
 import { slugGroup, defaultHubGroups, layoutToHubGroups, mergeUnplacedItems, subsFromNavLayout,
          type TileLayout } from '@/lib/tile-hubs'
@@ -32,7 +32,7 @@ type TileResp = { module: string; layout: TileLayout | null; resolved_from: 'ten
 
 export default function HubDashboardPage() {
   const { group: slug } = useParams<{ group: string }>()
-  const { permissions, session, rbacEnabled } = useAuth()
+  const { permissions, session, rbacEnabled, tenant } = useAuth()
   const { activeCarrier } = useActiveCarrier()
 
   const navGroup = useMemo(() => NAV.find(g => slugGroup(g.group) === slug) || null, [slug])
@@ -60,8 +60,9 @@ export default function HubDashboardPage() {
       .filter(it => !gated || canSeeItem(permissions, it))
       .filter(it => !it.cap || caps[it.cap] !== false)
       .filter(it => carrierOKActive(it.href, activeCarrier, caps))
+      .filter(it => verticalOK(it, tenant?.vertical, caps))
       .filter(it => !navCfg?.layout?.items?.[it.href]?.hidden)
-  }, [navCfg, permissions, session, rbacEnabled, activeCarrier])
+  }, [navCfg, permissions, session, rbacEnabled, activeCarrier, tenant?.vertical])
 
   // THIS group's own items — what the auto-derived default tiles, and the "not yet placed" tile, are
   // built from. A dashboard with no design still shows its own module, not the whole app.

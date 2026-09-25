@@ -833,15 +833,18 @@ def _mods(**on):
 
 # the role set seeded into every new tenant (mirror of migration 015 + helpdesk); the tenant admin
 # edits them afterward on their own Roles & Access.
+# The vertical-scoped modules (franchise_ops / supply_ordering / royalty, mig 1020) are granted here to the
+# roles that run a store; the tenant's VERTICAL decides whether they exist at all (verticalOK / module_enabled),
+# so for any other kind of business the grant is inert.
 # `closing` (Daily Closing) is a store-operations feature: every tier that already gets `storeops`
 # (admin / market / store manager) also gets `closing` so a NEW tenant's managers can run closings out
 # of the box — the seed list stays in lockstep with MODULE_CATALOG. FORWARD-ONLY: this seeds roles at
 # tenant CREATION; it never rewrites an existing tenant's role rows, so the house/Boost org is untouched
 # (byte-identical). An existing tenant grants/revokes any module per role on /admin/roles.
 _BASE_ROLES = [
-    ("admin", "Admin", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, closing=True, notify=True, helpdesk=True, hr=True, ai_assistant=True, admin=True), "scope": "all", "home": "/commcalc"}),
-    ("market_manager", "Market Manager", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, closing=True, notify=True, helpdesk=True, hr=True, ai_assistant=True), "scope": "market", "home": "/commcalc/targets"}),
-    ("store_manager", "Store Manager", {"modules": _mods(commissions=True, targets=True, asset=True, storeops=True, closing=True, helpdesk=True, ai_assistant=True), "scope": "store", "home": "/commcalc/targets"}),
+    ("admin", "Admin", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, closing=True, notify=True, helpdesk=True, hr=True, ai_assistant=True, admin=True, franchise_ops=True, supply_ordering=True, royalty=True), "scope": "all", "home": "/commcalc"}),
+    ("market_manager", "Market Manager", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, closing=True, notify=True, helpdesk=True, hr=True, ai_assistant=True, franchise_ops=True, supply_ordering=True, royalty=True), "scope": "market", "home": "/commcalc/targets"}),
+    ("store_manager", "Store Manager", {"modules": _mods(commissions=True, targets=True, asset=True, storeops=True, closing=True, helpdesk=True, ai_assistant=True, franchise_ops=True, supply_ordering=True), "scope": "store", "home": "/commcalc/targets"}),
     ("sales_rep", "Sales Rep", {"modules": _mods(targets=True, helpdesk=True), "scope": "self", "home": "/commcalc/targets/my"}),
 ]
 

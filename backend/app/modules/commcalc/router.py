@@ -30899,14 +30899,23 @@ _ONBOARDING_PROFILE = {
 }
 
 
-def _onboarding_profile_step(carriers):
+# Profile questions that only exist for a vertical that uses carriers (mig 1020, index §35). The carrier /
+# processor pick-lists are meaningless to a business that sells on no carrier, and — because the profile
+# check requires every question — keeping them would make that business's profile impossible to finish.
+_CARRIER_PROFILE_KEYS = ("carriers", "processor")
+
+
+def _onboarding_profile_step(carriers, uses_carriers=True):
     """The profile step with its carrier pick-list filled from `commcalc.carrier`.
 
     A copy, never a mutation of the module constant: the constant is shared across every request and
-    every tenant, so stamping one org's carriers onto it would leak them into the next org's wizard."""
+    every tenant, so stamping one org's carriers onto it would leak them into the next org's wizard.
+    `uses_carriers` is the tenant vertical's flag (core/verticals) — False drops the carrier questions."""
     step = {k: v for k, v in _ONBOARDING_PROFILE.items()}
     qs = []
     for q in _ONBOARDING_PROFILE["questions"]:
+        if not uses_carriers and q["key"] in _CARRIER_PROFILE_KEYS:
+            continue
         if q.get("options_from") == "commcalc.carrier":
             opts = implementation_spine.carrier_options(carriers)
             q = {**q, "options": [o["label"] for o in opts], "carrier_options": opts}
@@ -31097,7 +31106,15 @@ def _onboarding_wizard(client, org_id):
         _rep, _mapped = {}, set()
     implementation = implementation_spine.build(carrier_rows, reg_defs, reg_conns, _rep, _mapped)
 
-    filled_profile = _onboarding_profile_step(carrier_rows)
+    # The kind of business (mig 1020) — read from its ONE home (storeops.tenants.vertical via core/verticals),
+    # never stored in onboarding_state; the wizard page writes it with PUT /core/tenant-vertical.
+    try:
+        from app.modules.core import verticals as _vert
+        vpay = _vert.me_payload(client, org_id)
+    except Exception:
+        vpay = None
+    filled_profile = _onboarding_profile_step(carrier_rows,
+                                              uses_carriers=(vpay or {}).get("uses_carriers", True) is not False)
     steps, done_keys = [], set()
     for st in _onboarding_steps():
         if st.get("key") == "profile":
@@ -31126,7 +31143,7 @@ def _onboarding_wizard(client, org_id):
     total = len(steps)
     ready = sum(1 for s in steps if s["done"])
     return {"org_id": org_id, "profile": profile, "steps": steps, "ready": ready, "total": total,
-            "implementation": implementation,
+            "implementation": implementation, "vertical": vpay,
             "note": (None if rows or True else None)}
 
 

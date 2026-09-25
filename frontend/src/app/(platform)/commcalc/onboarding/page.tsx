@@ -91,6 +91,13 @@ export default function OnboardingPage() {
       {err && <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, marginBottom: 10 }}>❌ {err}</div>}
       {loading && <div style={{ color: 'var(--text3)', fontSize: 13, padding: 20 }}>Loading…</div>}
 
+      {/* WHAT KIND OF BUSINESS (mig 1020, index §35) — asked FIRST because it decides which modules, pages
+          and profile questions exist at all. Its one home is the tenant record (PUT /core/tenant-vertical);
+          the choices come from the backend vocabulary, so this file names no kind of business. */}
+      {!loading && wiz?.vertical?.choices?.length > 0 && (
+        <BusinessTypeCard vertical={wiz.vertical} onSaved={load} onError={setErr} />
+      )}
+
       {/* THE ORDERED FLOW. Read from the backend spine, which is pinned equal to the runbook's own
           stage list — so the strip, the "what next" prompt and the training material are one order. */}
       {!loading && impl?.spine?.length > 0 && <FlowStrip spine={impl.spine} here="/commcalc/onboarding" />}
@@ -441,6 +448,49 @@ function CarrierFlow({ impl, onChanged, setErr }:
           ))}
         </div>
       ))}
+    </div>
+  )
+}
+
+
+// "What kind of business is this?" — the tenant vertical. Saving re-syncs the tenant's modules server-side;
+// the page reloads the wizard and the whole app picks the new menus up on the next /core/me.
+function BusinessTypeCard({ vertical, onSaved, onError }: {
+  vertical: { key?: string; label?: string; source?: string; registry_ready?: boolean; choices: { key: string; label: string }[] }
+  onSaved: () => void
+  onError: (m: string) => void
+}) {
+  const [pick, setPick] = useState(vertical.source === 'tenant' ? (vertical.key || '') : '')
+  const [busy, setBusy] = useState(false)
+  const save = async () => {
+    if (!pick) return
+    setBusy(true)
+    try {
+      await api('/api/v1/core/tenant-vertical', { method: 'PUT', body: JSON.stringify({ vertical: pick, org_id: getActiveOrg() || '' }) })
+      onSaved()
+      if (typeof window !== 'undefined') window.location.reload()   // menus come from /core/me
+    } catch (e: unknown) { onError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
+  }
+  const declared = vertical.source === 'tenant'
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', marginBottom: 16, background: 'var(--surface)' }}>
+      <div style={{ fontWeight: 700, fontSize: 14 }}>1. What kind of business is this?</div>
+      <div style={{ fontSize: 12.5, color: 'var(--text2)', margin: '4px 0 10px' }}>
+        {declared ? <>Set to <b>{vertical.label}</b>. Changing it changes which menus and setup steps you see.</>
+                  : <>Not chosen yet — the menus currently show the default ({vertical.label}). Pick yours first.</>}
+        {vertical.registry_ready === false && <> (Business types are not fully set up on this server yet — saving will say so.)</>}
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <select value={pick} onChange={e => setPick(e.target.value)}
+                style={{ padding: '7px 10px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 8 }}>
+          <option value="">— choose —</option>
+          {vertical.choices.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+        </select>
+        <button disabled={!pick || busy || (declared && pick === vertical.key)} onClick={save}
+                style={{ padding: '7px 14px', fontSize: 13, borderRadius: 8, border: '1px solid var(--border)', cursor: 'pointer' }}>
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+      </div>
     </div>
   )
 }

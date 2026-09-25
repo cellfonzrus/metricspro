@@ -14,7 +14,10 @@ export default function TenantsAdmin() {
   const [tenants, setTenants] = useState<Tenant[]>([])
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
-  const [np, setNp] = useState({ name: '', admin_email: '', admin_name: '', temp_password: '' })
+  const [np, setNp] = useState({ name: '', admin_email: '', admin_name: '', temp_password: '', vertical: '' })
+  // Business types (mig 1020) — the vocabulary comes from the backend, so this page names none.
+  const [verticals, setVerticals] = useState<{ key: string; label: string }[]>([])
+  useEffect(() => { api('/api/v1/core/tenant-vertical').then((v: { choices?: { key: string; label: string }[] }) => setVerticals(v?.choices || [])).catch(() => {}) }, [])
   const [created, setCreated] = useState<any>(null)
   const [rp, setRp] = useState({ email: '', temp_password: '' })
   const [reset, setReset] = useState<any>(null)
@@ -47,7 +50,7 @@ export default function TenantsAdmin() {
     setBusy(true); setErr(''); setCreated(null)
     try {
       const r = await api('/api/v1/core/tenants', { method: 'POST', body: JSON.stringify(np) })
-      setCreated(r); setNp({ name: '', admin_email: '', admin_name: '', temp_password: '' }); load()
+      setCreated(r); setNp({ name: '', admin_email: '', admin_name: '', temp_password: '', vertical: '' }); load()
     } catch (e: any) { setErr(e?.message || 'Could not create company') } finally { setBusy(false) }
   }
   async function resetPassword() {
@@ -134,6 +137,12 @@ export default function TenantsAdmin() {
           <input style={{ ...inp, width: 220 }} placeholder="Admin email *" value={np.admin_email} onChange={e => setNp(v => ({ ...v, admin_email: e.target.value }))} />
           <input style={{ ...inp, width: 160 }} placeholder="Admin name" value={np.admin_name} onChange={e => setNp(v => ({ ...v, admin_name: e.target.value }))} />
           <input style={{ ...inp, width: 150 }} placeholder="Temp password (auto)" value={np.temp_password} onChange={e => setNp(v => ({ ...v, temp_password: e.target.value }))} />
+          {verticals.length > 0 && (
+            <select style={{ ...inp, width: 200 }} value={np.vertical} onChange={e => setNp(v => ({ ...v, vertical: e.target.value }))}>
+              <option value="">Business type (default)</option>
+              {verticals.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+            </select>
+          )}
           <button className="btn btn-primary" disabled={busy} onClick={addTenant}>{busy ? 'Creating…' : 'Create'}</button>
         </div>
         {created && (
