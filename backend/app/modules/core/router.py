@@ -2167,6 +2167,146 @@ def put_tenant_vertical(body: TenantVerticalIn, authorization: str = Header(defa
     return {"ok": True, "vertical": _vert.me_payload(client, org_id)}
 
 
+# ── BUSINESS TYPES EDITOR (super-admin; owner 2026-09-25 "no hard coded — all should be programmable platform
+#    based", index §35). The vertical vocabulary and each module's vertical scope are platform DATA edited here;
+#    the mig-1020 seed is only the starting rows. Tenant-level exceptions stay on the existing cap overrides.
+class VerticalIn(LaxModel):
+    key: str = ""
+    label: str = ""
+    uses_carriers: Any = None
+    nav_hidden: Any = None
+    closing_hidden: Any = None
+    sort_order: Any = None
+    is_active: Any = None
+    is_default: Any = None
+
+
+class ModuleVerticalIn(LaxModel):
+    vertical: str = ""
+    include: bool = True
+
+
+def _vertical_body(body: VerticalIn):
+    return {k: getattr(body, k) for k in body.model_fields_set}
+
+
+@router.get("/verticals/admin")
+def verticals_admin(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """The Business Types editor payload: every vertical (with how many tenants use it), the closing-form inputs
+    it may hide, and each module's vertical scope."""
+    _require_super_admin(authorization, x_active_org)
+    from app.modules.core import verticals as _vert
+    return _vert.admin_payload(sb())
+
+
+def _vertical_write(client, fn):
+    try:
+        return fn()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — is migration 1020 applied? [{str(e)[:200]}]")
+
+
+@router.post("/verticals")
+def create_vertical(body: VerticalIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Create a business type. It starts hiding nothing and owning no module; the editor then configures it."""
+    _require_super_admin(authorization, x_active_org)
+    from app.modules.core import verticals as _vert
+    client = sb()
+    vocab, ready = _vert.load_vocab(client)
+    if not ready:
+        raise HTTPException(400, "Business types are not set up on this database yet — apply migration 1020.")
+    known = [c["key"] for c in _vert.closing_sections()]
+    row, errs = _vert.validate_vertical(_vertical_body(body), known, {r["key"] for r in vocab}, creating=True)
+    if errs:
+        raise HTTPException(400, "; ".join(errs))
+    row.setdefault("uses_carriers", True)
+    row.setdefault("sort_order", 100)
+    _vertical_write(client, lambda: client.schema("core").table("tenant_vertical").insert(row).execute())
+    return {"ok": True, "vertical": row}
+
+
+@router.put("/verticals/{key}")
+def update_vertical(key: str, body: VerticalIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Edit one business type: label, uses_carriers, hidden pages, hidden closing inputs, order, active, default.
+    Making one the default un-defaults the previous one (exactly one default — the value an unset tenant reads)."""
+    _require_super_admin(authorization, x_active_org)
+    from app.modules.core import verticals as _vert
+    client = sb()
+    vocab, ready = _vert.load_vocab(client)
+    if not ready:
+        raise HTTPException(400, "Business types are not set up on this database yet — apply migration 1020.")
+    if key not in {r["key"] for r in vocab}:
+        raise HTTPException(404, "unknown business type")
+    data = _vertical_body(body)
+    known = [c["key"] for c in _vert.closing_sections()]
+    row, errs = _vert.validate_vertical(data, known)
+    if errs:
+        raise HTTPException(400, "; ".join(errs))
+    make_default = data.get("is_default") is True
+    if row.get("is_active") is False:
+        cur_default = _vert.default_vertical(vocab)
+        if (cur_default and cur_default["key"] == key) or make_default:
+            raise HTTPException(400, "The default business type cannot be deactivated — make another one the default first.")
+        try:
+            used = (client.schema("storeops").table("tenants").select("org_id").eq("vertical", key)
+                    .limit(1).execute().data) or []
+        except Exception:
+            used = []
+        if used:
+            raise HTTPException(400, "Companies still use this business type — move them to another type first.")
+    def _go():
+        if make_default:
+            client.schema("core").table("tenant_vertical").update({"is_default": False}).neq("key", key).execute()
+            row["is_default"] = True
+        if row:
+            client.schema("core").table("tenant_vertical").update(row).eq("key", key).execute()
+    _vertical_write(client, _go)
+    return {"ok": True, "key": key, "saved": row}
+
+
+@router.put("/module-verticals/{module_key}")
+def set_module_vertical(module_key: str, body: ModuleVerticalIn, authorization: str = Header(default=""),
+                        x_active_org: str = Header(default="")):
+    """Include / exclude one module for one business type (core.module_catalog.applies_to_vertical). Re-syncs
+    every tenant of that business type so the module switches on/off for them on their next load."""
+    _require_super_admin(authorization, x_active_org)
+    from app.modules.core import verticals as _vert
+    client = sb()
+    vocab, ready = _vert.load_vocab(client)
+    keys = [r["key"] for r in vocab]
+    if not ready:
+        raise HTTPException(400, "Business types are not set up on this database yet — apply migration 1020.")
+    if body.vertical not in keys:
+        raise HTTPException(400, "unknown business type")
+    scopes = _vert.load_module_scopes(client)
+    try:
+        exists = (client.schema("core").table("module_catalog").select("key").eq("key", module_key)
+                  .limit(1).execute().data) or []
+    except Exception:
+        exists = []
+    if not exists:
+        raise HTTPException(404, "unknown module")
+    new_scope = _vert.next_module_scope(scopes.get(module_key), body.vertical, body.include, keys)
+    _vertical_write(client, lambda: client.schema("core").table("module_catalog")
+                    .update({"applies_to_vertical": new_scope}).eq("key", module_key).execute())
+    default = _vert.default_vertical(vocab)
+    resynced = 0
+    try:
+        q = client.schema("storeops").table("tenants").select("org_id,vertical")
+        for t in (q.execute().data or []):
+            if (t.get("vertical") or (default or {}).get("key")) == body.vertical:
+                try:
+                    sync_tenant(client, t["org_id"])
+                    resynced += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return {"ok": True, "module": module_key, "applies_to_vertical": new_scope, "tenants_resynced": resynced}
+
+
 @router.get("/tenant-settings")
 def get_tenant_settings(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """The signed-in user's OWN tenant pay-period settings + a worked example of upcoming periods.

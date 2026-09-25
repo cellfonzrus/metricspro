@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
 import { invalidateApiCache } from '@/lib/cache'
-import { NAV, NAV_CARRIERS } from '@/lib/rbac'
+import { NAV, NAV_CARRIERS, hrefHiddenByVertical } from '@/lib/rbac'
 import { useReportKinds } from '@/lib/report-kinds'
 import { useAuth } from '@/lib/auth-context'
 
@@ -21,8 +21,9 @@ export default function DisplayLabelsPage() {
   const [caps, setCaps] = useState<Record<string, boolean | null>>({})   // capability overrides ('carrier:<href>' / 'pos:<surface>')
   // RE-GRANTING is super-admin only (owner directive 2026-09-13). The SERVER is the enforcement — this
   // only decides whether to offer a control that would 403, and explains why when it does not.
-  const { user } = useAuth()
+  const { user, tenant } = useAuth()
   const isSuper = !!user?.super_admin
+  const vert = tenant?.vertical || null
 
   useEffect(() => {
     api('/api/v1/commcalc/nav-config')
@@ -39,16 +40,17 @@ export default function DisplayLabelsPage() {
   const kinds = useReportKinds()
   const gatedKinds = (kinds.payload?.all_keys || []).filter(k => (k.applies_to_pos || []).length || (k.applies_to_carrier || []).length)
   const visibleKeys = new Set(kinds.visible.map(k => k.key))
-  async function setCap(href: string, val: 'auto' | 'show' | 'hide', ns: 'carrier' | 'pos' | 'kind' = 'carrier') {
+  async function setCap(href: string, val: 'auto' | 'show' | 'hide', ns: 'carrier' | 'pos' | 'kind' | 'vertical' | 'closing' = 'carrier') {
     const key = ns + ':' + href
     try {
       await api('/api/v1/commcalc/nav-labels', { method: 'POST', body: JSON.stringify({ scope: 'cap', key, label: val === 'auto' ? '' : val }) })
       invalidateApiCache('nav-config')   // sidebar (layout) caches nav-config → refresh it after this write
       setCaps(p => { const n = { ...p }; if (val === 'auto') delete n[key]; else n[key] = val === 'show'; return n })
-      setMsg(val === 'auto' ? (ns === 'pos' ? 'Reset to follow the POS setting' : ns === 'kind' ? 'Reset to follow the declared POS / carrier' : 'Reset to carrier default')
+      setMsg(val === 'auto' ? (ns === 'pos' ? 'Reset to follow the POS setting' : ns === 'kind' ? 'Reset to follow the declared POS / carrier'
+                               : ns === 'vertical' || ns === 'closing' ? 'Reset to follow the business type' : 'Reset to carrier default')
                             : val === 'show' ? 'Always shown' : 'Always hidden')
       setTimeout(() => setMsg(''), 3000)
-    } catch (e: any) { setMsg(e?.message || 'Save failed') }
+    } catch (e: unknown) { setMsg((e instanceof Error && e.message) || 'Save failed') }
   }
 
   async function save(scope: 'nav' | 'group', key: string) {
@@ -59,8 +61,8 @@ export default function DisplayLabelsPage() {
       invalidateApiCache('nav-config')   // sidebar (layout) caches nav-config → refresh it after this write
       setOver(p => { const n = { ...p }; if (label) n[key] = label; else delete n[key]; return n })
       setMsg(label ? `Saved "${label}"` : 'Reverted to default')
-    } catch (e: any) {
-      setMsg(e?.message || 'Save failed — is migration 068_ui_label_override.sql applied?')
+    } catch (e: unknown) {
+      setMsg((e instanceof Error && e.message) || 'Save failed — is migration 068_ui_label_override.sql applied?')
       setDraft(p => ({ ...p, [key]: over[key] || '' }))   // roll back the field
     }
     setTimeout(() => setMsg(''), 3500)
@@ -92,6 +94,55 @@ export default function DisplayLabelsPage() {
           POS setting rather than by a carrier. Same override store, same endpoint, one more key
           namespace — and the same asymmetry: anyone here may HIDE or reset, only a platform
           super-admin may turn one back ON. */}
+      {/* BUSINESS-TYPE OVERRIDES (index §35) — this company's exceptions to what its business type hides: a page
+          (cap 'vertical:<href>') or a daily-closing input (cap 'closing:<input>'). Auto follows the business type
+          (edited by the platform on Business Types); re-showing is the platform's call, hiding more is yours. */}
+      {loaded && vert && (
+        <div className="card" style={{ padding: 16, marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, textTransform: 'uppercase', letterSpacing: '0.05em',
+            color: 'var(--text2)', marginBottom: 4 }}>Business type — {vert.label}</div>
+          <div style={{ color: 'var(--text3)', fontSize: 12, marginBottom: 10 }}>
+            Auto follows what your business type shows. {!isSuper && 'Turning a hidden item back on is reserved for the platform team — you can still hide more, or reset.'}
+          </div>
+          <div style={{ fontWeight: 600, fontSize: 13, margin: '6px 0' }}>Daily closing inputs</div>
+          {(vert.closing_sections || []).map(sec => {
+            const cur = caps['closing:' + sec.key]
+            const v = cur === true ? 'show' : cur === false ? 'hide' : 'auto'
+            const byType = (vert.closing_hidden || []).includes(sec.key)
+            return (
+              <div key={sec.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '4px 0' }}>
+                <div style={{ fontSize: 13 }}>{sec.label}<span style={{ color: 'var(--text3)', fontSize: 11, marginLeft: 8 }}>{byType ? 'hidden' : 'shown'} by business type</span></div>
+                <select value={v} onChange={e => setCap(sec.key, e.target.value as 'auto' | 'show' | 'hide', 'closing')}
+                  style={{ padding: '5px 7px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }}>
+                  <option value="auto">Auto (business type)</option>
+                  {(isSuper || v === 'show') && <option value="show">Always show</option>}
+                  <option value="hide">Always hide</option>
+                </select>
+              </div>
+            )
+          })}
+          <div style={{ fontWeight: 600, fontSize: 13, margin: '12px 0 6px' }}>Pages your business type hides</div>
+          {NAV.flatMap(g => g.items).filter((it, i, all) => all.findIndex(x => x.href === it.href) === i)
+            .filter(it => hrefHiddenByVertical(it.href, vert.nav_hidden) || (vert.hidden_modules || []).includes(it.module)
+                          || caps['vertical:' + it.href] != null)
+            .map(it => {
+              const cur = caps['vertical:' + it.href]
+              const v = cur === true ? 'show' : cur === false ? 'hide' : 'auto'
+              return (
+                <div key={it.href} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '3px 0' }}>
+                  <div style={{ fontSize: 13 }}>{it.label}<span style={{ color: 'var(--text3)', fontSize: 11, marginLeft: 8 }}>{it.href}</span></div>
+                  <select value={v} onChange={e => setCap(it.href, e.target.value as 'auto' | 'show' | 'hide', 'vertical')}
+                    style={{ padding: '5px 7px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }}>
+                    <option value="auto">Auto (hidden by business type)</option>
+                    {(isSuper || v === 'show') && <option value="show">Always show</option>}
+                    <option value="hide">Always hide</option>
+                  </select>
+                </div>
+              )
+            })}
+        </div>
+      )}
+
       {loaded && (
         <div className="card" style={{ padding: 16, marginBottom: 14 }}>
           <div style={{ fontWeight: 700, fontSize: 14, textTransform: 'uppercase', letterSpacing: '0.05em',

@@ -285,6 +285,63 @@ def wired(src, pat):
 for name, src, pat in WIRES:
     check("E " + name, wired(src, pat))
 
+# ── §H PROGRAMMABLE (owner 2026-09-25 "no hard coded — all should be programmable platform based") ─────────
+print("§H programmable business types")
+secs = [c["key"] for c in V.closing_sections()]
+check("H1 closing inputs = the 3 form sections + one per built-in tender (derived)",
+      secs[:3] == ["acc_sale", "bill_payments", "activation_counts"] and "tender:acima" in secs and "tender:cash" in secs, secs)
+try:
+    from app.modules.closing.tender_config import STANDARD_DEFS as _SD
+    check("H2 tender inputs are DERIVED from tender_config.STANDARD_DEFS (none re-listed)",
+          [k for k in secs if k.startswith("tender:")] == [f"tender:{d[0]}" for d in _SD])
+except Exception as _e:
+    check("H2 tender inputs are DERIVED from tender_config.STANDARD_DEFS", False, _e)
+row, errs = V.validate_vertical({"key": "print_shop", "label": "Print shop", "nav_hidden": ["/pos/activations", "/commcalc$"],
+                                 "closing_hidden": ["tender:acima", "acc_sale"], "uses_carriers": False},
+                                secs, {WL, UPS}, creating=True)
+check("H3 a valid new type validates", not errs and row["key"] == "print_shop" and row["closing_hidden"] == ["acc_sale", "tender:acima"]
+      and row["nav_hidden"] == ["/commcalc$", "/pos/activations"] and row["uses_carriers"] is False, (row, errs))
+check("H4 bad key / duplicate / missing label refused",
+      V.validate_vertical({"key": "Bad Key", "label": "x"}, secs, set(), True)[1]
+      and V.validate_vertical({"key": UPS, "label": "x"}, secs, {UPS}, True)[1]
+      and V.validate_vertical({"key": "ok_key"}, secs, set(), True)[1])
+check("H5 unknown closing input / non-page address refused",
+      V.validate_vertical({"closing_hidden": ["nope"]}, secs)[1] and V.validate_vertical({"nav_hidden": ["javascript:alert(1)"]}, secs)[1])
+ALLV = [WL, UPS, "print_shop"]
+check("H6 excluding from 'any' lists the others", V.next_module_scope([], UPS, False, ALLV) == ["print_shop", WL])
+check("H7 including the last missing one collapses to any", V.next_module_scope([WL], UPS, True, [WL, UPS]) == [])
+check("H8 include / exclude on a list", V.next_module_scope([UPS], "print_shop", True, ALLV) == ["print_shop", UPS]
+      and V.next_module_scope([UPS, "print_shop"], UPS, False, ALLV) == ["print_shop"])
+ap = V.admin_payload(c)
+check("H9 admin payload: verticals with tenant counts, modules with scopes, closing inputs",
+      {v["key"]: v["tenants"] for v in ap["verticals"]} == {WL: 1, UPS: 1}
+      and any(m["key"] == "royalty" and m["applies_to_vertical"] == [UPS] for m in ap["modules"]) and ap["closing_sections"])
+check("H10 me_payload offers the closing inputs a company may override", V.me_payload(c, B)["closing_sections"] == V.closing_sections())
+_ep = {name: re.search(r"def %s\([\s\S]*?\n(?=@router|\Z)" % name, core_src) for name in
+       ("verticals_admin", "create_vertical", "update_vertical", "set_module_vertical")}
+check("H11 every Business Types endpoint is super-admin gated",
+      all(m and "_require_super_admin(authorization, x_active_org)" in m.group(0) for m in _ep.values()),
+      [k for k, m in _ep.items() if not (m and "_require_super_admin" in m.group(0))])
+check("H12 the default type can't be deactivated and a type in use can't be retired",
+      bool(_ep["update_vertical"]) and "cannot be deactivated" in _ep["update_vertical"].group(0)
+      and "Companies still use this business type" in _ep["update_vertical"].group(0))
+_cc = read("backend/app/modules/commcalc/router.py")
+check("H13 re-showing a business-type-hidden page / closing input is super-admin only (cap re-grant rule)",
+      "key.startswith('vertical:') or key.startswith('closing:')" in _cc)
+_csf = read("frontend/src/components/ClosingSubmitForm.tsx")
+check("H14 the closing form applies the company's 'closing:<input>' cap overrides over the business type's list",
+      "k.startsWith('closing:')" in _csf and "tenant?.vertical?.closing_hidden" in _csf)
+_dash = read("frontend/src/app/(platform)/franchise/page.tsx")
+check("H15 the dashboard's links come from the Dashboard Designer layout (default only as fallback) and are access-filtered",
+      "/api/v1/commcalc/tile-layout?module=" in _dash and "DEFAULT_LINKS" in _dash and "verticalPathOK(href" in _dash
+      and "canAccessPath(" in _dash)
+_bt = read("frontend/src/app/(platform)/admin/business-types/page.tsx")
+check("H16 the Business Types editor reads everything from the backend + NAV and names no business type",
+      "/api/v1/core/verticals/admin" in _bt and not re.search(r"['\"](%s|%s)['\"]" % (UPS, WL), _bt))
+_lb = read("frontend/src/app/(platform)/admin/labels/page.tsx")
+check("H17 a company edits its business-type exceptions on Display Labels (vertical: / closing: caps)",
+      "setCap(sec.key" in _lb and "'closing')" in _lb and "'vertical')" in _lb)
+
 # ── §F RULE TWO ─────────────────────────────────────────────────────────────────────────────────────────
 print("§F no vertical key spelled in code")
 ALLOWED = {os.path.normpath("backend/app/modules/core/verticals.py")}

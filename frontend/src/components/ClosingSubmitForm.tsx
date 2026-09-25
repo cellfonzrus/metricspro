@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
-import { apiCached, LOOKUP } from '@/lib/cache'
+import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 import { startTour } from '@/lib/tours'
 import { useReportLabels } from '@/lib/report-labels'
@@ -80,6 +80,28 @@ function readDraft(): Draft | null {
   } catch { return null }
 }
 function clearDraft() { try { window.localStorage.removeItem(DRAFT_KEY) } catch { /* private mode */ } }
+// A draft worth offering: it carries real content (a photo, a tender amount or an expense line).
+function draftHasContent(d: Draft | null): boolean {
+  return !!d && !!(d.envPreview || d.f?.envelope_picture
+    || MONEY_KEYS.some(k => d.f?.[k]) || Object.values(d.tv || {}).some(Boolean)
+    || (d.expLines || []).length > 0)
+}
+
+// The API payloads this form reads (only the fields it uses).
+type StoreOpt = { sfid?: string; store_code?: string; store_address?: string; store_name?: string; market?: string }
+type TenderDef = { tender_key: string; label?: string; recon_class?: string }
+type CountDef = { field_key: string; label?: string }
+type Employee = { id?: string | number; name?: string; email?: string; home_store?: string }
+type ExpenseCategory = { id: string; name: string; kind?: string }
+type Coach = { needs_walkthrough?: boolean; message?: string; tour_slug?: string }
+type RecentRow = {
+  id?: string | number; employee_name?: string; store_address?: string; store_name?: string; store_code?: string
+  t_cash?: number | null; t_credit?: number | null; t_ext_cc?: number | null; t_gift?: number | null
+  t_store_acct?: number | null; t_zelle?: number | null; other_account?: number | null; acc_sale?: number | null
+  store_cash?: number | null; epay_cash?: number | null; store_cc?: number | null; epay_cc?: number | null
+  counts?: Record<string, number | string | null>; auto_accepted?: boolean; source?: string
+  [col: string]: unknown
+}
 
 export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitted }:
   { defaultEmployeeName?: string; onSubmitted?: () => void }) {
@@ -90,8 +112,28 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   // Closing inputs the tenant's VERTICAL does not use (mig 1024, index §35) — DATA on the vertical, read from
   // /core/me: 'acc_sale' · 'bill_payments' · 'activation_counts' · 'tender:<built-in key>'. A hidden box
   // simply submits empty, exactly as a blank one does today. No vertical payload → nothing hidden.
+  // A company's OWN exception rides the existing per-tenant cap overrides (ui_label_override scope 'cap', key
+  // 'closing:<input>' → true = always show, false = always hide), edited on Display Labels; the business type's
+  // list is the default. Same nav-config read the sidebar uses (cached), so this adds no request.
   const { tenant } = useAuth()
-  const closingHidden = useMemo(() => new Set<string>(tenant?.vertical?.closing_hidden || []), [tenant?.vertical?.closing_hidden])
+  const [closingCaps, setClosingCaps] = useState<Record<string, boolean | null>>({})
+  useEffect(() => {
+    let alive = true
+    apiCached('/api/v1/commcalc/nav-config', CONFIG)
+      .then((c: { capabilities?: Record<string, boolean | null> } | null) => { if (alive) setClosingCaps(c?.capabilities || {}) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
+  const closingHidden = useMemo(() => {
+    const hidden = new Set<string>(tenant?.vertical?.closing_hidden || [])
+    for (const [k, v] of Object.entries(closingCaps)) {
+      if (!k.startsWith('closing:')) continue
+      const key = k.slice('closing:'.length)
+      if (v === true) hidden.delete(key)
+      else if (v === false) hidden.add(key)
+    }
+    return hidden
+  }, [tenant?.vertical?.closing_hidden, closingCaps])
   const builtinTenders = useMemo(() => TENDERS.filter(t => !closingHidden.has('tender:' + t.key.slice(2))), [closingHidden])
   const procName = term('processor', 'Bill-pay')
   const finName = term('financing', 'Financing')
@@ -106,8 +148,8 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
       : t.key === 't_ext_cc' ? `${extCcName} $`
         : t.label
   const [f, setF] = useState<State>(blank())
-  const [stores, setStores] = useState<any[]>([])
-  const [recent, setRecent] = useState<any[]>([])
+  const [stores, setStores] = useState<StoreOpt[]>([])
+  const [recent, setRecent] = useState<RecentRow[]>([])
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [retry, setRetry] = useState<{ message: string } | null>(null)
@@ -124,31 +166,29 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const [ocrCash, setOcrCash] = useState('')
   const [ocrAmounts, setOcrAmounts] = useState<number[]>([])
   const [ocrBusy, setOcrBusy] = useState(false)
-  const [tdefs, setTdefs] = useState<any[] | null>(null)     // configured tenders (null = built-in 7, static)
+  const [tdefs, setTdefs] = useState<TenderDef[] | null>(null)     // configured tenders (null = built-in 7, static)
   const [tv, setTv] = useState<Record<string, string>>({})   // amount per configured tender_key
-  const [cdefs, setCdefs] = useState<any[] | null>(null)      // configured count fields (null = built-in 3, static)
+  const [cdefs, setCdefs] = useState<CountDef[] | null>(null)      // configured count fields (null = built-in 3, static)
   const [cv, setCv] = useState<Record<string, string>>({})    // value per configured field_key
-  const [emps, setEmps] = useState<any[]>([])                 // employee roster (RULE THREE picker, see below)
+  const [emps, setEmps] = useState<Employee[]>([])                 // employee roster (RULE THREE picker, see below)
   const [empsLoaded, setEmpsLoaded] = useState(false)         // fetch landed — tells "empty" apart from "loading"
-  const [cats, setCats] = useState<any[]>([])                 // expense categories (mig 506, lazy-seeded)
-  const [coach, setCoach] = useState<any>(null)               // entry-quality coaching banner (mig 937)
+  const [cats, setCats] = useState<ExpenseCategory[]>([])                 // expense categories (mig 506, lazy-seeded)
+  // entry-quality coaching banner (mig 937) — kept WITH the name it was fetched for, so a cleared / changed name
+  // reads as no banner without a synchronous reset inside the effect.
+  const [coachFor, setCoachFor] = useState<{ name: string; data: Coach | null }>({ name: '', data: null })
   const [expLines, setExpLines] = useState<ExpLine[]>([])
 
   const set = (patch: Partial<State>) => setF(p => ({ ...p, ...patch }))
 
   // ── Draft persistence (see the note above DRAFT_KEY) ──────────────────────────────────────────
-  const [resumeDraft, setResumeDraft] = useState<Draft | null>(null)
-  // On mount, if a fresh draft with real content exists, OFFER to resume it (never auto-apply).
-  useEffect(() => {
-    const d = readDraft()
-    const hasContent = d && (d.envPreview || d.f?.envelope_picture
-      || MONEY_KEYS.some(k => (d.f as any)?.[k]) || Object.values(d.tv || {}).some(Boolean)
-      || (d.expLines || []).length > 0)
-    if (hasContent) setResumeDraft(d)
-  }, [])
+  // On first render, if a fresh draft with real content exists, OFFER to resume it (never auto-apply). Read in the
+  // state initialiser (not an effect): this form only ever renders client-side, after a session exists — the
+  // platform layout shows a splash until then and the kiosk mounts it after sign-in — and readDraft() returns
+  // null without a window, so no server render can disagree.
+  const [resumeDraft, setResumeDraft] = useState<Draft | null>(() => { const d = readDraft(); return draftHasContent(d) ? d : null })
   // Snapshot the in-progress entry whenever it changes, so a camera-induced reload can restore it.
   useEffect(() => {
-    const hasContent = envPreview || f.envelope_picture || MONEY_KEYS.some(k => (f as any)[k])
+    const hasContent = envPreview || f.envelope_picture || MONEY_KEYS.some(k => f[k])
       || Object.values(tv).some(Boolean) || expLines.length > 0
     if (!hasContent) return
     try {
@@ -162,6 +202,18 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     setEnvPreview(d.envPreview || ''); setResumeDraft(null)
   }
   function discardResume() { clearDraft(); setResumeDraft(null) }
+
+  // Prefill from the logged-in user's own name — but ONLY once the roster has loaded and it's an EXACT
+  // (case-insensitive) match to a real roster entry. allowCreate is false on the picker, so a default that matches
+  // nothing is never carried (it would look blank yet still be submitted). DERIVED, not copied into state by an
+  // effect: it applies while the rep has not touched the picker; clearing the picker keeps it clear.
+  const [nameTouched, setNameTouched] = useState(false)
+  const prefillName = useMemo(() => {
+    const want = (defaultEmployeeName || '').trim().toLowerCase()
+    if (!want) return ''
+    return emps.find(e => (e.name || '').trim().toLowerCase() === want)?.name || ''
+  }, [defaultEmployeeName, emps])
+  const employeeName = f.employee_name || (nameTouched ? '' : prefillName)
 
   const enteredCash = parseFloat(tdefs ? (tv['cash'] || '') : f.t_cash) || 0
   const ocrNum = parseFloat(ocrCash) || 0
@@ -182,12 +234,12 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
       try { dataUrl = await downscaleImage(rawDataUrl) } catch { /* keep rawDataUrl */ }
       setEnvPreview(dataUrl)
       try {
-        const u: any = await api('/api/v1/closing/envelope-photo', { method: 'POST', body: JSON.stringify({ image: dataUrl }) })
-        set({ envelope_picture: u.path })
-      } catch (e: any) {
+        const u = (await api('/api/v1/closing/envelope-photo', { method: 'POST', body: JSON.stringify({ image: dataUrl }) })) as { path?: string }
+        set({ envelope_picture: u.path || '' })
+      } catch (e: unknown) {
         // Sticky + visible: this error is NOT `msg` (the submit-result message), so a later
         // "✅ Closing submitted…" can never silently clobber it — see submit()'s reset.
-        setPhotoError('📷 Photo upload failed: ' + (e?.message || e) + ' — tap "Take / choose photo" again before submitting.')
+        setPhotoError('📷 Photo upload failed: ' + (e instanceof Error ? e.message : String(e)) + ' — tap "Take / choose photo" again before submitting.')
       } finally {
         setPhotoUploading(false)
       }
@@ -230,12 +282,12 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     } catch { /* OCR best-effort */ } finally { setOcrBusy(false) }
   }
 
-  useEffect(() => { apiCached('/api/v1/closing/stores', LOOKUP).then(s => setStores(s || [])).catch(() => {}) }, [])
+  useEffect(() => { apiCached('/api/v1/closing/stores', LOOKUP).then((s: StoreOpt[] | null) => setStores(s || [])).catch(() => {}) }, [])
   // Configured tenders (mig 111): render the tenant's own tender fields; null → the built-in 7 (static).
-  useEffect(() => { api('/api/v1/closing/tender-config').then((d: any) => setTdefs((d?.defs && d.defs.length) ? d.defs : null)).catch(() => setTdefs(null)) }, [])
+  useEffect(() => { api('/api/v1/closing/tender-config').then((d: { defs?: TenderDef[] } | null) => setTdefs((d?.defs && d.defs.length) ? d.defs : null)).catch(() => setTdefs(null)) }, [])
   // Configured count fields (mig 501): render the tenant's own activation-count fields; null → the
   // built-in 3 (static), so an un-opted tenant's form is byte-identical to today.
-  useEffect(() => { api('/api/v1/closing/count-config').then((d: any) => setCdefs((d?.defs && d.defs.length) ? d.defs : null)).catch(() => setCdefs(null)) }, [])
+  useEffect(() => { api('/api/v1/closing/count-config').then((d: { defs?: CountDef[] } | null) => setCdefs((d?.defs && d.defs.length) ? d.defs : null)).catch(() => setCdefs(null)) }, [])
   // Employee roster for the "Employee" picker (RULE THREE §3b — pick, don't type): company-wide,
   // same fetch/shape cash-config already uses for the store-closer picker. id === label = the
   // employee's name (daily_closing.employee_name stays a NAME STRING this wave — see handoff).
@@ -247,57 +299,51 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   useEffect(() => {
     let alive = true
     apiCached('/api/v1/storeops/employees?all_company=true', LOOKUP)
-      .then((r: any) => { if (alive) { setEmps(Array.isArray(r) ? r : (r?.employees || [])); setEmpsLoaded(true) } })
+      .then((r: Employee[] | { employees?: Employee[] } | null) => { if (alive) { setEmps(Array.isArray(r) ? r : (r?.employees || [])); setEmpsLoaded(true) } })
       .catch(() => { if (alive) setEmpsLoaded(true) })
     return () => { alive = false }
   }, [])
   // Expense categories (mig 506, EEP) — lazy-seeded 5 presets on first call.
-  useEffect(() => { api('/api/v1/closing/expense-categories').then((d: any) => setCats(d?.categories || [])).catch(() => setCats([])) }, [])
+  useEffect(() => { api('/api/v1/closing/expense-categories').then((d: { categories?: ExpenseCategory[] } | null) => setCats(d?.categories || [])).catch(() => setCats([])) }, [])
   // Entry-quality coaching (owner 2026-09-02, mig 937): once the rep's name is known, ask whether
   // their entries were incorrect for N days in a row — if so show the guidance banner + the
   // "Walk me through" tour launcher. Best-effort: any failure just means no banner.
+  const coachName = employeeName.trim()
   useEffect(() => {
-    const name = (f.employee_name || '').trim()
-    if (!name) { setCoach(null); return }
+    if (!coachName) return
     let dead = false
-    api(`/api/v1/closing/entry-quality/me?employee_name=${encodeURIComponent(name)}`)
-      .then((d: any) => { if (!dead) setCoach(d) })
-      .catch(() => { if (!dead) setCoach(null) })
+    api(`/api/v1/closing/entry-quality/me?employee_name=${encodeURIComponent(coachName)}`)
+      .then((d: Coach | null) => { if (!dead) setCoachFor({ name: coachName, data: d }) })
+      .catch(() => { if (!dead) setCoachFor({ name: coachName, data: null }) })
     return () => { dead = true }
-  }, [f.employee_name])
+  }, [coachName])
+  const coach = coachName && coachFor.name === coachName ? coachFor.data : null
   // Envelope config (mig 507/510) — org default merged with this store's override, re-fetched whenever
   // the picked store changes. `require_photo_if_cash` is OFF unless a tenant explicitly opted in (or
   // the migration hasn't run yet) — see submit()'s gate below.
   useEffect(() => {
     api(`/api/v1/closing/envelope-config${f.store_code ? `?store_code=${encodeURIComponent(f.store_code)}` : ''}`)
-      .then((d: any) => setEnvCfg(d?.effective || {})).catch(() => setEnvCfg({}))
+      .then((d: { effective?: { require_photo_if_cash?: boolean } } | null) => setEnvCfg(d?.effective || {})).catch(() => setEnvCfg({}))
   }, [f.store_code])
-  // Prefill from the logged-in user's own name — but ONLY once the roster has loaded and it's an
-  // EXACT (case-insensitive) match to a real roster entry. allowCreate is false on this picker, so a
-  // default that doesn't match anything must NOT be silently carried in state (it would look blank in
-  // the picker yet still be submitted) — better to leave it unset and make the rep actively pick.
-  useEffect(() => {
-    if (!defaultEmployeeName || f.employee_name || !emps.length) return
-    const hit = emps.find((e: any) => (e.name || '').trim().toLowerCase() === defaultEmployeeName.trim().toLowerCase())
-    if (hit) set({ employee_name: hit.name })
-  }, [defaultEmployeeName, emps]) // eslint-disable-line
+  // (The logged-in user's name prefill is DERIVED above — `employeeName` — rather than copied in here.)
 
   const loadRecent = useCallback(() => {
     if (!f.close_date) return
-    api(`/api/v1/closing/days?date=${f.close_date}`).then(r => setRecent(r || [])).catch(() => {})
+    api(`/api/v1/closing/days?date=${f.close_date}`).then((r: RecentRow[] | null) => setRecent(r || [])).catch(() => {})
   }, [f.close_date])
   useEffect(() => { loadRecent() }, [loadRecent])
 
   function pickStore(idx: string) {
     const s = stores[Number(idx)]
     if (!s) { set({ sfid: '', store_code: '', store_name: '' }); return }
-    set({ sfid: s.sfid, store_code: s.store_code, store_name: s.store_address || s.store_code })
+    // Values passed through exactly as the store list gives them (the submit payload is unchanged).
+    set({ sfid: s.sfid as string, store_code: s.store_code as string, store_name: (s.store_address || s.store_code) as string })
   }
 
   async function submit() {
     if (!f.close_date) { setMsg('❌ Pick a date.'); return }
     if (!f.sfid && !f.store_code) { setMsg('❌ Pick your store.'); return }
-    if (!f.employee_name.trim()) { setMsg('❌ Enter your name.'); return }
+    if (!employeeName.trim()) { setMsg('❌ Enter your name.'); return }
     // BUG FIX (owner-reported 2026-08-07): never let a submit race the photo upload — the button is
     // already disabled while photoUploading, this is the belt-and-suspenders guard.
     if (photoUploading) { setMsg('❌ Please wait for the envelope photo to finish uploading, then submit.'); return }
@@ -317,7 +363,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
       if (!l.category_id) { setMsg('❌ Pick a category for every expense line.'); return }
       if (!((parseFloat(l.amount) || 0) > 0)) { setMsg('❌ Every expense line needs an amount greater than zero.'); return }
       if (!l.description.trim()) { setMsg('❌ Every expense line needs a description.'); return }
-      const cat = cats.find((c: any) => c.id === l.category_id)
+      const cat = cats.find(c => c.id === l.category_id)
       if ((cat?.kind === 'payroll' || cat?.kind === 'commission') && !l.employee_id) {
         setMsg(`❌ "${cat?.name}" requires picking an employee.`); return
       }
@@ -325,8 +371,8 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     setBusy(true); setMsg('')
     // Build the tender fields: configured tenders → standard keys to t_*, custom keys to custom_tenders;
     // no config → the static t_* fields (unchanged behaviour).
-    let tenderFields: any
-    let customTenders: any = undefined
+    let tenderFields: Record<string, string>
+    let customTenders: Record<string, string> | undefined = undefined
     if (tdefs) {
       tenderFields = {}; customTenders = {}
       for (const d of tdefs) {
@@ -341,16 +387,16 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     // Build the count fields: configured count fields (mig 501) → a single `counts` map keyed by
     // field_key (standard field_keys route to the physical column server-side, custom ones to jsonb);
     // no config → the static upgrade_count/new_line_count/postpaid_count fields (unchanged behaviour).
-    let countFields: any
+    let countFields: Record<string, unknown>
     if (cdefs) {
-      countFields = { counts: Object.fromEntries(cdefs.map((d: any) => [d.field_key, cv[d.field_key] || '0'])) }
+      countFields = { counts: Object.fromEntries(cdefs.map(d => [d.field_key, cv[d.field_key] || '0'])) }
     } else {
       countFields = { upgrade_count: f.upgrade_count, new_line_count: f.new_line_count, postpaid_count: f.postpaid_count }
     }
     try {
       const r = await api('/api/v1/closing/row', { method: 'POST', body: JSON.stringify({
         close_date: f.close_date, sfid: f.sfid, store_code: f.store_code, store_name: f.store_name,
-        employee_name: f.employee_name.trim(),
+        employee_name: employeeName.trim(),
         ...tenderFields, custom_tenders: customTenders,
         epay_on_cash: f.epay_on_cash, epay_on_credit: f.epay_on_credit, epay_on_acima: f.epay_on_acima,
         acc_sale: f.acc_sale,
@@ -385,7 +431,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
       clearDraft()   // submitted successfully → the saved draft is done
       loadRecent()
       onSubmitted?.()
-    } catch (e: any) { setMsg('🚫 ' + (e?.message || e)) }
+    } catch (e: unknown) { setMsg('🚫 ' + (e instanceof Error ? e.message : String(e))) }
     finally { setBusy(false) }
   }
 
@@ -396,15 +442,15 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   // org are in this state). Saying so on the row is what makes that honest instead of noisy: the
   // rep can tell a colleague apart from a record nobody has finished setting up.
   const empOptions: EntityOption[] = useMemo(
-    () => emps.filter((e: any) => (e.name || '').trim()).map((e: any) => ({
-      id: e.name, label: e.name,
+    () => emps.filter(e => (e.name || '').trim()).map(e => ({
+      id: e.name as string, label: e.name as string,
       sublabel: (e.home_store || '').trim() ? (e.email || undefined) : 'no store assigned',
     })),
     [emps])
   // Employee options keyed by the REAL id (for the payroll/commission expense-line picker — those
   // lines carry commcalc.closing_expense.employee_id, a real FK, unlike the name-string rep picker above).
   const empOptionsById: EntityOption[] = useMemo(
-    () => emps.filter((e: any) => e.id && (e.name || '').trim()).map((e: any) => ({ id: String(e.id), label: e.name, sublabel: e.email || undefined })),
+    () => emps.filter(e => e.id && (e.name || '').trim()).map(e => ({ id: String(e.id), label: e.name as string, sublabel: e.email || undefined })),
     [emps])
 
   const storeIdx = stores.findIndex(s => (f.sfid && s.sfid === f.sfid) || (!f.sfid && f.store_code && s.store_code === f.store_code))
@@ -413,12 +459,13 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     : MONEY_KEYS.reduce((a, k) => a + (parseFloat(f[k] as string) || 0), 0)
   // The "recent submissions" columns: configured count fields (mig 501), else the built-in 3.
   const countCols = cdefs
-    ? cdefs.map((d: any) => ({ key: d.field_key as string, label: d.label || d.field_key }))
+    ? cdefs.map(d => ({ key: d.field_key, label: d.label || d.field_key }))
     : COUNTS.map(c => ({ key: c.key as string, label: c.label.replace(' #', '') }))
   // A row's value for one count field_key: a standard key is a physical column, a custom one lives
   // in the `counts` jsonb (mig 501).
-  function countVal(r: any, key: string) {
-    return key in r ? r[key] : (r.counts?.[key] ?? 0)
+  function countVal(r: RecentRow, key: string): string {
+    const v = key in r ? r[key] : (r.counts?.[key] ?? 0)
+    return v == null ? '' : String(v)
   }
 
   return (
@@ -453,8 +500,8 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
             </select>
           </Field>
           <Field label="Employee">
-            <EntityPicker options={empOptions} value={f.employee_name || null}
-              onChange={v => set({ employee_name: v || '' })} placeholder="Your name" width="100%" />
+            <EntityPicker options={empOptions} value={employeeName || null}
+              onChange={v => { setNameTouched(true); set({ employee_name: v || '' }) }} placeholder="Your name" width="100%" />
             {empsLoaded && !empOptions.length && (
               <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 4 }}>
                 No employees available to pick. Ask an admin to check your store assignment
@@ -470,7 +517,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
             {/* Owner directive 2026-09-02: the cash field reads "Total cash in store including
                 Bill Payments". Applied ONLY when the configured label is still the stock "Cash"
                 (a tenant's own custom label always wins — config over code). */}
-            {tdefs.map((d: any) => {
+            {tdefs.map(d => {
               const stock = (d.label || d.tender_key || '').trim().toLowerCase() === 'cash'
               const isCash = d.recon_class === 'cash' || d.tender_key === 'cash'
               const lbl = isCash && stock ? 'Total cash in store including Bill Payments' : (d.label || d.tender_key)
@@ -516,7 +563,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         <SectionLabel>Transaction counts</SectionLabel>
         {cdefs ? (
           <Row>
-            {cdefs.map((d: any) => (
+            {cdefs.map(d => (
               <Field key={d.field_key} label={`${d.label || d.field_key} #`}>
                 <input style={inp} inputMode="numeric" value={cv[d.field_key] || ''} onChange={e => setCv(v => ({ ...v, [d.field_key]: e.target.value }))} placeholder="0" />
               </Field>
@@ -538,13 +585,13 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
 
         <SectionLabel>Expenses taken from the envelope (categorized — DM approves each line)</SectionLabel>
         {expLines.map((l, i) => {
-          const cat = cats.find((c: any) => c.id === l.category_id)
+          const cat = cats.find(c => c.id === l.category_id)
           const needsEmp = cat?.kind === 'payroll' || cat?.kind === 'commission'
           return (
             <Row key={i}>
               <Field label="Category">
                 <EntityPicker
-                  options={cats.map((c: any) => ({ id: c.id, label: c.name }))}
+                  options={cats.map(c => ({ id: c.id, label: c.name }))}
                   value={l.category_id || null}
                   onChange={v => setExpLines(ls => ls.map((x, j) => j === i ? { ...x, category_id: v || '' } : x))}
                   placeholder="Category…" width="100%" />
@@ -558,7 +605,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
                   <EntityPicker
                     options={empOptionsById}
                     value={l.employee_id || null}
-                    onChange={v => { const e = emps.find((e: any) => e.id === v); setExpLines(ls => ls.map((x, j) => j === i ? { ...x, employee_id: v || '', employee_name: e?.name || '' } : x)) }}
+                    onChange={v => { const e = emps.find(x => String(x.id) === v); setExpLines(ls => ls.map((x, j) => j === i ? { ...x, employee_id: v || '', employee_name: e?.name || '' } : x)) }}
                     placeholder="Employee…" width="100%" />
                 </Field>
               )}
@@ -593,6 +640,9 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
               </label>
               {envPreview && (
                 <div style={{ position: 'relative', display: 'inline-block' }}>
+                  {/* next/image cannot optimise this: it is the rep's own photo as a local data: URL, shown before
+                      (and while) it uploads — there is no remote source to resize. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={envPreview} alt="envelope" style={{
                     height: 70, borderRadius: 8,
                     border: photoError ? '2px solid #b42318' : '1px solid var(--border)',
@@ -656,17 +706,17 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
                   <th key={i} style={{ textAlign: 'left', padding: '6px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
               </tr></thead>
               <tbody>
-                {recent.map((r: any) => (
+                {recent.map(r => (
                   <tr key={r.id}>
                     <td style={cell}>{r.employee_name || '—'}</td>
                     <td style={cell}>{r.store_address || r.store_name || r.store_code || '—'}</td>
                     <td style={cell}>{fmt(r.t_cash ?? ((r.store_cash || 0) + (r.epay_cash || 0)))}</td>
                     <td style={cell}>{fmt(r.t_credit ?? ((r.store_cc || 0) + (r.epay_cc || 0)))}</td>
-                    <td style={cell}>{fmt(r.t_ext_cc)}</td>
-                    <td style={cell}>{fmt(r.t_gift)}</td>
-                    <td style={cell}>{fmt(r.t_store_acct)}</td>
-                    <td style={cell}>{fmt(r.t_zelle ?? r.other_account)}</td>
-                    <td style={cell}>{fmt(r.acc_sale)}</td>
+                    <td style={cell}>{fmt(r.t_ext_cc ?? 0)}</td>
+                    <td style={cell}>{fmt(r.t_gift ?? 0)}</td>
+                    <td style={cell}>{fmt(r.t_store_acct ?? 0)}</td>
+                    <td style={cell}>{fmt(r.t_zelle ?? r.other_account ?? 0)}</td>
+                    <td style={cell}>{fmt(r.acc_sale ?? 0)}</td>
                     {countCols.map(c => <td key={c.key} style={cell}>{countVal(r, c.key)}</td>)}
                     <td style={cell}>{r.auto_accepted ? <span title="accepted after 3 tries — under management review" style={{ fontSize: 11, color: '#b42318' }}>⚑ review</span> : <span style={{ fontSize: 11, color: 'var(--text3)' }}>{r.source === 'manual' ? 'form' : 'sheet'}</span>}</td>
                   </tr>
@@ -695,14 +745,17 @@ const SectionLabel = ({ children }: { children: React.ReactNode }) => (
 
 // tesseract.js loaded on demand from CDN (in-browser OCR, no API key). Best-effort: printed digits
 // read well, handwriting roughly — the rep confirms/edits the read before submitting.
-let _tessP: Promise<any> | null = null
-function loadTesseract(): Promise<any> {
-  if ((window as any).Tesseract) return Promise.resolve((window as any).Tesseract)
+type TesseractLike = { recognize: (image: string, lang: string) => Promise<{ data?: { text?: string } }> }
+const tessWindow = () => window as unknown as { Tesseract?: TesseractLike }
+let _tessP: Promise<TesseractLike> | null = null
+function loadTesseract(): Promise<TesseractLike> {
+  const loaded = tessWindow().Tesseract
+  if (loaded) return Promise.resolve(loaded)
   if (_tessP) return _tessP
   _tessP = new Promise((resolve, reject) => {
     const s = document.createElement('script')
     s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'
-    s.onload = () => resolve((window as any).Tesseract)
+    s.onload = () => { const t = tessWindow().Tesseract; if (t) resolve(t); else reject(new Error('OCR library did not load')) }
     s.onerror = reject
     document.body.appendChild(s)
   })

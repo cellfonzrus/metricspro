@@ -9,10 +9,12 @@
 // GET /account/royalty/summary (§37). A source that is not set up (or not deployed yet) says so on its own
 // tile instead of showing a zero. Which tenants see this page is DATA: the module's applies_to_vertical
 // (mig 1020) — nothing here names a kind of business.
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
+import { canAccessPath, isSuperAdmin, verticalPathOK } from '@/lib/rbac'
+import { slugGroup, type TileLayout } from '@/lib/tile-hubs'
 
 type Load<T> = { state: 'loading' } | { state: 'ok'; data: T } | { state: 'off'; why: string }
 type Issue = { severity: string; message: string }
@@ -67,7 +69,11 @@ function Big({ value, sub, color }: { value: string | number; sub?: string; colo
   )
 }
 
-const LINKS: { group: string; items: [string, string][] }[] = [
+// The quick links are PROGRAMMABLE: the Dashboard Designer's tile layout for this NAV group (GET /commcalc/tile-layout,
+// the same store every hub uses — a tenant design, else the platform's house design). This list is only the built-in
+// default shown when nobody has designed the page. Either way a link the viewer cannot open is not shown.
+const LAYOUT_MODULE = slugGroup('Store Operations')
+const DEFAULT_LINKS: { group: string; items: [string, string][] }[] = [
   { group: 'Every day', items: [['/closing/submit', 'Submit closing'], ['/closing/verify', 'Verify closings'],
     ['/closing/pickup', 'Cash pickup'], ['/closing/store-cash-on-hand', 'Cash on hand']] },
   { group: 'Reconcile', items: [['/closing/deposit-recon', 'Cash deposit recon'],
@@ -83,7 +89,17 @@ const LINKS: { group: string; items: [string, string][] }[] = [
 ]
 
 export default function StoreOperationsDashboard() {
-  const { tenant } = useAuth()
+  const { tenant, permissions } = useAuth()
+  const design = useLoad<{ layout: TileLayout | null }>(`/api/v1/commcalc/tile-layout?module=${LAYOUT_MODULE}`)
+  const links = useMemo(() => {
+    const tiles = design.state === 'ok' ? design.data.layout?.tiles : undefined
+    const groups = tiles?.length
+      ? tiles.map(t => ({ group: t.title, items: (t.items || []).map(i => [i.href, i.label || i.href] as [string, string]) }))
+      : DEFAULT_LINKS
+    const canOpen = (href: string) => canAccessPath(permissions || {}, href)
+      && (isSuperAdmin(permissions || {}) || verticalPathOK(href, tenant?.vertical))
+    return groups.map(g => ({ ...g, items: g.items.filter(([href]) => canOpen(href)) })).filter(g => g.items.length > 0)
+  }, [design, permissions, tenant?.vertical])
   const cash = useLoad<CashResp>('/api/v1/closing/store-cash-on-hand')
   const ready = useLoad<ReadyResp>('/api/v1/closing/readiness')
   const supply = useLoad<SupplyResp>('/api/v1/supply/summary')
@@ -141,7 +157,7 @@ export default function StoreOperationsDashboard() {
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-        {LINKS.map(g => (
+        {links.map(g => (
           <div key={g.group} style={panel}>
             <div style={{ fontWeight: 600, marginBottom: 8 }}>{g.group}</div>
             <div style={{ display: 'grid', gap: 6 }}>

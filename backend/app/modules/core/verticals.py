@@ -208,4 +208,115 @@ def me_payload(client, org_id):
     ctx = vertical_context(client, org_id)
     out = payload(ctx["vertical"], ctx["module_scopes"], ctx["vocab"])
     out["registry_ready"] = ctx["registry_ready"]
+    out["closing_sections"] = closing_sections()   # what a company may override (Display Labels)
     return out
+
+
+# ── PROGRAMMABLE: the super-admin Business Types editor (owner 2026-09-25: "no hard coded — all should be
+#    programmable platform based"). Every field of a vertical — its label, whether it uses carriers, the pages
+#    it hides, the closing-form inputs it hides, which modules belong to it — is edited on /admin/business-types
+#    through the writers below; the house seed above is only the starting data.
+
+# The closing-form inputs a vertical (or a tenant, via caps 'closing:<key>') may hide. The three form sections
+# are the form's own vocabulary (components/ClosingSubmitForm.tsx); the tender entries are DERIVED from the
+# built-in tender set (closing/tender_config.STANDARD_DEFS — one home, never re-listed here).
+_FORM_SECTIONS = (
+    ("acc_sale", "Accessory Sale $ box"),
+    ("bill_payments", "Bill Payments section (processor on cash / credit / financing)"),
+    ("activation_counts", "Built-in activation counts (used only when no Count Fields are defined)"),
+)
+
+
+def closing_sections():
+    out = [{"key": k, "label": l, "kind": "section"} for k, l in _FORM_SECTIONS]
+    try:
+        from app.modules.closing.tender_config import STANDARD_DEFS
+        out += [{"key": f"tender:{d[0]}", "label": f"Built-in tender: {d[1]}", "kind": "tender"} for d in STANDARD_DEFS]
+    except Exception:
+        pass
+    return out
+
+
+def validate_vertical(body, known_sections, existing_keys=None, creating=False):
+    """(row, errors) — the vertical row a super-admin may save. PURE. Unknown closing keys, malformed hrefs
+    and a malformed key are refused (never silently dropped)."""
+    errs = []
+    key = str(body.get("key") or "").strip()
+    if creating:
+        if not _KEY_RE.match(key):
+            errs.append("key must be lower-case letters, digits and _ (2–41 chars), starting with a letter")
+        elif existing_keys and key in existing_keys:
+            errs.append(f"business type '{key}' already exists")
+    label = str(body.get("label") or "").strip()
+    if creating and not label:
+        errs.append("label is required")
+    row = {}
+    if label:
+        row["label"] = label[:120]
+    if "uses_carriers" in body:
+        row["uses_carriers"] = bool(body.get("uses_carriers"))
+    if "sort_order" in body:
+        try:
+            row["sort_order"] = int(body.get("sort_order"))
+        except (TypeError, ValueError):
+            errs.append("sort_order must be a number")
+    if "is_active" in body:
+        row["is_active"] = bool(body.get("is_active"))
+    if "nav_hidden" in body:
+        hrefs = [str(h).strip() for h in (body.get("nav_hidden") or []) if str(h).strip()]
+        bad = [h for h in hrefs if not re.match(r"^/[A-Za-z0-9_\-/\[\]]*\$?$", h)]
+        if bad:
+            errs.append(f"not a page address: {', '.join(bad[:5])}")
+        row["nav_hidden"] = sorted(set(hrefs))
+    if "closing_hidden" in body:
+        keys = [str(k).strip() for k in (body.get("closing_hidden") or []) if str(k).strip()]
+        unknown = [k for k in keys if k not in known_sections]
+        if unknown:
+            errs.append(f"unknown closing input: {', '.join(unknown)}")
+        row["closing_hidden"] = [k for k in known_sections if k in keys]
+    if creating:
+        row["key"] = key
+    return row, errs
+
+
+def next_module_scope(current_scope, vertical_key, include, all_keys):
+    """The module's applies_to_vertical after including / excluding one vertical. PURE.
+    '{}' means every vertical, so excluding one from '{}' lists all the OTHERS explicitly; a list that comes
+    to cover every vertical collapses back to '{}' (any — so a vertical created later gets the module too)."""
+    cur = [v for v in (current_scope or []) if v]
+    everyone = sorted(set(all_keys))
+    members = set(everyone) if not cur else set(cur)
+    if include:
+        members.add(vertical_key)
+    else:
+        members.discard(vertical_key)
+    return [] if members >= set(everyone) else sorted(members)
+
+
+def admin_payload(client):
+    """Everything the Business Types editor shows (super-admin only — gated by the endpoint)."""
+    vocab, ready = load_vocab(client)
+    try:
+        mods = (client.schema("core").table("module_catalog").select("key,label,sort_order,applies_to_vertical")
+                .order("sort_order").execute().data) or []
+    except Exception:
+        mods = []
+    scopes = load_module_scopes(client)
+    if not mods:
+        from app.modules.core.entitlements import MODULE_CATALOG
+        mods = [{"key": k, "label": v} for k, v in MODULE_CATALOG.items()]
+    usage = {}
+    try:
+        for r in (client.schema("storeops").table("tenants").select("org_id,vertical").execute().data) or []:
+            usage[r.get("vertical") or ""] = usage.get(r.get("vertical") or "", 0) + 1
+    except Exception:
+        pass
+    rows = sorted((normalise_vertical(r) for r in vocab), key=lambda r: (r["sort_order"], r["key"]))
+    default = default_vertical(rows)
+    for r in rows:
+        r["tenants"] = usage.get(r["key"], 0) + (usage.get("", 0) if default and r["key"] == default["key"] else 0)
+    return {"registry_ready": ready, "verticals": rows, "closing_sections": closing_sections(),
+            "modules": [{"key": m["key"], "label": m.get("label") or m["key"],
+                         "applies_to_vertical": list(scopes.get(m["key"], m.get("applies_to_vertical") or []))}
+                        for m in mods]}
+

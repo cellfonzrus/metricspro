@@ -11100,6 +11100,40 @@ a single tenant exception rides the existing `caps['vertical:<href>']` override.
 not vertical-gated (the page is unreachable from the UI and the data is the tenant's own); the vertical-scoped MODULES are
 (`require_module`). (4) `GET /closing/readiness` still words its count-config note as "built-in 3 activation-count fields" (an info note).
 
+
+### 35.1 PROGRAMMABLE — every business-type rule is platform DATA edited in the app (owner 2026-09-25)
+
+Owner, verbatim: *"no hard coded — all should be programmable platform based"*. The mig-1020/1024 seed is only the starting
+rows; nothing about a business type needs a code change or a migration any more.
+
+- **Platform (super-admin) — `/admin/business-types`** (Configuration → Business Types, module `admin`). Create a business
+  type; edit its name, whether it sells on carriers, its order, which one is the default; tick the **menu pages** it does not
+  see (every NAV page; pages the editor adds are exact entries `href$`, and un-hiding a page covered by a subtree entry re-adds
+  exact entries for its siblings so nothing else changes state); tick the **daily-closing inputs** it does not use; tick the
+  **modules** that belong to it (saved immediately, and every tenant of that type is re-synced). Endpoints (all
+  `_require_super_admin`): **`GET /core/verticals/admin`** → `verticals.admin_payload` (types + tenant counts, modules + scopes,
+  closing inputs), **`POST /core/verticals`**, **`PUT /core/verticals/{key}`** (refuses deactivating the default or a type in
+  use), **`PUT /core/module-verticals/{module_key}`** `{vertical, include}` → `verticals.next_module_scope` (excluding one type
+  from "any" lists the others; a list covering every type collapses back to "any" so a future type inherits the module).
+  PURE: `closing_sections()` (the three form sections + one entry per built-in tender DERIVED from
+  `closing/tender_config.STANDARD_DEFS`), `validate_vertical` (bad key / duplicate / unknown closing input / non-page address
+  refused, never dropped).
+- **Company — Display Labels → "Business type — <name>"**. A company's exceptions ride the EXISTING cap overrides
+  (`ui_label_override` scope `cap`): `vertical:<href>` for a page, `closing:<input>` for a closing input — Auto follows the
+  business type. `rbac.verticalOK` already honoured `vertical:`; `ClosingSubmitForm` now applies `closing:` over the type's
+  list (the same cached nav-config read the sidebar uses). **Re-showing what the business type hides is super-admin only**
+  (the `set_nav_label` re-grant rule now covers `vertical:` and `closing:` like carrier / POS); hiding more or resetting stays
+  the company's own. `me_payload` carries `closing_sections` for this card.
+- **Store Operations dashboard links** come from the **Dashboard Designer** tile layout for the *Store Operations* group
+  (`GET /commcalc/tile-layout?module=store-operations` — the store every hub uses; tenant design, else the house design); the
+  built-in list is only the fallback, and a link the viewer cannot open (RBAC or business type) is not shown.
+- **Lock:** `harness_tenant_vertical.py` §H (17 checks: derived tender inputs, validation, module-scope algebra, admin payload,
+  super-admin gates, the re-grant rule, the form's cap overlay, the designer-driven dashboard, no type named in the editor).
+
+**Migrations applied?** Not by this session — the database host accepts only direct Postgres connections, which the build
+environment cannot open. `_PENDING_MIGRATIONS_ups_store_2026-09-25.sql` (git-ignored) bundles 1020 → 1021 → 1022 → 1024 + the 925
+lineage reseed in ONE transaction; it was proven on a local PostgreSQL 16 copy (fresh prerequisites from 055 / 083 / 301 / 700 /
+924 / 1010), twice (idempotent), before hand-off to the owner for the Supabase SQL editor.
 ---
 
 ## 36. SUPPLY ORDERING — vendor setup, price compare, the cheapest cart incl. free shipping, the assisted order and its confirmation (owner request 2026-09-25, phase 2 of §34; mig `1021`, **NOT applied**)
