@@ -60,6 +60,7 @@ Primary code homes:
 | 11b | **Inventory integrity (POS units)** | "383 phones say in stock — which were really sold (sales report by invoice, commission report), to WHICH customer, and how do I move one out with one click and have a manager confirm it? Why did receiving this IMEI pop up a duplicate warning? How do I adjust a unit in or out, and where is that recorded?" |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
+| 37 | **Franchise royalty, cost & profit centers** | "Where does the franchisor's monthly royalty report land, how is it checked (the fee rounding rule), what does each line book to on the P&L and what books nothing (and why), how does it reconcile against the daily report, and how do I see the P&L per profit center or per cost center? Why did a sale line no classifier knows book nothing, and where is that reported now?" |
 
 ---
 
@@ -3956,6 +3957,12 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `core.ai_usage_period` (mig `973`; FROZEN AI period snapshots — rate + margin + figures at close) | `POST /billing/ai-usage/close` | `ai_usage.price_period(frozen=)` — read, NEVER recomputed |
 | `commcalc.raw_sales_invoice` (mig `1012`, **NOT applied**) — SALES BY INVOICE with the tender types (layout `sales_by_invoice`; owner 2026-09-21, §30.13): ONE ROW PER INVOICE — who / where / when, subtotal / adjustments / net sales / sales / cost / GP / extra charges / donations / invoice total / coupons / gift-card sales / non-revenue sales, the total `tax`, `source` (the kind stamp, default `sales_by_invoice`), `import_batch_id`. `trans_id` = the invoice number the line-level export carries | the intake's `invoice` kind only — `_intake_land` → `_ingest_mapped_df` (`TABLE_MAP['sales_by_invoice']`; stamped, consumer-gated, slice-replaced per store × `trans_date` × kind, `ingest_slice.INGEST_PARTITION`) | `_intake_reread_invoice` → the Stage-4 verify (Σ tie field / Σ invoice total / Σ tax) + the report links (`_intake_link_source`: invoice number ↔ `raw_sales.trans_id`, store, rep, date). **No money / tax path reads it** (`landing_identity.CONSUMERS`); the tax aggregator's dereference is PROPOSED (§30.13); before the migration a landing is REFUSED naming the file |
 | `commcalc.raw_sales_invoice_tender` (mig `1012`, **NOT applied**) — the TENDER SPLIT: one row per (invoice, DECLARED tender column) with `amount` ≠ 0 — `tender_label` (the header, verbatim), `tender_class` (`closing.router.TENDER_VOCAB` key), `keyed_manually`, `role` (`tender` \| `tax` — a jurisdiction tax column rides the same grain), store / `trans_date` / `trans_id` / salesperson, `source` = the PARENT's kind (`column_mapping.CHILD_TABLE_MAP` — the one home of "which child table") | the same landing, second `_ingest_mapped_df` call (same stamp, same slice) | `_intake_reread_invoice_tenders` (the save guarantee); **`closing.router._invoice_tenders_by_store`** — the invoice leg of THE tender resolver `_tender_split_by_store` (read by every closing cash / card recon when the org's `tender_basis` is `invoice` or `x_report_else_invoice`); the intake's Stage-4 tie-out (`_intake_invoice_tender_recon`) beside the X-report leg; **`pos/sales_from_reports.rebuild`** (§30.14) — the customer-payment rows (`closing.router.is_customer_payment`, §30.13a) print as the rebuilt receipt's payment lines, the others explain the lines-vs-subtotal difference. The invoice leg counts ONLY the customer's rows as collected; a vendor rebate / coupon row is reported beside as `not_customer` (§30.13a) |
+| `commcalc.royalty_report` + `commcalc.royalty_report_line` (mig `1022`, **NOT applied**) — one franchise royalty report per org × center × month (the report's OWN figures + `validation` flags) and every printed line / total | `POST /account/royalty/import` \| `/manual` → `royalty_router._write_report` (replace per center-month; org-scoped) | `coa.build_inputs` → `royalty.pl_bookings` (the P&L heads, §37.3); `GET /account/royalty/recon/{period}` (`royalty.reconcile`); `/royalty/summary`; the report page. §37 |
+| `commcalc.royalty_line_def` (mig `1022`) — THE royalty line vocabulary (house default vertical-scoped + tenant overrides): labels / aliases / section / role, `pl_line_key` / `pl_note`, fee `rate` + `absorbs_remainder`, `daily_categories` | seed (house) · `PUT /account/royalty/lines` (tenant override row) | `royalty.load_vocab` → `merge_vocab` → parse / validate / `pl_bookings` / `reconcile`. Mirror `royalty.HOUSE_ROYALTY_LINES`. §37.2 |
+| `commcalc.royalty_config` (mig `1022`) | `PUT /account/royalty/config` | `royalty.load_config` → `resolve_config` (NULL = `CONFIG_DEFAULT`). §37.2 |
+| `commcalc.finance_center` · `commcalc.profit_center_store` · `commcalc.pl_line_cost_center` (mig `1022`) — cost + profit centers, store → profit center, P&L line (± detail) → cost center | `PUT/DELETE /account/centers…` | `centers.load_profit_scopes` → `statement_engine._scopes` (`profit_center:<code>`); `statement_filter.scope_predicate`; `centers.store_for_center` (a report's center → store); `centers.cost_center_view`. §37.1 |
+| `commcalc.pl_sales_line_map` (mig `1022`) — routes a POS sale line NO classifier claims to a revenue line (every tenant) | `PUT /account/pl-sales-map` | `coa.build_inputs` sales scan → `sales_line_map.match` / `Tally` → `_unbooked_sales` side entry → statement `meta.unbooked_sales`; `GET /account/pl-sales-map?period=`. §37.4 |
+| `commcalc.report_kind.applies_to_vertical` (mig `1022`) — the report-kind registry's VERTICAL axis ('{}' = any) | seed (`royalty_report` by module sub-select) | `report_kinds.applies` / `hidden_kinds` via `tenant_declaration`'s `vertical`; frontend `carrier-scope.kindApplies`. §37.2 |
 | `pos.receipt_imports` + `pos.sales` (mig `864` / `866` / `725`) — a SALE REBUILT FROM THE TWO LANDED SALES REPORTS (§30.14, owner 2026-09-21): one `receipt_imports` row per org × POS × invoice # whose `document` carries `provenance.kind = 'reports'` (the two landings by table + kind, the header row id, the tender + line row ids, who / when, the per-invoice REPORT in words) and one summary `pos.sales` row (`source = 'receipt_import'`, the document's own subtotal / tax / total, `created_at` = the invoice date, the resolved store, the rep's employee_id, the matched customer, `receipt.payments` + `receipt.provenance`). No new column, no migration | `pos/sales_from_reports.rebuild` → `receipt_import.upsert_structured` (a first run → `import_structured`, THE one importer; a re-run → `update_structured_document` + `_sync_sale` — REPLACES, never a second sale); runs on the intake commit of either kind (`router._intake_pos_rebuild_after_landing`, both branches) and on `POST /pos/sales-from-reports/rebuild` | `GET /pos/sales-from-reports` (`sales_from_reports.list_rebuilt`: PostgREST JSON-path filter on the provenance kind), `GET /pos/receipt-imports/{id}/print` (`receipt_formats.render.render_html` — the ONE renderer), the receipt search / edit endpoints like any import |
 | `pos.customer_aliases` (mig `1017`, APPLIED 2026-09-24) — the names a customer ALSO went by: one row per org × customer × `alias_norm` (`customer_identity.norm_name`), `source` `upload` (combined on a shared phone line, §30.16 rule b) / `merge`, first / last seen · **`pos.customers.merged_into` + `merge_record`** (mig `1017`) — the customer a record was merged into, and the list of every row the merge moved (so Un-merge puts exactly those back) · **`pos.activations`** (mig `726`) as THE CUSTOMER'S PHONE LINES — one row per sale × phone number (`cell_number` / `mobile_phone`, `phone_serial` = the paired IMEI, `phone_model`, `plan_description`, `activation_date` = the invoice date, `contract_type`, `store_code`, `status`), notes per row in `pos.activation_notes` | `receipt_import.match_or_create` (the ONE matcher's write half: an alias when a sale is combined) · `customer_master.sync_invoice_lines` (the rebuild's line writer — select then update-empty-fields / insert, keyed org × sale × number) · `customer_master.merge_customers` / `unmerge` / `detach_placeholder` / `dedupe_apply` (`POST /pos/customers/{id}/merge`, `/unmerge`, `/customers/dedupe`) · `PATCH /pos/activations/{id}` + `POST /pos/activations/{id}/notes` (the existing line edit / notes) | `receipt_import._candidates` → `customer_identity.decide` (who a sale's customer is); `customer_master.lines_payload` / `invoices_payload` / `aliases_payload` / `search_ids` (`GET /pos/customers/{id}/lines` / `/invoices` / `/aliases`, `GET /pos/customers?search=`); every reader PROBES mig 1017 per column (`core.column_tolerant`) and says "apply migration 1017" when it is absent |
 | `pos.inventory_flags` (mig `1018`, **NOT applied** — surfaced for approval) — one row per integrity finding a scan saved: `imei_key` (`device_key`), `kind` (sold_no_receipt / sold_still_on_hand / returned_commission_kept / received_after_sold / duplicate_on_hand), `evidence` jsonb + `evidence_hash`, `customer_name` / `invoice_no` / `sold_on` (the commission report first), `status` open → assigned → verified \| dismissed, who / when per step, `note`, `last_seen_at`; ONE LIVE flag per (org, imei_key, kind) (partial unique index) | `inventory_integrity_router.scan` (`plan_scan`: refresh in place / never re-open a closed flag on the same evidence / a new row when it changed) · `assign_flag` / `verify_flag` / `dismiss_flag` / `adjust_unit` (flag_id) | `GET /pos/inventory/integrity` (`merge_view` — an assigned flag stays visible until verified) → the Integrity flags tab (§11b) |
@@ -4203,6 +4210,11 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | `GET /account/pl/{period}`, `GET /account/balance-sheet/{period}` (`?scope=&stores=&markets=` — stored snapshot when unfiltered; store/market-filtered view via `statement_filter.filtered_statement`: canonical-union market resolution + company-scope AND-composition, 2026-09-02) | `account/router.py` (`get_pl`/`get_bs` → `_filtered_read`) | §4 P&L filter |
 | `GET /account/statement/{period}` (`?scope=&kinds=pl,balance_sheet,cash_flow` — FRESH on-demand statements, nothing persisted; the platform statement service) | `account/router.py` (`on_demand_statement` → `statement_engine.statement`) | §4 statement engine |
+| `GET /account/royalty/config` · `PUT /account/royalty/lines` · `PUT /account/royalty/config` · `POST /account/royalty/parse` (preview, no write) · `POST /account/royalty/import` · `POST /account/royalty/manual` · `GET /account/royalty/reports` · `GET\|DELETE /account/royalty/report/{id}` — all `require_module("royalty")` | `account/royalty_router.py` → `royalty.parse` / `validate` / `header_fields` / `line_rows` / `pl_bookings` | §37.2–37.3 |
+| `GET /account/royalty/recon/{period}?center=` — royalty sales lines vs the daily report(s) per line, days, categories, unclaimed categories, tenders | `royalty_router.royalty_recon` → `_daily_rows` (raw_sales_product \| raw_sales) / `_tender_rows` → `royalty.reconcile` / `tender_crosscheck` | §37.5 |
+| `GET /account/royalty/summary` — the operations-dashboard tiles (latest STR, fees due, recon variance, unmapped lines, flagged) | `royalty_router.royalty_summary` → `royalty.summary` | §37.6 |
+| `GET/PUT /account/centers` · `DELETE /account/centers/{type}/{code}` · `PUT /account/centers/store-map` · `PUT /account/centers/line-tag` · `GET /account/centers/pl/{period}?profit_center=` (→ `statement_engine.statement`, scope `profit_center:<code>`) · `GET /account/centers/cost-view/{period}` (→ `centers.cost_center_view`) | `account/royalty_router.py` | §37.1 |
+| `GET /account/pl-sales-map?period=` · `PUT /account/pl-sales-map` — the unclaimed-sale-line rules and the scan's unbooked / mapped / suppressed tally (every tenant) | `account/router.py` → `coa.build_inputs` side entry `_unbooked_sales` | §37.4 |
 | `GET /account/cash-flow/{period}` (stored derived Cash Flow snapshot, statement_type `cash_flow`) | `account/router.py` (`get_cf`) | §4 statement engine |
 | `GET /account/inventory-recon` (per-store emailed-report ↔ unsold-phone-ledger ↔ manual ↔ effective tie-out + ghost counts) | `account/router.py` (`inventory_recon` → `statement_engine.inventory_reconciliation`) | §4 balance-sheet truths |
 | `POST /account/compute/{period}`, `POST /account/run-due` → `statement_engine.compute_and_store` (P&L + BS + Cash Flow snapshots; supersedes `engine.compute_and_store`, 2026-09-02). run-due is SELF-SCHEDULED since mig `940`: pg_cron job `account-recompute-run-due` (every 2h) via `commcalc.ensure_account_recompute_cron`, re-registered on every backend boot (`main.py` startup → `router._ensure_account_recompute_cron`) | `account/router.py` (`compute`), `account/autocompute.py` (`recompute_due`) | §4 statement engine |
@@ -4333,6 +4345,10 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Commission not received + APPEAL pipeline (open $ / appeal filed / won / denied / written off, per range) | `discrepancy_results` rows (both engines) + mig-947 appeal columns; buckets computed by the PURE `discrepancy_appeals.summarize_appeals` (`no_rule_count` = the LITERAL `'no business rule configured'` marker only — evidence-first, never inferred) | `GET /discrepancy-appeals` → Commission Discrepancy hub cards (`commission-discrepancy/page.tsx`); chase list = mig-098 `/recovery/claims` (reused) |
 | Card settlement recon — store→MARKET + the market option list | THE canonical union index ONLY (`core.scope.market_by_code` / `org_market_options`, §13a/§13c) — the roster read takes ADDRESS only, so no market-vocabulary site exists to pin. Deliberately CANONICAL rather than the closing family's OVERLAY: a settlement-only store has no roster row, and a `store_mapping`-only market would otherwise vanish from the filter | `closing/router.external_credit_recon` (pinned `CANONICAL` in `harness_market_enumeration_guard`; nothing to pin in `harness_market_resolution_guard`); truth table `harness_external_credit_recon.py` §J |
 | Sales tax collected (report) / Sales tax payable (BS liability, mig `991`) | `raw_sales.tax` ∪ `daily_sales_feed.tax` (mig `105`), voids excluded; report headline `tax` also excludes `trans_type=='Return'`, the liability figure `tax_net` includes them (refunded tax is not owed). Store key = `coa.store_resolver` (§13a) for BOTH. Balance = cumulative from the accrual start through as-of, less remittances | **ONE pure pass** `commcalc/tax_collected.py aggregate()` → `GET /commcalc/tax-collected` (first caller) **and** `balance_sheet.sales_tax_payable_bookings` via `statement_engine.build_inputs_full` (`account_config.sales_tax_basis`: off default / collected; `sales_tax_accrual_start` or the earliest taxed sale). Remittance = a negative `journal_entries` row folded by label in `engine._assemble` — never a second ledger. Proof `harness_tax_collected.py` §I/§J + `harness_balance_sheet_truths.py` §J |
+| **Royalty due / STR per center per month** (franchise report) | `commcalc.royalty_report` (the report's own `total_str` / `total_adjusted_str` / `total_due`) + `royalty_report_line` | stored as printed; checked by `royalty.validate` → THE rounding rule `royalty.fee_schedule` (total = round(basis × Σ rates), one fee absorbs the remainder); booked by `royalty.pl_bookings` → `royalty_fee` / `marketing_fee` / `ad_fund_fee`. §37.3 |
+| **Royalty vs daily sales variance** (per line / per center) | royalty sales lines vs `raw_sales_product` (or `raw_sales`) Σ month through `royalty_line_def.daily_categories` | `royalty.reconcile` ← `GET /account/royalty/recon/{period}`; tile `GET /account/royalty/summary`. §37.5 |
+| **Unbooked sales** (POS lines no P&L classifier claims — every tenant) | `raw_sales` ∪ `daily_sales_feed` lines passed over by every classifier | `coa.build_inputs` → `sales_line_map.Tally` → statement `meta.unbooked_sales` / `GET /account/pl-sales-map?period=`. §37.4 |
+| **P&L per profit center / per cost center** | the statement engine's own statement | profit center = scope `profit_center:<code>` (`statement_engine._scopes` ← `centers.profit_center_scopes`); cost center = `centers.cost_center_view` over the assembled P&L (ties to the cent). §37.1 |
 | Distributor payable — WHICH derivation and WHICH line (mig `954`) | `account_config.distributor_payable_basis` / `.distributor_payable_line` / `.asset_ledger_open_statuses`, else the house carrier preset (`ui_label_override` scope `finance_basis:<carrier>`, key `distributor_payable`) over the org's `commcalc.carrier` rows | `balance_sheet.resolve_payable_basis`/`resolve_payable_line` (org > carrier preset > declared mig-933 family > off; target line defaults `asset_ledger`→`owed_vip`, `marketplace_due`→`handset_payable`) → `statement_engine.build_inputs_full` + `GET /account/liabilities-due`; proof `harness_balance_sheet_truths.py` §G |
 | **Device purchases from the distributor** (what we were BILLED in a period, by company × store) | `commcalc.vip_invoice_lines.total` on lines whose `btrim(name)` is a `btrim(product_name)` in `commcalc.vip_invoice_devices` (i.e. the product actually arrived SERIALISED — no product-name matching, RULE TWO). Recognised on the INVOICE date. Invoice-level shipping/other/tax excluded (already `vip_fees`). Tablets INCLUDED and shown at product grain | `account/device_purchases.aggregate` (pure) → `GET /account/device-purchases` → `/accounts/device-purchases`. Store = `coa.store_resolver` (§13/§13a) **unchanged**, company = `coa.build_company_matcher` **unchanged** (called with `default_id=None` so "unassigned" stays distinguishable from "the default"); a codeless `store_mapping` row (a distributor master/dealer ACCOUNT) is not a store; unresolved rows keep their money in `(store not mapped)` / `(company not mapped)`. Proof `harness_device_purchases.py` (67), incl. §B2/§B3 pinning `coa.py` byte-identical. **Deliberately will NOT tie to `account/device_cogs`** — that is cost of units SOLD, IMEI-deduped, recognised at sale |
 | Distributor open balance — consignment side (BS liability, mig `954`) | `asset_ledger.owed_to_vip` on rows whose `status` is in `asset_ledger_open_statuses` (default `["Open"]`) with `acquired_date ≤ as-of`; live house org 2026-09-04 = $358,221.13 (past-due $29,839.62 / not-yet-due $328,381.51) | `balance_sheet.asset_ledger_open_bookings` via `statement_engine.build_inputs_full` → the resolved target line (default `owed_vip`); store grain = the ledger's own `store` through `coa.store_resolver`; as-of = `period_as_of` (open period ⇒ today, closed ⇒ period end) |
@@ -10977,3 +10993,155 @@ endpoint that calls `pricecompare/core.py` moved into `backend/app/modules/asset
 (5) *The UPS Store gate* = the tenant declares no wireless carrier, so every carrier-scoped connector / report kind is
 already withheld by `report_kinds.visible_kinds` / `connector_registry.visible`; the wireless NAV modules are gated through
 the existing `NAV_CARRIERS` / package mechanism — to be verified per page, not assumed.
+
+
+---
+
+## 37. FRANCHISE ROYALTY, COST & PROFIT CENTERS — the royalty report books the P&L and reconciles against the daily report; a profit center is a scope, a cost center a regrouping; the unclaimed sale line is reported (owner 2026-09-25, mig `1022`)
+
+Owner, verbatim (abridged): *"We need to appoint a financial agent to create and manage the finance data like p&l and create
+cost centers and capture royalty report etc, there are detailed cost centers assigned by ups and dedicated profit centers, all
+sales will be captured via the royalty report and reconciled against the daily report uploaded by the tenant … Royalty report
+is uploaded for your reference to create the same in the finance module and only show up if a ups store is selected while
+onboarding."*
+
+**Module & gate.** Module key `royalty` (mig `1020` `core.module_catalog`, `applies_to_vertical` = the franchise vertical —
+DATA). Every endpoint below is `Depends(require_module("royalty"))` (`account/royalty_router.py`, mounted in `main.py`), so a
+tenant of another vertical gets 403 and never sees the NAV items (module `royalty`; the vertical nav gate hides them). Nothing
+in code spells a vertical, a franchisor or a line (RULE TWO; locked, §37.7).
+
+**DUPLICATE CHECK (build gate — searched §4, §4b, §13, §16–18, §27, §30, §32, §34).** Cost / profit center: NOTHING existed (no
+table, column or config key). Royalty report: no table, parser or report kind. REUSED, not rebuilt: the statement engine's scope
+list (`statement_engine._scopes` — a profit center is one more scope family beside `company:` / `store:`), `engine._assemble`,
+the journal grain rule, `statement_filter.scope_predicate` (one more prefix, fail-closed), `coa.store_resolver` (§13a),
+`coa.build_inputs` as the ONE place a P&L line is booked, the mig-1009 `pl_line_key` shape (`commission_bucket` → here
+`royalty_line_def`), the report-kind registry (mig 1010 — one row + one axis), `landing_identity` (`CONSUMERS` + a module-page
+entry), `ScreenLink`, `_period.canonical_period` / `period_keys`, the EXISTING POS landings (`raw_sales_product`, `raw_sales`,
+`pos_tender_summary`) for the recon's daily side. NEW: the tables below, `account/royalty.py`, `account/centers.py`,
+`account/sales_line_map.py`, `account/royalty_router.py`, four pages.
+
+### 37.1 Cost centers + profit centers (a NEW dimension)
+- **Tables (mig 1022):** `commcalc.finance_center` (org, `center_type` cost|profit, `code`, `name`, `parent_code`, `external_ref`
+  = the franchisor-assigned number, `is_active`); `commcalc.profit_center_store` (org, `store_ref` → `profit_center_code`);
+  `commcalc.pl_line_cost_center` (org, `pl_line_key`, `detail_label` '' = whole line, `cost_center_code`).
+- **A PROFIT CENTER IS A SET OF STORES** → a scope of the ONE engine: `centers.profit_center_scopes` → `statement_engine._scopes(
+  …, profit_scopes=)` (tuple `profit_center:<code>`, label, the center's + descendants' stores resolved through
+  `coa.store_resolver`, never company-wide). `statement_engine.statement` (on demand) and `compute_and_store` (persisted
+  snapshots → the overview dropdown) both pass it; no profit center ⇒ the scope list is byte-identical.
+  `balance_sheet.journal_scope_entries` gives a profit center only its stores' entries (the old fall-through handed an unknown
+  prefix EVERY entry). `statement_filter.scope_predicate('profit_center:<code>')` = members only; unknown center / failure =
+  nothing (fail closed).
+- **A COST CENTER IS A SET OF LINES** → `centers.cost_center_view(pl, tags, centers)` regroups an ASSEMBLED statement: a detail
+  tag takes its detail, the line tag the rest, else "Untagged"; parents roll up; `tie` pins Σ = the statement to the cent.
+- **Endpoints:** `GET/PUT /account/centers`, `DELETE /account/centers/{type}/{code}`, `PUT /account/centers/store-map`,
+  `PUT /account/centers/line-tag`, `GET /account/centers/pl/{period}?profit_center=` (→ `statement_engine.statement`),
+  `GET /account/centers/cost-view/{period}?scope=` (statement → `cost_center_view`). **Pages:** `accounts/profit-centers`,
+  `accounts/cost-centers`.
+- **Center → store for a report:** `centers.store_for_center(center_no)` — the profit center whose `code` / `external_ref` is
+  the report's center number, and its ONE mapped store (else None + the reason; never guessed).
+
+### 37.2 The royalty report — tables, vocabulary, the report kind
+- **`commcalc.royalty_line_def`** — THE line vocabulary per org (house rows = default, scoped by `applies_to_vertical`, seeded
+  by sub-select on the royalty module's scope; a tenant row overrides per `line_key`): `label` + `aliases`, `section`
+  (sales | exclusion | commission | str | fee), `role` (header | line | total | echo | str | str_adjusted), `pl_line_key`,
+  `pl_note` (why a line books nothing), `rate` + `absorbs_remainder` (fees), `daily_categories` (sales). Mirror
+  `royalty.HOUSE_ROYALTY_LINES` (59 rows), parsed back from the seed by `harness_royalty.py` §A.
+- **`commcalc.royalty_config`** (per org; NULL = `royalty.CONFIG_DEFAULT`): `fee_basis` (adjusted_str | str), `tolerance`,
+  `daily_source` (raw_sales_product | raw_sales), `daily_match_field` (category | department | product_desc), `book_pl`,
+  `center_pattern`, `period_pattern`.
+- **`commcalc.royalty_report`** (org × `center_code` × `period` canonical, unique; `store_ref`; the report's own totals;
+  `status` ok|flagged; `validation` jsonb) + **`commcalc.royalty_report_line`** (every printed line and total, `section`,
+  `line_key`, `label` as printed, `amount` / `adjustment` / `adjusted_amount` / `reason` / `printed_rate`; ON DELETE CASCADE).
+- **Report kind `royalty_report`** (mig 1022 seed, 18-column 1010 shape) — `landing` 'module', no upload route;
+  `landing_identity.MODULE_PAGES` names its page (`royalty_report` screen) and table (`royalty_report_line`); `CONSUMERS`
+  → the report page, the P&L, the royalty recon. **The VERTICAL AXIS:** `commcalc.report_kind.applies_to_vertical` ('{}' = any
+  — every existing kind unchanged); `report_kinds.tenant_declaration` (THE one reader) now carries `vertical` from
+  `core/verticals.tenant_vertical`; `report_kinds.applies` / frontend `carrier-scope.kindApplies` check it (an unknown vertical
+  hides a vertical-scoped kind); the kind's scope DEREFERENCES the royalty module's (`HOUSE_MODULE_VERTICALS['royalty']` in the
+  mirror, a sub-select in the seed). Registered in the data lineage (`data_lineage_registry.INGEST_TABLES_BY_MODULE['account']`
+  — the account module is no longer feed-less; 925 seq 141–144).
+
+### 37.3 Parse → validate → store → book
+- **Parser `royalty.parse(text, vocab, cfg)`** — PDF text (pdfplumber), saved HTML (`html_to_text`: rows → lines, cells →
+  tabs, `<input value>` read, script/style dropped) or pasted text. A line = label + 1–3 figures (amount / adjustment /
+  adjusted) + reason; `($x)` negative; a label alone followed by a figures-only line joins; sections by the configured header
+  phrases; a truncated label (`…`) resolves only to the ONE line it can be; an unknown label is KEPT as `unknown_<section>_<slug>`.
+- **Validation `royalty.validate`** — Σ lines = each section total (amount and adjusted); the STR section's echoes = the
+  totals; STR = gross − exclusions(adj) + commissions(adj); the printed fee rate = the configured rate; each fee and the total
+  by **THE ROUNDING RULE `royalty.fee_schedule`**: total = round(basis × Σ rates); each fee = round(basis × rate) except the ONE
+  `absorbs_remainder` fee = total − the others (half-up). Every difference is a flag {code, message, expected, reported,
+  diff}. **The REPORT's figures are stored; flags are ours — never corrected.**
+- **Real sample (owner's June 2026 PDF, verified LOCALLY only, not committed):** parsed 45 lines + 9 totals, 0 unknown, all five
+  sections; validation **ok, 0 flags** — STR, the three fees and the total due tie to the cent under the rule (the 1% fee is the
+  remainder: a straight round would be one cent short). Synthetic fixture with the same remainder shape in `harness_royalty.py`.
+- **Endpoints:** `GET /account/royalty/config`, `PUT /account/royalty/lines`, `PUT /account/royalty/config`,
+  `POST /account/royalty/parse` (preview, writes nothing), `POST /account/royalty/import` (file or text; center / period /
+  store override; a re-import replaces the center-month), `POST /account/royalty/manual` (the same validation + writer; blank
+  totals DERIVED and marked `derived_totals`), `GET /account/royalty/reports`, `GET|DELETE /account/royalty/report/{id}`.
+- **P&L booking:** `coa.build_inputs` → `royalty.load_reports(period_keys)` → `royalty.pl_bookings(reports, vocab, PL_SECTION)`
+  → `add(pl_line_key, store_ref, amount, label)` (adjusted amount where printed). NEW `coa.PL_SPEC` heads, all `auto_opt`, store
+  grain: revenue `service_sales`, `shipping_sales`, `merchandise_sales`, `commission_income`; opex `royalty_fee`,
+  `marketing_fee`, `ad_fund_fee` (labels per org via `pl_line_labels`). A line with no key: `excluded` (with `pl_note`) or
+  `unmapped` — carried on the `_royalty_coverage` side entry → statement `meta.royalty`. A report whose center has no store
+  books company-wide and the line's `note` says so. `royalty_config.book_pl=false` books nothing and still reports.
+
+### 37.4 THE CLASS — "a non-wireless sale matches no classifier in coa.build_inputs and silently books nothing" (every tenant)
+- The sales scan's if/elif chain (service-fee products → ePay fee → accessory → device) dropped every other line with nothing
+  said. Now: a line no classifier claims goes to **`commcalc.pl_sales_line_map`** (org, `match_field` product|category|department,
+  `match_value`, `pl_line_key` — a REVENUE line only; others rejected + reported) via `sales_line_map.match` (product > category
+  > department); what still books nothing is TALLIED (`sales_line_map.Tally`) → `_unbooked_sales` side entry (line-shaped, no
+  dollars) → statement `meta.unbooked_sales` (`statement_engine.side_meta`) and `GET /account/pl-sales-map?period=` (the scan's
+  own tally — one derivation). A POS line mapped to a head the royalty report books that period is SUPPRESSED and reported
+  (the §4b `add_comm` shape — never both). `PUT /account/pl-sales-map` writes a rule.
+- **Byte-identity:** no map rows ⇒ nothing booked that was not booked before. `harness_royalty_pl.py` §A pins the house org's
+  P&L payload (consolidated + every store scope) EQUAL to the frozen oracle captured from the pre-change `coa.py` (commit
+  `2f2bdfd`; `harness_royalty_pl_oracle.json`) with the new tables absent, empty, and populated for another org, plus a
+  one-cent negative control and "the chart minus the seven heads IS the pre-change chart".
+
+### 37.5 The reconciliation — royalty (monthly, per line) vs the daily report(s)
+- `GET /account/royalty/recon/{period}?center=` → `royalty.reconcile(lines, vocab, daily_rows, match_field)`: per SALES line the
+  royalty figure, Σ the month's daily rows whose `match_field` is in the line's `daily_categories` (else a category spelled like
+  the line — `matched_by: same name`), the variance, the days and categories behind it; daily categories no line claims
+  (`unmapped_daily`) and categories two lines claim (`conflicts`) are reported; `tender_crosscheck` = Σ `pos_tender_summary`
+  vs gross sales (total level; none = not measured). Daily rows are the report's store's only (via `coa.store_resolver`).
+- **Daily source:** the EXISTING landings — `raw_sales_product` (layout `pos_product_sales`, default) or `raw_sales`
+  (`royalty_config.daily_source`). **THE TENANT'S DAILY REPORT FORMAT IS NOT YET KNOWN** — a sample daily export (one day, all
+  categories, with the store and a category/department column) is needed to confirm the layout lands on one of those tables and
+  to seed each line's `daily_categories`. Until then lines match by name or read `no_daily_map`.
+- **Page:** `accounts/royalty/recon` (NAV "Royalty vs Daily Sales", ScreenLink `royalty_recon`).
+
+### 37.6 Surfaces
+- Pages (Finance group, module `royalty`, REPORT_DIRECTORY 'finance'): `accounts/royalty` (reports, import with preview + ShowsIn,
+  manual entry, line setup), `accounts/royalty/recon`, `accounts/profit-centers`, `accounts/cost-centers`.
+- `GET /account/royalty/summary` — the operations-dashboard tiles: latest period, centers, STR, gross sales, fees due, recon
+  variance (None when no daily rows), flagged reports, unmapped lines + amount (`royalty.summary`).
+
+### 37.7 Proof + lock
+- `backend/harness_royalty.py` (stdlib, CI carrier-vocab-guard — 87 checks): §A mirror = seed; §B the vertical axis (backend twin;
+  frontend twin by source); §C the rounding rule incl. the 1-cent remainder (synthetic 40,000.45 → 3,400.04 = 2,000.02 +
+  1,000.01 + 400.01 vs a straight 400.00); §D parser (text, HTML with inputs, split label, truncation, unknown kept); §E
+  validation (clean ok; a straight-rounded fee flagged and stored as printed); §F P&L mapping; §G recon; §H centers (scopes,
+  cost view ties); §I the unclaimed-line map; §J manual entry; §K landing identity.
+- `backend/harness_royalty_pl.py` (app deps, CI job `finance-royalty-proof` — 49 checks): §A house byte-identity vs the frozen
+  pre-change oracle; §B booking at the profit center's store, fees below GP, excluded/unmapped in meta, `book_pl=false`, a
+  tenant outside the vertical books nothing silently; §C map + suppression; §D the chart; §E scopes + journal; §F filter fails
+  closed; §G the router over the fake client (parse writes nothing, import/replace/flag, manual, recon, summary, pre-migration
+  refusal, the module gate).
+- `backend/harness_royalty_lock.py` (stdlib, CI — 33 checks): one vocabulary (no distinctive label outside `royalty.py`; one
+  reviewed allow: the kind card's recognisable columns), one rounding rule, one booking path, the vertical as data, org scope on
+  every chain, the gate, one engine, the unclaimed-line wiring, CI + this section, five negative controls.
+
+### 37.8 Migration `1022_franchise_royalty_cost_profit_centers.sql` — WRITTEN, NOT APPLIED (money-touching: surface for approval)
+Creates the eight tables (RLS `open_all` like every commcalc table; isolation = org-scoped queries, locked), seeds the house line
+vocabulary (vertical-scoped by sub-select), adds `report_kind.applies_to_vertical` + the `royalty_report` kind. Nothing moves on
+apply; dollars reach a P&L only when a tenant imports a report or saves a map rule. `-- REVERT:` in the header.
+
+### 37.9 OPEN — needs owner input (reported, not guessed)
+1. **The franchisor's cost-center and profit-center list** (codes, names, hierarchy, which center number is which store) — the
+   tables are empty until entered on the two pages (or supplied for a config-row seed).
+2. **A sample daily report** from the tenant (§37.5) — to confirm its landing and seed `daily_categories`.
+3. **Exclusion lines' P&L treatment** — the house default books exclusions NOTHING (reason: they reduce the royalty base; the
+   underlying cost books through expenses). If the owner wants e.g. stamp / postage cost booked to COGS from the report, that is
+   a per-org `pl_line_key` on those rows (config) — plus a COGS head, not yet in the chart.
+4. **Role grants:** the `royalty` module must be granted on the tenant's roles (the module gate + the vertical nav gate are in
+   place; a role editor entry is the parent agent's nav work).

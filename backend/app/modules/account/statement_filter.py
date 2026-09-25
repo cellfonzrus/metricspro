@@ -182,6 +182,21 @@ def scope_predicate(client, org_id, scope):
             return lambda addr: company_of(addr) == cid
         except Exception:
             return lambda addr: False
+    if scope.startswith("profit_center:"):
+        # mig 1022 (index §37.1): the stores mapped to the profit center and every center under it, resolved
+        # through the SAME store resolver the P&L books under (centers.profit_center_stores). Fail-CLOSED: a
+        # resolution failure or an unknown center matches nothing — never another center's stores.
+        code = scope.split(":", 1)[1]
+        try:
+            from app.modules.account import coa, centers as _c
+            cs = _c.load_centers(client, org_id)
+            if not any(c["center_type"] == "profit" and c["code"] == code for c in cs):
+                return lambda addr: False
+            idx, _dupes = _c.store_map_index(_c.load_store_map(client, org_id), coa.store_resolver(client, org_id))
+            members = {s.lower() for s in _c.profit_center_stores(code, cs, idx)}
+            return lambda addr: str(addr or "").strip().lower() in members
+        except Exception:
+            return lambda addr: False
     return lambda addr: True
 
 

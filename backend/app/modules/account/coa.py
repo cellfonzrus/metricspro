@@ -129,6 +129,16 @@ PL_SPEC = [
     # presentation 'off' default ⇒ byte-identical for every org until it opts in.
     ("billpay_collected", "Bill payments collected (pass-through)",  "revenue", "auto_opt", "store"),
     ("billpay_offset",  "Bill payments offset (pass-through)",       "revenue", "auto_opt", "store"),
+    # Owner 2026-09-25 (mig 1022, index §37.3): "all sales will be captured via the royalty report". Generic
+    # revenue heads a franchise royalty report's product / service lines book to through the per-org line map
+    # (commcalc.royalty_line_def.pl_line_key — the mig-1009 shape), and that ANY tenant's unclaimed POS sale line
+    # may be routed to through commcalc.pl_sales_line_map (account/sales_line_map.py). `auto_opt` + no map rows ⇒
+    # no dollars ⇒ the lines never materialise, so every existing statement is byte-identical. The drill-down
+    # detail carries the report's own line label; the head labels are per-org config (pl_line_labels, mig 314).
+    ("service_sales",   "Service sales",                              "revenue", "auto_opt", "store"),
+    ("shipping_sales",  "Shipping & postage sales",                   "revenue", "auto_opt", "store"),
+    ("merchandise_sales", "Merchandise sales",                        "revenue", "auto_opt", "store"),
+    ("commission_income", "Commission income (third-party services)", "revenue", "auto_opt", "store"),
     ("vip_device_pay","Distributor device payments (PayGo, paid)",   "cogs",    "auto",  "store"),
     ("accessory_cost","Accessory cost",                              "cogs",    "auto",  "store"),
     ("device_cost",   "Device cost",                                 "cogs",    "auto",  "store"),
@@ -172,6 +182,12 @@ PL_SPEC = [
     ("payroll_expenses", "Payroll Expenses",                         "opex",    "auto_opt", "store"),
     ("chargebacks",   "Chargebacks / clawbacks",                     "opex",    "auto",  "store"),
     ("store_opex",    "Store operating expenses (rent / utilities / supplies)", "opex", "auto", "store"),
+    # Owner 2026-09-25 (mig 1022, index §37.3): the fees a franchise royalty report assesses on the sales subject to
+    # royalty — booked from the REPORT's own fee lines (never recomputed; a cent the configured rounding rule
+    # disagrees with is flagged on the report, not "corrected" here). `auto_opt` ⇒ absent for every other tenant.
+    ("royalty_fee",   "Franchise royalty fee",                       "opex",    "auto_opt", "store"),
+    ("marketing_fee", "Marketing fund fee",                          "opex",    "auto_opt", "store"),
+    ("ad_fund_fee",   "National advertising fund fee",               "opex",    "auto_opt", "store"),
 ]
 BS_SPEC = [
     ("cash",            "Cash / bank",                               "asset",     "manual",  None),
@@ -1175,6 +1191,53 @@ def build_inputs(client, org_id, period):
     # sales — accessory/device revenue + cost (store). UNIFIED source: raw_sales ∪ daily_sales_feed
     # (dedup by trans_id, raw_sales wins) so GP is correct whether or not the daily feed was promoted
     # into raw_sales — see _sales_union_rows for the Boost-neutral / no-double-count proof.
+    # ── FRANCHISE ROYALTY REPORT → P&L (owner 2026-09-25, mig 1022, index §37.3) ────────────────────────
+    # "all sales will be captured via the royalty report". Each stored report line books to the line its
+    # per-org vocabulary row names (royalty_line_def.pl_line_key — the mig-1009 shape; the REPORT's own
+    # figures, the adjusted amount where one is printed); a line with no key books nothing and is REPORTED
+    # (`excluded` with its configured reason, or `unmapped`) on the `_royalty_coverage` side entry. An org
+    # with no royalty rows for the period reads one empty result and books nothing ⇒ byte-identical.
+    _roy_covered = set()
+    _roy_side = None
+    try:
+        from app.modules.account import royalty as _roy
+        _roy_reps = _roy.load_reports(client, org_id, period_keys)
+        if _roy_reps:
+            _roy_cfg = _roy.load_config(client, org_id)
+            _roy_vocab, _ = _roy.load_vocab(client, org_id, _roy.tenant_vertical_key(client, org_id))
+            _roy_bk, _roy_cov = _roy.pl_bookings(_roy_reps, _roy_vocab, set(PL_SECTION))
+            if _roy_cfg["book_pl"]:
+                for _k, _st, _amt, _dl in _roy_bk:
+                    add(_k, _st, _amt, detail_label=_dl)
+                    _roy_covered.add(_k)
+                _cw = sorted({_c for _c in (r.get("center_code") for r in _roy_reps if not r.get("store_ref")) if _c})
+                for _k in _roy_covered:
+                    L[_k]["note"] = ("Booked from the franchise royalty report" +
+                                     (f"; center(s) {', '.join(_cw)} have no store mapped, so their lines are company-wide"
+                                      if _cw else ""))
+            _roy_side = {"by_store": {}, "company_wide": 0.0, "detail": {}, "book_pl": _roy_cfg["book_pl"],
+                         "reports": len(_roy_reps), **_roy_cov}
+    except Exception as e:
+        _warn("franchise royalty P&L booking skipped", e)
+    if _roy_side is not None:
+        L["_royalty_coverage"] = _roy_side
+
+    # ── the sale line NO classifier claims (index §37.4, the class, every tenant) ───────────────────────
+    # Per-org config (commcalc.pl_sales_line_map) may route it to a revenue line; whatever still books nothing
+    # is TALLIED and carried on the `_unbooked_sales` side entry (statement meta `unbooked_sales`). No map rows
+    # ⇒ nothing is booked that was not booked before ⇒ byte-identical for every tenant.
+    from app.modules.account import sales_line_map as _slm
+    _slm_tally = _slm.Tally()
+    _slm_idx = {}
+    try:
+        _slm_rows = _fetch_all(client, "pl_sales_line_map", "match_field,match_value,pl_line_key,is_active",
+                               {"org_id": org_id})
+        if _slm_rows:
+            _slm_idx, _ = _slm.normalise_rules(
+                _slm_rows, {k for k, _l, sec, *_ in PL_SPEC if sec == "revenue"})
+    except Exception:
+        _slm_idx = {}
+
     is_accessory, is_device = _sales_classifier(client, org_id)
     pos_device_cost = {}          # staged POS device cost — settled after the scan (ruling K3)
     try:
@@ -1215,8 +1278,21 @@ def build_inputs(client, org_id, period):
                 # is a last resort, not a source. With device_cogs_mode='off' (the default) this stages
                 # and then books the identical figure ⇒ byte-identical to pre-621 for every tenant.
                 pos_device_cost[st] = round(pos_device_cost.get(st, 0.0) + (ext - gp), 2)
+            elif ext:
+                # No classifier claimed this line (index §37.4). The org's map may route it; what it does not
+                # is reported, never silently dropped. A target the royalty report already books this period
+                # is suppressed (the report is the revenue of record — never both).
+                _hit = _slm.match(_slm_idx, dept, cat, prod) if _slm_idx else None
+                if _hit and _hit[0] in _roy_covered:
+                    _slm_tally.suppressed_by_royalty(_hit[0], dept, cat, ext, st)
+                elif _hit:
+                    add(_hit[0], st, ext, detail_label=_hit[2])
+                    _slm_tally.booked_by_map(_hit[0], _hit[1], _hit[2], ext, st)
+                else:
+                    _slm_tally.unclaimed(dept, cat, ext, st)
     except Exception:
         pass
+    L[_slm.SIDE_KEY] = _slm_tally.side_line()
 
     # ── DEVICE COGS SETTLEMENT — OWNER RULING K3 (2026-08-10) = the released "Option C" flip ────────
     # Policy of record (owner 2026-07-30, docs/designs/device-cost-ledger.md §9 C1): cost comes from the

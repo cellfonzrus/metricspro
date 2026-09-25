@@ -608,6 +608,14 @@ export const NAV: NavGroup[] = [
     { href: '/accounts/residual-per-sub', label: 'Residual per Subscriber', icon: '📉', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
     { href: '/accounts/journal', label: 'Journal', icon: '📒', module: 'accounts', scopes: ['all'], tileOnly: true },
     { href: '/accounts/companies', label: 'Companies', icon: '🏢', module: 'accounts', scopes: ['all'], tileOnly: true },
+    // Franchise royalty, cost centers, profit centers (owner 2026-09-25, mig 1022, index §37). Module `royalty` —
+    // the backend gates every endpoint with require_module('royalty'), and the module's vertical scope is DATA
+    // (core.module_catalog.applies_to_vertical, mig 1020): the vertical nav gate hides these for a tenant whose
+    // vertical the module does not apply to. Nothing here names a vertical.
+    { href: '/accounts/royalty', label: 'Royalty Report', icon: '🧾', module: 'royalty', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/accounts/royalty/recon', label: 'Royalty vs Daily Sales', icon: '🔎', module: 'royalty', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/accounts/profit-centers', label: 'Profit Centers', icon: '🏬', module: 'royalty', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/accounts/cost-centers', label: 'Cost Centers', icon: '🗂️', module: 'royalty', scopes: ['all', 'market'], tileOnly: true },
   ]},
   { group: 'Assets', module: 'asset', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
@@ -1053,6 +1061,8 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/accounts/liabilities-due', 'finance'],
   ['/accounts/device-purchases', 'finance'],
   ['/accounts/device-payable', 'finance'],
+  ['/accounts/royalty', 'finance'], ['/accounts/royalty/recon', 'finance'],
+  ['/accounts/profit-centers', 'finance'], ['/accounts/cost-centers', 'finance'],
   ['/commcalc/gp', 'finance'], ['/commcalc/expenses', 'finance'], ['/commcalc/tax-collected', 'finance'],
   // Payroll & HR
   ['/hr', 'payroll'], ['/hr/people', 'payroll'], ['/hr/onboarding', 'payroll'], ['/hr/compliance', 'payroll'],

@@ -52,6 +52,8 @@ export type ScreenKey =
   | 'pos_inventory'
   // the two surfaces that present THE TWO WAYS to calculate employee commission (commcalc/_lib/commissionWays.ts, 2026-09-20)
   | 'commission_structure' | 'incentive_plans'
+  // the franchise royalty report and its reconciliation (mig 1022, index §37 — landing_identity.MODULE_PAGES / CONSUMERS)
+  | 'royalty_report' | 'royalty_recon'
 
 export type ScreenDest = {
   /** Where the reader is sent. May carry a #anchor; the gate uses the path half. */
@@ -188,6 +190,9 @@ export const SCREENS: Record<ScreenKey, ScreenDest> = {
   // ── the two ways to calculate employee commission are presented on these two screens; each links the other ──
   commission_structure: { href: '/commcalc/commission-structure', label: 'Employee Commission Structure', blurb: 'Employee Commission Structure: the two ways to calculate employee commission, set up step by step', aliases: ['Employee Commission Structure', 'Commission Structure'] },
   incentive_plans: { href: '/commcalc/commission-plans', label: 'Incentive Plans', blurb: 'Incentive Plans: the plan editor — rules, tiers, assignments, and each plan\'s commission basis', aliases: ['Incentive Plans', 'plan editor'] },
+  // ── the franchise royalty report (mig 1022, index §37) — its own module page + its reconciliation ──
+  royalty_report: { href: '/accounts/royalty', label: 'Franchise Royalty Report', blurb: 'Franchise Royalty Report: the monthly royalty statement per center, checked against its own totals and the fee rule', aliases: ['Franchise Royalty Report', 'Royalty Report'] },
+  royalty_recon: { href: '/accounts/royalty/recon', label: 'Royalty vs Daily Sales', blurb: 'Royalty vs Daily Sales: each royalty sales line against the daily report(s) summed over the month', aliases: ['Royalty vs Daily Sales'] },
   // NOT registered: "Metric Source of Truth". Copy on Cash Recon (Management) names it, but no such
   // page exists anywhere in NAV or under app/ — inventing an href would be worse than the gap. It is
   // reported to the owner as a named destination with nothing behind it.

@@ -17,6 +17,7 @@ from app.modules.asset.router import router as asset_router
 from app.modules.notify.router import router as notify_router
 from app.modules.core.router import router as core_router
 from app.modules.account.router import router as account_router
+from app.modules.account.royalty_router import router as account_royalty_router
 from app.modules.storevisit.router import router as storevisit_router
 from app.modules.closing.router import router as closing_router
 from app.modules.helpdesk.router import router as helpdesk_router
@@ -243,6 +244,7 @@ app.include_router(asset_router, prefix="/api/v1/asset")
 app.include_router(notify_router, prefix="/api/v1")
 app.include_router(core_router, prefix="/api/v1")
 app.include_router(account_router, prefix="/api/v1")  # router carries its own /account prefix
+app.include_router(account_royalty_router, prefix="/api/v1")  # franchise royalty + cost/profit centers (mig 1022, index §37; gated on the royalty module)
 app.include_router(storevisit_router, prefix="/api/v1")  # router carries its own /storevisit prefix
 app.include_router(closing_router, prefix="/api/v1")     # router carries its own /closing prefix
 app.include_router(helpdesk_router, prefix="/api/v1")    # router carries its own /helpdesk prefix
