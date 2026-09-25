@@ -16,9 +16,43 @@ const th: React.CSSProperties = { textAlign: 'left', padding: '6px 9px', fontSiz
 const thr: React.CSSProperties = { ...th, textAlign: 'right' }
 const td: React.CSSProperties = { padding: '6px 9px', fontSize: 13, borderBottom: '1px solid var(--border)', verticalAlign: 'top' }
 const tdr: React.CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }
-const money = (v: any) => (v == null || v === '' ? '—' : fmt(v))
+// A figure as the API sends it (a stored-as-printed amount may arrive as a number or a decimal string).
+type Money = number | string | null | undefined
+const money = (v: Money) => (v == null || v === '' ? '—' : fmt(v as number))
 const SECTION_LABEL: Record<string, string> = { sales: 'Products / services', exclusion: 'Exclusions', commission: 'Commissions', str: 'Subject to royalty', fee: 'Fees due' }
 type Tab = 'reports' | 'import' | 'manual' | 'setup'
+
+// The fields of the /account/royalty/* payloads this page reads.
+interface Flag { code: string; message: string; expected?: Money; reported?: Money; diff?: number | null }
+interface RoyaltyLine {
+  section: string; line_key: string; label: string; role?: string
+  amount?: Money; adjustment?: Money; adjusted_amount?: Money; reason?: string | null
+  rate?: number | null; pl_line_key?: string | null; pl_note?: string | null; absorbs_remainder?: boolean
+  daily_categories?: string[]; _source?: string
+}
+interface PlCoverage {
+  booked?: Record<string, Money>
+  excluded?: Record<string, { label: string; section: string; amount: number; reason: string }>
+  unmapped?: Record<string, { label: string; amount: number; why: string }>
+}
+interface ReportSummary {
+  id: string; period: string; center_code: string; store_ref?: string | null; status?: string
+  total_gross_sales?: Money; total_adjusted_str?: Money; total_str?: Money; total_due?: Money
+}
+interface ReportDetail extends ReportSummary {
+  total_exclusions_adjusted?: Money; total_commissions_adjusted?: Money
+  validation?: { flags?: Flag[] }; lines?: RoyaltyLine[]
+}
+interface ReportOpen { report?: ReportDetail; pl_coverage?: PlCoverage }
+interface RoyaltyParse {
+  parsed: { center?: string; period_label?: string; lines: RoyaltyLine[] }; source?: string
+  validation: { flags: Flag[] }; pl_coverage?: PlCoverage; store_note?: string
+}
+interface RoyaltyConf { fee_basis?: string; daily_source?: string; daily_match_field?: string; book_pl?: boolean }
+interface RoyaltyConfig {
+  lines?: RoyaltyLine[]; config?: RoyaltyConf; pl_lines?: { key: string; label: string; section: string }[]
+  daily_sources?: string[]; match_fields?: string[]; problems?: string[]
+}
 
 function Card({ title, note, children }: { title: string; note?: React.ReactNode; children?: React.ReactNode }) {
   return (
@@ -30,7 +64,7 @@ function Card({ title, note, children }: { title: string; note?: React.ReactNode
   )
 }
 
-function Flags({ flags }: { flags: any[] }) {
+function Flags({ flags }: { flags: Flag[] }) {
   if (!flags?.length) return <div style={{ color: '#15803d', fontSize: 13 }}>Every check passed — the sections add up, the STR is gross sales − exclusions + commissions, and each fee matches the rule.</div>
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -44,9 +78,9 @@ function Flags({ flags }: { flags: any[] }) {
   )
 }
 
-function Lines({ lines }: { lines: any[] }) {
+function Lines({ lines }: { lines: RoyaltyLine[] }) {
   const bySec = useMemo(() => {
-    const m: Record<string, any[]> = {}
+    const m: Record<string, RoyaltyLine[]> = {}
     for (const l of lines || []) (m[l.section] = m[l.section] || []).push(l)
     return m
   }, [lines])
@@ -56,7 +90,7 @@ function Lines({ lines }: { lines: any[] }) {
         <div style={{ fontWeight: 600, fontSize: 13, margin: '6px 0' }}>{SECTION_LABEL[s]}</div>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr><th style={th}>Line</th><th style={thr}>Amount</th><th style={thr}>Adjustment</th><th style={thr}>Adjusted</th><th style={th}>Reason</th></tr></thead>
-          <tbody>{bySec[s].map((l: any) => (
+          <tbody>{bySec[s].map(l => (
             <tr key={l.section + l.line_key} style={l.role && l.role !== 'line' ? { fontWeight: 600 } : undefined}>
               <td style={td}>{l.label}{String(l.line_key || '').startsWith('unknown_') && <span style={{ color: '#b45309' }}> (not in the line vocabulary)</span>}</td>
               <td style={tdr}>{money(l.amount)}</td><td style={tdr}>{money(l.adjustment)}</td><td style={tdr}>{money(l.adjusted_amount)}</td>
@@ -68,11 +102,11 @@ function Lines({ lines }: { lines: any[] }) {
   )
 }
 
-function Coverage({ cov }: { cov: any }) {
+function Coverage({ cov }: { cov: PlCoverage | null | undefined }) {
   if (!cov) return null
   const booked = Object.entries(cov.booked || {})
-  const excl = Object.entries(cov.excluded || {}) as [string, any][]
-  const unm = Object.entries(cov.unmapped || {}) as [string, any][]
+  const excl = Object.entries(cov.excluded || {})
+  const unm = Object.entries(cov.unmapped || {})
   return (
     <div style={{ fontSize: 13 }}>
       <div style={{ marginBottom: 6 }}><b>Books to the P&L:</b> {booked.length ? booked.map(([k, v]) => `${k} ${fmt(Number(v))}`).join(' · ') : 'nothing'}</div>
@@ -84,9 +118,9 @@ function Coverage({ cov }: { cov: any }) {
 
 export default function RoyaltyReportPage() {
   const [tab, setTab] = useState<Tab>('reports')
-  const [cfg, setCfg] = useState<any>(null)
-  const [reports, setReports] = useState<any[]>([])
-  const [sel, setSel] = useState<any>(null)
+  const [cfg, setCfg] = useState<RoyaltyConfig | null>(null)
+  const [reports, setReports] = useState<ReportSummary[]>([])
+  const [sel, setSel] = useState<ReportOpen | null>(null)
   const [err, setErr] = useState('')
   const kinds = useReportKinds()
 
@@ -104,7 +138,7 @@ export default function RoyaltyReportPage() {
       </div>
       <ShowsIn info={kinds.showsIn('royalty_report')} loaded={kinds.loaded} />
       {err && <div style={{ color: '#b91c1c', margin: '8px 0' }}>{err}</div>}
-      {cfg?.problems?.length > 0 && <div style={{ color: '#b45309', margin: '8px 0' }}>Line setup needs attention: {cfg.problems.join(' · ')}</div>}
+      {(cfg?.problems?.length ?? 0) > 0 && cfg?.problems && <div style={{ color: '#b45309', margin: '8px 0' }}>Line setup needs attention: {cfg.problems.join(' · ')}</div>}
       <div style={{ display: 'flex', gap: 6, margin: '10px 0 14px', flexWrap: 'wrap' }}>
         {(['reports', 'import', 'manual', 'setup'] as Tab[]).map(t => (
           <button key={t} className={tab === t ? 'btn btn-primary' : 'btn'} onClick={() => setTab(t)}>
@@ -120,7 +154,7 @@ export default function RoyaltyReportPage() {
   )
 }
 
-function ReportsTab({ reports, open, sel, onDeleted }: { reports: any[]; open: (id: string) => void; sel: any; onDeleted: () => void }) {
+function ReportsTab({ reports, open, sel, onDeleted }: { reports: ReportSummary[]; open: (id: string) => void; sel: ReportOpen | null; onDeleted: () => void }) {
   const r = sel?.report
   return (
     <>
@@ -148,7 +182,7 @@ function ReportsTab({ reports, open, sel, onDeleted }: { reports: any[]; open: (
           <div style={{ fontWeight: 600, fontSize: 13, margin: '8px 0 4px' }}>Checks</div>
           <Flags flags={r.validation?.flags || []} />
           <div style={{ fontWeight: 600, fontSize: 13, margin: '12px 0 4px' }}>On the P&L</div>
-          <Coverage cov={sel.pl_coverage} />
+          <Coverage cov={sel?.pl_coverage} />
           <div style={{ fontWeight: 600, fontSize: 13, margin: '12px 0 4px' }}>Lines as printed</div>
           <Lines lines={r.lines || []} />
           <button className="btn" style={{ marginTop: 8 }} onClick={() => {
@@ -167,7 +201,7 @@ function ImportTab({ onSaved }: { onSaved: () => void }) {
   const [center, setCenter] = useState('')
   const [period, setPeriod] = useState('')
   const [store, setStore] = useState('')
-  const [preview, setPreview] = useState<any>(null)
+  const [preview, setPreview] = useState<RoyaltyParse | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const form = () => {
@@ -177,7 +211,7 @@ function ImportTab({ onSaved }: { onSaved: () => void }) {
     f.append('center', center); f.append('period', period); f.append('store_ref', store)
     return f
   }
-  const run = (path: string, then: (d: any) => void) => {
+  const run = (path: string, then: (d: RoyaltyParse) => void) => {
     setBusy(true); setErr('')
     apiUpload(path, form()).then(then).catch(e => setErr(e?.message || String(e))).finally(() => setBusy(false))
   }
@@ -213,14 +247,14 @@ function ImportTab({ onSaved }: { onSaved: () => void }) {
   )
 }
 
-function ManualTab({ cfg, onSaved }: { cfg: any; onSaved: () => void }) {
+function ManualTab({ cfg, onSaved }: { cfg: RoyaltyConfig; onSaved: () => void }) {
   const [vals, setVals] = useState<Record<string, { amount?: string; adjustment?: string; reason?: string }>>({})
   const [center, setCenter] = useState('')
   const [period, setPeriod] = useState('')
   const [store, setStore] = useState('')
-  const [res, setRes] = useState<any>(null)
+  const [res, setRes] = useState<{ status?: string; validation?: { flags?: Flag[] } } | null>(null)
   const [err, setErr] = useState('')
-  const rows = (cfg.lines || []).filter((l: any) => l.role !== 'header' && l.role !== 'echo')
+  const rows = (cfg.lines || []).filter(l => l.role !== 'header' && l.role !== 'echo')
   const set = (k: string, f: string, v: string) => setVals(p => ({ ...p, [k]: { ...(p[k] || {}), [f]: v } }))
   const save = () => {
     setErr('')
@@ -238,7 +272,7 @@ function ManualTab({ cfg, onSaved }: { cfg: any; onSaved: () => void }) {
       </div>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr><th style={th}>Section</th><th style={th}>Line</th><th style={thr}>Amount</th><th style={thr}>Adjustment</th><th style={th}>Reason</th></tr></thead>
-        <tbody>{rows.map((l: any) => (
+        <tbody>{rows.map(l => (
           <tr key={l.line_key} style={l.role !== 'line' ? { fontWeight: 600 } : undefined}>
             <td style={td}>{SECTION_LABEL[l.section] || l.section}</td><td style={td}>{l.label}{l.rate != null ? ` (${(l.rate * 100).toFixed(2).replace(/\.?0+$/, '')}%)` : ''}</td>
             <td style={tdr}><input style={{ width: 110, textAlign: 'right' }} inputMode="decimal" value={vals[l.line_key]?.amount || ''} onChange={e => set(l.line_key, 'amount', e.target.value)} /></td>
@@ -254,11 +288,11 @@ function ManualTab({ cfg, onSaved }: { cfg: any; onSaved: () => void }) {
   )
 }
 
-function SetupTab({ cfg, reload }: { cfg: any; reload: () => void }) {
+function SetupTab({ cfg, reload }: { cfg: RoyaltyConfig; reload: () => void }) {
   const [err, setErr] = useState('')
-  const [conf, setConf] = useState<any>(cfg.config || {})
+  const [conf, setConf] = useState<RoyaltyConf>(cfg.config || {})
   const plOptions = (cfg.pl_lines || []) as { key: string; label: string; section: string }[]
-  const save = (row: any, patch: any) => {
+  const save = (row: RoyaltyLine, patch: Partial<RoyaltyLine>) => {
     setErr('')
     api('/api/v1/account/royalty/lines', { method: 'PUT', body: JSON.stringify({ line_key: row.line_key, ...patch }) })
       .then(reload).catch(e => setErr(e?.message || String(e)))
@@ -282,7 +316,7 @@ function SetupTab({ cfg, reload }: { cfg: any; reload: () => void }) {
         {err && <div style={{ color: '#b91c1c', marginBottom: 8 }}>{err}</div>}
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr><th style={th}>Section</th><th style={th}>Line</th><th style={th}>Books to</th><th style={th}>Why it books nothing</th><th style={th}>Rate</th><th style={th}>Remainder</th><th style={th}>Daily categories</th></tr></thead>
-          <tbody>{(cfg.lines || []).filter((l: any) => l.role === 'line').map((l: any) => (
+          <tbody>{(cfg.lines || []).filter(l => l.role === 'line').map(l => (
             <tr key={l.line_key}>
               <td style={td}>{SECTION_LABEL[l.section] || l.section}</td>
               <td style={td}>{l.label}{l._source !== 'house' && <span style={{ color: 'var(--text3)' }}> · yours</span>}</td>

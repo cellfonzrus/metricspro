@@ -3,6 +3,7 @@
 // Nothing here names a vendor: vendors are rows (commcalc.po_vendor) the tenant sets up on /supply/vendors,
 // with their own free-shipping threshold and delivery time. The visual tokens are the house module tokens
 // (re-exported, not re-declared, so the look cannot drift from the other module pages).
+import { useMemo, useSyncExternalStore } from 'react'
 export { panel, input, label, btn, btnPrimary, btnDanger, cell, th, fmtMoney } from '@/lib/marketing'
 
 export interface Attention { code: string; severity: 'warn' | 'info'; text: string }
@@ -14,7 +15,7 @@ export interface VendorLogin {
 export interface Vendor {
   id: string; name: string; contact_name?: string | null; email?: string | null; phone?: string | null
   terms?: string | null; notes?: string | null; is_active: boolean
-  portal_url?: string | null; catalog_urls?: string[]; portal_config?: Record<string, any>
+  portal_url?: string | null; catalog_urls?: string[]; portal_config?: Record<string, unknown>
   free_shipping_threshold?: number | null; shipping_fee_below_threshold?: number | null
   delivery_days_min?: number | null; delivery_days_max?: number | null
   data_source_id?: string | null; is_price_source: boolean
@@ -41,6 +42,18 @@ export function readCart(): CartItem[] {
     const v = raw ? JSON.parse(raw) : []
     return Array.isArray(v) ? v : []
   } catch { return [] }
+}
+// True once the page is running on the client. The server render — and the hydration pass, which must match
+// it — see false, so browser-only reads (localStorage, the URL) happen at the same moment a mount effect used
+// to do them, without that effect's setState.
+const noSubscribe = () => () => {}
+export function useOnClient(): boolean {
+  return useSyncExternalStore(noSubscribe, () => true, () => false)
+}
+// The cart as stored in this browser, read once on the client (null before that).
+export function useStoredCart(): CartItem[] | null {
+  const onClient = useOnClient()
+  return useMemo(() => (onClient ? readCart() : null), [onClient])
 }
 export function writeCart(items: CartItem[]) {
   try { window.localStorage.setItem(CART_KEY, JSON.stringify(items)) } catch { /* private window: cart lives in memory */ }

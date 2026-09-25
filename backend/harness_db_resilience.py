@@ -910,7 +910,11 @@ _all_routes = _flatten_routes(real_app.routes)
 #     1650  + the 18 leaf routes of app/modules/supply/router.py (/supply/vendors GET+POST, PATCH /vendors/{id},
 #             /vendors/{id}/login|catalog/read|catalog, /catalog/upload, /compare, /cart/optimize|place, /orders,
 #             /orders/{id}, /orders/{id}/open-session|capture|submit|confirm-manual|status, /summary — index §36)
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1650"))
+#     1670  + 20 finance routes (app/modules/account/royalty_router.py incl. GET /account/pl-sales-map — franchise royalty,
+#             cost & profit centers — index §37; measured after the §36/§37 merges)
+#     1674  + GET /core/verticals/admin, POST /core/verticals, PUT /core/verticals/{key}, PUT /core/module-verticals/{module}
+#             (the Business Types editor — index §35.1)
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1674"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
