@@ -61,6 +61,7 @@ Primary code homes:
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
+| 36 | **Supply ordering (vendor setup · price compare · cheapest cart incl. free shipping · assisted order + confirmation)** | "Which vendor should this cart go to once shipping is counted, where is each vendor's free-shipping threshold and delivery time set, how is the order placed at the vendor from here, and where does the vendor's confirmation number land?" |
 
 ---
 
@@ -4041,6 +4042,9 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.daily_sales_feed.uploaded_at` · `vip_paygo_payments.swept_at` · `vip_credit_memos.swept_at` — the ARRIVAL columns (as opposed to each table's DATA date) | the ingest that lands the row | `data_lineage_registry.FRESHNESS_COLUMN_BY_TABLE` / `freshness_column(table)` is the ONE declaration; `router._table_feed_freshness` dereferences it to fill `last_ingest_at`, and `account/autocompute._PERIOD_SOURCES` must agree with it. Consumed by `_data_freshness_monitor` to tell **"the report email stopped arriving"** (old ingest) from **"the file arrives, its CONTENT is frozen"** (recent ingest, old data date) — a distinction that was structurally impossible for every table-backed feed until 2026-09-20, see §19.18. Proof `harness_ingest_freshness.py` (31 checks) |
 | `commcalc.email_sweep_config` / `ftp_sweep_config` — the FRESHNESS columns `last_run_at` vs `last_attempt_at` (mig `241`) | `router._sweep_run_stamp(success)` is the SOLE decider, written through `_email_status_update` (mailbox, scoped `org_id`+`account`) / `_status_update` (FTP). **Only an ingest advances `last_run_at`** (`ok > 0` attachments); a rejected login, a mailbox with no filename rules, a connect error or a crash writes `last_attempt_at`. Both degrade to a status-only write on a pre-241 database | `router._scan_connector_health` → `GET /commcalc/connector-health` (ERRORED/STALE arms — the STALE arm was DEAD for these two tables until 2026-09-20, see §19), and `core.control_box_api._SCHEDULER_SPECS['sched_email_sweep']` → `control_box.heartbeat_lamp(last_success=…)`, whose parameter name this now actually honours. Scheduling reads NEITHER column — `/run-due` keys off `next_run_at`. Proof `harness_sweep_freshness.py` (28 checks) |
 | `pos.products` (mig `724`; `system_category` free per-org since `745`) · read with `pos.inventory_serial` (`status = 'in_stock'`) + `pos.inventory_standard` (`qty_on_hand > 0`) (mig `725`) for "in stock" | `POST /pos/products` · `PATCH /pos/products/{id}` (the catalog page, the wizard) — unchanged | **THE product filters (§33):** `GET /pos/products` → `pos/product_filters.list_rows` (`clean` / `apply` over `EQ_FILTERS`, `search_clause`, `in_stock_product_ids`); `GET /pos/products/manufacturers` → `product_filters.manufacturers`; the special-order catalog's search → `product_filters.search_clause` |
+| `commcalc.vendor_catalog_price` (mig `1021`, **NOT applied**, §36) — THE vendor price snapshot: org, vendor_id → po_vendor, run_id (one per read), source `upload`\|`portal`, item_key (`s:<item #>` / `u:<hash link+name>`), sku, name, price (> 0), list_price, pack_qty, availability (in_stock\|backorder\|out_of_stock\|unknown), stock_qty, stock_text, url, description, seen_at; RLS on, service-role only | ONLY `supply/store.land_catalog` — from `POST /supply/catalog/upload` (the kit's products file) and `supply/portal.catalog_pull_on_page` (live `live_login` pull / scheduled `_SOURCE_SCRAPERS[SUPPLY_PROCESSOR]`) | `store.latest_rows` (newest run per vendor) → `GET /supply/compare`, `GET /supply/vendors/{id}/catalog`; `store.catalog_rows_by_ids` → `POST /supply/cart/optimize|place`; `store.latest_run` → vendor attention / `GET /supply/summary`. Locked: harness_supply_ordering §L1–L3 |
+| `commcalc.po_vendor` **+ mig `1021` columns** (§36): `portal_url`, `catalog_urls[]`, `portal_config` (a vendors.json block + optional `ordering` recipe; a credential key is refused), `free_shipping_threshold`, `shipping_fee_below_threshold`, `delivery_days_min/max` (tenant-defined; CHECK: a portal vendor carries threshold + max days), `data_source_id` → commcalc.data_source, `is_price_source` | `POST/PATCH /supply/vendors` (`ordering_logic.validate_vendor`), `PUT /supply/vendors/{id}/login` (links data_source_id); the Purchase Orders vendor endpoints (`/asset/po/vendors`) unchanged | `supply/store.load_vendors` / `vendor_by_id` / `vendor_for_source` → every /supply endpoint, `ordering_logic.optimize_cart` (terms), `vendor_scrape_config`, `parse_recipe` |
+| `commcalc.purchase_order` **+ mig `1021` columns** (§36): `vendor_order_ref`, `vendor_order_total`, `shipping_estimate`, `supply_cart_ref`, `supply_meta` (line links, threshold, delivery, plan saving), `cart_evidence` (vendor cart total, lines added, screenshot), `confirmation` (method live_capture\|live_submit\|manual, page, screenshot, who/when), `submitted_by`, `submitted_at`; supply rows carry `source='supply_cart'` | `supply/store.create_order` (one per vendor of a placed cart; `next_po_number`), `save_cart_evidence` (order session), `record_confirmation` / `set_status` (the 301 lifecycle rule) | `GET /supply/orders(/{id})`, `GET /supply/summary` (`ordering_logic.summary_tiles`); the Purchase Orders pages see them as ordinary POs |
 
 ## 17. Cross-reference: by ENDPOINT (high-value)
 
@@ -4247,6 +4251,16 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /core/platform-notice` (tenant-facing status banner — any signed-in user; org from the VERIFIED membership) · `GET /core/tenant-operator-access` (a TENANT admin's "who from the platform was in my company", gated by the existing `_require_setting(..., 'security')`) | `core/operator_api.py` `public_router` (mounted WITHOUT the /operator prefix) | §22 tenant-facing transparency |
 | `GET /pos/products` — the org's products newest first, capped at 500; optional filters (blank = any) `department_id`, `category_id`, `system_category`, `manufacturer` (exact), `inventory_type` (`standard` / `serial`, else 400), `in_stock` (+ `store_code`: a serial unit `in_stock` or standard `qty_on_hand > 0` at that store, else any store), combined (AND) with `search` (name / full name / UPC); `active_only` as before. **No new param = the query and answer it always gave** (§33) | `pos.router.list_products` → `pos/product_filters.list_rows` | §33 |
 | `GET /pos/products/manufacturers` (`active_only`, default true) — the Manufacturer filter's options: the org's distinct non-blank manufacturers A→Z, exactly as stored | `pos.router.list_product_manufacturers` → `product_filters.manufacturers` (org-scoped paged read through `catalog_suggest._page`) | §33 |
+| `GET /supply/vendors` · `POST /supply/vendors` · `PATCH /supply/vendors/{id}` (§36) — the vendor roster with its portal terms; a portal vendor is refused without its free-shipping threshold + delivery time; each row carries `login` (presence flags only), `catalog_seen_at`, `recipe` status, `attention` | `supply/router.list_vendors / create_vendor / update_vendor` → `ordering_logic.validate_vendor`, `normalize_portal_config`, `vendor_attention`; admin gate = asset `_require_po_admin` | `supply/vendors` |
+| `PUT /supply/vendors/{id}/login` (§36) — the vendor's portal login = a commcalc.data_source row (processor `SUPPLY_PROCESSOR`), written by commcalc's own `save_data_source` (SSRF guard, import-admin gate, blank password keeps) + linked to the vendor; optional scheduled read (`enabled/frequency/hour`) | `supply/router.save_vendor_login` → `commcalc.router.save_data_source` | `supply/vendors` |
+| `POST /supply/vendors/{id}/catalog/read` (§36) — read the catalog NOW on a live session: `require_browser_service()` → commcalc `live_login_start` → `_live_pull` → `supply.portal.catalog_pull_on_page` → `store.land_catalog`; 503 with the reason where no browser can run | `supply/router.read_vendor_catalog` | `supply/vendors` (streams via commcalc `/data-sources/{sid}/live-login/*`) |
+| `POST /supply/catalog/upload` (multipart `file`, optional `vendor_id`) · `GET /supply/vendors/{id}/catalog` (§36) — land the kit's products.json/csv (vendor key → `map_kit_vendor`; unmapped keys REPORTED); the newest run of one vendor | `supply/router.catalog_upload` → `ordering_logic.parse_products_upload` → `store.land_catalog`; `vendor_catalog` → `store.latest_rows` | `supply/vendors` |
+| `GET /supply/compare?q=&only_compared=` (§36) — newest prices of every active vendor matched across vendors: basis, best in-stock vendor, savings, note, per-vendor offers (row ids) | `supply/router.compare` → `store.latest_rows` → `pricing_core.group_products` / `comparison_rows` / `search_score` | `supply/compare` |
+| `POST /supply/cart/optimize` · `POST /supply/cart/place` (§36) — the cheapest plan incl. each vendor's free-shipping threshold / fee / delivery days (+ `max_delivery_days`, `allow_backorder`, `allow_unknown`); place RE-PLANS server-side and creates ONE purchase_order per vendor (draft, `source='supply_cart'`) | `supply/router.cart_optimize / cart_place` → `ordering_logic.optimize_cart` → `po_drafts_from_plan` → `store.create_order` (asset `_next_po_number`) | `supply/cart` |
+| `GET /supply/orders` · `GET /supply/orders/{id}` (§36) — supply POs (list without screenshots; detail with lines, `cart_evidence`, `confirmation`, recipe status, `can_submit`, whether a live window is open for it) | `supply/router.list_orders / get_order` → `store.list_orders` / `order_detail` | `supply/orders` |
+| `POST /supply/orders/{id}/open-session` · `/capture` · `/submit` (§36) — `require_browser_service()`; open-session = `live_login.start_session` with `supply.portal.order_session` (sign in → add lines by recipe → review → vendor cart total + screenshot → `cart_evidence`; NEVER submits); capture = read the page, `detect_confirmation` → `record_confirmation` (status submitted + ref + total + evidence + who/when) or say it is not the confirmation; submit = the human's explicit Confirm, refused unless the recipe has `submit_steps` and the cart was captured | `supply/router.open_order_session / capture_confirmation / submit_order` (`_live_pull` → `LiveLoginSession.run_pull_blocking`) | `supply/orders` |
+| `POST /supply/orders/{id}/confirm-manual` · `POST /supply/orders/{id}/status` (§36) — type the vendor's confirmation number (always available; email seam noted); move a supply PO through the 301 lifecycle (e.g. cancel a draft) | `supply/router.confirm_manual` → `ordering_logic.manual_confirmation` → `store.record_confirmation`; `order_status` → `store.set_status` | `supply/orders` |
+| `GET /supply/summary` (§36) — the store-operations dashboard tiles: `open_orders`, `spend_mtd` (vendor-confirmed total when captured), `savings_mtd` (the optimizer's saving vs the best single vendor), `vendors_needing_attention` + reasons, page links | `supply/router.summary` → `ordering_logic.vendor_attention` / `summary_tiles` | the store-operations dashboard (§35) |
 
 ## 18. Cross-reference: by METRIC / KPI
 
@@ -10967,7 +10981,7 @@ REPORT files, not catalogs; `po_vendor` is a roster with no portal or price; `di
 Phase 1 therefore reuses nothing at runtime (it runs off-platform by design), and phase 2 is planned ON these homes, not
 beside them:
 
-**PHASE 2 (planned, not built — each migration surfaced for approval first).** (1) *The vendor* = `commcalc.po_vendor`
+**PHASE 2 — BUILT as §36 (mig `1021`, not applied).** The pure logic now lives ONCE in `backend/app/modules/supply/pricing_core.py` (+ the reader in `supply/catalog_scrape.py`); the kit loads it. The plan as it was written: **PHASE 2 (planned — each migration surfaced for approval first).** (1) *The vendor* = `commcalc.po_vendor`
 gains `portal_url`, `catalog_urls[]`, `portal_config jsonb` (the same shape as a `vendors.json` block) — one vendor roster
 for ordering AND pricing. (2) *The login* = a `commcalc.data_source` row (`processor` = the vendor's connector key), secrets
 through the existing `_SOURCE_SECRETS` handling, login + human-finished 2FA through `live_login.start_session` — no second
@@ -11069,3 +11083,182 @@ franchise tenant needs them, and it is new; an admin grants them on Roles & Acce
 a single tenant exception rides the existing `caps['vertical:<href>']` override. (3) Backend endpoints of the hidden wireless PAGES are
 not vertical-gated (the page is unreachable from the UI and the data is the tenant's own); the vertical-scoped MODULES are
 (`require_module`). (4) `GET /closing/readiness` still words its count-config note as "built-in 3 activation-count fields" (an info note).
+
+---
+
+## 36. SUPPLY ORDERING — vendor setup, price compare, the cheapest cart incl. free shipping, the assisted order and its confirmation (owner request 2026-09-25, phase 2 of §34; mig `1021`, **NOT applied**)
+
+Owner, verbatim (abridged): *"Create a dashboard for UPS Store operations and add the comparison prices module there,
+the user should be able to add the items to the cart in the cheapest vendors cart from this platform and place the
+order, the order confirmation should be captured back in and updated in the system. Each vendor had the free shipping
+threshold which needs to be defined by the tenant. When setting up the vendor module the tenant needs to define this
+and the approx delivery time for the vendor."* Earlier (§34): vendors are not hard-coded; autonomous login + catalog
+read; compare price and availability.
+
+**Module key `supply_ordering`** (catalogued and scoped to its vertical as DATA by mig `1020` / §35 — nothing in this
+module spells a vertical or a vendor). Every endpoint: `Depends(require_module("supply_ordering"))`. The store-operations
+dashboard (parent build, §35) shows `GET /supply/summary` as tiles.
+
+### 36.1 The flow
+
+```
+Vendors page ──► commcalc.po_vendor (+ free_shipping_threshold, shipping_fee_below_threshold, delivery_days_min/max,
+   │               portal_url, catalog_urls[], portal_config = a vendors.json block + optional `ordering` recipe,
+   │               is_price_source, data_source_id)            ← a portal vendor cannot be saved without threshold + days
+   └─ Login ──► commcalc.data_source (processor = supply.portal.SUPPLY_PROCESSOR) via commcalc save_data_source
+                 (SSRF guard, import-admin gate, write-only password; secrets = router._SOURCE_SECRETS)
+PRICES (two routes, ONE lander supply/store.land_catalog → commcalc.vendor_catalog_price, one run_id per read)
+   (a) POST /supply/catalog/upload  — the kit's products.json / products.csv (works today, no browser)
+   (b) portal read — LIVE: POST /supply/vendors/{id}/catalog/read → commcalc live_login_start → _live_pull →
+       supply.portal.catalog_pull_on_page;  SCHEDULED: /commcalc/data-sources/sweep/run-due →
+       _SOURCE_SCRAPERS[SUPPLY_PROCESSOR] → supply.portal.run_catalog_sweep (assert_browser_allowed)
+       both walk the catalog with THE one reader (supply/catalog_scrape.VendorScraper.crawl — the kit's own code)
+COMPARE  GET /supply/compare — newest run per vendor → pricing_core.group_products → comparison_rows
+CART     POST /supply/cart/optimize — ordering_logic.optimize_cart (thresholds, fee, lead time, stock, packs)
+PLACE    POST /supply/cart/place — re-plans server-side → ONE commcalc.purchase_order (+ lines) PER VENDOR
+         (source='supply_cart', next_po_number, status draft, shipping_estimate, supply_meta)
+ORDER    POST /supply/orders/{po}/open-session — live_login.start_session(sid = the vendor's login, pull_fn =
+         supply.portal.order_session): sign in → add each line by the recipe → open the review page → capture the
+         vendor's cart total + screenshot onto purchase_order.cart_evidence. NEVER submits.
+         The human places the order: in the streamed window (commcalc /data-sources/{sid}/live-login/{frame,input,
+         submit,cancel}), or POST …/submit (explicit Confirm, only when the recipe HAS submit_steps).
+CONFIRM  POST …/capture — reads the page: detect_confirmation (configured url/success/ref/total patterns) →
+         store.record_confirmation: status submitted (301 lifecycle) + vendor_order_ref + vendor_order_total +
+         confirmation evidence (method, page, screenshot, who/when).   Fallback: POST …/confirm-manual (typed number).
+```
+
+### 36.2 Where each piece lives
+
+- **Pure pricing (ONE copy, shared with the kit):** `backend/app/modules/supply/pricing_core.py` — moved from
+  `tools/vendor_price_compare/pricecompare/core.py` (same functions as §34). The kit's `pricecompare/core.py` /
+  `scrape.py` are loaders (`pricecompare/_shared.py`) that resolve the backend home by relative path, or the copy
+  `tools/vendor_price_compare/build_zip.py` bundles into the downloadable zip (`pricecompare/_bundled/`, git-ignored).
+- **Read-only catalog reader (ONE copy, shared with the kit):** `supply/catalog_scrape.py` — `VendorScraper.crawl`
+  (now takes `should_stop`; `out_dir=None` keeps no snapshots), `SAFE_SKIP`, `EXTRACT_JS`, `clean_url`, `_merge`.
+- **Pure decisions:** `supply/ordering_logic.py` — `validate_vendor`, `normalize_portal_config` (a credential key is
+  REFUSED), `vendor_hosts`, `vendor_scrape_config` (reader key = vendor id), `item_key`, `normalize_catalog_row(s)`,
+  `parse_products_upload`, `map_kit_vendor` (config `key`, else a unique name; never guessed), `offer_from_row`,
+  `order_packs`, **`optimize_cart`**, `po_drafts_from_plan`, `parse_recipe`, `recipe_status`, `render_step`,
+  `url_allowed`, `parse_cart_total`, `detect_confirmation`, `manual_confirmation`, `vendor_attention`, `summary_tiles`.
+- **DB (every query org-scoped):** `supply/store.py` — `load_vendors`, `vendor_by_id`, `vendor_for_source`,
+  `insert_vendor`, `update_vendor`, `public_login` / `load_logins` (secrets dropped with `_SOURCE_SECRETS`),
+  `login_row_full` (live session only), **`land_catalog`**, `latest_run`, `latest_rows`, `catalog_rows_by_ids`,
+  `create_order` (asset `_next_po_number`), `list_orders`, `order_detail`, `save_cart_evidence`, `set_status` /
+  `record_confirmation` (asset `_validate_status_transition`).
+- **Browser:** `supply/portal.py` — `SUPPLY_PROCESSOR`, `is_supply_source`, `catalog_pull_on_page`,
+  `run_catalog_sweep`, `run_step`, `build_cart`, `capture_confirmation`, `order_session`, `cart_persist`,
+  `register_order_session` / `order_state` (in-process, the same single-worker caveat as `live_login`).
+- **HTTP:** `supply/router.py` (prefix `/supply`, registered in `main.py` beside marketing). Billing route map:
+  `module_usage.DEFAULT_ROUTE_MODULE["supply"] = "supply_ordering"`.
+- **Frontend:** `frontend/src/app/(platform)/supply/{vendors,compare,cart,orders}/page.tsx`, `lib/supply.ts`
+  (types + the per-viewer cart in localStorage — a convenience; the record is the PO), `components/supply/
+  LiveVendorWindow.tsx` (the commcalc live-login stream). NAV: ONE group `'Supply Ordering'` (module
+  `supply_ordering`) in `lib/rbac.ts`; `moduleForPath('/supply…') = 'supply_ordering'`. No vertical logic added there.
+
+### 36.3 The cart optimizer (`ordering_logic.optimize_cart`)
+
+- Quantity basis: **units** when every priced offer states its pack (packs = ⌈units ÷ pack⌉, rounding SAID), else each
+  vendor's own packs (SAID on the line); the cart may force packs.
+- Eligible offer: priced; vendor set up; not out of stock; a known stock shortfall (`stock_qty` < packs) is refused;
+  `unknown` availability allowed but flagged (`allow_unknown=False` refuses); `backorder` refused unless
+  `allow_backorder`; `max_delivery_days` drops a vendor whose stated maximum exceeds it — and one with no stated
+  delivery time, with that reason.
+- Cost = Σ lines + per vendor `shipping_fee_below_threshold` when 0 < subtotal < `free_shipping_threshold` (free at or
+  above; threshold 0 = always free; an unset fee is NOT added and is flagged). Money in integer cents.
+- Search: **exact** over every assignment when the space ≤ 200k (vendors are few); else every vendor subset with each
+  item on its cheapest in-subset vendor + single-item move improvement (`method` says which). Ties → fewer vendors →
+  faster delivery. Out: per-vendor blocks (subtotal, shipping, `to_free_shipping`, delivery), lines with alternatives,
+  `hints` ("Add $X more at V to reach free shipping (saves the $F fee)"), `flags`, `unfillable` (with reasons),
+  baselines (`cheapest_each_item`, `best_single_vendor`) and the savings vs each.
+
+### 36.4 The ordering recipe (config, `portal_config.ordering`)
+
+```json
+{"cart_url": "https://…/cart",
+ "line_steps":   [{"action":"goto","url":"{url}"}, {"action":"fill","selector":"input[name=qty]","value":"{qty}"},
+                  {"action":"click","selector":"button.add"}, {"action":"wait","ms":1500}],
+ "review_steps": [{"action":"goto","url":"{cart_url}"}],
+ "submit_steps": [{"action":"click","selector":"#confirm"}],          // optional — run ONLY on the human's Confirm
+ "cart_total_selector": "…", "cart_total_pattern": "Sub-Total:\\s*(\\$[\\d,.]+)",
+ "confirmation": {"url_pattern": "checkout_success", "success_pattern": "…", "ref_pattern": "…", "total_pattern": "…"}}
+```
+
+Actions `goto|click|fill|select|press|wait|wait_for` (+ optional `frame` regex, `optional`); placeholders
+`{url} {qty} {sku} {name} {line_no} {cart_url} {portal_url}`; a `goto` off the vendor's own hosts (`vendor_hosts`) is
+refused at parse AND at run time. No recipe → the session signs in (and opens `cart_url` when set) and says the human
+finishes. House defaults for the confirmation wording live in `DEFAULT_CONFIRMATION`; an order-number pattern alone
+NEVER confirms (a cart page prints "Order #" too).
+
+### 36.5 Tables / endpoints
+
+- **NEW** `commcalc.vendor_catalog_price` (the only new table) · **EXTENDED** `commcalc.po_vendor`,
+  `commcalc.purchase_order` (see §16).
+- `GET/POST /supply/vendors`, `PATCH /supply/vendors/{id}`, `PUT /supply/vendors/{id}/login`,
+  `POST /supply/vendors/{id}/catalog/read`, `GET /supply/vendors/{id}/catalog`, `POST /supply/catalog/upload`,
+  `GET /supply/compare`, `POST /supply/cart/optimize`, `POST /supply/cart/place`, `GET /supply/orders`,
+  `GET /supply/orders/{id}`, `POST /supply/orders/{id}/open-session|capture|submit|confirm-manual|status`,
+  `GET /supply/summary` (see §17).
+
+### 36.6 DUPLICATE CHECK (build gate) — what was searched, what was reused
+
+| Question | Existing home found | Decision |
+|---|---|---|
+| Who are our vendors? | `commcalc.po_vendor` (mig 301, Purchase Orders roster) | **Extended** (portal, threshold, fee, delivery, login link). `pos.vendors` (726) is the POS catalog's own receiving roster; `commcalc.distributors` (058) is wireless device supply — neither is the ordering roster. |
+| What is an order? | `commcalc.purchase_order(+_line)`, `next_po_number`, the draft→submitted→… rule (301, `asset/purchase_orders`) | **Reused**: one PO per vendor, `source='supply_cart'`; the confirmation columns are added to it. Receiving stays on the Purchase Orders receiving screen. |
+| Where do portal logins and passwords live? | `commcalc.data_source` + `router._SOURCE_SECRETS` + `save_data_source` | **Reused** (called in-process); po_vendor only points at the row. No new credential column. |
+| How does a portal get signed into / streamed? | `commcalc/live_login.start_session` + the `/data-sources/{sid}/live-login/*` endpoints | **Reused** for both the catalog read (via `live_login_start`) and the order session (own `pull_fn`); the page streams from the commcalc endpoints. |
+| How does a portal get read on a schedule? | `/commcalc/data-sources/sweep/run-due` → `_SOURCE_SCRAPERS` | **Reused**: one registration keyed by `supply.portal.SUPPLY_PROCESSOR`; `_live_pull` dispatches a supply login to the catalog read (it would otherwise have driven the VidaPay report list). |
+| What does vendor X charge for item Y today? | nothing (portal sweeps pull settlement/report files; §27 rebates; `raw_catalog` is the POS product master) | **New**: `commcalc.vendor_catalog_price`, one lander. |
+| Price/pack/stock/matching logic | `tools/vendor_price_compare/pricecompare/core.py` (§34) | **Moved** to `supply/pricing_core.py`; the kit loads it. |
+| Who is the caller / admin gate | core `_uid_from_token` + `caller_app_user`; asset `_require_po_admin` | **Reused**. |
+
+Registered as a feed: `data_lineage_registry.INGEST_TABLES_BY_MODULE["supply"] = ("vendor_catalog_price",)` + two
+925 edges (`supply_vendor_catalog` → `vendor_catalog_price` ingest, → `supply_cart_plan` derive).
+
+### 36.7 Locks (design-fix rule — each FAILS THE BUILD)
+
+- `backend/harness_supply_ordering.py` (**147**, stdlib, in `carrier-vocab-guard.yml`): §A vendor setup (threshold +
+  delivery required for a portal vendor) · §B portal config (the kit's real vendors.json blocks accepted; password /
+  username refused; selector keys allowed) · §C reader config · §D catalog rows (no $0 rows; stock text; pack; item
+  key; kit-vendor mapping never guessed) · §E optimizer (threshold flip $90→$71, fee-vs-free decisions, hints, lead
+  time, out-of-stock / shortfall / unknown / backorder, pack basis 100 vs 30 units, unknown fee, ties, zero qty,
+  subset search vs exact on 150 seeded carts, PO drafts) · §F recipe · §G cart total · §H confirmation (NEGATIVE: a
+  cart page with "Order #" + total is not a confirmation) + manual fallback · §I attention + tiles · §K order session
+  on a FAKE page: builds the cart, refuses an off-host line, captures the vendor total, **never submits in cart
+  mode**, refuses submit without a configured step, runs a configured submit exactly once on explicit request ·
+  §J no vertical / vendor / vendor host spelled in the package or the pages; every endpoint gated + org_id ·
+  §L one writer of the snapshot table, both routes call it, commcalc dereferences `SUPPLY_PROCESSOR` (no second
+  spelling), `_live_pull` dispatch order, the 301 home + commcalc login reused, mig 1021 creates exactly one table,
+  additive/idempotent/REVERT/RLS, logins leave the store without secrets, main.py registration, ONE nav group.
+- `backend/harness_vendor_price_compare.py` §I (**79** total): the kit resolves to the backend home; the zip bundles
+  a byte-identical copy; **a second definition of the pricing logic / reader anywhere in the repo fails** (planted
+  negative control).
+- `backend/harness_org_scope_guard.py` LEAK CLASS 5: every chain in `supply/store.py` org-scoped (mutation-proven);
+  router / portal / logic hold no query. `org-scope-guard.yml` triggers on `backend/app/modules/supply/**`.
+- `backend/harness_browser_sweep_kinds.py` §6 (**45**; now wired into CI — it was not before): the modules outside
+  commcalc that launch a browser = the declared set (`supply/portal.py`), each launch behind
+  `assert_browser_allowed()`, and every supply endpoint that reaches a live browser calls `require_browser_service()`
+  (and the others do not).
+
+### 36.8 Honest status — what does NOT work until the vendor sites are reachable / recipes are captured
+
+- **No vendor-specific behaviour exists in code, and none is configured yet.** Both vendor sites were unreachable from
+  the build environment; the ordering recipes (add-to-cart selectors, cart URL, confirmation pattern) must be captured
+  against the real sites and entered as `portal_config.ordering`. Until then the order session signs in and stops
+  (or opens `cart_url`) and the human adds the lines — the page says so.
+- The live login's "signed in" test is the shared `vidapay_sweep._classify` (password box gone + words like
+  "log out" / "my account" / "welcome"). A vendor whose signed-in page carries none of those words will sit in the
+  "verification step" phase; the human can still drive the window, but the automatic cart build will not start. To
+  be verified per vendor on the real sites.
+- A frameset shopfront whose password box appears only after a "log in" link: point the login row's portal URL at
+  the login page itself (the live session does not click `open_login_link_text`; the kit's reader does).
+- The browser work runs where Chromium runs: on a `SERVICE_ROLE=api` deploy without `BROWSER_SERVICE_URL`, the
+  catalog read / order session endpoints answer 503 with the reason (the pages say "upload the kit's products file /
+  type the confirmation number instead"). Order-session state is in the sweeps worker's memory (single-worker caveat,
+  same as `live_login`).
+- A supply login row is not in the connector registry (mig 1014 seed) — the commcalc Data Sources page may label it
+  "not registered"; managing it from Supply → Vendors is unaffected. Follow-up: a registry row once 1014 is applied.
+- **Seam, not built:** an emailed order confirmation parsed from the tenant mailbox would land through
+  `record_confirmation` with `method='email'`.
+- **Migration 1021 is NOT applied** — surfaced for owner approval (adds columns to `purchase_order`; one new table).
+  Until it runs every supply endpoint answers with the named "migration pending" message.

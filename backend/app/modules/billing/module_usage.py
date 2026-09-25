@@ -87,6 +87,7 @@ DEFAULT_ROUTE_MODULE = {
     "referral": "referral",
     "remediation": "remediation",
     "storevisit": "storevisit",
+    "supply": "supply_ordering",     # Supply Ordering (mig 1021, index §36)
 }
 # Prefixes that are PLATFORM INFRASTRUCTURE, not a billable tenant module. Excluded deliberately and
 # by name, so their absence from the invoice is a decision on the record rather than an oversight:

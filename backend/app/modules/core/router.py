@@ -1370,6 +1370,11 @@ SETTING_AREAS = [
     {"key": "classification",    "label": "Sales Classification settings (accessory / box / bill-payment / set-up-fee / contract-type map)"},
     {"key": "agency",            "label": "Agency (Master/Sub-Agent) — transfer confirm & config"},
     {"key": "asset_purchase_orders", "label": "Purchase Orders (vendors · aging threshold)"},
+    # Registered 2026-09-25 with Supply Ordering (index §36): placing / confirming an order at a supply vendor
+    # spends money, so supply/router._require_buyer gates it on this area — full-scope admin by default,
+    # grantable per role here. business_type gates PUT /core/tenant-vertical (index §35).
+    {"key": "supply_ordering",   "label": "Supply Ordering (place / confirm orders at supply vendors)"},
+    {"key": "business_type",     "label": "Business Type (what kind of business this company is)"},
     {"key": "expenses",          "label": "Store Expenses"},
     {"key": "labels",            "label": "Display Labels"},
     {"key": "menu",              "label": "Menu Layout"},
