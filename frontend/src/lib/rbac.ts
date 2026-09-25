@@ -913,6 +913,9 @@ export const NAV: NavGroup[] = [
   { group: 'Configuration', module: 'admin', items: [
     { href: '/configurations', label: 'All Settings', icon: '⚙️', module: 'admin' },
     { href: '/admin/tenants', label: 'Companies (Tenants)', icon: '🏢', module: 'admin' },
+    // Business Types (index §35) — the platform super-admin edits what each kind of business sees (pages, modules,
+    // closing-form inputs). The backend gate is _require_super_admin; module 'admin' keeps it off every tenant menu.
+    { href: '/admin/business-types', label: 'Business Types', icon: '🧭', module: 'admin' },
     { href: '/admin/tenant-settings', label: 'Pay Period & Work-Week', icon: '📅', module: 'admin' },
     { href: '/admin/billing', label: 'Billing (Tenants)', icon: '💳', module: 'admin' },
     // Pricing & Free Trial (mig 908) — where the PUBLIC price list and the trial length are set.
@@ -1403,6 +1406,7 @@ export type VerticalInfo = {
   uses_carriers?: boolean; nav_hidden?: string[]; hidden_modules?: string[]
   closing_hidden?: string[]   // mig 1024 — closing-form inputs this vertical does not use (ClosingSubmitForm)
   choices?: { key: string; label: string }[]; registry_ready?: boolean
+  closing_sections?: { key: string; label: string; kind: string }[]   // what a company may override (Display Labels)
 }
 // Mirror of core/verticals.href_hidden (harness_tenant_vertical.py §E compares the two).
 export function hrefHiddenByVertical(href: string, navHidden: string[] | undefined): boolean {

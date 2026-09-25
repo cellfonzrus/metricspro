@@ -18996,11 +18996,15 @@ def set_nav_label(body: NavLabelIn, org_id: str = ORG_ID,
     # platform's decision, because it re-grants a surface the tenant's own configuration says does not
     # apply to them. So this can never lock anyone out of something they already had; the worst it can
     # do is refuse to hand out something new.
+    # The tenant's BUSINESS TYPE (mig 1020/1024, index §35) is the same kind of gate: 'vertical:<href>' (a page)
+    # and 'closing:<input>' (a closing-form input) — re-showing what the business type hides is the platform's
+    # call; hiding more, or resetting to follow the business type, stays the tenant's own.
     if scope == 'cap' and label.lower() == 'show' and not gc["super_admin"] \
-            and (key.startswith('carrier:') or key.startswith('pos:') or key.startswith(_report_kinds.CAP_PREFIX)):
-        raise HTTPException(403, "Turning a carrier- or POS-gated option back on is reserved for a "
-                                 "platform super-admin. You can still hide it, or reset it to follow "
-                                 "your carrier and POS settings. Ask the platform team to re-grant it.")
+            and (key.startswith('carrier:') or key.startswith('pos:') or key.startswith(_report_kinds.CAP_PREFIX)
+                 or key.startswith('vertical:') or key.startswith('closing:')):
+        raise HTTPException(403, "Turning a carrier-, POS- or business-type-gated option back on is reserved for "
+                                 "a platform super-admin. You can still hide it, or reset it to follow your "
+                                 "settings. Ask the platform team to re-grant it.")
     client = sb()
     try:
         if not label:
