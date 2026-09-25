@@ -171,6 +171,26 @@ on:
       - "backend/harness_landing_identity_lock.py"
       - "backend/harness_line_class_lock.py"
       - "backend/harness_line_class.py"
+      - "backend/harness_activation_event_lock.py"
+      - "backend/harness_activation_event.py"
+      - "backend/harness_rep_incentive_range.py"
+      - "backend/harness_multimonth_offer.py"
+      - "backend/harness_multimonth_offer_lock.py"
+      - "backend/app/modules/commcalc/multimonth_config.py"
+      - "frontend/src/app/(platform)/commcalc/_lib/multimonthOffer.ts"
+      - "frontend/src/app/(platform)/commcalc/_lib/multimonth.ts"
+      - "frontend/src/app/(platform)/commcalc/_lib/commissionExport.ts"
+      - "frontend/src/app/(platform)/commcalc/expected-commission/page.tsx"
+      - "backend/app/modules/commcalc/rep_incentive_range.py"
+      - "backend/app/modules/account/_period.py"
+      - "backend/app/modules/commcalc/discrepancy_appeals.py"
+      - "backend/app/modules/commcalc/plan_pay_gate.py"
+      - "backend/app/modules/closing/router.py"
+      - "backend/app/modules/pos/customer_identity.py"
+      - "frontend/src/app/(platform)/commcalc/_lib/planLines.ts"
+      - "frontend/src/app/(platform)/commcalc/_lib/PlanLineBreakdown.tsx"
+      - "frontend/src/app/(platform)/commcalc/reports/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/commission-explain/page.tsx"
       - "backend/harness_tender_vocab_lock.py"
       - "backend/harness_pl_commission_source_lock.py"
       - "backend/harness_any_columns_lock.py"
@@ -325,6 +345,12 @@ jobs:
       - name: Run the line-class lock (one activation-type predicate; one rules home; every caller dereferences it)
         working-directory: backend
         run: python3 harness_line_class_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the activation-event lock (one definition of an activation / upgrade; every pay and count surface dereferences it — index §6f)
+        working-directory: backend
+        run: python3 harness_activation_event_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the multi-month offer lock (multi-month is offered only through the one predicate; money is never hidden — index §6h)
+        working-directory: backend
+        run: python3 harness_multimonth_offer_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the tender-vocab lock (one tender vocabulary; every classifier dereferences it)
         working-directory: backend
         run: python3 harness_tender_vocab_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -404,6 +430,15 @@ jobs:
       - name: Run the line-class proof (the money compatibility pin + the suggestion engine over the measured vocabulary)
         working-directory: backend
         run: python3 harness_line_class.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the activation-event proof (pay per activation / upgrade, not per line — the owner's invoice $30 → $10; byte-identity of the house count unit — index §6f)
+        working-directory: backend
+        run: python3 harness_activation_event.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the rep-incentive month-range proof (every month of a range == that month viewed alone; one month enumeration; the cap — index §6g)
+        working-directory: backend
+        run: python3 harness_rep_incentive_range.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the multi-month offer proof (configured / off / off-with-money; the R1 guard unchanged; the status endpoint — index §6h)
+        working-directory: backend
+        run: python3 harness_multimonth_offer.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the plan-sources lock (one registry of plan-name sources; one resolver for preview and apply; one writer; the card seeds from the proposal; no vendor)
         working-directory: backend
         run: python3 harness_plan_sources_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

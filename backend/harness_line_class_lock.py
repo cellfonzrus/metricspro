@@ -73,14 +73,16 @@ EXCUSED = {
 }
 # (b) the callers and the dereference each must show
 CALLERS = {
-    "modules/commcalc/calculator.py": ["from app.modules.commcalc import line_class", "classify_line(r, _line_rules)", "line_class_rules"],
-    "modules/commcalc/router.py": ["_lc.activation_class(r, line_rules)", "_lc.classify_line(", "'line_class_rules': _acfg['line_rules']", "_lc.count_classes("],
+    # 2026-09-25: the COUNTING callers count through line_class.activation_units (the one activation-event
+    # definition, which classifies with THE predicate) — harness_activation_event_lock.py pins the rest
+    "modules/commcalc/calculator.py": ["from app.modules.commcalc import line_class", "_lc.activation_units(", "line_class_rules"],
+    "modules/commcalc/router.py": ["_lc.activation_units(rows, line_rules", "_lc.classify_line(", "'line_class_rules': _acfg['line_rules']", "_lc.count_classes("],
     "modules/commcalc/payout_accrual.py": ["line_class_rules"],
     "modules/commcalc/commission_engine.py": ["_lc.classify_line(r, line_rules)"],
     "modules/commcalc/plan_options.py": ["_lc.classify_line("],
     "modules/commcalc/whatif.py": ["classify_line(r, _rules)"],
-    "modules/commcalc/sales_comparison.py": ["classify_line(ln, line_rules)"],
-    "modules/closing/router.py": ["classify_line(r, _lr)"],
+    "modules/commcalc/sales_comparison.py": ["_lc.activation_units(lines, line_rules"],
+    "modules/closing/router.py": ["activation_units(rows, _lr"],
     "modules/marketing/event_sales.py": ["classify_line(row, rules)"],
 }
 RETIRED_NAMES = ("PREMIUM_ACT", "_PREMIUM_KEYS", "BYOD_ACT", "UPGRADE_ACT", "_AUTO_ACT_CATEGORY_KEYS",
@@ -197,8 +199,8 @@ def scan_step_writes(router_src):
     agg = fn_body(router_src, "_sales_cell_agg") or ""
     if "exec_cfg.get('activation'" in agg or 'exec_cfg.get("activation"' in agg:
         v.append(("router.py", "_sales_cell_agg reads the retired exec-MTD activation tokens"))
-    if "_lc.activation_class(" not in agg:
-        v.append(("router.py", "_sales_cell_agg does not call the predicate"))
+    if "_lc.activation_units(" not in agg:
+        v.append(("router.py", "_sales_cell_agg does not count through the predicate (line_class.activation_units)"))
     loader = fn_body(router_src, "_accessory_config_uncached") or ""
     resolver = fn_body(router_src, "_line_rules_resolve") or ""
     if "activation_details_rules" not in loader or "_line_rules_resolve(" not in loader or "_lc.resolve_rules(" not in resolver:

@@ -63,12 +63,15 @@ BASIS_LABELS = {
     "per_line": "Each qualifying item",
     "per_device": "Once per device",
     "per_transaction": "Once per transaction",
+    "per_event": "Once per activation / upgrade",
 }
 
 BASIS_FOOTNOTES = {
     "per_device": ("Paid once for each device on the sale. The other items on the same receipt "
                    "(accessories, rate plans, activation fees) do not each earn this amount."),
     "per_transaction": "Paid once for the whole sale, however many items are on the receipt.",
+    "per_event": ("Paid once for each activation or upgrade (one per phone line on the sale). The rate-plan, "
+                  "rebate and tracking lines of that same activation do not each earn this amount."),
 }
 
 SCOPE_LABELS = {"employee": "Employee", "store": "Store", "market": "Market", "default": "Everyone"}

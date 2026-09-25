@@ -119,6 +119,7 @@ const UNIT_BASES: { value: string; label: string; help: string }[] = [
   { value: 'per_line', label: 'per line', help: 'Pay once for EVERY matching line — correct for a rule that genuinely pays per line item (e.g. $2 per accessory).' },
   { value: 'per_device', label: 'per device', help: 'Pay once per distinct device serial on the sale. The payment lands on the line carrying the serial, so accessory / rate-plan / fee lines never carry it.' },
   { value: 'per_transaction', label: 'per sale', help: 'Pay exactly once per transaction, however many devices or lines it has.' },
+  { value: 'per_event', label: 'per activation / upgrade', help: 'Pay once per activation or upgrade — one per phone line on the invoice — however many sale lines (rebate, tracking, plan) describe it. A $/unit rule keyed on the activation type pays this way by default.' },
 ]
 const blankPlan = (): Plan => ({ name: '', carrier_id: '', base_tier_metric: 'none', is_active: true, notes: '', activation_source: 'inherit', rules: [], tiers: [], assignments: [] })
 
@@ -1235,6 +1236,17 @@ export default function CommissionPlansPage() {
                 <option value="tender_type">tender type (the sale's payment method)</option>
                 <option value="tender_type,trans_type">tender type + transaction type</option>
                 <option value="">nothing — never auto-dedup</option>
+              </select>
+            </label>
+            {/* ⑥ PER ACTIVATION / PER UPGRADE (owner 2026-09-25): a $/unit rule keyed on the activation
+                type pays once per activation / upgrade (one per phone line on the invoice). */}
+            <label style={{ fontSize: 12 }}>
+              <div style={{ color: 'var(--text3)', marginBottom: 2 }}>Once per activation / upgrade for $/unit rules keyed on</div>
+              <select style={sel} value={(gate.config.unit_basis.auto_event_fields || []).join(',')} disabled={gateBusy}
+                onChange={e => saveGate({ ...gate.config, unit_basis: { ...gate.config.unit_basis, auto_event_fields: e.target.value ? e.target.value.split(',') : [] } })}>
+                <option value="activation_bucket">activation type (default)</option>
+                <option value="activation_bucket,contract_type">activation type + contract type</option>
+                <option value="">nothing — pay per line</option>
               </select>
             </label>
             <label style={{ fontSize: 12 }}>

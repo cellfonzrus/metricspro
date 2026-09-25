@@ -27,6 +27,9 @@ Primary code homes:
 | 4a | **GP vs P&L — one home for MA commission** | "Why do the Gross Profit report and the P&L disagree about M1 commission, and why does one show a company total where the other shows stores?" |
 | 5 | **Daily Targets & actuals** | "How are daily targets computed vs actuals? What's an 'achieved' number? Accessory $ actual?" |
 | 6 | **Rep commission (Boost)** | "How is a rep paid? premium/byod/upgrade counts, acc/setup/trade-in, tiers, KPIs. Where stored?" |
+| 6f | **One activation = one unit** | "Why was one activation paid three times? What is ONE activation / upgrade on an invoice, and which surfaces pay or count per activation?" |
+| 6g | **Rep Incentive — month range** | "Show the rep incentive for several months on one page, a row per rep per month — and is each month the same as viewing it alone?" |
+| 6h | **Multi-month offered only when configured** | "Why does a rep's pay show a multi-month option when this company has no multi-month pay — where is that decided, and what if money is there anyway?" |
 | 7 | **Carrier residual installments** | "Multi-month carrier residual pay from raw_mi. Why do named activation_types not pay?" |
 | 12 | **External credit machine + Card Settlement Recon** | "Where does the external / white-machine card figure live, what is it called for this tenant, and how does it tally with what the processor actually settled?" |
 | 7a | **Residual per Subscriber report** | "Where does the residual/subscriber trend come from per carrier? Why is a Total/MA store named, not a processor account id?" |
@@ -201,6 +204,8 @@ supported routes until the vendor re-opens the login and one config row is flipp
 ---
 
 ## 3. Sales report & the shared per-(store, rep, day) aggregation
+
+> **2026-09-25 (§6f):** `_sales_cell_agg`'s `_prem` / `_byod` / `_upg` / `_port` sets are filled from `line_class.activation_units` — distinct invoices under the house `event.count_unit='transaction'` (byte-identical), activation EVENTS (one per phone line) under `'event'`.
 
 **Purpose.** ONE row-level pass feeds the Sales Report, Executive MTD, and Daily Targets so they can never
 disagain (owner directive 2026-07-16, 2026-07-25).
@@ -1809,6 +1814,201 @@ registered AND NAV-backed (incl. every `where.screen` `where_to_upload` can emit
 `showsInFor`; the page order header → Option 1 → Option 2 → Step 1…6 → Apply; the editor mounts the same
 header and still owns the write; one home for the sentence and the titles across `src/`; no vendor / carrier
 spelling; five negative controls.
+
+---
+
+### 6f. ONE ACTIVATION = ONE UNIT — pay and count per activation / upgrade EVENT, never per sale line (owner 2026-09-25)
+
+Owner, verbatim: *"commisison for teh reps need to be claculated per action and per upgrade as defined in teh
+incentive payout , the system sis calculating per line item"* — on the rep breakdown (`PlanLineBreakdown`),
+invoice **Z1321IN11092** (org `f4f1c16e`, 2026-07-02) showed 3 lines × $10 = **$30** under the plan rule
+"Activation" for ONE activation.
+
+**"The incentive payout" = the org's commission plan** (`commcalc.commission_plan` "Flat Comission",
+`commission_basis='rules'`): `Activation` — `activation_bucket IN premium,byod`, `flat_per_unit` **$10**;
+`Upgrade` — `activation_bucket IN upgrade`, `flat_per_unit` **$5**; `Accessories` — `accessory = yes`,
+`pct_mrc` 10 (**matched 0 lines in July and August** — a separate finding, not touched). `unit_basis` NULL on
+all three; `commission_org_config.plan_pay_gate` NULL (code defaults).
+
+**The instance.** The org's activation-type rules (`accessory_config.activation_details_rules`: fields
+`category, product_desc`; activation tokens `new activation / add a line / new act / prepaid`) classify EVERY
+line whose words say "new act…": the rate-plan rebate (`DPA New Act iPhone (Rate Plan Rebate)`), the tracking
+line (`VERIZON BUSINESS TRACKING NEW ACTIVATION`) and the plan spiff (`32066 My Biz Plan - New Act`) — all three
+naming phone line 9297458084 in `serial_1`. `flat_per_unit` meant "per matching LINE" (the mig-260 gate only
+collapsed rules keyed on a TRANSACTION-level field, the tender).
+
+**The class.** A per-unit rate keyed on the ACTIVATION TYPE pays on the unit the type describes — one
+activation or upgrade EVENT — and several sale lines describe one event. Three surfaces answered "how many
+activations" in three different units: the plan engine per LINE, and the Boost calculator / `_sales_cell_agg`
+(Sales Report, Executive MTD, Targets, Productivity, zero-sales, box counts) / the daily closing / Sales
+Comparison per INVOICE × bucket (so a 4-line invoice read as 1, and an invoice with lines in two buckets
+counted in both — the §6d double count).
+
+**ONE definition — `line_class.py`** (the home of the activation-type predicate, extended; no new module):
+- `line_event_keys(row)` → `{phone, device}` a sale line names: the `mdn` column, else a phone-shaped
+  tracking # (`serial_1`); a device-shaped tracking # — through `customer_identity.norm_phone` /
+  `tracking_kind` (THE phone / device rule, §30.16), never re-implemented.
+- `activation_events(rows, rules, classes=None, skip=None, txn_of=None)` — per invoice, the activation-type
+  lines (THE predicate, or the caller's resolved labels — the engine passes its `activation_bucket` stamps incl.
+  the mig-224 rescue and Activation-Details lines) group into events by the FIRST configured key kind any of them
+  names (one per phone line; else per device; else one for the invoice). A line naming none is EVIDENCE: joins the
+  invoice's only event, or — several events — stays unattributed and is reported (`event_evidence_shared`),
+  never a new event. An event's type = its lines' strongest class by `event.precedence` (house: byod > upgrade >
+  port > activation, the predicate's own line precedence). Reported: `event_no_key`, `event_mixed_classes`,
+  `event_key_on_several_invoices`.
+- `activation_units(rows, rules, skip, txn_of, unit, require_txn)` → per row `(bucket, unit_id, class)` — THE
+  count key every counting surface adds to its bucket set; `unit` = the org's `event.count_unit`.
+- **Config (RULE TWO), no migration:** `accessory_config.activation_details_rules.event` =
+  `{"keys": ["phone","device"], "precedence": [...], "count_unit": "transaction"|"event"}` (house defaults as
+  shown; resolved by `line_class.resolve_event`; written through the existing `PUT /commcalc/accessory-config`,
+  which passes extra keys of that JSON through).
+
+**PAY — the plan engine.** `plan_pay_gate` ⑥: new basis **`per_event`**; `UNIT_DEFAULTS.auto_event_fields =
+["activation_bucket"]` → a `flat_per_unit` rule keyed on the activation type with no `unit_basis` of its own
+resolves `per_event` (source `auto_event_field`); an explicit rule `unit_basis` wins; `%`-of-basis rules are never
+collapsed. `select_paying_lines(..., event_of, event_ok)` → `_select_per_event`: one payment per event on its
+best line, other lines of the event shown at $0 (`unit_same_event`), an event of another type suppressed for this
+rule (`unit_event_other_type` — the "New Activation" spiff inside an upgrade pays under Upgrade only), evidence
+lines $0 (`unit_event_evidence`). The gate never derives an event — `commission_engine.preview` computes
+`_lc.activation_events` ONCE (only when some rule resolves `per_event`) and injects `event_of` into the payout
+AND the financing-tier unit count; the pay-gate report carries `unit.activation_events` (events, ambiguous
+invoices, config). Plan save accepts `unit_basis='per_event'`; the Pay-gate panel edits `auto_event_fields`;
+`payout_structure.BASIS_LABELS['per_event']` = "Once per activation / upgrade" (the statement / payout sheet).
+
+**THE SCREEN.** Every engine line carries `event_id / event_key / event_key_kind / event_type`;
+`planLines.toPlanLine` (ONE mapper, both surfaces — the reports modal and commission-explain),
+`eventsOf` / `groupPlanLinesByTxn` group an invoice's lines under their event; `PlanLineBreakdown` shows per
+invoice **"Activations N · Upgrades N"**, a sub-header per event (type · phone line · lines · $ per event), and
+Units = events. Basis reads "$ per activation" / "$ per upgrade".
+
+**COUNT — the siblings, all dereferencing `activation_units`:** `router._sales_cell_agg` (Sales Report /
+Executive MTD / Targets / Productivity / zero-sales / box counts), `calculator.calc_rep_commissions` (the Boost
+premium/byod/upgrade counts + `rep_commissions.*_acts`), `router.commission_drill` (the calculator replay),
+`closing/router._b2b_counts_by_store` + `_b2b_day` (daily closing tallies), `sales_comparison.tally`.
+**House `count_unit='transaction'` is byte-identical** (proved) — the owner flips a tenant to `'event'` by a
+config row. `_SALES_DISPLAY_COLS` / `_ACTUALS_COLS` now also carry `serial_1,mdn` (both tables have them; read by
+nothing under 'transaction'). **Excused (the lock names them):** `whatif.accessory_byod_correlation` (a per-store
+series fed to a correlation coefficient — analytics, never pay) and `whatif._byod_mdns` (collects phone numbers —
+already one per phone line); `marketing/event_sales` (labels its tally LINES beside `distinct_mdns`; the
+marketing owner's report); `activation_bucketing` (the Activation-Details basis — already one row per device).
+**P&L:** no P&L line counts activations (the commission P&L line books `rep_commissions` / ledger amounts) — it
+moves only through the rep pay below.
+
+**LIVE, org `f4f1c16e`, read-only 2026-09-25** (the full-run resolution `_resolve_plan_by_rep`, before = the
+stored `rep_commissions` exactly):
+
+| Rep | Jul before | Jul after | Aug before | Aug after |
+|---|---|---|---|---|
+| Jona Sejat | $2,180.00 (173 act lines + 90 upg lines) | **$715.00** (43 activations + 57 upgrades) | $1,065.00 | **$365.00** (22 + 29) |
+| Shweta Singh | $1,070.00 | **$320.00** (22 + 20) | $750.00 | **$205.00** (12 + 17) |
+| Sanjot Singh | $575.00 | **$250.00** (18 + 14) | $455.00 | **$125.00** (8 + 9) |
+| **Total** | **$3,825.00** | **$1,285.00** (−$2,540) | **$2,270.00** | **$695.00** (−$1,575) |
+
+Z1321IN11092: $30 → **$10**. Upgrades: 57 upgrade events = the 57 costed handsets on those 53 invoices, exactly.
+Ambiguous (July, all reps): 9 invoices whose BYOD "Customer Owned Device" line names no phone line while the
+invoice has several activations (Z1321IN11095 / 11185 / 11204 / 11231 / 11280 / 11284 / 11298 / 11301 / 11314 —
+kept as evidence, no new activation); 21 mixed-type events (a BYOD activation's lines carry activation + byod
+→ byod; 3 upgrades carry a "New Activation (VZ Commission)" spiff line → upgrade: Z1321IN11148 / 11160 / 11252);
+phone 3476759669 upgraded on two invoices the same day (Z1321IN11190 / 11192, two different handsets) — both
+paid, reported. Other tenants: **byte-identical** — no other org has an activation-type `flat_per_unit` rule
+(LuxeLink's preview A/B Jul $4,846.13 / Aug $2,248.69 identical on and off; house has no plans).
+
+**The owner's decisions (not taken):** (1) approve the pay change (−$2,540 July / −$1,575 August for this org,
+nothing recalculated or written); (2) whether to set `event.count_unit='event'` for this org so the Sales Report
+/ Exec MTD / rep-row counts agree with the pay (July 59/24/81 invoices → 65/18/92 events; Jona 24/10/53 →
+37/6/57); (3) for other tenants the same flip moves counts and, on the Boost calculator, pay — measured July
+house 713/660/762 → 754/681/641, LuxeLink 680/135/87 → 721/145/87 (premium/byod/upgrade) — it also resolves the
+§6d double count, which was already the owner's call.
+
+**Proof:** `backend/harness_activation_event.py` (46 checks, DB-free, the real engine / gate / `_sales_cell_agg`
+/ calculator — §A the owner's invoice $30 → $10 with the armed pre-fix control, §E byte-identity of the house unit
+over a 400-seed fuzz + a plan with no activation-type rule byte-identical). **Lock:**
+`backend/harness_activation_event_lock.py` (15 checks, stdlib — one home; every pay and count caller dereferences
+it; no function classifies and `.add(tid)`s; the screen groups by the stamp; 8 negative controls). Frontend:
+`frontend/tools/plan-drilldown-proof.mjs` §8. `harness_line_class_lock.py` and
+`harness_ny_plan_activation_accessory.py` §D updated to the new dereference / default.
+
+---
+
+### 6g. REP INCENTIVE — A MONTH RANGE ON ONE PAGE (owner 2026-09-25)
+
+Owner, verbatim: *"al for rep incentive report the range for multiple months should be there to display the
+commission for teh months selected in different rowqn on one page"*.
+
+**Duplicate check (what was reused).** The single-month Rep Incentive report is `/commcalc/reports` →
+`GET /commcalc/commissions/{period}` (`router.get_commissions`: stored `rep_commissions`, chargeback +
+ops-chargeback deductions → `final_payout`, the §13a market stamp, the caller's self / span scope). Range
+patterns checked: the discrepancy-appeals period filter (`discrepancy_appeals.period_range_variants`, its own
+inline month loop), the multi-month ledger batch (§30.17 — per-FILE months, not a window), the M1–M12 view
+(§4a — month-of-life columns, not calendar months), `account/_period` (THE period canonicaliser; had no
+enumeration). No existing month enumeration was a shared home, so ONE was added to the canonicaliser's module
+and the one inline sibling now dereferences it.
+
+- **`account/_period.month_range(period_from, period_to=None, max_months=None)`** — THE month enumeration:
+  canonical spellings, oldest first, either spelling in; ValueError on unparseable / reversed / too long.
+  `discrepancy_appeals.period_range_variants` now enumerates through it (byte-identical, 300-range fuzz).
+- **`GET /commcalc/commissions-range?period_from=&period_to=`** (`router.get_commissions_range`) — READ-ONLY;
+  months from `month_range` capped at **12** (`rep_incentive_range.MAX_MONTHS`: each month is one full
+  per-month read); each month = `await get_commissions(month, authorization, org_id)` — the single-month
+  handler itself, in-process, so every month carries its own deductions, market and scope. 400 on a bad range.
+- **`commcalc/rep_incentive_range.assemble(months, per_month)`** — PURE: rows (each the per-month row + a
+  `range_month` tag, no field changed), `month_totals`, `rep_totals`, `grand_total`; sums only.
+- **Frontend:** the report's **📅 Month range** tab (`reports/page.tsx`): from / to month pickers (default: the
+  last three months), one row per rep per month, a subtotal row per month, a total row; the standard filter bar
+  applies as on the other tabs; the export bar exports the range table. Pure grouping helper
+  `_lib/repIncentiveRange.ts` (`monthBlocks`, `spanMonths`, `RANGE_MAX_MONTHS`).
+
+**Live (read-only, 2026-09-25), Jun–Aug 2026 — every month JSON-identical to that month viewed alone:**
+org `f4f1c16e`: June 0 reps / $0.00 · July 4 reps / $3,825.00 · August 3 reps / $2,270.00 · **total $6,095.00**
+(Jona Sejat $3,245.00, Shweta Singh $1,820.00, Sanjot Singh $1,030.00, Anum Khokhar $0.00 — the STORED pay,
+i.e. before the §6f change is recalculated). LuxeLink `854f6d7b`: $1,870.00 / $8,380.87 / $11,118.78 =
+$21,369.65, identical per month.
+
+**Proof:** `backend/harness_rep_incentive_range.py` (30 checks, DB-free, the real handlers — §B every month ==
+the month alone, §C the cap, §D the endpoint loops `get_commissions` over `month_range` with negative
+controls); `frontend/tools/rep-incentive-range-proof.mjs` (10).
+
+### 6h. MULTI-MONTH IS OFFERED ONLY WHEN IT IS CONFIGURED — one predicate; money is never hidden (owner 2026-09-25)
+
+Owner, verbatim: *"right now the rep comisison is shown with plan incentive and multi month, if multi month is
+not confgured then it should not be shown as an available option."*
+
+**Where multi-month pay is configured (per-org rows, RULE TWO):** `commcalc.payout_schedule` (mig 057, the
+residual engine §7) and `commcalc.plan_installment_schedule` (mig 201, the sale-triggered engine §8). Each
+engine reads only its `is_active` rows and produces nothing without one.
+
+**THE predicate — `commcalc/multimonth_config.py`:** `schedule_counts(client, org)` (active rows in both
+tables, org-scoped; an unreadable table = None = treated as configured), `money_by_period(client, org,
+periods, _pvariants)` (`rep_commissions.residual_installment_comm + installment_comm_sale`), PURE
+`decide(counts, money)` → `state` **`configured`** (offer) · **`off`** (do not offer) · **`off_with_money`**
+(no active schedule but multi-money on the rows → SHOWN with a note, never hidden), `load(...)`. Served by
+**`GET /commcalc/multimonth/status?periods=`** (`router.get_multimonth_status`). The R1 refuse-to-pay guard
+`router._has_any_pay_source` now counts schedules through `schedule_counts` (byte-identical answers, 108-org
+matrix) — one answer to "is there a multi-month schedule". Frontend: `_lib/multimonthOffer.ts`
+(`multimonthOffered`, `multimonthRows` — a non-zero amount always shows; the $0 drill row only when offered)
+read through `_lib/multimonth.ts` `useMultimonthStatus(periods)` (pending / failed read = offered, today's
+behaviour).
+
+**Surfaces (fixed or excused — the lock names each):** `reports/page.tsx` (the Plan-based Payout card's
+"Multi-month installments" rows, the 🔬 tooltips, the off-with-money note), `_lib/commissionExport.ts` (the
+Individual export's rows — the page injects `multimonthRowsFor`), `commission-explain/page.tsx` (section
+"2 · Multi-month installments", the header copy, the reconciliation spans), `expected-commission/page.tsx` (says
+"not configured" instead of an empty report). Breakdown "Installment" column: already money-driven
+(`hasInstallment`), unchanged. **Excused:** the configuration pages (`plan-installments`, `payout-schedules`,
+the settings directory link, the NAV entry — hiding them would make "off" permanent), the commission hub's
+diagnostic copy, the pay simulator (renders its block only when the backend returns levers, which exist only for
+active `plan_installment_schedule` rows), `ma-upload` ("historical (multi-month)" is an upload mode), and on the
+backend the statement PDF (`commission_statement`: installment items appear only when earned / held rows exist —
+money-driven), `payout_plans_status` / `payout_plans_diagnose` (per-carrier readiness narration, not an offer).
+
+**Live (read-only, 2026-09-25):** org `f4f1c16e` — 0 active residual + 0 active sale schedules, $0 multi-month
+money Jun–Aug 2026 → **`off`**: the Rep Incentive card shows "Plan incentive" and no multi-month row (it
+showed a $0.00 "Multi-month installments" row before). LuxeLink `854f6d7b` — 2 + 1 active, $1,370.25 July /
+$183.66 August → `configured` (unchanged). House — 14 active residual schedules, $0 → `configured` (unchanged).
+
+**Proof:** `backend/harness_multimonth_offer.py` (16, DB-free); lock `backend/harness_multimonth_offer_lock.py`
+(10, stdlib, CI guard job — a surface that offers multi-month without asking fails the build; 5 negative
+controls); `frontend/tools/multimonth-offer-proof.mjs` (8).
 
 ---
 
@@ -3913,6 +4113,9 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `commcalc.payout_schedule` / `commcalc.plan_installment_schedule` — as the answer to **"is multi-month configured for this org"** (active rows) | the schedule editors (`payout-schedules`, `plan-installments`) | THE predicate `multimonth_config.schedule_counts` → `decide` / `load` → `GET /commcalc/multimonth/status` → `_lib/multimonth.useMultimonthStatus` (the Rep Incentive card + export, commission-explain, Expected vs Earned); the R1 guard `router._has_any_pay_source`. The engines keep their own loaders (§7/§8) (§6h) |
+| `commcalc.accessory_config.activation_details_rules` **`.event`** (`keys` · `precedence` · `count_unit`; JSON key, no migration, 2026-09-25) | `PUT /commcalc/accessory-config` (extra keys of the JSON pass through the one writer) | `line_class.resolve_event` ← `resolve_rules` → `activation_events` / `activation_units` — the plan pay gate's `per_event` (always events) and every activation COUNT (`count_unit`, house `'transaction'`): `_sales_cell_agg`, the Boost calculator, `commission_drill`, closing `_b2b_counts_by_store` / `_b2b_day`, `sales_comparison.tally` (§6f) |
+| `commcalc.commission_org_config.plan_pay_gate` **`.unit_basis.auto_event_fields`** (JSON key, mig 260 column; code default `['activation_bucket']`) · `commcalc.commission_rule.unit_basis = 'per_event'` | `PUT /commcalc/commission-plans/pay-gate` · `POST /commission-plans` (save accepts `per_event`) | `plan_pay_gate.resolve_unit_basis` → `select_paying_lines` → `_select_per_event` (events injected by `commission_engine.preview`); `payout_structure.describe_frequency`; `unit-multiplication-audit` `auto_deduped` (§6f) |
 | `storeops.app_users` (ONE ROW PER `(auth_id, org_id)` since mig `706` — a login belonging to several companies has several rows; `is_default_org` declares its home company and is set on **0 of 112 rows** live) | provisioning / invite / `connect-tenant` | `core/membership.list_memberships` → `pick_membership` (handlers) and `tenant_middleware._resolve_identity` → `_pick_active_org` (the request's acting org, and the ONLY rule that decides it); surfaced to the browser by `GET /core/my-tenants` → `frontend/src/lib/tenant-scope.ts` (§28) |
 | `core.module_onboarding_task` (mig `733`) | `onboarding.seed_tasks` (INSERTS missing task rows only) + `_backfill_import_sources` (fills a BLANK `import_source` from the shipped registry, nothing else, never overwriting an operator value) | `load_tasks_with_source` → `build_status`, the POS wizard (§23n). DB is truth, the in-code registry is the fallback — so a task that GAINS an import source after a tenant was seeded needs the backfill to reach it |
 | `commcalc.carrier` (mig `038`) · `commcalc.report_definitions.carrier_id` (mig `291`) · `commcalc.connector_instances.carrier_id` (mig `039`) | `implementation_spine.carrier_visible` — THE one predicate (`router._carrier_visible` delegates to it); `upload_scope_map`; `carrier_blocks` | **§26 — "which uploads and automations belong to a carrier" is these three columns and nothing else.** `report_definitions.connector_id` is the automation↔upload binding the owner asked for, and it has existed since mig `039`. NULL `carrier_id` = carrier-agnostic and ALWAYS shown |
@@ -4080,6 +4283,10 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `GET /commcalc/multimonth/status?periods=` — is multi-month configured for this org (`configured` / `off` / `off_with_money` + the money per period + a note). READ-ONLY | `router.get_multimonth_status` → `multimonth_config.load` | §6h |
+| `GET /commcalc/commissions-range?period_from=&period_to=` — the Rep Incentive report over a month range (≤ 12), one row per rep per month + month subtotals + total. READ-ONLY; each month IS `get_commissions(month)` | `router.get_commissions_range` → `account/_period.month_range` → `get_commissions` (per month, in-process) → `rep_incentive_range.assemble` | §6g |
+| `GET /commcalc/commission-explain` · the reports **🔍 Plan commission** drill (`PlanLineBreakdown`) — every plan line now carries `event_id / event_key / event_key_kind / event_type` when a rule pays per activation; the pay-gate report `pay_gate.unit.activation_events` (events, ambiguous invoices, config) | `commission_engine.preview(detail=True)` → `commission_drilldown.explain_rep`; frontend `planLines.toPlanLine` / `eventsOf` | §6f |
+| `GET/PUT /commcalc/commission-plans/pay-gate` — now also `unit_basis.auto_event_fields` (⑥ once per activation / upgrade) | `router.get_pay_gate` / put | §6f |
 | `GET /commcalc/report-kinds` — WHICH REPORT KINDS THIS TENANT MAY UPLOAD, computed never listed: `declaration` (+ reasons), `kinds` (visible, provenance per row), `hidden` (with why), `surfaces`, `upload_types`, `filename_rules` (the declared POS standard restricted to visible kinds), `standard`, `caps`, `registry_ready`. READ-ONLY, org-scoped `{org, house}` | `router.report_kinds_endpoint` → `report_kinds.load_registry` / `tenant_declaration` (THE one reader) / `_intake_caps` / `load_signatures` / `_pos_profile` → `report_kinds.payload` (`visible_kinds`) | §30.9; every upload surface renders from it through `lib/report-kinds.useReportKinds` (locked by `harness_report_kind_lock.py`). Proof `harness_report_kinds.py` §G |
 | `GET /commcalc/report-kinds` **`kinds[].shows_in` + `kinds[].where` + `consumers`** (§32, 2026-09-20) — per visible kind: the table its upload lands in and that table's readers (ScreenLink screen keys + the fields each needs), the page to upload it on; the ONE consumers map by table | `router.py` `report_kinds_endpoint` → `landing_identity.shows_in` / `where_to_upload` / `CONSUMERS` | every upload surface renders it through `components/ShowsIn.tsx` via `useReportKinds().showsIn(key \| upload_type)` — Upload page tiles, Upload wizard steps, Email / FTP import routes, intake 2.0 cards + 2.1 + the 2.6 result, Stage 5 runbook lines; pinned by `harness_landing_identity_lock.py` |
 | `GET /commcalc/report-kinds` **read the other way round — `lib/report-kinds.feedsForScreen(visible, screen)` / `useReportKinds().feedsFor(screen)`** (§6e, 2026-09-20): the visible kinds whose `shows_in.consumers` name a report screen, each with its `where` — the inverse of `showsInFor` over the same payload, no second link map | (frontend selector over the same endpoint; backend twin by construction = `landing_identity.feeds_for_table`) | `commcalc/_lib/CommissionWaysHeader.tsx` `ExecMtdFeeds` ("The Executive MTD counts what is uploaded as: <kind> under <page>") on the Employee Commission Structure page. Proof `frontend/prove_commission_structure_order.mjs` §C |
@@ -4302,6 +4509,9 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Is multi-month pay offered for this org** (the rep pay card's multi-month option) | active `payout_schedule` / `plan_installment_schedule` rows; multi-month $ on `rep_commissions.residual_installment_comm` + `installment_comm_sale` | ONE predicate `multimonth_config.decide` (backend) / `multimonthOffer.multimonthRows` (frontend); lock `harness_multimonth_offer_lock.py` (§6h) |
+| **Which months a window holds** (a from-month / to-month range, any period spelling) | — (calendar) | ONE enumeration `account/_period.month_range` (canonical names, oldest first, capped by the caller) — the Rep Incentive month range (§6g) and `discrepancy_appeals.period_range_variants` dereference it |
+| **ONE activation / upgrade** — what a per-activation or per-upgrade rate pays on, and what an activation count counts (owner 2026-09-25) | the activation-type lines of one invoice (`raw_sales` / feed rows, THE predicate) keyed by the phone line they name (`mdn` / phone-shaped `serial_1`), else device, else the invoice; config `accessory_config.activation_details_rules.event` | ONE definition `line_class.activation_events` (+ `line_event_keys`, `activation_units`); pay `plan_pay_gate._select_per_event` via `commission_engine.preview`; counts `_sales_cell_agg`, `calculator.calc_rep_commissions`, `commission_drill`, closing ×2, `sales_comparison.tally` (house unit 'transaction'); lock `harness_activation_event_lock.py`, proof `harness_activation_event.py` (§6f) |
 | **Which column mapping reads a commission statement** (the Ledger page, the batch, the setup preview, the read endpoints' convention — and the intake's own set) | `commcalc.column_mapping` rows under the statement type's key: the carrier's own (carrier_id = the template's carrier) and the global (carrier_id NULL) | ONE resolver `column_mapping.statement_rules` (carrier set whole, else global; never merged) ← `router._ledger_source_rules_meta`; carrier from the template `router._ledger_carrier_for`; the intake's set `column_mapping.carrier_rules`. Footer rows: ONE rule `onboarding_intake.split_footer`. Measured live 2026-09-24: 1 org with both sets, 7 of 8 fields differ; the kept July statement lands −110,315.41 through the global set vs 165,997.59 (= the intake's landing, row for row) through the carrier set. §30.17a |
 | **The month a commission statement FILE is for** (the multi-month upload — owner 2026-09-24) | the statement's own line dates (the layout's `column_mapping.period_source_field`, `trans_date` for the ledger layouts) | `ledger_batch.detect_period` → `onboarding_intake.period_proposal` (the month with the most dated lines; a tie / no dates → none, asked) → `commission_ledger.canonical_period`; a month typed on the preview → `ledger_batch.resolve_period` (the same canonicaliser). Stored by `_ledger_land_rows` in that one spelling. §30.17 |
 | **Who a sale's customer is** (every import: the sales rebuilt from the reports, the scanned PDF, the OCR photo) — and **what the customer paid per invoice** | `pos.activations.cell_number` (the customer's phone lines) + `pos.customers` name / phones / address + `pos.customer_aliases` (mig 1017); `pos.sales.receipt.payments` | ONE decision `pos/customer_identity.decide` (phone + name → a phone line within 730 days under another name, combined → the name alone → create; a placeholder never), ONE phone rule `customer_identity.norm_phone` (dereferences `crm.pipeline_core.normalize_phone`), ONE matcher `receipt_import.match_or_create`; paid = `customer_master.invoices_payload` (§30.16) |
