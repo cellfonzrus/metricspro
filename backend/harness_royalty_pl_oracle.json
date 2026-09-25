@@ -1,0 +1,729 @@
+{
+ "payload": {
+  "consolidated": {
+   "gross_profit": 92.0,
+   "net_income": -938.0,
+   "net_operating_income": -938.0,
+   "sections": [
+    {
+     "lines": [
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "carrier_comm",
+       "kind": "auto",
+       "label": "Carrier commissions & incentives"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "mi_income",
+       "kind": "auto",
+       "label": "MI residual income"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "atu_income",
+       "kind": "auto",
+       "label": "ATU income"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "ma_merchant_discount",
+       "kind": "auto",
+       "label": "Merchant discount"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "ma_device_margin",
+       "kind": "auto",
+       "label": "Device margin (Distributor/MA)"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "fee_income",
+       "kind": "auto",
+       "label": "Fee income (Distributor/MA)"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "financing_income",
+       "kind": "auto",
+       "label": "Consumer financing income"
+      },
+      {
+       "amount": 40.0,
+       "detail": {},
+       "key": "accessory_rev",
+       "kind": "auto",
+       "label": "Accessory sales revenue"
+      },
+      {
+       "amount": 500.0,
+       "detail": {},
+       "key": "device_rev",
+       "kind": "auto",
+       "label": "Device sales revenue"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "vip_reimb",
+       "kind": "auto",
+       "label": "Device-financing reimbursements (Distributor)"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "service_income",
+       "kind": "auto",
+       "label": "Service fee income (bill-pay & other fees)"
+      }
+     ],
+     "name": "Revenue",
+     "subtotal": 540.0,
+     "type": "revenue"
+    },
+    {
+     "lines": [
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "vip_device_pay",
+       "kind": "auto",
+       "label": "Distributor device payments (PayGo, paid)"
+      },
+      {
+       "amount": 8.0,
+       "detail": {},
+       "key": "accessory_cost",
+       "kind": "auto",
+       "label": "Accessory cost"
+      },
+      {
+       "amount": 440.0,
+       "detail": {},
+       "key": "device_cost",
+       "kind": "auto",
+       "label": "Device cost"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "device_rebate",
+       "kind": "auto",
+       "label": "Device purchase rebates (contra-COGS)"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "vip_fees",
+       "kind": "auto",
+       "label": "Distributor fees paid (shipping / SIM kit / processing)"
+      }
+     ],
+     "name": "Cost of Goods Sold",
+     "subtotal": 448.0,
+     "type": "cogs"
+    },
+    {
+     "lines": [
+      {
+       "amount": 30.0,
+       "detail": {},
+       "key": "rep_comm",
+       "kind": "auto",
+       "label": "Rep commissions paid"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "wages",
+       "kind": "auto",
+       "label": "Wages / hourly payroll"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "chargebacks",
+       "kind": "auto",
+       "label": "Chargebacks / clawbacks"
+      },
+      {
+       "amount": 1000.0,
+       "detail": {
+        "Rent": 1000.0
+       },
+       "key": "store_opex",
+       "kind": "auto",
+       "label": "Store operating expenses (rent / utilities / supplies)"
+      }
+     ],
+     "name": "Operating Expenses",
+     "subtotal": 1030.0,
+     "type": "opex"
+    },
+    {
+     "lines": [],
+     "name": "Other",
+     "subtotal": 0.0,
+     "type": "other"
+    }
+   ],
+   "statement_type": "pl"
+  },
+  "store:100 Main St": {
+   "gross_profit": 92.0,
+   "net_income": -938.0,
+   "net_operating_income": -938.0,
+   "sections": [
+    {
+     "lines": [
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "carrier_comm",
+       "kind": "auto",
+       "label": "Carrier commissions & incentives"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "mi_income",
+       "kind": "auto",
+       "label": "MI residual income"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "atu_income",
+       "kind": "auto",
+       "label": "ATU income"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "ma_merchant_discount",
+       "kind": "auto",
+       "label": "Merchant discount"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "ma_device_margin",
+       "kind": "auto",
+       "label": "Device margin (Distributor/MA)"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "fee_income",
+       "kind": "auto",
+       "label": "Fee income (Distributor/MA)"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "financing_income",
+       "kind": "auto",
+       "label": "Consumer financing income"
+      },
+      {
+       "amount": 40.0,
+       "detail": {},
+       "key": "accessory_rev",
+       "kind": "auto",
+       "label": "Accessory sales revenue"
+      },
+      {
+       "amount": 500.0,
+       "detail": {},
+       "key": "device_rev",
+       "kind": "auto",
+       "label": "Device sales revenue"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "vip_reimb",
+       "kind": "auto",
+       "label": "Device-financing reimbursements (Distributor)"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "service_income",
+       "kind": "auto",
+       "label": "Service fee income (bill-pay & other fees)"
+      }
+     ],
+     "name": "Revenue",
+     "subtotal": 540.0,
+     "type": "revenue"
+    },
+    {
+     "lines": [
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "vip_device_pay",
+       "kind": "auto",
+       "label": "Distributor device payments (PayGo, paid)"
+      },
+      {
+       "amount": 8.0,
+       "detail": {},
+       "key": "accessory_cost",
+       "kind": "auto",
+       "label": "Accessory cost"
+      },
+      {
+       "amount": 440.0,
+       "detail": {},
+       "key": "device_cost",
+       "kind": "auto",
+       "label": "Device cost"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "device_rebate",
+       "kind": "auto",
+       "label": "Device purchase rebates (contra-COGS)"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "vip_fees",
+       "kind": "auto",
+       "label": "Distributor fees paid (shipping / SIM kit / processing)"
+      }
+     ],
+     "name": "Cost of Goods Sold",
+     "subtotal": 448.0,
+     "type": "cogs"
+    },
+    {
+     "lines": [
+      {
+       "amount": 30.0,
+       "detail": {},
+       "key": "rep_comm",
+       "kind": "auto",
+       "label": "Rep commissions paid"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "wages",
+       "kind": "auto",
+       "label": "Wages / hourly payroll"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "chargebacks",
+       "kind": "auto",
+       "label": "Chargebacks / clawbacks"
+      },
+      {
+       "amount": 1000.0,
+       "detail": {},
+       "key": "store_opex",
+       "kind": "auto",
+       "label": "Store operating expenses (rent / utilities / supplies)"
+      }
+     ],
+     "name": "Operating Expenses",
+     "subtotal": 1030.0,
+     "type": "opex"
+    },
+    {
+     "lines": [],
+     "name": "Other",
+     "subtotal": 0.0,
+     "type": "other"
+    }
+   ],
+   "statement_type": "pl"
+  },
+  "store:200 Oak Ave": {
+   "gross_profit": 0.0,
+   "net_income": 0.0,
+   "net_operating_income": 0.0,
+   "sections": [
+    {
+     "lines": [
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "carrier_comm",
+       "kind": "auto",
+       "label": "Carrier commissions & incentives"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "mi_income",
+       "kind": "auto",
+       "label": "MI residual income"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "atu_income",
+       "kind": "auto",
+       "label": "ATU income"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "ma_merchant_discount",
+       "kind": "auto",
+       "label": "Merchant discount"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "ma_device_margin",
+       "kind": "auto",
+       "label": "Device margin (Distributor/MA)"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "fee_income",
+       "kind": "auto",
+       "label": "Fee income (Distributor/MA)"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "financing_income",
+       "kind": "auto",
+       "label": "Consumer financing income"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "accessory_rev",
+       "kind": "auto",
+       "label": "Accessory sales revenue"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "device_rev",
+       "kind": "auto",
+       "label": "Device sales revenue"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "vip_reimb",
+       "kind": "auto",
+       "label": "Device-financing reimbursements (Distributor)"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "service_income",
+       "kind": "auto",
+       "label": "Service fee income (bill-pay & other fees)"
+      }
+     ],
+     "name": "Revenue",
+     "subtotal": 0.0,
+     "type": "revenue"
+    },
+    {
+     "lines": [
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "vip_device_pay",
+       "kind": "auto",
+       "label": "Distributor device payments (PayGo, paid)"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "accessory_cost",
+       "kind": "auto",
+       "label": "Accessory cost"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "device_cost",
+       "kind": "auto",
+       "label": "Device cost"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "device_rebate",
+       "kind": "auto",
+       "label": "Device purchase rebates (contra-COGS)"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "vip_fees",
+       "kind": "auto",
+       "label": "Distributor fees paid (shipping / SIM kit / processing)"
+      }
+     ],
+     "name": "Cost of Goods Sold",
+     "subtotal": 0.0,
+     "type": "cogs"
+    },
+    {
+     "lines": [
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "rep_comm",
+       "kind": "auto",
+       "label": "Rep commissions paid"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "wages",
+       "kind": "auto",
+       "label": "Wages / hourly payroll"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "chargebacks",
+       "kind": "auto",
+       "label": "Chargebacks / clawbacks"
+      },
+      {
+       "amount": 0.0,
+       "detail": {},
+       "key": "store_opex",
+       "kind": "auto",
+       "label": "Store operating expenses (rent / utilities / supplies)"
+      }
+     ],
+     "name": "Operating Expenses",
+     "subtotal": 0.0,
+     "type": "opex"
+    },
+    {
+     "lines": [],
+     "name": "Other",
+     "subtotal": 0.0,
+     "type": "other"
+    }
+   ],
+   "statement_type": "pl"
+  }
+ },
+ "pl_spec": [
+  [
+   "carrier_comm",
+   "Carrier commissions & incentives",
+   "revenue",
+   "auto",
+   "company"
+  ],
+  [
+   "mi_income",
+   "MI residual income",
+   "revenue",
+   "auto",
+   "company"
+  ],
+  [
+   "atu_income",
+   "ATU income",
+   "revenue",
+   "auto",
+   "company"
+  ],
+  [
+   "ma_merchant_discount",
+   "Merchant discount",
+   "revenue",
+   "auto",
+   "company"
+  ],
+  [
+   "ma_device_margin",
+   "Device margin (Distributor/MA)",
+   "revenue",
+   "auto",
+   "company"
+  ],
+  [
+   "fee_income",
+   "Fee income (Distributor/MA)",
+   "revenue",
+   "auto",
+   "company"
+  ],
+  [
+   "financing_income",
+   "Consumer financing income",
+   "revenue",
+   "auto",
+   "company"
+  ],
+  [
+   "mdf_income",
+   "MDF (market spiffs)",
+   "revenue",
+   "auto_opt",
+   "store"
+  ],
+  [
+   "rebate_income",
+   "Rebates (device purchase)",
+   "revenue",
+   "auto_opt",
+   "store"
+  ],
+  [
+   "accessory_rev",
+   "Accessory sales revenue",
+   "revenue",
+   "auto",
+   "store"
+  ],
+  [
+   "device_rev",
+   "Device sales revenue",
+   "revenue",
+   "auto",
+   "store"
+  ],
+  [
+   "vip_reimb",
+   "Device-financing reimbursements (Distributor)",
+   "revenue",
+   "auto",
+   "store"
+  ],
+  [
+   "service_income",
+   "Service fee income (bill-pay & other fees)",
+   "revenue",
+   "auto",
+   "store"
+  ],
+  [
+   "epay_fee_income",
+   "ePay service charge (fee income)",
+   "revenue",
+   "auto_opt",
+   "store"
+  ],
+  [
+   "billpay_collected",
+   "Bill payments collected (pass-through)",
+   "revenue",
+   "auto_opt",
+   "store"
+  ],
+  [
+   "billpay_offset",
+   "Bill payments offset (pass-through)",
+   "revenue",
+   "auto_opt",
+   "store"
+  ],
+  [
+   "vip_device_pay",
+   "Distributor device payments (PayGo, paid)",
+   "cogs",
+   "auto",
+   "store"
+  ],
+  [
+   "accessory_cost",
+   "Accessory cost",
+   "cogs",
+   "auto",
+   "store"
+  ],
+  [
+   "device_cost",
+   "Device cost",
+   "cogs",
+   "auto",
+   "store"
+  ],
+  [
+   "device_rebate",
+   "Device purchase rebates (contra-COGS)",
+   "cogs",
+   "auto",
+   "company"
+  ],
+  [
+   "vip_fees",
+   "Distributor fees paid (shipping / SIM kit / processing)",
+   "cogs",
+   "auto",
+   "store"
+  ],
+  [
+   "rep_comm",
+   "Rep commissions paid",
+   "opex",
+   "auto",
+   "store"
+  ],
+  [
+   "wages",
+   "Wages / hourly payroll",
+   "opex",
+   "auto",
+   "store"
+  ],
+  [
+   "overhead_wages",
+   "Overhead salaries (allocated to stores)",
+   "opex",
+   "auto_opt",
+   "store"
+  ],
+  [
+   "overhead_comm",
+   "Overhead commission (allocated to stores)",
+   "opex",
+   "auto_opt",
+   "store"
+  ],
+  [
+   "payroll_expenses",
+   "Payroll Expenses",
+   "opex",
+   "auto_opt",
+   "store"
+  ],
+  [
+   "chargebacks",
+   "Chargebacks / clawbacks",
+   "opex",
+   "auto",
+   "store"
+  ],
+  [
+   "store_opex",
+   "Store operating expenses (rent / utilities / supplies)",
+   "opex",
+   "auto",
+   "store"
+  ]
+ ]
+}

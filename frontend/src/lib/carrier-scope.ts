@@ -201,6 +201,8 @@ export function posOK(
 export type ReportKindRow = {
   key: string; label: string; what_in_it?: string | null; recognisable_columns?: string[]; source_hint?: string | null
   applies_to_pos?: string[]; applies_to_carrier?: string[]; defined_by?: 'house' | 'tenant'; defined_by_org?: string | null
+  // the tenant VERTICALS a kind applies to (mig 1022; '{}'/absent = any) — the twin of backend report_kinds.applies
+  applies_to_vertical?: string[]
   statement_type?: string | null; landing: string; layout?: string | null   // a registry token ('commission' | 'residual' | one a row adds)
   signature_fields?: string[]; upload_types?: string[]; custom_sheet_label?: string | null
   sort_order?: number; is_active?: boolean
@@ -210,7 +212,12 @@ export type ReportKindRow = {
   shows_in?: { table: string | null; consumers: { screen: string; label: string; needs: string[]; gate: boolean; why?: string | null }[]; note: string | null }
   where?: { screen: string; label: string; upload_types: string[]; custom_sheet_label?: string }
 }
-export type ReportDeclaration = { pos: string[]; pos_source?: string; carriers: string[]; carrier_source?: string; reasons?: string[] }
+export type ReportDeclaration = {
+  pos: string[]; pos_source?: string; carriers: string[]; carrier_source?: string; reasons?: string[]
+  // the tenant's resolved vertical key (backend report_kinds.tenant_declaration → core/verticals.tenant_vertical);
+  // null/absent = not known, and an unknown vertical hides every vertical-scoped row (show less, never more)
+  vertical?: string | null; vertical_source?: string
+}
 
 /**
  * THE SHAPE THE PREDICATE READS — what a registry row must carry to be gated by the declaration. Report
@@ -219,7 +226,7 @@ export type ReportDeclaration = { pos: string[]; pos_source?: string; carriers: 
  * copying it (CLAUDE.md: one fact, one home, dereferenced).
  */
 export type ScopedRow = {
-  key: string; applies_to_pos?: string[]; applies_to_carrier?: string[]; defined_by?: 'house' | 'tenant'
+  key: string; applies_to_pos?: string[]; applies_to_carrier?: string[]; applies_to_vertical?: string[]; defined_by?: 'house' | 'tenant'
   is_active?: boolean; sort_order?: number; provenance?: string; provenance_text?: string
 }
 
@@ -230,14 +237,19 @@ export const KIND_PROVENANCE = {
 } as const
 
 /** The rows a kind's applies-to and a declaration intersect on (empty applies-to = any). Same squash as posSquash. */
-export function kindApplies(row: Pick<ScopedRow, 'applies_to_pos' | 'applies_to_carrier'>, decl: ReportDeclaration | null | undefined): boolean {
+export function kindApplies(row: Pick<ScopedRow, 'applies_to_pos' | 'applies_to_carrier' | 'applies_to_vertical'>, decl: ReportDeclaration | null | undefined): boolean {
   const pos = new Set((decl?.pos || []).map(posSquash))
   const car = new Set((decl?.carriers || []).map(posSquash))
   const ap = (row.applies_to_pos || []).map(posSquash).filter(Boolean)
   const ac = (row.applies_to_carrier || []).map(posSquash).filter(Boolean)
   const posOk = ap.length === 0 || ap.some(c => pos.has(c))
   const carOk = ac.length === 0 || ac.some(c => car.has(c))
-  return posOk && carOk
+  // THE VERTICAL AXIS (mig 1022): vertical keys are compared as written (snake_case), never squashed — the twin
+  // of backend report_kinds.applies. No applies_to_vertical (every connector, every pre-1022 kind) = any.
+  const av = (row.applies_to_vertical || []).map(v => String(v || '').trim().toLowerCase()).filter(Boolean)
+  const dv = String(decl?.vertical || '').trim().toLowerCase()
+  const verOk = av.length === 0 || (!!dv && av.includes(dv))
+  return posOk && carOk && verOk
 }
 
 /** The `<prefix><key>` cap override: true = show, false = hide, null = auto (follow the declaration).
