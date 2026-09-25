@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { PeriodProvider, usePeriod } from '@/lib/period-context'
@@ -140,8 +140,8 @@ function ImpersonationBanner() {
       const r = await unlockClockPunch(pw)
       setOk(`Unlocked — good for ONE clock in or clock out in the next ${r.valid_minutes} minutes. Open 🕐 Clock in.`)
       setPw(''); setUnlockOpen(false)
-    } catch (e: any) {
-      setErr(e?.message || 'That password did not work.')
+    } catch (e) {
+      setErr((e as { message?: string } | null)?.message || 'That password did not work.')
     } finally { setBusy(false) }
   }
 
@@ -225,10 +225,12 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
     apiCached('/api/v1/commcalc/nav-config', CONFIG).then(c => { if (alive && c) setNavCfg(c) }).catch(() => {})
     return () => { alive = false }
   }, [])
-  const caps = navCfg.capabilities || {}
-  const labelOf = (key: string, fallback: string) => navCfg.labels?.[key] || fallback
+  // Memoized on `navCfg` so `caps`/`capOK`/`labelOf` keep a stable identity between renders (the memos
+  // below list them as deps; a fresh `navCfg.capabilities || {}` each render would defeat them).
+  const caps = useMemo(() => navCfg.capabilities || {}, [navCfg])
+  const labelOf = useCallback((key: string, fallback: string) => navCfg.labels?.[key] || fallback, [navCfg.labels])
   // Hide an item ONLY when its capability is explicitly false; unknown/null/true → show (default-safe).
-  const capOK = (it: NavItem) => !it.cap || caps[it.cap] !== false
+  const capOK = useCallback((it: NavItem) => !it.cap || caps[it.cap] !== false, [caps])
 
   // When login isn't enforced (open), show the full nav (today's behavior); otherwise gate it. Then
   // apply tenant capability gating (e.g. hide Asset Lending when no consignment distributor).
@@ -240,8 +242,8 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
         .filter(it => verticalOK(it, tenant?.vertical, caps)) }))
       .filter(g => g.items.length > 0),
     // `caps`/`capOK` derive from `navCfg` (a new `navCfg.capabilities || {}` each render would defeat
-    // this memo), so key on the stable `navCfg` state object instead.
-    [open, permissions, activeCarrier, navCfg, tenant?.vertical])
+    // this memo), so they are themselves memoized on the stable `navCfg` state object.
+    [open, permissions, activeCarrier, caps, capOK, tenant?.vertical])
   // Per-org admin layout override (move items between groups / hide) — applied AFTER all access gating,
   // so anything an admin hasn't touched keeps its built-in placement and a newly-enabled item still shows.
   const groups = useMemo(
@@ -265,7 +267,14 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
       }
     }
   }
-  useEffect(() => { if (activeGroup) setOpenGroup(activeGroup) }, [activeGroup])
+  // Open the current page's group whenever it changes (during render — React's "adjust state when a
+  // value changes" pattern — rather than an effect's cascading second render). A null activeGroup
+  // leaves the accordion as the user left it, exactly as before.
+  const [syncedGroup, setSyncedGroup] = useState<string | null>(null)
+  if (activeGroup !== syncedGroup) {
+    setSyncedGroup(activeGroup)
+    if (activeGroup) setOpenGroup(activeGroup)
+  }
 
   const initials = (user?.full_name || user?.email || '?').split(/[\s@.]+/).filter(Boolean)
     .slice(0, 2).map(s => s[0]?.toUpperCase()).join('') || 'U'
@@ -285,7 +294,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
       label: labelOf(it.href, it.label),
       group: labelOf('group:' + g.group, g.group),
     }))),
-    [groups, navCfg.labels])
+    [groups, labelOf])
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -303,7 +312,9 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
       .slice(0, 12)
   }, [index, query])
 
-  useEffect(() => { setHi(0) }, [query])
+  // Reset the keyboard highlight whenever the query changes (adjusted during render, not in an effect).
+  const [hiQuery, setHiQuery] = useState(query)
+  if (hiQuery !== query) { setHiQuery(query); setHi(0) }
 
   const go = (href: string) => { setQuery(''); router.push(href) }
 
@@ -656,18 +667,21 @@ function Guard({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   // Master switch: until the admin turns enforcement ON, the app stays fully open (today's
   // behavior) so deploying this never locks anyone out. null = still checking.
-  const [enforce, setEnforce] = useState<boolean | null>(null)
+  const [fetchedEnforce, setFetchedEnforce] = useState<boolean | null>(null)
+  // Fast path: the ONE-call /api/v1/core/bootstrap (auth-context) already carried rbac_enabled —
+  // use it and skip the extra round trip (derived, so no setState-in-effect). auth-context only ever
+  // moves rbacEnabled null → boolean, never back.
+  const enforce: boolean | null = rbacEnabled !== null ? rbacEnabled : fetchedEnforce
 
   useEffect(() => {
-    // Fast path: the ONE-call /api/v1/core/bootstrap (auth-context) already carried rbac_enabled —
-    // use it and skip the extra round trip. rbacEnabled === null ⇒ bootstrap didn't run/supply it
+    // rbacEnabled === null ⇒ bootstrap didn't run/supply it
     // (older backend, waterfall path, signed-out) → keep the direct auth-config fetch as before so
     // nothing regresses. Explicit /api/v1 path — bare paths 404 silently in the UI.
-    if (rbacEnabled !== null) { setEnforce(rbacEnabled); return }
+    if (rbacEnabled !== null) return
     let on = true
     fetch(`${API_URL}/api/v1/core/auth-config`)
-      .then(r => r.json()).then(d => { if (on) setEnforce(!!d.rbac_enabled) })
-      .catch(() => { if (on) setEnforce(false) })
+      .then(r => r.json()).then(d => { if (on) setFetchedEnforce(!!d.rbac_enabled) })
+      .catch(() => { if (on) setFetchedEnforce(false) })
     return () => { on = false }
   }, [rbacEnabled])
 

@@ -4,24 +4,45 @@
 // delivery-time limit, and stock rules (out of stock is never chosen; stock not stated is flagged).
 // "Place order" turns the plan into one purchase order per vendor; the Orders page then opens each
 // vendor's live window to build the vendor's cart and capture the confirmation.
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { api } from '@/lib/client'
-import { panel, input, btn, btnPrimary, btnDanger, th, cell, fmtMoney, readCart, writeCart,
+import { panel, input, btn, btnPrimary, btnDanger, th, cell, fmtMoney, useStoredCart, writeCart,
          AVAIL_LABEL, type CartItem } from '@/lib/supply'
+
+// The fields of the /supply/cart/* replies this page reads.
+interface PlanLine {
+  key: string; label?: string; name?: string; flags?: string[]; packs: number; pack_qty?: number | null
+  unit_price: number | null; line_total: number | null; availability: string
+  alternatives?: { vendor_name: string; line_total: number | null }[]
+}
+interface PlanVendor {
+  vendor: string; vendor_name: string; total: number | null; subtotal: number | null
+  shipping_known?: boolean; shipping: number | null; free_shipping_threshold?: number | null; to_free_shipping?: number | null
+  delivery_days_min?: number | null; delivery_days_max?: number | null; recipe?: { level: string } | null; lines: PlanLine[]
+}
+interface CartPlan {
+  total: number | null; items_total: number | null; shipping_total: number | null
+  delivery_days?: { min?: number | null; max?: number | null }
+  savings_vs_single_vendor?: number | null; savings_vs_cheapest_each_item?: number | null
+  hints?: string[]; flags?: string[]; unfillable?: { key: string; label: string; reason: string }[]
+  vendors?: PlanVendor[]; method?: string
+}
 
 export default function SupplyCartPage() {
   const router = useRouter()
-  const [items, setItems] = useState<CartItem[]>([])
+  // The stored cart until this page edits it; after the first edit the edited list is the cart.
+  const storedCart = useStoredCart()
+  const [editedItems, setItems] = useState<CartItem[] | null>(null)
+  const items: CartItem[] = editedItems ?? storedCart ?? []
   const [maxDays, setMaxDays] = useState('')
   const [allowBackorder, setAllowBackorder] = useState(false)
   const [allowUnknown, setAllowUnknown] = useState(true)
-  const [plan, setPlan] = useState<any>(null)
+  const [plan, setPlan] = useState<CartPlan | null>(null)
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
 
-  useEffect(() => { setItems(readCart()) }, [])
   function update(next: CartItem[]) { setItems(next); writeCart(next); setPlan(null) }
 
   const body = () => JSON.stringify({
@@ -31,20 +52,20 @@ export default function SupplyCartPage() {
 
   async function optimize() {
     setBusy(true); setMsg('')
-    try { const r: any = await api('/api/v1/supply/cart/optimize', { method: 'POST', body: body() }); setPlan(r.plan) }
-    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    try { const r: { plan: CartPlan } = await api('/api/v1/supply/cart/optimize', { method: 'POST', body: body() }); setPlan(r.plan) }
+    catch (e) { setMsg('❌ ' + ((e as { message?: string } | null)?.message || e)) }
     setBusy(false)
   }
   async function place() {
     if (!plan?.vendors?.length) return
-    const summary = plan.vendors.map((v: any) => `${v.vendor_name}: ${fmtMoney(v.total)}`).join('\n')
+    const summary = plan.vendors.map(v => `${v.vendor_name}: ${fmtMoney(v.total)}`).join('\n')
     if (!confirm(`Create these purchase orders?\n\n${summary}\n\nNothing is sent to a vendor yet — you place each order from the Orders page.`)) return
     setBusy(true); setMsg('')
     try {
-      const r: any = await api('/api/v1/supply/cart/place', { method: 'POST', body: body() })
+      const r: { cart_ref: string } = await api('/api/v1/supply/cart/place', { method: 'POST', body: body() })
       update([])
       router.push(`/supply/orders?cart=${encodeURIComponent(r.cart_ref)}`)
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    } catch (e) { setMsg('❌ ' + ((e as { message?: string } | null)?.message || e)) }
     setBusy(false)
   }
 
@@ -93,14 +114,14 @@ export default function SupplyCartPage() {
             <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>TOTAL (items + shipping)</div><div style={{ fontSize: 22, fontWeight: 700 }}>{fmtMoney(plan.total)}</div></div>
             <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>Items</div>{fmtMoney(plan.items_total)}</div>
             <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>Shipping</div>{fmtMoney(plan.shipping_total)}</div>
-            {plan.delivery_days?.max != null && <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>Arrives in</div>{plan.delivery_days.min ?? '?'}–{plan.delivery_days.max} days</div>}
-            {plan.savings_vs_single_vendor > 0 && <div style={{ color: '#16a34a' }}>Saves {fmtMoney(plan.savings_vs_single_vendor)} vs the best single vendor</div>}
-            {plan.savings_vs_cheapest_each_item > 0 && <div style={{ color: '#16a34a' }}>Saves {fmtMoney(plan.savings_vs_cheapest_each_item)} vs buying each item wherever it is cheapest</div>}
+            {plan.delivery_days?.max != null && <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>Arrives in</div>{plan.delivery_days?.min ?? '?'}–{plan.delivery_days.max} days</div>}
+            {(plan.savings_vs_single_vendor ?? 0) > 0 && <div style={{ color: '#16a34a' }}>Saves {fmtMoney(plan.savings_vs_single_vendor)} vs the best single vendor</div>}
+            {(plan.savings_vs_cheapest_each_item ?? 0) > 0 && <div style={{ color: '#16a34a' }}>Saves {fmtMoney(plan.savings_vs_cheapest_each_item)} vs buying each item wherever it is cheapest</div>}
           </div>
-          {(plan.hints || []).map((h: string) => <div key={h} style={{ fontSize: 13, color: '#2563eb', marginBottom: 4 }}>💡 {h}</div>)}
-          {(plan.flags || []).map((h: string) => <div key={h} style={{ fontSize: 13, color: '#b45309', marginBottom: 4 }}>⚠️ {h}</div>)}
-          {(plan.unfillable || []).map((u: any) => <div key={u.key} style={{ fontSize: 13, color: '#dc2626', marginBottom: 4 }}>✖ {u.label}: {u.reason}</div>)}
-          {(plan.vendors || []).map((v: any) => (
+          {(plan.hints || []).map(h => <div key={h} style={{ fontSize: 13, color: '#2563eb', marginBottom: 4 }}>💡 {h}</div>)}
+          {(plan.flags || []).map(h => <div key={h} style={{ fontSize: 13, color: '#b45309', marginBottom: 4 }}>⚠️ {h}</div>)}
+          {(plan.unfillable || []).map(u => <div key={u.key} style={{ fontSize: 13, color: '#dc2626', marginBottom: 4 }}>✖ {u.label}: {u.reason}</div>)}
+          {(plan.vendors || []).map(v => (
             <div key={v.vendor} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginTop: 10 }}>
               <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'baseline' }}>
                 <strong>{v.vendor_name}</strong>
@@ -116,14 +137,14 @@ export default function SupplyCartPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 6 }}>
                 <thead><tr><th style={th}>Item</th><th style={th}>Order</th><th style={th}>Price</th><th style={th}>Line</th><th style={th}>Stock</th><th style={th}>Other vendors</th></tr></thead>
                 <tbody>
-                  {v.lines.map((ln: any) => (
+                  {v.lines.map(ln => (
                     <tr key={ln.key}>
-                      <td style={cell}>{ln.label || ln.name}{(ln.flags || []).map((f: string) => <div key={f} style={{ fontSize: 11, color: '#b45309' }}>{f}</div>)}</td>
+                      <td style={cell}>{ln.label || ln.name}{(ln.flags || []).map(f => <div key={f} style={{ fontSize: 11, color: '#b45309' }}>{f}</div>)}</td>
                       <td style={cell}>{ln.packs}{ln.pack_qty ? ` × ${ln.pack_qty}` : ''}</td>
                       <td style={cell}>{fmtMoney(ln.unit_price)}</td>
                       <td style={cell}>{fmtMoney(ln.line_total)}</td>
                       <td style={cell}>{AVAIL_LABEL[ln.availability] || ln.availability}</td>
-                      <td style={{ ...cell, fontSize: 11 }}>{(ln.alternatives || []).map((a: any) => `${a.vendor_name} ${fmtMoney(a.line_total)}`).join(' · ') || '—'}</td>
+                      <td style={{ ...cell, fontSize: 11 }}>{(ln.alternatives || []).map(a => `${a.vendor_name} ${fmtMoney(a.line_total)}`).join(' · ') || '—'}</td>
                     </tr>
                   ))}
                 </tbody>

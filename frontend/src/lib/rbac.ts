@@ -33,12 +33,12 @@ export type Permissions = {
 // "Sign in as an employee" on a role at /admin/roles. Entering someone else's session is not the kind
 // of capability that should arrive switched on because a role happened to be called "admin".
 export function canImpersonate(perms: Permissions | undefined): boolean {
-  return (perms as any)?.impersonate === true
+  return perms?.impersonate === true
 }
 // MIRROR of backend app/core/scope.scheduling_reach() — KEEP IN SYNC. Unknown/absent/garbage → 'org',
 // which is byte-identical to today's behaviour for every existing role.
 export function schedulingReach(perms: Permissions | undefined): SchedulingReach {
-  const v = String((perms as any)?.scheduling_reach || '').trim().toLowerCase()
+  const v = String(perms?.scheduling_reach || '').trim().toLowerCase()
   return v === 'span' ? 'span' : 'org'
 }
 // True when a scheduling roster / employee-picker read may ignore the reporting span.

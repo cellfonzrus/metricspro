@@ -18,17 +18,40 @@ const STATUS: Record<string, [string, string]> = {
   tie: ['ties', '#15803d'], variance: ['variance', '#b91c1c'], no_daily_map: ['not mapped to a daily category', '#b45309'],
   unknown_line: ['line not in the vocabulary', '#b45309'],
 }
+// The fields of GET /account/royalty/recon/{period} this page reads.
+interface ReconLine {
+  line_key: string; label: string; status: string; royalty: number; daily: number; variance: number
+  matched_by?: string; days?: Record<string, number>; categories?: Record<string, number>
+}
+interface ReconCenter {
+  report_id: string; center_code: string; period: string; store?: string | null; note?: string
+  totals: { royalty_sales: number; daily_total: number; variance: number }
+  tenders?: { tenders: number; days: number; variance: number } | null
+  lines: ReconLine[]
+  unmapped_daily?: { category: string; amount: number; days: Record<string, number>; rows: number }[]
+  conflicts?: { category: string; lines: string[] }[]
+}
+interface ReconData {
+  daily_source?: string; daily_rows?: number; match_field?: string; tender_rows?: number
+  needs?: string; period?: string; centers?: ReconCenter[]
+}
 const lastMonth = () => { const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 7) }
 
 export default function RoyaltyReconPage() {
   const [period, setPeriod] = useState(lastMonth())
-  const [data, setData] = useState<any>(null)
+  const [data, setData] = useState<ReconData | null>(null)
   const [open, setOpen] = useState<string | null>(null)
   const [err, setErr] = useState('')
-  const [loading, setLoading] = useState(false)
+  // A load starts on mount and on every month change: `loading` starts true and the month picker flips
+  // it (and clears the error) as it changes the month, so the effect below never sets state synchronously.
+  const [loading, setLoading] = useState(true)
+  const changePeriod = (p: string) => {
+    if (p === period) return
+    setLoading(true); setErr('')
+    setPeriod(p)
+  }
   useEffect(() => {
     let alive = true
-    setLoading(true); setErr('')
     api(`/api/v1/account/royalty/recon/${encodeURIComponent(period)}`)
       .then(d => { if (alive) setData(d) })
       .catch(e => { if (alive) { setErr(e?.message || String(e)); setData(null) } })
@@ -40,7 +63,7 @@ export default function RoyaltyReconPage() {
     <div style={{ padding: 16, maxWidth: 1200 }}>
       <h1 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 4px' }}>Royalty vs Daily Sales</h1>
       <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 10 }}>Each sales line of the month&apos;s royalty report against the daily report(s) for the same store, summed over the month.</div>
-      <label style={{ fontSize: 13 }}>Month <input type="month" value={period} onChange={e => setPeriod(e.target.value)} /></label>
+      <label style={{ fontSize: 13 }}>Month <input type="month" value={period} onChange={e => changePeriod(e.target.value)} /></label>
       {loading && <div style={{ marginTop: 10, color: 'var(--text2)' }}>Loading…</div>}
       {err && <div style={{ color: '#b91c1c', marginTop: 10 }}>{err}</div>}
       {data && (
@@ -50,7 +73,7 @@ export default function RoyaltyReconPage() {
           </div>
           {data.needs && <div className="card" style={{ padding: 12, marginBottom: 12, color: '#b45309' }}>{data.needs}</div>}
           {!data.centers?.length && <div className="card" style={{ padding: 12 }}>No royalty report is stored for {data.period}.</div>}
-          {data.centers?.map((c: any) => (
+          {data.centers?.map(c => (
             <div key={c.report_id} className="card" style={{ padding: 14, marginBottom: 14 }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>Center {c.center_code} — {c.period}{c.store ? ` · ${c.store}` : ''}</div>
               {c.note && <div style={{ color: '#b45309', fontSize: 13, margin: '4px 0' }}>{c.note}</div>}
@@ -61,7 +84,7 @@ export default function RoyaltyReconPage() {
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead><tr><th style={th}>Line</th><th style={thr}>Royalty</th><th style={thr}>Daily</th><th style={thr}>Variance</th><th style={th}>Status</th><th style={th}></th></tr></thead>
-                <tbody>{c.lines.map((l: any) => {
+                <tbody>{c.lines.map(l => {
                   const k = c.report_id + l.line_key
                   const [txt, col] = STATUS[l.status] || [l.status, 'inherit']
                   return (
@@ -81,13 +104,13 @@ export default function RoyaltyReconPage() {
                   )
                 })}</tbody>
               </table>
-              {c.unmapped_daily?.length > 0 && (
+              {(c.unmapped_daily?.length ?? 0) > 0 && c.unmapped_daily && (
                 <div style={{ marginTop: 10, fontSize: 13 }}>
                   <b style={{ color: '#b45309' }}>Daily categories no royalty line claims</b> (add them to a line under Royalty Report → Line setup):
-                  {c.unmapped_daily.map((u: any) => <div key={u.category}>{u.category} — {fmt(u.amount)} over {Object.keys(u.days).length} day(s), {u.rows} row(s)</div>)}
+                  {c.unmapped_daily.map(u => <div key={u.category}>{u.category} — {fmt(u.amount)} over {Object.keys(u.days).length} day(s), {u.rows} row(s)</div>)}
                 </div>
               )}
-              {c.conflicts?.length > 0 && <div style={{ marginTop: 8, color: '#b91c1c', fontSize: 13 }}>{c.conflicts.map((x: any) => `'${x.category}' is claimed by ${x.lines.join(' and ')}`).join(' · ')}</div>}
+              {(c.conflicts?.length ?? 0) > 0 && c.conflicts && <div style={{ marginTop: 8, color: '#b91c1c', fontSize: 13 }}>{c.conflicts.map(x => `'${x.category}' is claimed by ${x.lines.join(' and ')}`).join(' · ')}</div>}
             </div>
           ))}
         </div>

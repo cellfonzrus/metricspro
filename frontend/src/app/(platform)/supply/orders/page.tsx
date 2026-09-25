@@ -8,82 +8,119 @@
 //      recipe has a submit step — with "Confirm & place" here, after seeing the vendor's total.
 //   3. "Capture confirmation" reads the vendor's confirmation page (pattern from config) and writes the
 //      order number, total and screenshot back; the order becomes submitted. Or type the number by hand.
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
 import LiveVendorWindow from '@/components/supply/LiveVendorWindow'
-import { panel, input, btn, btnPrimary, btnDanger, th, cell, fmtMoney, fmtDate, PO_STATUS_COLOR } from '@/lib/supply'
+import { panel, input, btn, btnPrimary, btnDanger, th, cell, fmtMoney, fmtDate, PO_STATUS_COLOR, useOnClient } from '@/lib/supply'
+
+// The fields of the /supply/orders* replies this page reads.
+interface OrderRow {
+  id: string; po_number: string; vendor_name_snapshot: string; status: string; total: number | null
+  shipping_estimate?: number | null; vendor_order_total?: number | null; vendor_order_ref?: string | null
+  submitted_at?: string | null; submitted_by?: string | null; supply_cart_ref?: string | null
+}
+interface CartEvidence {
+  captured_at?: string | null; status?: string; vendor_cart_total?: number | null
+  lines_failed?: { line_no: number; error: string }[]; shot?: string | null
+}
+interface Confirmation {
+  method?: string; captured_at?: string | null; captured_by?: string | null; order_ref?: string | null
+  total?: number | null; note?: string | null; shot?: string | null
+}
+interface OrderHeader extends OrderRow {
+  subtotal: number | null; cart_evidence?: CartEvidence | null; confirmation?: Confirmation | null
+  supply_meta?: { to_free_shipping?: number | null } | null
+}
+interface OrderLine {
+  id: string; line_no: number; device_model: string; notes?: string | null; sku?: string | null
+  qty_ordered: number; unit_cost: number | null; extended_cost: number | null
+}
+interface OrderDetail {
+  header: OrderHeader; lines: OrderLine[]; recipe?: { text?: string } | null; can_submit?: boolean
+  live?: { for_this_order?: boolean; sid: string } | null
+}
+type ApiError = { message?: string; status?: number } | null | undefined
 
 export default function SupplyOrdersPage() {
-  const [rows, setRows] = useState<any[]>([])
+  const [rows, setRows] = useState<OrderRow[]>([])
   const [note, setNote] = useState('')
-  const [cartRef, setCartRef] = useState('')
-  const [sel, setSel] = useState<any>(null)
+  // The ?cart= the Cart page sent us here with (read once on the client), until "show all" clears it.
+  const onClient = useOnClient()
+  const urlCartRef = useMemo(() => {
+    if (!onClient) return ''
+    try { return new URLSearchParams(window.location.search).get('cart') || '' } catch { return '' /* no query */ }
+  }, [onClient])
+  const [clearedCartRef, setCartRef] = useState<string | null>(null)
+  const cartRef = clearedCartRef ?? urlCartRef
+  const [sel, setSel] = useState<OrderDetail | null>(null)
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
   const [live, setLive] = useState<string | null>(null)
   const [manual, setManual] = useState({ ref: '', total: '', note: '' })
 
-  const load = useCallback(async () => {
-    try {
-      const r: any = await api('/api/v1/supply/orders')
-      setRows(r.rows || []); setNote(r.migrated === false ? r.note : '')
-    } catch (e: any) { setNote(e?.message || String(e)) }
-  }, [])
+  // A promise chain (not async/await) so every setState visibly runs in a callback, after the fetch.
+  const load = useCallback(() => api('/api/v1/supply/orders')
+    .then((r: { rows?: OrderRow[]; migrated?: boolean; note?: string }) => { setRows(r.rows || []); setNote(r.migrated === false ? r.note ?? '' : '') })
+    .catch(e => { setNote(e?.message || String(e)) }), [])
   const open = useCallback(async (id: string) => {
     setMsg('')
     try {
-      const r: any = await api(`/api/v1/supply/orders/${id}`)
+      const r: OrderDetail = await api(`/api/v1/supply/orders/${id}`)
       setSel(r); setManual({ ref: '', total: '', note: '' })
       setLive(r.live?.for_this_order ? r.live.sid : null)   // re-attach to a vendor window still open for this order
     }
-    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    catch (e) { setMsg('❌ ' + ((e as ApiError)?.message || e)) }
   }, [])
   useEffect(() => {
     load()
-    try { setCartRef(new URLSearchParams(window.location.search).get('cart') || '') } catch { /* no query */ }
   }, [load])
 
   const h = sel?.header
   async function openSession() {
+    if (!h) return
     setBusy(true); setMsg('')
     try {
-      const r: any = await api(`/api/v1/supply/orders/${h.id}/open-session`, { method: 'POST', body: '{}' })
+      const r: { blocked?: boolean; requires_confirm?: boolean; phase?: string; message: string; sid: string } = await api(`/api/v1/supply/orders/${h.id}/open-session`, { method: 'POST', body: '{}' })
       if (r.blocked || r.requires_confirm || r.phase === 'route_disabled') setMsg('⚠️ ' + (r.message || 'The vendor login is paused.'))
       else { setLive(r.sid); setMsg(r.message) }
-    } catch (e: any) {
+    } catch (err) {
+      const e = err as ApiError
       setMsg('❌ ' + (e?.status === 503
         ? 'This server cannot open a browser (the live vendor window runs on the browser worker, which is not configured here). Place the order on the vendor\'s site and type the confirmation number below.'
-        : (e?.message || e)))
+        : (e?.message || err)))
     }
     setBusy(false)
   }
   async function capture(path: 'capture' | 'submit') {
+    if (!h) return
     if (path === 'submit') {
-      const ev = h.cart_evidence || {}
+      const ev: CartEvidence = h.cart_evidence || {}
       const vt = ev.vendor_cart_total != null ? fmtMoney(ev.vendor_cart_total) : 'not found on the page'
       if (!confirm(`Place this order at ${h.vendor_name_snapshot}?\n\nVendor's cart total: ${vt}\nOur estimate: ${fmtMoney(h.total)}\n\nThis presses the vendor's final order button.`)) return
     }
     setBusy(true); setMsg('')
     try {
-      const r: any = await api(`/api/v1/supply/orders/${h.id}/${path}`, { method: 'POST', body: '{}' })
+      const r: { confirmed?: boolean; message?: string; needs_ref?: boolean } = await api(`/api/v1/supply/orders/${h.id}/${path}`, { method: 'POST', body: '{}' })
       setMsg(r.confirmed ? `✅ ${r.message || 'Confirmation captured.'}${r.needs_ref ? ' Type the order number below.' : ''}` : `ℹ️ ${r.message}`)
       await open(h.id); load()
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    } catch (e) { setMsg('❌ ' + ((e as ApiError)?.message || e)) }
     setBusy(false)
   }
   async function saveManual() {
+    if (!h) return
     setBusy(true); setMsg('')
     try {
       await api(`/api/v1/supply/orders/${h.id}/confirm-manual`, { method: 'POST',
         body: JSON.stringify({ vendor_order_ref: manual.ref, vendor_order_total: manual.total || null, note: manual.note || null }) })
       setMsg('✅ Confirmation recorded.'); await open(h.id); load()
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    } catch (e) { setMsg('❌ ' + ((e as ApiError)?.message || e)) }
     setBusy(false)
   }
   async function cancelOrder() {
+    if (!h) return
     if (!confirm('Cancel this purchase order? (It does not cancel anything already placed at the vendor.)')) return
     try { await api(`/api/v1/supply/orders/${h.id}/status`, { method: 'POST', body: JSON.stringify({ status: 'cancelled' }) }); await open(h.id); load() }
-    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    catch (e) { setMsg('❌ ' + ((e as ApiError)?.message || e)) }
   }
 
   const shown = cartRef ? rows.filter(r => r.supply_cart_ref === cartRef) : rows
@@ -123,25 +160,25 @@ export default function SupplyOrdersPage() {
           <div style={{ display: 'flex', gap: 12, alignItems: 'baseline', flexWrap: 'wrap' }}>
             <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>{h.po_number} · {h.vendor_name_snapshot}</h2>
             <span style={{ color: PO_STATUS_COLOR[h.status], fontWeight: 600 }}>{h.status}</span>
-            <span style={{ fontSize: 12, color: 'var(--text2)' }}>Ordering: {sel.recipe?.text}</span>
+            <span style={{ fontSize: 12, color: 'var(--text2)' }}>Ordering: {sel?.recipe?.text}</span>
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 8 }}>
             <thead><tr><th style={th}>#</th><th style={th}>Item</th><th style={th}>SKU</th><th style={th}>Qty (packs)</th><th style={th}>Unit</th><th style={th}>Line</th></tr></thead>
-            <tbody>{sel.lines.map((l: any) => (
+            <tbody>{sel?.lines.map(l => (
               <tr key={l.id}><td style={cell}>{l.line_no}</td><td style={cell}>{l.device_model}{l.notes && <div style={{ fontSize: 11, color: '#b45309' }}>{l.notes}</div>}</td>
                 <td style={cell}>{l.sku || '—'}</td><td style={cell}>{l.qty_ordered}</td><td style={cell}>{fmtMoney(l.unit_cost)}</td><td style={cell}>{fmtMoney(l.extended_cost)}</td></tr>
             ))}</tbody>
           </table>
           <div style={{ fontSize: 13, marginTop: 8 }}>
             Items {fmtMoney(h.subtotal)} · shipping estimate {fmtMoney(h.shipping_estimate)} · <strong>total {fmtMoney(h.total)}</strong>
-            {h.supply_meta?.to_free_shipping != null && <span style={{ color: '#2563eb' }}> · {fmtMoney(h.supply_meta.to_free_shipping)} short of free shipping</span>}
+            {h.supply_meta?.to_free_shipping != null && <span style={{ color: '#2563eb' }}> · {fmtMoney(h.supply_meta?.to_free_shipping)} short of free shipping</span>}
           </div>
 
           {['draft', 'submitted'].includes(h.status) && (
             <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
               <button style={btnPrimary} disabled={busy} onClick={openSession}>Open vendor window</button>
               <button style={btn} disabled={busy || !live} onClick={() => capture('capture')}>Capture confirmation</button>
-              {sel.can_submit && <button style={btn} disabled={busy || !live || !ev?.captured_at} onClick={() => capture('submit')}>Confirm &amp; place at vendor</button>}
+              {sel?.can_submit && <button style={btn} disabled={busy || !live || !ev?.captured_at} onClick={() => capture('submit')}>Confirm &amp; place at vendor</button>}
               {h.status === 'draft' && <button style={btnDanger} disabled={busy} onClick={cancelOrder}>Cancel PO</button>}
             </div>
           )}
@@ -152,7 +189,8 @@ export default function SupplyOrdersPage() {
               <strong style={{ fontSize: 13 }}>Vendor cart (captured {fmtDate(ev.captured_at)})</strong>
               <div style={{ fontSize: 13 }}>{ev.status}</div>
               <div style={{ fontSize: 13 }}>Vendor&apos;s total: <strong>{ev.vendor_cart_total != null ? fmtMoney(ev.vendor_cart_total) : 'not found on the page'}</strong> vs our estimate {fmtMoney(h.total)}</div>
-              {(ev.lines_failed || []).map((f: any) => <div key={f.line_no} style={{ fontSize: 12, color: '#dc2626' }}>Line {f.line_no} not added: {f.error}</div>)}
+              {(ev.lines_failed || []).map(f => <div key={f.line_no} style={{ fontSize: 12, color: '#dc2626' }}>Line {f.line_no} not added: {f.error}</div>)}
+              {/* eslint-disable-next-line @next/next/no-img-element -- a base64 screenshot captured by the vendor window, shown as a data: URL; next/image cannot optimise data URLs */}
               {ev.shot && <img alt="Vendor cart as captured" src={`data:image/jpeg;base64,${ev.shot}`} style={{ maxWidth: 480, width: '100%', marginTop: 6, border: '1px solid var(--border)' }} />}
             </div>
           )}
@@ -161,6 +199,7 @@ export default function SupplyOrdersPage() {
               <strong style={{ fontSize: 13 }}>Confirmation ({conf.method}) — {fmtDate(conf.captured_at)}{conf.captured_by ? ` · ${conf.captured_by}` : ''}</strong>
               <div style={{ fontSize: 13 }}>Order #: <strong>{conf.order_ref || h.vendor_order_ref || 'not captured'}</strong>
                 {conf.total != null && <> · total {fmtMoney(conf.total)}</>}{conf.note && <> · {conf.note}</>}</div>
+              {/* eslint-disable-next-line @next/next/no-img-element -- a base64 screenshot captured by the vendor window, shown as a data: URL; next/image cannot optimise data URLs */}
               {conf.shot && <img alt="Vendor confirmation page" src={`data:image/jpeg;base64,${conf.shot}`} style={{ maxWidth: 480, width: '100%', marginTop: 6, border: '1px solid var(--border)' }} />}
             </div>
           )}
