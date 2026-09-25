@@ -219,8 +219,62 @@ def main():
     ok(disp.count("_sweep_registry()") >= 1,
        "...and an externally registered kind is never assumed to need a browser")
 
+    print("\n6. BROWSER WORK OUTSIDE THE SWEEP REGISTRY — every module that launches one is declared + guarded")
+    _browser_modules_elsewhere()
+
     print("\n%d passed, %d failed" % (PASS, FAIL))
     return 1 if FAIL else 0
+
+
+# Modules OUTSIDE commcalc that can launch Chromium (index §36). Derived from the code below and compared
+# both ways, exactly like _BROWSER_SWEEP_KINDS: a module that starts launching a browser without being declared
+# here (and guarded) fails the build, and so does a declared module that no longer launches one.
+APP = os.path.join(HERE, "app")
+BROWSER_MODULES_ELSEWHERE = {os.path.join("modules", "supply", "portal.py")}
+_LAUNCH_RE = re.compile(r"from\s+playwright|import\s+playwright|sync_playwright|assert_browser_allowed\(\)")
+# The endpoints of such a module's router that reach a live browser must call require_browser_service() (so a
+# SERVICE_ROLE=api deploy proxies them to BROWSER_SERVICE_URL or answers a plain 503 — never a fake success);
+# the ones that do not reach a browser must NOT (they would 503 for nothing).
+_BROWSER_CALLS = ("start_session(", "live_login_start(", "_live_pull(")
+SUPPLY_ROUTER = os.path.join(APP, "modules", "supply", "router.py")
+
+
+def _browser_modules_elsewhere():
+    derived = set()
+    for root, _dirs, files in os.walk(os.path.join(APP, "modules")):
+        if os.path.join("modules", "commcalc") in root:
+            continue
+        for fn in files:
+            if fn.endswith(".py"):
+                path = os.path.join(root, fn)
+                if _LAUNCH_RE.search(_src(path)):
+                    derived.add(os.path.relpath(path, APP))
+    eq(derived, BROWSER_MODULES_ELSEWHERE,
+       "the modules outside commcalc that can launch a browser are exactly the declared set")
+    for rel in sorted(derived):
+        fns = _functions(_src(os.path.join(APP, rel)))
+        for name, body in sorted(fns.items()):
+            if "sync_playwright" in body and "import" in body:
+                i_launch = body.find("sync_playwright")
+                i_guard = body.find("assert_browser_allowed()")
+                ok(0 <= i_guard < i_launch,
+                   "%s:%s() calls assert_browser_allowed() before it imports/launches playwright" % (rel, name))
+    if not os.path.exists(SUPPLY_ROUTER):
+        ok(False, "supply/router.py is present")
+        return
+    handlers = _functions(_src(SUPPLY_ROUTER))
+    reach, plain = [], []
+    for name, body in sorted(handlers.items()):
+        if not re.search(r"@router\.(get|post|put|patch|delete)", _src(SUPPLY_ROUTER).split("def %s(" % name)[0][-400:]):
+            continue
+        (reach if any(c in body for c in _BROWSER_CALLS) else plain).append(name)
+    ok(len(reach) >= 4, "the supply router's browser endpoints were found", str(reach))
+    for name in reach:
+        ok("require_browser_service()" in handlers[name],
+           "supply %s() reaches a live browser and calls require_browser_service()" % name)
+    for name in plain:
+        ok("require_browser_service()" not in handlers[name],
+           "supply %s() reaches no browser and does NOT require the browser service" % name)
 
 
 if __name__ == "__main__":

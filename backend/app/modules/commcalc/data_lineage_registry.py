@@ -156,6 +156,13 @@ INGEST_TABLES_BY_MODULE = {
     "asset": (
         "asset_ledger",
     ),
+    # supply (mig 1021, index §36) — the vendor catalog price snapshot: each supply vendor's products, prices,
+    # pack sizes and stock, landed by ONE lander (supply/store.land_catalog) from two routes — the price-compare
+    # kit's products.json/csv upload and the read-only portal read (live login or the data-sources scheduler).
+    # Read by Price Compare and the cart optimizer only; no P&L / payout path reads it.
+    "supply": (
+        "vendor_catalog_price",
+    ),
     # Other modules are added in subsequent PRs, one by one.
 }
 
