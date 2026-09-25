@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { Fragment, useState, useEffect, useMemo, useRef } from 'react'
 import { api, apiDownload, apiFetchBase64, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
@@ -10,6 +10,9 @@ import { carrierMode } from '@/lib/rbac'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, isStandardFilterActive, type StandardFilterValue } from '@/lib/standard-filters'
 import PlanLineBreakdown from '../_lib/PlanLineBreakdown'
+import { toPlanLine } from '../_lib/planLines'
+import { monthBlocks, monthInput, RANGE_MAX_MONTHS, spanMonths, type RangeRow } from '../_lib/repIncentiveRange'
+import { multimonthOffered, multimonthRows, useMultimonthStatus } from '../_lib/multimonth'
 import WhyZeroPanel from '../_lib/WhyZeroPanel'
 import { GoogleRatingChips, GoogleRatingDetail, ratingsText, useGoogleRatings } from '../_lib/googleRatings'
 
@@ -52,6 +55,7 @@ const TABS = [
   { id: 'breakdown', label: '👥 Rep Breakdown' },
   { id: 'individual', label: '📄 Individual Rep' },
   { id: 'compensation', label: '💰 Compensation by Line' },
+  { id: 'range', label: '📅 Month range' },
 ]
 
 // ── PLAN-MODE (non-Boost) drill labels — mirrored from commission-explain/page.tsx so the same
@@ -139,6 +143,25 @@ export default function ReportsPage() {
   const totalPayout = filtered.reduce((s, r) => s + (r.total_payout || 0), 0)
   const filterActive = isStandardFilterActive(filt)
 
+  // ── MONTH RANGE tab (owner 2026-09-25) — default window: the last three months ending this month ──
+  const [rangeFrom, setRangeFrom] = useState(() => monthInput(new Date(), 2))
+  const [rangeTo, setRangeTo] = useState(() => monthInput(new Date(), 0))
+  const [rangeData, setRangeData] = useState<{ months: string[]; rows: RangeRow[] } | null>(null)
+  const [rangeBusy, setRangeBusy] = useState(false)
+  const [rangeErr, setRangeErr] = useState('')
+  const rangeSpan = spanMonths(rangeFrom, rangeTo)
+  async function loadRange() {
+    setRangeBusy(true); setRangeErr('')
+    try {
+      const d = await api(`/api/v1/commcalc/commissions-range?period_from=${encodeURIComponent(rangeFrom)}&period_to=${encodeURIComponent(rangeTo)}&org_id=${ORG_ID}`)
+      setRangeData({ months: d?.months || [], rows: (d?.rows || []) as RangeRow[] })
+    } catch (e: any) { setRangeData(null); setRangeErr(String(e?.message || e)) } finally { setRangeBusy(false) }
+  }
+  // the standard filter applies to the range exactly as to the single-month tabs (same accessors)
+  const rangeView = useMemo(() => monthBlocks(
+    filterRows((rangeData?.rows || []) as any[], filt, acc as any) as RangeRow[], rangeData?.months || []),
+    [rangeData, filt])   // eslint-disable-line react-hooks/exhaustive-deps
+
   const currentRep = reps.find(r => r.epay_salesperson === selectedRep) || reps[0]
   // ── GOOGLE STORE RATING (owner 2026-08-06) — display-only, NON-money ───────────────────────────
   // ONE batched summary call for the reps currently on screen (the FILTERED set + whoever the
@@ -182,10 +205,11 @@ export default function ReportsPage() {
   // backend (`base + inst + sale_inst`), and the modal's reconciliation strip still prints both.
   const instSale  = currentRep?.installment_comm_sale || 0        // itemized by the drill modal
   const instResid = currentRep?.residual_installment_comm || 0    // raw_mi residual engine — not itemized
-  const showResidRow = instResid !== 0
-  // the sale-triggered row also carries the ALWAYS-available click path, so it renders at $0 too — unless
-  // the residual engine is the only payer, in which case that would be a second, meaningless $0 row.
-  const showSaleRow  = instSale !== 0 || !showResidRow
+  // THE multi-month predicate (owner 2026-09-25: "if multi month is not confgured then it should not be shown
+  // as an available option"). A non-zero amount always shows; the $0 sale-triggered row — the drill path — is
+  // offered only when the org has multi-month configured (multimonthRows, _lib/multimonthOffer.ts).
+  const mmStatus = useMultimonthStatus([period])
+  const { sale: showSaleRow, resid: showResidRow } = multimonthRows(mmStatus, instSale, instResid)
 
   const COMP_LABEL: Record<string, string> = { premium: 'Premium Activations', byod: 'BYOD Activations', upgrade: 'Device Upgrades', accessories: 'Accessories', setup: 'Setup Fees', acima: 'ACIMA Lease' }
 
@@ -197,8 +221,38 @@ export default function ReportsPage() {
   const exportInput = (): CommissionExportInput => ({
     tab: tab as CommissionTab, period, isBoost, reps, filtered, currentRep: currentRep || null,
     filt, cfg, chargebacks, hasInstallment, ratingByRep,
+    multimonthRowsFor: (s: number, r: number) => multimonthRows(mmStatus, s, r),
   })
-  const buildPayload = (): ExportPayload => buildCommissionExport(exportInput())
+  // the MONTH RANGE tab exports what it shows: one row per rep per month + each month's subtotal + the total
+  const rangePayload = (): ExportPayload => {
+    const out: any[] = []
+    for (const b of rangeView.blocks) {
+      for (const r of b.rows) out.push({ month: b.month, rep: r.storeops_name || r.epay_salesperson, store: r.store,
+        pa: r.premium_acts ?? 0, ba: r.byod_acts ?? 0, ua: r.upgrade_acts ?? 0, subtotal: r.subtotal,
+        payout: r.total_payout, final: r.final_payout ?? r.total_payout })
+      if (b.rows.length) out.push({ month: b.month, rep: `Subtotal · ${b.totals.reps} reps`, store: '',
+        pa: b.totals.premium_acts, ba: b.totals.byod_acts, ua: b.totals.upgrade_acts, subtotal: b.totals.subtotal,
+        payout: b.totals.total_payout, final: b.totals.final_payout })
+    }
+    const g = rangeView.grand
+    out.push({ month: 'Total', rep: '', store: '', pa: g.premium_acts, ba: g.byod_acts, ua: g.upgrade_acts,
+      subtotal: g.subtotal, payout: g.total_payout, final: g.final_payout })
+    const months = rangeData?.months || []
+    return {
+      title: 'Rep Incentive Report — month range',
+      subtitle: months.length ? `${months[0]} – ${months[months.length - 1]}` : '',
+      filename: `rep-incentive-${rangeFrom}-to-${rangeTo}`,
+      sheets: [{ name: 'Month range', rows: out, columns: [
+        { header: 'Month', get: (x: any) => x.month }, { header: 'Rep', get: (x: any) => x.rep },
+        { header: 'Store', get: (x: any) => x.store }, { header: 'PA', get: (x: any) => x.pa },
+        { header: 'BA', get: (x: any) => x.ba }, { header: 'UA', get: (x: any) => x.ua },
+        { header: 'Subtotal', get: (x: any) => x.subtotal, money: true },
+        { header: 'Payout', get: (x: any) => x.payout, money: true },
+        { header: 'Final', get: (x: any) => x.final, money: true },
+      ] }],
+    }
+  }
+  const buildPayload = (): ExportPayload => tab === 'range' ? rangePayload() : buildCommissionExport(exportInput())
   function downloadCSV() {
     const p = buildPayload()
     const a = document.createElement('a')
@@ -237,7 +291,8 @@ export default function ReportsPage() {
   // Cheap title for the Send modal's header (buildPayload() itself only runs on click).
   const exportTitle = tab === 'individual'
     ? `Incentive Statement — ${currentRep ? repLabel(currentRep) : 'no rep selected'}`
-    : tab === 'compensation' ? 'Compensation by Line' : 'Rep Incentive Report'
+    : tab === 'compensation' ? 'Compensation by Line'
+    : tab === 'range' ? 'Rep Incentive Report — month range' : 'Rep Incentive Report'
 
   function openDrill(comp: string) {
     setDrillComp(comp)
@@ -380,14 +435,9 @@ export default function ReportsPage() {
   // per-rule matched sale lines (same shape commission-explain/page.tsx maps into planRows)
   const planLineRows = useMemo(() => {
     const out: any[] = []
+    // ONE mapper (planLines.toPlanLine) for both surfaces — the event stamp rides along untouched
     for (const r of (explainPc?.rules || [])) for (const l of (r.lines || []))
-      out.push({ rule: r.label, basis: PLAN_BASIS[r.payout_kind] || r.payout_kind, date: l.date,
-        trans_id: l.trans_id, product: l.product, contract_type: l.contract_type,
-        ext_price: l.ext_price, gp: l.gp, amount: l.flat_once ? null : l.amount,
-        // carried for the per-category UNIT count and the "matched but not paid" marker in the
-        // grouped drill-down — same fields commission-explain already reads. Display only.
-        qualifies: l.qualifies !== false, suppressed: !!l.suppressed,
-        suppressed_reason: l.suppressed_reason || '', would_have_paid: l.would_have_paid ?? 0 })
+      out.push(toPlanLine(r, l, PLAN_BASIS))
     return out
   }, [explainPc])
   // rules that matched NOTHING — the honest "why is this $0" answer for a plan-mode rep
@@ -435,7 +485,7 @@ export default function ReportsPage() {
               title="Download this rep's itemized incentive statement (line-by-line, PDF)">
               📄 Incentive Statement
             </button>
-          ) : (
+          ) : tab === 'range' ? null : (
             <button className="btn btn-secondary" onClick={downloadAllStatements} disabled={!filtered.length}
               title="Download an itemized incentive statement for every rep currently shown — one PDF">
               📄 All Statements (PDF)
@@ -515,7 +565,7 @@ export default function ReportsPage() {
                       </button>
                       {' '}
                       <a href={`/commcalc/commission-explain?rep=${encodeURIComponent(r.storeops_name || r.epay_salesperson)}`}
-                        title="How was this incentive calculated? (plan + multi-month drill-down)"
+                        title={`How was this incentive calculated? (plan${multimonthOffered(mmStatus) ? ' + multi-month' : ''} drill-down)`}
                         style={{ fontSize: 11, textDecoration: 'none' }}>🔬</a>
                     </td>
                     <td style={{ color: 'var(--text3)', fontSize: 12 }}>{r.store?.substring(0, 25)}</td>
@@ -564,7 +614,7 @@ export default function ReportsPage() {
             {currentRep && (
               <a className="btn btn-secondary" style={{ textDecoration: 'none' }}
                 href={`/commcalc/commission-explain?rep=${encodeURIComponent(currentRep.storeops_name || currentRep.epay_salesperson)}`}
-                title="Plan + multi-month drill-down: which assignment, per-rule lines, installment gates & MA cross-reference">
+                title={multimonthOffered(mmStatus) ? 'Plan + multi-month drill-down: which assignment, per-rule lines, installment gates & MA cross-reference' : 'Plan drill-down: which assignment and the per-rule lines'}>
                 🔬 How was this calculated?
               </a>
             )}
@@ -651,6 +701,10 @@ export default function ReportsPage() {
                       <tr style={{ fontWeight: 700 }}><td>Total Payout</td><td style={{ textAlign: 'right', color: 'var(--accent)' }}>{fmt(currentRep.total_payout)}</td></tr>
                     </tbody>
                   </table>
+                  {/* multi-month money on the rows while the org has no multi-month configured: shown, and SAID */}
+                  {mmStatus.state === 'off_with_money' && mmStatus.note && (instSale !== 0 || instResid !== 0) && (
+                    <div style={{ fontSize: 12, color: '#b45309', marginTop: 8 }}>⚠ {mmStatus.note}</div>
+                  )}
                   {showResidRow && (
                     <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 8 }}>
                       Residual (raw‑mi) installments are paid off carrier residual rows, not off sale lines, so
@@ -906,6 +960,99 @@ export default function ReportsPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* MONTH RANGE (owner 2026-09-25) — every month in [from, to] on one page, one row per rep per
+          month, a subtotal per month and a grand total. Each month's rows ARE that month's single-month
+          report (the backend loops get_commissions over account/_period.month_range); nothing here
+          recomputes pay. The standard filter bar applies exactly as on the other tabs. */}
+      {tab === 'range' && (
+        <div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 14 }}>
+            <label style={{ fontSize: 12 }}>
+              <div style={{ color: 'var(--text3)', marginBottom: 2 }}>From month</div>
+              <input type="month" className="input" value={rangeFrom} max={rangeTo || undefined}
+                onChange={e => setRangeFrom(e.target.value)} />
+            </label>
+            <label style={{ fontSize: 12 }}>
+              <div style={{ color: 'var(--text3)', marginBottom: 2 }}>To month</div>
+              <input type="month" className="input" value={rangeTo} min={rangeFrom || undefined}
+                onChange={e => setRangeTo(e.target.value)} />
+            </label>
+            <button className="btn btn-primary" disabled={rangeBusy || !rangeSpan || rangeSpan > RANGE_MAX_MONTHS}
+              onClick={loadRange}>{rangeBusy ? 'Loading…' : 'Show months'}</button>
+            <span style={{ fontSize: 12, color: rangeSpan > RANGE_MAX_MONTHS || !rangeSpan ? '#b91c1c' : 'var(--text3)' }}>
+              {!rangeSpan ? 'Pick a from-month on or before the to-month.'
+                : rangeSpan > RANGE_MAX_MONTHS ? `${rangeSpan} months — the most one page shows is ${RANGE_MAX_MONTHS}.`
+                : `${rangeSpan} month${rangeSpan === 1 ? '' : 's'} · up to ${RANGE_MAX_MONTHS} on one page`}
+            </span>
+          </div>
+          {rangeErr && <div style={{ color: '#b91c1c', fontSize: 13, marginBottom: 10 }}>{rangeErr}</div>}
+          {rangeData && (
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Month</th><th>Rep</th><th>Store</th>
+                    <th style={{ textAlign: 'right' }}>PA</th><th style={{ textAlign: 'right' }}>BA</th><th style={{ textAlign: 'right' }}>UA</th>
+                    <th style={{ textAlign: 'right' }}>Subtotal</th>
+                    <th style={{ textAlign: 'right' }}>Payout</th>
+                    <th style={{ textAlign: 'right' }} title="Payout less chargeback and ops-chargeback deductions">Final</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rangeView.blocks.map(b => (
+                    <Fragment key={b.month}>
+                      {b.rows.length === 0 ? (
+                        <tr><td style={{ fontWeight: 600 }}>{b.month}</td>
+                          <td colSpan={8} style={{ color: 'var(--text3)' }}>No incentive rows for this month{filterActive ? ' under the current filter' : ''}.</td></tr>
+                      ) : b.rows.map((r, i) => (
+                        <tr key={`${b.month}:${i}`}>
+                          <td style={{ fontWeight: i === 0 ? 600 : 400, color: i === 0 ? undefined : 'var(--text3)' }}>{i === 0 ? b.month : ''}</td>
+                          <td>{r.storeops_name || r.epay_salesperson}</td>
+                          <td style={{ color: 'var(--text3)', fontSize: 12 }}>{String(r.store || '').substring(0, 25)}</td>
+                          <td style={{ textAlign: 'right' }}>{r.premium_acts ?? 0}</td>
+                          <td style={{ textAlign: 'right' }}>{r.byod_acts ?? 0}</td>
+                          <td style={{ textAlign: 'right' }}>{r.upgrade_acts ?? 0}</td>
+                          <td style={{ textAlign: 'right' }}>{fmt(r.subtotal)}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--accent)' }}>{fmt(r.total_payout)}</td>
+                          <td style={{ textAlign: 'right' }}>{fmt(r.final_payout ?? r.total_payout)}</td>
+                        </tr>
+                      ))}
+                      {b.rows.length > 0 && (
+                        <tr style={{ background: 'var(--surface2)', fontWeight: 600 }}>
+                          <td colSpan={3} style={{ textAlign: 'right', color: 'var(--text2)' }}>{b.month} · {b.totals.reps} rep{b.totals.reps === 1 ? '' : 's'}</td>
+                          <td style={{ textAlign: 'right' }}>{b.totals.premium_acts}</td>
+                          <td style={{ textAlign: 'right' }}>{b.totals.byod_acts}</td>
+                          <td style={{ textAlign: 'right' }}>{b.totals.upgrade_acts}</td>
+                          <td style={{ textAlign: 'right' }}>{fmt(b.totals.subtotal)}</td>
+                          <td style={{ textAlign: 'right', color: 'var(--accent)' }}>{fmt(b.totals.total_payout)}</td>
+                          <td style={{ textAlign: 'right' }}>{fmt(b.totals.final_payout)}</td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ background: 'var(--surface2)', fontWeight: 700, borderTop: '2px solid var(--border)' }}>
+                    <td colSpan={3} style={{ textAlign: 'right' }}>
+                      Total · {rangeData.months.length} month{rangeData.months.length === 1 ? '' : 's'}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>{rangeView.grand.premium_acts}</td>
+                    <td style={{ textAlign: 'right' }}>{rangeView.grand.byod_acts}</td>
+                    <td style={{ textAlign: 'right' }}>{rangeView.grand.upgrade_acts}</td>
+                    <td style={{ textAlign: 'right' }}>{fmt(rangeView.grand.subtotal)}</td>
+                    <td style={{ textAlign: 'right', color: 'var(--accent)' }}>{fmt(rangeView.grand.total_payout)}</td>
+                    <td style={{ textAlign: 'right' }}>{fmt(rangeView.grand.final_payout)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+          {!rangeData && !rangeBusy && !rangeErr && (
+            <div style={{ fontSize: 13, color: 'var(--text3)' }}>Pick the months and press Show months.</div>
+          )}
         </div>
       )}
 

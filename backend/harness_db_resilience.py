@@ -914,7 +914,8 @@ _all_routes = _flatten_routes(real_app.routes)
 #             cost & profit centers — index §37; measured after the §36/§37 merges)
 #     1674  + GET /core/verticals/admin, POST /core/verticals, PUT /core/verticals/{key}, PUT /core/module-verticals/{module}
 #             (the Business Types editor — index §35.1)
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1674"))
+#     1676  + GET /commcalc/commissions-range (the Rep Incentive month range, §6g) and GET /commcalc/multimonth/status (§6h)
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1676"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

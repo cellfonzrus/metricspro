@@ -7880,29 +7880,35 @@ def _b2b_counts_by_store(client, org_id: str, date: str) -> dict:
     + accessory GP — from the SAME unified B2B source as the money recon (_b2b_sales_rows, feed-first
     for the open month). Replaces the rigid daily_sales_actuals RPC so the recon counts populate for
     July too, and stay consistent with the Sales Report / Action Plan."""
-    from app.modules.commcalc.calculator import classify_line
+    from app.modules.commcalc import line_class as _lcls
     resolve = _addr_resolver(client, org_id)
     acc = _acc_cfg(client, org_id)
     _lr = _line_rules(client, org_id)
     rows = _b2b_sales_rows(client, org_id, date,
-                           "store,department,category,product_desc,contract_type,trans_id,gp,voided,trans_type")
+                           "store,department,category,product_desc,contract_type,trans_id,gp,voided,trans_type,"
+                           "serial_1,mdn")
     out, seen = {}, {}
-    for r in rows:
-        if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
-            continue
-        if str(r.get("trans_type") or "").strip() == "Return":
+
+    def _skip(r):
+        return (str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void")
+                or str(r.get("trans_type") or "").strip() == "Return")
+    # THE COUNT UNIT (2026-09-25): line_class.activation_units — one definition of an activation / upgrade
+    # (the org's `event.count_unit`; house 'transaction' = the distinct trans ids this always counted)
+    _units = _lcls.activation_units(rows, _lr, skip=_skip)
+    for _ri, r in enumerate(rows):
+        if _skip(r):
             continue
         code = resolve(r.get("store"))
         if not code:
             continue
         o = out.setdefault(code, {"activations": 0, "upgrades": 0, "acc_gp": 0.0})
         s = seen.setdefault(code, {"act": set(), "upg": set()})
-        tid = str(r.get("trans_id") or "").strip()
-        cls = classify_line(r, _lr)
-        if tid and cls in ("premium", "byod"):
-            s["act"].add(tid)
-        elif tid and cls == "upgrade":
-            s["upg"].add(tid)
+        _u = _units[_ri]
+        cls, _uid = (_u[0], _u[1]) if _u else (None, None)
+        if cls in ("premium", "byod"):
+            s["act"].add(_uid)
+        elif cls == "upgrade":
+            s["upg"].add(_uid)
         if _is_acc(r.get("department"), r.get("category"), acc, r.get("product_desc")):
             o["acc_gp"] += _f(r.get("gp"))
     for code, o in out.items():
@@ -8205,13 +8211,19 @@ def _b2b_day(client, org_id: str, date: str) -> dict:
             return num_to_code.get(nk)
         return None
 
-    from app.modules.commcalc.calculator import classify_line
+    from app.modules.commcalc import line_class as _lcls
     acc = _acc_cfg(client, org_id)
     _lr = _line_rules(client, org_id)
     rows = _b2b_sales_rows(client, org_id, date,
-                           "store,salesperson,department,category,product_desc,contract_type,trans_id,tender_type,ext_price,voided,trans_type")
+                           "store,salesperson,department,category,product_desc,contract_type,trans_id,tender_type,ext_price,voided,trans_type,"
+                           "serial_1,mdn")
     by_store, by_rep, counts, seen = {}, {}, {}, {}
-    for r in rows:
+    # THE COUNT UNIT (2026-09-25) — the same line_class definition as every activation count; the
+    # Return skip is the one this loop applies to the counts (voided rows never reach them)
+    _units = _lcls.activation_units(
+        rows, _lr, skip=lambda r: (str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void")
+                                   or str(r.get("trans_type") or "").strip() == "Return"))
+    for _ri, r in enumerate(rows):
         if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
             continue
         code = resolve(r.get("store"))
@@ -8234,13 +8246,13 @@ def _b2b_day(client, org_id: str, date: str) -> dict:
             rp["acc_gross"] += ext
         # Activation/upgrade counts from the SAME source + shared classifier (no rigid RPC).
         if str(r.get("trans_type") or "").strip() != "Return":
-            tid = str(r.get("trans_id") or "").strip()
-            ct_cls = classify_line(r, _lr)
+            _u = _units[_ri]
+            ct_cls, _uid = (_u[0], _u[1]) if _u else (None, None)
             s = seen.setdefault(code, {"act": set(), "upg": set()})
-            if tid and ct_cls in ("premium", "byod"):
-                s["act"].add(tid)
-            elif tid and ct_cls == "upgrade":
-                s["upg"].add(tid)
+            if ct_cls in ("premium", "byod"):
+                s["act"].add(_uid)
+            elif ct_cls == "upgrade":
+                s["upg"].add(_uid)
 
     # Flag stores/reps whose feed rows carry NO tender split (all in 'other') so the gate treats
     # them as recon-pending instead of blocking on a fabricated $0 cash/card.

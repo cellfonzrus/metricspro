@@ -28,9 +28,18 @@ const shortPeriod = (p: string) => {
 }
 
 // KPI keys for the report card (whole-number percents vs target).
+// SEVEN — the same seven the pay engine tiers on (kpi_failing.BUILTIN_KPI_DEFS), in that order and
+// with those defaults. `harness_kpi_registry_lock.py` fails the build if this list drifts from it.
+//
+// `boostapp` was missing here. The owner reported the count defect on 2026-09-24 ("what are the
+// seven kpis, it shows only 6"); it was fixed on the KPI report and NOT on the rep's own card, so a
+// rep scored out of seven kept reading their card as six — the sibling the design-fix rule says to
+// find in the same change. It is measured at rep grain (rep_commissions.kpi_values), which is all
+// this widget reads, so it renders like any other; a rep with no value still shows as "no data".
 const KPIS = [
   { k: 'atu', label: 'ATU', t: 55 }, { k: 'protect', label: 'Protect', t: 80 },
-  { k: 'byod', label: 'BYOD', t: 35 }, { k: 'familyplan', label: 'Family', t: 45 },
+  { k: 'boostapp', label: 'Carrier App', t: 65 },
+  { k: 'familyplan', label: 'Family', t: 45 }, { k: 'byod', label: 'BYOD', t: 35 },
   { k: 'tmr3', label: '3MR', t: 70 }, { k: 'aal', label: 'AAL', t: 5 },
 ]
 

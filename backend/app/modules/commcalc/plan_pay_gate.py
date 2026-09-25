@@ -55,7 +55,7 @@ from app.modules.commcalc import pay_data_quality as _pdq
 EXCLUSION_TABLE = "payout_exclusion_map"
 
 # ── ① UNIT DEDUP ─────────────────────────────────────────────────────────────────────────────────
-UNIT_BASES = ("per_line", "per_device", "per_transaction")
+UNIT_BASES = ("per_line", "per_device", "per_transaction", "per_event")
 
 UNIT_DEFAULTS = {
     "enabled": True,
@@ -65,6 +65,13 @@ UNIT_DEFAULTS = {
     # more (or empty the list to switch the auto-detection off entirely).
     "auto_txn_level_fields": ["tender_type"],
     "default_basis": "per_device",
+    # ⑥ PER ACTIVATION / PER UPGRADE (owner 2026-09-25: "commisison for teh reps need to be claculated per
+    # action and per upgrade as defined in teh incentive payout, the system sis calculating per line
+    # item"). A flat_per_unit rule matching on one of these fields is keyed on the ACTIVATION TYPE, so its
+    # unit is the activation / upgrade EVENT (`line_class.activation_events` — THE definition: one per
+    # phone line on the invoice), never each line of it. `activation_bucket` is the engine's synthetic
+    # activation-type field; a tenant may add `contract_type` (or empty the list to switch this off).
+    "auto_event_fields": ["activation_bucket"],
     # Which serial shapes identify a payable UNIT. 'imei' = a device (14-17 digits); 'iccid' = a SIM
     # (18-22). Owner rule: only the financed DEVICE line carries the payment.
     "unit_serial_kinds": ["imei"],
@@ -146,9 +153,11 @@ def normalize_gate_config(stored):
             d["enabled"] = bool(u["enabled"])
         if "auto_txn_level_fields" in u:
             d["auto_txn_level_fields"] = _slist(u["auto_txn_level_fields"])
+        if "auto_event_fields" in u:
+            d["auto_event_fields"] = _slist(u["auto_event_fields"])
         if "default_basis" in u:
             b = str(u["default_basis"] or "").strip().lower()
-            d["default_basis"] = b if b in UNIT_BASES else UNIT_DEFAULTS["default_basis"]
+            d["default_basis"] = b if b in UNIT_BASES[:3] else UNIT_DEFAULTS["default_basis"]
         if "unit_serial_kinds" in u:
             d["unit_serial_kinds"] = _slist(u["unit_serial_kinds"], ("imei", "iccid"))
         if "exclude_accessory_units" in u:
@@ -207,7 +216,8 @@ def resolve_unit_basis(rule, ucfg):
     Precedence:
       1. the rule's OWN `unit_basis` (a human said so)                        -> source 'rule'
       2. auto: a flat_per_unit rule matching on a TRANSACTION-LEVEL field     -> source 'auto_txn_field'
-      3. 'per_line' — today's behaviour                                       -> source 'default'
+      3. auto: a flat_per_unit rule matching on an ACTIVATION-TYPE field      -> 'per_event', 'auto_event_field'
+      4. 'per_line' — today's behaviour                                       -> source 'default'
 
     ONLY `flat_per_unit` is ever deduped. A %-of-basis rule reads each line's OWN price/GP/MRC, so
     collapsing its lines would silently delete dollars rather than stop double-paying them.
@@ -227,6 +237,8 @@ def resolve_unit_basis(rule, ucfg):
     if field in (ucfg.get("auto_txn_level_fields") or []):
         b = str(ucfg.get("default_basis") or "per_device").strip().lower()
         return (b if b in UNIT_BASES else "per_device"), "auto_txn_field"
+    if field in (ucfg.get("auto_event_fields") or []):
+        return "per_event", "auto_event_field"
     return "per_line", "default"
 
 
@@ -238,7 +250,7 @@ def _pick_key(row):
             str(row.get("sku") or ""), str(row.get("serial_1") or ""), str(row.get("mdn") or ""))
 
 
-def select_paying_lines(matched_rows, basis, ucfg, is_accessory=None):
+def select_paying_lines(matched_rows, basis, ucfg, is_accessory=None, event_of=None, event_ok=None):
     """Which of a rule's MATCHED lines actually pay, under `basis`.
 
     Returns (payers, suppressed, notes) where
@@ -248,10 +260,17 @@ def select_paying_lines(matched_rows, basis, ucfg, is_accessory=None):
 
     PURE (no I/O). `is_accessory` is an optional callable(row) -> bool supplied by the caller so this
     module never becomes a sixth accessory classifier.
+
+    `per_event` (⑥) needs `event_of(row)` -> the row's activation EVENT (a dict with at least `id`, from
+    `line_class.activation_events` — THE definition, injected so this module never defines an event) or
+    None; `event_ok(event)` -> may THIS rule pay that event (e.g. the event's type is one the rule names).
+    Without `event_of` a per_event rule pays exactly as per_line and says so — never a guessed dedup.
     """
     rows = list(matched_rows or [])
     if basis == "per_line" or not rows:
         return rows, [], []
+    if basis == "per_event":
+        return _select_per_event(rows, event_of, event_ok)
 
     kinds = set(ucfg.get("unit_serial_kinds") or UNIT_DEFAULTS["unit_serial_kinds"])
     excl_acc = bool(ucfg.get("exclude_accessory_units", True)) and callable(is_accessory)
@@ -340,7 +359,88 @@ def select_paying_lines(matched_rows, basis, ucfg, is_accessory=None):
     return payers, suppressed, notes
 
 
+def _select_per_event(rows, event_of, event_ok):
+    """⑥ one payment per activation / upgrade EVENT. PURE.
+
+    Per invoice: the matched lines are grouped by the event each belongs to. An event pays ONCE, on its
+    best line (`_pick_key`, the same deterministic choice as every other collapse here), when `event_ok`
+    accepts it; its other lines are shown and pay $0 ('unit_same_event'). An event of a type the rule does
+    not pay suppresses its lines ('unit_event_other_type' — they pay under the rule for that type). A
+    matched line that belongs to no event (evidence that names no phone line of its own) pays nothing when
+    the invoice has an event among the matched lines ('unit_event_evidence'); when it has none, the
+    invoice's evidence lines are ONE event and pay once."""
+    if event_of is None:
+        return rows, [], [{"code": "unit_event_unavailable", "lines": len(rows),
+                           "detail": ("this rule pays once per activation / upgrade, but the activation-event "
+                                      "definition was not available to this caller, so it paid per line.")}]
+    groups, blanks = {}, []
+    for r in rows:
+        tid = str(r.get("trans_id") or "").strip()
+        if tid:
+            groups.setdefault(tid, []).append(r)
+        else:
+            blanks.append(r)
+    payers, suppressed, notes = list(blanks), [], []
+    if blanks:
+        notes.append({"code": "unit_blank_trans_id", "lines": len(blanks),
+                      "detail": (f"{len(blanks)} matched line(s) carry no transaction id, so they could "
+                                 f"not be grouped and each still pays once.")})
+    for tid in sorted(groups):
+        grp = groups[tid]
+        evs, loose = {}, []
+        for r in grp:
+            try:
+                ev = event_of(r)
+            except Exception:
+                ev = None
+            if ev and ev.get("id"):
+                evs.setdefault(ev["id"], (ev, []))[1].append(r)
+            else:
+                loose.append(r)
+        paid_keys = []
+        if evs:
+            for eid in sorted(evs):
+                ev, lns = evs[eid]
+                ok = True
+                if event_ok is not None:
+                    try:
+                        ok = bool(event_ok(ev))
+                    except Exception:
+                        ok = True
+                if not ok:
+                    for r in lns:
+                        suppressed.append((r, "unit_event_other_type"))
+                    continue
+                best = min(lns, key=_pick_key)
+                payers.append(best)
+                paid_keys.append(ev.get("key") or eid)
+                for r in lns:
+                    if r is not best:
+                        suppressed.append((r, "unit_same_event"))
+            for r in loose:
+                suppressed.append((r, "unit_event_evidence"))
+        else:
+            best = min(loose, key=_pick_key)
+            payers.append(best)
+            paid_keys.append(tid)
+            for r in loose:
+                if r is not best:
+                    suppressed.append((r, "unit_same_event"))
+        if len(grp) > len(paid_keys):
+            notes.append({"code": "unit_event_collapsed", "trans_id": tid, "matched_lines": len(grp),
+                          "units_paid": len(paid_keys), "events": paid_keys,
+                          "detail": (f"transaction {tid}: {len(grp)} matched line(s) are "
+                                     f"{len(paid_keys)} activation / upgrade event(s); paid once per event.")})
+    return payers, suppressed, notes
+
+
 SUPPRESS_LABELS = {
+    "unit_same_event": "Part of an activation / upgrade already paid once — this rule pays per activation "
+                       "or upgrade, not per line.",
+    "unit_event_other_type": "This line belongs to an activation / upgrade of another type, which is paid "
+                             "under the rule for that type.",
+    "unit_event_evidence": "Evidence of an activation on this invoice (names no phone line of its own); "
+                           "the invoice's activations are paid on their own lines.",
     "unit_not_device_line": "Not the financed device line — this sale's payment is made once per "
                             "device, on the line that carries the device serial.",
     "unit_same_transaction": "Already paid once for this transaction.",

@@ -17,6 +17,7 @@ from app.core import import_batches as _import_batches   # DDIA Phase 1 idempote
 from app.core import column_tolerant as _ct    # 2026-09-22 — ANY-SUBSET column reads, the one reading rule (index §4b.1)
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import line_class as _lc    # 2026-09-21 — THE activation-type predicate (one home, per-org rules)
+from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import zero_sales as _zs   # 2026-09-22 — zero-sales states/runs/alerts (pure)
 from app.modules.commcalc import labour_coverage as _labour  # shared shift reader + the silent-zero shape
 from app.modules.commcalc import invoice_tenders as _invt   # 2026-09-21 — the invoice tender split (pure; classes injected from closing)
@@ -15293,9 +15294,11 @@ def _has_any_pay_source(client, org_id, period):
             return 0
     if _count('commission_plan_assignment') > 0:
         return True
-    if _count('payout_schedule', lambda q: q.eq('is_active', True)) > 0:
-        return True
-    if _count('plan_installment_schedule', lambda q: q.eq('is_active', True)) > 0:
+    # multi-month schedules: THE one count (multimonth_config.schedule_counts, 2026-09-25) — the same
+    # answer the "is multi-month configured" predicate gives every surface. An unreadable table counts 0
+    # here exactly as before (a failed count never manufactured a pay source).
+    from app.modules.commcalc import multimonth_config as _mmc
+    if any((n or 0) > 0 for n in _mmc.schedule_counts(client, org_id).values()):
         return True
     if _count('carrier_commission', lambda q: q.in_('period', _pvariants(period))) > 0:
         return True
@@ -16560,6 +16563,44 @@ async def get_commissions(period: str, authorization: str = Header(default=""), 
         return [c for c in comms if _mine(c)]
     ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
     return [c for c in comms if in_keyset(ks, c.get('store'), c.get('store_code'))]
+
+
+@router.get("/commissions-range")
+async def get_commissions_range(period_from: str, period_to: str = "", authorization: str = Header(default=""),
+                                org_id: str = ORG_ID):
+    """REP INCENTIVE over a MONTH RANGE (owner 2026-09-25: "the range for multiple months should be there to
+    display the commission for teh months selected in different rowqn on one page"). READ-ONLY.
+
+    The months come from THE one enumeration (`account/_period.month_range`, capped at
+    `rep_incentive_range.MAX_MONTHS` = 12); each month is `get_commissions(month)` — the single-month
+    report's OWN handler, called in-process with the caller's authorization, so every month carries the
+    same deductions, market stamp and self / span scope it has when viewed alone (never a second
+    calculation). `rep_incentive_range.assemble` lays them side by side and only sums. Index §6g."""
+    require_org(org_id)
+    from app.modules.account import _period as _pd
+    from app.modules.commcalc import rep_incentive_range as _rir
+    try:
+        months = _pd.month_range(period_from, period_to or period_from, _rir.MAX_MONTHS)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    per_month = {}
+    for m in months:
+        per_month[m] = await get_commissions(m, authorization=authorization, org_id=org_id)
+    return _rir.assemble(months, per_month)
+
+
+@router.get("/multimonth/status")
+def get_multimonth_status(periods: str = "", org_id: str = ORG_ID):
+    """IS MULTI-MONTH PAY CONFIGURED FOR THIS ORG — and is any multi-month money on the rep rows for the
+    periods on screen (`periods` = comma-separated, any spelling). THE predicate every surface asks before it
+    offers the multi-month option (owner 2026-09-25): `multimonth_config.load` → state
+    'configured' | 'off' | 'off_with_money' (the money is then shown with a note, never hidden). READ-ONLY,
+    org-scoped. Index §6h."""
+    require_org(org_id)
+    from app.modules.commcalc import multimonth_config as _mmc
+    plist = [p.strip() for p in str(periods or "").split(",") if p.strip()][:24]
+    return _mmc.load(sb(), org_id, plist, _pvariants)
+
 
 @router.get("/dlar-store/{period}")
 def get_dlar_store_kpis(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
@@ -19716,7 +19757,7 @@ def save_commission_plan(body: SaveCommissionPlanIn, org_id: str = ORG_ID):
             if _rule_gate_cols_present(client) and "unit_basis" in rl:
                 _ub = str(rl.get("unit_basis") or "").strip().lower()
                 rules[-1]["unit_basis"] = _ub if _ub in ("per_line", "per_device",
-                                                         "per_transaction") else None
+                                                         "per_transaction", "per_event") else None
             if _rule_scope_cols_present(client) and (
                     "applies_scope_kind" in rl or "applies_scope_value" in rl):
                 _sk = str(rl.get("applies_scope_kind") or "").strip().lower()
@@ -20213,7 +20254,8 @@ def unit_multiplication_audit(period: str, org_id: str = ORG_ID):
     except Exception as e:
         raise HTTPException(500, f"unit multiplication audit failed: {type(e).__name__}: {e}")
     cfg = ppg.load_gate_config(client, org_id)
-    auto = set((cfg.get("unit_basis") or {}).get("auto_txn_level_fields") or [])
+    auto = (set((cfg.get("unit_basis") or {}).get("auto_txn_level_fields") or [])
+            | set((cfg.get("unit_basis") or {}).get("auto_event_fields") or []))
     by_rule = {}
     for rep in (res.get("by_rep") or []):
         for rb in (rep.get("rules") or []):
@@ -24752,21 +24794,25 @@ def commission_drill(period: str, rep: str = "", org_id: str = ORG_ID):
                 "tender_type": r.get("tender_type"), "mdn": r.get("mdn"), "serial": r.get("serial_1")}
     prem, byod, upg, acima = {}, {}, {}, {}
     acc, setup = [], []
-    for r in rows:
+
+    def _drill_skip(r):
         # SHARED voided token set (owner 2026-07-25) — this endpoint exists to REPLAY what the calculator
         # counted, so its skip rule must be the calculator's skip rule exactly.
-        if _gp_is_voided(r.get("voided")):
-            continue
-        if str(r.get("trans_type") or "").strip() == "Return":
+        return _gp_is_voided(r.get("voided")) or str(r.get("trans_type") or "").strip() == "Return"
+    # THE COUNT UNIT (2026-09-25) — the same line_class definition the calculator counts through.
+    _units = _lc.activation_units(rows, _line_rules_of(acfg), skip=_drill_skip)
+    for _ri, r in enumerate(rows):
+        if _drill_skip(r):
             continue
         tid = str(r.get("trans_id") or "").strip()
-        cls = classify_line(r, _line_rules_of(acfg))
-        if tid and cls == "premium":
-            prem.setdefault(tid, _line(r))
-        elif tid and cls == "byod":
-            byod.setdefault(tid, _line(r))
-        elif tid and cls == "upgrade":
-            upg.setdefault(tid, _line(r))
+        _u = _units[_ri]
+        cls, _uid = (_u[0], _u[1]) if _u else (None, None)
+        if cls == "premium":
+            prem.setdefault(_uid, _line(r))
+        elif cls == "byod":
+            byod.setdefault(_uid, _line(r))
+        elif cls == "upgrade":
+            upg.setdefault(_uid, _line(r))
         if _is_accessory(r.get("department"), r.get("category"), r.get("product_desc"), acfg):
             acc.append(_line(r))
         if "Device Setup Charge" in str(r.get("product_desc") or ""):
@@ -26021,8 +26067,11 @@ def _open_month_source(client, org_id, period):
 # Default column projection for the display sales resolver — the exact set every reader agrees on and
 # that exists in BOTH raw_sales and daily_sales_feed (selecting a feed-absent column like `sku` throws;
 # see the sales-report/detail note). Callers may pass their own `cols`.
+# `serial_1,mdn` (2026-09-25, both tables carry them — verified live): the identities an activation EVENT
+# is keyed on (line_class.activation_events), so a counting surface whose org counts per event can tell
+# two activations on one invoice apart. Nothing reads them under the house 'transaction' count unit.
 _SALES_DISPLAY_COLS = ("trans_id,trans_date,store,salesperson,department,category,product_desc,"
-                       "contract_type,ext_price,gp,voided,trans_type")
+                       "contract_type,ext_price,gp,voided,trans_type,serial_1,mdn")
 
 
 # ── Feed↔raw_sales merge / dedupe / promotion-mutex primitives (all pure + unit-testable) ──────────
@@ -26416,7 +26465,7 @@ def _sales_rows_union_txn_range(client, org_id, period, start, end, cols=_SALES_
 
 
 _ACTUALS_COLS = ("trans_id,trans_date,store,salesperson,user_login,contract_type,department,category,"
-                 "product_desc,gp,ext_price,voided,trans_type")
+                 "product_desc,gp,ext_price,voided,trans_type,serial_1,mdn")   # event keys: see _SALES_DISPLAY_COLS
 
 
 # ── THE ONE shared per-(store, rep, day) sales aggregation ─────────────────────────────────────────
@@ -26828,8 +26877,13 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
     # (the house/Boost default) -> {} -> the supplement below is a no-op (BYTE-IDENTICAL).
     _act_rules = acfg.get('activation_rules') if acfg else None
     blank_bucket = _blank_ct_bucket_map(rows, line_rules, _act_rules)
+    # THE COUNT UNIT (2026-09-25): what one activation / upgrade IS comes from line_class (the ONE
+    # definition) — per the org's `event.count_unit`: 'transaction' (house default — the distinct-invoice
+    # sets below, byte-identical) or 'event' (one per phone line on the invoice). Never re-derived here.
+    rows = rows if isinstance(rows, list) else list(rows or [])
+    _units = _lc.activation_units(rows, line_rules, skip=_line_skip)
     agg = {}
-    for r in rows:
+    for _ri, r in enumerate(rows):
         # ── THE canonical skip rules — shared by all three (was three slightly different predicates).
         if str(r.get('voided') or '').strip().lower() in _VOID_TOKENS:
             continue
@@ -26877,16 +26931,16 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
         # predicate over the whole ROW — the fact may sit in contract_type, the category path or the
         # product name, per the org's rules. Port is a SUB-split of premium (never a redefinition of it):
         # the same predicate says 'port'; only needed when exec_cfg is present (Exec MTD).
-        _full = _lc.activation_class(r, line_rules)
-        _cls = _lc.bucket_of(_full)
-        if tid and _cls == 'byod':
-            a['_byod'].add(tid)
-        elif tid and _cls == 'upgrade':
-            a['_upg'].add(tid)
-        elif tid and _cls == 'premium':
-            a['_prem'].add(tid)
+        _u = _units[_ri]
+        _cls, _uid, _full = _u if _u else (None, None, None)
+        if _cls == 'byod':
+            a['_byod'].add(_uid)
+        elif _cls == 'upgrade':
+            a['_upg'].add(_uid)
+        elif _cls == 'premium':
+            a['_prem'].add(_uid)
             if exec_cfg and _full == 'port':
-                a['_port'].add(tid)
+                a['_port'].add(_uid)
         elif tid and not _cls and tid in blank_bucket:
             # Blank-contract_type transaction rescued by the per-org activation_rules (mig 224). DISTINCT-
             # txn like the ct branches; the tid was proven above to have NO ct classification on any line.
@@ -28340,17 +28394,12 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
             'setup_hint': setup_hint, 'collective': collective, 'scope': scope_block}
 
 
-# KPI → commission tier inputs (mirrors calculator.py KPI defaults).
-# Each is (key, label, payout_config column, default target %).
-ACTION_KPI_DEFS = [
-    ('atu', 'ATU', 'kpi_atu_target', 55),
-    ('protect', 'Protect', 'kpi_protect_target', 80),
-    ('boostapp', 'Carrier App', 'kpi_boostapp_target', 65),
-    ('familyplan', 'Family Plan', 'kpi_familyplan_target', 45),
-    ('byod', 'BYOD', 'kpi_byod_target', 35),
-    ('tmr3', 'TMR3', 'kpi_tmr3_target', 70),
-    ('aal', 'AAL', 'kpi_aal_target', 5),
-]
+# KPI → commission tier inputs. Each is (key, label, payout_config column, default target %).
+# It no longer MIRRORS calculator.py's defaults — it IS them: the built-in set is ONE fact with ONE
+# home (commcalc/kpi_failing.BUILTIN_KPI_DEFS) that the pay engine reads too, so the shown score and
+# the paid score cannot drift. "Mirrors" was the old comment, and a mirror is what went wrong.
+# This name is kept as the alias every existing caller already uses.
+ACTION_KPI_DEFS = [tuple(d) for d in _kpi_failing.BUILTIN_KPI_DEFS]
 _AP_CAT_LABEL = {'activations': 'Activations', 'upgrades': 'Upgrades',
                  'byod': 'BYOD', 'accessories': 'Accessories'}
 _KPI_DEFAULT_CARRIER = '00000000-0000-0000-0000-000000000000'  # nil carrier_id = the org default set
@@ -28394,6 +28443,15 @@ def list_carrier_kpi_metrics(carrier_id: str = "", org_id: str = ORG_ID):
                              for (k, l, c, d) in ACTION_KPI_DEFS]}
     if carrier_id:
         rows = [r for r in rows if r.get('carrier_id') in (_KPI_DEFAULT_CARRIER, carrier_id)]
+    # Each row says where its value COMES FROM, so a screen never has to carry its own idea of which
+    # metrics have a feed. `auto_fed` false = nobody fills this unless a person types it, which is
+    # exactly the set the manual-entry grid should offer — per ORG, so one tenant is never shown
+    # another tenant's metrics. Derived from the feed maps' one home, never from `source_mode`
+    # (that column defaults to 'manual' and reads wrong for the built-ins).
+    for r in rows:
+        k = r.get('metric_key')
+        r["auto_fed"] = _kpi_failing.auto_fed(k)
+        r["store_column"] = _kpi_failing.STORE_KPI_COLUMNS.get(k)
     return {"metrics": rows, "ready": True, "default_carrier": _KPI_DEFAULT_CARRIER}
 
 

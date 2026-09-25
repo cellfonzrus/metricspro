@@ -283,5 +283,49 @@ ok('unchanged for every payload with no duplicated sale line (date-stable order 
 ok('...and the section-1..6 fixture has no duplicated identity to begin with',
   new Set(payload.map(M.lineIdentity)).size === payload.length)
 
+// ── 8 · PER ACTIVATION / PER UPGRADE (owner 2026-09-25) — the invoice shows its EVENTS ────────────
+// The engine stamps each line with its activation / upgrade event (backend line_class.activation_events).
+// Display only: the screen groups by that stamp, counts events per invoice, and totals $ per event.
+section('8 · EVENTS — the owner\'s invoice Z1321IN11092: 3 lines, ONE activation, $10')
+const EV = (product, amount, suppressed, extra = {}) => ({
+  rule: 'Activation', basis: '$ per activation', date: '2026-07-02', trans_id: 'Z1321IN11092', product,
+  ext_price: 0, gp: 0, amount, suppressed, event_id: 'Z1321IN11092|phone:9297458084',
+  event_key: '9297458084', event_key_kind: 'phone', event_type: 'activation', ...extra })
+const evPayload = [
+  EV('VERIZON BUSINESS TRACKING NEW ACTIVATION', 0, true),
+  EV('DPA New Act iPhone (Rate Plan Rebate)', 10, false),
+  EV('32066 My Biz Plan - New Act', 0, true),
+  { rule: 'Upgrade', basis: '$ per upgrade', date: '2026-07-02', trans_id: 'Z1321IN11204', product: 'DPA Upgrade',
+    amount: 5, event_id: 'Z1321IN11204|phone:2678008088', event_key: '2678008088', event_type: 'upgrade' },
+  { rule: 'Activation', basis: '$ per activation', date: '2026-07-02', trans_id: 'Z1321IN11204', product: 'MTM Smart Phone',
+    amount: 10, event_id: 'Z1321IN11204|phone:9297790687', event_key: '9297790687', event_type: 'activation' },
+  { rule: 'Activation', basis: '$ per activation', date: '2026-07-02', trans_id: 'Z1321IN11204', product: 'Customer Owned Device',
+    amount: 0, suppressed: true },                                        // evidence: no event of its own
+]
+const evGroups = M.groupPlanLinesByTxn(evPayload)
+const g1 = evGroups.find(g => g.trans_id === 'Z1321IN11092')
+const g2 = evGroups.find(g => g.trans_id === 'Z1321IN11204')
+ok('Z1321IN11092: ONE event, 3 lines under it, $10.00 for the event',
+  g1.events.length === 1 && g1.events[0].lines.length === 3 && g1.events[0].amount === 10)
+ok('Z1321IN11092 header counters: Activations 1 · Upgrades 0',
+  g1.event_counts.activations === 1 && g1.event_counts.upgrades === 0)
+ok('the category table counts ONE unit (events), three lines',
+  M.planLineTotals(evPayload.slice(0, 3)).units === 1 && M.planLineTotals(evPayload.slice(0, 3)).lines === 3)
+ok('Z1321IN11204: 1 activation + 1 upgrade; the evidence line sits after the events, in no event',
+  g2.event_counts.activations === 1 && g2.event_counts.upgrades === 1 && g2.lines[g2.lines.length - 1].product === 'Customer Owned Device')
+ok('an event\'s lines are contiguous under it', evGroups.every(g => {
+  const ids = g.lines.map(l => l.event_id || '').filter(Boolean)
+  return ids.every((id, i) => i === 0 || id === ids[i - 1] || !ids.slice(0, i).includes(id))
+}))
+ok('grouping by event is a PERMUTATION — Σ unchanged', M.sumLines(evGroups.flatMap(g => g.lines)) === M.sumLines(evPayload)
+  && evGroups.flatMap(g => g.lines).length === evPayload.length)
+ok('a payload with no event stamp has no events and keeps its order (identity for every pre-2026-09-25 payload)',
+  groups.every(g => g.events.length === 0))
+ok('toPlanLine carries the stamp and labels a per-event rule "$ per activation"',
+  (() => { const r = M.toPlanLine({ label: 'Activation', payout_kind: 'flat_per_unit', unit_basis: 'per_event' },
+      { trans_id: 'T', amount: 10, event_id: 'T|phone:1', event_key: '1', event_type: 'activation' }, { flat_per_unit: '$/unit' })
+    return r.event_id === 'T|phone:1' && r.basis === '$ per activation' })())
+ok('...and a per-line rule keeps its old label', M.toPlanLine({ label: 'x', payout_kind: 'flat_per_unit' }, {}, { flat_per_unit: '$/unit' }).basis === '$/unit')
+
 console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILURES'} — ${pass} passed, ${fail} failed`)
 process.exitCode = fail === 0 ? 0 : 1

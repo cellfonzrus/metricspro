@@ -138,10 +138,13 @@ def period_range_variants(period_from, period_to):
         raise ValueError("period_from is after period_to")
     if n > MAX_RANGE_MONTHS:
         raise ValueError(f"period range too long (max {MAX_RANGE_MONTHS} months)")
+    # the months themselves come from THE one enumeration (account/_period.month_range, 2026-09-25);
+    # this module keeps only its strict parse and its two-spelling expansion
+    from app.modules.account import _period as _pd
     out = []
-    for i in range(n):
-        yy, mm = y0 + (m0 - 1 + i) // 12, (m0 - 1 + i) % 12 + 1
-        out.extend(month_spellings(yy, mm))
+    for name in _pd.month_range(f"{y0:04d}-{m0:02d}", f"{y1:04d}-{m1:02d}"):
+        mo, yy = _pd.parse_period(name)
+        out.extend(month_spellings(yy, mo))
     return out
 
 

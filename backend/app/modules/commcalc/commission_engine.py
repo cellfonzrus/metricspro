@@ -824,6 +824,9 @@ def _artifact_flag(rep_name, hints, best_score):
     return {"suspect": suspect, "confidence": conf if suspect else None, "reasons": reasons}
 
 
+_EVENT_AMBIG_CAP = 200   # ambiguous activation events carried on the pay-gate report (the total is always given)
+
+
 def _read_ct_classification_config(client, org_id):
     """(line_rules, activation_rules) — the tenant's classification config, read the ONE way
     (router._accessory_config → line_class.resolve_rules over accessory_config.activation_details_rules +
@@ -1630,8 +1633,42 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
             for _r in (_p.get("rules") or []):
                 _b, _s = _gate.resolve_unit_basis(_r, _ucfg)
                 _basis_by_rule[id(_r)] = (_b, _s)
-                if _b != "per_line" and _ucfg.get("exclude_accessory_units"):
+                if _b not in ("per_line", "per_event") and _ucfg.get("exclude_accessory_units"):
                     _needs_acc = True
+    # ⑥ PER ACTIVATION / PER UPGRADE (owner 2026-09-25). The activation EVENTS are computed ONCE, over the
+    # whole line set, by THE definition (`line_class.activation_events`) — never re-derived here — and only
+    # when some rule actually pays per event, so every other tenant does no extra work and is
+    # byte-identical. The classes are the `activation_bucket` stamps above (incl. the mig-224 rescue and
+    # Activation-Details lines), so an event is built from exactly the lines a rule can match.
+    _event_by_row, _events_meta = {}, None
+    if _gate is not None and any(b == "per_event" for b, _s in _basis_by_rule.values()):
+        try:
+            _ev_rules = _read_ct_classification_config(client, org_id)[0]
+            _ev = _lc.activation_events(
+                valid, _ev_rules,
+                classes=([r.get("activation_bucket") for r in valid] if _uses_bucket else None))
+            _ev_by_id = {x["id"]: x for x in _ev["events"]}
+            for _i, _eid in _ev["row_event"].items():
+                if _eid:
+                    _event_by_row[id(valid[_i])] = _ev_by_id[_eid]
+            _events_meta = {"events": len(_ev["events"]), "config": _ev["config"],
+                            "ambiguous": _ev["ambiguous"][:_EVENT_AMBIG_CAP],
+                            "ambiguous_total": len(_ev["ambiguous"]),
+                            "unattributed_lines": len(_ev["unattributed"])}
+        except Exception as _eve:
+            print(f"WARN activation events unavailable: {_eve}")
+            _event_by_row, _events_meta = {}, {"error": str(_eve)}
+
+    def _event_of(_row):
+        return _event_by_row.get(id(_row))
+
+    def _event_ok_for(_rule):
+        """May THIS rule pay an event: for a rule keyed on the activation type, the EVENT's type (its
+        strongest class, `event.precedence`) must be one the rule names — so a kicker line classed
+        'activation' inside an upgrade pays under the upgrade rule only, once."""
+        if (_rule.get("match_field") or "").strip().lower() != "activation_bucket":
+            return None
+        return lambda _e: _rule_matches({"activation_bucket": _e.get("bucket") or ""}, _rule)
     # Same predicate the gate has always built; when the mig-276 switch already built it above we
     # reuse that instance instead of re-reading the definition. Behaviourally identical.
     _acc_fn = None
@@ -1651,7 +1688,9 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
         from app.modules.commcalc import financing_tiers as _fin
         _fin_ctx = _fin.build_context(
             client, org_id, _pvariants(period), plans, valid, _rule_matches,
-            paying_lines=(_gate.select_paying_lines if _gate is not None else None),
+            # the same collapse the payout uses, with THE activation-event definition bound in (⑥)
+            paying_lines=((lambda _m, _b, _u, _a: _gate.select_paying_lines(_m, _b, _u, _a, event_of=_event_of))
+                          if _gate is not None else None),
             basis_by_rule=_basis_by_rule, unit_cfg=_ucfg, is_accessory=_acc_fn,
             is_excluded=((lambda _r: _gate.exclusion_hit(_r, _excl_rules) is not None)
                          if (_gate is not None and _excl_rules) else None))
@@ -1917,7 +1956,8 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                     if _ub != "per_line":
                         _elig = [r for r in _matched if id(r) not in _blocked]
                         _payers, _supp, _notes = _gate.select_paying_lines(
-                            _elig, _ub, _ucfg, _acc_fn)
+                            _elig, _ub, _ucfg, _acc_fn,
+                            event_of=_event_of, event_ok=_event_ok_for(rule))
                         for _r2, _why in _supp:
                             _blocked[id(_r2)] = (_why, None)
                         if _supp:
@@ -1929,7 +1969,7 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                             _pr["matched_lines"] += len(_elig)
                             _pr["units_paid"] += len(_payers)
                         for _n in _notes:
-                            if _n.get("code") == "unit_collapsed":
+                            if _n.get("code") in ("unit_collapsed", "unit_event_collapsed"):
                                 _guard["unit"]["transactions"] += 1
                             if len(_guard["unit"]["notes"]) < _GUARD_CAP:
                                 _guard["unit"]["notes"].append(dict(_n, rep=e["name"]))
@@ -1946,6 +1986,14 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                             "ext_price": round(safe_float(row.get("ext_price")), 2),
                             "gp": round(safe_float(row.get("gp")), 2),
                             "qualifies": bool(qualifies), "amount": 0.0}
+                    # ⑥ the activation / upgrade EVENT this line belongs to (only when some rule pays per
+                    # event — otherwise no key is added and the drill-down is byte-identical)
+                    _evd = _event_by_row.get(id(row)) if _event_by_row else None
+                    if _evd is not None:
+                        ldet["event_id"] = _evd["id"]
+                        ldet["event_key"] = _evd.get("key")
+                        ldet["event_key_kind"] = _evd.get("key_kind")
+                        ldet["event_type"] = _evd.get("cls")
                     rb.setdefault("lines", []).append(ldet)
                 _blk = _blocked.get(id(row))
                 if _blk is not None:
@@ -2244,6 +2292,10 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
              "match_op": r.get("match_op"), "match_value": r.get("match_value"),
              "source": r.get("source")} for r in (_excl_rules or [])]
         _guard["accessory_definition_loaded"] = bool(_acc_fn)
+        if _events_meta is not None:
+            # ⑥ what the per-activation / per-upgrade rules counted, and every invoice whose events are
+            # not clear-cut (evidence shared by several activations, mixed-type lines, no phone/device)
+            _guard["unit"]["activation_events"] = _events_meta
         out["pay_gate"] = _guard
     # ACTIVATION SOURCE REPORT (mig 296 org-level + mig 297 per-plan) — emitted ONLY when at least one plan
     # in this org resolves to activation_details, so an org with no such plan is byte-identical. Makes the

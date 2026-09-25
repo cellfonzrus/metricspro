@@ -8,6 +8,8 @@ import type { ExportColumn } from '@/lib/export'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import PlanLineBreakdown from '../_lib/PlanLineBreakdown'
+import { toPlanLine } from '../_lib/planLines'
+import { multimonthOffered, useMultimonthStatus } from '../_lib/multimonth'
 import WhyZeroPanel from '../_lib/WhyZeroPanel'
 import { GoogleRatingChips, GoogleRatingDetail, useGoogleRatings } from '../_lib/googleRatings'
 
@@ -67,6 +69,8 @@ const INST_COLS: ExportColumn[] = [
 
 export default function CommissionExplainPage() {
   const { period } = usePeriod()
+  // THE multi-month predicate (owner 2026-09-25): offer the multi-month section only when configured
+  const mmStatus = useMultimonthStatus([period])
   const [reps, setReps] = useState<RepRow[]>([])
   const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
   const [rep, setRep] = useState('')
@@ -210,18 +214,12 @@ export default function CommissionExplainPage() {
   const mm = data?.multimonth_component
   const planRows = useMemo(() => {
     const out: any[] = []
+    // ONE mapper (planLines.toPlanLine) for both surfaces, plus this page's cost / guard columns
     for (const r of (pc?.rules || [])) for (const l of (r.lines || []))
-      out.push({ rule: r.label, basis: BASIS[r.payout_kind] || r.payout_kind, date: l.date, trans_id: l.trans_id,
-        imei: l.imei, mdn: l.mdn, product: l.product, contract_type: l.contract_type,
-        ext_price: l.ext_price, gp: l.gp, amount: l.flat_once ? null : l.amount,
+      out.push({ ...toPlanLine(r, l, BASIS),
         implied_cost: l.implied_cost, cost_flags: l.cost_flags || [],
         cost_flag_labels: (l.cost_flag_labels || []).join(' '),
-        suppressed: !!l.suppressed, suppressed_by: l.suppressed_by || '',
-        suppressed_reason: l.suppressed_reason || '', would_have_paid: l.would_have_paid ?? 0,
-        basis_note: l.basis_note || '', amount_before_guard: l.amount_before_guard ?? null,
-        // engine's own qualifying flag — drives the per-category UNIT count in the grouped
-        // breakdown below. Display only; it changes no amount.
-        qualifies: l.qualifies !== false })
+        basis_note: l.basis_note || '', amount_before_guard: l.amount_before_guard ?? null })
     return out
   }, [pc])
   const instRows = useMemo(() => {
@@ -241,7 +239,7 @@ export default function CommissionExplainPage() {
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Incentive Explain — how was this calculated?</h1>
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          {period} · read-only · plan component + multi-month installments (M1–M6) with gate status &amp; the MA-file cross-reference
+          {period} · read-only · plan component{multimonthOffered(mmStatus) ? ' + multi-month installments (M1–M6) with gate status & the MA-file cross-reference' : ''}
         </p>
       </div>
 
@@ -357,7 +355,9 @@ export default function CommissionExplainPage() {
               ) : null}
             </div>
 
-            {/* MULTI-MONTH COMPONENT */}
+            {/* MULTI-MONTH COMPONENT — offered only when the org has multi-month configured (THE predicate,
+                _lib/multimonthOffer.ts, owner 2026-09-25); devices / money on the rows always show */}
+            {(multimonthOffered(mmStatus) || mm?.devices?.length > 0) && (
             <div className="card">
               <div style={{ fontWeight: 700, marginBottom: 8 }}>
                 2 · Multi-month installments (M1–M6){mm?.schedules ? ` · ${mm.schedules} schedule(s)` : ''}
@@ -384,7 +384,11 @@ export default function CommissionExplainPage() {
               ) : (
                 <div style={{ fontSize: 13, color: 'var(--text3)' }}>No sale-triggered installments for this rep in {period}.</div>
               )}
+              {mmStatus.state === 'off_with_money' && mmStatus.note && (
+                <div style={{ fontSize: 12, color: '#b45309', marginTop: 8 }}>⚠ {mmStatus.note}</div>
+              )}
             </div>
+            )}
 
             {/* RECONCILIATION */}
             {data.reconciliation && (
@@ -392,8 +396,10 @@ export default function CommissionExplainPage() {
                 <div style={{ fontWeight: 700, marginBottom: 6 }}>Reconciliation vs last Run Calculation</div>
                 <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', color: 'var(--text2)' }}>
                   <span>Plan comm: <b>{fmt(data.reconciliation.plan_comm)}</b></span>
-                  <span>Sale installments: <b>{fmt(data.reconciliation.installment_comm_sale)}</b></span>
-                  <span>Residual (raw_mi): <b>{fmt(data.reconciliation.residual_installment_comm)}</b></span>
+                  {(multimonthOffered(mmStatus) || !!data.reconciliation.installment_comm_sale) && (
+                    <span>Sale installments: <b>{fmt(data.reconciliation.installment_comm_sale)}</b></span>)}
+                  {(multimonthOffered(mmStatus) || !!data.reconciliation.residual_installment_comm) && (
+                    <span>Residual (raw_mi): <b>{fmt(data.reconciliation.residual_installment_comm)}</b></span>)}
                   <span>Total payout: <b style={{ color: 'var(--accent)' }}>{fmt(data.reconciliation.total_payout)}</b></span>
                 </div>
               </div>
