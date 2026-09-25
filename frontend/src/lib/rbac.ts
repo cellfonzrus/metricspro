@@ -235,7 +235,10 @@ export function hasDataGrant(perms: Permissions, key: string): boolean {
 // canAccessPath gating, the ⌘K search index, active-group (longest-prefix) detection and the Reports
 // directory duplicates all still see it — and the renderer deliberately keeps tileOnly items visible
 // inside the 'Reports · …' directory categories (applyNavLayout reuses the SAME item objects there).
-export type NavItem = { href: string; label: string; icon: string; module: string; scopes?: Scope[]; cap?: string; tileOnly?: boolean }
+// `tile` (optional, index §38): the master tile this item sits on in its group's /hub dashboard when no
+// layout is saved and the tenant menu names no sub-category (tile-hubs.subsFromItemTiles). DATA only —
+// the Dashboard Designer's saved layout still wins over it.
+export type NavItem = { href: string; label: string; icon: string; module: string; scopes?: Scope[]; cap?: string; tileOnly?: boolean; tile?: string }
 // A named sub-category INSIDE a group (owner directive 2026-08-12 — roadmap #5). Sub-groups are a
 // LAYOUT-level concept only: the built-in NAV literal below stays structurally two-level, so a
 // newly-shipped item still lands in its group with no code change and no tenant re-configuration.
@@ -244,7 +247,10 @@ export type NavItem = { href: string; label: string; icon: string; module: strin
 // widening it would change what they see. `subs` is therefore an ADDITIONAL view over the same objects
 // and the renderer treats anything no sub claims as loose (rendered directly under the group header).
 export type NavSub = { name: string; items: NavItem[] }
-export type NavGroup = { group: string; module: string; items: NavItem[]; subs?: NavSub[] }
+// `platformOnly` (index §38): the WHOLE group is for the platform super admin (AppUser.super_admin —
+// NOT modules.admin, which every tenant admin role holds). It never reaches a tenant's sidebar, search,
+// hub, role editor or menu editor: every consumer reads it through `platformOK` / `TENANT_NAV` below.
+export type NavGroup = { group: string; module: string; items: NavItem[]; subs?: NavSub[]; platformOnly?: boolean }
 
 // scopes (when present) further restricts an item to those scope tiers, e.g. settings = admin only.
 // ── NAV taxonomy (reorganized 2026-06-28) ──────────────────────────────────────────────
@@ -910,6 +916,47 @@ export const NAV: NavGroup[] = [
     { href: '/admin/support/fix-requests', label: 'Fix Requests', icon: '🛠️', module: 'support', scopes: ['all', 'market'], tileOnly: true },
     { href: '/admin/support/docs', label: 'Help Docs', icon: '📚', module: 'support', scopes: ['all'], tileOnly: true },
   ]},
+  // Super Admin Toolbox (owner 2026-09-25, index §38) — "duplicate all the items which are needed by the
+  // superadmin only into that toolbox under different tiles". Every item below is a COPY of a page that
+  // keeps its own home (Configuration, Support, the /operator console) — nothing is moved, so a tenant
+  // admin's menu is byte-identical. `platformOnly` keeps the whole group off every tenant surface; each
+  // item's `tile` is the built-in tiling of /hub/super-admin-toolbox, re-arrangeable in the Dashboard
+  // Designer (module key 'super-admin-toolbox'). Every page still gates itself server-side.
+  // harness_super_admin_toolbox.py locks: each copy has a home elsewhere, each route exists, and every
+  // NAV consumer dereferences platformOK / TENANT_NAV.
+  { group: 'Super Admin Toolbox', module: 'admin', platformOnly: true, items: [
+    { href: '/hub/super-admin-toolbox', label: 'Super Admin Toolbox', icon: '🧰', module: 'admin' },
+    { href: '/admin/tenants', label: 'Companies (Tenants)', icon: '🏢', module: 'admin', tileOnly: true, tile: 'Companies & Onboarding' },
+    { href: '/operator/tenants', label: 'Tenant List & Sign-in', icon: '🛰️', module: 'admin', tileOnly: true, tile: 'Companies & Onboarding' },
+    { href: '/admin/business-types', label: 'Business Types', icon: '🧭', module: 'admin', tileOnly: true, tile: 'Companies & Onboarding' },
+    { href: '/admin/tenant-settings', label: 'Pay Period & Work-Week', icon: '📅', module: 'admin', tileOnly: true, tile: 'Companies & Onboarding' },
+    { href: '/admin/billing', label: 'Billing (Tenants)', icon: '💳', module: 'admin', tileOnly: true, tile: 'Billing & Pricing' },
+    { href: '/admin/pricing', label: 'Pricing & Free Trial', icon: '🏷️', module: 'admin', tileOnly: true, tile: 'Billing & Pricing' },
+    { href: '/admin/billing-usage', label: 'Billing Usage & Pricing', icon: '💳', module: 'admin', tileOnly: true, tile: 'Billing & Pricing' },
+    { href: '/operator/billing', label: 'Tenant Billing Dashboard', icon: '🧾', module: 'admin', tileOnly: true, tile: 'Billing & Pricing' },
+    { href: '/operator', label: 'Operator Console', icon: '🛰️', module: 'admin', tileOnly: true, tile: 'Operators & Security' },
+    { href: '/operator/operators', label: 'Platform Operators', icon: '🧑‍✈️', module: 'admin', tileOnly: true, tile: 'Operators & Security' },
+    { href: '/operator/audit', label: 'Operator Audit Trail', icon: '📜', module: 'admin', tileOnly: true, tile: 'Operators & Security' },
+    { href: '/operator/notices', label: 'Platform Notices', icon: '📣', module: 'admin', tileOnly: true, tile: 'Operators & Security' },
+    { href: '/admin/security', label: 'Security Settings', icon: '🛡️', module: 'admin', tileOnly: true, tile: 'Operators & Security' },
+    { href: '/admin/access-log', label: 'Access Log', icon: '🧭', module: 'admin', tileOnly: true, tile: 'Operators & Security' },
+    { href: '/admin/impersonation', label: 'Sign-in-as Audit', icon: '🕵️', module: 'admin', tileOnly: true, tile: 'Operators & Security' },
+    { href: '/admin/roles', label: 'Roles & Access', icon: '🔐', module: 'admin', tileOnly: true, tile: 'Operators & Security' },
+    { href: '/admin/control-box', label: 'System Control Box', icon: '🛎️', module: 'admin', tileOnly: true, tile: 'Platform Health' },
+    { href: '/admin/import-health', label: 'Import Health', icon: '📡', module: 'admin', tileOnly: true, tile: 'Platform Health' },
+    { href: '/failures', label: 'Failure Logs', icon: '🩺', module: 'admin', tileOnly: true, tile: 'Platform Health' },
+    { href: '/admin/fix-requests', label: 'Auto-Fix Pipeline', icon: '🛠️', module: 'admin', tileOnly: true, tile: 'Platform Health' },
+    { href: '/admin/support', label: 'Support Console', icon: '🎧', module: 'support', scopes: ['all', 'market'], tileOnly: true, tile: 'Support' },
+    { href: '/admin/support/failures', label: 'Fleet Failure Triage', icon: '🩺', module: 'support', scopes: ['all', 'market'], tileOnly: true, tile: 'Support' },
+    { href: '/admin/support/fix-requests', label: 'Fix Requests', icon: '🛠️', module: 'support', scopes: ['all', 'market'], tileOnly: true, tile: 'Support' },
+    { href: '/admin/support/docs', label: 'Help Docs', icon: '📚', module: 'support', scopes: ['all'], tileOnly: true, tile: 'Support' },
+    { href: '/admin/dashboards', label: 'Dashboard Designer', icon: '🎛️', module: 'admin', tileOnly: true, tile: 'Platform Defaults' },
+    { href: '/admin/menu', label: 'Menu Layout', icon: '🧭', module: 'admin', tileOnly: true, tile: 'Platform Defaults' },
+    { href: '/admin/labels', label: 'Display Labels', icon: '🏷️', module: 'admin', tileOnly: true, tile: 'Platform Defaults' },
+    { href: '/admin/kpi-metrics', label: 'KPI Definitions', icon: '🎯', module: 'admin', tileOnly: true, tile: 'Platform Defaults' },
+    { href: '/admin/training', label: 'Walk-throughs', icon: '🎓', module: 'admin', tileOnly: true, tile: 'Platform Defaults' },
+    { href: '/admin/whats-new', label: "What's New", icon: '✨', module: 'admin', tileOnly: true, tile: 'Platform Defaults' },
+  ]},
   { group: 'Configuration', module: 'admin', items: [
     { href: '/configurations', label: 'All Settings', icon: '⚙️', module: 'admin' },
     { href: '/admin/tenants', label: 'Companies (Tenants)', icon: '🏢', module: 'admin' },
@@ -1431,6 +1478,21 @@ function moduleHiddenByVertical(module: string, v: VerticalInfo): boolean {
   const hid = v.hidden_modules || []
   return hid.some(m => m === module || MODULE_ALIASES[m] === module)
 }
+// ── Platform-only NAV (index §38) ────────────────────────────────────────────────────────────────
+// THE one predicate for "may this viewer see this NAV group?". A `platformOnly` group opens only for the
+// platform super admin (AppUser.super_admin, the flag the backend's _require_super_admin reads) — never
+// for modules.admin, which every tenant admin role holds. Presentation only: every page gates itself
+// server-side too. harness_super_admin_toolbox.py fails the build if a NAV consumer stops calling it.
+export function isPlatformAdmin(user: { super_admin?: boolean } | null | undefined): boolean {
+  return !!user?.super_admin
+}
+export function platformOK(group: { platformOnly?: boolean }, user: { super_admin?: boolean } | null | undefined): boolean {
+  return !group.platformOnly || isPlatformAdmin(user)
+}
+// The NAV a TENANT configures (role editor, menu editor, label editor): every platform-only group removed,
+// so its duplicate copies never masquerade as tenant pages or overwrite an item's real home group.
+export const TENANT_NAV: NavGroup[] = NAV.filter(g => !g.platformOnly)
+
 export function verticalOK(item: { href: string; module: string }, v: VerticalInfo | null | undefined,
                            caps: Record<string, boolean | null>): boolean {
   const ov = caps['vertical:' + item.href]

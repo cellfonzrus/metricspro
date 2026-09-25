@@ -63,6 +63,7 @@ Primary code homes:
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
 | 36 | **Supply ordering (vendor setup · price compare · cheapest cart incl. free shipping · assisted order + confirmation)** | "Which vendor should this cart go to once shipping is counted, where is each vendor's free-shipping threshold and delivery time set, how is the order placed at the vendor from here, and where does the vendor's confirmation number land?" |
 | 37 | **Franchise royalty, cost & profit centers** | "Where does the franchisor's monthly royalty report land, how is it checked (the fee rounding rule), what does each line book to on the P&L and what books nothing (and why), how does it reconcile against the daily report, and how do I see the P&L per profit center or per cost center? Why did a sale line no classifier knows book nothing, and where is that reported now?" |
+| 38 | **Super Admin Toolbox** | "As the platform super admin, where is every screen only I need — companies, business types, billing, operators, platform health, support, platform defaults — on one tiled page? Why does a tenant admin never see it, and how do I re-arrange its tiles?" |
 
 ---
 
@@ -4031,6 +4032,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.connector_route_policy` (mig `998` — RULE TWO: WHICH INGEST ROUTE a connector may use, per org. `(org_id, connector, route, allowed, reason, remedy_route/label/href)`; house row = the platform default every tenant inherits, tenant row overrides — the `portal_block_marker` (244) / `report_pull_map` (207) shape. `route` REUSES `core.import_feed.source_type`; `connector` is `data_source.processor`. Seeded CLOSED for the POS sales/inventory connector's `pull` route, owner directive 2026-09-09) | owner SQL (`UPDATE … SET allowed = true` re-opens it — ONE row) | `commcalc/connector_route_policy.py` `load_rows`/`resolve` → the gate on `POST /data-sources/{sid}/run` · `/login/start` · `/live-login/start` · `/data-sources/sweep/run-due` + `_data_sources_pull_worker` · `/b2b/sweep/run-now|run-due` · `_do_b2b_sweep`; the computed `route_policy` on `_strip_source_pw` / `_b2b_public_cfg`; `portal_session_health` state `route_disabled` → `control_box` lamp `unmonitored`; `import_audit.p_connectors` / `p_portal_sessions` via `collect_attention(route_policy=…)`. §12a.1 |
 | `commcalc.b2b_sweep_config.connector` (mig `998`) | mig 998 backfill / owner SQL | names WHICH connector that legacy per-vendor sweep drives, so the route gate can close it from config instead of a vendor literal in code (RULE TWO). NULL = ungated. §12a.1 |
 | `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`); `PUT /report-labels` (scopes `report_col`/`report_banner`/`report_term` at the TENANT org — overrides; gated on `classification`); mig `945` seeds the HOUSE carrier-preset rows (scopes `report_col:<carrier>`/`report_banner:<carrier>`); mig `953` seeds the HOUSE carrier VOCABULARY-TERM presets (scope `report_term:<carrier>` — boost: ePay/VIP Wireless/ACIMA/b2bsoft, total: VidaPay/T-CETRA/Edge/marketplace feed, §3); mig `954` seeds the HOUSE distributor-payable BASIS presets (NEW scope `finance_basis:<carrier>`, key `distributor_payable` — boost: `asset_ledger`, total: `marketplace_due`; read by `statement_engine.carrier_payable_preset`, §4); mig `947` seeds the HOUSE Incentives tile layout (scope `tiles` key `incentives`) + HOUSE nav-label presets (NEW scopes `nav_default`/`group_default`, e.g. `/commcalc/commission-legs` → 'Commission received over M1-M12'); mig `948` seeds the HOUSE Management Overview (`tiles` key `management-overview` — incl. the `/commcalc/exec` item-label 'Rep Incentive') + Flags & Compliance (`tiles` key `flags-compliance`) layouts (§14 mig 948) | `GET /nav-config` (house `nav_default`/`group_default` presets first, then the caller org's `nav`/`group` nicknames overlay per key — tenant > house preset > built-in, since mig 947; caps/layout stay caller-org-only), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins), `GET /report-labels` (`report_labels.load_report_labels`: tenant ∪ HOUSE, tenant override > carrier preset > built-in — §3 carrier column labels) |
+| `commcalc.ui_label_override` scope `tiles`, key `super-admin-toolbox` (NO new table/row shape) — the Super Admin Toolbox's saved tile layout, platform super admin only (the designer offers the group through `rbac.platformOK`) | `PUT /tile-layout?module=super-admin-toolbox` | `/hub/super-admin-toolbox` → `layoutToHubGroups`, else `tile-hubs.subsFromItemTiles` over the group's `NavItem.tile`. §38 |
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3); **P&L wages estimate** `coa.wages_by_store`→`derive_wage_cells` (actual_hours else scheduled_hours — the owner's 2026-09-08 rule, already implemented); **salary coverage basis** `labour_coverage.load_shift_hours`→`hours_basis_by_code` (hours only, never dollars — §4) |
 | `storeops.employees` / `stores` / `org_units` (+ RPC `org_span_for_manager`) | storeops roster + org tree | **OVERHEAD ALLOCATION** `storeops/overhead_allocation.gather` → `classify_employee` (structural: active + salaried + blank `home_store`) / `covered_stores` (span RPC → org-unit subtree → org-wide) / `build_overhead` → the P&L `overhead_wages` + `overhead_comm` lines (§14t, mig `997`, house default OFF). Reads the roster only; derives NO pay — the conversion is `coa.monthly_salary_equivalent`, the commission is `management_incentive_payout` (§9) |
@@ -4222,6 +4224,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /activation-counts/{period}` (b2b Activation-Details store/market counts; buckets via `activation_bucketing`, mig 313 — `total_activation` excludes BOTH Upgrade families) | `activation_counts` (search `@router.get("/activation-counts/`) | §15 Activation-Details basis |
 | `GET /tile-layout` (`?module=` — resolved tenant>house tile layout, dashboard-builder D1) | `commcalc/router.py` (`get_tile_layout`, beside nav-config) | §14 D1 |
 | `PUT /tile-layout` (fail-closed: house/foreign → super-admin; own org → `menu_layout` grant) | `commcalc/router.py` (`put_tile_layout`) | §14 D1 |
+| `GET/PUT /tile-layout?module=super-admin-toolbox` — the Super Admin Toolbox's tile arrangement (NO new endpoint: the same D1 pair; the built-in tiling is `NavItem.tile` data, a saved layout wins) | `commcalc/router.py` (`get_tile_layout` / `put_tile_layout`) | §38 |
 | `POST /nav-labels`, `POST /nav-layout` (RETROFIT 2026-09-01: were UNGATED — now fail-closed `menu_layout` gate, non-super pinned to own org) | `commcalc/router.py` (`set_nav_label`/`set_nav_layout`) | §14 D1 |
 | `POST /notify/send`, `POST /notify/run-due` → report keys `storeops_payroll` / `storeops_hours_approval` / `storeops_payroll_tax` / `storeops_payroll_expenses` / `storeops_attendance` / `storeops_lateness` (W3 scheduled workforce reports) | `notify/router.py` `_dispatch` → `report_registry.build_payload` → `notify/workforce_reports.py` builders | §14 W3 |
 | `GET /storeops/payroll-raw` (payroll-tax page inputs; mig-434 pay gate, FAIL-CLOSED 403 — ALL-money feed, §19.12 closed 2026-09-01; route `payroll_raw_route`, shared `payroll_raw()` stays ungated for pre-gated in-process callers) | `storeops/router.py` (`payroll_raw_route`) | §14 W3 |
@@ -11506,3 +11509,51 @@ apply; dollars reach a P&L only when a tenant imports a report or saves a map ru
    a per-org `pl_line_key` on those rows (config) — plus a COGS head, not yet in the chart.
 4. **Role grants:** the `royalty` module must be granted on the tenant's roles (the module gate + the vertical nav gate are in
    place; a role editor entry is the parent agent's nav work).
+
+## 38. SUPER ADMIN TOOLBOX — every platform-only screen on one tiled page (owner 2026-09-25)
+
+Owner, verbatim: *"create a super admin toolbox and duplicate all the items which are needed by the superadmin only into that
+toolbox under different tiles to make it easy"*.
+
+### 38.1 Duplicate check — what was reused (nothing new was built for the page itself)
+- **The tiled page IS the generic hub** (§14 D2, `(platform)/hub/[group]/page.tsx` + `HubTiles`): the toolbox is one more NAV
+  group, `Super Admin Toolbox`, slug / tile-layout module key **`super-admin-toolbox`**, reached at **`/hub/super-admin-toolbox`**.
+  Re-arrangeable in the Dashboard Designer (`/admin/dashboards`) and saved through the existing `PUT /commcalc/tile-layout`.
+- **"Duplicate, not move"** is the Flags & Compliance precedent (§23g): each toolbox item is a `tileOnly` COPY whose real home is
+  untouched — Configuration, Support, or the `/operator` console (§22). A tenant admin's menu is byte-identical.
+- Checked and NOT reused as the toolbox: `/configurations` "All Settings" (a hand-written tenant settings directory with a
+  3-card super-admin section — a second, code-held list; left as is) and the `/operator` console (its own shell and route group;
+  the toolbox links INTO it, it does not replace it).
+
+### 38.2 The two new facts — both DATA on the NAV literal (`frontend/src/lib/rbac.ts`)
+- **`NavGroup.platformOnly`** — the whole group is for the platform super admin. **THE one gate: `rbac.platformOK(group, user)`**
+  → `rbac.isPlatformAdmin(user)` = `AppUser.super_admin` (what `core.router._require_super_admin` reads) — **never
+  `modules.admin` / `isSuperAdmin`**, which every tenant admin role holds. **`rbac.TENANT_NAV`** = `NAV` without platform-only
+  groups: what the tenant configuration screens list.
+- **`NavItem.tile`** — the master tile an item sits on when nothing is saved. **`tile-hubs.subsFromItemTiles(items)`** turns it
+  into sub-categories. Hub precedence: saved layout > tenant `/admin/menu` subs > `NavItem.tile` > auto-chunking.
+
+### 38.3 The tiles (built-in; the Designer can re-arrange)
+| Tile | Screens (each a copy — real home in brackets) |
+|---|---|
+| Companies & Onboarding | Companies (Tenants) · Tenant List & Sign-in [`/operator/tenants`] · Business Types · Pay Period & Work-Week |
+| Billing & Pricing | Billing (Tenants) · Pricing & Free Trial · Billing Usage & Pricing · Tenant Billing Dashboard [`/operator/billing`] |
+| Operators & Security | Operator Console · Platform Operators · Operator Audit Trail · Platform Notices [`/operator/*`] · Security Settings · Access Log · Sign-in-as Audit · Roles & Access |
+| Platform Health | System Control Box · Import Health · Failure Logs · Auto-Fix Pipeline |
+| Support | Support Console · Fleet Failure Triage · Fix Requests · Help Docs [Support group] |
+| Platform Defaults | Dashboard Designer · Menu Layout · Display Labels · KPI Definitions · Walk-throughs · What's New |
+
+Every page keeps its own server-side gate; the toolbox adds NO permission surface (each copy carries its home's module + scopes).
+
+### 38.4 Who reads the gate (every NAV consumer)
+- `platformOK`: the sidebar + ⌘K search (`(platform)/layout.tsx` `filteredGroups`), the hub route (an unknown-slug notice for
+  anyone else), the Dashboard Designer (`designable`, platform super admin only).
+- `TENANT_NAV`: Roles & Access, Menu Layout, Display Labels, Business Types, Walk-throughs, Help Docs, `ScreenLink`.
+- Justified href-lookup exception: `compliance/page.tsx` (finds its own fixed group).
+
+### 38.5 Proof + lock
+`backend/harness_super_admin_toolbox.py` (stdlib, CI carrier-vocab-guard): §A the group (platformOnly, hub entry, every copy
+tileOnly + tile, ≥ 5 tiles); §B duplicate-not-moved (each copy has a home with the SAME module + scopes, or is an `/operator`
+page); §C every link is a real route; §D the one gate (`super_admin`, never `modules.admin`; `TENANT_NAV`; hub precedence);
+§E every file importing bare `NAV` calls `platformOK` or is on the justified list, and the tenant screens read `TENANT_NAV`;
+§F this section. No migration, no money.

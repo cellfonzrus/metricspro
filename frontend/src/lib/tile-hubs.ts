@@ -118,6 +118,23 @@ export function subsFromNavLayout(groupName: string, items: NavItem[], layout?: 
   return ranked.map(name => ({ name, items: byName[name] }))
 }
 
+// ── NAV-declared default tiles (index §38) ───────────────────────────────────────────────────────
+/** The built-in tiling a group DECLARES on its own items (`NavItem.tile`), as sub-categories in
+ *  first-appearance order — handed to defaultHubGroups when the tenant menu names no sub. Items with
+ *  no `tile` stay loose (the trailing '<Group> pages' tile). Precedence stays: saved layout > tenant
+ *  menu subs > these > auto-chunking. PURE. */
+export function subsFromItemTiles(items: NavItem[]): NavSub[] {
+  const names: string[] = []
+  const byName: Record<string, NavItem[]> = {}
+  for (const it of items) {
+    const t = (it.tile || '').trim()
+    if (!t) continue
+    if (!byName[t]) { byName[t] = []; names.push(t) }
+    byName[t].push(it)
+  }
+  return names.map(name => ({ name, items: byName[name] }))
+}
+
 // ── layout ⇄ HubGroup converters ─────────────────────────────────────────────────────────────────
 /**
  * Saved API layout → renderable HubGroup[]. `visibleItems` are the caller-visible NAV items of the

@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { api } from '@/lib/client'
 import { invalidateApiCache } from '@/lib/cache'
-import { NAV } from '@/lib/rbac'
+import { TENANT_NAV } from '@/lib/rbac'
 
 // Admin-only: rearrange the sidebar for the whole tenant — MOVE any item to a different group, show a
 // DUPLICATE copy of it in additional group(s), hide it, or create brand-new groups. Saved per-org to
@@ -15,16 +15,16 @@ type Ov = Record<string, ItemOv>
 const inp: React.CSSProperties = { padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
 export default function MenuLayoutPage() {
-  const defaultGroups = useMemo(() => Array.from(new Set(NAV.map(g => g.group))), [])
+  const defaultGroups = useMemo(() => Array.from(new Set(TENANT_NAV.map(g => g.group))), [])
   // built-in group for each href (used to know an item's DEFAULT placement)
   const defGroupByHref = useMemo(() => {
     const m: Record<string, string> = {}
-    NAV.forEach(g => g.items.forEach(it => { m[it.href] = g.group }))
+    TENANT_NAV.forEach(g => g.items.forEach(it => { m[it.href] = g.group }))
     return m
   }, [])
   const labelByHref = useMemo(() => {
     const m: Record<string, { label: string; icon: string }> = {}
-    NAV.forEach(g => g.items.forEach(it => { m[it.href] = { label: it.label, icon: it.icon } }))
+    TENANT_NAV.forEach(g => g.items.forEach(it => { m[it.href] = { label: it.label, icon: it.icon } }))
     return m
   }, [])
 
@@ -149,7 +149,7 @@ export default function MenuLayoutPage() {
     setExtraGroups(x => x.filter(x2 => x2 !== g))
   }
 
-  const allHrefs = useMemo(() => NAV.flatMap(g => g.items.map(it => it.href)), [])
+  const allHrefs = useMemo(() => TENANT_NAV.flatMap(g => g.items.map(it => it.href)), [])
   const dirty = Object.values(ov).filter(v => v && ((v.group || '').trim() || (v.sub || '').trim() || v.hidden || (v.also && v.also.length))).length
     + (groupOrder.length ? 1 : 0) + Object.keys(itemOrder).length + Object.keys(subOrder).length
 
