@@ -5,6 +5,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 import { startTour } from '@/lib/tours'
 import { useReportLabels } from '@/lib/report-labels'
+import { useAuth } from '@/lib/auth-context'
 
 // Rep-facing in-app closing form — one row per rep per day. Posts to /closing/row (source='manual').
 // Money is captured by the 6 tender types that mirror the POS X-report (cash / credit / external CC /
@@ -86,6 +87,12 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   // preset DATA per carrier (mig 953 — boost: ePay/ACIMA = byte-identical to today; total:
   // VidaPay/Edge), never hardcoded to one carrier's brand on this shared form.
   const { term, colLabel, pos } = useReportLabels()
+  // Closing inputs the tenant's VERTICAL does not use (mig 1024, index §35) — DATA on the vertical, read from
+  // /core/me: 'acc_sale' · 'bill_payments' · 'activation_counts' · 'tender:<built-in key>'. A hidden box
+  // simply submits empty, exactly as a blank one does today. No vertical payload → nothing hidden.
+  const { tenant } = useAuth()
+  const closingHidden = useMemo(() => new Set<string>(tenant?.vertical?.closing_hidden || []), [tenant?.vertical?.closing_hidden])
+  const builtinTenders = useMemo(() => TENDERS.filter(t => !closingHidden.has('tender:' + t.key.slice(2))), [closingHidden])
   const procName = term('processor', 'Bill-pay')
   const finName = term('financing', 'Financing')
   // EXTERNAL CREDIT MACHINE (owner 2026-09-04): the standalone third-party card terminal the POS
@@ -477,30 +484,34 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         ) : (
           <>
             <Row>
-              {TENDERS.slice(0, 3).map(t => (
+              {builtinTenders.slice(0, 3).map(t => (
                 <Field key={t.key} label={tenderLabel(t)}><input style={inp} inputMode="decimal" value={f[t.key]} onChange={e => set({ [t.key]: e.target.value } as Partial<State>)} placeholder="0.00" /></Field>
               ))}
             </Row>
             <Row>
-              {TENDERS.slice(3).map(t => (
+              {builtinTenders.slice(3).map(t => (
                 <Field key={t.key} label={tenderLabel(t)}><input style={inp} inputMode="decimal" value={f[t.key]} onChange={e => set({ [t.key]: e.target.value } as Partial<State>)} placeholder="0.00" /></Field>
               ))}
             </Row>
           </>
         )}
         <Row>
+          {!closingHidden.has('acc_sale') && (
           <Field label="Accessory Sale $ (declared — tallied vs sales, NOT in total)"><input style={inp} inputMode="decimal" value={f.acc_sale} onChange={e => set({ acc_sale: e.target.value })} placeholder="0.00" /></Field>
+          )}
           <Field label="Total collected (tenders only)"><div style={{ ...inp, background: 'var(--surface2)', fontWeight: 700 }}>{fmt(total)}</div></Field>
         </Row>
 
         {/* Owner directive 2026-09-02, verbatim: "Below it says epay already included, it should
             say Bill Payments, already included above." */}
+        {!closingHidden.has('bill_payments') && (<>
         <SectionLabel>Bill Payments, already included above (NOT added to the total)</SectionLabel>
         <Row>
           <Field label={`${procName} on Cash $`}><input style={inp} inputMode="decimal" value={f.epay_on_cash} onChange={e => set({ epay_on_cash: e.target.value })} placeholder="0.00" /></Field>
           <Field label={`${procName} on Credit $`}><input style={inp} inputMode="decimal" value={f.epay_on_credit} onChange={e => set({ epay_on_credit: e.target.value })} placeholder="0.00" /></Field>
           <Field label={`${procName} on Financing / ${finName} $`}><input style={inp} inputMode="decimal" value={f.epay_on_acima} onChange={e => set({ epay_on_acima: e.target.value })} placeholder="0.00" /></Field>
         </Row>
+        </>)}
 
         <SectionLabel>Transaction counts</SectionLabel>
         {cdefs ? (
@@ -511,6 +522,12 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
               </Field>
             ))}
           </Row>
+        ) : closingHidden.has('activation_counts') ? (
+          // The built-in fallback counts are activation counts; a vertical that does not use them sees none
+          // until the tenant defines its own (Daily Closing → Count Fields) — never a wireless count by default.
+          <div style={{ fontSize: 12.5, color: 'var(--text2)', margin: '4px 0 10px' }}>
+            No transaction counts are set up for this company yet — an admin can add them under Daily Closing → Count Fields.
+          </div>
         ) : (
           <Row>
             {COUNTS.map(c => (

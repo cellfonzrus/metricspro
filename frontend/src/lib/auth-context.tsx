@@ -8,7 +8,7 @@ import { supabase, setSessionOrgId, getActiveOrg, setActiveOrg, set2faToken, get
          onImpersonationInvalid, clearImpersonationInvalid, type ImpersonationState } from './client'
 import { setCacheIdentity } from './cache'
 import type { Permissions, CarrierRef } from './rbac'
-import { carrierCode, defaultActiveCarrier } from './rbac'
+import { carrierCode, defaultActiveCarrier, type VerticalInfo } from './rbac'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -32,6 +32,9 @@ export type TenantInfo = {
     ends_at: string | null
     expired: boolean
   } | null
+  // What kind of business (mig 1020, core/verticals.me_payload) — drives the vertical nav gate
+  // (rbac.verticalOK). Absent on an older backend → nothing is hidden.
+  vertical?: VerticalInfo | null
 }
 
 // One membership of a login (mig 706): which tenant + this login's role IN that tenant.
@@ -557,7 +560,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const carrierOrgKey = activeOrg || user?.org_id || null
   const carrierStoreKey = carrierUserKey && carrierOrgKey ? `mp-active-carrier:${carrierUserKey}:${carrierOrgKey}` : null
   useEffect(() => {
-    const def = defaultActiveCarrier(carriers)
+    const def = defaultActiveCarrier(carriers, tenant?.vertical?.uses_carriers)
     const valid = new Set((carriers || []).map(c => carrierCode(c)).filter(Boolean))
     let chosen = def
     if ((carriers || []).length > 1 && carrierStoreKey) {
@@ -567,7 +570,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch { /* missing / blocked → default */ }
     }
     setActiveCarrierState(chosen)
-  }, [carriers, carrierStoreKey])
+  }, [carriers, carrierStoreKey, tenant?.vertical?.uses_carriers])
 
   const setActiveCarrier = useCallback((code: string) => {
     const c = (code || '').toLowerCase().trim()

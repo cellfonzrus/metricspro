@@ -815,8 +815,11 @@ check("K10 the module is registered in the in-code catalogue (the billing/entitl
       '"marketing": "Marketing & Events"' in ENT)
 check("K11 …and in the DB registry mig 700 reads",
       "INSERT INTO core.module_catalog (key, label, sort_order) VALUES\n  ('marketing'" in MIG987)
+# ≥ 14, not == 14: mig 987 needed the bump to 14; later modules (mig 1020's vertical-scoped ones → 15) bump it
+# again, and a pin on the exact number would fail every future module registration for no reason.
+_sv = re.search(r"^SEED_VERSION = (\d+)", ENT, re.M)
 check("K12 SEED_VERSION was bumped so existing tenants self-provision the entitlement",
-      "SEED_VERSION = 14" in ENT)
+      bool(_sv) and int(_sv.group(1)) >= 14)
 check("K13 the router is wired into the app",
       "marketing_router" in open(os.path.join(HERE, "app", "main.py"), encoding="utf-8").read())
 _MIG987_SQL = _sql_without_comments(MIG987)

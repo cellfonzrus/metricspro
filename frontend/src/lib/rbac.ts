@@ -260,6 +260,12 @@ export const NAV: NavGroup[] = [
   // any tenant-created or Reports-directory groups, so moving a block here moves it in the sidebar.
   // POS module (mig 724/725) — the point-of-sale port (Phase 1: register, customers, inventory,
   // settings). Activations/vendors/POs/reports arrive in Phase 2; see pos-system INTEGRATION_PLAN.md.
+  // Store Operations (mig 1020, index §35) — a franchise store's day on one screen. Module `franchise_ops`
+  // is scoped to its vertical as DATA (core.module_catalog.applies_to_vertical), so verticalOK hides this
+  // group for every other kind of business; nothing here names one.
+  { group: 'Store Operations', module: 'franchise_ops', items: [
+    { href: '/franchise', label: 'Operations Dashboard', icon: '🏪', module: 'franchise_ops' },
+  ] },
   { group: 'Point of Sale', module: 'pos', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
@@ -1336,7 +1342,10 @@ export function carrierCode(c: CarrierRef | undefined): string {
 
 // The DEFAULT active carrier for a tenant: the is_default carrier's code, else the sole carrier's
 // code, else 'boost'. Pure — the persisted per-(user,org) choice overrides this at the call site.
-export function defaultActiveCarrier(carriers: CarrierRef[] | undefined): string {
+// A tenant whose VERTICAL does not use carriers (mig 1020, `usesCarriers === false`) has NO active carrier:
+// the old 'boost' fallback would otherwise have put a non-wireless tenant in the Boost lens.
+export function defaultActiveCarrier(carriers: CarrierRef[] | undefined, usesCarriers?: boolean): string {
+  if (usesCarriers === false) return ''
   const cs = carriers || []
   const def = cs.find(c => c.is_default)
   if (def) { const k = carrierCode(def); if (k) return k }
@@ -1357,6 +1366,61 @@ export function carrierOKActive(href: string, activeCarrier: string | undefined,
   const a = (activeCarrier || '').toLowerCase().trim()
   if (!a) return true
   return need.some(k => a.includes(k) || k.includes(a))
+}
+
+// ── Tenant VERTICAL gate (mig 1020, index §35) ────────────────────────────────────────────────────
+// WHAT KIND OF BUSINESS the tenant is decides which modules and pages exist for it. The facts come from
+// GET /core/me → tenant.vertical (core/verticals.py): `hidden_modules` (modules whose applies_to_vertical
+// excludes this vertical), `nav_hidden` (page hrefs the vertical does not see — 'x$' = exactly x, else x
+// and everything under x/) and `uses_carriers`. This file spells NO vertical: the lists are DATA in
+// core.tenant_vertical. Same override shape as the carrier gate: caps['vertical:<href>'] true/false wins.
+// No vertical payload (older backend / failed read) → hide nothing (today's behaviour).
+export type VerticalInfo = {
+  key?: string | null; label?: string | null; source?: string | null
+  uses_carriers?: boolean; nav_hidden?: string[]; hidden_modules?: string[]
+  closing_hidden?: string[]   // mig 1024 — closing-form inputs this vertical does not use (ClosingSubmitForm)
+  choices?: { key: string; label: string }[]; registry_ready?: boolean
+}
+// Mirror of core/verticals.href_hidden (harness_tenant_vertical.py §E compares the two).
+export function hrefHiddenByVertical(href: string, navHidden: string[] | undefined): boolean {
+  const h = ((href || '').split('?')[0].replace(/\/+$/, '')) || '/'
+  for (const p of navHidden || []) {
+    if (p.endsWith('$')) {
+      if (h === (p.slice(0, -1).replace(/\/+$/, '') || '/')) return true
+    } else {
+      const q = p.replace(/\/+$/, '')
+      if (h === q || h.startsWith(q + '/')) return true
+    }
+  }
+  return false
+}
+function moduleHiddenByVertical(module: string, v: VerticalInfo): boolean {
+  const hid = v.hidden_modules || []
+  return hid.some(m => m === module || MODULE_ALIASES[m] === module)
+}
+export function verticalOK(item: { href: string; module: string }, v: VerticalInfo | null | undefined,
+                           caps: Record<string, boolean | null>): boolean {
+  const ov = caps['vertical:' + item.href]
+  if (ov === true) return true
+  if (ov === false) return false
+  if (!v) return true
+  if (moduleHiddenByVertical(item.module, v)) return false
+  if (hrefHiddenByVertical(item.href, v.nav_hidden)) return false
+  if (v.uses_carriers === false && (NAV_CARRIERS[item.href] || []).length > 0) return false
+  return true
+}
+// Route guard twin: may this PATH be opened by this tenant's vertical? The page's module is the module of
+// the longest NAV href the path sits under (the same longest-prefix rule the active-group detection uses).
+export function verticalPathOK(path: string, v: VerticalInfo | null | undefined): boolean {
+  if (!v || !path || path === '/') return true
+  if (hrefHiddenByVertical(path, v.nav_hidden)) return false
+  let best: NavItem | undefined
+  for (const g of NAV) for (const it of g.items) {
+    if ((path === it.href || path.startsWith(it.href + '/')) && (!best || it.href.length > best.href.length)) best = it
+  }
+  if (best && moduleHiddenByVertical(best.module, v)) return false
+  if (best && v.uses_carriers === false && (NAV_CARRIERS[best.href] || []).length > 0 && path === best.href) return false
+  return true
 }
 
 // Pages restricted to management (company-wide leadership by default; DMs excluded), but still
@@ -1508,12 +1572,16 @@ export function homeFor(perms: Permissions): string {
 // commission-report clearance can't enter it. The (platform) guard would then redirect to that
 // same home forever (infinite "Redirecting…", presenting as "can't log in"). Fall back to the
 // first nav item the user can open, then to the always-allowed password page so we never loop.
-export function safeHomeFor(perms: Permissions): string {
+export function safeHomeFor(perms: Permissions, vertical?: VerticalInfo | null): string {
+  // The tenant's VERTICAL (mig 1020) can hide a role's configured home (e.g. a rep's targets page does not
+  // exist for a non-wireless business) — such a home is skipped exactly like one RBAC forbids, so the
+  // guard never redirects to a page it will bounce again.
+  const vOK = (p: string) => isSuperAdmin(perms) || verticalPathOK(p, vertical)
   const home = homeFor(perms)
-  if (canAccessPath(perms, home)) return home
+  if (canAccessPath(perms, home) && vOK(home)) return home
   for (const g of NAV) {
     for (const it of g.items) {
-      if (canSeeItem(perms, it) && canAccessPath(perms, it.href)) return it.href
+      if (canSeeItem(perms, it) && canAccessPath(perms, it.href) && vOK(it.href)) return it.href
     }
   }
   return '/account/password'   // canAccessPath() always allows this → guaranteed non-looping

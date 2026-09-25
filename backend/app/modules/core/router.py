@@ -417,6 +417,15 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None,
                       "trial": _trial.trial_view(t)}
     except Exception:
         pass
+    # Tenant VERTICAL (mig 1020, index §35) — what kind of business this is and what that hides: the
+    # frontend nav gate (lib/rbac.ts verticalOK) reads hidden_modules / nav_hidden / uses_carriers from here
+    # and spells no vertical itself. Best-effort: any failure leaves it off and the nav unchanged.
+    if tenant is not None:
+        try:
+            from app.modules.core import verticals as _vert
+            tenant["vertical"] = _vert.me_payload(client, org_id)
+        except Exception:
+            pass
     # Tenant carriers (mig 038) — drive carrier-scoped nav gating (a Boost tenant shouldn't see Total
     # pages, and vice-versa). Empty list = no carrier chosen yet → the frontend hides nothing.
     carriers = []
@@ -824,15 +833,18 @@ def _mods(**on):
 
 # the role set seeded into every new tenant (mirror of migration 015 + helpdesk); the tenant admin
 # edits them afterward on their own Roles & Access.
+# The vertical-scoped modules (franchise_ops / supply_ordering / royalty, mig 1020) are granted here to the
+# roles that run a store; the tenant's VERTICAL decides whether they exist at all (verticalOK / module_enabled),
+# so for any other kind of business the grant is inert.
 # `closing` (Daily Closing) is a store-operations feature: every tier that already gets `storeops`
 # (admin / market / store manager) also gets `closing` so a NEW tenant's managers can run closings out
 # of the box — the seed list stays in lockstep with MODULE_CATALOG. FORWARD-ONLY: this seeds roles at
 # tenant CREATION; it never rewrites an existing tenant's role rows, so the house/Boost org is untouched
 # (byte-identical). An existing tenant grants/revokes any module per role on /admin/roles.
 _BASE_ROLES = [
-    ("admin", "Admin", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, closing=True, notify=True, helpdesk=True, hr=True, ai_assistant=True, admin=True), "scope": "all", "home": "/commcalc"}),
-    ("market_manager", "Market Manager", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, closing=True, notify=True, helpdesk=True, hr=True, ai_assistant=True), "scope": "market", "home": "/commcalc/targets"}),
-    ("store_manager", "Store Manager", {"modules": _mods(commissions=True, targets=True, asset=True, storeops=True, closing=True, helpdesk=True, ai_assistant=True), "scope": "store", "home": "/commcalc/targets"}),
+    ("admin", "Admin", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, closing=True, notify=True, helpdesk=True, hr=True, ai_assistant=True, admin=True, franchise_ops=True, supply_ordering=True, royalty=True), "scope": "all", "home": "/commcalc"}),
+    ("market_manager", "Market Manager", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, closing=True, notify=True, helpdesk=True, hr=True, ai_assistant=True, franchise_ops=True, supply_ordering=True, royalty=True), "scope": "market", "home": "/commcalc/targets"}),
+    ("store_manager", "Store Manager", {"modules": _mods(commissions=True, targets=True, asset=True, storeops=True, closing=True, helpdesk=True, ai_assistant=True, franchise_ops=True, supply_ordering=True), "scope": "store", "home": "/commcalc/targets"}),
     ("sales_rep", "Sales Rep", {"modules": _mods(targets=True, helpdesk=True), "scope": "self", "home": "/commcalc/targets/my"}),
 ]
 
@@ -855,8 +867,25 @@ def list_tenants(authorization: str = Header(default="")):
     return {"tenants": tens}
 
 
+def _set_tenant_vertical(client, org_id, value):
+    """Validate a vertical against the vocabulary (core/verticals — never a literal here) and write it.
+    Returns (ok, message). A value not in the vocabulary is refused, never stored."""
+    from app.modules.core import verticals as _vert
+    vocab, ready = _vert.load_vocab(client)
+    v = str(value or "").strip()
+    if not _vert.valid_choice(v, vocab):
+        return False, "unknown business type"
+    if not ready:
+        return False, "business types are not set up yet (migration 1020 pending)"
+    try:
+        client.schema("storeops").table("tenants").update({"vertical": v}).eq("org_id", org_id).execute()
+    except Exception:
+        return False, "business type could not be saved (migration 1020 pending)"
+    return True, "saved"
+
+
 def _provision_tenant(client, name, admin_email, admin_name=None, password=None, slug=None, must_reset=True,
-                      package_key=None):
+                      package_key=None, vertical=None):
     """Create a tenant (org_id) + seed base roles + module entitlements + provision its first admin
     login. Shared by super-admin create-tenant AND self-serve signup. Returns the temp password only
     when one was auto-generated (super-admin flow), not when the caller chose it (signup)."""
@@ -886,6 +915,11 @@ def _provision_tenant(client, name, admin_email, admin_name=None, password=None,
         # migration degrades to "no trial" instead of blocking signup entirely.
         client.schema("storeops").table("tenants").insert(
             {"org_id": new_org, "name": name, "slug": slug}).execute()
+    # The kind of business (mig 1020) — written BEFORE sync_tenant so the first entitlement pass already
+    # drops the modules that do not belong to it. Its own best-effort write: a pre-1020 database simply
+    # leaves the tenant on the default vertical, and provisioning never fails because of it.
+    if vertical:
+        _set_tenant_vertical(client, new_org, vertical)
     client.schema("storeops").table("roles").insert(
         [{"org_id": new_org, "name": n, "display_name": d, "permissions": p} for (n, d, p) in _BASE_ROLES]).execute()
     # Entitlement + tenant-safe default content in one shot: enables modules per the (all-access
@@ -912,6 +946,7 @@ class CreateTenantIn(LaxModel):
     admin_name: str = ""
     temp_password: str = ""
     slug: str = ""
+    vertical: str = ""
 
 
 @router.post("/tenants")
@@ -923,7 +958,8 @@ def create_tenant(body: CreateTenantIn, authorization: str = Header(default=""))
     if not name or not admin_email:
         raise HTTPException(400, "name and admin_email required")
     return _provision_tenant(sb(), name, admin_email, (body.admin_name or None),
-                             password=(body.temp_password or None), slug=(body.slug or None), must_reset=True)
+                             password=(body.temp_password or None), slug=(body.slug or None), must_reset=True,
+                             vertical=(body.vertical or None))
 
 
 # ─────────────────────────────────────────────
@@ -1047,6 +1083,7 @@ class SignupIn(LaxModel):
     password: Any = None
     admin_name: Any = None
     package_key: Any = None
+    vertical: Any = None
 
 
 @router.post("/signup")
@@ -1079,8 +1116,14 @@ def signup(body: SignupIn):
         from app.modules.billing.pricing import published_package_keys  # lazy: billing imports core
         if package_key not in published_package_keys(client):
             raise HTTPException(400, "that plan is not available")
+    # The kind of business is optional and, like the plan, only accepted from the vocabulary.
+    vertical = (str(body.vertical).strip() if body.vertical else "") or None
+    if vertical:
+        from app.modules.core import verticals as _vert
+        if not _vert.valid_choice(vertical, _vert.load_vocab(client)[0]):
+            raise HTTPException(400, "that business type is not available")
     res = _provision_tenant(client, name, admin_email, body.admin_name, password=password,
-                            must_reset=False, package_key=package_key)
+                            must_reset=False, package_key=package_key, vertical=vertical)
     return {"org_id": res["org_id"], "name": name, "admin_email": admin_email,
             "package_key": package_key,
             "message": "Company created — sign in with your email and password."}
@@ -2072,6 +2115,51 @@ def list_fix_requests(authorization: str = Header(default=""), x_active_org: str
     except Exception:
         rows = []
     return {"fix_requests": rows, "statuses": list(FIX_STATUSES)}
+
+
+class TenantVerticalIn(LaxModel):
+    vertical: str = ""
+    org_id: str = ""
+
+
+@router.get("/tenant-vertical")
+def get_tenant_vertical(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """The signed-in tenant's business type (mig 1020, index §35) + the choices. Any signed-in user may read."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    caller = _resolve_caller(client, uid, x_active_org)
+    if not caller:
+        raise HTTPException(403, "no tenant for this login")
+    from app.modules.core import verticals as _vert
+    return _vert.me_payload(client, caller["org_id"])
+
+
+@router.put("/tenant-vertical")
+def put_tenant_vertical(body: TenantVerticalIn, authorization: str = Header(default=""),
+                        x_active_org: str = Header(default="")):
+    """The tenant ADMIN declares the kind of business (the onboarding wizard's first question). Super-admins
+    may pass org_id. Re-syncs the tenant's module entitlements so the change takes effect on next load."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    caller = _resolve_caller(client, uid, x_active_org)
+    if not caller:
+        raise HTTPException(403, "no tenant for this login")
+    org_id = (body.org_id if caller["super_admin"] else None) or caller["org_id"] or ORG_ID
+    if not _can_edit_setting(caller, "business_type"):
+        raise HTTPException(403, "you don't have permission to change the business type")
+    ok, msg = _set_tenant_vertical(client, org_id, body.vertical)
+    if not ok:
+        raise HTTPException(400, msg)
+    try:
+        sync_tenant(client, org_id)
+    except Exception:
+        pass
+    from app.modules.core import verticals as _vert
+    return {"ok": True, "vertical": _vert.me_payload(client, org_id)}
 
 
 @router.get("/tenant-settings")

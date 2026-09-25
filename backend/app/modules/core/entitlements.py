@@ -27,7 +27,8 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"   # house org (middleware rewrit
 # tenant re-syncs on its next /core/me. (1 = initial tenant-provisioning engine, mig 076; 2 = mig 077
 # folded the configurable HR intake-capture form into seed_tenant_defaults(); 3 = mig 079 expanded
 # seed_intake_fields() into the comprehensive HR packet — work eligibility, W-4, policies.)
-SEED_VERSION = 14  # bumped: 14 = migs 986/987 registered the 'marketing' module (outside-store event
+SEED_VERSION = 15  # bumped: 15 = mig 1020 — three vertical-scoped modules (franchise_ops / supply_ordering /
+#   royalty) enter the catalog and effective_modules drops modules outside the tenant's vertical. 14 = migs 986/987 registered the 'marketing' module (outside-store event
                    #              management), so every EXISTING tenant self-provisions a marketing
                    #              tenant_modules entitlement row on its next login instead of waiting
                    #              for a manual grant. The module's own default CONTENT (the eight
@@ -121,6 +122,12 @@ MODULE_CATALOG = {
     # /health module list. Mirrored in core.module_catalog by migration 987; this dict is the
     # fallback, so the app behaves identically whether or not that migration has run.
     "marketing": "Marketing & Events",
+    # Vertical-scoped modules (mig 1020, index §35). Which vertical each belongs to is DATA —
+    # core.module_catalog.applies_to_vertical, mirrored in core/verticals.HOUSE_MODULE_VERTICALS —
+    # and module_enabled / effective_modules below read it; nothing here names a vertical.
+    "franchise_ops": "Store Operations Dashboard",
+    "supply_ordering": "Supply Ordering & Price Compare",
+    "royalty": "Franchise Royalty & Cost Centers",
 }
 ALL_MODULES = list(MODULE_CATALOG.keys())
 
@@ -169,6 +176,18 @@ def module_enabled(org_id: str, key: str, client=None) -> bool:
     key = canonical_module_key(key)
     try:
         client = client or get_supabase()
+    except Exception:
+        return True
+    # The tenant's VERTICAL comes first (mig 1020): a module that does not belong to this kind of business
+    # is never enabled — checked even when tenant_modules is unreachable, so failing open on that table
+    # can never open a module to the wrong vertical.
+    try:
+        from app.modules.core import verticals as _vert
+        if not _vert.module_applies_to_tenant(client, org_id, key):
+            return False
+    except Exception:
+        pass
+    try:
         rows = (client.schema("storeops").table("tenant_modules").select("is_enabled")
                 .eq("org_id", org_id).eq("module_key", key).limit(1).execute().data or [])
     except Exception:
@@ -210,11 +229,20 @@ def effective_modules(client, org_id: str) -> set:
                 .select("modules").eq("org_id", org_id).limit(1).execute().data) or []
     except Exception:
         rows = []
-    if rows:
-        mods = rows[0].get("modules")
-        if mods:  # a non-empty list = pay-per-module → only these (aliases normalized; unknown dropped)
-            return {canonical_module_key(m) for m in mods if canonical_module_key(m) in catalog}
-    return set(catalog.keys())  # no plan / NULL / empty modules = all-access
+    if rows and rows[0].get("modules"):
+        # a non-empty list = pay-per-module → only these (aliases normalized; unknown dropped)
+        mods = {canonical_module_key(m) for m in rows[0]["modules"] if canonical_module_key(m) in catalog}
+    else:
+        mods = set(catalog.keys())  # no plan / NULL / empty modules = all-access
+    # …minus the modules that do not belong to the tenant's vertical (mig 1020). '{}' scope = any vertical,
+    # so for every existing module and tenant this removes nothing.
+    try:
+        from app.modules.core import verticals as _vert
+        ctx = _vert.vertical_context(client, org_id)
+        mods -= set(_vert.hidden_modules(ctx["module_scopes"], ctx["vertical"]["key"]))
+    except Exception:
+        pass
+    return mods
 
 
 def sync_tenant(client, org_id: str) -> dict:

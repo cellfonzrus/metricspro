@@ -60,6 +60,7 @@ Primary code homes:
 | 11b | **Inventory integrity (POS units)** | "383 phones say in stock — which were really sold (sales report by invoice, commission report), to WHICH customer, and how do I move one out with one click and have a manager confirm it? Why did receiving this IMEI pop up a duplicate warning? How do I adjust a unit in or out, and where is that recorded?" |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
+| 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
 
 ---
 
@@ -10977,3 +10978,94 @@ endpoint that calls `pricecompare/core.py` moved into `backend/app/modules/asset
 (5) *The UPS Store gate* = the tenant declares no wireless carrier, so every carrier-scoped connector / report kind is
 already withheld by `report_kinds.visible_kinds` / `connector_registry.visible`; the wireless NAV modules are gated through
 the existing `NAV_CARRIERS` / package mechanism — to be verified per page, not assumed.
+
+---
+
+## 35. TENANT VERTICAL — what kind of business a tenant is, and what that hides; the Store Operations dashboard (owner 2026-09-24/25, mig `1020`)
+
+Owner, verbatim (abridged): *"UPS store … a new tenant … keep them gated from wireless vendors if ups store is selected"* ·
+*"Create a dashboard for UPS Store operations and add the comparison prices module there"* · *"Royalty report … only show up
+if a ups store is selected while onboarding"*.
+
+**THE CLASS (measured before building).** *The platform had no business-type axis; every gate was carrier-shaped, so a tenant
+with NO carrier was shown EVERYTHING.* Measured: `rbac.carrierOK` returns true on an empty carrier list (`core/router.py` /core/me
+comment "Empty list = no carrier chosen yet → the frontend hides nothing"); `defaultActiveCarrier` fell back to `'boost'`, putting a
+carrier-less tenant in the Boost lens; the generic wireless pages (Incentives, Payout Plans, activations, distributors) were never in
+`NAV_CARRIERS`; `storeops.tenants.package_key` is a pricing plan that gates nothing; the Setup Wizard's profile check requires every
+question, so a tenant with no carrier could never finish it. §34's note that "declaring no carrier withholds them" held for
+connectors / report kinds only, not the nav.
+
+**ONE FACT, ONE HOME.** `storeops.tenants.vertical` (NULL = the default vertical ⇒ every pre-1020 tenant reads exactly as today)
+over the vocabulary **`core.tenant_vertical`** (`key`, `label`, `is_default` — exactly one, `uses_carriers`, `nav_hidden[]` — page
+hrefs the vertical does not see, `'x$'` = exactly x, else x and x/…). Module ownership is **`core.module_catalog.applies_to_vertical`**
+(`'{}'` = any — every existing module unchanged). House seed: `wireless_retail` (default, uses carriers, hides nothing);
+`ups_store` (no carriers; hides the wireless pages: activations, commission/incentive/payout, targets, device/asset lending,
+distributors, carrier / ePay / bill-pay / accessory recons, the commission intake). New modules `franchise_ops` / `supply_ordering`
+/ `royalty` → `ups_store`; `vip` → `wireless_retail`. Code mirror `core/verticals.HOUSE_VERTICALS` / `HOUSE_MODULE_VERTICALS`,
+byte-equal (the lock parses the SQL back), so the app answers identically before the migration.
+
+- **Reader:** `backend/app/modules/core/verticals.py` — PURE `normalise_vertical`, `default_vertical`, `resolve_vertical` (unset or
+  unknown → default; an unknown value is reported as `source: unknown_value`, never turned into another vertical's gates),
+  `module_applies`, `hidden_modules`, `href_hidden`, `payload`, `valid_choice`; I/O `load_vocab`, `load_module_scopes`,
+  `declared_vertical`, **`tenant_vertical`** (THE reader), `vertical_context`, `module_applies_to_tenant`, `me_payload`. Every
+  read degrades to the mirror / the default — never to "hide all".
+- **Backend gates (EXTENDED, not siblinged):** `entitlements.module_enabled` refuses a module outside the tenant's vertical — checked
+  BEFORE the fail-open on `tenant_modules`, so an unreachable table never opens a module to the wrong vertical — hence every
+  `require_module(...)` router; `effective_modules` drops them (so `sync_tenant` writes them off). `SEED_VERSION` 15.
+- **Declaration writes:** `core/router._set_tenant_vertical` (validates against the vocabulary; refuses, never stores, an unknown
+  value). Called by `_provision_tenant(vertical=)` BEFORE the first `sync_tenant`; `POST /core/tenants` (`vertical`), `POST /core/signup`
+  (`vertical`, vocabulary-checked like the plan), **`GET` / `PUT /core/tenant-vertical`** (tenant admin via `_can_edit_setting(caller,
+  'business_type')`, super-admin via `org_id`; PUT re-syncs the tenant's modules).
+- **/core/me** → `tenant.vertical` = `me_payload` (`key`, `label`, `source`, `uses_carriers`, `nav_hidden`, `hidden_modules`,
+  `choices`, `registry_ready`).
+- **Frontend gate (spells no vertical):** `lib/rbac.ts` `VerticalInfo`, `hrefHiddenByVertical` (twin of `href_hidden`),
+  **`verticalOK(item, v, caps)`** (override `caps['vertical:<href>']` wins; then `hidden_modules`, `nav_hidden`, and — when
+  `uses_carriers === false` — every `NAV_CARRIERS` page), **`verticalPathOK(path, v)`** (route guard twin, longest-prefix module).
+  Applied in the sidebar (`(platform)/layout.tsx` filteredGroups), `hub/[group]` `gateItems`, `compliance` visibleItems, the route
+  guard (super-admin never bounced), `safeHomeFor(perms, vertical)` (a role home the vertical hides is skipped — no redirect loop for
+  a rep whose default home is a wireless page) incl. the login redirect; `defaultActiveCarrier(carriers, usesCarriers)` → `''` when
+  the vertical uses no carriers (auth-context).
+- **Setup Wizard:** `commcalc/onboarding` renders **BusinessTypeCard** ("1. What kind of business is this?", choices from the payload,
+  saves via PUT /core/tenant-vertical); `_onboarding_profile_step(carriers, uses_carriers)` drops the carrier / processor questions
+  for a vertical without carriers (so its profile can complete); `GET /commcalc/onboarding` carries `vertical`.
+- **Base roles:** `_BASE_ROLES` grants `franchise_ops` / `supply_ordering` / `royalty` to admin + market manager and `franchise_ops`
+  / `supply_ordering` to store manager — inert for any other vertical (the vertical decides whether the module exists).
+
+**THE STORE OPERATIONS DASHBOARD** — `frontend/src/app/(platform)/franchise/page.tsx`, NAV group *Store Operations* (module
+`franchise_ops`). **It computes nothing**: cash in the stores = `GET /closing/store-cash-on-hand` (`_cash_position_core`, the Cash
+Position report's own function); closing set-up = `GET /closing/readiness`; supply = `GET /supply/summary` (§36); royalty =
+`GET /account/royalty/summary` (§37). A source that is not deployed / not enabled says so on its tile (never a zero). Quick links to
+the daily / reconcile / supplies / finance / people screens.
+
+**DUPLICATE CHECK (build gate).** Searched `tenants.package_key` (908), `report_kinds.tenant_declaration` (POS + carriers — left
+untouched; the finance work in §37 adds the vertical to it for report kinds), `connector_registry` (1014), `core.module_catalog` (700)
++ `entitlements`, `NAV_CARRIERS` / `carrierOK` / `carrierOKActive`, the marketing module's dashboard pattern, `closing/summary`,
+`store-cash-on-hand`, `readiness`. Nothing answered "what kind of business is this"; the module gate and the nav gate were EXTENDED.
+
+**THE LOCK.** `backend/harness_tenant_vertical.py` (60, stdlib, in `carrier-vocab-guard.yml`): §A mirror = seed; §B pure rules; §C every
+`nav_hidden` entry is a real NAV page (none stale) and a pinned list of pages a non-carrier store runs on (closing, cash / card recon,
+uploads, imports, POs, expenses, P&L, payroll, schedule, POS register …) is never hidden; §D behaviour over a fake client (existing
+tenants unchanged, franchise tenant scoped, fail-open never crosses verticals, mirror fallback); §E every gate still asks (13 wires,
+backend + frontend); §F no vertical key spelled in `backend/app` or `frontend/src` outside the mirror; §G six negative controls.
+
+**THE CLOSING FORM (mig `1024`, same PR).** Owner: *"Cash and credit needs to reconciled by the reps declaring the actual cash at the
+end of the day … most of this is already made but might need some tweaking."* Tenders (`tender_config`, mig 111) and transaction
+counts (`count_config`, mig 501) were already per-tenant config; four WIRELESS inputs were hard-wired into
+`components/ClosingSubmitForm.tsx`: the *Accessory Sale $* box, the *Bill Payments, already included above* section, the three
+built-in activation counts used when a tenant configured none, and the financing (lease) tender in the built-in tender fallback.
+They are now DATA on the vertical: **`core.tenant_vertical.closing_hidden[]`** (section keys `acc_sale` · `bill_payments` ·
+`activation_counts` · `tender:<built-in key>`; franchise seed hides all four), mirrored in `HOUSE_VERTICALS[*].closing_hidden`,
+carried by `me_payload` → `tenant.vertical.closing_hidden`, read by the form (`closingHidden`, `builtinTenders`). A hidden box submits
+empty — exactly a blank one today — so no recon, gate or stored value changes; a franchise tenant with no count fields sees a pointer
+to *Daily Closing → Count Fields* instead of wireless counts. `load_vocab` reads a database that has 1020 but not 1024 (closing_hidden
+from the mirror by key, registry still ready). Cash / card reconciliation itself (envelope + pickup + count, deposit recon, 3-way
+tender recon, external credit recon + the merchant-portal sweep, email / FTP auto-import) is REUSED unchanged — it is generic.
+
+**Migrations `1020` + `1024` — SURFACED, NOT APPLIED.** Not money-touching. Until applied the mirror answers and saving a business
+type says "migration 1020 pending".
+
+**Seams (stated, not hidden).** (1) A tenant's roles created BEFORE this change carry no grant for the three new modules — only a
+franchise tenant needs them, and it is new; an admin grants them on Roles & Access. (2) `nav_hidden` is per vertical, not per tenant;
+a single tenant exception rides the existing `caps['vertical:<href>']` override. (3) Backend endpoints of the hidden wireless PAGES are
+not vertical-gated (the page is unreachable from the UI and the data is the tenant's own); the vertical-scoped MODULES are
+(`require_module`). (4) `GET /closing/readiness` still words its count-config note as "built-in 3 activation-count fields" (an info note).

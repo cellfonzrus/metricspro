@@ -234,6 +234,12 @@ on:
       - ".github/workflows/carrier-vocab-guard.yml"
       - "tools/vendor_price_compare/**"
       - "backend/harness_vendor_price_compare.py"
+      - "backend/harness_tenant_vertical.py"
+      - "backend/app/modules/core/verticals.py"
+      - "backend/app/modules/core/entitlements.py"
+      - "database/migrations/1020_tenant_vertical.sql"
+      - "database/migrations/1024_vertical_closing_sections.sql"
+      - "frontend/src/components/ClosingSubmitForm.tsx"
   push:
     branches: [main]
     paths:
@@ -327,6 +333,9 @@ jobs:
       - name: Run the vendor price-compare proof (price / pack / stock reading, cross-vendor matching, cheapest in stock; no vendor or password in code; the crawler refuses cart / order links — index §34)
         working-directory: backend
         run: python3 harness_vendor_price_compare.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the tenant-vertical lock (one business-type declaration; every module / page / route / carrier gate asks it; mirror = seed; no vertical spelled in code — index §35)
+        working-directory: backend
+        run: python3 harness_tenant_vertical.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CUSTOMER-MASTER PROOF (index §30.16) drives the REAL matcher, rebuild, line writer and /pos endpoints over the
   # in-memory client (harness_intake_fakes) — it imports the app, so it runs in its own job with the backend's

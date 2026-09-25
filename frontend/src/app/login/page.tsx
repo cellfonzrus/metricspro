@@ -11,7 +11,7 @@ export default function LoginPage() {
   const { session, permissions, loading, provisioned, active, user, signOut,
           tenants, needsTenantChoice, switchTenant,
           pendingConnections, connectTenant, disableAndSwitch, dismissPending,
-          needs2fa, twofa, startTwoFactor, verifyTwoFactor } = useAuth()
+          needs2fa, twofa, startTwoFactor, verifyTwoFactor, tenant } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
@@ -54,8 +54,8 @@ export default function LoginPage() {
     if (pendingConnections.length) return
     if (needs2fa) return
     if (user?.must_reset_password) router.replace('/account/password')
-    else router.replace(safeHomeFor(permissions))
-  }, [loading, session, provisioned, active, permissions, user, router, pendingConnections, needs2fa])
+    else router.replace(safeHomeFor(permissions, tenant?.vertical))
+  }, [loading, session, provisioned, active, permissions, user, router, pendingConnections, needs2fa, tenant?.vertical])
 
   // Credentials accepted but the login belongs to MORE THAN ONE tenant and none is chosen yet →
   // show a tenant picker (platform-core-9). Picking one loads that tenant's profile, and the effect

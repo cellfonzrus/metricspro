@@ -9,7 +9,7 @@ import AskBar from '@/components/AskBar'
 import { useAuth, useActiveCarrier } from '@/lib/auth-context'
 import { setActiveOrg } from '@/lib/client'
 import { apiCached, CONFIG } from '@/lib/cache'
-import { NAV, canSeeItem, canAccessPath, carrierOKActive, safeHomeFor, applyNavLayout, carrierCode, REPORT_CATEGORIES, type NavItem, type NavLayout } from '@/lib/rbac'
+import { NAV, canSeeItem, canAccessPath, carrierOKActive, verticalOK, verticalPathOK, isSuperAdmin, safeHomeFor, applyNavLayout, carrierCode, REPORT_CATEGORIES, type NavItem, type NavLayout } from '@/lib/rbac'
 import { carrierDisplayName } from '@/lib/carrier-scope'
 import { actingCompany, switcherOptions, switcherVisible, switchConfirmText } from '@/lib/tenant-scope'
 import HelpPanel from '@/components/HelpPanel'
@@ -206,7 +206,7 @@ function ImpersonationBanner() {
 
 function PlatformShell({ children, open }: { children: React.ReactNode; open: boolean }) {
   const { period, setPeriod, periods } = usePeriod()
-  const { user, permissions, signOut, tenants, activeOrg, impersonationInfo } = useAuth()
+  const { user, permissions, signOut, tenants, activeOrg, impersonationInfo, tenant } = useAuth()
   // Active-carrier lens: the sidebar is gated on the ACTIVE carrier, not the tenant's whole carrier
   // set, so a dual-carrier tenant sees one carrier's cluster at a time. Single-carrier tenants are
   // pinned to their only carrier (multi=false), so this is byte-identical to the old carrierOK gate.
@@ -236,11 +236,12 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
   // reference every render (e.g. on every search keystroke) would also defeat the `index` useMemo below.
   const filteredGroups = useMemo(
     () => (open ? NAV : NAV.map(g => ({ ...g, items: g.items.filter(it => canSeeItem(permissions, it)) })))
-      .map(g => ({ ...g, items: g.items.filter(capOK).filter(it => carrierOKActive(it.href, activeCarrier, caps)) }))
+      .map(g => ({ ...g, items: g.items.filter(capOK).filter(it => carrierOKActive(it.href, activeCarrier, caps))
+        .filter(it => verticalOK(it, tenant?.vertical, caps)) }))
       .filter(g => g.items.length > 0),
     // `caps`/`capOK` derive from `navCfg` (a new `navCfg.capabilities || {}` each render would defeat
     // this memo), so key on the stable `navCfg` state object instead.
-    [open, permissions, activeCarrier, navCfg])
+    [open, permissions, activeCarrier, navCfg, tenant?.vertical])
   // Per-org admin layout override (move items between groups / hide) — applied AFTER all access gating,
   // so anything an admin hasn't touched keeps its built-in placement and a newly-enabled item still shows.
   const groups = useMemo(
@@ -650,7 +651,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
 
 function Guard({ children }: { children: React.ReactNode }) {
   const { loading, session, user, permissions, provisioned, active, signOut, needsTenantChoice,
-          rbacEnabled, sessionInvalid, refresh } = useAuth()
+          rbacEnabled, sessionInvalid, refresh, tenant } = useAuth()
   const pathname = usePathname()
   const router = useRouter()
   // Master switch: until the admin turns enforcement ON, the app stays fully open (today's
@@ -682,11 +683,13 @@ function Guard({ children }: { children: React.ReactNode }) {
     if (needsTenantChoice) { router.replace('/login'); return }
     if (!provisioned || !active) return
     if (user?.must_reset_password) { router.replace('/account/password'); return }
-    if (!canAccessPath(permissions, pathname)) {
-      const dest = safeHomeFor(permissions)
+    // The tenant's VERTICAL (mig 1020) bounces a page that does not exist for this kind of business, the
+    // same way RBAC does — a super-admin (who sees every tab) is never bounced.
+    if (!canAccessPath(permissions, pathname) || (!isSuperAdmin(permissions) && !verticalPathOK(pathname, tenant?.vertical))) {
+      const dest = safeHomeFor(permissions, tenant?.vertical)
       if (dest !== pathname) router.replace(dest)   // guard against redirecting to a gated-off home (loop)
     }
-  }, [enforce, loading, session, provisioned, active, user, permissions, pathname, router, needsTenantChoice, sessionInvalid])
+  }, [enforce, loading, session, provisioned, active, user, permissions, pathname, router, needsTenantChoice, sessionInvalid, tenant?.vertical])
 
   if (enforce === null) return <Splash text="Loading…" />
   if (enforce === false) return <PlatformShell open>{children}</PlatformShell>  // app open
@@ -717,6 +720,7 @@ function Guard({ children }: { children: React.ReactNode }) {
     onSignOut={() => signOut().then(() => router.replace('/login'))} />
   if (user?.must_reset_password) return <Splash text="Redirecting…" />
   if (!canAccessPath(permissions, pathname)) return <Splash text="Redirecting…" />
+  if (!isSuperAdmin(permissions) && !verticalPathOK(pathname, tenant?.vertical)) return <Splash text="Redirecting…" />
   return <PlatformShell open={false}>{children}</PlatformShell>
 }
 
