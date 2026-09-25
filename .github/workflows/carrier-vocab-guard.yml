@@ -270,6 +270,9 @@ on:
       - "backend/harness_supply_ordering.py"
       - "backend/harness_paramount_kpi_lock.py"
       - "backend/app/modules/commcalc/paramount_kpi.py"
+      - "backend/harness_kpi_registry_lock.py"
+      - "backend/app/modules/commcalc/kpi_failing.py"
+      - "frontend/src/components/EmployeeWidgets.impl.tsx"
       - "backend/harness_browser_sweep_kinds.py"
       - "database/migrations/1021_supply_ordering.sql"
   push:
@@ -371,6 +374,9 @@ jobs:
       - name: Run the Paramount KPI column lock (one exact column table; an unknown header yields no value, never the neighbour's; the import writes every key it parsed — index §19.20)
         working-directory: backend
         run: python3 harness_paramount_kpi_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the KPI registry lock (one built-in KPI set; the PAID score and the SHOWN score read it; the hand-entry grid is the tenant's own registry — index §19.27)
+        working-directory: backend
+        run: python3 harness_kpi_registry_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the supply-ordering proof (vendor setup incl. free-shipping threshold + delivery days; catalog ingest; the cart optimizer with thresholds / lead time / stock / packs; the order recipe never submits on its own; confirmation capture; one lander, one connector key, one pricing copy — index §36)
         working-directory: backend
         run: python3 harness_supply_ordering.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

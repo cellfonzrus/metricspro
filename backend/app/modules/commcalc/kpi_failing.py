@@ -24,6 +24,29 @@ CLASSIFICATION HONESTY: a metric with NO recorded value is `no_data`, never "fai
 report must never accuse a store/rep off a blank cell. Only metrics with an actual < target fail.
 """
 
+# THE BUILT-IN KPI SET — (metric_key, label, payout_config_col, default target). ONE HOME.
+#
+# This is the set the pay engine scores a rep on and writes into `rep_commissions.kpi_values`, and
+# the set `_kpi_defs` falls back to when a tenant has defined none of their own. It lived in TWO
+# places — `router.ACTION_KPI_DEFS` and a literal dict in `calculator.py` — with the same seven keys,
+# the same config columns and the same defaults written out twice. A tenant KPI change that reached
+# one and not the other would have moved the displayed score away from the paid score in silence,
+# which is the divergence CLAUDE.md's "one fact, one home, dereferenced" rule exists to stop. Both
+# now read THIS tuple; `harness_kpi_registry_lock.py` fails the build if a second copy appears.
+#
+# It is deliberately NOT the same fact as the registry (`carrier_kpi_metric`): the registry says what
+# a TENANT has defined, this says what the platform can actually MEASURE without help. A metric in
+# the registry but not here (or in STORE_KPI_COLUMNS) has no automated feed — see `auto_fed`.
+BUILTIN_KPI_DEFS = (
+    ("atu",        "ATU",         "kpi_atu_target",        55),
+    ("protect",    "Protect",     "kpi_protect_target",    80),
+    ("boostapp",   "Carrier App", "kpi_boostapp_target",   65),
+    ("familyplan", "Family Plan", "kpi_familyplan_target", 45),
+    ("byod",       "BYOD",        "kpi_byod_target",       35),
+    ("tmr3",       "TMR3",        "kpi_tmr3_target",       70),
+    ("aal",        "AAL",         "kpi_aal_target",         5),
+)
+
 # metric_key → raw_dlar_store column (the store-grain actual). Keys not named here (e.g.
 # `boostapp`, tenant-custom metrics) simply have no store-level DLAR value → no_data at store
 # grain; they are still evaluated at rep grain when rep_commissions.kpi_values carries them.
@@ -35,6 +58,27 @@ STORE_KPI_COLUMNS = {
     "tmr3": "tmr3",
     "aal": "aal_conversion",
 }
+
+# The keys the pay engine measures at rep grain (what lands in rep_commissions.kpi_values).
+REP_KPI_KEYS = tuple(k for (k, _l, _c, _d) in BUILTIN_KPI_DEFS)
+
+
+def auto_fed(metric_key):
+    """Does this metric arrive on its own, or must somebody type it in?
+
+    TRUE when the platform measures it without help — at rep grain (the pay engine writes it into
+    `kpi_values`) or at store grain (a raw_dlar_store column). FALSE for a metric a tenant defined
+    that no feed fills: those are the ones that need a hand-entry box, and they are the ONLY ones
+    that should get one. Deriving this from the two feed maps is what lets the manual-entry grid
+    stop carrying its own list of "metrics with no feed yet" — a list that was wrong the moment a
+    tenant defined an eighth metric, and that showed one tenant another tenant's metrics.
+
+    NOT read from `carrier_kpi_metric.source_mode`: that column defaults to 'manual' and is only
+    written when somebody touches the toggle, so today it reads 'manual' for all seven built-ins
+    that are in fact auto-fed. A column that is wrong rather than absent cannot be the discriminator.
+    """
+    k = str(metric_key or "").strip()
+    return bool(k) and (k in REP_KPI_KEYS or k in STORE_KPI_COLUMNS)
 
 
 def _num(v):
