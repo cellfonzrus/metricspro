@@ -279,14 +279,25 @@ def run_per_transaction_vs_per_line():
     t_txn[("commcalc", "raw_sales")] = rows
     pay_txn = _money(_preview(t_txn)["totals"]["payout"])
 
-    line_rule = dict(ACTIVATION_RULE, unit_basis="")             # per_line default
+    # 2026-09-25 (owner: "per action and per upgrade ... the system sis calculating per line item"): an
+    # activation-type $/unit rule with NO unit_basis of its own now pays per activation EVENT by default
+    # (plan_pay_gate ⑥ auto_event_fields) — one activation here, $10. An EXPLICIT per_line still over-counts,
+    # which is exactly what that setting says.
+    auto_rule = dict(ACTIVATION_RULE, unit_basis="")             # auto -> per_event
+    t_auto = _base_tables([auto_rule])
+    t_auto[("commcalc", "raw_sales")] = rows
+    pay_auto = _money(_preview(t_auto)["totals"]["payout"])
+
+    line_rule = dict(ACTIVATION_RULE, unit_basis="per_line")     # explicit per_line
     t_line = _base_tables([line_rule])
     t_line[("commcalc", "raw_sales")] = rows
     pay_line = _money(_preview(t_line)["totals"]["payout"])
 
     print(f"   per_transaction  : ${pay_txn:,.2f}  (expect $10.00 — 1 activation)")
-    print(f"   per_line default : ${pay_line:,.2f}  (would be $20.00 — the over-count)")
+    print(f"   auto (per_event) : ${pay_auto:,.2f}  (expect $10.00 — 1 activation)")
+    print(f"   explicit per_line: ${pay_line:,.2f}  (would be $20.00 — the over-count, as configured)")
     assert pay_txn == 10.0, pay_txn
+    assert pay_auto == 10.0, pay_auto
     assert pay_line == 20.0, pay_line
     print("   PASS — per_transaction matches the report's distinct-txn count\n")
 

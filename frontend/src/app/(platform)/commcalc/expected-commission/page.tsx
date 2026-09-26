@@ -6,6 +6,7 @@ import { ReportShell } from '@/components/ReportShell'
 import type { ExportColumn } from '@/lib/export'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
+import { multimonthOffered, useMultimonthStatus } from '../_lib/multimonth'
 
 // EXPECTED vs EARNED — multi-month commission, months 2..6 (configurable).
 //
@@ -98,6 +99,8 @@ function Tile({ label, value, tone, sub }: { label: string; value: string; tone?
 
 export default function ExpectedCommissionPage() {
   const { period } = usePeriod()
+  // THE multi-month predicate (owner 2026-09-25): say so plainly when this org has none configured
+  const mmStatus = useMultimonthStatus([period])
   const [tab, setTab] = useState<'rows' | 'audit'>('rows')
   const [data, setData] = useState<Data | null>(null)
   const [audit, setAudit] = useState<any>(null)
@@ -167,6 +170,12 @@ export default function ExpectedCommissionPage() {
           moment the dealer is shown paid.
         </p>
       </div>
+      {!multimonthOffered(mmStatus) && (
+        <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 13, color: 'var(--text2)' }}>
+          Multi-month pay is not configured for this organisation (no active multi-month schedule), so there is
+          nothing to expect here. Set one up under <a href="/commcalc/plan-installments" style={{ color: 'var(--accent)' }}>Multi-month installments</a>.
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
         <button className={`btn ${tab === 'rows' ? 'btn-primary' : ''}`} onClick={() => setTab('rows')}>📊 Expected vs earned</button>

@@ -39,7 +39,8 @@ filters (not voided, not a Return) are the same two every commcalc sales report 
 """
 import calendar as _cal
 
-from app.modules.commcalc.calculator import safe_float, classify_line
+from app.modules.commcalc.calculator import safe_float
+from app.modules.commcalc import line_class as _lc   # THE activation-event count unit (2026-09-25)
 from app.modules.commcalc import installment_category as _icat
 from app.modules.commcalc import financing_registry as _finreg
 
@@ -217,15 +218,21 @@ def tally(rows, rules, is_accessory, vendors, line_rules=None):
             # home_internet / sim / unknown — real sales, just not one of the owner's headline items.
             st["other_units"] += 1
 
+        # THE COUNT UNIT (2026-09-25): line_class.activation_units — the org's `event.count_unit`. House
+        # 'transaction' = one unit per receipt that carries such a line (exactly the retired `any(...)`,
+        # a blank-id receipt included); 'event' = one per activation / upgrade on the receipt.
+        _units = [u for u in _lc.activation_units(lines, line_rules, require_txn=False) if u]
         # ── BYOD (independent tally, like the Sales Report's BYOD column) ──
-        if any(classify_line(ln, line_rules) == "byod" for ln in lines):
-            cats.setdefault("byod", _blank_metric())["units"] += 1
+        _nb = len({u[1] for u in _units if u[0] == "byod"})
+        if _nb:
+            cats.setdefault("byod", _blank_metric())["units"] += _nb
 
         # ── Activation (independent tally): a PREMIUM new-line activation on the receipt. THE one
-        #    predicate (line_class via classify_line) the commission engine / Sales Report use, over the
-        #    whole row with the org's rules; distinct-txn count. ──
-        if any(classify_line(ln, line_rules) == "premium" for ln in lines):
-            cats.setdefault("activation", _blank_metric())["units"] += 1
+        #    predicate (line_class) the commission engine / Sales Report use, over the whole row with the
+        #    org's rules. ──
+        _np = len({u[1] for u in _units if u[0] == "premium"})
+        if _np:
+            cats.setdefault("activation", _blank_metric())["units"] += _np
 
         # ── Accessories: every accessory LINE on the receipt, with its revenue ($ is the headline) ──
         for ln in lines:

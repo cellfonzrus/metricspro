@@ -22,20 +22,23 @@ import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { useAuth, useActiveCarrier } from '@/lib/auth-context'
 import { useCachedApi, CONFIG } from '@/lib/cache'
-import { NAV, canSeeItem, carrierOKActive, verticalOK, type NavItem, type NavLayout } from '@/lib/rbac'
+import { NAV, platformOK, canSeeItem, carrierOKActive, verticalOK, type NavItem, type NavLayout } from '@/lib/rbac'
 import HubTiles from '@/components/HubTiles'
 import { slugGroup, defaultHubGroups, layoutToHubGroups, mergeUnplacedItems, subsFromNavLayout,
-         type TileLayout } from '@/lib/tile-hubs'
+         subsFromItemTiles, type TileLayout } from '@/lib/tile-hubs'
 
 type NavCfg = { labels?: Record<string, string>; capabilities?: Record<string, boolean | null>; layout?: NavLayout }
 type TileResp = { module: string; layout: TileLayout | null; resolved_from: 'tenant' | 'house' | null }
 
 export default function HubDashboardPage() {
   const { group: slug } = useParams<{ group: string }>()
-  const { permissions, session, rbacEnabled, tenant } = useAuth()
+  const { permissions, session, rbacEnabled, tenant, user } = useAuth()
   const { activeCarrier } = useActiveCarrier()
 
-  const navGroup = useMemo(() => NAV.find(g => slugGroup(g.group) === slug) || null, [slug])
+  // A platform-only group (the Super Admin Toolbox, index §38) resolves for the platform super admin
+  // alone; anyone else gets the same "no dashboard here" notice as an unknown slug.
+  const navGroup = useMemo(
+    () => NAV.find(g => slugGroup(g.group) === slug && platformOK(g, user)) || null, [slug, user])
 
   // Both fetches are best-effort + cached (the same nav-config entry the sidebar shares). A failed
   // tile-layout read degrades to the auto-derived default; a failed nav-config read means no
@@ -84,13 +87,14 @@ export default function HubDashboardPage() {
   // the viewer is not allowed to open: this widens what a DESIGNER may place, never what a VIEWER
   // may see.
   const allVisibleItems = useMemo<NavItem[]>(
-    () => gateItems(NAV.flatMap(g => g.items)), [gateItems])
+    () => gateItems(NAV.filter(g => platformOK(g, user)).flatMap(g => g.items)), [gateItems, user])
 
   const groups = useMemo(() => {
     if (!navGroup) return []
     const designed = layoutToHubGroups(tileResp?.layout, allVisibleItems)
     if (designed.length) return mergeUnplacedItems(designed, visibleItems)
-    const subs = subsFromNavLayout(navGroup.group, visibleItems, navCfg?.layout)
+    const menuSubs = subsFromNavLayout(navGroup.group, visibleItems, navCfg?.layout)
+    const subs = menuSubs.length ? menuSubs : subsFromItemTiles(visibleItems)
     return defaultHubGroups(navGroup.group, visibleItems, subs)
   }, [navGroup, tileResp, visibleItems, allVisibleItems, navCfg])
 

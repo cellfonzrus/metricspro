@@ -2,7 +2,7 @@
 import { useState, useEffect, Fragment } from 'react'
 import { apiCached, CONFIG, LOOKUP } from '@/lib/cache'
 import { api } from '@/lib/client'
-import { REPORT_AREAS, DATA_GRANTS, NAV, reportAreaForPath, canSeeItem, navBlockReason,
+import { REPORT_AREAS, DATA_GRANTS, TENANT_NAV, reportAreaForPath, canSeeItem, navBlockReason,
          schedulingReach, canImpersonate, MASTER_ADMIN_ROLE, MASTER_ADMIN_DISPLAY,
          type Permissions } from '@/lib/rbac'
 import { ExportButtons } from '@/lib/export'
@@ -871,7 +871,7 @@ export default function RolesAdminPage() {
                     Functions — grant/deny every individual screen ({Object.keys(p.pages || {}).length} override{Object.keys(p.pages || {}).length === 1 ? '' : 's'})
                   </summary>
                   <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
-                    {NAV.map(g => (
+                    {TENANT_NAV.map(g => (
                       <div key={g.group}>
                         <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>{g.group}</div>
                         {g.items.map(it => {

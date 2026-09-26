@@ -6,13 +6,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
-import { NAV } from '@/lib/rbac'
+import { TENANT_NAV } from '@/lib/rbac'
 
 type Doc = { id?: string; page_key: string; title?: string; module?: string; user_md?: string
   support_md?: string; common_issues?: any[]; permissions_needed?: string; related_settings?: any; is_published?: boolean }
 type Issue = { symptom?: string; diagnosis?: string; fix?: string; escalate_when?: string }
 
-const NAV_ITEMS = NAV.flatMap(g => g.items.map(it => ({ href: it.href, label: `${g.group} · ${it.label}`, module: it.module })))
+const NAV_ITEMS = TENANT_NAV.flatMap(g => g.items.map(it => ({ href: it.href, label: `${g.group} · ${it.label}`, module: it.module })))
 const emptyDoc = (): Doc => ({ page_key: '', title: '', module: '', user_md: '', support_md: '', common_issues: [], permissions_needed: '', is_published: true })
 
 export default function HelpDocsEditor() {

@@ -21,7 +21,7 @@ function parseNav(src) {
   const groups = []
   let cur = null
   for (const line of body.split('\n')) {
-    const gm = line.match(/\{\s*group:\s*'([^']+)',\s*module:\s*'([^']+)',\s*items:\s*\[/)
+    const gm = line.match(/\{\s*group:\s*'([^']+)',\s*module:\s*'([^']+)',(?:\s*platformOnly:\s*true,)?\s*items:\s*\[/)
     if (gm) { cur = { group: gm[1], module: gm[2], items: [] }; groups.push(cur) }
     const im = line.match(/\{\s*href:\s*'([^']+)',\s*label:\s*'[^']*',\s*icon:\s*'[^']*',\s*module:\s*'([^']+)'/)
     if (im && cur) cur.items.push({ href: im[1], label: im[1], icon: 'x', module: im[2] })

@@ -29,7 +29,7 @@ import Link from 'next/link'
 import { Fragment, useCallback, useMemo } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useAuth } from '@/lib/auth-context'
-import { NAV, canSeeItem } from '@/lib/rbac'
+import { TENANT_NAV, canSeeItem } from '@/lib/rbac'
 import type { NavItem } from '@/lib/rbac'
 
 // ── THE REGISTRY ────────────────────────────────────────────────────────────────────────────────
@@ -215,7 +215,7 @@ export function useCanOpen(): (href: string) => boolean {
   const { permissions, session, rbacEnabled } = useAuth()
   const byHref = useMemo(() => {
     const m = new Map<string, NavItem>()
-    for (const g of NAV) for (const it of g.items) if (!m.has(it.href)) m.set(it.href, it)
+    for (const g of TENANT_NAV) for (const it of g.items) if (!m.has(it.href)) m.set(it.href, it)
     return m
   }, [])
   return useCallback((href: string) => {

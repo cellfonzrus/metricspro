@@ -105,7 +105,8 @@ check("B2 that source is the ALL-GROUPS set, not the single group's "
       "`continue`, so a cross-module pick simply vanished)",
       src_var == "allVisibleItems", f"resolved against `{src_var}`")
 check("B3 the all-groups set is built by flattening NAV, not one navGroup",
-      re.search(r"allVisibleItems\s*=\s*useMemo[^=]*=>\s*gateItems\(NAV\.flatMap", hub) is not None,
+      re.search(r"allVisibleItems\s*=\s*useMemo[^=]*=>\s*gateItems\(NAV(\.filter\(g => platformOK\(g, user\)\))?\.flatMap", hub)
+      is not None,  # index §38: platform-only groups are filtered by platformOK first, still ALL other groups
       "allVisibleItems is not derived from NAV.flatMap")
 
 print()
@@ -122,7 +123,8 @@ for pred, why in (("canSeeItem(permissions, it)", "RBAC"),
                   ("hidden", "tenant nav-layout hidden override")):
     check(f"C2 the gate still applies the {why} filter", pred in gate, gate[:200])
 check("C3 BOTH sets go through that one gate — the cross-module list is gateItems(...), never raw NAV",
-      "gateItems(NAV.flatMap" in hub and "gateItems(navGroup.items)" in hub)
+      bool(re.search(r"gateItems\(NAV(\.filter\(g => platformOK\(g, user\)\))?\.flatMap", hub))
+      and "gateItems(navGroup.items)" in hub)
 check("C4 the '/hub/…' self-link is still excluded (a dashboard must not tile a link to itself)",
       "startsWith('/hub/')" in gate)
 
@@ -145,7 +147,11 @@ check("E1 the designer has a cross-module toggle — without it there is no supp
       "crossModule" in designer, "no cross-module affordance in the designer")
 check("E2 it draws from NAV (all groups), not just the selected one",
       re.search(r"crossModule\s*\n?\s*\?\s*NAV\.filter", designer) is not None
-      or "NAV.filter(g => g.group !== groupName)" in designer, "designer never widens past navGroup")
+      or "NAV.filter(g => g.group !== groupName)" in designer
+      # index §38: `designable` = NAV less the platform-only groups a non-platform designer may not lay out
+      or ("designable.filter(g => g.group !== groupName)" in designer
+          and re.search(r"designable\s*=\s*useMemo\(\(\)\s*=>\s*NAV\.filter\(g => platformOK\(", designer) is not None),
+      "designer never widens past navGroup")
 check("E3 the designer still filters by canSeeItem, so a menu_layout-granted manager cannot design "
       "with pages their own role cannot see",
       "canSeeItem(permissions, it)" in designer)
