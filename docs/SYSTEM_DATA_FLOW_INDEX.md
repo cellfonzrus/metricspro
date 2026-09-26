@@ -66,7 +66,7 @@ Primary code homes:
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
 | 36 | **Supply ordering (vendor setup · price compare · cheapest cart incl. free shipping · assisted order + confirmation)** | "Which vendor should this cart go to once shipping is counted, where is each vendor's free-shipping threshold and delivery time set, how is the order placed at the vendor from here, and where does the vendor's confirmation number land?" |
-| 37 | **Franchise royalty, cost & profit centers** | "Where does the franchisor's monthly royalty report land, how is it checked (the fee rounding rule), what does each line book to on the P&L and what books nothing (and why), how does it reconcile against the daily report, and how do I see the P&L per profit center or per cost center? Why did a sale line no classifier knows book nothing, and where is that reported now?" |
+| 37 | **Franchise royalty, cost & profit centers** | "Where does the franchisor's monthly royalty report land, how is it checked (the fee rounding rule), what does each line book to on the P&L and what books nothing (and why), how does it reconcile against the daily report, and how do I see the P&L per profit center or per cost center? Why did a sale line no classifier knows book nothing, and where is that reported now? How do I upload many months of royalty reports at once, and which months are on file (§37.10)?" |
 | 38 | **Super Admin Toolbox** | "As the platform super admin, where is every screen only I need — companies, business types, billing, operators, platform health, support, platform defaults — on one tiled page? Why does a tenant admin never see it, and how do I re-arrange its tiles?" |
 
 ---
@@ -4287,9 +4287,9 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `core.ai_usage_period` (mig `973`; FROZEN AI period snapshots — rate + margin + figures at close) | `POST /billing/ai-usage/close` | `ai_usage.price_period(frozen=)` — read, NEVER recomputed |
 | `commcalc.raw_sales_invoice` (mig `1012`, **NOT applied**) — SALES BY INVOICE with the tender types (layout `sales_by_invoice`; owner 2026-09-21, §30.13): ONE ROW PER INVOICE — who / where / when, subtotal / adjustments / net sales / sales / cost / GP / extra charges / donations / invoice total / coupons / gift-card sales / non-revenue sales, the total `tax`, `source` (the kind stamp, default `sales_by_invoice`), `import_batch_id`. `trans_id` = the invoice number the line-level export carries | the intake's `invoice` kind only — `_intake_land` → `_ingest_mapped_df` (`TABLE_MAP['sales_by_invoice']`; stamped, consumer-gated, slice-replaced per store × `trans_date` × kind, `ingest_slice.INGEST_PARTITION`) | `_intake_reread_invoice` → the Stage-4 verify (Σ tie field / Σ invoice total / Σ tax) + the report links (`_intake_link_source`: invoice number ↔ `raw_sales.trans_id`, store, rep, date). **No money / tax path reads it** (`landing_identity.CONSUMERS`); the tax aggregator's dereference is PROPOSED (§30.13); before the migration a landing is REFUSED naming the file |
 | `commcalc.raw_sales_invoice_tender` (mig `1012`, **NOT applied**) — the TENDER SPLIT: one row per (invoice, DECLARED tender column) with `amount` ≠ 0 — `tender_label` (the header, verbatim), `tender_class` (`closing.router.TENDER_VOCAB` key), `keyed_manually`, `role` (`tender` \| `tax` — a jurisdiction tax column rides the same grain), store / `trans_date` / `trans_id` / salesperson, `source` = the PARENT's kind (`column_mapping.CHILD_TABLE_MAP` — the one home of "which child table") | the same landing, second `_ingest_mapped_df` call (same stamp, same slice) | `_intake_reread_invoice_tenders` (the save guarantee); **`closing.router._invoice_tenders_by_store`** — the invoice leg of THE tender resolver `_tender_split_by_store` (read by every closing cash / card recon when the org's `tender_basis` is `invoice` or `x_report_else_invoice`); the intake's Stage-4 tie-out (`_intake_invoice_tender_recon`) beside the X-report leg; **`pos/sales_from_reports.rebuild`** (§30.14) — the customer-payment rows (`closing.router.is_customer_payment`, §30.13a) print as the rebuilt receipt's payment lines, the others explain the lines-vs-subtotal difference. The invoice leg counts ONLY the customer's rows as collected; a vendor rebate / coupon row is reported beside as `not_customer` (§30.13a) |
-| `commcalc.royalty_report` + `commcalc.royalty_report_line` (mig `1022`, **NOT applied**) — one franchise royalty report per org × center × month (the report's OWN figures + `validation` flags) and every printed line / total | `POST /account/royalty/import` \| `/manual` → `royalty_router._write_report` (replace per center-month; org-scoped) | `coa.build_inputs` → `royalty.pl_bookings` (the P&L heads, §37.3); `GET /account/royalty/recon/{period}` (`royalty.reconcile`); `/royalty/summary`; the report page. §37 |
+| `commcalc.royalty_report` + `commcalc.royalty_report_line` (mig `1022`, **NOT applied**) — one franchise royalty report per org × center × month (the report's OWN figures + `validation` flags) and every printed line / total | `POST /account/royalty/import` \| `/manual` \| `/batch/import` (§37.10, N files) → `royalty_router._write_report` (replace per center-month; org-scoped) | `coa.build_inputs` → `royalty.pl_bookings` (the P&L heads, §37.3); `GET /account/royalty/recon/{period}` (`royalty.reconcile`); `/royalty/summary`; the report page. §37 |
 | `commcalc.royalty_line_def` (mig `1022`) — THE royalty line vocabulary (house default vertical-scoped + tenant overrides): labels / aliases / section / role, `pl_line_key` / `pl_note`, fee `rate` + `absorbs_remainder`, `daily_categories` | seed (house) · `PUT /account/royalty/lines` (tenant override row) | `royalty.load_vocab` → `merge_vocab` → parse / validate / `pl_bookings` / `reconcile`. Mirror `royalty.HOUSE_ROYALTY_LINES`. §37.2 |
-| `commcalc.royalty_config` (mig `1022`) | `PUT /account/royalty/config` | `royalty.load_config` → `resolve_config` (NULL = `CONFIG_DEFAULT`). §37.2 |
+| `commcalc.royalty_config` (mig `1022`; + `lookback_months` mig `1027`, **NOT applied**) | `PUT /account/royalty/config` (the lookback written only when it changes) | `royalty.load_config` → `resolve_config` (NULL = `CONFIG_DEFAULT`; `lookback_months` house default 24, bounds `LOOKBACK_BOUNDS` 1–120) → the multi-month upload window `royalty.lookback_window`. §37.2, §37.10 |
 | `commcalc.finance_center` · `commcalc.profit_center_store` · `commcalc.pl_line_cost_center` (mig `1022`) — cost + profit centers, store → profit center, P&L line (± detail) → cost center | `PUT/DELETE /account/centers…` | `centers.load_profit_scopes` → `statement_engine._scopes` (`profit_center:<code>`); `statement_filter.scope_predicate`; `centers.store_for_center` (a report's center → store); `centers.cost_center_view`. §37.1 |
 | `commcalc.pl_sales_line_map` (mig `1022`) — routes a POS sale line NO classifier claims to a revenue line (every tenant) | `PUT /account/pl-sales-map` | `coa.build_inputs` sales scan → `sales_line_map.match` / `Tally` → `_unbooked_sales` side entry → statement `meta.unbooked_sales`; `GET /account/pl-sales-map?period=`. §37.4 |
 | `commcalc.report_kind.applies_to_vertical` (mig `1022`) — the report-kind registry's VERTICAL axis ('{}' = any) | seed (`royalty_report` by module sub-select) | `report_kinds.applies` / `hidden_kinds` via `tenant_declaration`'s `vertical`; frontend `carrier-scope.kindApplies`. §37.2 |
@@ -4555,6 +4555,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /account/royalty/config` · `PUT /account/royalty/lines` · `PUT /account/royalty/config` · `POST /account/royalty/parse` (preview, no write) · `POST /account/royalty/import` · `POST /account/royalty/manual` · `GET /account/royalty/reports` · `GET\|DELETE /account/royalty/report/{id}` — all `require_module("royalty")` | `account/royalty_router.py` → `royalty.parse` / `validate` / `header_fields` / `line_rows` / `pl_bookings` | §37.2–37.3 |
 | `GET /account/royalty/recon/{period}?center=` — royalty sales lines vs the daily report(s) per line, days, categories, unclaimed categories, tenders | `royalty_router.royalty_recon` → `_daily_rows` (raw_sales_product \| raw_sales) / `_tender_rows` → `royalty.reconcile` / `tender_crosscheck` | §37.5 |
 | `GET /account/royalty/summary` — the operations-dashboard tiles (latest STR, fees due, recon variance, unmapped lines, flagged) | `royalty_router.royalty_summary` → `royalty.summary` | §37.6 |
+| `POST /account/royalty/batch/preview` (many files, writes nothing) · `POST /account/royalty/batch/import` (the ticked files, per-file results) · `GET /account/royalty/coverage` (the lookback window + months on file per center) — `require_module("royalty")` | `royalty_router._batch_plan` → `_batch_read` (`_parse_input` → `R.parse` / `R.validate`; `_report_key`) + `_on_file` (`R.load_reports`) → `royalty.batch_plan`; import → `_write_report` per ready file; `royalty.coverage` / `batch_outcome` | §37.10 |
 | `GET/PUT /account/centers` · `DELETE /account/centers/{type}/{code}` · `PUT /account/centers/store-map` · `PUT /account/centers/line-tag` · `GET /account/centers/pl/{period}?profit_center=` (→ `statement_engine.statement`, scope `profit_center:<code>`) · `GET /account/centers/cost-view/{period}` (→ `centers.cost_center_view`) | `account/royalty_router.py` | §37.1 |
 | `GET /account/pl-sales-map?period=` · `PUT /account/pl-sales-map` — the unclaimed-sale-line rules and the scan's unbooked / mapped / suppressed tally (every tenant) | `account/router.py` → `coa.build_inputs` side entry `_unbooked_sales` | §37.4 |
 | `GET /account/cash-flow/{period}` (stored derived Cash Flow snapshot, statement_type `cash_flow`) | `account/router.py` (`get_cf`) | §4 statement engine |
@@ -4703,6 +4704,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Sales tax collected (report) / Sales tax payable (BS liability, mig `991`) | `raw_sales.tax` ∪ `daily_sales_feed.tax` (mig `105`), voids excluded; report headline `tax` also excludes `trans_type=='Return'`, the liability figure `tax_net` includes them (refunded tax is not owed). Store key = `coa.store_resolver` (§13a) for BOTH. Balance = cumulative from the accrual start through as-of, less remittances | **ONE pure pass** `commcalc/tax_collected.py aggregate()` → `GET /commcalc/tax-collected` (first caller) **and** `balance_sheet.sales_tax_payable_bookings` via `statement_engine.build_inputs_full` (`account_config.sales_tax_basis`: off default / collected; `sales_tax_accrual_start` or the earliest taxed sale). Remittance = a negative `journal_entries` row folded by label in `engine._assemble` — never a second ledger. Proof `harness_tax_collected.py` §I/§J + `harness_balance_sheet_truths.py` §J |
 | **Royalty due / STR per center per month** (franchise report) | `commcalc.royalty_report` (the report's own `total_str` / `total_adjusted_str` / `total_due`) + `royalty_report_line` | stored as printed; checked by `royalty.validate` → THE rounding rule `royalty.fee_schedule` (total = round(basis × Σ rates), one fee absorbs the remainder); booked by `royalty.pl_bookings` → `royalty_fee` / `marketing_fee` / `ad_fund_fee`. §37.3 |
 | **Royalty vs daily sales variance** (per line / per center) | royalty sales lines vs `raw_sales_product` (or `raw_sales`) Σ month through `royalty_line_def.daily_categories` | `royalty.reconcile` ← `GET /account/royalty/recon/{period}`; tile `GET /account/royalty/summary`. §37.5 |
+| **Royalty months on file** (per center, over the lookback window) | `commcalc.royalty_report` (org-scoped, both period spellings) over `royalty.lookback_window(this month, royalty_config.lookback_months)` | `royalty.coverage` ← `GET /account/royalty/coverage` (+ returned by the batch preview / import); the coverage strip on `/accounts/royalty` → "Upload several months". §37.10 |
 | **Unbooked sales** (POS lines no P&L classifier claims — every tenant) | `raw_sales` ∪ `daily_sales_feed` lines passed over by every classifier | `coa.build_inputs` → `sales_line_map.Tally` → statement `meta.unbooked_sales` / `GET /account/pl-sales-map?period=`. §37.4 |
 | **P&L per profit center / per cost center** | the statement engine's own statement | profit center = scope `profit_center:<code>` (`statement_engine._scopes` ← `centers.profit_center_scopes`); cost center = `centers.cost_center_view` over the assembled P&L (ties to the cent). §37.1 |
 | Distributor payable — WHICH derivation and WHICH line (mig `954`) | `account_config.distributor_payable_basis` / `.distributor_payable_line` / `.asset_ledger_open_statuses`, else the house carrier preset (`ui_label_override` scope `finance_basis:<carrier>`, key `distributor_payable`) over the org's `commcalc.carrier` rows | `balance_sheet.resolve_payable_basis`/`resolve_payable_line` (org > carrier preset > declared mig-933 family > off; target line defaults `asset_ledger`→`owed_vip`, `marketplace_due`→`handset_payable`) → `statement_engine.build_inputs_full` + `GET /account/liabilities-due`; proof `harness_balance_sheet_truths.py` §G |
@@ -9540,6 +9542,32 @@ roster. Neither LuxeLink nor Vzone moves: their roles have no explicit `scheduli
 3. **One `app_users.email` is a malformed header string** — `"akberawais@icloud.com" <akberawais@icloud.com>`
    — a duplicate login for E252 alongside the clean `akberawais@icloud.com`. Reported, not deleted.
 
+
+### 29.7 WHOSE NAME the closing is submitted under — the signed-in person; DM and above may pick (owner 2026-09-26)
+Owner: *"while submitting the daily closing the employee name should default to the person who is signed in, only the
+DM and above should get the option to select any body other than themselves"*.
+- **Duplicate check:** §29 decides WHOM a picker lists (roster reach); this decides whether the closer may pick at
+  all — a different question, so a separate rule, but it reuses the same scope tiers (market / region = DM, all =
+  company-wide) and the existing per-role DATA_GRANT idiom rather than a new permission mechanism. No table, no migration.
+- **ONE rule:** `backend/app/modules/closing/closer_pick.py` — `may_pick_any(perms)` (super admin → yes; explicit
+  `data.closing_pick_any_employee` wins either way; else scope ∈ market/region/regional/all), `own_names(...)`,
+  `verdict(perms, submitted, names)`. **The server enforces it:** `closing/router.create_row` → `_closer_gate` (own
+  names = login `full_name` + the employee record's `name`; refusal = 403 with the reason) BEFORE anything is written,
+  so a store-tier login cannot submit under someone else's name by any client. **The screen mirrors it:**
+  `rbac.canPickAnyCloser` / `CLOSER_PICK_ANY_SCOPES` / `CLOSER_PICK_ANY_GRANT`; `ClosingSubmitForm` offers the picker
+  only when allowed, else shows the signed-in name read-only (a resumed draft cannot override it).
+- **Config:** Roles & Access → the data grant *"Daily closing — submit under another employee's name"* (tick / untick
+  per role); unset follows the house default above.
+- **Lock:** `backend/harness_closing_closer_pick.py` (rule, server gate before the write, mirror equality, form gating,
+  Roles grant, this section).
+
+### 29.8 A page's organisation starts on the ACTING company, never the house org (owner 2026-09-26)
+Owner (KPI Definitions, standing in the UPS Store tenant): *"why does it show 0000 as the org"*. `/admin/kpi-metrics`
+seeded its organisation from `ORG_ID` (house org); the middleware lets a super admin pass a foreign `?org_id=`, so it
+read — and would have written — the house org's KPIs. Now it follows `useAuth().activeOrg` (the tenant switcher), with a
+by-name company picker. **Lock:** `backend/harness_acting_org_default.py` — no React state anywhere is seeded from
+`ORG_ID`; the KPI page follows the acting company.
+
 ---
 
 ## 30. TENANT ONBOARDING — the COMMISSION-STATEMENT INTAKE, stage 3 of the new flow (owner 2026-09-20)
@@ -11846,6 +11874,96 @@ apply; dollars reach a P&L only when a tenant imports a report or saves a map ru
    a per-org `pl_line_key` on those rows (config) — plus a COGS head, not yet in the chart.
 4. **Role grants:** the `royalty` module must be granted on the tenant's roles (the module gate + the vertical nav gate are in
    place; a role editor entry is the parent agent's nav work).
+
+### 37.10 MANY MONTHS IN ONE GO — the multi-month royalty upload is N single imports (owner 2026-09-26, mig `1027`)
+Owner, verbatim: *"option to upload royalty reports for multiple months should be created for the ups store going back up
+to 24 months"*.
+
+**DUPLICATE CHECK (build gate) — searched** §37.2–37.3 (the parser, validator, `_write_report`, the replace per center ×
+month), §30.17 (the multi-month LEDGER upload — the pattern mirrored: "the batch is N single imports — one reader/mapper,
+one lander, one month detector, one canonicaliser"), §30.15 (`_period.canonical_period` / `period_keys`), `_period.month_range`
+(THE one month enumeration), §16 `royalty_config`, §17 `/account/royalty/*`. **REUSED, not rebuilt:** the single import's
+reader `_parse_input` (→ `R.parse` → `R.validate`; now takes the request's loaded vocabulary/config once instead of per
+file), the writer `_write_report` (which replaces per center × month), the module's org-scoped reader `R.load_reports`, the
+config row `royalty_config` via `load_config` / `resolve_config` / `CONFIG_DEFAULT`, `_period.month_range` for the window.
+**FACTORED, not copied:** the writer's center × month resolution into `royalty_router._report_key` (entered value wins, else
+the report's own header; canonical period; the problem in words) — the writer refuses on it, the batch reader reads the
+same answer, so a batch can never file a report under a month the single import would not. `/account/royalty/import` is
+byte-identical. **NEW:** pure `royalty.lookback_window` / `batch_plan` / `coverage` / `batch_outcome`; router `_this_period`,
+`_window`, `_on_file`, `_batch_read`, `_batch_plan`, `_coverage_payload`; three endpoints; the page's "Upload several
+months" tab (`BatchTab` + `CoverageStrip` in `accounts/royalty/page.tsx`); config key `lookback_months`; mig `1027`. **Not a
+sibling:** no second parser, validator, month detector, period spelling or lander. **No new feed** (nothing to register in
+the lineage registry — the report kind is §37.2's).
+
+**Why new endpoints, not a mode on `/parse` / `/import`:** those take ONE file plus typed center / period / store overrides;
+the batch takes MANY files and no overrides (each month comes from the report's own header). The batch endpoints are thin
+loops over the SAME functions the single endpoints call — locked (below).
+
+**THE LOOKBACK IS CONFIG.** `royalty_config.lookback_months` (mig `1027`, nullable; NULL = `CONFIG_DEFAULT["lookback_months"]`
+= 24; outside `LOOKBACK_BOUNDS` 1–120 reads the default — the migration's CHECK mirrors the bounds, pinned by
+`harness_royalty.py` §L). The window = **this month and the `lookback_months` months before it** (24 → 25 months, e.g.
+September 2024 – September 2026), `royalty.lookback_window(_this_period(), n)` → `_period.month_range`. Set on Line setup
+("Several-months upload reaches back N months"); `PUT /account/royalty/config` writes it ONLY when it changes, so the settings
+form (which sends the whole resolved config) keeps saving every other knob before mig 1027 is applied; a changed lookback
+before then is refused naming `1027` (the other settings saved). Before 1027 the batch works with 24.
+
+**THE FLOW.** `/accounts/royalty` → "Upload several months" → the coverage strip (`GET /account/royalty/coverage`: each month
+of the window green = every center on file, amber = some centers missing, grey = missing; tooltip names the centers) →
+drop / pick many files (PDF / saved HTML / text) → `POST /account/royalty/batch/preview` (writes nothing): one row per file
+— **file · month · center** (from the report's header) **· total due · checks** (the validation flags; never blocking — a
+flagged report is stored as printed, as a single import) **· new / will REPLACE** (the report on file for that center ×
+month, its total) **· why it cannot be imported** · Remove (re-previews the rest). Ready rows are ticked; refused rows cannot
+be ticked. **Import selected** (a confirm when any ticked row replaces) → `POST /account/royalty/batch/import` with ONLY the
+ticked files → the plan is re-run on exactly those files → each READY file lands through `_write_report`, one at a time in
+upload order → a result row per file and the sentence *"Imported 11 of 12 file(s). NOT imported: x.pdf — … The files that
+were imported stay imported — a failure on one file undoes no other."* + the coverage after landing.
+
+**THE RULES (`royalty.batch_plan`, PURE).**
+
+| Case | Rule |
+|------|------|
+| Unreadable file / no report lines | refused with the single import's own message (`_parse_input`); never skipped, never blocks another file |
+| No period / no center in the header | refused — "import it on its own under 'Import a report' and enter the period / center" |
+| Period older than the window | refused naming the window ("older than the 24-month window (September 2024 – September 2026) — the lookback is a company setting") |
+| Period after this month | refused (a future month) |
+| Two files for the same center × month in one batch | BOTH refused, each naming the other — never a silent replace of the earlier by the later; remove one and the other lands |
+| Center × month already on file (this org) | ready, flagged **will REPLACE**; `_write_report`'s existing replace (delete center × every period spelling, insert) — one report after, never two |
+| Another center, same month | independent (one report per center per month) |
+| Validation flags | shown, never blocking |
+| Landing | per file through `_write_report`; an exception on one file (HTTP refusal or insert error) is recorded for that file and the rest continue; nothing landed is rolled back |
+
+**PROOF.** `backend/harness_royalty.py` §L (stdlib, 107 checks total): the config default 24 + overrides + bounds, the
+migration's CHECK = the code's bounds, the window (25 months, year boundary, non-month raises), every plan rule, coverage
+(both spellings, missing centers, outside-window ignored), the sentence, three negative controls.
+`backend/harness_royalty_pl.py` §H (app deps, CI `finance-royalty-proof`, 81 checks total): the REAL endpoints over the
+in-memory client with "today" pinned — the preview writes nothing; N files → N reports under their header months; the
+window's first month accepted, older / future refused; duplicates refused and cleared by removal; the on-file month
+flagged and replaced (the new figures, one report); unreadable / undated files refused without blocking; the same batch
+twice = one report per center × month; **BYTE IDENTITY** — four files through one batch (reverse order) land exactly the
+header and line rows four single imports land, with a one-cent negative control; a per-file insert failure (the FIRST
+file) isolated; the lookback read from the org's row (3 → June–September), another org's never read, an out-of-range value
+→ 24; the config save (unchanged lookback not written; changed saved; 500 refused; pre-1027 refusal names it while the
+other settings save); ORG SCOPE (another org's same center × month neither "on file" nor touched; every write org-scoped).
+**THE LOCK — `backend/harness_royalty_lock.py` (k)** (stdlib, 53 checks total): ONE parser (`R.parse(` once, in
+`_parse_input`), ONE lander (`royalty_report` inserted once, in `_write_report`), ONE resolution (`_report_key`, read by
+the writer and the batch reader; the writer canonicalises nothing itself); the batch import calls `_batch_plan` +
+`_write_report` and never parses / validates / canonicalises / writes a table; the preview, coverage, plan and reader
+write nothing; the on-file read is `R.load_reports`; the lookback is read from `cfg["lookback_months"]` and no month count
+is spelled in the router's batch block or the page's batch tab; the pure plan enumerates via `month_range` and holds no
+month table or clock; every router function defined once; the page calls the three endpoints; CI + this section; six
+negative controls. **CI:** the three royalty steps now set `shell: bash` (pipefail) — before, `| tail | tee` swallowed a
+failing harness's exit code (the §30.17 seam (5), now closed for the royalty steps).
+
+**Migration `1027_royalty_lookback_months.sql` — WRITTEN, NOT APPLIED (schema change: surface for approval).** Adds the
+nullable `royalty_config.lookback_months` + a 1–120 CHECK; `-- REVERT:` in the header. Moves no money, changes no stored
+report; until applied every org reads 24 and only saving a different lookback is refused.
+
+**SEAMS LEFT (reported, not hidden).** (1) A report whose header carries no period or center must go through the single
+import (which lets you type them) — the batch takes the month only from the report's own header, by design. (2) Multi-file
+transport is one request: a very large batch (many PDFs) is bounded by the API's request-size limit — upload in two
+batches if it refuses. (3) `_write_report`'s delete-then-insert is not one transaction (pre-existing): a file whose INSERT
+fails after its month's old report was deleted leaves that center × month empty — the result names the file; re-upload
+it. (4) The window includes this month (a report for the current month, if the franchisor issues one, is accepted).
 
 ## 38. SUPER ADMIN TOOLBOX — every platform-only screen on one tiled page (owner 2026-09-25)
 

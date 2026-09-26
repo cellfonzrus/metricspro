@@ -1859,11 +1859,17 @@ async def _notify_envelope_mismatch(client, org_id, summary):
 
 
 @router.post("/row")
-async def create_row(payload: dict, org_id: str = ORG_ID):
+async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     client = sb()
     d = _date(payload.get("close_date"))
     if not d:
         raise HTTPException(400, "valid close_date required")
+    # WHO the closing is submitted under (index §29.7): the signed-in person, unless their role may pick
+    # anyone (DM and above, or an explicit Roles grant) — closing/closer_pick.verdict is the one rule.
+    # Every live request carries a token (the tenant middleware 401s without one); a direct in-process
+    # call with no header string is the only way to arrive without one.
+    if isinstance(authorization, str) and authorization.strip():
+        _closer_gate(client, org_id, authorization, payload.get("employee_name"))
     sfid = (payload.get("sfid") or "").strip()
     sm = _store_resolver(client, org_id).get(sfid, {}) if sfid else {}
     body = {
@@ -7728,6 +7734,33 @@ def _caller_perms(client, authorization: str) -> dict:
         return perms
     except Exception:
         return {}
+
+
+def _closer_gate(client, org_id: str, authorization: str, submitted_name) -> None:
+    """Refuse a closing submitted under someone else's name by a caller who may not pick anyone
+    (closing/closer_pick, index §29.7). Own names = the login's full name + its employee record's name."""
+    from app.modules.closing import closer_pick
+    perms = _caller_perms(client, authorization)
+    if closer_pick.may_pick_any(perms):
+        return
+    names = set()
+    try:
+        from app.modules.core.router import _uid_from_token
+        from app.core.tenant_middleware import caller_app_user
+        uid = _uid_from_token(authorization)
+        u = caller_app_user(uid, "org_id,full_name,employee_id") if uid else None
+        emp_name = ""
+        if u and u.get("employee_id"):
+            rows = (client.schema("storeops").table("employees").select("name")
+                    .eq("org_id", u.get("org_id") or org_id).eq("employee_id", u["employee_id"])
+                    .limit(1).execute().data) or []
+            emp_name = rows[0].get("name") if rows else ""
+        names = closer_pick.own_names((u or {}).get("full_name"), emp_name)
+    except Exception as e:                                              # pragma: no cover - I/O guard
+        print(f"WARN closing _closer_gate name lookup failed: {e}")
+    ok, why = closer_pick.verdict(perms, submitted_name, names)
+    if not ok:
+        raise HTTPException(403, why)
 
 
 def _can_mgmt_review(perms: dict) -> bool:
