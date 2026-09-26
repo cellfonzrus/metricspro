@@ -300,6 +300,14 @@ check("(h) WHICH COLUMNS MUST CARRY A VALUE lives in the lineage registry, and t
 check("(h) a column that stopped arriving CANNOT sit under a green OK",
       'gone = []' in SWEEP_CODE and 'COLUMN STOPPED ARRIVING' in SWEEP
       and 'if not (skipped or gone)' in SWEEP_CODE)
+check("(h) THE CALCULATION RECORDS THE KPI VINTAGE IT TIERED ON — a mid-month slice is never paid on as "
+      "a closed month in silence, and it is the ONE home of the question, not a re-derivation",
+      "dlar_sweep.slice_vintage(" in ROUTER
+      and "KPI slice this run tiered on is as of" in ROUTER
+      and "DIFFERENT vintages" in ROUTER
+      and "calc_notices.append(" in ROUTER)
+check("(h) …and it does NOT refuse the run (blocking a payroll recalculation is the owner's policy call)",
+      "raise" not in _hl.py_code_only(ROUTER).split("slice_vintage(")[1].split("result = calc_rep_commissions")[0])
 check("(h) THE GRAIN a KPI is measured at is DERIVED from the feed maps, never stored",
       "def grain_of(" in KPIF and "REP_DLAR_COLUMNS" in fn_body(KPIF, "grain_of")
       and "STORE_KPI_COLUMNS" in fn_body(KPIF, "grain_of"))

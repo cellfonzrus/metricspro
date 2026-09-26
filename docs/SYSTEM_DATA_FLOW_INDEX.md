@@ -5565,6 +5565,16 @@ classification config row for "BYOD Swap" / "Ineligible Port-In" — both MONEY,
   `payout_accrual` threads the registry too. `GET /productivity/kpi-values` already skipped a `None` —
   the one surface that had it right. `hr/letters._is_kpi_miss` already guards `total > 0`, so an honest
   `0 of 0` no longer generates a KPI-miss letter off a fabricated 0/7.
+- **THE CALCULATION RECORDS THE VINTAGE IT TIERED ON.** `_run_calculation` writes an operator notice
+  (`calc_status.calc_notices`, the channel the multi-month engine already uses) naming any grain whose
+  slice falls short of the period, and — separately — when the two grains are DIFFERENT vintages: *"⚠ the
+  rep-grain KPI slice this run tiered on is as of 2026-08-24 — 7 day(s) short of August 2026 (the
+  report's own date was never recorded; this is the WRITE date, an upper bound)"* and *"⚠ the two KPI
+  grains are DIFFERENT vintages — rep as of 2026-08-24, store as of 2026-09-02."* It **does not refuse the
+  run**: a gate that blocks a payroll recalculation is a policy decision about the owner's money, so the
+  fact is made to travel with the run instead. **Provisional-vs-finalised is DERIVED** from the as-of date
+  (`vintage().complete`), never a flag somebody has to remember to set — a flag is a fact that rots, and
+  the as-of date already decides it.
 - **`GET /kpi-failing/{period}`** now returns **`feed_vintage`** (`_dlar_slice_vintage` → per-grain as-of,
   `complete`, `days_short`, and **`disagree`** when the two grains are different months). A row written
   before mig 1026 falls back to its write date as an **upper bound**, labelled `basis='write_date'` —
@@ -5654,7 +5664,7 @@ metric" above, pinned by `harness_kpi_vintage.py` §D11–D11f.
 `kpi_failing` / `dlar_sweep` / `line_class`; anonymised fixtures, synthetic phone numbers; armed pre-fix
 controls in §A6/§A8/§B2; a target fuzz in §B9/§B11; HOUSE byte-identity in §D1–D5 incl. the LIVE
 house registry, which differs from the built-ins only in its labels). **Lock:**
-`harness_kpi_registry_lock.py` §(h), 21 new checks — the pay engine names no DLAR column and no literal
+`harness_kpi_registry_lock.py` §(h), 30 new checks — the pay engine names no DLAR column and no literal
 denominator, reads no KPI through `safe_float`, counts through the one scorer; the sweep derives its rate
 and parses every rate through `_rate`; each grain carries its own as-of date; the status is derived from
 what was written; no surface fabricates a 7 — with six negative controls. Both wired in

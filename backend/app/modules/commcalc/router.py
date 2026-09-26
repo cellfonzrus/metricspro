@@ -15840,6 +15840,35 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
             raise Exception(f"No sales data for {period}")
 
         # Run calculation
+        # WHAT VINTAGE OF KPI DATA WAS THIS RUN TIERED ON (owner defect 2026-09-26, index §19.28). A
+        # mid-month snapshot must never be paid on as a closed month in SILENCE. This does not refuse the
+        # run — a gate that blocks a payroll recalculation is a policy decision about the owner's money,
+        # not ours — it makes the fact travel with the run, on the same operator-notice channel the
+        # multi-month engine already uses. `slice_vintage` is the ONE home of the question (§19.18's two
+        # freshness questions plus §19.28's third); nothing is re-derived here.
+        try:
+            _vint = dlar_sweep.slice_vintage(
+                period,
+                rep_rows=[{k: r.get(k) for k in ('as_of_date', 'created_at') if k in r} for r in dlar_rep],
+                store_rows=[{k: r.get(k) for k in ('as_of_date', 'created_at') if k in r} for r in dlar_store])
+            for _g, _lbl in (('raw_dlar_rep', 'rep-grain'), ('raw_dlar_store', 'store-grain')):
+                _v = (_vint.get('grains') or {}).get(_g) or {}
+                if _v.get('complete') is False and _v.get('days_short'):
+                    calc_notices.append(
+                        f"⚠ the {_lbl} KPI slice this run tiered on is as of {_v.get('as_of')} — "
+                        f"{_v['days_short']} day(s) short of {period}"
+                        + (" (the report's own date was never recorded; this is the WRITE date, an upper "
+                           "bound)" if _v.get('basis') == 'write_date' else ""))
+            if _vint.get('disagree'):
+                _a = ((_vint.get('grains') or {}).get('raw_dlar_rep') or {}).get('as_of')
+                _b = ((_vint.get('grains') or {}).get('raw_dlar_store') or {}).get('as_of')
+                calc_notices.append(
+                    f"⚠ the two KPI grains are DIFFERENT vintages — rep as of {_a}, store as of {_b}. "
+                    f"Four of the seven scored KPIs come from the rep grain and three from the store "
+                    f"grain, so this run tiered on two different months.")
+        except Exception:
+            pass
+
         result = calc_rep_commissions(
             sales=sales, pay_detail=pay_detail, dlar_rep=dlar_rep,
             dlar_store=dlar_store, mi_rows=mi_rows, catalog=catalog,
