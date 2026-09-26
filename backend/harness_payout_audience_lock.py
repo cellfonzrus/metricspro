@@ -275,7 +275,55 @@ def scan(be, fe, rbac=None):
             v.append(("d", page, "forces an audience again (%s) — the server decides by who is looking" % m.group(0)))
     if FORCED_AUDIENCE.search(ts_code(fe.get("_lib/payoutAudience.ts", ""))):
         v.append(("d", "_lib/payoutAudience.ts", "a per-page audience declaration came back"))
+    v.extend(inprocess_violations(be))
     return v
+
+
+def inprocess_violations(be):
+    """(h) THE CALLER travels with every in-process call. A scheduled / emailed report (notify) that calls a
+    commission handler without `authorization=` binds FastAPI's Header SENTINEL — which the audience decision
+    reads as 'no caller' → the MANAGER view: a rep could email themselves a report the server refuses them
+    (found 2026-09-26: Pay Discrepancy + Phantom Payments after #306). So: every notify call to a commcalc
+    handler that takes `authorization` must pass it, and a builder that reaches a manager-only handler must be
+    registered `wants_auth` (else it is always called with "")."""
+    import ast
+    out = []
+    try:
+        rt = ast.parse(be.get(ROUTER, ""))
+    except SyntaxError:
+        return [("h", ROUTER, "router does not parse")]
+    takes_auth, refusing = set(), set()
+    for n in ast.walk(rt):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if any(a.arg == "authorization" for a in n.args.args + n.args.kwonlyargs):
+                takes_auth.add(n.name)
+            if "_refuse_employee_audience(" in ast.unparse(n):
+                refusing.add(n.name)
+    refusing.discard("_refuse_employee_audience")
+    for rel, src in sorted(be.items()):
+        if not rel.startswith("modules/notify/"):
+            continue
+        aliases = set(re.findall(r"from app\.modules\.commcalc import router as (\w+)", src))
+        if not aliases:
+            continue
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            out.append(("h", rel, "does not parse"))
+            continue
+        for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            reaches_refused = False
+            for c in ast.walk(fn):
+                if not (isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+                        and isinstance(c.func.value, ast.Name) and c.func.value.id in aliases):
+                    continue
+                if c.func.attr in takes_auth and "authorization" not in {k.arg for k in c.keywords}:
+                    out.append(("h", rel, "%s calls %s without the caller's authorization" % (fn.name, c.func.attr)))
+                if c.func.attr in refusing:
+                    reaches_refused = True
+            if reaches_refused and not re.search(r'"build":\s*%s\s*,\s*"wants_auth":\s*True' % re.escape(fn.name), src):
+                out.append(("h", rel, "%s reaches a manager-only report but is not registered wants_auth" % fn.name))
+    return out
 
 
 be = walk(APP, (".py",))
@@ -288,7 +336,8 @@ for part, label in (
         ("c", "(c) nobody filters paid lines on their own (backend or frontend); no second paid-line rule"),
         ("d", "(d) payout pages force no audience (the server decides by who is looking); the breakdown renders the served one"),
         ("f", "(f) ONE manager-only registry: every refusal registered, every registered page hidden by the nav gates, /me stamps it"),
-        ("g", "(g) the paid row names its sale through ONE customer / phone rule; every statement is _statement_doc")):
+        ("g", "(g) the paid row names its sale through ONE customer / phone rule; every statement is _statement_doc"),
+        ("h", "(h) scheduled / emailed reports carry the CALLER into every commission handler (no manager view by default)")):
     check(label, not [x for x in viol if x[0] == part], [x[1:] for x in viol if x[0] == part])
 
 print("\n  negative controls")
@@ -337,6 +386,13 @@ v = planted(be_mut={ROUTER: be[ROUTER].replace("_statement_doc(client, org_id, r
                                                "_own_month_doc(client, org_id, rep, m, _aud, ctx")})
 check("(e) the month range building its own statement instead of the single one → RED",
       any(x[0] == "b" and "commission_statement_document" in x[2] for x in v))
+REG = "modules/notify/report_registry.py"
+v = planted(be_mut={REG: be[REG].replace("org_id=org_id, authorization=authorization)\n    summary", "org_id=org_id)\n    summary", 1)})
+check("(e) the emailed Pay Discrepancy calling its handler without the caller → RED",
+      any(x[0] == "h" and "get_discrepancy_results" in x[2] for x in v))
+v = planted(be_mut={REG: be[REG].replace('"build": _phantom, "wants_auth": True}', '"build": _phantom}', 1)})
+check("(e) a builder reaching a manager-only report without wants_auth → RED",
+      any(x[0] == "h" and "_phantom" in x[2] and "wants_auth" in x[2] for x in v))
 v = planted()
 check("(e) the unmodified tree is GREEN", not v)
 

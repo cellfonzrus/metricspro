@@ -2248,6 +2248,14 @@ building its own statement …); `frontend/tools/payout-nav-proof.mjs` (11 — t
 reaches none of the registered pages, no grant or admin module reopens them, a manager still does);
 `frontend/tools/plan-drilldown-render-proof.mjs` (36 — the employee Sale column, the manager's identity line).
 
+**Scheduled / emailed reports carry the caller (found 2026-09-26, after #306).** The notify builders `_discrepancy`
+and `_phantom` (`notify/report_registry.py`) called the now manager-only handlers without `authorization=`, so
+FastAPI's Header sentinel was bound → read as "no caller" → the MANAGER view: a rep could email themselves Pay
+Discrepancy / Phantom Payments through `POST /notify/send`. Both are now registered `wants_auth` and pass the
+caller's header (a scheduled, admin-configured run still has no caller → org-wide, as before). CLASS lock:
+`harness_payout_audience_lock.py` part (h) — every notify call to a commcalc handler that takes `authorization`
+must pass it, and a builder reaching a manager-only handler must be `wants_auth` (2 negative controls; 24 checks).
+
 ---
 
 ## 7. Carrier residual installments (raw_mi path)

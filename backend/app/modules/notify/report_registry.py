@@ -335,9 +335,10 @@ async def _gp(org_id, f, authorization=""):
             ]}]}
 
 
-async def _discrepancy(org_id, f):
+async def _discrepancy(org_id, f, authorization=""):
     period = _resolve_period(f)
-    data = await C.get_discrepancy_results(period=period, org_id=org_id)
+    # a manager-only report (index §6i/§6j): the CALLER's header decides, so a rep cannot email it to themselves
+    data = await C.get_discrepancy_results(period=period, org_id=org_id, authorization=authorization)
     summary = data.get("summary") or []
     line_items = []
     for s in summary:
@@ -366,9 +367,9 @@ async def _discrepancy(org_id, f):
             "filename": f"discrepancy-{period.replace(' ', '-')}", "sheets": sheets}
 
 
-async def _phantom(org_id, f):
+async def _phantom(org_id, f, authorization=""):
     period = _resolve_period(f)
-    data = await C.get_phantom_payments(period=period, org_id=org_id)
+    data = await C.get_phantom_payments(period=period, org_id=org_id, authorization=authorization)
     by_store = data.get("by_store") or []
     payments = []
     for s in by_store:
@@ -704,10 +705,10 @@ REPORTS = {
         "live_path": lambda f: "/commcalc/gp", "build": _gp, "wants_auth": True},
     "discrepancy": {
         "label": "Pay Discrepancy", "filters": ["period"],
-        "live_path": lambda f: "/commcalc/discrepancy", "build": _discrepancy},
+        "live_path": lambda f: "/commcalc/discrepancy", "build": _discrepancy, "wants_auth": True},
     "phantom": {
         "label": "Phantom Payments", "filters": ["period"],
-        "live_path": lambda f: "/commcalc/discrepancy", "build": _phantom},
+        "live_path": lambda f: "/commcalc/discrepancy", "build": _phantom, "wants_auth": True},
     "sales_recon": {
         "label": "Sales Feed Recon", "filters": ["period"],
         "live_path": lambda f: "/commcalc/sales-recon" + _qs(f, ["period"]),
