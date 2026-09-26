@@ -56,7 +56,7 @@ CONFIG_DEFAULT = {
     "book_pl": True,                    # the royalty report books the P&L revenue / fee lines
     "center_pattern": r"\bCenter\s+([A-Za-z]*\d[A-Za-z0-9-]*)",   # the center's code carries a digit
     "period_pattern": r"Period:\s*([A-Za-z]+\.?\s+\d{4}|\d{4}-\d{1,2})",
-    "lookback_months": 24,              # the multi-month upload accepts this month and this many months before it
+    "lookback_months": 24,              # the multi-month upload accepts the last N months, this month included
 }
 LOOKBACK_BOUNDS = (1, 120)              # a configured lookback outside this range reads the house default
 DAILY_SOURCES = ("raw_sales_product", "raw_sales")
@@ -849,14 +849,15 @@ def summary(reports, recon_by_report=None, coverage=None):
 # replace a report already on file, and why a file is refused. No month is worked out here: the window is enumerated
 # by `_period.month_range` and every period arrives already canonical from the writer's own resolution.
 def lookback_window(this_period, months):
-    """THE WINDOW the multi-month upload accepts: `months` months back through `this_period` INCLUSIVE, oldest first,
-    canonical spellings ('October 2024' … 'October 2026' for 24 back from October 2026). Raises ValueError on a
+    """THE WINDOW the multi-month upload accepts: EXACTLY `months` months ending with `this_period` (this month
+    included), oldest first, canonical spellings — 24 from September 2026 = 'October 2024' … 'September 2026' (owner
+    decision 2026-09-26: 24 months = this month and the 23 before it). Raises ValueError on a
     non-month `this_period` — never guesses."""
     from app.modules.account._period import parse_period, month_range   # stdlib module; lazy so this file imports alone
     m, y = parse_period(this_period)
     if not (1 <= m <= 12 and y):
         raise ValueError(f"not a month period: {this_period!r}")
-    k = y * 12 + (m - 1) - int(months)
+    k = y * 12 + (m - 1) - (int(months) - 1)
     return month_range(f"{k // 12:04d}-{k % 12 + 1:02d}", f"{y:04d}-{m:02d}")
 
 
@@ -882,7 +883,7 @@ def batch_plan(items, window, on_file):
     PURE."""
     wset = set(window or [])
     first, last = (window[0], window[-1]) if window else ("", "")
-    n = max(len(window or []) - 1, 0)
+    n = len(window or [])
     rows = []
     for it in items:
         r = dict(it)

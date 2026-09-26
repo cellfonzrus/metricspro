@@ -336,7 +336,7 @@ def _coverage_payload(window, months, reps):
 
 @router.get("/royalty/coverage")
 def royalty_coverage(org_id: str = ORG_ID):
-    """The lookback window (this month and `lookback_months` before it — per-org config, house default 24) and which
+    """The lookback window (exactly `lookback_months` months, this month included — per-org config, house default 24) and which
     months hold a report, per center."""
     _need_org(org_id)
     client = sb()

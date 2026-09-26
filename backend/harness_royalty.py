@@ -464,10 +464,11 @@ mig27 = io.open(os.path.join(ROOT, "database", "migrations", "1027_royalty_lookb
 check("the migration's CHECK bounds are the code's bounds (one fact, mirrored and pinned)",
       "BETWEEN %d AND %d" % R.LOOKBACK_BOUNDS in mig27 and "ADD COLUMN IF NOT EXISTS lookback_months" in mig27 and "-- REVERT:" in mig27)
 W = R.lookback_window("September 2026", 24)
-check("the window: this month and the 24 before it, oldest first, canonical (September 2024 … September 2026)",
-      len(W) == 25 and W[0] == "September 2024" and W[-1] == "September 2026" and W[16] == "January 2026")
+check("the window: EXACTLY 24 months, this month included, oldest first, canonical (October 2024 … September 2026)",
+      len(W) == 24 and W[0] == "October 2024" and W[-1] == "September 2026" and W[15] == "January 2026")
+check("a lookback of 1 is this month alone", R.lookback_window("September 2026", 1) == ["September 2026"])
 check("the window crosses a year boundary cleanly and accepts either spelling of 'this month'",
-      R.lookback_window("2026-02", 3) == ["November 2025", "December 2025", "January 2026", "February 2026"])
+      R.lookback_window("2026-02", 3) == ["December 2025", "January 2026", "February 2026"])
 try:
     R.lookback_window("soon", 24)
     check("a non-month 'this month' raises (never guessed)", False)
@@ -481,13 +482,15 @@ def it(i, name, center="9001", period="June 2026", error=None):
 
 items = [it(0, "a"), it(1, "b", period="July 2026"), it(2, "c", period="August 2024"), it(3, "d", period="October 2026"),
          it(4, "e", period="May 2026"), it(5, "f", period="May 2026"), it(6, "g", period=None), it(7, "h", center=None),
-         it(8, "i", error="no report lines were found"), it(9, "j", center="9002", period="May 2026"), it(10, "k", period="September 2024")]
+         it(8, "i", error="no report lines were found"), it(9, "j", center="9002", period="May 2026"), it(10, "k", period="October 2024"), it(11, "l", period="September 2024")]
 on = {("9001", "July 2026"): {"id": "r1", "total_due": 10, "status": "ok"}}
 pl = {r["file_name"]: r for r in R.batch_plan(items, W, on)}
 check("a clean in-window file is ready and new", pl["a"]["ready"] and not pl["a"]["replace"])
 check("an on-file center × month is ready and flagged REPLACE with the existing report", pl["b"]["ready"] and pl["b"]["replace"] and pl["b"]["existing"]["id"] == "r1")
 check("older than the window → refused naming the window; the window's first month → ready",
-      not pl["c"]["ready"] and "older than the 24-month window (September 2024 – September 2026)" in pl["c"]["refusals"][0] and pl["k"]["ready"])
+      not pl["c"]["ready"] and "older than the 24-month window (October 2024 – September 2026)" in pl["c"]["refusals"][0] and pl["k"]["ready"])
+check("September 2024 (24 months back = the 25th month) is refused as too old",
+      not pl["l"]["ready"] and "older than the 24-month window" in pl["l"]["refusals"][0])
 check("a future month → refused", not pl["d"]["ready"] and "future" in pl["d"]["refusals"][0])
 check("the same center × month twice → BOTH refused, each naming the other; another center's same month is fine",
       not pl["e"]["ready"] and not pl["f"]["ready"] and "in f in this batch" in pl["e"]["refusals"][0]
@@ -496,7 +499,7 @@ check("no period / no center / an unreadable file → refused in words (never sk
       not pl["g"]["ready"] and "period could not be read" in pl["g"]["refusals"][0]
       and not pl["h"]["ready"] and "center could not be read" in pl["h"]["refusals"][0]
       and pl["i"]["refusals"] == ["no report lines were found"])
-check("one row out per file in, in order (a refused file is never dropped)", [r["index"] for r in R.batch_plan(items, W, on)] == list(range(11)))
+check("one row out per file in, in order (a refused file is never dropped)", [r["index"] for r in R.batch_plan(items, W, on)] == list(range(12)))
 check("a validation flag never blocks (a flagged report is stored as printed, as a single import)",
       R.batch_plan([dict(it(0, "a"), status="flagged", flags=[{"code": "x"}])], W, {})[0]["ready"])
 cv = R.coverage(W, [{"id": "r1", "center_code": "9001", "period": "July 2026", "status": "ok"},
@@ -506,7 +509,7 @@ cv = R.coverage(W, [{"id": "r1", "center_code": "9001", "period": "July 2026", "
 jl = next(m for m in cv["months"] if m["period"] == "July 2026")
 jn = next(m for m in cv["months"] if m["period"] == "June 2026")
 check("coverage: every window month listed; either stored spelling counts; a month outside the window is ignored",
-      len(cv["months"]) == 25 and [x["center_code"] for x in jl["on_file"]] == ["9001", "9002"] and cv["centers"] == ["9001", "9002"]
+      len(cv["months"]) == 24 and [x["center_code"] for x in jl["on_file"]] == ["9001", "9002"] and cv["centers"] == ["9001", "9002"]
       and not any(x["id"] == "r4" for m in cv["months"] for x in m["on_file"]))
 check("coverage names the centers MISSING a month", jn["missing"] == ["9002"] and cv["months"][0]["missing"] == ["9001", "9002"])
 out = R.batch_outcome([{"ok": True, "file_name": "a"}, {"ok": False, "file_name": "b", "error": "x"}])

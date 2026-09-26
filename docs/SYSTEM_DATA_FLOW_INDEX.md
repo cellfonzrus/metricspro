@@ -12380,8 +12380,9 @@ loops over the SAME functions the single endpoints call — locked (below).
 
 **THE LOOKBACK IS CONFIG.** `royalty_config.lookback_months` (mig `1027`, nullable; NULL = `CONFIG_DEFAULT["lookback_months"]`
 = 24; outside `LOOKBACK_BOUNDS` 1–120 reads the default — the migration's CHECK mirrors the bounds, pinned by
-`harness_royalty.py` §L). The window = **this month and the `lookback_months` months before it** (24 → 25 months, e.g.
-September 2024 – September 2026), `royalty.lookback_window(_this_period(), n)` → `_period.month_range`. Set on Line setup
+`harness_royalty.py` §L). The window = **EXACTLY `lookback_months` months, this month included** (owner decision 2026-09-26: 24 = this month and the
+23 before it — 24 boxes on the strip, e.g. October 2024 – September 2026 when today is September 2026; September 2024 is refused
+as too old), `royalty.lookback_window(_this_period(), n)` → `_period.month_range`. Set on Line setup
 ("Several-months upload reaches back N months"); `PUT /account/royalty/config` writes it ONLY when it changes, so the settings
 form (which sends the whole resolved config) keeps saving every other knob before mig 1027 is applied; a changed lookback
 before then is refused naming `1027` (the other settings saved). Before 1027 the batch works with 24.
@@ -12403,7 +12404,7 @@ were imported stay imported — a failure on one file undoes no other."* + the c
 |------|------|
 | Unreadable file / no report lines | refused with the single import's own message (`_parse_input`); never skipped, never blocks another file |
 | No period / no center in the header | refused — "import it on its own under 'Import a report' and enter the period / center" |
-| Period older than the window | refused naming the window ("older than the 24-month window (September 2024 – September 2026) — the lookback is a company setting") |
+| Period older than the window | refused naming the window ("older than the 24-month window (October 2024 – September 2026) — the lookback is a company setting") |
 | Period after this month | refused (a future month) |
 | Two files for the same center × month in one batch | BOTH refused, each naming the other — never a silent replace of the earlier by the later; remove one and the other lands |
 | Center × month already on file (this org) | ready, flagged **will REPLACE**; `_write_report`'s existing replace (delete center × every period spelling, insert) — one report after, never two |
@@ -12411,16 +12412,16 @@ were imported stay imported — a failure on one file undoes no other."* + the c
 | Validation flags | shown, never blocking |
 | Landing | per file through `_write_report`; an exception on one file (HTTP refusal or insert error) is recorded for that file and the rest continue; nothing landed is rolled back |
 
-**PROOF.** `backend/harness_royalty.py` §L (stdlib, 107 checks total): the config default 24 + overrides + bounds, the
-migration's CHECK = the code's bounds, the window (25 months, year boundary, non-month raises), every plan rule, coverage
+**PROOF.** `backend/harness_royalty.py` §L (stdlib, 109 checks total): the config default 24 + overrides + bounds, the
+migration's CHECK = the code's bounds, the window (exactly 24 months incl. this month — oldest October 2024 for September 2026, September 2024 refused; a lookback of 1 = this month; year boundary; non-month raises), every plan rule, coverage
 (both spellings, missing centers, outside-window ignored), the sentence, three negative controls.
 `backend/harness_royalty_pl.py` §H (app deps, CI `finance-royalty-proof`, 81 checks total): the REAL endpoints over the
 in-memory client with "today" pinned — the preview writes nothing; N files → N reports under their header months; the
-window's first month accepted, older / future refused; duplicates refused and cleared by removal; the on-file month
+window's oldest month (October 2024) accepted, September 2024 and future refused; duplicates refused and cleared by removal; the on-file month
 flagged and replaced (the new figures, one report); unreadable / undated files refused without blocking; the same batch
 twice = one report per center × month; **BYTE IDENTITY** — four files through one batch (reverse order) land exactly the
 header and line rows four single imports land, with a one-cent negative control; a per-file insert failure (the FIRST
-file) isolated; the lookback read from the org's row (3 → June–September), another org's never read, an out-of-range value
+file) isolated; the lookback read from the org's row (4 → June–September), another org's never read, an out-of-range value
 → 24; the config save (unchanged lookback not written; changed saved; 500 refused; pre-1027 refusal names it while the
 other settings save); ORG SCOPE (another org's same center × month neither "on file" nor touched; every write org-scoped).
 **THE LOCK — `backend/harness_royalty_lock.py` (k)** (stdlib, 53 checks total): ONE parser (`R.parse(` once, in
@@ -12442,7 +12443,10 @@ import (which lets you type them) — the batch takes the month only from the re
 transport is one request: a very large batch (many PDFs) is bounded by the API's request-size limit — upload in two
 batches if it refuses. (3) `_write_report`'s delete-then-insert is not one transaction (pre-existing): a file whose INSERT
 fails after its month's old report was deleted leaves that center × month empty — the result names the file; re-upload
-it. (4) The window includes this month (a report for the current month, if the franchisor issues one, is accepted).
+it. (4) The window includes this month (a report for the current month, if the franchisor issues one, is accepted) — so a
+lookback of 24 reaches 23 closed months back. (5) The header comment of mig `1027` still reads "this month and
+`lookback_months` months before it" — the migration was applied as written (comment only; the column's meaning is
+defined here and by `royalty.lookback_window`).
 
 ## 38. SUPER ADMIN TOOLBOX — every platform-only screen on one tiled page (owner 2026-09-25)
 
