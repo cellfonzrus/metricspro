@@ -551,6 +551,32 @@ def commission_index(rows, key_of):
     return out
 
 
+def sale_customer(row, invoice_customers=None, customer_field="customer", id_field="trans_id"):
+    """THE customer a SALE LINE was sold to (one rule, dereferenced — never copied): the line's own customer
+    column, else its invoice header's (`invoice_customers` {trans_id: customer} — the sales-by-invoice export's
+    `raw_sales_invoice.customer`, mig 1012). None when neither names one. PURE. Readers: `sales_detail_index`
+    (inventory integrity, §11b) and the commission line identity (`commission_drilldown.attach_line_identity`,
+    index §6j) — the name a rep sees on a paid line is the name the integrity report shows for that sale."""
+    r = row or {}
+    tid = str(r.get(id_field) or "").strip() or None
+    return (str(r.get(customer_field) or "").strip()
+            or ((invoice_customers or {}).get(tid) if tid else None) or None)
+
+
+def invoice_customer_map(sale_rows, invoice_customers=None, customer_field="customer", id_field="trans_id"):
+    """{trans_id: customer} — per invoice, the first line naming a customer through `sale_customer`, else the
+    invoice header. PURE."""
+    out = {}
+    for r in sale_rows or []:
+        tid = str((r or {}).get(id_field) or "").strip()
+        if tid and not out.get(tid):
+            out[tid] = sale_customer(r, invoice_customers, customer_field, id_field)
+    for tid, c in (invoice_customers or {}).items():
+        if tid and not out.get(tid) and str(c or "").strip():
+            out[tid] = str(c).strip()
+    return out
+
+
 def sales_detail_index(sale_rows, key_of, invoice_customers=None, qty_field="quantity", key_field="serial_1",
                        id_field="trans_id", date_field="trans_date", customer_field="customer", mobile_field="mdn"):
     """`{device_key: sale evidence}` — the sale LINES by invoice that name a device. Net units are exactly
@@ -570,7 +596,7 @@ def sales_detail_index(sale_rows, key_of, invoice_customers=None, qty_field="qua
         q = _num(raw) if raw not in (None, "") else 1.0
         tid = str(r.get(id_field) or "").strip() or None
         day = _day(r.get(date_field))
-        cust = str(r.get(customer_field) or "").strip() or (inv_cust.get(tid) if tid else None) or None
+        cust = sale_customer(r, inv_cust, customer_field, id_field)
         d = out.setdefault(k, {"source": SOURCE_SALES, "net": net.get(k, 0.0), "lines": [], "last_sold_on": None,
                                "customer": None, "mobile": None, "invoice": None, "_last": None})
         if len(d["lines"]) < EVIDENCE_CAP:

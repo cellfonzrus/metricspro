@@ -25,6 +25,17 @@ THE THREE FACTS, ONE HOME EACH:
     here on purpose. `disallowed_fields(payload, kind)` names anything outside the list (the proof and the lock
     use it); `KNOWN_CARRIER_FIELDS` is the sanity list the lock asserts is never allowed.
 
+FOLLOW-UPS (owner 2026-09-26, index §6j): *"pay discrepancy should be hidden, managers can see rep incentive, on
+paid row show the action / upgrade with the details of the phone number and customer name. also need a report to
+export one employees report over a number of selected months. all these need to be platform wide"*
+  · WHO, for the screen too — `viewer_payload(caller_is_self)` is what `/me` hands the client: the viewer's
+    audience and the pages refused to it. Pages come from ONE registry, `MANAGER_ONLY_SURFACES` — the server's
+    refusals (`router._refuse_employee_audience(key)`) and the nav's visibility (`rbac.payoutRefused`) both read it.
+  · Pages no longer declare an audience: the server resolves it from who is looking (a manager gets the full
+    report, a rep the employee one).
+  · A plan line names its sale: `phone` (`line_phone`, THE phone rule) and `customer` (the sale-customer rule,
+    `inventory_sold_recon.sale_customer`) — both on the employee allow-list on purpose.
+
 PURE; no I/O; no tenant, carrier or product name (RULE TWO). Lock: `harness_payout_audience_lock.py`.
 """
 import copy
@@ -34,8 +45,11 @@ DEFAULT_AUDIENCE = "manager"
 
 # ── THE EMPLOYEE ALLOW-LISTS ─────────────────────────────────────────────────────────────────────────
 # a plan rule line (commission_engine.preview(detail=True) → rules[].lines[])
+# `phone` / `customer` (index §6j): the rep's own sale — the line and the customer they sold it to. PII shown to
+# the rep who made the sale; the name only (never an id number), read org-scoped by `commission_drilldown`.
 EMPLOYEE_LINE_FIELDS = ("date", "trans_id", "product", "contract_type", "imei", "mdn", "amount", "qualifies",
-                        "flat_once", "event_id", "event_key", "event_key_kind", "event_type")
+                        "flat_once", "event_id", "event_key", "event_key_kind", "event_type", "event_label", "phone",
+                        "customer")
 # a plan rule (its rate and what it paid — the rep's own terms)
 EMPLOYEE_RULE_FIELDS = ("rule_id", "label", "payout_kind", "tiered", "qualifies", "matched_lines",
                         "qualifying_units", "payout", "match_field", "match_op", "match_value", "amount", "pct",
@@ -80,6 +94,41 @@ KNOWN_CARRIER_FIELDS = ("ext_price", "gp", "implied_cost", "cost_flags", "data_q
                         "ma_says_paid", "held_but_ma_paid", "rebate_total", "ma_spiff_total", "mi_ref",
                         "boost_commission", "boost_reimbursement", "would_have_paid", "suppressed",
                         "suppressed_reason", "buckets")
+
+# ── MANAGER-ONLY SURFACES — THE one registry (index §6j) ────────────────────────────────────────────
+# A carrier-commission report (what the carrier paid the store, per rep) is refused to the employee audience. The
+# server's refusal names its key here (`router._refuse_employee_audience(authorization, org_id, key)`), and the
+# nav hides every `pages` entry from a viewer whose audience is 'employee' (`viewer_payload` → `/me` →
+# `rbac.payoutRefused`). One list; a surface refused on the server is never offered in the menu.
+MANAGER_ONLY_SURFACES = (
+    {"key": "carrier_vs_pay", "label": "Carrier Earned vs Employee Paid",
+     "endpoints": ("/carrier-vs-pay",), "pages": ("/commcalc/carrier-vs-pay",)},
+    {"key": "pay_discrepancy", "label": "Pay Discrepancy",
+     "endpoints": ("/discrepancy/{period}", "/discrepancy/{period}/phantom"), "pages": ("/commcalc/discrepancy",)},
+    {"key": "commission_discrepancy", "label": "Commission Discrepancy",
+     "endpoints": ("/discrepancy-appeals",), "pages": ("/commcalc/commission-discrepancy",)},
+    # a drill inside other pages (no page of its own) — refused on the server, nothing to hide in the nav
+    {"key": "commission_device", "label": "Device commission story",
+     "endpoints": ("/commission-device",), "pages": ()},
+)
+MANAGER_ONLY_PAGES = tuple(p for s_ in MANAGER_ONLY_SURFACES for p in s_["pages"])
+
+
+def manager_only_label(key):
+    """The registered label of a manager-only surface — KeyError for an unregistered key (a refusal must be
+    registered, or the nav could not hide it)."""
+    for s_ in MANAGER_ONLY_SURFACES:
+        if s_["key"] == key:
+            return s_["label"]
+    raise KeyError(f"manager-only surface {key!r} is not registered in payout_audience.MANAGER_ONLY_SURFACES")
+
+
+def viewer_payload(caller_is_self):
+    """What `/me` tells the client about THIS viewer: the audience the server will serve them (`resolve` with no
+    page request) and the pages refused to them. The client decides nothing — it hides what it is told."""
+    aud = resolve("", caller_is_self)
+    return {"audience": aud, "refused_pages": list(MANAGER_ONLY_PAGES) if aud == "employee" else []}
+
 
 _ALLOW = {"line": EMPLOYEE_LINE_FIELDS, "rule": EMPLOYEE_RULE_FIELDS, "plan": EMPLOYEE_PLAN_FIELDS,
           "device": EMPLOYEE_DEVICE_FIELDS, "installment": EMPLOYEE_INSTALLMENT_FIELDS,
@@ -211,6 +260,39 @@ def disallowed_fields(payload, kind="explain", path=""):
         for j, it in enumerate(d.get("installments") or []):
             hits += [f"{path}.devices[{i}].installments[{j}].{k}" for k in it if k not in EMPLOYEE_INSTALLMENT_FIELDS]
     return hits
+
+
+def line_phone(line):
+    """The phone line a plan line is about: its activation EVENT's key when the event is keyed by phone, else THE
+    phone rule (`line_class.line_event_keys`: the line's MDN, else a phone-shaped tracking #). None when neither."""
+    ln = line or {}
+    if ln.get("event_key_kind") == "phone" and ln.get("event_key"):
+        return str(ln["event_key"])
+    from app.modules.commcalc import line_class as _lc      # pure; lazy so this module stays import-light
+    return _lc.line_event_keys({"mdn": ln.get("mdn"), "serial_1": ln.get("imei")}).get("phone")
+
+
+def event_label(line):
+    """The action a line's activation EVENT was — THE class label (`line_class.CLASS_LABELS`: 'New activation',
+    'Upgrade', …). None for a line that is not part of an activation event."""
+    cls = (line or {}).get("event_type")
+    if not cls:
+        return None
+    from app.modules.commcalc import line_class as _lc
+    return _lc.CLASS_LABELS.get(str(cls), str(cls))
+
+
+def stamp_line_identity(explain, customers_by_txn):
+    """Set `event_label`, `phone` and `customer` on every plan rule line (in place; returns the explain).
+    `customers_by_txn` = {trans_id: customer} from the sale-customer rule. PURE."""
+    pc = (explain or {}).get("plan_component") or {}
+    cust = customers_by_txn or {}
+    for rb in pc.get("rules") or []:
+        for ln in rb.get("lines") or []:
+            ln["event_label"] = event_label(ln)
+            ln["phone"] = line_phone(ln)
+            ln["customer"] = cust.get(str(ln.get("trans_id") or "").strip()) or None
+    return explain
 
 
 def rule_line_total(explain):

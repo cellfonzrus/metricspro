@@ -80,11 +80,57 @@ async def _financial_statement(org_id, f):
             "sheets": sheets}
 
 
+def _range_bounds(filters):
+    """(period_from, period_to) for the month-range P&L: explicit months (either spelling), else the
+    registry's period convention for BOTH ends ('current' / 'last' / 'Month YYYY'), so a recurring schedule
+    with no range still sends a meaningful month."""
+    f = filters or {}
+    lo = str(f.get("period_from") or "").strip() or _resolve_period(f)
+    hi = str(f.get("period_to") or "").strip() or lo
+    return lo, hi
+
+
+async def _account_pl_range(org_id, f):
+    """The P&L over a MONTH RANGE (owner 2026-09-26) — one column per month plus a Total, the same scope /
+    store / market filters as the page. In-process through `GET /account/pl-range` (`router.get_pl_range`),
+    which loops THE single-month P&L read; the sheets are the layout `account/pl_range.export_sheet` owns.
+    Index §4c."""
+    from app.modules.account import router as AC
+    from app.modules.notify.report_filters import ReportConfigError
+    lo, hi = _range_bounds(f)
+    scope = (f or {}).get("scope") or "consolidated"
+    try:
+        data = await AC.get_pl_range(period_from=lo, period_to=hi, scope=scope,
+                                     stores=(f or {}).get("stores") or "", markets=(f or {}).get("markets") or "",
+                                     org_id=org_id)
+    except Exception as e:
+        if getattr(e, "status_code", None) == 400:     # a bad range is a CONFIG error on the schedule
+            raise ReportConfigError(f"P&L month range {lo} → {hi}: {getattr(e, 'detail', e)}")
+        raise
+    if not data.get("computed_months"):
+        raise ValueError(f"P&L not computed for any month of {data['period_from']} → {data['period_to']} / "
+                         f"{scope} — open /accounts and click 'Compute statements' first.")
+    label = data.get("scope_label") or scope
+    slug = "".join(c if c.isalnum() else "-" for c in str(scope)).strip("-") or "scope"
+    sub = f"{data['period_from']} → {data['period_to']} · cash basis · {label}"
+    if data.get("missing_months"):
+        sub += f" · not computed: {', '.join(data['missing_months'])}"
+    return {"title": f"Profit & Loss by month — {label}", "subtitle": sub,
+            "filename": (f"pl-{slug}-{data['period_from']}-to-{data['period_to']}").replace(" ", "-"),
+            "sheets": data.get("sheets") or []}
+
+
 FINANCE_REPORTS = {
     "financial_statement": {
         "label": "Financial Statements (on demand)",
         "filters": ["period", "scope"],
         "live_path": lambda f: "/accounts",
         "build": _financial_statement,
+    },
+    "account_pl_range": {
+        "label": "Profit & Loss by month (month range)",
+        "filters": ["period_from", "period_to", "scope", "stores", "markets"],
+        "live_path": lambda f: "/accounts/pl",
+        "build": _account_pl_range,
     },
 }

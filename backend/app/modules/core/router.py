@@ -470,6 +470,17 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None,
             imp = _impersonation.session_brief(client, _impersonation.current().get("session_id"))
     except Exception:
         imp = {"active": True}
+    # WHO THIS VIEWER IS TO A PAYOUT SURFACE (index §6j): the audience the server will serve them and the
+    # manager-only pages refused to them — from THE registry (`payout_audience.MANAGER_ONLY_SURFACES`) through
+    # THE self-scope answer (`storeops.role_is_self_scoped`), so the nav hides exactly what the server refuses.
+    # Copied into a new dict (the roles row is untouched). Best-effort: a failure leaves it off (nothing hidden;
+    # the server still refuses).
+    try:
+        from app.modules.commcalc import payout_audience as _pa
+        from app.modules.storeops.router import role_is_self_scoped as _self_scoped
+        perms = {**perms, "payout": _pa.viewer_payload(_self_scoped(org_id, u.get("role")))}
+    except Exception:
+        pass
     return {"provisioned": True, "user": u, "permissions": perms,
             "active": bool(u.get("is_active", True)), "tenant": tenant, "carriers": carriers,
             "password_policy": pw_policy, "twofa": twofa,
