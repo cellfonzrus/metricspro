@@ -706,7 +706,12 @@ def _compute_day_boost(client, org_id, period, lines, cfg, smap, source_table):
                 "setup_fee_keywords": _acfg["setup_fee_keywords_list"],
                 "setup_fee_match_mode": _r._sfp_cfg_mode(client, org_id),
                 # the ONE activation-type predicate's per-org rules (line_class, 2026-09-21)
-                "line_class_rules": _acfg.get("line_rules")}
+                "line_class_rules": _acfg.get("line_rules"),
+                # the tenant's OWN KPI registry drives the score here too (index §19.28) — this accrual
+                # path passes `dlar_rep=[] / dlar_store=[]`, so no KPI has a value and every one of them
+                # is `no_data`: the day's accrual is not KPI-tiered, and must not read as a rep failing
+                # seven KPIs at 0%. Threaded so the def SET is the tenant's, exactly as the monthly run.
+                "kpi_defs": _r._kpi_defs(org_id, _r._kpi_carrier_id(client, org_id))}
     except Exception:
         pass
 
