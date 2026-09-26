@@ -56,7 +56,9 @@ CONFIG_DEFAULT = {
     "book_pl": True,                    # the royalty report books the P&L revenue / fee lines
     "center_pattern": r"\bCenter\s+([A-Za-z]*\d[A-Za-z0-9-]*)",   # the center's code carries a digit
     "period_pattern": r"Period:\s*([A-Za-z]+\.?\s+\d{4}|\d{4}-\d{1,2})",
+    "lookback_months": 24,              # the multi-month upload accepts this month and this many months before it
 }
+LOOKBACK_BOUNDS = (1, 120)              # a configured lookback outside this range reads the house default
 DAILY_SOURCES = ("raw_sales_product", "raw_sales")
 MATCH_FIELDS = ("category", "department", "product_desc")
 FEE_BASES = ("adjusted_str", "str")
@@ -241,6 +243,11 @@ def resolve_config(row=None):
         cfg["daily_source"] = CONFIG_DEFAULT["daily_source"]
     if cfg["daily_match_field"] not in MATCH_FIELDS:
         cfg["daily_match_field"] = CONFIG_DEFAULT["daily_match_field"]
+    try:
+        lb = int(str(cfg["lookback_months"]).strip())
+    except (TypeError, ValueError):
+        lb = CONFIG_DEFAULT["lookback_months"]
+    cfg["lookback_months"] = lb if LOOKBACK_BOUNDS[0] <= lb <= LOOKBACK_BOUNDS[1] else CONFIG_DEFAULT["lookback_months"]
     return cfg
 
 
@@ -833,6 +840,120 @@ def summary(reports, recon_by_report=None, coverage=None):
             "recon_variance": f2(sum((D(x["totals"]["variance"]) for x in rv), Decimal("0"))) if rv else None,
             "unmapped_lines": len((coverage or {}).get("unmapped") or {}),
             "unmapped_amount": f2(sum((D(u["amount"]) for u in ((coverage or {}).get("unmapped") or {}).values()), Decimal("0")))}
+
+
+# ══ MANY MONTHS IN ONE GO — the batch is N single imports (owner 2026-09-26, index §37.10) ══════════
+# The router reads each file through the ONE parser (`parse`) and validator (`validate`), resolves its center × month
+# through the ONE key resolution the writer uses (`royalty_router._report_key`), and lands each confirmed file through
+# the ONE writer (`royalty_router._write_report`). What lives here is only the PLAN — which files may land, which
+# replace a report already on file, and why a file is refused. No month is worked out here: the window is enumerated
+# by `_period.month_range` and every period arrives already canonical from the writer's own resolution.
+def lookback_window(this_period, months):
+    """THE WINDOW the multi-month upload accepts: `months` months back through `this_period` INCLUSIVE, oldest first,
+    canonical spellings ('October 2024' … 'October 2026' for 24 back from October 2026). Raises ValueError on a
+    non-month `this_period` — never guesses."""
+    from app.modules.account._period import parse_period, month_range   # stdlib module; lazy so this file imports alone
+    m, y = parse_period(this_period)
+    if not (1 <= m <= 12 and y):
+        raise ValueError(f"not a month period: {this_period!r}")
+    k = y * 12 + (m - 1) - int(months)
+    return month_range(f"{k // 12:04d}-{k % 12 + 1:02d}", f"{y:04d}-{m:02d}")
+
+
+def _ordinal(period):
+    from app.modules.account._period import parse_period
+    m, y = parse_period(period or "")
+    return y * 12 + m if (1 <= m <= 12 and y) else None
+
+
+def batch_plan(items, window, on_file):
+    """items: one per uploaded file, in upload order — {index, file_name, error, center, period (canonical or None),
+    status, flags, total_due, …} as the router read them. window: `lookback_window(...)`. on_file: {(center_code,
+    canonical period): {id, total_due, status}} — the reports this org already holds in the window.
+
+    Returns the items, each with `refusals` (every reason it cannot land, in words), `ready`, `replace` (a report for
+    that center × month is already on file and WILL BE REPLACED by this one) and `existing`. The rules:
+      · a file the parser could not read → refused with the parser's own message (never skipped);
+      · no period / no center in the report's header → refused (the single import lets you enter it);
+      · a period outside the window (before its first month, or after this month) → refused, naming the window;
+      · two files for the SAME center × month in one batch → BOTH refused, each naming the other (never a silent
+        replace of the earlier by the later) — remove one and check again;
+      · a validation flag never blocks: the report is stored as printed WITH its flags, exactly as a single import.
+    PURE."""
+    wset = set(window or [])
+    first, last = (window[0], window[-1]) if window else ("", "")
+    n = max(len(window or []) - 1, 0)
+    rows = []
+    for it in items:
+        r = dict(it)
+        ref = []
+        if r.get("error"):
+            ref.append(str(r["error"]))
+        else:
+            p = r.get("period")
+            if not p:
+                ref.append("the royalty period could not be read from this report's header — import it on its own "
+                           "under 'Import a report' and enter the period")
+            elif p not in wset:
+                o, lo = _ordinal(p), _ordinal(first)
+                if o is not None and lo is not None and o < lo:
+                    ref.append(f"{p} is older than the {n}-month window ({first} – {last}) — the lookback is a company "
+                               "setting (Line setup)")
+                else:
+                    ref.append(f"{p} is after this month ({last}) — a royalty report cannot be for a future month")
+            if not r.get("center"):
+                ref.append("the center could not be read from this report's header — import it on its own under "
+                           "'Import a report' and enter the center")
+        r["refusals"] = ref
+        rows.append(r)
+    groups = {}
+    for r in rows:
+        if not r.get("error") and r.get("center") and r.get("period") in wset:
+            groups.setdefault((r["center"], r["period"]), []).append(r)
+    for (c, p), rs in groups.items():
+        if len(rs) > 1:
+            for r in rs:
+                others = ", ".join(str(x.get("file_name") or "file %d" % (x.get("index", 0) + 1)) for x in rs if x is not r)
+                r["refusals"].append(f"center {c} · {p} is also in {others} in this batch — one report per center per "
+                                     "month: remove one and check again")
+    for r in rows:
+        ex = (on_file or {}).get((r.get("center"), r.get("period"))) if not r.get("error") else None
+        r["existing"] = ex or None
+        r["replace"] = bool(ex)
+        r["ready"] = not r["refusals"]
+    return rows
+
+
+def coverage(window, reports):
+    """Which months of the window hold a report, per center: {window, centers[], months: [{period, on_file[],
+    missing[]}]}. `centers` = every center with a report in the window (a center never reported is not guessed).
+    PURE."""
+    from app.modules.account._period import canonical_period
+    by = {p: [] for p in (window or [])}
+    for r in reports or []:
+        p = canonical_period(r.get("period") or "")
+        if p in by:
+            by[p].append({"center_code": r.get("center_code"), "id": r.get("id"), "status": r.get("status"),
+                          "total_due": r.get("total_due")})
+    centers = sorted({x["center_code"] for v in by.values() for x in v if x.get("center_code")})
+    months = []
+    for p in window or []:
+        got = sorted(by[p], key=lambda x: str(x.get("center_code") or ""))
+        have = {x.get("center_code") for x in got}
+        months.append({"period": p, "on_file": got, "missing": [c for c in centers if c not in have]})
+    return {"window": list(window or []), "centers": centers, "months": months}
+
+
+def batch_outcome(results):
+    """The one sentence a batch import ends with — every file named, landed or not."""
+    ok = [r for r in results if r.get("ok")]
+    bad = [r for r in results if not r.get("ok")]
+    s = f"Imported {len(ok)} of {len(results)} file(s)."
+    if bad:
+        s += " NOT imported: " + "; ".join(f"{r.get('file_name') or 'file'} — {r.get('error')}" for r in bad) + "."
+        if ok:
+            s += " The files that were imported stay imported — a failure on one file undoes no other."
+    return s
 
 
 # ══ I/O (org-scoped; every failure degrades to the mirror / the default, never to another org's rows) ═
