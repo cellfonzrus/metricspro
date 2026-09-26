@@ -5408,6 +5408,15 @@ classification config row for "BYOD Swap" / "Ineligible Port-In" — both MONEY,
   never back-filled, because inventing the report's date is the very class being fixed.
 - **`harnesslib.py_code_only`** — the Python twin of `js_code_only` (§24): a lock asserting "the `else 0`
   expression is gone" failed on the replacement's own docstring, which quotes it.
+- **`harness_team_snapshot_perf.py` RE-EXPRESSED, not loosened (§24's rule for a guard that has become
+  a proxy).** It pinned `rep_coaching` byte-identical to a base commit to prove a PERF refactor moved
+  nothing. This change ADDS `kpis_no_data` to that payload, and its check 5.6 asserted the tenant's
+  custom metric `reviews` appears on every rep's `kpis` list — which it did, as `actual: 0.0, met:
+  false`, off a blank cell: the very defect. Now `ADDED_SINCE_BASE` names the added key, `j_base`
+  compares every field that existed at the base commit byte for byte, and new checks pin that the
+  difference is EXACTLY that key, that the custom metric is still config-driven with its config target,
+  that an unmeasured metric is `no_data`, and — as the armed control — that the OLD payload carried it
+  as a 0.0 failure. 120/120, stricter than before.
 
 **MIGRATION `1026_dlar_vintage_kpi_no_data.sql` — WRITTEN, NOT APPLIED.** Block 1 (`as_of_date` on both
 tables + indexes) is additive and money-neutral. Block 2 is **commented out**: turning the 189 fabricated
