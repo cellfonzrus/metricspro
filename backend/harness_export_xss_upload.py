@@ -311,8 +311,13 @@ ok("B4  an ordinary report is grid-identical to base",
 src_render = open(os.path.join(_HERE, "app/modules/notify/render.py"), encoding="utf-8").read()
 xlsx_body = src_render.split("def build_xlsx")[1].split("def build_pdf")[0]
 money_branch = xlsx_body.split('if col.get("money"):')[1].split("else:")[0]
+# 2026-09-26 (index §4c): the money branch reads the value once (`raw = _raw(col, row)`), leaves a MISSING value
+# an empty cell (absence is not $0.00), and writes every present value as `float(raw)` — still a float, still
+# MONEY_FMT, still never a string that could reach the guard.
 ok("B5  the build_xlsx MONEY branch still writes a float + number format",
-   "float(_raw(col, row) or 0)" in money_branch and "MONEY_FMT" in money_branch)
+   ("float(_raw(col, row) or 0)" in money_branch
+    or ("raw = _raw(col, row)" in money_branch and "float(raw)" in money_branch))
+   and "MONEY_FMT" in money_branch)
 ok("B5b the money branch contains no call to the neutraliser — money cannot be touched",
    "_is_formula_risky" not in money_branch and "_write_text_cell" not in money_branch)
 

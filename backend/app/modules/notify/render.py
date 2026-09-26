@@ -51,7 +51,9 @@ def _money_str(v):
 def _display(col, row):
     v = _raw(col, row)
     if col.get("money"):
-        return _money_str(v)
+        # A MISSING money value renders BLANK, never $0.00 (index §23w / §4c) — the same rule as the
+        # browser exporter's money(); a real zero still renders $0.00.
+        return "" if v is None or v == "" else _money_str(v)
     return "" if v is None else str(v)
 
 
@@ -160,8 +162,16 @@ def build_xlsx(payload: dict) -> bytes:
                 if col.get("money"):
                     # Money is a real float + number format — it can never be a formula, and this is
                     # also why the H7 guard cannot touch a single currency figure.
+                    raw = _raw(col, row)
+                    if raw is None or raw == "":
+                        # A MISSING money value is not zero (index §23w, 2026-09-10; the Excel half closed
+                        # 2026-09-26, §4c): a withheld or not-computed cell is left EMPTY, never written as
+                        # $0.00. A real zero is still a number.
+                        cell = ws.cell(row=ri, column=ci)
+                        cell.alignment = right
+                        continue
                     try:
-                        val = float(_raw(col, row) or 0)
+                        val = float(raw)
                     except (TypeError, ValueError):
                         val = 0.0
                     cell = ws.cell(row=ri, column=ci, value=val)

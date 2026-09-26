@@ -314,6 +314,12 @@ on:
       - "frontend/src/components/EmployeeWidgets.impl.tsx"
       - "backend/harness_browser_sweep_kinds.py"
       - "database/migrations/1021_supply_ordering.sql"
+      - "backend/app/modules/account/pl_range.py"
+      - "backend/app/modules/notify/finance_reports.py"
+      - "backend/app/modules/notify/render.py"
+      - "backend/harness_pl_range.py"
+      - "backend/harness_pl_range_lock.py"
+      - "backend/harness_export_xss_upload.py"
   push:
     branches: [main]
     paths:
@@ -382,6 +388,9 @@ jobs:
       - name: Run the P&L-commission-source lock (one resolver; the ledger booking dereferences the registry; a derived suppression set; one sum; every surface wired)
         working-directory: backend
         run: python3 harness_pl_commission_source_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the P&L month-range lock (a multi-month P&L loops THE single-month read; it computes no line; no second range path — index §4c)
+        working-directory: backend
+        run: python3 harness_pl_range_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       # index §4a / §4a.1 / §4a.2 — the MA money, the month-of-life LEG and the ladder's RUNG
       # convention each have ONE home. These locks shipped with #270/#272 but were never wired into
       # CI, so nothing failed the build when a caller stopped dereferencing them. Wiring them is the
@@ -532,3 +541,9 @@ jobs:
       - name: Run the franchise royalty P&L proof (house byte-identity; booking; suppression; scopes; filter; router)
         working-directory: backend
         run: python3 harness_royalty_pl.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §4c — the P&L over a month range drives the REAL account router (pl_single_month / get_pl_range),
+      # statement_filter and the notify registry + renderer over an in-memory client; it imports the app, so it
+      # runs here with the backend's dependencies.
+      - name: Run the P&L month-range proof (every month column == that month's P&L to the cent; Total == Σ months; absence blank; org-isolated; the scheduled report and the xlsx renderer)
+        working-directory: backend
+        run: python3 harness_pl_range.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
