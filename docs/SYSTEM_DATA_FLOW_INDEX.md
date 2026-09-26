@@ -9568,6 +9568,26 @@ read — and would have written — the house org's KPIs. Now it follows `useAut
 by-name company picker. **Lock:** `backend/harness_acting_org_default.py` — no React state anywhere is seeded from
 `ORG_ID`; the KPI page follows the acting company.
 
+
+### 29.9 A switched-off closing field is gone everywhere — and there is a switch (owner 2026-09-26)
+Owner (UPS Store): *"the tender type has been saved with external card / gift card etc as inactive … but the submit closing
+still shows the same, if disabled it should not show anything platform wide"*.
+- **Live evidence:** every `commcalc.closing_tender_def` row for the UPS Store was `is_active = true`; what had been unticked
+  was **"In total"** (`include_in_total`) on Gift Card / Store Account / External Credit Card / ACIMA. The Tender Config page
+  had no active switch at all.
+- **The class (tender AND count configs):** (1) no switch; (2) the settings GET returned active defs only, so a switched-off
+  field vanished from its own editor and the editor's full-replace save deleted it; (3) an all-off list read as "no list",
+  so the closing form fell back to the BUILT-IN fields — showing what the company had switched off.
+- **Fix:** `tender_config.load_tender_config(..., include_inactive=False)` / `count_config.load_count_config(...)` — default
+  stays active-only for every money reader; the editor passes `include_inactive=True`. `GET /closing/tender-config` and
+  `/closing/count-config` add `all_defs` (editor) + `configured` (form); `defs` is unchanged. `PUT /closing/tender-config`
+  refuses a list with nothing active (before any write). Both editors gain an **Active** column; tender mappings go only to
+  active tenders (a label mapped to a switched-off one is released, and the save says so); "In total" now explains it does
+  not hide. `ClosingSubmitForm`: a configured company gets exactly its active list, never the built-in fallback.
+- **Every reader already honoured `is_active`** (the loader; `external_credit_recon.role_columns`; the processor-role read
+  selects it) — now locked. **Live data NOT changed:** the owner switches the four tenders off on the page once deployed.
+- **Lock:** `backend/harness_closing_config_active.py`.
+
 ---
 
 ## 30. TENANT ONBOARDING — the COMMISSION-STATEMENT INTAKE, stage 3 of the new flow (owner 2026-09-20)

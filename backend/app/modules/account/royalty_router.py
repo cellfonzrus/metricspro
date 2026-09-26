@@ -5,7 +5,8 @@ tenant is never enabled, mig 1020) and every query is org-scoped (`.eq("org_id",
 lock in backend/harness_royalty_lock.py fails the build on an unscoped chain in this file). The logic is PURE in
 account/royalty.py and account/centers.py; this file reads, calls, writes.
 """
-from typing import Any, Optional
+from datetime import date
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
@@ -117,6 +118,10 @@ class ConfigIn(LaxModel):
     book_pl: Optional[bool] = None
     center_pattern: Optional[str] = None
     period_pattern: Optional[str] = None
+    lookback_months: Optional[int] = None
+
+
+LOOKBACK_MIGRATION = "1027_royalty_lookback_months.sql"
 
 
 @router.put("/royalty/config")
@@ -124,14 +129,26 @@ def royalty_config_save(body: ConfigIn, org_id: str = ORG_ID):
     _need_org(org_id)
     row = {"org_id": org_id, **{k: getattr(body, k) for k in body.model_fields_set}}
     resolved = R.resolve_config(row)
-    for k in ("fee_basis", "daily_source", "daily_match_field"):
-        if k in row and row[k] != resolved[k]:
-            raise HTTPException(400, f"{k} '{row[k]}' is not one of the allowed values")
+    for k in ("fee_basis", "daily_source", "daily_match_field", "lookback_months"):
+        if k in row and row[k] is not None and row[k] != resolved[k]:
+            raise HTTPException(400, f"{k} '{row[k]}' is not one of the allowed values"
+                                + (" (%d–%d months)" % R.LOOKBACK_BOUNDS if k == "lookback_months" else ""))
+    # The lookback column arrives with its own migration (1027): it is written only when it CHANGES, so the settings
+    # form (which sends the whole resolved config back) keeps saving every other knob before that migration is applied.
+    lookback = row.pop("lookback_months", None)
+    client = sb()
     try:
-        sb().schema("commcalc").table("royalty_config").upsert(row, on_conflict="org_id").execute()
+        client.schema("commcalc").table("royalty_config").upsert(row, on_conflict="org_id").execute()
     except Exception as e:
         raise _pre_migration(e)
-    return {"ok": True, "config": resolved}
+    if lookback is not None and lookback != R.load_config(client, org_id)["lookback_months"]:
+        try:
+            client.schema("commcalc").table("royalty_config") \
+                .upsert({"org_id": org_id, "lookback_months": lookback}, on_conflict="org_id").execute()
+        except Exception as e:
+            raise HTTPException(409, f"{LOOKBACK_MIGRATION} is not applied yet — the lookback setting cannot be saved "
+                                     f"(the other settings were saved) ({str(e)[:120]})")
+    return {"ok": True, "config": R.resolve_config({**row, "lookback_months": lookback})}
 
 
 # ── parse / import / manual entry ────────────────────────────────────────────────────────────────────
@@ -150,8 +167,8 @@ def _text_of(data: bytes, filename: str):
     return text, ("html" if R.looks_like_html(text) else "text")
 
 
-def _parse_input(client, org_id, file: Optional[UploadFile], text: str):
-    vocab, _ready, cfg = _ctx(client, org_id)
+def _parse_input(client, org_id, file: Optional[UploadFile], text: str, ctx=None):
+    vocab, _ready, cfg = ctx or _ctx(client, org_id)
     if file is not None:
         data = file.file.read()
         raw, source = _text_of(data, file.filename or "")
@@ -183,14 +200,24 @@ def royalty_parse(org_id: str = ORG_ID, file: Optional[UploadFile] = File(None),
             "pl_coverage": cov}
 
 
-def _write_report(client, org_id, parsed, val, source, fname, center, period, store_ref):
+def _report_key(parsed, center, period):
+    """THE ONE center × month resolution of a report (an entered value wins, else the report's own header): (center,
+    canonical period, problem). The writer refuses on the problem; the multi-month plan reads the same answer, so a
+    batch can never file a report under a month the single import would not."""
     center = (center or parsed.get("center") or "").strip()
     period_c = _period.canonical_period(period or parsed.get("period_label") or "")
     m, y = _period.parse_period(period_c)
     if not center:
-        raise HTTPException(400, "the center could not be read from the report — enter it")
+        return center, period_c, "the center could not be read from the report — enter it"
     if not (1 <= m <= 12 and y):
-        raise HTTPException(400, "the royalty period could not be read from the report — enter it (e.g. June 2026)")
+        return center, period_c, "the royalty period could not be read from the report — enter it (e.g. June 2026)"
+    return center, period_c, None
+
+
+def _write_report(client, org_id, parsed, val, source, fname, center, period, store_ref):
+    center, period_c, problem = _report_key(parsed, center, period)
+    if problem:
+        raise HTTPException(400, problem)
     store_note = None
     if not (store_ref or "").strip():
         centers, idx, _d = _store_index(client, org_id)
@@ -245,6 +272,121 @@ def royalty_manual(body: ManualIn, org_id: str = ORG_ID):
     val = R.validate(parsed, vocab, cfg)
     out = _write_report(client, org_id, parsed, val, "manual", None, body.center_code, body.period, body.store_ref)
     return {**out, "validation": val, "derived_totals": parsed.get("derived_totals")}
+
+
+# ── many months in one go (owner 2026-09-26, index §37.10) — the batch is N single imports ─────────────
+def _this_period():
+    """This month, canonical — the end of the lookback window (a module function so the proof can pin 'today')."""
+    t = date.today()
+    return _period.canonical_period(f"{t.year:04d}-{t.month:02d}")
+
+
+def _window(cfg):
+    months = cfg["lookback_months"]
+    return R.lookback_window(_this_period(), months), months
+
+
+def _on_file(client, org_id, window):
+    """The reports this org already holds in the window (org-scoped, through the module's one reader)."""
+    keys = sorted({k for p in window for k in _period.period_keys(p)})
+    reps = R.load_reports(client, org_id, keys, with_lines=False)
+    idx = {}
+    for r in reps:
+        idx[(r.get("center_code"), _period.canonical_period(r.get("period") or ""))] = {
+            "id": r.get("id"), "total_due": r.get("total_due"), "status": r.get("status")}
+    return reps, idx
+
+
+def _batch_read(client, org_id, files):
+    """Each file through the SINGLE import's own reader (`_parse_input` → R.parse → R.validate) and the writer's own
+    key resolution (`_report_key`). A file that cannot be read is an item with its error — it never stops the others."""
+    ctx = _ctx(client, org_id)
+    items, prepared = [], {}
+    for i, f in enumerate(files or []):
+        base = {"index": i, "file_name": getattr(f, "filename", None) or f"file {i + 1}"}
+        try:
+            parsed, val, _vocab, _cfg, source, fname = _parse_input(client, org_id, f, "", ctx)
+        except HTTPException as e:
+            items.append({**base, "error": str(e.detail), "center": None, "period": None})
+            continue
+        except Exception as e:                      # a crash on one file is that file's error, never the batch's
+            items.append({**base, "error": f"could not read this file ({type(e).__name__})", "center": None, "period": None})
+            continue
+        center, period_c, _problem = _report_key(parsed, "", "")
+        m, y = _period.parse_period(period_c)
+        rep = val.get("reported") or {}
+        items.append({**base, "error": None, "center": center or None, "period": period_c if (1 <= m <= 12 and y) else None,
+                      "period_label": parsed.get("period_label"), "source": source, "lines": len(parsed.get("lines") or []),
+                      "status": val["status"], "flags": val["flags"], "total_due": rep.get("total_due"),
+                      "gross_sales": rep.get("gross_sales")})
+        prepared[i] = (parsed, val, source, fname)
+    return items, prepared, ctx[2]
+
+
+def _batch_plan(client, org_id, files):
+    items, prepared, cfg = _batch_read(client, org_id, files)
+    window, months = _window(cfg)
+    reps, idx = _on_file(client, org_id, window)
+    return R.batch_plan(items, window, idx), prepared, window, months, reps
+
+
+def _coverage_payload(window, months, reps):
+    return {"lookback_months": months, **R.coverage(window, reps)}
+
+
+@router.get("/royalty/coverage")
+def royalty_coverage(org_id: str = ORG_ID):
+    """The lookback window (this month and `lookback_months` before it — per-org config, house default 24) and which
+    months hold a report, per center."""
+    _need_org(org_id)
+    client = sb()
+    window, months = _window(R.load_config(client, org_id))
+    reps, _idx = _on_file(client, org_id, window)
+    return _coverage_payload(window, months, reps)
+
+
+@router.post("/royalty/batch/preview")
+def royalty_batch_preview(org_id: str = ORG_ID, files: List[UploadFile] = File(...)):
+    """Many reports at once — the PREVIEW: per file the center and month read off its own header, the checks, whether a
+    report for that center × month is already on file (it will be replaced), and every reason it cannot land.
+    NOTHING is written."""
+    _need_org(org_id)
+    client = sb()
+    plan, _prepared, window, months, reps = _batch_plan(client, org_id, files)
+    return {"files": plan, "ready": sum(1 for r in plan if r["ready"]), "coverage": _coverage_payload(window, months, reps)}
+
+
+@router.post("/royalty/batch/import")
+def royalty_batch_import(org_id: str = ORG_ID, files: List[UploadFile] = File(...)):
+    """Many reports at once — IMPORT the files sent (the page sends only the ones ticked on the preview). The plan is
+    re-run on exactly these files; each READY file lands through the single import's own writer (`_write_report`, which
+    replaces that center × month), one at a time, in upload order. A refused or failing file is reported in
+    `results` and never stops, rolls back or hides another."""
+    _need_org(org_id)
+    client = sb()
+    plan, prepared, window, months, _reps = _batch_plan(client, org_id, files)
+    results = []
+    for r in plan:
+        base = {"index": r["index"], "file_name": r["file_name"], "center_code": r.get("center"), "period": r.get("period")}
+        if not r["ready"]:
+            results.append({**base, "ok": False, "error": "; ".join(r["refusals"])})
+            continue
+        parsed, val, source, fname = prepared[r["index"]]
+        try:
+            out = _write_report(client, org_id, parsed, val, source, fname, "", "", "")
+        except HTTPException as e:
+            results.append({**base, "ok": False, "error": str(e.detail)})
+            continue
+        except Exception as e:
+            results.append({**base, "ok": False, "error": f"could not be saved ({type(e).__name__}: {str(e)[:120]})"})
+            continue
+        results.append({**base, "ok": True, "id": out["id"], "replaced": r["replace"], "status": out["status"],
+                        "flags": len(out["flags"]), "store_ref": out["store_ref"], "store_note": out["store_note"],
+                        "total_due": r.get("total_due")})
+    reps_after, _i = _on_file(client, org_id, window)
+    return {"results": results, "imported": sum(1 for x in results if x["ok"]),
+            "failed": sum(1 for x in results if not x["ok"]), "sentence": R.batch_outcome(results),
+            "coverage": _coverage_payload(window, months, reps_after)}
 
 
 # ── reading reports ──────────────────────────────────────────────────────────────────────────────────
