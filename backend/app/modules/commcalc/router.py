@@ -16153,7 +16153,7 @@ def _caller_rep_keys(authorization: str, org_id: str):
     Same identity path My Targets uses (app_user → employee → rep name). Reads app_users/employees
     (public schema) READ-ONLY, org-scoped. Never raises."""
     try:
-        from app.modules.storeops.router import _rbac_enabled, _role_scope
+        from app.modules.storeops.router import _rbac_enabled, role_is_self_scoped
         from app.modules.core.router import _uid_from_token
     except Exception:
         return None
@@ -16168,7 +16168,7 @@ def _caller_rep_keys(authorization: str, org_id: str):
         if not urows:
             return None
         u = urows[0]
-        if _role_scope(org_id, (u.get("role") or "").strip()) != "self":
+        if not role_is_self_scoped(org_id, u.get("role"), rbac_on=True):
             return None
         name = ""
         eid = (u.get("employee_id") or "").strip()
@@ -19484,58 +19484,21 @@ def _statement_buckets(client, org_id, period, rep, source_report="ma_daily_tx")
     return agg if hit else None
 
 
-@router.get("/commission-statement")
-def commission_statement_document(rep: str, period: str, fmt: str = "pdf",
-                                  source_report: str = "ma_daily_tx", audience: str = "",
-                                  authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """The individual per-employee Commission Statement — what YOU earned, line by line.
-
-    fmt=pdf (default) downloads it; fmt=json returns the SAME document model so an on-screen preview and
-    the PDF can never disagree (same contract as payout-structure). Every number is re-stated from the
-    read-only drill-down; nothing is computed or written here.
-
-    The "Held / not yet paid" section is DEFAULT-CLOSED (owner directive): it is carried on neither the PDF
-    nor the JSON unless the caller holds the 'statement_held' grant (`_can_view_statement_held`).
-    """
-    require_org(org_id)
-    if not rep:
-        raise HTTPException(400, "rep required")
-    if not period:
-        raise HTTPException(400, "period required")
-    # AUDIENCE (index §6i): the employee's statement lists only what PAID and carries no carrier commission
-    # (no commission-ledger buckets); a self-scoped caller always gets it, for their own rep only.
-    _aud = _payout_audience(authorization, org_id, audience, rep=rep)
-    from fastapi import Response
-    from app.modules.commcalc import commission_statement as _cst
-    from app.modules.commcalc import commission_drilldown as _dd
+def _statement_ctx(client, org_id, authorization):
+    """What every statement of this org shares: the carrier mode (same resolution `/commission-explain` uses,
+    degrading to the plan engine), the pay-gate config, the tenant's name, and whether the caller holds the
+    held-section grant. READ-ONLY, org-scoped."""
     from app.modules.commcalc import plan_pay_gate as _ppg
-    from app.modules.commcalc import payout_audience as _pa
-
-    client = sb()
-    # Same carrier-mode resolution the /commission-explain endpoint uses, so the drill-down narrates
-    # this tenant's engine correctly. Degrades to the plan engine on any error.
     try:
         carriers = (client.schema('commcalc').table('carrier').select('*')
                     .eq('org_id', org_id).execute().data) or []
         mode = _resolve_carrier_mode(carriers)
     except Exception:
         mode = "plan"
-    # SINGLE SOURCE OF TRUTH for this rep's earnings (plan component + multi-month ledger + the
-    # rep_commissions reconciliation). This read is what makes the statement read-only.
-    try:
-        explain = _dd.explain_rep(client, org_id, period, rep, carrier_mode=mode)
-    except Exception as e:
-        raise HTTPException(500, f"commission-statement drill-down failed: {e}")
-    # Optional five-bucket rollup + gate config both degrade to None so a missing optional migration
-    # (071 ledger / 260 pay gate) yields a valid document rather than a 500.
-    buckets = _statement_buckets(client, org_id, period, rep, source_report=source_report)
-    if _aud == "employee":
-        explain, buckets = _pa.employee_explain(explain), None
     try:
         gate_cfg = _ppg.load_gate_config(client, org_id)
     except Exception:
         gate_cfg = None
-    # The tenant's real name heads the document; a tenant with no storeops row still gets a valid one.
     tenant = ""
     try:
         _t = (client.schema("storeops").table("tenants").select("name")
@@ -19543,12 +19506,92 @@ def commission_statement_document(rep: str, period: str, fmt: str = "pdf",
         tenant = (_t[0].get("name") or "") if _t else ""
     except Exception:
         tenant = ""
-
     # Held section is management-only, default-closed — carried only when the caller holds the grant.
-    include_held = _can_view_statement_held(authorization, org_id)
-    doc = _cst.build_statement(explain, buckets=buckets, tenant_name=tenant, rep_name=rep,
-                               period=period, gate_cfg=gate_cfg, include_held=include_held)
-    if (fmt or "pdf").strip().lower() == "json":
+    return {"mode": mode, "gate_cfg": gate_cfg, "tenant": tenant,
+            "include_held": _can_view_statement_held(authorization, org_id)}
+
+
+def _statement_doc(client, org_id, rep, period, aud, ctx, source_report="ma_daily_tx"):
+    """THE one statement for ONE rep + ONE month in ONE audience — the single download, the batch and the month
+    range all build through here, so a month in a range IS that month's statement (index §6j). Raises on a
+    drill-down failure (the caller decides: 500 for a single statement, skip in a batch)."""
+    from app.modules.commcalc import commission_statement as _cst
+    from app.modules.commcalc import commission_drilldown as _dd
+    from app.modules.commcalc import payout_audience as _pa
+    # SINGLE SOURCE OF TRUTH for this rep's earnings (plan component + multi-month ledger + the
+    # rep_commissions reconciliation). This read is what makes the statement read-only.
+    explain = _dd.explain_rep(client, org_id, period, rep, carrier_mode=ctx["mode"])
+    # Optional five-bucket rollup degrades to None so a missing optional migration (071 ledger) yields a valid
+    # document rather than a 500. The EMPLOYEE's statement lists only what PAID and carries no carrier
+    # commission (no commission-ledger buckets) — index §6i.
+    buckets = _statement_buckets(client, org_id, period, rep, source_report=source_report)
+    if aud == "employee":
+        explain, buckets = _pa.employee_explain(explain), None
+    return _cst.build_statement(explain, buckets=buckets, tenant_name=ctx["tenant"], rep_name=rep,
+                                period=period, gate_cfg=ctx["gate_cfg"], include_held=ctx["include_held"])
+
+
+@router.get("/commission-statement")
+def commission_statement_document(rep: str, period: str = "", fmt: str = "pdf",
+                                  source_report: str = "ma_daily_tx", audience: str = "",
+                                  period_from: str = "", period_to: str = "",
+                                  authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The individual per-employee Commission Statement — what YOU earned, line by line.
+
+    fmt=pdf (default) downloads it; fmt=json returns the SAME document model so an on-screen preview and
+    the PDF can never disagree (same contract as payout-structure). Every number is re-stated from the
+    read-only drill-down; nothing is computed or written here.
+
+    MONTH RANGE (owner 2026-09-26, index §6j): `period_from` (+ `period_to`) instead of `period` gives ONE
+    employee's statement over those months — each month is `_statement_doc` for that month (byte-identical to
+    downloading it alone), then the month totals and the grand total (`commission_statement.build_range`, sums
+    only). Months come from THE enumeration `account/_period.month_range`, capped like the Rep Incentive month
+    range (`rep_incentive_range.MAX_MONTHS`). fmt=pdf | json | csv.
+
+    The "Held / not yet paid" section is DEFAULT-CLOSED (owner directive): it is carried on neither the PDF
+    nor the JSON unless the caller holds the 'statement_held' grant (`_can_view_statement_held`).
+    AUDIENCE (index §6i/§6j): decided by who is looking — a self-scoped caller gets the employee statement, for
+    their own rep only (403 otherwise); anyone else the full one (or the audience they ask for).
+    """
+    require_org(org_id)
+    if not rep:
+        raise HTTPException(400, "rep required")
+    if not period and not period_from:
+        raise HTTPException(400, "period required")
+    _aud = _payout_audience(authorization, org_id, audience, rep=rep)
+    from fastapi import Response
+    from app.modules.commcalc import commission_statement as _cst
+    client = sb()
+    ctx = _statement_ctx(client, org_id, authorization)
+    f = (fmt or "pdf").strip().lower()
+
+    if period_from or f == "csv":
+        from app.modules.account import _period as _pd
+        from app.modules.commcalc import rep_incentive_range as _rir
+        try:
+            months = _pd.month_range(period_from or period, period_to or period_from or period, _rir.MAX_MONTHS)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        docs = []
+        for m in months:
+            try:
+                docs.append(_statement_doc(client, org_id, rep, m, _aud, ctx, source_report=source_report))
+            except Exception as e:
+                raise HTTPException(500, f"commission-statement drill-down failed for {m}: {e}")
+        rng = _cst.build_range(docs, employee=rep, tenant_name=ctx["tenant"])
+        if f == "json":
+            return rng
+        if f == "csv":
+            return Response(content=_cst.range_csv(rng), media_type="text/csv",
+                            headers={"Content-Disposition": f'attachment; filename="{_cst.range_filename(rng, "csv")}"'})
+        return Response(content=_cst.render_range_pdf(rng), media_type="application/pdf",
+                        headers={"Content-Disposition": f'attachment; filename="{_cst.range_filename(rng)}"'})
+
+    try:
+        doc = _statement_doc(client, org_id, rep, period, _aud, ctx, source_report=source_report)
+    except Exception as e:
+        raise HTTPException(500, f"commission-statement drill-down failed: {e}")
+    if f == "json":
         return doc
     return Response(content=_cst.render_pdf(doc), media_type="application/pdf",
                     headers={"Content-Disposition":
@@ -19604,35 +19647,13 @@ def commission_statements_batch(period: str, reps: str = "", store: str = "", ma
         raise HTTPException(400, "period required")
     from fastapi import Response
     from app.modules.commcalc import commission_statement as _cst
-    from app.modules.commcalc import commission_drilldown as _dd
-    from app.modules.commcalc import plan_pay_gate as _ppg
 
     client = sb()
     rep_list = [r.strip() for r in (reps or "").split(",") if r.strip()]
     if not rep_list:
         rep_list = _statement_period_reps(client, org_id, period, store=store, market=market)
-
-    try:
-        carriers = (client.schema('commcalc').table('carrier').select('*')
-                    .eq('org_id', org_id).execute().data) or []
-        mode = _resolve_carrier_mode(carriers)
-    except Exception:
-        mode = "plan"
-    try:
-        gate_cfg = _ppg.load_gate_config(client, org_id)
-    except Exception:
-        gate_cfg = None
-    tenant = ""
-    try:
-        _t = (client.schema("storeops").table("tenants").select("name")
-              .eq("org_id", org_id).limit(1).execute().data) or []
-        tenant = (_t[0].get("name") or "") if _t else ""
-    except Exception:
-        tenant = ""
-
-    # Held section is management-only, default-closed — carried only when the caller holds the grant.
-    include_held = _can_view_statement_held(authorization, org_id)
-    from app.modules.commcalc import payout_audience as _pa
+    ctx = _statement_ctx(client, org_id, authorization)
+    tenant = ctx["tenant"]
     docs = []
     for rep in rep_list:
         # AUDIENCE (index §6i) per rep: a self-scoped caller gets only their OWN statement (anyone else's is
@@ -19642,14 +19663,9 @@ def commission_statements_batch(period: str, reps: str = "", store: str = "", ma
         except HTTPException:
             continue
         try:
-            explain = _dd.explain_rep(client, org_id, period, rep, carrier_mode=mode)
+            docs.append(_statement_doc(client, org_id, rep, period, _aud, ctx, source_report=source_report))
         except Exception:
             continue   # one bad rep must not sink the whole batch
-        buckets = _statement_buckets(client, org_id, period, rep, source_report=source_report)
-        if _aud == "employee":
-            explain, buckets = _pa.employee_explain(explain), None
-        docs.append(_cst.build_statement(explain, buckets=buckets, tenant_name=tenant, rep_name=rep,
-                                         period=period, gate_cfg=gate_cfg, include_held=include_held))
 
     if (fmt or "pdf").strip().lower() == "json":
         return {"period": period, "count": len(docs), "statements": docs}
@@ -24917,10 +24933,14 @@ def commission_explain(period: str, rep: str = "", audience: str = "", authoriza
     return _res
 
 
-def _refuse_employee_audience(authorization, org_id, what):
+def _refuse_employee_audience(authorization, org_id, key):
     """A MANAGER-ONLY carrier-commission report (what the carrier paid the store, per rep) is refused to the
     employee audience — THE same decision `_payout_audience` makes (a self-scoped caller is the employee), so
-    no carrier commission reaches an employee through a report the nav merely did not list (index §6i)."""
+    no carrier commission reaches an employee through a report the nav merely did not list (index §6i).
+    `key` names the surface in THE registry `payout_audience.MANAGER_ONLY_SURFACES` — the same list `/me` hands
+    the nav, so a refused report is never offered in the menu either (index §6j). An unregistered key raises."""
+    from app.modules.commcalc import payout_audience as _pa
+    what = _pa.manager_only_label(key)
     if _payout_audience(authorization, org_id, "manager") == "employee":
         raise HTTPException(403, f"{what} is a management report.")
 
@@ -24991,7 +25011,7 @@ def commission_device(imei: str, period: str = "", org_id: str = ORG_ID, authori
     Optional `period` merges that period's live installment compute when the calc hasn't been re-run.
     Writes nothing. See commission_drilldown.device_story."""
     require_org(org_id)
-    _refuse_employee_audience(authorization, org_id, "Device commission story")
+    _refuse_employee_audience(authorization, org_id, "commission_device")
     if not imei:
         raise HTTPException(400, "imei required")
     client = sb()
@@ -25166,7 +25186,7 @@ def carrier_vs_pay_report(period: str, org_id: str = ORG_ID, authorization: str 
     carrier, tenant or market name appears in the logic.
     """
     require_org(org_id)
-    _refuse_employee_audience(authorization, org_id, "Carrier Earned vs Employee Paid")
+    _refuse_employee_audience(authorization, org_id, "carrier_vs_pay")
     from app.modules.commcalc import ma_recon, carrier_vs_pay as _cvp
     from app.modules.commcalc.sale_installment_engine import _ma_gate_index
     client = sb()
@@ -25256,7 +25276,7 @@ async def get_discrepancy_results(period: str, org_id: str = ORG_ID, authorizati
     to one writer's rows: 'boost' (the legacy engine; includes pre-312 rows whose source is NULL) or
     'ma' (the B2B ↔ MA recon, mig 312). Default = all rows. Selects * so the mig-312 attribution
     columns (rule_key, rule_reason, evidence, source, order_number) flow through when present."""
-    _refuse_employee_audience(authorization, org_id, "Pay Discrepancy")
+    _refuse_employee_audience(authorization, org_id, "pay_discrepancy")
     client = sb()
     q = client.schema("commcalc").table("discrepancy_results")        .select("*")        .eq("org_id", org_id)        .in_("period", _pvariants(period))
     src = (source or "").strip().lower()
@@ -25322,7 +25342,7 @@ def list_discrepancy_appeals(period_from: str = "", period_to: str = "", source:
     source ('boost' includes pre-312 NULL rows / 'ma'), row status, appeal state ('none' = no
     appeal activity), store, and an activation-date range. Returns rows + the pure summary buckets
     + `appeals_ready` (False on a pre-947 database — rows still return, appeal filters degrade)."""
-    _refuse_employee_audience(authorization, org_id, "Commission Discrepancy")
+    _refuse_employee_audience(authorization, org_id, "commission_discrepancy")
     from app.modules.commcalc import discrepancy_appeals as _da
     try:
         pvars = _da.period_range_variants(period_from, period_to)
@@ -25555,7 +25575,7 @@ def _period_ym(period: str) -> tuple[int, int]:
 @router.get("/discrepancy/{period}/phantom")
 async def get_phantom_payments(period: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Payments received in the period with no matching commissionable sale (by MDN or IMEI)."""
-    _refuse_employee_audience(authorization, org_id, "Phantom payments")
+    _refuse_employee_audience(authorization, org_id, "pay_discrepancy")
     from datetime import date as _date
     client = sb()
     year, month = _period_ym(period)
@@ -28100,7 +28120,7 @@ def _caller_self_keyset(authorization: str, org_id: str):
 
     READ-ONLY, org-scoped on every read. Never raises."""
     try:
-        from app.modules.storeops.router import _rbac_enabled, _role_scope
+        from app.modules.storeops.router import _rbac_enabled, role_is_self_scoped
         from app.modules.core.router import _uid_from_token
     except Exception:
         return (False, None)
@@ -28119,7 +28139,7 @@ def _caller_self_keyset(authorization: str, org_id: str):
         if not rows:
             return (False, None)
         u = rows[0]
-        if _role_scope(org_id, (u.get("role") or "").strip()) != "self":
+        if not role_is_self_scoped(org_id, u.get("role"), rbac_on=True):
             return (False, None)
     except Exception as e:                                          # pragma: no cover - I/O guard
         print(f"WARN _caller_self_keyset identity read failed: {e}")

@@ -24,6 +24,7 @@ Primary code homes:
 | 2 | **Data ingest & raw_* tables** | "How does sales/DLAR/MI/inventory data get in? Email? Upload? Sweep? Which raw table?" |
 | 3 | **Sales report & the shared cell-agg** | "Where do activation/accessory counts come from? Why do Sales Report / Exec MTD / Targets agree now?" |
 | 4 | **GP / P&L report** | "How is store gross-profit / P&L built? What's voided? Where's the money booked?" |
+| 4c | **P&L over a month range** | "Export the P&L for several months — a column per month plus a Total, same lines, drill rows and filters as the page — and is each month the same as viewing it alone? Why is a month blank rather than $0.00?" |
 | 4a | **GP vs P&L — one home for MA commission** | "Why do the Gross Profit report and the P&L disagree about M1 commission, and why does one show a company total where the other shows stores?" |
 | 5 | **Daily Targets & actuals** | "How are daily targets computed vs actuals? What's an 'achieved' number? Accessory $ actual?" |
 | 6 | **Rep commission (Boost)** | "How is a rep paid? premium/byod/upgrade counts, acc/setup/trade-in, tiers, KPIs. Where stored?" |
@@ -31,6 +32,7 @@ Primary code homes:
 | 6g | **Rep Incentive — month range** | "Show the rep incentive for several months on one page, a row per rep per month — and is each month the same as viewing it alone?" |
 | 6h | **Multi-month offered only when configured** | "Why does a rep's pay show a multi-month option when this company has no multi-month pay — where is that decided, and what if money is there anyway?" |
 | 6i | **What an employee sees of their own commission** | "Why does the employee payout report show only the line I am paid for, and no carrier Price / GP? Which surfaces show an employee their commission, and where is 'paid line' and 'employee-visible field' decided?" |
+| 6j | **Who is looking; the sale on the paid row; one employee over several months** | "Why does a rep not see Pay Discrepancy but a manager does — where is that list? Why does a manager see every line on the Rep Incentive report and a rep only their paid ones? Where does the customer name / phone on a paid row come from? How do I export one employee's statement for several months, and is each month the same as downloading it alone?" |
 | 7 | **Carrier residual installments** | "Multi-month carrier residual pay from raw_mi. Why do named activation_types not pay?" |
 | 12 | **External credit machine + Card Settlement Recon** | "Where does the external / white-machine card figure live, what is it called for this tenant, and how does it tally with what the processor actually settled?" |
 | 7a | **Residual per Subscriber report** | "Where does the residual/subscriber trend come from per carrier? Why is a Total/MA store named, not a processor account id?" |
@@ -1383,6 +1385,75 @@ line: July 2026 holds 2 landings … The feed booking stays switched off so noth
 statement in the period books as before; with no conflict the payload is byte-identical (`landing_conflicts: []`).
 `load_ledger_rows` reads `created_at` / `synced_at` too (three column tiers). Proof
 `harness_ledger_statement_identity.py` §F (through the REAL `coa.build_inputs` over the P&L proof's client).
+
+## 4c. THE P&L OVER A MONTH RANGE — one column per month plus a Total (owner 2026-09-26)
+
+Owner, verbatim: *"also need the p&L report to be exported for multiple months … all these need to be platform wide"*.
+
+**Duplicate check (what was checked, what was reused).** The P&L page (`/accounts/pl`) reads ONE month through
+`GET /account/pl/{period}` (stored `account_statements` snapshot for the company / store scope, or — under a store /
+market filter — `statement_filter.filtered_statement`, the sum of the matching per-store snapshots). Existing
+multi-period paths checked: **no quarterly P&L exists** (nothing in `account/` or the frontend builds one);
+`analysis.assemble` (§4 Financial Analysis — per-month HEADLINE totals only, consolidated + per scope, no line grid,
+no store / market filter, trailing window only); `projection_engine` (forward, not actuals); the on-demand
+`statement_engine.statement` (one period, computed fresh — NOT what the page shows, so a range built on it could
+disagree with the page); the Rep Incentive month range (§6g — the precedent: the single-month handler LOOPED over
+`_period.month_range`); the P&L exports (the page's `ReportExportBar` Excel / PDF / Print / Send; notify
+`account_pl` and `financial_statement` — one period each). Nothing answered "the P&L lines for months M1…Mn", so the
+single-month read was FACTORED OUT and LOOPED; no second P&L derivation exists.
+
+- **`account/router.pl_single_month(period, scope, stores, markets, org_id)`** — THE single-month P&L read (the
+  former inline body of `get_pl`, byte-identical — proof §A). `GET /account/pl/{period}` returns it; so does every
+  month of a range.
+- **`GET /account/pl-range?period_from=&period_to=&scope=&stores=&markets=`** (`router.get_pl_range`) — READ-ONLY,
+  org-scoped, any org / company / store / profit-center scope / store+market filter (the same parameters as
+  `/account/pl/{period}`). Months from `_period.month_range` (either spelling in, canonical out), capped at
+  **24** (`pl_range.MAX_MONTHS` — the reach of the section period switcher); each month = `pl_single_month(month, …)`
+  in a worker thread (SEV-1 rule); 400 on an unparseable / reversed / over-long range. Returns the grid + `sheets`.
+- **`account/pl_range.py`** — PURE, stdlib only. `assemble(months, per_month)` lays the months side by side in the
+  PAGE's order (Revenue, COGS, **Gross Profit**, Opex, **Net Operating Income**, Other, **Net Income** —
+  `TOTALS_AFTER`), each line's drill rows (`detail`) under it, section subtotals; lines / drill rows present in only
+  some months are merged where they first appear (`_merge_order`); a line's identity across months is
+  (section, key, occurrence) (`_line_ids`). Every month cell is COPIED from that month's statement; the only
+  arithmetic is the Total (`_sum_cents`, exact decimal cents). **Absence is not zero:** a month never computed is a
+  blank column named in `missing_months`; a line a month lacks is blank; blanks are not in the Total.
+  `export_sheet(grid)` (Section · Line · one money column per month · Total — THE export layout, used by every
+  renderer) and `notes_sheet(grid)` (months not computed, stale months, the months' own notes).
+- **Frontend:** `accounts/_components/PLRangeExport.tsx` — **📅 Month range** next to the P&L export button: From /
+  To month pickers (default the last three months), *Prepare export*, then Excel · **CSV** · PDF · Print · Send, for
+  the page's scope and store / market filter. `accounts/_components/plRangeExport.ts` maps the server's sheets onto
+  `ExportColumn` getters and adds the `statementInfoSheet` cover (months computed / not computed / stale); it adds
+  up nothing. **Region** is not a filter of the on-screen P&L (its bar is stores + markets; the company / store /
+  profit-center scope is the dropdown), so the range offers exactly the page's filters.
+- **Platform-wide:** notify report key **`account_pl_range`** (`notify/finance_reports._account_pl_range`, filters
+  `period_from` / `period_to` / `scope` / `stores` / `markets`; blank = the registry's `period` convention) —
+  scheduled / on-demand xlsx / pdf through `get_pl_range` in-process, shipping its `sheets` unchanged; a bad saved
+  range is a `ReportConfigError`, a range with no computed month refuses to send an empty file.
+- **Shared exporter changes (the class, not the instance):** `lib/export.tsx` gains `payloadToCsv` / `exportToCsv`
+  (every field through `cell-safety.csvRow` — RFC-4180 + the H7 formula guard) and an opt-in `csv` prop on
+  `ExportButtons` / `ReportExportBar` (default off: no other toolbar changes). **Defect closed on the way:** §23w's
+  "a missing money value is not zero" was fixed in `money()` (display / PDF / Print) but NOT in the Excel writers —
+  `lib/export.tsx rawCell` (`Number(v) || 0`) and `notify/render.build_xlsx` (`float(… or 0)`), and the server PDF
+  `_display` — so a withheld pay cell still landed in every .xlsx as a real `0`. All three now leave it EMPTY; a real
+  zero is still `0` / `$0.00`. **Sibling excused, not fixed:** `commcalc/_lib/commissionExport.payloadToCsv` (the
+  Rep Incentive CSV) is a second payload→CSV emitter without the H7 guard; it is commission-agent code and its proof
+  tool needs that module import-free, so it is left for the commission agent (reported).
+
+**Proof:** `backend/harness_pl_range.py` (**106 checks**, DB-free, the REAL router / statement_filter / coa company +
+market resolution over an in-memory client; statements built by the REAL `engine._assemble` over `coa.PL_SPEC`):
+§A `get_pl` JSON-identical to its old inline body; §B every month column == `get_pl(month)` for consolidated, both
+companies, a store, a store filter, a market filter (both casings), a company composed with a market — every line,
+drill row, subtotal, GP / NOI / NI, complete both ways, with negative controls (a cent off, a Total off, a dropped
+line, $0.00 in a missing month, the range really reading through `pl_single_month`); §C Total == Σ in integer cents
+(0.10 + 0.20 + 0.70 = 1.00); §D absence; §E org isolation; §F order; §G the range / cap; §H one month; §I layout;
+§J the registry entry and the renderer's blank-not-zero. Lock **`backend/harness_pl_range_lock.py`** (20, stdlib, CI
+guard job): `get_pl` / `pl_single_month` / `get_pl_range` wiring, `pl_range.py` purity (no subtraction, sums only in
+`_sum_cents`), NO function anywhere in `backend/app` may enumerate months and read a P&L — or loop the single-month
+read, or mount a P&L-range route — outside `get_pl_range`; the registry entry; the frontend (reads
+`/account/pl-range`, adds nothing; a new frontend reader of the single-month endpoint fails unless allow-listed);
+12 negative controls. `harness_db_resilience.py` route pin 1676 → **1677**. **No money or booking logic changed**
+(`coa.py`, `engine.py`, `statement_engine.py`, `statement_filter.py` untouched; the range only reads snapshots).
+
 ---
 
 ## 5. Daily Targets & actuals
@@ -2043,9 +2114,9 @@ carrier Price / GP; `/commission-explain`, `/commission-statement(s)` and `/comm
 - Shapers every caller uses: `employee_explain` (paid lines only, allow-listed, `audience: 'employee'` stamped),
   `employee_rep_row`, `employee_drill`; `disallowed_fields(payload, kind)` and `rule_line_total` for proofs.
 - `router._refuse_employee_audience(authorization, org_id, what)` — the 403 for manager-only carrier reports.
-- Frontend: `_lib/payoutAudience.ts` — `PAYOUT_AUDIENCE_OF_PAGE` (the ONE page declaration:
-  `/commcalc/reports` → employee, `/commcalc/commission-explain` → manager), `audienceParam(page)`,
-  `servedAudience(payload)`. Components render from the SERVED audience (never a page-local flag):
+- Frontend: `_lib/payoutAudience.ts` — `servedAudience(payload)`, `viewerAudience(perms)`. (The #306 per-page
+  declaration `PAYOUT_AUDIENCE_OF_PAGE` / `audienceParam` is GONE — superseded by §6j: pages send no audience,
+  the server decides from who is looking.) Components render from the SERVED audience (never a page-local flag):
   `PlanLineBreakdown` drops Price/GP columns and the per-event sub-headers and shows the event label
   (type · line) under the rule when `audience === 'employee'`. Hiding is never frontend-only: the fields are not in
   the payload.
@@ -2063,7 +2134,7 @@ carrier Price / GP; `/commission-explain`, `/commission-statement(s)` and `/comm
 | `GET /commcalc/commission-drill` (Boost drill) | wired | own-rep guard + `employee_drill` |
 | `core GET /employee-dashboard` "my commission" | wired | always `employee_rep_row` |
 | notify Incentives email (`report_registry._commissions`) | wired | `get_commissions(audience="employee")` |
-| Rep Incentive page (`reports/page.tsx`): drill, multimonth table ("MA says paid" hidden), Boost modal, exports (`commissionExport` — rows come from the allow-listed payload) | wired | declares `employee` via `payoutAudience.ts` |
+| Rep Incentive page (`reports/page.tsx`): drill, multimonth table ("MA says paid" hidden), Boost modal, exports (`commissionExport` — rows come from the allow-listed payload) | wired | renders the SERVED audience; since §6j it sends none (a rep is served employee, a manager the full report) |
 | `/carrier-vs-pay`, `/discrepancy/{period}`, `/discrepancy/{period}/phantom`, `/discrepancy-appeals`, `/commission-device` | manager-only | `_refuse_employee_audience` → 403 for a self-scoped rep |
 | `commission-explain/page.tsx` | excused | manager diagnostic, declared `manager`; a self rep is forced `employee` server-side anyway |
 | `sales_comparison` | excused | store units / accessory $, not commission lines |
@@ -2097,6 +2168,93 @@ batch, drill, the 5 manager-only 403s, the dashboard row, predicate truth table)
 through the home or returns a carrier field, a manager-only carrier report opens to an employee, a surface filters
 paid lines on its own, a second paid-line predicate appears (backend or frontend), or a payout page stops declaring
 its audience; 8 negative controls + the green tree); `frontend/tools/plan-drilldown-render-proof.mjs` (30).
+
+---
+
+### 6j. WHO IS LOOKING decides the payout view; the paid row names its sale; one employee over several months (owner 2026-09-26)
+
+Owner, verbatim: *"pay discrepancy should be hidden, managers can see rep incentive, on paid row show the action /
+upgrade with the details of the phone number and customer name. also need a report to export one employees report
+over a number of selected months. all these need to be platform wide"*. Four facts, one home each, every org.
+
+**1 · The manager-only list is ONE registry the server AND the nav read.** `payout_audience.MANAGER_ONLY_SURFACES`
+(key, label, endpoints, pages): `carrier_vs_pay` (/carrier-vs-pay → page `/commcalc/carrier-vs-pay`),
+`pay_discrepancy` (/discrepancy/{period} + /phantom → `/commcalc/discrepancy`), `commission_discrepancy`
+(/discrepancy-appeals → `/commcalc/commission-discrepancy`), `commission_device` (/commission-device — a drill, no
+page). The server's refusal names its key: `router._refuse_employee_audience(authorization, org_id, key)` (label via
+`manager_only_label`; an unregistered key raises). The nav reads the SAME list through `/me`:
+`core._me_payload` stamps `permissions.payout = payout_audience.viewer_payload(role_is_self_scoped(org, role))` →
+`{audience, refused_pages}`; `lib/rbac.ts payoutRefused(perms, path)` is asked FIRST in `canSeeItem`,
+`canAccessPath` and `navBlockReason` — so the sidebar, every hub, the Report Center directory
+(`lib/reports.ts`), `ScreenLink` and the route guard hide / bounce them with no per-item flag (no bypass: a
+per-function grant or the admin module cannot reopen what the server refuses). **ONE self-scope answer:**
+`storeops.router.role_is_self_scoped(org, role, rbac_on=)` (RBAC on AND role scope 'self') — `/me`,
+`commcalc.router._caller_rep_keys` (the payout audience) and `_caller_self_keyset` all ask it.
+
+**2 · The payout view comes from WHO IS LOOKING, not a page constant.** The Rep Incentive page and
+commission-explain send no `audience`; `payout_audience.resolve('', caller_is_self)` serves a rep the employee
+view (paid lines, no carrier $, own pay only — 403 for anyone else's) and a manager / admin the full report
+(every line, ⛔ reasons, Price / GP) — as before #306. Statements, the batch and the range follow the same rule.
+`audience=` stays an API parameter for server-side callers (the notify Incentives email asks for `employee`).
+
+**3 · The paid row names its SALE: action · phone line · customer.** Stamped INSIDE the one drill-down producer
+(`commission_drilldown.explain_rep` → `attach_line_identity`), so `/commission-explain`, `/commission-statement(s)`
+and the range all carry it: `event_label` = THE class label (`line_class.CLASS_LABELS` via
+`payout_audience.event_label` — 'New activation', 'Upgrade', …), `phone` = `payout_audience.line_phone` (the
+activation event's key when phone-keyed, else THE phone rule `line_class.line_event_keys`), `customer` =
+`_sale_customers` → **REUSED: `inventory_sold_recon.sale_customer` / `invoice_customer_map`** — the sale line's
+`raw_sales.customer`, else its invoice header `raw_sales_invoice.customer` (mig 1012). This is the rule the
+inventory integrity report (§11b, `sales_detail_index`) already applied; it was factored out, not copied, and
+`sales_detail_index` now calls it. *Why not the POS customer master (§30.16)?* Its customers are BUILT from these
+same report lines (`receipt_import.match_or_create`) and it is keyed by `pos.sales` / phone lines, which the
+commission lines do not carry — the sale's own customer field is the source it was built from. PII: the name only;
+the read selects `trans_id,customer` and nothing else, org-scoped (no id number is ever touched). `event_label`,
+`phone`, `customer` are on `EMPLOYEE_LINE_FIELDS` on purpose. Display: `PlanLineBreakdown` (employee) shows a
+**Sale** column = `planLines.saleLabel(l)` IN PLACE of the product; the manager keeps Product with phone · customer
+under it. The statement (`commission_statement._sale_line_items`) lists the same rows — employee: paid only, no
+product / Price / GP; manager: paid lines, plus the unpaid ones with their reasons only under the default-closed
+held grant.
+
+**4 · One employee over a month range — the statement, extended (no sibling).** `GET /commcalc/commission-statement
+?rep=&period_from=&period_to=&fmt=pdf|csv|json` (one month with `fmt=csv` = a one-month range). Months from THE
+enumeration `account/_period.month_range`, capped at `rep_incentive_range.MAX_MONTHS` (12) like §6g; each month is
+`router._statement_doc` — the SAME builder the single download and the batch use (`_statement_ctx` holds the
+org-wide carrier mode / gate config / tenant / held grant) — so a month's section IS that month's statement.
+`commission_statement.build_range` only sums the months' payout of record into the grand total;
+`render_range_pdf` (a totals page, then each month) / `range_csv` (per month: sale rows, earned items, the month
+total; then the grand total — employee columns carry no product / carrier figure). The 403 own-rep rule applies.
+UI: the Rep Incentive **📅 Month range** tab → "One employee over these months" (📄 Statement PDF / ⬇ CSV).
+
+**Live (read-only, 2026-09-26, org `f4f1c16e`, Jona Sejat):** Z1321IN11092 / July — employee row
+`New activation · 9297458084 · CHEORGE CHEISHVILI INC · $10`; the manager sees the same identity on all three
+lines (Price 150 / 0 / 45, two ⛔). July: 100 / 100 paid rows carry a customer and a phone. **Range May–Aug 2026:**
+May $595.00 · June $570.00 · July $715.00 · August $365.00 = **$2,245.00**; each month's section is byte-identical
+to its single statement (employee and manager), Σ single statements $2,245.00.
+
+**Surfaces (every one wired or excused):** the nav consumers all go through `canSeeItem` / `canAccessPath`
+(sidebar `layout.tsx`, `hub/[group]`, `compliance`, `lib/reports.ts` → `reports-index`, `/reports`,
+`PortalReports`, `ScreenLink`, `AskBar`) — wired by the gate itself. Links to the manager-only pages INSIDE
+`carrier-vs-pay` / `commission-discrepancy` pages — excused (only reachable by a viewer the page is open to). The
+Roles admin preview (`navBlockReason` over a ROLE's permissions, not a viewer's) — excused: it shows role grants;
+a rep role's refusal is decided per viewer on `/me`. `/commission-device` — refused on the server; no page to hide.
+
+**Proof:** `backend/harness_payout_audience.py` (67, DB-free — adds F: the sale identity, the header fallback, the
+org-scoped `trans_id,customer`-only read, the statement rows; G: viewer payload, registered 403 labels, the one
+self-scope answer, a manager's full view vs a rep's; H: the range == its single statements to the cent in both
+audiences, CSV / PDF, own-rep 403, the 12-month cap); lock `backend/harness_payout_audience_lock.py` (21, 14
+negative controls: an unregistered refusal, a menu gate that stops asking `payoutRefused`, a registered page with
+no NAV entry, `/me` not stamping the payload, a page forcing an audience again, a second customer rule, the range
+building its own statement …); `frontend/tools/payout-nav-proof.mjs` (11 — the compiled `rbac.ts`: a rep sees and
+reaches none of the registered pages, no grant or admin module reopens them, a manager still does);
+`frontend/tools/plan-drilldown-render-proof.mjs` (36 — the employee Sale column, the manager's identity line).
+
+**Scheduled / emailed reports carry the caller (found 2026-09-26, after #306).** The notify builders `_discrepancy`
+and `_phantom` (`notify/report_registry.py`) called the now manager-only handlers without `authorization=`, so
+FastAPI's Header sentinel was bound → read as "no caller" → the MANAGER view: a rep could email themselves Pay
+Discrepancy / Phantom Payments through `POST /notify/send`. Both are now registered `wants_auth` and pass the
+caller's header (a scheduled, admin-configured run still has no caller → org-wide, as before). CLASS lock:
+`harness_payout_audience_lock.py` part (h) — every notify call to a commcalc handler that takes `authorization`
+must pass it, and a builder reaching a manager-only handler must be `wants_auth` (2 negative controls; 24 checks).
 
 ---
 
@@ -4214,6 +4372,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `commcalc.raw_sales.customer` + `commcalc.raw_sales_invoice.customer` (mig 1012) — as **the customer on a paid commission line** | the sales / sales-by-invoice uploads (unchanged) | THE rule `inventory_sold_recon.sale_customer` / `invoice_customer_map` → `commission_drilldown._sale_customers` (reads `trans_id,customer` only, org-scoped) → `attach_line_identity` → every plan line's `customer` (explain, statements, the range); also `sales_detail_index` (inventory integrity §11b) (§6j) |
 | `commcalc.rep_commissions` + the `/commission-explain` payload — as **what an EMPLOYEE may see of their own commission** | `calc_rep_commissions` / `commission_engine.preview` (unchanged) | THE shapers `payout_audience.employee_rep_row` / `employee_explain` / `employee_drill` (allow-lists; paid lines by `is_paid_line`) → `/commissions`, `/commissions-range`, `/commission-explain`, `/commission-statement(s)`, `/commission-drill`, core `/employee-dashboard`, the notify Incentives email (§6i) |
 | `commcalc.payout_schedule` / `commcalc.plan_installment_schedule` — as the answer to **"is multi-month configured for this org"** (active rows) | the schedule editors (`payout-schedules`, `plan-installments`) | THE predicate `multimonth_config.schedule_counts` → `decide` / `load` → `GET /commcalc/multimonth/status` → `_lib/multimonth.useMultimonthStatus` (the Rep Incentive card + export, commission-explain, Expected vs Earned); the R1 guard `router._has_any_pay_source`. The engines keep their own loaders (§7/§8) (§6h) |
 | `commcalc.accessory_config.activation_details_rules` **`.event`** (`keys` · `precedence` · `count_unit`; JSON key, no migration, 2026-09-25) | `PUT /commcalc/accessory-config` (extra keys of the JSON pass through the one writer) | `line_class.resolve_event` ← `resolve_rules` → `activation_events` / `activation_units` — the plan pay gate's `per_event` (always events) and every activation COUNT (`count_unit`, house `'transaction'`): `_sales_cell_agg`, the Boost calculator, `commission_drill`, closing `_b2b_counts_by_store` / `_b2b_day`, `sales_comparison.tally` (§6f) |
@@ -4275,7 +4434,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.payout_schedule(+_line)` | `/payout-schedule` POST `11965` | `installment_engine.compute_installments` |
 | `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert; **upload via `/upload-mapped` report_key `pos_inventory_listing` (mig `1004`, §25)** — adds `status`/`quantity`/`total_cost`/`category` so an on-hand SNAPSHOT is fully representable and a valuation can be summed from the table | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus, **BS inventory under `inventory_basis='devices'` + `GET /account/inventory-recon`** (`balance_sheet.device_inventory_cells` via `statement_engine`, mig `933`); statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`); **device-grain store source for `payables/engine.ma_store_resolution`** (forecast/payables Total-side attribution, 2026-09-04 §15 — its `store` is the store_mapping vocabulary, measured 20/20); **the onboarding intake's inventory landing (`write_inventory_devices`, §30.6) — CONFIRMED the same table the inventory module reads (§30.8)** |
 | `commcalc.journal_entries` | `PUT /account/journal/{period}` (`account/router.py` — delete+insert per period; echoes `rejected`/`resolved`) | `statement_engine._journal_rows` (BOTH period spellings) → `balance_sheet.journal_scope_entries` (fixed company scoping, mig `933`) → **`balance_sheet.journal_grain_entries`** (mig `954` GRAIN rule: store / company / tenant-total entries, a coarser row booked NET of the finer rows inside it — no double count; conflicts surfaced in `bs['journal_grains']`); legacy `engine.compute_and_store` exact-period read; staleness probe |
-| `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview` (company scopes cross-checked against `coa.org_companies` via `coa.filter_org_scopes` — §13b), `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet`; **the Account hub's Expenses column + per-scope drill-down (2026-09-21)** — `analysis.pl_totals` is the ONE home for the headline figures incl. `expenses` (Σ `analysis.EXPENSE_SECTIONS`), read by `/account/overview` and by the drill-down through `GET /account/pl/{period}?scope=` |
+| `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview` (company scopes cross-checked against `coa.org_companies` via `coa.filter_org_scopes` — §13b), `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet`/**`account_pl_range`**; **the P&L month range (§4c, 2026-09-26)** — `router.pl_single_month` (THE single-month read, `get_pl` returns it) looped by `router.get_pl_range` over `_period.month_range`; **the Account hub's Expenses column + per-scope drill-down (2026-09-21)** — `analysis.pl_totals` is the ONE home for the headline figures incl. `expenses` (Σ `analysis.EXPENSE_SECTIONS`), read by `/account/overview` and by the drill-down through `GET /account/pl/{period}?scope=` |
 | `commcalc.companies` | `POST/PATCH /account/companies` (org_id in payload/filter; mig `952` removed the two 2026-06-27 wrong-org LuxeLink rows) | ONLY `coa.org_companies` (§13b canonical fail-closed enumeration; CI-pinned by `harness_org_scope_guard.py`) → `list_companies`/`list_stores`/journal echo/`overview`/`analysis`/`finance_attention`/`store_company_map`⇒`company_assignment`; billing `per_entity` org-scoped count probe |
 | `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`/`938`/`941`/`954`) | `PUT /account/config` (incl. the mig-954 tenant mapping `distributor_payable_basis`/`distributor_payable_line`/`asset_ledger_open_statuses`); mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate; mig-941 columns (`projection_config`, `valuation_config` JSONB — display-only assumptions, org seeds gated) | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933/938 knobs, adaptive), `projection_engine.load_projection_config`, `valuation.load_valuation_config` (mig-941, adaptive); **mig-954 distributor-payable mapping** via `balance_sheet.load_bs_config` → `resolve_payable_basis`/`resolve_payable_line` (org column > carrier preset > declared mig-933 family > off) |
 | `commcalc.asset_ledger` (consignment / asset-lending ledger; wipe-and-reinsert CURRENT snapshot) | mod-asset upload `process_asset_ledger_bytes`, `vip_sweep.run_asset_ledger_sweep` | asset dashboard `GET /asset/summary` ("Open Balance Owed" = Σ `owed_to_vip` where `status='Open'`), `account/device_cogs` (consignment COGS), `coa.build_inputs` (`vip_reimb`/`vip_fees`, and the legacy `owed_vip`/`inventory` `status='on inventory'` predicate that matches NOTHING on the live feed), **BS distributor payable under `distributor_payable_basis='asset_ledger'`** (`balance_sheet.asset_ledger_open_bookings` via `statement_engine._fetch_asset_ledger_open`, mig `954`; money column `owed_to_vip` ONLY; as-of = `period_as_of`) and the SAME derivation behind `GET /account/liabilities-due`; statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`) ; **Device Payable as at a date** (`account/device_payable`, §23z — the PAID-ON side: `payg_date` is the ONLY per-unit PAYMENT DATE in the platform and the only thing that can backdate a payable, licensed by agreeing to within 2.7% with the settled payment batches; `owed_to_vip` the money; `acquired_date` drives the DERIVED coverage window, because this snapshot has been PRUNED — 72 rows in 2023 and 1,391 in 2024 against 1,504 and 16,195 units actually invoiced, so a payable for a 2024 date returns "not measured" rather than a small confident wrong number) |
@@ -4387,7 +4546,9 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
 | `GET /commcalc/commissions/{period}` · `/commissions-range` · `/commission-explain` · `/commission-statement` · `/commission-statements` · `/commission-drill` — `audience=employee|manager` (default manager, byte-identical); a self-scoped rep is ALWAYS employee and may ask only for their own rep (403 otherwise) | `router._payout_audience` → `payout_audience.resolve` + `employee_*` shapers | §6i |
-| `GET /commcalc/carrier-vs-pay` · `/discrepancy/{period}` · `/discrepancy/{period}/phantom` · `/discrepancy-appeals` · `/commission-device` — manager-only carrier reports: 403 for a self-scoped rep | `router._refuse_employee_audience` | §6i |
+| `GET /commcalc/carrier-vs-pay` · `/discrepancy/{period}` · `/discrepancy/{period}/phantom` · `/discrepancy-appeals` · `/commission-device` — manager-only carrier reports: 403 for a self-scoped rep, each by its REGISTERED key | `router._refuse_employee_audience(authorization, org_id, key)` → `payout_audience.MANAGER_ONLY_SURFACES` | §6i / §6j |
+| `GET /commcalc/commission-statement?rep=&period_from=&period_to=&fmt=pdf\|csv\|json` — ONE employee over a month range (≤ 12): each month = that month's single statement, month totals + grand total. READ-ONLY; own-rep 403 for a rep | `router.commission_statement_document` → `_statement_doc` (per month) → `commission_statement.build_range` / `render_range_pdf` / `range_csv` | §6j |
+| `GET /core/me` (+ `/core/bootstrap`) — `permissions.payout = {audience, refused_pages}`: the viewer's payout audience and the manager-only pages the server refuses them (the nav hides these) | `core._me_payload` → `payout_audience.viewer_payload(storeops.role_is_self_scoped(...))` | §6j |
 | `GET /commcalc/multimonth/status?periods=` — is multi-month configured for this org (`configured` / `off` / `off_with_money` + the money per period + a note). READ-ONLY | `router.get_multimonth_status` → `multimonth_config.load` | §6h |
 | `GET /commcalc/commissions-range?period_from=&period_to=` — the Rep Incentive report over a month range (≤ 12), one row per rep per month + month subtotals + total. READ-ONLY; each month IS `get_commissions(month)` | `router.get_commissions_range` → `account/_period.month_range` → `get_commissions` (per month, in-process) → `rep_incentive_range.assemble` | §6g |
 | `GET /commcalc/commission-explain` · the reports **🔍 Plan commission** drill (`PlanLineBreakdown`) — every plan line now carries `event_id / event_key / event_key_kind / event_type` when a rule pays per activation; the pay-gate report `pay_gate.unit.activation_events` (events, ambiguous invoices, config) | `commission_engine.preview(detail=True)` → `commission_drilldown.explain_rep`; frontend `planLines.toPlanLine` / `eventsOf` | §6f |
@@ -4551,6 +4712,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `POST /marketing/event-sales/roi/link-event` | link a (store, date) to an event, or CREATE one through the module's existing creator with the minimum needed to cost it | §23s.7 |
 
 | `GET /account/pl/{period}`, `GET /account/balance-sheet/{period}` (`?scope=&stores=&markets=` — stored snapshot when unfiltered; store/market-filtered view via `statement_filter.filtered_statement`: canonical-union market resolution + company-scope AND-composition, 2026-09-02) | `account/router.py` (`get_pl`/`get_bs` → `_filtered_read`) | §4 P&L filter |
+| `GET /account/pl-range?period_from=&period_to=&scope=&stores=&markets=` — the P&L over a month range (≤ 24): the page's lines / drill rows / order, one column per month + a Total, the export `sheets`. READ-ONLY; each month IS `pl_single_month(month)` | `account/router.py` (`get_pl_range` → `_period.month_range` → `pl_single_month` per month → `pl_range.assemble` / `export_sheet` / `notes_sheet`) | §4c |
 | `GET /account/statement/{period}` (`?scope=&kinds=pl,balance_sheet,cash_flow` — FRESH on-demand statements, nothing persisted; the platform statement service) | `account/router.py` (`on_demand_statement` → `statement_engine.statement`) | §4 statement engine |
 | `GET /account/royalty/config` · `PUT /account/royalty/lines` · `PUT /account/royalty/config` · `POST /account/royalty/parse` (preview, no write) · `POST /account/royalty/import` · `POST /account/royalty/manual` · `GET /account/royalty/reports` · `GET\|DELETE /account/royalty/report/{id}` — all `require_module("royalty")` | `account/royalty_router.py` → `royalty.parse` / `validate` / `header_fields` / `line_rows` / `pl_bookings` | §37.2–37.3 |
 | `GET /account/royalty/recon/{period}?center=` — royalty sales lines vs the daily report(s) per line, days, categories, unclaimed categories, tenders | `royalty_router.royalty_recon` → `_daily_rows` (raw_sales_product \| raw_sales) / `_tender_rows` → `royalty.reconcile` / `tender_crosscheck` | §37.5 |
@@ -4560,6 +4722,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /account/cash-flow/{period}` (stored derived Cash Flow snapshot, statement_type `cash_flow`) | `account/router.py` (`get_cf`) | §4 statement engine |
 | `GET /account/inventory-recon` (per-store emailed-report ↔ unsold-phone-ledger ↔ manual ↔ effective tie-out + ghost counts) | `account/router.py` (`inventory_recon` → `statement_engine.inventory_reconciliation`) | §4 balance-sheet truths |
 | `POST /account/compute/{period}`, `POST /account/run-due` → `statement_engine.compute_and_store` (P&L + BS + Cash Flow snapshots; supersedes `engine.compute_and_store`, 2026-09-02). run-due is SELF-SCHEDULED since mig `940`: pg_cron job `account-recompute-run-due` (every 2h) via `commcalc.ensure_account_recompute_cron`, re-registered on every backend boot (`main.py` startup → `router._ensure_account_recompute_cron`) | `account/router.py` (`compute`), `account/autocompute.py` (`recompute_due`) | §4 statement engine |
+| `POST /notify/send` / `run-due` → report key `account_pl_range` (the P&L by month, any scope / store / market filter, xlsx / pdf) | `notify/finance_reports.py` (`_account_pl_range` → `account/router.get_pl_range`, ships its `sheets`) | §4c |
 | `POST /notify/send` / `run-due` → report key `financial_statement` (fresh P&L+BS+CF at send time, any period/scope) | `notify/finance_reports.py` (`_financial_statement` → `statement_engine.statement`) | §4 statement engine |
 | `GET /account/analysis` (`?months=N` — chart-ready monthly trend/margins/OPEX composition/per-company+store comparison from STORED snapshots; `account_trends` grant; company series fail-closed via `own_company_ids`) | `account/router.py` (`financial_analysis` → pure `analysis.assemble`) | §4 financial-analysis series |
 | `GET /account/overview/{period}` (headline scopes + THE company/scope dropdown source for dashboard/P&L/BS/Cash-Flow; company scopes fail-closed against `coa.org_companies` per §13b; per scope `revenue`/`gross_profit`/**`expenses`**/`net_income` all from `analysis.pl_totals` — never re-summed here, 2026-09-21) | `account/router.py` (`overview`) | §4, §13b |
@@ -4615,6 +4778,9 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Which menu entries a rep may not see** (manager-only payout reports) and **which payout view a viewer gets** | `storeops.roles.permissions.scope` + `app_config.rbac_enabled` | ONE registry `payout_audience.MANAGER_ONLY_SURFACES`, ONE self-scope answer `storeops.role_is_self_scoped`, served on `/me` (`viewer_payload`) → `rbac.payoutRefused` in `canSeeItem` / `canAccessPath`; audience by `payout_audience.resolve` (§6j) |
+| **The sale on a paid commission row** (action · phone line · customer) | engine event stamp (`event_type`, `event_key`); `raw_sales.customer` / `raw_sales_invoice.customer` | `payout_audience.event_label` (`line_class.CLASS_LABELS`) · `line_phone` (`line_class.line_event_keys`) · `inventory_sold_recon.sale_customer` via `commission_drilldown.attach_line_identity`; frontend `planLines.saleLabel` (§6j) |
+| **One employee's incentive over several months** (per month + grand total) | `rep_commissions.total_payout` per month (the statement's payout of record) | `router._statement_doc` per month (== the single statement) → `commission_statement.build_range` (sums only) (§6j) |
 | **Which commission lines / fields an employee sees** (the paid line only; no carrier Price / GP / MA rebate) | engine verdict on each plan line (`suppressed`, `qualifies`, `flat_once`, `amount`); `rep_commissions` pay columns | ONE predicate `payout_audience.is_paid_line` + ONE allow-list set `payout_audience.EMPLOYEE_*_FIELDS`, audience by `payout_audience.resolve`; frontend declaration `_lib/payoutAudience.ts`; lock `harness_payout_audience_lock.py` (§6i) |
 | **Is multi-month pay offered for this org** (the rep pay card's multi-month option) | active `payout_schedule` / `plan_installment_schedule` rows; multi-month $ on `rep_commissions.residual_installment_comm` + `installment_comm_sale` | ONE predicate `multimonth_config.decide` (backend) / `multimonthOffer.multimonthRows` (frontend); lock `harness_multimonth_offer_lock.py` (§6h) |
 | **Which months a window holds** (a from-month / to-month range, any period spelling) | — (calendar) | ONE enumeration `account/_period.month_range` (canonical names, oldest first, capped by the caller) — the Rep Incentive month range (§6g) and `discrepancy_appeals.period_range_variants` dereference it |
@@ -4725,6 +4891,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Bill-pay coverage (billpay ≤ cash+card per store/day) | processor feed (`raw_epay_daily_tx` per_store_day / `raw_ma_daily_tx` by `tx_date` — mig-944 row filter `ma_billpay_predicate`, accounts via store_merchant_id → mig-314 index) or declared closing split, vs `daily_closing` tender totals (DM-corrected) | `metric_recon.reconcile_billpay_coverage` via `GET /billpay-coverage/{period}` |
 | Days-in-stock (aging) | `inventory_aging_device.days_in_stock` (snapshot) | device-cost recon `27338`; MI aging bonus |
 | Lateness % (`late_rate` — late shifts ÷ scheduled shifts) | `storeops.timelog` punches vs `storeops.shifts` windows | `attendance_exceptions.compute_attendance_exceptions` → `accountability.aggregate`; surfaced by `/storeops/accountability` ('Lateness %' page, W2 rename) and the `storeops_lateness` scheduled report (§14 W3) |
+| **P&L for a range of months** (a column per month + Total, the page's lines, drill rows and filters) | the STORED `commcalc.account_statements` P&L snapshots (or their store / market filtered sum), one per month — exactly what `/accounts/pl` shows for that month | **ONE read** `account/router.pl_single_month` looped by `get_pl_range` over `_period.month_range`; layout + Total (Σ month cells, exact cents; blank months excluded, never $0.00) `account/pl_range.assemble` / `export_sheet`. Proof `harness_pl_range.py`, lock `harness_pl_range_lock.py` (§4c, 2026-09-26) |
 | **Expenses for a scope and period** (the Account hub column, the P&L's own expense total) | the STORED `commcalc.account_statements` P&L payload — Σ subtotals of the sections below gross profit (`analysis.EXPENSE_SECTIONS` = `('opex','other')` ≡ `statement_engine.PL_SECTIONS` minus revenue/COGS). NEVER re-summed from `commcalc.store_expenses` or any other source feed, and never netted as GP − NI | **ONE home** `account/analysis.pl_totals(payload)['expenses']` → `GET /account/overview/{period}` (the hub column + export), `router._consolidated_pl` (narrative), and the per-scope drill-down via `GET /account/pl/{period}?scope=` (the same read `/accounts/pl` does). Identity `gross_profit − expenses == net_income`. Absent P&L ⇒ NO key ⇒ 'not reported', never $0.00. Proofs `harness_account_expenses_one_home.py` (CI lock) + `prove_accounts_expenses_column.mjs` (§4, 2026-09-21) |
 | Store salary expense for a MONTH (the `payroll_gross` P&L/GP line) | `get_payroll_by_store` — ACTUAL hours where MEASURED (a closed `storeops.timelog` punch or a manual `shifts.actual_hours>0` correction), SCHEDULED hours only where NOT measured; salaried via `payroll_salary.py`, never hours×`pay_rate`. A MEASURED ZERO pays zero and never falls back. No measurement AND no schedule ⇒ WITHHELD, never $0.00 | `storeops/salary_expense.py` via `router._salary_expense_gather` → `POST /storeops/payroll-expenses/run/{period}` → `commcalc.store_expenses` `source_key='payroll_gross'` → `account/coa.py` `wages`. Proof `harness_salary_expense.py` (§14s) |
 | Withholding estimate (gross/FICA/federal/state/net) | `storeops.timelog`+`manual_hours` hours × `employees.pay_rate` × `payroll_settings` W-4 | browser: `frontend/src/lib/payroll-tax.ts computePay`; server twin: `storeops/payroll_tax_estimate.compute_pay` (§14 W3 — keep in lockstep) |
@@ -7936,7 +8103,9 @@ Fixed in two places, defence in depth:
    withheld values is still a fabricated number.
 2. **The shared exporter** checks for a missing value **before** formatting: absent renders blank, a
    **real zero still renders `$0.00`** because zero is a fact. This closes the class across every
-   report, not just this one.
+   report, not just this one. **Correction 2026-09-26 (§4c):** it closed the DISPLAY half only — the Excel
+   writers (`lib/export.tsx rawCell`, `notify/render.build_xlsx`) and the server PDF text (`render._display`)
+   still wrote an absent money value as `0`; all three now leave it empty (`harness_pl_range.py` §J).
 
 **Proof:** `backend/harness_training_flowcharts.py` (**33 checks**) — §A the registry and its themed,
 labelled diagrams; §B reachable, listed from the registry, deep-linked, and not admin-gated; §C no HTML

@@ -20,6 +20,17 @@ export type Permissions = {
   scheduling_reach?: SchedulingReach  // SCHEDULING reach (whom you may schedule); default 'org'
   home?: string
   impersonate?: boolean               // "Sign in as an employee" — DEFAULT-DENY, no bypass (see below)
+  // WHO THIS VIEWER IS TO A PAYOUT SURFACE (index §6j) — stamped by the SERVER on /me
+  // (`payout_audience.viewer_payload`): the audience it will serve them and the manager-only pages it refuses
+  // them (THE registry `payout_audience.MANAGER_ONLY_SURFACES`). The client decides nothing; it hides these.
+  payout?: { audience?: 'employee' | 'manager'; refused_pages?: string[] }
+}
+// Is this path a manager-only payout page the SERVER refuses this viewer (index §6j)? The pages come from /me —
+// the same registry the server's 403 reads — so the menu never offers a report the server will refuse. No
+// bypass: a per-function grant or the admin module cannot reopen what the server refuses.
+export function payoutRefused(perms: Permissions | undefined, path: string): boolean {
+  for (const h of perms?.payout?.refused_pages || []) if (path === h || path.startsWith(h + '/')) return true
+  return false
 }
 // ── Admin "view as employee" (owner directive 2026-08-06) ────────────────────────────────────────
 // MIRROR of backend `app.modules.core.impersonation_api.can_impersonate` — KEEP IN SYNC.
@@ -1561,6 +1572,7 @@ export function moduleGranted(mods: Record<string, boolean> | undefined, key: st
 }
 
 export function canSeeItem(perms: Permissions, item: NavItem): boolean {
+  if (payoutRefused(perms, item.href)) return false   // the server refuses it to this viewer (index §6j)
   if (isSuperAdmin(perms)) return true
   if (MGMT_ONLY.has(item.href)) return canManage(perms, item.href)
   // Per-function override wins (either direction) — lets an admin grant/deny each function per role.
@@ -1591,7 +1603,11 @@ export type NavBlockReason =
   | { gate: 'page'; detail: string }
   | { gate: 'module'; detail: string }
   | { gate: 'report'; detail: string }
+  | { gate: 'payout'; detail: string }
 export function navBlockReason(perms: Permissions, item: NavItem): NavBlockReason | null {
+  if (payoutRefused(perms, item.href)) {
+    return { gate: 'payout', detail: 'a management report — the server refuses it to a rep viewing their own pay' }
+  }
   if (isSuperAdmin(perms)) return null
   if (MGMT_ONLY.has(item.href)) {
     return canManage(perms, item.href) ? null
@@ -1633,6 +1649,7 @@ const SELF_ALLOWED = ['/commcalc/targets/my', '/commcalc/kpi', '/account/passwor
 
 export function canAccessPath(perms: Permissions, path: string): boolean {
   if (path === '/' || path.startsWith('/account/password')) return true
+  if (payoutRefused(perms, path)) return false   // the server refuses it to this viewer (index §6j)
   // Super-admin bypass FIRST — mirrors canSeeItem's own precedence (isSuperAdmin checked before scope).
   // Keeping it ahead of the per-item scope loop guarantees the operator/super-admin (who sees every tab)
   // can never be bounced by a scope-restricted nav item → the sidebar and the guard stay consistent.

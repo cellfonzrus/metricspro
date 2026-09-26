@@ -632,10 +632,14 @@ def _filtered_read(period, st_type, scope, stores, markets, org_id):
             "crosscheck_ok": None, **f, **stale}
 
 
-@router.get("/pl/{period}")
-async def get_pl(period: str, scope: str = "consolidated", stores: str = "", markets: str = "",
-                 org_id: str = ORG_ID):
-    require_org(org_id)
+def pl_single_month(period, scope="consolidated", stores="", markets="", org_id=ORG_ID):
+    """THE single-month P&L read — what `/accounts/pl` shows for ONE month, one company / store scope,
+    one store / market filter. Every caller that wants "the P&L for a month" (the page's own
+    `GET /account/pl/{period}` and the month-range export `GET /account/pl-range`) goes through here,
+    so a month in a range can never differ from that month viewed alone (index §4c; the lock
+    `harness_pl_range_lock.py` fails the build if a multi-month path computes lines any other way).
+    Org-scoped: every read below carries `org_id`. Behaviour is byte-identical to the pre-2026-09-26
+    inline body of `get_pl`."""
     if (stores or "").strip() or (markets or "").strip():
         return _filtered_read(period, "pl", scope, stores, markets, org_id)
     row = _read(period, "pl", scope, org_id)
@@ -647,6 +651,47 @@ async def get_pl(period: str, scope: str = "consolidated", stores: str = "", mar
     return {"period": period, "scope": scope, "computed": True,
             "statement": row["payload"], "narrative": row.get("narrative"),
             "model": row.get("model"), "crosscheck_ok": row.get("crosscheck_ok"), **stale}
+
+
+@router.get("/pl/{period}")
+async def get_pl(period: str, scope: str = "consolidated", stores: str = "", markets: str = "",
+                 org_id: str = ORG_ID):
+    require_org(org_id)
+    return pl_single_month(period, scope, stores, markets, org_id)
+
+
+@router.get("/pl-range")
+async def get_pl_range(period_from: str, period_to: str = "", scope: str = "consolidated",
+                       stores: str = "", markets: str = "", org_id: str = ORG_ID):
+    """THE P&L OVER A MONTH RANGE (owner 2026-09-26: "also need the p&L report to be exported for multiple
+    months … all these need to be platform wide"). READ-ONLY; any org, any company / store scope, any store /
+    market filter — the same parameters `GET /account/pl/{period}` takes.
+
+    The months come from THE one enumeration (`_period.month_range`, capped at `pl_range.MAX_MONTHS`); each
+    month is `pl_single_month(month, …)` — the single-month P&L read itself, so every column equals that
+    month on the P&L page to the cent (never a second derivation). `pl_range.assemble` lays the months side
+    by side: the page's line order and drill rows, one column per month, and a Total that is only the sum of
+    the months. A month never computed is a blank column named in `missing_months` (never $0.00). 400 on an
+    unparseable, reversed or over-long range. Index §4c."""
+    require_org(org_id)
+    from app.modules.account import _period, pl_range
+    try:
+        months = _period.month_range(period_from, period_to or period_from, pl_range.MAX_MONTHS)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    def _run():
+        per_month = {}
+        for m in months:
+            per_month[m] = pl_single_month(m, scope, stores, markets, org_id)
+        return pl_range.assemble(months, per_month)
+
+    # Same SEV-1 worker-thread rule as /compute: N months of Supabase reads stay off the event loop.
+    out = await run_in_threadpool(_run)
+    # the export layout travels WITH the grid, so the page's Excel / CSV / PDF and the scheduled report render
+    # the one layout `pl_range.export_sheet` owns — no renderer lays the months out a second time.
+    return {"period_from": months[0], "period_to": months[-1], "scope": scope, **out,
+            "sheets": [pl_range.export_sheet(out), pl_range.notes_sheet(out)]}
 
 
 @router.get("/balance-sheet/{period}")
