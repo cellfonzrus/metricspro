@@ -13,6 +13,10 @@ import PlanLineBreakdown from '../_lib/PlanLineBreakdown'
 import { toPlanLine } from '../_lib/planLines'
 import { monthBlocks, monthInput, RANGE_MAX_MONTHS, spanMonths, type RangeRow } from '../_lib/repIncentiveRange'
 import { multimonthOffered, multimonthRows, useMultimonthStatus } from '../_lib/multimonth'
+import { audienceParam, servedAudience } from '../_lib/payoutAudience'
+// THE employee payout report (owner 2026-09-26): every payout read on this page asks for the employee
+// audience — paid lines only, no carrier commission (index §6i). Declared once, in _lib/payoutAudience.
+const AUD = audienceParam('/commcalc/reports')
 import WhyZeroPanel from '../_lib/WhyZeroPanel'
 import { GoogleRatingChips, GoogleRatingDetail, ratingsText, useGoogleRatings } from '../_lib/googleRatings'
 
@@ -107,7 +111,7 @@ export default function ReportsPage() {
   const [linking, setLinking] = useState(false)
 
   useEffect(() => {
-    api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
+    api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}${AUD}`)
       .then(setReps).catch(console.error).finally(() => setLoading(false))
     api(`/api/v1/commcalc/config/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
       .then(setCfg).catch(console.error)
@@ -129,7 +133,7 @@ export default function ReportsPage() {
         method: 'PUT', body: JSON.stringify({ deduct }),
       })
       // Refresh commissions so payout reflects the change
-      const updated = await api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
+      const updated = await api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}${AUD}`)
       setReps(updated)
     } catch (e) { console.error(e) }
   }
@@ -153,7 +157,7 @@ export default function ReportsPage() {
   async function loadRange() {
     setRangeBusy(true); setRangeErr('')
     try {
-      const d = await api(`/api/v1/commcalc/commissions-range?period_from=${encodeURIComponent(rangeFrom)}&period_to=${encodeURIComponent(rangeTo)}&org_id=${ORG_ID}`)
+      const d = await api(`/api/v1/commcalc/commissions-range?period_from=${encodeURIComponent(rangeFrom)}&period_to=${encodeURIComponent(rangeTo)}&org_id=${ORG_ID}${AUD}`)
       setRangeData({ months: d?.months || [], rows: (d?.rows || []) as RangeRow[] })
     } catch (e: any) { setRangeData(null); setRangeErr(String(e?.message || e)) } finally { setRangeBusy(false) }
   }
@@ -268,13 +272,13 @@ export default function ReportsPage() {
   function downloadStatement() {
     const r = currentRep
     if (!r) return
-    apiDownload(`/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(repLabel(r))}&period=${encodeURIComponent(period)}&org_id=${ORG_ID}`)
+    apiDownload(`/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(repLabel(r))}&period=${encodeURIComponent(period)}&org_id=${ORG_ID}${AUD}`)
       .catch(e => alert(`Could not generate statement: ${e?.message || e}`))
   }
   function downloadAllStatements() {
     const names = filtered.map(repLabel).filter(Boolean)
     if (!names.length) { alert('No reps to export for the current filter.'); return }
-    apiDownload(`/api/v1/commcalc/commission-statements?period=${encodeURIComponent(period)}&reps=${encodeURIComponent(names.join(','))}&org_id=${ORG_ID}`)
+    apiDownload(`/api/v1/commcalc/commission-statements?period=${encodeURIComponent(period)}&reps=${encodeURIComponent(names.join(','))}&org_id=${ORG_ID}${AUD}`)
       .catch(e => alert(`Could not generate statements: ${e?.message || e}`))
   }
   // Send the selected rep's server-rendered statement PDF through the shared /notify/send-file modal
@@ -284,7 +288,7 @@ export default function ReportsPage() {
     const r = currentRep
     if (!r) return []
     const name = repLabel(r)
-    const b64 = await apiFetchBase64(`/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(name)}&period=${encodeURIComponent(period)}&org_id=${ORG_ID}`)
+    const b64 = await apiFetchBase64(`/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(name)}&period=${encodeURIComponent(period)}&org_id=${ORG_ID}${AUD}`)
     const safe = `${name}-${period}`.replace(/[^\w]+/g, '-').replace(/^-|-$/g, '').toLowerCase()
     return [{ filename: `commission-statement-${safe}.pdf`, mime: 'application/pdf', content_b64: b64 }]
   }
@@ -304,7 +308,7 @@ export default function ReportsPage() {
     const key = `${rep}|${period}`
     drillReq.current = key                          // only the LATEST request may land
     setDrillData(null); setDrillBusy(true)
-    api(`/api/v1/commcalc/commission-drill?org_id=${ORG_ID}&period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}`)
+    api(`/api/v1/commcalc/commission-drill?org_id=${ORG_ID}&period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}${AUD}`)
       .then((d: any) => { if (drillReq.current === key) setDrillData({ ...d, _rep: rep, _period: period }) })
       .catch(e => { if (drillReq.current === key) setDrillData({ error: String(e?.message || e), _rep: rep, _period: period }) })
       .finally(() => { if (drillReq.current === key) setDrillBusy(false) })
@@ -325,7 +329,7 @@ export default function ReportsPage() {
     const key = `${rep}|${period}`
     explainReq.current = key                       // only the LATEST request may land
     setExplain(null); setExplainBusy(true)
-    api(`/api/v1/commcalc/commission-explain?period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}`)
+    api(`/api/v1/commcalc/commission-explain?period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}${AUD}`)
       .then((d: any) => { if (explainReq.current === key) setExplain({ ...d, _rep: rep, _period: period }) })
       .catch(e => { if (explainReq.current === key) setExplain({ error: String(e?.message || e), _rep: rep, _period: period }) })
       .finally(() => { if (explainReq.current === key) setExplainBusy(false) })
@@ -344,7 +348,7 @@ export default function ReportsPage() {
   async function refreshRepData() {
     const rep = drillRep
     try {
-      const updated = await api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
+      const updated = await api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}${AUD}`)
       setReps(updated)   // refreshes currentRep.plan_name → the Plan-based Payout card + breakdown table
     } catch (e) { console.error(e) }
     if (!rep) return
@@ -353,7 +357,7 @@ export default function ReportsPage() {
     explainReq.current = key
     setExplain(null); setExplainBusy(true)
     try {
-      const d: any = await api(`/api/v1/commcalc/commission-explain?period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}`)
+      const d: any = await api(`/api/v1/commcalc/commission-explain?period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}${AUD}`)
       if (explainReq.current === key) setExplain({ ...d, _rep: rep, _period: period })
     } catch (e: any) {
       if (explainReq.current === key) setExplain({ error: String(e?.message || e), _rep: rep, _period: period })
@@ -1060,6 +1064,8 @@ export default function ReportsPage() {
       {drillComp && (() => {
         const b = drillOk ? drillOk[drillComp] : null   // drillOk = drillData, gated on rep+period (INFO-4)
         const moneyBucket = drillComp === 'accessories' || drillComp === 'setup'
+        // the employee form (served by the backend, index §6i) carries no Price / GP on a count-paid bucket
+        const showMoneyCols = moneyBucket || servedAudience(drillFresh) !== 'employee'
         return (
           <div onClick={() => setDrillComp(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
             <div onClick={e => e.stopPropagation()} style={{ background: 'var(--surface)', borderRadius: 12, padding: 20, width: 'min(900px,97vw)', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}>
@@ -1080,7 +1086,7 @@ export default function ReportsPage() {
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                     <thead><tr style={{ background: 'var(--surface2)' }}>
-                      {['Date', 'Trans ID', 'Product', drillComp === 'acima' ? 'Tender' : 'Contract', 'MDN', 'Price', 'GP'].map(h =>
+                      {['Date', 'Trans ID', 'Product', drillComp === 'acima' ? 'Tender' : 'Contract', 'MDN', ...(showMoneyCols ? ['Price', 'GP'] : [])].map(h =>
                         <th key={h} style={{ textAlign: h === 'Price' || h === 'GP' ? 'right' : 'left', padding: '5px 8px', fontSize: 10, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{h}</th>)}
                     </tr></thead>
                     <tbody>
@@ -1091,8 +1097,8 @@ export default function ReportsPage() {
                           <td style={{ padding: '5px 8px' }}>{it.product || '—'}</td>
                           <td style={{ padding: '5px 8px' }}>{drillComp === 'acima' ? (it.tender_type || '—') : (it.contract_type || '—')}</td>
                           <td style={{ padding: '5px 8px' }}>{it.mdn || '—'}</td>
-                          <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(it.ext_price)}</td>
-                          <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(it.gp)}</td>
+                          {showMoneyCols && <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(it.ext_price)}</td>}
+                          {showMoneyCols && <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(it.gp)}</td>}
                         </tr>
                       ))}
                     </tbody>
@@ -1231,7 +1237,7 @@ export default function ReportsPage() {
                       {/* Rules line detail / dead-rules / why-$0 are RULES-basis explanations — hidden for
                           an exec_mtd rep (the Executive-MTD table above is the whole story for them). */}
                       {!explainMtd && (planLineRows.length > 0 ? (
-                        <PlanLineBreakdown rows={planLineRows} compact />
+                        <PlanLineBreakdown rows={planLineRows} compact audience={servedAudience(explainOk)} />
                       ) : (
                         <div style={{ fontSize: 13, color: 'var(--text3)' }}>
                           {explainPc?.plan_name
@@ -1266,7 +1272,7 @@ export default function ReportsPage() {
                         <div style={{ overflowX: 'auto' }}>
                           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                             <thead><tr style={{ background: 'var(--surface2)' }}>
-                              {['IMEI', 'Device — Rate plan', 'Category', 'Month', 'Pay period', 'Status / hold reason', 'MA says paid', 'Paid $', 'Held $', 'MRC'].map(h =>
+                              {['IMEI', 'Device — Rate plan', 'Category', 'Month', 'Pay period', 'Status / hold reason', ...(servedAudience(explainOk) === 'employee' ? [] : ['MA says paid']), 'Paid $', 'Held $', 'MRC'].map(h =>
                                 <th key={h} style={{ textAlign: ['Paid $', 'Held $', 'MRC'].includes(h) ? 'right' : 'left', padding: '5px 8px', fontSize: 10, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{h}</th>)}
                             </tr></thead>
                             <tbody>
@@ -1280,7 +1286,7 @@ export default function ReportsPage() {
                                   <td style={{ padding: '5px 8px', color: r.paid ? 'var(--green)' : 'var(--red)' }}>
                                     {r.status_label}{r.hold_detail ? ` · ${r.hold_detail}` : ''}
                                   </td>
-                                  <td style={{ padding: '5px 8px' }}>{r.ma_says_paid ? 'yes' : 'no'}</td>
+                                  {servedAudience(explainOk) !== 'employee' && <td style={{ padding: '5px 8px' }}>{r.ma_says_paid ? 'yes' : 'no'}</td>}
                                   <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 600 }}>{fmt(r.amount)}</td>
                                   <td style={{ padding: '5px 8px', textAlign: 'right' }}>{r.withheld_amount == null ? '—' : fmt(r.withheld_amount)}</td>
                                   <td style={{ padding: '5px 8px', textAlign: 'right' }}>{r.mrc_at_pay == null ? '—' : fmt(r.mrc_at_pay)}</td>

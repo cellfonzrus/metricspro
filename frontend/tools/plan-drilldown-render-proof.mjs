@@ -44,11 +44,13 @@ mkdirSync(path.join(OUT, 'src'))
 writeFileSync(path.join(OUT, 'src/lib-client.ts'),
   "export const fmt = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n || 0)\n")
 writeFileSync(path.join(OUT, 'src/planLines.ts'), readFileSync(path.join(LIB, 'planLines.ts'), 'utf8'))
+writeFileSync(path.join(OUT, 'src/payoutAudience.ts'), readFileSync(path.join(LIB, 'payoutAudience.ts'), 'utf8'))
 writeFileSync(path.join(OUT, 'src/PlanLineBreakdown.tsx'),
   readFileSync(path.join(LIB, 'PlanLineBreakdown.tsx'), 'utf8').replace("'@/lib/client'", "'./lib-client'"))
 
 execFileSync(path.join(FRONTEND, 'node_modules/.bin/tsc'), [
-  path.join(OUT, 'src/planLines.ts'), path.join(OUT, 'src/lib-client.ts'), path.join(OUT, 'src/PlanLineBreakdown.tsx'),
+  path.join(OUT, 'src/planLines.ts'), path.join(OUT, 'src/lib-client.ts'), path.join(OUT, 'src/payoutAudience.ts'),
+  path.join(OUT, 'src/PlanLineBreakdown.tsx'),
   '--outDir', path.join(OUT, 'js'), '--target', 'es2020', '--module', 'es2020',
   '--moduleResolution', 'node', '--jsx', 'react-jsx', '--esModuleInterop', '--skipLibCheck',
 ], { stdio: 'inherit' })

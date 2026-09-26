@@ -60,12 +60,13 @@ export default function HubDashboardPage() {
     const gated = rbacEnabled !== false && !!session
     return items
       .filter(it => !it.href.startsWith('/hub/'))
+      .filter(it => platformOK(it, user))
       .filter(it => !gated || canSeeItem(permissions, it))
       .filter(it => !it.cap || caps[it.cap] !== false)
       .filter(it => carrierOKActive(it.href, activeCarrier, caps))
       .filter(it => verticalOK(it, tenant?.vertical, caps))
       .filter(it => !navCfg?.layout?.items?.[it.href]?.hidden)
-  }, [navCfg, permissions, session, rbacEnabled, activeCarrier, tenant?.vertical])
+  }, [navCfg, permissions, session, rbacEnabled, activeCarrier, tenant?.vertical, user])
 
   // THIS group's own items — what the auto-derived default tiles, and the "not yet placed" tile, are
   // built from. A dashboard with no design still shows its own module, not the whole app.

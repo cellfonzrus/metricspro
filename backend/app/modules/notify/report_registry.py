@@ -296,7 +296,8 @@ async def _flags(org_id, f, authorization=""):
 
 async def _commissions(org_id, f, authorization=""):
     period = _resolve_period(f)
-    rows = await C.get_commissions(period=period, org_id=org_id, authorization=authorization)
+    # the Incentives report IS the employee payout report (index §6i): the employee allow-list, whoever sends it
+    rows = await C.get_commissions(period=period, org_id=org_id, authorization=authorization, audience="employee")
     return {"title": "Incentives", "subtitle": period, "filename": f"commissions-{period.replace(' ', '-')}",
             "sheets": [{"name": "Rep Payouts", "rows": rows or [], "columns": [
                 {"header": "Rep", "key": "epay_salesperson"},

@@ -16524,7 +16524,17 @@ def settle_ops_chargebacks(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/commissions/{period}")
-async def get_commissions(period: str, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
+async def get_commissions(period: str, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001",
+                          audience: str = ""):
+    # AUDIENCE (index §6i): for the employee payout report (or any self-scoped caller) the carrier-paid dealer
+    # figures (`boost_commission` / `boost_reimbursement`) are dropped from every row; default unchanged.
+    from app.modules.commcalc import payout_audience as _pa
+    _aud = _payout_audience(authorization, org_id, audience)
+    rows = await _get_commissions_rows(period, authorization, org_id)
+    return [_pa.employee_rep_row(r) for r in rows] if _aud == "employee" else rows
+
+
+async def _get_commissions_rows(period, authorization, org_id):
     client = sb()
     r = client.schema('commcalc').table('rep_commissions').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).order('total_payout', desc=True).execute()
     comms = r.data or []
@@ -16582,7 +16592,7 @@ async def get_commissions(period: str, authorization: str = Header(default=""), 
 
 @router.get("/commissions-range")
 async def get_commissions_range(period_from: str, period_to: str = "", authorization: str = Header(default=""),
-                                org_id: str = ORG_ID):
+                                org_id: str = ORG_ID, audience: str = ""):
     """REP INCENTIVE over a MONTH RANGE (owner 2026-09-25: "the range for multiple months should be there to
     display the commission for teh months selected in different rowqn on one page"). READ-ONLY.
 
@@ -16600,7 +16610,7 @@ async def get_commissions_range(period_from: str, period_to: str = "", authoriza
         raise HTTPException(400, str(e))
     per_month = {}
     for m in months:
-        per_month[m] = await get_commissions(m, authorization=authorization, org_id=org_id)
+        per_month[m] = await get_commissions(m, authorization=authorization, org_id=org_id, audience=audience)
     return _rir.assemble(months, per_month)
 
 
@@ -19521,7 +19531,7 @@ def _statement_buckets(client, org_id, period, rep, source_report="ma_daily_tx")
 
 @router.get("/commission-statement")
 def commission_statement_document(rep: str, period: str, fmt: str = "pdf",
-                                  source_report: str = "ma_daily_tx",
+                                  source_report: str = "ma_daily_tx", audience: str = "",
                                   authorization: str = Header(default=""), org_id: str = ORG_ID):
     """The individual per-employee Commission Statement — what YOU earned, line by line.
 
@@ -19537,10 +19547,14 @@ def commission_statement_document(rep: str, period: str, fmt: str = "pdf",
         raise HTTPException(400, "rep required")
     if not period:
         raise HTTPException(400, "period required")
+    # AUDIENCE (index §6i): the employee's statement lists only what PAID and carries no carrier commission
+    # (no commission-ledger buckets); a self-scoped caller always gets it, for their own rep only.
+    _aud = _payout_audience(authorization, org_id, audience, rep=rep)
     from fastapi import Response
     from app.modules.commcalc import commission_statement as _cst
     from app.modules.commcalc import commission_drilldown as _dd
     from app.modules.commcalc import plan_pay_gate as _ppg
+    from app.modules.commcalc import payout_audience as _pa
 
     client = sb()
     # Same carrier-mode resolution the /commission-explain endpoint uses, so the drill-down narrates
@@ -19560,6 +19574,8 @@ def commission_statement_document(rep: str, period: str, fmt: str = "pdf",
     # Optional five-bucket rollup + gate config both degrade to None so a missing optional migration
     # (071 ledger / 260 pay gate) yields a valid document rather than a 500.
     buckets = _statement_buckets(client, org_id, period, rep, source_report=source_report)
+    if _aud == "employee":
+        explain, buckets = _pa.employee_explain(explain), None
     try:
         gate_cfg = _ppg.load_gate_config(client, org_id)
     except Exception:
@@ -19615,7 +19631,7 @@ def _statement_period_reps(client, org_id, period, store="", market=""):
 
 @router.get("/commission-statements")
 def commission_statements_batch(period: str, reps: str = "", store: str = "", market: str = "",
-                                fmt: str = "pdf", source_report: str = "ma_daily_tx",
+                                fmt: str = "pdf", source_report: str = "ma_daily_tx", audience: str = "",
                                 authorization: str = Header(default=""), org_id: str = ORG_ID):
     """EVERY rep's Commission Statement for a period, in ONE multi-page PDF (one rep per page).
 
@@ -19661,13 +19677,22 @@ def commission_statements_batch(period: str, reps: str = "", store: str = "", ma
 
     # Held section is management-only, default-closed — carried only when the caller holds the grant.
     include_held = _can_view_statement_held(authorization, org_id)
+    from app.modules.commcalc import payout_audience as _pa
     docs = []
     for rep in rep_list:
+        # AUDIENCE (index §6i) per rep: a self-scoped caller gets only their OWN statement (anyone else's is
+        # skipped, never rendered) and always the employee form; others get the declared audience.
+        try:
+            _aud = _payout_audience(authorization, org_id, audience, rep=rep)
+        except HTTPException:
+            continue
         try:
             explain = _dd.explain_rep(client, org_id, period, rep, carrier_mode=mode)
         except Exception:
             continue   # one bad rep must not sink the whole batch
         buckets = _statement_buckets(client, org_id, period, rep, source_report=source_report)
+        if _aud == "employee":
+            explain, buckets = _pa.employee_explain(explain), None
         docs.append(_cst.build_statement(explain, buckets=buckets, tenant_name=tenant, rep_name=rep,
                                          period=period, gate_cfg=gate_cfg, include_held=include_held))
 
@@ -24784,12 +24809,18 @@ def put_catalog_override(body: PutCatalogOverrideIn, org_id: str = ORG_ID, autho
 
 
 @router.get("/commission-drill")
-def commission_drill(period: str, rep: str = "", org_id: str = ORG_ID):
+def commission_drill(period: str, rep: str = "", audience: str = "", authorization: str = Header(default=""),
+                     org_id: str = ORG_ID):
     """The exact transactions behind each paid-out commission component for one rep + period, so every
     number on the Rep Commission Report can be verified. Replays the SAME classification the calculator
     uses (shared contract-type classifier + configurable accessory + setup-fee + ACIMA-tender), over the
     rep's raw_sales rows (the calc's source; falls back to the daily feed for visibility). Premium/BYOD/
-    upgrade/ACIMA are DISTINCT transactions (matching the pay counts); accessories/setup are line items."""
+    upgrade/ACIMA are DISTINCT transactions (matching the pay counts); accessories/setup are line items.
+
+    AUDIENCE (index §6i): a self-scoped caller may drill only their OWN rep and always gets the employee form
+    (`payout_audience.employee_drill`: count-paid buckets carry each transaction without its money; the
+    percentage-paid buckets keep the sale's price / margin, the basis of that pay). Default = unchanged."""
+    _aud = _payout_audience(authorization, org_id, audience, rep=rep or "")
     import re as _re
     client = sb()
     acfg = _accessory_config(client, org_id)
@@ -24871,22 +24902,32 @@ def commission_drill(period: str, rep: str = "", org_id: str = ORG_ID):
         items.sort(key=lambda x: (x["date"], str(x["trans_id"])))
         return {"count": len(items), "sales": round(sum(x["ext_price"] for x in items), 2),
                 "gp": round(sum(x["gp"] for x in items), 2), "items": items[:2000]}
-    return {"rep": rep, "period": period, "source": source,
-            "premium": _bucket(prem), "byod": _bucket(byod), "upgrade": _bucket(upg),
-            "accessories": _bucket(acc), "setup": _bucket(setup), "acima": _bucket(acima)}
+    out = {"rep": rep, "period": period, "source": source,
+           "premium": _bucket(prem), "byod": _bucket(byod), "upgrade": _bucket(upg),
+           "accessories": _bucket(acc), "setup": _bucket(setup), "acima": _bucket(acima)}
+    if _aud == "employee":
+        from app.modules.commcalc import payout_audience as _pa
+        return _pa.employee_drill(out)
+    return out
 
 
 @router.get("/commission-explain")
-def commission_explain(period: str, rep: str = "", org_id: str = ORG_ID):
+def commission_explain(period: str, rep: str = "", audience: str = "", authorization: str = Header(default=""),
+                       org_id: str = ORG_ID):
     """READ-ONLY 'how was this commission calculated' for ONE rep + period. Returns the PLAN component
     (which plan attached, VIA WHICH assignment — reused from _resolve_plan_for(explain=True), the same
     matcher the live calc uses — plus per-rule matched sale lines), the MULTI-MONTH component (per-device
     M1–M6 installment rows with gate status/held-reason + the MA-file cross-reference), a $0 explanation,
     and a reconciliation against the last calc's rep_commissions row. Writes nothing; changes no payout
-    number; never touches the live /calculate path. See commission_drilldown."""
+    number; never touches the live /calculate path. See commission_drilldown.
+
+    AUDIENCE (owner 2026-09-26, index §6i): `audience=employee` (the Rep Incentive payout report's drill) returns
+    only the lines that PAID and no carrier-commission field (`payout_audience.employee_explain`); a SELF-scoped
+    caller always gets that, and only for their OWN rep. Default = the full manager diagnostic, unchanged."""
     require_org(org_id)
     if not rep:
         raise HTTPException(400, "rep required")
+    _aud = _payout_audience(authorization, org_id, audience, rep=rep)
     client = sb()
     carriers = (client.schema('commcalc').table('carrier').select('*').eq('org_id', org_id).execute().data) or []
     mode = _resolve_carrier_mode(carriers)
@@ -24915,7 +24956,35 @@ def commission_explain(period: str, rep: str = "", org_id: str = ORG_ID):
             _res["mtd_supersedes_rules"] = True
     except Exception as _mbe:
         print(f"WARN exec_mtd drill breakdown skipped: {_mbe}")
+    if _aud == "employee":
+        from app.modules.commcalc import payout_audience as _pa
+        return _pa.employee_explain(_res)
     return _res
+
+
+def _refuse_employee_audience(authorization, org_id, what):
+    """A MANAGER-ONLY carrier-commission report (what the carrier paid the store, per rep) is refused to the
+    employee audience — THE same decision `_payout_audience` makes (a self-scoped caller is the employee), so
+    no carrier commission reaches an employee through a report the nav merely did not list (index §6i)."""
+    if _payout_audience(authorization, org_id, "manager") == "employee":
+        raise HTTPException(403, f"{what} is a management report.")
+
+
+def _payout_audience(authorization, org_id, requested, rep=None):
+    """THE one place a payout surface learns WHO it is talking to (owner 2026-09-26, index §6i):
+    `payout_audience.resolve(requested, caller_is_self)` — a SELF-scoped caller (a rep: `_caller_rep_keys` is
+    not None) is ALWAYS 'employee'; anyone else gets the audience the page declares (default 'manager', i.e.
+    today's payload). When `rep` is given, a self-scoped caller may read only their OWN rep — anyone else's
+    pay (and its lines) is refused 403, the same identity rule `/commissions/{period}` already applies."""
+    from app.modules.commcalc import payout_audience as _pa
+    authorization = authorization if isinstance(authorization, str) else ""
+    keys = _caller_rep_keys(authorization, org_id)
+    if keys is not None and rep is not None:
+        cmap = _rep_canon_map(sb(), org_id)
+        want = {str(rep).strip().upper(), str(_canon(str(rep).strip(), cmap)).strip().upper()} - {""}
+        if not (want & keys):
+            raise HTTPException(403, "You can only view your own commission.")
+    return _pa.resolve(requested, keys is not None)
 
 
 def _exec_mtd_breakdown_for_rep(client, org_id, period, rep):
@@ -24961,12 +25030,13 @@ def _exec_mtd_breakdown_for_rep(client, org_id, period, rep):
 
 
 @router.get("/commission-device")
-def commission_device(imei: str, period: str = "", org_id: str = ORG_ID):
+def commission_device(imei: str, period: str = "", org_id: str = ORG_ID, authorization: str = Header(default="")):
     """READ-ONLY device search: paste an IMEI → its full commission story across reps/periods (sale
     line(s), plan pay attributable, multi-month installments + gate reasons, MA-file matches, rebate).
     Optional `period` merges that period's live installment compute when the calc hasn't been re-run.
     Writes nothing. See commission_drilldown.device_story."""
     require_org(org_id)
+    _refuse_employee_audience(authorization, org_id, "Device commission story")
     if not imei:
         raise HTTPException(400, "imei required")
     client = sb()
@@ -25109,7 +25179,7 @@ def run_discrepancy_check(payload: dict, org_id: str = ORG_ID):
 
 
 @router.get("/carrier-vs-pay/{period}")
-def carrier_vs_pay_report(period: str, org_id: str = ORG_ID, market: str = "", store: str = ""):
+def carrier_vs_pay_report(period: str, org_id: str = ORG_ID, authorization: str = Header(default=""), market: str = "", store: str = ""):
     """CARRIER STATEMENT EARNED vs EMPLOYEE PAID, per rep, for one month. READ-ONLY. BOOKS NOTHING.
 
     Owner directive 2026-09-20 — the evidence surface for "is the basis for calculation the same feed
@@ -25141,6 +25211,7 @@ def carrier_vs_pay_report(period: str, org_id: str = ORG_ID, market: str = "", s
     carrier, tenant or market name appears in the logic.
     """
     require_org(org_id)
+    _refuse_employee_audience(authorization, org_id, "Carrier Earned vs Employee Paid")
     from app.modules.commcalc import ma_recon, carrier_vs_pay as _cvp
     from app.modules.commcalc.sale_installment_engine import _ma_gate_index
     client = sb()
@@ -25225,11 +25296,12 @@ def carrier_vs_pay_report(period: str, org_id: str = ORG_ID, market: str = "", s
 
 
 @router.get("/discrepancy/{period}")
-async def get_discrepancy_results(period: str, org_id: str = ORG_ID, source: str = ""):
+async def get_discrepancy_results(period: str, org_id: str = ORG_ID, authorization: str = Header(default=""), source: str = ""):
     """Get all discrepancy results for a period, grouped by store. Optional `source` filter narrows
     to one writer's rows: 'boost' (the legacy engine; includes pre-312 rows whose source is NULL) or
     'ma' (the B2B ↔ MA recon, mig 312). Default = all rows. Selects * so the mig-312 attribution
     columns (rule_key, rule_reason, evidence, source, order_number) flow through when present."""
+    _refuse_employee_audience(authorization, org_id, "Pay Discrepancy")
     client = sb()
     q = client.schema("commcalc").table("discrepancy_results")        .select("*")        .eq("org_id", org_id)        .in_("period", _pvariants(period))
     src = (source or "").strip().lower()
@@ -25288,12 +25360,14 @@ def update_discrepancy_status(discrepancy_id: int, payload: dict, org_id: str = 
 @router.get("/discrepancy-appeals")
 def list_discrepancy_appeals(period_from: str = "", period_to: str = "", source: str = "",
                              status: str = "", appeal_status: str = "", store: str = "",
-                             date_from: str = "", date_to: str = "", org_id: str = ORG_ID):
+                             date_from: str = "", date_to: str = "", org_id: str = ORG_ID,
+                             authorization: str = Header(default="")):
     """Commission Discrepancy hub rows, org-scoped, filterable: period range (YYYY-MM, spelling-
     agnostic via discrepancy_appeals.period_range_variants — the _pvariants doctrine), engine
     source ('boost' includes pre-312 NULL rows / 'ma'), row status, appeal state ('none' = no
     appeal activity), store, and an activation-date range. Returns rows + the pure summary buckets
     + `appeals_ready` (False on a pre-947 database — rows still return, appeal filters degrade)."""
+    _refuse_employee_audience(authorization, org_id, "Commission Discrepancy")
     from app.modules.commcalc import discrepancy_appeals as _da
     try:
         pvars = _da.period_range_variants(period_from, period_to)
@@ -25524,8 +25598,9 @@ def _period_ym(period: str) -> tuple[int, int]:
     return year, month
 
 @router.get("/discrepancy/{period}/phantom")
-async def get_phantom_payments(period: str, org_id: str = ORG_ID):
+async def get_phantom_payments(period: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Payments received in the period with no matching commissionable sale (by MDN or IMEI)."""
+    _refuse_employee_audience(authorization, org_id, "Phantom payments")
     from datetime import date as _date
     client = sb()
     year, month = _period_ym(period)

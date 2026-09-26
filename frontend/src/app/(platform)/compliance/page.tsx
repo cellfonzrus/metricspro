@@ -15,7 +15,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
 import { useAuth, useActiveCarrier } from '@/lib/auth-context'
 import { useCachedApi, CONFIG } from '@/lib/cache'
-import { NAV, canSeeItem, carrierOKActive, verticalOK, type NavItem, type NavLayout } from '@/lib/rbac'
+import { NAV, platformOK, canSeeItem, carrierOKActive, verticalOK, type NavItem, type NavLayout } from '@/lib/rbac'
 import HubTiles from '@/components/HubTiles'
 import StatTile from '@/components/StatTile'
 import { slugGroup, defaultHubGroups, layoutToHubGroups, mergeUnplacedItems, subsFromNavLayout,
@@ -31,7 +31,7 @@ const GROUP_NAME = 'Flags & Compliance'
 const SLUG = slugGroup(GROUP_NAME) // 'flags-compliance' — the D1 tile-layout module key
 
 export default function ComplianceDashboardPage() {
-  const { permissions, session, rbacEnabled, tenant } = useAuth()
+  const { permissions, session, rbacEnabled, tenant, user } = useAuth()
   const { activeCarrier } = useActiveCarrier()
   const [summary, setSummary] = useState<ComplianceSummary | null>(null)
   const [sumErr, setSumErr] = useState('')
@@ -53,12 +53,13 @@ export default function ComplianceDashboardPage() {
     const gated = rbacEnabled !== false && !!session
     return navGroup.items
       .filter(it => it.href !== '/compliance' && !it.href.startsWith('/hub/'))
+      .filter(it => platformOK(it, user))   // index §38.6 — platform-only pages reach the super admin alone
       .filter(it => !gated || canSeeItem(permissions, it))
       .filter(it => !it.cap || caps[it.cap] !== false)
       .filter(it => carrierOKActive(it.href, activeCarrier, caps))
       .filter(it => verticalOK(it, tenant?.vertical, caps))
       .filter(it => !navCfg?.layout?.items?.[it.href]?.hidden)
-  }, [navGroup, navCfg, permissions, session, rbacEnabled, activeCarrier, tenant?.vertical])
+  }, [navGroup, navCfg, permissions, session, rbacEnabled, activeCarrier, tenant?.vertical, user])
 
   const groups = useMemo(() => {
     if (!navGroup) return []
