@@ -2246,9 +2246,12 @@ gates.
   deletes no measured value. Live: HOUSE 7 metrics, LuxeLink `zulu` only, Vzone none.
 - **THE REP-GRAIN RESOLVER, THE SCORER AND THE FEED VINTAGE (§19.28, owner defect 2026-09-26):**
   `kpi_failing.rep_kpi_values(defs, rep_row, store_row, actuals)` is THE one place a rep's KPI value is
-  resolved — precedence **rep-grain `raw_dlar_rep` (`REP_DLAR_COLUMNS`) → store-grain `raw_dlar_store`
-  (`STORE_KPI_COLUMNS`) ROLLED DOWN to the reps of that store → a measured `kpi_actual` for that store →
-  `None`**. `kpi_failing.score(values, defs, targets)` is THE met-count, and `total_kpis` is the HONEST
+  resolved, and **the GRAIN is a property of the METRIC, not a blanket fallback chain**: a metric with a
+  REP-grain feed (`REP_DLAR_COLUMNS`: atu / protect / boostapp / byod) is the rep's OWN `raw_dlar_rep`
+  value or it is `None` — **never the store's number rolled down**; a metric with no rep-grain feed
+  (`STORE_KPI_COLUMNS` only: familyplan / tmr3 / aal) IS rolled down from `raw_dlar_store` to every rep
+  at that store, exactly as the Boost engine has always done, and falls through to a measured
+  `kpi_actual` for that store when the DLAR column is empty. Each value is stamped with its `source`. `kpi_failing.score(values, defs, targets)` is THE met-count, and `total_kpis` is the HONEST
   denominator (metrics with both a target and a value) — never a literal 7. `kpi_failing.resolve_defs`
   turns a tenant's registry into the def tuples, falling back to the built-in seven. The PAY ENGINE
   dereferences all three and is handed the tenant's registry through `cfg['kpi_defs']`
@@ -5381,7 +5384,8 @@ classification config row for "BYOD Swap" / "Ineligible Port-In" — both MONEY,
   chain `device_insurance_pct` → `protect_pct` preserved verbatim) beside the existing
   `STORE_KPI_COLUMNS`: **which column carries a KPI now has ONE home at BOTH grains**; the rep-grain map
   was a literal inside the pay engine. `rep_kpi_values(defs, rep_row, store_row, actuals)` — THE one
-  resolver, precedence rep-grain → store-grain **rolled down to the rep** → `kpi_actual` → `None`.
+  resolver, where **grain is a property of the metric**: a rep-grain metric is the rep's own value or
+  `None`, a store-grain-only metric rolls down and then falls through to `kpi_actual`.
   `score(values, defs, targets)` — the met-count with an HONEST denominator (`total_kpis` = metrics with
   both a target and a value). `resolve_defs(raw)` — a tenant's registry → the def tuples, falling back to
   the built-in seven. **And `evaluate` now owns the rule "a FALSY target is no target"**: the comparison
@@ -5440,9 +5444,23 @@ any KPI has no data: should the threshold stay an absolute count or become "all 
 (v) the August rep slice cannot be repaired from here — only a fresh month-end pull of the advocate
 report can, and the portal serves the CURRENT period, so it may no longer be available at all.
 
-**Proof:** `backend/harness_kpi_vintage.py` (53 checks, DB-free, the real `calc_rep_commissions` /
+**MEASURED BYTE-IDENTITY OVER THE LIVE MONTHS (read-only replay, old engine vs new, same live inputs).**
+March–September 2026, **322 rep-months**: `total_payout` identical to the cent every month
+(1,474.11 / 13,419.44 / 12,540.93 / 11,979.21 / 13,147.11 / 10,872.09 / 14,349.72), and **zero**
+differences in `tier`, `kpis_met` or any count or component. The only deltas are **213 KPI cells where a
+fabricated `0` becomes `None`**, and `total_kpis` falling from the literal 7 to what was measured
+(7→7 for 282 rows, 7→4 where the store row is missing, 7→3 where the rep row is, 7→0 for the 16 rows
+with neither).
+**⚠ THE REPLAY CAUGHT A DEFECT IN THE FIRST CUT OF THIS FIX, which is why it was run:** a blanket
+fallback chain rep → store → actual made a rep with NO advocate row read atu 39.53 / protect 91.36 /
+byod 44.19 off their STORE, and their met-count went 1 → 3. Rolling a store figure down onto a rep
+nobody measured is a better-looking lie than the `0.0` it replaced. Hence "grain is a property of the
+metric" above, pinned by `harness_kpi_vintage.py` §D11–D11f.
+
+**Proof:** `backend/harness_kpi_vintage.py` (61 checks, DB-free, the real `calc_rep_commissions` /
 `kpi_failing` / `dlar_sweep` / `line_class`; anonymised fixtures, synthetic phone numbers; armed pre-fix
-controls in §A6/§A8/§B2; a target fuzz in §B9; HOUSE byte-identity in §D1–D5). **Lock:**
+controls in §A6/§A8/§B2; a target fuzz in §B9/§B11; HOUSE byte-identity in §D1–D5 incl. the LIVE
+house registry, which differs from the built-ins only in its labels). **Lock:**
 `harness_kpi_registry_lock.py` §(h), 21 new checks — the pay engine names no DLAR column and no literal
 denominator, reads no KPI through `safe_float`, counts through the one scorer; the sweep derives its rate
 and parses every rate through `_rate`; each grain carries its own as-of date; the status is derived from

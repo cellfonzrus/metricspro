@@ -422,12 +422,44 @@ ck("D9 a store-grain value — from raw_dlar_store OR from kpi_actual — rolls 
    f"met={plan_fed['kpis_met']}/{plan_fed['total_kpis']} {plan_fed['kpi_values']}")
 ck("D10 and it STILL does not tier a plan tenant — 2 of 3 met, tier unchanged at 1.0",
    plan_fed["tier"] == 1.0 and plan_fed["total_payout"] == plan["total_payout"])
-ck("D11 resolution order is rep-grain, then store-grain, then a measured actual",
+# ── THE GRAIN IS A PROPERTY OF THE METRIC ─────────────────────────────────────────────────────────
+# CAUGHT BY REPLAYING THIS RESOLVER AGAINST SEVEN LIVE MONTHS (322 rep-months, read-only): a first cut
+# used a blanket fallback chain rep → store → actual, and a rep with NO advocate row then read
+# atu 39.53 / protect 91.36 / byod 44.19 off their STORE and their met-count went 1 → 3. That is a
+# money-shaped change nobody asked for, and a better-looking lie than the 0.0 it replaced.
+ck("D11 a REP-grain metric is the rep's OWN or it is NOT MEASURED — never the store's number rolled "
+   "down (the live-replay regression: met-count 1 -> 3 off a store figure)",
    kf.rep_kpi_values(kf.BUILTIN_KPI_DEFS, rep_row={"atu_pct": 1.0},
-                     store_row={"atu": 2.0}, actuals={"atu": 3.0})[1]["atu"] == kf.SOURCE_REP_DLAR
-   and kf.rep_kpi_values(kf.BUILTIN_KPI_DEFS, store_row={"atu": 2.0},
-                         actuals={"atu": 3.0})[1]["atu"] == kf.SOURCE_STORE_DLAR
-   and kf.rep_kpi_values(kf.BUILTIN_KPI_DEFS, actuals={"atu": 3.0})[1]["atu"] == kf.SOURCE_ACTUAL)
+                     store_row={"atu": 2.0})[0]["atu"] == 1.0
+   and kf.rep_kpi_values(kf.BUILTIN_KPI_DEFS, rep_row=None,
+                         store_row={"atu": 2.0, "protect_pct": 9.0, "byod_pct": 8.0})[0]["atu"] is None
+   and all(kf.rep_kpi_values(kf.BUILTIN_KPI_DEFS, rep_row=None,
+                             store_row={"atu": 2.0, "protect_pct": 9.0, "byod_pct": 8.0},
+                             actuals={"atu": 3.0})[0][k] is None
+           for k in ("atu", "protect", "byod", "boostapp")))
+ck("D11b …and a metric with NO rep-grain feed IS rolled down from the store, which is exactly what the "
+   "Boost engine has always done for familyplan / tmr3 / aal",
+   (lambda v: v["familyplan"] == 5.0 and v["tmr3"] == 6.0 and v["aal"] == 7.0)(
+       kf.rep_kpi_values(kf.BUILTIN_KPI_DEFS, rep_row=None,
+                         store_row={"family_plan_pct": 5.0, "tmr3": 6.0, "aal_conversion": 7.0})[0]))
+ck("D11c …and a store-grain metric with no DLAR column value falls through to a measured kpi_actual",
+   kf.rep_kpi_values(kf.BUILTIN_KPI_DEFS, store_row={}, actuals={"familyplan": 4.0}
+                     )[1]["familyplan"] == kf.SOURCE_ACTUAL
+   and kf.rep_kpi_values((("zulu", "Zulu", "kpi_zulu_target", 90),),
+                         actuals={"zulu": 91.0})[1]["zulu"] == kf.SOURCE_ACTUAL)
+ck("D11d the sources are stamped per metric, so a screen never has to guess where a number came from",
+   kf.rep_kpi_values(kf.BUILTIN_KPI_DEFS, rep_row=REP_ROW_STALE, store_row=STORE_ROW_FINAL)[1]
+   == {"atu": kf.SOURCE_REP_DLAR, "protect": kf.SOURCE_REP_DLAR, "boostapp": kf.SOURCE_REP_DLAR,
+       "familyplan": kf.SOURCE_STORE_DLAR, "byod": kf.SOURCE_REP_DLAR,
+       "tmr3": kf.SOURCE_STORE_DLAR, "aal": kf.SOURCE_STORE_DLAR})
+# The live-replay result itself, encoded as the shapes it found (the replay is read-only and cannot run
+# in CI; these are the two rep shapes it turned up, so the regression cannot come back unnoticed).
+ck("D11e LIVE SHAPE — a rep with a DLAR row but no store row measures exactly the 4 rep-grain metrics",
+   kf.score(kf.rep_kpi_values(kf.BUILTIN_KPI_DEFS, rep_row=REP_ROW_STALE, store_row=None)[0],
+            kf.BUILTIN_KPI_DEFS, TARGETS)[1] == 4)
+ck("D11f LIVE SHAPE — a rep with a store row but no DLAR row measures exactly the 3 store-grain ones",
+   kf.score(kf.rep_kpi_values(kf.BUILTIN_KPI_DEFS, rep_row=None, store_row=STORE_ROW_FINAL)[0],
+            kf.BUILTIN_KPI_DEFS, TARGETS)[1] == 3)
 ck("D12 the retired protect fallback chain is preserved exactly (device_insurance_pct, then protect_pct)",
    kf.rep_kpi_values(kf.BUILTIN_KPI_DEFS, rep_row={"device_insurance_pct": 9.0,
                                                    "protect_pct": 1.0})[0]["protect"] == 9.0

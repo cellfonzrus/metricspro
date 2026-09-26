@@ -179,17 +179,23 @@ def rep_kpi_values(defs, rep_row=None, store_row=None, actuals=None,
                    rep_columns=None, store_columns=None):
     """THE ONE rep-grain KPI resolver → ({metric_key: value|None}, {metric_key: source|None}).
 
-    ONE metric, ONE resolution order, for EVERY tenant — the pay engine, the KPI report and the
-    coaching card all dereference this rather than each knowing where a KPI lives:
+    THE GRAIN IS A PROPERTY OF THE METRIC, declared once — not a blanket fallback chain:
 
-      1. the rep's own `raw_dlar_rep` column (`REP_DLAR_COLUMNS`)               — rep grain;
-      2. the rep's store's `raw_dlar_store` column (`STORE_KPI_COLUMNS`)        — store grain,
-         ROLLED DOWN to every rep at that store. This is not a new rule: it is exactly what the
-         Boost pay engine has always done for familyplan / tmr3 / aal, which have no rep-grain feed;
-      3. a measured `commcalc.kpi_actual` value for that store and period (`actuals` = the already
-         org/period/store-scoped {metric_key: value} map) — the home of a metric a tenant defined
-         that no carrier feed fills (hand-entered, or the MA door-report email import);
-      4. nothing → `None`.
+      • a metric with a REP-grain feed (`REP_DLAR_COLUMNS`: atu / protect / boostapp / byod) is a REP
+        measurement. Its value is the rep's OWN `raw_dlar_rep` column, and if the rep has no row it is
+        **`None` — NOT the store's number**. Rolling a store figure down onto a rep nobody measured
+        would attribute the store's performance to that rep; it is a different, better-looking lie than
+        the 0.0 it replaces. (Caught by replaying this resolver against seven live months: a rep with no
+        advocate row read atu 39.53 / protect 91.36 / byod 44.19 off their STORE and their met-count
+        went 1 → 3. The old engine said 0 for those, meaning "no rep row"; the truth is `no_data`.)
+      • a metric with NO rep-grain feed (`STORE_KPI_COLUMNS` only: familyplan / tmr3 / aal) is a STORE
+        measurement and is ROLLED DOWN to every rep at that store. This is not a new rule — it is
+        exactly what the Boost pay engine has always done for those three.
+      • otherwise a measured `commcalc.kpi_actual` value for that store and period (`actuals` = the
+        already org/period/store-scoped {metric_key: value} map) — the home of a metric a tenant defined
+        that no carrier feed fills (hand-entered, or the MA door-report email import). A store-grain
+        metric whose DLAR column is empty falls through to it.
+      • nothing → `None`.
 
     `None` IS THE POINT. A metric with no basis is NOT a score of zero (owner defect 2026-09-26:
     `boost_app_pct` was written as a measured `0` from an empty denominator for 189 of 516
@@ -205,20 +211,22 @@ def rep_kpi_values(defs, rep_row=None, store_row=None, actuals=None,
     values, sources = {}, {}
     for (k, _label, _col, _dflt) in defs or []:
         v, src = None, None
-        if rep_row:
-            for col in rcols.get(k) or ():
+        if k in rcols:
+            # A REP-GRAIN METRIC IS THE REP'S OWN, OR IT IS NOT MEASURED. No store fallback.
+            for col in rcols[k]:
                 v = _num((rep_row or {}).get(col))
                 if v is not None:
                     src = SOURCE_REP_DLAR
                     break
-        if v is None and store_row and k in scols:
-            v = _num((store_row or {}).get(scols[k]))
-            if v is not None:
-                src = SOURCE_STORE_DLAR
-        if v is None and k in act:
-            v = _num(act.get(k))
-            if v is not None:
-                src = SOURCE_ACTUAL
+        else:
+            if k in scols:
+                v = _num((store_row or {}).get(scols[k]))
+                if v is not None:
+                    src = SOURCE_STORE_DLAR
+            if v is None and k in act:
+                v = _num(act.get(k))
+                if v is not None:
+                    src = SOURCE_ACTUAL
         values[k] = v
         sources[k] = src
     return values, sources
