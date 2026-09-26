@@ -222,10 +222,18 @@ def calc_rep_commissions(
         if not _t:
             _t = _dflt
         try:
-            if _t is not None:
-                KPI[_k] = float(_t)
+            _t = float(_t) if _t is not None else None
         except (TypeError, ValueError):
-            pass
+            _t = None
+        # A FALSY TARGET IS NO TARGET, not a target of zero that every value "meets". This is the
+        # platform's existing convention — the `or dflt` chain above has always treated a stored 0 as
+        # absent, and `GET /kpi-failing/{period}` filters its target map with `if v` for the same
+        # reason. It matters now that the def list is the TENANT'S registry: a registry row saved with
+        # no `target_default` resolves to 0.0 through `_kpi_defs`'s `safe_float`, and scoring against
+        # 0 would hand every rep a free MET on a metric nobody set a bar for. All seven built-in
+        # defaults are non-zero, so Boost is unchanged.
+        if _t:
+            KPI[_k] = _t
     # Measured values for metrics no carrier feed fills — `commcalc.kpi_actual`, already scoped to this
     # org + period by the caller: {store_key: {metric_key: value}}. EMPTY platform-wide as at 2026-09-26,
     # so this is inert until a tenant types or emails one in.

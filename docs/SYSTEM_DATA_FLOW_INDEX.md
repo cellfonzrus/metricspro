@@ -5384,7 +5384,12 @@ classification config row for "BYOD Swap" / "Ineligible Port-In" — both MONEY,
   resolver, precedence rep-grain → store-grain **rolled down to the rep** → `kpi_actual` → `None`.
   `score(values, defs, targets)` — the met-count with an HONEST denominator (`total_kpis` = metrics with
   both a target and a value). `resolve_defs(raw)` — a tenant's registry → the def tuples, falling back to
-  the built-in seven.
+  the built-in seven. **And `evaluate` now owns the rule "a FALSY target is no target"**: the comparison
+  is `actual >= target`, so a target of 0 is a free pass for every value rather than a bar. `GET
+  /kpi-failing` had filtered its own target map with `if v` and the `or dflt` chains treated a stored 0
+  as absent — one decision in two copies. It matters now that the def list is the TENANT'S registry,
+  because `_kpi_defs` puts a row saved with no `target_default` through `safe_float` → `0.0`. All seven
+  built-in defaults are positive, so every existing score is unchanged (`harness_kpi_vintage.py` §B9/B11).
 - **`commcalc/dlar_sweep.py`** — `_rate()` (an absent RATE cell is `None`, not 0.0; `_num()` unchanged
   for COUNTS, where absent and zero are the same fact), `derived_rate(n, d)` (no basis → `None`),
   `as_of_date()`, `vintage()`, `vintage_of_row()`, `slice_vintage()`, `status_sentence()`. The ADVOCATE

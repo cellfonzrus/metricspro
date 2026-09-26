@@ -120,8 +120,16 @@ def evaluate(values, defs, targets):
         tgt = _num(targets.get(k))
         if tgt is None:
             tgt = _num(dflt)
-        if tgt is None:
-            continue                           # a metric with no target cannot fail anyone
+        # A metric with no target cannot fail anyone — AND A FALSY TARGET IS NO TARGET (2026-09-26,
+        # §19.28). The comparison is `actual >= target`, so a target of 0 is met by every value
+        # including a fabricated one: it is a free pass, never a bar. This was already the convention
+        # everywhere else — the `or dflt` chains treat a stored 0 as absent and `GET /kpi-failing`
+        # filtered its own target map with `if v` — so the rule now lives HERE, once, where every
+        # caller reads it. It matters because the def list is now the TENANT'S registry, and
+        # `_kpi_defs` puts a row saved with no `target_default` through `safe_float` → 0.0. All seven
+        # built-in defaults are positive, so every existing score is unchanged.
+        if tgt is None or tgt <= 0:
+            continue
         actual = _num((values or {}).get(k))
         if actual is None:
             no_data.append({"kpi": k, "label": label, "target": round(tgt, 1)})

@@ -16686,6 +16686,10 @@ def get_kpi_failing(period: str, authorization: str = Header(default=""), org_id
     # Same resolution as /coaching: config column value wins, else the metric's carrier default.
     targets = {k: (safe_float(cfg.get(col)) or (safe_float(dv) if dv is not None else 0.0))
                for (k, _l, col, dv) in kpi_defs}
+    # The `if v` filter that used to live here is now `kpi_failing.evaluate`'s own rule ("a falsy
+    # target is no target", §19.28) — one home, so /coaching, the action plan and the PAY ENGINE get it
+    # too. Kept here as well only because a 0 in this map would otherwise be echoed to the page as a
+    # target of zero; the classification no longer depends on it.
     targets = {k: v for k, v in targets.items() if v}
     dlar_rows = get_dlar_store_kpis(cperiod, authorization=authorization, org_id=org_id) or []
     resolve_market, _mk = _store_market_resolver(client, org_id)

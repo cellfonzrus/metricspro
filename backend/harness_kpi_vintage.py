@@ -226,21 +226,30 @@ ck("B8 REPORTED HONESTLY: Boost App does not flip 4-vs-3 here either — the car
 
 # MONEY NEUTRALITY OF THE HONEST DENOMINATOR, over every shape a live row can take.
 neutral = True
-for tgt in (0, 1, 5, 35, 55, 65, 80, 100):
+for tgt in (-1, 0, 1, 5, 35, 55, 65, 80, 100):
     for val in (None, 0.0, 0.5, tgt - 0.01, float(tgt), tgt + 0.01, 100.0):
         defs = (("m", "M", "kpi_m_target", tgt),)
         m1, t1, e1, n1 = kf.score({"m": val}, defs, {"m": tgt})
-        if val is None:
-            # unmeasured: never met, never counted, never in the denominator
+        if tgt <= 0:
+            # no bar → not scored at all, measured or not: never met, never counted, never no_data
+            neutral &= (m1 == 0 and t1 == 0 and not e1 and not n1)
+        elif val is None:
+            # unmeasured: never met, never counted, never in the denominator — reported as no_data
             neutral &= (m1 == 0 and t1 == 0 and len(n1) == 1 and not e1)
         else:
             neutral &= (t1 == 1 and m1 == (1 if val >= tgt else 0))
-ck("B9 FUZZ — an unmeasured metric is never met and never in the denominator, at ANY target "
-   "(including 0, where a fabricated zero WOULD have 'met' it); a measured one scores exactly as before",
+ck("B9 FUZZ — an unmeasured metric is never met and never in the denominator; a metric with no real "
+   "bar (target <= 0) is not scored at all; a measured one against a real bar scores exactly as before",
    neutral)
 ck("B10 a metric with neither a stored target nor a default cannot fail anyone (it is skipped, not "
    "given a target of 0 that every value meets)",
    kf.score({"x": 0.0}, (("x", "X", "kpi_x_target", None),), {}) == (0, 0, [], []))
+# THE MIRROR HAZARD, now that the def list is the TENANT'S: `_kpi_defs` runs `target_default` through
+# `safe_float`, so a registry row saved with no target arrives as 0.0. Scoring against 0 would hand
+# every rep a free MET on a metric nobody set a bar for.
+ck("B11 a registry metric with a FALSY target is not scored at all — never a free MET at target 0",
+   kf.score({"x": 0.0}, (("x", "X", "kpi_x_target", 0.0),), {}) == (0, 0, [], [])
+   and kf.score({"x": 99.0}, (("x", "X", "kpi_x_target", 0.0),), {}) == (0, 0, [], []))
 
 
 print("\n=== §C  ONE INVOICE, TWO BUCKETS — and the exact reconciliation to the carrier ==============")
@@ -341,6 +350,30 @@ MONEY = ("premium_acts", "byod_acts", "upgrade_acts", "premium_comm", "byod_comm
 ck("D1 BYTE-IDENTICAL — the house registry through cfg pays exactly what the built-ins pay",
    all(base[k] == with_reg[k] for k in MONEY) and base["kpi_values"] == with_reg["kpi_values"],
    f"tier={base['tier']} payout={base['total_payout']} met={base['kpis_met']}")
+# THE LIVE HOUSE REGISTRY, verbatim from `carrier_kpi_metric` (measured read-only 2026-09-26): the same
+# seven keys IN THE SAME ORDER with the same config columns and the same target defaults — only the
+# LABELS differ from the built-ins ('Protection %' / 'App Attach %' / '3-Month Retention'). A label can
+# never move a payout, and this is the registry the house org is actually scored on from now on.
+LIVE_HOUSE_REGISTRY = [
+    ["atu", "ATU", "kpi_atu_target", 55.0],
+    ["protect", "Protection %", "kpi_protect_target", 80.0],
+    ["boostapp", "App Attach %", "kpi_boostapp_target", 65.0],
+    ["familyplan", "Family Plan", "kpi_familyplan_target", 45.0],
+    ["byod", "BYOD", "kpi_byod_target", 35.0],
+    ["tmr3", "3-Month Retention", "kpi_tmr3_target", 70.0],
+    ["aal", "AAL", "kpi_aal_target", 5.0],
+]
+live = run(dict(CFG, kpi_defs=LIVE_HOUSE_REGISTRY))
+ck("D1b BYTE-IDENTICAL against the LIVE house registry — it differs from the built-ins only in labels",
+   all(live[k] == base[k] for k in MONEY) and live["kpi_values"] == base["kpi_values"]
+   and live["total_kpis"] == base["total_kpis"],
+   f"tier={live['tier']} payout={live['total_payout']} met={live['kpis_met']}")
+ck("D1c …and that is not a coincidence of the fixture: keys, config columns, targets and ORDER match "
+   "the built-ins exactly; only the labels differ",
+   [r[0] for r in LIVE_HOUSE_REGISTRY] == [d[0] for d in kf.BUILTIN_KPI_DEFS]
+   and [r[2] for r in LIVE_HOUSE_REGISTRY] == [d[2] for d in kf.BUILTIN_KPI_DEFS]
+   and [r[3] for r in LIVE_HOUSE_REGISTRY] == [float(d[3]) for d in kf.BUILTIN_KPI_DEFS]
+   and [r[1] for r in LIVE_HOUSE_REGISTRY] != [d[1] for d in kf.BUILTIN_KPI_DEFS])
 ck("D2 no registry at all falls back to the built-ins — an unconfigured tenant is unchanged",
    run(dict(CFG, kpi_defs=None))["total_payout"] == base["total_payout"]
    and run(dict(CFG, kpi_defs=[]))["total_payout"] == base["total_payout"])
