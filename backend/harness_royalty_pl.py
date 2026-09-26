@@ -18,6 +18,13 @@ in-memory client that genuinely filters) — CI: the finance-royalty-proof job (
   §F statement_filter.scope_predicate('profit_center:…') — members only; unknown center / failure = NOTHING (fail closed).
   §G the router over the fake client: parse writes nothing; import stores the REPORT's figures + flags; a re-import
      replaces; manual entry; recon against raw_sales_product; the dashboard summary; every write org-scoped.
+  §H MANY MONTHS IN ONE GO (index §37.10) — the REAL batch endpoints: the preview writes nothing; N files → N reports,
+     each under the month its OWN header prints; out-of-window (older / future) refused, the window's first month
+     accepted; a duplicate center × month in one batch refused (both), cleared by removing one; an on-file month flagged
+     "will replace" and replaced (one report after, never two); an unreadable / undated file refused and never blocks
+     the others; a per-file insert failure isolated; BYTE IDENTITY with N single imports; the lookback read from the
+     org's royalty_config row (house default 24; an out-of-range value reads 24); the config save writes the lookback
+     only when it changes and names mig 1027 when its column is absent; ORG SCOPE.
 
 Run: cd backend && python3 harness_royalty_pl.py        (no DB, no network)
 """
@@ -428,6 +435,217 @@ except Exception as e:
     check("before the migration an import is refused naming it", "1022" in str(getattr(e, "detail", e)))
 check("the router is gated by the royalty module", any("require_module_royalty" in getattr(d.dependency, "__name__", "")
                                                        for d in RR.router.dependencies))
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+section("H. MANY MONTHS IN ONE GO — the batch is N single imports (index §37.10)")
+import io as _io  # noqa: E402
+
+TODAY = "September 2026"
+RR._this_period = lambda: TODAY                      # pin 'today' — the window is counted back from this month
+
+
+def up(name, text):
+    return SimpleNamespace(filename=name, file=_io.BytesIO(text.encode("utf-8")))
+
+
+def rep_text(period, center="9001"):
+    return FIX.replace("March 2031", period).replace("Center 9001", "Center " + center)
+
+
+def batch_db(extra=None):
+    t = {**base_tables(FR), **{k: v for k, v in fr_royalty.items() if k not in ("royalty_report", "royalty_report_line")}}
+    t.update(extra or {})
+    return Client(t)
+
+
+def files_all():
+    return [up("jun.txt", rep_text("June 2026")), up("jul.txt", rep_text("July 2026")),
+            up("aug-9002.txt", rep_text("August 2026", "9002")), up("old.txt", rep_text("August 2024")),
+            up("future.txt", rep_text("October 2026")), up("may-a.txt", rep_text("May 2026")),
+            up("may-b.txt", rep_text("May 2026")), up("nodate.txt", FIX.replace("(Royalty Period: March 2031)", "")),
+            up("junk.txt", "hello world"), up("edge.txt", rep_text("September 2024"))]
+
+
+bdb = batch_db({"royalty_report": [{"id": "rep-other-org", "org_id": OTHER, "center_code": "9001", "period": "July 2026",
+                                    "status": "ok", "total_due": 1.0}]})
+RR.sb = lambda: bdb
+RR.royalty_import(org_id=FR, file=None, text=rep_text("July 2026").replace("Marketing Due (1%) $400.01", "Marketing Due (1%) $400.00"),
+                  center="", period="", store_ref="")
+n0 = len(bdb.writes)
+pv = RR.royalty_batch_preview(org_id=FR, files=files_all())
+byf = {r["file_name"]: r for r in pv["files"]}
+check("the preview writes NOTHING and returns one row per file, in upload order",
+      len(bdb.writes) == n0 and [r["file_name"] for r in pv["files"]] == [f.filename for f in files_all()])
+check("each file's month and center come from its OWN header, canonical (June 2026 / July 2026 / 9002 August 2026)",
+      (byf["jun.txt"]["period"], byf["jun.txt"]["center"]) == ("June 2026", "9001")
+      and byf["jul.txt"]["period"] == "July 2026" and (byf["aug-9002.txt"]["center"], byf["aug-9002.txt"]["period"]) == ("9002", "August 2026"))
+check("the window is this month and the 24 before it (house default): September 2024 – September 2026, 25 months",
+      pv["coverage"]["lookback_months"] == 24 and pv["coverage"]["window"][0] == "September 2024"
+      and pv["coverage"]["window"][-1] == TODAY and len(pv["coverage"]["window"]) == 25)
+check("the window's FIRST month (24 back) is accepted", byf["edge.txt"]["ready"], byf["edge.txt"])
+check("a month OLDER than the window is refused, naming the window and that the lookback is a setting",
+      not byf["old.txt"]["ready"] and "older than the 24-month window (September 2024 – September 2026)" in byf["old.txt"]["refusals"][0])
+check("a FUTURE month is refused", not byf["future.txt"]["ready"] and "after this month" in byf["future.txt"]["refusals"][0])
+check("two files for the same center × month are BOTH refused, each naming the other",
+      not byf["may-a.txt"]["ready"] and not byf["may-b.txt"]["ready"]
+      and "may-b.txt" in " ".join(byf["may-a.txt"]["refusals"]) and "may-a.txt" in " ".join(byf["may-b.txt"]["refusals"]))
+check("a report with no period in its header is refused (in words, pointing at the single import)",
+      not byf["nodate.txt"]["ready"] and "period could not be read" in byf["nodate.txt"]["refusals"][0])
+check("an unreadable file is refused with the single import's own message — never skipped",
+      not byf["junk.txt"]["ready"] and "no report lines were found" in byf["junk.txt"]["refusals"][0])
+check("a month already on file is flagged WILL REPLACE with the report on file (its total, its status)",
+      byf["jul.txt"]["replace"] and byf["jul.txt"]["existing"]["status"] == "flagged" and not byf["jun.txt"]["replace"])
+check("ORG SCOPE: another org's report for the same center × month is not 'on file' for this org",
+      byf["jul.txt"]["existing"]["id"] != "rep-other-org"
+      and not any(m["on_file"] and any(x["id"] == "rep-other-org" for x in m["on_file"]) for m in pv["coverage"]["months"]))
+check("the validation flags ride along and never block (a report is stored as printed WITH its flags)",
+      byf["jun.txt"]["status"] == "ok" and byf["jun.txt"]["total_due"] == 3400.04 and pv["ready"] == 4)
+cov_jul = next(m for m in pv["coverage"]["months"] if m["period"] == "July 2026")
+check("the coverage strip: July 2026 on file for 9001; June 2026 missing", [x["center_code"] for x in cov_jul["on_file"]] == ["9001"]
+      and next(m for m in pv["coverage"]["months"] if m["period"] == "June 2026")["on_file"] == [])
+
+res = RR.royalty_batch_import(org_id=FR, files=files_all())
+rby = {r["file_name"]: r for r in res["results"]}
+mine = [r for r in bdb.tables["royalty_report"] if r["org_id"] == FR]
+check("import: every file has a result; the 4 ready files landed, the 6 refused did not (and are named)",
+      len(res["results"]) == 10 and res["imported"] == 4 and res["failed"] == 6
+      and all(rby[n]["ok"] for n in ("jun.txt", "jul.txt", "aug-9002.txt", "edge.txt"))
+      and all(n in res["sentence"] for n in ("old.txt", "future.txt", "may-a.txt", "may-b.txt", "nodate.txt", "junk.txt")), res["sentence"])
+check("N files → N reports, each under its own header month (July replaced: one report for 9001 July, never two)",
+      sorted((r["center_code"], r["period"]) for r in mine) ==
+      sorted([("9001", "June 2026"), ("9001", "July 2026"), ("9002", "August 2026"), ("9001", "September 2024")])
+      and rby["jul.txt"]["replaced"] and not rby["jun.txt"]["replaced"])
+jul = next(r for r in mine if r["period"] == "July 2026")
+check("the replacement is the NEW file's figures (the old flagged July is gone, the new one is ok)",
+      jul["status"] == "ok" and jul["file_name"] == "jul.txt"
+      and len([l for l in bdb.tables["royalty_report_line"] if l["report_id"] == jul["id"]]) ==
+      len([l for l in bdb.tables["royalty_report_line"] if l.get("report_id") == jul["id"] and l["org_id"] == FR]))
+check("ORG SCOPE: another org's report for the same center × month is untouched by the import",
+      any(r["id"] == "rep-other-org" for r in bdb.tables["royalty_report"]))
+check("every write the batch made carried org_id", all(("eq", "org_id", FR) in w[2] or all(r.get("org_id") == FR for r in w[3])
+                                                     for w in bdb.writes[n0:]))
+check("the store is found through the profit center for 9001, and a center with no profit center says so",
+      rby["jun.txt"]["store_ref"] == A and rby["aug-9002.txt"]["store_ref"] is None and rby["aug-9002.txt"]["store_note"])
+check("the import returns the coverage AFTER landing (June now on file)",
+      next(m for m in res["coverage"]["months"] if m["period"] == "June 2026")["on_file"][0]["center_code"] == "9001")
+res2 = RR.royalty_batch_import(org_id=FR, files=[up("may-a.txt", rep_text("May 2026"))])
+check("a duplicate is cleared by removing one file: the other then lands", res2["imported"] == 1
+      and any(r["period"] == "May 2026" for r in bdb.tables["royalty_report"] if r["org_id"] == FR))
+res3 = RR.royalty_batch_import(org_id=FR, files=files_all())
+check("the same batch twice = one report per center × month (a replace, never a second copy)",
+      len([r for r in bdb.tables["royalty_report"] if r["org_id"] == FR]) == 5 and res3["imported"] == 4)
+
+# BYTE IDENTITY: the batch's rows == N single imports' rows
+single = batch_db()
+RR.sb = lambda: single
+for name, per, ctr in (("jun.txt", "June 2026", "9001"), ("jul.txt", "July 2026", "9001"),
+                       ("aug-9002.txt", "August 2026", "9002"), ("edge.txt", "September 2024", "9001")):
+    RR.royalty_import(org_id=FR, file=up(name, rep_text(per, ctr)), text="", center="", period="", store_ref="")
+batch = batch_db()
+RR.sb = lambda: batch
+RR.royalty_batch_import(org_id=FR, files=[up("aug-9002.txt", rep_text("August 2026", "9002")), up("edge.txt", rep_text("September 2024")),
+                                          up("jul.txt", rep_text("July 2026")), up("jun.txt", rep_text("June 2026"))])
+
+
+def norm_reports(db):
+    heads = sorted(({k: v for k, v in r.items() if k != "id"} for r in db.tables["royalty_report"]),
+                   key=lambda r: (r["center_code"], r["period"]))
+    by_id = {r["id"]: (r["center_code"], r["period"]) for r in db.tables["royalty_report"]}
+    lines = sorted(((by_id[l["report_id"]],) + tuple(sorted((k, str(v)) for k, v in l.items() if k not in ("id", "report_id"))))
+                   for l in db.tables["royalty_report_line"])
+    return json.loads(json.dumps(heads, sort_keys=True, default=str)), lines
+
+
+check("BYTE IDENTITY: the batch (in reverse upload order) lands exactly the rows 4 single imports land — every header "
+      "column and every line", norm_reports(single) == norm_reports(batch) and len(batch.tables["royalty_report"]) == 4)
+RR.royalty_batch_import(org_id=FR, files=[up("jun.txt", rep_text("June 2026").replace("Copies $500.25", "Copies $500.26"))])
+check("…negative control: one cent on one file perturbs the identity", norm_reports(single) != norm_reports(batch))
+
+
+class FailOn9002(Client):
+    def schema(self, _n):
+        sch = _Schema(self)
+        orig = sch.table
+
+        def table(n):
+            q = orig(n)
+            ex = q.execute
+
+            def execute():
+                if n == "royalty_report" and q.op == "insert" and any(r.get("center_code") == "9002" for r in q.rows_in):
+                    raise RuntimeError("insert failed")
+                return ex()
+            q.execute = execute
+            return q
+        sch.table = table
+        return sch
+
+
+fdb = FailOn9002({**base_tables(FR), **{k: v for k, v in fr_royalty.items() if k not in ("royalty_report", "royalty_report_line")}})
+RR.sb = lambda: fdb
+rf = RR.royalty_batch_import(org_id=FR, files=[up("aug-9002.txt", rep_text("August 2026", "9002")), up("jun.txt", rep_text("June 2026")),
+                                               up("jul.txt", rep_text("July 2026"))])
+check("a per-file SAVE failure (the FIRST file) is recorded for that file and the others still land",
+      [r["ok"] for r in rf["results"]] == [False, True, True] and "aug-9002.txt" in rf["sentence"]
+      and "stay imported" in rf["sentence"] and len(fdb.tables["royalty_report"]) == 2, rf)
+
+# THE LOOKBACK IS CONFIG
+cdb = batch_db({"royalty_config": [{"org_id": FR, "lookback_months": 3}]})
+RR.sb = lambda: cdb
+pc = RR.royalty_batch_preview(org_id=FR, files=[up("jun.txt", rep_text("June 2026")), up("may-a.txt", rep_text("May 2026"))])
+check("the lookback is read from the org's royalty_config row (3 → June 2026 – September 2026: June in, May refused)",
+      pc["coverage"]["lookback_months"] == 3 and pc["coverage"]["window"] == ["June 2026", "July 2026", "August 2026", "September 2026"]
+      and pc["files"][0]["ready"] and not pc["files"][1]["ready"] and "3-month window" in pc["files"][1]["refusals"][0])
+odb = batch_db({"royalty_config": [{"org_id": OTHER, "lookback_months": 3}, {"org_id": FR, "lookback_months": 0}]})
+RR.sb = lambda: odb
+check("another org's lookback is never read, and an out-of-range value reads the house default 24",
+      RR.royalty_coverage(org_id=FR)["lookback_months"] == 24)
+sdb = batch_db()
+RR.sb = lambda: sdb
+w0 = len(sdb.writes)
+RR.royalty_config_save(RR.ConfigIn(fee_basis="adjusted_str", lookback_months=24), org_id=FR)
+check("the settings form sending the lookback UNCHANGED writes no lookback (saves the other knobs only)",
+      not any("lookback_months" in r for w in sdb.writes[w0:] for r in w[3]))
+RR.royalty_config_save(RR.ConfigIn(lookback_months=12), org_id=FR)
+check("a changed lookback is saved on the org's row and the window follows it",
+      next(r for r in sdb.tables["royalty_config"] if r["org_id"] == FR)["lookback_months"] == 12
+      and len(RR.royalty_coverage(org_id=FR)["window"]) == 13)
+try:
+    RR.royalty_config_save(RR.ConfigIn(lookback_months=500), org_id=FR)
+    check("a lookback outside 1–120 is refused", False)
+except Exception as e:
+    check("a lookback outside 1–120 is refused", getattr(e, "status_code", 0) == 400 and "1–120" in str(e.detail))
+
+
+class NoLookbackColumn(Client):
+    def schema(self, _n):
+        sch = _Schema(self)
+        orig = sch.table
+
+        def table(n):
+            q = orig(n)
+            ex = q.execute
+
+            def execute():
+                if n == "royalty_config" and q.op == "upsert" and any("lookback_months" in r for r in q.rows_in):
+                    raise RuntimeError('42703 column "lookback_months" does not exist')
+                return ex()
+            q.execute = execute
+            return q
+        sch.table = table
+        return sch
+
+
+ndb = NoLookbackColumn({})
+RR.sb = lambda: ndb
+try:
+    RR.royalty_config_save(RR.ConfigIn(fee_basis="str", lookback_months=6), org_id=FR)
+    check("before mig 1027 a changed lookback is refused naming it — and the other settings were saved", False)
+except Exception as e:
+    check("before mig 1027 a changed lookback is refused naming it — and the other settings were saved",
+          "1027" in str(getattr(e, "detail", e)) and ndb.tables["royalty_config"][0]["fee_basis"] == "str")
+RR.royalty_config_save(RR.ConfigIn(fee_basis="adjusted_str", lookback_months=24), org_id=FR)
+check("…while the settings form (lookback unchanged at 24) keeps saving before mig 1027", ndb.tables["royalty_config"][0]["fee_basis"] == "adjusted_str")
 
 print("\n══ royalty P&L / scopes / router: %d passed, %d failed ══" % (P, F))
 sys.exit(1 if F else 0)

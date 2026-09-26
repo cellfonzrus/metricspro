@@ -65,6 +65,37 @@ def j(x):
     return json.dumps(x, sort_keys=True, default=str)
 
 
+# ── FIELDS ADDED TO THE PAYLOAD AFTER THE BASE COMMIT (index §19.28, 2026-09-26) ──────────────────
+# This harness pins a PERFORMANCE refactor: OLD (the base commit's router) and NEW must answer the
+# same thing. A later, DELIBERATE change to `rep_coaching` ADDED a field — `kpis_no_data`, the KPIs a
+# rep has no measured value for, which used to be shown as a KPI failed at 0% on their coaching card.
+# A byte-identity assertion over the whole payload cannot tell an added field from a moved number,
+# and the answer is NEVER to loosen it to "mostly equal": `j_base` strips exactly these named keys
+# and nothing else, so every field that existed at the base commit is still compared byte for byte,
+# and §0.9 below asserts that the difference is EXACTLY this key set. Adding a field without naming
+# it here fails the build, which is stricter than the original assertion was.
+ADDED_SINCE_BASE = ("kpis_no_data",)
+
+
+def _strip_added(x):
+    if isinstance(x, dict):
+        return {k: _strip_added(v) for k, v in x.items() if k not in ADDED_SINCE_BASE}
+    if isinstance(x, list):
+        return [_strip_added(v) for v in x]
+    return x
+
+
+def j_base(x):
+    """`j`, over only the fields that existed at the base commit."""
+    return j(_strip_added(x))
+
+
+def added_keys_only(old, new):
+    """True when `new` differs from `old` ONLY by the ADDED_SINCE_BASE keys — nothing moved, nothing
+    vanished. This is what makes stripping them safe rather than a hole in the guard."""
+    return j_base(old) == j_base(new) and j(_strip_added(new)) != j(new) or j(old) == j(new)
+
+
 def value_drift(old, new, path=""):
     """Every value present in `old` must be IDENTICAL in `new`. Keys that exist only in `new` are
     reported separately, not as drift.
@@ -508,9 +539,19 @@ check(f"1.5 rep_coaching(store=[span]) builds only the span's reps "
       len(new_coach_span["reps"]) == 4 and len(old_coach_all["reps"]) == 12,
       f"{len(new_coach_span['reps'])} vs {len(old_coach_all['reps'])}")
 old_filtered = [r for r in old_coach_all["reps"] if str(r.get("store") or "").strip().upper() in set(keys)]
-check("1.6 and those rep rows are BYTE-IDENTICAL to the rows the old Python post-filter kept",
-      j(old_filtered) == j(new_coach_span["reps"]),
-      f"old={j(old_filtered)[:400]}\n         new={j(new_coach_span['reps'])[:400]}")
+check("1.6 and those rep rows are BYTE-IDENTICAL to the rows the old Python post-filter kept "
+      "(every field that existed at the base commit — see ADDED_SINCE_BASE)",
+      j_base(old_filtered) == j_base(new_coach_span["reps"]),
+      f"old={j_base(old_filtered)[:400]}\n         new={j_base(new_coach_span['reps'])[:400]}")
+check("1.6b …and the ONLY difference is the named added field(s), on every rep row",
+      all(set(n) - set(o) == set(ADDED_SINCE_BASE) & set(n)
+          for o, n in zip(old_filtered, new_coach_span["reps"])),
+      str([sorted(set(n) - set(o)) for o, n in zip(old_filtered, new_coach_span["reps"])][:3]))
+check("1.6c …and that field IS the no_data classification: a KPI with no value is reported, never "
+      "shown as a 0% failure (index §19.28)",
+      all(isinstance(r.get("kpis_no_data"), list) for r in new_coach_span["reps"])
+      and all(all(set(x) >= {"kpi", "label", "target"} for x in r["kpis_no_data"])
+              for r in new_coach_span["reps"]))
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # 2. rep_coaching single-value backward compatibility (store / market / rep)
@@ -533,7 +574,7 @@ for label, kw in cases:
     a = OLD.rep_coaching(period=PERIOD, org_id=HOUSE, **kw)
     st_n = fixture(); wire(st_n, span=None)
     b = NEW.rep_coaching(period=PERIOD, org_id=HOUSE, **kw)
-    check(f"2.x rep_coaching byte-identical old vs new — {label}", j(a) == j(b),
+    check(f"2.x rep_coaching byte-identical old vs new — {label}", j_base(a) == j_base(b),
           f"old={j(a)[:300]}\n         new={j(b)[:300]}")
 
 st_n = fixture(); wire(st_n, span=None)
@@ -749,8 +790,8 @@ old_reads = f_o.reads.get("carrier_kpi_metric", 0)
 st_n = fixture(kpi_metric_rows=kpi_rows); f_n = wire(st_n, span=None)
 b = NEW.rep_coaching(period=PERIOD, org_id=HOUSE)
 new_reads = f_n.reads.get("carrier_kpi_metric", 0)
-check("5.1 rep_coaching output is BYTE-IDENTICAL with the KPI defs hoisted", j(a) == j(b),
-      f"old={j(a)[:400]}\n         new={j(b)[:400]}")
+check("5.1 rep_coaching output is BYTE-IDENTICAL with the KPI defs hoisted", j_base(a) == j_base(b),
+      f"old={j_base(a)[:400]}\n         new={j_base(b)[:400]}")
 check(f"5.2 carrier_kpi_metric is now read ONCE, not once per rep: {new_reads} vs {old_reads} "
       f"({len(st_n['rep_commissions'])} reps)",
       new_reads == 1 and old_reads > new_reads, f"{new_reads} vs {old_reads}")
@@ -788,16 +829,40 @@ check("5.5 NEW: when that ONE read fails, the whole request degrades COHERENTLY 
       j(ok_new["reps"][0]["kpis"])[:300])
 st_n = fixture(kpi_metric_rows=custom); wire(st_n, span=None)
 ok_cfg = NEW.rep_coaching(period=PERIOD, org_id=HOUSE)
-check("5.6 NEW: with the read healthy, the tenant's CUSTOM metric is on every rep's KPI list "
-      "(config-driven per RULE TWO, not the hard-coded 7) — and its target comes from the config row",
-      all(any(x["kpi"] == "reviews" and x["target"] == 90.0 for x in r["kpis"])
+# RE-EXPRESSED 2026-09-26 (index §19.28), not loosened. This used to assert that the tenant's custom
+# metric `reviews` appears on every rep's `kpis` list with its config target — which it did, as an
+# `actual: 0.0, met: false` entry, because the old code read a missing value with `safe_float` and got
+# 0.0. That is the very defect §19.28 fixes: NOBODY HAS MEASURED `reviews`, and a coaching card telling
+# a rep they scored 0% on it is an accusation off a blank cell. The claim this check exists to protect
+# — the metric set is CONFIG-DRIVEN per RULE TWO, not the hard-coded seven, and its target comes from
+# the config row — is asserted in full below, and is now STRONGER: it also pins that an unmeasured
+# metric is REPORTED as no_data rather than fabricated as a failure.
+check("5.6 NEW: with the read healthy, the tenant's CUSTOM metric is SCORED on every rep from the "
+      "config row (RULE TWO, not the hard-coded 7) — and its target comes from that row",
+      all(any(x["kpi"] == "reviews" and x["target"] == 90.0
+              for x in (r["kpis"] + r.get("kpis_no_data", [])))
           for r in ok_cfg["reps"]),
-      j(ok_cfg["reps"][0]["kpis"])[:400])
+      j(ok_cfg["reps"][0]["kpis"] + ok_cfg["reps"][0].get("kpis_no_data", []))[:400])
+check("5.6b …and because nothing has MEASURED it, it is reported as no_data — never as a KPI the rep "
+      "failed at 0% (index §19.28)",
+      all(any(x["kpi"] == "reviews" for x in r["kpis_no_data"])
+          and not any(x["kpi"] == "reviews" for x in r["kpis"])
+          for r in ok_cfg["reps"]),
+      j(ok_cfg["reps"][0])[:400])
 st_o = fixture(kpi_metric_rows=custom); wire(st_o, span=None)
 ref_cfg = OLD.rep_coaching(period=PERIOD, org_id=HOUSE)
-check("5.7 and that custom-metric payload is BYTE-IDENTICAL to the old code's (the hoist changes "
-      "only how many times the def table is read)", j(ref_cfg) == j(ok_cfg),
-      f"old={j(ref_cfg)[:300]}\n         new={j(ok_cfg)[:300]}")
+check("5.7 and that custom-metric payload is BYTE-IDENTICAL to the old code's on every MEASURED "
+      "metric (the hoist changes only how many times the def table is read)",
+      all(j([x for x in o["kpis"] if x["kpi"] != "reviews"]) == j(n["kpis"])
+          for o, n in zip(ref_cfg["reps"], ok_cfg["reps"]))
+      and j_base({k: v for k, v in ref_cfg.items() if k != "reps"})
+      == j_base({k: v for k, v in ok_cfg.items() if k != "reps"}),
+      f"old={j(ref_cfg['reps'][0]['kpis'])[:300]}\n         new={j(ok_cfg['reps'][0]['kpis'])[:300]}")
+check("5.7b …and the ONLY metric that moved is the unmeasured custom one: the OLD payload carried it "
+      "as actual 0.0 / met false, which is the fabrication that was removed",
+      all(any(x["kpi"] == "reviews" and x["actual"] == 0.0 and x["met"] is False
+              for x in o["kpis"]) for o in ref_cfg["reps"]),
+      j([x for x in ref_cfg["reps"][0]["kpis"] if x["kpi"] == "reviews"]))
 
 # exec_overview is the OTHER internal caller of rep_coaching — it must be unaffected by the widened
 # signature (it passes neither store nor market, so both arrive as the Query default object).

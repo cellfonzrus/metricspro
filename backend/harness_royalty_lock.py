@@ -26,6 +26,14 @@ WHAT FAILS THE BUILD
   (i) CI + INDEX: both stdlib proofs and this lock run in carrier-vocab-guard.yml, the app-dependent proof in its own
       job; index §37 exists and names the tables, endpoints and harnesses.
   (j) NEGATIVE CONTROLS: every scanner is run over a synthetic violation and must go RED.
+  (k) MANY MONTHS IN ONE GO (index §37.10) — the batch is N single imports: ONE parser (R.parse is called once in
+      the router, inside `_parse_input`), ONE lander (`royalty_report` is inserted only inside `_write_report`), ONE
+      center × month resolution (`_report_key`, read by the writer and the batch reader). The batch import calls
+      `_batch_plan` + `_write_report` and never parses, validates, canonicalises or writes a table itself; the preview
+      writes nothing; the batch reader goes through `_parse_input` + `_report_key`. The lookback is CONFIG (read from
+      `cfg["lookback_months"]`; no month-count literal in the router's batch block or the page); the window is
+      enumerated by `_period.month_range` (royalty.py holds no month table, no clock). Every router function is
+      defined once; the page calls the three batch endpoints; CI + index §37.10. Negative controls for each.
 
   python3 backend/harness_royalty_lock.py
 """
@@ -232,6 +240,107 @@ check("(j) a vertical literal → RED", bool(vertical_literals({"x.py": "if v ==
 check("(j) an unscoped chain → RED", bool(unscoped_chains('client.schema("commcalc").table("royalty_report").select("*").execute()')))
 check("(j) an unscoped q-delete → RED", bool(unscoped_q('q.delete().eq("store_ref", s).execute()')))
 check("(j) a rate literal → RED", bool(RATE_LIT.search("fee = str * 0.085")))
+
+# ── (k) many months in one go — the batch is N single imports ────────────────────────────────────────
+def fn_body(src, name):
+    """The source of top-level `def name(` up to the next top-level statement (decorator / def / class / comment rule)."""
+    m = re.search(r"^def " + re.escape(name) + r"\(", src, re.M)
+    if not m:
+        return ""
+    nxt = re.search(r"^(?:@|def |class |# ──)", src[m.end():], re.M)
+    return src[m.start(): m.end() + (nxt.start() if nxt else len(src))]
+
+
+def batch_import_violations(src):
+    b = fn_body(src, "royalty_batch_import")
+    bad = [t for t in ("R.parse(", "R.validate(", "_parse_input(", "canonical_period(", ".table(", ".insert(", ".delete(", ".upsert(")
+           if t in b]
+    if "_batch_plan(" not in b or "_write_report(" not in b:
+        bad.append("does not call _batch_plan + _write_report")
+    return bad
+
+
+def preview_writes(src):
+    b = fn_body(src, "royalty_batch_preview") + fn_body(src, "royalty_coverage") + fn_body(src, "_batch_plan") + fn_body(src, "_batch_read") \
+        + fn_body(src, "_on_file")
+    return [t for t in ("_write_report(", ".insert(", ".upsert(", ".delete(", ".update(") if t in b]
+
+
+def parser_copies(src):
+    """R.parse( must be called exactly once, inside _parse_input; royalty_report inserted only inside _write_report."""
+    bad = []
+    calls = len(re.findall(r"\bR\.parse\(", src))
+    if calls != 1 or "R.parse(" not in fn_body(src, "_parse_input"):
+        bad.append("R.parse( called %d time(s) / outside _parse_input" % calls)
+    ins = [m.start() for m in re.finditer(r'table\("royalty_report"\)\.insert\(', src)]
+    wr = fn_body(src, "_write_report")
+    if len(ins) != 1 or 'table("royalty_report").insert(' not in wr:
+        bad.append("royalty_report inserted %d time(s) / outside _write_report" % len(ins))
+    return bad
+
+
+def code_only(src):
+    """Python source minus docstrings, strings and comments (a month count in prose is not a constant)."""
+    src = re.sub(r'"""(?:.|\n)*?"""', "", src)
+    return re.sub(r'f?"[^"\n]*"|#.*', "", src)
+
+
+def lookback_literals(text):
+    return re.findall(r"(?<![\w.])(?:24|25)(?![\w.%])", text)
+
+
+rr = BE[ROUTER]
+check("(k) the batch import calls _batch_plan + _write_report and never parses, validates, canonicalises or writes a "
+      "table itself", not batch_import_violations(rr), batch_import_violations(rr))
+check("(k) the preview (and the coverage read, the plan, the reader) writes NOTHING", not preview_writes(rr), preview_writes(rr))
+check("(k) ONE parser and ONE lander: R.parse( once (inside _parse_input); royalty_report inserted once (inside _write_report)",
+      not parser_copies(rr), parser_copies(rr))
+br = fn_body(rr, "_batch_read")
+check("(k) the batch reader reads each file through the single import's _parse_input and the writer's _report_key",
+      "_parse_input(client, org_id, f," in br and "_report_key(parsed" in br and "R.parse(" not in br and "R.validate(" not in br)
+wr = fn_body(rr, "_write_report")
+check("(k) ONE center × month resolution: the writer resolves through _report_key and canonicalises nothing itself",
+      "_report_key(parsed, center, period)" in wr and "canonical_period(" not in wr and "canonical_period(" in fn_body(rr, "_report_key"))
+bp = fn_body(rr, "_batch_plan")
+check("(k) the plan is the pure R.batch_plan over the window and the org's reports on file",
+      "R.batch_plan(items, window, idx)" in bp and "_on_file(client, org_id, window)" in bp)
+check("(k) the on-file read is the module's one org-scoped reader (R.load_reports), never a table call of its own",
+      "R.load_reports(client, org_id, keys" in fn_body(rr, "_on_file") and ".table(" not in fn_body(rr, "_on_file"))
+wn = fn_body(rr, "_window")
+batch_block = rr.split("# ── many months in one go", 1)[1].split("# ── reading reports", 1)[0] if "# ── many months in one go" in rr else ""
+check("(k) THE LOOKBACK IS CONFIG: the window reads cfg['lookback_months'] and the batch block spells no month count",
+      'cfg["lookback_months"]' in wn and "R.lookback_window(_this_period(), months)" in wn and batch_block
+      and not lookback_literals(code_only(batch_block)), lookback_literals(code_only(batch_block)))
+rs = BE[ACC + "royalty.py"]
+check("(k) the lookback's one home is royalty.CONFIG_DEFAULT (resolved in resolve_config); its bounds are LOOKBACK_BOUNDS",
+      '"lookback_months": 24,' in rs and 'cfg["lookback_months"] = lb if LOOKBACK_BOUNDS[0] <= lb <= LOOKBACK_BOUNDS[1]' in rs)
+pure = "".join(fn_body(rs, n) for n in ("lookback_window", "batch_plan", "coverage", "batch_outcome", "_ordinal"))
+check("(k) the pure plan enumerates the window through _period.month_range and holds no month table, no clock",
+      "month_range(" in fn_body(rs, "lookback_window") and not re.search(r"January|December|strftime|datetime|date\.today|time\.", pure))
+dup_defs = [n for n in set(re.findall(r"^def (\w+)\(", rr, re.M)) if len(re.findall(r"^def " + n + r"\(", rr, re.M)) > 1]
+check("(k) every router function is defined once", not dup_defs, dup_defs)
+pg = rd(*PAGES[0].split("/"))
+check("(k) the page calls the three batch endpoints", all(e in pg for e in ("/api/v1/account/royalty/batch/preview",
+                                                                             "/api/v1/account/royalty/batch/import",
+                                                                             "/api/v1/account/royalty/coverage")))
+pg_batch = pg.split("function BatchTab", 1)[1] if "function BatchTab" in pg else ""
+check("(k) the page's batch tab works out no month and spells no lookback (both come from the API)",
+      pg_batch and not re.search(r"January|December|toLocaleDateString|new Date\(", pg_batch)
+      and not lookback_literals(re.sub(r"'[^'\n]*'|//.*", "", pg_batch)), lookback_literals(pg_batch))
+check("(k) CI runs the batch proof (harness_royalty_pl.py §H) with pipefail; index §37.10 names the endpoints + mig 1027",
+      "python3 harness_royalty_pl.py" in wf and "/royalty/batch/preview" in sec and "/royalty/batch/import" in sec
+      and "/royalty/coverage" in sec and "1027_royalty_lookback_months.sql" in sec
+      and bool(re.search(r"shell: bash\s*\n\s*run: python3 harness_royalty_pl\.py", wf)))
+# negative controls
+check("(k) NEGATIVE: a batch import that inserts itself → RED",
+      bool(batch_import_violations("def royalty_batch_import(x):\n    _batch_plan(); _write_report()\n    c.table('royalty_report').insert(r)\n")))
+check("(k) NEGATIVE: a batch import that parses itself → RED",
+      bool(batch_import_violations("def royalty_batch_import(x):\n    _batch_plan(); R.parse(t, v); _write_report()\n")))
+check("(k) NEGATIVE: a preview that writes → RED", bool(preview_writes("def royalty_batch_preview(x):\n    _write_report(c)\n")))
+check("(k) NEGATIVE: a second parser call → RED", bool(parser_copies(rr + "\ndef _other(t):\n    return R.parse(t, v, c)\n")))
+check("(k) NEGATIVE: a second royalty_report insert → RED",
+      bool(parser_copies(rr + '\ndef _other(c):\n    c.table("royalty_report").insert(h)\n')))
+check("(k) NEGATIVE: a hard-coded lookback → RED", bool(lookback_literals("window = R.lookback_window(p, 24)")))
 
 print("\n%d passed, %d failed" % (P, F))
 print("OK — one vocabulary, one rounding rule, one booking path, the vertical as data, org-scoped, gated, one engine."

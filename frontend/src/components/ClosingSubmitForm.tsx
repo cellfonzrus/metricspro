@@ -6,6 +6,7 @@ import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 import { startTour } from '@/lib/tours'
 import { useReportLabels } from '@/lib/report-labels'
 import { useAuth } from '@/lib/auth-context'
+import { canPickAnyCloser, isPlatformAdmin } from '@/lib/rbac'
 
 // Rep-facing in-app closing form — one row per rep per day. Posts to /closing/row (source='manual').
 // Money is captured by the 6 tender types that mirror the POS X-report (cash / credit / external CC /
@@ -115,7 +116,11 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   // A company's OWN exception rides the existing per-tenant cap overrides (ui_label_override scope 'cap', key
   // 'closing:<input>' → true = always show, false = always hide), edited on Display Labels; the business type's
   // list is the default. Same nav-config read the sidebar uses (cached), so this adds no request.
-  const { tenant } = useAuth()
+  const { tenant, permissions, user } = useAuth()
+  // WHO the closing is submitted under (owner 2026-09-26, index §29.7): the signed-in person; only DM and
+  // above (or a role granted it on the Roles page) may pick somebody else. The server enforces the same
+  // rule (closing/closer_pick) — this only decides whether the picker is offered.
+  const pickAny = canPickAnyCloser(permissions, isPlatformAdmin(user))
   const [closingCaps, setClosingCaps] = useState<Record<string, boolean | null>>({})
   useEffect(() => {
     let alive = true
@@ -213,7 +218,10 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     if (!want) return ''
     return emps.find(e => (e.name || '').trim().toLowerCase() === want)?.name || ''
   }, [defaultEmployeeName, emps])
-  const employeeName = f.employee_name || (nameTouched ? '' : prefillName)
+  // Not allowed to pick: always the signed-in person — their roster name when it matches, else the name on
+  // their login (a saved draft's name can never override it).
+  const lockedName = prefillName || (defaultEmployeeName || '').trim()
+  const employeeName = pickAny ? (f.employee_name || (nameTouched ? '' : prefillName)) : lockedName
 
   const enteredCash = parseFloat(tdefs ? (tv['cash'] || '') : f.t_cash) || 0
   const ocrNum = parseFloat(ocrCash) || 0
@@ -284,10 +292,12 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
 
   useEffect(() => { apiCached('/api/v1/closing/stores', LOOKUP).then((s: StoreOpt[] | null) => setStores(s || [])).catch(() => {}) }, [])
   // Configured tenders (mig 111): render the tenant's own tender fields; null → the built-in 7 (static).
-  useEffect(() => { api('/api/v1/closing/tender-config').then((d: { defs?: TenderDef[] } | null) => setTdefs((d?.defs && d.defs.length) ? d.defs : null)).catch(() => setTdefs(null)) }, [])
+  // A company with its OWN list (`configured`) gets exactly its ACTIVE tenders — a switched-off tender never
+  // reappears through the built-in fallback (index §29.9). No list at all → the built-in 7, as before.
+  useEffect(() => { api('/api/v1/closing/tender-config').then((d: { defs?: TenderDef[]; configured?: boolean } | null) => setTdefs(d?.configured ? (d.defs || []) : ((d?.defs && d.defs.length) ? d.defs : null))).catch(() => setTdefs(null)) }, [])
   // Configured count fields (mig 501): render the tenant's own activation-count fields; null → the
   // built-in 3 (static), so an un-opted tenant's form is byte-identical to today.
-  useEffect(() => { api('/api/v1/closing/count-config').then((d: { defs?: CountDef[] } | null) => setCdefs((d?.defs && d.defs.length) ? d.defs : null)).catch(() => setCdefs(null)) }, [])
+  useEffect(() => { api('/api/v1/closing/count-config').then((d: { defs?: CountDef[]; configured?: boolean } | null) => setCdefs(d?.configured ? (d.defs || []) : ((d?.defs && d.defs.length) ? d.defs : null))).catch(() => setCdefs(null)) }, [])
   // Employee roster for the "Employee" picker (RULE THREE §3b — pick, don't type): company-wide,
   // same fetch/shape cash-config already uses for the store-closer picker. id === label = the
   // employee's name (daily_closing.employee_name stays a NAME STRING this wave — see handoff).
@@ -500,9 +510,20 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
             </select>
           </Field>
           <Field label="Employee">
-            <EntityPicker options={empOptions} value={employeeName || null}
-              onChange={v => { setNameTouched(true); set({ employee_name: v || '' }) }} placeholder="Your name" width="100%" />
-            {empsLoaded && !empOptions.length && (
+            {pickAny ? (
+              <EntityPicker options={empOptions} value={employeeName || null}
+                onChange={v => { setNameTouched(true); set({ employee_name: v || '' }) }} placeholder="Your name" width="100%" />
+            ) : (
+              <>
+                <input style={{ ...inp, background: 'var(--bg2, #f5f5f5)' }} value={lockedName} readOnly
+                  placeholder="Your name" title="Closings are submitted under your own name" />
+                <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 4 }}>
+                  {lockedName ? 'Submitted under your name. A district manager or above can submit for someone else.'
+                    : 'Your login has no name on file — ask an admin to set it (Admin → Roles & Access).'}
+                </div>
+              </>
+            )}
+            {pickAny && empsLoaded && !empOptions.length && (
               <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 4 }}>
                 No employees available to pick. Ask an admin to check your store assignment
                 (Admin → Roles) — the close cannot be submitted without a name.

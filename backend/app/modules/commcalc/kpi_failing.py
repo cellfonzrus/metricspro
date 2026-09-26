@@ -47,6 +47,19 @@ BUILTIN_KPI_DEFS = (
     ("aal",        "AAL",         "kpi_aal_target",         5),
 )
 
+# metric_key → the `raw_dlar_rep` column(s) carrying the REP-grain actual, in fallback order.
+# ONE HOME (owner defect 2026-09-26, index §19.28). This map was a literal inside the PAY ENGINE
+# (`calculator.calc_rep_commissions` read `dr.get('atu_pct')`, `dr.get('device_insurance_pct') or
+# dr.get('protect_pct')`, … by hand) while `STORE_KPI_COLUMNS` below was the store-grain map here —
+# so "which column carries this KPI" had two homes at two grains, and only one of them was locked.
+# The tuple order IS the fallback order and reproduces the pay engine's own `or` chain exactly.
+REP_DLAR_COLUMNS = {
+    "atu":      ("atu_pct",),
+    "protect":  ("device_insurance_pct", "protect_pct"),
+    "boostapp": ("boost_app_pct",),
+    "byod":     ("byod_pct",),
+}
+
 # metric_key → raw_dlar_store column (the store-grain actual). Keys not named here (e.g.
 # `boostapp`, tenant-custom metrics) simply have no store-level DLAR value → no_data at store
 # grain; they are still evaluated at rep grain when rep_commissions.kpi_values carries them.
@@ -81,6 +94,28 @@ def auto_fed(metric_key):
     return bool(k) and (k in REP_KPI_KEYS or k in STORE_KPI_COLUMNS)
 
 
+GRAIN_REP, GRAIN_STORE, GRAIN_NONE = "rep", "store", None
+
+
+def grain_of(metric_key):
+    """AT WHICH GRAIN IS THIS KPI ACTUALLY MEASURED — 'rep' | 'store' | None. DERIVED from the two feed
+    maps, never stored, so it cannot drift from where the value really comes from.
+
+    THE FACT THIS MAKES SAYABLE (owner's question, 2026-09-26): three of the seven KPIs a Boost rep is
+    TIERED on — familyplan, tmr3, aal — have never been published at rep grain. Measured: all 516
+    `raw_dlar_rep` rows carry NULL in `family_plan_pct`, `tmr3` and `aal_conversion`, every period since
+    March. A rep reaches them only through their STORE's row. So "this rep met 3 of 7" is partly a claim
+    about their store's performance, and a surface that shows the score should be able to say which is
+    which. Whether the carrier publishes those three only per door is the carrier's business; that the
+    platform can no longer hide the difference is ours."""
+    k = str(metric_key or "").strip()
+    if k in REP_DLAR_COLUMNS:
+        return GRAIN_REP
+    if k in STORE_KPI_COLUMNS:
+        return GRAIN_STORE
+    return GRAIN_NONE
+
+
 def _num(v):
     """float or None — '', None, non-numeric → None (no data ≠ zero)."""
     if v is None or (isinstance(v, str) and not v.strip()):
@@ -107,8 +142,16 @@ def evaluate(values, defs, targets):
         tgt = _num(targets.get(k))
         if tgt is None:
             tgt = _num(dflt)
-        if tgt is None:
-            continue                           # a metric with no target cannot fail anyone
+        # A metric with no target cannot fail anyone — AND A FALSY TARGET IS NO TARGET (2026-09-26,
+        # §19.28). The comparison is `actual >= target`, so a target of 0 is met by every value
+        # including a fabricated one: it is a free pass, never a bar. This was already the convention
+        # everywhere else — the `or dflt` chains treat a stored 0 as absent and `GET /kpi-failing`
+        # filtered its own target map with `if v` — so the rule now lives HERE, once, where every
+        # caller reads it. It matters because the def list is now the TENANT'S registry, and
+        # `_kpi_defs` puts a row saved with no `target_default` through `safe_float` → 0.0. All seven
+        # built-in defaults are positive, so every existing score is unchanged.
+        if tgt is None or tgt <= 0:
+            continue
         actual = _num((values or {}).get(k))
         if actual is None:
             no_data.append({"kpi": k, "label": label, "target": round(tgt, 1)})
@@ -117,6 +160,113 @@ def evaluate(values, defs, targets):
                           "actual": round(actual, 1), "met": actual >= tgt,
                           "gap": round(tgt - actual, 1)})
     return evaluated, no_data
+
+
+# where ONE rep-grain KPI value came from, in resolution order. `None` = nothing fed it.
+SOURCE_REP_DLAR   = "rep_dlar"       # the rep's own raw_dlar_rep column — the finest grain there is
+SOURCE_STORE_DLAR = "store_dlar"     # the store's raw_dlar_store column, ROLLED DOWN to the rep
+SOURCE_ACTUAL     = "kpi_actual"     # a measured value typed in / emailed in, at store grain
+SOURCES = (SOURCE_REP_DLAR, SOURCE_STORE_DLAR, SOURCE_ACTUAL)
+
+
+def resolve_defs(raw=None):
+    """A tenant's KPI definitions → the `(key, label, payout_config_col, target_default)` tuples every
+    caller already takes, falling back to the built-in seven. Accepts what `router._kpi_defs` returns
+    (tuples/lists) or registry dicts, so the PAY engine can be handed the tenant's OWN registry through
+    config without a signature change. A row with no `metric_key` is dropped; a duplicate key keeps the
+    first. PURE — never raises, and an empty/garbage input yields the built-ins, never nothing."""
+    out, seen = [], set()
+    for r in raw or ():
+        if isinstance(r, dict):
+            k = str(r.get("metric_key") or r.get("key") or "").strip()
+            lab = r.get("label") or k
+            col = r.get("payout_config_col") or (f"kpi_{k}_target" if k else "")
+            dflt = r.get("target_default")
+        else:
+            try:
+                k, lab, col, dflt = (list(r) + [None] * 4)[:4]
+            except TypeError:
+                continue
+            k = str(k or "").strip()
+            lab = lab or k
+            col = col or (f"kpi_{k}_target" if k else "")
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append((k, lab, col, dflt))
+    return tuple(out) if out else BUILTIN_KPI_DEFS
+
+
+def rep_kpi_values(defs, rep_row=None, store_row=None, actuals=None,
+                   rep_columns=None, store_columns=None):
+    """THE ONE rep-grain KPI resolver → ({metric_key: value|None}, {metric_key: source|None}).
+
+    THE GRAIN IS A PROPERTY OF THE METRIC, declared once — not a blanket fallback chain:
+
+      • a metric with a REP-grain feed (`REP_DLAR_COLUMNS`: atu / protect / boostapp / byod) is a REP
+        measurement. Its value is the rep's OWN `raw_dlar_rep` column, and if the rep has no row it is
+        **`None` — NOT the store's number**. Rolling a store figure down onto a rep nobody measured
+        would attribute the store's performance to that rep; it is a different, better-looking lie than
+        the 0.0 it replaces. (Caught by replaying this resolver against seven live months: a rep with no
+        advocate row read atu 39.53 / protect 91.36 / byod 44.19 off their STORE and their met-count
+        went 1 → 3. The old engine said 0 for those, meaning "no rep row"; the truth is `no_data`.)
+      • a metric with NO rep-grain feed (`STORE_KPI_COLUMNS` only: familyplan / tmr3 / aal) is a STORE
+        measurement and is ROLLED DOWN to every rep at that store. This is not a new rule — it is
+        exactly what the Boost pay engine has always done for those three.
+      • otherwise a measured `commcalc.kpi_actual` value for that store and period (`actuals` = the
+        already org/period/store-scoped {metric_key: value} map) — the home of a metric a tenant defined
+        that no carrier feed fills (hand-entered, or the MA door-report email import). A store-grain
+        metric whose DLAR column is empty falls through to it.
+      • nothing → `None`.
+
+    `None` IS THE POINT. A metric with no basis is NOT a score of zero (owner defect 2026-09-26:
+    `boost_app_pct` was written as a measured `0` from an empty denominator for 189 of 516
+    `raw_dlar_rep` rows, 122 of which had sold the thing being measured). `score()` below reports it
+    as `no_data` and leaves it OUT of the met-count denominator; it can never be a failed zero.
+
+    `defs` = the tenant's own registry (`router._kpi_defs`), so a tenant is scored on the metrics IT
+    has defined. A defined metric that none of the four steps can fill resolves to `None` — which is
+    why adding a registry metric can never move a payout on its own. PURE, never raises."""
+    rcols = rep_columns if rep_columns is not None else REP_DLAR_COLUMNS
+    scols = store_columns if store_columns is not None else STORE_KPI_COLUMNS
+    act = actuals if isinstance(actuals, dict) else {}
+    values, sources = {}, {}
+    for (k, _label, _col, _dflt) in defs or []:
+        v, src = None, None
+        if k in rcols:
+            # A REP-GRAIN METRIC IS THE REP'S OWN, OR IT IS NOT MEASURED. No store fallback.
+            for col in rcols[k]:
+                v = _num((rep_row or {}).get(col))
+                if v is not None:
+                    src = SOURCE_REP_DLAR
+                    break
+        else:
+            if k in scols:
+                v = _num((store_row or {}).get(scols[k]))
+                if v is not None:
+                    src = SOURCE_STORE_DLAR
+            if v is None and k in act:
+                v = _num(act.get(k))
+                if v is not None:
+                    src = SOURCE_ACTUAL
+        values[k] = v
+        sources[k] = src
+    return values, sources
+
+
+def score(values, defs, targets):
+    """THE met-count, with an HONEST denominator → (kpis_met, total_kpis, evaluated, no_data).
+
+    `total_kpis` is the number of metrics that had BOTH a target and a VALUE — never the length of
+    the definition list. A metric nothing fed is `no_data`: it is not counted as met and it is not
+    counted against the rep either, because "3 of 7" when only 6 were ever measured accuses a rep of
+    a failure nobody observed. The pay engine dereferences THIS rather than counting a dict it built
+    itself, so the PAID denominator and the SHOWN denominator cannot drift (index §19.28).
+
+    Byte-identical to the retired `sum(1 for k, v in kpi_vals.items() if v >= KPI[k])` whenever every
+    metric has a value, which is every live Boost row to date — `harness_kpi_vintage.py` §B pins it."""
+    evaluated, no_data = evaluate(values, defs, targets)
+    return sum(1 for e in evaluated if e["met"]), len(evaluated), evaluated, no_data
 
 
 def store_values(dlar_row, columns=None):

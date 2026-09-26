@@ -6,12 +6,16 @@ recon, the sales / X-report bucketing, the closing form, and the smart-detect wi
 """
 
 
-def load_tender_config(client, org_id):
-    """(defs, map_rows) for a tenant. defs = active tender field definitions (empty → use hardcoded);
-    map_rows = the raw-label→tender rules."""
+def load_tender_config(client, org_id, include_inactive=False):
+    """(defs, map_rows) for a tenant. defs = ACTIVE tender field definitions (empty → use hardcoded);
+    map_rows = the raw-label→tender rules. `include_inactive=True` is for the settings editor ONLY
+    (index §29.9): it must show a switched-off tender so it can be switched back on, and so a resave does
+    not silently delete it. Every reader that renders or reconciles money keeps the default."""
     try:
-        defs = (client.schema("commcalc").table("closing_tender_def").select("*")
-                .eq("org_id", org_id).eq("is_active", True).order("sort_order").execute().data) or []
+        q = client.schema("commcalc").table("closing_tender_def").select("*").eq("org_id", org_id)
+        if not include_inactive:
+            q = q.eq("is_active", True)
+        defs = q.order("sort_order").execute().data or []
     except Exception:
         defs = []   # table not migrated yet → hardcoded fallback
     try:

@@ -19,6 +19,9 @@ tenant's). The synthetic STR (40,000.45) exercises the SAME remainder the real s
   §I the unclaimed sale line map — precedence, revenue-only, suppression by the royalty report, the tally
   §J manual entry = the same shape, derived totals marked
   §K landing identity: the royalty kind lands through its module page and says where it shows
+  §L many months in one go (index §37.10): the lookback is config (house default 24, bounds), the window, the batch
+     plan's rules (out-of-window, undated, unreadable, duplicate center × month, replace), coverage, the outcome
+     sentence; negative controls
 
   python3 backend/harness_royalty.py
 """
@@ -450,6 +453,69 @@ check("'this upload will show in': the report page, the P&L, the royalty recon",
 check("the module page's screen is a ScreenLink key the lock pins", "royalty_report" in LI.screen_keys() and "royalty_recon" in LI.screen_keys())
 check("the kind is on no generic upload surface (no route key, no intake landing) — its page is the one place it is uploaded",
       all(R.REPORT_KIND not in [r["key"] for r in RK.for_surface([roy], s)] for s in ("intake", "upload", "wizard", "email_imports", "tiles")))
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+section("L. MANY MONTHS IN ONE GO — the lookback is config; the plan is pure (index §37.10)")
+check("the lookback is a house-default config key: 24", R.CONFIG_DEFAULT["lookback_months"] == 24 and R.resolve_config(None)["lookback_months"] == 24)
+check("an org row overrides it; blank / non-number / out-of-range reads the default",
+      R.resolve_config({"lookback_months": 6})["lookback_months"] == 6 and R.resolve_config({"lookback_months": "12"})["lookback_months"] == 12
+      and all(R.resolve_config({"lookback_months": v})["lookback_months"] == 24 for v in (None, "", "abc", 0, -3, 121, 9999)))
+mig27 = io.open(os.path.join(ROOT, "database", "migrations", "1027_royalty_lookback_months.sql"), encoding="utf-8").read()
+check("the migration's CHECK bounds are the code's bounds (one fact, mirrored and pinned)",
+      "BETWEEN %d AND %d" % R.LOOKBACK_BOUNDS in mig27 and "ADD COLUMN IF NOT EXISTS lookback_months" in mig27 and "-- REVERT:" in mig27)
+W = R.lookback_window("September 2026", 24)
+check("the window: this month and the 24 before it, oldest first, canonical (September 2024 … September 2026)",
+      len(W) == 25 and W[0] == "September 2024" and W[-1] == "September 2026" and W[16] == "January 2026")
+check("the window crosses a year boundary cleanly and accepts either spelling of 'this month'",
+      R.lookback_window("2026-02", 3) == ["November 2025", "December 2025", "January 2026", "February 2026"])
+try:
+    R.lookback_window("soon", 24)
+    check("a non-month 'this month' raises (never guessed)", False)
+except ValueError:
+    check("a non-month 'this month' raises (never guessed)", True)
+
+
+def it(i, name, center="9001", period="June 2026", error=None):
+    return {"index": i, "file_name": name, "center": center, "period": period, "error": error, "status": "ok", "flags": []}
+
+
+items = [it(0, "a"), it(1, "b", period="July 2026"), it(2, "c", period="August 2024"), it(3, "d", period="October 2026"),
+         it(4, "e", period="May 2026"), it(5, "f", period="May 2026"), it(6, "g", period=None), it(7, "h", center=None),
+         it(8, "i", error="no report lines were found"), it(9, "j", center="9002", period="May 2026"), it(10, "k", period="September 2024")]
+on = {("9001", "July 2026"): {"id": "r1", "total_due": 10, "status": "ok"}}
+pl = {r["file_name"]: r for r in R.batch_plan(items, W, on)}
+check("a clean in-window file is ready and new", pl["a"]["ready"] and not pl["a"]["replace"])
+check("an on-file center × month is ready and flagged REPLACE with the existing report", pl["b"]["ready"] and pl["b"]["replace"] and pl["b"]["existing"]["id"] == "r1")
+check("older than the window → refused naming the window; the window's first month → ready",
+      not pl["c"]["ready"] and "older than the 24-month window (September 2024 – September 2026)" in pl["c"]["refusals"][0] and pl["k"]["ready"])
+check("a future month → refused", not pl["d"]["ready"] and "future" in pl["d"]["refusals"][0])
+check("the same center × month twice → BOTH refused, each naming the other; another center's same month is fine",
+      not pl["e"]["ready"] and not pl["f"]["ready"] and "in f in this batch" in pl["e"]["refusals"][0]
+      and "in e in this batch" in pl["f"]["refusals"][0] and pl["j"]["ready"])
+check("no period / no center / an unreadable file → refused in words (never skipped, never guessed)",
+      not pl["g"]["ready"] and "period could not be read" in pl["g"]["refusals"][0]
+      and not pl["h"]["ready"] and "center could not be read" in pl["h"]["refusals"][0]
+      and pl["i"]["refusals"] == ["no report lines were found"])
+check("one row out per file in, in order (a refused file is never dropped)", [r["index"] for r in R.batch_plan(items, W, on)] == list(range(11)))
+check("a validation flag never blocks (a flagged report is stored as printed, as a single import)",
+      R.batch_plan([dict(it(0, "a"), status="flagged", flags=[{"code": "x"}])], W, {})[0]["ready"])
+cv = R.coverage(W, [{"id": "r1", "center_code": "9001", "period": "July 2026", "status": "ok"},
+                    {"id": "r2", "center_code": "9002", "period": "2026-07", "status": "flagged"},
+                    {"id": "r3", "center_code": "9001", "period": "June 2026"},
+                    {"id": "r4", "center_code": "9001", "period": "June 2020"}])
+jl = next(m for m in cv["months"] if m["period"] == "July 2026")
+jn = next(m for m in cv["months"] if m["period"] == "June 2026")
+check("coverage: every window month listed; either stored spelling counts; a month outside the window is ignored",
+      len(cv["months"]) == 25 and [x["center_code"] for x in jl["on_file"]] == ["9001", "9002"] and cv["centers"] == ["9001", "9002"]
+      and not any(x["id"] == "r4" for m in cv["months"] for x in m["on_file"]))
+check("coverage names the centers MISSING a month", jn["missing"] == ["9002"] and cv["months"][0]["missing"] == ["9001", "9002"])
+out = R.batch_outcome([{"ok": True, "file_name": "a"}, {"ok": False, "file_name": "b", "error": "x"}])
+check("the outcome sentence names every file not imported and says the others stay imported",
+      out.startswith("Imported 1 of 2 file(s).") and "b — x" in out and "stay imported" in out)
+# negative controls — the rules must be able to go RED
+check("NEGATIVE: a window of 3 refuses what the default accepted", not R.batch_plan([it(0, "a", period="May 2026")], R.lookback_window("September 2026", 3), {})[0]["ready"])
+check("NEGATIVE: with the duplicate removed, the other file is ready", R.batch_plan([it(4, "e", period="May 2026")], W, {})[0]["ready"])
+check("NEGATIVE: an empty on-file index flags no replace", not R.batch_plan([it(1, "b", period="July 2026")], W, {})[0]["replace"])
 
 print("\n══ franchise royalty / centers: %d passed, %d failed ══" % (P, F))
 sys.exit(1 if F else 0)

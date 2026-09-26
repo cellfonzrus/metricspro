@@ -20,7 +20,7 @@ const tdr: React.CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric
 type Money = number | string | null | undefined
 const money = (v: Money) => (v == null || v === '' ? '—' : fmt(v as number))
 const SECTION_LABEL: Record<string, string> = { sales: 'Products / services', exclusion: 'Exclusions', commission: 'Commissions', str: 'Subject to royalty', fee: 'Fees due' }
-type Tab = 'reports' | 'import' | 'manual' | 'setup'
+type Tab = 'reports' | 'import' | 'batch' | 'manual' | 'setup'
 
 // The fields of the /account/royalty/* payloads this page reads.
 interface Flag { code: string; message: string; expected?: Money; reported?: Money; diff?: number | null }
@@ -48,7 +48,7 @@ interface RoyaltyParse {
   parsed: { center?: string; period_label?: string; lines: RoyaltyLine[] }; source?: string
   validation: { flags: Flag[] }; pl_coverage?: PlCoverage; store_note?: string
 }
-interface RoyaltyConf { fee_basis?: string; daily_source?: string; daily_match_field?: string; book_pl?: boolean }
+interface RoyaltyConf { fee_basis?: string; daily_source?: string; daily_match_field?: string; book_pl?: boolean; lookback_months?: number }
 interface RoyaltyConfig {
   lines?: RoyaltyLine[]; config?: RoyaltyConf; pl_lines?: { key: string; label: string; section: string }[]
   daily_sources?: string[]; match_fields?: string[]; problems?: string[]
@@ -140,14 +140,15 @@ export default function RoyaltyReportPage() {
       {err && <div style={{ color: '#b91c1c', margin: '8px 0' }}>{err}</div>}
       {(cfg?.problems?.length ?? 0) > 0 && cfg?.problems && <div style={{ color: '#b45309', margin: '8px 0' }}>Line setup needs attention: {cfg.problems.join(' · ')}</div>}
       <div style={{ display: 'flex', gap: 6, margin: '10px 0 14px', flexWrap: 'wrap' }}>
-        {(['reports', 'import', 'manual', 'setup'] as Tab[]).map(t => (
+        {(['reports', 'import', 'batch', 'manual', 'setup'] as Tab[]).map(t => (
           <button key={t} className={tab === t ? 'btn btn-primary' : 'btn'} onClick={() => setTab(t)}>
-            {{ reports: 'Reports', import: 'Import a report', manual: 'Enter by hand', setup: 'Line setup' }[t]}
+            {{ reports: 'Reports', import: 'Import a report', batch: 'Upload several months', manual: 'Enter by hand', setup: 'Line setup' }[t]}
           </button>
         ))}
       </div>
       {tab === 'reports' && <ReportsTab reports={reports} open={open} sel={sel} onDeleted={() => { setSel(null); loadReports() }} />}
       {tab === 'import' && <ImportTab onSaved={() => { loadReports(); setTab('reports') }} />}
+      {tab === 'batch' && <BatchTab onSaved={loadReports} />}
       {tab === 'manual' && cfg && <ManualTab cfg={cfg} onSaved={() => { loadReports(); setTab('reports') }} />}
       {tab === 'setup' && cfg && <SetupTab cfg={cfg} reload={loadCfg} />}
     </div>
@@ -309,6 +310,8 @@ function SetupTab({ cfg, reload }: { cfg: RoyaltyConfig; reload: () => void }) {
           <label>Match daily rows on <select value={conf.daily_match_field} onChange={e => setConf({ ...conf, daily_match_field: e.target.value })}>
             {(cfg.match_fields || []).map((s: string) => <option key={s} value={s}>{s}</option>)}</select></label>
           <label><input type="checkbox" checked={conf.book_pl !== false} onChange={e => setConf({ ...conf, book_pl: e.target.checked })} /> The report books the P&L</label>
+          <label>Several-months upload reaches back <input type="number" min={1} max={120} style={{ width: 64 }} value={conf.lookback_months ?? ''}
+            onChange={e => setConf({ ...conf, lookback_months: e.target.value === '' ? undefined : Number(e.target.value) })} /> months</label>
           <button className="btn" onClick={saveConf}>Save</button>
         </div>
       </Card>
@@ -331,6 +334,172 @@ function SetupTab({ cfg, reload }: { cfg: RoyaltyConfig; reload: () => void }) {
           ))}</tbody>
         </table>
       </Card>
+    </>
+  )
+}
+
+// ── MANY MONTHS IN ONE GO (owner 2026-09-26, index §37.10) ───────────────────────────────────────────────
+// Pick or drop several monthly reports → the backend reads EACH through the single import's own parser, takes the
+// center and month from the report's OWN header, runs the same checks, and says whether that center × month is already
+// on file (it will be replaced) or why the file cannot land. Tick the rows → Import selected → each ticked file lands
+// through the single import's own writer, one at a time; a file that fails never stops the others. The lookback window
+// and every month shown come from the API (per-company setting) — nothing here works a month out.
+interface CoverageMonth { period: string; on_file: { center_code: string; id: string; status?: string; total_due?: Money }[]; missing: string[] }
+interface CoverageInfo { lookback_months: number; window: string[]; centers: string[]; months: CoverageMonth[] }
+interface BatchFile {
+  index: number; file_name: string; center?: string | null; period?: string | null; period_label?: string | null
+  status?: string; flags?: Flag[]; total_due?: Money; lines?: number; error?: string | null
+  refusals: string[]; ready: boolean; replace: boolean; existing?: { id: string; total_due?: Money; status?: string } | null
+}
+interface BatchPreview { files: BatchFile[]; ready: number; coverage: CoverageInfo }
+interface BatchResultRow {
+  index: number; file_name: string; center_code?: string | null; period?: string | null; ok: boolean; error?: string
+  replaced?: boolean; status?: string; flags?: number; store_note?: string | null; total_due?: Money
+}
+interface BatchResult { results: BatchResultRow[]; imported: number; failed: number; sentence: string; coverage: CoverageInfo }
+
+const fileKey = (f: File) => `${f.name}|${f.size}|${f.lastModified}`
+// 'September 2024' → 'Sep 2024' for a narrow cell (the API's canonical spelling, shortened — never re-derived)
+const shortMonth = (p: string) => { const [m, y] = p.split(' '); return `${(m || '').slice(0, 3)} ${y || ''}` }
+
+function CoverageStrip({ cov, inUpload }: { cov: CoverageInfo | null; inUpload: Set<string> }) {
+  if (!cov) return <div style={{ fontSize: 13, color: 'var(--text2)' }}>Loading which months are on file…</div>
+  const nC = cov.centers.length
+  const tone = (m: CoverageMonth) => m.on_file.length === 0 ? { bg: 'var(--surface2, #f3f4f6)', fg: 'var(--text2)', word: 'missing' }
+    : m.missing.length === 0 ? { bg: '#dcfce7', fg: '#15803d', word: 'on file' } : { bg: '#fef3c7', fg: '#b45309', word: 'partly on file' }
+  const have = cov.months.filter(m => m.on_file.length > 0 && m.missing.length === 0).length
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 6 }}>
+        {have} of {cov.months.length} months fully on file ({cov.window[0]} – {cov.window[cov.window.length - 1]}, this month and the {cov.lookback_months} before it
+        {nC ? ` · ${nC} center${nC === 1 ? '' : 's'}: ${cov.centers.join(', ')}` : ' · no report on file yet'}).
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+        {cov.months.map(m => {
+          const t = tone(m)
+          const tip = `${m.period}: ${m.on_file.length ? 'on file for ' + m.on_file.map(x => x.center_code).join(', ') : 'no report'}`
+            + (m.on_file.length && m.missing.length ? ` · missing ${m.missing.join(', ')}` : '') + (inUpload.has(m.period) ? ' · in this upload' : '')
+          return (
+            <div key={m.period} title={tip} style={{ minWidth: 64, padding: '5px 6px', borderRadius: 6, background: t.bg, color: t.fg, fontSize: 11.5,
+              textAlign: 'center', border: inUpload.has(m.period) ? '2px solid var(--accent, #2563eb)' : '1px solid var(--border)' }}>
+              <div style={{ fontWeight: 600 }}>{shortMonth(m.period)}</div>
+              <div>{t.word}</div>
+            </div>
+          )
+        })}
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--text2)', marginTop: 6 }}>Green = every center on file · amber = some centers missing · grey = missing · blue outline = in the files you picked.</div>
+    </div>
+  )
+}
+
+function BatchTab({ onSaved }: { onSaved: () => void }) {
+  const [files, setFiles] = useState<File[]>([])
+  const [preview, setPreview] = useState<BatchPreview | null>(null)
+  const [checked, setChecked] = useState<Set<number>>(new Set())
+  const [cov, setCov] = useState<CoverageInfo | null>(null)
+  const [result, setResult] = useState<BatchResult | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [drag, setDrag] = useState(false)
+  const [err, setErr] = useState('')
+
+  useEffect(() => { api('/api/v1/account/royalty/coverage').then(setCov).catch(e => setErr(e?.message || String(e))) }, [])
+
+  const form = (fs: File[]) => { const f = new FormData(); fs.forEach(x => f.append('files', x)); return f }
+  const runPreview = (fs: File[]) => {
+    setFiles(fs); setResult(null); setErr('')
+    if (!fs.length) { setPreview(null); setChecked(new Set()); return }
+    setBusy(true)
+    apiUpload('/api/v1/account/royalty/batch/preview', form(fs)).then((d: BatchPreview) => {
+      setPreview(d); setCov(d.coverage)
+      setChecked(new Set(d.files.filter(r => r.ready).map(r => r.index)))
+    }).catch(e => setErr(e?.message || String(e))).finally(() => setBusy(false))
+  }
+  const add = (list: FileList | null) => {
+    if (!list?.length) return
+    const seen = new Set(files.map(fileKey))
+    runPreview([...files, ...Array.from(list).filter(f => !seen.has(fileKey(f)))])
+  }
+  const remove = (i: number) => runPreview(files.filter((_, j) => j !== i))
+  const toggle = (i: number) => setChecked(p => { const n = new Set(p); if (n.has(i)) n.delete(i); else n.add(i); return n })
+  const importSelected = () => {
+    const pick = files.filter((_, i) => checked.has(i))
+    if (!pick.length) return
+    const replacing = (preview?.files || []).filter(r => checked.has(r.index) && r.replace).length
+    if (replacing && !window.confirm(`${replacing} of the selected report(s) will REPLACE a report already on file for that center and month. Continue?`)) return
+    setBusy(true); setErr('')
+    apiUpload('/api/v1/account/royalty/batch/import', form(pick)).then((d: BatchResult) => {
+      setResult(d); setCov(d.coverage); setPreview(null); setFiles([]); setChecked(new Set()); onSaved()
+    }).catch(e => setErr(e?.message || String(e))).finally(() => setBusy(false))
+  }
+  const rows = preview?.files || []
+  const readyRows = rows.filter(r => r.ready)
+  const inUpload = new Set(rows.filter(r => r.ready && r.period).map(r => r.period as string))
+  const allOn = readyRows.length > 0 && readyRows.every(r => checked.has(r.index))
+
+  return (
+    <>
+      <Card title="Months on file" note="Which months of the lookback window already hold a royalty report. The window is a company setting (Line setup).">
+        <CoverageStrip cov={cov} inUpload={inUpload} />
+      </Card>
+      <Card title="Upload several months at once" note={`Pick or drop the monthly royalty reports (PDF, saved HTML or text) — several months and several centers at once, up to ${cov ? cov.lookback_months : '…'} months back. Each report's center and month are read from its own header. Nothing is saved until you press Import selected.`}>
+        <div onDragOver={e => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)}
+          onDrop={e => { e.preventDefault(); setDrag(false); add(e.dataTransfer.files) }}
+          style={{ border: `2px dashed ${drag ? 'var(--accent, #2563eb)' : 'var(--border)'}`, borderRadius: 10, padding: 18, textAlign: 'center', fontSize: 13, color: 'var(--text2)', marginBottom: 10 }}>
+          Drag the report files here, or{' '}
+          <label className="btn" style={{ cursor: busy ? 'default' : 'pointer' }}>
+            choose files
+            <input type="file" multiple accept=".pdf,.html,.htm,.txt,text/html,application/pdf,text/plain" style={{ display: 'none' }} disabled={busy}
+              onChange={e => { add(e.target.files); e.target.value = '' }} />
+          </label>
+          {files.length > 0 && <div style={{ marginTop: 6 }}>{files.length} file(s) picked{busy ? ' — reading…' : ''}</div>}
+        </div>
+        {err && <div style={{ color: '#b91c1c', marginBottom: 8 }}>{err}</div>}
+        {rows.length > 0 && (
+          <>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr>
+                <th style={th}><input type="checkbox" aria-label="Select every ready file" checked={allOn} disabled={!readyRows.length}
+                  onChange={() => setChecked(allOn ? new Set() : new Set(readyRows.map(r => r.index)))} /></th>
+                <th style={th}>File</th><th style={th}>Month</th><th style={th}>Center</th><th style={thr}>Total due</th><th style={th}>Checks</th>
+                <th style={th}>New / replace</th><th style={th}>Why it cannot be imported</th><th style={th}></th>
+              </tr></thead>
+              <tbody>{rows.map(r => (
+                <tr key={r.index} style={r.ready ? undefined : { background: '#fef2f2' }}>
+                  <td style={td}><input type="checkbox" aria-label={`Import ${r.file_name}`} checked={checked.has(r.index)} disabled={!r.ready} onChange={() => toggle(r.index)} /></td>
+                  <td style={td}>{r.file_name}</td>
+                  <td style={td}>{r.period || <span style={{ color: '#b91c1c' }}>not read{r.period_label ? ` (“${r.period_label}”)` : ''}</span>}</td>
+                  <td style={td}>{r.center || <span style={{ color: '#b91c1c' }}>not read</span>}</td>
+                  <td style={tdr}>{money(r.total_due)}</td>
+                  <td style={td}>{r.error ? '—' : r.flags?.length ? <span style={{ color: '#b45309' }} title={r.flags.map(f => f.message).join('\n')}>{r.flags.length} flag(s) — saved as printed</span> : <span style={{ color: '#15803d' }}>ok</span>}</td>
+                  <td style={td}>{!r.ready ? '—' : r.replace ? <span style={{ color: '#b45309' }}>will REPLACE the report on file{r.existing?.total_due != null ? ` (total due ${money(r.existing.total_due)})` : ''}</span> : 'new'}</td>
+                  <td style={{ ...td, color: '#b91c1c' }}>{r.refusals.join(' · ')}</td>
+                  <td style={td}><button className="btn" disabled={busy} onClick={() => remove(r.index)}>Remove</button></td>
+                </tr>
+              ))}</tbody>
+            </table>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+              <button className="btn btn-primary" disabled={busy || checked.size === 0} onClick={importSelected}>Import selected ({checked.size})</button>
+              <span style={{ fontSize: 12.5, color: 'var(--text2)' }}>{readyRows.length} of {rows.length} file(s) can be imported. A file that cannot be imported is shown in red with the reason — remove it (or fix it and pick it again).</span>
+            </div>
+          </>
+        )}
+      </Card>
+      {result && (
+        <Card title="Import results" note={result.sentence}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr><th style={th}>File</th><th style={th}>Result</th><th style={th}>Month</th><th style={th}>Center</th><th style={thr}>Total due</th><th style={th}>Notes</th></tr></thead>
+            <tbody>{result.results.map(r => (
+              <tr key={r.index}>
+                <td style={td}>{r.file_name}</td>
+                <td style={td}>{r.ok ? <span style={{ color: '#15803d' }}>imported{r.replaced ? ' (replaced the report on file)' : ''}</span> : <span style={{ color: '#b91c1c' }}>NOT imported</span>}</td>
+                <td style={td}>{r.period || '—'}</td><td style={td}>{r.center_code || '—'}</td><td style={tdr}>{money(r.total_due)}</td>
+                <td style={td}>{r.ok ? [r.flags ? `${r.flags} flag(s) — open it under Reports` : '', r.store_note || ''].filter(Boolean).join(' · ') : <span style={{ color: '#b91c1c' }}>{r.error}</span>}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </Card>
+      )}
     </>
   )
 }

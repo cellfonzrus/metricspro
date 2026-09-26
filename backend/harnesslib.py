@@ -33,6 +33,23 @@ def js_code_only(js: str) -> str:
     return re.sub(r"^\s*//.*$", "", js, flags=re.M)
 
 
+def py_code_only(src: str) -> str:
+    """Python source with `#` comments and every docstring / triple-quoted block removed.
+
+    THE SAME REASON `js_code_only` exists, on the Python side, and it bit immediately: a lock asserting
+    "the `else 0` expression is gone from the sweep" failed on the replacement function's own docstring,
+    which QUOTES the retired expression so a reader knows what was fixed. A guard a truthful comment can
+    break is a guard that gets deleted — so locks read CODE.
+
+    Conservative, like its JS sibling: triple-quoted blocks go first (that covers docstrings wherever
+    they sit), then `#` comments, and only when the `#` starts the line so a `#` inside a surviving
+    string literal cannot silently remove real code.
+    """
+    src = re.sub(re.escape('"""') + r".*?" + re.escape('"""'), "", src, flags=re.S)
+    src = re.sub(re.escape("'''") + r".*?" + re.escape("'''"), "", src, flags=re.S)
+    return re.sub(r"^\s*#.*$", "", src, flags=re.M)
+
+
 # ── COA NO-MOVEMENT: what a "coa.py is byte-identical" guard was really protecting ────────────────
 # Several proof harnesses pinned `account/coa.py` byte-identical to the branch point. That was a
 # PROXY for the claim that actually matters — *this work did not re-attribute booked money* — and it
