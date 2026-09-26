@@ -1,12 +1,14 @@
 'use client'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
+import { PLATFORM_ONLY_HREFS, isPlatformAdmin } from '@/lib/rbac'
 
 // One place for EVERY settings / configuration screen. Hub-and-spoke: each card links to the page
 // that still owns that config — those pages keep their own routes + in-module nav entries; this is
 // the single landing that ties them all together so an admin can set the whole thing up from here.
-// `adminOnly` items (platform-level) show only to super-admins.
-type Item = { href: string; icon: string; label: string; desc: string; adminOnly?: boolean }
+// Platform-only cards show only to the platform super admin — WHICH pages those are is read from the NAV
+// registry (rbac.PLATFORM_ONLY_HREFS, index §38.6), never listed a second time here.
+type Item = { href: string; icon: string; label: string; desc: string }
 type Group = { title: string; desc: string; items: Item[] }
 
 const GROUPS: Group[] = [
@@ -105,18 +107,18 @@ const GROUPS: Group[] = [
     title: 'Platform (Super-Admin)',
     desc: 'Cross-tenant operator controls.',
     items: [
-      { href: '/admin/tenants', icon: '🏢', label: 'Companies & Platform Admins', desc: 'Create/manage tenants; platform super-admins.', adminOnly: true },
-      { href: '/admin/billing', icon: '💳', label: 'Billing & Platform Costs', desc: 'Price each tenant, invoices, MRR/ARR + your run-cost and break-even cost per tenant.', adminOnly: true },
-      { href: '/admin/pricing', icon: '🏷️', label: 'Pricing & Free Trial', desc: 'The public price list the website shows, and how long a new company gets for free.', adminOnly: true },
+      { href: '/admin/tenants', icon: '🏢', label: 'Companies & Platform Admins', desc: 'Create/manage tenants; platform super-admins.' },
+      { href: '/admin/billing', icon: '💳', label: 'Billing & Platform Costs', desc: 'Price each tenant, invoices, MRR/ARR + your run-cost and break-even cost per tenant.' },
+      { href: '/admin/pricing', icon: '🏷️', label: 'Pricing & Free Trial', desc: 'The public price list the website shows, and how long a new company gets for free.' },
     ],
   },
 ]
 
 export default function ConfigurationsPage() {
   const { user } = useAuth()
-  const isSuper = !!user?.super_admin
+  const isSuper = isPlatformAdmin(user)
   const groups = GROUPS
-    .map(g => ({ ...g, items: g.items.filter(it => !it.adminOnly || isSuper) }))
+    .map(g => ({ ...g, items: g.items.filter(it => !PLATFORM_ONLY_HREFS.has(it.href) || isSuper) }))
     .filter(g => g.items.length > 0)
 
   return (

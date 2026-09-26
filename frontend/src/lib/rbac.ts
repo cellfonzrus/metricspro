@@ -238,7 +238,10 @@ export function hasDataGrant(perms: Permissions, key: string): boolean {
 // `tile` (optional, index §38): the master tile this item sits on in its group's /hub dashboard when no
 // layout is saved and the tenant menu names no sub-category (tile-hubs.subsFromItemTiles). DATA only —
 // the Dashboard Designer's saved layout still wins over it.
-export type NavItem = { href: string; label: string; icon: string; module: string; scopes?: Scope[]; cap?: string; tileOnly?: boolean; tile?: string }
+// `platformOnly` (optional, index §38.6): the PAGE itself is for the platform super admin alone (its
+// endpoints call _require_super_admin), so every other viewer never sees it — in the sidebar, search,
+// any hub, or by URL (platformPathOK). Same field and same gate (`platformOK`) as NavGroup.platformOnly.
+export type NavItem = { href: string; label: string; icon: string; module: string; scopes?: Scope[]; cap?: string; tileOnly?: boolean; tile?: string; platformOnly?: boolean }
 // A named sub-category INSIDE a group (owner directive 2026-08-12 — roadmap #5). Sub-groups are a
 // LAYOUT-level concept only: the built-in NAV literal below stays structurally two-level, so a
 // newly-shipped item still lands in its group with no code change and no tenant re-configuration.
@@ -460,8 +463,8 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/recovery', label: 'Appeal Recovery', icon: '💰', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // First NAV home for the ingest-guard quarantine queue (page pre-existed, menu-less; admin tier).
     { href: '/commcalc/ingest-guard', label: 'Ingest Guard', icon: '🛡️', module: 'commissions', scopes: ['all'], tileOnly: true },
-    { href: '/admin/control-box', label: 'System Control Box', icon: '🛎️', module: 'admin', tileOnly: true },
-    { href: '/admin/billing-usage', label: 'Billing Usage & Pricing', icon: '💳', module: 'admin', tileOnly: true },
+    { href: '/admin/control-box', label: 'System Control Box', icon: '🛎️', module: 'admin', tileOnly: true, platformOnly: true },
+    { href: '/admin/billing-usage', label: 'Billing Usage & Pricing', icon: '💳', module: 'admin', tileOnly: true, platformOnly: true },
     { href: '/admin/import-health', label: 'Import Health', icon: '📡', module: 'admin', tileOnly: true },
     { href: '/failures', label: 'Failure Logs', icon: '🩺', module: 'admin', tileOnly: true },
     { href: '/storeops/attendance', label: 'Attendance Exceptions', icon: '🚨', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
@@ -959,19 +962,19 @@ export const NAV: NavGroup[] = [
   ]},
   { group: 'Configuration', module: 'admin', items: [
     { href: '/configurations', label: 'All Settings', icon: '⚙️', module: 'admin' },
-    { href: '/admin/tenants', label: 'Companies (Tenants)', icon: '🏢', module: 'admin' },
+    { href: '/admin/tenants', label: 'Companies (Tenants)', icon: '🏢', module: 'admin', platformOnly: true },
     // Business Types (index §35) — the platform super-admin edits what each kind of business sees (pages, modules,
     // closing-form inputs). The backend gate is _require_super_admin; module 'admin' keeps it off every tenant menu.
-    { href: '/admin/business-types', label: 'Business Types', icon: '🧭', module: 'admin' },
+    { href: '/admin/business-types', label: 'Business Types', icon: '🧭', module: 'admin', platformOnly: true },
     { href: '/admin/tenant-settings', label: 'Pay Period & Work-Week', icon: '📅', module: 'admin' },
-    { href: '/admin/billing', label: 'Billing (Tenants)', icon: '💳', module: 'admin' },
+    { href: '/admin/billing', label: 'Billing (Tenants)', icon: '💳', module: 'admin', platformOnly: true },
     // Pricing & Free Trial (mig 908) — where the PUBLIC price list and the trial length are set.
     // module 'admin' with NO `scopes`, byte-identical in shape to its /admin/billing sibling above:
     // an existing admin role already carries modules.admin, so this line adds no new permission
     // surface and needs no SEED_VERSION bump. The page itself is super-admin-only (it renders an
     // explainer for anyone else) and every endpoint behind it gates independently — the one
     // exception being the anonymous read-only feed the marketing site uses.
-    { href: '/admin/pricing', label: 'Pricing & Free Trial', icon: '🏷️', module: 'admin' },
+    { href: '/admin/pricing', label: 'Pricing & Free Trial', icon: '🏷️', module: 'admin', platformOnly: true },
     // KPI Definitions (owner 2026-09-25) — the platform-wide registry (commcalc.carrier_kpi_metric,
     // mig 060) that decides WHICH KPIs each tenant has. module 'admin' with NO `scopes`, the same
     // shape as its /admin/pricing and /admin/roles siblings: an existing admin role already carries
@@ -980,7 +983,7 @@ export const NAV: NavGroup[] = [
     { href: '/admin/kpi-metrics', label: 'KPI Definitions', icon: '🎯', module: 'admin' },
     { href: '/admin/roles', label: 'Roles & Access', icon: '🔐', module: 'admin' },
     { href: '/admin/security', label: 'Security Settings', icon: '🛡️', module: 'admin' },
-    { href: '/admin/access-log', label: 'Access Log', icon: '🧭', module: 'admin' },
+    { href: '/admin/access-log', label: 'Access Log', icon: '🧭', module: 'admin', platformOnly: true },
     // "Sign in as an employee" audit log + policy (mig 730, owner directive 2026-08-06). Tagged
     // module 'admin' with NO `scopes`, byte-identical in shape to its /admin/security sibling: an
     // existing admin role already carries modules.admin, so this nav line adds NO new permission
@@ -1021,13 +1024,13 @@ export const NAV: NavGroup[] = [
     // super-admin-only (every backend endpoint calls core.router._require_super_admin and 403s a
     // non-super-admin independently), so this nav line adds no new permission surface and needs no
     // SEED_VERSION bump. Not a new module key: it is a platform surface, not a billable tenant module.
-    { href: '/admin/control-box', label: 'System Control Box', icon: '🛎️', module: 'admin' },
+    { href: '/admin/control-box', label: 'System Control Box', icon: '🛎️', module: 'admin', platformOnly: true },
     // Billing usage & pricing (owner directives 2026-09-05, migs 972-975) — per-tenant AI and
     // per-module usage, the plan x module pricing grid, and the itemized statement. module 'admin'
     // with NO `scopes`, same shape as its siblings: every backend endpoint calls
     // _require_super_admin and 403s independently, so this adds no permission surface.
-    { href: '/admin/billing-usage', label: 'Billing Usage & Pricing', icon: '💳', module: 'admin' },
-    { href: '/admin/fix-requests', label: 'Auto-Fix Pipeline', icon: '🛠️', module: 'admin' },
+    { href: '/admin/billing-usage', label: 'Billing Usage & Pricing', icon: '💳', module: 'admin', platformOnly: true },
+    { href: '/admin/fix-requests', label: 'Auto-Fix Pipeline', icon: '🛠️', module: 'admin', platformOnly: true },
     // Platform Operator Console (owner directive 2026-09-05, migs 980/981) — "make a separate view
     // for the super admin". APPENDED, never restructured: this single line is the only change this
     // work makes to the NAV registry, so it cannot collide with concurrent edits elsewhere in this
@@ -1041,7 +1044,7 @@ export const NAV: NavGroup[] = [
     // admin who reaches it by URL gets a plain explanation and a way back, never a half-console; every
     // endpoint behind it 403s independently. This line only puts the door where an operator will
     // find it while the two personas still share one menu.
-    { href: '/operator', label: 'Operator Console', icon: '🛰️', module: 'admin' },
+    { href: '/operator', label: 'Operator Console', icon: '🛰️', module: 'admin', platformOnly: true },
   ]},
   // Reports LAST (owner directive 2026-08-10) — the Report Center directory sits at the foot of the
   // sidebar, immediately above the per-category report groups applyNavLayout() appends after it.
@@ -1486,12 +1489,31 @@ function moduleHiddenByVertical(module: string, v: VerticalInfo): boolean {
 export function isPlatformAdmin(user: { super_admin?: boolean } | null | undefined): boolean {
   return !!user?.super_admin
 }
-export function platformOK(group: { platformOnly?: boolean }, user: { super_admin?: boolean } | null | undefined): boolean {
-  return !group.platformOnly || isPlatformAdmin(user)
+// Takes a NAV group OR a NAV item — both carry the same `platformOnly` field.
+export function platformOK(entry: { platformOnly?: boolean }, user: { super_admin?: boolean } | null | undefined): boolean {
+  return !entry.platformOnly || isPlatformAdmin(user)
 }
 // The NAV a TENANT configures (role editor, menu editor, label editor): every platform-only group removed,
 // so its duplicate copies never masquerade as tenant pages or overwrite an item's real home group.
 export const TENANT_NAV: NavGroup[] = NAV.filter(g => !g.platformOnly)
+  .map(g => ({ ...g, items: g.items.filter(it => !it.platformOnly) }))
+// The PAGES that are platform-only: an href every NAV occurrence of which is platform-only (item flag,
+// or a platform-only group). A toolbox copy of a tenant page (e.g. /admin/roles) is NOT one.
+export const PLATFORM_ONLY_HREFS: ReadonlySet<string> = (() => {
+  const occ = new Map<string, boolean>()
+  for (const g of NAV) for (const it of g.items) {
+    const po = !!(g.platformOnly || it.platformOnly)
+    occ.set(it.href, (occ.get(it.href) ?? true) && po)
+  }
+  return new Set([...occ].filter(([, po]) => po).map(([h]) => h))
+})()
+// Route-guard twin of platformOK: may this viewer open this PATH? The page is the longest platform-only
+// href the path sits under (e.g. /admin/billing-usage/x → /admin/billing-usage, never /admin/billing).
+export function platformPathOK(path: string, user: { super_admin?: boolean } | null | undefined): boolean {
+  if (isPlatformAdmin(user)) return true
+  for (const h of PLATFORM_ONLY_HREFS) if (path === h || path.startsWith(h + '/')) return false
+  return true
+}
 
 export function verticalOK(item: { href: string; module: string }, v: VerticalInfo | null | undefined,
                            caps: Record<string, boolean | null>): boolean {
