@@ -460,10 +460,10 @@ def batch_db(extra=None):
 
 def files_all():
     return [up("jun.txt", rep_text("June 2026")), up("jul.txt", rep_text("July 2026")),
-            up("aug-9002.txt", rep_text("August 2026", "9002")), up("old.txt", rep_text("August 2024")),
+            up("aug-9002.txt", rep_text("August 2026", "9002")), up("old.txt", rep_text("September 2024")),
             up("future.txt", rep_text("October 2026")), up("may-a.txt", rep_text("May 2026")),
             up("may-b.txt", rep_text("May 2026")), up("nodate.txt", FIX.replace("(Royalty Period: March 2031)", "")),
-            up("junk.txt", "hello world"), up("edge.txt", rep_text("September 2024"))]
+            up("junk.txt", "hello world"), up("edge.txt", rep_text("October 2024"))]
 
 
 bdb = batch_db({"royalty_report": [{"id": "rep-other-org", "org_id": OTHER, "center_code": "9001", "period": "July 2026",
@@ -479,12 +479,13 @@ check("the preview writes NOTHING and returns one row per file, in upload order"
 check("each file's month and center come from its OWN header, canonical (June 2026 / July 2026 / 9002 August 2026)",
       (byf["jun.txt"]["period"], byf["jun.txt"]["center"]) == ("June 2026", "9001")
       and byf["jul.txt"]["period"] == "July 2026" and (byf["aug-9002.txt"]["center"], byf["aug-9002.txt"]["period"]) == ("9002", "August 2026"))
-check("the window is this month and the 24 before it (house default): September 2024 – September 2026, 25 months",
-      pv["coverage"]["lookback_months"] == 24 and pv["coverage"]["window"][0] == "September 2024"
-      and pv["coverage"]["window"][-1] == TODAY and len(pv["coverage"]["window"]) == 25)
-check("the window's FIRST month (24 back) is accepted", byf["edge.txt"]["ready"], byf["edge.txt"])
-check("a month OLDER than the window is refused, naming the window and that the lookback is a setting",
-      not byf["old.txt"]["ready"] and "older than the 24-month window (September 2024 – September 2026)" in byf["old.txt"]["refusals"][0])
+check("the window is EXACTLY 24 months, this month included (house default): October 2024 – September 2026, 24 boxes",
+      pv["coverage"]["lookback_months"] == 24 and pv["coverage"]["window"][0] == "October 2024"
+      and pv["coverage"]["window"][-1] == TODAY and len(pv["coverage"]["window"]) == 24 and len(pv["coverage"]["months"]) == 24)
+check("the window's OLDEST month (October 2024) is accepted", byf["edge.txt"]["ready"], byf["edge.txt"])
+check("September 2024 is OLDER than the window and refused, naming the window and that the lookback is a setting",
+      byf["old.txt"]["period"] == "September 2024" and not byf["old.txt"]["ready"]
+      and "older than the 24-month window (October 2024 – September 2026)" in byf["old.txt"]["refusals"][0])
 check("a FUTURE month is refused", not byf["future.txt"]["ready"] and "after this month" in byf["future.txt"]["refusals"][0])
 check("two files for the same center × month are BOTH refused, each naming the other",
       not byf["may-a.txt"]["ready"] and not byf["may-b.txt"]["ready"]
@@ -513,7 +514,7 @@ check("import: every file has a result; the 4 ready files landed, the 6 refused 
       and all(n in res["sentence"] for n in ("old.txt", "future.txt", "may-a.txt", "may-b.txt", "nodate.txt", "junk.txt")), res["sentence"])
 check("N files → N reports, each under its own header month (July replaced: one report for 9001 July, never two)",
       sorted((r["center_code"], r["period"]) for r in mine) ==
-      sorted([("9001", "June 2026"), ("9001", "July 2026"), ("9002", "August 2026"), ("9001", "September 2024")])
+      sorted([("9001", "June 2026"), ("9001", "July 2026"), ("9002", "August 2026"), ("9001", "October 2024")])
       and rby["jul.txt"]["replaced"] and not rby["jun.txt"]["replaced"])
 jul = next(r for r in mine if r["period"] == "July 2026")
 check("the replacement is the NEW file's figures (the old flagged July is gone, the new one is ok)",
@@ -539,11 +540,11 @@ check("the same batch twice = one report per center × month (a replace, never a
 single = batch_db()
 RR.sb = lambda: single
 for name, per, ctr in (("jun.txt", "June 2026", "9001"), ("jul.txt", "July 2026", "9001"),
-                       ("aug-9002.txt", "August 2026", "9002"), ("edge.txt", "September 2024", "9001")):
+                       ("aug-9002.txt", "August 2026", "9002"), ("edge.txt", "October 2024", "9001")):
     RR.royalty_import(org_id=FR, file=up(name, rep_text(per, ctr)), text="", center="", period="", store_ref="")
 batch = batch_db()
 RR.sb = lambda: batch
-RR.royalty_batch_import(org_id=FR, files=[up("aug-9002.txt", rep_text("August 2026", "9002")), up("edge.txt", rep_text("September 2024")),
+RR.royalty_batch_import(org_id=FR, files=[up("aug-9002.txt", rep_text("August 2026", "9002")), up("edge.txt", rep_text("October 2024")),
                                           up("jul.txt", rep_text("July 2026")), up("jun.txt", rep_text("June 2026"))])
 
 
@@ -590,12 +591,12 @@ check("a per-file SAVE failure (the FIRST file) is recorded for that file and th
       and "stay imported" in rf["sentence"] and len(fdb.tables["royalty_report"]) == 2, rf)
 
 # THE LOOKBACK IS CONFIG
-cdb = batch_db({"royalty_config": [{"org_id": FR, "lookback_months": 3}]})
+cdb = batch_db({"royalty_config": [{"org_id": FR, "lookback_months": 4}]})
 RR.sb = lambda: cdb
 pc = RR.royalty_batch_preview(org_id=FR, files=[up("jun.txt", rep_text("June 2026")), up("may-a.txt", rep_text("May 2026"))])
-check("the lookback is read from the org's royalty_config row (3 → June 2026 – September 2026: June in, May refused)",
-      pc["coverage"]["lookback_months"] == 3 and pc["coverage"]["window"] == ["June 2026", "July 2026", "August 2026", "September 2026"]
-      and pc["files"][0]["ready"] and not pc["files"][1]["ready"] and "3-month window" in pc["files"][1]["refusals"][0])
+check("the lookback is read from the org's royalty_config row (4 → June 2026 – September 2026: June in, May refused)",
+      pc["coverage"]["lookback_months"] == 4 and pc["coverage"]["window"] == ["June 2026", "July 2026", "August 2026", "September 2026"]
+      and pc["files"][0]["ready"] and not pc["files"][1]["ready"] and "4-month window" in pc["files"][1]["refusals"][0])
 odb = batch_db({"royalty_config": [{"org_id": OTHER, "lookback_months": 3}, {"org_id": FR, "lookback_months": 0}]})
 RR.sb = lambda: odb
 check("another org's lookback is never read, and an out-of-range value reads the house default 24",
@@ -609,7 +610,7 @@ check("the settings form sending the lookback UNCHANGED writes no lookback (save
 RR.royalty_config_save(RR.ConfigIn(lookback_months=12), org_id=FR)
 check("a changed lookback is saved on the org's row and the window follows it",
       next(r for r in sdb.tables["royalty_config"] if r["org_id"] == FR)["lookback_months"] == 12
-      and len(RR.royalty_coverage(org_id=FR)["window"]) == 13)
+      and len(RR.royalty_coverage(org_id=FR)["window"]) == 12)
 try:
     RR.royalty_config_save(RR.ConfigIn(lookback_months=500), org_id=FR)
     check("a lookback outside 1–120 is refused", False)
