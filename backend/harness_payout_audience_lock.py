@@ -1,0 +1,228 @@
+"""LOCK — every surface that shows an employee their own commission decides "which lines are paid" and "which
+fields an employee may see" from ONE home, on the server (owner 2026-09-26: "on the employee commission payout
+report we only need o show the line they are getting paid and other lines should be hidden and carrier commission
+not be displayed" — applied platform-wide as a design fix, index §6i). stdlib only; static scan.
+
+THE HOME: backend `commcalc/payout_audience.py` — `resolve` (a self-scoped caller is always 'employee'),
+`is_paid_line` (the engine's verdict: plan_pay_gate / activation_events), the EMPLOYEE ALLOW-LISTS, and
+`employee_explain` / `employee_rep_row` / `employee_drill`. The router's `_payout_audience` is the one place a
+handler supplies the caller; `_refuse_employee_audience` keeps manager-only carrier reports from an employee.
+Frontend `_lib/payoutAudience.ts` declares each payout page's audience; the shared breakdown renders the SERVED one.
+
+FAILS THE BUILD WHEN:
+  (a) a second copy of the predicate, the audience decision or an allow-list appears under backend/app, or a
+      KNOWN carrier field (Price, GP, the MA cross-reference, the dealer figures, the ledger buckets …) is on an
+      employee allow-list;
+  (b) an employee-facing surface stops going through the home — every one in SURFACES must carry its dereference
+      (the Rep Incentive rows + month range, the drill-down, the statements, the Boost drill, the employee
+      dashboard bundle, the emailed Incentives report) — or a manager-only carrier report stops refusing the
+      employee audience (MANAGER_ONLY);
+  (c) any backend function outside the home filters lines to the PAID ones on its own (`not …get("suppressed")`
+      in a comprehension / filter), or the frontend grows a paid-line rule (a function named like isPaid /
+      paidLine outside the excused display markers), or the breakdown filters rows by audience itself;
+  (d) a payout page stops sending its declared audience, or the breakdown stops rendering the served one;
+  (e) negative controls — each planted violation turns this lock RED.
+
+    python3 backend/harness_payout_audience_lock.py
+"""
+import os
+import re
+import sys
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+APP = os.path.join(ROOT, "app")
+FE = os.path.join(os.path.dirname(ROOT), "frontend", "src", "app", "(platform)", "commcalc")
+HOME = "modules/commcalc/payout_audience.py"
+ROUTER = "modules/commcalc/router.py"
+# (file, function) → the dereference an EMPLOYEE-facing surface must carry
+SURFACES = {
+    (ROUTER, "commission_explain"): ["_payout_audience(authorization, org_id, audience, rep=rep)", "_pa.employee_explain(_res)"],
+    (ROUTER, "commission_statement_document"): ["_payout_audience(authorization, org_id, audience, rep=rep)", "_pa.employee_explain(explain)"],
+    (ROUTER, "commission_statements_batch"): ["_payout_audience(authorization, org_id, audience, rep=rep)", "_pa.employee_explain(explain)"],
+    (ROUTER, "get_commissions"): ["_payout_audience(authorization, org_id, audience)", "_pa.employee_rep_row(r)"],
+    (ROUTER, "get_commissions_range"): ["await get_commissions(m, authorization=authorization, org_id=org_id, audience=audience)"],
+    (ROUTER, "commission_drill"): ["_payout_audience(authorization, org_id, audience, rep=rep", "_pa.employee_drill("],
+    ("modules/core/router.py", "employee_dashboard"): ["_pa.employee_rep_row(myc)"],
+    ("modules/notify/report_registry.py", "_commissions"): ['audience="employee"'],
+}
+# manager-only reports that carry carrier commission per rep — refused to the employee audience
+MANAGER_ONLY = ("carrier_vs_pay_report", "get_discrepancy_results", "get_phantom_payments",
+                "list_discrepancy_appeals", "commission_device")
+HOME_DEFS = ("resolve", "is_paid_line", "employee_explain", "employee_rep_row", "employee_drill", "disallowed_fields")
+PAID_FILTER = re.compile(r"(?:if|filter)[^\n]*\bnot\b[^\n]*\.get\(\s*['\"]suppressed['\"]")
+# engine / gate / statement code that reads `suppressed` for its OWN job (not to hand an employee paid lines)
+PAID_FILTER_EXCUSED = {
+    "modules/commcalc/commission_engine.py": "the engine that STAMPS the verdict",
+    "modules/commcalc/plan_pay_gate.py": "the gate that decides it",
+    "modules/billing/statement.py": "platform billing statement (usage pricing lines) - not a commission line",
+}
+PAID_FN = re.compile(r"\b(?:function|const)\s+(is[A-Z]?\w*[Pp]aid\w*|\w*[Pp]aid[Ll]ine\w*)\b")
+PAID_FN_EXCUSED = {("_lib/planLines.ts", "isPaying"):
+                   "pre-existing dual-membership marker in the manager diagnostic (which rule paid a line two rules "
+                   "matched); it labels rows and filters nothing — the employee payload is shaped on the server"}
+FE_PAGES = {"reports/page.tsx": "audienceParam('/commcalc/reports')",
+            "commission-explain/page.tsx": "audienceParam('/commcalc/commission-explain')"}
+P = F = 0
+
+
+def check(label, ok, detail=""):
+    global P, F
+    if ok:
+        P += 1
+        print("  PASS  %s" % label)
+    else:
+        F += 1
+        print("  FAIL  %s   %s" % (label, str(detail)[:400]))
+
+
+def read(p):
+    with open(p, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def walk(root, exts):
+    out = {}
+    for dp, dirs, fs in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in ("__pycache__", "node_modules", ".next")]
+        for f in fs:
+            if f.endswith(exts):
+                p = os.path.join(dp, f)
+                out[os.path.relpath(p, root).replace(os.sep, "/")] = read(p)
+    return out
+
+
+def py_code(src):
+    src = re.sub(r'"""[\s\S]*?"""', '""', src)
+    return "\n".join(ln.split("#", 1)[0] for ln in src.split("\n"))
+
+
+def ts_code(src):
+    src = re.sub(r"/\*[\s\S]*?\*/", "", src)
+    return "\n".join(ln.split("//", 1)[0] if "://" not in ln else ln for ln in src.split("\n"))
+
+
+def fn_body(src, name):
+    m = re.search(r"^(?:async\s+)?def\s+%s\s*\(" % re.escape(name), src, re.M)
+    if not m:
+        return ""
+    rest = src[m.start():]
+    nxt = re.search(r"^(?:@router\.|def |class |async def )", rest[m.end() - m.start():], re.M)
+    return rest[: (m.end() - m.start()) + nxt.start()] if nxt else rest
+
+
+def tuple_values(src, name):
+    m = re.search(r"^%s\s*=\s*\(([\s\S]*?)\)\s*$" % re.escape(name), src, re.M)
+    return re.findall(r'"([^"]+)"', m.group(1)) if m else []
+
+
+def scan(be, fe):
+    v = []
+    home_src = be.get(HOME, "")
+    home = py_code(home_src)
+    for fn in HOME_DEFS:
+        if not re.search(r"^def\s+%s\s*\(" % fn, home, re.M):
+            v.append(("a", HOME, "the home no longer defines " + fn))
+    for rel, src in sorted(be.items()):
+        if rel == HOME:
+            continue
+        code = py_code(src)
+        for fn in ("is_paid_line", "employee_explain", "employee_rep_row", "employee_drill"):
+            if re.search(r"^def\s+%s\s*\(" % fn, code, re.M):
+                v.append(("a", rel, "a second " + fn))
+        if re.search(r"^EMPLOYEE_\w+_FIELDS\s*=", code, re.M):
+            v.append(("a", rel, "a second employee allow-list"))
+        if re.search(r"^def\s+_payout_audience\s*\(", code, re.M) and rel != ROUTER:
+            v.append(("a", rel, "a second _payout_audience"))
+    carrier = set(tuple_values(home_src, "KNOWN_CARRIER_FIELDS"))
+    if not {"ext_price", "gp", "ma_matches", "boost_commission", "buckets"} <= carrier:
+        v.append(("a", HOME, "KNOWN_CARRIER_FIELDS no longer names the carrier fields"))
+    for name in re.findall(r"^(EMPLOYEE_\w+_FIELDS)\s*=", home_src, re.M):
+        leak = carrier & set(tuple_values(home_src, name))
+        if leak:
+            v.append(("a", HOME, "%s allows carrier field(s) %s" % (name, sorted(leak))))
+    for (rel, fn), needs in SURFACES.items():
+        body = py_code(fn_body(be.get(rel, ""), fn))
+        if not body:
+            v.append(("b", rel, fn + " missing"))
+            continue
+        for n in needs:
+            if n not in body:
+                v.append(("b", rel, "%s no longer carries: %s" % (fn, n)))
+    router = be.get(ROUTER, "")
+    for fn in MANAGER_ONLY:
+        if "_refuse_employee_audience(authorization, org_id" not in py_code(fn_body(router, fn)):
+            v.append(("b", ROUTER, "manager-only %s no longer refuses the employee audience" % fn))
+    pa = py_code(fn_body(router, "_payout_audience"))
+    if "_caller_rep_keys(authorization, org_id)" not in pa or "_pa.resolve(" not in pa:
+        v.append(("b", ROUTER, "_payout_audience no longer reads the caller / decides through payout_audience.resolve"))
+    for rel, src in sorted(be.items()):
+        if rel == HOME or rel in PAID_FILTER_EXCUSED:
+            continue
+        for ln in py_code(src).split("\n"):
+            if PAID_FILTER.search(ln):
+                v.append(("c", rel, "filters PAID lines on its own: " + ln.strip()[:90]))
+                break
+    for rel, src in sorted(fe.items()):
+        for m in PAID_FN.finditer(ts_code(src)):
+            if (rel, m.group(1)) not in PAID_FN_EXCUSED:
+                v.append(("c", rel, "a second paid-line rule: " + m.group(1)))
+    br = ts_code(fe.get("_lib/PlanLineBreakdown.tsx", ""))
+    if re.search(r"\.filter\([^)]*employee", br) or re.search(r"employee[^\n]*\.filter\(", br):
+        v.append(("c", "_lib/PlanLineBreakdown.tsx", "filters rows by audience on its own"))
+    if "audience === 'employee'" not in br:
+        v.append(("d", "_lib/PlanLineBreakdown.tsx", "no longer renders from the served audience"))
+    for page, need in FE_PAGES.items():
+        code = ts_code(fe.get(page, ""))
+        if need not in code or "servedAudience(" not in code:
+            v.append(("d", page, "no longer sends its declared audience / renders the served one"))
+    decl = ts_code(fe.get("_lib/payoutAudience.ts", ""))
+    for page in ("'/commcalc/reports': 'employee'", "'/commcalc/commission-explain': 'manager'"):
+        if page not in decl:
+            v.append(("d", "_lib/payoutAudience.ts", "no longer declares " + page))
+    return v
+
+
+be = walk(APP, (".py",))
+fe = walk(FE, (".ts", ".tsx"))
+viol = scan(be, fe)
+for part, label in (
+        ("a", "(a) ONE home: the paid-line predicate, the audience decision, the allow-lists; no carrier field allowed"),
+        ("b", "(b) every employee-facing surface goes through the home; every manager-only carrier report refuses an employee"),
+        ("c", "(c) nobody filters paid lines on their own (backend or frontend); no second paid-line rule"),
+        ("d", "(d) payout pages declare their audience; the breakdown renders the served one")):
+    check(label, not [x for x in viol if x[0] == part], [x[1:] for x in viol if x[0] == part])
+
+print("\n  negative controls")
+
+
+def planted(be_mut=None, fe_mut=None):
+    b2, f2 = dict(be), dict(fe)
+    b2.update(be_mut or {})
+    f2.update(fe_mut or {})
+    return scan(b2, f2)
+
+
+v = planted(be_mut={"modules/commcalc/shadow.py": "def is_paid_line(line):\n    return True\n"})
+check("(e) a second is_paid_line → RED", any(x[0] == "a" and "shadow" in x[1] for x in v))
+v = planted(be_mut={HOME: be[HOME].replace('EMPLOYEE_LINE_FIELDS = ("date",', 'EMPLOYEE_LINE_FIELDS = ("gp", "date",')})
+check("(e) an employee allow-list that lets GP through → RED", any(x[0] == "a" and "allows carrier" in x[2] for x in v))
+v = planted(be_mut={ROUTER: be[ROUTER].replace("return _pa.employee_explain(_res)", "return _res")})
+check("(e) /commission-explain returning the raw drill to an employee → RED", any(x[0] == "b" for x in v))
+v = planted(be_mut={"modules/core/router.py": be["modules/core/router.py"].replace("_pa.employee_rep_row(myc)", "myc")})
+check("(e) the employee dashboard handing back the raw commission row → RED", any(x[0] == "b" and "core" in x[1] for x in v))
+v = planted(be_mut={ROUTER: be[ROUTER].replace('_refuse_employee_audience(authorization, org_id, "Pay Discrepancy")', "")})
+check("(e) a manager-only carrier report open to an employee → RED", any(x[0] == "b" and "get_discrepancy_results" in x[2] for x in v))
+v = planted(be_mut={"modules/commcalc/rep_view.py":
+                    "def paid(lines):\n    return [l for l in lines if not l.get('suppressed') and l.get('amount')]\n"})
+check("(e) a backend surface filtering paid lines on its own → RED", any(x[0] == "c" and "rep_view" in x[1] for x in v))
+v = planted(fe_mut={"_lib/employeeLines.ts": "export function isPaidLine(l: any) { return !l.suppressed && l.amount > 0 }"})
+check("(e) a second paid-line rule on the frontend → RED", any(x[0] == "c" and "employeeLines" in x[1] for x in v))
+v = planted(fe_mut={"reports/page.tsx": fe["reports/page.tsx"].replace("audienceParam('/commcalc/reports')", "''")})
+check("(e) the payout report no longer asking for the employee audience → RED", any(x[0] == "d" and "reports" in x[1] for x in v))
+v = planted()
+check("(e) the unmodified tree is GREEN", not v)
+
+print("\n%d passed, %d failed" % (P, F))
+if F:
+    sys.exit(1)
+print("OK — one audience decision, one paid-line predicate, one allow-list; no employee surface carries carrier commission.")

@@ -10,6 +10,9 @@ import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterVa
 import PlanLineBreakdown from '../_lib/PlanLineBreakdown'
 import { toPlanLine } from '../_lib/planLines'
 import { multimonthOffered, useMultimonthStatus } from '../_lib/multimonth'
+import { audienceParam, servedAudience } from '../_lib/payoutAudience'
+// the MANAGER diagnostic (index §6i): every matched line, ⛔ reasons, Price / GP — declared in _lib/payoutAudience
+const AUD = audienceParam('/commcalc/commission-explain')
 import WhyZeroPanel from '../_lib/WhyZeroPanel'
 import { GoogleRatingChips, GoogleRatingDetail, useGoogleRatings } from '../_lib/googleRatings'
 
@@ -89,7 +92,7 @@ export default function CommissionExplainPage() {
 
   // roster (pick-don't-type) from the org-scoped rep_commissions rows
   useEffect(() => {
-    api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
+    api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}${AUD}`)
       .then(setReps).catch(console.error)
     // deep-link ?rep= / ?imei= from the Rep Commission report drill-in
     const q = new URLSearchParams(window.location.search)
@@ -124,7 +127,7 @@ export default function CommissionExplainPage() {
   useEffect(() => {
     if (!rep) { setData(null); return }
     setBusy(true); setData(null)
-    api(`/api/v1/commcalc/commission-explain?org_id=${ORG_ID}&period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}`)
+    api(`/api/v1/commcalc/commission-explain?org_id=${ORG_ID}&period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}${AUD}`)
       .then(setData).catch(e => setData({ error: String(e?.message || e) })).finally(() => setBusy(false))
   }, [rep, period, reload])
 
@@ -199,7 +202,7 @@ export default function CommissionExplainPage() {
   // /notify/send-file modal (the statement is rendered on the SERVER, so the in-browser export path can't
   // produce it — this is SendReportButton's serverFiles path).
   const statementUrl = () =>
-    `/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(rep)}&period=${encodeURIComponent(period)}&org_id=${ORG_ID}`
+    `/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(rep)}&period=${encodeURIComponent(period)}&org_id=${ORG_ID}${AUD}`
   function downloadStatement() {
     if (!rep) return
     apiDownload(statementUrl()).catch(e => alert(`Could not generate statement: ${e?.message || e}`))
@@ -341,7 +344,7 @@ export default function CommissionExplainPage() {
                   underneath and is fed the SAME rows in the SAME order with the SAME category
                   filter applied — what you see is what exports. */}
               {planRows.length > 0 ? (
-                <PlanLineBreakdown rows={planRows}>
+                <PlanLineBreakdown rows={planRows} audience={servedAudience(data)}>
                   {(visible) => (
                     <ReportShell title={`Plan line detail — ${data.rep}`} subtitle={`${period} · ${pc?.plan_name || ''}`}
                       filename={`plan-detail-${data.rep}-${period}`.replace(/\s+/g, '-')} columns={PLAN_COLS} rows={visible} totals compact />

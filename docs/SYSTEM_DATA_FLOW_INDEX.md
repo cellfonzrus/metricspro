@@ -30,6 +30,7 @@ Primary code homes:
 | 6f | **One activation = one unit** | "Why was one activation paid three times? What is ONE activation / upgrade on an invoice, and which surfaces pay or count per activation?" |
 | 6g | **Rep Incentive — month range** | "Show the rep incentive for several months on one page, a row per rep per month — and is each month the same as viewing it alone?" |
 | 6h | **Multi-month offered only when configured** | "Why does a rep's pay show a multi-month option when this company has no multi-month pay — where is that decided, and what if money is there anyway?" |
+| 6i | **What an employee sees of their own commission** | "Why does the employee payout report show only the line I am paid for, and no carrier Price / GP? Which surfaces show an employee their commission, and where is 'paid line' and 'employee-visible field' decided?" |
 | 7 | **Carrier residual installments** | "Multi-month carrier residual pay from raw_mi. Why do named activation_types not pay?" |
 | 12 | **External credit machine + Card Settlement Recon** | "Where does the external / white-machine card figure live, what is it called for this tenant, and how does it tally with what the processor actually settled?" |
 | 7a | **Residual per Subscriber report** | "Where does the residual/subscriber trend come from per carrier? Why is a Total/MA store named, not a processor account id?" |
@@ -2010,6 +2011,92 @@ $183.66 August → `configured` (unchanged). House — 14 active residual schedu
 **Proof:** `backend/harness_multimonth_offer.py` (16, DB-free); lock `backend/harness_multimonth_offer_lock.py`
 (10, stdlib, CI guard job — a surface that offers multi-month without asking fails the build; 5 negative
 controls); `frontend/tools/multimonth-offer-proof.mjs` (8).
+
+---
+
+### 6i. AN EMPLOYEE SEES THE LINE THEY ARE PAID FOR — and never carrier commission (owner 2026-09-26)
+
+Owner, verbatim: *"on the employee commission payout report we only need o show the line they are getting paid
+and other lines should be hidden and carrier commission not be displayed"*.
+
+**The class (not the instance):** any surface that shows an employee their own commission must decide TWO facts —
+*which lines are paid* and *which fields the employee may see* — and before this change every surface decided both
+on its own (or not at all): the Rep Incentive drill rendered every matched line incl. the held ⛔ ones and the
+carrier Price / GP; `/commission-explain`, `/commission-statement(s)` and `/commission-drill` had no caller check;
+`/commissions/{period}` and `core /employee-dashboard` returned `boost_commission` / `boost_reimbursement`.
+
+**ONE home — `commcalc/payout_audience.py`** (pure, no DB):
+- `resolve(requested, caller_is_self)` — THE audience decision. A self-scoped rep (`router._caller_rep_keys` not
+  None) is ALWAYS `employee`; anyone else gets the declared audience, default **`manager` (byte-identical to
+  before)**. `router._payout_audience(authorization, org_id, requested, rep=)` wraps it and adds the own-rep guard
+  (a self caller asking for another rep → 403 "You can only view your own commission.").
+- `is_paid_line(line)` — THE paid-line predicate. It does not re-decide pay: it reads the engine's verdict
+  (`plan_pay_gate` via `commission_engine` stamps `suppressed`; `qualifies`, `flat_once`, `amount` are the per-line
+  outcome incl. the per-activation event of §6f). Paid = not suppressed AND qualifies is not False AND (flat_once or
+  amount ≠ 0).
+- The **employee allow-lists** (server-side; a field not named is dropped): `EMPLOYEE_LINE_FIELDS`,
+  `_RULE_`, `_PLAN_`, `_DEVICE_`, `_INSTALLMENT_`, `_MULTIMONTH_`, `_EXPLAIN_`, `_REP_ROW_`, `_DRILL_ITEM_FIELDS`
+  (the drill keeps `ext_price`/`gp` only for the `DRILL_PCT_BASIS_BUCKETS` accessory / setup buckets, where the rep
+  is paid a % of that price). `KNOWN_CARRIER_FIELDS` (ext_price, gp, implied_cost, cost_flags, data_quality,
+  ma_matches, ma_says_paid, held_but_ma_paid, rebate_total, ma_spiff_total, mi_ref, boost_commission,
+  boost_reimbursement, would_have_paid, suppressed, suppressed_reason, buckets) may never appear in an allow-list.
+- Shapers every caller uses: `employee_explain` (paid lines only, allow-listed, `audience: 'employee'` stamped),
+  `employee_rep_row`, `employee_drill`; `disallowed_fields(payload, kind)` and `rule_line_total` for proofs.
+- `router._refuse_employee_audience(authorization, org_id, what)` — the 403 for manager-only carrier reports.
+- Frontend: `_lib/payoutAudience.ts` — `PAYOUT_AUDIENCE_OF_PAGE` (the ONE page declaration:
+  `/commcalc/reports` → employee, `/commcalc/commission-explain` → manager), `audienceParam(page)`,
+  `servedAudience(payload)`. Components render from the SERVED audience (never a page-local flag):
+  `PlanLineBreakdown` drops Price/GP columns and the per-event sub-headers and shows the event label
+  (type · line) under the rule when `audience === 'employee'`. Hiding is never frontend-only: the fields are not in
+  the payload.
+
+**Totals:** the employee view drops only lines that pay $0 — Σ employee line $ = the rep's plan total to the cent;
+`total_payout` untouched. No pay is recomputed or written; this is a read-side shaping.
+
+**Surfaces (every one wired or excused — the lock names each):**
+
+| Surface | Status | Why |
+|---|---|---|
+| `GET /commcalc/commissions/{period}` + `/commissions-range` | wired | `audience=` param; employee → `employee_rep_row` (no boost carrier fields) |
+| `GET /commcalc/commission-explain` | wired | own-rep guard + `employee_explain` |
+| `GET /commcalc/commission-statement` (PDF/CSV) + `/commission-statements` batch | wired | own-rep guard (batch skips other reps) + `employee_explain`; ledger buckets dropped |
+| `GET /commcalc/commission-drill` (Boost drill) | wired | own-rep guard + `employee_drill` |
+| `core GET /employee-dashboard` "my commission" | wired | always `employee_rep_row` |
+| notify Incentives email (`report_registry._commissions`) | wired | `get_commissions(audience="employee")` |
+| Rep Incentive page (`reports/page.tsx`): drill, multimonth table ("MA says paid" hidden), Boost modal, exports (`commissionExport` — rows come from the allow-listed payload) | wired | declares `employee` via `payoutAudience.ts` |
+| `/carrier-vs-pay`, `/discrepancy/{period}`, `/discrepancy/{period}/phantom`, `/discrepancy-appeals`, `/commission-device` | manager-only | `_refuse_employee_audience` → 403 for a self-scoped rep |
+| `commission-explain/page.tsx` | excused | manager diagnostic, declared `manager`; a self rep is forced `employee` server-side anyway |
+| `sales_comparison` | excused | store units / accessory $, not commission lines |
+| pay-simulator | excused | rates × counts; simulated lines at $0 |
+| daily-commission / accrual | excused | nav scoped all/market; the run needs commission admin |
+| custom_report | excused | per-column carrier_residual gate; `rep_commissions` dataset = pay columns |
+| comp_trend, KPI page, AskBar | excused | read `total_payout` / `/commissions` (forced employee for a self rep) |
+| payout_structure, whatif, dashboard flags | excused | rates only / analytics / compliance (sales_leak already withheld) |
+| statement held section | excused | manager grant (`_can_view_statement_held`) |
+| `planLines.isPaying` / `isUnit` | excused | display markers over server-shaped rows, not a paid filter |
+
+**Live (read-only, 2026-09-26, org `f4f1c16e`, rep Jona Sejat):** July 2026 — manager 263 lines / employee 100,
+Σ line $ 715 = 715, `total_payout` 715 unchanged, manager Σ carrier Price on matched lines $16,315, 0 disallowed
+fields in the employee payload. **Z1321IN11092:** manager 3 lines (Price 150 / 0 / 45; one paid $10, two ⛔) →
+employee 1 row, $10, activation line 9297458084. Z1321IN11301: 11 → 4 rows × $10. May 2026 — 198 → 76 lines,
+$595 = $595; **Z1321IN10551:** manager 4 lines ($150 / $0 / $100 / $0) → employee 1 row $10. It is ONE activation
+(all activation lines name 3478963977; 1672844107 is the Device Payment Agreement loan number; one costed handset;
+the two "ADD A LINE SMART PHONE KICKER" lines are the $0 tracking + $100 rebate pair, 879 of 882 phone lines
+org-wide carry it this way) — `activation_events` gives one event, the $10 is correct.
+
+**Security note:** before this change a self-scoped rep could read ANY rep's `/commission-explain` lines incl.
+ext_price / gp (carrier rebate $), any rep's statement (with ledger buckets) and the whole batch, any rep's
+`/commission-drill`, and carrier `boost_commission` / `boost_reimbursement` on `/commissions` and the employee
+dashboard; the discrepancy / phantom / appeals / carrier-vs-pay / commission-device endpoints had no server gate.
+All closed.
+
+**Proof:** `backend/harness_payout_audience.py` (38, DB-free — both invoices through the real handlers: manager
+byte-identical, employee one $10 row, no disallowed field, totals equal, self forced / 403, rows, statements,
+batch, drill, the 5 manager-only 403s, the dashboard row, predicate truth table); lock
+`backend/harness_payout_audience_lock.py` (13, stdlib, CI guard job — fails when an employee surface stops going
+through the home or returns a carrier field, a manager-only carrier report opens to an employee, a surface filters
+paid lines on its own, a second paid-line predicate appears (backend or frontend), or a payout page stops declaring
+its audience; 8 negative controls + the green tree); `frontend/tools/plan-drilldown-render-proof.mjs` (30).
 
 ---
 
@@ -4127,6 +4214,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `commcalc.rep_commissions` + the `/commission-explain` payload — as **what an EMPLOYEE may see of their own commission** | `calc_rep_commissions` / `commission_engine.preview` (unchanged) | THE shapers `payout_audience.employee_rep_row` / `employee_explain` / `employee_drill` (allow-lists; paid lines by `is_paid_line`) → `/commissions`, `/commissions-range`, `/commission-explain`, `/commission-statement(s)`, `/commission-drill`, core `/employee-dashboard`, the notify Incentives email (§6i) |
 | `commcalc.payout_schedule` / `commcalc.plan_installment_schedule` — as the answer to **"is multi-month configured for this org"** (active rows) | the schedule editors (`payout-schedules`, `plan-installments`) | THE predicate `multimonth_config.schedule_counts` → `decide` / `load` → `GET /commcalc/multimonth/status` → `_lib/multimonth.useMultimonthStatus` (the Rep Incentive card + export, commission-explain, Expected vs Earned); the R1 guard `router._has_any_pay_source`. The engines keep their own loaders (§7/§8) (§6h) |
 | `commcalc.accessory_config.activation_details_rules` **`.event`** (`keys` · `precedence` · `count_unit`; JSON key, no migration, 2026-09-25) | `PUT /commcalc/accessory-config` (extra keys of the JSON pass through the one writer) | `line_class.resolve_event` ← `resolve_rules` → `activation_events` / `activation_units` — the plan pay gate's `per_event` (always events) and every activation COUNT (`count_unit`, house `'transaction'`): `_sales_cell_agg`, the Boost calculator, `commission_drill`, closing `_b2b_counts_by_store` / `_b2b_day`, `sales_comparison.tally` (§6f) |
 | `commcalc.commission_org_config.plan_pay_gate` **`.unit_basis.auto_event_fields`** (JSON key, mig 260 column; code default `['activation_bucket']`) · `commcalc.commission_rule.unit_basis = 'per_event'` | `PUT /commcalc/commission-plans/pay-gate` · `POST /commission-plans` (save accepts `per_event`) | `plan_pay_gate.resolve_unit_basis` → `select_paying_lines` → `_select_per_event` (events injected by `commission_engine.preview`); `payout_structure.describe_frequency`; `unit-multiplication-audit` `auto_deduped` (§6f) |
@@ -4298,6 +4386,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `GET /commcalc/commissions/{period}` · `/commissions-range` · `/commission-explain` · `/commission-statement` · `/commission-statements` · `/commission-drill` — `audience=employee|manager` (default manager, byte-identical); a self-scoped rep is ALWAYS employee and may ask only for their own rep (403 otherwise) | `router._payout_audience` → `payout_audience.resolve` + `employee_*` shapers | §6i |
+| `GET /commcalc/carrier-vs-pay` · `/discrepancy/{period}` · `/discrepancy/{period}/phantom` · `/discrepancy-appeals` · `/commission-device` — manager-only carrier reports: 403 for a self-scoped rep | `router._refuse_employee_audience` | §6i |
 | `GET /commcalc/multimonth/status?periods=` — is multi-month configured for this org (`configured` / `off` / `off_with_money` + the money per period + a note). READ-ONLY | `router.get_multimonth_status` → `multimonth_config.load` | §6h |
 | `GET /commcalc/commissions-range?period_from=&period_to=` — the Rep Incentive report over a month range (≤ 12), one row per rep per month + month subtotals + total. READ-ONLY; each month IS `get_commissions(month)` | `router.get_commissions_range` → `account/_period.month_range` → `get_commissions` (per month, in-process) → `rep_incentive_range.assemble` | §6g |
 | `GET /commcalc/commission-explain` · the reports **🔍 Plan commission** drill (`PlanLineBreakdown`) — every plan line now carries `event_id / event_key / event_key_kind / event_type` when a rule pays per activation; the pay-gate report `pay_gate.unit.activation_events` (events, ambiguous invoices, config) | `commission_engine.preview(detail=True)` → `commission_drilldown.explain_rep`; frontend `planLines.toPlanLine` / `eventsOf` | §6f |
@@ -4525,6 +4615,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Which commission lines / fields an employee sees** (the paid line only; no carrier Price / GP / MA rebate) | engine verdict on each plan line (`suppressed`, `qualifies`, `flat_once`, `amount`); `rep_commissions` pay columns | ONE predicate `payout_audience.is_paid_line` + ONE allow-list set `payout_audience.EMPLOYEE_*_FIELDS`, audience by `payout_audience.resolve`; frontend declaration `_lib/payoutAudience.ts`; lock `harness_payout_audience_lock.py` (§6i) |
 | **Is multi-month pay offered for this org** (the rep pay card's multi-month option) | active `payout_schedule` / `plan_installment_schedule` rows; multi-month $ on `rep_commissions.residual_installment_comm` + `installment_comm_sale` | ONE predicate `multimonth_config.decide` (backend) / `multimonthOffer.multimonthRows` (frontend); lock `harness_multimonth_offer_lock.py` (§6h) |
 | **Which months a window holds** (a from-month / to-month range, any period spelling) | — (calendar) | ONE enumeration `account/_period.month_range` (canonical names, oldest first, capped by the caller) — the Rep Incentive month range (§6g) and `discrepancy_appeals.period_range_variants` dereference it |
 | **ONE activation / upgrade** — what a per-activation or per-upgrade rate pays on, and what an activation count counts (owner 2026-09-25) | the activation-type lines of one invoice (`raw_sales` / feed rows, THE predicate) keyed by the phone line they name (`mdn` / phone-shaped `serial_1`), else device, else the invoice; config `accessory_config.activation_details_rules.event` | ONE definition `line_class.activation_events` (+ `line_event_keys`, `activation_units`); pay `plan_pay_gate._select_per_event` via `commission_engine.preview`; counts `_sales_cell_agg`, `calculator.calc_rep_commissions`, `commission_drill`, closing ×2, `sales_comparison.tally` (house unit 'transaction'); lock `harness_activation_event_lock.py`, proof `harness_activation_event.py` (§6f) |

@@ -22,22 +22,31 @@
 // The visual language deliberately mirrors the multi-month (installments) drill-down — the grouped
 // header + inner table is the same shape as its per-device card — so the two read as one product.
 import { Fragment, useMemo, useState } from 'react'
+import type { PayoutAudience } from './payoutAudience'
 import { fmt } from '@/lib/client'
 import {
   categoryOf, crossRefFor, EVENT_COUNTERS, EVENT_TYPE_LABEL, filterPlanLinesByCategory, groupPlanLinesByTxn,
   isFlatOnce, isUnit, planCategories, planLineMembership, planLineTotals, type PlanLine,
 } from './planLines'
 
-const COLS = ['Rule', 'Date', 'Trans ID', 'Product', 'Contract', 'Basis', 'Price', 'GP', 'Line $']
+// MANAGER columns (the diagnostic) vs EMPLOYEE columns (owner 2026-09-26: "only show the line they are getting
+// paid … carrier commission not be displayed"). The audience is the one the SERVER served (payload.audience —
+// backend payout_audience.resolve); in the employee payload Price / GP do not exist, so they are not columns.
+const MANAGER_COLS = ['Rule', 'Date', 'Trans ID', 'Product', 'Contract', 'Basis', 'Price', 'GP', 'Line $']
+const EMPLOYEE_COLS = ['Rule', 'Date', 'Trans ID', 'Product', 'Contract', 'Basis', 'Line $']
 const RIGHT = new Set(['Price', 'GP', 'Line $'])
 
-export default function PlanLineBreakdown({ rows, compact, children }: {
+export default function PlanLineBreakdown({ rows, compact, children, audience }: {
   rows: PlanLine[]
+  /** the audience the payload was served for (servedAudience(payload)); default 'manager' = today's table */
+  audience?: PayoutAudience
   /** modal density (the reports drill-down) vs page density (commission-explain). */
   compact?: boolean
   /** optional render-prop for a page-level flat table / export, fed the SAME visible rows (WYSIWYG). */
   children?: (visible: PlanLine[]) => React.ReactNode
 }) {
+  const employee = audience === 'employee'
+  const COLS = employee ? EMPLOYEE_COLS : MANAGER_COLS
   const [sel, setSel] = useState<string[]>([])          // empty = ALL categories (the default)
   const [showExtra, setShowExtra] = useState(false)
 
@@ -191,7 +200,7 @@ export default function PlanLineBreakdown({ rows, compact, children }: {
                     ? g.events.find(e => e.id === l.event_id) : undefined
                   return (
                   <Fragment key={`${g.key}:${i}`}>
-                  {ev && (
+                  {ev && !employee && (
                     <tr style={{ borderTop: '1px solid var(--border)' }}>
                       <td colSpan={COLS.length - 1} style={{ ...td, fontSize: 11, color: 'var(--text2)', paddingLeft: 14 }}>
                         📱 <b>{EVENT_TYPE_LABEL[ev.type] || ev.type || 'Activation'}</b>
@@ -205,6 +214,13 @@ export default function PlanLineBreakdown({ rows, compact, children }: {
                   <tr style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={{ ...td, borderLeft: `3px solid ${dual ? 'var(--border)' : 'var(--surface2)'}` }}>
                       {categoryOf(l)}
+                      {/* EMPLOYEE view: the paid line IS the event's row — name the activation / upgrade it pays */}
+                      {employee && l.event_id && (
+                        <div style={xref}>
+                          {EVENT_TYPE_LABEL[String(l.event_type)] || l.event_type || 'Activation'}
+                          {l.event_key ? ` · ${l.event_key_kind === 'device' ? 'device' : 'line'} ${l.event_key}` : ''}
+                        </div>
+                      )}
                       {/* CROSS-REFERENCE — the same sale line under another rule, one muted line. */}
                       {x.paidElsewhere.length > 0 && (
                         <div style={xref} title="This is the same sale line as the paying row above">
@@ -223,8 +239,8 @@ export default function PlanLineBreakdown({ rows, compact, children }: {
                     <td style={td} title={l.product || ''}>{l.product || '—'}</td>
                     <td style={td}>{l.contract_type || '—'}</td>
                     <td style={{ ...td, color: 'var(--text3)' }}>{l.basis || '—'}</td>
-                    <td style={{ ...td, textAlign: 'right' }}>{fmt(l.ext_price)}</td>
-                    <td style={{ ...td, textAlign: 'right' }}>{fmt(l.gp)}</td>
+                    {!employee && <td style={{ ...td, textAlign: 'right' }}>{fmt(l.ext_price)}</td>}
+                    {!employee && <td style={{ ...td, textAlign: 'right' }}>{fmt(l.gp)}</td>}
                     <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>
                       {isFlatOnce(l) ? 'flat (once)' : fmt(l.amount as number)}
                       {l.suppressed && (

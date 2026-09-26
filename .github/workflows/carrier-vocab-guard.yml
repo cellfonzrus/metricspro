@@ -177,6 +177,12 @@ on:
       - "backend/harness_multimonth_offer.py"
       - "backend/harness_multimonth_offer_lock.py"
       - "backend/app/modules/commcalc/multimonth_config.py"
+      - "backend/harness_payout_audience.py"
+      - "backend/harness_payout_audience_lock.py"
+      - "backend/app/modules/commcalc/payout_audience.py"
+      - "backend/app/modules/core/router.py"
+      - "backend/app/modules/notify/report_registry.py"
+      - "backend/app/modules/billing/statement.py"
       - "frontend/src/app/(platform)/commcalc/_lib/multimonthOffer.ts"
       - "frontend/src/app/(platform)/commcalc/_lib/multimonth.ts"
       - "frontend/src/app/(platform)/commcalc/_lib/commissionExport.ts"
@@ -361,6 +367,9 @@ jobs:
       - name: Run the multi-month offer lock (multi-month is offered only through the one predicate; money is never hidden — index §6h)
         working-directory: backend
         run: python3 harness_multimonth_offer_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the payout-audience lock (one paid-line predicate, one employee allow-list; no employee surface carries carrier commission — index §6i)
+        working-directory: backend
+        run: python3 harness_payout_audience_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the tender-vocab lock (one tender vocabulary; every classifier dereferences it)
         working-directory: backend
         run: python3 harness_tender_vocab_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -455,6 +464,9 @@ jobs:
       - name: Run the multi-month offer proof (configured / off / off-with-money; the R1 guard unchanged; the status endpoint — index §6h)
         working-directory: backend
         run: python3 harness_multimonth_offer.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the payout-audience proof (employee sees the paid line only, no carrier $; manager byte-identical; own-rep 403 — index §6i)
+        working-directory: backend
+        run: python3 harness_payout_audience.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the plan-sources lock (one registry of plan-name sources; one resolver for preview and apply; one writer; the card seeds from the proposal; no vendor)
         working-directory: backend
         run: python3 harness_plan_sources_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
