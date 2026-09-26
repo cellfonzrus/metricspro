@@ -9,7 +9,7 @@ import AskBar from '@/components/AskBar'
 import { useAuth, useActiveCarrier } from '@/lib/auth-context'
 import { setActiveOrg } from '@/lib/client'
 import { apiCached, CONFIG } from '@/lib/cache'
-import { NAV, platformOK, canSeeItem, canAccessPath, carrierOKActive, verticalOK, verticalPathOK, isSuperAdmin, safeHomeFor, applyNavLayout, carrierCode, REPORT_CATEGORIES, type NavItem, type NavLayout } from '@/lib/rbac'
+import { NAV, platformOK, platformPathOK, canSeeItem, canAccessPath, carrierOKActive, verticalOK, verticalPathOK, isSuperAdmin, safeHomeFor, applyNavLayout, carrierCode, REPORT_CATEGORIES, type NavItem, type NavLayout } from '@/lib/rbac'
 import { carrierDisplayName } from '@/lib/carrier-scope'
 import { actingCompany, switcherOptions, switcherVisible, switchConfirmText } from '@/lib/tenant-scope'
 import HelpPanel from '@/components/HelpPanel'
@@ -240,7 +240,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
     () => (open ? NAV : NAV.map(g => ({ ...g, items: g.items.filter(it => canSeeItem(permissions, it)) })))
       // Platform-only groups (the Super Admin Toolbox, index §38) reach the platform super admin alone.
       .filter(g => platformOK(g, user))
-      .map(g => ({ ...g, items: g.items.filter(capOK).filter(it => carrierOKActive(it.href, activeCarrier, caps))
+      .map(g => ({ ...g, items: g.items.filter(it => platformOK(it, user)).filter(capOK).filter(it => carrierOKActive(it.href, activeCarrier, caps))
         .filter(it => verticalOK(it, tenant?.vertical, caps)) }))
       .filter(g => g.items.length > 0),
     // `caps`/`capOK` derive from `navCfg` (a new `navCfg.capabilities || {}` each render would defeat
@@ -701,7 +701,9 @@ function Guard({ children }: { children: React.ReactNode }) {
     if (user?.must_reset_password) { router.replace('/account/password'); return }
     // The tenant's VERTICAL (mig 1020) bounces a page that does not exist for this kind of business, the
     // same way RBAC does — a super-admin (who sees every tab) is never bounced.
-    if (!canAccessPath(permissions, pathname) || (!isSuperAdmin(permissions) && !verticalPathOK(pathname, tenant?.vertical))) {
+    // A platform-only page (index §38.6) bounces everyone but the platform super admin.
+    if (!canAccessPath(permissions, pathname) || (!isSuperAdmin(permissions) && !verticalPathOK(pathname, tenant?.vertical))
+        || !platformPathOK(pathname, user)) {
       const dest = safeHomeFor(permissions, tenant?.vertical)
       if (dest !== pathname) router.replace(dest)   // guard against redirecting to a gated-off home (loop)
     }
@@ -737,6 +739,7 @@ function Guard({ children }: { children: React.ReactNode }) {
   if (user?.must_reset_password) return <Splash text="Redirecting…" />
   if (!canAccessPath(permissions, pathname)) return <Splash text="Redirecting…" />
   if (!isSuperAdmin(permissions) && !verticalPathOK(pathname, tenant?.vertical)) return <Splash text="Redirecting…" />
+  if (!platformPathOK(pathname, user)) return <Splash text="Redirecting…" />
   return <PlatformShell open={false}>{children}</PlatformShell>
 }
 

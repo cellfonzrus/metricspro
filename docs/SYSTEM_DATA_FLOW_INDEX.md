@@ -11803,3 +11803,22 @@ tileOnly + tile, ≥ 5 tiles); §B duplicate-not-moved (each copy has a home wit
 page); §C every link is a real route; §D the one gate (`super_admin`, never `modules.admin`; `TENANT_NAV`; hub precedence);
 §E every file importing bare `NAV` calls `platformOK` or is on the justified list, and the tenant screens read `TENANT_NAV`;
 §F this section. No migration, no money.
+
+### 38.6 Platform-only PAGES are hidden from everyone else — and the screen asks the server's own question (owner 2026-09-26)
+Owner: *"hide from all users other than super admin"* — Billing (Tenants), Pricing & Free Trial, Access Log, System Control Box,
+Billing Usage & Pricing, Auto-Fix Pipeline, and the Operator Console were in every tenant admin's menu (module `admin`), each
+opening onto a "super-admin only" notice.
+- **The class, not the instance:** a page whose server gate is `_require_super_admin` was offered by the menu on `modules.admin`,
+  which every tenant admin role holds. Siblings fixed in the same change: **Companies (Tenants)** and **Business Types** (same gate),
+  the Flags & Compliance copies of Control Box / Billing Usage, and the `/configurations` "Platform" cards (which kept a SECOND,
+  hand-written `adminOnly` list — removed; they now read `rbac.PLATFORM_ONLY_HREFS`).
+- **One mark, one gate:** `NavItem.platformOnly` (the same field as `NavGroup.platformOnly`) → `rbac.platformOK(entry, user)` in the
+  sidebar + search, every hub and the Flags & Compliance dashboard; `rbac.platformPathOK(path, user)` in the `(platform)` route guard
+  (a URL visit redirects); `TENANT_NAV` drops platform-only items from the role / menu / label editors.
+- **One platform-authority fact:** the client read `user.super_admin` off the ACTING membership row, while the server's gate accepts
+  the flag on ANY membership or a house-org admin — so a platform admin standing in a tenant whose row lacked the flag saw
+  "super-admin only" on pages the server would have served. `core.router._platform_admin_rungs(rows, u)` is now read by BOTH
+  `_require_super_admin` and `_me_payload` (`user.super_admin` = login-level authority).
+- **Lock:** `harness_super_admin_toolbox.py` §G (each named page and every page that refuses non-super-admins in its own render —
+  `if (!isSuper) return` — is platformOnly at EVERY NAV occurrence; the guard, sidebar, hub and All Settings read the one mark) and
+  §H (the gate and `/me` read the same rungs). Negative control: un-marking `/admin/pricing` fails G1 + G2.

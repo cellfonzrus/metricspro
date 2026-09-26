@@ -367,6 +367,9 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None,
     u = _pick_membership(rows, (x_active_org or "").strip() or None)
     if not u:
         return {"provisioned": False, "user": None, "permissions": {}}
+    # `user.super_admin` is the LOGIN-level platform authority — the same two rungs the server's gate
+    # reads (index §38.6), never the acting row's own flag. Copied, so the membership row is untouched.
+    u = {**u, "super_admin": any(_platform_admin_rungs(rows, u))}
     org_id = u.get("org_id") or ORG_ID
     # ONE tenants-row fetch serves the tenant info, seed-version check and password/2FA policies
     # below (this same row was previously fetched up to 4x per request).
@@ -559,6 +562,18 @@ def _app_user_from_token(authorization: str, active_org: str = ""):
     return _pick_membership(_memberships(sb(), uid), (active_org or "").strip() or None)
 
 
+def _platform_admin_rungs(rows, u):
+    """(legacy, house) — THE two platform-authority rungs, read by `_require_super_admin` AND by `/me`
+    (index §38.6). legacy = the super_admin flag on ANY membership (a login-level bypass, not a
+    per-tenant grant); house = the acting membership is an admin of the house org (bootstrap). The
+    client used to read `super_admin` off the ACTING row only, so a platform admin standing in a
+    tenant whose row lacked the flag saw every platform page as "super-admin only" and the server
+    disagreed — one fact, two answers. Now both ask this."""
+    legacy = any(r.get("super_admin") for r in (rows or []))
+    house = bool(u and u.get("org_id") == ORG_ID and u.get("role") == "admin")
+    return legacy, house
+
+
 def _require_super_admin(authorization: str, active_org: str = ""):
     """Super-admin = the super_admin flag on ANY of the login's memberships (super_admin is a
     login-level bypass, not a per-tenant grant), OR (bootstrap) a house-org admin — so the very
@@ -574,9 +589,8 @@ def _require_super_admin(authorization: str, active_org: str = ""):
     """
     uid = _uid_from_token(authorization)
     rows = _memberships(sb(), uid) if uid else []
-    legacy = any(r.get("super_admin") for r in rows)
     u = _pick_membership(rows, (active_org or "").strip() or None)
-    house = bool(u and u.get("org_id") == ORG_ID and u.get("role") == "admin")
+    legacy, house = _platform_admin_rungs(rows, u)
 
     verdict = None
     if uid:

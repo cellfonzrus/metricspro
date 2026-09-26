@@ -181,10 +181,7 @@ check("D7 hub precedence: saved layout, then menu subs, then item tiles",
 # ── E. every NAV consumer dereferences the gate ──────────────────────────────────────────────────
 print("E. every NAV consumer asks platformOK / reads TENANT_NAV")
 # href-lookup consumers that walk bare NAV for a FIXED, non-platform group — justified one by one.
-HREF_LOOKUP_OK = {
-    os.path.join("app", "(platform)", "compliance", "page.tsx"):
-        "finds its own fixed 'flags-compliance' group by slug; never lists other groups",
-}
+HREF_LOOKUP_OK = {}   # empty: every bare-NAV walker gates (compliance joined in §38.6)
 MUST_TENANT_NAV = [
     os.path.join("app", "(platform)", "admin", p, "page.tsx")
     for p in ("roles", "menu", "labels", "business-types", "training", os.path.join("support", "docs"))
@@ -193,6 +190,7 @@ MUST_PLATFORM_OK = [
     os.path.join("app", "(platform)", "layout.tsx"),
     os.path.join("app", "(platform)", "hub", "[group]", "page.tsx"),
     os.path.join("app", "(platform)", "admin", "dashboards", "page.tsx"),
+    os.path.join("app", "(platform)", "compliance", "page.tsx"),
 ]
 imp_re = re.compile(r"import\s*\{([^}]*)\}\s*from\s*'@/lib/rbac'", re.S)
 consumers = []
@@ -224,6 +222,54 @@ for rel in MUST_TENANT_NAV:
 lay = dict(consumers).get(os.path.join("app", "(platform)", "layout.tsx"), "")
 check("E4 the sidebar filters groups with platformOK(g, user) before any rendering",
       ".filter(g => platformOK(g, user))" in lay, "sidebar + ⌘K search would show the toolbox to tenant admins")
+
+# ── G. platform-only PAGES (index §38.6) ─────────────────────────────────────────────────────────
+print("G. platform-only pages never reach anyone but the platform super admin")
+OWNER_NAMED = ["/admin/billing", "/admin/pricing", "/admin/access-log", "/admin/control-box",
+               "/admin/billing-usage", "/admin/fix-requests", "/operator"]
+SAME_CLASS = ["/admin/tenants", "/admin/business-types"]   # siblings: their pages/endpoints are super-admin-only too
+all_occ = {}
+for g, hdr, its in groups:
+    for i in its:
+        all_occ.setdefault(field(i, "href"), []).append("platformOnly: true" in hdr or "platformOnly: true" in i)
+for h in OWNER_NAMED + SAME_CLASS:
+    occ = all_occ.get(h, [])
+    check("G1 %-24s every NAV occurrence is platformOnly (%d)" % (h, len(occ)), bool(occ) and all(occ),
+          "a tenant admin would see it in the sidebar / a hub")
+# the class, not the list: a page that REFUSES a non-super-admin in its own render must be platform-only in NAV
+for dp, _dn, fns in os.walk(os.path.join(APP, "(platform)")):
+    if "page.tsx" not in fns:
+        continue
+    src = code_only(read(os.path.join(dp, "page.tsx")))
+    if not re.search(r"if \(!isSuper\) return", src):
+        continue
+    href = "/" + os.path.relpath(dp, os.path.join(APP, "(platform)")).replace(os.sep, "/")
+    occ = all_occ.get(href)
+    if occ is None:
+        continue   # not a NAV page (reached from another page only)
+    check("G2 %-24s refuses non-super-admins, so NAV marks it platformOnly" % href, all(occ),
+          "page says 'super-admin only' but the menu still offers it to tenant admins")
+check("G3 TENANT_NAV drops platform-only ITEMS too",
+      ".map(g => ({ ...g, items: g.items.filter(it => !it.platformOnly) }))" in rc, "role/menu editors would list them")
+check("G4 platformPathOK exists and rides isPlatformAdmin",
+      bool(re.search(r"export function platformPathOK\([^)]*\)[^{]*\{\s*if \(isPlatformAdmin\(user\)\) return true", rc)), "missing")
+check("G5 the route guard bounces a platform-only path (effect + render)",
+      lay.count("platformPathOK(pathname, user)") >= 2, "reachable by URL")
+check("G6 the sidebar filters ITEMS with platformOK(it, user)", "g.items.filter(it => platformOK(it, user))" in lay, "sidebar leak")
+check("G7 the hub filters ITEMS with platformOK(it, user)", ".filter(it => platformOK(it, user))" in hub_page, "hub leak")
+cfg = code_only(read(os.path.join(APP, "(platform)", "configurations", "page.tsx")))
+check("G8 All Settings reads PLATFORM_ONLY_HREFS (no second list of platform pages)",
+      "PLATFORM_ONLY_HREFS.has(" in cfg and "adminOnly" not in cfg, "a second copy of the fact")
+
+# ── H. ONE platform-authority fact, server and screen (index §38.6) ──────────────────────────────
+print("H. the screen's super_admin = the server gate's rungs")
+core = read(os.path.join(ROOT, "backend", "app", "modules", "core", "router.py"))
+check("H1 _platform_admin_rungs is defined once", core.count("def _platform_admin_rungs(") == 1, "missing / duplicated")
+m4 = re.search(r"def _require_super_admin\(.*?\n(?=def )", core, re.S)
+check("H2 _require_super_admin reads it", bool(m4) and "_platform_admin_rungs(rows, u)" in m4.group(0), "gate drifted")
+m5 = re.search(r"def _me_payload\(.*?\n(?=def |@router)", core, re.S)
+check("H3 /me sets user.super_admin from it (login-level, not the acting row)",
+      bool(m5) and '"super_admin": any(_platform_admin_rungs(rows, u))' in m5.group(0), "screen and server disagree")
 
 # ── F. registered ────────────────────────────────────────────────────────────────────────────────
 print("F. registered in the index")
