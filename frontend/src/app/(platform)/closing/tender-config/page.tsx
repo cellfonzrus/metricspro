@@ -16,8 +16,24 @@ const LEGS: { key: 'sales' | 'x_report'; label: string }[] = [
   { key: 'x_report', label: 'X-report' },
 ]
 
-type Def = { tender_key: string; label: string; recon_class: string; include_in_total: boolean; is_standard?: boolean }
+// is_active (index §29.9): a switched-off tender stays in this list (so it can be switched back on) but is
+// gone from the closing form and every recon. `include_in_total` only decides whether it adds to the total.
+type Def = { tender_key: string; label: string; recon_class: string; include_in_total: boolean; is_active: boolean; is_standard?: boolean }
 type Sug = { raw_label: string; suggested_tender?: string; confidence?: string }
+type RawDef = Partial<Def> & { tender_key: string }
+type MapRow = { tender_key: string; report: string; source_labels?: string[] }
+type ConfigResp = { defs?: RawDef[]; all_defs?: RawDef[]; standard?: RawDef[]; maps?: MapRow[]; recon_mode?: string; custom?: boolean }
+type DetectResp = { sales?: Sug[]; x_report?: Sug[]; detected_leg?: 'sales' | 'x_report'; detect_detail?: string }
+const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
+
+function StepHead({ n, title, sub }: { n: number; title: string; sub?: string }) {
+  return (
+    <div style={{ margin: '22px 0 10px' }}>
+      <div style={{ fontSize: 15, fontWeight: 700 }}><span style={{ color: 'var(--accent)' }}>Step {n}</span> · {title}</div>
+      {sub && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+    </div>
+  )
+}
 
 function slug(s: string) { return (s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') }
 
@@ -36,10 +52,12 @@ export default function TenderConfigPage() {
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(() => {
-    api('/api/v1/closing/tender-config').then((d: any) => {
-      const dfs: Def[] = (d?.defs?.length ? d.defs : d?.standard || []).map((x: any) => ({
+    api('/api/v1/closing/tender-config').then((d: ConfigResp | null) => {
+      // The EDITOR reads all_defs (switched-off tenders included); an older backend without it → defs.
+      const saved = d?.all_defs?.length ? d.all_defs : d?.defs
+      const dfs: Def[] = (saved?.length ? saved : d?.standard || []).map((x: RawDef) => ({
         tender_key: x.tender_key, label: x.label || x.tender_key, recon_class: x.recon_class || 'other',
-        include_in_total: x.include_in_total !== false, is_standard: !!x.is_standard,
+        include_in_total: x.include_in_total !== false, is_active: x.is_active !== false, is_standard: !!x.is_standard,
       }))
       setDefs(dfs)
       setReconMode(d?.recon_mode === '2way' ? '2way' : '3way')
@@ -57,13 +75,13 @@ export default function TenderConfigPage() {
         }
       }
       setAssign(a); setRawLabels(rl)
-    }).catch((e: any) => setMsg('❌ ' + (e?.message || e)))
+    }).catch((e: unknown) => setMsg('❌ ' + errText(e)))
   }, [])
   useEffect(() => { load() }, [load])
 
   // ── field (tender def) editing ──
   const setDef = (i: number, patch: Partial<Def>) => setDefs(ds => ds.map((d, j) => j === i ? { ...d, ...patch } : d))
-  const addDef = () => setDefs(ds => [...ds, { tender_key: '', label: '', recon_class: 'other', include_in_total: true }])
+  const addDef = () => setDefs(ds => [...ds, { tender_key: '', label: '', recon_class: 'other', include_in_total: true, is_active: true }])
   const delDef = (i: number) => setDefs(ds => ds.filter((_, j) => j !== i))
   const move = (i: number, dir: -1 | 1) => setDefs(ds => {
     const j = i + dir; if (j < 0 || j >= ds.length) return ds
@@ -72,7 +90,7 @@ export default function TenderConfigPage() {
   async function seedStandard() {
     setBusy(true)
     try { await api('/api/v1/closing/tender-config/seed-standard', { method: 'POST' }); setCustom(false); load(); setMsg('✅ Seeded the 7 standard tenders.') }
-    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    catch (e: unknown) { setMsg('❌ ' + errText(e)) }
     setBusy(false)
   }
 
@@ -87,7 +105,7 @@ export default function TenderConfigPage() {
     try {
       const fd = new FormData()
       if (file) { fd.append('file', file); fd.append('leg', leg) }
-      const d: any = await apiUpload('/api/v1/closing/tender-config/detect', fd)
+      const d = (await apiUpload('/api/v1/closing/tender-config/detect', fd)) as DetectResp | null
       setRawLabels(prev => {
         const next = { ...prev }
         for (const l of ['sales', 'x_report'] as const) {
@@ -113,7 +131,7 @@ export default function TenderConfigPage() {
       } else {
         setMsg(n ? `🔍 Found ${n} tender value(s); pre-filled the best match — review & Save.` : 'No tender values found — upload a sample report, or ingest a day of sales first.')
       }
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    } catch (e: unknown) { setMsg('❌ ' + errText(e)) }
     setBusy(false)
   }
   const setAssignOne = (leg: string, raw: string, key: string) => setAssign(a => ({ ...a, [leg]: { ...a[leg], [raw]: key } }))
@@ -123,31 +141,31 @@ export default function TenderConfigPage() {
     const cleanDefs = defs.map((d, i) => ({ ...d, tender_key: d.tender_key || slug(d.label), sort_order: i }))
       .filter(d => d.tender_key)
     if (!cleanDefs.length) { setMsg('Add at least one tender.'); return }
-    const keys = new Set(cleanDefs.map(d => d.tender_key))
+    if (!cleanDefs.some(d => d.is_active)) { setMsg('Keep at least one tender active — a closing needs somewhere to enter the money.'); return }
+    // Only ACTIVE tenders take report mappings: a label mapped to a switched-off tender is let go (the server
+    // refuses a mapping to a tender that is off), and the save message says how many.
+    const keys = new Set(cleanDefs.filter(d => d.is_active).map(d => d.tender_key))
+    let released = 0
     // group per-leg assignments back into map rows {tender_key, report, source_labels[]}
-    const maps: any[] = []
+    const maps: MapRow[] = []
     for (const leg of ['sales', 'x_report'] as const) {
       const byKey: Record<string, string[]> = {}
       for (const [lab, key] of Object.entries(assign[leg])) {
-        if (!key || !keys.has(key)) continue
+        if (!key) continue
+        if (!keys.has(key)) { released++; continue }
         ;(byKey[key] = byKey[key] || []).push(lab)
       }
       for (const [key, labels] of Object.entries(byKey)) maps.push({ tender_key: key, report: leg, source_labels: labels })
     }
     setBusy(true)
     try {
-      const r: any = await api('/api/v1/closing/tender-config', { method: 'PUT', body: JSON.stringify({ defs: cleanDefs, maps, recon_mode: reconMode, custom }) })
-      setMsg(`✅ Saved ${r?.defs ?? cleanDefs.length} tenders · ${r?.maps ?? maps.length} mapping row(s).`); load()
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+      const r = (await api('/api/v1/closing/tender-config', { method: 'PUT', body: JSON.stringify({ defs: cleanDefs, maps, recon_mode: reconMode, custom }) })) as { defs?: number; maps?: number } | null
+      const off = cleanDefs.filter(d => !d.is_active).length
+      setMsg(`✅ Saved ${r?.defs ?? cleanDefs.length} tenders${off ? ` (${off} switched off — hidden from the closing form)` : ''} · ${r?.maps ?? maps.length} mapping row(s)`
+        + (released ? ` · ${released} report label(s) that pointed at a switched-off tender were un-mapped.` : '.')); load()
+    } catch (e: unknown) { setMsg('❌ ' + errText(e)) }
     setBusy(false)
   }
-
-  const StepHead = ({ n, title, sub }: { n: number; title: string; sub?: string }) => (
-    <div style={{ margin: '22px 0 10px' }}>
-      <div style={{ fontSize: 15, fontWeight: 700 }}><span style={{ color: 'var(--accent)' }}>Step {n}</span> · {title}</div>
-      {sub && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
-    </div>
-  )
 
   return (
     <div>
@@ -174,7 +192,7 @@ export default function TenderConfigPage() {
       <div className="card table-wrapper" style={{ padding: 0 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>
-            {['', 'Label (on the sheet)', 'Key', 'Recon class', 'In total', ''].map(h =>
+            {['', 'Active', 'Label (on the sheet)', 'Key', 'Recon class', 'In total', ''].map(h =>
               <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
           </tr></thead>
           <tbody>
@@ -184,7 +202,10 @@ export default function TenderConfigPage() {
                   <button className="btn btn-secondary" style={{ fontSize: 11, padding: '1px 6px' }} onClick={() => move(i, -1)}>↑</button>
                   <button className="btn btn-secondary" style={{ fontSize: 11, padding: '1px 6px', marginLeft: 2 }} onClick={() => move(i, 1)}>↓</button>
                 </td>
-                <td style={cell}><input style={{ ...sel, width: '100%' }} value={d.label} placeholder="e.g. Financing" onChange={e => setDef(i, { label: e.target.value })} /></td>
+                <td style={cell}><input type="checkbox" checked={d.is_active} title="Untick to switch this tender off — it disappears from the closing form and every reconciliation"
+                  onChange={e => setDef(i, { is_active: e.target.checked })} /></td>
+                <td style={{ ...cell, opacity: d.is_active ? 1 : 0.55 }}><input style={{ ...sel, width: '100%' }} value={d.label} placeholder="e.g. Financing" onChange={e => setDef(i, { label: e.target.value })} />
+                  {!d.is_active && <div style={{ fontSize: 10, color: 'var(--text3)' }}>switched off — not shown anywhere</div>}</td>
                 <td style={cell}><input style={{ ...sel, width: 130 }} value={d.tender_key} placeholder={slug(d.label) || 'auto'} onChange={e => setDef(i, { tender_key: slug(e.target.value) })} />
                   {d.is_standard && <div style={{ fontSize: 10, color: 'var(--text3)' }}>standard</div>}</td>
                 <td style={cell}>
@@ -192,7 +213,8 @@ export default function TenderConfigPage() {
                     {RECON_CLASSES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                   </select>
                 </td>
-                <td style={cell}><input type="checkbox" checked={d.include_in_total} onChange={e => setDef(i, { include_in_total: e.target.checked })} /></td>
+                <td style={cell}><input type="checkbox" checked={d.include_in_total} title="Adds this tender's amount to the closing total. It does NOT hide the tender — use Active for that."
+                  onChange={e => setDef(i, { include_in_total: e.target.checked })} /></td>
                 <td style={cell}><button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => delDef(i)}>✕</button></td>
               </tr>
             ))}
@@ -211,7 +233,7 @@ export default function TenderConfigPage() {
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
         <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
           onChange={e => { const f = e.target.files?.[0]; if (f) detect(f, uploadLeg); e.target.value = '' }} />
-        <select style={sel} value={uploadLeg} onChange={e => setUploadLeg(e.target.value as any)} title="Which report the next uploaded sample is">
+        <select style={sel} value={uploadLeg} onChange={e => setUploadLeg(e.target.value as 'sales' | 'x_report' | 'auto')} title="Which report the next uploaded sample is">
           <option value="auto">Auto-detect shape</option>
           <option value="sales">Sales transactions sample</option>
           <option value="x_report">X-Report sample</option>
@@ -234,7 +256,7 @@ export default function TenderConfigPage() {
                   <span style={{ color: 'var(--text3)' }}>→</span>
                   <select style={{ ...sel, minWidth: 150 }} value={assign[leg.key]?.[s.raw_label] || ''} onChange={e => setAssignOne(leg.key, s.raw_label, e.target.value)}>
                     <option value="">— ignore —</option>
-                    {defs.map(d => <option key={d.tender_key || d.label} value={d.tender_key || slug(d.label)}>{d.label || d.tender_key}</option>)}
+                    {defs.filter(d => d.is_active).map(d => <option key={d.tender_key || d.label} value={d.tender_key || slug(d.label)}>{d.label || d.tender_key}</option>)}
                   </select>
                 </div>
               ))}

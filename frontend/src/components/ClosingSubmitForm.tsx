@@ -292,10 +292,12 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
 
   useEffect(() => { apiCached('/api/v1/closing/stores', LOOKUP).then((s: StoreOpt[] | null) => setStores(s || [])).catch(() => {}) }, [])
   // Configured tenders (mig 111): render the tenant's own tender fields; null → the built-in 7 (static).
-  useEffect(() => { api('/api/v1/closing/tender-config').then((d: { defs?: TenderDef[] } | null) => setTdefs((d?.defs && d.defs.length) ? d.defs : null)).catch(() => setTdefs(null)) }, [])
+  // A company with its OWN list (`configured`) gets exactly its ACTIVE tenders — a switched-off tender never
+  // reappears through the built-in fallback (index §29.9). No list at all → the built-in 7, as before.
+  useEffect(() => { api('/api/v1/closing/tender-config').then((d: { defs?: TenderDef[]; configured?: boolean } | null) => setTdefs(d?.configured ? (d.defs || []) : ((d?.defs && d.defs.length) ? d.defs : null))).catch(() => setTdefs(null)) }, [])
   // Configured count fields (mig 501): render the tenant's own activation-count fields; null → the
   // built-in 3 (static), so an un-opted tenant's form is byte-identical to today.
-  useEffect(() => { api('/api/v1/closing/count-config').then((d: { defs?: CountDef[] } | null) => setCdefs((d?.defs && d.defs.length) ? d.defs : null)).catch(() => setCdefs(null)) }, [])
+  useEffect(() => { api('/api/v1/closing/count-config').then((d: { defs?: CountDef[]; configured?: boolean } | null) => setCdefs(d?.configured ? (d.defs || []) : ((d?.defs && d.defs.length) ? d.defs : null))).catch(() => setCdefs(null)) }, [])
   // Employee roster for the "Employee" picker (RULE THREE §3b — pick, don't type): company-wide,
   // same fetch/shape cash-config already uses for the store-closer picker. id === label = the
   // employee's name (daily_closing.employee_name stays a NAME STRING this wave — see handoff).

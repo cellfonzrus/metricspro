@@ -2715,6 +2715,9 @@ def get_tender_config(org_id: str = ORG_ID):
     client = sb()
     from .tender_config import load_tender_config, STANDARD_DEFS
     defs, maps = load_tender_config(client, org_id)
+    # The editor's view (index §29.9): every saved def INCLUDING switched-off ones. `configured` tells the
+    # closing form "this company has its own list" — so an all-off list never falls back to the built-in 7.
+    all_defs, _ = load_tender_config(client, org_id, include_inactive=True)
     mode, custom = "3way", False
     try:
         t = (client.schema("storeops").table("tenants").select("closing_recon_mode,closing_tenders_custom")
@@ -2726,7 +2729,8 @@ def get_tender_config(org_id: str = ORG_ID):
         pass
     standard = [{"tender_key": k, "label": lbl, "recon_class": rc, "is_standard": True, "include_in_total": intot}
                 for (k, lbl, rc, intot) in STANDARD_DEFS]
-    return {"defs": defs, "maps": maps, "standard": standard, "recon_mode": mode, "custom": custom}
+    return {"defs": defs, "all_defs": all_defs, "configured": bool(all_defs), "maps": maps,
+            "standard": standard, "recon_mode": mode, "custom": custom}
 
 
 class PutTenderConfigIn(LaxModel):
@@ -2782,6 +2786,11 @@ def put_tender_config(payload: PutTenderConfigIn, org_id: str = ORG_ID, authoriz
     # (dead/deactivated/typo'd tender_key) now fails loudly at save time instead of silently at read
     # time. Nothing is deleted/written until this check passes (a rejected save leaves the tenant's
     # PREVIOUS config completely untouched).
+    # A closing with no money box at all cannot be submitted — refuse an all-off list rather than let the
+    # form fall back to the built-in 7 the company switched off (index §29.9).
+    if rows and not any(r["is_active"] for r in rows):
+        raise HTTPException(400, "At least one tender must stay active — a closing needs somewhere to enter "
+                                 "the money. Nothing was saved.")
     active_keys = {r["tender_key"] for r in rows if r["is_active"]} or set(CANON_TENDERS)
     off_axis = sorted({m["tender_key"] for m in mrows if m["tender_key"] not in active_keys})
     if off_axis:
@@ -2885,9 +2894,10 @@ def get_count_config(org_id: str = ORG_ID):
     client = sb()
     from . import count_config
     defs = count_config.load_count_config(client, org_id)
+    all_defs = count_config.load_count_config(client, org_id, include_inactive=True)   # the editor's view (§29.9)
     standard = [{"field_key": k, "label": lbl, "recon_class": rc, "sort_order": so, "is_standard": True}
                 for (k, lbl, rc, so) in count_config.STANDARD_DEFS]
-    return {"defs": defs, "standard": standard}
+    return {"defs": defs, "all_defs": all_defs, "configured": bool(all_defs), "standard": standard}
 
 
 class PutCountConfigIn(LaxModel):

@@ -17,7 +17,12 @@ const reconClasses = (pos: string) => [
   ['other', `Other (not compared to ${pos})`],
 ]
 
-type Def = { field_key: string; label: string; recon_class: string; is_standard?: boolean }
+// is_active (index §29.9): a switched-off count stays listed here (so it can come back) but is gone from the
+// closing form, the DM verify view and every recon.
+type Def = { field_key: string; label: string; recon_class: string; is_active: boolean; is_standard?: boolean }
+type RawDef = Partial<Def> & { field_key: string }
+type ConfigResp = { defs?: RawDef[]; all_defs?: RawDef[]; standard?: RawDef[] }
+const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 function slug(s: string) { return (s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') }
 
@@ -29,18 +34,19 @@ export default function CountConfigPage() {
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(() => {
-    api('/api/v1/closing/count-config').then((d: any) => {
-      const dfs: Def[] = (d?.defs?.length ? d.defs : d?.standard || []).map((x: any) => ({
+    api('/api/v1/closing/count-config').then((d: ConfigResp | null) => {
+      const saved = d?.all_defs?.length ? d.all_defs : d?.defs   // the editor sees switched-off counts too
+      const dfs: Def[] = (saved?.length ? saved : d?.standard || []).map((x: RawDef) => ({
         field_key: x.field_key, label: x.label || x.field_key, recon_class: x.recon_class || 'other',
-        is_standard: !!x.is_standard,
+        is_active: x.is_active !== false, is_standard: !!x.is_standard,
       }))
       setDefs(dfs)
-    }).catch((e: any) => setMsg('❌ ' + (e?.message || e)))
+    }).catch((e: unknown) => setMsg('❌ ' + errText(e)))
   }, [])
   useEffect(() => { load() }, [load])
 
   const setDef = (i: number, patch: Partial<Def>) => setDefs(ds => ds.map((d, j) => j === i ? { ...d, ...patch } : d))
-  const addDef = () => setDefs(ds => [...ds, { field_key: '', label: '', recon_class: 'other' }])
+  const addDef = () => setDefs(ds => [...ds, { field_key: '', label: '', recon_class: 'other', is_active: true }])
   const delDef = (i: number) => setDefs(ds => ds.filter((_, j) => j !== i))
   const move = (i: number, dir: -1 | 1) => setDefs(ds => {
     const j = i + dir; if (j < 0 || j >= ds.length) return ds
@@ -50,7 +56,7 @@ export default function CountConfigPage() {
   async function seedStandard() {
     setBusy(true)
     try { await api('/api/v1/closing/count-config/seed-standard', { method: 'POST' }); load(); setMsg('✅ Seeded the 3 standard count fields.') }
-    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    catch (e: unknown) { setMsg('❌ ' + errText(e)) }
     setBusy(false)
   }
 
@@ -59,9 +65,9 @@ export default function CountConfigPage() {
       .filter(d => d.field_key)
     setBusy(true)
     try {
-      const r: any = await api('/api/v1/closing/count-config', { method: 'PUT', body: JSON.stringify({ defs: cleanDefs }) })
+      const r = (await api('/api/v1/closing/count-config', { method: 'PUT', body: JSON.stringify({ defs: cleanDefs }) })) as { defs?: number } | null
       setMsg(`✅ Saved ${r?.defs ?? cleanDefs.length} count field(s).`); load()
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    } catch (e: unknown) { setMsg('❌ ' + errText(e)) }
     setBusy(false)
   }
 
@@ -88,7 +94,7 @@ export default function CountConfigPage() {
       <div className="card table-wrapper" style={{ marginTop: 16, padding: 0 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>
-            {['', 'Label (on the sheet)', 'Key', 'Recon class', ''].map(h =>
+            {['', 'Active', 'Label (on the sheet)', 'Key', 'Recon class', ''].map(h =>
               <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
           </tr></thead>
           <tbody>
@@ -98,7 +104,10 @@ export default function CountConfigPage() {
                   <button className="btn btn-secondary" style={{ fontSize: 11, padding: '1px 6px' }} onClick={() => move(i, -1)}>↑</button>
                   <button className="btn btn-secondary" style={{ fontSize: 11, padding: '1px 6px', marginLeft: 2 }} onClick={() => move(i, 1)}>↓</button>
                 </td>
-                <td style={cell}><input style={{ ...sel, width: '100%' }} value={d.label} placeholder="e.g. Port-In" onChange={e => setDef(i, { label: e.target.value })} /></td>
+                <td style={cell}><input type="checkbox" checked={d.is_active} title="Untick to switch this count off — it disappears from the closing form and every reconciliation"
+                  onChange={e => setDef(i, { is_active: e.target.checked })} /></td>
+                <td style={{ ...cell, opacity: d.is_active ? 1 : 0.55 }}><input style={{ ...sel, width: '100%' }} value={d.label} placeholder="e.g. Port-In" onChange={e => setDef(i, { label: e.target.value })} />
+                  {!d.is_active && <div style={{ fontSize: 10, color: 'var(--text3)' }}>switched off — not shown anywhere</div>}</td>
                 <td style={cell}><input style={{ ...sel, width: 150 }} value={d.field_key} placeholder={slug(d.label) || 'auto'} disabled={!!d.is_standard} onChange={e => setDef(i, { field_key: slug(e.target.value) })} />
                   {d.is_standard && <div style={{ fontSize: 10, color: 'var(--text3)' }}>standard</div>}</td>
                 <td style={cell}>
