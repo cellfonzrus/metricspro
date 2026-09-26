@@ -25,15 +25,17 @@ import { Fragment, useMemo, useState } from 'react'
 import type { PayoutAudience } from './payoutAudience'
 import { fmt } from '@/lib/client'
 import {
-  categoryOf, crossRefFor, EVENT_COUNTERS, EVENT_TYPE_LABEL, filterPlanLinesByCategory, groupPlanLinesByTxn,
+  categoryOf, crossRefFor, EVENT_COUNTERS, EVENT_TYPE_LABEL, filterPlanLinesByCategory, groupPlanLinesByTxn, saleLabel,
   isFlatOnce, isUnit, planCategories, planLineMembership, planLineTotals, type PlanLine,
 } from './planLines'
 
 // MANAGER columns (the diagnostic) vs EMPLOYEE columns (owner 2026-09-26: "only show the line they are getting
 // paid … carrier commission not be displayed"). The audience is the one the SERVER served (payload.audience —
 // backend payout_audience.resolve); in the employee payload Price / GP do not exist, so they are not columns.
+// The employee's row names the SALE (action · phone line · customer) in place of the product name (owner
+// 2026-09-26, index §6j); the manager's keeps the product and shows the same sale label under it.
 const MANAGER_COLS = ['Rule', 'Date', 'Trans ID', 'Product', 'Contract', 'Basis', 'Price', 'GP', 'Line $']
-const EMPLOYEE_COLS = ['Rule', 'Date', 'Trans ID', 'Product', 'Contract', 'Basis', 'Line $']
+const EMPLOYEE_COLS = ['Rule', 'Date', 'Trans ID', 'Sale', 'Contract', 'Basis', 'Line $']
 const RIGHT = new Set(['Price', 'GP', 'Line $'])
 
 export default function PlanLineBreakdown({ rows, compact, children, audience }: {
@@ -214,13 +216,6 @@ export default function PlanLineBreakdown({ rows, compact, children, audience }:
                   <tr style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={{ ...td, borderLeft: `3px solid ${dual ? 'var(--border)' : 'var(--surface2)'}` }}>
                       {categoryOf(l)}
-                      {/* EMPLOYEE view: the paid line IS the event's row — name the activation / upgrade it pays */}
-                      {employee && l.event_id && (
-                        <div style={xref}>
-                          {EVENT_TYPE_LABEL[String(l.event_type)] || l.event_type || 'Activation'}
-                          {l.event_key ? ` · ${l.event_key_kind === 'device' ? 'device' : 'line'} ${l.event_key}` : ''}
-                        </div>
-                      )}
                       {/* CROSS-REFERENCE — the same sale line under another rule, one muted line. */}
                       {x.paidElsewhere.length > 0 && (
                         <div style={xref} title="This is the same sale line as the paying row above">
@@ -236,7 +231,12 @@ export default function PlanLineBreakdown({ rows, compact, children, audience }:
                     </td>
                     <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.date || '—'}</td>
                     <td style={{ ...td, fontFamily: 'monospace', color: 'var(--text3)' }}>{l.trans_id || '—'}</td>
-                    <td style={td} title={l.product || ''}>{l.product || '—'}</td>
+                    {employee
+                      ? <td style={td}>{saleLabel(l) || '—'}</td>
+                      : <td style={td} title={l.product || ''}>
+                          {l.product || '—'}
+                          {(l.phone || l.customer) && <div style={xref}>{[l.phone, l.customer].filter(Boolean).join(' · ')}</div>}
+                        </td>}
                     <td style={td}>{l.contract_type || '—'}</td>
                     <td style={{ ...td, color: 'var(--text3)' }}>{l.basis || '—'}</td>
                     {!employee && <td style={{ ...td, textAlign: 'right' }}>{fmt(l.ext_price)}</td>}

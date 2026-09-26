@@ -158,6 +158,27 @@ ok('transaction subtotal is still the sum of the paid rows',
 ok('single-membership payload renders NO cross-reference lines',
   !/same line/.test(html.replace(/title="[^"]*"/g, '')) && !/also matched/.test(html.replace(/title="[^"]*"/g, '')))
 
+// ── index §6j: the SALE on the row — employee: action · phone · customer IN PLACE of the product; manager: the
+// product stays, the phone + customer ride under it. Built from the server's stamp (event_label / phone / customer).
+section('THE SALE ON THE ROW (index §6j)')
+const sale = [L('activations', '2026-07-09', 'Z1321IN11092', 'DPA New Act iPhone (Rate Plan Rebate)', 10.00,
+  { event_id: 'Z1321IN11092|phone:9297458084', event_key: '9297458084', event_key_kind: 'phone', event_type: 'activation',
+    event_label: 'New activation', phone: '9297458084', customer: 'CHEORGE CHEISHVILI INC' })]
+const empRows = sale.map(({ ext_price, gp, ...rest }) => rest)
+const ehtml = renderToStaticMarkup(React.createElement(PlanLineBreakdown, { rows: empRows, compact: true, audience: 'employee' }))
+const etext = ehtml.replace(/title="[^"]*"/g, '').replace(/<[^>]+>/g, ' ').replace(/<!-- -->/g, '')
+ok('employee: the row names the action, the phone line and the customer',
+  /New activation · 9297458084 · CHEORGE CHEISHVILI INC/.test(etext), etext.slice(0, 200))
+ok('employee: no product name on the row', !/DPA New Act iPhone/.test(ehtml))
+ok('employee: a Sale column, no Product / Price / GP columns',
+  />Sale</.test(ehtml) && !/>Product</.test(ehtml) && !/>Price</.test(ehtml) && !/>GP</.test(ehtml))
+ok('employee: the paid $10.00 is on screen', ehtml.includes('$10.00'))
+const mhtml = renderToStaticMarkup(React.createElement(PlanLineBreakdown, { rows: sale, compact: true }))
+const mtext = mhtml.replace(/title="[^"]*"/g, '').replace(/<[^>]+>/g, ' ').replace(/<!-- -->/g, '')
+ok('manager: the product stays and the phone + customer show under it',
+  /DPA New Act iPhone/.test(mtext) && /9297458084 · CHEORGE CHEISHVILI INC/.test(mtext))
+ok('manager: Price and GP columns stay', />Price</.test(mhtml) && />GP</.test(mhtml))
+
 console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILURES'} — ${pass} passed, ${fail} failed`)
 // react-dom's scheduler keeps a MessageChannel alive, so exit explicitly rather than hanging
 rmSync(OUT, { recursive: true, force: true })

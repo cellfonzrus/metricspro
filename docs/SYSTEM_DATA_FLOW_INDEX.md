@@ -31,6 +31,7 @@ Primary code homes:
 | 6g | **Rep Incentive — month range** | "Show the rep incentive for several months on one page, a row per rep per month — and is each month the same as viewing it alone?" |
 | 6h | **Multi-month offered only when configured** | "Why does a rep's pay show a multi-month option when this company has no multi-month pay — where is that decided, and what if money is there anyway?" |
 | 6i | **What an employee sees of their own commission** | "Why does the employee payout report show only the line I am paid for, and no carrier Price / GP? Which surfaces show an employee their commission, and where is 'paid line' and 'employee-visible field' decided?" |
+| 6j | **Who is looking; the sale on the paid row; one employee over several months** | "Why does a rep not see Pay Discrepancy but a manager does — where is that list? Why does a manager see every line on the Rep Incentive report and a rep only their paid ones? Where does the customer name / phone on a paid row come from? How do I export one employee's statement for several months, and is each month the same as downloading it alone?" |
 | 7 | **Carrier residual installments** | "Multi-month carrier residual pay from raw_mi. Why do named activation_types not pay?" |
 | 12 | **External credit machine + Card Settlement Recon** | "Where does the external / white-machine card figure live, what is it called for this tenant, and how does it tally with what the processor actually settled?" |
 | 7a | **Residual per Subscriber report** | "Where does the residual/subscriber trend come from per carrier? Why is a Total/MA store named, not a processor account id?" |
@@ -2043,9 +2044,9 @@ carrier Price / GP; `/commission-explain`, `/commission-statement(s)` and `/comm
 - Shapers every caller uses: `employee_explain` (paid lines only, allow-listed, `audience: 'employee'` stamped),
   `employee_rep_row`, `employee_drill`; `disallowed_fields(payload, kind)` and `rule_line_total` for proofs.
 - `router._refuse_employee_audience(authorization, org_id, what)` — the 403 for manager-only carrier reports.
-- Frontend: `_lib/payoutAudience.ts` — `PAYOUT_AUDIENCE_OF_PAGE` (the ONE page declaration:
-  `/commcalc/reports` → employee, `/commcalc/commission-explain` → manager), `audienceParam(page)`,
-  `servedAudience(payload)`. Components render from the SERVED audience (never a page-local flag):
+- Frontend: `_lib/payoutAudience.ts` — `servedAudience(payload)`, `viewerAudience(perms)`. (The #306 per-page
+  declaration `PAYOUT_AUDIENCE_OF_PAGE` / `audienceParam` is GONE — superseded by §6j: pages send no audience,
+  the server decides from who is looking.) Components render from the SERVED audience (never a page-local flag):
   `PlanLineBreakdown` drops Price/GP columns and the per-event sub-headers and shows the event label
   (type · line) under the rule when `audience === 'employee'`. Hiding is never frontend-only: the fields are not in
   the payload.
@@ -2063,7 +2064,7 @@ carrier Price / GP; `/commission-explain`, `/commission-statement(s)` and `/comm
 | `GET /commcalc/commission-drill` (Boost drill) | wired | own-rep guard + `employee_drill` |
 | `core GET /employee-dashboard` "my commission" | wired | always `employee_rep_row` |
 | notify Incentives email (`report_registry._commissions`) | wired | `get_commissions(audience="employee")` |
-| Rep Incentive page (`reports/page.tsx`): drill, multimonth table ("MA says paid" hidden), Boost modal, exports (`commissionExport` — rows come from the allow-listed payload) | wired | declares `employee` via `payoutAudience.ts` |
+| Rep Incentive page (`reports/page.tsx`): drill, multimonth table ("MA says paid" hidden), Boost modal, exports (`commissionExport` — rows come from the allow-listed payload) | wired | renders the SERVED audience; since §6j it sends none (a rep is served employee, a manager the full report) |
 | `/carrier-vs-pay`, `/discrepancy/{period}`, `/discrepancy/{period}/phantom`, `/discrepancy-appeals`, `/commission-device` | manager-only | `_refuse_employee_audience` → 403 for a self-scoped rep |
 | `commission-explain/page.tsx` | excused | manager diagnostic, declared `manager`; a self rep is forced `employee` server-side anyway |
 | `sales_comparison` | excused | store units / accessory $, not commission lines |
@@ -2097,6 +2098,85 @@ batch, drill, the 5 manager-only 403s, the dashboard row, predicate truth table)
 through the home or returns a carrier field, a manager-only carrier report opens to an employee, a surface filters
 paid lines on its own, a second paid-line predicate appears (backend or frontend), or a payout page stops declaring
 its audience; 8 negative controls + the green tree); `frontend/tools/plan-drilldown-render-proof.mjs` (30).
+
+---
+
+### 6j. WHO IS LOOKING decides the payout view; the paid row names its sale; one employee over several months (owner 2026-09-26)
+
+Owner, verbatim: *"pay discrepancy should be hidden, managers can see rep incentive, on paid row show the action /
+upgrade with the details of the phone number and customer name. also need a report to export one employees report
+over a number of selected months. all these need to be platform wide"*. Four facts, one home each, every org.
+
+**1 · The manager-only list is ONE registry the server AND the nav read.** `payout_audience.MANAGER_ONLY_SURFACES`
+(key, label, endpoints, pages): `carrier_vs_pay` (/carrier-vs-pay → page `/commcalc/carrier-vs-pay`),
+`pay_discrepancy` (/discrepancy/{period} + /phantom → `/commcalc/discrepancy`), `commission_discrepancy`
+(/discrepancy-appeals → `/commcalc/commission-discrepancy`), `commission_device` (/commission-device — a drill, no
+page). The server's refusal names its key: `router._refuse_employee_audience(authorization, org_id, key)` (label via
+`manager_only_label`; an unregistered key raises). The nav reads the SAME list through `/me`:
+`core._me_payload` stamps `permissions.payout = payout_audience.viewer_payload(role_is_self_scoped(org, role))` →
+`{audience, refused_pages}`; `lib/rbac.ts payoutRefused(perms, path)` is asked FIRST in `canSeeItem`,
+`canAccessPath` and `navBlockReason` — so the sidebar, every hub, the Report Center directory
+(`lib/reports.ts`), `ScreenLink` and the route guard hide / bounce them with no per-item flag (no bypass: a
+per-function grant or the admin module cannot reopen what the server refuses). **ONE self-scope answer:**
+`storeops.router.role_is_self_scoped(org, role, rbac_on=)` (RBAC on AND role scope 'self') — `/me`,
+`commcalc.router._caller_rep_keys` (the payout audience) and `_caller_self_keyset` all ask it.
+
+**2 · The payout view comes from WHO IS LOOKING, not a page constant.** The Rep Incentive page and
+commission-explain send no `audience`; `payout_audience.resolve('', caller_is_self)` serves a rep the employee
+view (paid lines, no carrier $, own pay only — 403 for anyone else's) and a manager / admin the full report
+(every line, ⛔ reasons, Price / GP) — as before #306. Statements, the batch and the range follow the same rule.
+`audience=` stays an API parameter for server-side callers (the notify Incentives email asks for `employee`).
+
+**3 · The paid row names its SALE: action · phone line · customer.** Stamped INSIDE the one drill-down producer
+(`commission_drilldown.explain_rep` → `attach_line_identity`), so `/commission-explain`, `/commission-statement(s)`
+and the range all carry it: `event_label` = THE class label (`line_class.CLASS_LABELS` via
+`payout_audience.event_label` — 'New activation', 'Upgrade', …), `phone` = `payout_audience.line_phone` (the
+activation event's key when phone-keyed, else THE phone rule `line_class.line_event_keys`), `customer` =
+`_sale_customers` → **REUSED: `inventory_sold_recon.sale_customer` / `invoice_customer_map`** — the sale line's
+`raw_sales.customer`, else its invoice header `raw_sales_invoice.customer` (mig 1012). This is the rule the
+inventory integrity report (§11b, `sales_detail_index`) already applied; it was factored out, not copied, and
+`sales_detail_index` now calls it. *Why not the POS customer master (§30.16)?* Its customers are BUILT from these
+same report lines (`receipt_import.match_or_create`) and it is keyed by `pos.sales` / phone lines, which the
+commission lines do not carry — the sale's own customer field is the source it was built from. PII: the name only;
+the read selects `trans_id,customer` and nothing else, org-scoped (no id number is ever touched). `event_label`,
+`phone`, `customer` are on `EMPLOYEE_LINE_FIELDS` on purpose. Display: `PlanLineBreakdown` (employee) shows a
+**Sale** column = `planLines.saleLabel(l)` IN PLACE of the product; the manager keeps Product with phone · customer
+under it. The statement (`commission_statement._sale_line_items`) lists the same rows — employee: paid only, no
+product / Price / GP; manager: paid lines, plus the unpaid ones with their reasons only under the default-closed
+held grant.
+
+**4 · One employee over a month range — the statement, extended (no sibling).** `GET /commcalc/commission-statement
+?rep=&period_from=&period_to=&fmt=pdf|csv|json` (one month with `fmt=csv` = a one-month range). Months from THE
+enumeration `account/_period.month_range`, capped at `rep_incentive_range.MAX_MONTHS` (12) like §6g; each month is
+`router._statement_doc` — the SAME builder the single download and the batch use (`_statement_ctx` holds the
+org-wide carrier mode / gate config / tenant / held grant) — so a month's section IS that month's statement.
+`commission_statement.build_range` only sums the months' payout of record into the grand total;
+`render_range_pdf` (a totals page, then each month) / `range_csv` (per month: sale rows, earned items, the month
+total; then the grand total — employee columns carry no product / carrier figure). The 403 own-rep rule applies.
+UI: the Rep Incentive **📅 Month range** tab → "One employee over these months" (📄 Statement PDF / ⬇ CSV).
+
+**Live (read-only, 2026-09-26, org `f4f1c16e`, Jona Sejat):** Z1321IN11092 / July — employee row
+`New activation · 9297458084 · CHEORGE CHEISHVILI INC · $10`; the manager sees the same identity on all three
+lines (Price 150 / 0 / 45, two ⛔). July: 100 / 100 paid rows carry a customer and a phone. **Range May–Aug 2026:**
+May $595.00 · June $570.00 · July $715.00 · August $365.00 = **$2,245.00**; each month's section is byte-identical
+to its single statement (employee and manager), Σ single statements $2,245.00.
+
+**Surfaces (every one wired or excused):** the nav consumers all go through `canSeeItem` / `canAccessPath`
+(sidebar `layout.tsx`, `hub/[group]`, `compliance`, `lib/reports.ts` → `reports-index`, `/reports`,
+`PortalReports`, `ScreenLink`, `AskBar`) — wired by the gate itself. Links to the manager-only pages INSIDE
+`carrier-vs-pay` / `commission-discrepancy` pages — excused (only reachable by a viewer the page is open to). The
+Roles admin preview (`navBlockReason` over a ROLE's permissions, not a viewer's) — excused: it shows role grants;
+a rep role's refusal is decided per viewer on `/me`. `/commission-device` — refused on the server; no page to hide.
+
+**Proof:** `backend/harness_payout_audience.py` (67, DB-free — adds F: the sale identity, the header fallback, the
+org-scoped `trans_id,customer`-only read, the statement rows; G: viewer payload, registered 403 labels, the one
+self-scope answer, a manager's full view vs a rep's; H: the range == its single statements to the cent in both
+audiences, CSV / PDF, own-rep 403, the 12-month cap); lock `backend/harness_payout_audience_lock.py` (21, 14
+negative controls: an unregistered refusal, a menu gate that stops asking `payoutRefused`, a registered page with
+no NAV entry, `/me` not stamping the payload, a page forcing an audience again, a second customer rule, the range
+building its own statement …); `frontend/tools/payout-nav-proof.mjs` (11 — the compiled `rbac.ts`: a rep sees and
+reaches none of the registered pages, no grant or admin module reopens them, a manager still does);
+`frontend/tools/plan-drilldown-render-proof.mjs` (36 — the employee Sale column, the manager's identity line).
 
 ---
 
@@ -4214,6 +4294,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `commcalc.raw_sales.customer` + `commcalc.raw_sales_invoice.customer` (mig 1012) — as **the customer on a paid commission line** | the sales / sales-by-invoice uploads (unchanged) | THE rule `inventory_sold_recon.sale_customer` / `invoice_customer_map` → `commission_drilldown._sale_customers` (reads `trans_id,customer` only, org-scoped) → `attach_line_identity` → every plan line's `customer` (explain, statements, the range); also `sales_detail_index` (inventory integrity §11b) (§6j) |
 | `commcalc.rep_commissions` + the `/commission-explain` payload — as **what an EMPLOYEE may see of their own commission** | `calc_rep_commissions` / `commission_engine.preview` (unchanged) | THE shapers `payout_audience.employee_rep_row` / `employee_explain` / `employee_drill` (allow-lists; paid lines by `is_paid_line`) → `/commissions`, `/commissions-range`, `/commission-explain`, `/commission-statement(s)`, `/commission-drill`, core `/employee-dashboard`, the notify Incentives email (§6i) |
 | `commcalc.payout_schedule` / `commcalc.plan_installment_schedule` — as the answer to **"is multi-month configured for this org"** (active rows) | the schedule editors (`payout-schedules`, `plan-installments`) | THE predicate `multimonth_config.schedule_counts` → `decide` / `load` → `GET /commcalc/multimonth/status` → `_lib/multimonth.useMultimonthStatus` (the Rep Incentive card + export, commission-explain, Expected vs Earned); the R1 guard `router._has_any_pay_source`. The engines keep their own loaders (§7/§8) (§6h) |
 | `commcalc.accessory_config.activation_details_rules` **`.event`** (`keys` · `precedence` · `count_unit`; JSON key, no migration, 2026-09-25) | `PUT /commcalc/accessory-config` (extra keys of the JSON pass through the one writer) | `line_class.resolve_event` ← `resolve_rules` → `activation_events` / `activation_units` — the plan pay gate's `per_event` (always events) and every activation COUNT (`count_unit`, house `'transaction'`): `_sales_cell_agg`, the Boost calculator, `commission_drill`, closing `_b2b_counts_by_store` / `_b2b_day`, `sales_comparison.tally` (§6f) |
@@ -4387,7 +4468,9 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
 | `GET /commcalc/commissions/{period}` · `/commissions-range` · `/commission-explain` · `/commission-statement` · `/commission-statements` · `/commission-drill` — `audience=employee|manager` (default manager, byte-identical); a self-scoped rep is ALWAYS employee and may ask only for their own rep (403 otherwise) | `router._payout_audience` → `payout_audience.resolve` + `employee_*` shapers | §6i |
-| `GET /commcalc/carrier-vs-pay` · `/discrepancy/{period}` · `/discrepancy/{period}/phantom` · `/discrepancy-appeals` · `/commission-device` — manager-only carrier reports: 403 for a self-scoped rep | `router._refuse_employee_audience` | §6i |
+| `GET /commcalc/carrier-vs-pay` · `/discrepancy/{period}` · `/discrepancy/{period}/phantom` · `/discrepancy-appeals` · `/commission-device` — manager-only carrier reports: 403 for a self-scoped rep, each by its REGISTERED key | `router._refuse_employee_audience(authorization, org_id, key)` → `payout_audience.MANAGER_ONLY_SURFACES` | §6i / §6j |
+| `GET /commcalc/commission-statement?rep=&period_from=&period_to=&fmt=pdf\|csv\|json` — ONE employee over a month range (≤ 12): each month = that month's single statement, month totals + grand total. READ-ONLY; own-rep 403 for a rep | `router.commission_statement_document` → `_statement_doc` (per month) → `commission_statement.build_range` / `render_range_pdf` / `range_csv` | §6j |
+| `GET /core/me` (+ `/core/bootstrap`) — `permissions.payout = {audience, refused_pages}`: the viewer's payout audience and the manager-only pages the server refuses them (the nav hides these) | `core._me_payload` → `payout_audience.viewer_payload(storeops.role_is_self_scoped(...))` | §6j |
 | `GET /commcalc/multimonth/status?periods=` — is multi-month configured for this org (`configured` / `off` / `off_with_money` + the money per period + a note). READ-ONLY | `router.get_multimonth_status` → `multimonth_config.load` | §6h |
 | `GET /commcalc/commissions-range?period_from=&period_to=` — the Rep Incentive report over a month range (≤ 12), one row per rep per month + month subtotals + total. READ-ONLY; each month IS `get_commissions(month)` | `router.get_commissions_range` → `account/_period.month_range` → `get_commissions` (per month, in-process) → `rep_incentive_range.assemble` | §6g |
 | `GET /commcalc/commission-explain` · the reports **🔍 Plan commission** drill (`PlanLineBreakdown`) — every plan line now carries `event_id / event_key / event_key_kind / event_type` when a rule pays per activation; the pay-gate report `pay_gate.unit.activation_events` (events, ambiguous invoices, config) | `commission_engine.preview(detail=True)` → `commission_drilldown.explain_rep`; frontend `planLines.toPlanLine` / `eventsOf` | §6f |
@@ -4615,6 +4698,9 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Which menu entries a rep may not see** (manager-only payout reports) and **which payout view a viewer gets** | `storeops.roles.permissions.scope` + `app_config.rbac_enabled` | ONE registry `payout_audience.MANAGER_ONLY_SURFACES`, ONE self-scope answer `storeops.role_is_self_scoped`, served on `/me` (`viewer_payload`) → `rbac.payoutRefused` in `canSeeItem` / `canAccessPath`; audience by `payout_audience.resolve` (§6j) |
+| **The sale on a paid commission row** (action · phone line · customer) | engine event stamp (`event_type`, `event_key`); `raw_sales.customer` / `raw_sales_invoice.customer` | `payout_audience.event_label` (`line_class.CLASS_LABELS`) · `line_phone` (`line_class.line_event_keys`) · `inventory_sold_recon.sale_customer` via `commission_drilldown.attach_line_identity`; frontend `planLines.saleLabel` (§6j) |
+| **One employee's incentive over several months** (per month + grand total) | `rep_commissions.total_payout` per month (the statement's payout of record) | `router._statement_doc` per month (== the single statement) → `commission_statement.build_range` (sums only) (§6j) |
 | **Which commission lines / fields an employee sees** (the paid line only; no carrier Price / GP / MA rebate) | engine verdict on each plan line (`suppressed`, `qualifies`, `flat_once`, `amount`); `rep_commissions` pay columns | ONE predicate `payout_audience.is_paid_line` + ONE allow-list set `payout_audience.EMPLOYEE_*_FIELDS`, audience by `payout_audience.resolve`; frontend declaration `_lib/payoutAudience.ts`; lock `harness_payout_audience_lock.py` (§6i) |
 | **Is multi-month pay offered for this org** (the rep pay card's multi-month option) | active `payout_schedule` / `plan_installment_schedule` rows; multi-month $ on `rep_commissions.residual_installment_comm` + `installment_comm_sale` | ONE predicate `multimonth_config.decide` (backend) / `multimonthOffer.multimonthRows` (frontend); lock `harness_multimonth_offer_lock.py` (§6h) |
 | **Which months a window holds** (a from-month / to-month range, any period spelling) | — (calendar) | ONE enumeration `account/_period.month_range` (canonical names, oldest first, capped by the caller) — the Rep Incentive month range (§6g) and `discrepancy_appeals.period_range_variants` dereference it |

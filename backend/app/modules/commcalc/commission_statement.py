@@ -47,6 +47,7 @@ from app.modules.commcalc.payout_structure import (
     describe_condition, describe_rate, describe_frequency,
 )
 from app.modules.commcalc import plan_pay_gate as _gate
+from app.modules.commcalc import payout_audience as _pa
 from app.modules.commcalc.commission_ledger import CATEGORIES, CATEGORY_LABELS
 
 
@@ -110,6 +111,37 @@ def _plan_line_items(plan_component, ucfg):
         earned.append({"what": what, "condition": cond, "rate": rate, "frequency": freq,
                        "units": units, "amount": money(payout), "source": "plan"})
     return earned, held, footnotes
+
+
+# ── the SALES behind the plan incentive: one row per plan line (index §6j) ───────────────────────────
+def _sale_line_items(plan_component, include_held, employee):
+    """The plan lines as statement rows — the action, the phone line and the customer (owner 2026-09-26: "on paid
+    row show the action / upgrade with the details of the phone number and customer name"). PURE.
+
+    Which lines: whatever the drill-down carries, through THE paid-line predicate (`payout_audience.is_paid_line`)
+    — the employee drill-down already holds only paid lines; a manager statement lists the paid lines, plus the
+    unpaid ones only when the held section is granted (`include_held`, the same default-closed gate). An employee
+    row carries no product name and no carrier figure; a manager row adds the product and, when present, the
+    sale's price / GP."""
+    rows = []
+    for rule in (plan_component or {}).get("rules") or []:
+        what = display_label(rule.get("label")) or describe_condition(rule)
+        for ln in rule.get("lines") or []:
+            paid = _pa.is_paid_line(ln)
+            if not paid and not include_held:
+                continue
+            row = {"rule": what, "date": _s(ln.get("date")), "invoice": _s(ln.get("trans_id")),
+                   "action": _s(ln.get("event_label")) or None, "phone": _s(ln.get("phone")) or None,
+                   "customer": _s(ln.get("customer")) or None,
+                   "amount": money(_f(ln.get("amount"))), "amount_raw": round(_f(ln.get("amount")), 2),
+                   "status": "Paid" if paid else (_s(ln.get("suppressed_reason")) or "Not paid")}
+            if not employee:
+                row["product"] = _s(ln.get("product")) or None
+                for k in ("ext_price", "gp"):
+                    if ln.get(k) is not None:
+                        row[k] = round(_f(ln.get(k)), 2)
+            rows.append(row)
+    return rows
 
 
 # ── multi-month component: per-device residual / installment rows (paid vs held) ────────────────────
@@ -197,6 +229,8 @@ def build_statement(explain, buckets=None, tenant_name="", rep_name="", period="
     # permission (the router computes include_held from the DATA_GRANT). Everything below — is_empty, the
     # intro's held branch, the PDF section, the fmt=json array — then sees no held rows.
     held = (plan_held + inst_held) if include_held else []
+    audience = "employee" if explain.get("audience") == "employee" else "manager"
+    sale_lines = _sale_line_items(pc, include_held, audience == "employee")
 
     plan_subtotal = round(_f(pc.get("total_payout")), 2)
     inst_subtotal = round(_f((mm.get("totals") or {}).get("amount")), 2)
@@ -250,6 +284,8 @@ def build_statement(explain, buckets=None, tenant_name="", rep_name="", period="
         },
         "earned": earned,
         "held": held,
+        "audience": audience,
+        "sale_lines": sale_lines,
         "notes": notes,
         "footnotes": footnotes,
         "empty": is_empty,
@@ -308,9 +344,10 @@ def render_statements_pdf(docs):
     return _render_docs(list(docs or []))
 
 
-def _render_docs(docs):
+def _render_docs(docs, range_summary=None):
     """Shared renderer for one-or-many statements. Builds the styles + story helpers ONCE, then emits
-    each doc's flowables (separated by a page break) into a single SimpleDocTemplate."""
+    each doc's flowables (separated by a page break) into a single SimpleDocTemplate. `range_summary`
+    (`build_range` output) leads with ONE employee's month-by-month totals page (index §6j)."""
     from io import BytesIO
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_RIGHT
@@ -457,6 +494,26 @@ def _render_docs(docs):
             story.append(Paragraph("No incentive was earned for this period. The reasons below explain why.",
                                    st_body))
 
+        # ── the sales behind the plan incentive (index §6j) ──
+        sale_lines = doc.get("sale_lines") or []
+        if sale_lines:
+            emp = doc.get("audience") == "employee"
+            story.append(Paragraph("Your sales that paid" if emp else "Plan lines", st_h2))
+            rows = [[Paragraph("Date", st_head), Paragraph("Invoice", st_head),
+                     Paragraph("Sale", st_head), Paragraph("Rule", st_head),
+                     Paragraph("Amount", st_head_r)]]
+            for it in sale_lines:
+                sale = " · ".join(esc(x) for x in (it.get("action"), it.get("phone"), it.get("customer")) if x)
+                if not emp and it.get("product"):
+                    sale = (sale + "<br/>" if sale else "") + f"<font size=7 color='#6b7280'>{esc(it['product'])}</font>"
+                if it.get("status") and it.get("status") != "Paid":
+                    sale += f"<br/><font size=7 color='#b45309'>{esc(it['status'])}</font>"
+                rows.append([Paragraph(esc(it.get("date")), st_cell), Paragraph(esc(it.get("invoice")), st_cell),
+                             Paragraph(sale or "—", st_cell), Paragraph(esc(it.get("rule")), st_cell),
+                             Paragraph(esc(it.get("amount")), st_cell_r)])
+            story.append(table(rows, [avail * 0.13, avail * 0.17, avail * 0.38, avail * 0.18, avail * 0.14],
+                               [("ALIGN", (4, 0), (4, -1), "RIGHT")]))
+
         # ── held / not yet paid ──
         held = doc.get("held") or []
         if held:
@@ -536,7 +593,33 @@ def _render_docs(docs):
                             title=pdf_title, author=tenant0 or "MetricsPro", subject=subject)
 
     story = []
-    if not docs:
+    if range_summary is not None:
+        rs = range_summary
+        if _s(rs.get("tenant")):
+            story.append(Paragraph(esc(rs.get("tenant")), st_tenant))
+        story.append(Paragraph(esc(rs.get("title")), st_title))
+        story.append(Paragraph(esc(f"{rs.get('employee')} · {rs.get('period_from')} to {rs.get('period_to')}"),
+                               st_meta))
+        story.append(Paragraph(f"Generated {esc(rs.get('generated_at'))}", st_meta))
+        story.append(HRFlowable(width="100%", thickness=1.6, color=C(_NAVY), spaceAfter=10))
+        rows = [[Paragraph("Month", st_head), Paragraph("Plan incentive", st_head_r),
+                 Paragraph("Multi-month", st_head_r), Paragraph("Total earned", st_head_r)]]
+        for m in rs.get("months") or []:
+            rows.append([Paragraph(esc(m["period"]), st_cell_b), Paragraph(esc(m["plan_subtotal"]), st_cell_r),
+                         Paragraph(esc(m["installment_subtotal"]), st_cell_r),
+                         Paragraph(esc(m["total_payout"]), st_cell_r)])
+        rows.append([Paragraph("Total for the range", st_cell_b), "", "",
+                     Paragraph(esc(rs.get("grand_total")), st_cell_r)])
+        n = len(rows) - 1
+        story.append(table(rows, [avail * 0.34, avail * 0.22, avail * 0.22, avail * 0.22],
+                           [("ALIGN", (1, 0), (-1, -1), "RIGHT"), ("SPAN", (0, n), (2, n)),
+                            ("BACKGROUND", (0, n), (-1, n), C(_BAND)),
+                            ("LINEABOVE", (0, n), (-1, n), 0.8, C(_NAVY))]))
+        story.append(Paragraph("Each month below is that month's own statement, exactly as downloaded alone.",
+                               st_cap))
+        if docs:
+            story.append(PageBreak())
+    if not docs and range_summary is None:
         # A period with no reps still yields a valid one-page document, never a crash.
         story.append(Paragraph("Incentive Statements", st_title))
         story.append(Paragraph("No reps with incentive for this period.", st_body))
@@ -548,6 +631,78 @@ def _render_docs(docs):
 
     pdf.build(story, onFirstPage=on_page, onLaterPages=on_page)
     return buf.getvalue()
+
+
+# ── ONE employee over a MONTH RANGE (owner 2026-09-26, index §6j) ──────────────────────────────────
+def build_range(docs, employee="", tenant_name="", generated_at=None):
+    """ONE employee's statements for consecutive months → the range document: the per-month docs UNCHANGED (each
+    is exactly that month's single statement — the router builds them through the same helper) plus the month
+    totals and the grand total, which are only SUMS of the months' own payout of record. PURE."""
+    docs = list(docs or [])
+    _now = datetime.now(timezone.utc)
+    months, grand = [], 0.0
+    for d in docs:
+        sm = d.get("summary") or {}
+        tr = round(_f(sm.get("total_raw")), 2)
+        grand = round(grand + tr, 2)
+        months.append({"period": _s(d.get("period")), "total_payout": money(tr), "total_raw": tr,
+                       "plan_subtotal": sm.get("plan_subtotal"), "installment_subtotal": sm.get("installment_subtotal"),
+                       "paid_lines": sum(1 for x in d.get("sale_lines") or [] if x.get("status") == "Paid")})
+    return {"title": "Incentive Statement — month range", "tenant": _s(tenant_name),
+            "employee": _s(employee) or (_s(docs[0].get("employee")) if docs else ""),
+            "period_from": months[0]["period"] if months else "", "period_to": months[-1]["period"] if months else "",
+            "generated_at": generated_at or f"{_now.strftime('%B')} {_now.day}, {_now.year}",
+            "audience": (docs[0].get("audience") if docs else None) or "manager",
+            "months": months, "grand_total": money(grand), "grand_total_raw": grand, "statements": docs}
+
+
+def render_range_pdf(rng):
+    """The range document as ONE PDF: the month-by-month totals page, then each month's statement page(s)."""
+    return _render_docs(list((rng or {}).get("statements") or []), range_summary=rng or {})
+
+
+_CSV_EMPLOYEE_COLS = ("month", "section", "item", "date", "invoice", "action", "phone", "customer", "amount")
+_CSV_MANAGER_COLS = ("month", "section", "item", "date", "invoice", "action", "phone", "customer", "product",
+                     "status", "ext_price", "gp", "amount")
+
+
+def range_csv(rng):
+    """The range document as CSV text: per month its sale lines, its earned items and its total, then the grand
+    total. The employee's columns carry no product and no carrier figure (the sale lines are already shaped);
+    a manager's add product, status, price and GP. PURE."""
+    import csv
+    import io
+    rng = rng or {}
+    emp = rng.get("audience") == "employee"
+    cols = _CSV_EMPLOYEE_COLS if emp else _CSV_MANAGER_COLS
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=list(cols), extrasaction="ignore")
+    w.writeheader()
+    for d in rng.get("statements") or []:
+        per = _s(d.get("period"))
+        for ln in d.get("sale_lines") or []:
+            w.writerow({"month": per, "section": "sale", "item": ln.get("rule"), "date": ln.get("date"),
+                        "invoice": ln.get("invoice"), "action": ln.get("action"), "phone": ln.get("phone"),
+                        "customer": ln.get("customer"), "product": ln.get("product"), "status": ln.get("status"),
+                        "ext_price": ln.get("ext_price"), "gp": ln.get("gp"), "amount": ln.get("amount_raw")})
+        for it in d.get("earned") or []:
+            w.writerow({"month": per, "section": "earned", "item": it.get("what"),
+                        "amount": it.get("amount")})
+        w.writerow({"month": per, "section": "month total", "item": "Total earned",
+                    "amount": ((d.get("summary") or {}).get("total_raw"))})
+    w.writerow({"month": f"{rng.get('period_from')} to {rng.get('period_to')}", "section": "grand total",
+                "item": "Total for the range", "amount": rng.get("grand_total_raw")})
+    return buf.getvalue()
+
+
+def range_filename(rng, ext="pdf"):
+    parts = [p for p in [_s((rng or {}).get("tenant")), _s((rng or {}).get("employee")),
+                         _s((rng or {}).get("period_from")), _s((rng or {}).get("period_to")),
+                         "commission-statement"] if p]
+    out = "".join(c if (c.isalnum() or c == "-") else "-" for c in "-".join(parts).lower())
+    while "--" in out:
+        out = out.replace("--", "-")
+    return (out.strip("-") or "commission-statement") + "." + ext
 
 
 def filename_for(doc):

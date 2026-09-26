@@ -241,7 +241,19 @@ export function toPlanLine(rule: any, l: any, basisOfKind: Record<string, string
     suppressed_reason: l?.suppressed_reason || '', would_have_paid: l?.would_have_paid ?? 0,
     event_id: l?.event_id || '', event_key: l?.event_key || '', event_key_kind: l?.event_key_kind || '',
     event_type: l?.event_type || '',
+    // the sale this line is (index §6j) — stamped by the server (`payout_audience.stamp_line_identity`)
+    event_label: l?.event_label || '', phone: l?.phone || '', customer: l?.customer || '',
   }
+}
+
+/**
+ * The SALE a line is, as one label: the action (the server's class label, e.g. 'New activation' / 'Upgrade'),
+ * the phone line and the customer — owner 2026-09-26: "on paid row show the action / upgrade with the details of
+ * the phone number and customer name". Every part comes from the server's stamp; '' when it carries none.
+ */
+export function saleLabel(l: PlanLine): string {
+  const action = l?.event_label || (l?.event_type ? (EVENT_TYPE_LABEL[String(l.event_type)] || String(l.event_type)) : '')
+  return [action, l?.phone, l?.customer].filter(x => x && String(x).trim()).join(' · ')
 }
 
 export type TxnGroup = {

@@ -491,7 +491,55 @@ def explain_rep(client, org_id, period, rep, carrier_mode="plan", identity_map=N
 
     out["zero_explanation"] = _zero_reasons(period, rep, carrier_mode, out)
     out["reconciliation"] = _reconcile(client, org_id, period, rep, ce)
+    attach_line_identity(client, org_id, out)
     return out
+
+
+_TXN_CHUNK = 200
+
+
+def _sale_customers(client, org_id, tids):
+    """{trans_id: customer} for the sales behind a drill-down's plan lines — THE sale-customer rule
+    (`inventory_sold_recon.sale_customer`: the sale line's customer, else its invoice header) over the two tables
+    the inventory integrity report reads for the same fact (`raw_sales.customer`, `raw_sales_invoice.customer`).
+    READ-ONLY, org-scoped, only `trans_id` + `customer` are selected (no other customer field is ever touched).
+    Any failure degrades to {} — the line simply shows no name."""
+    from app.modules.commcalc import inventory_sold_recon as _isr
+    tids = sorted({str(t).strip() for t in (tids or []) if str(t or "").strip()})
+    if not tids:
+        return {}
+    sale_rows, inv = [], {}
+    for i in range(0, len(tids), _TXN_CHUNK):
+        chunk = tids[i:i + _TXN_CHUNK]
+        try:
+            sale_rows += (client.schema("commcalc").table("raw_sales").select("trans_id,customer")
+                          .eq("org_id", org_id).in_("trans_id", chunk).limit(20000).execute().data) or []
+        except Exception:
+            pass
+        try:
+            for r in (client.schema("commcalc").table("raw_sales_invoice").select("trans_id,customer")
+                      .eq("org_id", org_id).in_("trans_id", chunk).limit(5000).execute().data) or []:
+                t = str(r.get("trans_id") or "").strip()
+                if t and str(r.get("customer") or "").strip():
+                    inv.setdefault(t, str(r["customer"]).strip())
+        except Exception:
+            pass
+    return _isr.invoice_customer_map(sale_rows, inv)
+
+
+def attach_line_identity(client, org_id, explain):
+    """Stamp every plan line with WHO and WHICH LINE (owner 2026-09-26: "on paid row show the action / upgrade
+    with the details of the phone number and customer name"): `phone` (THE phone rule via
+    `payout_audience.line_phone`) and `customer` (`_sale_customers`). One place, inside THE drill-down producer, so
+    the explain endpoint, the statement and the statement batch all carry it. Additive; never raises. Index §6j."""
+    from app.modules.commcalc import payout_audience as _pa
+    try:
+        pc = (explain or {}).get("plan_component") or {}
+        tids = [ln.get("trans_id") for rb in pc.get("rules") or [] for ln in rb.get("lines") or []]
+        _pa.stamp_line_identity(explain, _sale_customers(client, org_id, tids) if tids else {})
+    except Exception as e:
+        print(f"WARN line identity skipped: {e}")
+    return explain
 
 
 def _no_plan_narration(client, org_id, period, rep, ce, identity_map=None):
