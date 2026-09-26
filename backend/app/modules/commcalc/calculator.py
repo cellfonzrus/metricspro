@@ -416,7 +416,7 @@ def calc_rep_commissions(
             _vals, _ = _kpi_failing.rep_kpi_values(
                 _KPI_DEFS, rep_row=_dr, store_row=_sr,
                 actuals=_KPI_ACTUALS.get(str(rep['store']).strip()))
-            _m, _t, _e, _nd = _kpi_failing.score(_vals, _KPI_DEFS, KPI)
+            _m, _t, _ev, _nd = _kpi_failing.score(_vals, _KPI_DEFS, KPI)
             _plan_score[key] = (_m, _t, _vals)
         for key, rep in rep_map.items():
             plan_rows.append({
@@ -513,7 +513,6 @@ def calc_rep_commissions(
         kpi_vals = {}
         kpis_met = 0
         total_kpis = 0
-        kpi_nodata = []
 
         if not G['straight']:
             dr = dlar_rep_by_name.get(rep['name'].upper())
@@ -536,7 +535,11 @@ def calc_rep_commissions(
                 kpi_vals, _kpi_src = _kpi_failing.rep_kpi_values(
                     _KPI_DEFS, rep_row=dr, store_row=sr,
                     actuals=_KPI_ACTUALS.get(str(rep['store']).strip()))
-                kpis_met, total_kpis, _kpi_eval, kpi_nodata = _kpi_failing.score(kpi_vals, _KPI_DEFS, KPI)
+                # `kpi_values` carries a key per SCORED metric with None where nothing fed it, so the
+                # no_data list is derivable by every reader through `kpi_failing.evaluate` and is not
+                # duplicated into the stored row (`rep_commissions` has no column for it, and a second
+                # copy of a derivable fact is the divergence this whole change is about).
+                kpis_met, total_kpis, _ev, _nd = _kpi_failing.score(kpi_vals, _KPI_DEFS, KPI)
 
             if kpis_met >= G['t100']: tier = 1.0
             elif kpis_met >= G['t75']: tier = G['t75pct']
