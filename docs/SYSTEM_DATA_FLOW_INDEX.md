@@ -86,8 +86,8 @@ email), (c) **RPC/manual entry**.
 | `merchant_settlement_day` | `955_merchant_portal_settlement.sql` | `org_id, source_id, portal_key, settlement_role, business_date, merchant_id, terminal_id, store_code, card_brand, gross_amount, refund_amount, net_amount, fee_amount, txn_count, batch_ref, raw` | **Merchant-processor card settlement** — the PROCESSOR side of the daily-closing card tally (§12a). Grain = org × source × merchant × business_date × card_brand |
 | `merchant_settlement_batch` | `955_merchant_portal_settlement.sql` | `org_id, source_id, portal_key, settlement_role, deposit_date, batch_date, merchant_id, store_code, batch_ref, deposit_amount, fee_amount, raw` | Processor **funding** events (money to the bank) — cash/deposit recon (§12). A DIFFERENT grain from settlement; never sum the two |
 | `raw_mi` | `002_commcalc.sql:46` | `salesforce_id, actual_mi_payout, actual_atu_payout, phone_number, subscriber_status` | Carrier residual gate (paid-proof), MI/ATU |
-| `raw_dlar_rep` | `002_commcalc.sql:56` (+`012`,`031`) | `rep_name, store, atu_pct, protect_pct, byod_pct, family_plan_pct, tmr3, aal_conversion, bounty, split, ga_prepaid` | Rep KPI, comp trend |
-| `raw_dlar_store` | `002_commcalc.sql:67` (+`012`,`031`) | `store_code, salesforce_id, address, total_acts, port_pct, psa_projected` **plus** later `atu, protect_pct, byod_pct, family_plan_pct, tmr3, aal_conversion, conversion_rate, gross_adds, total_upgrades, location` | Store KPIs, MI TMR3 gate |
+| `raw_dlar_rep` | `002_commcalc.sql:56` (+`012`,`031`, `1026`) | `rep_name, store, atu_pct, protect_pct, byod_pct, family_plan_pct, tmr3, aal_conversion, bounty, split, ga_prepaid` **+ `as_of_date`** (mig `1026`, the ADVOCATE report's own date — §19.28; NULL on rows written before it, where `created_at` is an upper bound only) | Rep KPI, comp trend, the pay engine's tier |
+| `raw_dlar_store` | `002_commcalc.sql:67` (+`012`,`031`, `1026`) | `store_code, salesforce_id, address, total_acts, port_pct, psa_projected` **plus** later `atu, protect_pct, byod_pct, family_plan_pct, tmr3, aal_conversion, conversion_rate, gross_adds, total_upgrades, location` **+ `as_of_date`** (mig `1026`, §19.28) | Store KPIs, MI TMR3 gate |
 | `raw_catalog` | `002_commcalc.sql:77` | `product_id, product_desc, cost, sku` | Device COGS, GP, installment MRC |
 
 > **Period spelling.** Sweeps stamp month-name labels (`'July 2026'`); manual entry may differ. Every
@@ -176,7 +176,7 @@ email), (c) **RPC/manual entry**.
 ### Ingest route B — automated sweeps (`backend/app/modules/commcalc/*_sweep.py`)
 | Sweep | Module | Writes | Config table / endpoints |
 |-------|--------|--------|--------------------------|
-| DLAR (rep+store KPI) | `dlar_sweep.py` `run_dlar_sweep:209` | **replaces** period `raw_dlar_rep`/`raw_dlar_store` (`dlar_sweep.py:237`) | `dlar_sweep_config` (mig `012`); `/dlar/sweep/*` `router.py:8447-8490` |
+| DLAR (rep+store KPI) | `dlar_sweep.py` `run_dlar_sweep` | **replaces** period `raw_dlar_rep`/`raw_dlar_store`, each stamped with ITS OWN report's `as_of_date` (mig `1026`, §19.28). ⚠ Only ever the period the portal is CURRENTLY serving, so a closed month's slice is frozen at its last pull; the status reports what was **WRITTEN** (`dlar_sweep.status_sentence`), never the pull, and names any DECLARED COLUMN that carried nothing in the whole pull (`data_lineage_registry.content_arrival` — the advocate report silently dropped `store` / `door_*` / `ga_prepaid` / `ga_postpaid` in July 2026) | `dlar_sweep_config` (mig `012`); `/dlar/sweep/*` `router.py:8447-8490` |
 | B2B (sales + inventory aging) | `b2b_sweep.py` | `raw_sales`/feed + `inventory_aging_device` upsert (`b2b_sweep.py:341`) | `/b2b/sweep/*` (`b2b_sweep_run_now`/`run_due`); `fetch_inventory_aging` is a **stub** (`b2b_sweep.py:77`) `⚠`. **Its portal-login route is CLOSED by config since mig `998`** (vendor instruction, owner 2026-09-09) — the supported route is the email sweep; see §12a.1 |
 | epay (payment detail) | `epay_sweep.py` | `raw_payment_detail` | `/epay/sweep/*` `router.py:8730-8811` (mig `020`,`025`) |
 | VIP invoices | `vip_sweep.py` | vip invoice tables (mig `008`,`011`,`014`) | `/vip/sweep/*` `router.py:3034-3078` |
@@ -1457,7 +1457,10 @@ trade-in, acima, custom spiffs, plus KPI-tier multiplier, plus installment add-o
 counts `premium_acts, byod_acts, upgrade_acts`;
 $ `premium_comm, byod_comm, upgrade_comm, acc_comm, setup_fee_comm, trade_in_comm, acima_comm,
 custom_comm, acc_target`; tier `tier, tier_source, kpis_met, total_kpis, kpi_values JSONB`;
-`subtotal, total_payout, boost_commission, boost_reimbursement`. **Added by later migrations:**
+`subtotal, total_payout, boost_commission, boost_reimbursement`. **⚠ `total_kpis` is the HONEST
+denominator since 2026-09-26 (§19.28)** — the metrics actually MEASURED for that rep, not the literal 7
+it used to be; `kpi_values` carries a key per SCORED metric with `None` where nothing fed it, and a
+`None` is `no_data`, never a failed zero. **Added by later migrations:**
 `plan_comm` (mig `061_rep_commissions_plan_comm.sql`), `residual_installment_comm` (mig `057`),
 **⚠ on a PLAN-MODE row the component columns were all `0` until 2026-09-17 — see §6b for which are now
 filled, which cannot be, and why,** 
@@ -2328,6 +2331,23 @@ gates.
   define them, or hiding is permanent. It distinguishes `ready: false` (mig 060 unapplied — a store that
   CANNOT answer) from an org with zero rows (a blank slate); removing a definition hides the KPI and
   deletes no measured value. Live: HOUSE 7 metrics, LuxeLink `zulu` only, Vzone none.
+- **THE REP-GRAIN RESOLVER, THE SCORER AND THE FEED VINTAGE (§19.28, owner defect 2026-09-26):**
+  `kpi_failing.rep_kpi_values(defs, rep_row, store_row, actuals)` is THE one place a rep's KPI value is
+  resolved, and **the GRAIN is a property of the METRIC, not a blanket fallback chain**: a metric with a
+  REP-grain feed (`REP_DLAR_COLUMNS`: atu / protect / boostapp / byod) is the rep's OWN `raw_dlar_rep`
+  value or it is `None` — **never the store's number rolled down**; a metric with no rep-grain feed
+  (`STORE_KPI_COLUMNS` only: familyplan / tmr3 / aal) IS rolled down from `raw_dlar_store` to every rep
+  at that store, exactly as the Boost engine has always done, and falls through to a measured
+  `kpi_actual` for that store when the DLAR column is empty. Each value is stamped with its `source`. `kpi_failing.score(values, defs, targets)` is THE met-count, and `total_kpis` is the HONEST
+  denominator (metrics with both a target and a value) — never a literal 7. `kpi_failing.resolve_defs`
+  turns a tenant's registry into the def tuples, falling back to the built-in seven. The PAY ENGINE
+  dereferences all three and is handed the tenant's registry through `cfg['kpi_defs']`
+  (`router._kpi_defs(org_id, carrier_id)`), so a tenant is tiered on the metrics IT defined and a
+  registry metric nothing feeds can never move a payout. A PLAN tenant is scored informationally and
+  never tiered on it. Feed vintage: `dlar_sweep.vintage / vintage_of_row / slice_vintage` — each DLAR
+  grain's own as-of date (`as_of_date`, mig `1026`), whether a slice reaches the period's last day, and
+  whether the two grains are DIFFERENT months (`disagree`); served on `GET /kpi-failing/{period}` as
+  `feed_vintage`. Lock: `harness_kpi_registry_lock.py` §(h); proof `harness_kpi_vintage.py`.
 - **THE BUILT-IN KPI SET — one home (§19.27):** `commcalc/kpi_failing.BUILTIN_KPI_DEFS` — the seven
   `(metric_key, label, payout_config_col, target_default)` the pay engine tiers on. `router.ACTION_KPI_DEFS`
   is an alias over it and `calculator.py` builds its `KPI` dict from it, so the **PAID** score and the
@@ -4257,7 +4277,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.raw_payment_detail` | epay sweep, upload | `calc_gp_report`, reimbursement categorization, **Processor Daily Debits & Credits** (`processor_ledger.assemble` — `amount` sign = credit/debit to the dealer, §15) |
 | `commcalc.raw_mi` | upload / MI sweep | carrier residual gate `installment_engine.compute_installments`, sale-installment gate, MI/ATU; the `subscribers` entry of the plan-source registry `core/plan_sources.HOUSE_SOURCES` (`customer_plan` + `base_mrc`, newest period, ON by default) → `onboarding._observed_plans(…, src)` (§23n.1); `raw_sales` (`sales_lines`) and `commission_ledger` (`statement_lines`) are the registry's two line-level entries, OFF until the org confirms its words |
 | `commcalc.raw_dlar_store` | `dlar_sweep.run_dlar_sweep:209` (replace), upload | `get_dlar_store_kpis` `10279`, `_cr_resolve_kpi_metrics` `25656`, MI tmr3 `28884` |
-| `commcalc.raw_dlar_rep` | `dlar_sweep` (replace), upload | rep KPI, comp trend `15238` |
+| `commcalc.raw_dlar_rep` | `dlar_sweep` (replace, stamping `as_of_date` — mig `1026`, §19.28), upload | rep KPI, comp trend `15238`; the PAY ENGINE's tier via `kpi_failing.rep_kpi_values` (`REP_DLAR_COLUMNS`); `router._dlar_slice_vintage` for the feed vintage |
 | `commcalc.raw_catalog` | upload `/product-mrc/import` region, catalog | GP, device COGS, installment MRC |
 | `commcalc.payout_config` | `/config/{period}` `10474`, `/commission-settings` `10517` | `calc_rep_commissions` (spiffs/tiers), installment base rates |
 | `commcalc.commission_org_config` | `/commission-settings` (incl. **`pl_commission_source`**, mig `1013` — its own statement, validated, READ BACK, refuses naming the migration when the column is absent), migrations (`209`,`306`,`308`,`309`,`314`,`934`,`939`,`992`,`996`,**`1013`**, **`1015` WRITTEN NOT APPLIED — `ma_leg_rate_schedule` + `ma_mrc_list_divisor`, §4a.2, surfaced for owner approval; both are `ADD COLUMN IF NOT EXISTS` on this same table and coexist with mig 1013's `pl_commission_source` (different columns, either order); zero blast radius until a row is written**) | THE per-org money-policy row (RULE TWO). Readers: `ma_store_pnl.load_config` (store attribution · month-spiff source/order types · MDF tokens · line labels · rebate presentation · device-margin presentation · **P&L commission source** `feeds`\|`ledger`\|`ledger_else_feeds`, mig 1013, resolved by `ledger_pnl.resolve_source` — the row read WHOLE through `core.column_tolerant.read_row`, §4b.1: ANY subset of columns; a pre-1013 DB reads `feeds` AND reports `config_columns_missing=['pl_commission_source']`) · `ma_store_pnl.load_unbooked_reasons` (`pl_ma_unbooked_reasons`, mig 994) · `residual_subs.load_ma_pnl_config` (`pl_merchant_discount_own_line`, `pl_ma_residual_order_types`) · `residual_subs.load_residual_report_config` (`residual_report_components`, mig 994) · `billpay_pl` (`pl_billpay_presentation`/`pl_billpay_settlement`) · the installment/plan engines (`installment_mrc_basis`, `plan_pay_gate`, `sales_source`) · `setup_fee_pay.load_pay_config` → `resolve_for_scope` (`setup_fee_pay`: `default` / `by_carrier` / `by_market` / `all_markets`, §6a). EVERY reader is org-scoped and ADAPTIVE — a missing column/row degrades to the code defaults, never raises — and since 2026-09-22 (§4b.1) NO reader selects a column block: each reads the row whole (`read_row`) and reports what is absent |
@@ -4488,6 +4508,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /targets/{period}/action-plan` | `21334` | §5 |
 | `GET /dlar-store/{period}` | `10278` | §10 |
 | `GET /carrier-kpi-metrics` | `19757` | §10 |
+| `GET /kpi-failing/{period}` (`feed_vintage`) | beside `/dlar-store` | §10 / §19.28 — per-grain DLAR as-of date, `complete`, `days_short` and `disagree` (the two grains are different months). Helper `router._dlar_slice_vintage` → `dlar_sweep.slice_vintage`; `as_of_date` probed through `core.column_tolerant` |
 | `POST /kpi-actuals` · `POST /kpi-import/paramount` | `28540` | §10 — measured KPI values (`kpi_actual`, source `manual` / `email`). The import's column choice is `paramount_kpi.resolve_columns`, exact-match, locked (§19.26) |
 | `GET /exec-overview/{period}` | `20103` | §10 |
 | `GET /device-history` | `17015` | §11 |
@@ -4663,7 +4684,11 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Processor DEBITS / CREDITS / NET per day × transaction type | `raw_payment_detail.amount` (>0 credit, <0 debit) and `raw_ma_daily_tx.retail_cost` (>0 debit, <0 credit) — the sign convention is a property of the FEED SHAPE, not the carrier (`processor_ledger.FEED_SHAPES`) | `processor_ledger.classify_amount` → `fold_cells` → `day_type_rollup`; NET = credits − debits at every grain (positive = the processor paid the dealer more than it took). Live-verified + pinned in `harness_processor_ledger.py` (§15) |
 | VHI/FIOS / home-internet count | `raw_sales` product tokens / `installment_category.py:82` | `_mi_resolve_numbers` `28843`; `installment_category` (plan-mode, runtime-only) |
 | Failing-KPI classification (store/rep below target; `no_data` never fails) | `raw_dlar_store` KPI columns (store grain, `kpi_failing.STORE_KPI_COLUMNS`) + `rep_commissions.kpi_values` (rep grain) vs `payout_config.kpi_*_target` falling back to `carrier_kpi_metric.target_default` | `kpi_failing.evaluate/store_rows/rep_rows` via `GET /kpi-failing/{period}` (§10) |
-| ATU % | `raw_dlar_store.atu` / `raw_dlar_rep.atu_pct` / `store_kpis.atu_pct` | `_cr_resolve_kpi_metrics` `25656`; MI ATU RPC mig `032` |
+| ATU % | `raw_dlar_store.atu` / `raw_dlar_rep.atu_pct` / `store_kpis.atu_pct` | `_cr_resolve_kpi_metrics` `25656`; MI ATU RPC mig `032`; the pay engine via `kpi_failing.rep_kpi_values` (§19.28) |
+| Boost App % (`boostapp`) | `raw_dlar_rep.boost_app_pct` — **DERIVED by us**, `dlar_sweep.derived_rate(boost_ready_bounty, ga_prepaid)`; **`None` when there is no denominator, never a measured 0** (§19.28; ⚠ the carrier's own basis looks like ALL activations, not prepaid — open with the owner) | `kpi_failing.rep_kpi_values` → `kpi_failing.score`; no store-grain column exists |
+| A KPI's GRAIN (any metric) | DERIVED from `kpi_failing.REP_DLAR_COLUMNS` / `STORE_KPI_COLUMNS` — never stored | `kpi_failing.grain_of(metric_key)` → `'rep'` \| `'store'` \| `None`; stamped on `GET /carrier-kpi-metrics` (+ `rep_columns`) and on `GET /kpi-failing/{period}` defs. §19.28 (2b): familyplan / tmr3 / aal are STORE-grain only — NULL in all 516 `raw_dlar_rep` rows |
+| DOES A COLUMN STILL CARRY VALUES (the completeness axis) | the rows a sweep just normalised, against `data_lineage_registry.REQUIRED_CONTENT_COLUMNS` | `data_lineage_registry.content_arrival(rows, columns)` (pure); `dlar_sweep.run_dlar_sweep` → `status_sentence`. §19.18's two questions (arriving / content moving) both read GREEN through the July 2026 break |
+| A KPI's AS-OF DATE (any metric) | `raw_dlar_rep.as_of_date` / `raw_dlar_store.as_of_date` (mig `1026`); `created_at` is an UPPER BOUND for rows written before it | `dlar_sweep.vintage / vintage_of_row / slice_vintage`; `router._dlar_slice_vintage`; served as `feed_vintage` on `GET /kpi-failing/{period}` (§19.28) |
 | Protect % | `raw_dlar_store.protect_pct` | `_cr_resolve_kpi_metrics` `25656` |
 | BYOD % | `raw_dlar_store.byod_pct` | `_cr_resolve_kpi_metrics` `25656` |
 | Family-plan % | `raw_dlar_store.family_plan_pct` | `_cr_resolve_kpi_metrics` `25656` |
@@ -5042,6 +5067,10 @@ neither investigation read.
 
 §19.18 **"IS THE DATA STILL FLOWING?" — THE DISCRIMINATOR WAS DEAD FOR EVERY TABLE-BACKED FEED, AND
 THE SWEEP COULD LOSE THE RECORD OF A SUCCESSFUL RUN (fixed 2026-09-20, owner directive: no patchwork).**
+> **A THIRD QUESTION was added 2026-09-26 (§19.28): do the COLUMNS still carry values?** Both questions
+> below read GREEN for three months while the advocate report's `store` / `door_*` / `ga_prepaid` /
+> `ga_postpaid` carried nothing — rows arrived, the data date moved, the feed was useless. The axis lives
+> beside these two: `data_lineage_registry.REQUIRED_CONTENT_COLUMNS` + `content_arrival`.
 
 Owner: *"it was the same password but it fizzled out of the b2bimports — this happened in luxelink and
 was fixed, again it was a patchwork and i want no patchwork; if one thing is fixed for one tenant it
@@ -5235,7 +5264,7 @@ the Boost row replayed both ways, §D pins that nothing schedules off `last_run_
    (mig `216:22`). Live b2bsoft scrape is a **stub** (`b2b_sweep.py:77`), so aging arrives by upload.
 8. **DEPRECATED SQL RPC `daily_sales_feed_actuals`** (mig `048`) hardcodes Ondigo/gp and a rigid label
    list — superseded by `_compute_feed_actuals_py`. Do not build on it.
-9. **`raw_dlar_store` / `raw_dlar_rep` columns accreted across migrations** (`002`→`012`→`031`). Base mig
+9. **`raw_dlar_store` / `raw_dlar_rep` columns accreted across migrations** (`002`→`012`→`031`→`1026`). Base mig
    `002` lists only a subset; readers select later-added columns (`atu, conversion_rate, gross_adds,
    total_upgrades, location`). Confirm a column exists in the applied schema before relying on it.
 10. **MI gates fail CLOSED** (`management_incentive.py:117`): any qualifier whose value can't be measured
@@ -5381,6 +5410,267 @@ the vocabulary, and the caller writing EVERY key it parsed — each with a negat
 go red. Live blast radius at the time of the fix: **`kpi_actual` held 0 rows platform-wide**, so no historical
 score moved; the wider column set the owner asked for ("all of them") lands from the next import. Component
 counts feed KPI display and the qualifier ONLY — the pay basis stays on `raw_sales` (owner decision 2026-08-15).
+
+§19.28 **A KPI NUMBER WITH NO AS-OF DATE, NO BASIS AND A FABRICATED DENOMINATOR — three defects, three
+classes (owner report 2026-09-26: "ElevateGo says Waleed meets 4/7, MetricsPro says 2/7").** Store
+**11636 Springfield Blvd**, **August 2026**, house org. ElevateGo is the CARRIER PORTAL and is the
+source of truth for what the carrier will pay on. Side by side (ElevateGo | MetricsPro): Sales 13 | 19 ·
+ATU 84.62% | 75% · Protect 80% | 71.4% · BYOD 53.85% | 50% · Family Plan 25% | 25% · 3MR 88.9% | 88.9% ·
+AAL 3.9% | 3.9% · Boost App 61.54% | "Not available". Stored row: `kpi_values` = {atu 75.0, protect
+71.43, boostapp 0.0, familyplan 25.0, byod 50.0, tmr3 88.89, aal 3.85}, `premium_acts` 8, `byod_acts` 11,
+`upgrade_acts` **17** (the owner's note said 16), `kpis_met` 3, `total_kpis` 7, `tier` 0.5.
+
+**(0) IT IS NOT A CALCULATION DEFECT, AND NO ARITHMETIC WAS CHANGED TO CLOSE THE GAP.** Owner: *"both
+should be pulled from the same website ElevateGo, why is the data different"*. Because the stored
+snapshot is 24 of August's 31 days. Every stored August percentage reproduces EXACTLY from the snapshot's
+own base, so the engine is faithful to the data it was given, and adjusting the maths would have HIDDEN a
+live data defect — which CLAUDE.md forbids. **The fix for this rep is a fresh month-end pull of the
+advocate report from ElevateGo, which is live data and the owner's action.** Proof that the snapshot and
+not the code moves the numbers: `harness_kpi_vintage.py` §A22–A25 runs the SAME rep through the SAME
+resolver twice, changing only the base (4 gross adds → 13), and the score moves 3/7 → 4/7 while every
+percentage still reproduces from its own snapshot.
+
+**(1) THE DECISIVE PARTITION — two vintages in one paid row.** The three KPIs that AGREE with the carrier
+(familyplan, tmr3, aal) are EXACTLY the three the pay engine reads from `raw_dlar_store`. The four that
+DISAGREE (atu, protect, byod, boostapp) are EXACTLY the four it reads from `raw_dlar_rep`. 4-for-4 and
+3-for-3. Measured (read-only, `created_at` per slice):
+
+| period | `raw_dlar_store` written | `raw_dlar_rep` written | rep slice |
+|---|---|---|---|
+| **August 2026** | 2026-09-02 (28 rows) | **2026-08-24** (44 rows) | **7 days short** |
+| June 2026 | 2026-07-02 (28) | 2026-06-29 (75) | 1 day short |
+| July 2026 | 2026-08-02 (28) | 2026-07-31 (58) | last-day pull |
+| September 2026 | 2026-09-26 (28) | 2026-09-26 (45) | open month |
+
+Both Elevate Go reports are MONTH-TO-DATE for the portal's current period, and `run_dlar_sweep` files
+only the period the portal is currently serving — so once a month rolls, that month's slice is frozen at
+whatever day its last pull happened to be, forever. **THE OWNER'S HYPOTHESIS IS KILLED, not confirmed:**
+MetricsPro does not compute Protect at all; it copies the carrier's own `insurance_take_rate`. Its
+denominator is SMALLER, not inflated by the count over-count — `device_insurance_total` 5 over
+`gross_adds` 4 + `upgrades` 3 = **5/7 = 71.43%**, a 4-activation month read seven days early; ATU is
+`atu` 3 / `gross_adds` 4 = 75%. **AND 4-vs-3 DOES NOT MOVE THIS REP'S TIER:** `tier_75_min_kpis` = 5, so
+3 and 4 both land on `tier_50_pct` = 0.5. August pay for this rep is unaffected; the stale slice is still
+a defect, and other reps are nearer the band.
+The class: **a measurement with no as-of date, and two grains of different vintages scored as one month.**
+Neither table had a column for it; the only copy was a sentence in `dlar_sweep_config.last_detail`,
+overwritten every run — and it reported the rows PULLED, so the 2026-09-02 run whose rep table the
+partial-collapse guard REFUSED still read "OK — 28 stores, 45 reps" (the §19.21 class, on the one sweep
+nobody had looked at).
+
+**(2) NO DENOMINATOR IS NOT A SCORE OF ZERO — AND THE DENOMINATOR STOPPED ARRIVING IN JULY.**
+`dlar_sweep.normalize_rep` carried `"boost_app_pct": (bounty / ga_prepaid * 100) if ga_prepaid > 0 else 0`.
+**189 of 516** `raw_dlar_rep` rows have `ga_prepaid = 0` and every one was written a measured `0`; **122**
+of them had `boost_ready_bounty > 0` — they had SOLD the thing being scored.
+
+**⚠ CORRECTION TO THE FIRST ACCOUNT OF THIS, WRITTEN BEFORE THE PER-PERIOD MEASUREMENT.** Those 189 were
+first attributed to "the portal not reporting a prepaid count for that rep" — scattered missing values.
+**That attribution was wrong.** They decompose, exactly, into a dated **FEED-SHAPE BREAK** plus a handful
+of genuine zeros:
+
+| period | rows | `ga_prepaid = 0` | `store` / `door_*` | Σ `ga_prepaid` | Σ `ga_postpaid` |
+|---|---|---|---|---|---|
+| March 2026 | 110 | 13 | populated | 1508 | 16 |
+| April 2026 | 103 | 11 | populated | 1071 | 2 |
+| May 2026 | 81 | 11 | populated | 403 | 3 |
+| June 2026 | 75 | 7 | populated | 621 | 2 |
+| **July 2026** | 58 | **58** | **ALL BLANK** | **0** | **0** |
+| **August 2026** | 44 | **44** | **ALL BLANK** | **0** | **0** |
+| **September 2026** | 45 | **45** | **ALL BLANK** | **0** | **0** |
+
+42 scattered (column present, the rep genuinely had no prepaid activations) + **147 from the break**
+(July onward, the column stopped being sent) = 189. And it was never one column: **`store`, `door_name`,
+`door_city`, `door_state`, `door_zip`, `door_address`, `ga_prepaid` and `ga_postpaid` all went blank
+together in July 2026** — ONE upstream shape change, because `normalize_rep` maps that whole block from
+the advocate record's `address` / `name` / `city` / `state` / `zip` / `prepaid_activations` /
+`postpaid_activations`. With `tier_100_min_kpis = 7`, **tier 1.0 was unreachable for every house rep in
+those three months** (live tier counts: zero rows at 1.0 in Jul/Aug/Sep, one in April when only 10 of 46
+were fabricated). Reported honestly: it does NOT flip this rep's 4-vs-3 — the carrier's own 61.54% fails
+the 65 target either way.
+
+**THE CLASS, AND IT IS A THIRD FRESHNESS QUESTION.** §19.18 gave the platform two: is the feed still
+ARRIVING (`last_ingest_at`), and is its CONTENT moving (`latest_data_date`). Both read GREEN here for
+three months, because rows kept arriving and the data date kept moving — while the columns inside them
+carried nothing. **A column that stops arriving must say so.** `data_lineage_registry.
+REQUIRED_CONTENT_COLUMNS` + `content_arrival(rows, columns)` are that axis, declared in the registry that
+already owns "which column means arrived", and `run_dlar_sweep` DEREFERENCES them on the rows it just
+normalised — no extra DB read, at the one moment the portal's response is in hand. A whole-pull empty
+column makes the run **`⚠ PARTIAL`** and names it: `⚠ COLUMN STOPPED ARRIVING: raw_dlar_rep.store (0 of
+58 rows), raw_dlar_rep.ga_prepaid (0 of 58 rows)`. A genuine per-rep zero is NOT a break (June: 74 of 75
+filled → reported arriving), which is the discrimination that makes the signal usable.
+
+**(2a) `store` GOING BLANK BREAKS THE STORE ROLL-DOWN for a DLAR-only rep.** `calc_rep_commissions` takes
+a rep's store from `raw_dlar_rep.store` when the rep has no sales rows, and joins the store DLAR on the
+leading number of it. Since July that value is `''`, so such a rep resolves to no store row and their
+three store-grain KPIs are `no_data`. Reps who DO have sales are unaffected (their store comes from
+`raw_sales.store`), which is why August's 42 computed rows all carry familyplan / tmr3 / aal.
+
+**(2b) THREE OF THE SEVEN KPIs A REP IS TIERED ON ARE THEIR STORE'S, NOT THEIRS.** `family_plan_pct`,
+`tmr3`, `aal_conversion` (and `bounty`, `split`) are **NULL in all 516 `raw_dlar_rep` rows, every period
+since March** — never once fed at rep grain. A rep reaches them only through their store's row, which is
+precisely why Waleed's Family Plan 25%, 3MR 88.89% and AAL 3.85% match ElevateGo exactly: they are his
+STORE's finalised numbers. So "this rep met 3 of 7" is partly a claim about their store. Whether the
+carrier publishes those three only per door is the carrier's business; that the platform can no longer
+hide the difference is ours — `kpi_failing.grain_of(metric_key)` → `'rep' | 'store' | None`, DERIVED from
+the two feed maps so it cannot drift, and stamped on every row of `GET /carrier-kpi-metrics` (with
+`rep_columns`) and on every def of `GET /kpi-failing/{period}`.
+
+**(3) THE COUNTS ARE TWO BASES, NOT ONE ARITHMETIC ERROR — and the reconciliation is EXACT.** Five
+August invoices — **201291, 202807, 205112, 206157, 206300** — each carry a "BYOD Swap" line AND an
+"Upgrade" line **on the same phone line**. Under the house `count_unit='transaction'` the invoice is
+added to the byod set AND the upgrade set (§6d/§6f). Invoice **202731** is the mirror image: two
+"Ineligible Port-In" phone lines counted as ONE premium transaction.
+
+| | MetricsPro `transaction` (today) | MetricsPro `event` (§6f) | carrier | reconciliation |
+|---|---|---|---|---|
+| activations | 19 | 20 | **13** | 20 − 5 BYOD-Swap − 2 Ineligible Port-In = **13** |
+| upgrades | 17 | **12** | **12** | exact under the event unit (17 − the 5 swaps) |
+
+So the answer to *"are the 6 extra acts and the 4 extra upgrades the same transactions?"* is **yes**: the
+five extra upgrades ARE the five BYOD-Swap invoices, and those same five are five of the seven extra
+activations. A BYOD Swap is a customer's own device moved onto an EXISTING line — no gross add, and the
+carrier counts it as neither an activation nor an upgrade. `line_class.activation_events` **already**
+names all five (`event_mixed_classes`); nothing surfaced it. **Nothing here was changed**: the fix is the
+§6f `count_unit='event'` flip (a config row, measured, awaiting the owner) plus, if he wants it, a
+classification config row for "BYOD Swap" / "Ineligible Port-In" — both MONEY, both his call.
+
+**WHAT SHIPPED (design fixes; house pay byte-identical, proven).**
+- **`commcalc/kpi_failing.py`** — `REP_DLAR_COLUMNS` (metric → `raw_dlar_rep` column(s), the fallback
+  chain `device_insurance_pct` → `protect_pct` preserved verbatim) beside the existing
+  `STORE_KPI_COLUMNS`: **which column carries a KPI now has ONE home at BOTH grains**; the rep-grain map
+  was a literal inside the pay engine. `rep_kpi_values(defs, rep_row, store_row, actuals)` — THE one
+  resolver, where **grain is a property of the metric**: a rep-grain metric is the rep's own value or
+  `None`, a store-grain-only metric rolls down and then falls through to `kpi_actual`.
+  `score(values, defs, targets)` — the met-count with an HONEST denominator (`total_kpis` = metrics with
+  both a target and a value). `resolve_defs(raw)` — a tenant's registry → the def tuples, falling back to
+  the built-in seven. **And `evaluate` now owns the rule "a FALSY target is no target"**: the comparison
+  is `actual >= target`, so a target of 0 is a free pass for every value rather than a bar. `GET
+  /kpi-failing` had filtered its own target map with `if v` and the `or dflt` chains treated a stored 0
+  as absent — one decision in two copies. It matters now that the def list is the TENANT'S registry,
+  because `_kpi_defs` puts a row saved with no `target_default` through `safe_float` → `0.0`. All seven
+  built-in defaults are positive, so every existing score is unchanged (`harness_kpi_vintage.py` §B9/B11).
+- **`commcalc/dlar_sweep.py`** — `_rate()` (an absent RATE cell is `None`, not 0.0; `_num()` unchanged
+  for COUNTS, where absent and zero are the same fact), `derived_rate(n, d)` (no basis → `None`),
+  `as_of_date()`, `vintage()`, `vintage_of_row()`, `slice_vintage()`, `status_sentence()`. The ADVOCATE
+  report's own `import_date` is no longer discarded; each grain is stamped with its own `as_of_date`
+  (probed through `core.column_tolerant`, §4b.1). The status names what was **WRITTEN**, every refusal,
+  and any short slice.
+- **`calculator.calc_rep_commissions`** — scores the TENANT'S registry (`cfg['kpi_defs']`, threaded like
+  `line_class_rules`), through the one resolver and the one scorer. `total_kpis` is the measured count,
+  not the literal 7. A PLAN tenant is scored INFORMATIONALLY from its registry and is never tiered on it
+  (`tier` stays 1.0 / `'plan'`) — so LuxeLink reads **0 of 0** with 17 metrics as `no_data`, never the
+  "0/17 against money tiered on something else" §19.27 refused to ship.
+- **Siblings fixed in the same change** — `/coaching` and the action-plan `rep_commission` block both did
+  `safe_float(kv.get(k))` (a missing value shown to a rep, and to their manager, as a KPI failed at 0%)
+  and both fabricated `total_kpis … or 7`; `EmployeeWidgets.impl.tsx` did `total_kpis ?? 7`.
+  `payout_accrual` threads the registry too. `GET /productivity/kpi-values` already skipped a `None` —
+  the one surface that had it right. `hr/letters._is_kpi_miss` already guards `total > 0`, so an honest
+  `0 of 0` no longer generates a KPI-miss letter off a fabricated 0/7.
+- **THE CALCULATION RECORDS THE VINTAGE IT TIERED ON.** `_run_calculation` writes an operator notice
+  (`calc_status.calc_notices`, the channel the multi-month engine already uses) naming any grain whose
+  slice falls short of the period, and — separately — when the two grains are DIFFERENT vintages: *"⚠ the
+  rep-grain KPI slice this run tiered on is as of 2026-08-24 — 7 day(s) short of August 2026 (the
+  report's own date was never recorded; this is the WRITE date, an upper bound)"* and *"⚠ the two KPI
+  grains are DIFFERENT vintages — rep as of 2026-08-24, store as of 2026-09-02."* It **does not refuse the
+  run**: a gate that blocks a payroll recalculation is a policy decision about the owner's money, so the
+  fact is made to travel with the run instead. **Provisional-vs-finalised is DERIVED** from the as-of date
+  (`vintage().complete`), never a flag somebody has to remember to set — a flag is a fact that rots, and
+  the as-of date already decides it.
+- **`GET /kpi-failing/{period}`** now returns **`feed_vintage`** (`_dlar_slice_vintage` → per-grain as-of,
+  `complete`, `days_short`, and **`disagree`** when the two grains are different months). A row written
+  before mig 1026 falls back to its write date as an **upper bound**, labelled `basis='write_date'` —
+  never back-filled, because inventing the report's date is the very class being fixed.
+- **`harnesslib.py_code_only`** — the Python twin of `js_code_only` (§24): a lock asserting "the `else 0`
+  expression is gone" failed on the replacement's own docstring, which quotes it.
+- **`harness_team_snapshot_perf.py` RE-EXPRESSED, not loosened (§24's rule for a guard that has become
+  a proxy).** It pinned `rep_coaching` byte-identical to a base commit to prove a PERF refactor moved
+  nothing. This change ADDS `kpis_no_data` to that payload, and its check 5.6 asserted the tenant's
+  custom metric `reviews` appears on every rep's `kpis` list — which it did, as `actual: 0.0, met:
+  false`, off a blank cell: the very defect. Now `ADDED_SINCE_BASE` names the added key, `j_base`
+  compares every field that existed at the base commit byte for byte, and new checks pin that the
+  difference is EXACTLY that key, that the custom metric is still config-driven with its config target,
+  that an unmeasured metric is `no_data`, and — as the armed control — that the OLD payload carried it
+  as a 0.0 failure. 120/120, stricter than before.
+
+**MIGRATION `1026_dlar_vintage_kpi_no_data.sql` — WRITTEN, NOT APPLIED.** Block 1 (`as_of_date` on both
+tables + indexes) is additive and money-neutral. Block 2 is **commented out**: turning the 189 fabricated
+zeroes into NULL, held for owner sign-off with the measured before/after beside it.
+
+**⚠ OPEN — THE OWNER'S, NOT GUESSED.** (i) the 189 historical rows: nulling them alone moves no money (a
+0 and a NULL both fail 65), but **recomputing** boostapp on the carrier's own basis
+(`boost_ready_bounty / gross_adds`) moves three rep-months, all in the reps' favour — **July 2026 Khan,
+Ismail 4→5 met, tier 0.50→0.75, +$73.27; July 2026 Singh, Simarjyot 6→7, 0.75→1.00, +$118.80;
+August 2026 Singh, Simarjyot 4→5, 0.50→0.75, +$148.69; total +$340.77**, no moves in March/April/May/
+June/September. (ii) confirm the rule: no prepaid activations → Boost App NOT MEASURED, rather than a zero
+failed. (iii) found while measuring: **the carrier's denominator looks like ALL activations, not prepaid
+ones** — 61.54% = 8/13 exactly — so the platform may have had the wrong denominator as well as an empty
+one. (iv) `tier_100_min_kpis = 7` against an honest denominator of 6 makes tier 1.0 unreachable whenever
+any KPI has no data: should the threshold stay an absolute count or become "all measured KPIs met"?
+(v) the August rep slice cannot be repaired from here — only a fresh month-end pull of the advocate
+report can, and the portal serves the CURRENT period, so it may no longer be available at all.
+(vii) **THE MONEY EXPOSURE OF THE MID-MONTH AUGUST SNAPSHOT — all 42 computed rows, not just Waleed**
+(measured read-only; nothing recomputed or written). The snapshot covers 24 of 31 days (77%), and August's
+282 rep-grain gross adds sit against July's 825 and September's 872.
+
+| `kpis_met` | reps | subtotal | paid today (tier) | at tier 0.75 | exposure |
+|---|---|---|---|---|---|
+| 1 | 8 | 2,520.80 | 1,260.40 (0.50) | 1,890.60 | +630.20 |
+| 2 | 10 | 4,654.25 | 2,327.12 (0.50) | 3,490.69 | +1,163.56 |
+| 3 | 16 | 9,894.89 | 4,947.45 (0.50) | 7,421.17 | +2,473.72 |
+| 4 | 5 | 2,960.83 | 1,480.41 (0.50) | 2,220.62 | **+740.21** |
+| 5 | 3 | 944.02 | 708.02 (0.75) | — | — |
+| **total** | **42** | **20,974.79** | **10,723.40** | | |
+
+**5 reps are ONE KPI short of the 0.75 band — $740.21 turns on a single KPI that a finalised pull could
+move**, and 16 more are two short ($2,473.72). The absolute ceiling, if every rep went to tier 1.0, is
+**+$10,251.39**. These are EXPOSURES, not a computed delta: the finalised values do not exist until the
+advocate report is re-pulled, and that is the owner's action on live data.
+
+(viii) **WHICH SOURCE IS AUTHORITATIVE FOR PAY — not assumed here.** The 19-vs-13 is two independent
+sources for one number: 19 is `len(prem_set) + len(byod_set)` from the POS (`raw_sales` /
+`daily_sales_feed`), 13 is the carrier's own gross adds on the advocate report. The standing decision
+(§10, owner 2026-08-15) is that *the pay basis stays on `raw_sales`* and the carrier's component counts
+feed KPI display and the MI qualifier only. That decision predates this report and the report does not
+reopen it — it is named here because the owner should re-affirm it knowing the two differ by 46%, and
+because §31 (carrier earned vs employee paid) is the report that already exists to hold the difference.
+
+(vi) **FOUND IN THE SIBLING AUDIT, reported not fixed:** the **MI 3MR qualifier** (`router` ~42194)
+averages `raw_dlar_store.tmr3` over a manager's stores through `_f_num`, which coerces `None` to `0.0`
+— so a store that reported NO 3MR is averaged in as **0%** and drags the manager's qualifier down off a
+blank cell, the same class as (2). Its `[v for v in vals if v is not None]` filter is a NO-OP for that
+reason, which is also why this change moves no manager's qualifier. Correcting it (excluding an
+unmeasured store from the average, as a store with no row already is) MOVES MANAGER MONEY, so it waits
+for the owner. Pinned inert by `harness_kpi_vintage.py` §B12/B13 so it cannot change in silence.
+
+**SIBLING AUDIT — every reader of a DLAR rate column, checked in this change.** `GET /dlar-store/
+{period}` and `_cr_resolve_kpi_metrics` serve display rows (the KPI page already renders a null blank,
+and `kpi_failing.store_values` → `evaluate` reports it as `no_data` — the intended improvement); the MI
+3MR qualifier is (vi) above; `commcalc.store_kpis` is a separate snapshot table the sweep does not
+write. No money reader treats a DLAR rate as None-sensitive.
+
+**MEASURED BYTE-IDENTITY OVER THE LIVE MONTHS (read-only replay, old engine vs new, same live inputs).**
+March–September 2026, **322 rep-months**: `total_payout` identical to the cent every month
+(1,474.11 / 13,419.44 / 12,540.93 / 11,979.21 / 13,147.11 / 10,872.09 / 14,349.72), and **zero**
+differences in `tier`, `kpis_met` or any count or component. The only deltas are **213 KPI cells where a
+fabricated `0` becomes `None`**, and `total_kpis` falling from the literal 7 to what was measured
+(7→7 for 282 rows, 7→4 where the store row is missing, 7→3 where the rep row is, 7→0 for the 16 rows
+with neither).
+**⚠ THE REPLAY CAUGHT A DEFECT IN THE FIRST CUT OF THIS FIX, which is why it was run:** a blanket
+fallback chain rep → store → actual made a rep with NO advocate row read atu 39.53 / protect 91.36 /
+byod 44.19 off their STORE, and their met-count went 1 → 3. Rolling a store figure down onto a rep
+nobody measured is a better-looking lie than the `0.0` it replaced. Hence "grain is a property of the
+metric" above, pinned by `harness_kpi_vintage.py` §D11–D11f.
+
+**Proof:** `backend/harness_kpi_vintage.py` (76 checks, DB-free, the real `calc_rep_commissions` /
+`kpi_failing` / `dlar_sweep` / `line_class`; anonymised fixtures, synthetic phone numbers; armed pre-fix
+controls in §A6/§A8/§B2; a target fuzz in §B9/§B11; HOUSE byte-identity in §D1–D5 incl. the LIVE
+house registry, which differs from the built-ins only in its labels). **Lock:**
+`harness_kpi_registry_lock.py` §(h), 30 new checks — the pay engine names no DLAR column and no literal
+denominator, reads no KPI through `safe_float`, counts through the one scorer; the sweep derives its rate
+and parses every rate through `_rate`; each grain carries its own as-of date; the status is derived from
+what was written; no surface fabricates a 7 — with six negative controls. Both wired in
+`.github/workflows/carrier-vocab-guard.yml`.
+
+---
 
 §19.27 **A FACT ABOUT WHICH KPIs EXIST, COPIED INTO THE SCREEN THAT SHOWS IT — two instances, one class
 (fixed 2026-09-25).** (1) Owner 2026-09-24: *"what are the seven kpis, it shows only 6"*. The seven keys,

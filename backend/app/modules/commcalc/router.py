@@ -14401,8 +14401,12 @@ def _do_dlar_sweep(org_id):
     _dlar_set_status(client, org_id, 'running', 'Sweep in progress…')
     try:
         res = dlar_sweep.run_dlar_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'])
-        detail = (f"OK — {res['stores']} stores, {res['reps']} reps for {res['period']} "
-                  f"(import_date {res['import_date']})")
+        # WHAT WAS WRITTEN, AND AS OF WHEN (owner defect 2026-09-26, index §19.28). This line used to
+        # report the PULL counts, so a table the partial-collapse guard refused sat under a green
+        # "OK — 28 stores, 45 reps" while nothing was written to it and the period's slice stayed frozen
+        # — the §19.21 class on the one sweep nobody had looked at. It now names the WRITE per table,
+        # each grain's own as-of date, and says plainly when a slice does not reach the period's last day.
+        detail = dlar_sweep.status_sentence(res)
         # Auto-recompute commissions for the just-imported period so the KPI Metrics page
         # and Targets employee KPIs — which read the rep_commissions snapshot, NOT live DLAR
         # — stay current with the freshly-imported DLAR. This runs on every sweep (the daily
@@ -15800,7 +15804,18 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
                # ACTIVATION TYPE (2026-09-21): the ONE predicate's per-org rules reach the pay path — a
                # tenant whose export carries the type outside contract_type earns its activations here
                # exactly as the Sales Report counts them. House defaults = byte-identical.
-               'line_class_rules': _acfg['line_rules']}
+               'line_class_rules': _acfg['line_rules'],
+               # THE KPI REGISTRY REACHES THE PAY PATH (owner "do the pay engine and registry fix",
+               # 2026-09-26; index §19.28). The engine scored the built-in seven for EVERY tenant,
+               # ignoring `carrier_kpi_metric` — the same shape of defect `setup_fee_keywords` and
+               # `line_class_rules` above already closed on this very dict. `_kpi_defs` is the SAME
+               # resolver /coaching, /kpi-failing and the KPI Definitions page read, so the PAID score
+               # and the SHOWN score cannot come from different sets. The house org's registry IS the
+               # built-in seven and an org with no rows falls back to them → byte-identical.
+               'kpi_defs': _kpi_defs(org_id, _kpi_carrier_id(client, org_id)),
+               # Measured values for registry metrics no carrier feed fills (commcalc.kpi_actual, store
+               # grain). EMPTY platform-wide as at 2026-09-26, so inert until a tenant enters one.
+               'kpi_actuals': _kpi_actuals_by_store(client, org_id, period)}
 
         # Resolve payment categories
         cat_map = {r['description'].strip(): r['category'] for r in pay_cats if r.get('description')}
@@ -15825,6 +15840,35 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
             raise Exception(f"No sales data for {period}")
 
         # Run calculation
+        # WHAT VINTAGE OF KPI DATA WAS THIS RUN TIERED ON (owner defect 2026-09-26, index §19.28). A
+        # mid-month snapshot must never be paid on as a closed month in SILENCE. This does not refuse the
+        # run — a gate that blocks a payroll recalculation is a policy decision about the owner's money,
+        # not ours — it makes the fact travel with the run, on the same operator-notice channel the
+        # multi-month engine already uses. `slice_vintage` is the ONE home of the question (§19.18's two
+        # freshness questions plus §19.28's third); nothing is re-derived here.
+        try:
+            _vint = dlar_sweep.slice_vintage(
+                period,
+                rep_rows=[{k: r.get(k) for k in ('as_of_date', 'created_at') if k in r} for r in dlar_rep],
+                store_rows=[{k: r.get(k) for k in ('as_of_date', 'created_at') if k in r} for r in dlar_store])
+            for _g, _lbl in (('raw_dlar_rep', 'rep-grain'), ('raw_dlar_store', 'store-grain')):
+                _v = (_vint.get('grains') or {}).get(_g) or {}
+                if _v.get('complete') is False and _v.get('days_short'):
+                    calc_notices.append(
+                        f"⚠ the {_lbl} KPI slice this run tiered on is as of {_v.get('as_of')} — "
+                        f"{_v['days_short']} day(s) short of {period}"
+                        + (" (the report's own date was never recorded; this is the WRITE date, an upper "
+                           "bound)" if _v.get('basis') == 'write_date' else ""))
+            if _vint.get('disagree'):
+                _a = ((_vint.get('grains') or {}).get('raw_dlar_rep') or {}).get('as_of')
+                _b = ((_vint.get('grains') or {}).get('raw_dlar_store') or {}).get('as_of')
+                calc_notices.append(
+                    f"⚠ the two KPI grains are DIFFERENT vintages — rep as of {_a}, store as of {_b}. "
+                    f"Four of the seven scored KPIs come from the rep grain and three from the store "
+                    f"grain, so this run tiered on two different months.")
+        except Exception:
+            pass
+
         result = calc_rep_commissions(
             sales=sales, pay_detail=pay_detail, dlar_rep=dlar_rep,
             dlar_store=dlar_store, mi_rows=mi_rows, catalog=catalog,
@@ -16633,6 +16677,27 @@ def get_dlar_store_kpis(period: str, authorization: str = Header(default=""), or
     return [r for r in rows if in_keyset(ks, r.get('store_code'), r.get('address'), r.get('location'))]
 
 
+def _dlar_slice_vintage(client, org_id, period):
+    """The per-GRAIN vintage of this org's stored DLAR slices for one period — `dlar_sweep.slice_vintage`
+    over the two tables' own date columns. `as_of_date` arrives by hand-applied migration, so it is
+    PROBED (core.column_tolerant, index §4b.1) and a row written before it existed falls back to its
+    write date as an UPPER BOUND, labelled as one. Org-scoped; `None` on any error — an unknown vintage
+    is reported as unknown, never as fresh."""
+    try:
+        from app.core import column_tolerant as _ct
+        out = {}
+        for tbl in ("raw_dlar_rep", "raw_dlar_store"):
+            present = _ct.present_columns(lambda: client.schema("commcalc").table(tbl),
+                                          lambda q: q.eq("org_id", org_id), ("as_of_date",))
+            cols = "created_at" + (",as_of_date" if "as_of_date" in present else "")
+            out[tbl] = (client.schema("commcalc").table(tbl).select(cols)
+                        .eq("org_id", org_id).in_("period", _pvariants(period)).execute().data) or []
+        return dlar_sweep.slice_vintage(period, rep_rows=out["raw_dlar_rep"],
+                                       store_rows=out["raw_dlar_store"])
+    except Exception:
+        return None
+
+
 @router.get("/kpi-failing/{period}")
 def get_kpi_failing(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """FAILING-KPI overview (owner directive 2026-09-03: "a high level overview of failing KPI
@@ -16660,6 +16725,10 @@ def get_kpi_failing(period: str, authorization: str = Header(default=""), org_id
     # Same resolution as /coaching: config column value wins, else the metric's carrier default.
     targets = {k: (safe_float(cfg.get(col)) or (safe_float(dv) if dv is not None else 0.0))
                for (k, _l, col, dv) in kpi_defs}
+    # The `if v` filter that used to live here is now `kpi_failing.evaluate`'s own rule ("a falsy
+    # target is no target", §19.28) — one home, so /coaching, the action plan and the PAY ENGINE get it
+    # too. Kept here as well only because a 0 in this map would otherwise be echoed to the page as a
+    # target of zero; the classification no longer depends on it.
     targets = {k: v for k, v in targets.items() if v}
     dlar_rows = get_dlar_store_kpis(cperiod, authorization=authorization, org_id=org_id) or []
     resolve_market, _mk = _store_market_resolver(client, org_id)
@@ -16672,8 +16741,18 @@ def get_kpi_failing(period: str, authorization: str = Header(default=""), org_id
     stores = _kpif.store_rows(dlar_rows, kpi_defs, targets, resolve_market=resolve_market)
     reps = _kpif.rep_rows(comms, kpi_defs, targets)
     return {"period": cperiod, "targets": targets,
-            "defs": [{"kpi": k, "label": l} for (k, l, _c, _d) in kpi_defs],
+            # WHICH GRAIN each KPI is actually measured at (§19.28). Three of the seven a Boost rep is
+            # tiered on — familyplan / tmr3 / aal — have never been published at rep grain (all 516
+            # `raw_dlar_rep` rows are NULL in those columns, every period), so a rep reaches them only
+            # through their STORE's row. Derived from the feed maps, so it cannot drift from the truth.
+            "defs": [{"kpi": k, "label": l, "grain": _kpif.grain_of(k)}
+                     for (k, l, _c, _d) in kpi_defs],
             "summary": _kpif.summarize(stores, reps), "stores": stores, "reps": reps,
+            # AS OF WHEN IS THIS TRUE (owner defect 2026-09-26, index §19.28). The pay engine reads four
+            # KPIs from the REP grain and three from the STORE grain into one paid row, so two slices of
+            # different vintages are two different months scored as one — and until now nothing anywhere
+            # said either number had an as-of date. `disagree` is that fact, on the report the owner reads.
+            "feed_vintage": _dlar_slice_vintage(client, org_id, cperiod),
             "note": ("No store DLAR rows for this period — store-grain KPIs unavailable; "
                      "rep grain shown from computed commissions.") if not dlar_rows else None}
 
@@ -28505,6 +28584,44 @@ def _kpi_defs(org_id=ORG_ID, carrier_id=None):
     return out or ACTION_KPI_DEFS
 
 
+def _kpi_carrier_id(client, org_id):
+    """The org's chosen carrier id, for the carrier-specific rows of `carrier_kpi_metric`. None when the
+    org has not chosen one (then only the nil-carrier default set applies). Never raises."""
+    try:
+        r = (client.schema('commcalc').table('commission_org_config').select('carrier_id')
+             .eq('org_id', org_id).limit(1).execute().data) or []
+        return (r[0].get('carrier_id') if r else None) or None
+    except Exception:
+        return None
+
+
+def _kpi_actuals_by_store(client, org_id, period):
+    """`commcalc.kpi_actual` for this org + period at STORE grain → {store_entity: {metric_key: value}}.
+
+    THE ONE HOME of a measured value for a registry metric no carrier feed fills — hand-entered through
+    `POST /kpi-actuals` or imported from the MA door report (`POST /kpi-import/paramount`). The pay
+    engine reads it through `kpi_failing.rep_kpi_values`, which rolls a store-grain value DOWN to the
+    reps of that store — the SAME rule the Boost engine has always used for familyplan / tmr3 / aal.
+    Org-scoped, period-scoped (both spellings), and `{}` on any error or missing table: a KPI nobody fed
+    must read as `no_data`, never as a zero the rep failed."""
+    out = {}
+    try:
+        rows = (client.schema('commcalc').table('kpi_actual')
+                .select('scope,entity,metric_key,value')
+                .eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
+    except Exception:
+        return out
+    for r in rows:
+        if str(r.get('scope') or '').strip().lower() != 'store':
+            continue
+        ent = str(r.get('entity') or '').strip()
+        mk = str(r.get('metric_key') or '').strip()
+        if not ent or not mk:
+            continue
+        out.setdefault(ent, {})[mk] = r.get('value')
+    return out
+
+
 @router.get("/carrier-kpi-metrics")
 def list_carrier_kpi_metrics(carrier_id: str = "", org_id: str = ORG_ID):
     """KPI metric definitions for the org (optionally a carrier). Falls back to the built-in defaults as
@@ -28527,6 +28644,11 @@ def list_carrier_kpi_metrics(carrier_id: str = "", org_id: str = ORG_ID):
         k = r.get('metric_key')
         r["auto_fed"] = _kpi_failing.auto_fed(k)
         r["store_column"] = _kpi_failing.STORE_KPI_COLUMNS.get(k)
+        # AND AT WHICH GRAIN it is measured (§19.28) — 'rep', 'store' (rolled down to every rep at that
+        # store) or None (nothing feeds it). Three of the built-in seven are store-grain only, so a
+        # screen showing "met 3 of 7" can say which of those are the rep's own numbers.
+        r["grain"] = _kpi_failing.grain_of(k)
+        r["rep_columns"] = list(_kpi_failing.REP_DLAR_COLUMNS.get(k) or ())
     return {"metrics": rows, "ready": True, "default_carrier": _KPI_DEFAULT_CARRIER}
 
 
@@ -28846,10 +28968,16 @@ def rep_coaching(period: str, store: Optional[List[str]] = Query(default=None),
         tier = safe_float(cr.get('tier'))
         subtotal = safe_float(cr.get('subtotal'))
         kv = cr.get('kpi_values') or {}
-        kpis = [{'kpi': k, 'label': lab, 'target': kpi_targets.get(k, safe_float(_d)),
-                 'actual': round(safe_float(kv.get(k)), 1),
-                 'met': safe_float(kv.get(k)) >= kpi_targets.get(k, safe_float(_d))}
-                for (k, lab, _c, _d) in kpi_defs]
+        # ONE CLASSIFIER, EVERY SURFACE (owner defect 2026-09-26; index §19.28). `safe_float(None)`
+        # returned 0.0, so a KPI nothing measured was shown to a rep — and to their manager on a
+        # coaching card — as a KPI they failed at 0% against target. `kpi_failing.evaluate` is the
+        # platform's classifier and already gets this right: a missing value is `no_data`, reported and
+        # never counted as failing. `kpis` carries exactly the entries it always did for every MEASURED
+        # metric (same keys, same rounding, same `met` rule), so no consumer changes shape.
+        _kev, _knd = _kpi_failing.evaluate(kv, kpi_defs, kpi_targets)
+        kpis = [{'kpi': e['kpi'], 'label': e['label'], 'target': e['target'],
+                 'actual': e['actual'], 'met': e['met']} for e in _kev]
+        kpis_no_data = _knd
         kpis_met = cr.get('kpis_met')
         kpis_met = sum(1 for x in kpis if x['met']) if kpis_met is None else kpis_met
         at_risk = round(subtotal * (1.0 - tier), 2) if tier < 1.0 else 0.0
@@ -28874,7 +29002,11 @@ def rep_coaching(period: str, store: Optional[List[str]] = Query(default=None),
         final_payout = round((safe_float(fp) if fp is not None else total_payout - cbd['deducted']) - ops_amt, 2)
         reps.append({
             'rep': name, 'store': st, 'market': mk, 'tier': tier,
-            'kpis_met': kpis_met, 'total_kpis': cr.get('total_kpis') or 7,
+            # THE DENOMINATOR IS WHAT WAS MEASURED. `or 7` turned an honest 0 into a literal 7 — the
+            # same fabrication on the display side that `total_kpis: 7` was on the pay side.
+            'kpis_met': kpis_met,
+            'total_kpis': (cr.get('total_kpis') if cr.get('total_kpis') is not None else len(kpis)),
+            'kpis_no_data': kpis_no_data,
             'subtotal': round(subtotal, 2), 'total_payout': total_payout, 'final_payout': final_payout,
             'at_risk': at_risk, 'kpis': kpis, 'short_kpis': [x['label'] for x in kpis if not x['met']],
             'need_for_full': max(0, t100 - kpis_met),
@@ -32265,15 +32397,17 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
         tier = safe_float(cr.get('tier'))
         subtotal = safe_float(cr.get('subtotal'))
         kv = cr.get('kpi_values') or {}
-        kpis = []
-        for (k, lab, _col, _dv) in _kpi_defs(org_id):
-            actual = safe_float(kv.get(k))
-            kpis.append({'kpi': k, 'label': lab, 'target': kpi_targets[k],
-                         'actual': round(actual, 1), 'met': actual >= kpi_targets[k]})
+        # THE SAME ONE CLASSIFIER as /coaching above (index §19.28) — a metric with no value is
+        # `no_data`, never an action-plan item accusing the rep of a 0%.
+        _kev, _knd = _kpi_failing.evaluate(kv, _kpi_defs(org_id), kpi_targets)
+        kpis = [{'kpi': e['kpi'], 'label': e['label'], 'target': e['target'],
+                 'actual': e['actual'], 'met': e['met']} for e in _kev]
         kpis_met = cr.get('kpis_met')
         if kpis_met is None:
             kpis_met = sum(1 for x in kpis if x['met'])
-        return {'tier': tier, 'kpis_met': kpis_met, 'total_kpis': cr.get('total_kpis') or 7,
+        return {'tier': tier, 'kpis_met': kpis_met,
+                'total_kpis': (cr.get('total_kpis') if cr.get('total_kpis') is not None else len(kpis)),
+                'kpis_no_data': _knd,
                 'subtotal': round(subtotal, 2),
                 'total_payout': round(safe_float(cr.get('total_payout')), 2),
                 'at_risk': round(subtotal * (1.0 - tier), 2) if tier < 1.0 else 0.0,
