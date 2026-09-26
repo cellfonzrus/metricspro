@@ -5443,6 +5443,19 @@ one. (iv) `tier_100_min_kpis = 7` against an honest denominator of 6 makes tier 
 any KPI has no data: should the threshold stay an absolute count or become "all measured KPIs met"?
 (v) the August rep slice cannot be repaired from here — only a fresh month-end pull of the advocate
 report can, and the portal serves the CURRENT period, so it may no longer be available at all.
+(vi) **FOUND IN THE SIBLING AUDIT, reported not fixed:** the **MI 3MR qualifier** (`router` ~42194)
+averages `raw_dlar_store.tmr3` over a manager's stores through `_f_num`, which coerces `None` to `0.0`
+— so a store that reported NO 3MR is averaged in as **0%** and drags the manager's qualifier down off a
+blank cell, the same class as (2). Its `[v for v in vals if v is not None]` filter is a NO-OP for that
+reason, which is also why this change moves no manager's qualifier. Correcting it (excluding an
+unmeasured store from the average, as a store with no row already is) MOVES MANAGER MONEY, so it waits
+for the owner. Pinned inert by `harness_kpi_vintage.py` §B12/B13 so it cannot change in silence.
+
+**SIBLING AUDIT — every reader of a DLAR rate column, checked in this change.** `GET /dlar-store/
+{period}` and `_cr_resolve_kpi_metrics` serve display rows (the KPI page already renders a null blank,
+and `kpi_failing.store_values` → `evaluate` reports it as `no_data` — the intended improvement); the MI
+3MR qualifier is (vi) above; `commcalc.store_kpis` is a separate snapshot table the sweep does not
+write. No money reader treats a DLAR rate as None-sensitive.
 
 **MEASURED BYTE-IDENTITY OVER THE LIVE MONTHS (read-only replay, old engine vs new, same live inputs).**
 March–September 2026, **322 rep-months**: `total_payout` identical to the cent every month
@@ -5457,7 +5470,7 @@ byod 44.19 off their STORE, and their met-count went 1 → 3. Rolling a store fi
 nobody measured is a better-looking lie than the `0.0` it replaced. Hence "grain is a property of the
 metric" above, pinned by `harness_kpi_vintage.py` §D11–D11f.
 
-**Proof:** `backend/harness_kpi_vintage.py` (61 checks, DB-free, the real `calc_rep_commissions` /
+**Proof:** `backend/harness_kpi_vintage.py` (63 checks, DB-free, the real `calc_rep_commissions` /
 `kpi_failing` / `dlar_sweep` / `line_class`; anonymised fixtures, synthetic phone numbers; armed pre-fix
 controls in §A6/§A8/§B2; a target fuzz in §B9/§B11; HOUSE byte-identity in §D1–D5 incl. the LIVE
 house registry, which differs from the built-ins only in its labels). **Lock:**

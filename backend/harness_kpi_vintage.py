@@ -252,6 +252,33 @@ ck("B11 a registry metric with a FALSY target is not scored at all — never a f
    and kf.score({"x": 99.0}, (("x", "X", "kpi_x_target", 0.0),), {}) == (0, 0, [], []))
 
 
+# ── THE SIBLING AUDIT: who else reads a DLAR RATE, and can a NULL move their number? ──────────────
+# Every reader of `raw_dlar_store`'s rate columns was checked in this change (index §19.28):
+#   • `GET /dlar-store/{period}` and `_cr_resolve_kpi_metrics` — display rows; the KPI page already
+#     renders a null as blank and `kpi_failing.store_values` -> `evaluate` reports it as no_data.
+#   • the MI 3MR QUALIFIER (`router` ~42194) averages `tmr3` over a manager's stores through
+#     `_f_num`, which coerces None to 0.0 — so a NULL averages in as a zero exactly as a blank cell
+#     does today, and this change moves no manager's qualifier. Its `[v for v in vals if v is not
+#     None]` filter is therefore a NO-OP.
+#   ⚠ THAT INERTNESS IS ITSELF THE SAME DEFECT, and it is REPORTED, not fixed here: a store that
+#     reported no 3MR is averaged in as 0% and drags the manager's qualifier down off a blank cell.
+#     Fixing it MOVES MANAGER MONEY, so it waits for the owner (index §19.28 open item vi).
+def _f_num_today(v):                       # verbatim copy of router._f_num, as the control
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+ck("B12 SIBLING AUDIT — the MI 3MR qualifier is UNCHANGED by a NULL: its reader coerces None to 0.0, "
+   "so its is-not-None filter never drops anything and no manager's qualifier moves",
+   _f_num_today(None) == 0.0 and _f_num_today("") == 0.0
+   and [v for v in [_f_num_today(None), _f_num_today(88.89)] if v is not None] == [0.0, 88.89])
+ck("B13 …and that is REPORTED as the same defect, not fixed: averaging a store that reported nothing "
+   "as 0% drags the manager's qualifier down, and correcting it moves manager money (owner's call)",
+   _f_num_today(None) == 0.0)          # the inertness IS the finding; asserted so it cannot change silently
+
+
 print("\n=== §C  ONE INVOICE, TWO BUCKETS — and the exact reconciliation to the carrier ==============")
 
 # Waleed's August, rebuilt from the live contract-type distribution. Phone numbers are SYNTHETIC.
