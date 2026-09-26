@@ -1,6 +1,7 @@
 'use client'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, ORG_ID } from '@/lib/client'
+import { useAuth } from '@/lib/auth-context'
 
 // KPI DEFINITIONS — the platform-wide registry (owner 2026-09-25: "create a KPI dashboard, which
 // will be used platform wide, move the KPI from Boost in that right now and when other KPIs are
@@ -63,7 +64,13 @@ export default function KpiMetricsAdminPage() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
-  const [orgId, setOrgId] = useState<string>(ORG_ID)
+  // The organisation defaults to the company you are ACTING AS (the tenant switcher), never the house
+  // org: this used to start on ORG_ID, so a super admin standing in another tenant (e.g. a franchise
+  // store) was shown — and would have written — the house org's KPIs. Harness: harness_acting_org_default.py.
+  const { activeOrg, tenant, tenants } = useAuth()
+  const actingOrg = activeOrg || tenant?.org_id || ORG_ID
+  const [orgPick, setOrgPick] = useState<string>('')   // '' = follow the acting company
+  const orgId = orgPick || actingOrg
   const [draft, setDraft] = useState<Metric>({ metric_key: '', label: '' })
   const [busy, setBusy] = useState(false)
   // The endpoint answers `ready: false` when migration 060 has not been applied — the registry table
@@ -73,17 +80,23 @@ export default function KpiMetricsAdminPage() {
   // anything. Tracked separately and said in words.
   const [ready, setReady] = useState(true)
 
-  const load = useCallback(() => {
-    setLoading(true); setErr('')
+  // The fetch runs in the effect and sets state only in its callbacks; `load()` (Reload / after a save)
+  // shows the spinner and bumps `tick` to re-run it. A late answer for a previous org is dropped.
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    let alive = true
     api(`/api/v1/commcalc/carrier-kpi-metrics?org_id=${encodeURIComponent(orgId)}`)
-      .then((r: any) => {
+      .then((r: Metric[] | { metrics?: Metric[]; rows?: Metric[]; ready?: boolean } | null) => {
+        if (!alive) return
+        setErr('')
         setRows(Array.isArray(r) ? r : (r?.metrics || r?.rows || []))
         setReady(Array.isArray(r) ? true : r?.ready !== false)
       })
-      .catch((e: any) => setErr(e?.message || String(e)))
-      .finally(() => setLoading(false))
-  }, [orgId])
-  useEffect(() => { load() }, [load])
+      .catch((e: unknown) => { if (alive) setErr(e instanceof Error ? e.message : String(e)) })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [orgId, tick])
+  const load = useCallback(() => { setLoading(true); setErr(''); setTick(t => t + 1) }, [])
 
   const sorted = useMemo(
     () => [...rows].sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0) || a.metric_key.localeCompare(b.metric_key)),
@@ -97,7 +110,7 @@ export default function KpiMetricsAdminPage() {
       })
       setMsg(`Saved ${m.label || m.metric_key}.`)
       load()
-    } catch (e: any) { setErr(e?.message || String(e)) } finally { setBusy(false) }
+    } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
   }
 
   async function addDraft() {
@@ -130,7 +143,7 @@ export default function KpiMetricsAdminPage() {
         { method: 'DELETE' })
       setMsg(`Removed ${m.label}.`)
       load()
-    } catch (e: any) { setErr(e?.message || String(e)) } finally { setBusy(false) }
+    } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
   }
 
   return (
@@ -153,9 +166,14 @@ export default function KpiMetricsAdminPage() {
 
       <div style={{ marginTop: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <label style={{ fontSize: 13, color: 'var(--text2)' }}>Organisation</label>
-        <input className="input" style={{ width: 340, fontFamily: 'monospace', fontSize: 12 }}
-               value={orgId} onChange={e => setOrgId(e.target.value.trim())}
-               placeholder="org_id" />
+        <select className="input" style={{ minWidth: 260, fontSize: 13 }}
+                value={orgPick} onChange={e => { setLoading(true); setOrgPick(e.target.value) }}>
+          <option value="">{(tenant?.name || 'This company') + ' (the company you are in)'}</option>
+          {tenants.filter(t => t.org_id !== actingOrg).map(t => (
+            <option key={t.org_id} value={t.org_id}>{t.name}</option>
+          ))}
+        </select>
+        <span style={{ fontSize: 11, color: 'var(--text3)', fontFamily: 'monospace' }}>{orgId}</span>
         <button className="btn btn-secondary" onClick={load} disabled={loading}>Reload</button>
         <span style={{ fontSize: 12, color: 'var(--text3)' }}>
           {loading ? 'Loading…' : `${sorted.length} metric${sorted.length === 1 ? '' : 's'} defined`}

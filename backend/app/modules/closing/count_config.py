@@ -25,12 +25,15 @@ STD_FIELD_KEYS = {k for (k, _lbl, _rc, _so) in STANDARD_DEFS}
 TABLE = "closing_count_field_def"
 
 
-def load_count_config(client, org_id):
+def load_count_config(client, org_id, include_inactive=False):
     """Active count-field definitions for a tenant, sorted for display. [] (→ hardcoded fallback) if
-    migration 501 isn't applied or the tenant hasn't configured anything."""
+    migration 501 isn't applied or the tenant hasn't configured anything. `include_inactive=True` is for
+    the settings editor ONLY (index §29.9) — same contract as tender_config.load_tender_config."""
     try:
-        rows = (client.schema("commcalc").table(TABLE).select("*")
-                .eq("org_id", org_id).eq("is_active", True).order("sort_order").execute().data) or []
+        q = client.schema("commcalc").table(TABLE).select("*").eq("org_id", org_id)
+        if not include_inactive:
+            q = q.eq("is_active", True)
+        rows = q.order("sort_order").execute().data or []
         return rows
     except Exception:
         return []   # table not migrated yet, or tenant has no rows → hardcoded fallback

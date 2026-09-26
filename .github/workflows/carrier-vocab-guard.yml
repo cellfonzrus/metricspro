@@ -129,7 +129,9 @@ name: carrier-vocab-guard
 # (backend/harness_royalty_lock.py; stdlib only). The stdlib PROOF (backend/harness_royalty.py: the synthetic report
 # parsed from text and HTML, the rounding remainder, validation flags, the P&L mapping, the recon, centers, the vertical
 # axis) runs here; the app-dependent PROOF (backend/harness_royalty_pl.py: byte-identity of the house P&L against the
-# frozen pre-change oracle, the booking, the scopes, the filter, the router) runs in the finance-royalty-proof job.
+# frozen pre-change oracle, the booking, the scopes, the filter, the router, and §H the multi-month upload — N files
+# through the single import's own parser and writer, index §37.10) runs in the finance-royalty-proof job. The three
+# royalty steps set `shell: bash` so a failing harness fails its step through the `| tee` pipe (pipefail).
 
 on:
   pull_request:
@@ -148,6 +150,7 @@ on:
       - "backend/harness_royalty_pl.py"
       - "backend/harness_royalty_pl_oracle.json"
       - "database/migrations/1022_franchise_royalty_cost_profit_centers.sql"
+      - "database/migrations/1027_royalty_lookback_months.sql"
       - "docs/SYSTEM_DATA_FLOW_INDEX.md"
       - "frontend/src/**"
       - "backend/harness_account_expenses_one_home.py"
@@ -288,6 +291,15 @@ on:
       - "backend/harness_vendor_price_compare.py"
       - "backend/harness_tenant_vertical.py"
       - "backend/harness_super_admin_toolbox.py"
+      - "backend/harness_closing_closer_pick.py"
+      - "backend/harness_closing_config_active.py"
+      - "backend/app/modules/closing/tender_config.py"
+      - "backend/app/modules/closing/count_config.py"
+      - "frontend/src/app/(platform)/closing/**"
+      - "backend/harness_acting_org_default.py"
+      - "backend/app/modules/closing/closer_pick.py"
+      - "backend/app/modules/closing/router.py"
+      - "frontend/src/components/ClosingSubmitForm.tsx"
       - "frontend/src/lib/rbac.ts"
       - "frontend/src/lib/tile-hubs.ts"
       - "frontend/src/components/ScreenLink.tsx"
@@ -419,6 +431,15 @@ jobs:
       - name: Run the Super Admin Toolbox lock (platform-only tiles are copies with a real home and a real route; one gate reads super_admin, never modules.admin; every NAV consumer asks platformOK or reads TENANT_NAV — index §38)
         working-directory: backend
         run: python3 harness_super_admin_toolbox.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the closing closer-pick lock (the closing is submitted under the signed-in person; DM and above may pick; the server refuses otherwise; screen mirror = server rule — index §29.7)
+        working-directory: backend
+        run: python3 harness_closing_closer_pick.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the closing config active lock (a switched-off tender / count is gone from the form and every recon, and the editors can switch one off — index §29.9)
+        working-directory: backend
+        run: python3 harness_closing_config_active.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the acting-org default lock (no page seeds its organisation from the house org — index §29.8)
+        working-directory: backend
+        run: python3 harness_acting_org_default.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the Paramount KPI column lock (one exact column table; an unknown header yields no value, never the neighbour's; the import writes every key it parsed — index §19.20)
         working-directory: backend
         run: python3 harness_paramount_kpi_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -433,9 +454,11 @@ jobs:
         run: python3 harness_browser_sweep_kinds.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the franchise royalty proof (synthetic report from text + HTML; the rounding remainder; flags kept, never corrected; P&L mapping; recon; centers; the vertical axis — index §37)
         working-directory: backend
+        shell: bash
         run: python3 harness_royalty.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the franchise royalty lock (one vocabulary, one rounding rule, one booking path, the vertical as data, org-scoped, gated, one engine — index §37)
         working-directory: backend
+        shell: bash
         run: python3 harness_royalty_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CUSTOMER-MASTER PROOF (index §30.16) drives the REAL matcher, rebuild, line writer and /pos endpoints over the
@@ -526,6 +549,7 @@ jobs:
         with: { python-version: "3.11" }
       - name: Install the backend's dependencies
         run: pip install -r backend/requirements.txt
-      - name: Run the franchise royalty P&L proof (house byte-identity; booking; suppression; scopes; filter; router)
+      - name: Run the franchise royalty P&L proof (house byte-identity; booking; suppression; scopes; filter; router; the multi-month upload = N single imports — index §37.10)
         working-directory: backend
+        shell: bash
         run: python3 harness_royalty_pl.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

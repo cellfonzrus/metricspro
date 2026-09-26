@@ -37,6 +37,18 @@ export function canImpersonate(perms: Permissions | undefined): boolean {
 }
 // MIRROR of backend app/core/scope.scheduling_reach() — KEEP IN SYNC. Unknown/absent/garbage → 'org',
 // which is byte-identical to today's behaviour for every existing role.
+// ── Daily closing: whose name the closing is submitted under (owner 2026-09-26, index §29.7) ─────────
+// MIRROR of backend app/modules/closing/closer_pick.may_pick_any — KEEP IN SYNC (harness_closing_closer_pick.py
+// fails the build if the scope tiers or the grant key drift). Presentation only: the server refuses a
+// closing submitted under someone else's name by a caller this returns false for.
+export const CLOSER_PICK_ANY_GRANT = 'closing_pick_any_employee'
+export const CLOSER_PICK_ANY_SCOPES: readonly string[] = ['market', 'region', 'regional', 'all']
+export function canPickAnyCloser(perms: Permissions | undefined, platformAdmin = false): boolean {
+  if (platformAdmin) return true
+  const explicit = perms?.data?.[CLOSER_PICK_ANY_GRANT]
+  if (typeof explicit === 'boolean') return explicit
+  return CLOSER_PICK_ANY_SCOPES.includes(String(perms?.scope || 'all').trim().toLowerCase())
+}
 export function schedulingReach(perms: Permissions | undefined): SchedulingReach {
   const v = String(perms?.scheduling_reach || '').trim().toLowerCase()
   return v === 'span' ? 'span' : 'org'
@@ -196,6 +208,8 @@ export const DATA_GRANTS: { key: string; label: string; help?: string }[] = [
     help: 'The $ inside a customer lookup: margin, cost, extended price, lifetime value (backend crm `customer_360_financial_allowed`). DEFAULT-CLOSED with NO tenant toggle. Without it the lookup still shows what/when/where/who-sold-it — the money is listed as withheld, never shown as zero.' },
   { key: 'whatif_carrier_income', label: 'What-If — Company Payout / Carrier Income',
     help: 'The 💵 Company Payout / Carrier Income tab of /commcalc/whatif — what the carrier / master-agent pays the COMPANY. DEFAULT-CLOSED — admin-only until granted; also rides "carrier_residual" when the tenant sets residual visibility to "permissioned".' },
+  { key: 'closing_pick_any_employee', label: 'Daily closing — submit under another employee\'s name',
+    help: 'Pick any employee on the daily closing form. When never set on a role, DM and above (market / region / company-wide scope) may, and store managers and reps submit under their own name only (backend closing/closer_pick.may_pick_any). Tick or untick to override per role.' },
   { key: 'employee_pay_rates', label: 'Employee pay rates & gross pay',
     help: 'See pay-per-hour, gross pay and salary across payroll & workforce reports. Without it those columns are removed server-side.' },
 ]

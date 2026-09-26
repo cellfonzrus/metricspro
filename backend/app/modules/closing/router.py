@@ -1859,11 +1859,17 @@ async def _notify_envelope_mismatch(client, org_id, summary):
 
 
 @router.post("/row")
-async def create_row(payload: dict, org_id: str = ORG_ID):
+async def create_row(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     client = sb()
     d = _date(payload.get("close_date"))
     if not d:
         raise HTTPException(400, "valid close_date required")
+    # WHO the closing is submitted under (index §29.7): the signed-in person, unless their role may pick
+    # anyone (DM and above, or an explicit Roles grant) — closing/closer_pick.verdict is the one rule.
+    # Every live request carries a token (the tenant middleware 401s without one); a direct in-process
+    # call with no header string is the only way to arrive without one.
+    if isinstance(authorization, str) and authorization.strip():
+        _closer_gate(client, org_id, authorization, payload.get("employee_name"))
     sfid = (payload.get("sfid") or "").strip()
     sm = _store_resolver(client, org_id).get(sfid, {}) if sfid else {}
     body = {
@@ -2709,6 +2715,9 @@ def get_tender_config(org_id: str = ORG_ID):
     client = sb()
     from .tender_config import load_tender_config, STANDARD_DEFS
     defs, maps = load_tender_config(client, org_id)
+    # The editor's view (index §29.9): every saved def INCLUDING switched-off ones. `configured` tells the
+    # closing form "this company has its own list" — so an all-off list never falls back to the built-in 7.
+    all_defs, _ = load_tender_config(client, org_id, include_inactive=True)
     mode, custom = "3way", False
     try:
         t = (client.schema("storeops").table("tenants").select("closing_recon_mode,closing_tenders_custom")
@@ -2720,7 +2729,8 @@ def get_tender_config(org_id: str = ORG_ID):
         pass
     standard = [{"tender_key": k, "label": lbl, "recon_class": rc, "is_standard": True, "include_in_total": intot}
                 for (k, lbl, rc, intot) in STANDARD_DEFS]
-    return {"defs": defs, "maps": maps, "standard": standard, "recon_mode": mode, "custom": custom}
+    return {"defs": defs, "all_defs": all_defs, "configured": bool(all_defs), "maps": maps,
+            "standard": standard, "recon_mode": mode, "custom": custom}
 
 
 class PutTenderConfigIn(LaxModel):
@@ -2776,6 +2786,11 @@ def put_tender_config(payload: PutTenderConfigIn, org_id: str = ORG_ID, authoriz
     # (dead/deactivated/typo'd tender_key) now fails loudly at save time instead of silently at read
     # time. Nothing is deleted/written until this check passes (a rejected save leaves the tenant's
     # PREVIOUS config completely untouched).
+    # A closing with no money box at all cannot be submitted — refuse an all-off list rather than let the
+    # form fall back to the built-in 7 the company switched off (index §29.9).
+    if rows and not any(r["is_active"] for r in rows):
+        raise HTTPException(400, "At least one tender must stay active — a closing needs somewhere to enter "
+                                 "the money. Nothing was saved.")
     active_keys = {r["tender_key"] for r in rows if r["is_active"]} or set(CANON_TENDERS)
     off_axis = sorted({m["tender_key"] for m in mrows if m["tender_key"] not in active_keys})
     if off_axis:
@@ -2879,9 +2894,10 @@ def get_count_config(org_id: str = ORG_ID):
     client = sb()
     from . import count_config
     defs = count_config.load_count_config(client, org_id)
+    all_defs = count_config.load_count_config(client, org_id, include_inactive=True)   # the editor's view (§29.9)
     standard = [{"field_key": k, "label": lbl, "recon_class": rc, "sort_order": so, "is_standard": True}
                 for (k, lbl, rc, so) in count_config.STANDARD_DEFS]
-    return {"defs": defs, "standard": standard}
+    return {"defs": defs, "all_defs": all_defs, "configured": bool(all_defs), "standard": standard}
 
 
 class PutCountConfigIn(LaxModel):
@@ -7728,6 +7744,33 @@ def _caller_perms(client, authorization: str) -> dict:
         return perms
     except Exception:
         return {}
+
+
+def _closer_gate(client, org_id: str, authorization: str, submitted_name) -> None:
+    """Refuse a closing submitted under someone else's name by a caller who may not pick anyone
+    (closing/closer_pick, index §29.7). Own names = the login's full name + its employee record's name."""
+    from app.modules.closing import closer_pick
+    perms = _caller_perms(client, authorization)
+    if closer_pick.may_pick_any(perms):
+        return
+    names = set()
+    try:
+        from app.modules.core.router import _uid_from_token
+        from app.core.tenant_middleware import caller_app_user
+        uid = _uid_from_token(authorization)
+        u = caller_app_user(uid, "org_id,full_name,employee_id") if uid else None
+        emp_name = ""
+        if u and u.get("employee_id"):
+            rows = (client.schema("storeops").table("employees").select("name")
+                    .eq("org_id", u.get("org_id") or org_id).eq("employee_id", u["employee_id"])
+                    .limit(1).execute().data) or []
+            emp_name = rows[0].get("name") if rows else ""
+        names = closer_pick.own_names((u or {}).get("full_name"), emp_name)
+    except Exception as e:                                              # pragma: no cover - I/O guard
+        print(f"WARN closing _closer_gate name lookup failed: {e}")
+    ok, why = closer_pick.verdict(perms, submitted_name, names)
+    if not ok:
+        raise HTTPException(403, why)
 
 
 def _can_mgmt_review(perms: dict) -> bool:
