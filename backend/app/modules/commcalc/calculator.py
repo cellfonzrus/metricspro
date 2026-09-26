@@ -202,7 +202,34 @@ def calc_rep_commissions(
     # too. They used to be written out here a second time, so a change reaching the display set and
     # not this one would have moved the SHOWN score away from the PAID score with nothing failing.
     # Same keys, same columns, same defaults, same order — this is a dereference, not a rule change.
-    KPI = {k: float(cfg.get(col) or dflt) for (k, _label, col, dflt) in _kpi_failing.BUILTIN_KPI_DEFS}
+    # THE TENANT'S OWN REGISTRY DRIVES THE PAID SCORE (owner "do the pay engine and registry fix",
+    # 2026-09-26; index §19.28). The engine used to score the built-in seven for EVERY tenant, ignoring
+    # `commcalc.carrier_kpi_metric` entirely — so a tenant whose registry defines 17 door-report metrics
+    # was tiered on seven metrics it does not have, and its KPI screens could never be driven from the
+    # registry without reading a score against something else. `cfg['kpi_defs']` is `router._kpi_defs`
+    # (org + carrier), threaded exactly the way `line_class_rules` is; `resolve_defs` falls back to the
+    # built-in seven, so an org with no registry rows — and the house org, whose registry IS the seven —
+    # is BYTE-IDENTICAL (`harness_kpi_vintage.py` §B/§D).
+    _KPI_DEFS = _kpi_failing.resolve_defs(cfg.get('kpi_defs'))
+    # Targets: the per-period payout_config column wins over the definition's default. The `or dflt`
+    # fallback is preserved verbatim, including its known quirk that a stored 0 falls back to the
+    # default. A metric with NEITHER a stored target nor a default is left OUT of this map on purpose —
+    # `kpi_failing.evaluate` then skips it, because a metric with no target cannot fail anyone. It is
+    # NOT given a target of 0, which every value would "meet".
+    KPI = {}
+    for (_k, _label, _col, _dflt) in _KPI_DEFS:
+        _t = cfg.get(_col)
+        if not _t:
+            _t = _dflt
+        try:
+            if _t is not None:
+                KPI[_k] = float(_t)
+        except (TypeError, ValueError):
+            pass
+    # Measured values for metrics no carrier feed fills — `commcalc.kpi_actual`, already scoped to this
+    # org + period by the caller: {store_key: {metric_key: value}}. EMPTY platform-wide as at 2026-09-26,
+    # so this is inert until a tenant types or emails one in.
+    _KPI_ACTUALS = cfg.get('kpi_actuals') if isinstance(cfg.get('kpi_actuals'), dict) else {}
     
     # ── Name map ─────────────────────────────────────────────
     name_lookup = {}  # epay_login → storeops_name
@@ -374,6 +401,15 @@ def calc_rep_commissions(
     # branch (carrier_mode defaults to 'boost'), so their pay stays byte-identical.
     if carrier_mode != 'boost':
         plan_rows = []
+        _plan_score = {}
+        for key, rep in rep_map.items():
+            _dr = dlar_rep_by_name.get(rep['name'].upper())
+            _sr = dlar_store_by_num.get(str(rep['store']).split(' ')[0])
+            _vals, _ = _kpi_failing.rep_kpi_values(
+                _KPI_DEFS, rep_row=_dr, store_row=_sr,
+                actuals=_KPI_ACTUALS.get(str(rep['store']).strip()))
+            _m, _t, _e, _nd = _kpi_failing.score(_vals, _KPI_DEFS, KPI)
+            _plan_score[key] = (_m, _t, _vals)
         for key, rep in rep_map.items():
             plan_rows.append({
                 'period': period,
@@ -382,11 +418,17 @@ def calc_rep_commissions(
                 'epay_salesperson': rep['name'],
                 'storeops_name': rep['storeops_name'],
                 'store': rep['store'],
+                # A PLAN TENANT IS NOT KPI-TIERED — `tier` stays 1.0 and the plan engine sets the
+                # money. Its registry metrics are scored INFORMATIONALLY (owner 2026-09-26): the same
+                # one resolver, the same honest denominator, so the KPI screens can be driven from the
+                # registry without a score ever becoming a multiplier here. A metric nothing fed is
+                # `None` → `no_data` → outside the denominator, never a failed zero. With nothing fed,
+                # this is `0 of 0` — never "0 of 17", which is the reading the owner refused.
                 'tier': 1.0,
                 'tier_source': 'plan',
-                'kpis_met': 0,
-                'total_kpis': 0,
-                'kpi_values': {},
+                'kpis_met': _plan_score[key][0],
+                'total_kpis': _plan_score[key][1],
+                'kpi_values': _plan_score[key][2],
                 'premium_acts': len(rep['prem_set']),
                 'byod_acts': len(rep['byod_set']),
                 'upgrade_acts': len(rep['upg_set']),
@@ -462,35 +504,32 @@ def calc_rep_commissions(
         tier = 1.0
         kpi_vals = {}
         kpis_met = 0
-        
+        total_kpis = 0
+        kpi_nodata = []
+
         if not G['straight']:
             dr = dlar_rep_by_name.get(rep['name'].upper())
             store_num = str(rep['store']).split(' ')[0]
             sr = dlar_store_by_num.get(store_num)
-            
-            # Rep-level KPIs from Advocate report (already whole-number %)
-            rep_atu      = safe_float(dr.get('atu_pct')) if dr else 0
-            rep_protect  = safe_float(dr.get('device_insurance_pct') or dr.get('protect_pct')) if dr else 0
-            rep_boostapp = safe_float(dr.get('boost_app_pct')) if dr else 0
-            rep_byod     = safe_float(dr.get('byod_pct')) if dr else 0
-
-            # Store-level KPIs from Elevate Go Store DLAR (rolled down to rep)
-            st_familyplan = safe_float(sr.get('family_plan_pct')) if sr else 0
-            st_tmr3       = safe_float(sr.get('tmr3')) if sr else 0
-            st_aal        = safe_float(sr.get('aal_conversion')) if sr else 0
 
             if dr or sr:
-                kpi_vals = {
-                    'atu':         rep_atu,
-                    'protect':     rep_protect,
-                    'boostapp':    rep_boostapp,
-                    'byod':        rep_byod,
-                    'familyplan':  st_familyplan,
-                    'tmr3':        st_tmr3,
-                    'aal':         st_aal,
-                }
-                kpis_met = sum(1 for k,v in kpi_vals.items() if v >= KPI[k])
-            
+                # ONE RESOLVER, ONE SCORER (owner defect 2026-09-26; index §19.28). Which column carries
+                # a KPI, and at which grain, used to be a literal HERE — `dr.get('atu_pct')`,
+                # `dr.get('device_insurance_pct') or dr.get('protect_pct')`, the store roll-down for
+                # familyplan/tmr3/aal — a second home for the fact `kpi_failing.STORE_KPI_COLUMNS`
+                # already held, at a grain nothing locked. Both maps now live in `kpi_failing`
+                # (`REP_DLAR_COLUMNS` / `STORE_KPI_COLUMNS`) and this is a dereference.
+                #
+                # AND NO FABRICATED ZERO. `safe_float(None)` returned 0.0, so an ABSENT measurement was
+                # scored as a failure at 0% against the target and counted in a denominator of a literal
+                # 7. `rep_kpi_values` keeps `None` as `None` and `score` reports it as `no_data`, outside
+                # the met-count. Byte-identical whenever every metric has a value — which is every live
+                # Boost row written to date.
+                kpi_vals, _kpi_src = _kpi_failing.rep_kpi_values(
+                    _KPI_DEFS, rep_row=dr, store_row=sr,
+                    actuals=_KPI_ACTUALS.get(str(rep['store']).strip()))
+                kpis_met, total_kpis, _kpi_eval, kpi_nodata = _kpi_failing.score(kpi_vals, _KPI_DEFS, KPI)
+
             if kpis_met >= G['t100']: tier = 1.0
             elif kpis_met >= G['t75']: tier = G['t75pct']
             else: tier = G['t50pct']
@@ -514,7 +553,9 @@ def calc_rep_commissions(
             'tier': tier,
             'tier_source': 'dlar',
             'kpis_met': kpis_met,
-            'total_kpis': 7,
+            # THE HONEST DENOMINATOR — the metrics actually MEASURED, not the literal 7 this used to be.
+            # "3 of 7" when six were measured accuses a rep of a failure nobody observed.
+            'total_kpis': total_kpis,
             'kpi_values': kpi_vals,
             'premium_acts': pa,
             'byod_acts': ba,

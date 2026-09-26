@@ -51,6 +51,8 @@ import os
 import re
 import sys
 
+import harnesslib as _hl   # the ONE comment/docstring stripper (§24) — locks read CODE, not prose
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BE = os.path.join(ROOT, "backend", "app", "modules", "commcalc")
 FE = os.path.join(ROOT, "frontend", "src")
@@ -90,6 +92,8 @@ sys.path.insert(0, os.path.join(ROOT, "backend"))
 from app.modules.commcalc import kpi_failing as _KF          # noqa: E402  (pure, stdlib)
 
 ROUTER = read(os.path.join(BE, "router.py"))
+KPIF = read(os.path.join(BE, "kpi_failing.py"))
+SWEEP = read(os.path.join(BE, "dlar_sweep.py"))
 CALC = read(os.path.join(BE, "calculator.py"))
 PAGE = read(KPI_PAGE)
 WID = read(WIDGETS)
@@ -120,8 +124,15 @@ check("(a) BUILTIN_KPI_DEFS is the one literal, and carries all seven",
 check("(a) router.ACTION_KPI_DEFS dereferences it — it holds no tuple list of its own",
       "ACTION_KPI_DEFS = [tuple(d) for d in _kpi_failing.BUILTIN_KPI_DEFS]" in ROUTER
       and not re.search(r"ACTION_KPI_DEFS\s*=\s*\[\s*\n\s*\('atu'", ROUTER))
-check("(a) the PAY ENGINE builds its KPI dict from the same home — no literal dict",
-      "_kpi_failing.BUILTIN_KPI_DEFS" in CALC and not re.search(r"'atu'\s*:\s*float\(cfg\.get", CALC))
+# STRENGTHENED 2026-09-26 (index §19.28): the pay engine no longer names the built-in set at all — it
+# resolves the TENANT'S registry through the one home, whose documented fallback IS the built-in seven.
+# That is a stricter property than "it dereferences BUILTIN_KPI_DEFS": it also forbids the engine from
+# having a set at all, and requires the registry to actually reach it.
+check("(a) the PAY ENGINE holds NO KPI set of its own — it resolves the tenant's registry through the"
+      " one home, which falls back to the built-in seven",
+      "_kpi_failing.resolve_defs(cfg.get('kpi_defs'))" in CALC
+      and "BUILTIN_KPI_DEFS" in fn_body(KPIF, "resolve_defs")
+      and not re.search(r"'atu'\s*:\s*float\(cfg\.get", CALC))
 # The PAY ENGINE is where a second literal does the damage (the paid score silently leaving the
 # shown one), and it names these columns for no other reason. router.py names them legitimately all
 # over — /targets, payout config, the action plan — so its own copy is caught by the assertion above
@@ -231,11 +242,84 @@ check("(g) a manual grid that goes back to a literal list → RED",
       "EXTRA_METRICS" in (PAGE + "\nconst EXTRA_METRICS = []"))
 
 
+# ── (h) A KPI VALUE'S FEED, ITS VINTAGE AND ITS DENOMINATOR (owner defect 2026-09-26, index §19.28) ──
+# THREE MORE INSTANCES OF THE SAME CLASS the sections above close. (1) WHICH COLUMN carries a KPI was a
+# literal inside the PAY ENGINE at rep grain (`dr.get('atu_pct')`, `dr.get('device_insurance_pct') or
+# dr.get('protect_pct')`, the store roll-down) while `STORE_KPI_COLUMNS` was the home of the same fact at
+# store grain. (2) An ABSENT measurement was read with `safe_float`, which returns 0.0, so a KPI nobody
+# measured was a KPI failed at 0% — against a denominator that was the literal `7`. (3) The sweep's own
+# derived rate divided by a denominator it had not got and wrote the quotient as `0`.
+print("\n(h) the feed map, the vintage and the denominator")
+
+KPI_RATE_COLS = ("atu_pct", "device_insurance_pct", "boost_app_pct", "byod_pct",
+                 "family_plan_pct", "aal_conversion")
+check("(h) REP_DLAR_COLUMNS is the one rep-grain feed map, and it lives in kpi_failing",
+      "REP_DLAR_COLUMNS = {" in KPIF and "REP_DLAR_COLUMNS" not in CALC.split("import")[-1].split("REP_DLAR")[0]
+      or "REP_DLAR_COLUMNS = {" in KPIF)
+CALC_CODE, SWEEP_CODE = _hl.py_code_only(CALC), _hl.py_code_only(SWEEP)
+check("(h) the PAY ENGINE names no DLAR column of its own — not one of them appears in its CODE",
+      not [c for c in KPI_RATE_COLS if c in CALC_CODE], [c for c in KPI_RATE_COLS if c in CALC_CODE])
+check("(h) the PAY ENGINE never reads a KPI through safe_float (which turns an absence into a 0.0)",
+      "safe_float(dr.get" not in CALC_CODE and "safe_float(sr.get" not in CALC_CODE)
+check("(h) the PAY ENGINE counts the met-set through the one scorer, not a sum of its own dict",
+      "_kpi_failing.score(" in CALC_CODE
+      and not re.search(r"sum\(1 for k\s*,\s*v in kpi_vals", CALC_CODE))
+check("(h) the paid denominator is what was MEASURED — no literal total_kpis in the pay engine",
+      not re.search(r"'total_kpis'\s*:\s*\d", CALC_CODE),
+      re.findall(r"'total_kpis'\s*:\s*\d+", CALC_CODE))
+check("(h) every built-in KPI still has a feed: the rep-grain and store-grain maps cover all seven",
+      set(re.findall(r'"(\w+)":\s*\(', KPIF.split("REP_DLAR_COLUMNS = {")[1].split("}")[0]))
+      | set(re.findall(r'"(\w+)":\s*"', KPIF.split("STORE_KPI_COLUMNS = {")[1].split("}")[0]))
+      == set(KEYS))
+check("(h) the SWEEP derives its one rate through derived_rate — the `else 0` expression is gone",
+      "derived_rate(bounty, ga_prepaid)" in SWEEP_CODE
+      and "if ga_prepaid > 0 else 0" not in SWEEP_CODE)
+check("(h) every KPI RATE column on both DLAR reports is parsed by _rate, never _num",
+      not [c for c in ("atu_loading_rate", "insurance_take_rate", "byod_rate", "family_plan_percent",
+                       "three_mr", "aal_conversion", "protect_total_attach", "atu_loading_percent")
+           if ("_num(rec.get(\"%s\"" % c) in SWEEP],
+      [c for c in ("atu_loading_rate", "insurance_take_rate", "byod_rate", "family_plan_percent",
+                   "three_mr", "aal_conversion", "protect_total_attach", "atu_loading_percent")
+       if ("_num(rec.get(\"%s\"" % c) in SWEEP])
+check("(h) each GRAIN carries its own as-of date — the rep report's import_date is no longer discarded",
+      "rep_recs, rep_import_date = fetch_report" in SWEEP and "def vintage(" in SWEEP
+      and '"as_of_date": as_of[tbl]' in SWEEP)
+check("(h) the sweep's STATUS is derived from what was WRITTEN, not spelled from what was pulled",
+      "dlar_sweep.status_sentence(res)" in ROUTER
+      and "{res['stores']} stores, {res['reps']} reps" not in _hl.py_code_only(ROUTER))
+check("(h) no surface fabricates a denominator of seven any more",
+      "total_kpis') or 7" not in ROUTER and "total_kpis ?? 7" not in WID
+      and "total_kpis\") or 7" not in ROUTER)
+check("(h) the DISPLAY siblings read the one classifier — neither turns a missing value into a 0%",
+      "safe_float(kv.get(k))" not in ROUTER and "_kpi_failing.evaluate(kv," in ROUTER,
+      ROUTER.count("safe_float(kv.get(k))"))
+
+# negative controls — each re-introduction must go RED
+check("(h) NEG a re-introduced DLAR column literal in the pay engine → RED",
+      bool([c for c in KPI_RATE_COLS
+            if c in (CALC_CODE + "\n    rep_atu = safe_float(dr.get('atu_pct'))")]))
+check("(h) NEG a re-introduced safe_float read of a KPI → RED",
+      "safe_float(dr.get" in (CALC_CODE + "\nx = safe_float(dr.get('atu_pct'))"))
+check("(h) NEG a literal total_kpis back in the pay engine → RED",
+      bool(re.search(r"'total_kpis'\s*:\s*\d", CALC_CODE + "\n 'total_kpis': 7,")))
+check("(h) NEG the `else 0` derived rate back in the sweep → RED",
+      "if ga_prepaid > 0 else 0" in (SWEEP_CODE + "\nx = (b / ga_prepaid * 100) if ga_prepaid > 0 else 0"))
+check("(h) NEG a rate column parsed by _num again → RED",
+      '_num(rec.get("three_mr"' in (SWEEP_CODE + '\n x = _num(rec.get("three_mr")),'))
+check("(h) NEG a display surface fabricating 7 again → RED",
+      "total_kpis ?? 7" in (WID + "\n{data.report_card.total_kpis ?? 7}"))
+
+
 # ── wired, or it is not a lock ────────────────────────────────────────────────────────────────────
 wf = read(WORKFLOW) if os.path.exists(WORKFLOW) else ""
 check("(wired) this lock runs in carrier-vocab-guard.yml", "harness_kpi_registry_lock.py" in wf)
 check("(wired) the guard re-runs when the KPI home or its readers change",
       "backend/app/modules/commcalc/kpi_failing.py" in wf)
+check("(wired) the guard re-runs when the pay engine or the DLAR sweep changes",
+      "backend/app/modules/commcalc/calculator.py" in wf
+      and "backend/app/modules/commcalc/dlar_sweep.py" in wf)
+check("(wired) the MONEY proof for this class runs in CI too",
+      "harness_kpi_vintage.py" in wf)
 
 print("\n%d passed, %d failed" % (P, F))
 if F:

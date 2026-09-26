@@ -299,6 +299,10 @@ on:
       - "backend/app/modules/commcalc/paramount_kpi.py"
       - "backend/harness_kpi_registry_lock.py"
       - "backend/app/modules/commcalc/kpi_failing.py"
+      - "backend/harness_kpi_vintage.py"
+      - "backend/app/modules/commcalc/calculator.py"
+      - "backend/app/modules/commcalc/dlar_sweep.py"
+      - "database/migrations/1026_dlar_vintage_kpi_no_data.sql"
       - "frontend/src/components/EmployeeWidgets.impl.tsx"
       - "backend/harness_browser_sweep_kinds.py"
       - "database/migrations/1021_supply_ordering.sql"
@@ -410,7 +414,7 @@ jobs:
       - name: Run the Paramount KPI column lock (one exact column table; an unknown header yields no value, never the neighbour's; the import writes every key it parsed — index §19.20)
         working-directory: backend
         run: python3 harness_paramount_kpi_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the KPI registry lock (one built-in KPI set; the PAID score and the SHOWN score read it; the hand-entry grid is the tenant's own registry — index §19.27)
+      - name: Run the KPI registry lock (one built-in KPI set; one rep-grain AND store-grain feed map; the PAID score, the SHOWN score and the hand-entry grid read them; no fabricated zero, no fabricated denominator, each DLAR grain carries its own as-of date — index §19.27 / §19.28)
         working-directory: backend
         run: python3 harness_kpi_registry_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the supply-ordering proof (vendor setup incl. free-shipping threshold + delivery days; catalog ingest; the cart optimizer with thresholds / lead time / stock / packs; the order recipe never submits on its own; confirmation capture; one lander, one connector key, one pricing copy — index §36)
@@ -449,6 +453,9 @@ jobs:
       - name: Run the activation-event proof (pay per activation / upgrade, not per line — the owner's invoice $30 → $10; byte-identity of the house count unit — index §6f)
         working-directory: backend
         run: python3 harness_activation_event.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the KPI vintage / honest-denominator / registry pay-engine proof (the owner's 4-vs-7; a KPI with no basis is no_data, never a failed zero; the count reconciliation to the carrier; HOUSE pay byte-identical — index §19.28)
+        working-directory: backend
+        run: python3 harness_kpi_vintage.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the rep-incentive month-range proof (every month of a range == that month viewed alone; one month enumeration; the cap — index §6g)
         working-directory: backend
         run: python3 harness_rep_incentive_range.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
