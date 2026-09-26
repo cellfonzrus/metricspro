@@ -4801,7 +4801,10 @@ def employee_dashboard(employee_id: str = "", period: str = "",
     # hits the data whether it's stored 'July 2026' or '2026-07'.
     comm = client.schema("commcalc").table("rep_commissions").select("*").eq("org_id", org_id).in_("period", pvar).execute().data or []
     myc = next((c for c in comm if _is_me(c, "storeops_name", "epay_salesperson")), None)
-    out["commission"] = myc
+    # THE EMPLOYEE's bundle (index §6i): their commission row through the ONE employee allow-list
+    # (commcalc/payout_audience) — the carrier-paid dealer figures never reach it, whoever opens the bundle.
+    from app.modules.commcalc import payout_audience as _pa
+    out["commission"] = _pa.employee_rep_row(myc) if myc else myc
     allc = (client.schema("commcalc").table("rep_commissions")
             .select("period,period_year,period_month,total_payout,tier,kpis_met,total_kpis,storeops_name,epay_salesperson")
             .eq("org_id", org_id).execute().data or [])
