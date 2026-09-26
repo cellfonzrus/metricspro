@@ -24,6 +24,7 @@ Primary code homes:
 | 2 | **Data ingest & raw_* tables** | "How does sales/DLAR/MI/inventory data get in? Email? Upload? Sweep? Which raw table?" |
 | 3 | **Sales report & the shared cell-agg** | "Where do activation/accessory counts come from? Why do Sales Report / Exec MTD / Targets agree now?" |
 | 4 | **GP / P&L report** | "How is store gross-profit / P&L built? What's voided? Where's the money booked?" |
+| 4c | **P&L over a month range** | "Export the P&L for several months — a column per month plus a Total, same lines, drill rows and filters as the page — and is each month the same as viewing it alone? Why is a month blank rather than $0.00?" |
 | 4a | **GP vs P&L — one home for MA commission** | "Why do the Gross Profit report and the P&L disagree about M1 commission, and why does one show a company total where the other shows stores?" |
 | 5 | **Daily Targets & actuals** | "How are daily targets computed vs actuals? What's an 'achieved' number? Accessory $ actual?" |
 | 6 | **Rep commission (Boost)** | "How is a rep paid? premium/byod/upgrade counts, acc/setup/trade-in, tiers, KPIs. Where stored?" |
@@ -1383,6 +1384,75 @@ line: July 2026 holds 2 landings … The feed booking stays switched off so noth
 statement in the period books as before; with no conflict the payload is byte-identical (`landing_conflicts: []`).
 `load_ledger_rows` reads `created_at` / `synced_at` too (three column tiers). Proof
 `harness_ledger_statement_identity.py` §F (through the REAL `coa.build_inputs` over the P&L proof's client).
+
+## 4c. THE P&L OVER A MONTH RANGE — one column per month plus a Total (owner 2026-09-26)
+
+Owner, verbatim: *"also need the p&L report to be exported for multiple months … all these need to be platform wide"*.
+
+**Duplicate check (what was checked, what was reused).** The P&L page (`/accounts/pl`) reads ONE month through
+`GET /account/pl/{period}` (stored `account_statements` snapshot for the company / store scope, or — under a store /
+market filter — `statement_filter.filtered_statement`, the sum of the matching per-store snapshots). Existing
+multi-period paths checked: **no quarterly P&L exists** (nothing in `account/` or the frontend builds one);
+`analysis.assemble` (§4 Financial Analysis — per-month HEADLINE totals only, consolidated + per scope, no line grid,
+no store / market filter, trailing window only); `projection_engine` (forward, not actuals); the on-demand
+`statement_engine.statement` (one period, computed fresh — NOT what the page shows, so a range built on it could
+disagree with the page); the Rep Incentive month range (§6g — the precedent: the single-month handler LOOPED over
+`_period.month_range`); the P&L exports (the page's `ReportExportBar` Excel / PDF / Print / Send; notify
+`account_pl` and `financial_statement` — one period each). Nothing answered "the P&L lines for months M1…Mn", so the
+single-month read was FACTORED OUT and LOOPED; no second P&L derivation exists.
+
+- **`account/router.pl_single_month(period, scope, stores, markets, org_id)`** — THE single-month P&L read (the
+  former inline body of `get_pl`, byte-identical — proof §A). `GET /account/pl/{period}` returns it; so does every
+  month of a range.
+- **`GET /account/pl-range?period_from=&period_to=&scope=&stores=&markets=`** (`router.get_pl_range`) — READ-ONLY,
+  org-scoped, any org / company / store / profit-center scope / store+market filter (the same parameters as
+  `/account/pl/{period}`). Months from `_period.month_range` (either spelling in, canonical out), capped at
+  **24** (`pl_range.MAX_MONTHS` — the reach of the section period switcher); each month = `pl_single_month(month, …)`
+  in a worker thread (SEV-1 rule); 400 on an unparseable / reversed / over-long range. Returns the grid + `sheets`.
+- **`account/pl_range.py`** — PURE, stdlib only. `assemble(months, per_month)` lays the months side by side in the
+  PAGE's order (Revenue, COGS, **Gross Profit**, Opex, **Net Operating Income**, Other, **Net Income** —
+  `TOTALS_AFTER`), each line's drill rows (`detail`) under it, section subtotals; lines / drill rows present in only
+  some months are merged where they first appear (`_merge_order`); a line's identity across months is
+  (section, key, occurrence) (`_line_ids`). Every month cell is COPIED from that month's statement; the only
+  arithmetic is the Total (`_sum_cents`, exact decimal cents). **Absence is not zero:** a month never computed is a
+  blank column named in `missing_months`; a line a month lacks is blank; blanks are not in the Total.
+  `export_sheet(grid)` (Section · Line · one money column per month · Total — THE export layout, used by every
+  renderer) and `notes_sheet(grid)` (months not computed, stale months, the months' own notes).
+- **Frontend:** `accounts/_components/PLRangeExport.tsx` — **📅 Month range** next to the P&L export button: From /
+  To month pickers (default the last three months), *Prepare export*, then Excel · **CSV** · PDF · Print · Send, for
+  the page's scope and store / market filter. `accounts/_components/plRangeExport.ts` maps the server's sheets onto
+  `ExportColumn` getters and adds the `statementInfoSheet` cover (months computed / not computed / stale); it adds
+  up nothing. **Region** is not a filter of the on-screen P&L (its bar is stores + markets; the company / store /
+  profit-center scope is the dropdown), so the range offers exactly the page's filters.
+- **Platform-wide:** notify report key **`account_pl_range`** (`notify/finance_reports._account_pl_range`, filters
+  `period_from` / `period_to` / `scope` / `stores` / `markets`; blank = the registry's `period` convention) —
+  scheduled / on-demand xlsx / pdf through `get_pl_range` in-process, shipping its `sheets` unchanged; a bad saved
+  range is a `ReportConfigError`, a range with no computed month refuses to send an empty file.
+- **Shared exporter changes (the class, not the instance):** `lib/export.tsx` gains `payloadToCsv` / `exportToCsv`
+  (every field through `cell-safety.csvRow` — RFC-4180 + the H7 formula guard) and an opt-in `csv` prop on
+  `ExportButtons` / `ReportExportBar` (default off: no other toolbar changes). **Defect closed on the way:** §23w's
+  "a missing money value is not zero" was fixed in `money()` (display / PDF / Print) but NOT in the Excel writers —
+  `lib/export.tsx rawCell` (`Number(v) || 0`) and `notify/render.build_xlsx` (`float(… or 0)`), and the server PDF
+  `_display` — so a withheld pay cell still landed in every .xlsx as a real `0`. All three now leave it EMPTY; a real
+  zero is still `0` / `$0.00`. **Sibling excused, not fixed:** `commcalc/_lib/commissionExport.payloadToCsv` (the
+  Rep Incentive CSV) is a second payload→CSV emitter without the H7 guard; it is commission-agent code and its proof
+  tool needs that module import-free, so it is left for the commission agent (reported).
+
+**Proof:** `backend/harness_pl_range.py` (**106 checks**, DB-free, the REAL router / statement_filter / coa company +
+market resolution over an in-memory client; statements built by the REAL `engine._assemble` over `coa.PL_SPEC`):
+§A `get_pl` JSON-identical to its old inline body; §B every month column == `get_pl(month)` for consolidated, both
+companies, a store, a store filter, a market filter (both casings), a company composed with a market — every line,
+drill row, subtotal, GP / NOI / NI, complete both ways, with negative controls (a cent off, a Total off, a dropped
+line, $0.00 in a missing month, the range really reading through `pl_single_month`); §C Total == Σ in integer cents
+(0.10 + 0.20 + 0.70 = 1.00); §D absence; §E org isolation; §F order; §G the range / cap; §H one month; §I layout;
+§J the registry entry and the renderer's blank-not-zero. Lock **`backend/harness_pl_range_lock.py`** (20, stdlib, CI
+guard job): `get_pl` / `pl_single_month` / `get_pl_range` wiring, `pl_range.py` purity (no subtraction, sums only in
+`_sum_cents`), NO function anywhere in `backend/app` may enumerate months and read a P&L — or loop the single-month
+read, or mount a P&L-range route — outside `get_pl_range`; the registry entry; the frontend (reads
+`/account/pl-range`, adds nothing; a new frontend reader of the single-month endpoint fails unless allow-listed);
+12 negative controls. `harness_db_resilience.py` route pin 1676 → **1677**. **No money or booking logic changed**
+(`coa.py`, `engine.py`, `statement_engine.py`, `statement_filter.py` untouched; the range only reads snapshots).
+
 ---
 
 ## 5. Daily Targets & actuals
@@ -4275,7 +4345,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.payout_schedule(+_line)` | `/payout-schedule` POST `11965` | `installment_engine.compute_installments` |
 | `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert; **upload via `/upload-mapped` report_key `pos_inventory_listing` (mig `1004`, §25)** — adds `status`/`quantity`/`total_cost`/`category` so an on-hand SNAPSHOT is fully representable and a valuation can be summed from the table | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus, **BS inventory under `inventory_basis='devices'` + `GET /account/inventory-recon`** (`balance_sheet.device_inventory_cells` via `statement_engine`, mig `933`); statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`); **device-grain store source for `payables/engine.ma_store_resolution`** (forecast/payables Total-side attribution, 2026-09-04 §15 — its `store` is the store_mapping vocabulary, measured 20/20); **the onboarding intake's inventory landing (`write_inventory_devices`, §30.6) — CONFIRMED the same table the inventory module reads (§30.8)** |
 | `commcalc.journal_entries` | `PUT /account/journal/{period}` (`account/router.py` — delete+insert per period; echoes `rejected`/`resolved`) | `statement_engine._journal_rows` (BOTH period spellings) → `balance_sheet.journal_scope_entries` (fixed company scoping, mig `933`) → **`balance_sheet.journal_grain_entries`** (mig `954` GRAIN rule: store / company / tenant-total entries, a coarser row booked NET of the finer rows inside it — no double count; conflicts surfaced in `bs['journal_grains']`); legacy `engine.compute_and_store` exact-period read; staleness probe |
-| `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview` (company scopes cross-checked against `coa.org_companies` via `coa.filter_org_scopes` — §13b), `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet`; **the Account hub's Expenses column + per-scope drill-down (2026-09-21)** — `analysis.pl_totals` is the ONE home for the headline figures incl. `expenses` (Σ `analysis.EXPENSE_SECTIONS`), read by `/account/overview` and by the drill-down through `GET /account/pl/{period}?scope=` |
+| `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview` (company scopes cross-checked against `coa.org_companies` via `coa.filter_org_scopes` — §13b), `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet`/**`account_pl_range`**; **the P&L month range (§4c, 2026-09-26)** — `router.pl_single_month` (THE single-month read, `get_pl` returns it) looped by `router.get_pl_range` over `_period.month_range`; **the Account hub's Expenses column + per-scope drill-down (2026-09-21)** — `analysis.pl_totals` is the ONE home for the headline figures incl. `expenses` (Σ `analysis.EXPENSE_SECTIONS`), read by `/account/overview` and by the drill-down through `GET /account/pl/{period}?scope=` |
 | `commcalc.companies` | `POST/PATCH /account/companies` (org_id in payload/filter; mig `952` removed the two 2026-06-27 wrong-org LuxeLink rows) | ONLY `coa.org_companies` (§13b canonical fail-closed enumeration; CI-pinned by `harness_org_scope_guard.py`) → `list_companies`/`list_stores`/journal echo/`overview`/`analysis`/`finance_attention`/`store_company_map`⇒`company_assignment`; billing `per_entity` org-scoped count probe |
 | `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`/`938`/`941`/`954`) | `PUT /account/config` (incl. the mig-954 tenant mapping `distributor_payable_basis`/`distributor_payable_line`/`asset_ledger_open_statuses`); mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate; mig-941 columns (`projection_config`, `valuation_config` JSONB — display-only assumptions, org seeds gated) | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933/938 knobs, adaptive), `projection_engine.load_projection_config`, `valuation.load_valuation_config` (mig-941, adaptive); **mig-954 distributor-payable mapping** via `balance_sheet.load_bs_config` → `resolve_payable_basis`/`resolve_payable_line` (org column > carrier preset > declared mig-933 family > off) |
 | `commcalc.asset_ledger` (consignment / asset-lending ledger; wipe-and-reinsert CURRENT snapshot) | mod-asset upload `process_asset_ledger_bytes`, `vip_sweep.run_asset_ledger_sweep` | asset dashboard `GET /asset/summary` ("Open Balance Owed" = Σ `owed_to_vip` where `status='Open'`), `account/device_cogs` (consignment COGS), `coa.build_inputs` (`vip_reimb`/`vip_fees`, and the legacy `owed_vip`/`inventory` `status='on inventory'` predicate that matches NOTHING on the live feed), **BS distributor payable under `distributor_payable_basis='asset_ledger'`** (`balance_sheet.asset_ledger_open_bookings` via `statement_engine._fetch_asset_ledger_open`, mig `954`; money column `owed_to_vip` ONLY; as-of = `period_as_of`) and the SAME derivation behind `GET /account/liabilities-due`; statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`) ; **Device Payable as at a date** (`account/device_payable`, §23z — the PAID-ON side: `payg_date` is the ONLY per-unit PAYMENT DATE in the platform and the only thing that can backdate a payable, licensed by agreeing to within 2.7% with the settled payment batches; `owed_to_vip` the money; `acquired_date` drives the DERIVED coverage window, because this snapshot has been PRUNED — 72 rows in 2023 and 1,391 in 2024 against 1,504 and 16,195 units actually invoiced, so a payable for a 2024 date returns "not measured" rather than a small confident wrong number) |
@@ -4551,6 +4621,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `POST /marketing/event-sales/roi/link-event` | link a (store, date) to an event, or CREATE one through the module's existing creator with the minimum needed to cost it | §23s.7 |
 
 | `GET /account/pl/{period}`, `GET /account/balance-sheet/{period}` (`?scope=&stores=&markets=` — stored snapshot when unfiltered; store/market-filtered view via `statement_filter.filtered_statement`: canonical-union market resolution + company-scope AND-composition, 2026-09-02) | `account/router.py` (`get_pl`/`get_bs` → `_filtered_read`) | §4 P&L filter |
+| `GET /account/pl-range?period_from=&period_to=&scope=&stores=&markets=` — the P&L over a month range (≤ 24): the page's lines / drill rows / order, one column per month + a Total, the export `sheets`. READ-ONLY; each month IS `pl_single_month(month)` | `account/router.py` (`get_pl_range` → `_period.month_range` → `pl_single_month` per month → `pl_range.assemble` / `export_sheet` / `notes_sheet`) | §4c |
 | `GET /account/statement/{period}` (`?scope=&kinds=pl,balance_sheet,cash_flow` — FRESH on-demand statements, nothing persisted; the platform statement service) | `account/router.py` (`on_demand_statement` → `statement_engine.statement`) | §4 statement engine |
 | `GET /account/royalty/config` · `PUT /account/royalty/lines` · `PUT /account/royalty/config` · `POST /account/royalty/parse` (preview, no write) · `POST /account/royalty/import` · `POST /account/royalty/manual` · `GET /account/royalty/reports` · `GET\|DELETE /account/royalty/report/{id}` — all `require_module("royalty")` | `account/royalty_router.py` → `royalty.parse` / `validate` / `header_fields` / `line_rows` / `pl_bookings` | §37.2–37.3 |
 | `GET /account/royalty/recon/{period}?center=` — royalty sales lines vs the daily report(s) per line, days, categories, unclaimed categories, tenders | `royalty_router.royalty_recon` → `_daily_rows` (raw_sales_product \| raw_sales) / `_tender_rows` → `royalty.reconcile` / `tender_crosscheck` | §37.5 |
@@ -4560,6 +4631,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /account/cash-flow/{period}` (stored derived Cash Flow snapshot, statement_type `cash_flow`) | `account/router.py` (`get_cf`) | §4 statement engine |
 | `GET /account/inventory-recon` (per-store emailed-report ↔ unsold-phone-ledger ↔ manual ↔ effective tie-out + ghost counts) | `account/router.py` (`inventory_recon` → `statement_engine.inventory_reconciliation`) | §4 balance-sheet truths |
 | `POST /account/compute/{period}`, `POST /account/run-due` → `statement_engine.compute_and_store` (P&L + BS + Cash Flow snapshots; supersedes `engine.compute_and_store`, 2026-09-02). run-due is SELF-SCHEDULED since mig `940`: pg_cron job `account-recompute-run-due` (every 2h) via `commcalc.ensure_account_recompute_cron`, re-registered on every backend boot (`main.py` startup → `router._ensure_account_recompute_cron`) | `account/router.py` (`compute`), `account/autocompute.py` (`recompute_due`) | §4 statement engine |
+| `POST /notify/send` / `run-due` → report key `account_pl_range` (the P&L by month, any scope / store / market filter, xlsx / pdf) | `notify/finance_reports.py` (`_account_pl_range` → `account/router.get_pl_range`, ships its `sheets`) | §4c |
 | `POST /notify/send` / `run-due` → report key `financial_statement` (fresh P&L+BS+CF at send time, any period/scope) | `notify/finance_reports.py` (`_financial_statement` → `statement_engine.statement`) | §4 statement engine |
 | `GET /account/analysis` (`?months=N` — chart-ready monthly trend/margins/OPEX composition/per-company+store comparison from STORED snapshots; `account_trends` grant; company series fail-closed via `own_company_ids`) | `account/router.py` (`financial_analysis` → pure `analysis.assemble`) | §4 financial-analysis series |
 | `GET /account/overview/{period}` (headline scopes + THE company/scope dropdown source for dashboard/P&L/BS/Cash-Flow; company scopes fail-closed against `coa.org_companies` per §13b; per scope `revenue`/`gross_profit`/**`expenses`**/`net_income` all from `analysis.pl_totals` — never re-summed here, 2026-09-21) | `account/router.py` (`overview`) | §4, §13b |
@@ -4725,6 +4797,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Bill-pay coverage (billpay ≤ cash+card per store/day) | processor feed (`raw_epay_daily_tx` per_store_day / `raw_ma_daily_tx` by `tx_date` — mig-944 row filter `ma_billpay_predicate`, accounts via store_merchant_id → mig-314 index) or declared closing split, vs `daily_closing` tender totals (DM-corrected) | `metric_recon.reconcile_billpay_coverage` via `GET /billpay-coverage/{period}` |
 | Days-in-stock (aging) | `inventory_aging_device.days_in_stock` (snapshot) | device-cost recon `27338`; MI aging bonus |
 | Lateness % (`late_rate` — late shifts ÷ scheduled shifts) | `storeops.timelog` punches vs `storeops.shifts` windows | `attendance_exceptions.compute_attendance_exceptions` → `accountability.aggregate`; surfaced by `/storeops/accountability` ('Lateness %' page, W2 rename) and the `storeops_lateness` scheduled report (§14 W3) |
+| **P&L for a range of months** (a column per month + Total, the page's lines, drill rows and filters) | the STORED `commcalc.account_statements` P&L snapshots (or their store / market filtered sum), one per month — exactly what `/accounts/pl` shows for that month | **ONE read** `account/router.pl_single_month` looped by `get_pl_range` over `_period.month_range`; layout + Total (Σ month cells, exact cents; blank months excluded, never $0.00) `account/pl_range.assemble` / `export_sheet`. Proof `harness_pl_range.py`, lock `harness_pl_range_lock.py` (§4c, 2026-09-26) |
 | **Expenses for a scope and period** (the Account hub column, the P&L's own expense total) | the STORED `commcalc.account_statements` P&L payload — Σ subtotals of the sections below gross profit (`analysis.EXPENSE_SECTIONS` = `('opex','other')` ≡ `statement_engine.PL_SECTIONS` minus revenue/COGS). NEVER re-summed from `commcalc.store_expenses` or any other source feed, and never netted as GP − NI | **ONE home** `account/analysis.pl_totals(payload)['expenses']` → `GET /account/overview/{period}` (the hub column + export), `router._consolidated_pl` (narrative), and the per-scope drill-down via `GET /account/pl/{period}?scope=` (the same read `/accounts/pl` does). Identity `gross_profit − expenses == net_income`. Absent P&L ⇒ NO key ⇒ 'not reported', never $0.00. Proofs `harness_account_expenses_one_home.py` (CI lock) + `prove_accounts_expenses_column.mjs` (§4, 2026-09-21) |
 | Store salary expense for a MONTH (the `payroll_gross` P&L/GP line) | `get_payroll_by_store` — ACTUAL hours where MEASURED (a closed `storeops.timelog` punch or a manual `shifts.actual_hours>0` correction), SCHEDULED hours only where NOT measured; salaried via `payroll_salary.py`, never hours×`pay_rate`. A MEASURED ZERO pays zero and never falls back. No measurement AND no schedule ⇒ WITHHELD, never $0.00 | `storeops/salary_expense.py` via `router._salary_expense_gather` → `POST /storeops/payroll-expenses/run/{period}` → `commcalc.store_expenses` `source_key='payroll_gross'` → `account/coa.py` `wages`. Proof `harness_salary_expense.py` (§14s) |
 | Withholding estimate (gross/FICA/federal/state/net) | `storeops.timelog`+`manual_hours` hours × `employees.pay_rate` × `payroll_settings` W-4 | browser: `frontend/src/lib/payroll-tax.ts computePay`; server twin: `storeops/payroll_tax_estimate.compute_pay` (§14 W3 — keep in lockstep) |
@@ -7936,7 +8009,9 @@ Fixed in two places, defence in depth:
    withheld values is still a fabricated number.
 2. **The shared exporter** checks for a missing value **before** formatting: absent renders blank, a
    **real zero still renders `$0.00`** because zero is a fact. This closes the class across every
-   report, not just this one.
+   report, not just this one. **Correction 2026-09-26 (§4c):** it closed the DISPLAY half only — the Excel
+   writers (`lib/export.tsx rawCell`, `notify/render.build_xlsx`) and the server PDF text (`render._display`)
+   still wrote an absent money value as `0`; all three now leave it empty (`harness_pl_range.py` §J).
 
 **Proof:** `backend/harness_training_flowcharts.py` (**33 checks**) — §A the registry and its themed,
 labelled diagrams; §B reachable, listed from the registry, deep-linked, and not admin-gated; §C no HTML
