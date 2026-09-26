@@ -197,6 +197,83 @@ FRESHNESS_COLUMN_BY_TABLE = {
     "vip_credit_memos": "swept_at",
 }
 
+# ── WHICH COLUMNS MUST CARRY A VALUE — the COMPLETENESS axis (owner defect 2026-09-26, index §19.28) ──
+# §19.18 gave the platform two questions about a feed: is it still ARRIVING (`last_ingest_at`), and is its
+# CONTENT moving (`latest_data_date`). Both can be green while a feed has quietly become USELESS, because
+# there is a third question neither asks: **do the columns still carry values?**
+#
+# MEASURED, house org, `commcalc.raw_dlar_rep`, 2026-09-26 — rows kept arriving and the data date kept
+# moving, and in JULY 2026 seven columns stopped carrying anything at all, together:
+#
+#   period      rows   store / door_*      ga_prepaid + ga_postpaid (sum)
+#   March 2026   110   populated            1508 / 16
+#   April 2026   103   populated            1071 /  2
+#   May 2026      81   populated             403 /  3
+#   June 2026     75   populated             621 /  2
+#   July 2026     58   ALL BLANK               0 /  0     <-- the advocate report changed shape
+#   August 2026   44   ALL BLANK               0 /  0
+#   September     45   ALL BLANK               0 /  0
+#
+# One upstream change, seven columns: `normalize_rep` maps `store` and `door_address` from the record's
+# `address`, `door_name/city/state/zip` from `name/city/state/zip`, and `ga_prepaid`/`ga_postpaid` from
+# `prepaid_activations`/`postpaid_activations`. The portal stopped sending that whole block. Nothing
+# failed: 147 rep rows since July divided a bounty by a denominator that was no longer being sent, and
+# the `if ga_prepaid > 0 else 0` guard turned every one of them into a measured KPI failure at 0%.
+#
+# A column that STOPS ARRIVING must say so, and WHICH columns those are is declared here — once — so the
+# sweep that sees the portal's response dereferences the fact instead of carrying its own list.
+REQUIRED_CONTENT_COLUMNS = {
+    # the advocate (rep) DLAR: the door identity the store roll-down joins on, and the prepaid split the
+    # Boost App attach rate is measured against.
+    "raw_dlar_rep": ("store", "ga_prepaid", "gross_adds", "atu_pct"),
+    # the store DLAR: the join key and the three KPIs that are ONLY published at store grain.
+    "raw_dlar_store": ("address", "family_plan_pct", "tmr3", "aal_conversion"),
+}
+
+
+def required_content_columns(table: str):
+    """The columns a row of `table` must actually CARRY, or () when nothing is declared for it. The ONE
+    home of that fact — a caller reads it, never repeats it (`harness_kpi_registry_lock.py` §(h))."""
+    return tuple(REQUIRED_CONTENT_COLUMNS.get(table) or ())
+
+
+def content_arrival(rows, columns):
+    """PURE. Per declared column: how many of these rows carry a value, and which columns carry NONE.
+
+    → `{"rows": n, "columns": {col: {"filled": n, "empty": n}}, "empty_columns": [col, ...]}`
+
+    "Carries a value" means not None, not a blank/whitespace string, and — for a NUMERIC column — not a
+    whole-pull zero: a column that is 0 in EVERY row of a pull that has activations is a column that
+    stopped being sent, not a month in which nobody sold anything. That distinction is the whole point;
+    it is what makes July's `ga_prepaid` visible while a genuine zero for one rep is not. With no rows,
+    nothing is reported empty — an empty pull is a different failure and the load guards already own it.
+    stdlib only, no DB."""
+    rows = list(rows or [])
+    cols = tuple(columns or ())
+    out = {"rows": len(rows), "columns": {}, "empty_columns": []}
+    if not rows or not cols:
+        return out
+    for col in cols:
+        filled = 0
+        for r in rows:
+            v = (r or {}).get(col)
+            if v is None:
+                continue
+            if isinstance(v, str):
+                if v.strip():
+                    filled += 1
+                continue
+            try:
+                if float(v) != 0.0:
+                    filled += 1
+            except (TypeError, ValueError):
+                filled += 1          # a non-numeric, non-string value is still a value
+        out["columns"][col] = {"filled": filled, "empty": len(rows) - filled}
+        if filled == 0:
+            out["empty_columns"].append(col)
+    return out
+
+
 # ── WHICH UPLOAD TYPES REPLACE THEIR WHOLE PERIOD ─────────────────────────────────────────────────
 # An upload type here lands by DELETING the (org, period) slice and inserting the file's rows. Two
 # consequences follow, and the second is why this list exists:
