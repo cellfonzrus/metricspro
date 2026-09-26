@@ -440,11 +440,16 @@ def sentinel_violations(source):
 
 base_bad = sentinel_violations(base_source("backend/app/modules/notify/report_registry.py"))
 now_bad = sentinel_violations(_src("app/modules/notify/report_registry.py"))
-ok("E1 BASE leaves exactly the four reported handlers unbound (root cause pinned)",
+# BASE source is audited against TODAY's handler signatures: since #306 (index §6i) get_discrepancy_results and
+# get_phantom_payments also take the caller's `authorization` (manager-only reports), so BASE leaves them unbound
+# too — the same defect class, now fixed in report_registry (wants_auth) and locked in harness_payout_audience_lock (h).
+ok("E1 BASE leaves exactly the reported handlers unbound (root cause pinned)",
    sorted(base_bad) == ["C.get_action_plan(authorization=<Header>)",
                         "C.get_commissions(authorization=<Header>)",
+                        "C.get_discrepancy_results(authorization=<Header>)",
                         "C.get_flags(authorization=<Header>)",
-                        "C.get_gp_report(authorization=<Header>)"], base_bad)
+                        "C.get_gp_report(authorization=<Header>)",
+                        "C.get_phantom_payments(authorization=<Header>)"], base_bad)
 ok("E2 FIXED leaves NONE (regression guard for every future builder)", now_bad == [], now_bad)
 
 

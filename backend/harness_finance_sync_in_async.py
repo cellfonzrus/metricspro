@@ -221,7 +221,10 @@ print("\n[5] MONEY PROOF — every non-transport function is AST-identical to or
 EXPECTED_DELTA = {
     ENGINE: {"_narrate", "_assemble"},
     RECON: {"_missed_days"},
-    AROUTER: {"compute", "run_due", "get_recon"},
+    # get_pl (2026-09-26, index §4c): its body MOVED, unchanged, into the new `pl_single_month` (THE
+    # single-month P&L read the month-range export loops); get_pl now returns it. JSON-identical for every
+    # scope / filter / month — proven by backend/harness_pl_range.py §A against the old body verbatim.
+    AROUTER: {"compute", "run_due", "get_recon", "get_pl"},
     PCOSTS: {"_anthropic_cost", "fetch_cost"},
     BROUTER: {"refresh_platform_costs"},
 }
@@ -249,7 +252,12 @@ EXPECTED_DELTA = {
 #   backend/harness_device_payable.py (78 checks), whose §I7 asserts coa.py is byte-identical to the
 #   branch point.
 ALLOWED_NEW = {
-    AROUTER: {"device_purchases", "device_payable"},
+    #   account/router.py +{pl_single_month, get_pl_range, get_pl_range._run} (2026-09-26) — the P&L over a
+    #   month range (owner: "also need the p&L report to be exported for multiple months"; index §4c). A NEW
+    #   read-only mount: `pl_single_month` is get_pl's former body (see EXPECTED_DELTA), `get_pl_range` loops
+    #   it over _period.month_range in run_in_threadpool (`_run`) and books / writes nothing. Proven by
+    #   backend/harness_pl_range.py; locked by backend/harness_pl_range_lock.py.
+    AROUTER: {"device_purchases", "device_payable", "pl_single_month", "get_pl_range", "get_pl_range._run"},
 }
 
 for rel, allowed in EXPECTED_DELTA.items():

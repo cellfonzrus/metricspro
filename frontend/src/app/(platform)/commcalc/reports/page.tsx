@@ -13,10 +13,7 @@ import PlanLineBreakdown from '../_lib/PlanLineBreakdown'
 import { toPlanLine } from '../_lib/planLines'
 import { monthBlocks, monthInput, RANGE_MAX_MONTHS, spanMonths, type RangeRow } from '../_lib/repIncentiveRange'
 import { multimonthOffered, multimonthRows, useMultimonthStatus } from '../_lib/multimonth'
-import { audienceParam, servedAudience } from '../_lib/payoutAudience'
-// THE employee payout report (owner 2026-09-26): every payout read on this page asks for the employee
-// audience — paid lines only, no carrier commission (index §6i). Declared once, in _lib/payoutAudience.
-const AUD = audienceParam('/commcalc/reports')
+import { servedAudience } from '../_lib/payoutAudience'
 import WhyZeroPanel from '../_lib/WhyZeroPanel'
 import { GoogleRatingChips, GoogleRatingDetail, ratingsText, useGoogleRatings } from '../_lib/googleRatings'
 
@@ -111,7 +108,7 @@ export default function ReportsPage() {
   const [linking, setLinking] = useState(false)
 
   useEffect(() => {
-    api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}${AUD}`)
+    api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
       .then(setReps).catch(console.error).finally(() => setLoading(false))
     api(`/api/v1/commcalc/config/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
       .then(setCfg).catch(console.error)
@@ -133,7 +130,7 @@ export default function ReportsPage() {
         method: 'PUT', body: JSON.stringify({ deduct }),
       })
       // Refresh commissions so payout reflects the change
-      const updated = await api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}${AUD}`)
+      const updated = await api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
       setReps(updated)
     } catch (e) { console.error(e) }
   }
@@ -157,9 +154,26 @@ export default function ReportsPage() {
   async function loadRange() {
     setRangeBusy(true); setRangeErr('')
     try {
-      const d = await api(`/api/v1/commcalc/commissions-range?period_from=${encodeURIComponent(rangeFrom)}&period_to=${encodeURIComponent(rangeTo)}&org_id=${ORG_ID}${AUD}`)
+      const d = await api(`/api/v1/commcalc/commissions-range?period_from=${encodeURIComponent(rangeFrom)}&period_to=${encodeURIComponent(rangeTo)}&org_id=${ORG_ID}`)
       setRangeData({ months: d?.months || [], rows: (d?.rows || []) as RangeRow[] })
     } catch (e: any) { setRangeData(null); setRangeErr(String(e?.message || e)) } finally { setRangeBusy(false) }
+  }
+  // ONE EMPLOYEE over the range (owner 2026-09-26, index §6j): the SAME statement endpoint as "Download
+  // statement", given period_from / period_to — each month IS that month's statement; the server decides the
+  // audience from who is looking (a rep: their own, paid rows only; a manager: the full one).
+  const [rangeRep, setRangeRep] = useState('')
+  const rangeRepOptions = useMemo(() => {
+    const names = new Set<string>()
+    for (const r of (rangeData?.rows || []) as any[]) { const n = repLabel(r); if (n) names.add(n) }
+    if (!names.size) for (const r of reps) { const n = repLabel(r); if (n) names.add(n) }
+    return [...names].sort((a, b) => a.localeCompare(b))
+  }, [rangeData, reps])
+  const rangeRepPick = rangeRep && rangeRepOptions.includes(rangeRep) ? rangeRep : (rangeRepOptions[0] || '')
+  function downloadRangeStatement(fmt: 'pdf' | 'csv') {
+    if (!rangeRepPick) { alert('Pick an employee.'); return }
+    apiDownload(`/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(rangeRepPick)}`
+      + `&period_from=${encodeURIComponent(rangeFrom)}&period_to=${encodeURIComponent(rangeTo)}&fmt=${fmt}&org_id=${ORG_ID}`)
+      .catch(e => alert(`Could not generate the statement: ${e?.message || e}`))
   }
   // the standard filter applies to the range exactly as to the single-month tabs (same accessors)
   const rangeView = useMemo(() => monthBlocks(
@@ -272,13 +286,13 @@ export default function ReportsPage() {
   function downloadStatement() {
     const r = currentRep
     if (!r) return
-    apiDownload(`/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(repLabel(r))}&period=${encodeURIComponent(period)}&org_id=${ORG_ID}${AUD}`)
+    apiDownload(`/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(repLabel(r))}&period=${encodeURIComponent(period)}&org_id=${ORG_ID}`)
       .catch(e => alert(`Could not generate statement: ${e?.message || e}`))
   }
   function downloadAllStatements() {
     const names = filtered.map(repLabel).filter(Boolean)
     if (!names.length) { alert('No reps to export for the current filter.'); return }
-    apiDownload(`/api/v1/commcalc/commission-statements?period=${encodeURIComponent(period)}&reps=${encodeURIComponent(names.join(','))}&org_id=${ORG_ID}${AUD}`)
+    apiDownload(`/api/v1/commcalc/commission-statements?period=${encodeURIComponent(period)}&reps=${encodeURIComponent(names.join(','))}&org_id=${ORG_ID}`)
       .catch(e => alert(`Could not generate statements: ${e?.message || e}`))
   }
   // Send the selected rep's server-rendered statement PDF through the shared /notify/send-file modal
@@ -288,7 +302,7 @@ export default function ReportsPage() {
     const r = currentRep
     if (!r) return []
     const name = repLabel(r)
-    const b64 = await apiFetchBase64(`/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(name)}&period=${encodeURIComponent(period)}&org_id=${ORG_ID}${AUD}`)
+    const b64 = await apiFetchBase64(`/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(name)}&period=${encodeURIComponent(period)}&org_id=${ORG_ID}`)
     const safe = `${name}-${period}`.replace(/[^\w]+/g, '-').replace(/^-|-$/g, '').toLowerCase()
     return [{ filename: `commission-statement-${safe}.pdf`, mime: 'application/pdf', content_b64: b64 }]
   }
@@ -308,7 +322,7 @@ export default function ReportsPage() {
     const key = `${rep}|${period}`
     drillReq.current = key                          // only the LATEST request may land
     setDrillData(null); setDrillBusy(true)
-    api(`/api/v1/commcalc/commission-drill?org_id=${ORG_ID}&period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}${AUD}`)
+    api(`/api/v1/commcalc/commission-drill?org_id=${ORG_ID}&period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}`)
       .then((d: any) => { if (drillReq.current === key) setDrillData({ ...d, _rep: rep, _period: period }) })
       .catch(e => { if (drillReq.current === key) setDrillData({ error: String(e?.message || e), _rep: rep, _period: period }) })
       .finally(() => { if (drillReq.current === key) setDrillBusy(false) })
@@ -329,7 +343,7 @@ export default function ReportsPage() {
     const key = `${rep}|${period}`
     explainReq.current = key                       // only the LATEST request may land
     setExplain(null); setExplainBusy(true)
-    api(`/api/v1/commcalc/commission-explain?period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}${AUD}`)
+    api(`/api/v1/commcalc/commission-explain?period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}`)
       .then((d: any) => { if (explainReq.current === key) setExplain({ ...d, _rep: rep, _period: period }) })
       .catch(e => { if (explainReq.current === key) setExplain({ error: String(e?.message || e), _rep: rep, _period: period }) })
       .finally(() => { if (explainReq.current === key) setExplainBusy(false) })
@@ -348,7 +362,7 @@ export default function ReportsPage() {
   async function refreshRepData() {
     const rep = drillRep
     try {
-      const updated = await api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}${AUD}`)
+      const updated = await api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
       setReps(updated)   // refreshes currentRep.plan_name → the Plan-based Payout card + breakdown table
     } catch (e) { console.error(e) }
     if (!rep) return
@@ -357,7 +371,7 @@ export default function ReportsPage() {
     explainReq.current = key
     setExplain(null); setExplainBusy(true)
     try {
-      const d: any = await api(`/api/v1/commcalc/commission-explain?period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}${AUD}`)
+      const d: any = await api(`/api/v1/commcalc/commission-explain?period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}`)
       if (explainReq.current === key) setExplain({ ...d, _rep: rep, _period: period })
     } catch (e: any) {
       if (explainReq.current === key) setExplain({ error: String(e?.message || e), _rep: rep, _period: period })
@@ -990,6 +1004,21 @@ export default function ReportsPage() {
               {!rangeSpan ? 'Pick a from-month on or before the to-month.'
                 : rangeSpan > RANGE_MAX_MONTHS ? `${rangeSpan} months — the most one page shows is ${RANGE_MAX_MONTHS}.`
                 : `${rangeSpan} month${rangeSpan === 1 ? '' : 's'} · up to ${RANGE_MAX_MONTHS} on one page`}
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 14 }}>
+            <label style={{ fontSize: 12 }}>
+              <div style={{ color: 'var(--text3)', marginBottom: 2 }}>One employee over these months</div>
+              <select className="input" value={rangeRepPick} onChange={e => setRangeRep(e.target.value)}>
+                {rangeRepOptions.map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+            <button className="btn" disabled={!rangeRepPick || !rangeSpan || rangeSpan > RANGE_MAX_MONTHS}
+              onClick={() => downloadRangeStatement('pdf')}>📄 Statement PDF</button>
+            <button className="btn" disabled={!rangeRepPick || !rangeSpan || rangeSpan > RANGE_MAX_MONTHS}
+              onClick={() => downloadRangeStatement('csv')}>⬇ CSV</button>
+            <span style={{ fontSize: 12, color: 'var(--text3)' }}>
+              a section per month with its total, then the total for the range
             </span>
           </div>
           {rangeErr && <div style={{ color: '#b91c1c', fontSize: 13, marginBottom: 10 }}>{rangeErr}</div>}

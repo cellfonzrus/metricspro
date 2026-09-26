@@ -4,7 +4,7 @@
 // report exports identically. Libs are dynamically imported on click to keep them
 // out of the initial bundle and the SSR path.
 import { useState, type ReactNode } from 'react'
-import { pinSheetCellTypes } from '@/lib/cell-safety'
+import { pinSheetCellTypes, csvRow } from '@/lib/cell-safety'
 import { isSafeMediaSrc } from '@/lib/safe-url'
 import { api } from '@/lib/client'
 
@@ -16,7 +16,7 @@ export type ExportAudit = { watermark?: string; blocked?: boolean; max?: number 
 
 // Low-level: report an export to the governance endpoint. Fail-open ({} on error) so a logging hiccup
 // never blocks a legitimate export; a returned `blocked` (over the row cap) is respected by callers.
-export async function governExport(report: string, format: 'excel' | 'pdf' | 'print',
+export async function governExport(report: string, format: 'excel' | 'pdf' | 'print' | 'csv',
                                    totalRows: number,
                                    sheets?: { name: string; rows: number }[]): Promise<ExportAudit> {
   try {
@@ -30,7 +30,7 @@ export async function governExport(report: string, format: 'excel' | 'pdf' | 'pr
     return { watermark: r?.watermark, blocked: !!r?.blocked, max: r?.max_rows }
   } catch { return {} }
 }
-async function auditExport(p: ExportPayload, format: 'excel' | 'pdf' | 'print'): Promise<ExportAudit> {
+async function auditExport(p: ExportPayload, format: 'excel' | 'pdf' | 'print' | 'csv'): Promise<ExportAudit> {
   const total = p.sheets.reduce((n, s) => n + (s.rows?.length || 0), 0)
   return governExport(p.title || p.filename, format, total,
     p.sheets.map(s => ({ name: s.name, rows: s.rows?.length || 0 })))
@@ -96,9 +96,13 @@ function displayCell(col: ExportColumn, row: any): string {
   if (col.money) return money(v)
   return v == null ? '' : String(v)
 }
+// The Excel / CSV half of the same rule (2026-09-26, index §4c): `money()` above stopped printing an
+// absent value as $0.00, but the Excel cell writer still ran `Number(v) || 0`, so a withheld or
+// not-computed money cell landed in the .xlsx as a real 0. Absent is now an EMPTY cell; a real zero
+// (or a numeric string) is still a number.
 function rawCell(col: ExportColumn, row: any): string | number {
   const v = col.get(row)
-  if (col.money) return Number(v) || 0
+  if (col.money) return v == null || v === '' ? '' : (Number(v) || 0)
   return v == null ? '' : (v as any)
 }
 function hasRows(p: ExportPayload) {
@@ -152,6 +156,35 @@ export async function renderExcelBase64(p: ExportPayload) {
     mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     content_b64: XLSX.write(wb, { type: 'base64', bookType: 'xlsx' }) as string,
   }
+}
+
+// ---- CSV ----
+// The SAME payload as Excel / PDF / Print, as CSV: one block per sheet (the sheet name first when there
+// are several), the headers, then every row through `rawCell` — money stays a raw number a spreadsheet can
+// total, an absent value is an empty field. Every field goes through cell-safety's `csvRow` (RFC-4180
+// quoting + the H7 formula-injection guard), so a CSV never opens as a live formula. Opt-in per report
+// (`<ExportButtons csv />`); the P&L month range is the first to offer it (index §4c).
+export function payloadToCsv(p: ExportPayload): string {
+  const lines: string[] = []
+  for (const sh of p.sheets) {
+    if (p.sheets.length > 1) lines.push(csvRow([sh.name]))
+    lines.push(csvRow(sh.columns.map(c => c.header)))
+    for (const r of sh.rows) lines.push(csvRow(sh.columns.map(c => rawCell(c, r))))
+    lines.push('')
+  }
+  return lines.join('\r\n')
+}
+export async function exportToCsv(p: ExportPayload) {
+  const audit = await auditExport(p, 'csv')
+  if (audit.blocked) { alert(capMessage(audit.max)); return }
+  let body = payloadToCsv(p)
+  if (audit.watermark) body += `\r\n${csvRow([audit.watermark])}\r\n`
+  const blob = new Blob(['﻿' + body], { type: 'text/csv;charset=utf-8;' })   // BOM: Excel reads UTF-8 (↳, —)
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = `${p.filename}.csv`
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 // ---- PDF ----
@@ -261,14 +294,16 @@ export async function printReport(p: ExportPayload) {
 }
 
 // ---- Buttons ----
-export function ExportButtons({ payload, compact }: { payload: () => ExportPayload; compact?: boolean }) {
-  const [busy, setBusy] = useState<'' | 'excel' | 'pdf'>('')
-  async function go(kind: 'excel' | 'pdf') {
+// `csv` (opt-in, default off so no existing toolbar changes): adds a CSV button over the SAME payload.
+export function ExportButtons({ payload, compact, csv }: { payload: () => ExportPayload; compact?: boolean; csv?: boolean }) {
+  const [busy, setBusy] = useState<'' | 'excel' | 'pdf' | 'csv'>('')
+  async function go(kind: 'excel' | 'pdf' | 'csv') {
     const p = payload()
     if (!hasRows(p)) { alert('Nothing to export yet.'); return }
     try {
       setBusy(kind)
       if (kind === 'excel') await exportToExcel(p)
+      else if (kind === 'csv') await exportToCsv(p)
       else await exportToPDF(p)
     } catch (e: any) {
       console.error(e); alert('Export failed: ' + (e?.message || e))
@@ -287,6 +322,11 @@ export function ExportButtons({ payload, compact }: { payload: () => ExportPaylo
       <button className="btn btn-secondary" style={style} disabled={!!busy} onClick={() => go('excel')}>
         {busy === 'excel' ? '⏳' : '⬇️'} Excel
       </button>
+      {csv && (
+        <button className="btn btn-secondary" style={style} disabled={!!busy} onClick={() => go('csv')}>
+          {busy === 'csv' ? '⏳' : '⬇️'} CSV
+        </button>
+      )}
       <button className="btn btn-secondary" style={style} disabled={!!busy} onClick={() => go('pdf')}>
         {busy === 'pdf' ? '⏳' : '📄'} PDF
       </button>

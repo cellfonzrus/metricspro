@@ -7709,6 +7709,15 @@ def _role_scope(org_id: str, role: str) -> str:
         return fallback                                        # roles read failed → restrictive (elevated → 'all')
 
 
+def role_is_self_scoped(org_id: str, role, rbac_on=None) -> bool:
+    """Is a caller holding `role` SELF-scoped (a rep — sees only their own numbers)? THE one answer both the
+    payout surfaces (`commcalc.router._caller_rep_keys` → `payout_audience.resolve`) and `/me`'s viewer payload
+    (the nav) ask, so the menu and the server can never disagree about who is an employee (index §6j).
+    RBAC off → never. `rbac_on` lets a caller that already checked `_rbac_enabled` skip the second read."""
+    on = _rbac_enabled(org_id) if rbac_on is None else bool(rbac_on)
+    return bool(on) and _role_scope(org_id, (role or "").strip()) == "self"
+
+
 def _role_permissions(org_id: str, role: str) -> dict:
     """Full roles.permissions jsonb for a role name (scope, scheduling_reach, page/report
     overrides, …). Empty dict on missing role / read failure — every consumer here treats a blank
