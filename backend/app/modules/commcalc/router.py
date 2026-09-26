@@ -16712,7 +16712,12 @@ def get_kpi_failing(period: str, authorization: str = Header(default=""), org_id
     stores = _kpif.store_rows(dlar_rows, kpi_defs, targets, resolve_market=resolve_market)
     reps = _kpif.rep_rows(comms, kpi_defs, targets)
     return {"period": cperiod, "targets": targets,
-            "defs": [{"kpi": k, "label": l} for (k, l, _c, _d) in kpi_defs],
+            # WHICH GRAIN each KPI is actually measured at (§19.28). Three of the seven a Boost rep is
+            # tiered on — familyplan / tmr3 / aal — have never been published at rep grain (all 516
+            # `raw_dlar_rep` rows are NULL in those columns, every period), so a rep reaches them only
+            # through their STORE's row. Derived from the feed maps, so it cannot drift from the truth.
+            "defs": [{"kpi": k, "label": l, "grain": _kpif.grain_of(k)}
+                     for (k, l, _c, _d) in kpi_defs],
             "summary": _kpif.summarize(stores, reps), "stores": stores, "reps": reps,
             # AS OF WHEN IS THIS TRUE (owner defect 2026-09-26, index §19.28). The pay engine reads four
             # KPIs from the REP grain and three from the STORE grain into one paid row, so two slices of
@@ -28610,6 +28615,11 @@ def list_carrier_kpi_metrics(carrier_id: str = "", org_id: str = ORG_ID):
         k = r.get('metric_key')
         r["auto_fed"] = _kpi_failing.auto_fed(k)
         r["store_column"] = _kpi_failing.STORE_KPI_COLUMNS.get(k)
+        # AND AT WHICH GRAIN it is measured (§19.28) — 'rep', 'store' (rolled down to every rep at that
+        # store) or None (nothing feeds it). Three of the built-in seven are store-grain only, so a
+        # screen showing "met 3 of 7" can say which of those are the rep's own numbers.
+        r["grain"] = _kpi_failing.grain_of(k)
+        r["rep_columns"] = list(_kpi_failing.REP_DLAR_COLUMNS.get(k) or ())
     return {"metrics": rows, "ready": True, "default_carrier": _KPI_DEFAULT_CARRIER}
 
 

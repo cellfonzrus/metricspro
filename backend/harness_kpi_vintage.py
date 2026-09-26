@@ -56,6 +56,7 @@ sys.path.insert(0, ".")
 from app.modules.commcalc import kpi_failing as kf            # noqa: E402
 from app.modules.commcalc import dlar_sweep as ds             # noqa: E402
 from app.modules.commcalc import line_class as lc             # noqa: E402
+from app.modules.commcalc import data_lineage_registry as lin  # noqa: E402
 from app.modules.commcalc.calculator import calc_rep_commissions  # noqa: E402
 
 CHECKS = []
@@ -196,6 +197,42 @@ ck("A21 the live JUNE slice is short too — this is a CLASS, not one month",
                     )["grains"]["raw_dlar_rep"]["days_short"] == 1)
 
 
+# ── §A THE PROOF THE OWNER ASKED FOR: SAME REP, SAME CODE, TWO SNAPSHOTS ──────────────────────────
+# Owner: *"both should be pulled from the same website ElevateGo, why is the data different"*. Because the
+# stored snapshot is 24 of August's 31 days. The engine is NOT at fault, and this is how you see that: run
+# the SAME code over the SAME rep twice, changing only the snapshot's base, and every percentage moves
+# with it. No arithmetic was changed to close the gap — doing so would have hidden a live data defect.
+REP_ROW_FINAL = {                     # the same rep, the carrier's finalised August (13 gross adds)
+    "rep_name": "WALEED", "gross_adds": 13.0, "upgrades": 12.0, "atu": 11.0, "atu_pct": 84.62,
+    "protect_pct": 80.0, "device_insurance_pct": 80.0, "device_insurance_total": 20.0,
+    "byod_pct": 53.85, "ga_prepaid": 13.0, "boost_ready_bounty": 8.0, "boost_app_pct": 61.54,
+}
+mid, _ = kf.rep_kpi_values(kf.BUILTIN_KPI_DEFS, rep_row=REP_ROW_STALE, store_row=STORE_ROW_FINAL)
+fin, _ = kf.rep_kpi_values(kf.BUILTIN_KPI_DEFS, rep_row=REP_ROW_FINAL, store_row=STORE_ROW_FINAL)
+ck("A22 THE SNAPSHOT MOVES THE PERCENTAGES, NOT THE CODE — the same rep through the same resolver: a "
+   "4-gross-add snapshot scores 3 of 7, a 13-gross-add one scores 4 of 7",
+   kf.score(mid, kf.BUILTIN_KPI_DEFS, TARGETS)[0] == 3
+   and kf.score(fin, kf.BUILTIN_KPI_DEFS, TARGETS)[0] == 4)
+ck("A23 …and every diverging percentage reproduces EXACTLY from its own snapshot's base, so the engine "
+   "is faithful to the data it was given: ATU 3/4=75 vs 11/13=84.62, Protect 5/7=71.43 vs 20/25=80, "
+   "BYOD 2/4=50 vs 7/13=53.85",
+   abs(REP_ROW_STALE["atu"] / REP_ROW_STALE["gross_adds"] * 100 - mid["atu"]) < 0.01
+   and abs(REP_ROW_FINAL["atu"] / REP_ROW_FINAL["gross_adds"] * 100 - fin["atu"]) < 0.01
+   and abs(REP_ROW_STALE["device_insurance_total"]
+           / (REP_ROW_STALE["gross_adds"] + REP_ROW_STALE["upgrades"]) * 100 - mid["protect"]) < 0.01
+   and abs(REP_ROW_FINAL["device_insurance_total"]
+           / (REP_ROW_FINAL["gross_adds"] + REP_ROW_FINAL["upgrades"]) * 100 - fin["protect"]) < 0.01
+   and abs(2 / REP_ROW_STALE["gross_adds"] * 100 - mid["byod"]) < 0.01
+   and abs(7 / REP_ROW_FINAL["gross_adds"] * 100 - fin["byod"]) < 0.01)
+ck("A24 NOT A CALCULATION FIX — no percentage formula was changed. Feed the retired reads the SAME "
+   "stale row and they produce the SAME numbers this resolver does",
+   mid["atu"] == REP_ROW_STALE["atu_pct"] and mid["protect"] == REP_ROW_STALE["device_insurance_pct"]
+   and mid["byod"] == REP_ROW_STALE["byod_pct"])
+ck("A25 THE FIX FOR THIS REP IS A RE-PULL, WHICH IS LIVE DATA AND THE OWNER'S: no code path here can "
+   "produce the finalised base — the portal serves the CURRENT period only",
+   ds.vintage("August 2026", "2026-08-24")["complete"] is False)
+
+
 print("\n=== §B  NO DENOMINATOR IS NOT A SCORE OF ZERO ==============================================")
 
 ck("B1 derived_rate refuses a zero denominator (the live row: bounty 3, ga_prepaid 0)",
@@ -277,6 +314,82 @@ ck("B12 SIBLING AUDIT — the MI 3MR qualifier is UNCHANGED by a NULL: its reade
 ck("B13 …and that is REPORTED as the same defect, not fixed: averaging a store that reported nothing "
    "as 0% drags the manager's qualifier down, and correcting it moves manager money (owner's call)",
    _f_num_today(None) == 0.0)          # the inertness IS the finding; asserted so it cannot change silently
+
+
+# ── A COLUMN THAT STOPS ARRIVING (the COMPLETENESS axis — index §19.18 gains a third question) ─────
+# ⚠ CORRECTION TO THIS HARNESS'S OWN FIRST ACCOUNT. The 189 `ga_prepaid = 0` rows were first reported as
+# "the portal not reporting a prepaid-activation count" — scattered missing values. They are not. They
+# DECOMPOSE, exactly, into a dated FEED-SHAPE BREAK plus a handful of genuine zeros (measured live):
+#
+#   March 13/110 · April 11/103 · May 11/81 · June 7/75      = 42   column PRESENT, rep genuinely had none
+#   July 58/58 · August 44/44 · September 45/45              = 147  column STOPPED BEING SENT
+#                                                              ---
+#                                                              189
+#
+# And it was never one column: `store`, `door_name`, `door_city`, `door_state`, `door_zip`,
+# `door_address`, `ga_prepaid` and `ga_postpaid` all went blank together in July 2026 — one upstream shape
+# change, because `normalize_rep` maps that whole block from the record's `address` / `name` / `city` /
+# `state` / `zip` / `prepaid_activations` / `postpaid_activations`. Rows kept arriving and the data date
+# kept moving, so §19.18's two questions both read GREEN for three months.
+JUL_REP_ROWS = [{"store": "", "door_address": "", "ga_prepaid": 0.0, "ga_postpaid": 0.0,
+                 "gross_adds": 14.0, "atu_pct": 75.0}] * 58
+JUN_REP_ROWS = ([{"store": "11636 Springfield Blvd", "door_address": "11636 Springfield Blvd",
+                  "ga_prepaid": 8.0, "ga_postpaid": 0.0, "gross_adds": 9.0, "atu_pct": 75.0}] * 74
+               + [{"store": "11636 Springfield Blvd", "door_address": "11636 Springfield Blvd",
+                   "ga_prepaid": 0.0, "ga_postpaid": 0.0, "gross_adds": 0.0, "atu_pct": 0.0}])
+REQ = lin.required_content_columns("raw_dlar_rep")
+jul = lin.content_arrival(JUL_REP_ROWS, REQ)
+jun = lin.content_arrival(JUN_REP_ROWS, REQ)
+ck("B14 WHICH COLUMNS MUST CARRY A VALUE is declared ONCE, in the lineage registry — the sweep reads it",
+   "store" in REQ and "ga_prepaid" in REQ and lin.required_content_columns("nope") == ())
+ck("B15 THE JULY BREAK IS VISIBLE — `store` and `ga_prepaid` carry nothing in any of the 58 rows",
+   jul["empty_columns"] == ["store", "ga_prepaid"] and jul["rows"] == 58
+   and jul["columns"]["gross_adds"]["filled"] == 58, str(jul["empty_columns"]))
+ck("B16 …and a GENUINE per-rep zero is NOT a break: June's one rep with no prepaid activations leaves "
+   "the column reported as arriving (74 of 75 filled)",
+   jun["empty_columns"] == [] and jun["columns"]["ga_prepaid"]["filled"] == 74,
+   str(jun["columns"]["ga_prepaid"]))
+ck("B17 the SWEEP SAYS SO OUT LOUD — the run is ⚠ PARTIAL and names the table.column and the row count",
+   (lambda L: L.startswith("⚠ PARTIAL") and "COLUMN STOPPED ARRIVING" in L
+    and "raw_dlar_rep.store (0 of 58 rows)" in L and "raw_dlar_rep.ga_prepaid (0 of 58 rows)" in L)(
+       ds.status_sentence({"period": "July 2026",
+                           "written": {"raw_dlar_store": 28, "raw_dlar_rep": 58},
+                           "pulled": {"raw_dlar_store": 28, "raw_dlar_rep": 58},
+                           "as_of": {"raw_dlar_store": "2026-07-31", "raw_dlar_rep": "2026-07-31"},
+                           "vintage": {t: ds.vintage("July 2026", "2026-07-31")
+                                       for t in ("raw_dlar_store", "raw_dlar_rep")},
+                           "content": {"raw_dlar_rep": jul,
+                                       "raw_dlar_store": {"rows": 28, "columns": {}, "empty_columns": []}},
+                           "skipped_guard": None})),
+   ds.status_sentence({"period": "July 2026", "written": {"raw_dlar_rep": 58}, "pulled": {},
+                       "as_of": {}, "vintage": {}, "content": {"raw_dlar_rep": jul},
+                       "skipped_guard": None}))
+ck("B18 a CLEAN pull is still plainly OK — the new axis does not cry wolf",
+   ds.status_sentence({"period": "June 2026",
+                       "written": {"raw_dlar_store": 28, "raw_dlar_rep": 75},
+                       "pulled": {"raw_dlar_store": 28, "raw_dlar_rep": 75},
+                       "as_of": {"raw_dlar_store": "2026-06-30", "raw_dlar_rep": "2026-06-30"},
+                       "vintage": {t: ds.vintage("June 2026", "2026-06-30")
+                                   for t in ("raw_dlar_store", "raw_dlar_rep")},
+                       "content": {"raw_dlar_rep": jun,
+                                   "raw_dlar_store": {"rows": 28, "columns": {}, "empty_columns": []}},
+                       "skipped_guard": None}).startswith("OK — "))
+ck("B19 an EMPTY pull reports no empty columns — that is a different failure and the load guards own it",
+   lin.content_arrival([], REQ)["empty_columns"] == []
+   and lin.content_arrival(None, REQ)["rows"] == 0)
+ck("B20 THE CORRECTED ATTRIBUTION, arithmetically: 42 scattered zeros (Mar-Jun, column present) + 147 "
+   "feed-break rows (Jul-Sep) = the 189 measured platform-wide",
+   13 + 11 + 11 + 7 == 42 and 58 + 44 + 45 == 147 and 42 + 147 == 189)
+
+# ── D3 — WHICH GRAIN IS THIS KPI MEASURED AT ──────────────────────────────────────────────────────
+ck("B21 THREE OF THE SEVEN a Boost rep is TIERED on are STORE-grain only — and a surface can now say so",
+   [kf.grain_of(k) for k in ("atu", "protect", "boostapp", "byod")] == ["rep"] * 4
+   and [kf.grain_of(k) for k in ("familyplan", "tmr3", "aal")] == ["store"] * 3
+   and kf.grain_of("zulu") is None and kf.grain_of("") is None)
+ck("B22 …which is exactly why those three MATCH ElevateGo while the rep-grain four do not: they are the "
+   "rep's STORE's numbers, from a slice that WAS finalised",
+   all(abs(stale_vals[k] - CARRIER_FINAL[k]) < 0.01 for k in ("familyplan", "tmr3", "aal"))
+   and all(kf.grain_of(k) == "store" for k in ("familyplan", "tmr3", "aal")))
 
 
 print("\n=== §C  ONE INVOICE, TWO BUCKETS — and the exact reconciliation to the carrier ==============")

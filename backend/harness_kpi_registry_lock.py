@@ -290,6 +290,26 @@ check("(h) the sweep's STATUS is derived from what was WRITTEN, not spelled from
 check("(h) no surface fabricates a denominator of seven any more",
       "total_kpis') or 7" not in ROUTER and "total_kpis ?? 7" not in WID
       and "total_kpis\") or 7" not in ROUTER)
+LIN = read(os.path.join(BE, "data_lineage_registry.py"))
+check("(h) WHICH COLUMNS MUST CARRY A VALUE lives in the lineage registry, and the SWEEP DEREFERENCES it "
+      "— no second list of required columns in the sweep (index §19.28 completeness axis)",
+      "REQUIRED_CONTENT_COLUMNS = {" in LIN and "def content_arrival(" in LIN
+      and "_lineage.required_content_columns(" in SWEEP_CODE
+      and "_lineage.content_arrival(" in SWEEP_CODE
+      and "REQUIRED_CONTENT_COLUMNS" not in SWEEP_CODE)
+check("(h) a column that stopped arriving CANNOT sit under a green OK",
+      'gone = []' in SWEEP_CODE and 'COLUMN STOPPED ARRIVING' in SWEEP
+      and 'if not (skipped or gone)' in SWEEP_CODE)
+check("(h) THE GRAIN a KPI is measured at is DERIVED from the feed maps, never stored",
+      "def grain_of(" in KPIF and "REP_DLAR_COLUMNS" in fn_body(KPIF, "grain_of")
+      and "STORE_KPI_COLUMNS" in fn_body(KPIF, "grain_of"))
+check("(h) …and every surface that shows a KPI set STAMPS it, so no screen works the grain out",
+      '_kpif.grain_of(k)' in ROUTER and '_kpi_failing.grain_of(k)' in ROUTER)
+check("(h) NEG the sweep carrying its own required-column list again → RED",
+      "REQUIRED_CONTENT_COLUMNS" in (SWEEP_CODE + '\nREQUIRED_CONTENT_COLUMNS = {"raw_dlar_rep": ()}'))
+check("(h) NEG a stopped column back under a green OK → RED",
+      'if not skipped' in (SWEEP_CODE.replace("if not (skipped or gone)", "")
+                           + '\n head = "OK" if not skipped else "x"'))
 check("(h) the DISPLAY siblings read the one classifier — neither turns a missing value into a 0%",
       "safe_float(kv.get(k))" not in ROUTER and "_kpi_failing.evaluate(kv," in ROUTER,
       ROUTER.count("safe_float(kv.get(k))"))
@@ -318,6 +338,8 @@ check("(wired) the guard re-runs when the KPI home or its readers change",
 check("(wired) the guard re-runs when the pay engine or the DLAR sweep changes",
       "backend/app/modules/commcalc/calculator.py" in wf
       and "backend/app/modules/commcalc/dlar_sweep.py" in wf)
+check("(wired) …and when the lineage registry that declares the required columns changes",
+      "backend/app/modules/commcalc/data_lineage_registry.py" in wf)
 check("(wired) the MONEY proof for this class runs in CI too",
       "harness_kpi_vintage.py" in wf)
 

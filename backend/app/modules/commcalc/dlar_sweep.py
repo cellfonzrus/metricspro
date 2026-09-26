@@ -21,6 +21,9 @@ keeps working unchanged.
 import calendar as _calendar
 from datetime import datetime, timezone
 
+# THE one home of "which columns must carry a value" (index §19.18 arrival/content, §19.28 completeness).
+from app.modules.commcalc import data_lineage_registry as _lineage
+
 import requests
 
 
@@ -397,10 +400,20 @@ def status_sentence(res):
         elif v.get("complete") is False:
             seg += f" — NOT within {period}"
         parts.append(seg)
-    head = "OK" if not skipped else "⚠ PARTIAL"
+    # A COLUMN THAT STOPPED ARRIVING IS NOT AN "OK" RUN. The pull succeeded, the rows landed and the
+    # period moved — and a declared column carries nothing in any of them, which is how July 2026's
+    # advocate-report shape change went unnoticed for three months (index §19.28).
+    gone = []
+    for tbl in ("raw_dlar_store", "raw_dlar_rep"):
+        c = (res.get("content") or {}).get(tbl) or {}
+        for col in c.get("empty_columns") or []:
+            gone.append(f"{tbl}.{col} (0 of {c.get('rows', 0)} rows)")
+    head = "OK" if not (skipped or gone) else "⚠ PARTIAL"
     line = f"{head} — {period}: " + " · ".join(parts)
     if skipped:
         line += " · NOT REPLACED (partial-collapse guard, existing->pulled): " + ", ".join(skipped)
+    if gone:
+        line += " · ⚠ COLUMN STOPPED ARRIVING: " + ", ".join(gone)
     return line
 
 
@@ -438,6 +451,15 @@ def run_dlar_sweep(client, org_id, user, pw):
 
     store_rows = [{**base, **normalize_store(r)} for r in store_recs]
     rep_rows = [{**base, **normalize_rep(r)} for r in rep_recs]
+
+    # DO THE DECLARED COLUMNS STILL CARRY VALUES? The third freshness question (index §19.28): rows can
+    # keep arriving and the data date keep moving while a column has silently stopped being sent. The
+    # advocate report lost its whole door-identity block and its prepaid/postpaid split in JULY 2026 and
+    # nothing failed — 147 rep rows since then divided a bounty by a denominator that was no longer being
+    # sent. WHICH columns must carry a value is declared ONCE in `data_lineage_registry`; this reads it.
+    content = {}
+    for _tbl, _rows in (("raw_dlar_store", store_rows), ("raw_dlar_rep", rep_rows)):
+        content[_tbl] = _lineage.content_arrival(_rows, _lineage.required_content_columns(_tbl))
 
     # GUARD: a DLAR pull that returns nothing is almost never a real empty month — it's an expired
     # session or a portal layout change. Aborting BEFORE the wipe (instead of "OK — 0 stores") keeps
@@ -477,6 +499,7 @@ def run_dlar_sweep(client, org_id, user, pw):
             "vintage": {t: vintage(period, as_of.get(t)) for t in ("raw_dlar_store", "raw_dlar_rep")},
             "pulled": {"raw_dlar_store": len(store_rows), "raw_dlar_rep": len(rep_rows)},
             "written": written,
+            "content": content,
             # kept for compatibility with the status line: these are the PULL counts it has always shown
             "stores": len(store_rows), "reps": len(rep_rows),
             "skipped_guard": skipped or None}

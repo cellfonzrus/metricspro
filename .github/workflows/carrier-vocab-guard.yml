@@ -312,6 +312,7 @@ on:
       - "backend/app/modules/commcalc/calculator.py"
       - "backend/app/modules/commcalc/dlar_sweep.py"
       - "database/migrations/1026_dlar_vintage_kpi_no_data.sql"
+      - "backend/app/modules/commcalc/data_lineage_registry.py"
       - "frontend/src/components/EmployeeWidgets.impl.tsx"
       - "backend/harness_browser_sweep_kinds.py"
       - "database/migrations/1021_supply_ordering.sql"

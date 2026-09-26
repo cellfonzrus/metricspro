@@ -56,16 +56,29 @@ CREATE INDEX IF NOT EXISTS idx_raw_dlar_store_asof
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════════
 -- THE DEFECT (fixed FORWARD in code; this block is about HISTORY only).
 --     "boost_app_pct": (bounty / ga_prepaid * 100) if ga_prepaid > 0 else 0
--- `ga_prepaid = 0` is the portal not reporting a prepaid-activation count, not a rep with no
--- activations. Measured live 2026-09-26, read-only:
+-- `ga_prepaid = 0` is not "a rep with no activations". Measured live 2026-09-26, read-only:
 --
 --     raw_dlar_rep rows                                       516
 --     with ga_prepaid = 0, every one written a measured 0%     189
---       …of those, gross_adds > 0 (had activations)            139
 --       …of those, boost_ready_bounty > 0 (SOLD the thing)     122
---       …of those, no activity at all                            7
---     July 2026 / August 2026 / September 2026: ALL 58 / 44 / 45 rep rows are in that set, so with
---     payout_config.tier_100_min_kpis = 7, tier 1.0 was UNREACHABLE for every house rep in three months.
+--
+-- ⚠ AND THE 189 ARE NOT SCATTERED MISSING VALUES — they decompose into a dated FEED-SHAPE BREAK plus a
+-- handful of genuine zeros. `store`, `door_name/city/state/zip/address`, `ga_prepaid` AND `ga_postpaid`
+-- all went blank TOGETHER in July 2026 (one upstream change: normalize_rep maps that whole block from the
+-- advocate record). Rows kept arriving and the data date kept moving, so nothing failed:
+--
+--     period        rows   ga_prepaid=0   store/door_*   sum ga_prepaid   sum ga_postpaid
+--     March 2026     110        13         populated          1508              16
+--     April 2026     103        11         populated          1071               2
+--     May 2026        81        11         populated           403               3
+--     June 2026       75         7         populated           621               2
+--     July 2026       58        58         ALL BLANK             0               0   <-- the break
+--     August 2026     44        44         ALL BLANK             0               0
+--     September       45        45         ALL BLANK             0               0
+--
+--     42 genuine (column present, rep had none) + 147 from the break = 189.
+--     With payout_config.tier_100_min_kpis = 7, tier 1.0 was UNREACHABLE for every house rep in
+--     July / August / September 2026.
 --
 -- WHAT THIS BLOCK WOULD DO: turn those fabricated zeroes into NULL, so `kpi_failing.score` reports them
 -- as `no_data` and leaves them OUT of the met-count denominator. On its own that moves NO money — a 0

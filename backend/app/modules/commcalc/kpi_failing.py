@@ -94,6 +94,28 @@ def auto_fed(metric_key):
     return bool(k) and (k in REP_KPI_KEYS or k in STORE_KPI_COLUMNS)
 
 
+GRAIN_REP, GRAIN_STORE, GRAIN_NONE = "rep", "store", None
+
+
+def grain_of(metric_key):
+    """AT WHICH GRAIN IS THIS KPI ACTUALLY MEASURED — 'rep' | 'store' | None. DERIVED from the two feed
+    maps, never stored, so it cannot drift from where the value really comes from.
+
+    THE FACT THIS MAKES SAYABLE (owner's question, 2026-09-26): three of the seven KPIs a Boost rep is
+    TIERED on — familyplan, tmr3, aal — have never been published at rep grain. Measured: all 516
+    `raw_dlar_rep` rows carry NULL in `family_plan_pct`, `tmr3` and `aal_conversion`, every period since
+    March. A rep reaches them only through their STORE's row. So "this rep met 3 of 7" is partly a claim
+    about their store's performance, and a surface that shows the score should be able to say which is
+    which. Whether the carrier publishes those three only per door is the carrier's business; that the
+    platform can no longer hide the difference is ours."""
+    k = str(metric_key or "").strip()
+    if k in REP_DLAR_COLUMNS:
+        return GRAIN_REP
+    if k in STORE_KPI_COLUMNS:
+        return GRAIN_STORE
+    return GRAIN_NONE
+
+
 def _num(v):
     """float or None — '', None, non-numeric → None (no data ≠ zero)."""
     if v is None or (isinstance(v, str) and not v.strip()):
