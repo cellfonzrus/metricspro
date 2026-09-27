@@ -33,7 +33,12 @@ WHAT FAILS THE BUILD
   (f) NEGATIVE CONTROLS: an inline set, an accepted-but-unapplied parameter, and a resolver that
       turns blank into an empty set must each go red.
 
-Stdlib only, DB-free. Runs in .github/workflows/carrier-vocab-guard.yml.
+DB-free, but NOT stdlib-only: check (b) imports the real `closing.router` to exercise the three
+resolvers behaviourally rather than by reading source, and that module imports fastapi. This
+harness therefore belongs in the `closing-filter-contract-proof` job of
+.github/workflows/carrier-vocab-guard.yml, which runs `pip install -r backend/requirements.txt`
+— NOT in the stdlib-only `carrier-vocab-guard` job. An earlier copy of it landed there and failed
+with ModuleNotFoundError; the false "stdlib only" claim on this line is what invited that move.
 
   python3 backend/harness_closing_filter_contract.py
 """

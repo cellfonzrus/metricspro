@@ -5656,6 +5656,22 @@ workflow that runs a `harness_*.py` without that default fails the build. `deplo
 unchanged (its `printf | grep -q` pipes would misbehave under pipefail). Found by the commission agent while wiring the
 multi-period ledger upload.
 
+§19.25b **A GATE THAT CANNOT RUN IS NOT A GATE — the same class as §19.25, the other way round (2026-09-27).**
+`harness_closing_filter_contract.py` (§29.10) was run from `carrier-vocab-guard.yml`'s stdlib-only
+`carrier-vocab-guard` job, which installs nothing. Its check (b) imports the real `closing.router` to exercise
+`_resolve_market_filter` / `_resolve_store_filter` / `_resolve_employee_filter` BEHAVIOURALLY rather than by reading
+source, and that module imports `fastapi` — so the step died with `ModuleNotFoundError` before check one, and passed on
+every developer machine because a developer machine has the backend installed. The harness's own docstring claimed
+"Stdlib only", which is what invited the move; the claim is now the truth (it names the job it belongs in and why).
+Fixed as a class, not as a step: `backend/harness_ci_pipefail_lock.py` (CI `security.yml` job `ci-pipefail`, enforcing)
+now also fails the build when a job WITHOUT `pip install` runs a harness whose MODULE-LEVEL imports reach a wheel —
+followed transitively through `app.*`, since that is how this one arrived. The wheel set is READ from
+`backend/requirements.txt` (`wheel_names()`), not restated, so a dependency added tomorrow is covered. Two things are
+deliberately not violations because neither can break module load: a `try:`-guarded import, and a third-party module the
+harness STUBS into `sys.modules` itself (`harness_tenant_vertical.py` does exactly that and is correctly placed in the
+no-deps job). Proven both ways: replaying the bad step into the workflow text reproduces the violation and names
+`app/modules/closing/router.py imports fastapi`; 28 checks, 9 of them negative controls.
+
 §19.26 **A MONEY GATE CHOSE ITS COLUMN BY RESEMBLANCE — the qualifier read TWP+ while the rule is TWP ALL
 (owner defect 2026-09-25; fixed as a class).** `paramount_kpi` matched the SUBSTRING `"current twp"` against the
 door report's header row and took the FIRST column containing it. The real report carries TWO — `Current TWP+%`
