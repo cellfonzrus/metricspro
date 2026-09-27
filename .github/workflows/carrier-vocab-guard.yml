@@ -181,6 +181,10 @@ on:
       - "backend/harness_multimonth_offer_lock.py"
       - "backend/app/modules/commcalc/multimonth_config.py"
       - "backend/harness_payout_audience.py"
+      - "backend/harness_recompute_rep_e2e.py"
+      - "backend/harness_recompute_rep_parity.py"
+      - "backend/app/modules/commcalc/installment_engine.py"
+      - "backend/app/modules/commcalc/sale_installment_engine.py"
       - "backend/harness_payout_audience_lock.py"
       - "backend/app/modules/commcalc/payout_audience.py"
       - "backend/app/modules/commcalc/commission_statement.py"
@@ -296,6 +300,12 @@ on:
       - "backend/harness_super_admin_toolbox.py"
       - "backend/harness_closing_closer_pick.py"
       - "backend/harness_closing_config_active.py"
+      - "backend/harness_setup_documents.py"
+      - "backend/app/modules/commcalc/setup_documents.py"
+      - "backend/app/modules/commcalc/setup_router.py"
+      - "backend/app/modules/core/import_health.py"
+      - "database/migrations/1028_setup_documents.sql"
+      - "frontend/src/lib/setup-gate.ts"
       - "backend/app/modules/closing/tender_config.py"
       - "backend/app/modules/closing/count_config.py"
       - "frontend/src/app/(platform)/closing/**"
@@ -525,6 +535,12 @@ jobs:
       - name: Run the payout-audience proof (employee sees the paid line with its sale, no carrier $; manager full; own-rep 403; the one-employee month range == its single statements — index §6i / §6j)
         working-directory: backend
         run: python3 harness_payout_audience.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the one-rep recompute end-to-end proof (runs the handler; writes only that rep's row == the full run's; no ledger write — index §6k)
+        working-directory: backend
+        run: python3 harness_recompute_rep_e2e.py | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the recompute-rep parity proof (one plan resolution, reached through the full path — index §6c / §6k)
+        working-directory: backend
+        run: python3 harness_recompute_rep_parity.py | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the plan-sources lock (one registry of plan-name sources; one resolver for preview and apply; one writer; the card seeds from the proposal; no vendor)
         working-directory: backend
         run: python3 harness_plan_sources_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -532,6 +548,40 @@ jobs:
       - name: Run the POS product-filters proof (each filter narrows; they combine with search; no new param = the old answer; in stock; past the 500 cap; org-scoped)
         working-directory: backend
         run: python3 harness_pos_product_filters.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE CLOSING FILTER CONTRACT (index §29.10) imports closing/router.py (FastAPI), so it cannot run in the bare-Python
+  # job above — it failed there with "No module named 'fastapi'" from the day it landed (#311, red on main). Its own job,
+  # with the backend's dependencies, like the proofs below.
+  closing-filter-contract-proof:
+    name: Closing filter contract (imports the closing router)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the closing filter contract (three standard filters, three resolvers; an accepted filter is an applied filter — owner 2026-09-26, index §29.10)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_closing_filter_contract.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE SETUP-DOCUMENTS PROOF (index §39) imports the real setup_documents / setup_router / import_health modules (the
+  # document rules, automation history, gate, reminders, the super-admin edit validation), so it runs in its own job with
+  # the backend's dependencies, like the proofs below. DB-free.
+  setup-documents-proof:
+    name: Setup documents proof (DB-free, the real functions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the setup-documents lock (per-carrier required uploads from the registry; automation offered only on a proven track record; the wizard gate; one reminder per cycle through the alert pipeline — index §39)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_setup_documents.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE INVENTORY-INTEGRITY PROOF (index §11b) drives the REAL engine, landing guard, status writer and /pos endpoints over
   # the in-memory client (harness_intake_fakes) with the anonymised 383-unit regression fixture — it imports the app, so it

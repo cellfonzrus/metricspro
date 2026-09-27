@@ -232,6 +232,10 @@ ck("both versions share the calculation-body anchor",
    BODY_ANCHOR in b_calc and BODY_ANCHOR in n_calc)
 b_body = b_calc[b_calc.index(BODY_ANCHOR):]
 n_body = n_calc[n_calc.index(BODY_ANCHOR):]
+# Index §6k (2026-09-27): the period's input gathering moved VERBATIM into `_calc_inputs` (shared with the one-rep
+# recompute); `_run_calculation` calls it. The calculation body is therefore both functions together.
+if "_calc_inputs(client, org_id, period)" in n_body:
+    n_body += fn_source(branch_src, "_calc_inputs")
 # ── RETIRED: whole-body byte-identity and the "everything sits before the anchor" arithmetic ──────
 # These asserted that THIS package (the single-flight recompute guard: `async def` -> `def` plus a
 # guard_token) changed not one line of the calculation. GUARD_BASE is PINNED to da961df, and that was

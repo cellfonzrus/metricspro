@@ -957,6 +957,9 @@ export const NAV: NavGroup[] = [
     { href: '/admin/tenants', label: 'Companies (Tenants)', icon: '🏢', module: 'admin', tileOnly: true, tile: 'Companies & Onboarding' },
     { href: '/operator/tenants', label: 'Tenant List & Sign-in', icon: '🛰️', module: 'admin', tileOnly: true, tile: 'Companies & Onboarding' },
     { href: '/admin/business-types', label: 'Business Types', icon: '🧭', module: 'admin', tileOnly: true, tile: 'Companies & Onboarding' },
+    // Carrier Documents (index §39) — THE per-carrier list of documents a new tenant uploads at setup (house rows of the
+    // report-kind registry). Platform-only page: its only home is this toolbox.
+    { href: '/admin/carrier-documents', label: 'Carrier Documents', icon: '📑', module: 'admin', tileOnly: true, tile: 'Companies & Onboarding' },
     { href: '/admin/tenant-settings', label: 'Pay Period & Work-Week', icon: '📅', module: 'admin', tileOnly: true, tile: 'Companies & Onboarding' },
     { href: '/admin/billing', label: 'Billing (Tenants)', icon: '💳', module: 'admin', tileOnly: true, tile: 'Billing & Pricing' },
     { href: '/admin/pricing', label: 'Pricing & Free Trial', icon: '🏷️', module: 'admin', tileOnly: true, tile: 'Billing & Pricing' },

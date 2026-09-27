@@ -17,12 +17,16 @@ on:
       - "backend/app/modules/pos/inventory_integrity_router.py"
       - "backend/app/modules/supply/**"
       - ".github/workflows/org-scope-guard.yml"
+      # the undefined-name lock (index §6k) judges EVERY module under backend/app
+      - "backend/app/**/*.py"
+      - "backend/harness_undefined_names_lock.py"
   push:
     branches: [main]
     paths:
       - "backend/app/modules/commcalc/router.py"
       - "backend/app/modules/pos/inventory_integrity_router.py"
       - "backend/app/modules/supply/**"
+      - "backend/app/**/*.py"
   workflow_dispatch:
 
 permissions:
@@ -50,3 +54,17 @@ jobs:
       - name: Run org-scope guard
         working-directory: backend
         run: python3 harness_org_scope_guard.py | tee "$GITHUB_STEP_SUMMARY"
+
+  undefined-names:
+    # THE #244 CLASS (index §6k): a local moved into a helper strands a sibling that still reads it — a NameError
+    # on every call that Python only finds when the line runs. stdlib `symtable`, no pip install: every scope of
+    # every module under backend/app; a read name bound nowhere fails the build. Planted controls inside.
+    name: No undefined names under backend/app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the undefined-name lock
+        working-directory: backend
+        run: python3 harness_undefined_names_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

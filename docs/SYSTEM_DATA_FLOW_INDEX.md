@@ -33,6 +33,7 @@ Primary code homes:
 | 6h | **Multi-month offered only when configured** | "Why does a rep's pay show a multi-month option when this company has no multi-month pay — where is that decided, and what if money is there anyway?" |
 | 6i | **What an employee sees of their own commission** | "Why does the employee payout report show only the line I am paid for, and no carrier Price / GP? Which surfaces show an employee their commission, and where is 'paid line' and 'employee-visible field' decided?" |
 | 6j | **Who is looking; the sale on the paid row; one employee over several months** | "Why does a rep not see Pay Discrepancy but a manager does — where is that list? Why does a manager see every line on the Rep Incentive report and a rep only their paid ones? Where does the customer name / phone on a paid row come from? How do I export one employee's statement for several months, and is each month the same as downloading it alone?" |
+| 6k | **The one-rep Recalculate button** | "Why did Recalculate for one rep fail / what does it write? Does it touch other reps or the installment ledgers? Is the one-rep row the same as Run Calculation's? How is a moved-local NameError kept out of the build?" |
 | 7 | **Carrier residual installments** | "Multi-month carrier residual pay from raw_mi. Why do named activation_types not pay?" |
 | 12 | **External credit machine + Card Settlement Recon** | "Where does the external / white-machine card figure live, what is it called for this tenant, and how does it tally with what the processor actually settled?" |
 | 7a | **Residual per Subscriber report** | "Where does the residual/subscriber trend come from per carrier? Why is a Total/MA store named, not a processor account id?" |
@@ -70,6 +71,7 @@ Primary code homes:
 | 36 | **Supply ordering (vendor setup · price compare · cheapest cart incl. free shipping · assisted order + confirmation)** | "Which vendor should this cart go to once shipping is counted, where is each vendor's free-shipping threshold and delivery time set, how is the order placed at the vendor from here, and where does the vendor's confirmation number land?" |
 | 37 | **Franchise royalty, cost & profit centers** | "Where does the franchisor's monthly royalty report land, how is it checked (the fee rounding rule), what does each line book to on the P&L and what books nothing (and why), how does it reconcile against the daily report, and how do I see the P&L per profit center or per cost center? Why did a sale line no classifier knows book nothing, and where is that reported now? How do I upload many months of royalty reports at once, and which months are on file (§37.10)?" |
 | 38 | **Super Admin Toolbox** | "As the platform super admin, where is every screen only I need — companies, business types, billing, operators, platform health, support, platform defaults — on one tiled page? Why does a tenant admin never see it, and how do I re-arrange its tiles?" |
+| 39 | **Setup documents (per-carrier required uploads · setup wizard first · automation offer · reminders)** | "Which documents must a new company upload for its carrier, where does it download each one, why is its admin sent to the Upload Wizard first, when is it offered automatic updates (and when not), and how is it reminded on the schedule it picked?" |
 
 ---
 
@@ -1740,6 +1742,8 @@ routes to the ruling agreeing).
 
 ### 6c. THE ONE PLAN RESOLUTION — `_resolve_plan_by_rep` (owner-reported class, 2026-09-17)
 
+> **2026-09-27 (§6k):** the one-rep recompute no longer calls this resolver itself — it runs the FULL path (`_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines`), so the resolver has ONE call site. The #244 split below left `recompute_rep` reading a moved local (`_id_map`) — a NameError on every call until §6k.
+
 **`router._resolve_plan_by_rep(client, org_id, period, only_rep=None, notices=None)`** is THE answer to
 "what does this rep's assigned plan pay them this period": `commission_engine.preview` (with the
 mig-306 `source_mode` and the POS→roster identity map) **plus** the mig-298 exec-MTD basis override.
@@ -1894,6 +1898,8 @@ spelling; five negative controls.
 ---
 
 ### 6f. ONE ACTIVATION = ONE UNIT — pay and count per activation / upgrade EVENT, never per sale line (owner 2026-09-25)
+
+> **Persisting per-event pay for ONE rep** (e.g. a month never calculated): the Recalculate button, `POST /commcalc/recompute-rep` — the full path's row for that rep, written alone (§6k).
 
 Owner, verbatim: *"commisison for teh reps need to be claculated per action and per upgrade as defined in teh
 incentive payout , the system sis calculating per line item"* — on the rep breakdown (`PlanLineBreakdown`),
@@ -2258,6 +2264,62 @@ Discrepancy / Phantom Payments through `POST /notify/send`. Both are now registe
 caller's header (a scheduled, admin-configured run still has no caller → org-wide, as before). CLASS lock:
 `harness_payout_audience_lock.py` part (h) — every notify call to a commcalc handler that takes `authorization`
 must pass it, and a builder reaching a manager-only handler must be `wants_auth` (2 negative controls; 24 checks).
+
+---
+
+### 6k. THE ONE-REP RECALCULATE runs the full path and writes one rep — and a moved local can never strand a reader again (2026-09-27)
+
+Owner: *"Fix button, then save"* — found while saving Jona Sejat's never-calculated months (org `f4f1c16e`).
+
+**The defect.** `POST /commcalc/recompute-rep` (`router.recompute_rep`) died with `NameError: name '_id_map' is not
+defined` on EVERY call, every org, every rep, since #244 (2026-09-17, cc8def39): that refactor moved
+`_id_map = _rep_canon_map(...)` into `_resolve_plan_by_rep` and the handler kept reading the name. Every one-rep
+recalculate button (Rep Incentive attach-plan / link-alias, commission-explain, the Coverage Wizard — which swallows
+the error) returned 500. Worse, it crashed AFTER running both installment engines with `persist=True`, i.e. it wrote
+the period's installment ledgers for EVERY rep of the org before failing. No harness ever called the handler.
+
+**The class, named:** *a name read in a function that nothing binds* — Python finds it only when the line runs.
+Swept with pyflakes F821 over `backend/app` (and the new stdlib lock below): **exactly one hit** —
+`commcalc/router.py` `recompute_rep` `_id_map`. Now zero.
+
+**The fix (design, not patch):**
+- **One row derivation.** The full Run Calculation's input gathering moved VERBATIM into
+  `router._calc_inputs(client, org_id, period)` (every org-scoped read + the cfg it assembles; returns the
+  inputs) and its standard calc into `router._calc_rep_rows(inp, period)` (`calc_rep_commissions` with the full run's
+  exact arguments). `_run_calculation` calls both — not one line of the calculation changed.
+  `recompute_rep` now runs `_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines` — the full path's own functions —
+  and writes only its rep's row(s) (`_rows_for_rep`: name keys ∪ the identity-map canonical, `_canon_person`
+  fallback): update in place, else insert; never delete, never another rep. So the one-rep row IS the full run's
+  row for that rep (counts, store, tier and pay), not the thinner copy it used to build. When the full calculation
+  produces no row for the rep, nothing is written (an existing row is left as it is) and the response says so.
+- **One identity map.** `_rep_canon_map` is its only home; `recompute_rep` reads it; the resolver reads it.
+- **Scope — the installment ledgers are NOT written by the one-rep button.** `_apply_new_engines(...,
+  persist_installments=False)` (default `True` = the full run, unchanged). Chosen because it changes no pay figure:
+  both engines compute `by_rep` before, and independently of, the ledger write, and neither engine has a rep
+  filter to scope the persist to one rep. The whole-period ledger write stays Run Calculation's job; the response
+  carries `installment_ledgers` saying so. (A stored row keeps columns the fresh row does not carry — e.g. the
+  ops-chargeback settlement columns written after the full run's insert — because the update only sets the
+  fresh row's keys.)
+
+**Locks:** `backend/harness_recompute_rep_e2e.py` (10, DB-free, pip job): runs the REAL handler end-to-end on an
+in-memory client that records every write, against the REAL `_run_calculation` as reference — no exception; exactly
+one `rep_commissions` write, this rep's, update-in-place (same id) or insert; no other table, no delete, the other
+rep's stored row untouched; the row == the full run's row for that rep (every column but id / timestamps); both
+installment engines asked with `persist=False` (the full run: `True`). Negative controls: the undefined name
+reintroduced → RED; a second rep's row written → RED; the ledgers persisted → RED.
+`backend/harness_undefined_names_lock.py` (7, stdlib `symtable`, `org-scope-guard.yml` job
+**No undefined names under backend/app**, triggered by any `backend/app/**/*.py` change): every scope of every
+module; a name that is read, resolves to module level and is bound nowhere (assignment, def, class, import,
+`global`) nor a builtin / module dunder fails the build; a star-importing module is reported, never passed.
+Controls: the #244 shape, a class body, a comprehension → RED; import / global / closure / builtins → GREEN.
+Verified against main's router: it reports exactly `recompute_rep _id_map`, the same as pyflakes.
+`harness_recompute_rep_parity.py` §E3 now pins ONE resolver call site (the full path the one-rep button runs) plus
+E3b (the handler runs `_calc_inputs` / `_calc_rep_rows` / `_apply_new_engines`), and is wired into CI for the first
+time. `harness_commcalc_recompute_guard.py` §B and `harness_cross_tenant_isolation.py` C1 follow the moved input
+gathering into `_calc_inputs`.
+
+**Not done here (awaits the merge):** saving Jona Sejat's 15 never-calculated months (Feb 2025 – Apr 2026) through
+the fixed button — the owner approved it; it runs after this is live.
 
 ---
 
@@ -4411,6 +4473,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Table | Written by | Read by |
 |-------|-----------|---------|
 | `commcalc.raw_sales.customer` + `commcalc.raw_sales_invoice.customer` (mig 1012) — as **the customer on a paid commission line** | the sales / sales-by-invoice uploads (unchanged) | THE rule `inventory_sold_recon.sale_customer` / `invoice_customer_map` → `commission_drilldown._sale_customers` (reads `trans_id,customer` only, org-scoped) → `attach_line_identity` → every plan line's `customer` (explain, statements, the range); also `sales_detail_index` (inventory integrity §11b) (§6j) |
+| `commcalc.rep_commissions` — ONE rep's row(s) for one period | `POST /commcalc/recompute-rep` → the full path (`_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines(persist_installments=False)`), writing only `_rows_for_rep` (update in place / insert) | the same readers as the full run's rows (§6k) |
 | `commcalc.rep_commissions` + the `/commission-explain` payload — as **what an EMPLOYEE may see of their own commission** | `calc_rep_commissions` / `commission_engine.preview` (unchanged) | THE shapers `payout_audience.employee_rep_row` / `employee_explain` / `employee_drill` (allow-lists; paid lines by `is_paid_line`) → `/commissions`, `/commissions-range`, `/commission-explain`, `/commission-statement(s)`, `/commission-drill`, core `/employee-dashboard`, the notify Incentives email (§6i) |
 | `commcalc.payout_schedule` / `commcalc.plan_installment_schedule` — as the answer to **"is multi-month configured for this org"** (active rows) | the schedule editors (`payout-schedules`, `plan-installments`) | THE predicate `multimonth_config.schedule_counts` → `decide` / `load` → `GET /commcalc/multimonth/status` → `_lib/multimonth.useMultimonthStatus` (the Rep Incentive card + export, commission-explain, Expected vs Earned); the R1 guard `router._has_any_pay_source`. The engines keep their own loaders (§7/§8) (§6h) |
 | `commcalc.accessory_config.activation_details_rules` **`.event`** (`keys` · `precedence` · `count_unit`; JSON key, no migration, 2026-09-25) | `PUT /commcalc/accessory-config` (extra keys of the JSON pass through the one writer) | `line_class.resolve_event` ← `resolve_rules` → `activation_events` / `activation_units` — the plan pay gate's `per_event` (always events) and every activation COUNT (`count_unit`, house `'transaction'`): `_sales_cell_agg`, the Boost calculator, `commission_drill`, closing `_b2b_counts_by_store` / `_b2b_day`, `sales_comparison.tally` (§6f) |
@@ -4534,6 +4597,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.b2b_sweep_config.connector` (mig `998`) | mig 998 backfill / owner SQL | names WHICH connector that legacy per-vendor sweep drives, so the route gate can close it from config instead of a vendor literal in code (RULE TWO). NULL = ungated. §12a.1 |
 | `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`); `PUT /report-labels` (scopes `report_col`/`report_banner`/`report_term` at the TENANT org — overrides; gated on `classification`); mig `945` seeds the HOUSE carrier-preset rows (scopes `report_col:<carrier>`/`report_banner:<carrier>`); mig `953` seeds the HOUSE carrier VOCABULARY-TERM presets (scope `report_term:<carrier>` — boost: ePay/VIP Wireless/ACIMA/b2bsoft, total: VidaPay/T-CETRA/Edge/marketplace feed, §3); mig `954` seeds the HOUSE distributor-payable BASIS presets (NEW scope `finance_basis:<carrier>`, key `distributor_payable` — boost: `asset_ledger`, total: `marketplace_due`; read by `statement_engine.carrier_payable_preset`, §4); mig `947` seeds the HOUSE Incentives tile layout (scope `tiles` key `incentives`) + HOUSE nav-label presets (NEW scopes `nav_default`/`group_default`, e.g. `/commcalc/commission-legs` → 'Commission received over M1-M12'); mig `948` seeds the HOUSE Management Overview (`tiles` key `management-overview` — incl. the `/commcalc/exec` item-label 'Rep Incentive') + Flags & Compliance (`tiles` key `flags-compliance`) layouts (§14 mig 948) | `GET /nav-config` (house `nav_default`/`group_default` presets first, then the caller org's `nav`/`group` nicknames overlay per key — tenant > house preset > built-in, since mig 947; caps/layout stay caller-org-only), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins), `GET /report-labels` (`report_labels.load_report_labels`: tenant ∪ HOUSE, tenant override > carrier preset > built-in — §3 carrier column labels) |
 | `commcalc.ui_label_override` scope `tiles`, key `super-admin-toolbox` (NO new table/row shape) — the Super Admin Toolbox's saved tile layout, platform super admin only (the designer offers the group through `rbac.platformOK`) | `PUT /tile-layout?module=super-admin-toolbox` | `/hub/super-admin-toolbox` → `layoutToHubGroups`, else `tile-hubs.subsFromItemTiles` over the group's `NavItem.tile`. §38 |
+| `commcalc.report_kind` setup columns (mig `1028`: `required`, `default_cadence`, `download_url`, `download_steps`, `evidence_table`, `upload_path`, `automation_min_runs`, `automation_window_days`) · `storeops.tenants.documents_setup_done_at` (mig `1028`; every tenant existing at apply time stamped done) · `core.import_feed` rows `kind:<key>` (module `setup`) · `core.job_run` rows `sweep:<table>` | `PUT/POST /commcalc/report-kinds/house` (super admin) · `PUT /commcalc/setup-documents/{key}` (cadence → feed enabled + `auto_derived=false`; skip → `muted_until`) · `setup_documents.ensure_feeds` (registers `kind:` feeds, never overwrites) · `router._sweep_set_status` (job_run per finished sweep) · `setup_documents.payload` (stamps done) | `setup_documents.payload` / `gate` / `automation_proof` / `run_reminders`; the wizard; the layout gate. §39 |
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3); **P&L wages estimate** `coa.wages_by_store`→`derive_wage_cells` (actual_hours else scheduled_hours — the owner's 2026-09-08 rule, already implemented); **salary coverage basis** `labour_coverage.load_shift_hours`→`hours_basis_by_code` (hours only, never dollars — §4) |
 | `storeops.employees` / `stores` / `org_units` (+ RPC `org_span_for_manager`) | storeops roster + org tree | **OVERHEAD ALLOCATION** `storeops/overhead_allocation.gather` → `classify_employee` (structural: active + salaried + blank `home_store`) / `covered_stores` (span RPC → org-unit subtree → org-wide) / `build_overhead` → the P&L `overhead_wages` + `overhead_comm` lines (§14t, mig `997`, house default OFF). Reads the roster only; derives NO pay — the conversion is `coa.monthly_salary_equivalent`, the commission is `management_incentive_payout` (§9) |
@@ -4735,6 +4799,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /tile-layout` (`?module=` — resolved tenant>house tile layout, dashboard-builder D1) | `commcalc/router.py` (`get_tile_layout`, beside nav-config) | §14 D1 |
 | `PUT /tile-layout` (fail-closed: house/foreign → super-admin; own org → `menu_layout` grant) | `commcalc/router.py` (`put_tile_layout`) | §14 D1 |
 | `GET/PUT /tile-layout?module=super-admin-toolbox` — the Super Admin Toolbox's tile arrangement (NO new endpoint: the same D1 pair; the built-in tiling is `NavItem.tile` data, a saved layout wins) | `commcalc/router.py` (`get_tile_layout` / `put_tile_layout`) | §38 |
+| `GET /commcalc/setup-documents` · `GET /commcalc/setup-documents/gate` · `PUT /commcalc/setup-documents/{key}` (import-health view / edit gates) · `GET/PUT/POST /commcalc/report-kinds/house` · `POST /commcalc/setup-documents/reopen` (super admin) | `commcalc/setup_router.py` → `commcalc/setup_documents.py` | §39 |
 | `POST /nav-labels`, `POST /nav-layout` (RETROFIT 2026-09-01: were UNGATED — now fail-closed `menu_layout` gate, non-super pinned to own org) | `commcalc/router.py` (`set_nav_label`/`set_nav_layout`) | §14 D1 |
 | `POST /notify/send`, `POST /notify/run-due` → report keys `storeops_payroll` / `storeops_hours_approval` / `storeops_payroll_tax` / `storeops_payroll_expenses` / `storeops_attendance` / `storeops_lateness` (W3 scheduled workforce reports) | `notify/router.py` `_dispatch` → `report_registry.build_payload` → `notify/workforce_reports.py` builders | §14 W3 |
 | `GET /storeops/payroll-raw` (payroll-tax page inputs; mig-434 pay gate, FAIL-CLOSED 403 — ALL-money feed, §19.12 closed 2026-09-01; route `payroll_raw_route`, shared `payroll_raw()` stays ungated for pre-gated in-process callers) | `storeops/router.py` (`payroll_raw_route`) | §14 W3 |
@@ -4770,7 +4835,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /account/projection` (`?months=&horizon=` — deterministic linear/seasonal-naive P&L projection + cash runway, per-org `projection_config` mig `941`; rows flagged `projected:true`; `account_trends` grant) | `account/router.py` (`financial_projection` → pure `projection_engine.project`) | §4 projection engine |
 | `GET /account/valuation` (assumption-driven ESTIMATE range: TTM multiples + asset floor + projection-fed DCF w/ sensitivity grid; per-org `valuation_config` mig `941`; own default-closed `company_valuation` grant; disclaimer always in payload) | `account/router.py` (`company_valuation` → pure `valuation.valuation`) | §4 company valuation |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
-| `POST /commcalc/recompute-rep` | `commcalc/router.py` (`recompute_rep`) → **`_resolve_plan_by_rep`** + `_apply_engine_components_to_row` | §6c — recompute + UPSERT ONE rep's `rep_commissions` row. **It carried its own shorter copy of the plan resolution until 2026-09-17 and would have written `total_payout = 0.00` over a correct figure for any rep on an `exec_mtd`-basis plan** (and a halved figure for any rep in a month with partial `raw_sales`). Both money paths now share one resolver; §E of `harness_recompute_rep_parity.py` keeps it that way |
+| `POST /commcalc/recompute-rep` | `commcalc/router.py` (`recompute_rep`) → **`_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines(persist_installments=False)`** (the full run's own functions) → `_rows_for_rep` → update-in-place / insert of THAT rep's row only | §6k — the full path's row for ONE rep, written alone; no delete, no other rep, no installment-ledger write. **Broken (NameError `_id_map`) on every call 2026-09-17 → 2026-09-27; locked by `harness_recompute_rep_e2e.py` + `harness_undefined_names_lock.py`.** §6c history — **It carried its own shorter copy of the plan resolution until 2026-09-17 and would have written `total_payout = 0.00` over a correct figure for any rep on an `exec_mtd`-basis plan** (and a halved figure for any rep in a month with partial `raw_sales`). Both money paths now share one resolver; §E of `harness_recompute_rep_parity.py` keeps it that way |
 | `GET/PUT /commcalc/setup-fee/config` | `commcalc/router.py` (`get_setup_fee_config`/`save_setup_fee_config`) | §6a — the per-org set-up-fee economics: `default` / `by_carrier` / **`by_market`** / **`all_markets`** (the owner's all-markets checkbox). MONEY-TOUCHING: it applies on the next Calculate, nothing is recalculated on save |
 | `GET /commcalc/setup-fee/candidates/{period}` | `commcalc/router.py` (`setup_fee_candidates`) → `setup_fee_pay.candidates` | §6a — PICK-DON'T-TYPE: the tenant's own product descriptions that could BE the fee, ranked by the money they carry, each flagged `mapped_now`. **Use this before editing `setup_fee_keywords`** |
 | `GET /commcalc/setup-fee/recognition-divergence/{period}` | `commcalc/router.py` → `setup_fee_pay.divergence` | §6a — the two historic matchers measured against each other (case). Empty ⇒ switching `match_mode` moves $0 |
@@ -4818,6 +4883,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **One rep's recalculated commission row** (the Recalculate button) | `rep_commissions` (that rep's row only) | THE full path's row: `router._calc_inputs` + `_calc_rep_rows` + `_apply_new_engines`, shared with `_run_calculation`; lock `harness_recompute_rep_e2e.py` (== the full run's row, one rep, no ledger write) (§6k) |
+| **Undefined names in the backend** (a read name nothing binds — a NameError on first run) | `backend/app/**/*.py` | `harness_undefined_names_lock.py` (stdlib `symtable`), CI job *No undefined names under backend/app* (§6k) |
 | **Which menu entries a rep may not see** (manager-only payout reports) and **which payout view a viewer gets** | `storeops.roles.permissions.scope` + `app_config.rbac_enabled` | ONE registry `payout_audience.MANAGER_ONLY_SURFACES`, ONE self-scope answer `storeops.role_is_self_scoped`, served on `/me` (`viewer_payload`) → `rbac.payoutRefused` in `canSeeItem` / `canAccessPath`; audience by `payout_audience.resolve` (§6j) |
 | **The sale on a paid commission row** (action · phone line · customer) | engine event stamp (`event_type`, `event_key`); `raw_sales.customer` / `raw_sales_invoice.customer` | `payout_audience.event_label` (`line_class.CLASS_LABELS`) · `line_phone` (`line_class.line_event_keys`) · `inventory_sold_recon.sale_customer` via `commission_drilldown.attach_line_identity`; frontend `planLines.saleLabel` (§6j) |
 | **One employee's incentive over several months** (per month + grand total) | `rep_commissions.total_payout` per month (the statement's payout of record) | `router._statement_doc` per month (== the single statement) → `commission_statement.build_range` (sums only) (§6j) |
@@ -12587,3 +12654,40 @@ opening onto a "super-admin only" notice.
 - **Lock:** `harness_super_admin_toolbox.py` §G (each named page and every page that refuses non-super-admins in its own render —
   `if (!isSuper) return` — is platformOnly at EVERY NAV occurrence; the guard, sidebar, hub and All Settings read the one mark) and
   §H (the gate and `/me` read the same rungs). Negative control: un-marking `/admin/pricing` fails G1 + G2.
+
+## 39. SETUP DOCUMENTS — per-carrier required uploads, the setup wizard first, automation only when proven, reminders (owner 2026-09-27)
+
+Owner, verbatim: *"Create a list of documents which need to be uploaded for each carrier to get all the required reports and
+queries, create them as a part of super admin console and attach them by default when the tenant is set up, then on the tenant
+side the first page which opens up is the set up wizard which requires the tenant to upload these files, tell the Tenant where to
+download those files from as that toiled their carrier, tell them to add credentials if they want automated data updating if we
+have a successful history of doing that, if we don't have a successful history then don't ask and keep the tenant on manual
+uploads, create reminders for the tenant to upload the files on the period as chosen by the tenant."* Owner decisions: apply the
+pending migrations (1007/1010/1014 were found ALREADY applied — the "not applied" notes in §26/§30/§12a are stale), proof = **3
+successful automated runs in 60 days**, reminders by **email + WhatsApp + in-app popup**.
+
+### 39.1 Duplicate check — every fact dereferenced from its existing home (no new table)
+| Owner asks for | Existing home, extended |
+|---|---|
+| the per-carrier document list, in the super-admin console | **the report-kind registry** (`commcalc.report_kind`, mig 1010; §30.9) — house rows ARE the list, already scoped by carrier / POS / business type. Mig **1028** adds the setup columns (`report_kinds.SETUP_COLS`). Edited on **Super Admin Toolbox → Carrier Documents** (`/admin/carrier-documents`, platform-only). |
+| attached by default at setup | read-time inheritance of house rows through `report_kinds.visible_kinds` — nothing copied. |
+| where to download it | `download_steps` / `download_url` (seeded from the portal names + links already on file in live `report_definitions` — nothing invented). No portal is named in code: `harness_setup_documents.py` §F scans for every seeded host. |
+| the first page is the setup wizard | the **Upload Wizard** (`/commcalc/upload/wizard`, §12a.2) grows a "Your required documents" section; `(platform)/layout.tsx` Guard redirects a company admin (not the platform super admin, not reps) through pure `lib/setup-gate.ts` while `GET /commcalc/setup-documents/gate` says active. Active = `storeops.tenants.documents_setup_done_at IS NULL` AND a required document is neither uploaded nor put off; stamped done the moment the last one lands. Every tenant existing when 1028 is applied is stamped done — no live company is redirected. A super admin can re-open one tenant's wizard. |
+| credentials only with a successful history | `setup_documents.automation_proof`: distinct org-days of AUTOMATED landings for the document's upload types, any tenant, inside the kind's window — `commcalc.upload_trace` rows from `email_sweep` / `ftp_sweep` + **`core.job_run` rows `sweep:<table>`**, which `router._sweep_set_status` (THE one portal-sweep status writer) now appends on every finished run, mapped to upload types by `import_health._SWEEP_SPECS`. **The class fixed:** a sweep's status row said only "last time", never "how often it has worked". Below the bar the wizard says nothing about automation. |
+| reminders on the tenant's period | each required document is a **`core.import_feed` row `kind:<key>`** (registered by `setup_documents.ensure_feeds` in import_health's own row shape + idempotent insert — import_health itself never reads the registry), registered DISABLED; choosing a period in the wizard enables it with that cadence and sets `auto_derived=false` (so import_health's one-way auto-disable never turns it off). Overdue → the existing login popup (`_p_imports`); **email + WhatsApp** via the existing alert pipeline (`closing._send_alert`, scope **`upload_due`**, recipients on Cash & Closing Alerts, else the tenant's admins; deduped by `alert_log` on `setup_documents.reminder_ref` = one reminder per cycle), sent from the existing hourly `POST /commcalc/connector-health/run-due`. |
+
+### 39.2 The starting list (mig 1028, house rows; all editable)
+Required: Sales report with IMEI (daily), Inventory aging (weekly) — generic, owed only by business types that use carriers;
+Boost: Commission Payment Detail, MI & ATU, Comprehensive Comp (monthly), DLAR Rep + Store (daily — and scoped to Boost, the only
+carrier that has ever landed one); Total: MA Commission Details (monthly), MA Daily Tx (daily); UPS Store: royalty report (monthly,
+own page `/accounts/royalty`, arrival read from `commcalc.royalty_report`). Optional with steps: MA fulfillment, VIP workbook, asset
+ledger, hotsheet. **Gap reported, not guessed:** a carrier with no carrier-specific kind (e.g. Verizon) has no commission document
+required until one is added on the Carrier Documents page.
+
+### 39.3 Proof + lock
+`backend/harness_setup_documents.py` (stdlib, CI): §A migration (idempotent, fill-only seed, live tenants stamped done, real
+keys); §B which documents; §C automation history (org-days, manual/empty/failed never count, window + threshold per kind, portal
+job runs via `_SWEEP_SPECS`); §D gate + reminders (one per cycle, never before scheduled, a day's grace); §E super-admin
+validation + gates; §F wiring (feed registration in import_health's row shape, the sweep writer's job_run, the hourly tick, feed ownership, no portal
+word in code, the pure frontend gate, the alert scope listed); §G this section. Tested on local PG16: runs, re-runs without
+change, keeps an edit.
