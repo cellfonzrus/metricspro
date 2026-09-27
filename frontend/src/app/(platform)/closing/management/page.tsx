@@ -1,6 +1,10 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import Link from 'next/link'
+import { apiCached, LOOKUP } from '@/lib/cache'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import type { StandardFilterValue } from '@/lib/standard-filters'
+import { marketsFromStores, type StoreOpt } from '@/lib/market-store-cascade'
 import { api, fmt, localToday } from '@/lib/client'
 import { usePosTerm } from '@/lib/report-labels'
 import ScreenLink from '@/components/ScreenLink'
@@ -19,18 +23,39 @@ export default function ClosingManagementPage() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [open, setOpen] = useState<Record<string, boolean>>({})
+  // THE STANDARD FILTERS (owner 2026-09-26: "i cannt pick one stroe or one market whicle doing cash
+  // recon"). This dashboard had NO picker at all, and /closing/attempts took a singular `store=` with
+  // no market — so there was nothing to pick with and nowhere to send it. Both ends now speak the
+  // three standard filters, through the shared bar and the shared resolvers.
+  const [flt, setFlt] = useState<StandardFilterValue>({ stores: [], markets: [], reps: [] })
+  const [roster, setRoster] = useState<StoreOpt[]>([])
+  useEffect(() => {
+    apiCached('/api/v1/closing/stores', LOOKUP)
+      .then((r: any) => setRoster((Array.isArray(r) ? r : []).filter((x: any) => x.store_code)
+        .map((x: any) => ({ id: x.store_code, label: x.store_address || x.store_code, market: x.market || null }))))
+      .catch(() => setRoster([]))
+  }, [])
+  // Markets come from the roster itself — pick-don't-type, and the '(no market)' bucket appears only
+  // when a store actually lacks one, so a store can never silently vanish behind a market pick.
+  const marketOptions = useMemo(() => marketsFromStores(roster), [roster])
   const [relBusy, setRelBusy] = useState<Record<string, boolean>>({})
   const [relMsg, setRelMsg] = useState<Record<string, string>>({})
 
   function load() {
     setLoading(true); setErr('')
-    const q = mode === 'date' ? `date=${date}` : `period=${encodeURIComponent(period)}`
-    api(`/api/v1/closing/attempts?${q}&only_review=${onlyReview}`)
+    const q = [
+      mode === 'date' ? `date=${date}` : `period=${encodeURIComponent(period)}`,
+      `only_review=${onlyReview}`,
+      flt.markets.length && `markets=${encodeURIComponent(flt.markets.join(','))}`,
+      flt.stores.length && `stores=${encodeURIComponent(flt.stores.join(','))}`,
+      flt.reps.length && `employees=${encodeURIComponent(flt.reps.join(','))}`,
+    ].filter(Boolean).join('&')
+    api(`/api/v1/closing/attempts?${q}`)
       .then(setData)
       .catch(e => { setErr(e?.message || String(e)); setData(null) })
       .finally(() => setLoading(false))
   }
-  useEffect(() => { load() }, [mode, date, period, onlyReview])
+  useEffect(() => { load() }, [mode, date, period, onlyReview, flt])
 
   // MANAGEMENT OVERRIDE (mig 502, retail-ops-7 item 1): unlock a submitted closing row for ONE
   // corrected resubmit. Never creates a second row — the rep's next submit for that store/day UPDATES
@@ -76,6 +101,18 @@ export default function ClosingManagementPage() {
           <Link href="/closing/duplicates" className="btn btn-secondary" style={{ fontSize: 12 }}>🧾 Duplicate submissions</Link>
         </div>
       </div>
+
+      <StandardFilterBar
+        value={flt} onChange={setFlt}
+        storeOptions={roster} marketOptions={marketOptions}
+        repOptions={(data?.rep_options || []).map((n: string) => ({ id: n, label: n }))}
+        storeLabel="Stores…" marketLabel="Markets…" repLabel="Employees…"
+      />
+      {data?.market_filter_skipped && (
+        <div className="card" style={{ padding: '8px 12px', margin: '10px 0', fontSize: 12, background: '#fff8e6', border: '1px solid #f3d98b' }}>
+          ⚠️ Your market filter could not be applied (store roster unavailable) — showing all markets rather than silently dropping stores.
+        </div>
+      )}
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>

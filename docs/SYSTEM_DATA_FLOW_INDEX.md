@@ -5905,6 +5905,38 @@ page owning its own asc/desc STATE — a second answer to "what order are these 
 (`commcalc/flags`, `commcalc/asset/on-inventory`, `commcalc/vip`); each is NAMED with its reason and
 the migration owed, each excuse must still be true or the build fails, and a fourth cannot appear.
 
+§19.30 **A DASHBOARD THAT COULD NOT ASK A MARKET QUESTION (owner 2026-09-26; fixed).** Owner:
+*"daily closing dashboard … i cannt pick one stroe or one market whicle doing cash recon"*.
+`GET /closing/attempts` — the Management Review / daily-closing dashboard — took a **singular
+`store=`** and no market parameter at all, so it could narrow to exactly one store and could not ask a
+market question; and the page carried NO picker, because there was nothing to send. Market and store
+each already had ONE resolver (`_resolve_market_filter`, `_resolve_store_filter`); the employee set was
+built INLINE inside `cash_recon_management` and nowhere else, which is exactly why employee filtering
+existed on one screen out of eighteen. Now: `_resolve_employee_filter` is the third home,
+`cash_recon_management` dereferences both it and the store resolver (its two inline sets are gone),
+`/closing/attempts` takes markets + stores + employees resolved through all three while KEEPING the
+legacy singular `store=`, and the page renders the shared `StandardFilterBar`. `rep_options` is
+collected BEFORE the employee filter so picking one person cannot empty the dropdown that would let you
+pick another; a market pick that cannot be honoured (roster unavailable) is REPORTED
+(`market_filter_skipped`), never silently unfiltered.
+**A CORRECTION WORTH RECORDING.** The first diagnosis — "every endpoint invented its own filter subset"
+— was WRONG, and stating it that way would have licensed a pointless sweep. `lib/market-store-cascade.ts`
+is the designed mechanism: the market picker narrows the STORE option list and "market picked, no store
+picked" means the whole market, so an endpoint taking `stores=` and no `markets=` is correct by design.
+Likewise `StandardFilterBar` RENDERS `MarketStorePicker` (and `closing/_lib/MarketStorePicker` is a
+re-export shim) — they are layered, not duplicated. Only **four** closing pages had no picker at all
+(`management`, `verify`, `readiness`, `duplicates`). The real defects were the singular-`store` endpoint
+and the inline employee set.
+Lock: `harness_closing_filter_contract.py` (23 checks, stdlib, DB-free, in `carrier-vocab-guard.yml`) —
+three resolvers exist and agree that blank means NO filter (never an empty set that drops every row),
+**an accepted filter is an applied filter**, and eleven endpoints that parse the CSV themselves are a
+NAMED ratchet that may only shrink. Its balanced-paren signature scan exists because `[^)]*` stops at
+the `)` inside `Header(default="")` — which truncated most signatures and made the lock read
+endpoints as declaring no filters at all. **That under-reading hid a real error while it lasted: the
+filter block had been inserted into `closing_duplicates` instead of `closing_attempts`, where it would
+have raised NameError on live traffic.** A guard that under-reads is worse than no guard, because it
+passes.
+
 ---
 
 ## 20. Super-admin CONTROL BOX — platform red/green board + the daily check
