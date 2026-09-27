@@ -16115,7 +16115,10 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
             # none. The chargeback AMOUNT and the decision flow are untouched.
             _cb_rules = _line_rules_of(_accessory_config(client, org_id))
             for s in sales:
-                if _lc.exclusion_class(s, _cb_rules) == 'ineligible':
+                # MEMBERSHIP, not precedence — `exclusion_kinds`, so a value spelling two kinds still
+                # raises its chargeback. Byte-identical to the retired `'ineligible' in ct` on all 35
+                # distinct contract_type values live on the platform (measured 2026-09-27).
+                if 'ineligible' in _lc.exclusion_kinds(s, _cb_rules):
                     ref = str(s.get('trans_id') or '').strip()
                     if not ref: continue
                     cb_items.append({

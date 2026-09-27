@@ -613,13 +613,26 @@ def exclusion_class(row, rules=None):
     `ma_recon._is_activation_line` (the MA reconciliation's sold-side basis, which has ALWAYS excluded a
     swap — so the ruling is not new behaviour there, it is the same rule finally written down once).
     Both were bare contract-type substrings, invisible to a tenant whose POS carries the fact elsewhere."""
+    ks = exclusion_kinds(row, rules)
+    return ks[0] if ks else None
+
+
+def exclusion_kinds(row, rules=None):
+    """EVERY exclusion kind one sale line carries, in `EXCLUSION_KINDS` order — the tuple `exclusion_class`
+    takes its first element from. PURE, never raises.
+
+    WHY BOTH EXIST, and why a caller that ASKS ABOUT A KIND must use this one. `exclusion_class` answers
+    "what is this line, in one word" for a person reading a report, so it needs a precedence. But a
+    caller testing membership — "is this excluded under my config", "is this an ineligible activation" —
+    must not be answered by a precedence: a value spelling BOTH kinds (a hypothetical "Ineligible Port-In
+    Swap") would report only `swap`, and a config excluding only `ineligible`, or a chargeback detector
+    looking only for `ineligible`, would silently miss it. Measured 2026-09-27 over all 35 distinct
+    `contract_type` values live on the platform: no value carries two kinds, so the two functions agree
+    everywhere today — which is exactly when a latent precedence bug is cheapest to remove."""
     r = rules or HOUSE_RULES
     texts = _texts(row, r)
     words = r.get("exclusions") or HOUSE_EXCLUSIONS
-    for kind in EXCLUSION_KINDS:
-        if _hit(words.get(kind) or [], texts):
-            return kind
-    return None
+    return tuple(k for k in EXCLUSION_KINDS if _hit(words.get(k) or [], texts))
 
 
 def new_activation_units(rows, rules=None, skip=None, txn_of=None, unit=None, require_txn=True,
@@ -658,9 +671,12 @@ def new_activation_units(rows, rules=None, skip=None, txn_of=None, unit=None, re
             keep.add(uid)
             cls_of.setdefault(uid, cls)
         if excl_on:
-            kind = exclusion_class(row, r)
-            if kind in excl_on and uid not in excluded:
-                excluded[uid] = kind
+            # MEMBERSHIP, not precedence (see `exclusion_kinds`): a line spelling two kinds must be
+            # excluded when EITHER is switched on, not only when the stronger one is.
+            for kind in exclusion_kinds(row, r):
+                if kind in excl_on and uid not in excluded:
+                    excluded[uid] = kind
+                    break
     # an excluded unit is removed from the count, never from the evidence — a report must be able to say
     # WHICH units came out and why, or "13 not 19" is an assertion rather than a reconciliation.
     counted = keep - set(excluded)

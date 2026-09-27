@@ -8,8 +8,10 @@ WHAT THIS PROVES
  A. `line_class.resolve_new_activation` / `resolve_exclusions` — the config, per org, with the house
     default being EXACTLY the ruling; junk and an empty classes list can never produce a denominator
     of nothing, and an explicitly empty exclusion word list IS honoured.
- B. `exclusion_class` — the ONE swap vocabulary, over the org's own configured fields, and
-    byte-identical to the two bare `'swap' in contract_type.lower()` copies it replaces.
+ B. `exclusion_class` / `exclusion_kinds` — the ONE swap vocabulary, over the org's own configured
+    fields, byte-identical to the three bare substring copies it replaces (the Sales Report's swap
+    tally, `ma_recon`'s sold-side basis, and the chargeback detector's `'ineligible' in ct`), AND the
+    precedence hazard removed: a caller ASKING ABOUT A KIND reads the SET, never the precedence winner.
  C. `new_activation_units` — the count. Per-UNIT exclusion (a BYOD-Swap invoice leaves once, not per
     line), the evidence kept, and the same answer under BOTH count units when the boundary is closed.
  D. THE CARRIER RECONCILIATION, from the real August shape (anonymised): 8 premium + 11 BYOD − 5
@@ -123,6 +125,36 @@ check("B4 and the house field is NOT read when the tenant declared another",
 check("B5 EXCLUSION_KINDS order is the precedence (a line saying both reports the first)",
       lc.exclusion_class({"contract_type": "Ineligible Port-In Swap"}) == "swap"
       and lc.EXCLUSION_KINDS[0] == "swap")
+# THE PRECEDENCE HAZARD, removed. `exclusion_class` answers "what is this, in one word" and so needs a
+# precedence; a caller testing MEMBERSHIP must not be answered by one. Measured 2026-09-27: none of the
+# 35 distinct `contract_type` values live on the platform carries two kinds, so the two agree everywhere
+# today — which is exactly when this is cheapest to get right.
+BOTH = {"contract_type": "Ineligible Port-In Swap", "trans_id": "X", "mdn": "9170000000"}
+check("B6 exclusion_kinds reports BOTH kinds, in EXCLUSION_KINDS order",
+      lc.exclusion_kinds(BOTH) == ("swap", "ineligible"), lc.exclusion_kinds(BOTH))
+check("B7 a plain line carries no kinds (an empty tuple, not a None to unpack)",
+      lc.exclusion_kinds({"contract_type": "Activation"}) == ())
+check("B8 exclusion_class is exactly the FIRST of exclusion_kinds, on every live spelling",
+      all((lc.exclusion_class({"contract_type": v}) or None)
+          == ((lc.exclusion_kinds({"contract_type": v}) or (None,))[0])
+          for v in ("Activation", "BYOD Swap", "Ineligible Port-In Activation",
+                    "PML Ineligible Port In Activation", "Ineligible Port-In Add A Line",
+                    "Ineligible Port-In Swap", "Upgrade", "")))
+check("B9 a config excluding ONLY 'ineligible' still excludes a line spelling both — the precedence "
+      "must not decide membership",
+      lc.new_activation_units([BOTH], exclusions=["ineligible"])["excluded"] == {"X": "ineligible"},
+      lc.new_activation_units([BOTH], exclusions=["ineligible"])["excluded"])
+check("B10 …and a config excluding only 'swap' excludes it too",
+      lc.new_activation_units([BOTH], exclusions=["swap"])["excluded"] == {"X": "swap"})
+check("B11 with NO exclusions configured it is counted, not dropped",
+      lc.new_activation_units([BOTH], exclusions=[])["count"] == 1)
+check("B12 the retired chargeback predicate `'ineligible' in ct` agrees with the SET on every live "
+      "spelling (byte-identical; measured over all 35 distinct platform values)",
+      all(("ineligible" in v.lower()) == ("ineligible" in lc.exclusion_kinds({"contract_type": v}))
+          for v in ("Activation", "BYOD", "BYOD Swap", "Upgrade", "Eligible Port-In Activation",
+                    "Eligible Port-In Add A Line", "Ineligible Port-In Activation",
+                    "Ineligible Port-In Add A Line", "PML Ineligible Port In Activation",
+                    "Ineligible Port-In Swap", "BYOD Port-In", "BYOD Add A Line", "")))
 
 print("\nC/D. the count, and the carrier reconciliation")
 EXPECT = {("transaction", ("swap",)): 14, ("transaction", ("swap", "ineligible")): 13,

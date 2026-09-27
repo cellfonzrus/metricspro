@@ -37,7 +37,8 @@ HOME = "modules/commcalc/line_class.py"
 DEFS = ("line_event_keys", "activation_events", "activation_units",
         # "HOW MANY NEW ACTIVATIONS" and "which unit does not count" — the owner's 2026-09-27 ruling.
         # One home, same file, same lock: a second copy of either is the same defect as a second event.
-        "exclusion_class", "new_activation_units", "new_activation_count", "new_activation_from_buckets")
+        "exclusion_class", "exclusion_kinds", "new_activation_units", "new_activation_count",
+        "new_activation_from_buckets")
 # (g) THE NEW-ACTIVATION COUNT — who must dereference it, and what must not reappear.
 #     Owner: *"Denominator should be the total of new activations excluding upgrade and swap as reported
 #     in exec mats - data source is the same for all reports"*. So: the count Executive MTD prints, the
@@ -67,6 +68,15 @@ DERIVED = {
 }
 # a bare swap/ineligible substring test over a sale line is the vocabulary escaping its home again
 BARE_EXCL = re.compile(r"""["'](?:swap|ineligible)["']\s+in\s+\w*(?:ct|contract_type|category|product)""", re.I)
+# asking "is it THIS kind" of the precedence winner is the hazard exclusion_kinds exists to remove
+PRECEDENCE_MEMBERSHIP = re.compile(r"""exclusion_class\([^)\n]*\)\s*(?:==|!=|in\b)""")
+PRECEDENCE_EXCUSED = {
+    # the Sales Report's swap TALLY asks "what is this line, in one word" for a display column, and
+    # 'swap' is the first kind, so the precedence winner IS the answer.
+    "modules/commcalc/router.py": "_sales_cell_agg's swap tally reads the strongest kind, which is swap.",
+    # ma_recon's sold-side basis is the same question with the same first kind.
+    "modules/commcalc/ma_recon.py": "_is_activation_line excludes the strongest kind, which is swap.",
+}
 # a second "how many new activations" derivation: buckets added up without the home saying so
 BARE_COUNT = re.compile(r"""len\([^)\n]*prem[^)\n]*\)\s*\+\s*len\([^)\n]*byod[^)\n]*\)""", re.I)
 EXCL_EXCUSED = {
@@ -225,6 +235,9 @@ def scan(files, fe):
         if BARE_EXCL.search(c) and rel not in EXCL_EXCUSED:
             v.append(("i", rel, "tests a sale line for 'swap'/'ineligible' itself — read "
                                 "line_class.exclusion_class"))
+        if PRECEDENCE_MEMBERSHIP.search(c) and rel not in PRECEDENCE_EXCUSED and rel != HOME:
+            v.append(("i", rel, "tests a KIND against exclusion_class (the precedence winner) — a "
+                                "membership question must read exclusion_kinds"))
         if BARE_COUNT.search(c) and rel not in COUNT_EXCUSED:
             v.append(("i", rel, "adds the premium and byod bucket sizes itself — that is the "
                                 "new-activation count, and it has one home"))
@@ -327,6 +340,11 @@ v, _s = planted({"modules/commcalc/newcount.py": (
 check("(f) a second premium+byod count → RED", any(x[0] == "i" and "newcount" in x[1] for x in v))
 v, _s = planted({"modules/commcalc/newswap.py": "def f(ct):\n    return 'swap' in ct.lower()\n"})
 check("(f) a bare swap test on a sale line → RED", any(x[0] == "i" and "newswap" in x[1] for x in v))
+v, _s = planted({"modules/commcalc/newkind.py": (
+    "from app.modules.commcalc import line_class as _lc\n"
+    "def f(row):\n    return _lc.exclusion_class(row, None) == 'ineligible'\n")})
+check("(f) asking 'is it THIS kind' of the precedence winner → RED",
+      any(x[0] == "i" and "newkind" in x[1] for x in v))
 v, _s = planted({"modules/commcalc/kpi_failing.py": files["modules/commcalc/kpi_failing.py"].replace(
     "REP_DERIVED_RATES", "REP_GONE_RATES")})
 check("(f) the derived-rate declaration removed → RED", any(x[0] == "h" for x in v))

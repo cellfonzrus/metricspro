@@ -6039,9 +6039,18 @@ new lock, not by reading — the chargeback detector in `_run_calculation` (`'in
 
 **THE HOME: `commcalc/line_class.py`,** beside the predicate and the event it already owns.
 - `EXCLUSION_KINDS = ("swap", "ineligible")`, `HOUSE_EXCLUSIONS` (`swap` → `['swap']`,
-  `ineligible` → `['ineligible']`), `resolve_exclusions(raw)`, and `exclusion_class(row, rules)` —
-  THE reason one line does not count although its class does, read over the SAME configured `fields`
-  the class predicate reads, so a tenant whose POS carries the fact in the category path is served.
+  `ineligible` → `['ineligible']`), `resolve_exclusions(raw)`, and `exclusion_class(row, rules)` /
+  **`exclusion_kinds(row, rules)`** — THE reason one line does not count although its class does, read
+  over the SAME configured `fields` the class predicate reads, so a tenant whose POS carries the fact in
+  the category path is served. **TWO functions, and the distinction is a latent money bug removed:**
+  `exclusion_class` answers *"what is this line, in one word"* for a person reading a report, so it needs
+  a precedence — but a caller testing MEMBERSHIP (*"is this excluded under my config"*, *"is this an
+  ineligible activation"*) must read the SET. A value spelling BOTH kinds would otherwise report only
+  `swap`, and a config excluding only `ineligible` — or the chargeback detector, which looks only for
+  `ineligible` — would silently miss it. Measured 2026-09-27: **none of the 35 distinct `contract_type`
+  values live on the platform carries two kinds**, so the two agree everywhere today and the retired
+  `'ineligible' in ct` is byte-identical — which is exactly when this is cheapest to get right. Locked:
+  axis (i) fails the build on `exclusion_class(...) == '<kind>'` outside the two excused display callers.
 - `HOUSE_NEW_ACTIVATION = {"classes": ["activation","port","byod"], "exclusions": ["swap"]}` and
   `resolve_new_activation(raw)` — **the house default IS the ruling, exactly as worded**: Total
   Activation less Upgrade, less swap. Config per org in the EXISTING mig-313 JSON
@@ -6240,11 +6249,12 @@ three axes join it — **(g)** every caller of the new-activation count derefere
 cells, the basis applier, the Exec MTD row incl. `cross_bucket`, the pay engine's denominator, the
 difference report);
 **(h)** the derived rate has one home (`kpi_failing`) and one arithmetic, and a third `derived_rate`
-anywhere under `backend/app` is RED; **(i)** a bare `'swap'`/`'ineligible'` test on a sale line, or a
-second `len(prem) + len(byod)`, is RED. Seven new negative controls, each proving its axis can go red,
+anywhere under `backend/app` is RED; **(i)** a bare `'swap'`/`'ineligible'` test on a sale line, a
+membership question asked of `exclusion_class` rather than `exclusion_kinds`, or a
+second `len(prem) + len(byod)`, is RED. Nine new negative controls, each proving its axis can go red,
 plus the existing "the unmodified tree is GREEN" control. Proof of the rules:
-`harness_ready_app_denominator.py` (76 checks) and `harness_dlar_vs_platform.py` (48 checks), both
-stdlib and DB-free, both in `carrier-vocab-guard.yml`. 26 checks on the lock.
+`harness_ready_app_denominator.py` (83 checks) and `harness_dlar_vs_platform.py` (48 checks), both
+stdlib and DB-free, both in `carrier-vocab-guard.yml`. 27 checks on the lock.
 
 ---
 
