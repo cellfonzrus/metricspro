@@ -5715,6 +5715,29 @@ engine scores the built-in seven for every tenant — so driving that grid from 
 show LuxeLink "0/17 KPIs met" against money tiered on something else: a page contradicting the pay.
 The pay engine must read the registry first (commission-agent work, §6), and the grid follows.
 
+§19.29 **A DIRECTIVE SATISFIED BY BUILDING THE MECHANISM AND WIRING 26 OF 244 CALLERS (owner
+2026-08-10, re-reported 2026-09-26).** Owner, seven weeks apart: *"sort function by clicking on the
+header for all reports"*, then *"sort functions are not working platfrom wide"*. Both true. The
+mechanism was built on the day — `frontend/src/lib/table-sort.ts` (the comparison rules) +
+`components/SortableTh.tsx` (`useTableSort` + the `<th>`) — and then wired to **26 of the 244 files
+that render a data table**. 38 pages get it free through `ReportShell`; everything hand-rolling its own
+`<table>` got nothing, so on 218 reports a header simply did not respond to a click. **The class is
+§19.18's, for the fourth time: a mechanism written, and the callers left unwired** — and nothing failed
+while that was true, which is the whole reason it lasted seven weeks.
+**Fixed as a RATCHET, not a big bang.** 218 bespoke tables cannot be rewritten in one reviewable
+change, and a lock that demands it gets switched off. So the debt is WRITTEN DOWN in
+`frontend/table_sort_pending.txt` and `backend/harness_table_sort_lock.py` (20 checks, stdlib, DB-free,
+in `carrier-vocab-guard.yml`) enforces that it only shrinks: a NEW data table that is unsorted and
+unlisted fails the build; a listed page that HAS been wired fails the build until its line is deleted;
+the count may never exceed a pinned maximum; a listed file that no longer exists fails too. A page is
+wired by deleting its line and lowering the pin — proven end to end on
+`closing/cash-recon-management` in the same change (218 → 217).
+**A default row order is NOT a violation** and the lock says so: `rows.sort((a,b) => b.amount - a.amount)`
+is the report's own order, which `useTableSort` preserves (`initial = null`). What the lock flags is a
+page owning its own asc/desc STATE — a second answer to "what order are these rows in". Three do
+(`commcalc/flags`, `commcalc/asset/on-inventory`, `commcalc/vip`); each is NAMED with its reason and
+the migration owed, each excuse must still be true or the build fails, and a fourth cannot appear.
+
 ---
 
 ## 20. Super-admin CONTROL BOX — platform red/green board + the daily check

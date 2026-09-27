@@ -326,6 +326,10 @@ on:
       - "database/migrations/1026_dlar_vintage_kpi_no_data.sql"
       - "backend/app/modules/commcalc/data_lineage_registry.py"
       - "frontend/src/components/EmployeeWidgets.impl.tsx"
+      - "backend/harness_table_sort_lock.py"
+      - "frontend/table_sort_pending.txt"
+      - "frontend/src/components/SortableTh.tsx"
+      - "frontend/src/lib/table-sort.ts"
       - "backend/harness_browser_sweep_kinds.py"
       - "database/migrations/1021_supply_ordering.sql"
   push:
@@ -451,6 +455,9 @@ jobs:
       - name: Run the KPI registry lock (one built-in KPI set; one rep-grain AND store-grain feed map; the PAID score, the SHOWN score and the hand-entry grid read them; no fabricated zero, no fabricated denominator, each DLAR grain carries its own as-of date — index §19.27 / §19.28)
         working-directory: backend
         run: python3 harness_kpi_registry_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the table-sort ratchet (a new data table cannot ship unsorted; the unsorted list only shrinks — owner 2026-08-10, index §19.29)
+        working-directory: backend
+        run: python3 harness_table_sort_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the supply-ordering proof (vendor setup incl. free-shipping threshold + delivery days; catalog ingest; the cart optimizer with thresholds / lead time / stock / packs; the order recipe never submits on its own; confirmation capture; one lander, one connector key, one pricing copy — index §36)
         working-directory: backend
         run: python3 harness_supply_ordering.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
