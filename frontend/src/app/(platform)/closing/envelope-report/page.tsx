@@ -6,6 +6,7 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import StandardFilterBar from '@/components/StandardFilterBar'
 import type { EntityOption } from '@/components/EntityPicker'
 import type { StandardFilterValue } from '@/lib/standard-filters'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 // Envelope Report — OWNER DIRECTIVE 2026-09-02, verbatim: "a new report when all the envelopes can
 // be filtered by using the standard filters... user can put their comments after counting the
@@ -25,6 +26,32 @@ const csv = (a: string[]) => (a.length ? a.join(',') : undefined)
 const STATUS_BADGE: Record<string, string> = {
   short: '🔻 Short', over: '🔺 Over', match: '✅ Match', uncounted: '— Uncounted',
 }
+
+// [label, sort field]. '' = nothing to compare (a photo link, the actions column) and the header
+// opts out rather than pretending to sort. OWNER DIRECTIVE 2026-08-10, "sort function by clicking
+// on the header for all reports" — the mechanism (useTableSort/SortableTh) already existed and this
+// report was one of the 208 tables never wired to it.
+const ENV_COLS: [string, string][] = [
+  ['Date', 'close_date'], ['Store', 'store_address'], ['Employee', 'employee_name'],
+  ['Declared $', 'declared_cash'], ['Photo', ''], ['Counted $', 'counted_amount'],
+  ['Variance', 'variance'], ['Status', 'status'], ['Comment', 'comment'],
+  ['Chargeback', 'chargeback_status'], ['', ''],
+]
+
+// BY EMPLOYEE (owner 2026-09-26, "report by user") — who is short, how often, by how much. The
+// server rolls this up by calling the same `totals()` the tiles use, so these lines add back up to
+// the tiles exactly; the page only renders them.
+const EMP_COLS: [string, string][] = [
+  ['Employee', 'employee_name'], ['Envelopes', 'envelopes'], ['Counted', 'counted'],
+  ['Uncounted', 'uncounted'], ['Short', 'short'], ['$ Short', 'short_total'],
+  ['Over', 'over'], ['$ Over', 'over_total'], ['Match', 'match'],
+  ['Net variance', 'net_variance'], ['Chargebacks', 'chargebacks'], ['$ Charged back', 'chargeback_total'],
+  ['Stores', ''], ['Last close', 'last_close'],
+]
+
+// STABLE readers — a new function each render would rebuild the sort memo every time.
+const envCell = (r: any, f: string) => r?.[f]
+const empCell = (e: any, f: string) => e?.[f]
 
 export default function EnvelopeReportPage() {
   const today = localToday()
@@ -75,7 +102,15 @@ export default function EnvelopeReportPage() {
 
   const rows: any[] = data?.rows || []
   const t = data?.totals || {}
+  const byEmp: any[] = data?.by_employee || []
   const canDecide = !!data?.can_decide
+
+  // Two views over ONE fetch — the per-envelope detail and the per-employee rollup are the same
+  // filtered rows, so switching costs no request and the two can never describe different data.
+  const [view, setView] = useState<'envelopes' | 'employees'>('envelopes')
+  const envSort = useTableSort(rows, envCell, { field: 'close_date', dir: 'desc' })
+  // Seeded on $ short descending: the point of this view is who is worst, so it opens on the answer.
+  const empSort = useTableSort(byEmp, empCell, { field: 'short_total', dir: 'desc' })
 
   const draftFor = (r: any) => drafts[r.closing_row_id] || {
     counted: r.counted_amount != null ? String(r.counted_amount) : '',
@@ -120,6 +155,24 @@ export default function EnvelopeReportPage() {
     } catch (e: any) { alert(e?.message || String(e)) }
   }
 
+  const empColumns: ExportColumn[] = useMemo(() => [
+    { header: 'Employee', field: 'employee_name', role: 'rep', get: (e: any) => e.employee_name },
+    { header: 'Envelopes', field: 'envelopes', type: 'number', get: (e: any) => e.envelopes },
+    { header: 'Counted', field: 'counted', type: 'number', get: (e: any) => e.counted },
+    { header: 'Uncounted', field: 'uncounted', type: 'number', get: (e: any) => e.uncounted },
+    { header: 'Short', field: 'short', type: 'number', get: (e: any) => e.short },
+    { header: '$ Short', field: 'short_total', type: 'money', get: (e: any) => e.short_total },
+    { header: 'Over', field: 'over', type: 'number', get: (e: any) => e.over },
+    { header: '$ Over', field: 'over_total', type: 'money', get: (e: any) => e.over_total },
+    { header: 'Match', field: 'match', type: 'number', get: (e: any) => e.match },
+    { header: 'Net variance', field: 'net_variance', type: 'money', get: (e: any) => e.net_variance },
+    { header: 'Chargebacks', field: 'chargebacks', type: 'number', get: (e: any) => e.chargebacks },
+    { header: '$ Charged back', field: 'chargeback_total', type: 'money', get: (e: any) => e.chargeback_total },
+    { header: 'Stores', field: 'stores', get: (e: any) => (e.stores || []).join(', ') },
+    { header: 'First close', field: 'first_close', type: 'date', get: (e: any) => e.first_close },
+    { header: 'Last close', field: 'last_close', type: 'date', get: (e: any) => e.last_close },
+  ], [])
+
   const columns: ExportColumn[] = useMemo(() => [
     { header: 'Date', field: 'close_date', type: 'date', role: 'date', get: (r: any) => r.close_date },
     { header: 'Store', field: 'store_address', role: 'store', get: (r: any) => r.store_address },
@@ -154,7 +207,11 @@ export default function EnvelopeReportPage() {
             title="Envelope Report"
             subtitle={`${filt.period} → ${filt.periodTo || filt.period}${status ? ` · ${status}` : ''}`}
             filename={`envelope-report_${filt.period}_${filt.periodTo || filt.period}`}
-            sheets={[{ name: 'Envelopes', columns, rows }]}
+            sheets={[
+              { name: 'Envelopes', columns, rows },
+              // The rollup exports too — an accountability conversation happens off the screen.
+              { name: 'By employee', columns: empColumns, rows: byEmp },
+            ]}
           />
         )}
       </div>
@@ -187,6 +244,18 @@ export default function EnvelopeReportPage() {
         <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Chargebacks</div><div style={{ fontSize: 20, fontWeight: 700 }}>{t.chargebacks ?? 0} · {fmt(t.chargeback_total || 0)}</div></div>
       </div>
 
+      {/* One fetch, two views (owner 2026-09-26, "report by user"). */}
+      <div style={{ display: 'inline-flex', gap: 2, marginBottom: 12 }}>
+        {([['envelopes', `Envelopes (${rows.length})`], ['employees', `By employee (${byEmp.length})`]] as const)
+          .map(([v, label]) => (
+            <button key={v} className="btn" onClick={() => setView(v as any)} style={{
+              fontSize: 12.5, padding: '4px 12px',
+              background: view === v ? 'var(--accent)' : 'var(--surface2)',
+              color: view === v ? 'white' : 'var(--text2)',
+            }}>{label}</button>
+          ))}
+      </div>
+
       {data?.market_filter_skipped && (
         <div className="card" style={{ padding: '8px 12px', marginBottom: 12, fontSize: 12, background: '#fff8e6', border: '1px solid #f3d98b' }}>
           ⚠️ Your market filter could not be applied (store roster unavailable) — showing all markets rather than silently dropping stores.
@@ -195,18 +264,78 @@ export default function EnvelopeReportPage() {
       {err && <div className="card" style={{ padding: 12, marginBottom: 12, color: '#c0392b' }}>⚠️ {err}</div>}
       {loading && <div style={{ padding: 24, color: 'var(--text3)' }}>Loading…</div>}
 
-      {!loading && (
+      {!loading && view === 'employees' && (
         <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', textAlign: 'left' }}>
-                {['Date', 'Store', 'Employee', 'Declared $', 'Photo', 'Counted $', 'Variance', 'Status', 'Comment', 'Chargeback', ''].map(h => (
-                  <th key={h} style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontWeight: 600, color: 'var(--text2)' }}>{h}</th>
+                {EMP_COLS.map(([label, field]) => (
+                  <SortableTh key={label || field} field={field} sort={empSort.sort} onSort={empSort.toggle}
+                    disabled={!field}
+                    style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontWeight: 600, color: 'var(--text2)' }}>
+                    {label}
+                  </SortableTh>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {rows.map((r: any) => {
+              {empSort.sorted.map((e: any) => (
+                <tr key={e.employee_name} style={{ borderBottom: '1px solid var(--border)' }}>
+                  <td style={{ padding: '6px 10px', fontWeight: 600 }}>{e.employee_name}</td>
+                  <td style={{ padding: '6px 10px' }}>{e.envelopes}</td>
+                  <td style={{ padding: '6px 10px' }}>{e.counted}</td>
+                  {/* Uncounted is not a clean sheet — it is an envelope nobody has checked yet. */}
+                  <td style={{ padding: '6px 10px', color: e.uncounted ? 'var(--text2)' : 'var(--text3)' }}>
+                    {e.uncounted || '—'}
+                  </td>
+                  <td style={{ padding: '6px 10px', color: e.short ? '#c0392b' : 'var(--text3)' }}>{e.short || '—'}</td>
+                  <td style={{ padding: '6px 10px', color: e.short_total ? '#c0392b' : 'var(--text3)', fontWeight: e.short_total ? 600 : 400 }}>
+                    {e.short_total ? fmt(e.short_total) : '—'}
+                  </td>
+                  <td style={{ padding: '6px 10px', color: e.over ? '#b7791f' : 'var(--text3)' }}>{e.over || '—'}</td>
+                  <td style={{ padding: '6px 10px', color: e.over_total ? '#b7791f' : 'var(--text3)' }}>
+                    {e.over_total ? fmt(e.over_total) : '—'}
+                  </td>
+                  <td style={{ padding: '6px 10px' }}>{e.match || '—'}</td>
+                  {/* Net is shown BESIDE the gross figures, never instead of them: $50 short one day
+                      and $50 over the next nets to zero while twice being the wrong cash. */}
+                  <td style={{ padding: '6px 10px', fontWeight: 600, color: e.net_variance < 0 ? '#c0392b' : e.net_variance > 0 ? '#b7791f' : 'var(--text3)' }}>
+                    {e.net_variance ? fmt(e.net_variance) : '—'}
+                  </td>
+                  <td style={{ padding: '6px 10px' }}>{e.chargebacks || '—'}</td>
+                  <td style={{ padding: '6px 10px' }}>{e.chargeback_total ? fmt(e.chargeback_total) : '—'}</td>
+                  <td style={{ padding: '6px 10px', fontSize: 11.5, color: 'var(--text3)' }}>
+                    {(e.stores || []).join(', ') || '—'}
+                  </td>
+                  <td style={{ padding: '6px 10px', whiteSpace: 'nowrap' }}>{e.last_close || '—'}</td>
+                </tr>
+              ))}
+              {byEmp.length === 0 && (
+                <tr><td colSpan={EMP_COLS.length} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>
+                  No envelopes for this range/filter.
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {!loading && view === 'envelopes' && (
+        <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--border)', textAlign: 'left' }}>
+                {ENV_COLS.map(([label, field]) => (
+                  <SortableTh key={label || field} field={field} sort={envSort.sort} onSort={envSort.toggle}
+                    disabled={!field}
+                    style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontWeight: 600, color: 'var(--text2)' }}>
+                    {label}
+                  </SortableTh>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {envSort.sorted.map((r: any) => {
                 const d = draftFor(r)
                 const isShortDraft = d.counted !== '' && Number(d.counted) < (r.declared_cash || 0)
                 return (

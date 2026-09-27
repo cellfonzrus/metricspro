@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from app.modules.closing.envelope_report import (  # noqa: E402
     expected_cash, count_fields, shortage_amount, chargeback_parent_row,
-    report_row, status_filter, totals, ENVELOPE_SHORT_REASON)
+    report_row, status_filter, totals, by_employee, ENVELOPE_SHORT_REASON)
 
 FAILS = []
 
@@ -98,6 +98,70 @@ t = totals(rows)
 check("totals tiles", t["envelopes"] == 3 and t["counted"] == 2 and t["short"] == 1 and t["over"] == 1
       and t["short_total"] == 40.0 and t["over_total"] == 10.0
       and t["chargebacks"] == 1 and t["chargeback_total"] == 40.0, str(t))
+
+# ── BY EMPLOYEE (owner 2026-09-26, "report by user") ──────────────────────────────────────────────
+# The rollup answers "who is short, how often, by how much" across a range. Its whole correctness
+# claim is that it does not RE-DERIVE anything: each line is `totals()` over that employee's rows.
+# So the test that matters is the INVARIANT — the rollup must add back up to the tiles, for every
+# figure, or one of the two is lying to the owner.
+be = by_employee(rows)
+# The name comes from the fixture rather than a literal, so renaming the fixture cannot make this
+# check silently vacuous — all three rows are the same person, so the rollup must be ONE line.
+check("by_employee: one line per employee",
+      [e["employee_name"] for e in be] == [crow["employee_name"]], str(be))
+e0 = be[0]
+check("by_employee: counts and dollars carry over",
+      e0["envelopes"] == 3 and e0["counted"] == 2 and e0["short"] == 1 and e0["over"] == 1
+      and e0["short_total"] == 40.0 and e0["over_total"] == 10.0
+      and e0["chargebacks"] == 1 and e0["chargeback_total"] == 40.0, str(e0))
+check("by_employee: uncounted is envelopes minus counted", e0["uncounted"] == 1, str(e0))
+check("by_employee: net_variance is over MINUS short", e0["net_variance"] == -30.0, str(e0))
+check("by_employee: first/last close date span the group",
+      e0["first_close"] == "2026-09-01" and e0["last_close"] == "2026-09-01", str(e0))
+for k in ("envelopes", "counted", "short", "over", "match", "chargebacks"):
+    check(f"INVARIANT: rollup sums to the tiles — {k}", sum(e[k] for e in be) == t[k],
+          f"{sum(e[k] for e in be)} vs {t[k]}")
+for k in ("short_total", "over_total", "chargeback_total"):
+    check(f"INVARIANT: rollup sums to the tiles — {k}",
+          round(sum(e[k] for e in be), 2) == t[k], f"{sum(e[k] for e in be)} vs {t[k]}")
+
+# Two employees, worst first. $60 short must outrank $5 short however the rows arrive.
+many = [
+    {"employee_name": "Small Miss", "close_date": "2026-09-03", "store_address": "S1",
+     "status": "short", "variance": -5.0, "counted": True},
+    {"employee_name": "Big Miss", "close_date": "2026-09-02", "store_address": "S2",
+     "status": "short", "variance": -60.0, "counted": True},
+    {"employee_name": "Big Miss", "close_date": "2026-09-04", "store_address": "S3",
+     "status": "match", "variance": 0.0, "counted": True},
+]
+mb = by_employee(many)
+check("by_employee: ordered worst-first by dollars short",
+      [e["employee_name"] for e in mb] == ["Big Miss", "Small Miss"], str([e["employee_name"] for e in mb]))
+check("by_employee: stores the person touched are listed, deduped and sorted",
+      mb[0]["stores"] == ["S2", "S3"], str(mb[0]["stores"]))
+check("by_employee: date span across several days",
+      mb[0]["first_close"] == "2026-09-02" and mb[0]["last_close"] == "2026-09-04", str(mb[0]))
+
+# An employee whose envelopes were NEVER counted has nothing measured. They must not sort to the
+# top as if they were the worst, and must not read as a clean sheet either — `uncounted` says so.
+never = by_employee([
+    {"employee_name": "Never Counted", "close_date": "2026-09-05", "store_address": "S4",
+     "status": "uncounted", "variance": None, "counted": False},
+    {"employee_name": "Was Short", "close_date": "2026-09-05", "store_address": "S4",
+     "status": "short", "variance": -1.0, "counted": True},
+])
+check("by_employee: an uncounted-only employee is not ranked worst",
+      [e["employee_name"] for e in never] == ["Was Short", "Never Counted"], str(never))
+check("by_employee: uncounted-only reads 0 short / 1 uncounted, never a clean match",
+      never[1]["short"] == 0 and never[1]["uncounted"] == 1 and never[1]["match"] == 0, str(never[1]))
+
+# A blank name is a row that still has to be accounted for, not a row that vanishes.
+blank = by_employee([{"employee_name": "", "close_date": "2026-09-06", "status": "short",
+                      "variance": -2.0, "counted": True}])
+check("by_employee: a blank employee name is surfaced, not dropped",
+      len(blank) == 1 and blank[0]["employee_name"] == "(unnamed)", str(blank))
+check("by_employee: empty input is an empty rollup",
+      by_employee([]) == [] and by_employee(None) == [])
 
 print()
 if FAILS:
