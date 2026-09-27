@@ -156,6 +156,28 @@ def _resolve_store_filter(stores):
     return {x.upper() for x in s} if s else None
 
 
+def _resolve_employee_filter(employees):
+    """None (no filter) or a CASEFOLDED set of employee names, the third of the three standard
+    filters beside `_resolve_market_filter` and `_resolve_store_filter`.
+
+    OWNER 2026-09-26: *"i cannt pick one stroe or one market whicle doing cash recon"*. He was right,
+    and the cause was not a missing picker. Every closing recon endpoint accepted a DIFFERENT SUBSET
+    of the standard filters under DIFFERENT SPELLINGS — `/deposit-recon` had no market param at all,
+    `/epay-recon` took a singular `store`, `/recon` took a singular `market` and no stores — so on
+    most cash screens the value a picker would send had nowhere to go. Market and store already had
+    one resolver each; the employee set was built INLINE in `cash_recon_management` and nowhere else,
+    which is why it existed on exactly one screen. Three filters, three homes, every endpoint
+    dereferencing them — `harness_closing_filter_contract.py` fails the build on an endpoint that
+    invents its own spelling or accepts a filter it never applies.
+
+    Casefolded because a name is typed by a human on both sides of the comparison; matched against
+    the names a closing row records, so a row with NO employee recorded is never silently dropped by
+    an employee pick it cannot answer (the same rule `_resolve_store_filter` states for store_code).
+    """
+    s = _csv_set(employees)
+    return {x.casefold() for x in s} if s else None
+
+
 def _overlay_canonical_market(client, org_id, rows):
     """Fill each storeops.stores row's BLANK market from THE canonical union map
     (core.scope.market_by_code: storeops.stores ∪ commcalc.store_mapping ∪ store_aliases).
@@ -2240,12 +2262,26 @@ def closing_duplicates(period: str = None, date: str = None, store: str = None,
 
 # ── Management review (permission-gated, DMs excluded): the 3-try close-attempt log ──────────────
 @router.get("/attempts")
-def closing_attempts(period: str = None, date: str = None, store: str = None, only_review: bool = False,
+def closing_attempts(period: str = None, date: str = None, store: str = None,
+                     stores: str = "", markets: str = None, employees: str = "",
+                     only_review: bool = False,
                      authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Every value a rep entered before a close was accepted, grouped by (date, store, rep), WITH the
     true B2B variance the rep never saw. Restricted to management (super-admin / company-wide scope /
     explicit /closing/management grant) — a DM cannot see it. only_review=true → just the groups that
-    took >1 try or were auto-accepted (the ones worth reviewing)."""
+    took >1 try or were auto-accepted (the ones worth reviewing).
+
+    THE STANDARD FILTERS (owner 2026-09-26: *"i cannt pick one stroe or one market whicle doing cash
+    recon"*). This endpoint took a SINGULAR `store=` and no market at all, so the daily-closing
+    dashboard could narrow to exactly one store and could not ask a market question — and the screen
+    had no picker to ask with. It now takes all three, resolved through the SAME three resolvers every
+    other closing surface uses (`_resolve_market_filter` / `_resolve_store_filter` /
+    `_resolve_employee_filter`), so there is no fourth spelling of "which stores".
+
+    Purely ADDITIVE: the singular `store=` still works (an existing link or bookmark is unaffected),
+    blank means NO filter rather than an empty set that drops everything, and a row whose store has no
+    resolvable market is only hidden by an explicit market pick — never silently, which is the
+    silent-drop trap `_resolve_store_filter` already documents."""
     require_org(org_id)
     client = sb()
     if not _can_mgmt_review(_caller_perms(client, authorization)):
@@ -2258,6 +2294,47 @@ def closing_attempts(period: str = None, date: str = None, store: str = None, on
     if store:
         q = q.eq("store_code", store)
     rows = q.limit(50000).execute().data or []
+    # The three standard filters, applied AFTER the fetch because market lives on the store roster
+    # rather than on the attempt row. Market is resolved through the canonical union overlay, so a
+    # store whose market is spelled only in commcalc.store_mapping still answers a market pick
+    # (the 2026-09-03 "1115 Liberty Ave … fix once for all" rule).
+    store_set = _resolve_store_filter(stores)
+    market_set = _resolve_market_filter(None, markets)   # CSV goes through the multi-select param
+    emp_set = _resolve_employee_filter(employees)
+    rep_options = []
+    if store_set or market_set or emp_set:
+        mkt_by_code = {}
+        if market_set:
+            try:
+                roster = (client.schema("storeops").table("stores")
+                          .select("store_code,address,market").eq("org_id", org_id)
+                          .limit(5000).execute().data) or []
+                roster = _overlay_canonical_market(client, org_id, roster)
+                mkt_by_code = {str(x.get("store_code") or "").upper():
+                               (x.get("market") or "").strip() for x in roster}
+            except Exception:
+                # The roster is unavailable: a market pick we CANNOT honour must not silently drop
+                # every row. Leave the market filter unapplied and say so in the payload.
+                market_set = None
+        def _keep(r):
+            code = str(r.get("store_code") or "").strip()
+            if store_set and code.upper() not in store_set:
+                return False
+            if market_set:
+                mk = mkt_by_code.get(code.upper(), "")
+                if mk and mk.casefold() not in market_set:
+                    return False
+                if not mk and "(no market)" not in market_set:
+                    return False
+            return True
+        rows = [r for r in rows if _keep(r)]
+    # The employee PICKER's options come from the rows the store/market filters left — so the list
+    # narrows with market and store, but NOT with the employee pick itself. Computing it after that
+    # pick would shrink the dropdown to the one person already chosen, leaving no way to change it.
+    rep_options = sorted({(r.get("employee_name") or "").strip() for r in rows} - {""})
+    if emp_set:   # noqa: E129
+        rows = [r for r in rows
+                if (r.get("employee_name") or "").strip().casefold() in emp_set]
     # retail-ops-26 (cross-endpoint audit, PACKAGE C): same gate as /closing/duplicates just above -- an
     # explicit per-role `pages["/closing/management"]` grant can let a market/store-scope role reach this
     # endpoint without company-wide scope, so the keyset boundary still applies.
@@ -2316,7 +2393,13 @@ def closing_attempts(period: str = None, date: str = None, store: str = None, on
                        "created_at": t.get("created_at")} for t in tries],
         })
     out.sort(key=lambda x: (x["close_date"] or "", x["store_address"] or ""), reverse=True)
-    return {"groups": out, "total": len(out)}
+    return {"groups": out, "total": len(out), "rep_options": rep_options,
+            # Echo what was actually applied, and say plainly when a market pick could NOT be (roster
+            # unavailable) rather than returning a silently unfiltered list that looks filtered.
+            "filters": {"stores": sorted(store_set) if store_set else None,
+                        "markets": sorted(market_set) if market_set else None,
+                        "employees": sorted(emp_set) if emp_set else None},
+            "market_filter_skipped": bool(markets) and not market_set}
 
 
 # ── 3-way tender recon: DAILY CLOSING vs POS X-REPORT vs SALES TRANSACTIONS, per store, per tender ──
@@ -4491,7 +4574,12 @@ def envelope_report(date_from: str = None, date_to: str = None,
                                      if r.get("envelope_picture") else None)
         out.append(line)
     out = envelope_report_mod.status_filter(out, status)
+    # `by_employee` is the SAME rows rolled up per person (owner 2026-09-26, "report by user") — the
+    # accountability view over a date range, where `rows` answers one store-day at a time. Computed
+    # AFTER status_filter so the rollup describes exactly what the screen is showing, and derived by
+    # calling `totals` per group, so it can never disagree with the tiles.
     return {"rows": out, "totals": envelope_report_mod.totals(out),
+            "by_employee": envelope_report_mod.by_employee(out),
             "date_from": date_from, "date_to": date_to,
             "market_filter_skipped": market_filter_skipped,
             "can_decide": _can_mgmt_review(_caller_perms(client, authorization))}
@@ -6856,8 +6944,8 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
     # every rep's money on them intact; the screen says so rather than leaving it to be assumed.
     # Resolution is the SHARED `_resolve_market_filter` every other closing surface uses.
     market_set = _resolve_market_filter(market, markets)
-    store_set = {x.strip().upper() for x in (stores or "").split(",") if x.strip()} or None
-    emp_set = {x.strip().casefold() for x in (employees or "").split(",") if x.strip()} or None
+    store_set = _resolve_store_filter(stores)
+    emp_set = _resolve_employee_filter(employees)
 
     _twA, _twB, _twC = {}, {}, {}
     _kept, _rep_options = [], set()

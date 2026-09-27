@@ -2839,6 +2839,24 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   the live endpoint). Frontend `/closing/envelope-report` (`closing/envelope-report/page.tsx`;
   NAV Daily Closing group + REPORT_DIRECTORY 'ops').
 
+- **Envelope report BY EMPLOYEE (owner 2026-09-26, "report by user"):** `envelope_report.by_employee(rows)`
+  — the SAME filtered envelope rows rolled up per person: envelopes, counted, uncounted, short/over
+  counts and dollars, match, `net_variance` (over MINUS short, shown BESIDE the gross figures, never
+  instead of them), chargebacks and their dollars, the stores that person touched, and the close-date
+  span. Ordered worst-first by dollars short; an employee whose envelopes were never counted sorts to
+  the BOTTOM, never to the top as a false clean sheet. **It re-derives nothing** — each line is
+  `totals()` over that employee's rows, so the rollup sums to the report tiles exactly (the invariant
+  is asserted field by field in `harness_envelope_report.py`). Identity is `employee_name`, because
+  that is the only identity `commcalc.daily_closing` carries (no employee id) — so same-named people
+  merge and a rename splits a history; the `stores` column makes a merge visible. Served on
+  `GET /closing/envelope-report` as `by_employee`, rendered as a second view on the same page over ONE
+  fetch, and exported as its own sheet. Both tables on that page are sorted through the shared
+  `useTableSort`/`SortableTh` (§19.29).
+  **LIVE STATE 2026-09-27, reported not hidden: `commcalc.envelope_count` holds ZERO rows.** 1,562
+  envelopes and 44 employees are on record and not one physical count has ever been entered, so every
+  envelope reads `uncounted` and there is no variance to reconcile yet. The mechanism is not the gap —
+  the counting is.
+
 - **Closing entry-quality coaching (owner directive 2026-09-02, mig `937`):** "a training walkthru
   for an employee if their data is not entered correctly for a second day in a row". Detection is
   PURE (`closing/entry_quality.py`, proof `harness_closing_entry_quality.py`): signals
@@ -5927,6 +5945,61 @@ LuxeLink defines 17 metrics and its 116 `rep_commissions` rows carry **empty** `
 engine scores the built-in seven for every tenant — so driving that grid from the registry today would
 show LuxeLink "0/17 KPIs met" against money tiered on something else: a page contradicting the pay.
 The pay engine must read the registry first (commission-agent work, §6), and the grid follows.
+
+§19.29 **A DIRECTIVE SATISFIED BY BUILDING THE MECHANISM AND WIRING 26 OF 244 CALLERS (owner
+2026-08-10, re-reported 2026-09-26).** Owner, seven weeks apart: *"sort function by clicking on the
+header for all reports"*, then *"sort functions are not working platfrom wide"*. Both true. The
+mechanism was built on the day — `frontend/src/lib/table-sort.ts` (the comparison rules) +
+`components/SortableTh.tsx` (`useTableSort` + the `<th>`) — and then wired to **26 of the 244 files
+that render a data table**. 38 pages get it free through `ReportShell`; everything hand-rolling its own
+`<table>` got nothing, so on 218 reports a header simply did not respond to a click. **The class is
+§19.18's, for the fourth time: a mechanism written, and the callers left unwired** — and nothing failed
+while that was true, which is the whole reason it lasted seven weeks.
+**Fixed as a RATCHET, not a big bang.** 218 bespoke tables cannot be rewritten in one reviewable
+change, and a lock that demands it gets switched off. So the debt is WRITTEN DOWN in
+`frontend/table_sort_pending.txt` and `backend/harness_table_sort_lock.py` (20 checks, stdlib, DB-free,
+in `carrier-vocab-guard.yml`) enforces that it only shrinks: a NEW data table that is unsorted and
+unlisted fails the build; a listed page that HAS been wired fails the build until its line is deleted;
+the count may never exceed a pinned maximum; a listed file that no longer exists fails too. A page is
+wired by deleting its line and lowering the pin — proven end to end on
+`closing/cash-recon-management` in the same change (218 → 217).
+**A default row order is NOT a violation** and the lock says so: `rows.sort((a,b) => b.amount - a.amount)`
+is the report's own order, which `useTableSort` preserves (`initial = null`). What the lock flags is a
+page owning its own asc/desc STATE — a second answer to "what order are these rows in". Three do
+(`commcalc/flags`, `commcalc/asset/on-inventory`, `commcalc/vip`); each is NAMED with its reason and
+the migration owed, each excuse must still be true or the build fails, and a fourth cannot appear.
+
+§19.30 **A DASHBOARD THAT COULD NOT ASK A MARKET QUESTION (owner 2026-09-26; fixed).** Owner:
+*"daily closing dashboard … i cannt pick one stroe or one market whicle doing cash recon"*.
+`GET /closing/attempts` — the Management Review / daily-closing dashboard — took a **singular
+`store=`** and no market parameter at all, so it could narrow to exactly one store and could not ask a
+market question; and the page carried NO picker, because there was nothing to send. Market and store
+each already had ONE resolver (`_resolve_market_filter`, `_resolve_store_filter`); the employee set was
+built INLINE inside `cash_recon_management` and nowhere else, which is exactly why employee filtering
+existed on one screen out of eighteen. Now: `_resolve_employee_filter` is the third home,
+`cash_recon_management` dereferences both it and the store resolver (its two inline sets are gone),
+`/closing/attempts` takes markets + stores + employees resolved through all three while KEEPING the
+legacy singular `store=`, and the page renders the shared `StandardFilterBar`. `rep_options` is
+collected BEFORE the employee filter so picking one person cannot empty the dropdown that would let you
+pick another; a market pick that cannot be honoured (roster unavailable) is REPORTED
+(`market_filter_skipped`), never silently unfiltered.
+**A CORRECTION WORTH RECORDING.** The first diagnosis — "every endpoint invented its own filter subset"
+— was WRONG, and stating it that way would have licensed a pointless sweep. `lib/market-store-cascade.ts`
+is the designed mechanism: the market picker narrows the STORE option list and "market picked, no store
+picked" means the whole market, so an endpoint taking `stores=` and no `markets=` is correct by design.
+Likewise `StandardFilterBar` RENDERS `MarketStorePicker` (and `closing/_lib/MarketStorePicker` is a
+re-export shim) — they are layered, not duplicated. Only **four** closing pages had no picker at all
+(`management`, `verify`, `readiness`, `duplicates`). The real defects were the singular-`store` endpoint
+and the inline employee set.
+Lock: `harness_closing_filter_contract.py` (23 checks, stdlib, DB-free, in `carrier-vocab-guard.yml`) —
+three resolvers exist and agree that blank means NO filter (never an empty set that drops every row),
+**an accepted filter is an applied filter**, and eleven endpoints that parse the CSV themselves are a
+NAMED ratchet that may only shrink. Its balanced-paren signature scan exists because `[^)]*` stops at
+the `)` inside `Header(default="")` — which truncated most signatures and made the lock read
+endpoints as declaring no filters at all. **That under-reading hid a real error while it lasted: the
+filter block had been inserted into `closing_duplicates` instead of `closing_attempts`, where it would
+have raised NameError on live traffic.** A guard that under-reads is worse than no guard, because it
+passes.
 
 ---
 
