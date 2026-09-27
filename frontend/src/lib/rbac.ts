@@ -1742,3 +1742,37 @@ export function safeHomeFor(perms: Permissions, vertical?: VerticalInfo | null):
   }
   return '/account/password'   // canAccessPath() always allows this → guaranteed non-looping
 }
+
+
+// ── THE PAGE TITLE — derived from THIS registry, never typed a second time ────────────────────────
+// Owner 2026-09-27 ("generic page titles"). 328 pages shipped one title: every browser tab read
+// "MetricsPro — Commission Intelligence", so a user with eight tabs open could not tell them apart.
+//
+// WHY NOT `export const metadata` PER PAGE: 324 of the 328 are `'use client'`, and a client component
+// cannot export metadata in the app router. The honest options were 328 new server layouts or ONE
+// derivation — and the label is already here, beside the href, for the nav. So the title reads the
+// SAME entry the sidebar reads: rename a nav item and its tab renames itself. A second list of
+// route titles would be the duplicate this file's own invariant forbids.
+//
+// Longest-prefix match, so `/commcalc/kpi/detail` inherits "KPI Metrics" rather than falling back,
+// while an exact `/commcalc/kpi` still wins over a shorter parent.
+export function navLabelForPath(path: string): string | null {
+  const p = (path || '').split('?')[0].replace(/\/+$/, '') || '/'
+  let best: { href: string; label: string } | null = null
+  for (const g of NAV) {
+    for (const it of g.items) {
+      const h = it.href.replace(/\/+$/, '')
+      if (p === h || p.startsWith(h + '/')) {
+        if (!best || h.length > best.href.length) best = { href: h, label: it.label }
+      }
+    }
+  }
+  return best ? best.label : null
+}
+
+/** The full document title for a route. Falls back to the product name alone rather than to a
+ *  half-built string, so an unregistered route never shows "— MetricsPro" with nothing in front. */
+export function documentTitleForPath(path: string): string {
+  const label = navLabelForPath(path)
+  return label ? `${label} · MetricsPro` : 'MetricsPro'
+}
