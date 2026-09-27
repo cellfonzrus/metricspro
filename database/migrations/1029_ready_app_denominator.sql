@@ -15,6 +15,8 @@
 -- PRE-RULING default in both cases (`kpi_failing.resolve_boostapp_basis` → 'feed_prepaid';
 -- `dlar_sweep.resolve_report_set` → the two reports it has always pulled).
 
+BEGIN;
+
 ALTER TABLE commcalc.payout_config
   ADD COLUMN IF NOT EXISTS kpi_boostapp_basis TEXT;
 
@@ -39,24 +41,60 @@ COMMENT ON COLUMN commcalc.dlar_sweep_config.reports IS
   'feed that tiers pay is the index §19.26 defect.';
 
 -- ── The Feed-vs-Transactions tile on the Management Overview dashboard (owner: "show it it in
---    management dashboard"). The mig-948 mechanism: tile layout is D1 CONFIG in
---    commcalc.ui_label_override (scope='tiles'), a HOUSE row every tenant inherits and may override in
---    the Dashboard Designer. 948 could INSERT its row; this one must APPEND a tile to the row 948
---    created, so it is a guarded UPDATE: idempotent (the LIKE test), and it never touches a tenant's own
---    row nor a house-admin's later design beyond adding this one item.
+--    management dashboard"). Tile layout is D1 CONFIG in commcalc.ui_label_override (scope='tiles'),
+--    a HOUSE row every tenant inherits and may override in the Dashboard Designer.
+--
+--    THIS USES THE HOUSE PATTERN (mig 1002 / mig 1016) AND NOT A STRING REPLACE. The first draft of
+--    this block did `replace(label, '{"title":"Failing KPIs"', ...)`. MEASURED against the live row
+--    2026-09-27: it matches NOTHING, so the guarded UPDATE would have silently not fired — a migration
+--    that appears to succeed and adds no tile. Mig 948 INSERTed COMPACT json
+--    (`{"title":"Failing KPIs","icon":...`), but the row has since been RE-SERIALISED: spaces after
+--    colons and keys reordered (`..."items": [{"href": "/commcalc/kpi-failing"}], "title": "Failing
+--    KPIs"}`), because the Dashboard Designer round-trips the layout through a JSON encoder.
+--    ** ANY migration that string-matches into a tile layout is broken by construction. ** jsonb append
+--    with an `@>` containment guard is order- and whitespace-proof, and is exactly what mig 1016 does.
 UPDATE commcalc.ui_label_override
-   SET label = replace(
-         label,
-         '{"title":"Failing KPIs"',
-         '{"title":"Feed vs Transactions","icon":"⚖️",'
-         '"desc":"What the carrier report claims beside what the store transactions say, and what '
-         'accounts for every difference","items":[{"href":"/commcalc/dlar-vs-platform"}]},'
-         '{"title":"Failing KPIs"')
+   SET label = jsonb_set(
+         label::jsonb,
+         '{tiles}',
+         (label::jsonb -> 'tiles') || '[
+           {"title":"Feed vs Transactions","icon":"\u2696\ufe0f",
+            "desc":"What the carrier report claims beside what the store transactions say - and what accounts for every difference: a counting definition, a stale feed slice, or nothing.",
+            "items":[{"href":"/commcalc/dlar-vs-platform","label":"Feed vs Transactions"}]}
+         ]'::jsonb
+       )::text,
+       updated_at = now()
  WHERE org_id = '00000000-0000-0000-0000-000000000001'
-   AND scope = 'tiles'
-   AND key = 'management-overview'
-   AND label LIKE '%"title":"Failing KPIs"%'
-   AND label NOT LIKE '%/commcalc/dlar-vs-platform%';
+   AND scope   = 'tiles'
+   AND key     = 'management-overview'
+   AND jsonb_typeof(label::jsonb -> 'tiles') = 'array'
+   AND NOT (label::jsonb -> 'tiles') @> '[{"title":"Feed vs Transactions"}]'::jsonb;
+
+-- Post-flight (mig 1016's own check): the tile must be present EXACTLY once and the layout must still
+-- parse as the shape the hub reads. A half-applied dashboard is a blank screen for every manager, so
+-- this rolls the whole block back rather than leaving one.
+DO $$
+DECLARE n INT; v INT;
+BEGIN
+  SELECT COUNT(*) INTO n
+    FROM commcalc.ui_label_override o,
+         LATERAL jsonb_array_elements(o.label::jsonb -> 'tiles') t
+   WHERE o.org_id = '00000000-0000-0000-0000-000000000001'
+     AND o.scope = 'tiles' AND o.key = 'management-overview'
+     AND t ->> 'title' = 'Feed vs Transactions';
+  IF n <> 1 THEN
+    RAISE EXCEPTION 'expected exactly 1 "Feed vs Transactions" tile on the house management-overview layout, found %', n;
+  END IF;
+  SELECT (label::jsonb ->> 'version')::INT INTO v
+    FROM commcalc.ui_label_override
+   WHERE org_id = '00000000-0000-0000-0000-000000000001'
+     AND scope = 'tiles' AND key = 'management-overview';
+  IF v IS NULL THEN
+    RAISE EXCEPTION 'house management-overview layout lost its version key';
+  END IF;
+END $$;
+
+COMMIT;
 
 NOTIFY pgrst, 'reload schema';
 
@@ -64,11 +102,13 @@ NOTIFY pgrst, 'reload schema';
 --   ALTER TABLE commcalc.payout_config     DROP COLUMN IF EXISTS kpi_boostapp_basis;
 --   ALTER TABLE commcalc.dlar_sweep_config DROP COLUMN IF EXISTS reports;
 --   UPDATE commcalc.ui_label_override
---      SET label = replace(label,
---            '{"title":"Feed vs Transactions","icon":"⚖️","desc":"What the carrier report '
---            'claims beside what the store transactions say, and what accounts for every '
---            'difference","items":[{"href":"/commcalc/dlar-vs-platform"}]},', '')
---    WHERE org_id = '00000000-0000-0000-0000-000000000001' AND scope='tiles' AND key='management-overview';
+--      SET label = jsonb_set(label::jsonb, '{tiles}',
+--                    (SELECT COALESCE(jsonb_agg(t), '[]'::jsonb)
+--                       FROM jsonb_array_elements(label::jsonb -> 'tiles') t
+--                      WHERE t ->> 'title' <> 'Feed vs Transactions'))::text,
+--          updated_at = now()
+--    WHERE org_id = '00000000-0000-0000-0000-000000000001'
+--      AND scope = 'tiles' AND key = 'management-overview';
 --   NOTIFY pgrst, 'reload schema';
 
 

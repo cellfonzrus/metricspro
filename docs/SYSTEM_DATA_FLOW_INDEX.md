@@ -6209,9 +6209,22 @@ Pure logic `commcalc/dlar_vs_platform.py`; proof `backend/harness_dlar_vs_platfo
   zero that looks like a measurement. A rep with no transactions is not a rep with zero.
 - The feed publishes per rep per **DOOR**: a rep with several feed rows is reported and marked
   undecidable, never compared against whichever row happened to be first.
-- Placement: the **Management Overview dashboard** tile (mig `1029`, the mig-948 `ui_label_override`
-  `scope='tiles'` mechanism — tile layout is config, appended by a guarded idempotent UPDATE) plus the
-  `NAV_CARRIERS`-gated nav entry. Standard filters narrow client-side over the already-span-scoped
+- Placement: the **Management Overview dashboard** tile (mig `1029`, the `ui_label_override`
+  `scope='tiles'` mechanism — tile layout is config, appended by a guarded idempotent **jsonb** UPDATE
+  with mig 1016's own post-flight check) plus the `NAV_CARRIERS`-gated nav entry.
+  **A MIGRATION BUG CAUGHT BEFORE SHIPPING, and the general fact behind it.** The first draft of that
+  block did `replace(label, '{"title":"Failing KPIs"', …)`. Measured against the LIVE row 2026-09-27: it
+  matches **0 rows**, so the guarded UPDATE would have silently not fired — a migration that reports
+  success and adds no tile. Mig `948` INSERTed COMPACT JSON, but the row has since been **re-serialised**
+  (spaces after colons, keys reordered: `… "items": [{"href": "/commcalc/kpi-failing"}], "title":
+  "Failing KPIs"}`) because the Dashboard Designer round-trips the layout through a JSON encoder.
+  **So ANY migration that string-matches into a tile layout is broken by construction** — jsonb append
+  plus an `@>` containment guard is order- and whitespace-proof. The two sibling tile migrations
+  (`1002`, `1016`) were CHECKED in the same pass and both already use jsonb, so there is no sibling
+  defect; this one was the only offender. Mig `1029` Block 1 was then **run on real PostgreSQL 16
+  against a copy of the live row**: apply (9 → 10 tiles, the `\u2696\ufe0f` icon decoding correctly, both
+  columns landing), re-run clean (the post-flight "exactly 1 tile" assertion holding), the REVERT block
+  pasted verbatim restoring 10 → 9 tiles and dropping both columns, and a clean re-apply after it. Standard filters narrow client-side over the already-span-scoped
   payload — `/kpi-failing`'s and `/dlar-store`'s own pattern in this module, so no fourth server-side
   filter spelling is invented. Sorted from the first commit through `useTableSort` / `SortableTh`.
 
