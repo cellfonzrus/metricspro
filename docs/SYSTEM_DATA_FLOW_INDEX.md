@@ -214,7 +214,7 @@ supported routes until the vendor re-opens the login and one config row is flipp
 
 > **2026-09-25 (§6f):** `_sales_cell_agg`'s `_prem` / `_byod` / `_upg` / `_port` sets are filled from `line_class.activation_units` — distinct invoices under the house `event.count_unit='transaction'` (byte-identical), activation EVENTS (one per phone line) under `'event'`.
 >
-> **2026-09-27 (§19.31, owner ruling):** the same pass also builds `_newact` — **the NEW-ACTIVATION count**, `line_class.new_activation_units` over those same units: the classes `activation + port + byod` (Total Activation less Upgrade) less any unit an exclusion kind removes (house: `swap`). `_apply_activation_basis` publishes it as the shared cell field **`act_new_activation`** and Executive MTD prints it as **`new_activation`** (+ `swap_excluded`). The Boost pay engine's Ready App denominator and `GET /dlar-vs-platform/{period}` read the SAME derivation — *"data source is the same for all reports"*. `_swap` is now filled by `line_class.exclusion_class` (the bare `'swap' in ctl` is gone).
+> **2026-09-27 (§19.31, owner ruling):** the same pass also builds `_newact` — **the NEW-ACTIVATION count**, `line_class.new_activation_units` over those same units: the classes `activation + port + byod` (Total Activation less Upgrade) less any unit an exclusion kind removes (house: `swap`). `_apply_activation_basis` publishes it as the shared cell field **`act_new_activation`** and Executive MTD prints it as **`new_activation`** (+ `swap_excluded` + `cross_bucket`, so `total_activation − upgrade − swap_excluded − cross_bucket == new_activation` exactly — §19.31 (2a)). The Boost pay engine's Ready App denominator and `GET /dlar-vs-platform/{period}` read the SAME derivation — *"data source is the same for all reports"*. `_swap` is now filled by `line_class.exclusion_class` (the bare `'swap' in ctl` is gone).
 
 **Purpose.** ONE row-level pass feeds the Sales Report, Executive MTD, and Daily Targets so they can never
 disagain (owner directive 2026-07-16, 2026-07-25).
@@ -6062,11 +6062,28 @@ new lock, not by reading — the chargeback detector in `_run_calculation` (`'in
 |---|---|
 | `router._sales_cell_agg` | `_lc.new_activation_units(rows, line_rules, units=_units)` → per-cell `_newact`; `_swap` now filled by `_lc.exclusion_class` |
 | `router._apply_activation_basis` | sets the SHARED field `act_new_activation` (+ `act_swap_excluded`) on every cell — the sales basis from the exact unit set, the Activation-Details basis via `new_activation_from_buckets` with `new_activation_exclusions_applied: False` (the AD report does not say which units were swaps, so the report says the exclusion could not be applied rather than implying it was) |
-| Executive MTD `router._row` | new columns **`new_activation`** and **`swap_excluded`** — the owner's number, printed on the report he named it after, with the subtraction visible |
+| Executive MTD `router._row` | new columns **`new_activation`**, **`swap_excluded`** and **`cross_bucket`** — the owner's number on the report he named it after, with the subtraction COMPLETE (see (2a)) |
 | `calculator.calc_rep_commissions` | the same count per rep → `basis={'boostapp': n}` into the ONE resolver, gated on `kpi_failing.resolve_boostapp_basis(cfg['kpi_boostapp_basis'])` |
 | `ma_recon._is_activation_line` | `_lc.exclusion_class(row, line_rules) == "swap"` |
 | `_run_calculation` chargeback detector | `_lc.exclusion_class(s, _cb_rules) == 'ineligible'` |
 | `GET /dlar-vs-platform/{period}` | composes `act_new_activation` — it never classifies a line itself |
+
+**(2a) WHY THE NUMBER IS NOT LITERALLY `total_activation − upgrade − swap`, and the defect that
+surfaced.** Executive MTD's `total_activation` is the **SUM of four per-line bucket counts**, and
+`_sales_cell_agg` assigns a transaction to a bucket PER LINE — so one invoice carrying an Activation line
+AND a BYOD line joins BOTH sets and Total Activation counts it **twice**. That is the §6d /
+`harness_activation_cross_bucket.py` defect **(C)**, already measured and still the owner's call.
+`new_activation_units` returns a **SET of unit ids**, so the denominator counts such an invoice ONCE and
+is free of the defect *by construction* — which is the right answer for a rate, and also means the two
+numbers differ. Rather than leave a silent difference (house August: 1092 against 1096), the cell carries
+`act_cross_bucket` and Exec MTD prints `cross_bucket`, so the identity is exact:
+
+> `total_activation − upgrade − swap_excluded − cross_bucket == new_activation`
+
+Verified live on three months, both grains: August 1926 − 696 − 134 − 4 = **1092** · September
+1629 − 566 − 117 − 9 = **937** · June 1853 − 672 − 106 − 2 = **1073**. Pinned by
+`harness_ready_app_denominator.py` §E5–E8 and by lock axis (g), which fails the build if the Exec MTD row
+stops printing `cross_bucket` (a missing term is how a silent difference comes back).
 
 **(3) THE DERIVED RATE MOVED FROM INGEST TO COMPUTE.** `kpi_failing.REP_DERIVED_RATES =
 {"boostapp": ("boost_ready_bounty", "new_activations")}`, `kpi_failing.derived_rate(n, d)` (the
@@ -6220,13 +6237,14 @@ Pure logic `commcalc/dlar_vs_platform.py`; proof `backend/harness_dlar_vs_platfo
 **(10) THE LOCK.** `harness_activation_event_lock.py` EXTENDED (not a sibling): the home's `DEFS` gains
 `exclusion_class` / `new_activation_units` / `new_activation_count` / `new_activation_from_buckets`, and
 three axes join it — **(g)** every caller of the new-activation count dereferences the home (Exec MTD's
-cells, the basis applier, the Exec MTD row, the pay engine's denominator, the difference report);
+cells, the basis applier, the Exec MTD row incl. `cross_bucket`, the pay engine's denominator, the
+difference report);
 **(h)** the derived rate has one home (`kpi_failing`) and one arithmetic, and a third `derived_rate`
 anywhere under `backend/app` is RED; **(i)** a bare `'swap'`/`'ineligible'` test on a sale line, or a
 second `len(prem) + len(byod)`, is RED. Seven new negative controls, each proving its axis can go red,
-plus the existing "the unmodified tree is GREEN" control. 25 checks. Proof of the rules:
-`harness_ready_app_denominator.py` (72 checks) and `harness_dlar_vs_platform.py` (48 checks), both
-stdlib and DB-free, both in `carrier-vocab-guard.yml`.
+plus the existing "the unmodified tree is GREEN" control. Proof of the rules:
+`harness_ready_app_denominator.py` (76 checks) and `harness_dlar_vs_platform.py` (48 checks), both
+stdlib and DB-free, both in `carrier-vocab-guard.yml`. 26 checks on the lock.
 
 ---
 

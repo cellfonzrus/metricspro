@@ -29705,7 +29705,7 @@ def _blank_sales_cell(store, rep, date):
             "bill_qty": 0, "bill_amt": 0.0, "activation_fee": 0.0, "protect": 0,
             "act_new": 0, "act_port": 0, "act_byod": 0, "act_upg": 0,
             "act_tablet": 0, "act_home_internet": 0, "act_edge": 0,
-            "act_new_activation": 0, "act_swap_excluded": 0}
+            "act_new_activation": 0, "act_swap_excluded": 0, "act_cross_bucket": 0}
 
 
 def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_stores=None,
@@ -29734,7 +29734,17 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
         # (per-unit exclusion, so a BYOD-Swap invoice leaves the count once, not per line). Nothing is
         # re-derived here; this field is what every consumer reads, exactly like `act_new` beside it.
         a["act_new_activation"] = len(a.get("_newact") or ())
-        a["act_swap_excluded"] = len((a.get("_swap") or set()) & ((a.get("_prem") or set()) | (a.get("_byod") or set())))
+        _p, _b = (a.get("_prem") or set()), (a.get("_byod") or set())
+        a["act_swap_excluded"] = len((a.get("_swap") or set()) & (_p | _b))
+        # A MIXED-BUCKET TICKET, and why the owner's number is not literally `TA - upgrade - swap`.
+        # `total_activation` is the SUM of four distinct-transaction bucket counts, and
+        # `_sales_cell_agg` assigns a transaction to a bucket PER LINE — so one invoice carrying an
+        # Activation line AND a BYOD line joins BOTH sets and Total Activation counts it twice. That is
+        # the §6d/`harness_activation_cross_bucket.py` defect (C), already measured and still the owner's
+        # call. `new_activation_units` returns a SET of unit ids, so the denominator counts such an
+        # invoice ONCE and is free of it by construction. Reporting the difference keeps the subtraction
+        # complete: TA - upgrade - swap_excluded - cross_bucket == new_activation, exactly.
+        a["act_cross_bucket"] = max(0, (len(_p) + len(_b)) - len(_p | _b))
     # ── THE BASIS IS NOW STATED, NOT INFERRED (owner 2026-09-20) ────────────────────────────────
     # `policy` is the caller's explicit choice (activation_bucketing.BASIS_POLICIES); None/'auto' is
     # today's behaviour and every number below is byte-identical. What changes unconditionally is that
@@ -29761,7 +29771,7 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
     for a in cells.values():
         a["act_new"] = a["act_port"] = a["act_byod"] = a["act_upg"] = 0   # AD authoritative
         a["act_tablet"] = a["act_home_internet"] = a["act_edge"] = 0
-        a["act_new_activation"] = a["act_swap_excluded"] = 0
+        a["act_new_activation"] = a["act_swap_excluded"] = a["act_cross_bucket"] = 0
     for key, ad in ad_cells.items():
         if key not in cells:
             if restrict_stores is not None and key[0] not in restrict_stores:
@@ -29782,7 +29792,7 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
         a["act_new_activation"] = _lc.new_activation_from_buckets(
             {"activation": a["act_new"], "port": a["act_port"], "byod": a["act_byod"], "upgrade": a["act_upg"]},
             excluded=0, rules=_ad_line_rules)
-        a["act_swap_excluded"] = 0
+        a["act_swap_excluded"] = a["act_cross_bucket"] = 0
     if _pol == "folded":
         # A DELIBERATE FOLD, and a NARROW one. It folds ONLY the split-only sub-counts back into
         # `act_new` — which already contains them by construction (`new + tablet + home_internet +
@@ -30032,7 +30042,7 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
         # below — a metric sentinel, NOT a bucket. Any future code iterating these dicts must skip '_name'.
         return {'activation': 0, 'port': 0, 'byod': 0, 'upgrade': 0, 'total_phones': 0,
                 'tablet': 0, 'home_internet': 0, 'edge': 0,
-                'new_activation': 0, 'swap_excluded': 0,
+                'new_activation': 0, 'swap_excluded': 0, 'cross_bucket': 0,
                 'bill_qty': 0, 'bill_amt': 0.0, 'acc_sales': 0.0, 'setup_fee': 0.0,
                 'activation_fee': 0.0, 'protect': 0}
     by_store, by_emp = {}, {}
@@ -30067,6 +30077,7 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
             # correct: a unit belongs to exactly one (store, rep, day) cell.
             d['new_activation'] += a.get('act_new_activation', 0) or 0
             d['swap_excluded'] += a.get('act_swap_excluded', 0) or 0
+            d['cross_bucket'] += a.get('act_cross_bucket', 0) or 0
             d['total_phones'] += a['total_phones']
             d['bill_qty'] += a['bill_qty']
             d['bill_amt'] += a['bill_amt']
@@ -30112,6 +30123,11 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
                 # new activations = Total Activation less Upgrade, less the units an exclusion kind took
                 # out. `swap_excluded` says how many came out, so the subtraction is never invisible.
                 'new_activation': d['new_activation'], 'swap_excluded': d['swap_excluded'],
+                # so the subtraction is complete and nothing is a silent difference:
+                # total_activation − upgrade − swap_excluded − cross_bucket == new_activation.
+                # `cross_bucket` is the §6d defect (C) — one invoice whose lines land in two buckets,
+                # counted twice by Total Activation and ONCE by the denominator.
+                'cross_bucket': d['cross_bucket'],
                 'trending_box': round(ta * trend_factor),
                 'bill_payment_qty': d['bill_qty'], 'amount': round(d['bill_amt'], 2),
                 'conv': round(ta / d['bill_qty'], 4) if d['bill_qty'] else 0.0,

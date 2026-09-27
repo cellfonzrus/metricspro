@@ -18,7 +18,13 @@ WHAT THIS PROVES
     15 and 13 — so the ruling is basis-STABLE only once the boundary is closed, which is why the
     boundary is a question for the owner and not a guess here.
  E. `new_activation_from_buckets` — the ONLY other way in (an Activation-Details basis), agreeing with
-    the line-level count on the same fixture.
+    the line-level count on the same fixture; and THE MIXED-BUCKET TICKET, which is why the owner's
+    number is not literally Executive MTD's `total_activation - upgrade - swap`: Total Activation SUMS
+    four per-line bucket counts, so an invoice whose lines land in two buckets is counted twice there
+    (the §6d / `harness_activation_cross_bucket.py` defect (C)), while the denominator counts it ONCE
+    because it is a SET of unit ids. Exec MTD now also reports `cross_bucket`, so
+    `total_activation - upgrade - swap_excluded - cross_bucket == new_activation` exactly (verified live:
+    house August 1926-696-134-4 = 1092; September 1629-566-117-9 = 937; June 1853-672-106-2 = 1073).
  F. `kpi_failing` — the derived rate: `boost_ready_bounty / new_activations`, the basis names, and
     that a caller offering NO basis reads the stored column exactly as before (the money pin: shipping
     this moves nothing until a tenant's `kpi_boostapp_basis` says otherwise).
@@ -172,6 +178,25 @@ check("E3 it can never go negative",
       lc.new_activation_from_buckets({"activation": 1}, excluded=50) == 0)
 check("E4 junk in → 0, never a crash",
       lc.new_activation_from_buckets({"activation": "x"}, excluded="y") == 0)
+
+# THE MIXED-BUCKET TICKET (§6d defect (C)). One invoice whose lines land in TWO buckets: Total
+# Activation sums the bucket counts and so counts it twice; the denominator is a SET and counts it once.
+MIXED = ROWS + [{"contract_type": "Activation", "trans_id": "B0", "mdn": "9172000000",
+                 "voided": "", "trans_type": "Sale", "salesperson": "Rep One", "store": "1 Example St"}]
+_u = lc.activation_units(MIXED, unit="transaction")
+_prem = {x[1] for x in _u if x and x[0] == "premium"}
+_byod = {x[1] for x in _u if x and x[0] == "byod"}
+check("E5 the fixture now has exactly one invoice in BOTH buckets",
+      len(_prem & _byod) == 1 and (_prem & _byod) == {"B0"}, _prem & _byod)
+check("E6 Total Activation's arithmetic counts it TWICE (len(prem) + len(byod))",
+      len(_prem) + len(_byod) == 20 and len(_prem | _byod) == 19)
+check("E7 the DENOMINATOR counts it ONCE — 14 still, not 15 (the defect cannot reach the rate)",
+      lc.new_activation_units(MIXED, unit="transaction")["count"] == 14,
+      lc.new_activation_units(MIXED, unit="transaction")["count"])
+check("E8 and the subtraction is COMPLETE once the cross-bucket count is reported: "
+      "TA − upgrade − swap − cross_bucket == new_activation",
+      (len(_prem) + len(_byod) + 16) - 16 - 5 - ((len(_prem) + len(_byod)) - len(_prem | _byod))
+      == lc.new_activation_units(MIXED, unit="transaction")["count"])
 
 print("\nF. the derived rate, and THE MONEY PIN")
 check("F1 boostapp is declared derived: numerator boost_ready_bounty over the new-activation basis",

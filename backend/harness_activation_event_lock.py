@@ -47,8 +47,13 @@ NEWACT = {
     # consumer reads; the Exec MTD row prints it; the pay engine scores the rate on it.
     ("modules/commcalc/router.py", "_sales_cell_agg"): ["_lc.new_activation_units(", "_lc.exclusion_class("],
     ("modules/commcalc/router.py", "_apply_activation_basis"): ['a["act_new_activation"]',
+                                                                'a["act_cross_bucket"]',
                                                                 "_lc.new_activation_from_buckets("],
-    ("modules/commcalc/router.py", "_row"): ["'new_activation': d['new_activation']"],
+    # the row must print the count AND the two numbers that make the subtraction complete — a silent
+    # difference between `TA - upgrade` and the denominator is how the §6d cross-bucket defect hides
+    ("modules/commcalc/router.py", "_row"): ["'new_activation': d['new_activation']",
+                                             "'swap_excluded': d['swap_excluded']",
+                                             "'cross_bucket': d['cross_bucket']"],
     ("modules/commcalc/calculator.py", "calc_rep_commissions"): ["_lc.new_activation_units(",
                                                                  "_kpi_failing.resolve_boostapp_basis("],
     # the difference report COMPOSES the platform count; it must never classify a line itself
@@ -309,6 +314,10 @@ check("(f) a second new_activation_units → RED", any(x[0] == "a" and "shadow2"
 v, _s = planted({"modules/commcalc/router.py": files["modules/commcalc/router.py"].replace(
     "'new_activation': d['new_activation']", "'new_activation': 0")})
 check("(f) Exec MTD dropping the owner's column → RED", any(x[0] == "g" and "_row" in x[2] for x in v))
+v, _s = planted({"modules/commcalc/router.py": files["modules/commcalc/router.py"].replace(
+    "'cross_bucket': d['cross_bucket']", "'x': 0")})
+check("(f) Exec MTD dropping the cross-bucket count (making the subtraction silent) → RED",
+      any(x[0] == "g" and "cross_bucket" in x[2] for x in v))
 v, _s = planted({"modules/commcalc/calculator.py": files["modules/commcalc/calculator.py"].replace(
     "_lc.new_activation_units(", "_lc.gone(")})
 check("(f) the Ready App denominator not dereferencing the one home → RED",
