@@ -6092,8 +6092,11 @@ numbers differ. Rather than leave a silent difference (house August: 1092 agains
 Verified live on three months, both grains: August 1926 − 696 − 134 − 4 = **1092** · September
 1629 − 566 − 117 − 9 = **937** · June 1853 − 672 − 106 − 2 = **1073**. **And every PRE-EXISTING Exec MTD
 field is byte-identical** — the payload replayed against commit `8753513d` over June/July/August/September
-2026, both grains, with only the three new keys removed: identical to the byte (148,727 bytes). That
-matters because an `exec_mtd`-basis plan pays off this report. Pinned by
+2026, both grains, with only the three new keys removed: identical to the byte (148,727 bytes) — and
+identical again across **all three live tenants** over July/August/September, both grains (213,612 bytes).
+That matters because an `exec_mtd`-basis plan pays off this report, and because the tenant with
+POS-declared classification fields (`f4f1c16e…`, `fields: ['category','product_desc']`) is the one whose
+`_swap` tally the new `exclusion_class` could have moved — it did not. Pinned by
 `harness_ready_app_denominator.py` §E5–E8 and by lock axis (g), which fails the build if the Exec MTD row
 stops printing `cross_bucket` (a missing term is how a silent difference comes back).
 
