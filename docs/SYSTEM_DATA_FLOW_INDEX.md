@@ -33,6 +33,7 @@ Primary code homes:
 | 6h | **Multi-month offered only when configured** | "Why does a rep's pay show a multi-month option when this company has no multi-month pay — where is that decided, and what if money is there anyway?" |
 | 6i | **What an employee sees of their own commission** | "Why does the employee payout report show only the line I am paid for, and no carrier Price / GP? Which surfaces show an employee their commission, and where is 'paid line' and 'employee-visible field' decided?" |
 | 6j | **Who is looking; the sale on the paid row; one employee over several months** | "Why does a rep not see Pay Discrepancy but a manager does — where is that list? Why does a manager see every line on the Rep Incentive report and a rep only their paid ones? Where does the customer name / phone on a paid row come from? How do I export one employee's statement for several months, and is each month the same as downloading it alone?" |
+| 6k | **The one-rep Recalculate button** | "Why did Recalculate for one rep fail / what does it write? Does it touch other reps or the installment ledgers? Is the one-rep row the same as Run Calculation's? How is a moved-local NameError kept out of the build?" |
 | 7 | **Carrier residual installments** | "Multi-month carrier residual pay from raw_mi. Why do named activation_types not pay?" |
 | 12 | **External credit machine + Card Settlement Recon** | "Where does the external / white-machine card figure live, what is it called for this tenant, and how does it tally with what the processor actually settled?" |
 | 7a | **Residual per Subscriber report** | "Where does the residual/subscriber trend come from per carrier? Why is a Total/MA store named, not a processor account id?" |
@@ -1741,6 +1742,8 @@ routes to the ruling agreeing).
 
 ### 6c. THE ONE PLAN RESOLUTION — `_resolve_plan_by_rep` (owner-reported class, 2026-09-17)
 
+> **2026-09-27 (§6k):** the one-rep recompute no longer calls this resolver itself — it runs the FULL path (`_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines`), so the resolver has ONE call site. The #244 split below left `recompute_rep` reading a moved local (`_id_map`) — a NameError on every call until §6k.
+
 **`router._resolve_plan_by_rep(client, org_id, period, only_rep=None, notices=None)`** is THE answer to
 "what does this rep's assigned plan pay them this period": `commission_engine.preview` (with the
 mig-306 `source_mode` and the POS→roster identity map) **plus** the mig-298 exec-MTD basis override.
@@ -1895,6 +1898,8 @@ spelling; five negative controls.
 ---
 
 ### 6f. ONE ACTIVATION = ONE UNIT — pay and count per activation / upgrade EVENT, never per sale line (owner 2026-09-25)
+
+> **Persisting per-event pay for ONE rep** (e.g. a month never calculated): the Recalculate button, `POST /commcalc/recompute-rep` — the full path's row for that rep, written alone (§6k).
 
 Owner, verbatim: *"commisison for teh reps need to be claculated per action and per upgrade as defined in teh
 incentive payout , the system sis calculating per line item"* — on the rep breakdown (`PlanLineBreakdown`),
@@ -2259,6 +2264,62 @@ Discrepancy / Phantom Payments through `POST /notify/send`. Both are now registe
 caller's header (a scheduled, admin-configured run still has no caller → org-wide, as before). CLASS lock:
 `harness_payout_audience_lock.py` part (h) — every notify call to a commcalc handler that takes `authorization`
 must pass it, and a builder reaching a manager-only handler must be `wants_auth` (2 negative controls; 24 checks).
+
+---
+
+### 6k. THE ONE-REP RECALCULATE runs the full path and writes one rep — and a moved local can never strand a reader again (2026-09-27)
+
+Owner: *"Fix button, then save"* — found while saving Jona Sejat's never-calculated months (org `f4f1c16e`).
+
+**The defect.** `POST /commcalc/recompute-rep` (`router.recompute_rep`) died with `NameError: name '_id_map' is not
+defined` on EVERY call, every org, every rep, since #244 (2026-09-17, cc8def39): that refactor moved
+`_id_map = _rep_canon_map(...)` into `_resolve_plan_by_rep` and the handler kept reading the name. Every one-rep
+recalculate button (Rep Incentive attach-plan / link-alias, commission-explain, the Coverage Wizard — which swallows
+the error) returned 500. Worse, it crashed AFTER running both installment engines with `persist=True`, i.e. it wrote
+the period's installment ledgers for EVERY rep of the org before failing. No harness ever called the handler.
+
+**The class, named:** *a name read in a function that nothing binds* — Python finds it only when the line runs.
+Swept with pyflakes F821 over `backend/app` (and the new stdlib lock below): **exactly one hit** —
+`commcalc/router.py` `recompute_rep` `_id_map`. Now zero.
+
+**The fix (design, not patch):**
+- **One row derivation.** The full Run Calculation's input gathering moved VERBATIM into
+  `router._calc_inputs(client, org_id, period)` (every org-scoped read + the cfg it assembles; returns the
+  inputs) and its standard calc into `router._calc_rep_rows(inp, period)` (`calc_rep_commissions` with the full run's
+  exact arguments). `_run_calculation` calls both — not one line of the calculation changed.
+  `recompute_rep` now runs `_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines` — the full path's own functions —
+  and writes only its rep's row(s) (`_rows_for_rep`: name keys ∪ the identity-map canonical, `_canon_person`
+  fallback): update in place, else insert; never delete, never another rep. So the one-rep row IS the full run's
+  row for that rep (counts, store, tier and pay), not the thinner copy it used to build. When the full calculation
+  produces no row for the rep, nothing is written (an existing row is left as it is) and the response says so.
+- **One identity map.** `_rep_canon_map` is its only home; `recompute_rep` reads it; the resolver reads it.
+- **Scope — the installment ledgers are NOT written by the one-rep button.** `_apply_new_engines(...,
+  persist_installments=False)` (default `True` = the full run, unchanged). Chosen because it changes no pay figure:
+  both engines compute `by_rep` before, and independently of, the ledger write, and neither engine has a rep
+  filter to scope the persist to one rep. The whole-period ledger write stays Run Calculation's job; the response
+  carries `installment_ledgers` saying so. (A stored row keeps columns the fresh row does not carry — e.g. the
+  ops-chargeback settlement columns written after the full run's insert — because the update only sets the
+  fresh row's keys.)
+
+**Locks:** `backend/harness_recompute_rep_e2e.py` (10, DB-free, pip job): runs the REAL handler end-to-end on an
+in-memory client that records every write, against the REAL `_run_calculation` as reference — no exception; exactly
+one `rep_commissions` write, this rep's, update-in-place (same id) or insert; no other table, no delete, the other
+rep's stored row untouched; the row == the full run's row for that rep (every column but id / timestamps); both
+installment engines asked with `persist=False` (the full run: `True`). Negative controls: the undefined name
+reintroduced → RED; a second rep's row written → RED; the ledgers persisted → RED.
+`backend/harness_undefined_names_lock.py` (7, stdlib `symtable`, `org-scope-guard.yml` job
+**No undefined names under backend/app**, triggered by any `backend/app/**/*.py` change): every scope of every
+module; a name that is read, resolves to module level and is bound nowhere (assignment, def, class, import,
+`global`) nor a builtin / module dunder fails the build; a star-importing module is reported, never passed.
+Controls: the #244 shape, a class body, a comprehension → RED; import / global / closure / builtins → GREEN.
+Verified against main's router: it reports exactly `recompute_rep _id_map`, the same as pyflakes.
+`harness_recompute_rep_parity.py` §E3 now pins ONE resolver call site (the full path the one-rep button runs) plus
+E3b (the handler runs `_calc_inputs` / `_calc_rep_rows` / `_apply_new_engines`), and is wired into CI for the first
+time. `harness_commcalc_recompute_guard.py` §B and `harness_cross_tenant_isolation.py` C1 follow the moved input
+gathering into `_calc_inputs`.
+
+**Not done here (awaits the merge):** saving Jona Sejat's 15 never-calculated months (Feb 2025 – Apr 2026) through
+the fixed button — the owner approved it; it runs after this is live.
 
 ---
 
@@ -4412,6 +4473,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Table | Written by | Read by |
 |-------|-----------|---------|
 | `commcalc.raw_sales.customer` + `commcalc.raw_sales_invoice.customer` (mig 1012) — as **the customer on a paid commission line** | the sales / sales-by-invoice uploads (unchanged) | THE rule `inventory_sold_recon.sale_customer` / `invoice_customer_map` → `commission_drilldown._sale_customers` (reads `trans_id,customer` only, org-scoped) → `attach_line_identity` → every plan line's `customer` (explain, statements, the range); also `sales_detail_index` (inventory integrity §11b) (§6j) |
+| `commcalc.rep_commissions` — ONE rep's row(s) for one period | `POST /commcalc/recompute-rep` → the full path (`_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines(persist_installments=False)`), writing only `_rows_for_rep` (update in place / insert) | the same readers as the full run's rows (§6k) |
 | `commcalc.rep_commissions` + the `/commission-explain` payload — as **what an EMPLOYEE may see of their own commission** | `calc_rep_commissions` / `commission_engine.preview` (unchanged) | THE shapers `payout_audience.employee_rep_row` / `employee_explain` / `employee_drill` (allow-lists; paid lines by `is_paid_line`) → `/commissions`, `/commissions-range`, `/commission-explain`, `/commission-statement(s)`, `/commission-drill`, core `/employee-dashboard`, the notify Incentives email (§6i) |
 | `commcalc.payout_schedule` / `commcalc.plan_installment_schedule` — as the answer to **"is multi-month configured for this org"** (active rows) | the schedule editors (`payout-schedules`, `plan-installments`) | THE predicate `multimonth_config.schedule_counts` → `decide` / `load` → `GET /commcalc/multimonth/status` → `_lib/multimonth.useMultimonthStatus` (the Rep Incentive card + export, commission-explain, Expected vs Earned); the R1 guard `router._has_any_pay_source`. The engines keep their own loaders (§7/§8) (§6h) |
 | `commcalc.accessory_config.activation_details_rules` **`.event`** (`keys` · `precedence` · `count_unit`; JSON key, no migration, 2026-09-25) | `PUT /commcalc/accessory-config` (extra keys of the JSON pass through the one writer) | `line_class.resolve_event` ← `resolve_rules` → `activation_events` / `activation_units` — the plan pay gate's `per_event` (always events) and every activation COUNT (`count_unit`, house `'transaction'`): `_sales_cell_agg`, the Boost calculator, `commission_drill`, closing `_b2b_counts_by_store` / `_b2b_day`, `sales_comparison.tally` (§6f) |
@@ -4773,7 +4835,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /account/projection` (`?months=&horizon=` — deterministic linear/seasonal-naive P&L projection + cash runway, per-org `projection_config` mig `941`; rows flagged `projected:true`; `account_trends` grant) | `account/router.py` (`financial_projection` → pure `projection_engine.project`) | §4 projection engine |
 | `GET /account/valuation` (assumption-driven ESTIMATE range: TTM multiples + asset floor + projection-fed DCF w/ sensitivity grid; per-org `valuation_config` mig `941`; own default-closed `company_valuation` grant; disclaimer always in payload) | `account/router.py` (`company_valuation` → pure `valuation.valuation`) | §4 company valuation |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
-| `POST /commcalc/recompute-rep` | `commcalc/router.py` (`recompute_rep`) → **`_resolve_plan_by_rep`** + `_apply_engine_components_to_row` | §6c — recompute + UPSERT ONE rep's `rep_commissions` row. **It carried its own shorter copy of the plan resolution until 2026-09-17 and would have written `total_payout = 0.00` over a correct figure for any rep on an `exec_mtd`-basis plan** (and a halved figure for any rep in a month with partial `raw_sales`). Both money paths now share one resolver; §E of `harness_recompute_rep_parity.py` keeps it that way |
+| `POST /commcalc/recompute-rep` | `commcalc/router.py` (`recompute_rep`) → **`_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines(persist_installments=False)`** (the full run's own functions) → `_rows_for_rep` → update-in-place / insert of THAT rep's row only | §6k — the full path's row for ONE rep, written alone; no delete, no other rep, no installment-ledger write. **Broken (NameError `_id_map`) on every call 2026-09-17 → 2026-09-27; locked by `harness_recompute_rep_e2e.py` + `harness_undefined_names_lock.py`.** §6c history — **It carried its own shorter copy of the plan resolution until 2026-09-17 and would have written `total_payout = 0.00` over a correct figure for any rep on an `exec_mtd`-basis plan** (and a halved figure for any rep in a month with partial `raw_sales`). Both money paths now share one resolver; §E of `harness_recompute_rep_parity.py` keeps it that way |
 | `GET/PUT /commcalc/setup-fee/config` | `commcalc/router.py` (`get_setup_fee_config`/`save_setup_fee_config`) | §6a — the per-org set-up-fee economics: `default` / `by_carrier` / **`by_market`** / **`all_markets`** (the owner's all-markets checkbox). MONEY-TOUCHING: it applies on the next Calculate, nothing is recalculated on save |
 | `GET /commcalc/setup-fee/candidates/{period}` | `commcalc/router.py` (`setup_fee_candidates`) → `setup_fee_pay.candidates` | §6a — PICK-DON'T-TYPE: the tenant's own product descriptions that could BE the fee, ranked by the money they carry, each flagged `mapped_now`. **Use this before editing `setup_fee_keywords`** |
 | `GET /commcalc/setup-fee/recognition-divergence/{period}` | `commcalc/router.py` → `setup_fee_pay.divergence` | §6a — the two historic matchers measured against each other (case). Empty ⇒ switching `match_mode` moves $0 |
@@ -4821,6 +4883,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **One rep's recalculated commission row** (the Recalculate button) | `rep_commissions` (that rep's row only) | THE full path's row: `router._calc_inputs` + `_calc_rep_rows` + `_apply_new_engines`, shared with `_run_calculation`; lock `harness_recompute_rep_e2e.py` (== the full run's row, one rep, no ledger write) (§6k) |
+| **Undefined names in the backend** (a read name nothing binds — a NameError on first run) | `backend/app/**/*.py` | `harness_undefined_names_lock.py` (stdlib `symtable`), CI job *No undefined names under backend/app* (§6k) |
 | **Which menu entries a rep may not see** (manager-only payout reports) and **which payout view a viewer gets** | `storeops.roles.permissions.scope` + `app_config.rbac_enabled` | ONE registry `payout_audience.MANAGER_ONLY_SURFACES`, ONE self-scope answer `storeops.role_is_self_scoped`, served on `/me` (`viewer_payload`) → `rbac.payoutRefused` in `canSeeItem` / `canAccessPath`; audience by `payout_audience.resolve` (§6j) |
 | **The sale on a paid commission row** (action · phone line · customer) | engine event stamp (`event_type`, `event_key`); `raw_sales.customer` / `raw_sales_invoice.customer` | `payout_audience.event_label` (`line_class.CLASS_LABELS`) · `line_phone` (`line_class.line_event_keys`) · `inventory_sold_recon.sale_customer` via `commission_drilldown.attach_line_identity`; frontend `planLines.saleLabel` (§6j) |
 | **One employee's incentive over several months** (per month + grand total) | `rep_commissions.total_payout` per month (the statement's payout of record) | `router._statement_doc` per month (== the single statement) → `commission_statement.build_range` (sums only) (§6j) |

@@ -10,8 +10,8 @@ copy of "what does this rep's plan pay them", and the copy had drifted from the 
      a DIFFERENT sales basis than the full run for the same rep.
 
 Two paths answering the same question is a defect — they drift, and this one drifted into destroying
-money. The fix is ONE shared resolver, `router._resolve_plan_by_rep`, called by `_apply_new_engines`
-and by `recompute_rep`. §A reproduces the $0.00 and pins the repair; §E pins the sharing structurally
+money. The fix is ONE shared resolver, `router._resolve_plan_by_rep`, called by `_apply_new_engines` —
+which `recompute_rep` now runs itself (index §6k). §A reproduces the $0.00 and pins the repair; §E pins it structurally
 so the copy cannot come back.
 
 CARRIER/TENANT-AGNOSTIC: the only thing the resolver consults is each plan's own `commission_basis`.
@@ -169,7 +169,16 @@ eq("E2 ...and that place is inside the shared resolver",
    _code.index("_override_plan_by_rep_with_mtd(\n") > _code.index("def _resolve_plan_by_rep("), True)
 _calls = [m for m in re.findall(r"^(.*_resolve_plan_by_rep\(client, org_id, period.*)$", _code, re.M)
           if not m.strip().startswith("def ")]
-eq("E3 both money paths — and only those two — call the shared resolver", len(_calls), 2)
+# Since 2026-09-27 (index §6k) the one-rep recompute no longer calls the resolver ITSELF: it runs the full
+# path (`_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines`) and writes only its rep's row, so the one
+# call site is the full run's — a stronger form of "one resolution" than two call sites of one helper.
+eq("E3 the shared resolver has exactly ONE call site (the full path, which the one-rep recompute runs)",
+   len(_calls), 1)
+_rr = _code[_code.index("def recompute_rep("):]
+_rr = _rr[:re.search(r"\n(?:@router|def |class )", _rr[10:]).start() + 10]
+ok("E3b recompute_rep runs the full path's own functions (inputs, standard calc, engines)",
+   all(x in _rr for x in ("_calc_inputs(client, org_id, period)", "_calc_rep_rows(inp, period)",
+                          "_apply_new_engines(client, org_id, period, comms")), "recompute_rep forked the path")
 # `plan_by_rep[rn] = {` legitimately appears twice: once in the shared resolver (built from a PREVIEW
 # row, keyed on total_payout) and once inside _override_plan_by_rep_with_mtd, which is the exec-MTD
 # basis writing its OWN entries (keyed on commission). What must be unique is the PREVIEW-sourced one.

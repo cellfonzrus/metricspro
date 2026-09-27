@@ -345,6 +345,9 @@ print("\n== C. the Boost calc honors sales_source='union' (the §19.16 August pa
 # feed held the full month; the legacy read trusted the partial table whole and undercounted.
 import inspect  # noqa: E402
 _calc_src = inspect.getsource(R._run_calculation)
+# index §6k: the input gathering lives in `_calc_inputs` (shared with the one-rep recompute) — follow the call
+if "_calc_inputs(client, org_id, period)" in _calc_src:
+    _calc_src += inspect.getsource(R._calc_inputs)
 check("C1. _run_calculation's sales fetch consults _sales_source_mode (mig 306 reaches Boost)",
       "_sales_source_mode(" in _calc_src and "_sales_rows_union_txn(" in _calc_src)
 
