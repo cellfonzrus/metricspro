@@ -755,7 +755,8 @@ def feed_health(client, org_id, persist=True, force=False):
         st = feed_status(f, evidence, now=now, raw_freshness=raw)
         out.append({**{k: f.get(k) for k in
                        ("id", "feed_key", "label", "module", "source_type", "deep_link", "enabled",
-                        "auto_derived", "derived_from", "muted_until", "notes", "evidence")}, **st})
+                        "auto_derived", "derived_from", "muted_until", "notes", "evidence",
+                        "created_at", "updated_at")}, **st})
     out.sort(key=lambda r: ({"overdue": 0, "never": 1, "ok": 2}.get(r["state"], 3), r["label"] or ""))
     return {"feeds": out, **meta,
             "overdue": sum(1 for r in out if r["enabled"] and r["state"] == "overdue"),

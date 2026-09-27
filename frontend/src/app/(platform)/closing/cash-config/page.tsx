@@ -13,6 +13,8 @@ const SCOPES = [
   { key: 'cash_unpicked', label: 'Cash not picked up' },
   { key: 'deposit_mismatch', label: 'Deposit mismatch' },
   { key: 'connector', label: 'Data source failed / stale (imports, sweeps)' },
+  // Setup-document reminders (index §39): a document scheduled in the Upload Wizard that is due and not uploaded.
+  { key: 'upload_due', label: 'Upload reminders (a scheduled report is due)' },
   { key: 'all', label: 'All alerts' },
 ]
 
