@@ -13,11 +13,12 @@ import type { ExportSheet } from '@/lib/export'
 import { StalenessBanner } from '../_components/StalenessBanner'
 import ScreenLink from '@/components/ScreenLink'
 import { statementInfoSheet, statementSubtitle, type StatementMeta } from '../_components/statementExport'
+import PLRangeExport from '../_components/PLRangeExport'
 
 const SECTION_TITLE: Record<string, string> = { revenue: 'Revenue', cogs: 'Cost of Goods Sold', opex: 'Operating Expenses', other: 'Other' }
 
 function PLInner() {
-  const { period } = usePeriod()
+  const { period, periods } = usePeriod()
   const sp = useSearchParams()
   const [scope, setScope] = useState(sp.get('scope') || 'consolidated')
   const [scopes, setScopes] = useState<any[]>([])
@@ -129,6 +130,10 @@ function PLInner() {
             subtitle={statementSubtitle(plMeta())}
             filename={`pl-${(data?.filtered ? 'filtered' : scope).replace(/[^a-z0-9]+/gi, '-')}-${period.replace(/\s+/g, '-')}`}
             sheets={plSheets()} />}
+          {/* MONTH RANGE export (owner 2026-09-26, index §4c): the same scope + store / market filter,
+              one column per month + a Total, every month the single-month P&L read above. */}
+          <PLRangeExport period={period} periods={periods} scope={scope} scopeLabel={st?.scope_label || scope}
+            stores={filt.stores} markets={filt.markets} />
         </div>
       </div>
 

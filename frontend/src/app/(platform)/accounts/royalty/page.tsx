@@ -371,7 +371,7 @@ function CoverageStrip({ cov, inUpload }: { cov: CoverageInfo | null; inUpload: 
   return (
     <div>
       <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 6 }}>
-        {have} of {cov.months.length} months fully on file ({cov.window[0]} – {cov.window[cov.window.length - 1]}, this month and the {cov.lookback_months} before it
+        {have} of {cov.months.length} months fully on file ({cov.window[0]} – {cov.window[cov.window.length - 1]}, the last {cov.lookback_months} months, this month included
         {nC ? ` · ${nC} center${nC === 1 ? '' : 's'}: ${cov.centers.join(', ')}` : ' · no report on file yet'}).
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>

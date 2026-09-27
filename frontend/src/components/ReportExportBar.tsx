@@ -16,7 +16,7 @@ import { SendReportButton } from '@/lib/send-report'
 export type { ExportColumn } from '@/lib/export'
 
 export function ReportExportBar({
-  title, subtitle, filename, columns, rows, sheets, compact = true, right, style,
+  title, subtitle, filename, columns, rows, sheets, compact = true, right, style, csv,
 }: {
   title: string
   subtitle?: string
@@ -27,6 +27,7 @@ export function ReportExportBar({
   compact?: boolean
   right?: React.ReactNode
   style?: React.CSSProperties
+  csv?: boolean                                                      // opt-in CSV button (same payload)
 }) {
   const buildPayload = (): ExportPayload => ({
     title, subtitle,
@@ -38,7 +39,7 @@ export function ReportExportBar({
   return (
     <div style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', ...style }}>
       {right}
-      <ExportButtons payload={buildPayload} compact={compact} />
+      <ExportButtons payload={buildPayload} compact={compact} csv={csv} />
       {/* Universal Send: renders the file in-browser + delivers via /notify/send-file (email + WhatsApp). */}
       <SendReportButton exportPayload={buildPayload} title={title} compact={compact} />
     </div>

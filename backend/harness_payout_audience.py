@@ -4,7 +4,8 @@ getting paid and other lines should be hidden and carrier commission not be disp
 
 DB-free: the REAL `/commission-explain`, `/commission-statement` and `/commissions/{period}` handlers over the REAL
 engine (plan pay gate + activation events), on an in-memory read-only client, with the two invoices the owner
-pointed at, line for line as they sit in raw_sales (org f4f1c16e, customer omitted):
+pointed at, line for line as they sit in raw_sales (org f4f1c16e; the customer on Z1321IN11092's lines, and on
+Z1321IN10551 only its invoice header — so both halves of the sale-customer rule are exercised):
   · Z1321IN11092 (2026-07-02) — one activation; 3 activation-type lines (carrier $150 / $0 / $45);
   · Z1321IN10551 (2026-05-02 shape) — one activation; 4 activation-type lines (carrier $150, and the
     "ADD A LINE SMART PHONE KICKER" pair $0 / $100 — the pair is one line's tracking SKU + rebate SKU:
@@ -20,6 +21,13 @@ pointed at, line for line as they sit in raw_sales (org f4f1c16e, customer omitt
      carrier-paid dealer figures and the commission-ledger buckets; the manager form is unchanged.
   E. `is_paid_line` reads the engine's verdict: suppressed / non-qualifying / $0 lines are not paid; a flat
      bonus and a negative line are.
+  F. (index §6j) the paid row names its SALE — the action, the phone line, the customer (THE sale-customer rule;
+     only `trans_id,customer` read, org-scoped); the manager row carries them too; the statement lists them.
+  G. (§6j) WHO: /me's viewer payload hides exactly the registered manager-only pages from a rep; each refusal
+     names its registered label; the self-scope answer is one function; a manager viewing the Rep Incentive page
+     (no audience sent) gets the full report.
+  H. (§6j) ONE employee over a MONTH RANGE: each month IS that month's single statement (to the cent), month
+     totals + the grand total are sums of them; CSV / PDF; a rep may run it only for themselves; the 12-month cap.
 
     python3 backend/harness_payout_audience.py
 """
@@ -116,8 +124,12 @@ RULES = [{"id": "RACT", "label": "Activation", "match_field": "activation_bucket
 REP = "Jona Sejat"
 
 
+CUST1, CUST2 = "CHEORGE CHEISHVILI INC", "MALIKA,R IRGASHEVA"
+
+
 def L(tid, product, category, serial="", ext=0.0, voided="No"):
     return {"org_id": ORG, "period": PERIOD, "trans_id": tid, "trans_date": "2026-07-02", "store": "Store 1321",
+            "customer": CUST1 if tid == "Z1321IN11092" else "",
             "salesperson": REP, "user_login": REP, "department": "Activations (Price Sheet)",
             "category": ">> Activations (Price Sheet) >> Carrier >> " + category, "product_desc": product,
             "serial_1": serial, "mdn": "", "ext_price": ext, "gp": ext, "voided": voided, "trans_type": None,
@@ -159,11 +171,20 @@ TABLES = {
                                                   "scope_value": None}],
     ("commcalc", "accessory_config"): [{"org_id": ORG, "activation_details_rules": TENANT_ADR,
                                         "contract_type_map": {}, "activation_rules": []}],
-    ("commcalc", "raw_sales"): Z11092 + Z10551,
+    ("commcalc", "raw_sales"): Z11092 + Z10551 + [dict(r, period="June 2026", trans_date="2026-06-02", trans_id="Z1321IN10551J")
+                                                   for r in Z10551],
+    # the invoice header (sales by invoice, mig 1012) — the fallback half of the sale-customer rule
+    ("commcalc", "raw_sales_invoice"): [{"org_id": ORG, "trans_id": "Z1321IN10551", "customer": CUST2},
+                                        {"org_id": ORG, "trans_id": "Z1321IN10551J", "customer": CUST2},
+                                        {"org_id": "another-org", "trans_id": "Z1321IN11092", "customer": "LEAKED NAME"}],
     ("commcalc", "rep_commissions"): [{"org_id": ORG, "period": PERIOD, "epay_salesperson": REP, "storeops_name": REP,
                                        "store": "Store 1321", "total_payout": 20.0, "plan_comm": 20.0, "subtotal": 20.0,
                                        "boost_commission": 310.0, "boost_reimbursement": 12.5,
-                                       "premium_acts": 2, "byod_acts": 0, "upgrade_acts": 0}],
+                                       "premium_acts": 2, "byod_acts": 0, "upgrade_acts": 0},
+                                      {"org_id": ORG, "period": "June 2026", "epay_salesperson": REP, "storeops_name": REP,
+                                       "store": "Store 1321", "total_payout": 10.0, "plan_comm": 10.0, "subtotal": 10.0,
+                                       "boost_commission": 150.0, "boost_reimbursement": 0.0,
+                                       "premium_acts": 1, "byod_acts": 0, "upgrade_acts": 0}],
 }
 _FAKE = FakeClient(TABLES)
 R.sb = lambda: _FAKE
@@ -353,6 +374,166 @@ check("E7 no known carrier field is on any employee allow-list",
 check("E6 resolve: self → employee whatever is asked; others → the declared audience, default manager",
       PA.resolve("manager", True) == "employee" and PA.resolve("employee", False) == "employee"
       and PA.resolve("", False) == "manager" and PA.resolve("x", False) == "manager")
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════════
+section("F. the paid row names its SALE — action · phone line · customer (index §6j)")
+f1, f2 = act_lines(e, "Z1321IN11092"), act_lines(e, "Z1321IN10551")
+check("F1 Z1321IN11092 employee row: 'New activation' · 9297458084 · the customer on the sale lines",
+      len(f1) == 1 and f1[0].get("event_label") == "New activation" and f1[0].get("phone") == P1
+      and f1[0].get("customer") == CUST1, f1)
+check("F2 Z1321IN10551 employee row: the customer from the INVOICE HEADER (its lines name none)",
+      len(f2) == 1 and f2[0].get("customer") == CUST2 and f2[0].get("phone") == P2, f2)
+check("F3 another org's invoice header never names this org's customer (org-scoped read)",
+      "LEAKED NAME" not in json.dumps(e) and "LEAKED NAME" not in json.dumps(m0))
+check("F4 phone / customer / event_label are on the employee allow-list on purpose (no disallowed field)",
+      {"phone", "customer", "event_label"} <= set(PA.EMPLOYEE_LINE_FIELDS) and PA.disallowed_fields(e) == [])
+check("F5 the manager rows carry the same sale identity (every matched line of the invoice)",
+      all(l.get("customer") == CUST1 and l.get("phone") == P1 for l in act_lines(m0, "Z1321IN11092")))
+from app.modules.commcalc import inventory_sold_recon as _ISR   # noqa: E402
+_raw = TABLES[("commcalc", "raw_sales")]
+_hdr = {r["trans_id"]: r["customer"] for r in TABLES[("commcalc", "raw_sales_invoice")] if r["org_id"] == ORG}
+check("F6 the name IS the sale-customer rule the inventory integrity report uses (inventory_sold_recon.sale_customer)",
+      _ISR.invoice_customer_map(_raw, _hdr).get("Z1321IN11092") == CUST1
+      and _ISR.invoice_customer_map(_raw, _hdr).get("Z1321IN10551") == CUST2
+      and _ISR.sale_customer({"trans_id": "Z1321IN10551", "customer": ""}, _hdr) == CUST2)
+_seen = []
+
+
+class _Spy(FakeClient):
+    def schema(self, name):
+        base = FakeClient.schema(self, name)
+        seen = _seen
+
+        class S:
+            def table(self_, n):
+                q = base.table(n)
+                sel0, eq0 = q.select, q.eq
+
+                def select(*a, **k):
+                    seen.append((n, a[0] if a else ""))
+                    return sel0(*a, **k)
+
+                def eq(col, val):
+                    seen.append((n, "eq:" + col))
+                    return eq0(col, val)
+                q.select, q.eq = select, eq
+                return q
+        return S()
+
+
+_DD._sale_customers(_Spy(TABLES), ORG, ["Z1321IN11092", "Z1321IN10551"])
+_sels = {c for t, c in _seen if not c.startswith("eq:")}
+check("F7 the name read selects ONLY trans_id,customer (no id number, no other customer field) and is org-scoped",
+      _sels == {"trans_id,customer"} and ("raw_sales", "eq:org_id") in _seen and ("raw_sales_invoice", "eq:org_id") in _seen,
+      _seen)
+se_lines = se.get("sale_lines") or []
+check("F8 the employee statement lists its sales that paid: 2 rows, action · phone · customer, no product / Price / GP",
+      len(se_lines) == 2 and all(r["status"] == "Paid" and r.get("customer") and r.get("phone") for r in se_lines)
+      and not any(k in r for r in se_lines for k in ("product", "ext_price", "gp")), se_lines)
+sm_lines = sm0.get("sale_lines") or []
+check("F9 the manager statement (held grant) lists every matched line — the product, Price / GP, the ⛔ reasons",
+      len(sm_lines) > len(se_lines) and any(r.get("product") for r in sm_lines)
+      and any(r["status"] != "Paid" for r in sm_lines) and any("ext_price" in r for r in sm_lines))
+check("F10 Σ statement sale-line $ == Σ drill-down line $ (the lines restate the engine, nothing added)",
+      round(sum(r["amount_raw"] for r in se_lines), 2) == PA.rule_line_total(e) == 20.0)
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════════
+section("G. WHO is looking — /me's viewer payload, the registry, the self scope (index §6j)")
+vp_rep, vp_mgr = PA.viewer_payload(True), PA.viewer_payload(False)
+check("G1 a rep is told: audience employee, the manager-only pages refused (Pay Discrepancy among them)",
+      vp_rep["audience"] == "employee" and "/commcalc/discrepancy" in vp_rep["refused_pages"]
+      and set(vp_rep["refused_pages"]) == set(PA.MANAGER_ONLY_PAGES))
+check("G2 a manager is told: audience manager, nothing refused", vp_mgr == {"audience": "manager", "refused_pages": []})
+_SELF["keys"] = {REP.upper()}
+msgs = []
+for call in (lambda: R.carrier_vs_pay_report(PERIOD, org_id=ORG, authorization=""),
+             lambda: asyncio.run(R.get_discrepancy_results(PERIOD, org_id=ORG, authorization="")),
+             lambda: R.list_discrepancy_appeals(org_id=ORG, authorization="")):
+    try:
+        call()
+    except R.HTTPException as ex:
+        msgs.append(str(ex.detail))
+    except Exception:
+        pass
+_SELF["keys"] = None
+check("G3 each refusal names its REGISTERED surface", msgs == [
+    "Carrier Earned vs Employee Paid is a management report.", "Pay Discrepancy is a management report.",
+    "Commission Discrepancy is a management report."], msgs)
+try:
+    PA.manager_only_label("not_registered")
+    check("G4 an unregistered manager-only key raises (a refusal must be registered for the nav to hide it)", False)
+except KeyError:
+    check("G4 an unregistered manager-only key raises (a refusal must be registered for the nav to hide it)", True)
+from app.modules.storeops import router as _SO   # noqa: E402
+_orig = (_SO._rbac_enabled, _SO._role_scope)
+_SO._rbac_enabled = lambda org_id=None: True
+_SO._role_scope = lambda org_id, role: {"rep": "self", "dm": "market", "owner": "all"}.get(role, "self")
+g5 = (_SO.role_is_self_scoped(ORG, "rep"), _SO.role_is_self_scoped(ORG, "dm"), _SO.role_is_self_scoped(ORG, "owner"))
+_SO._rbac_enabled = lambda org_id=None: False
+g5off = _SO.role_is_self_scoped(ORG, "rep")
+_SO._rbac_enabled, _SO._role_scope = _orig
+check("G5 ONE self-scope answer (the nav's and the server's): rep yes, DM / owner no, RBAC off never",
+      g5 == (True, False, False) and g5off is False, (g5, g5off))
+mgr_page = explain("")         # the Rep Incentive page now sends no audience
+check("G6 a manager on the Rep Incentive page (no audience sent) gets the FULL report: ⛔ lines, Price / GP",
+      "audience" not in mgr_page and any(l.get("suppressed") for l in act_lines(mgr_page, "Z1321IN11092"))
+      and any("ext_price" in l for l in act_lines(mgr_page, "Z1321IN11092")))
+_SELF["keys"] = {REP.upper()}
+check("G7 ...while a rep on the same page (no audience sent) gets the employee report", explain("").get("audience") == "employee")
+_SELF["keys"] = None
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════════
+section("H. ONE employee over a MONTH RANGE — each month IS the single statement (index §6j)")
+
+
+def stmt(period, audience=""):
+    return R.commission_statement_document(REP, period, fmt="json", audience=audience, authorization="", org_id=ORG)
+
+
+def rng(audience="", fmt="json", rep_=REP, pf="2026-06", pt="2026-07"):
+    return R.commission_statement_document(rep_, "", fmt=fmt, audience=audience, period_from=pf, period_to=pt,
+                                           authorization="", org_id=ORG)
+
+
+for aud in ("manager", "employee"):
+    rg = rng(aud)
+    singles = [stmt("June 2026", aud), stmt("July 2026", aud)]
+    check("H1 [%s] months = June, July — each month's section == that month's single statement, byte for byte" % aud,
+          [m["period"] for m in rg["months"]] == ["June 2026", "July 2026"]
+          and json.dumps(rg["statements"], sort_keys=True, default=str) == json.dumps(singles, sort_keys=True, default=str))
+    check("H2 [%s] month totals == the single statements' payout of record; grand total == their sum, to the cent" % aud,
+          [m["total_raw"] for m in rg["months"]] == [d["summary"]["total_raw"] for d in singles] == [10.0, 20.0]
+          and rg["grand_total_raw"] == 30.0 and rg["grand_total"] == "$30.00", (rg["months"], rg["grand_total"]))
+re_rng = rng("employee")
+check("H3 the employee range lists paid rows only (1 in June, 2 in July) and no carrier field",
+      [m["paid_lines"] for m in re_rng["months"]] == [1, 2]
+      and all(r["status"] == "Paid" and "ext_price" not in r for d in re_rng["statements"] for r in d["sale_lines"]))
+csv_e = rng("employee", fmt="csv").body.decode()
+csv_m = rng("manager", fmt="csv").body.decode()
+hdr_e, hdr_m = csv_e.splitlines()[0], csv_m.splitlines()[0]
+check("H4 employee CSV: action / phone / customer, no product / Price / GP column; month totals + the grand total",
+      "customer" in hdr_e and "product" not in hdr_e and "ext_price" not in hdr_e and "gp" not in hdr_e.split(",")
+      and CUST1 in csv_e and "month total" in csv_e and "grand total" in csv_e and ",30.0" in csv_e, hdr_e)
+check("H5 manager CSV: adds product, status, Price and GP", all(k in hdr_m for k in ("product", "status", "ext_price", "gp")))
+pdf = rng("employee", fmt="pdf")
+check("H6 the range PDF renders (the totals page, then each month)", pdf.body[:4] == b"%PDF" and len(pdf.body) > 2000)
+single_csv = R.commission_statement_document(REP, "July 2026", fmt="csv", authorization="", org_id=ORG).body.decode()
+check("H7 one month as CSV is the one-month range", "July 2026" in single_csv and "grand total" in single_csv)
+_SELF["keys"] = {REP.upper()}
+try:
+    rng("", rep_="Someone Else")
+    check("H8 a rep running the range for ANOTHER employee is refused", False)
+except R.HTTPException as ex:
+    check("H8 a rep running the range for ANOTHER employee is refused 403", ex.status_code == 403)
+own = rng("manager")
+check("H9 a rep's own range is always the employee form (asking for manager changes nothing)",
+      own["audience"] == "employee" and all(d.get("audience") == "employee" for d in own["statements"]))
+_SELF["keys"] = None
+try:
+    rng("", pf="2025-01", pt="2026-07")
+    check("H10 more than 12 months is refused (the Rep Incentive range cap)", False)
+except R.HTTPException as ex:
+    check("H10 more than 12 months is refused 400 (the Rep Incentive range cap)", ex.status_code == 400)
 
 print("\n" + "=" * 100)
 print("%d passed, %d failed" % (P, F))
