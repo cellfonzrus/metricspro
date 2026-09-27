@@ -6229,11 +6229,20 @@ Pure logic `commcalc/dlar_vs_platform.py`; proof `backend/harness_dlar_vs_platfo
   filter spelling is invented. Sorted from the first commit through `useTableSort` / `SortableTh`.
 
 **(9) LIVE-DATA DEFECTS FOUND WHILE MEASURING — REPORTED, NOT CODED AROUND.**
-- **A NEW column stopped arriving: `raw_dlar_store.tmr3`, 0 of 28 rows, September 2026.** The sweep's
-  own 2026-09-27 11:01Z status says so (`⚠ PARTIAL … ⚠ COLUMN STOPPED ARRIVING: raw_dlar_store.tmr3
-  (0 of 28 rows), raw_dlar_rep.store (0 of 45), raw_dlar_rep.ga_prepaid (0 of 45)`) — the §19.28
-  content-arrival axis working as designed, on a column the MI 3MR qualifier averages. `ga_prepaid` and
-  `store` are still gone, three months on.
+- **A NEW column stopped arriving, and it is one the PAY ENGINE TIERS ON: `raw_dlar_store.tmr3`.**
+  Measured per period (read-only, house org, 28 store rows each month): **July 28/28 filled · August
+  28/28 · September 0/28**, while `family_plan_pct`, `aal_conversion` and `atu` stayed 28/28 — so it is
+  that one column, not the report. The sweep's own 2026-09-27 11:01Z status already said so
+  (`⚠ PARTIAL … ⚠ COLUMN STOPPED ARRIVING: raw_dlar_store.tmr3 (0 of 28 rows), raw_dlar_rep.store
+  (0 of 45), raw_dlar_rep.ga_prepaid (0 of 45)`): the §19.28 content-arrival axis earning its keep on a
+  break nobody would otherwise have seen. **Why it matters twice over:** `tmr3` is in
+  `kpi_failing.STORE_KPI_COLUMNS`, one of the three store-grain KPIs the Boost pay engine ROLLS DOWN to
+  every rep (§19.28 (2b)), and it is the column the MI 3MR manager qualifier averages (§19.28 (vi)).
+  **And this is the §19.28 fix working in production right now:** before it, an empty `tmr3` would have
+  been a fabricated `0` failing every rep and dragging every manager's qualifier; today it resolves to
+  `None` → `no_data`, outside the met-count denominator, so September's scores are honest about it
+  instead of quietly wrong. The remedy is upstream (the carrier's report) and is the owner's, not ours.
+  `ga_prepaid` and `store` are still gone, three months on.
 - **`raw_dlar_rep` holds SEVERAL ROWS PER REP PER PERIOD and the pay engine silently keeps ONE.**
   `calculator.dlar_rep_by_name[name] = d` — last insert wins. Measured: March 24 duplicated rep names
   (Waleed Asghar 6 rows), April 23, May 19, June 19, July 3, August 2, September 2. So a rep who worked
