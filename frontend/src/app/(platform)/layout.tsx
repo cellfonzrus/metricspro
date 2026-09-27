@@ -7,9 +7,10 @@ import { HelpProvider } from '@/lib/help-context'
 import HelpToggle from '@/components/HelpToggle'
 import AskBar from '@/components/AskBar'
 import { useAuth, useActiveCarrier } from '@/lib/auth-context'
-import { setActiveOrg } from '@/lib/client'
+import { setActiveOrg, api } from '@/lib/client'
+import { setupRedirect, setupGateApplies, type SetupGate } from '@/lib/setup-gate'
 import { apiCached, CONFIG } from '@/lib/cache'
-import { NAV, platformOK, platformPathOK, canSeeItem, canAccessPath, carrierOKActive, verticalOK, verticalPathOK, isSuperAdmin, safeHomeFor, applyNavLayout, carrierCode, REPORT_CATEGORIES, type NavItem, type NavLayout } from '@/lib/rbac'
+import { NAV, platformOK, platformPathOK, isPlatformAdmin, canSeeItem, canAccessPath, carrierOKActive, verticalOK, verticalPathOK, isSuperAdmin, safeHomeFor, applyNavLayout, carrierCode, REPORT_CATEGORIES, type NavItem, type NavLayout } from '@/lib/rbac'
 import { carrierDisplayName } from '@/lib/carrier-scope'
 import { actingCompany, switcherOptions, switcherVisible, switchConfirmText } from '@/lib/tenant-scope'
 import HelpPanel from '@/components/HelpPanel'
@@ -708,6 +709,26 @@ function Guard({ children }: { children: React.ReactNode }) {
       if (dest !== pathname) router.replace(dest)   // guard against redirecting to a gated-off home (loop)
     }
   }, [enforce, loading, session, provisioned, active, user, permissions, pathname, router, needsTenantChoice, sessionInvalid, tenant?.vertical])
+
+  // SETUP WIZARD FIRST (index §39): a new company's admin is walked to the Upload Wizard until its required documents
+  // are in. The server answers whether (GET /commcalc/setup-documents/gate — one read for every company already done);
+  // lib/setup-gate decides where. Re-asked on each navigation so the gate lifts the moment the last upload lands.
+  const [setupGate, setSetupGate] = useState<SetupGate | null>(null)
+  const gateOn = enforce === true && !!session && provisioned && active
+    && setupGateApplies(isSuperAdmin(permissions), isPlatformAdmin(user))
+  useEffect(() => {
+    if (!gateOn) return
+    let on = true
+    api('/api/v1/commcalc/setup-documents/gate')
+      .then((g: SetupGate) => { if (on) setSetupGate(g) })
+      .catch(() => { if (on) setSetupGate(null) })     // unreadable → never trap anyone
+    return () => { on = false }
+  }, [gateOn, pathname, tenant?.org_id])
+  useEffect(() => {
+    if (!gateOn) return
+    const dest = setupRedirect(setupGate, pathname)
+    if (dest && dest !== pathname) router.replace(dest)
+  }, [gateOn, setupGate, pathname, router])
 
   if (enforce === null) return <Splash text="Loading…" />
   if (enforce === false) return <PlatformShell open>{children}</PlatformShell>  // app open

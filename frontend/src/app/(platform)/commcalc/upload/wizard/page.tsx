@@ -73,6 +73,38 @@ function stepsFromKinds(kindRows: ReportKindRow[]): Step[] {
   return out
 }
 
+// ── SETUP DOCUMENTS (index §39, owner 2026-09-27) ────────────────────────────────────────────────
+// The required documents for THIS company's carrier(s) come from GET /commcalc/setup-documents — the report-kind
+// registry's house rows (edited on Super Admin Toolbox → Carrier Documents) through the one visibility function.
+// Each says where to download it (registry DATA — this file names no portal), takes the upload on the same route
+// the rest of this page uses, lets the tenant pick how often it is due (its import-health feed → reminders), and
+// offers automatic updates ONLY when the platform has a proven automation track record for that document.
+type Proof = { proven: boolean; runs: number; needed: number; window_days: number; how: string | null; setup_link: string | null }
+type SetupDoc = {
+  key: string; label: string; what_in_it: string | null; required: boolean; carriers: string[]
+  download_steps: string | null; download_url: string | null; source_hint: string | null
+  upload_types: string[]; upload_path: string | null; cadence: string; default_cadence: string
+  scheduled: boolean; uploaded: boolean; last_uploaded_at: string | null; state: string; due_at: string | null
+  skipped: boolean; skipped_until: string | null; automation: Proof
+}
+type SetupGate = { active: boolean; pending: string[]; done: boolean; complete: boolean; allow_paths?: string[] }
+type SetupPayload = { company: string; documents: SetupDoc[]; gate: SetupGate; wizard_path: string }
+const CADENCES = ['daily', 'weekly', 'monthly'] as const
+
+// The upload step for a setup document: its first upload route this page knows (same routes as stepsFromKinds).
+function stepForDoc(d: SetupDoc): Step | null {
+  for (const u of d.upload_types) {
+    const pr = PERIOD_ROUTES[u]; const mr = MODULE_ROUTES[u]
+    if (!pr && !mr) continue
+    return {
+      id: u, label: d.label, icon: (pr || mr)!.icon, source: d.source_hint || '', report: d.what_in_it || '',
+      auto: false, kind: pr ? 'period' : 'module', endpoint: pr ? `commcalc/upload/${u}` : mr!.endpoint,
+      needsDate: !!mr?.needsDate, ft: pr ? u : undefined,
+    }
+  }
+  return null
+}
+
 type Rec = { file_type: string; period: string | null; uploaded_at: string }
 type RegistryReport = { report_key: string; label?: string | null; source_name?: string | null; report_id?: string | number | null; upload_endpoint?: string | null; source_url?: string | null; auto?: boolean }
 type Connector = { vendor_name: string; label?: string | null; portal_url?: string | null; sweep_kind?: string | null; reports?: RegistryReport[] }
@@ -85,6 +117,24 @@ export default function UploadWizardPage() {
   const [msg, setMsg] = useState<Record<string, string>>({})
   const [dates, setDates] = useState<Record<string, string>>({})
   const kinds = useReportKinds()
+  const [setup, setSetup] = useState<SetupPayload | null>(null)
+  const [setupMsg, setSetupMsg] = useState<Record<string, string>>({})
+  const [setupTick, setSetupTick] = useState(0)
+  useEffect(() => {
+    let alive = true
+    api('/api/v1/commcalc/setup-documents')
+      .then((d: SetupPayload) => { if (alive) setSetup(d) })
+      .catch(() => { if (alive) setSetup(null) })   // not an admin / not set up: the page works as before
+    return () => { alive = false }
+  }, [setupTick])
+  async function saveDoc(d: SetupDoc, body: { cadence?: string; skip?: boolean }) {
+    setSetupMsg(m => ({ ...m, [d.key]: '' }))
+    try {
+      await api(`/api/v1/commcalc/setup-documents/${encodeURIComponent(d.key)}`, { method: 'PUT', body: JSON.stringify(body) })
+      setSetupMsg(m => ({ ...m, [d.key]: body.cadence ? `✓ We'll remind you ${body.cadence} when it's due.` : body.skip ? '✓ Put off for 30 days.' : '✓ Saved.' }))
+      setSetupTick(t => t + 1)
+    } catch (e: unknown) { setSetupMsg(m => ({ ...m, [d.key]: 'Error: ' + ((e as Error)?.message || e) })) }
+  }
 
   function loadHistory() {
     api(`/api/v1/commcalc/upload/history?org_id=${ORG_ID}&limit=200`)
@@ -125,12 +175,16 @@ export default function UploadWizardPage() {
       // A price-guard refusal / shrink warning returns HTTP-200 — tell the truth instead of "✓ Uploaded".
       const o = readUploadOutcome(res, 'rows')
       setMsg(m => ({ ...m, [s.id]: (o.tone === 'ok' ? '✓ ' : '⚠ ') + o.text }))
-      loadHistory()
+      loadHistory(); setSetupTick(t => t + 1)
     } catch (e: unknown) {
       setMsg(m => ({ ...m, [s.id]: `Error: ${(e as Error)?.message || e}` }))
     } finally { setBusy('') }
   }
 
+  const setupDocs = setup?.documents || []
+  const setupRouteIds = new Set(setupDocs.flatMap(d => d.upload_types))
+  const otherSteps = setupDocs.length ? STEPS.filter(s => !setupRouteIds.has(s.id)) : STEPS
+  const setupDone = setupDocs.filter(d => d.uploaded).length
   const periodSteps = STEPS.filter(s => s.kind === 'period')
   const done = periodSteps.filter(s => lastUpload(s)).length
 
@@ -160,13 +214,93 @@ export default function UploadWizardPage() {
         <Link href="/commcalc/connectors" className="btn btn-secondary" style={{ fontSize: 13, whiteSpace: 'nowrap' }}>🔌 Manage in Connectors</Link>
       </div>
 
+      {setupDocs.length > 0 && (
+        <section style={{ marginBottom: 22 }}>
+          {setup?.gate.active ? (
+            <div className="card" style={{ padding: 16, marginBottom: 12, border: '1px solid #93c5fd', background: '#eff6ff' }}>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>👋 Welcome{setup.company ? `, ${setup.company}` : ''} — let&apos;s get your data in</div>
+              <div style={{ fontSize: 13.5, color: 'var(--text2)', marginTop: 4, lineHeight: 1.5 }}>
+                Upload the {setupDocs.filter(d => d.required).length} documents below for your carrier. Each one says exactly where to
+                download it. Pick how often you&apos;ll upload each one and we&apos;ll remind you when it&apos;s due. Don&apos;t have one yet?
+                Choose <b>I don&apos;t have this yet</b> and we&apos;ll remind you in 30 days. The rest of the app opens as soon as every
+                document is in or put off.
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>📑 Your required documents</div>
+          )}
+          <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 10 }}>
+            <b>{setupDone}</b> of <b>{setupDocs.length}</b> uploaded.
+          </div>
+          <div style={{ display: 'grid', gap: 12 }}>
+            {setupDocs.map(d => {
+              const st = stepForDoc(d)
+              const m = setupMsg[d.key] || (st ? msg[st.id] : '')
+              return (
+                <div key={d.key} className="card" style={{ padding: 14, display: 'grid', gap: 8, borderLeft: `4px solid ${d.uploaded ? '#16a34a' : d.skipped ? '#9ca3af' : '#f59e0b'}` }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                    <div style={{ fontWeight: 700, fontSize: 15 }}>
+                      {d.label}
+                      {d.required && <span style={{ marginLeft: 8, fontSize: 11, color: '#1d4ed8', background: '#dbeafe', padding: '2px 7px', borderRadius: 10 }}>required</span>}
+                    </div>
+                    <div style={{ fontSize: 12, color: d.uploaded ? '#15803d' : 'var(--text3)', whiteSpace: 'nowrap' }}>
+                      {d.uploaded ? `✓ last uploaded ${String(d.last_uploaded_at).slice(0, 10)}` : d.skipped ? `put off until ${String(d.skipped_until).slice(0, 10)}` : 'not uploaded yet'}
+                    </div>
+                  </div>
+                  {d.what_in_it && <div style={{ fontSize: 12.5, color: 'var(--text2)' }}>{d.what_in_it}</div>}
+                  <div style={{ fontSize: 13, background: 'var(--surface2)', borderRadius: 8, padding: '8px 10px' }}>
+                    <b>Where to get it:</b> {d.download_steps || d.source_hint || 'from your system'}
+                    {d.download_url && <> {' '}<a href={d.download_url} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>Open the portal ↗</a></>}
+                  </div>
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    {st ? (
+                      <>
+                        {st.needsDate && (
+                          <input type="date" className="input" value={dates[st.id] || ''} onChange={e => setDates(x => ({ ...x, [st.id]: e.target.value }))} style={{ width: 160 }} />
+                        )}
+                        <label className="btn" style={{ padding: '6px 12px', fontSize: 13, cursor: 'pointer' }}>
+                          {busy === st.id ? 'Uploading…' : '📤 Choose file & upload'}
+                          <input type="file" hidden disabled={busy === st.id}
+                            onChange={e => { const f = e.target.files?.[0]; if (f) upload(st, f); e.currentTarget.value = '' }} />
+                        </label>
+                      </>
+                    ) : d.upload_path ? (
+                      <Link href={d.upload_path} className="btn" style={{ padding: '6px 12px', fontSize: 13 }}>📤 Upload it here →</Link>
+                    ) : null}
+                    <label style={{ fontSize: 12.5, color: 'var(--text2)' }}>I&apos;ll upload it{' '}
+                      <select className="input" style={{ fontSize: 12.5, padding: '4px 6px' }} value={d.scheduled ? d.cadence : ''}
+                        onChange={e => { if (e.target.value) saveDoc(d, { cadence: e.target.value }) }}>
+                        {!d.scheduled && <option value="">choose…</option>}
+                        {CADENCES.map(c => <option key={c} value={c}>{c}{c === d.default_cadence ? ' (usual)' : ''}</option>)}
+                      </select>
+                    </label>
+                    {!d.uploaded && (d.skipped
+                      ? <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => saveDoc(d, { skip: false })}>Undo put off</button>
+                      : <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => saveDoc(d, { skip: true })}>I don&apos;t have this yet</button>)}
+                    {m && <span style={{ fontSize: 12, color: m.startsWith('Error') ? '#b91c1c' : m.startsWith('⚠') ? '#b45309' : '#15803d' }}>{m}</span>}
+                  </div>
+                  {d.automation.proven && d.automation.setup_link && (
+                    <div style={{ fontSize: 12.5, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '8px 10px' }}>
+                      ⚡ <b>Want this to update automatically?</b> This report has been pulled automatically {d.automation.runs} times in the
+                      last {d.automation.window_days} days. {d.automation.how === 'portal' ? 'Add your portal login' : 'Set up automatic forwarding'} and
+                      you won&apos;t need to upload it by hand: <Link href={d.automation.setup_link} style={{ color: '#15803d', fontWeight: 600 }}>set it up →</Link>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          {otherSteps.length > 0 && <div style={{ fontSize: 15, fontWeight: 700, margin: '22px 0 0' }}>Other reports you can upload</div>}
+        </section>
+      )}
+
       <div style={{ display: 'grid', gap: 12 }}>
         {kinds.loaded && !kinds.error && STEPS.length === 0 && (
           <div className="card" style={{ padding: 14, color: 'var(--text2)', fontSize: 13 }}>
             No upload steps are offered yet: no visible report kind names a manual upload route for this company&apos;s declared POS and carrier. Declare them in onboarding, or register the reports in Connectors.
           </div>
         )}
-        {STEPS.map(s => {
+        {otherSteps.map(s => {
           const last = lastUpload(s)
           const m = msg[s.id]
           return (

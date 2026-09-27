@@ -918,7 +918,8 @@ _all_routes = _flatten_routes(real_app.routes)
 #     1677  + GET /account/pl-range (the P&L over a month range — one column per month + Total, index §4c)
 #     1680  + 3 routes main gained in #304 (Super Admin Toolbox, §38) / #307 (KPI registry, §19.28) without re-pinning
 #             — measured on the merged tree
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1680"))
+#     1687  + 7 setup-documents routes (index §39: GET/PUT/gate setup-documents, GET/PUT/POST report-kinds/house, reopen)
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1687"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
