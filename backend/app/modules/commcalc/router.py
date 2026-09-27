@@ -14411,7 +14411,12 @@ def _do_dlar_sweep(org_id):
         return
     _dlar_set_status(client, org_id, 'running', 'Sweep in progress…')
     try:
-        res = dlar_sweep.run_dlar_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'])
+        # WHICH REPORTS TO PULL IS CONFIG, NOT CODE (owner: "nothing is hard coded, option is platform
+        # wide"). `reports` arrives by mig 1029 and is NULL until set, so the default pair is unchanged.
+        # No column ladder is possible: `_dlar_cfg` reads the row WHOLE, which is the §4b.1 reading rule
+        # for a config row — an absent column is simply an absent key.
+        res = dlar_sweep.run_dlar_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'],
+                                        reports=cfg.get('reports'))
         # WHAT WAS WRITTEN, AND AS OF WHEN (owner defect 2026-09-26, index §19.28). This line used to
         # report the PULL counts, so a table the partial-collapse guard refused sat under a green
         # "OK — 28 stores, 45 reps" while nothing was written to it and the period's slice stayed frozen
@@ -16101,9 +16106,16 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
             cb_items = []
             prem_rate = float(cfg.get('premium_flat') or 5)
 
+            # THE SIBLING (found by the lock, owner ruling 2026-09-27): "this line is an INELIGIBLE
+            # activation" was a bare `'ineligible' in ct` here — a THIRD copy of the exclusion
+            # vocabulary `line_class.exclusion_class` now owns (the other two were the Sales Report's
+            # swap tally and `ma_recon._is_activation_line`). Byte-identical for any org whose rules are
+            # the house ones (contract_type + the word 'ineligible'); a tenant whose POS carries the fact
+            # in the category path now gets its chargebacks detected at all, where before it silently got
+            # none. The chargeback AMOUNT and the decision flow are untouched.
+            _cb_rules = _line_rules_of(_accessory_config(client, org_id))
             for s in sales:
-                ct = str(s.get('contract_type') or '').lower()
-                if 'ineligible' in ct:
+                if _lc.exclusion_class(s, _cb_rules) == 'ineligible':
                     ref = str(s.get('trans_id') or '').strip()
                     if not ref: continue
                     cb_items.append({
@@ -16739,6 +16751,195 @@ def _dlar_slice_vintage(client, org_id, period):
     except Exception:
         return None
 
+
+@router.get("/dlar-vs-platform/{period}")
+def get_dlar_vs_platform(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """CARRIER FEED vs THE STORE'S TRANSACTIONS — the per-metric difference, attributed. READ-ONLY.
+
+    OWNER 2026-09-27, verbatim: *"the comparison of the dlar report for numbers and the ones we are
+    reporting in thr platform , they should be the same - the source of truth is the transaction done in
+    thr store so all reporting should have the same data , create a report for the. Difference of thr
+    incoming data from dlar and whatever you are using to assess the difference and show it it in
+    management dashboard"*.
+
+    IT COMPOSES, IT DOES NOT RE-DERIVE (duplicate-check gate, and the reason this report is in the same
+    change as the denominator ruling):
+      · the PLATFORM side is `_sales_cell_agg` + `_apply_activation_basis` — the very cells Executive MTD
+        and the Sales Report roll up, including `act_new_activation`, the ONE new-activation count
+        (`line_class.new_activation_units`, §19.31). If this endpoint counted for itself it would become
+        the third answer to "how many activations" and so the defect it exists to expose.
+      · the FEED side is `raw_dlar_rep` / `raw_dlar_store` AS LANDED — read, never recomputed.
+      · the VINTAGE is `_dlar_slice_vintage` → `dlar_sweep.slice_vintage` (mig 1026, §19.28), so a gap
+        caused by a 24-of-31-days snapshot is reported as UNDECIDABLE rather than as a counting dispute.
+      · which feed column carries a metric, and the absence vocabulary, come from the existing homes
+        (`kpi_failing`, `carrier_vs_pay`'s `reported`/`measured_zero`/`not_reported`).
+      · the classification is PURE in `commcalc/dlar_vs_platform.py` (proof
+        `backend/harness_dlar_vs_platform.py`).
+
+    Standard filters (market / store / rep) apply client-side over this already-span-scoped payload —
+    `/kpi-failing`'s and `/dlar-store`'s own pattern in this module, so no fourth server-side spelling of
+    a filter is invented here. Books nothing (`summary.books_to == []`)."""
+    require_org(org_id)
+    cperiod = _period_or_400(period)
+    client = sb()
+    from app.modules.commcalc import dlar_vs_platform as _dvp
+    from app.modules.commcalc import data_lineage_registry as _dlr
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+
+    # ── the PLATFORM side: Executive MTD's own cells, not a second pass ──────────────────────────
+    acfg = _accessory_config(client, org_id)
+    ckey = _canonical_store_key_fn(client, org_id)
+    rows, _umeta = _sales_rows_union(client, org_id, cperiod, cols=_ACTUALS_COLS)
+    cells = _sales_cell_agg(rows, acfg, store_key=ckey)
+    src_meta = _apply_activation_basis(client, org_id, cperiod, cells, ckey)
+    line_rules = _line_rules_of(acfg)
+    # WHICH UNITS THE CARRIER'S OWN BASIS WOULD DROP, per metric, per entity. The swap units sit in BOTH
+    # the byod set and the upgrade set under the house `count_unit='transaction'` (index §19.28 (3): one
+    # BYOD-Swap line and one Upgrade line on the same phone line), so they inflate the UPGRADE count too
+    # — which is why the exclusion map is per METRIC and not per entity.
+    def _blank_side():
+        return {"new_activations": 0, "upgrades": 0, "total_acts": 0, "byod": 0, "premium": 0,
+                "swap_in_upgrades": 0, "ineligible_in_new": 0, "bounty": None}
+    by_rep, by_store = {}, {}
+    _inel = {}                       # (scope, key) → units the 'ineligible' kind would remove
+    for (sk, rep, _date), a in cells.items():
+        for scope, bag, kkey in ((_dvp.GRAIN_REP, by_rep, (rep or "").strip().upper()),
+                                 (_dvp.GRAIN_STORE, by_store, sk or "")):
+            if not kkey:
+                continue
+            d = bag.setdefault(kkey, _blank_side())
+            d["new_activations"] += a.get("act_new_activation", 0) or 0
+            d["upgrades"] += len(a.get("_upg") or ())
+            d["premium"] += len(a.get("_prem") or ())
+            d["byod"] += len(a.get("_byod") or ())
+            d["total_acts"] = d["new_activations"] + d["upgrades"]
+            d["swap_in_upgrades"] += len((a.get("_swap") or set()) & (a.get("_upg") or set()))
+            if scope == _dvp.GRAIN_REP:
+                d.setdefault("_label", (a.get("salesperson") or rep or "").strip())
+                d.setdefault("_store", a.get("store") or "")
+    # the OPEN boundary, measured but not applied (owner's two questions, §19.31): how many of the units
+    # still counted would leave under the `ineligible` kind. Reported so the page can show what each
+    # boundary answer does, and NEVER subtracted from the count on its own.
+    _units_all = _lc.activation_units(rows, line_rules, skip=_line_skip)
+    _nau_all = _lc.new_activation_units(rows, line_rules, skip=_line_skip, units=_units_all)
+    for _i, _r in enumerate(rows):
+        _u = _units_all[_i]
+        if not _u or _u[1] not in _nau_all["units"]:
+            continue
+        if _lc.exclusion_class(_r, line_rules) != "ineligible":
+            continue
+        _rk = str(_r.get("salesperson") or "").strip().upper()
+        _sk = ckey(str(_r.get("store") or "").strip()) if ckey else str(_r.get("store") or "").strip()
+        for _scope, _k in ((_dvp.GRAIN_REP, _rk), (_dvp.GRAIN_STORE, _sk)):
+            _inel.setdefault((_scope, _k), set()).add(_u[1])
+
+    # ── the FEED side, AS LANDED ─────────────────────────────────────────────────────────────────
+    fr = (client.schema('commcalc').table('raw_dlar_rep').select('*')
+          .eq('org_id', org_id).in_('period', _pvariants(cperiod)).execute().data) or []
+    fs = (client.schema('commcalc').table('raw_dlar_store').select('*')
+          .eq('org_id', org_id).in_('period', _pvariants(cperiod)).execute().data) or []
+    vint = _dlar_slice_vintage(client, org_id, cperiod) or {}
+    _grains = (vint.get('grains') or {})
+    v_rep = (_grains.get('raw_dlar_rep') or {})
+    v_store = (_grains.get('raw_dlar_store') or {})
+    # A COLUMN THE FEED STOPPED SENDING FOR EVERYBODY is one fact about the feed, not N findings — the
+    # §19.28 content-arrival axis, read from the registry that already declares which columns must carry.
+    stopped = []
+    for _tbl, _rws in (('raw_dlar_rep', fr), ('raw_dlar_store', fs)):
+        _ca = _dlr.content_arrival(_rws, _dlr.required_content_columns(_tbl))
+        stopped.extend('%s.%s' % (_tbl, _col) for _col in (_ca or {}).get('empty_columns') or ())
+
+    # the feed's own grain is per rep per DOOR: several rows for one rep cannot be compared against a
+    # single platform figure without saying so. Counted and reported, never silently collapsed.
+    rep_rows_per_name = {}
+    for f in fr:
+        k = str(f.get('rep_name') or '').strip().upper()
+        if k:
+            rep_rows_per_name[k] = rep_rows_per_name.get(k, 0) + 1
+    feed_by_rep, feed_by_store = {}, {}
+    for f in fr:
+        k = str(f.get('rep_name') or '').strip().upper()
+        if k and k not in feed_by_rep:
+            feed_by_rep[k] = f
+    for f in fs:
+        k = ckey(str(f.get('address') or '').strip()) if ckey else str(f.get('address') or '').strip()
+        if k and k not in feed_by_store:
+            feed_by_store[k] = f
+
+    def _grain_note(n):
+        if (n or 0) <= 1:
+            return None
+        return ('the feed holds %d rows for this rep (one per door) and this platform figure counts the '
+                'rep across every store they rang a sale at — the two are not over the same population, '
+                'so the difference is not decidable at this grain' % n)
+
+    out_reps = []
+    for k in sorted(set(by_rep) | set(feed_by_rep)):
+        p = by_rep.get(k) or _blank_side()
+        store_label = p.get("_store") or ''
+        if not in_keyset(ks, store_label or (feed_by_rep.get(k) or {}).get('store')):
+            continue
+        n_feed_rows = rep_rows_per_name.get(k, 0)
+        out_reps.append(_dvp.entity_row(
+            key=k, label=p.get("_label") or k, store=store_label, grain=_dvp.GRAIN_REP,
+            feed_row=feed_by_rep.get(k),
+            platform=(_platform_side(p, feed_by_rep.get(k)) if k in by_rep else None),
+            excluded_units={'activations': {'ineligible': len(_inel.get((_dvp.GRAIN_REP, k)) or ())},
+                            'upgrades': {'swap': p.get('swap_in_upgrades', 0)}},
+            vintage=v_rep, grain_note=_grain_note(n_feed_rows)))
+    out_stores = []
+    for k in sorted(set(by_store) | set(feed_by_store)):
+        if not in_keyset(ks, k):
+            continue
+        p = by_store.get(k) or _blank_side()
+        out_stores.append(_dvp.entity_row(
+            key=k, label=k, store=k, grain=_dvp.GRAIN_STORE,
+            feed_row=feed_by_store.get(k),
+            platform=(_platform_side(p, feed_by_store.get(k)) if k in by_store else None),
+            excluded_units={'activations': {'ineligible': len(_inel.get((_dvp.GRAIN_STORE, k)) or ())},
+                            'upgrades': {'swap': p.get('swap_in_upgrades', 0)}},
+            vintage=v_store))
+    return {
+        "period": cperiod,
+        "reps": out_reps, "stores": out_stores,
+        "summary": _dvp.summarize(out_reps + out_stores, period=cperiod, vintage=vint,
+                                  stopped_columns=stopped,
+                                  feed_rows_per_entity=rep_rows_per_name),
+        "metric_defs": {g: [{"metric": m[0], "label": m[1], "kind": m[4],
+                             "feed_columns": list(m[2]), "platform_basis": m[3]}
+                            for m in ms] for g, ms in _dvp.METRICS.items()},
+        # THE PLATFORM SIDE'S OWN PROVENANCE: which activation basis produced it, and whether the
+        # exclusion could be applied on that basis at all (it cannot on an uploaded Activation-Details
+        # basis, which does not say which units were swaps).
+        "activation_source": src_meta,
+        "new_activation_rule": {**_lc.HOUSE_RULES["new_activation"], **(line_rules.get("new_activation") or {}),
+                                "sentence": _lc.NEW_ACTIVATION_SENTENCE},
+        "feed_vintage": vint,
+    }
+
+
+def _platform_side(p, feed_row=None):
+    """The platform's {metric key: value} for `dlar_vs_platform.compare` — the numbers Executive MTD
+    prints, plus the ONE derived rate. A key left out is `not_reported` on the platform side, which is the
+    honest answer for a carrier metric the transactions cannot speak to (ATU, protect, tablets on the
+    sales basis) — never a zero that looks like a measurement.
+
+    `boostapp_rate` is the owner's ruling made visible: the numerator is the FEED's own
+    `boost_ready_bounty` (the platform cannot see a Ready App install and never pretends to) over the
+    PLATFORM's new-activation count, through the ONE arithmetic `kpi_failing.derived_rate`. So this row
+    shows the carrier's stored rate beside the rate his ruling produces, on the same page."""
+    from app.modules.commcalc import kpi_failing as _kpif
+    na = p.get("new_activations") or 0
+    out = {"new_activations": na, "upgrades": p.get("upgrades") or 0,
+           "total_acts": p.get("total_acts") or 0}
+    if na:
+        out["byod_rate"] = round((p.get("byod") or 0) / na * 100.0, 2)
+    _num_col = _kpif.REP_DERIVED_RATES["boostapp"][0]
+    b = (feed_row or {}).get(_num_col)
+    if b is not None:
+        out["boostapp_rate"] = _kpif.derived_rate(b, na)
+    return out
 
 @router.get("/kpi-failing/{period}")
 def get_kpi_failing(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
@@ -27077,6 +27278,12 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
     # sets below, byte-identical) or 'event' (one per phone line on the invoice). Never re-derived here.
     rows = rows if isinstance(rows, list) else list(rows or [])
     _units = _lc.activation_units(rows, line_rules, skip=_line_skip)
+    # THE NEW-ACTIVATION COUNT (owner ruling 2026-09-27: "the total of new activations excluding upgrade
+    # and swap as reported in exec mats - data source is the same for all reports"). ONE derivation, in
+    # line_class, over the SAME units this cell pass counts on — never a second pass and never a second
+    # definition. `_newact` below is its unit set per cell; the Ready App denominator reads the same home.
+    _nau = _lc.new_activation_units(rows, line_rules, skip=_line_skip, units=_units)
+    _newact_units = _nau['units']
     agg = {}
     for _ri, r in enumerate(rows):
         # ── THE canonical skip rules — shared by all three (was three slightly different predicates).
@@ -27106,7 +27313,7 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
         if not a:
             a = agg[k] = {'store': store, 'salesperson': rep, 'trans_date': date, 'login': None,
                           '_txn': set(), '_prem': set(), '_byod': set(), '_upg': set(),
-                          '_port': set(), '_swap': set(), '_billpay': set(),
+                          '_port': set(), '_swap': set(), '_newact': set(), '_billpay': set(),
                           'lines': 0, 'revenue': 0.0, 'gp': 0.0, 'accessory_rev': 0.0, 'setup_fee_rev': 0.0,
                           'box_count': 0,
                           'total_phones': 0, 'bill_qty': 0, 'bill_amt': 0.0, 'activation_fee': 0.0,
@@ -27146,9 +27353,16 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
                 a['_upg'].add(tid)
             elif _bb == 'premium':
                 a['_prem'].add(tid)
-        # Swaps — distinct-txn, contract_type contains 'swap' (independent tally; changes none of the above).
-        if tid and 'swap' in ctl:
+        # Swaps — distinct-txn, through THE ONE exclusion vocabulary (`line_class.exclusion_class`, owner
+        # ruling 2026-09-27). This was a bare `'swap' in ctl` here and a second copy in
+        # `ma_recon._is_activation_line`; both are now dereferences of the org's `exclusions` config over
+        # the SAME fields the class predicate reads. House org: contract_type + the word 'swap' →
+        # byte-identical. (Independent tally; changes none of the buckets above.)
+        if tid and _lc.exclusion_class(r, line_rules) == 'swap':
             a['_swap'].add(tid)
+        # NEW ACTIVATIONS — the owner's denominator, per cell, from the one derivation above.
+        if _uid and _uid in _newact_units:
+            a['_newact'].add(_uid)
         # Accessory$ — the ONE shared _is_accessory classifier (all three agree; Exec MTD no longer uses
         # its own exec_metric_config['accessory'] token match for the number — see the handoff note).
         # DEVICE SET-UP FEE (mig 217) is tallied in its OWN accumulator, SEPARATE from accessory_rev, and
@@ -29486,11 +29700,12 @@ def _blank_sales_cell(store, rep, date):
     Activation Details but not in the sales feed, so its activations still show (with zero sales columns)."""
     return {"store": store, "salesperson": rep, "trans_date": date, "login": None,
             "_txn": set(), "_prem": set(), "_byod": set(), "_upg": set(), "_port": set(),
-            "_swap": set(), "_billpay": set(), "lines": 0, "revenue": 0.0, "gp": 0.0,
+            "_swap": set(), "_newact": set(), "_billpay": set(), "lines": 0, "revenue": 0.0, "gp": 0.0,
             "accessory_rev": 0.0, "setup_fee_rev": 0.0, "box_count": 0, "total_phones": 0,
             "bill_qty": 0, "bill_amt": 0.0, "activation_fee": 0.0, "protect": 0,
             "act_new": 0, "act_port": 0, "act_byod": 0, "act_upg": 0,
-            "act_tablet": 0, "act_home_internet": 0, "act_edge": 0}
+            "act_tablet": 0, "act_home_internet": 0, "act_edge": 0,
+            "act_new_activation": 0, "act_swap_excluded": 0}
 
 
 def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_stores=None,
@@ -29514,6 +29729,12 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
         # The sales feed does not distinguish tablet / home-internet / edge → 0 (they stay folded inside the
         # feed's own `new` sense). An INACTIVE basis is therefore byte-identical to before this split.
         a["act_tablet"] = a["act_home_internet"] = a["act_edge"] = 0
+        # THE OWNER'S DENOMINATOR (ruling 2026-09-27) — new activations excluding upgrade and swap. On the
+        # sales basis it is the EXACT unit set `_sales_cell_agg` built from `line_class.new_activation_units`
+        # (per-unit exclusion, so a BYOD-Swap invoice leaves the count once, not per line). Nothing is
+        # re-derived here; this field is what every consumer reads, exactly like `act_new` beside it.
+        a["act_new_activation"] = len(a.get("_newact") or ())
+        a["act_swap_excluded"] = len((a.get("_swap") or set()) & ((a.get("_prem") or set()) | (a.get("_byod") or set())))
     # ── THE BASIS IS NOW STATED, NOT INFERRED (owner 2026-09-20) ────────────────────────────────
     # `policy` is the caller's explicit choice (activation_bucketing.BASIS_POLICIES); None/'auto' is
     # today's behaviour and every number below is byte-identical. What changes unconditionally is that
@@ -29528,16 +29749,19 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
         # The tenant has not stated Activation Details as their activation source, so folding is the
         # stated behaviour and nothing is degraded.
         return {"active": False, "basis": "sales_agg", "ad_rows": 0, "policy": _pol,
-                "stated_source": _stated, "degraded": False,
+                "stated_source": _stated, "degraded": False, "new_activation_exclusions_applied": True,
                 "reason": "the activation source of truth is not Activation Details."}
     ad_cells, ad_n = _ad_cells_full(client, org_id, period, ckey_fn)
+    _ad_line_rules = _line_rules_of(_accessory_config(client, org_id))   # the org's `classes`, read ONCE
     if not ad_n:
         _d = _ab.basis_decision(_pol, 0, _stated)
         return {"active": False, "basis": "sales_agg", "ad_rows": 0, "policy": _pol,
-                "stated_source": _stated, "degraded": True, "reason": _d["reason"]}
+                "stated_source": _stated, "degraded": True, "new_activation_exclusions_applied": True,
+                "reason": _d["reason"]}
     for a in cells.values():
         a["act_new"] = a["act_port"] = a["act_byod"] = a["act_upg"] = 0   # AD authoritative
         a["act_tablet"] = a["act_home_internet"] = a["act_edge"] = 0
+        a["act_new_activation"] = a["act_swap_excluded"] = 0
     for key, ad in ad_cells.items():
         if key not in cells:
             if restrict_stores is not None and key[0] not in restrict_stores:
@@ -29550,6 +29774,15 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
         a["act_tablet"], a["act_home_internet"], a["act_edge"] = ad["tablet"], ad["home_internet"], ad["edge"]
         a["act_new"] = ad["new"] + ad["tablet"] + ad["home_internet"] + ad["edge"]
         a["act_port"], a["act_byod"], a["act_upg"] = ad["port"], ad["byod"], ad["upgrade"]
+        # THE SAME denominator on the Activation-Details basis, from the SAME `classes` config — the one
+        # other way in (`new_activation_from_buckets`), so the number cannot drift from the line-level one.
+        # The Activation-Details report does not say which units were SWAPS, so the exclusion cannot be
+        # applied on this basis and `act_swap_excluded` stays 0: the meta says `exclusions_applied: False`
+        # rather than letting a report imply the swaps were taken out when they were not.
+        a["act_new_activation"] = _lc.new_activation_from_buckets(
+            {"activation": a["act_new"], "port": a["act_port"], "byod": a["act_byod"], "upgrade": a["act_upg"]},
+            excluded=0, rules=_ad_line_rules)
+        a["act_swap_excluded"] = 0
     if _pol == "folded":
         # A DELIBERATE FOLD, and a NARROW one. It folds ONLY the split-only sub-counts back into
         # `act_new` — which already contains them by construction (`new + tablet + home_internet +
@@ -29564,11 +29797,12 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
             a["act_tablet"] = a["act_home_internet"] = a["act_edge"] = 0
         return {"active": True, "basis": "activation_details", "ad_rows": ad_n, "policy": _pol,
                 "stated_source": _stated, "degraded": False, "folded_split_categories": True,
+                "new_activation_exclusions_applied": False,
                 "reason": (f"Activation Details supplied {ad_n} row(s); policy 'folded' folds "
                            + ", ".join(_ab.SPLIT_ONLY_CATEGORIES)
                            + f" into '{_ab.FOLD_TARGET}' so an upload cannot re-price those sales.")}
     return {"active": True, "basis": "activation_details", "ad_rows": ad_n, "policy": _pol,
-            "stated_source": _stated, "degraded": False,
+            "stated_source": _stated, "degraded": False, "new_activation_exclusions_applied": False,
             "reason": f"Activation Details supplied {ad_n} row(s) for this period."}
 
 
@@ -29798,6 +30032,7 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
         # below — a metric sentinel, NOT a bucket. Any future code iterating these dicts must skip '_name'.
         return {'activation': 0, 'port': 0, 'byod': 0, 'upgrade': 0, 'total_phones': 0,
                 'tablet': 0, 'home_internet': 0, 'edge': 0,
+                'new_activation': 0, 'swap_excluded': 0,
                 'bill_qty': 0, 'bill_amt': 0.0, 'acc_sales': 0.0, 'setup_fee': 0.0,
                 'activation_fee': 0.0, 'protect': 0}
     by_store, by_emp = {}, {}
@@ -29827,6 +30062,11 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
             d['tablet'] += a['act_tablet']
             d['home_internet'] += a['act_home_internet']
             d['edge'] += a['act_edge']
+            # NEW ACTIVATIONS excluding upgrade and swap (owner ruling 2026-09-27) — the SHARED basis
+            # field, set once by `_apply_activation_basis` from `line_class`. Summing the cells is
+            # correct: a unit belongs to exactly one (store, rep, day) cell.
+            d['new_activation'] += a.get('act_new_activation', 0) or 0
+            d['swap_excluded'] += a.get('act_swap_excluded', 0) or 0
             d['total_phones'] += a['total_phones']
             d['bill_qty'] += a['bill_qty']
             d['bill_amt'] += a['bill_amt']
@@ -29868,6 +30108,10 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
                 'total_activation': ta, 'activation': _pure_new, 'port': d['port'],
                 'byod': d['byod'], 'tablet': _tab, 'home_internet': _hi, 'edge': _edge,
                 'upgrade': d['upgrade'], 'total_phones': d['total_phones'],
+                # THE OWNER'S DENOMINATOR (ruling 2026-09-27), reported on the report he named it after:
+                # new activations = Total Activation less Upgrade, less the units an exclusion kind took
+                # out. `swap_excluded` says how many came out, so the subtraction is never invisible.
+                'new_activation': d['new_activation'], 'swap_excluded': d['swap_excluded'],
                 'trending_box': round(ta * trend_factor),
                 'bill_payment_qty': d['bill_qty'], 'amount': round(d['bill_amt'], 2),
                 'conv': round(ta / d['bill_qty'], 4) if d['bill_qty'] else 0.0,

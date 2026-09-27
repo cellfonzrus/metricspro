@@ -34,7 +34,46 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 APP = os.path.join(ROOT, "app")
 FE = os.path.join(os.path.dirname(ROOT), "frontend", "src", "app", "(platform)", "commcalc")
 HOME = "modules/commcalc/line_class.py"
-DEFS = ("line_event_keys", "activation_events", "activation_units")
+DEFS = ("line_event_keys", "activation_events", "activation_units",
+        # "HOW MANY NEW ACTIVATIONS" and "which unit does not count" — the owner's 2026-09-27 ruling.
+        # One home, same file, same lock: a second copy of either is the same defect as a second event.
+        "exclusion_class", "new_activation_units", "new_activation_count", "new_activation_from_buckets")
+# (g) THE NEW-ACTIVATION COUNT — who must dereference it, and what must not reappear.
+#     Owner: *"Denominator should be the total of new activations excluding upgrade and swap as reported
+#     in exec mats - data source is the same for all reports"*. So: the count Executive MTD prints, the
+#     Ready App denominator and the DLAR-vs-platform report must be the SAME derivation.
+NEWACT = {
+    # Executive MTD's cells build the unit set; the basis applier turns it into the shared field every
+    # consumer reads; the Exec MTD row prints it; the pay engine scores the rate on it.
+    ("modules/commcalc/router.py", "_sales_cell_agg"): ["_lc.new_activation_units(", "_lc.exclusion_class("],
+    ("modules/commcalc/router.py", "_apply_activation_basis"): ['a["act_new_activation"]',
+                                                                "_lc.new_activation_from_buckets("],
+    ("modules/commcalc/router.py", "_row"): ["'new_activation': d['new_activation']"],
+    ("modules/commcalc/calculator.py", "calc_rep_commissions"): ["_lc.new_activation_units(",
+                                                                 "_kpi_failing.resolve_boostapp_basis("],
+    # the difference report COMPOSES the platform count; it must never classify a line itself
+    ("modules/commcalc/router.py", "get_dlar_vs_platform"): ["_lc.new_activation_units(",
+                                                             'a.get("act_new_activation"'],
+}
+# the KPI resolver is the one place a DERIVED rep-grain rate is resolved, and the one arithmetic
+DERIVED = {
+    ("modules/commcalc/kpi_failing.py", None): ["REP_DERIVED_RATES", "def derived_rate(",
+                                                "def resolve_boostapp_basis(", "SOURCE_REP_DERIVED"],
+}
+# a bare swap/ineligible substring test over a sale line is the vocabulary escaping its home again
+BARE_EXCL = re.compile(r"""["'](?:swap|ineligible)["']\s+in\s+\w*(?:ct|contract_type|category|product)""", re.I)
+# a second "how many new activations" derivation: buckets added up without the home saying so
+BARE_COUNT = re.compile(r"""len\([^)\n]*prem[^)\n]*\)\s*\+\s*len\([^)\n]*byod[^)\n]*\)""", re.I)
+EXCL_EXCUSED = {
+    "modules/commcalc/line_class.py": "THE HOME — it declares the words.",
+}
+COUNT_EXCUSED = {
+    "modules/commcalc/line_class.py": "THE HOME.",
+    # the difference report's per-rep bag keeps premium/byod for the BYOD RATE it prints beside the
+    # count; the COUNT itself comes from act_new_activation, which axis (g) pins.
+    "modules/commcalc/router.py": ("_platform_side builds the BYOD rate from the bucket counts; the "
+                                   "new-activation COUNT is read from act_new_activation, pinned by (g)."),
+}
 
 # (b) pay callers — (file, function or None) → the dereferences it must carry
 PAY = {
@@ -154,6 +193,36 @@ def scan(files, fe):
         for n in needs:
             if n not in body:
                 v.append(("c", rel, "%s no longer carries: %s" % (fn, n)))
+    # (g) the new-activation count — every caller dereferences the home
+    for (rel, fn), needs in NEWACT.items():
+        src = files.get(rel)
+        body = code(functions(src or "").get(fn, "") if fn else (src or ""))
+        if not body:
+            v.append(("g", rel, "function %s missing" % fn))
+            continue
+        for n in needs:
+            if n not in body:
+                v.append(("g", rel, "%s no longer carries: %s" % (fn, n)))
+    # (h) the derived rate has one home and one arithmetic
+    for (rel, fn), needs in DERIVED.items():
+        body = code(files.get(rel, "") if fn is None else functions(code(files.get(rel, ""))).get(fn, ""))
+        for n in needs:
+            if n not in body:
+                v.append(("h", rel, "no longer carries: " + n))
+    for rel, src in sorted(files.items()):
+        if re.search(r"^\s*def\s+derived_rate\s*\(", src, re.M) and rel not in (
+                "modules/commcalc/kpi_failing.py", "modules/commcalc/dlar_sweep.py"):
+            v.append(("h", rel, "a third derived_rate — the score side is kpi_failing, the ingest side "
+                                "is dlar_sweep, and there is no room for another"))
+    # (i) the exclusion vocabulary and the count may not reappear as bare expressions
+    for rel, src in sorted(files.items()):
+        c = code(src)
+        if BARE_EXCL.search(c) and rel not in EXCL_EXCUSED:
+            v.append(("i", rel, "tests a sale line for 'swap'/'ineligible' itself — read "
+                                "line_class.exclusion_class"))
+        if BARE_COUNT.search(c) and rel not in COUNT_EXCUSED:
+            v.append(("i", rel, "adds the premium and byod bucket sizes itself — that is the "
+                                "new-activation count, and it has one home"))
     # (d) the retired per-transaction count
     stale = []
     for rel, src in sorted(files.items()):
@@ -194,7 +263,13 @@ for part, label in (("a", "(a) one home: line_event_keys / activation_events / a
                     ("b", "(b) pay: the engine computes events and injects them into the gate (payout + financing); the gate offers per_event"),
                     ("c", "(c) count: Sales Report/Exec MTD cells, Boost calculator, commission drill, closing x2, Sales Comparison dereference activation_units"),
                     ("d", "(d) no function classifies a line and adds the trans id to an activation set (the retired count)"),
-                    ("e", "(e) the breakdown groups by the engine's event stamp on both surfaces")):
+                    ("e", "(e) the breakdown groups by the engine's event stamp on both surfaces"),
+                    ("g", "(g) the NEW-ACTIVATION count (owner 2026-09-27): Exec MTD's cells + basis + row, "
+                          "the pay engine's Ready App denominator and the DLAR-vs-platform report all "
+                          "dereference line_class"),
+                    ("h", "(h) the DERIVED rate has one home (kpi_failing) and one arithmetic; the basis "
+                          "is resolved, never branched on"),
+                    ("i", "(i) no bare 'swap'/'ineligible' line test and no second premium+byod count")):
     check(label, not [x for x in viol if x[0] == part], [x[1:] for x in viol if x[0] == part])
 check("(d) every excuse is still true (the excused file still counts per transaction)", not stale, stale)
 
@@ -229,6 +304,25 @@ check("(f) a surface hand-mapping plan lines (dropping the event stamp) → RED"
 v, _s = planted({"modules/commcalc/router.py": files["modules/commcalc/router.py"].replace(
     "_units = _lc.activation_units(rows, line_rules, skip=_line_skip)", "_units = [None] * len(rows)")})
 check("(f) _sales_cell_agg no longer counting through the definition → RED", any(x[0] == "c" and "_sales_cell_agg" in x[2] for x in v))
+v, _s = planted({"modules/commcalc/shadow2.py": "def new_activation_units(rows):\n    return {}\n"})
+check("(f) a second new_activation_units → RED", any(x[0] == "a" and "shadow2" in x[1] for x in v))
+v, _s = planted({"modules/commcalc/router.py": files["modules/commcalc/router.py"].replace(
+    "'new_activation': d['new_activation']", "'new_activation': 0")})
+check("(f) Exec MTD dropping the owner's column → RED", any(x[0] == "g" and "_row" in x[2] for x in v))
+v, _s = planted({"modules/commcalc/calculator.py": files["modules/commcalc/calculator.py"].replace(
+    "_lc.new_activation_units(", "_lc.gone(")})
+check("(f) the Ready App denominator not dereferencing the one home → RED",
+      any(x[0] == "g" and "calculator" in x[1] for x in v))
+v, _s = planted({"modules/commcalc/newcount.py": (
+    "def denom(a):\n    return len(a['_prem']) + len(a['_byod'])\n")})
+check("(f) a second premium+byod count → RED", any(x[0] == "i" and "newcount" in x[1] for x in v))
+v, _s = planted({"modules/commcalc/newswap.py": "def f(ct):\n    return 'swap' in ct.lower()\n"})
+check("(f) a bare swap test on a sale line → RED", any(x[0] == "i" and "newswap" in x[1] for x in v))
+v, _s = planted({"modules/commcalc/kpi_failing.py": files["modules/commcalc/kpi_failing.py"].replace(
+    "REP_DERIVED_RATES", "REP_GONE_RATES")})
+check("(f) the derived-rate declaration removed → RED", any(x[0] == "h" for x in v))
+v, _s = planted({"modules/commcalc/thirdrate.py": "def derived_rate(n, d):\n    return 0\n"})
+check("(f) a third derived_rate → RED", any(x[0] == "h" and "thirdrate" in x[1] for x in v))
 v, _s = planted()
 check("(f) the unmodified tree is GREEN (the controls above are not vacuous)", not v)
 

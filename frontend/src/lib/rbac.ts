@@ -150,6 +150,7 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/sales-comparison', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
   ['/commcalc/kpi-failing', 'commissions'],
+  ['/commcalc/dlar-vs-platform', 'commissions'],
   ['/commcalc/zero-sales', 'commissions'],
   ['/commcalc/discrepancy', 'commissions'], ['/commcalc/sales-recon', 'commissions'],
   ['/commcalc/epay-fee-recon', 'commissions'],
@@ -457,6 +458,10 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // NEW report (2026-09-03): high-level overview of every KPI below target, store → rep drill-down.
     { href: '/commcalc/kpi-failing', label: 'Failing KPIs', icon: '🎯', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // NEW report (owner 2026-09-27): what the carrier's report claims, beside what the store's own
+    // transactions say, with every difference attributed — a counting definition, a stale feed slice,
+    // or nothing (the finding). Composes the ONE activation count Executive MTD prints.
+    { href: '/commcalc/dlar-vs-platform', label: 'Feed vs Transactions', icon: '⚖️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // NEW report (owner 2026-09-22): store-days and rep-days with no activation and no upgrade. A
     // store whose feed did not land reads "not reported", never zero — see commcalc/zero_sales.py.
     { href: '/commcalc/zero-sales', label: 'Zero Sales', icon: '🚫', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
@@ -1148,7 +1153,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/targets', 'targets'], ['/commcalc/targets/action-plan', 'targets'],
   ['/commcalc/atu-opportunity', 'targets'],
   ['/commcalc/targets/accessories', 'targets'], ['/commcalc/targets/my', 'targets'],
-  ['/commcalc/kpi', 'targets'], ['/commcalc/kpi-failing', 'targets'], ['/commcalc/productivity', 'targets'], ['/commcalc/coaching', 'targets'],
+  ['/commcalc/kpi', 'targets'], ['/commcalc/kpi-failing', 'targets'], ['/commcalc/dlar-vs-platform', 'targets'], ['/commcalc/productivity', 'targets'], ['/commcalc/coaching', 'targets'],
   // Assets & Inventory (incl. Distributors/VIP consignment)
   ['/commcalc/asset', 'assets'], ['/commcalc/asset/dashboard', 'assets'], ['/commcalc/asset/owed-weekly', 'assets'],
   ['/commcalc/asset/aging', 'assets'], ['/commcalc/asset/missing-phones', 'assets'],

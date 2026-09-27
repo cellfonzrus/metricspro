@@ -125,7 +125,7 @@ BROAD_RATIO = 0.8
 # the keys this module owns inside accessory_config.activation_details_rules (the Activation-Details
 # basis keys — edge_* / upgrade_hidden_* — live beside them and are never touched by a save here)
 OWNED_KEYS = ("fields", "tokens", "exact", "auto_activation_tokens", "hints", "metric_hints", "broad_attested",
-              "event")
+              "event", "exclusions", "new_activation")
 
 # ── THE ACTIVATION EVENT (owner 2026-09-25) — what ONE activation / upgrade IS ─────────────────────
 # Owner, verbatim: *"commisison for teh reps need to be claculated per action and per upgrade as defined
@@ -154,6 +154,74 @@ CLASS_OF_BUCKET = {"premium": "activation", "upgrade": "upgrade", "byod": "byod"
 EVENT_NO_KEY = "no phone line or device on the invoice's activation-type lines — counted once for the invoice"
 EVENT_EVIDENCE_SHARED = ("activation-type line(s) name no phone line of their own and the invoice has several "
                          "activations — kept as evidence of the invoice, never as another activation")
+
+# ── "HOW MANY NEW ACTIVATIONS" — ONE HOME (owner ruling 2026-09-27) ────────────────────────────────
+# Owner, verbatim: *"Denominator should be the total of new activations excluding upgrade and swap as
+# reported in exec mats - data source is the same for all reports"*. ("exec mats" = the Executive MTD
+# report.) The ruling settles what the Boost Ready App rate is measured against, and it says something
+# wider than that: **one activation count, one home.** The count Executive MTD prints, the Ready App
+# denominator, and any other report answering "how many new activations" must all dereference THIS.
+#
+# THE TWO PARTS OF THE RULING, separated because they are different kinds of fact:
+#   · WHICH CLASSES are a new activation — `new_activation.classes`. The ruling names Total Activation
+#     minus Upgrade, so: activation + port + byod (the three non-upgrade activation-type classes; that
+#     is exactly Exec MTD's `total_activation - upgrade`, and `activation` there is the FOLDED count —
+#     tablet / home-internet / edge included, as it always has been).
+#   · WHICH UNITS ARE EXCLUDED even though their class counts — `new_activation.exclusions`. A "swap"
+#     moves a customer's own device onto an EXISTING line: no gross add, and the carrier counts it as
+#     neither an activation nor an upgrade (index §19.28 (3) — five August invoices carried a BYOD-Swap
+#     line AND an Upgrade line on one phone line). The vocabulary that recognises one is `EXCLUSIONS`
+#     below, and it is CONFIG (RULE TWO): 'swap' was a bare `'swap' in contract_type.lower()` in
+#     `router._sales_cell_agg` and again in `ma_recon._is_activation_line`, two copies of one fact.
+#
+# `ineligible` is DECLARED here and NOT APPLIED by default. It is the open boundary: the carrier's own
+# August figure for the reference rep reconciles only when ineligible port-ins come out too
+# (measured: 8 premium + 11 byod − 5 swap = 14, and − the ineligible port-in = 13 = ElevateGo's
+# denominator, under BOTH count units). The owner's wording names upgrade and swap and not this, so the
+# house default is exactly what he said and the exclusion is one config value away. Never guessed.
+EXCLUSION_KINDS = ("swap", "ineligible")
+# the house token vocabulary per exclusion kind — matched by CONTAINS over the SAME configured `fields`
+# the class predicate reads, so a tenant whose POS carries the fact in the category path is served too.
+HOUSE_EXCLUSIONS = {"swap": ["swap"], "ineligible": ["ineligible"]}
+# `classes` = the classes that count; `exclusions` = the kinds applied. House = the owner's ruling.
+HOUSE_NEW_ACTIVATION = {"classes": ["activation", "port", "byod"], "exclusions": ["swap"]}
+NEW_ACTIVATION_SENTENCE = ("new activations = the Executive MTD Total Activation less Upgrade "
+                           "(activation + port + BYOD), less any unit excluded by kind")
+
+
+def resolve_exclusions(raw=None):
+    """The org's EXCLUSION vocabulary (`activation_details_rules.exclusions`) → {kind: [tokens]}.
+    Missing / junk → the house words. An explicitly EMPTY list is honoured (that kind then matches
+    nothing), because "we have no word for a swap" is a real answer. Unknown kinds are dropped. PURE."""
+    raw = raw if isinstance(raw, dict) else {}
+    return {k: _norm_tokens(raw.get(k), HOUSE_EXCLUSIONS[k]) for k in EXCLUSION_KINDS}
+
+
+def resolve_new_activation(raw=None):
+    """The org's NEW-ACTIVATION definition (`activation_details_rules.new_activation`) →
+    {'classes': [...], 'exclusions': [...], 'source': 'house'|'tenant'}. Missing / junk → the house
+    default (the owner's ruling). An explicitly empty `classes` list is NOT honoured — a denominator of
+    nothing is never what anybody means, and a silent zero denominator is the §19.28 defect itself; the
+    house classes are used and `source` still reports 'tenant' for the part that was declared. PURE."""
+    raw = raw if isinstance(raw, dict) else {}
+    classes = []
+    if isinstance(raw.get("classes"), (list, tuple)):
+        for c in raw["classes"]:
+            v = _s(c)
+            if v in ACTIVATION_TYPE_CLASSES and v not in classes:
+                classes.append(v)
+    excl = []
+    if isinstance(raw.get("exclusions"), (list, tuple)):
+        for e in raw["exclusions"]:
+            v = _s(e)
+            if v in EXCLUSION_KINDS and v not in excl:
+                excl.append(v)
+    else:
+        excl = list(HOUSE_NEW_ACTIVATION["exclusions"])
+    return {"classes": classes or list(HOUSE_NEW_ACTIVATION["classes"]),
+            "exclusions": excl,
+            "source": "tenant" if any(k in raw for k in ("classes", "exclusions")) else "house"}
+
 
 
 def _now_iso():
@@ -286,6 +354,10 @@ def resolve_rules(raw=None, ct_map=None, legacy_activation=None):
         "metric_hints": {b: _norm_tokens(mhints_raw.get(b), HOUSE_METRIC_HINTS[b]) for b in HOUSE_METRIC_HINTS},
         "broad_attested": _norm_attested(raw.get("broad_attested")),
         "event": resolve_event(raw.get("event")),
+        # THE ONE HOME for "how many new activations" (owner ruling 2026-09-27) — the vocabulary that
+        # recognises an excluded unit, and which classes / exclusions make the count.
+        "exclusions": resolve_exclusions(raw.get("exclusions")),
+        "new_activation": resolve_new_activation(raw.get("new_activation")),
         "declared": declared,
         "house_fill": house_fill,
         "source": "tenant" if (declared["fields"] or declared["tokens"] or declared["exact"]) else "house",
@@ -525,6 +597,115 @@ def event_counts(events_result):
             by_bucket[e["bucket"]] = by_bucket.get(e["bucket"], 0) + 1
         by_class[e["cls"]] = by_class.get(e["cls"], 0) + 1
     return {"by_bucket": by_bucket, "by_class": by_class}
+
+
+# ── "HOW MANY NEW ACTIVATIONS" — the predicate and the count, dereferenced by Executive MTD, the Boost
+#    Ready App denominator and every other surface that answers it. `harness_activation_event_lock.py`
+#    fails the build on a second copy. ───────────────────────────────────────────────────────────────
+def exclusion_class(row, rules=None):
+    """'swap' | 'ineligible' | None — THE reason one sale line does not count as a new activation even
+    though its CLASS does. Read over the SAME configured `fields` the class predicate reads, by CONTAINS
+    over the org's `exclusions` words. `EXCLUSION_KINDS` order is the precedence (a line that says both
+    reports the first). PURE, never raises.
+
+    ONE HOME. This fact had two copies before the owner's 2026-09-27 ruling: `'swap' in ctl` inside
+    `router._sales_cell_agg` (the Sales Report's swap tally) and `"swap" in ct.lower()` inside
+    `ma_recon._is_activation_line` (the MA reconciliation's sold-side basis, which has ALWAYS excluded a
+    swap — so the ruling is not new behaviour there, it is the same rule finally written down once).
+    Both were bare contract-type substrings, invisible to a tenant whose POS carries the fact elsewhere."""
+    r = rules or HOUSE_RULES
+    texts = _texts(row, r)
+    words = r.get("exclusions") or HOUSE_EXCLUSIONS
+    for kind in EXCLUSION_KINDS:
+        if _hit(words.get(kind) or [], texts):
+            return kind
+    return None
+
+
+def new_activation_units(rows, rules=None, skip=None, txn_of=None, unit=None, require_txn=True,
+                         units=None, classes=None, exclusions=None):
+    """THE new-activation COUNT for a slice of sale lines — the number the owner's ruling names, and the
+    ONE derivation of it. PURE, never raises.
+
+    Returns {"units": {unit_id}, "count": int, "by_class": {cls: n}, "excluded": {unit_id: kind},
+             "excluded_count": int, "config": {"classes": [...], "exclusions": [...], "unit": ...}}
+
+    A unit (an invoice under `event.count_unit='transaction'`, one activation EVENT under `'event'`) is a
+    new activation when its class is in `classes` AND no line of that unit carries an APPLIED exclusion.
+    The exclusion is decided per UNIT, not per line, because that is where the fact lives: a BYOD-Swap
+    invoice is one activation-shaped unit that is not an activation, and one of its lines saying so is
+    enough. `count` is therefore basis-honest under either count unit.
+
+    `units` = an already-computed `activation_units(...)` result (parallel to `rows`), so a caller that
+    has one does not pay for a second pass and — more importantly — cannot count on a different basis
+    than it pays on. `classes` / `exclusions` override the org's config for a caller that must ask a
+    different question (a report offering the boundary both ways); None = the org's own."""
+    r = rules or HOUSE_RULES
+    cfg = r.get("new_activation") or resolve_new_activation(None)
+    cls_ok = set(classes if classes is not None else cfg.get("classes") or ())
+    excl_on = [k for k in EXCLUSION_KINDS
+               if k in set(exclusions if exclusions is not None else cfg.get("exclusions") or ())]
+    rows = list(rows or [])
+    u = units if units is not None else activation_units(rows, r, skip=skip, txn_of=txn_of, unit=unit,
+                                                         require_txn=require_txn)
+    keep, cls_of, excluded = set(), {}, {}
+    for i, row in enumerate(rows):
+        ent = u[i] if i < len(u) else None
+        if not ent:
+            continue
+        _bucket, uid, cls = ent
+        if cls in cls_ok:
+            keep.add(uid)
+            cls_of.setdefault(uid, cls)
+        if excl_on:
+            kind = exclusion_class(row, r)
+            if kind in excl_on and uid not in excluded:
+                excluded[uid] = kind
+    # an excluded unit is removed from the count, never from the evidence — a report must be able to say
+    # WHICH units came out and why, or "13 not 19" is an assertion rather than a reconciliation.
+    counted = keep - set(excluded)
+    by_class = {}
+    for uid in counted:
+        c = cls_of.get(uid)
+        if c:
+            by_class[c] = by_class.get(c, 0) + 1
+    return {"units": counted, "count": len(counted), "by_class": by_class,
+            "excluded": {k: v for k, v in excluded.items() if k in keep},
+            "excluded_count": len(keep & set(excluded)),
+            "config": {"classes": sorted(cls_ok), "exclusions": excl_on,
+                       "unit": unit if unit in COUNT_UNITS else count_unit_of(r),
+                       "source": cfg.get("source", "house")}}
+
+
+def new_activation_count(rows, rules=None, **kw):
+    """The integer alone — `new_activation_units(...)["count"]`. PURE."""
+    return new_activation_units(rows, rules, **kw)["count"]
+
+
+def new_activation_from_buckets(bucket_counts, excluded=0, rules=None, classes=None):
+    """THE SAME count from already-aggregated bucket counts — for a surface whose activation numbers come
+    from a BASIS that replaced the line-level ones (Executive MTD under the Activation-Details basis,
+    where `act_new` / `act_port` / `act_byod` / `act_upg` are the uploaded report's counts and the sale
+    lines behind them are not the authority any more).
+
+    `bucket_counts` = {'activation'|'port'|'byod'|'upgrade': n} (the CLASS vocabulary, so it cannot drift
+    from `classes`); `excluded` = units removed by kind, which the line pass still supplies. Deriving the
+    same number two ways is exactly the divergence this module exists to stop, so this reads the SAME
+    `classes` config and is the only other way in. Never negative. PURE."""
+    r = rules or HOUSE_RULES
+    cfg = r.get("new_activation") or resolve_new_activation(None)
+    cls_ok = classes if classes is not None else (cfg.get("classes") or ())
+    total = 0
+    for c in cls_ok:
+        try:
+            total += int(bucket_counts.get(c) or 0)
+        except (AttributeError, TypeError, ValueError):
+            continue
+    try:
+        total -= int(excluded or 0)
+    except (TypeError, ValueError):
+        pass
+    return max(0, total)
 
 
 # ── the gate's measurement ───────────────────────────────────────────────────────────────────────

@@ -324,6 +324,28 @@ def calc_rep_commissions(
     _units = _lc.activation_units(
         valid, _line_rules, txn_of=lambda _r: str(_r.get('trans_id', '')).replace('.0', '').strip(),
         require_txn=False)
+    # ── THE READY APP DENOMINATOR (owner ruling 2026-09-27) ─────────────────────────────────────
+    # *"Denominator should be the total of new activations excluding upgrade and swap as reported in exec
+    # mats - data source is the same for all reports"*. ONE derivation, in line_class, over the SAME
+    # `_units` this engine pays on — so the number that scores the rep cannot differ from the number that
+    # pays them, nor from the number Executive MTD prints. Which basis the rate uses is CONFIG
+    # (`payout_config.kpi_boostapp_basis`, mig 1029); the default is the pre-ruling `feed_prepaid`, so a
+    # closed month is never re-scored by shipping this and the flip is the owner's config row.
+    _boostapp_basis = _kpi_failing.resolve_boostapp_basis(cfg.get('kpi_boostapp_basis'))
+    _newact = _lc.new_activation_units(
+        valid, _line_rules, units=_units,
+        txn_of=lambda _r: str(_r.get('trans_id', '')).replace('.0', '').strip(), require_txn=False)
+    _newact_units = _newact['units']
+
+    def _boostapp_rate_basis(_rep, _basis_name):
+        """{metric_key: denominator} for the DERIVED rep-grain rates, or {} on the legacy basis.
+
+        `{}` means "I have no basis to offer", and `kpi_failing.rep_kpi_values` then reads the stored
+        `boost_app_pct` exactly as it always has — which is why shipping this moves nothing until the
+        tenant's `kpi_boostapp_basis` says otherwise."""
+        if _basis_name != _kpi_failing.BOOSTAPP_BASIS_EXEC:
+            return {}
+        return {'boostapp': len(_rep.get('newact_set') or ())}
 
     # ── Build rep map ─────────────────────────────────────────
     rep_map = {}
@@ -337,7 +359,7 @@ def calc_rep_commissions(
                 'name': rep, 'login': login,
                 'store': str(r.get('store','')).strip(),
                 'storeops_name': name_lookup.get(login,''),
-                'prem_set': set(), 'byod_set': set(), 'upg_set': set(),
+                'prem_set': set(), 'byod_set': set(), 'upg_set': set(), 'newact_set': set(),
                 'acc_gp': 0, 'setup_fee_gp': 0, 'acc_sales': 0, 'setup_fee_sales': 0, 'trade_ins': 0,
                 'sales': []
             }
@@ -358,6 +380,9 @@ def calc_rep_commissions(
         if _cls == 'byod': entry['byod_set'].add(_uid)
         elif _cls == 'upgrade': entry['upg_set'].add(_uid)
         elif _cls == 'premium': entry['prem_set'].add(_uid)
+        # the owner's denominator, per rep, from the one derivation above (never re-classified here)
+        if _uid is not None and _uid in _newact_units:
+            entry['newact_set'].add(_uid)
         
         if _is_acc(dept, cat, product):
             entry['acc_gp'] += gp
@@ -376,7 +401,7 @@ def calc_rep_commissions(
                 'name': dname, 'login': '',
                 'store': str(d.get('store','') or ''),
                 'storeops_name': '',
-                'prem_set': set(), 'byod_set': set(), 'upg_set': set(),
+                'prem_set': set(), 'byod_set': set(), 'upg_set': set(), 'newact_set': set(),
                 'acc_gp': 0, 'setup_fee_gp': 0, 'acc_sales': 0, 'setup_fee_sales': 0, 'trade_ins': 0,
                 'sales': []
             }
@@ -415,7 +440,8 @@ def calc_rep_commissions(
             _sr = dlar_store_by_num.get(str(rep['store']).split(' ')[0])
             _vals, _ = _kpi_failing.rep_kpi_values(
                 _KPI_DEFS, rep_row=_dr, store_row=_sr,
-                actuals=_KPI_ACTUALS.get(str(rep['store']).strip()))
+                actuals=_KPI_ACTUALS.get(str(rep['store']).strip()),
+                basis=_boostapp_rate_basis(rep, _boostapp_basis))
             _m, _t, _ev, _nd = _kpi_failing.score(_vals, _KPI_DEFS, KPI)
             _plan_score[key] = (_m, _t, _vals)
         for key, rep in rep_map.items():
@@ -534,7 +560,8 @@ def calc_rep_commissions(
                 # Boost row written to date.
                 kpi_vals, _kpi_src = _kpi_failing.rep_kpi_values(
                     _KPI_DEFS, rep_row=dr, store_row=sr,
-                    actuals=_KPI_ACTUALS.get(str(rep['store']).strip()))
+                    actuals=_KPI_ACTUALS.get(str(rep['store']).strip()),
+                    basis=_boostapp_rate_basis(rep, _boostapp_basis))
                 # `kpi_values` carries a key per SCORED metric with None where nothing fed it, so the
                 # no_data list is derivable by every reader through `kpi_failing.evaluate` and is not
                 # duplicated into the stored row (`rep_commissions` has no column for it, and a second
