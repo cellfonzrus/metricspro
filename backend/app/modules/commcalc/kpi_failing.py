@@ -60,6 +60,40 @@ REP_DLAR_COLUMNS = {
     "byod":     ("byod_pct",),
 }
 
+# ── A KPI THIS PLATFORM DERIVES — metric_key → (numerator column on the rep row, basis key) ──────
+# OWNER RULING 2026-09-27, verbatim: *"Denominator should be the total of new activations excluding
+# upgrade and swap as reported in exec mats - data source is the same for all reports"*.
+#
+# `boostapp` (the carrier's Ready App rate) is the one KPI the platform COMPUTES rather than reads. Its
+# numerator is a COUNT the feed carries (`boost_ready_bounty` — how many Ready App installs the rep was
+# paid a bounty for). Its denominator is NOT on the feed: the owner has ruled it is the store's own
+# transactions, counted exactly as Executive MTD counts them — `line_class.new_activation_units`, the
+# ONE home. So the rate is resolved HERE, at score time, from a `basis` the caller supplies.
+#
+# WHY NOT AT INGEST, WHERE IT USED TO BE. `dlar_sweep.normalize_rep` divided the bounty by the feed's own
+# `ga_prepaid`, baking a derived rate into a raw_* column. That column stopped arriving in July 2026 and
+# 189 of 516 rows were written a measured `0` (index §19.28) — a denominator nobody chose, invisible in
+# the table it was stored in. Ingest records what arrived; compute derives what it means. The stored
+# `boost_app_pct` is LEGACY: still read for historical rows on the legacy basis, never the definition.
+REP_DERIVED_RATES = {"boostapp": ("boost_ready_bounty", "new_activations")}
+# the basis names a tenant may put the Ready App rate on. `exec_new_activations` is the owner's ruling;
+# `feed_prepaid` is the pre-ruling behaviour (the stored `boost_app_pct`), kept so a flip is a config row
+# and a closed month is never silently re-scored. RULE TWO: the choice is config, never a code branch.
+BOOSTAPP_BASIS_EXEC = "exec_new_activations"     # the owner's ruling: the store's own transactions
+BOOSTAPP_BASIS_FEED = "feed_prepaid"             # pre-ruling: the stored, ingest-derived boost_app_pct
+BOOSTAPP_BASES = (BOOSTAPP_BASIS_EXEC, BOOSTAPP_BASIS_FEED)
+BOOSTAPP_BASIS_DEFAULT = BOOSTAPP_BASIS_FEED
+
+
+def resolve_boostapp_basis(raw=None):
+    """A stored `payout_config.kpi_boostapp_basis` → one of `BOOSTAPP_BASES`. PURE.
+
+    MISSING BEATS WRONG ON A MONEY GATE (§19.26): an unrecognised or absent value resolves to the
+    PRE-RULING default, never to the new basis. The column arrives with mig `1029` and is NULL until the
+    owner sets it, so every existing period keeps the score it was paid on until he says otherwise."""
+    v = str(raw or "").strip().lower()
+    return v if v in BOOSTAPP_BASES else BOOSTAPP_BASIS_DEFAULT
+
 # metric_key → raw_dlar_store column (the store-grain actual). Keys not named here (e.g.
 # `boostapp`, tenant-custom metrics) simply have no store-level DLAR value → no_data at store
 # grain; they are still evaluated at rep grain when rep_commissions.kpi_values carries them.
@@ -166,7 +200,8 @@ def evaluate(values, defs, targets):
 SOURCE_REP_DLAR   = "rep_dlar"       # the rep's own raw_dlar_rep column — the finest grain there is
 SOURCE_STORE_DLAR = "store_dlar"     # the store's raw_dlar_store column, ROLLED DOWN to the rep
 SOURCE_ACTUAL     = "kpi_actual"     # a measured value typed in / emailed in, at store grain
-SOURCES = (SOURCE_REP_DLAR, SOURCE_STORE_DLAR, SOURCE_ACTUAL)
+SOURCE_REP_DERIVED = "rep_derived"   # computed here: a feed COUNT over a basis the caller supplied
+SOURCES = (SOURCE_REP_DLAR, SOURCE_STORE_DLAR, SOURCE_ACTUAL, SOURCE_REP_DERIVED)
 
 
 def resolve_defs(raw=None):
@@ -197,8 +232,22 @@ def resolve_defs(raw=None):
     return tuple(out) if out else BUILTIN_KPI_DEFS
 
 
+def derived_rate(numerator, denominator):
+    """A rate the platform computes itself → float, or **None when there is no basis to compute it**.
+
+    THE ONE arithmetic for a derived KPI. `dlar_sweep.derived_rate` is the ingest-side twin with the same
+    contract (a zero, negative, absent or non-numeric denominator yields None, never a 0% failure); this
+    is the score-side one, so a surface that has the denominator in hand never writes the division out.
+    PURE."""
+    n, d = _num(numerator), _num(denominator)
+    if n is None or d is None or d <= 0:
+        return None
+    return n / d * 100.0
+
+
 def rep_kpi_values(defs, rep_row=None, store_row=None, actuals=None,
-                   rep_columns=None, store_columns=None):
+                   rep_columns=None, store_columns=None, basis=None,
+                   derived_rates=None):
     """THE ONE rep-grain KPI resolver → ({metric_key: value|None}, {metric_key: source|None}).
 
     THE GRAIN IS A PROPERTY OF THE METRIC, declared once — not a blanket fallback chain:
@@ -229,10 +278,28 @@ def rep_kpi_values(defs, rep_row=None, store_row=None, actuals=None,
     why adding a registry metric can never move a payout on its own. PURE, never raises."""
     rcols = rep_columns if rep_columns is not None else REP_DLAR_COLUMNS
     scols = store_columns if store_columns is not None else STORE_KPI_COLUMNS
+    drates = derived_rates if derived_rates is not None else REP_DERIVED_RATES
+    bas = basis if isinstance(basis, dict) else {}
     act = actuals if isinstance(actuals, dict) else {}
     values, sources = {}, {}
     for (k, _label, _col, _dflt) in defs or []:
         v, src = None, None
+        # A DERIVED rep-grain rate (owner ruling 2026-09-27): the numerator is a COUNT on the rep's own
+        # feed row, the denominator comes from the caller through `basis` — the ONE activation count
+        # (`line_class.new_activation_units`), the same number Executive MTD prints. A caller that has no
+        # such basis passes none and the metric falls through to its stored column below, so every
+        # pre-ruling caller is byte-identical. No basis and no stored column → `None` → `no_data`, which
+        # is the honest answer and never a 0% failure.
+        if k in drates and k in bas:
+            num_col, _bkey = drates[k]
+            v = derived_rate((rep_row or {}).get(num_col), bas.get(k))
+            if v is not None:
+                values[k], sources[k] = v, SOURCE_REP_DERIVED
+                continue
+            # the basis was offered and is unusable (no transactions, or a zero count). That is NOT the
+            # stored column's cue to stand in: the tenant chose this basis, so the answer is no_data.
+            values[k], sources[k] = None, None
+            continue
         if k in rcols:
             # A REP-GRAIN METRIC IS THE REP'S OWN, OR IT IS NOT MEASURED. No store fallback.
             for col in rcols[k]:

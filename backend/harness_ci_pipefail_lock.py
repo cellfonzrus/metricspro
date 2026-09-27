@@ -1,4 +1,4 @@
-"""LOCK — a failing harness fails CI.
+"""LOCK — a harness CI runs actually runs, and when it fails CI fails.
 
 THE DEFECT (found 2026-09-24). GitHub Actions runs a step with no `shell:` as `bash -e {0}` — WITHOUT pipefail. Every
 gate here was written `python3 harness_x.py | tee -a "$GITHUB_STEP_SUMMARY"`, so the step's status was tee's, and a
@@ -12,8 +12,26 @@ THE RULE: every workflow that runs a harness (`harness_*.py`) declares the top-l
       run:
         shell: bash
 
+THE SECOND DEFECT, SAME CLASS (found 2026-09-27). `harness_closing_filter_contract.py` landed in the
+stdlib-only `carrier-vocab-guard` job, which installs nothing. It imports the real `closing.router`
+to prove the three filter resolvers BEHAVIOURALLY, and that module imports fastapi — so the step died
+with `ModuleNotFoundError: No module named 'fastapi'` before a single check ran. It passed on every
+developer machine, because a developer machine has the backend installed. Same class as the pipefail
+bug: **a gate that cannot run is not a gate**, whether it silently passes or loudly dies.
+
+THE SECOND RULE: a harness whose MODULE-LEVEL imports reach something from `backend/requirements.txt`
+is run only in a job that `pip install`s. The set of things that need a wheel is not restated here —
+it is READ from requirements.txt, so a dependency added tomorrow is covered without touching this
+file. Reachability is followed through first-party `app.*` modules, because that is how the defect
+arrived: the harness imported `app`, and `app` imported fastapi. Two things are deliberately NOT
+violations, since neither can break module load: an import guarded by `try:`, and a third-party
+module the harness STUBS into `sys.modules` itself (`harness_tenant_vertical.py` does exactly that,
+on purpose, and is correctly placed in the no-deps job).
+
 Stdlib only (the job that runs this installs nothing): run `python backend/harness_ci_pipefail_lock.py`.
 """
+import ast
+import io
 import os
 import re
 import sys
@@ -35,6 +53,128 @@ def violations(files):
             out.append(f"{name}: runs a harness but does not declare `defaults: run: shell: bash` — without pipefail "
                        "`python3 harness_x.py | tee …` passes even when the harness fails")
     return out
+
+
+# ── THE SECOND RULE — a harness that needs a wheel runs in a job that installs wheels ─────────────
+# The import name usually IS the distribution name; these are the ones where it is not.
+IMPORT_NAME = {
+    "beautifulsoup4": "bs4", "python-dotenv": "dotenv", "python-dateutil": "dateutil",
+    "python-multipart": "multipart", "pyjwt": "jwt", "pillow": "PIL", "python-jose": "jose",
+    "pyyaml": "yaml", "google-api-python-client": "googleapiclient", "google-auth": "google",
+    "opencv-python": "cv2", "attrs": "attr",
+}
+# Transitive dependencies nothing declares directly but every import of fastapi/supabase drags in.
+# Listed because a harness can import THEM without requirements.txt ever naming them.
+TRANSITIVE = ("pydantic", "starlette", "postgrest", "gotrue", "storage3", "realtime", "supafunc",
+              "numpy", "anyio", "h11", "certifi", "urllib3", "charset_normalizer", "soupsieve")
+STUBBED = re.compile(r"""sys\.modules\[\s*['"]([A-Za-z0-9_.]+)['"]\s*\]\s*=""")
+JOB_KEY = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$", re.M)
+
+
+def wheel_names(requirements_text):
+    """requirements.txt → the set of IMPORT names that only exist after a pip install."""
+    out = set(TRANSITIVE)
+    for raw in (requirements_text or "").splitlines():
+        line = raw.split("#")[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        dist = re.split(r"[<>=!\[;]", line)[0].strip().lower()
+        if dist:
+            out.add(IMPORT_NAME.get(dist, dist.replace("-", "_")))
+    return out
+
+
+def _module_level_imports(src):
+    """The imports that run when the module is LOADED — the only ones that can raise ImportError
+    before check one. Function bodies are lazy; `try:` blocks are guarded; both are skipped."""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []
+    found = []
+
+    def take(node):
+        if isinstance(node, ast.Import):
+            found.extend(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            found.append(node.module)
+
+    def walk(body):
+        for node in body:
+            take(node)
+            if isinstance(node, (ast.If, ast.With)):          # `if`/`with` still execute on load
+                walk(node.body)
+                walk(getattr(node, "orelse", []) or [])
+            # ast.Try, ast.FunctionDef, ast.ClassDef: deliberately not descended into
+
+    walk(tree.body)
+    return found
+
+
+def _first_party(module, read_source):
+    """An `app.…` module → its source, or None when it is not a file in this backend."""
+    rel = os.path.join(*module.split("."))
+    for candidate in (rel + ".py", os.path.join(rel, "__init__.py")):
+        src = read_source(candidate)
+        if src is not None:
+            return candidate, src
+    return None
+
+
+def unrunnable(harness_name, read_source, wheels):
+    """→ "<file> imports <module>" for the first module-level chain that needs a wheel, else None.
+    Follows `app.*` imports, because the defect arrived transitively: harness → app → fastapi."""
+    head_src = read_source(harness_name)
+    if head_src is None:
+        return None
+    stubs = set(STUBBED.findall(head_src))
+    seen, queue = set(), [(harness_name, head_src)]
+    while queue:
+        where, src = queue.pop(0)
+        for module in _module_level_imports(src):
+            head = module.split(".")[0]
+            if head in wheels or module in wheels:
+                if head in stubs or module in stubs:
+                    continue                                   # the harness supplies its own stub
+                return "%s imports %s" % (where, module)
+            if head == "app" and module not in seen:
+                seen.add(module)
+                nxt = _first_party(module, read_source)
+                if nxt:
+                    queue.append(nxt)
+    return None
+
+
+def misplaced(files, read_source, wheels):
+    """files: {workflow: yaml} → [plain sentences]; [] = every harness can actually import."""
+    out = []
+    for name in sorted(files):
+        text = files[name]
+        if "jobs:" not in text or "harness_" not in text:
+            continue
+        marks = [(m.start(), m.group(1)) for m in JOB_KEY.finditer(text)
+                 if m.start() > text.index("jobs:")]
+        for i, (pos, job) in enumerate(marks):
+            body = text[pos: marks[i + 1][0] if i + 1 < len(marks) else len(text)]
+            if "pip install" in body:
+                continue
+            for m in re.finditer(r"\b(harness_\w+\.py)", body):
+                why = unrunnable(m.group(1), read_source, wheels)
+                if why:
+                    out.append("%s job `%s` runs %s but installs nothing — %s, so the step dies with "
+                               "ModuleNotFoundError before check one. Move it to a job that runs "
+                               "`pip install -r backend/requirements.txt`."
+                               % (name, job, m.group(1), why))
+    return out
+
+
+def _reader(root):
+    def read(rel):
+        path = os.path.join(root, rel)
+        if not os.path.isfile(path):
+            return None
+        return io.open(path, encoding="utf-8", errors="replace").read()
+    return read
 
 
 def _load():
@@ -72,10 +212,75 @@ def main():
     check("a workflow that runs no harness needs nothing → green",
           violations({"d.yml": "jobs:\n  d:\n    steps:\n      - run: echo hi | tee x\n"}) == [])
 
+    # ── THE SECOND RULE ───────────────────────────────────────────────────────────────────────────
+    read = _reader(HERE)
+    wheels = wheel_names(read("requirements.txt") or "")
+    check("the wheel set is READ from requirements.txt, not restated here",
+          {"fastapi", "supabase", "pandas", "bs4", "dateutil"} <= wheels)
+    bad = misplaced(files, read, wheels)
+    for v in bad:
+        print("  ✗ " + v)
+    check("every harness CI runs can actually import in the job that runs it", bad == [])
+    check("the second rule sees the jobs (it found harness steps to judge)",
+          any("harness_" in t and "jobs:" in t for t in files.values()))
+
+    # the regression this rule exists for: that harness DOES need the wheels, and the workflow
+    # therefore must keep running it in the job that installs them.
+    check("harness_closing_filter_contract is correctly identified as needing the backend installed",
+          unrunnable("harness_closing_filter_contract.py", read, wheels) is not None)
+    check("it is the fastapi chain through the closing router that is named",
+          "fastapi" in (unrunnable("app/modules/closing/router.py", read, wheels) or ""))
+    check("harness_tenant_vertical, which stubs fastapi itself, is NOT flagged",
+          unrunnable("harness_tenant_vertical.py", read, wheels) is None)
+    check("this lock itself needs nothing installed",
+          unrunnable("harness_ci_pipefail_lock.py", read, wheels) is None)
+
+    # negative controls, on synthetic sources — the RULE is under test, not today's tree
+    def fake(sources):
+        return lambda rel: sources.get(rel)
+    nodeps = "jobs:\n  g:\n    steps:\n      - run: python3 harness_z.py | tee -a out\n"
+    withdeps = ("jobs:\n  g:\n    steps:\n      - run: pip install -r backend/requirements.txt\n"
+                "      - run: python3 harness_z.py | tee -a out\n")
+    W = {"fastapi", "pandas"}
+    check("a plain third-party import in a no-deps job → RED",
+          bool(misplaced({"x.yml": nodeps}, fake({"harness_z.py": "import fastapi\n"}), W)))
+    check("the SAME harness in a job that pip installs → green",
+          misplaced({"x.yml": withdeps}, fake({"harness_z.py": "import fastapi\n"}), W) == [])
+    check("a chain THROUGH app.* → RED  ← how the real defect arrived",
+          bool(misplaced({"x.yml": nodeps}, fake({
+              "harness_z.py": "from app.modules.closing.router import r\n",
+              "app/modules/closing/router.py": "from fastapi import APIRouter\n"}), W)))
+    check("a try-guarded import cannot break the load → green",
+          misplaced({"x.yml": nodeps}, fake({
+              "harness_z.py": "try:\n    import pandas\nexcept ImportError:\n    pandas = None\n"}), W) == [])
+    check("an import inside a function is lazy → green",
+          misplaced({"x.yml": nodeps}, fake({
+              "harness_z.py": "def f():\n    import pandas\n    return pandas\n"}), W) == [])
+    check("a stub the harness installs itself → green",
+          misplaced({"x.yml": nodeps}, fake({
+              "harness_z.py": 'import sys, types\nsys.modules["fastapi"] = types.ModuleType("fastapi")\n'
+                              "from app.x import y\n",
+              "app/x.py": "from fastapi import APIRouter\n"}), W) == [])
+    check("a stub does NOT excuse a DIFFERENT wheel → RED",
+          bool(misplaced({"x.yml": nodeps}, fake({
+              "harness_z.py": 'import sys, types\nsys.modules["fastapi"] = types.ModuleType("fastapi")\n'
+                              "import pandas\n"}), W)))
+    check("an import under `if` still runs on load → RED",
+          bool(misplaced({"x.yml": nodeps}, fake({
+              "harness_z.py": "import os\nif os.environ.get('X'):\n    import pandas\n"}), W)))
+    check("a package __init__ is followed too",
+          bool(misplaced({"x.yml": nodeps}, fake({
+              "harness_z.py": "from app.pkg import thing\n",
+              "app/pkg/__init__.py": "import pandas\n"}), W)))
+    check("a harness the workflow names but the repo does not have is not a violation → green",
+          misplaced({"x.yml": nodeps}, fake({}), W) == [])
+    check("stdlib only → green",
+          misplaced({"x.yml": nodeps}, fake({"harness_z.py": "import os, re, sys, json\n"}), W) == [])
+
     print(f"\n{passed} passed, {failed} failed")
     if failed:
         sys.exit(1)
-    print("OK — every workflow that runs a harness runs it under pipefail; a failing harness fails CI.")
+    print("OK — every harness CI runs can import in its job, and a failing one fails CI.")
 
 
 if __name__ == "__main__":

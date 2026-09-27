@@ -50,6 +50,7 @@ Primary code homes:
 | 16 | **Cross-reference: by TABLE** | table → sections/functions that read & write it. |
 | 17 | **Cross-reference: by ENDPOINT** | endpoint → handler/section. |
 | 18 | **Cross-reference: by METRIC/KPI** | metric → source table → reader function. |
+| 19.31 | **One activation count · Feed vs Transactions** | "How many new activations, and says who? What does the carrier's report claim against what the store's transactions say, and what accounts for every difference — a counting definition, a stale feed slice, or nothing?" |
 | 19 | **Known gaps & inert config** | stored-but-unwired, snapshot-only, surfaces that can disagree. |
 | 20 | **Super-admin control box** | "Is the platform working? What is red right now, what is NOT being watched at all, did the daily check actually run, and how do I hand this failure to Claude Code safely?" |
 | 21 | **Billing — usage & pricing** | "What did this tenant use, what did it cost us, what do we bill them, which modules are still unpriced, and what does their itemized statement say?" |
@@ -212,6 +213,8 @@ supported routes until the vendor re-opens the login and one config row is flipp
 ## 3. Sales report & the shared per-(store, rep, day) aggregation
 
 > **2026-09-25 (§6f):** `_sales_cell_agg`'s `_prem` / `_byod` / `_upg` / `_port` sets are filled from `line_class.activation_units` — distinct invoices under the house `event.count_unit='transaction'` (byte-identical), activation EVENTS (one per phone line) under `'event'`.
+>
+> **2026-09-27 (§19.31, owner ruling):** the same pass also builds `_newact` — **the NEW-ACTIVATION count**, `line_class.new_activation_units` over those same units: the classes `activation + port + byod` (Total Activation less Upgrade) less any unit an exclusion kind removes (house: `swap`). `_apply_activation_basis` publishes it as the shared cell field **`act_new_activation`** and Executive MTD prints it as **`new_activation`** (+ `swap_excluded` + `cross_bucket`, so `total_activation − upgrade − swap_excluded − cross_bucket == new_activation` exactly — §19.31 (2a)). The Boost pay engine's Ready App denominator and `GET /dlar-vs-platform/{period}` read the SAME derivation — *"data source is the same for all reports"*. `_swap` is now filled by `line_class.exclusion_class` (the bare `'swap' in ctl` is gone).
 
 **Purpose.** ONE row-level pass feeds the Sales Report, Executive MTD, and Daily Targets so they can never
 disagain (owner directive 2026-07-16, 2026-07-25).
@@ -4185,9 +4188,11 @@ be a seaprate box in the p&l under wages"
     key `management-overview`): one tile per report — Sales Reports (`/commcalc/sales-report`),
     Executive MTD, Sales Comparison, **"Rep Incentive"** = `/commcalc/exec` with the relabel as
     tile-layout item-label DATA (layout label > NAV label; nothing hardcoded, tenant-editable),
-    **Failing KPIs** (NEW report, §10), **Cash at Hand** = a SECOND PLACEMENT of the existing
-    `/closing/store-cash-on-hand` report (same endpoint/component, no forked derivation), and
-    **Current Monetary Liabilities** (NEW report, §4).
+    **Failing KPIs** (NEW report, §10), **Feed vs Transactions** (NEW report, §19.31 — what the carrier
+    feed claims beside what the store's transactions say, every difference attributed; tile appended by
+    mig `1029` through the same `ui_label_override` `scope='tiles'` mechanism), **Cash at Hand** = a
+    SECOND PLACEMENT of the existing `/closing/store-cash-on-hand` report (same endpoint/component, no
+    forked derivation), and **Current Monetary Liabilities** (NEW report, §4).
   - **Flags & Compliance** (`/compliance` — a curated page, the /storeops hub precedent): every
     flag/exception/compliance queue under one roof. StatTile COUNTS from
     `GET /commcalc/compliance-summary` — ONE thin count pass over the existing queues' own
@@ -4517,9 +4522,10 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.raw_payment_detail` | epay sweep, upload | `calc_gp_report`, reimbursement categorization, **Processor Daily Debits & Credits** (`processor_ledger.assemble` — `amount` sign = credit/debit to the dealer, §15) |
 | `commcalc.raw_mi` | upload / MI sweep | carrier residual gate `installment_engine.compute_installments`, sale-installment gate, MI/ATU; the `subscribers` entry of the plan-source registry `core/plan_sources.HOUSE_SOURCES` (`customer_plan` + `base_mrc`, newest period, ON by default) → `onboarding._observed_plans(…, src)` (§23n.1); `raw_sales` (`sales_lines`) and `commission_ledger` (`statement_lines`) are the registry's two line-level entries, OFF until the org confirms its words |
 | `commcalc.raw_dlar_store` | `dlar_sweep.run_dlar_sweep:209` (replace), upload | `get_dlar_store_kpis` `10279`, `_cr_resolve_kpi_metrics` `25656`, MI tmr3 `28884` |
-| `commcalc.raw_dlar_rep` | `dlar_sweep` (replace, stamping `as_of_date` — mig `1026`, §19.28), upload | rep KPI, comp trend `15238`; the PAY ENGINE's tier via `kpi_failing.rep_kpi_values` (`REP_DLAR_COLUMNS`); `router._dlar_slice_vintage` for the feed vintage |
+| `commcalc.raw_dlar_rep` | `dlar_sweep` (replace, stamping `as_of_date` — mig `1026`, §19.28; the report SET is `dlar_sweep_config.reports`, mig `1029`, §19.31), upload | rep KPI, comp trend `15238`; the PAY ENGINE's tier via `kpi_failing.rep_kpi_values` (`REP_DLAR_COLUMNS`, and `REP_DERIVED_RATES` for the Ready App numerator — §19.31); `router._dlar_slice_vintage` for the feed vintage; the FEED side of `GET /dlar-vs-platform/{period}` |
 | `commcalc.raw_catalog` | upload `/product-mrc/import` region, catalog | GP, device COGS, installment MRC |
-| `commcalc.payout_config` | `/config/{period}` `10474`, `/commission-settings` `10517` | `calc_rep_commissions` (spiffs/tiers), installment base rates |
+| `commcalc.payout_config` | `/config/{period}` `10474`, `/commission-settings` `10517` | `calc_rep_commissions` (spiffs/tiers), installment base rates; **`kpi_boostapp_basis`** (mig `1029`, §19.31 — which basis the Ready App rate is measured on, per org PER PERIOD; NULL = the pre-ruling `feed_prepaid`) via `kpi_failing.resolve_boostapp_basis` |
+| `commcalc.dlar_sweep_config` | the admin sweep page via `router._dlar_cfg` (whole row) / `_dlar_public_cfg` (no password) | `_do_dlar_sweep` → `dlar_sweep.run_dlar_sweep`; **`reports`** (mig `1029`, §19.31 — which of `dlar_sweep.PORTAL_REPORTS` this org pulls; NULL = the default pair) via `dlar_sweep.resolve_report_set`. ⚠ `portal_pass` is the carrier portal password **in plaintext** — RLS-on/service_role-only, never browser-reachable, but it belongs in a secret store (§19.31 (9)) |
 | `commcalc.commission_org_config` | `/commission-settings` (incl. **`pl_commission_source`**, mig `1013` — its own statement, validated, READ BACK, refuses naming the migration when the column is absent), migrations (`209`,`306`,`308`,`309`,`314`,`934`,`939`,`992`,`996`,**`1013`**, **`1015` WRITTEN NOT APPLIED — `ma_leg_rate_schedule` + `ma_mrc_list_divisor`, §4a.2, surfaced for owner approval; both are `ADD COLUMN IF NOT EXISTS` on this same table and coexist with mig 1013's `pl_commission_source` (different columns, either order); zero blast radius until a row is written**) | THE per-org money-policy row (RULE TWO). Readers: `ma_store_pnl.load_config` (store attribution · month-spiff source/order types · MDF tokens · line labels · rebate presentation · device-margin presentation · **P&L commission source** `feeds`\|`ledger`\|`ledger_else_feeds`, mig 1013, resolved by `ledger_pnl.resolve_source` — the row read WHOLE through `core.column_tolerant.read_row`, §4b.1: ANY subset of columns; a pre-1013 DB reads `feeds` AND reports `config_columns_missing=['pl_commission_source']`) · `ma_store_pnl.load_unbooked_reasons` (`pl_ma_unbooked_reasons`, mig 994) · `residual_subs.load_ma_pnl_config` (`pl_merchant_discount_own_line`, `pl_ma_residual_order_types`) · `residual_subs.load_residual_report_config` (`residual_report_components`, mig 994) · `billpay_pl` (`pl_billpay_presentation`/`pl_billpay_settlement`) · the installment/plan engines (`installment_mrc_basis`, `plan_pay_gate`, `sales_source`) · `setup_fee_pay.load_pay_config` → `resolve_for_scope` (`setup_fee_pay`: `default` / `by_carrier` / `by_market` / `all_markets`, §6a). EVERY reader is org-scoped and ADAPTIVE — a missing column/row degrades to the code defaults, never raises — and since 2026-09-22 (§4b.1) NO reader selects a column block: each reads the row whole (`read_row`) and reports what is absent |
 | `commcalc.rep_commissions` | `_run_calculation`/`_apply_new_engines` `9183` | `/commissions/{period}` `10222`, GP report, commission-by-store, statements, MI (indirect) |
 | `commcalc.store_kpis` | KPI ingest/snapshot | tiers, exec |
@@ -4850,6 +4856,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`; since 2026-09-08 also **`by_dm` + `dm_summary` — THE CASH SHORT BY DM REPORT**, folded from the SAME keyset-filtered day rows on `cash_pickup.picked_up_by`, never a second read; uncounted is reported as uncounted, never as short, and `over` never nets a short away, §23p), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
 | `GET /billpay-coverage/{period}` (per store/day: bill-pay ≤ cash+card, exceptions surfaced) | `commcalc/router.py` (`billpay_coverage` → `metric_recon.reconcile_billpay_coverage`) | §4 bill-pay carve-out / §15 |
+| `GET /dlar-vs-platform/{period}` (carrier feed vs the store's transactions, per metric, attributed; composes Executive MTD's cells + `raw_dlar_*` as landed + `dlar_sweep.slice_vintage`; pure `dlar_vs_platform.py`; READ-ONLY, `books_to == []`) | `commcalc/router.py` (`get_dlar_vs_platform`, beside `/kpi-failing`; helper `_platform_side`) | §19.31 — the difference report |
 | `GET /kpi-failing/{period}` (failing-KPI overview: /coaching target resolution + in-process `/dlar-store` store rows + `rep_commissions.kpi_values`; pure `kpi_failing.py`) | `commcalc/router.py` (`get_kpi_failing`, beside `/dlar-store`) | §10 failing-KPI report |
 | `GET /compliance-summary` (per-queue open counts over the existing flag/exception surfaces; failed probe = null, never 0; pure `compliance_summary.py`) | `commcalc/router.py` (`get_compliance_summary`, beside `/kpi-failing`) | §14 mig 948 Flags & Compliance |
 | `GET /account/liabilities-due` (owed-to-distributor + due-this-week payments/payroll/payroll-tax/rents/insurance per store; mig-434 + mig-946 gates fail closed; pure `account/liabilities_due.py`; distributor side = the SAME as-of-parameterized derivation the BS books, mig `954`) | `account/router.py` (`liabilities_due_endpoint` → `_liabilities_due_impl`) | §4 Current Monetary Liabilities |
@@ -4937,7 +4944,10 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | VHI/FIOS / home-internet count | `raw_sales` product tokens / `installment_category.py:82` | `_mi_resolve_numbers` `28843`; `installment_category` (plan-mode, runtime-only) |
 | Failing-KPI classification (store/rep below target; `no_data` never fails) | `raw_dlar_store` KPI columns (store grain, `kpi_failing.STORE_KPI_COLUMNS`) + `rep_commissions.kpi_values` (rep grain) vs `payout_config.kpi_*_target` falling back to `carrier_kpi_metric.target_default` | `kpi_failing.evaluate/store_rows/rep_rows` via `GET /kpi-failing/{period}` (§10) |
 | ATU % | `raw_dlar_store.atu` / `raw_dlar_rep.atu_pct` / `store_kpis.atu_pct` | `_cr_resolve_kpi_metrics` `25656`; MI ATU RPC mig `032`; the pay engine via `kpi_failing.rep_kpi_values` (§19.28) |
-| Boost App % (`boostapp`) | `raw_dlar_rep.boost_app_pct` — **DERIVED by us**, `dlar_sweep.derived_rate(boost_ready_bounty, ga_prepaid)`; **`None` when there is no denominator, never a measured 0** (§19.28; ⚠ the carrier's own basis looks like ALL activations, not prepaid — open with the owner) | `kpi_failing.rep_kpi_values` → `kpi_failing.score`; no store-grain column exists |
+| Boost App % / Carrier App (`boostapp`) | **DERIVED by us, and the denominator is the OWNER'S RULING (2026-09-27, §19.31):** `boost_ready_bounty` over the store's own NEW ACTIVATIONS (`line_class.new_activation_units` — Executive MTD's Total Activation less Upgrade less swap), resolved at SCORE time through `kpi_failing.REP_DERIVED_RATES` + `kpi_failing.derived_rate`. The LEGACY value is `raw_dlar_rep.boost_app_pct`, which `dlar_sweep.derived_rate(boost_ready_bounty, ga_prepaid)` wrote at INGEST; it is still read for historical rows and is what a tenant on `payout_config.kpi_boostapp_basis = 'feed_prepaid'` (the default) gets. **`None` when there is no denominator, never a measured 0** (§19.28) | `kpi_failing.rep_kpi_values(..., basis=…)` → `kpi_failing.score`; the basis comes from `calculator.calc_rep_commissions`; no store-grain column exists |
+| NEW ACTIVATIONS (how many — any surface) | DERIVED from the classified sale lines: `line_class.new_activation_units` over `activation_units`, per the org's `accessory_config.activation_details_rules.new_activation` (`classes` + `exclusions`; house = the owner's ruling: activation + port + byod, less swap). **ONE home** (§19.31) | the shared cell field `act_new_activation` (`router._apply_activation_basis`) → Executive MTD's `new_activation` column, the Boost pay engine's Ready App denominator, `GET /dlar-vs-platform/{period}` |
+| WHY A UNIT DOES NOT COUNT (swap / ineligible) | `line_class.exclusion_class(row, rules)` over the org's `exclusions` words, on the SAME fields the class predicate reads. **ONE home** — it replaced bare substring tests in `_sales_cell_agg`, `ma_recon._is_activation_line` and the chargeback detector (§19.31) | `router._sales_cell_agg` (`_swap`), `ma_recon._is_activation_line`, `_run_calculation`'s chargeback detector, `line_class.new_activation_units` |
+| FEED CLAIM vs STORE TRANSACTIONS (per metric) | `raw_dlar_rep` / `raw_dlar_store` AS LANDED vs the Executive-MTD cells, with the cause of each difference (`counting_definition` exact / `feed_vintage` undecidable / `grain` / `unattributed`) | `dlar_vs_platform.compare/entity_row/summarize` via `GET /dlar-vs-platform/{period}` (§19.31) |
 | A KPI's GRAIN (any metric) | DERIVED from `kpi_failing.REP_DLAR_COLUMNS` / `STORE_KPI_COLUMNS` — never stored | `kpi_failing.grain_of(metric_key)` → `'rep'` \| `'store'` \| `None`; stamped on `GET /carrier-kpi-metrics` (+ `rep_columns`) and on `GET /kpi-failing/{period}` defs. §19.28 (2b): familyplan / tmr3 / aal are STORE-grain only — NULL in all 516 `raw_dlar_rep` rows |
 | DOES A COLUMN STILL CARRY VALUES (the completeness axis) | the rows a sweep just normalised, against `data_lineage_registry.REQUIRED_CONTENT_COLUMNS` | `data_lineage_registry.content_arrival(rows, columns)` (pure); `dlar_sweep.run_dlar_sweep` → `status_sentence`. §19.18's two questions (arriving / content moving) both read GREEN through the July 2026 break |
 | A KPI's AS-OF DATE (any metric) | `raw_dlar_rep.as_of_date` / `raw_dlar_store.as_of_date` (mig `1026`); `created_at` is an UPPER BOUND for rows written before it | `dlar_sweep.vintage / vintage_of_row / slice_vintage`; `router._dlar_slice_vintage`; served as `feed_vintage` on `GET /kpi-failing/{period}` (§19.28) |
@@ -5646,6 +5656,22 @@ workflow that runs a `harness_*.py` without that default fails the build. `deplo
 unchanged (its `printf | grep -q` pipes would misbehave under pipefail). Found by the commission agent while wiring the
 multi-period ledger upload.
 
+§19.25b **A GATE THAT CANNOT RUN IS NOT A GATE — the same class as §19.25, the other way round (2026-09-27).**
+`harness_closing_filter_contract.py` (§29.10) was run from `carrier-vocab-guard.yml`'s stdlib-only
+`carrier-vocab-guard` job, which installs nothing. Its check (b) imports the real `closing.router` to exercise
+`_resolve_market_filter` / `_resolve_store_filter` / `_resolve_employee_filter` BEHAVIOURALLY rather than by reading
+source, and that module imports `fastapi` — so the step died with `ModuleNotFoundError` before check one, and passed on
+every developer machine because a developer machine has the backend installed. The harness's own docstring claimed
+"Stdlib only", which is what invited the move; the claim is now the truth (it names the job it belongs in and why).
+Fixed as a class, not as a step: `backend/harness_ci_pipefail_lock.py` (CI `security.yml` job `ci-pipefail`, enforcing)
+now also fails the build when a job WITHOUT `pip install` runs a harness whose MODULE-LEVEL imports reach a wheel —
+followed transitively through `app.*`, since that is how this one arrived. The wheel set is READ from
+`backend/requirements.txt` (`wheel_names()`), not restated, so a dependency added tomorrow is covered. Two things are
+deliberately not violations because neither can break module load: a `try:`-guarded import, and a third-party module the
+harness STUBS into `sys.modules` itself (`harness_tenant_vertical.py` does exactly that and is correctly placed in the
+no-deps job). Proven both ways: replaying the bad step into the workflow text reproduces the violation and names
+`app/modules/closing/router.py imports fastapi`; 28 checks, 9 of them negative controls.
+
 §19.26 **A MONEY GATE CHOSE ITS COLUMN BY RESEMBLANCE — the qualifier read TWP+ while the rule is TWP ALL
 (owner defect 2026-09-25; fixed as a class).** `paramount_kpi` matched the SUBSTRING `"current twp"` against the
 door report's header row and took the FIRST column containing it. The real report carries TWO — `Current TWP+%`
@@ -6003,6 +6029,276 @@ endpoints as declaring no filters at all. **That under-reading hid a real error 
 filter block had been inserted into `closing_duplicates` instead of `closing_attempts`, where it would
 have raised NameError on live traffic.** A guard that under-reads is worse than no guard, because it
 passes.
+
+§19.31 **ONE ACTIVATION COUNT, ONE HOME — the Ready App denominator, and the report that shows the
+feed against it (owner rulings 2026-09-27; code shipped, the money held).**
+
+OWNER RULING, verbatim: *"Denominator should be the total of new activations excluding upgrade and swap
+as reported in exec mats - data source is the same for all reports"* ("exec mats" = Executive MTD).
+This settles open question (iii) of §19.28. A second ruling the same day, verbatim: *"the comparison of
+the dlar report for numbers and the ones we are reporting in thr platform , they should be the same -
+the source of truth is the transaction done in thr store so all reporting should have the same data ,
+create a report for the. Difference of thr incoming data from dlar and whatever you are using to assess
+the difference and show it it in management dashboard"*. They are one change because the second
+report's content IS the first's count.
+
+**(1) THE CLASS. "How many new activations" had NO home, and the swap vocabulary had THREE.** §19.28
+fixed the numerator's honesty (`derived_rate` → `None`, not a fabricated 0) and left the denominator a
+feed column. The wider defect is that the *count itself* was never named: Executive MTD's Total
+Activation was a local expression inside `router._row`
+(`d['activation'] + d['port'] + d['byod'] + d['upgrade']`), the pay engine built its own
+`prem_set`/`byod_set`/`upg_set`, and "a swap is not a new activation" existed as a bare substring test
+in **three** places — `router._sales_cell_agg` (`'swap' in ctl`), `ma_recon._is_activation_line`
+(`"swap" in ct.lower()`, where the MA reconciliation's sold side had ALWAYS excluded swaps, so the
+ruling is not new behaviour there, it is the same rule finally written down once) and — found by the
+new lock, not by reading — the chargeback detector in `_run_calculation` (`'ineligible' in ct`).
+
+**THE HOME: `commcalc/line_class.py`,** beside the predicate and the event it already owns.
+- `EXCLUSION_KINDS = ("swap", "ineligible")`, `HOUSE_EXCLUSIONS` (`swap` → `['swap']`,
+  `ineligible` → `['ineligible']`), `resolve_exclusions(raw)`, and `exclusion_class(row, rules)` /
+  **`exclusion_kinds(row, rules)`** — THE reason one line does not count although its class does, read
+  over the SAME configured `fields` the class predicate reads, so a tenant whose POS carries the fact in
+  the category path is served. **TWO functions, and the distinction is a latent money bug removed:**
+  `exclusion_class` answers *"what is this line, in one word"* for a person reading a report, so it needs
+  a precedence — but a caller testing MEMBERSHIP (*"is this excluded under my config"*, *"is this an
+  ineligible activation"*) must read the SET. A value spelling BOTH kinds would otherwise report only
+  `swap`, and a config excluding only `ineligible` — or the chargeback detector, which looks only for
+  `ineligible` — would silently miss it. Measured 2026-09-27: **none of the 35 distinct `contract_type`
+  values live on the platform carries two kinds**, so the two agree everywhere today and the retired
+  `'ineligible' in ct` is byte-identical — which is exactly when this is cheapest to get right. Locked:
+  axis (i) fails the build on `exclusion_class(...) == '<kind>'` outside the two excused display callers.
+- `HOUSE_NEW_ACTIVATION = {"classes": ["activation","port","byod"], "exclusions": ["swap"]}` and
+  `resolve_new_activation(raw)` — **the house default IS the ruling, exactly as worded**: Total
+  Activation less Upgrade, less swap. Config per org in the EXISTING mig-313 JSON
+  (`accessory_config.activation_details_rules.new_activation` / `.exclusions`) — no migration for the
+  rule itself. An explicitly empty `classes` list is NOT honoured (a denominator of nothing is the
+  §19.28 defect wearing a different hat); an explicitly empty exclusion word list IS.
+- `new_activation_units(rows, rules, …)` — the count, over the SAME `activation_units` the caller
+  already pays and counts on (`units=` reuses them, so no second pass and therefore no second basis).
+  The exclusion is decided **per UNIT, not per line**: a BYOD-Swap invoice leaves the count once.
+  Returns the unit set, the count, `by_class`, and `excluded` **by kind as evidence** — a report must
+  be able to say which units came out and why, or "13 not 19" is an assertion, not a reconciliation.
+- `new_activation_from_buckets(counts, excluded, …)` — the ONLY other way in, for a surface whose
+  activation numbers came from a basis that replaced the line-level ones (Activation Details). It reads
+  the same `classes` config, so the two ways cannot drift.
+
+**(2) EVERY CALLER DEREFERENCES IT.**
+| surface | what it reads |
+|---|---|
+| `router._sales_cell_agg` | `_lc.new_activation_units(rows, line_rules, units=_units)` → per-cell `_newact`; `_swap` now filled by `_lc.exclusion_class` |
+| `router._apply_activation_basis` | sets the SHARED field `act_new_activation` (+ `act_swap_excluded`) on every cell — the sales basis from the exact unit set, the Activation-Details basis via `new_activation_from_buckets` with `new_activation_exclusions_applied: False` (the AD report does not say which units were swaps, so the report says the exclusion could not be applied rather than implying it was) |
+| Executive MTD `router._row` | new columns **`new_activation`**, **`swap_excluded`** and **`cross_bucket`** — the owner's number on the report he named it after, with the subtraction COMPLETE (see (2a)) |
+| `calculator.calc_rep_commissions` | the same count per rep → `basis={'boostapp': n}` into the ONE resolver, gated on `kpi_failing.resolve_boostapp_basis(cfg['kpi_boostapp_basis'])` |
+| `ma_recon._is_activation_line` | `_lc.exclusion_class(row, line_rules) == "swap"` |
+| `_run_calculation` chargeback detector | `_lc.exclusion_class(s, _cb_rules) == 'ineligible'` |
+| `GET /dlar-vs-platform/{period}` | composes `act_new_activation` — it never classifies a line itself |
+
+**(2a) WHY THE NUMBER IS NOT LITERALLY `total_activation − upgrade − swap`, and the defect that
+surfaced.** Executive MTD's `total_activation` is the **SUM of four per-line bucket counts**, and
+`_sales_cell_agg` assigns a transaction to a bucket PER LINE — so one invoice carrying an Activation line
+AND a BYOD line joins BOTH sets and Total Activation counts it **twice**. That is the §6d /
+`harness_activation_cross_bucket.py` defect **(C)**, already measured and still the owner's call.
+`new_activation_units` returns a **SET of unit ids**, so the denominator counts such an invoice ONCE and
+is free of the defect *by construction* — which is the right answer for a rate, and also means the two
+numbers differ. Rather than leave a silent difference (house August: 1092 against 1096), the cell carries
+`act_cross_bucket` and Exec MTD prints `cross_bucket`, so the identity is exact:
+
+> `total_activation − upgrade − swap_excluded − cross_bucket == new_activation`
+
+Verified live on three months, both grains: August 1926 − 696 − 134 − 4 = **1092** · September
+1629 − 566 − 117 − 9 = **937** · June 1853 − 672 − 106 − 2 = **1073**. **And every PRE-EXISTING Exec MTD
+field is byte-identical** — the payload replayed against commit `8753513d` over June/July/August/September
+2026, both grains, with only the three new keys removed: identical to the byte (148,727 bytes) — and
+identical again across **all three live tenants** over July/August/September, both grains (213,612 bytes).
+That matters because an `exec_mtd`-basis plan pays off this report, and because the tenant with
+POS-declared classification fields (`f4f1c16e…`, `fields: ['category','product_desc']`) is the one whose
+`_swap` tally the new `exclusion_class` could have moved — it did not. Pinned by
+`harness_ready_app_denominator.py` §E5–E8 and by lock axis (g), which fails the build if the Exec MTD row
+stops printing `cross_bucket` (a missing term is how a silent difference comes back).
+
+**(3) THE DERIVED RATE MOVED FROM INGEST TO COMPUTE.** `kpi_failing.REP_DERIVED_RATES =
+{"boostapp": ("boost_ready_bounty", "new_activations")}`, `kpi_failing.derived_rate(n, d)` (the
+score-side twin of `dlar_sweep.derived_rate`, same contract: no basis → `None`), a new source
+`SOURCE_REP_DERIVED = "rep_derived"`, and `rep_kpi_values(..., basis=None)`. **A caller that offers no
+basis reads the stored `boost_app_pct` exactly as before** — that is the money pin, and it is why
+shipping this moves nothing. A basis offered and unusable (no transactions, a zero count) is `no_data`;
+the stored column does NOT stand in, because letting it would restore the fabricated denominator.
+`resolve_boostapp_basis` applies §19.26's rule — **missing beats wrong on a money gate**: absent or
+unrecognised resolves to the PRE-RULING `feed_prepaid`, never to the new basis.
+
+**(4) THE RECONCILIATION, MEASURED — and it says the owner's wording is the right one.** Read-only,
+2026-09-27, HOUSE org, nothing recomputed or written. Every candidate denominator against the carrier's
+own `raw_dlar_rep.gross_adds`, at the grain the feed publishes (rep × door × period), 296 comparable
+cells (July onward the feed's `store` column is blank — §19.28 — so those months cannot be joined at
+door grain and are compared by rep name in the report instead):
+
+| candidate | exact | mean error | within ±1 |
+|---|---|---|---|
+| Total Activation (prem + byod + upgrade) | 43 (14.5%) | +8.61 | 96 |
+| Total Activation − upgrade | 119 (40.2%) | +2.34 | 190 |
+| **the ruling: − upgrade − swap** | **157 (53.0%)** | **+1.16** | **211** |
+| the ruling − ineligible port-in | 154 (52.0%) | +1.14 | 210 |
+| the ruling − ALL port-ins | 109 (36.8%) | **−1.66** | 182 |
+| the ruling − BYOD (activation + port only) | 96 (32.4%) | **−2.35** | 181 |
+
+**So the ruling as written is the best fit, and the two boundaries it did not state are now answered
+with evidence: a PORT-IN is a new activation and NEW BYOD is a new activation** — excluding either
+makes the platform *undercount* the carrier (mean −1.66 and −2.35), which is the opposite error. The
+third boundary is genuinely open: see (6).
+
+**THE REFERENCE REP, store 11636, August 2026** (the §19.28 case), on the live rows through the new home:
+
+| | `count_unit='transaction'` | `count_unit='event'` |
+|---|---|---|
+| premium (incl. port) / BYOD / upgrade | 8 / 11 / 16 | 9 / 11 / 11 |
+| Total Activation − upgrade | 19 | 20 |
+| **− swap (the ruling as written)** | **14** | **15** |
+| − swap − ineligible port-in | **13** | **13** |
+| ElevateGo's own finalised denominator | **13** (61.54% = 8/13) | |
+
+`kpi_failing.derived_rate(8, 13)` = **61.538…%**, the carrier's published figure to the digit. It still
+FAILS the 65 target, so the ruling does not lift that rep's tier on its own. Two facts fall out of this
+table: the ruling is **basis-stable across the §6f count_unit flip only once the ineligible boundary is
+closed** (14 vs 15 without it, 13 vs 13 with it); and the rep's `upgrade_acts` of **17** is the engine's
+rep-across-stores grain (16 at 11636 + 1 at another store) against the carrier's per-door 12 — a grain
+difference, not a counting one. **September 2026, rep grain, 68 comparable reps: 19 agree EXACTLY on
+new activations and the net difference is +26 across all of them** (against +784 in August, whose slice
+is the 24-August partial) — and the reference rep is feed 22 / platform 22, exact.
+
+**(5) THE MONEY — MEASURED, APPLIED NOWHERE.** Replaying the old engine against the new over the same
+live inputs, all **322** HOUSE rep-months, only `boostapp` changing: **62 rep-months change their
+met-count; 6 change a tier, and every one goes DOWN, totalling −$658.30** (June Waleed Asghar
+−153.72 · April Radhika Sharma −145.65 · June Yesica Reyes −124.71 · June Abdullah Mohammed −119.65 ·
+April Rana Akhtar −71.02 · March Angie Ramos −43.55; all 5/7→4/7, tier 0.75→0.50). **Nothing in July,
+August or September 2026 moves** — the column stopped arriving in July, so the rate is already NULL
+there. WHY it goes down, and why that is the ruling working: in March–June `ga_prepaid` WAS arriving and
+was tiny next to the store's transactions (Radhika April: bounty 1 over `ga_prepaid` 1 = "100%" against
+24 real new activations = 4.17%), so the old rate read near-100% for a rep who had sold one Ready App.
+The switch is **per period** (`payout_config.kpi_boostapp_basis`, mig `1029`), so setting it from
+September forward leaves every closed month exactly as paid and −$658.30 never happens. **HOUSE PAY IS
+BYTE-IDENTICAL until that column is set** (`harness_ready_app_denominator.py` §F7 is the pin).
+
+**(6) ⚠ OPEN — THE OWNER'S, NOT GUESSED.** (i) **Ineligible port-in**: in or out? The carrier's own
+August figure for the reference rep reconciles ONLY with it out, and excluding it is what makes the
+count identical under both count units — but across 296 cells it is a near-tie (53.0% vs 52.0% exact).
+Config statement in mig `1029` (c1). (ii) **Which period the new basis starts from** — mig `1029`
+Block 2 (a) vs (b), the −$658.30 turning on it. (iii) Port-in and new BYOD are answered by (4) and need
+nothing, recorded so the questions close with evidence.
+
+**(7) THE SWEEP'S REPORT SET IS CONFIG (owner: *"nothing is hard coded, option is platform wide"*).**
+`dlar_sweep.PORTAL_REPORTS` declares each report once (path, target table, normalizer, label) and
+`resolve_report_set(raw)` reads `dlar_sweep_config.reports` (mig `1029`; NULL = the default pair =
+byte-identical). **`boost_ready_by_advocate` is DECLARED and NOT ENABLED, deliberately**: its
+`normalize` is `None`, `resolve_report_set` refuses a report with no normalizer **by name with the
+reason**, and the run's record carries `reports` / `reports_refused` — a config the owner would
+otherwise believe was working. **Does it supersede the derivation?** Only if it carries the RATE per
+rep; if it carries the bounty COUNT (which is what `boost_ready_bounty` on the advocate report already
+is) it supersedes nothing and the denominator argument stands either way. That cannot be known without
+ONE sample of its `/inline` JSON, and guessing which key is the rate on a KPI that tiers pay is exactly
+§19.26 ("missing beats wrong on a money gate"). Enabling it is then one config row — mig `1029` (d).
+
+**(8) THE NEW REPORT — `GET /dlar-vs-platform/{period}` → `/commcalc/dlar-vs-platform`.**
+Pure logic `commcalc/dlar_vs_platform.py`; proof `backend/harness_dlar_vs_platform.py` (48 checks).
+- **It COMPOSES.** The platform side is `_sales_cell_agg` + `_apply_activation_basis` — Executive MTD's
+  own cells, `act_new_activation` included. The feed side is `raw_dlar_rep` / `raw_dlar_store` AS
+  LANDED. The vintage is `_dlar_slice_vintage` → `dlar_sweep.slice_vintage`. Which column carries a
+  metric is `kpi_failing`'s existing map. The absence vocabulary is `carrier_vs_pay`'s verbatim
+  (`reported` / `measured_zero` / `not_reported`), not a fourth spelling. It introduces **no table and
+  no ingest path**, so no lineage-registry row; `summary.books_to == []`.
+- **THE ONE JUDGEMENT CALL, and it is the heart of the report.** Three causes can make the sides
+  disagree, and they have different owners: a **counting definition** (exact, by named unit kind, and
+  attributed FIRST), a **stale feed slice**, and **nothing** (the finding). A stale slice does **not
+  EXPLAIN** a residual — it makes the comparison **UNDECIDABLE**, and the report says so. Measured why:
+  the reference rep's stored August slice says 4 activations where the carrier's finalised August says
+  13, so a partial snapshot does **not** grow in proportion to the days it is missing (24 of 31 days,
+  but 4 of 13 activations). Any rule that scaled a partial up by its day coverage would have called
+  that residual unexplained and sent somebody hunting a counting bug that is not there; any rule that
+  let staleness swallow the residual would hide a real one. So `decidable: False`, kept OUT of the
+  "to look at" headline, waiting on a fresh pull — which is the owner's action on live data.
+- **WHAT IT FOUND ON ITS FIRST RUN.** Against a hypothetically complete feed the reference rep's
+  activations reconcile exactly through the ineligible port-in, and **UPGRADES are +5 unattributed —
+  which is §19.28 (3)'s five BYOD-Swap invoices, reproduced from the outside** by a report that shares
+  the platform's one count. Supplying the upgrade side's own swap exclusion attributes it exactly.
+- Absence on BOTH sides: `ga_prepaid`, `store` (and, new this run, `raw_dlar_store.tmr3` — see (9))
+  read `not_reported`, never a delta of 0 and never a 100% variance; a metric the transactions cannot
+  speak to (ATU, protect, tablets on the sales basis, the bounty itself) says so rather than printing a
+  zero that looks like a measurement. A rep with no transactions is not a rep with zero.
+- The feed publishes per rep per **DOOR**: a rep with several feed rows is reported and marked
+  undecidable, never compared against whichever row happened to be first.
+- Placement: the **Management Overview dashboard** tile (mig `1029`, the `ui_label_override`
+  `scope='tiles'` mechanism — tile layout is config, appended by a guarded idempotent **jsonb** UPDATE
+  with mig 1016's own post-flight check) plus the `NAV_CARRIERS`-gated nav entry.
+  **A MIGRATION BUG CAUGHT BEFORE SHIPPING, and the general fact behind it.** The first draft of that
+  block did `replace(label, '{"title":"Failing KPIs"', …)`. Measured against the LIVE row 2026-09-27: it
+  matches **0 rows**, so the guarded UPDATE would have silently not fired — a migration that reports
+  success and adds no tile. Mig `948` INSERTed COMPACT JSON, but the row has since been **re-serialised**
+  (spaces after colons, keys reordered: `… "items": [{"href": "/commcalc/kpi-failing"}], "title":
+  "Failing KPIs"}`) because the Dashboard Designer round-trips the layout through a JSON encoder.
+  **So ANY migration that string-matches into a tile layout is broken by construction** — jsonb append
+  plus an `@>` containment guard is order- and whitespace-proof. The two sibling tile migrations
+  (`1002`, `1016`) were CHECKED in the same pass and both already use jsonb, so there is no sibling
+  defect; this one was the only offender. Mig `1029` Block 1 was then **run on real PostgreSQL 16
+  against a copy of the live row**: apply (9 → 10 tiles, the `\u2696\ufe0f` icon decoding correctly, both
+  columns landing), re-run clean (the post-flight "exactly 1 tile" assertion holding), the REVERT block
+  pasted verbatim restoring 10 → 9 tiles and dropping both columns, and a clean re-apply after it. Standard filters narrow client-side over the already-span-scoped
+  payload — `/kpi-failing`'s and `/dlar-store`'s own pattern in this module, so no fourth server-side
+  filter spelling is invented. Sorted from the first commit through `useTableSort` / `SortableTh`.
+
+**(9) LIVE-DATA DEFECTS FOUND WHILE MEASURING — REPORTED, NOT CODED AROUND.**
+- **A NEW column stopped arriving, and it is one the PAY ENGINE TIERS ON: `raw_dlar_store.tmr3`.**
+  Measured per period (read-only, house org, 28 store rows each month): **July 28/28 filled · August
+  28/28 · September 0/28**, while `family_plan_pct`, `aal_conversion` and `atu` stayed 28/28 — so it is
+  that one column, not the report. The sweep's own 2026-09-27 11:01Z status already said so
+  (`⚠ PARTIAL … ⚠ COLUMN STOPPED ARRIVING: raw_dlar_store.tmr3 (0 of 28 rows), raw_dlar_rep.store
+  (0 of 45), raw_dlar_rep.ga_prepaid (0 of 45)`): the §19.28 content-arrival axis earning its keep on a
+  break nobody would otherwise have seen. **Why it matters twice over:** `tmr3` is in
+  `kpi_failing.STORE_KPI_COLUMNS`, one of the three store-grain KPIs the Boost pay engine ROLLS DOWN to
+  every rep (§19.28 (2b)), and it is the column the MI 3MR manager qualifier averages (§19.28 (vi)).
+  **And this is the §19.28 fix working in production right now:** before it, an empty `tmr3` would have
+  been a fabricated `0` failing every rep and dragging every manager's qualifier; today it resolves to
+  `None` → `no_data`, outside the met-count denominator, so September's scores are honest about it
+  instead of quietly wrong. The remedy is upstream (the carrier's report) and is the owner's, not ours.
+  `ga_prepaid` and `store` are still gone, three months on.
+- **`raw_dlar_rep` holds SEVERAL ROWS PER REP PER PERIOD and the pay engine silently keeps ONE.**
+  `calculator.dlar_rep_by_name[name] = d` — last insert wins. Measured: March 24 duplicated rep names
+  (Waleed Asghar 6 rows), April 23, May 19, June 19, July 3, August 2, September 2. So a rep who worked
+  several doors is tiered on whichever door row landed last, and `boost_ready_bounty` — the Ready App
+  NUMERATOR — is per door, so it is one door's bounty against (under the ruling) that rep's whole
+  activation count. Fixing the resolver MOVES PAY (atu / protect / byod / boostapp all read from that
+  row), so it waits for the owner. The new report makes it visible: those reps are marked undecidable
+  with the grain reason.
+- **`LAST, FIRST` is a literal placeholder rep name on the advocate report** — 13 rows July, 5 August,
+  3 September. Those rows carry KPI values attributable to nobody.
+- **`as_of_date` is populated from the 2026-09-27 sweep onward** (September rows: `as_of_date`
+  2026-09-25, `basis='as_of_date'`), so mig `1026` Block 1 IS applied and the §19.28 fix is live.
+  August and July rows remain NULL and fall back to their write date as an upper bound, never
+  back-filled. **The vintage gap is still open:** the 2026-09-27 pull carries the portal's own
+  `import_date` of 09/25 — 5 days short of September — so an open month is compared against a slice
+  two days older than the pull.
+- **`commcalc.dlar_sweep_config.portal_pass` stores the carrier portal password in PLAINTEXT** in a
+  config column. RLS-on, service_role-only and never returned by `_dlar_public_cfg`, so it is not
+  browser-reachable — but it is readable by anything holding the service key and it lands in any
+  transcript that prints the row. It belongs in the environment / a secret store with the column
+  holding only a reference, and the same is true of `vip_sweep_config`, `epay_sweep_config` and
+  `411_storeops_google_reviews_config` which follow the same pattern. Reported, not changed: rotating a
+  live credential and moving four sweeps' auth is the owner's call. **This password was printed into an
+  owner transcript on 2026-09-26 and needs rotating.**
+- **`backend/harness_activation_bucketing.py` fails on `main` (48 passed, 1 failed, check F3) and NO
+  workflow runs it.** A pre-existing red harness that no gate executes is a lock that is not locking —
+  the §19.25 class, on a different file. Not touched here; reported.
+
+**(10) THE LOCK.** `harness_activation_event_lock.py` EXTENDED (not a sibling): the home's `DEFS` gains
+`exclusion_class` / `new_activation_units` / `new_activation_count` / `new_activation_from_buckets`, and
+three axes join it — **(g)** every caller of the new-activation count dereferences the home (Exec MTD's
+cells, the basis applier, the Exec MTD row incl. `cross_bucket`, the pay engine's denominator, the
+difference report);
+**(h)** the derived rate has one home (`kpi_failing`) and one arithmetic, and a third `derived_rate`
+anywhere under `backend/app` is RED; **(i)** a bare `'swap'`/`'ineligible'` test on a sale line, a
+membership question asked of `exclusion_class` rather than `exclusion_kinds`, or a
+second `len(prem) + len(byod)`, is RED. Nine new negative controls, each proving its axis can go red,
+plus the existing "the unmodified tree is GREEN" control. Proof of the rules:
+`harness_ready_app_denominator.py` (83 checks) and `harness_dlar_vs_platform.py` (48 checks), both
+stdlib and DB-free, both in `carrier-vocab-guard.yml`. 27 checks on the lock.
 
 ---
 

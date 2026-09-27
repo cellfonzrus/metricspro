@@ -285,7 +285,9 @@ export async function printReport(p: ExportPayload) {
     </style></head><body>
     <h1>${esc(p.title)}</h1>${p.subtitle ? `<p class="sub">${esc(p.subtitle)}</p>` : ''}
     ${[p.chartImage, ...(p.chartImages || [])].filter(Boolean).filter(isSafeMediaSrc)
-      .map(src => `<img class="chart" src="${esc(src)}"/>`).join('')}
+      .map((src, i, arr) => `<img class="chart" src="${esc(src)}" alt="${
+        esc(arr.length > 1 ? `${p.title} — chart ${i + 1} of ${arr.length}` : `${p.title} — chart`)
+      }"/>`).join('')}
     ${tables}
     ${audit.watermark ? `<div class="wm">${esc(audit.watermark)}</div>` : ''}
     <script>window.onload=function(){window.print()}</script>

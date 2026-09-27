@@ -150,6 +150,7 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/sales-comparison', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
   ['/commcalc/kpi-failing', 'commissions'],
+  ['/commcalc/dlar-vs-platform', 'commissions'],
   ['/commcalc/zero-sales', 'commissions'],
   ['/commcalc/discrepancy', 'commissions'], ['/commcalc/sales-recon', 'commissions'],
   ['/commcalc/epay-fee-recon', 'commissions'],
@@ -457,6 +458,10 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // NEW report (2026-09-03): high-level overview of every KPI below target, store → rep drill-down.
     { href: '/commcalc/kpi-failing', label: 'Failing KPIs', icon: '🎯', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // NEW report (owner 2026-09-27): what the carrier's report claims, beside what the store's own
+    // transactions say, with every difference attributed — a counting definition, a stale feed slice,
+    // or nothing (the finding). Composes the ONE activation count Executive MTD prints.
+    { href: '/commcalc/dlar-vs-platform', label: 'Feed vs Transactions', icon: '⚖️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // NEW report (owner 2026-09-22): store-days and rep-days with no activation and no upgrade. A
     // store whose feed did not land reads "not reported", never zero — see commcalc/zero_sales.py.
     { href: '/commcalc/zero-sales', label: 'Zero Sales', icon: '🚫', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
@@ -1148,7 +1153,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/targets', 'targets'], ['/commcalc/targets/action-plan', 'targets'],
   ['/commcalc/atu-opportunity', 'targets'],
   ['/commcalc/targets/accessories', 'targets'], ['/commcalc/targets/my', 'targets'],
-  ['/commcalc/kpi', 'targets'], ['/commcalc/kpi-failing', 'targets'], ['/commcalc/productivity', 'targets'], ['/commcalc/coaching', 'targets'],
+  ['/commcalc/kpi', 'targets'], ['/commcalc/kpi-failing', 'targets'], ['/commcalc/dlar-vs-platform', 'targets'], ['/commcalc/productivity', 'targets'], ['/commcalc/coaching', 'targets'],
   // Assets & Inventory (incl. Distributors/VIP consignment)
   ['/commcalc/asset', 'assets'], ['/commcalc/asset/dashboard', 'assets'], ['/commcalc/asset/owed-weekly', 'assets'],
   ['/commcalc/asset/aging', 'assets'], ['/commcalc/asset/missing-phones', 'assets'],
@@ -1736,4 +1741,38 @@ export function safeHomeFor(perms: Permissions, vertical?: VerticalInfo | null):
     }
   }
   return '/account/password'   // canAccessPath() always allows this → guaranteed non-looping
+}
+
+
+// ── THE PAGE TITLE — derived from THIS registry, never typed a second time ────────────────────────
+// Owner 2026-09-27 ("generic page titles"). 328 pages shipped one title: every browser tab read
+// "MetricsPro — Commission Intelligence", so a user with eight tabs open could not tell them apart.
+//
+// WHY NOT `export const metadata` PER PAGE: 324 of the 328 are `'use client'`, and a client component
+// cannot export metadata in the app router. The honest options were 328 new server layouts or ONE
+// derivation — and the label is already here, beside the href, for the nav. So the title reads the
+// SAME entry the sidebar reads: rename a nav item and its tab renames itself. A second list of
+// route titles would be the duplicate this file's own invariant forbids.
+//
+// Longest-prefix match, so `/commcalc/kpi/detail` inherits "KPI Metrics" rather than falling back,
+// while an exact `/commcalc/kpi` still wins over a shorter parent.
+export function navLabelForPath(path: string): string | null {
+  const p = (path || '').split('?')[0].replace(/\/+$/, '') || '/'
+  let best: { href: string; label: string } | null = null
+  for (const g of NAV) {
+    for (const it of g.items) {
+      const h = it.href.replace(/\/+$/, '')
+      if (p === h || p.startsWith(h + '/')) {
+        if (!best || h.length > best.href.length) best = { href: h, label: it.label }
+      }
+    }
+  }
+  return best ? best.label : null
+}
+
+/** The full document title for a route. Falls back to the product name alone rather than to a
+ *  half-built string, so an unregistered route never shows "— MetricsPro" with nothing in front. */
+export function documentTitleForPath(path: string): string {
+  const label = navLabelForPath(path)
+  return label ? `${label} · MetricsPro` : 'MetricsPro'
 }
