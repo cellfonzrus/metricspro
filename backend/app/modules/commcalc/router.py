@@ -3309,7 +3309,18 @@ def _sweep_set_status(client, table, org_id, status, detail, mark_run=False, suc
     upd = {'last_status': status, 'last_detail': (detail or '')[:600]}
     if mark_run:
         ok = (str(status or '').strip().lower() in ('ok', 'partial')) if success is None else bool(success)
-        upd['last_run_at' if ok else 'last_attempt_at'] = _datetime.now(_timezone.utc).isoformat()
+        now_iso = _datetime.now(_timezone.utc).isoformat()
+        upd['last_run_at' if ok else 'last_attempt_at'] = now_iso
+        # A SWEEP'S STATUS IS ONE ROW OF "LAST TIME" — it cannot say how often it has worked. Every finished run
+        # also appends to core.job_run (`sweep:<table>`), the history the setup wizard reads to decide whether a
+        # document has a successful automation track record (commcalc/setup_documents.automation_runs, index §39).
+        try:
+            client.schema('core').table('job_run').insert({
+                'org_id': org_id, 'job_name': f'sweep:{table}', 'status': 'succeeded' if ok else 'failed',
+                'detail': {'status': status, 'detail': (detail or '')[:600]}, 'started_at': now_iso,
+                'finished_at': now_iso}).execute()
+        except Exception as e:
+            print(f'WARN sweep run history not recorded ({table}): {e}')
     _status_update(client, table, upd, lambda q: q.eq('org_id', org_id))
 
 
@@ -35020,9 +35031,18 @@ async def connector_health_run_due(x_notify_secret: str = Header(default="")):
             sent.append({"source": f["source"], "kind": f["kind"], "result": res})
         except Exception as e:
             sent.append({"source": f["source"], "kind": f["kind"], "error": str(e)[:160]})
+    # SETUP-DOCUMENT REMINDERS (index §39) ride this same hourly tick and the same alert pipeline: a document the
+    # tenant scheduled in the setup wizard and has not uploaded for its period gets ONE reminder per cycle (scope
+    # `upload_due`; email + WhatsApp per the tenant's Cash & Closing Alerts recipients, else its admins).
+    try:
+        from app.modules.commcalc import setup_documents as _setup_docs
+        reminders = await _setup_docs.run_reminders(client, _send_alert)
+    except Exception as e:
+        reminders = {"error": str(e)[:160]}
     return {"checked_sources": len(_CONNECTOR_HEALTH_SOURCES), "failing": len(failures), "sent": sent,
             "unmonitored": [{"org_id": u["org_id"], "source": u["source"], "detail": u["detail"]}
-                            for u in unmonitored]}
+                            for u in unmonitored],
+            "upload_reminders": reminders}
 
 
 # How long a sweeping_since stamp holds the per-mailbox lock before it is considered stale (a crashed

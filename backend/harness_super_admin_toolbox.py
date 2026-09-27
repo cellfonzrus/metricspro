@@ -134,6 +134,11 @@ for g, _h, its in groups:
     for i in its:
         homes.setdefault(field(i, "href"), []).append((g, field(i, "module"), scopes(i)))
 operator_dir = os.path.join(APP, "(operator)")
+# Pages BORN in the toolbox (no other home by design) — each a platform-only page, each with its reason.
+TOOLBOX_NATIVE = {
+    "/admin/carrier-documents": "index §39 — the per-carrier setup-document list; a platform super-admin editor with no "
+                                "tenant-facing home, so the toolbox IS its home",
+}
 for i in copies:
     h = field(i, "href")
     if h in homes:
@@ -142,7 +147,8 @@ for i in copies:
               "copy differs from its home %s — a copy must never widen or narrow access" % homes[h])
     else:
         is_op = h == "/operator" or h.startswith("/operator/")
-        check("B2 %-28s is an /operator console page" % h, is_op,
+        native = h in TOOLBOX_NATIVE
+        check("B2 %-28s is an /operator console page or a toolbox-native page" % h, is_op or native,
               "no other NAV group carries it — that is a MOVE, not a duplicate")
 
 # ── C. routes exist ──────────────────────────────────────────────────────────────────────────────

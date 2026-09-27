@@ -96,6 +96,11 @@ _COLS = ("key", "label", "what_in_it", "recognisable_columns", "source_hint", "a
          "requires_columns", "excludes_columns", "upload_types", "custom_sheet_label", "sort_order", "is_active")
 
 
+# The setup-wizard facts a kind carries (mig 1028): read by commcalc/setup_documents — the ONE module that interprets them.
+SETUP_COLS = ("required", "default_cadence", "download_url", "download_steps", "evidence_table", "upload_path",
+              "automation_min_runs", "automation_window_days")
+
+
 def _k(**kw):
     row = {"recognisable_columns": [], "source_hint": None, "applies_to_pos": [], "applies_to_carrier": [],
            "applies_to_vertical": [],
@@ -347,6 +352,10 @@ def normalise_row(row):
     out["is_active"] = out.get("is_active") is not False
     out["sort_order"] = int(out.get("sort_order") or 100)
     out["defined_by"] = out.get("defined_by") if out.get("defined_by") in DEFINED_BY else "house"
+    # SETUP FACTS (mig 1028, index §39): carried through AS READ — None when the column is absent (pre-1028) so
+    # commcalc/setup_documents.setup_fields can tell "not set" from "set to the default" and fall back to its mirror.
+    for k in SETUP_COLS:
+        out[k] = row.get(k) if k in row else None
     return out
 
 
