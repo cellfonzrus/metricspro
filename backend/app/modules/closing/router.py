@@ -4491,7 +4491,12 @@ def envelope_report(date_from: str = None, date_to: str = None,
                                      if r.get("envelope_picture") else None)
         out.append(line)
     out = envelope_report_mod.status_filter(out, status)
+    # `by_employee` is the SAME rows rolled up per person (owner 2026-09-26, "report by user") — the
+    # accountability view over a date range, where `rows` answers one store-day at a time. Computed
+    # AFTER status_filter so the rollup describes exactly what the screen is showing, and derived by
+    # calling `totals` per group, so it can never disagree with the tiles.
     return {"rows": out, "totals": envelope_report_mod.totals(out),
+            "by_employee": envelope_report_mod.by_employee(out),
             "date_from": date_from, "date_to": date_to,
             "market_filter_skipped": market_filter_skipped,
             "can_decide": _can_mgmt_review(_caller_perms(client, authorization))}

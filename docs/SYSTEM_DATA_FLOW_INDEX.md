@@ -2620,6 +2620,24 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   the live endpoint). Frontend `/closing/envelope-report` (`closing/envelope-report/page.tsx`;
   NAV Daily Closing group + REPORT_DIRECTORY 'ops').
 
+- **Envelope report BY EMPLOYEE (owner 2026-09-26, "report by user"):** `envelope_report.by_employee(rows)`
+  — the SAME filtered envelope rows rolled up per person: envelopes, counted, uncounted, short/over
+  counts and dollars, match, `net_variance` (over MINUS short, shown BESIDE the gross figures, never
+  instead of them), chargebacks and their dollars, the stores that person touched, and the close-date
+  span. Ordered worst-first by dollars short; an employee whose envelopes were never counted sorts to
+  the BOTTOM, never to the top as a false clean sheet. **It re-derives nothing** — each line is
+  `totals()` over that employee's rows, so the rollup sums to the report tiles exactly (the invariant
+  is asserted field by field in `harness_envelope_report.py`). Identity is `employee_name`, because
+  that is the only identity `commcalc.daily_closing` carries (no employee id) — so same-named people
+  merge and a rename splits a history; the `stores` column makes a merge visible. Served on
+  `GET /closing/envelope-report` as `by_employee`, rendered as a second view on the same page over ONE
+  fetch, and exported as its own sheet. Both tables on that page are sorted through the shared
+  `useTableSort`/`SortableTh` (§19.29).
+  **LIVE STATE 2026-09-27, reported not hidden: `commcalc.envelope_count` holds ZERO rows.** 1,562
+  envelopes and 44 employees are on record and not one physical count has ever been entered, so every
+  envelope reads `uncounted` and there is no variance to reconcile yet. The mechanism is not the gap —
+  the counting is.
+
 - **Closing entry-quality coaching (owner directive 2026-09-02, mig `937`):** "a training walkthru
   for an employee if their data is not entered correctly for a second day in a row". Detection is
   PURE (`closing/entry_quality.py`, proof `harness_closing_entry_quality.py`): signals

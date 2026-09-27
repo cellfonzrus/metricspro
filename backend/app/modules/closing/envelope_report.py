@@ -143,6 +143,51 @@ def status_filter(rows, status):
     return rows
 
 
+def by_employee(rows):
+    """PURE: the SAME envelopes, rolled up per employee — owner 2026-09-26, "report by user".
+
+    Answers "who is short, how often, and by how much" across a date range, where the per-envelope
+    report answers it one store-day at a time.
+
+    IT DOES NOT RE-DERIVE ANYTHING. Each group's numbers come from calling `totals()` on that
+    group, so a per-employee figure can never disagree with the tiles above it — two summarisers
+    over one set of rows is the divergence the house rules forbid, and it would show up here as a
+    rollup that does not add to the total.
+
+    IDENTITY IS THE NAME, because that is the only identity a closing row carries
+    (`commcalc.daily_closing` has `employee_name` and no employee id). Two people with the same
+    name therefore merge into one line, and renaming somebody splits their history at the rename.
+    Stated rather than hidden: this is a roster limitation, not something to paper over here, and
+    `stores` on each line makes a merge visible when it happens.
+
+    Ordered worst-first — biggest dollar shortage, then most envelopes short, then most envelopes —
+    so the line that needs attention is the line at the top. An employee whose envelopes were never
+    counted has nothing measured and sorts to the bottom, never to the top as a false clean sheet.
+    """
+    groups = {}
+    for r in rows or []:
+        key = (r.get("employee_name") or "").strip() or "(unnamed)"
+        groups.setdefault(key, []).append(r)
+    out = []
+    for name, grp in groups.items():
+        t = totals(grp)
+        dates = sorted(d for d in (str(g.get("close_date") or "")[:10] for g in grp) if d)
+        out.append({
+            "employee_name": name,
+            **t,
+            # Over MINUS short: the employee's net effect on the till across the range. Kept beside
+            # the two gross figures, never instead of them — a rep $50 short one day and $50 over the
+            # next nets to zero while having twice failed to hand over the right cash.
+            "net_variance": round(_f(t["over_total"]) - _f(t["short_total"]), 2),
+            "uncounted": t["envelopes"] - t["counted"],
+            "stores": sorted({str(g.get("store_address") or g.get("store_code") or "") for g in grp} - {""}),
+            "first_close": dates[0] if dates else None,
+            "last_close": dates[-1] if dates else None,
+        })
+    out.sort(key=lambda e: (-_f(e["short_total"]), -e["short"], -e["envelopes"], e["employee_name"]))
+    return out
+
+
 def totals(rows):
     """PURE: the report's summary tiles."""
     out = {"envelopes": len(rows), "counted": 0, "short": 0, "over": 0, "match": 0,
