@@ -466,9 +466,6 @@ jobs:
       - name: Run the closing config active lock (a switched-off tender / count is gone from the form and every recon, and the editors can switch one off — index §29.9)
         working-directory: backend
         run: python3 harness_closing_config_active.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the setup-documents lock (per-carrier required uploads from the registry; automation offered only on a proven track record; the wizard gate; one reminder per cycle through the alert pipeline — index §39)
-        working-directory: backend
-        run: python3 harness_setup_documents.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the acting-org default lock (no page seeds its organisation from the house org — index §29.8)
         working-directory: backend
         run: python3 harness_acting_org_default.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -541,6 +538,23 @@ jobs:
       - name: Run the POS product-filters proof (each filter narrows; they combine with search; no new param = the old answer; in stock; past the 500 cap; org-scoped)
         working-directory: backend
         run: python3 harness_pos_product_filters.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE SETUP-DOCUMENTS PROOF (index §39) imports the real setup_documents / setup_router / import_health modules (the
+  # document rules, automation history, gate, reminders, the super-admin edit validation), so it runs in its own job with
+  # the backend's dependencies, like the proofs below. DB-free.
+  setup-documents-proof:
+    name: Setup documents proof (DB-free, the real functions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the setup-documents lock (per-carrier required uploads from the registry; automation offered only on a proven track record; the wizard gate; one reminder per cycle through the alert pipeline — index §39)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_setup_documents.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE INVENTORY-INTEGRITY PROOF (index §11b) drives the REAL engine, landing guard, status writer and /pos endpoints over
   # the in-memory client (harness_intake_fakes) with the anonymised 383-unit regression fixture — it imports the app, so it
