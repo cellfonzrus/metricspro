@@ -333,21 +333,7 @@ def tenant_context(client, org_id):
         uses_carriers = _vert.tenant_vertical(client, org_id).get("uses_carriers") is not False
     except Exception:
         pass
-    done_at, name = None, ""
-    try:
-        t = (client.schema("storeops").table("tenants").select("name,documents_setup_done_at")
-             .eq("org_id", org_id).limit(1).execute().data) or []
-        if t:
-            done_at, name = t[0].get("documents_setup_done_at"), t[0].get("name") or ""
-    except Exception:
-        # pre-1028: the column is absent — read the name alone and treat the tenant as done (never gated)
-        try:
-            t = (client.schema("storeops").table("tenants").select("name").eq("org_id", org_id)
-                 .limit(1).execute().data) or []
-            name = (t[0].get("name") if t else "") or ""
-        except Exception:
-            pass
-        done_at = "pre-1028"
+    done_at, name = tenant_setup_state(client, org_id)
     return visible, uses_carriers, done_at, name
 
 
@@ -373,6 +359,18 @@ def ensure_feeds(client, org_id, kinds):
         print(f"WARN setup_documents could not register document feeds: {e}")
         return 0
     return len(rows)
+
+
+def tenant_setup_state(client, org_id):
+    """(documents_setup_done_at, company name) through THE any-subset row reader (core/column_tolerant, index §4b.1).
+    A tenants row without the mig-1028 column reads as DONE — never gated, the safe direction."""
+    from app.core.column_tolerant import read_row
+    rr = read_row(lambda: client.schema("storeops").table("tenants"), lambda q: q.eq("org_id", org_id),
+                  ("name", "documents_setup_done_at"))
+    row = rr.row or {}
+    if "documents_setup_done_at" in (rr.missing or ()):
+        return "pre-1028", row.get("name") or ""
+    return row.get("documents_setup_done_at"), row.get("name") or ""
 
 
 def payload(client, org_id, persist=True):

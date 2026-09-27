@@ -136,12 +136,8 @@ def get_setup_gate(org_id: str = ORG_ID, authorization: str = Header(default="")
                    x_active_org: str = Header(default="")):
     """Cheap for every tenant that is done (one read); the full evaluation only while a tenant is still setting up."""
     client, _caller, org = IH._gate(authorization, x_active_org, org_id)
-    try:
-        t = (client.schema("storeops").table("tenants").select("documents_setup_done_at")
-             .eq("org_id", org).limit(1).execute().data) or []
-    except Exception:
-        return {"active": False, "pending": [], "done": True, "wizard_path": SD.WIZARD_PATH}   # pre-1028: never gate
-    if t and t[0].get("documents_setup_done_at"):
+    done_at, _name = SD.tenant_setup_state(client, org)
+    if done_at:          # done, or a database without the mig-1028 column (never gate)
         return {"active": False, "pending": [], "done": True, "wizard_path": SD.WIZARD_PATH}
     p = SD.payload(client, org, persist=True)
     return {**p["gate"], "wizard_path": SD.WIZARD_PATH}
