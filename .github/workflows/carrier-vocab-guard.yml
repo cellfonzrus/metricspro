@@ -478,9 +478,6 @@ jobs:
       - name: Run the table-sort ratchet (a new data table cannot ship unsorted; the unsorted list only shrinks — owner 2026-08-10, index §19.29)
         working-directory: backend
         run: python3 harness_table_sort_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the closing filter contract (three standard filters, three resolvers; an accepted filter is an applied filter — owner 2026-09-26, index §29.10)
-        working-directory: backend
-        run: python3 harness_closing_filter_contract.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the supply-ordering proof (vendor setup incl. free-shipping threshold + delivery days; catalog ingest; the cart optimizer with thresholds / lead time / stock / packs; the order recipe never submits on its own; confirmation capture; one lander, one connector key, one pricing copy — index §36)
         working-directory: backend
         run: python3 harness_supply_ordering.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -538,6 +535,23 @@ jobs:
       - name: Run the POS product-filters proof (each filter narrows; they combine with search; no new param = the old answer; in stock; past the 500 cap; org-scoped)
         working-directory: backend
         run: python3 harness_pos_product_filters.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE CLOSING FILTER CONTRACT (index §29.10) imports closing/router.py (FastAPI), so it cannot run in the bare-Python
+  # job above — it failed there with "No module named 'fastapi'" from the day it landed (#311, red on main). Its own job,
+  # with the backend's dependencies, like the proofs below.
+  closing-filter-contract-proof:
+    name: Closing filter contract (imports the closing router)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the closing filter contract (three standard filters, three resolvers; an accepted filter is an applied filter — owner 2026-09-26, index §29.10)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_closing_filter_contract.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE SETUP-DOCUMENTS PROOF (index §39) imports the real setup_documents / setup_router / import_health modules (the
   # document rules, automation history, gate, reminders, the super-admin edit validation), so it runs in its own job with
