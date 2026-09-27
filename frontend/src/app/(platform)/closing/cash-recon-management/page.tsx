@@ -4,9 +4,15 @@ import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import StandardFilterBar from '@/components/StandardFilterBar'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 import { useReportLabels } from '@/lib/report-labels'
 import type { StandardFilterValue } from '@/lib/standard-filters'
 import type { StoreOpt } from '@/lib/market-store-cascade'
+
+// OWNER 2026-09-26, "sort functions are not working platfrom wide". Click-to-sort via the SHARED
+// hook (owner directive 2026-08-10) — never a local comparator. `store` sorts on the label the row
+// actually displays, so the order matches what the eye reads rather than the underlying code.
+const reconCell = (r: any, f: string) => (f === 'store' ? (r?.store_name || r?.store_code) : r?.[f])
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import ScreenLink from '@/components/ScreenLink'
@@ -90,6 +96,8 @@ export default function CashReconManagementPage() {
 
   const rows: any[] = (data?.rows || []).filter((r: any) => !mismatchOnly || r.billpay_status === 'mismatch' || r.three_way_status === 'mismatch')
   const t = data?.totals || {}
+  // Day ascending to start — a recon is read chronologically until you ask otherwise.
+  const sortState = useTableSort(rows, reconCell, { field: 'day', dir: 'asc' })
 
   function exportPayload(): ExportPayload {
     return {
@@ -232,27 +240,27 @@ export default function CashReconManagementPage() {
             <div className="card table-wrapper" style={{ padding: 0, overflow: 'auto', maxHeight: '70vh' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead><tr style={{ background: 'var(--surface2)' }}>
-                  <th style={{ ...thL, left: STICK_L0, zIndex: 5, minWidth: 88 }}>Day</th>
-                  <th style={{ ...thL, left: STICK_L1, zIndex: 5 }}>Store</th>
-                  <th style={thTop}>Cash declared</th>
-                  <th style={thTop}>Credit declared</th>
-                  <th style={thTop}>Bill-pay on cash</th>
-                  <th style={thTop}>Bill-pay on credit</th>
-                  <th style={thTop} title="The pickup the DM confirmed — the declared envelope figure">DM verified cash</th>
-                  <th style={thTop} title="What the DM recorded actually taking out of the envelope (mig 949). Blank = not recorded.">DM actually took</th>
-                  <th style={thTop} title="Management's own count of the envelope, from the envelope report (envelope_count, mig 936). Blank = not counted yet.">Management counted</th>
-                  <th style={thTop} title="Management counted minus cash declared. Negative = short.">Mgmt short / over</th>
-                  <th style={thTop}>{`DM verified ${procName}`}</th>
-                  <th style={thTop}>POS cash</th>
-                  <th style={thTop}>POS card</th>
-                  <th style={thTop} title="Bill payments in the email-ingested sales transactions for the day (Leg B of the 3-way recon)">Sales-tx bill pay</th>
-                  <th style={thTop} title="Of the sales-tx bill payments, the share taken on credit/debit card">Sales-tx on card</th>
-                  <th style={thTop} title="Carrier-side report (owner portal / daily-TX feed, per Metric Source of Truth — Leg C)">Processor bill pay</th>
-                  <th style={thTop}>Bill-pay Δ</th>
-                  <th style={thTop} title="Declared vs sales-tx vs processor, all present legs within tolerance">3-way</th>
+                  <SortableTh field="day" sort={sortState.sort} onSort={sortState.toggle} style={{ ...thL, left: STICK_L0, zIndex: 5, minWidth: 88 }}>Day</SortableTh>
+                  <SortableTh field="store" sort={sortState.sort} onSort={sortState.toggle} style={{ ...thL, left: STICK_L1, zIndex: 5 }}>Store</SortableTh>
+                  <SortableTh field="cash_declared" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>Cash declared</SortableTh>
+                  <SortableTh field="credit_declared" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>Credit declared</SortableTh>
+                  <SortableTh field="epay_cash_declared" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>Bill-pay on cash</SortableTh>
+                  <SortableTh field="epay_credit_declared" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>Bill-pay on credit</SortableTh>
+                  <SortableTh field="cash_pickup" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="The pickup the DM confirmed — the declared envelope figure">DM verified cash</SortableTh>
+                  <SortableTh field="cash_picked_actual" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="What the DM recorded actually taking out of the envelope (mig 949). Blank = not recorded.">DM actually took</SortableTh>
+                  <SortableTh field="mgmt_counted" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="Management's own count of the envelope, from the envelope report (envelope_count, mig 936). Blank = not counted yet.">Management counted</SortableTh>
+                  <SortableTh field="mgmt_variance" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="Management counted minus cash declared. Negative = short.">Mgmt short / over</SortableTh>
+                  <SortableTh field="billpay_pickup" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>{`DM verified ${procName}`}</SortableTh>
+                  <SortableTh field="pos_cash" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>POS cash</SortableTh>
+                  <SortableTh field="pos_card" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>POS card</SortableTh>
+                  <SortableTh field="sales_billpay" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="Bill payments in the email-ingested sales transactions for the day (Leg B of the 3-way recon)">Sales-tx bill pay</SortableTh>
+                  <SortableTh field="sales_billpay_card" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="Of the sales-tx bill payments, the share taken on credit/debit card">Sales-tx on card</SortableTh>
+                  <SortableTh field="pos_billpay" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="Carrier-side report (owner portal / daily-TX feed, per Metric Source of Truth — Leg C)">Processor bill pay</SortableTh>
+                  <SortableTh field="billpay_delta" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>Bill-pay Δ</SortableTh>
+                  <SortableTh field="three_way_status" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="Declared vs sales-tx vs processor, all present legs within tolerance">3-way</SortableTh>
                 </tr></thead>
                 <tbody>
-                  {rows.map((r: any, i: number) => (
+                  {sortState.sorted.map((r: any, i: number) => (
                     <tr key={`${r.day}|${r.store_code}|${i}`} style={{ background: r.billpay_status === 'mismatch' ? 'rgba(220,38,38,0.06)' : undefined }}>
                       {/* The two frozen columns carry the row's own background, or the sticky cell
                           would be transparent and the scrolled columns would show through it. */}
