@@ -63,8 +63,8 @@ check("file: status + trimmed note + who + when",
 check("patch touches ONLY appeal fields (never money/status)",
       set(p) == {"appeal_status", "appeal_note", "appealed_by", "appealed_at"})
 p2 = apply_appeal("appeal_filed", "appeal_won", "", None, "2026-09-04T10:00:00Z")
-check("won: empty note -> None, blank actor -> 'web'",
-      p2["appeal_note"] is None and p2["appealed_by"] == "web" and p2["appeal_status"] == "appeal_won")
+check("won: empty note -> None, blank actor -> None (never a sentinel like 'web'; index §19.34)",
+      p2["appeal_note"] is None and p2["appealed_by"] is None and p2["appeal_status"] == "appeal_won")
 p3 = apply_appeal("appeal_won", "", "ignored", "uid", "now")
 check("clear: full NULL reset of all four fields",
       p3 == {"appeal_status": None, "appeal_note": None, "appealed_by": None, "appealed_at": None})

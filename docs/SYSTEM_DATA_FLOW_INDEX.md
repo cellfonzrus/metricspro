@@ -2811,6 +2811,11 @@ conflates them.
 impact previews at `10726-11391`); `/expected-commission/*` `11397-11579`. **Frontend:**
 `commcalc/plan-installments/page.tsx`, `expected-commission/page.tsx`.
 
+**Who saved it (§19.34, 2026-09-28):** every editor here stamps `updated_by` / audit `changed_by` from ONE helper,
+`router._caller_uid(authorization)` — the signed-in uid or NULL, never a sentinel (`installment_category_rule.updated_by`
+is UUID, mig 245; the old `'web'` 500'd every token-less save). The audit trail shows NULL as "system"
+(`frontend/src/lib/actor.ts::actorLabel`). Lock: `backend/harness_actor_uid_lock.py`.
+
 **GAP (verified):** `sale_installment_ledger` has **NO category column** — category is computed at runtime
 (`category_guard.by_category` counts are emitted but **not persisted**). So plan-mode `home_internet`/edge
 counts cannot be queried historically from the ledger. `⚠`
@@ -4816,6 +4821,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| Actor columns stamped by `router._caller_uid` — `installment_category_rule.updated_by` (**UUID**, mig 245), `plan_installment_schedule.updated_by` + `plan_installment_schedule_audit.changed_by` (mig 210), `commission_org_config.updated_by` (mig 201), `discrepancy_results.appealed_by` (mig 947), `commission_payout_ledger.recorded_by` (mig 267), `ingest_store_guard.updated_by` / `ingest_store_quarantine.decided_by` (mig 280), `targets.updated_by` (mig 006), `financing_target.updated_by` (mig 272) — **who did this: a uid or NULL, never a sentinel** (§19.34) | the plan-installment / category / matcher / payout-config / expected-commission editors, `PATCH /discrepancy-appeals/{row_id}`, `POST /payout/record`, the ingest-guard + targets + financing-target saves — all via ONE helper `_caller_uid` (`_mpc_who` / `_xc_who` / `_agency_who` dereference it) | the UI through ONE display rule `frontend/src/lib/actor.ts::actorLabel` (NULL / legacy `'web'` → "system"); lock `harness_actor_uid_lock.py` |
 | `commcalc.calc_status.auto_calc_requested_at` / `.auto_calc_landings` / `.auto_calc_last` (mig `1030`, NOT applied) — **a pending auto-calculation and the last one's outcome** for one (org, month) | `auto_calc.landed` (queue), `auto_calc._claim` (the poller's conditional UPDATE), `auto_calc.run_one` → `_record_last` (outcome); pre-1030 the outcome goes to `calc_notices` (type `auto_calc`) | `auto_calc.run_due` (the poller), `auto_calc.view` ← `GET /commcalc/calc-status/{period}` → `_lib/AutoCalcNotice.tsx` on the Rep Incentive page (§6l) |
 | `commcalc.commission_org_config.auto_calc_on_landing` / `.auto_calc_debounce_minutes` (mig `1030`) — house row → tenant row override | migration 1030 (house row TRUE where NULL); SQL / a future settings writer | ONE reader `auto_calc.load_config` → `resolve_config` (lock: `harness_auto_calc_lock.py` E) (§6l) |
 | `data_lineage_registry.COMMISSION_CALC_FEEDS` / `SALES_SIBLING_TABLES` (code registry) — **which tables the Run Calculation reads** | code | `auto_calc.is_calc_feed` (the hook), `harness_auto_calc_lock.py` A/F (§6l) |
@@ -4999,6 +5005,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `POST /commcalc/plan-installments/category-rules` — now saves for a token-less caller (automation, agents, the auto-calc poller, RBAC off) with `updated_by = NULL` instead of 500-ing on `'web'` into a UUID column; the same actor stamp (uid or NULL) on `POST`/`PUT`/`DELETE /plan-installments[/{sid}]`, `PUT /plan-installments/{activation-matcher,plan-line-matcher,category-qualification,category-payout}`, `PUT /expected-commission/config`, `PATCH /discrepancy-appeals/{row_id}`, `POST /payout/record`, `PUT /ingest-guard/config`, `POST /ingest-guard/queue/{item_id}/decide`, `PUT /targets/{period}`, `PUT /financing/targets/{period}` | `router.save_category_rule` → `_caller_uid` (the one home) | §19.34, §8 |
 | `GET /commcalc/calc-status/{period}` — now also serves `auto_calc` `{state, tone, sentence, due_at, last, enabled}`: what the landing hook did for the month (queued / calculated / refused / failed / busy / off / running). Read by the Rep Incentive page | `router.get_calc_status` → `auto_calc.view` + `auto_calc.load_config` | §6l |
 | Every landing endpoint's response now carries `auto_calc` (`queued` + periods / `off` / `not_a_calc_input` / …): `POST /upload/{file_type}`, `POST /upload-mapped`, `POST /onboarding/intake/commit`, `POST /sales/promote-feed`, `POST /ingest-guard/queue/{item_id}/decide`, the commission import wizard commit, `POST /manual-upload/ingest`, the POS sync; the DLAR sweep's status line says "auto-calculation queued for …" | `auto_calc.landed` (no new route) | §6l |
 | **Every backend path, as the BROWSER reaches it** — `/api/v1/*` and `/health` on the site's own origin, proxied server-side (`next.config.ts` `rewrites()` = `apiRewrites()`); uploads + the `require_browser_service()` endpoints + `POST /payables/rebuild` go DIRECT (`DIRECT_ROUTES`) | `frontend/src/lib/apiBase.ts` `apiUrl` / `routeClass`; lock `harness_one_domain_lock.py`, proof `frontend/prove_one_domain.mjs` | §40 |
@@ -5244,6 +5251,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Who did this** (the actor on a config save / audit row / appeal / payout record) — a uid or NULL ("system"), never a sentinel string | the §16 actor columns (types READ from the migrations by the lock) | writer: ONE helper `router._caller_uid`; display: `frontend/src/lib/actor.ts::actorLabel`; lock `harness_actor_uid_lock.py`, CI job *Actor columns get a UUID or NULL, never a sentinel* (§19.34) |
 | **Is this month's stored commission up to date with what landed?** ("Auto-calculated at … from the upload of …" / refused / off / queued) | `calc_status.auto_calc_requested_at` / `auto_calc_last` (mig 1030; pre-1030 `calc_notices` type `auto_calc`) | `auto_calc.view` via `GET /calc-status/{period}`; written only by the landing hook's runner, which runs `_run_calculation` (§6l) |
 | **What device an activation activated** (tablet / watch) and **its Exec-MTD pay category** | sale lines of the event (`product_desc`, `category`, `department`, `sku`, serial, catalog) | ONE classifier `installment_category.resolve_chain_category` (tenant rules + built-in ladder), dereferenced by `line_class._device_of_lines` / `unit_devices`; `line_class.pay_category` (one event, one category); categories `activation_bucketing.MTD_CATEGORIES` (§6n) |
 | **Where the backend is / the customer-facing site / which browser origins may call the API** (deploy config, not a metric) | env `BACKEND_ORIGIN`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_API_DIRECT_ORIGIN`, `NEXT_PUBLIC_SITE_URL` (frontend); `APP_PUBLIC_URL`, `CORS_ORIGINS`, `CORS_ORIGIN_REGEX` (backend) | ONE home each: `frontend/src/lib/apiBase.ts`; `backend/app/core/cors_policy.cors_policy` (§40) |
@@ -5393,6 +5401,69 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 ---
 
 ## 19. Known gaps & inert config
+
+§19.34 **"WHO DID THIS" IS A UUID OR NULL — NEVER A SENTINEL STRING (found live 2026-09-28, saving tenant device
+rules).** `commcalc/router.py::_caller_uid(authorization)` returned the literal `'web'` when no signed-in user resolved.
+`save_category_rule` (`POST /plan-installments/category-rules`) writes it into `commcalc.installment_category_rule.updated_by`,
+which mig `245` declares **UUID** — so every save by a token-less caller (RBAC off, automation, agents, the auto-calc
+poller) died `invalid input syntax for type uuid: "web"`: a 500, nothing saved. The scratchpad proof for that endpoint
+stubbed `_caller_uid` with `"harness"`, which is why nothing caught it.
+**The class:** an actor identity was written as a sentinel STRING where the database's own "unknown" is NULL. It only
+FAILS on a UUID column; on a TEXT column the sentinel is silently stored and later shown as if it were a person.
+**The design fix (one home, dereferenced):** `_caller_uid` returns the signed-in uid as a canonical UUID string, or
+`None` — never a sentinel, and a resolved id that is not a UUID is `None` too. The three copies of the same lookup in
+commcalc (`_mpc_who`, `_xc_who`, `_agency_who`) now call it. Downstream helpers stopped re-adding `'web'`
+(`_installment_audit`, `discrepancy_appeals.apply_appeal`). The UI reads NULL, and the retired `'web'` on old rows,
+as "system" through ONE helper, `frontend/src/lib/actor.ts::actorLabel` (plan-installments audit trail, discrepancy
+appeals, daily-commission "Recorded by", ingest-guard "by …").
+**Writers of `_caller_uid` (every target column checked in the migrations; none is NOT NULL, so NULL is always legal):**
+
+| Writer (endpoint) | table.column | type | null? | writes now |
+|---|---|---|---|---|
+| `save_category_rule` (`POST /plan-installments/category-rules`) | `installment_category_rule.updated_by` (mig 245) | **UUID** | nullable | uid or NULL (was `'web'` → 500) |
+| `save_plan_installment` / `update_plan_installment` → `_write_installment_schedule` | `plan_installment_schedule.updated_by` (mig 210) | TEXT | nullable | uid or NULL |
+| same + `delete_plan_installment` → `_installment_audit` | `plan_installment_schedule_audit.changed_by` (mig 210) | TEXT | nullable | uid or NULL (`or 'web'` removed) |
+| `put_activation_matcher`, `put_plan_line_matcher`, `put_category_qualification`, `put_category_payout`, `put_expected_commission_config` | `commission_org_config.updated_by` (mig 201) | TEXT | nullable | uid or NULL |
+| `set_discrepancy_appeal` (`PATCH /discrepancy-appeals/{row_id}`) → `apply_appeal` | `discrepancy_results.appealed_by` (mig 947) | TEXT | nullable | uid or NULL (`or "web"` removed) |
+| `payout_record` (`POST /payout/record`) → `payout_accrual.record_payout` | `commission_payout_ledger.recorded_by` (mig 267) | TEXT | nullable | body name, else uid, else NULL |
+
+**Siblings fixed:** `put_ingest_guard_config` (`ingest_store_guard.updated_by`, TEXT, mig 280), `decide_ingest_guard_item`
+(`ingest_store_quarantine.decided_by`, TEXT), `save_target` (`targets.updated_by`, TEXT, mig 006), `save_financing_target`
+(`financing_target.updated_by`, TEXT, mig 272) all wrote `body.x or "web"` — now `body.x or _caller_uid(authorization)`;
+the Target Settings page no longer sends `updated_by: 'web'`. **The only UUID actor columns in the migrations**
+(read by the lock): `installment_category_rule.updated_by` and the `*_by_auth_id` / `*_by_app_user_id` /
+`*_by_staff_id` / `*_by_employee_id` / `defined_by_org` columns — every writer of those already writes an id or NULL.
+**Excused, left as-is (all TEXT; the lock prints the full inventory):** (a) MARKERS that a reader depends on and NULL
+would break — `updated_by='seed'` / NULL = "never hand-edited, the seeder may refresh" (management_incentive_plan via
+`mi_save_plan` `or "admin"`, support_doc, training_tour, release_note; ma_commission_month_rate `'api_v1'` vs the
+seed's NULL), `decided_by='settlement'` (read at `_settle_ops_chargebacks`),
+`decided_by='schedule_save'`, `'roll-forward'`; (b) a ROLE or a display NAME stored as the actor in TEXT columns
+(core `caller.role or "admin"`, storeops/HR `'admin'`/`'manager'`/`'system'`, marketing `_who()` → `'unknown'`,
+chargeback `'admin'`, helpdesk `'support'`) — these are other domains' audit conventions, not the auth-uid fact, and
+none targets a UUID column; converting them is a separate owner decision, not this fix; (c) kind labels that are not
+actors (`triggered_by`, `calculated_by`, `defined_by='house'|'tenant'`).
+**Lock:** `backend/harness_actor_uid_lock.py` (stdlib + ast, CI job *Actor columns get a UUID or NULL, never a
+sentinel* in `org-scope-guard.yml`): exec's the real `_caller_uid` against a stub resolver (None for no token / empty /
+raising / non-UUID; the uid for a real token); `_caller_uid` defined once and no commcalc function re-implements the
+token lookup; no `_uid_from_token(...) or '<literal>'` anywhere; no proof stubs `_caller_uid` with a non-UUID; parses
+the migrations for every actor column's type + nullability and traces every actor-key write under backend/app to the
+literals it can carry (direct, `or`, if-else, a local, a parameter default, a same-module helper's return) — a non-UUID
+literal reaching a UUID column fails, a write whose table is dynamic fails unless excused with the tables it can name
+(verified non-UUID); the retired `'web'` is written by no actor column and sent by no frontend body; and the REAL
+`save_category_rule` is exec'd against a client that enforces the declared column types — no token → saved with
+`updated_by=None`, a token → the uid, and the pre-fix helper reproduces the live 500. Run against `main` before this
+fix it fails on exactly `save_category_rule`. `harness_discrepancy_appeals.py` now also runs in CI (debt list 334 → 333).
+**Reported, not fixed (other class):** `marketing/router.py::update_child` stamps `updated_by`/`updated_at` on the
+`checklist` collection, but `core.marketing_event_checklist_item` (mig 986) declares neither column — a checklist edit
+would fail with an unknown-column error. And mig 268b's never-clobber guard (`UPDATE … WHERE updated_by IS NULL` on
+`ma_overview_tile_config`) assumes "the tile-mapping endpoint stamps `updated_by` on every save" — `ma_overview_put_tile`
+stamps only `updated_at`, so a re-run of 268b would overwrite a hand-edited tile. When `updated_by` doubles as a
+"hand-edited" marker, NULL-for-unknown and NULL-for-seeded collide; that needs a decision (a separate marker column,
+or a non-NULL stamp for that table), not a quiet stamp. **Owner decisions:** (1) `_caller_uid` resolves the EFFECTIVE uid
+(`_uid_from_token`); during admin "view as employee" an edit is stamped with the employee's id — the core docstring says
+audit trails should use `_real_uid_from_token`; switching is a one-line change in the one home, not made here.
+(2) The mig 210 / 947 column COMMENTs still say "'web' when unresolved" — historical text in applied migrations;
+a comment refresh would need a new migration. (3) Whether the (b) role/name conventions above should become uids.
 
 §19.33 **NO PERIOD LOCK FOR A REP-COMMISSION MONTH (found building §6l, 2026-09-28).** There is no locked / finalized
 / paid state for a `rep_commissions` month anywhere in the platform (searched the index, the migrations and the

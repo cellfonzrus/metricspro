@@ -810,7 +810,9 @@ _st = store_for(sales=mixed)
 R.sb = lambda: FakeClient(_st)
 R.require_org = lambda *a, **k: None
 R._require_commission_admin = lambda *a, **k: None
-R._caller_uid = lambda *a, **k: "harness"
+# (was: R._caller_uid = lambda *a, **k: "harness" — a NON-UUID stub that hid the live defect where the real helper
+#  returned 'web' into the UUID column installment_category_rule.updated_by. The real helper now runs: no
+#  Authorization -> None. Index §19.34; locked by harness_actor_uid_lock.py.)
 
 g = asyncio.run(R.get_category_qualification(period=PERIOD, org_id=LUXE))
 check("GET category-qualification returns the owner's defaults, the labels, the built-ins and this "

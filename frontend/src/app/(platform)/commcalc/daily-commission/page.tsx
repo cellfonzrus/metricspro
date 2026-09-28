@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, fmt, getActiveOrg, ORG_ID } from '@/lib/client'
 import { ReportShell } from '@/components/ReportShell'
 import type { ExportColumn } from '@/lib/export'
+import { actorLabel } from '@/lib/actor'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
@@ -87,7 +88,7 @@ const LEDGER_COLS: ExportColumn[] = [
   { header: 'Method', get: r => r.method },
   { header: 'Envelope withdrawal', get: r => r.withdrawal_ref },
   { header: 'Note', get: r => r.note },
-  { header: 'Recorded by', get: r => r.recorded_by },
+  { header: 'Recorded by', get: r => actorLabel(r.recorded_by) },
 ]
 
 const SETTLE_COLS: ExportColumn[] = [
