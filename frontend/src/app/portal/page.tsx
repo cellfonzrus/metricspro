@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { api, ORG_ID, localToday, supabase } from '@/lib/client'
+import { apiUrl } from '@/lib/apiBase'
 import { createPunchQueue, runPunchWithRetry, optimisticMessage, syncingMessage, type PunchItem } from '@/lib/punchQueue'
 import { useAuth } from '@/lib/auth-context'
 import EmployeeWidgets from '@/components/EmployeeWidgets'
@@ -312,8 +313,11 @@ export default function PortalPage() {
   useEffect(() => {
     if (authLoading || !session || user) { setApiDown(null); return }
     let alive = true
-    fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/`, { signal: tsig(6000) })
-      .then(() => { if (alive) setApiDown(false) })
+    // Probe the backend's /health through the one home (lib/apiBase.ts). It is same-origin now, so a
+    // down backend answers with the proxy's 5xx rather than a network error — hence `r.ok`, not "any
+    // response". (It used to fetch the backend's `/`, which same-origin would be THIS page.)
+    fetch(apiUrl('/health'), { signal: tsig(6000) })
+      .then(r => { if (alive) setApiDown(!r.ok) })
       .catch(() => { if (alive) setApiDown(true) })
     const t = setInterval(() => refresh().catch(() => {}), 12000)
     return () => { alive = false; clearInterval(t) }

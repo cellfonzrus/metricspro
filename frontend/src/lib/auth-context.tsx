@@ -9,8 +9,8 @@ import { supabase, setSessionOrgId, getActiveOrg, setActiveOrg, set2faToken, get
 import { setCacheIdentity } from './cache'
 import type { Permissions, CarrierRef } from './rbac'
 import { carrierCode, defaultActiveCarrier, type VerticalInfo } from './rbac'
+import { apiUrl } from './apiBase'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export type AppUser = {
   id: string; auth_id: string; email: string; full_name: string | null
@@ -239,7 +239,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const headers: Record<string, string> = { Authorization: `Bearer ${token}`,
                                                 ...impersonationHeader('/api/v1/core/me') }
       if (orgId) headers['x-active-org'] = orgId
-      const res = await fetch(`${API_URL}/api/v1/core/me`, { headers })
+      const res = await fetch(apiUrl(`/api/v1/core/me`), { headers })
       if (!res.ok) throw new Error(String(res.status))
       applyMe(await res.json())
     } catch {
@@ -261,7 +261,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (stored) headers['x-active-org'] = stored
       const t2fa = get2faToken()
       if (t2fa) headers['x-2fa-token'] = t2fa
-      const res = await fetch(`${API_URL}/api/v1/core/bootstrap`, { headers })
+      const res = await fetch(apiUrl(`/api/v1/core/bootstrap`), { headers })
       if (!res.ok) return false            // 404 = older backend; any error → waterfall decides
       const d = await res.json()
       if (typeof d?.rbac_enabled === 'boolean') setRbacEnabled(d.rbac_enabled)
@@ -305,7 +305,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (await tryBootstrap(token)) return
     let mems: TenantMembership[] = []
     try {
-      const res = await fetch(`${API_URL}/api/v1/core/my-tenants`, { headers: { Authorization: `Bearer ${token}` } })
+      const res = await fetch(apiUrl(`/api/v1/core/my-tenants`), { headers: { Authorization: `Bearer ${token}` } })
       if (res.ok) mems = (await res.json()).tenants || []
     } catch { mems = [] }
     setTenants(mems)
@@ -313,7 +313,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Any pending account-link invites addressed to this login's email (platform-core-11). Almost
     // always empty; when present, the login page shows a connect/disable prompt before entering the app.
     try {
-      const pr = await fetch(`${API_URL}/api/v1/core/pending-connections`, { headers: { Authorization: `Bearer ${token}` } })
+      const pr = await fetch(apiUrl(`/api/v1/core/pending-connections`), { headers: { Authorization: `Bearer ${token}` } })
       setPendingConnections(pr.ok ? ((await pr.json()).pending || []) : [])
     } catch { setPendingConnections([]) }
 
@@ -351,7 +351,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // new tenant appears in the top-bar switcher. The access code (from the admin) is the consent proof.
   const connectTenant = useCallback(async (orgId: string, code: string) => {
     if (!session?.access_token) return
-    const res = await fetch(`${API_URL}/api/v1/core/connect-tenant`, {
+    const res = await fetch(apiUrl(`/api/v1/core/connect-tenant`), {
       method: 'POST', headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ org_id: orgId, code }),
     })
@@ -364,7 +364,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // + policy text so the caller can show them; the current session is banned, so the caller signs out.
   const disableAndSwitch = useCallback(async (orgId: string, code: string) => {
     if (!session?.access_token) throw new Error('not signed in')
-    const res = await fetch(`${API_URL}/api/v1/core/disable-and-switch`, {
+    const res = await fetch(apiUrl(`/api/v1/core/disable-and-switch`), {
       method: 'POST', headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ org_id: orgId, code }),
     })
@@ -382,7 +382,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' }
     if (activeOrg) headers['x-active-org'] = activeOrg
-    const res = await fetch(`${API_URL}/api/v1/core/me/2fa/start`, {
+    const res = await fetch(apiUrl(`/api/v1/core/me/2fa/start`), {
       method: 'POST', headers, body: JSON.stringify({ channel }) })
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Could not send a code')
     return res.json()
@@ -395,7 +395,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' }
     if (activeOrg) headers['x-active-org'] = activeOrg
-    const res = await fetch(`${API_URL}/api/v1/core/me/2fa/verify`, {
+    const res = await fetch(apiUrl(`/api/v1/core/me/2fa/verify`), {
       method: 'POST', headers, body: JSON.stringify({ code, remember: !!remember }) })
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Invalid or expired code.')
     const d = await res.json()
@@ -412,7 +412,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!session?.access_token) throw new Error('not signed in')
     if (getImpersonation()) throw new Error('You are already viewing the app as someone else.')
     const org = getActiveOrg()
-    const res = await fetch(`${API_URL}/api/v1/core/impersonation/start${org ? `?org_id=${encodeURIComponent(org)}` : ''}`, {
+    const res = await fetch(apiUrl(`/api/v1/core/impersonation/start${org ? `?org_id=${encodeURIComponent(org)}` : ''}`), {
       method: 'POST',
       headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json',
                  ...(org ? { 'x-active-org': org } : {}) },
@@ -440,7 +440,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     clearImpersonationInvalid()
     try {
       if (imp?.session_id && session?.access_token) {
-        await fetch(`${API_URL}/api/v1/core/impersonation/stop`, {
+        await fetch(apiUrl(`/api/v1/core/impersonation/stop`), {
           method: 'POST',
           headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ session_id: imp.session_id, reason: 'exit' }),
@@ -467,7 +467,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (error || !data?.session?.access_token) throw new Error(error?.message || 'That password did not work.')
     const empToken = data.session.access_token
     try {
-      const res = await fetch(`${API_URL}/api/v1/core/impersonation/reauth`, {
+      const res = await fetch(apiUrl(`/api/v1/core/impersonation/reauth`), {
         method: 'POST',
         headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: imp.session_id, token: empToken }),

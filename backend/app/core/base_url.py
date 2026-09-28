@@ -1,4 +1,4 @@
-"""One home for "an operator-typed base URL" (owner 2026-09-28, index §16).
+"""One home for "an operator-typed base URL" (owner 2026-09-28, index §41).
 
 Every service address the platform calls or hands out (the sweeps worker, its own public API, the frontend, Supabase)
 is typed by a human into the host's environment settings. Hosts show the address WITHOUT a scheme

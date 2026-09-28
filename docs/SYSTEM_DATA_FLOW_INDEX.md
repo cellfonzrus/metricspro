@@ -36,6 +36,7 @@ Primary code homes:
 | 6l | **Auto-calculation on landing** | "I uploaded September — did the commission recalculate by itself? When, from which upload, and if not, why not (refused, off, waiting)? Which uploads / sweeps trigger it, and how is a burst of files one calculation?" |
 | 6k | **The one-rep Recalculate button** | "Why did Recalculate for one rep fail / what does it write? Does it touch other reps or the installment ledgers? Is the one-rep row the same as Run Calculation's? How is a moved-local NameError kept out of the build?" |
 | 6m | **Carrier commission is for management's eyes only** | "Why does the Rep Incentive report show no Price / GP (carrier commission) even to a manager? Who may see carrier commission, where is that role list set, and which pages show it? Why can a store manager not open Pay Discrepancy / Carrier vs Pay / the explain diagnostic?" |
+| 6n | **Tablet and watch activations at their own Exec-MTD rate** | "How do tablets and watches pay differently from a phone? Where is 'what device did this activation activate' decided? Why does a tablet show in the Tablet column with no Activation Details file? Which categories can a plan price, and where is that list?" |
 | 7 | **Carrier residual installments** | "Multi-month carrier residual pay from raw_mi. Why do named activation_types not pay?" |
 | 12 | **External credit machine + Card Settlement Recon** | "Where does the external / white-machine card figure live, what is it called for this tenant, and how does it tally with what the processor actually settled?" |
 | 7a | **Residual per Subscriber report** | "Where does the residual/subscriber trend come from per carrier? Why is a Total/MA store named, not a processor account id?" |
@@ -53,6 +54,7 @@ Primary code homes:
 | 17 | **Cross-reference: by ENDPOINT** | endpoint → handler/section. |
 | 18 | **Cross-reference: by METRIC/KPI** | metric → source table → reader function. |
 | 19.31 | **One activation count · Feed vs Transactions** | "How many new activations, and says who? What does the carrier's report claim against what the store's transactions say, and what accounts for every difference — a counting definition, a stale feed slice, or nothing?" |
+| 19.32 | **Daily port-out fraud report** | "Which port-in activations ported out again before they paid for themselves, how much was sold alongside them, and — said in the same breath — how many could we not decide about at all?" |
 | 19 | **Known gaps & inert config** | stored-but-unwired, snapshot-only, surfaces that can disagree. |
 | 20 | **Super-admin control box** | "Is the platform working? What is red right now, what is NOT being watched at all, did the daily check actually run, and how do I hand this failure to Claude Code safely?" |
 | 21 | **Billing — usage & pricing** | "What did this tenant use, what did it cost us, what do we bill them, which modules are still unpriced, and what does their itemized statement say?" |
@@ -75,6 +77,7 @@ Primary code homes:
 | 37 | **Franchise royalty, cost & profit centers** | "Where does the franchisor's monthly royalty report land, how is it checked (the fee rounding rule), what does each line book to on the P&L and what books nothing (and why), how does it reconcile against the daily report, and how do I see the P&L per profit center or per cost center? Why did a sale line no classifier knows book nothing, and where is that reported now? How do I upload many months of royalty reports at once, and which months are on file (§37.10)?" |
 | 38 | **Super Admin Toolbox** | "As the platform super admin, where is every screen only I need — companies, business types, billing, operators, platform health, support, platform defaults — on one tiled page? Why does a tenant admin never see it, and how do I re-arrange its tiles?" |
 | 39 | **Setup documents (per-carrier required uploads · setup wizard first · automation offer · reminders)** | "Which documents must a new company upload for its carrier, where does it download each one, why is its admin sent to the Upload Wizard first, when is it offered automatic updates (and when not), and how is it reminded on the schedule it picked?" |
+| 40 | **One domain — where the backend is, and the customer-facing site** | "Why does the browser only ever talk to metricspro.tech, where is the one place that says where the backend is, which calls are proxied and which go direct (uploads, long portal logins) and why, when does the platform hostname redirect to the canonical site, and which origins may the API be called from?" |
 
 ---
 
@@ -196,7 +199,7 @@ email), (c) **RPC/manual entry**.
 | FTP drop | `ftp_sweep.py` | per report-pull-map | `/ftp-sweep/*` `router.py:22175-22237` (mig `046`); freshness stamp via `_sweep_run_stamp` — see the Email inbox row |
 | Email inbox | `email_sweep.py` | routes attachments to report ingest | `/email-sweep/*` `router.py:22973-23407` (mig `049`,`075`); scheduler: pg_cron → `/email-sweep/run-due` (mig `921`,`922` — backend self-registers on boot; handler advances `next_run_at` up front and sweeps on a dedicated thread so the tick answers pg_net inside its 5 s timeout; per-mailbox in-progress lock `sweeping_since` (mig `932`) stops overlapping sweeps; non-terminal files stop re-fetching after `SWEEP_MAX_NONTERMINAL_ATTEMPTS` — surfaced in `last_status`, never silent). **FRESHNESS STAMP (2026-09-20): `router._sweep_run_stamp(success)` is the ONE place a mailbox/FTP sweep decides which timestamp it may write** — only a run that actually ingested (`ok > 0`) advances `last_run_at`; a rejected login, a mailbox with no filename rules, a connect error or a crash records `last_attempt_at` instead (mig `241` column, the contract the portal sweeps already followed via `_sweep_set_status`). Scheduling is untouched — `/run-due` keys off `next_run_at`. Proof: `harness_sweep_freshness.py` (28 checks) |
 | Vidapay | `vidapay_sweep.py` | payment feed | (mig `083` total processor sources) |
-| Generic data-source portal login | `live_login.py` | any report | `/data-sources/*` `router.py:23760-24979`, `/data-sources/sweep/run-due` `24409` (cron path advances each due source's `next_run_at` up front and pulls on a dedicated thread — the email-sweep incident pattern; the secret-less org-scoped call still pulls inline; interactive login/2FA/live-login endpoints on the API service proxy transparently to the sweeps worker when `BROWSER_SERVICE_URL` is set — `service_role.BrowserWorkProxy` + handler in `main.py`; the address is read ONLY by `service_role.browser_service_url()` through `core.base_url.base_url`, §40) |
+| Generic data-source portal login | `live_login.py` | any report | `/data-sources/*` `router.py:23760-24979`, `/data-sources/sweep/run-due` `24409` (cron path advances each due source's `next_run_at` up front and pulls on a dedicated thread — the email-sweep incident pattern; the secret-less org-scoped call still pulls inline; interactive login/2FA/live-login endpoints on the API service proxy transparently to the sweeps worker when `BROWSER_SERVICE_URL` is set — `service_role.BrowserWorkProxy` + handler in `main.py`; the address is read ONLY by `service_role.browser_service_url()` through `core.base_url.base_url`, §41) |
 
 Connector/schedule model: mig `039_connector_model.sql`, `063`, `290_report_schedule_and_grain.sql`;
 endpoints `/connectors*` `router.py:6666-6989`, `/connector-health` `23378`. Sweep store-guard
@@ -2407,7 +2410,7 @@ post-landing hook existed (`_intake_pos_rebuild_after_landing` rebuilds POS sale
   request KEYS (`# org-guard-ok`), each then claimed and run org-scoped.
 - **NO PERIOD LOCK EXISTS** (searched: no locked / finalized / paid state for a rep-commission month; the only
   draft→approved→paid lifecycle is Management Incentive's `mi_payout`, which the Run Calculation never writes). A late
-  correction to a paid month recalculates it — exactly as a manual Run Calculation would. Open gap §19.32; a lock, when
+  correction to a paid month recalculates it — exactly as a manual Run Calculation would. Open gap §19.33; a lock, when
   built, belongs in `auto_calc.run_one` before the runner.
 - **Before mig 1030 is applied** the hook degrades to a PROCESS-LOCAL queue (same debounce, one calculation per
   process) and records its outcome as a `calc_notices` entry of type `auto_calc` (mig 247) — the two pre-existing
@@ -2558,6 +2561,104 @@ the grant (router / client `hasDataGrant` / a stray `carrier_view_allowed`), a s
 carrier surface asking a second gate). Frontend: `tools/plan-drilldown-render-proof.mjs` (38 — manager: no Price / GP
 columns; carrier view: Price / GP), `tools/payout-nav-proof.mjs` (15 — a store manager without the permission sees and
 reaches none of the carrier pages incl. the diagnostic; top management does).
+
+---
+
+### 6n. TABLET AND WATCH ACTIVATIONS PAY AT THEIR OWN EXEC-MTD RATE — one device classifier, one category list (owner 2026-09-28)
+
+Owner, verbatim: *"need to add tablets and watches as a fix and a different commission for those, tablet pay at $5
+and watch at $2, gizmo at $2, add those and map and recalculate"*; Gizmo: *"treat all as watch ($2)"*. The rate
+card for org `f4f1c16e` (applied in PART 3, after this merges): new phone $10 (port / BYOD $10), phone upgrade $5,
+tablet $5 (new or upgrade), watch / connected device $2 (new or upgrade).
+
+**The class.** An activation's CLASS (new / port / BYOD / upgrade — `line_class`) was known; the DEVICE it activated
+was not part of the pay decision, so a tablet or a watch paid exactly like a phone on every surface; and Exec MTD
+split Tablet out ONLY on the Activation-Details basis (§6d-i), so an org with no AD file (f4f1c16e: 0 AD rows,
+Feb 2025 – Aug 2026) could never price one.
+
+**ONE device classifier — the existing one.** "What device did this activation activate" already had a home: the
+multi-month category ladder `installment_category` (mig 245: `installment_category_rule` tenant rows ahead of the
+built-in ladder, the product catalog, the serial's shape, strongest signal across an activation's lines). It is NOT
+re-implemented. `watch` joins its vocabulary (`CATEGORY_KEYS`, label "Watches / connected devices",
+`DEFAULT_QUALIFICATION.watch = True`) with **no built-in rule** — a tenant that adds none classifies exactly as
+before, multi-month included; a chain a tenant newly names a watch keeps qualifying.
+
+**The device dimension on the EVENT — `line_class`** (the per-org switch + the pay decision, beside the class and
+the event): `activation_details_rules.devices` = `{enabled, applies_to}` (house: `enabled: False` → no dimension;
+`applies_to` default = every activation-type class, so a tablet UPGRADE pays the tablet rate; drop `'upgrade'` to
+pay device upgrades at the upgrade rate). `resolve_devices(raw, device_rules, catalog_cat_of)` — the rules and the
+catalog lookup are injected by THE loader `router._line_rules_resolve` (`installment_category.load_category_rules`
++ `build_catalog_category_lookup`, the multi-month engine's own inputs) only when enabled.
+`_device_of_lines` = `installment_category.resolve_chain_category` over the lines, kept when it names `tablet` /
+`watch`; `device_of(row)`, `unit_devices(rows, units)` (per counting unit, all of its lines),
+`pay_category(cls, device)` — one event, one category, one rate. `activation_events` stamps `device` +
+`pay_category` on an event only when enabled (house event dicts byte-identical). The too-broad guard
+(`token_shares` / `refused_tokens`, §30.12) now also measures the TENANT's device rule rows under `device:<name>`.
+A category-rule write (`POST` / `DELETE /plan-installments/category-rules`) drops the config memo
+(`_invalidate_accessory_config`).
+
+**Exec MTD — the sales basis splits devices.** `_sales_cell_agg` asks `_lc.unit_devices` once and adds each device
+unit to `_dev_tablet` / `_dev_watch` (the class sets every other surface reads are untouched). The sales branch of
+`_apply_activation_basis` moves a device unit OUT of the port / BYOD / upgrade columns into its device column
+(`act_tablet`, new `act_watch`); `act_new` stays FOLDED (non-device new + every device unit once), so **Total
+Activation is unchanged** and pure New = `act_new − tablet − watch`. A plan stating `activation_basis: 'folded'`
+keeps devices folded. The AD basis is unchanged (its own `Tablet` bucket; `act_watch = 0`). The Exec MTD rows /
+totals gain `watch` (page column "Watch").
+
+**ONE category list.** `activation_bucketing.MTD_CATEGORIES` (`activation, port, byod, tablet, watch,
+home_internet, edge, upgrade`) + `MTD_CATEGORY_LABELS` + `DEVICE_CATEGORIES`; `router._MTD_ACT_CATEGORIES` aliases
+it; **`GET /commcalc/commission-mtd/categories`** serves it; the rate editors (`commission-plans/page.tsx`,
+`commission-structure/page.tsx`) read it through `_lib/mtdCategories.useMtdCategories` (their literal `MTD_CATS`
+copies are gone). The plan save now carries the saved `mtd_rates` keys the editor does not show (e.g.
+`activation_basis`, previously dropped on every save) and re-seeds when the list arrives.
+
+**THE NAME BRIDGE reaches the Exec-MTD basis (sibling found 2026-09-28).** `_commission_mtd_result` filtered
+employee-scope assignments on the literal name, so a rep assigned under the ROSTER spelling ('Shweta', 'ss',
+'Mailk') was paid **$0** in exec_mtd mode while the rules basis bridged them. Now every POS alias whose canonical
+(`_rep_canon_map`, the same map) is assigned joins the scope. Live 2026-09-28: the only exec_mtd plan anywhere
+(854f6d7b "NY / Luxelink Comp") is market-scoped → **$0 moves today**.
+
+**Compatibility pin.** No device dimension enabled → every count and every payout byte-identical: proved on the
+house rules and on f4f1c16e's CURRENT config, plus an A/B of `_commission_mtd_result` against the base branch's
+router (git-available runs).
+
+**f4f1c16e — the PART-3 config (measured read-only, NOT written):** `activation_details_rules.devices =
+{"enabled": true}`; tablets by the built-in ladder (product word `tablet` / `tab` / `ipad`, category `tablet`);
+watches by three tenant rules in `installment_category_rule` (`watch`, priority 25: product_desc contains
+`connected device`, category contains `wearables`, product_desc word `watch`). Feb 2025 – Aug 2026 it catches
+**351 tablet events** (329 new + 22 upgrade) and **61 watch events** (55 + 6); every device rule under 0.7% of
+lines (none refused). The rate card over those events: **$28,572** vs $30,685 today (stored $30,615 + Anum's
+$70 now fixed).
+
+**Siblings, stated.** Excused by name in the lock (different facts, pre-existing): `discrepancy_engine._plan_category`
+(the CARRIER rate card's plan-name category), `asset` inventory buckets, `pos.catalog_suggest`, the top-sellers
+display heuristic. **Remaining sibling to unify (reported, not done):** `activation_bucketing
+.activation_details_bucket` classifies the carrier's Activation-Details rows into `Tablet` by its own words —
+folding it into the ladder moves AD-basis counts (LuxeLink), an owner call.
+
+**Proof:** `backend/harness_exec_mtd_device_rates.py` (26, DB-free — the real `_commission_mtd_result` → `_exec_mtd`
+over fixture sales: the 10 / 5 / 5 / 2 card per event ($84 = 40+10+10+5+15+4), precedence by the ladder's priority,
+`applies_to` without upgrade, the mixed invoice, the hardware-only line, the sales-basis split with Total Activation
+unchanged, `folded`, the compatibility pin incl. the base-router A/B, the name bridge). Lock
+`backend/harness_exec_mtd_device_rates_lock.py` (18, stdlib, CI guard job: one device classifier + named excuses, one
+category list served to the editors, every consumer wired, RULE TWO, the single-assignment remover; 12 negative
+controls).
+
+**THE SINGLE-ASSIGNMENT REMOVER (owner 2026-09-28).** `DELETE /commcalc/commission-plans/{plan_id}/assignments/
+{assignment_id}` (`router.delete_commission_plan_assignment` → `_remove_plan_assignment`) removes exactly ONE
+`commission_plan_assignment` row — filtered on `org_id` + `plan_id` + `id` on the read AND the delete; anything else
+(another org's row, another plan's row, an unknown or malformed id, a row already gone) is **404 with zero writes**. It
+never touches a rule, a tier or another assignment — unlike the plan save (`POST /commission-plans`), which deletes and
+re-inserts every child of the plan. Gated by THE `'commission_plans'` setting gate `_require_commission_plans_edit`
+(factored out of the carrier-template importer, which now calls it; the only `_can_edit_setting(…, "commission_plans")`
+decision). Drops the config memo. There is no plan-change audit table (the plan save writes none); the request is in
+`core.access_log` like every request, and the removed row is returned and printed to the server log. The Commission
+Plans editor shows **Remove now** on a saved assignment (the ✕ still only edits the draft). **Gap, reported:** the plan
+save, plan delete and bulk-assign carry NO in-handler permission gate (only the tenant middleware's auth + org
+rewrite); wiring them to `_require_commission_plans_edit` narrows who may write today and is an owner call. Proof
+`backend/harness_plan_assignment_remove.py` (43, DB-free, the real handler over a recording client); the lock's (f)
+section fails the build if another function deletes `commission_plan_assignment` rows outside the three named writers
+(plan save, bulk-assign, this remover).
 
 ---
 
@@ -4427,7 +4528,10 @@ be a seaprate box in the p&l under wages"
     feed claims beside what the store's transactions say, every difference attributed; tile appended by
     mig `1029` through the same `ui_label_override` `scope='tiles'` mechanism), **Cash at Hand** = a
     SECOND PLACEMENT of the existing `/closing/store-cash-on-hand` report (same endpoint/component, no
-    forked derivation), and **Current Monetary Liabilities** (NEW report, §4).
+    forked derivation), **Current Monetary Liabilities** (NEW report, §4), and **Daily Port-Out
+    Fraud** (NEW report, §19.32 — port-in activations that ported out inside the configured window,
+    with the accessory sold alongside each one and, in the same headline, how many port-ins the
+    report could NOT decide about; sent daily to market managers and above).
   - **Flags & Compliance** (`/compliance` — a curated page, the /storeops hub precedent): every
     flag/exception/compliance queue under one roof. StatTile COUNTS from
     `GET /commcalc/compliance-summary` — ONE thin count pass over the existing queues' own
@@ -4564,7 +4668,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | **B2B ↔ MA activation recon (Pay Discrepancy, MA source)** | `discrepancy_results` (`source='ma'`), `ma_payment_rule` — mig `312_ma_payment_rules_and_discrepancy_attribution` | `ma_recon.py` (pure: `build_sold_index`/`build_paid_index`/`match_rules`/`reconcile_ma_activations`; reuses mig-308 `_gate_met_ma_tx` + the two-hop link); ran by `POST /discrepancy/run` `router.py:19056` for plan-mode orgs; rules CRUD `/ma-payment-rules*` `19200-19270`; proof `harness_ma_recon.py`. Sold-but-unpaid → status `open` + literal `'no business rule configured'`, or rule-attributed `info`/`lagged` |
 | **Commission Discrepancy hub + APPEALS (owner directive 2026-09-03)** | appeal columns ON `discrepancy_results` (`appeal_status/appeal_note/appealed_by/appealed_at`) — mig `947_commission_discrepancy_hub` (NO new table: rows stay the two engines' output, the hub only ANNOTATES; the mig-098 denied-appeal claw-back pipeline `/recovery/*` is a DIFFERENT lifecycle, linked not re-derived). Mig 947 also seeds the HOUSE Incentives tile layout (§14 D1) + the `nav_default` label preset | pure state machine `discrepancy_appeals.py` (`validate_transition`/`apply_appeal`/`period_range_variants`/`summarize_appeals`; states `appeal_filed→appeal_won\|appeal_denied\|written_off`, NULL = none, clear = full reset); `GET /discrepancy-appeals` (period-RANGE query, spelling-agnostic; filters source/status/appeal_status/store/activation-date; degrades `appeals_ready=false` pre-947) + `PATCH /discrepancy-appeals/{row_id}` (org-scoped read-validate-update, who/when via `_caller_uid`) beside the discrepancy block; page `commcalc/commission-discrepancy` (StandardFilterBar + appeal buttons + `/recovery/claims` chase list); proof `harness_discrepancy_appeals.py` |
 | **Carrier statement commission** | mig `065_carrier_commission.sql` → `rep_commissions.carrier_statement_comm` | `/carrier-comm-file/extract` `6216`, `/commission-received-breakout` `15488` |
-| **Commission plans (rule engine)** | mig `059_commission_plans.sql`, `066`,`067`,`232`,`260`,`262`; **`commission_basis` + `mtd_rates` mig `298`** (`'rules'` default \| `'exec_mtd'` — THE two ways, §6e) | `commission_engine.py`; `/commission-plans*` `12557-14246` (coverage, pay-gate, exclusions, bulk-assign); `commission_basis` READ by `commission-structure/page.tsx` + `commission-plans/page.tsx` through `_lib/commissionWays.wayForBasis` (written only by the plan editor's save) |
+| **Commission plans (rule engine)** | mig `059_commission_plans.sql`, `066`,`067`,`232`,`260`,`262`; **`commission_basis` + `mtd_rates` mig `298`** (`'rules'` default \| `'exec_mtd'` — THE two ways, §6e) | `commission_engine.py`; `/commission-plans*` `12557-14246` (coverage, pay-gate, exclusions, bulk-assign; the single-assignment remover `DELETE /commission-plans/{plan_id}/assignments/{assignment_id}`, §6n); `commission_basis` READ by `commission-structure/page.tsx` + `commission-plans/page.tsx` through `_lib/commissionWays.wayForBasis` (written only by the plan editor's save) |
 | **Commission ledger (income tracking)** | mig `071_commission_ledger.sql`; provenance mig `251`; leg mig `274`; **sign convention mig `1006` (on `commcalc.column_mapping.sign_convention`, §25.12)**; **THE BUCKET REGISTRY mig `1009_commission_bucket_registry.sql` (`commcalc.commission_bucket`, §30.7 — NOT applied)** | `/commission-ledger/*` `3997-4602`. Engine `commcalc/commission_ledger.py` — `load_rules_meta` (rules + `rules_source` `tenant`\|`builtin_default`\|`none`; **the built-in MA defaults belong to `DEFAULT_RULES_BY_TEMPLATE` and no longer leak into a tenant-created rule-set**), `convention_from_mapping` → `direction` → `classify_line` → `booked_amount` (WHICH SIGN IS MONEY EARNED, declared on the amount column's mapping row; a reversal books NEGATIVE into the bucket it reverses, never `abs()`), `build_row`, `summarize`, `leg_of`, `list_templates` (also lists a template the tenant's own ledger rows name, so a brand-new carrier's first rule can be written in the UI). Footer/total rows dropped through the EXISTING `column_mapping.drop_footer_rows` + `identity_fields` (mig 1004 rule, reported as `footer_rows_dropped`). Proof `harness_commission_ledger_sign.py` (85 checks, armed negative controls). **THE BUCKETS ARE CONFIG (§30.7, owner 2026-09-20):** `load_buckets_meta` (house rows + this org's rows merged PER KEY, `merge_buckets`; pre-1009 → `builtin_buckets()` = `HOUSE_BUCKETS`, the seed's mirror, DISPLAY only), `bucket_keys` / `bucket_labels` / `deduction_keys` / `bucket_kind`; every bucket has a KIND — `earned` books +|amt| (a netted reversal −|amt|), `deduction` books the canonical SIGNED amount either way (`_booking_for`, never abs()). The five mig-071 keys stay COLUMN-BACKED (`COLUMN_BACKED`); every other bucket is read by (`category`, `payout_total`) — no column per bucket. `summarize` reports one entry per registry bucket + `earned_total` / `deductions_total` / `net_total` / `unlisted` (a key the registry no longer lists is summed, never dropped); `payout_total` = the NET the statement pays. `unbookable_categories` + `router._ledger_bucket_guard` REFUSE a landing to a column-less bucket while 1009 is absent, naming it. Registry endpoints `GET/POST/DELETE /commcalc/commission-buckets`; settings panel on the Category → Bucket Map page. Proof: `harness_commission_ledger_sign.py` §I–K (125 checks) · **BOOKS THE P&L when the org's `pl_commission_source` is the ledger (mig `1013`, §4b): `ledger_pnl.load_ledger_rows` (org-scoped, both period spellings) → `ledger_bookings` → `coa.build_inputs`** · **ONE STATEMENT IDENTITY, ONE PERIOD SPELLING, ONE LANDER, ONE GUARD (§30.15, owner 2026-09-22):** `ledger_identity` / `ledger_source_report` / `source_report_family` / `identity_key` / `template_key` (a statement's ledger key derived ONCE — `<base>__<statement slug>`, the intake's form; a bare key READS as that base's default statement type; every reader filters the FAMILY), `canonical_period` / `ledger_period_keys` / `is_orphan_period` (dereference `account/_period` — the month-NAME form is stored, every spelling read), `landings_for` / `landing_conflicts` / `landing_sentence` / `landing_detail` / `replaced_sentence` (a LANDING = one (origin, stored key, stored period spelling) tuple; N landings of one statement × period are REFUSED by every summing reader: `router._ledger_guarded_summary`, by-rep, observed-types, `_statement_buckets`, `ledger_pnl.ledger_bookings`). Every route lands through `router._ledger_land_rows` (the older wizard, the intake's 3.9, the MA refresh — origin-scoped), which stamps the derived key + canonical period on every row and wipes the family × every period spelling through `_ledger_delete_scoped` (measured first — the trace says "replaced 973 rows landed on 2026-09-20 under the older key"). Every ledger read in the router goes through `_ledger_query`. `GET /commission-ledger/landings`, `POST /commission-ledger/landings/retire` (counted, confirmed, by id). Proof `harness_ledger_statement_identity.py` (92 checks); lock `harness_ledger_identity_lock.py` (CI) |
 | **VIP / PayGo** | mig `008`,`011`,`014` | `vip_sweep.py`; `/vip/*` `2421-3078`, `/vip/paygo/*` `8336-8365` |
 | `commcalc.vip_invoice_lines` (distributor invoice LINE items; `location` is a STORE ADDRESS in the distributor's own spelling) | `vip_sweep.py` (portal scrape, mig `008`) | **Device Purchases report** (`account/device_purchases.compute` → `GET /account/device-purchases`, §23y — the money grain); `device_cost_recon` (source ② evidence); `asset/invoice_due` (per-invoice device list) |
@@ -4715,6 +4819,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.calc_status.auto_calc_requested_at` / `.auto_calc_landings` / `.auto_calc_last` (mig `1030`, NOT applied) — **a pending auto-calculation and the last one's outcome** for one (org, month) | `auto_calc.landed` (queue), `auto_calc._claim` (the poller's conditional UPDATE), `auto_calc.run_one` → `_record_last` (outcome); pre-1030 the outcome goes to `calc_notices` (type `auto_calc`) | `auto_calc.run_due` (the poller), `auto_calc.view` ← `GET /commcalc/calc-status/{period}` → `_lib/AutoCalcNotice.tsx` on the Rep Incentive page (§6l) |
 | `commcalc.commission_org_config.auto_calc_on_landing` / `.auto_calc_debounce_minutes` (mig `1030`) — house row → tenant row override | migration 1030 (house row TRUE where NULL); SQL / a future settings writer | ONE reader `auto_calc.load_config` → `resolve_config` (lock: `harness_auto_calc_lock.py` E) (§6l) |
 | `data_lineage_registry.COMMISSION_CALC_FEEDS` / `SALES_SIBLING_TABLES` (code registry) — **which tables the Run Calculation reads** | code | `auto_calc.is_calc_feed` (the hook), `harness_auto_calc_lock.py` A/F (§6l) |
+| `commcalc.installment_category_rule` (mig 245) — now also **the device an Exec-MTD activation event activated** (`tablet` / new `watch`) · `accessory_config.activation_details_rules.devices` (`{enabled, applies_to}`, no migration) | `POST/DELETE /plan-installments/category-rules` (drop the config memo) · `PUT /accessory-config` | `router._line_rules_resolve` → `line_class.resolve_devices` → `_device_of_lines` (= `installment_category.resolve_chain_category`) → `unit_devices` → `_sales_cell_agg` `_dev_tablet`/`_dev_watch` → `_apply_activation_basis` `act_tablet`/`act_watch` → Exec MTD → `_commission_from_mtd_rows` (§6n) |
+| *(none — §40 One domain creates no table and touches no database; its facts are deploy config, see §18)* | — | — |
 | `commcalc.raw_sales.customer` + `commcalc.raw_sales_invoice.customer` (mig 1012) — as **the customer on a paid commission line** | the sales / sales-by-invoice uploads (unchanged) | THE rule `inventory_sold_recon.sale_customer` / `invoice_customer_map` → `commission_drilldown._sale_customers` (reads `trans_id,customer` only, org-scoped) → `attach_line_identity` → every plan line's `customer` (explain, statements, the range); also `sales_detail_index` (inventory integrity §11b) (§6j) |
 | `commcalc.rep_commissions` — ONE rep's row(s) for one period | `POST /commcalc/recompute-rep` → the full path (`_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines(persist_installments=False)`), writing only `_rows_for_rep` (update in place / insert) | the same readers as the full run's rows (§6k) |
 | `commcalc.rep_commissions` + the `/commission-explain` payload — as **what an EMPLOYEE may see of their own commission** | `calc_rep_commissions` / `commission_engine.preview` (unchanged) | THE shapers `payout_audience.employee_rep_row` / `employee_explain` / `employee_drill` (allow-lists; paid lines by `is_paid_line`) → `/commissions`, `/commissions-range`, `/commission-explain`, `/commission-statement(s)`, `/commission-drill`, core `/employee-dashboard`, the notify Incentives email (§6i) |
@@ -4760,7 +4866,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.merchant_settlement_day` | `merchant_portal_sweep.store_settlement` (daily portal scrape) | `closing/external_credit_recon` (declared-vs-settled card tally, §12a), resolved via `report_pull_map.merchant_settlement` |
 | `commcalc.merchant_settlement_batch` | `merchant_portal_sweep.store_batches` | cash/deposit recon (§12); NEVER summed into the closing card tally (different grain) |
 | `commcalc.raw_payment_detail` | epay sweep, upload | `calc_gp_report`, reimbursement categorization, **Processor Daily Debits & Credits** (`processor_ledger.assemble` — `amount` sign = credit/debit to the dealer, §15) |
-| `commcalc.raw_mi` | upload / MI sweep | carrier residual gate `installment_engine.compute_installments`, sale-installment gate, MI/ATU; the `subscribers` entry of the plan-source registry `core/plan_sources.HOUSE_SOURCES` (`customer_plan` + `base_mrc`, newest period, ON by default) → `onboarding._observed_plans(…, src)` (§23n.1); `raw_sales` (`sales_lines`) and `commission_ledger` (`statement_lines`) are the registry's two line-level entries, OFF until the org confirms its words |
+| `commcalc.raw_mi` | upload / MI sweep | carrier residual gate `installment_engine.compute_installments`, sale-installment gate, MI/ATU; **the PORT-OUT side of the daily fraud report** (`subscriber_status` `'PORTED-OUT'`, dated from `mi_deactivation_date` → `residual_transfer_out_date` → the monthly snapshot transition — §19.32), read through the retention report's own bounded loader `marketing.router._es_mi_snapshots`, never a second read path; the `subscribers` entry of the plan-source registry `core/plan_sources.HOUSE_SOURCES` (`customer_plan` + `base_mrc`, newest period, ON by default) → `onboarding._observed_plans(…, src)` (§23n.1); `raw_sales` (`sales_lines`) and `commission_ledger` (`statement_lines`) are the registry's two line-level entries, OFF until the org confirms its words |
 | `commcalc.raw_dlar_store` | `dlar_sweep.run_dlar_sweep:209` (replace), upload | `get_dlar_store_kpis` `10279`, `_cr_resolve_kpi_metrics` `25656`, MI tmr3 `28884` |
 | `commcalc.raw_dlar_rep` | `dlar_sweep` (replace, stamping `as_of_date` — mig `1026`, §19.28; the report SET is `dlar_sweep_config.reports`, mig `1029`, §19.31), upload | rep KPI, comp trend `15238`; the PAY ENGINE's tier via `kpi_failing.rep_kpi_values` (`REP_DLAR_COLUMNS`, and `REP_DERIVED_RATES` for the Ready App numerator — §19.31); `router._dlar_slice_vintage` for the feed vintage; the FEED side of `GET /dlar-vs-platform/{period}` |
 | `commcalc.raw_catalog` | upload `/product-mrc/import` region, catalog | GP, device COGS, installment MRC |
@@ -4835,7 +4941,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.management_incentive_*` | `/management-incentive/plans` `28534`, `/compute` `28613` | MI engine, payouts, resolve |
 | `commcalc.discrepancy_results` | Boost engine `discrepancy_engine.run_discrepancy` (`source='boost'`/NULL) + MA recon `ma_recon.run_ma_discrepancy` (`source='ma'`, `comp_type='MA_ACTIVATION'`) — each delete-then-inserts ONLY its own `(org, period, source)` slice; canonical DDL + attribution columns (`rule_id/rule_key/rule_reason/evidence/source/order_number`) in mig `312` (table pre-dates migrations, console-created); APPEAL columns (`appeal_status/appeal_note/appealed_by/appealed_at`) mig `947` — written ONLY by `PATCH /discrepancy-appeals/{row_id}` (pure state machine `discrepancy_appeals.py`), never by the engines | `GET /discrepancy/{period}` `router.py:19099` (selects `*`, optional `source` filter), Pay Discrepancy page; `GET /discrepancy-appeals` (period-range + filters) → Commission Discrepancy hub page (§15) |
 | `commcalc.ma_payment_rule` | `/ma-payment-rules` POST/PATCH/DELETE `router.py:19214-19270` (upsert by `org_id,rule_key`; mig `312`) | `ma_recon.load_rules` → `match_rules` (first match by ascending priority; case/trim-insensitive; `effective_from/to` windows; bad regex skipped) |
-| `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`) | `PUT /accessory-config` (Sales Report → Classification settings; since 2026-09-21 also `activation_details_rules` — the line_class keys `fields` / `tokens` / `exact` normalised through `line_class.merge_into_raw`, every other key passed through — and the intake's `PUT /onboarding/intake/line-class` writes THROUGH it) | `_accessory_config(_uncached)` (ONE whole-row read since 2026-09-22 — §4b.1 — instead of nine single-column reads of the same row; accessory/billpay/blank-ct classification for `_sales_cell_agg`; **`line_rules`** = `line_class.resolve_rules(activation_details_rules, contract_type_map, tenant exec 'activation' row)` — THE activation-type rules every classifier dereferences, §3 / §15); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, since 2026-09-22 dereferencing the ONE cached `_accessory_config` read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, its own whole-row `read_row`, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`); **`setup_fee_keywords` (mig `217`) is THE set-up/activation-fee recognition for BOTH the reports and the PAY path** (`_is_setup_fee` → `setup_fee_rev`; `setup_fee_pay.load_keywords`, §6a) — editing it moves Executive MTD, the accessory-TARGET basis AND somebody's commission in the same edit |
+| `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`, **`1031` `portout_fraud_rules`** — the daily fraud report's window / accessory floor / watched classes / second-payment boundary, resolved by `portout_fraud.resolve_rules` over house defaults that ARE the owner's numbers, so NULL changes nothing, §19.32) | `PUT /accessory-config` (Sales Report → Classification settings; since 2026-09-21 also `activation_details_rules` — the line_class keys `fields` / `tokens` / `exact` normalised through `line_class.merge_into_raw`, every other key passed through — and the intake's `PUT /onboarding/intake/line-class` writes THROUGH it) | `_accessory_config(_uncached)` (ONE whole-row read since 2026-09-22 — §4b.1 — instead of nine single-column reads of the same row; accessory/billpay/blank-ct classification for `_sales_cell_agg`; **`line_rules`** = `line_class.resolve_rules(activation_details_rules, contract_type_map, tenant exec 'activation' row)` — THE activation-type rules every classifier dereferences, §3 / §15); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, since 2026-09-22 dereferencing the ONE cached `_accessory_config` read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, its own whole-row `read_row`, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`); **`setup_fee_keywords` (mig `217`) is THE set-up/activation-fee recognition for BOTH the reports and the PAY path** (`_is_setup_fee` → `setup_fee_rev`; `setup_fee_pay.load_keywords`, §6a) — editing it moves Executive MTD, the accessory-TARGET basis AND somebody's commission in the same edit |
 | `commcalc.report_pull_map` (mig `207` — report_key → `target_table` + `column_map` + `param_spec`, org row over the house row) | `POST /commcalc/report-mappings` (`/commcalc/report-mappings`); mig `955` seeds `merchant_settlement` / `merchant_funding` | `report_pull` portal ingest; **card-settlement recon feed resolution** (`closing/router._settlement_feed_spec` → `external_credit_recon.SETTLEMENT_REPORT_KEY`, §12 — this is HOW the tally finds the scraped table without hardcoding it) |
 | `commcalc.metric_source_of_truth` (per-metric basis-of-truth config, mig `923`; columns added by `944` `processor_order_types`/`processor_product_tokens` — the bill-payment row filter for the daily-TX processor feed) | `PUT /metric-source-config` | `_metric_source` (consumed by Exec MTD activation override, `/metric-recon`, `/billpay-coverage`, `_pos_billpay_for_days`/`_billpay_processor_by_store(_day)` — §12 3-way Leg C; NULL columns = `metric_recon` house defaults) |
 | `commcalc.exec_metric_config` (per-org Exec-MTD metric DEFINITIONS, mig `204`; **`carrier` preset column mig `962`, `applicable` flag mig `963`**; seed fn `seed_exec_metric_config`) | `GET/PUT /exec-metric-config` `router.py` (upsert by `org_id,bucket`); 2026-09-02: LuxeLink `bill_payment` rules gained `product_desc_contains:["wallet funding"]`; **mig `962`** corrects the HOUSE `bill_payment` rules + seeds the boost carrier PRESET | `_exec_metric_config` → **`exec_metric_defs.resolve`** (tenant row > house carrier preset > built-in default) → `_sales_cell_agg` exec metrics via `exec_metric_defs.line_match` (since 2026-09-21 also `category_contains` / `department_contains`, additive — the intake's 2.5a step writes them through `PUT /exec-metric-config` for a bucket that matched nothing; the `activation` bucket's byod/upgrade/port tokens are RETIRED as a home — read only as a legacy layer by `line_class.resolve_rules` for a tenant-authored row; the Metric-definitions panel no longer offers it) |
@@ -4895,6 +5001,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 |----------|-------------|---------|
 | `GET /commcalc/calc-status/{period}` — now also serves `auto_calc` `{state, tone, sentence, due_at, last, enabled}`: what the landing hook did for the month (queued / calculated / refused / failed / busy / off / running). Read by the Rep Incentive page | `router.get_calc_status` → `auto_calc.view` + `auto_calc.load_config` | §6l |
 | Every landing endpoint's response now carries `auto_calc` (`queued` + periods / `off` / `not_a_calc_input` / …): `POST /upload/{file_type}`, `POST /upload-mapped`, `POST /onboarding/intake/commit`, `POST /sales/promote-feed`, `POST /ingest-guard/queue/{item_id}/decide`, the commission import wizard commit, `POST /manual-upload/ingest`, the POS sync; the DLAR sweep's status line says "auto-calculation queued for …" | `auto_calc.landed` (no new route) | §6l |
+| **Every backend path, as the BROWSER reaches it** — `/api/v1/*` and `/health` on the site's own origin, proxied server-side (`next.config.ts` `rewrites()` = `apiRewrites()`); uploads + the `require_browser_service()` endpoints + `POST /payables/rebuild` go DIRECT (`DIRECT_ROUTES`) | `frontend/src/lib/apiBase.ts` `apiUrl` / `routeClass`; lock `harness_one_domain_lock.py`, proof `frontend/prove_one_domain.mjs` | §40 |
+| **Any path on the platform hostname in production** → 308 to `NEXT_PUBLIC_SITE_URL`, same path + query (only when that is set; previews / localhost untouched) | `frontend/site-routing.ts` `canonicalHostRedirects` via `next.config.ts` `redirects()` | §40.4 |
 | `GET /commcalc/commissions/{period}` · `/commissions-range` · `/commission-explain` · `/commission-statement` · `/commission-statements` · `/commission-drill` — `audience=employee|manager` (default manager, byte-identical); a self-scoped rep is ALWAYS employee and may ask only for their own rep (403 otherwise) | `router._payout_audience` → `payout_audience.resolve` + `employee_*` shapers | §6i |
 | `GET /commcalc/carrier-vs-pay/{period}` · `/discrepancy/{period}` · `/discrepancy/{period}/phantom` · `POST /discrepancy/run` · `GET /discrepancy-appeals` · `/commission-device` · `/commission-explain?view=carrier` — the CARRIER surfaces: 403 for every viewer without `carrier_commission_view` (reps and store managers alike), each by its REGISTERED key | `router._require_carrier_view(authorization, org_id, key)` → `_can_view_carrier_commission` → `payout_audience.carrier_view_allowed`; keys in `payout_audience.MANAGER_ONLY_SURFACES` | §6i / §6j / §6m |
 | `GET /commcalc/commission-explain` (no `view`) · `/commission-drill` · `/commissions/{period}` · `/commissions-range` · `/commission-statement(s)` — the Rep Incentive payloads: NO carrier field for ANY audience | `payout_audience.rep_incentive_explain` / `rep_incentive_drill` / `rep_incentive_row`; `_statement_doc(buckets=None)` | §6m |
@@ -4913,6 +5021,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /commcalc/pl-commission-source` (mig `1013`, §4b — READ-ONLY: `value`, `ready` + `not_ready_note`, `config_columns_missing` / `config_migrations_missing` (§4b.1 — the same reader the P&L uses), `options` in layman words, `suggestion` = `ledger_pnl.suggest_source` over `evidence` = `ledger_pnl.load_source_evidence` (which feed tables hold rows, ledger lines per period), `pl_link` (the P&L lines the buckets book to), `shows_in`) | `router.get_pl_commission_source` → `ledger_pnl.load_source_meta` / `load_source_evidence` / `suggest_source`, `router._ledger_pl_link`, `landing_identity.shows_in(…, pl_link)` | `components/PlCommissionSourcePanel.tsx` (on `/commcalc/commission-ledger` and the intake 3.9 card); the ONE writer is `PUT /commcalc/commission-settings {pl_commission_source}` |
 | `PUT /commcalc/commission-settings` **`pl_commission_source`** (mig `1013`) — 💰 which source books the P&L commission lines: validated against `ma_store_pnl.COMMISSION_SOURCES`, written in its own statement, READ BACK through `ledger_pnl.load_source_meta`; an unknown word → 400, a missing column → 400 naming `1013_pl_commission_source.sql` (never a silent non-save) | `router.put_commission_settings`; `_commission_org_config` returns it | takes effect on the next `/account/compute`; the P&L line's `commission_source` shows both sources' figures |
 | `GET /gp/{period}` — **the month-of-life COLUMNS** (owner report 2026-09-21): every store row carries `comm_ladder` `{rung: $}` plus flat `comm_month_<n>` / `comm_month_unlabelled` companions, `totals.comm_ladder` is summed rung by rung, and `commission_legs` carries `ladder_months` / `ladder_month_labels` / `ladder_columns` / `ladder_unknown_key` — the COLUMN LIST from the data, never a hardcoded 6 or 12 | `router._compute_gp` → `gp_report.calc_gp_report` → `commission_legs.months_present` / `ladder_to_public` (the one home) | §4a.2 — rendered by the GP page's 📅 Months toggle and its 'Commission by month-of-life' card (EARNED sheet above RECEIVED cash, booked basis marked); both exports follow the visible columns (WYSIWYG) and a 'Commission by month-of-life' sheet always ships. Locked by `harness_ma_month_columns.py` + CHECK 2c |
+| `DELETE /commcalc/commission-plans/{plan_id}/assignments/{assignment_id}` — THE single-assignment remover: ONE `commission_plan_assignment` row of that plan and org, 404 otherwise; gated `'commission_plans'`; drops the config memo | `router.delete_commission_plan_assignment` → `_remove_plan_assignment` (`_require_commission_plans_edit`) | §6n |
+| `GET /commcalc/commission-mtd/categories` — THE Exec-MTD pay categories + labels (incl. `tablet`, `watch`) the rate editors render; static | `router.commission_mtd_categories` → `activation_bucketing.MTD_CATEGORIES` | §6n |
 | `GET /commcalc/commission-mtd/{period}` (`?plan_id=&rates=<cat:$,…>&acc_pct=`) — Option 1's READ-ONLY preview: each rep's flat $ per activation type + accessory % over the Exec MTD numbers for the plan's stores (`_commission_mtd_result`); `POST …/save` records it (plan editor only), `GET …/saved` reads the record | `router.commission_mtd` `19739` / `19778` / `19816` → `_commission_mtd_result` `19603` → `_exec_mtd` | §6e — the Employee Commission Structure page's **Option 1** card (top; formerly the bottom card, unchanged call) and the plan editor's "Calculate from Executive MTD" box |
 | **`/commcalc/commission-structure`** — Employee Commission Structure (the front door, `tileOnly`): "There are 2 ways to calculate employee commission" → Option 1 (Exec MTD flat) → Option 2 (custom steps 1–6) → Apply | reads `GET /commission-plans`, `/accessory-config`, `/accessory-definition`, `/commission-plans/preview`, `/commission-mtd/{period}`, `/report-kinds`; writes ONLY `POST /commission-plans` (activation_source) + `PUT /accessory-config` — as before | §6e; header + order from `_lib/commissionWays.ts` via `_lib/CommissionWaysHeader.tsx` (also mounted on `/commcalc/commission-plans`). Proof `frontend/prove_commission_structure_order.mjs` |
 | `POST /commcalc/report-kinds/detect` (multipart file) — "This looks like your <kind> — right?": header names only, nothing stored; `mode` confirm\|ask\|none + candidates with confidence and evidence | `router.report_kinds_detect` → `_read_upload_grids` → `onboarding_intake.stitch_sheets` → `report_kinds.detect_report_kind` over `visible_kinds` + the confirmed signatures → `decide` | §30.9; the intake's `KindDetectZone`. Proof `harness_report_kinds.py` §E/§G |
@@ -5100,6 +5210,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
 | `GET /billpay-coverage/{period}` (per store/day: bill-pay ≤ cash+card, exceptions surfaced) | `commcalc/router.py` (`billpay_coverage` → `metric_recon.reconcile_billpay_coverage`) | §4 bill-pay carve-out / §15 |
 | `GET /dlar-vs-platform/{period}` (carrier feed vs the store's transactions, per metric, attributed; composes Executive MTD's cells + `raw_dlar_*` as landed + `dlar_sweep.slice_vintage`; pure `dlar_vs_platform.py`; READ-ONLY, `books_to == []`) | `commcalc/router.py` (`get_dlar_vs_platform`, beside `/kpi-failing`; helper `_platform_side`) | §19.31 — the difference report |
+| `GET /portout-fraud` (THE DAILY FRAUD REPORT: port-in activations that ported OUT again inside the configured window, with the accessory sold alongside each one; composes `line_class.activation_class` (is it a port-in), `event_sales.line_feed_state` (did it stay — the retention report's own derivation), `_is_accessory`/`_is_setup_fee` (the Sales Report's own accessory dollar) and the retention report's own bounded `raw_mi` loader; pure `portout_fraud.py`; READ-ONLY, `books_to == []`; the headline carries `undecidable` + `coverage_pct` beside `flagged`) | `commcalc/router.py` (`get_portout_fraud`, beside `/dlar-vs-platform`; rules via `_portout_rules`) | §19.32 — the daily fraud report |
 | `GET /kpi-failing/{period}` (failing-KPI overview: /coaching target resolution + in-process `/dlar-store` store rows + `rep_commissions.kpi_values`; pure `kpi_failing.py`) | `commcalc/router.py` (`get_kpi_failing`, beside `/dlar-store`) | §10 failing-KPI report |
 | `GET /compliance-summary` (per-queue open counts over the existing flag/exception surfaces; failed probe = null, never 0; pure `compliance_summary.py`) | `commcalc/router.py` (`get_compliance_summary`, beside `/kpi-failing`) | §14 mig 948 Flags & Compliance |
 | `GET /account/liabilities-due` (owed-to-distributor + due-this-week payments/payroll/payroll-tax/rents/insurance per store; mig-434 + mig-946 gates fail closed; pure `account/liabilities_due.py`; distributor side = the SAME as-of-parameterized derivation the BS books, mig `954`) | `account/router.py` (`liabilities_due_endpoint` → `_liabilities_due_impl`) | §4 Current Monetary Liabilities |
@@ -5134,8 +5245,11 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
 | **Is this month's stored commission up to date with what landed?** ("Auto-calculated at … from the upload of …" / refused / off / queued) | `calc_status.auto_calc_requested_at` / `auto_calc_last` (mig 1030; pre-1030 `calc_notices` type `auto_calc`) | `auto_calc.view` via `GET /calc-status/{period}`; written only by the landing hook's runner, which runs `_run_calculation` (§6l) |
+| **What device an activation activated** (tablet / watch) and **its Exec-MTD pay category** | sale lines of the event (`product_desc`, `category`, `department`, `sku`, serial, catalog) | ONE classifier `installment_category.resolve_chain_category` (tenant rules + built-in ladder), dereferenced by `line_class._device_of_lines` / `unit_devices`; `line_class.pay_category` (one event, one category); categories `activation_bucketing.MTD_CATEGORIES` (§6n) |
+| **Where the backend is / the customer-facing site / which browser origins may call the API** (deploy config, not a metric) | env `BACKEND_ORIGIN`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_API_DIRECT_ORIGIN`, `NEXT_PUBLIC_SITE_URL` (frontend); `APP_PUBLIC_URL`, `CORS_ORIGINS`, `CORS_ORIGIN_REGEX` (backend) | ONE home each: `frontend/src/lib/apiBase.ts`; `backend/app/core/cors_policy.cors_policy` (§40) |
 | **One rep's recalculated commission row** (the Recalculate button) | `rep_commissions` (that rep's row only) | THE full path's row: `router._calc_inputs` + `_calc_rep_rows` + `_apply_new_engines`, shared with `_run_calculation`; lock `harness_recompute_rep_e2e.py` (== the full run's row, one rep, no ledger write) (§6k) |
 | **Undefined names in the backend** (a read name nothing binds — a NameError on first run) | `backend/app/**/*.py` | `harness_undefined_names_lock.py` (stdlib `symtable`), CI job *No undefined names under backend/app* (§6k) |
+| **Is a migration number / an index section number claimed once?** (#315 and #317 both took mig `1030` and §19.32 on 2026-09-28 — each branch green against a main without the other; the port-out file became `1031`, the auto-calc gap §19.33) | `database/migrations/*.sql` file names; `docs/SYSTEM_DATA_FLOW_INDEX.md` headings, `§N.M **` paragraphs, TOC rows | `harness_unique_numbers_lock.py` (stdlib), CI job *Migration and index numbers are claimed once* (org-scope-guard, also on push to main — the merged tree); the collisions that predate it (applied migrations 223 / 420 / 724 / 864–867; §23s, §23s.8, TOC 12) are listed by exact name and may only shrink |
 | **Which menu entries a viewer may not see** (the carrier surfaces) and **which payout view a viewer gets** | `storeops.roles.permissions.scope` / `.data.carrier_commission_view` + `app_config.rbac_enabled` | ONE registry `payout_audience.MANAGER_ONLY_SURFACES`, ONE self-scope answer `storeops.role_is_self_scoped`, ONE carrier permission `payout_audience.carrier_view_allowed`, served on `/me` (`viewer_payload`) → `rbac.payoutRefused` in `canSeeItem` / `canAccessPath`; audience by `payout_audience.resolve` (§6j, §6m) |
 | **Who may see carrier commission** (what the carrier paid the store — Price / GP, MA cross-reference, dealer figures, ledger buckets) | `storeops.roles.permissions.data.carrier_commission_view` per role, per org; unset = company-wide roles + platform super admin | `payout_audience.carrier_view_allowed` (the one home) → `router._require_carrier_view` on every registered carrier surface; the Rep Incentive report shows it to nobody (§6m) |
 | **The sale on a paid commission row** (action · phone line · customer) | engine event stamp (`event_type`, `event_key`); `raw_sales.customer` / `raw_sales_invoice.customer` | `payout_audience.event_label` (`line_class.CLASS_LABELS`) · `line_phone` (`line_class.line_event_keys`) · `inventory_sold_recon.sale_customer` via `commission_drilldown.attach_line_identity`; frontend `planLines.saleLabel` (§6j) |
@@ -5192,6 +5306,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Boost App % / Carrier App (`boostapp`) | **DERIVED by us, and the denominator is the OWNER'S RULING (2026-09-27, §19.31):** `boost_ready_bounty` over the store's own NEW ACTIVATIONS (`line_class.new_activation_units` — Executive MTD's Total Activation less Upgrade less swap), resolved at SCORE time through `kpi_failing.REP_DERIVED_RATES` + `kpi_failing.derived_rate`. The LEGACY value is `raw_dlar_rep.boost_app_pct`, which `dlar_sweep.derived_rate(boost_ready_bounty, ga_prepaid)` wrote at INGEST; it is still read for historical rows and is what a tenant on `payout_config.kpi_boostapp_basis = 'feed_prepaid'` (the default) gets. **`None` when there is no denominator, never a measured 0** (§19.28) | `kpi_failing.rep_kpi_values(..., basis=…)` → `kpi_failing.score`; the basis comes from `calculator.calc_rep_commissions`; no store-grain column exists |
 | NEW ACTIVATIONS (how many — any surface) | DERIVED from the classified sale lines: `line_class.new_activation_units` over `activation_units`, per the org's `accessory_config.activation_details_rules.new_activation` (`classes` + `exclusions`; house = the owner's ruling: activation + port + byod, less swap). **ONE home** (§19.31) | the shared cell field `act_new_activation` (`router._apply_activation_basis`) → Executive MTD's `new_activation` column, the Boost pay engine's Ready App denominator, `GET /dlar-vs-platform/{period}` |
 | WHY A UNIT DOES NOT COUNT (swap / ineligible) | `line_class.exclusion_class(row, rules)` over the org's `exclusions` words, on the SAME fields the class predicate reads. **ONE home** — it replaced bare substring tests in `_sales_cell_agg`, `ma_recon._is_activation_line` and the chargeback detector (§19.31) | `router._sales_cell_agg` (`_swap`), `ma_recon._is_activation_line`, `_run_calculation`'s chargeback detector, `line_class.new_activation_units` |
+| PORT-IN THAT PORTED OUT AGAIN (the fraud signal) | OUR transaction supplies the activation date (`raw_sales.trans_date` on a line whose `line_class.activation_class == 'port'`); the CARRIER supplies the port-out (`raw_mi.subscriber_status == 'PORTED-OUT'`, dated by `mi_deactivation_date` → `residual_transfer_out_date` → the monthly snapshot transition). FOUR states — `flagged` / `cleared` / `retained` / `undecidable`-with-a-reason; a port-out we cannot DATE is undecidable, and a port-out date BEFORE our sale is a recycled number, never the report's worst case | `portout_fraud.evaluate` / `.report` via `GET /portout-fraud` (§19.32); the lookup is `event_sales.line_feed_state`, shared with §23s.5 |
+| ACCESSORY SOLD WITH AN ACTIVATION (per invoice) | `raw_sales.ext_price` over the lines of that invoice the org's OWN accessory definition accepts — `router._is_accessory` / `_is_setup_fee` over `_accessory_config`, the SAME gate that produces the Sales Report's `accessory_rev`, so it is the same dollar. An invoice that was not measured reads UNKNOWN, never $0.00 (the most accusing value the column has) | `router.get_portout_fraud` → `portout_fraud.attribution` against the per-org `accessory_floor` (§19.32) |
 | FEED CLAIM vs STORE TRANSACTIONS (per metric) | `raw_dlar_rep` / `raw_dlar_store` AS LANDED vs the Executive-MTD cells, with the cause of each difference (`counting_definition` exact / `feed_vintage` undecidable / `grain` / `unattributed`) | `dlar_vs_platform.compare/entity_row/summarize` via `GET /dlar-vs-platform/{period}` (§19.31) |
 | A KPI's GRAIN (any metric) | DERIVED from `kpi_failing.REP_DLAR_COLUMNS` / `STORE_KPI_COLUMNS` — never stored | `kpi_failing.grain_of(metric_key)` → `'rep'` \| `'store'` \| `None`; stamped on `GET /carrier-kpi-metrics` (+ `rep_columns`) and on `GET /kpi-failing/{period}` defs. §19.28 (2b): familyplan / tmr3 / aal are STORE-grain only — NULL in all 516 `raw_dlar_rep` rows |
 | DOES A COLUMN STILL CARRY VALUES (the completeness axis) | the rows a sweep just normalised, against `data_lineage_registry.REQUIRED_CONTENT_COLUMNS` | `data_lineage_registry.content_arrival(rows, columns)` (pure); `dlar_sweep.run_dlar_sweep` → `status_sentence`. §19.18's two questions (arriving / content moving) both read GREEN through the July 2026 break |
@@ -5278,7 +5394,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 ## 19. Known gaps & inert config
 
-§19.32 **NO PERIOD LOCK FOR A REP-COMMISSION MONTH (found building §6l, 2026-09-28).** There is no locked / finalized
+§19.33 **NO PERIOD LOCK FOR A REP-COMMISSION MONTH (found building §6l, 2026-09-28).** There is no locked / finalized
 / paid state for a `rep_commissions` month anywhere in the platform (searched the index, the migrations and the
 routers; the only draft→approved→paid lifecycle is Management Incentive's `mi_payout`, which the Run Calculation never
 writes). So the landing hook (§6l) recalculates a paid month when a late correction to it lands — exactly what a
@@ -5926,6 +6042,33 @@ harness STUBS into `sys.modules` itself (`harness_tenant_vertical.py` does exact
 no-deps job). Proven both ways: replaying the bad step into the workflow text reproduces the violation and names
 `app/modules/closing/router.py imports fastapi`; 28 checks, 9 of them negative controls.
 
+§19.25c **A GUARD WENT STALE AND NOTHING NOTICED, BECAUSE NOTHING RAN IT (owner-directed, 2026-09-27).**
+`harness_activation_bucketing.py` check **F3** had been RED on `main` for ~3 weeks. It grepped the SOURCE TEXT of
+`router._activation_details_rules` for the literal `.eq("org_id", org_id)`. PR #279 did the right thing and removed
+that query — a second read of the same column was the §4b.1 "ONE READ" duplicate — so the loader now delegates to
+`_accessory_config(client, org_id)` and the scoping lives, shared, in `_accessory_config_uncached` as
+`lambda q: q.eq("org_id", org_id)`. **Org-scoping never weakened; it moved and became shared.** The refactor that
+improved the code broke the guard: the §24 pattern of a guard that has become a proxy for the thing it guards.
+
+Fixed the way §19.28 fixed `harness_team_snapshot_perf` — **re-expressed, never loosened.** F3 now FOLLOWS THE
+DELEGATION (`_org_scoped_through`, a bounded walk over the router functions the loader calls) and asserts the FACT:
+the rules returned came from a read filtered on this org, wherever in the chain that filter now lives. F3b names
+where it lives so the guard stays honest about the indirection. **Three armed negative controls**, without which
+"follow the delegation" would be indistinguishable from "stop checking": the same shape with the filter removed goes
+RED, a filter one delegation deeper is still found, and a loader that calls nothing and scopes nothing goes RED. 53
+checks, was 49.
+
+**THE SERIOUS HALF WAS THE SECOND FACT, and it is much larger than one file.** Measured: **400 harnesses on disk, 65
+run by a workflow, 335 run by nothing.** A harness no workflow runs is not a gate, it is a file — the §19.25 class in
+its third direction, beside *a failing harness must fail CI* (§19.25) and *a harness CI runs must be able to import in
+its job* (§19.25b). All three now live in `backend/harness_ci_pipefail_lock.py`. The third is a **RATCHET**, not a hard
+gate, because wiring 335 harnesses into CI in one change would multiply the build and is the owner's call, not a
+lock's: `backend/harness_unrun_pending.txt` is the debt list, a NEW harness must be run by some workflow, the list may
+only SHRINK, and a name that becomes run (or stops existing) must be de-registered or the build fails — a debt list
+that does not shrink when the debt is paid stops measuring anything. Same shape as `frontend/table_sort_pending.txt`.
+Pinned at **334**: this change wires `harness_activation_bucketing.py` into `carrier-vocab-guard.yml` (stdlib job —
+its placement checked by the §19.25b rule), so the list shrinks by one on the very change that introduces it.
+
 §19.26 **A MONEY GATE CHOSE ITS COLUMN BY RESEMBLANCE — the qualifier read TWP+ while the rule is TWP ALL
 (owner defect 2026-09-25; fixed as a class).** `paramount_kpi` matched the SUBSTRING `"current twp"` against the
 door report's header row and took the FIRST column containing it. The real report carries TWO — `Current TWP+%`
@@ -6432,12 +6575,32 @@ The switch is **per period** (`payout_config.kpi_boostapp_basis`, mig `1029`), s
 September forward leaves every closed month exactly as paid and −$658.30 never happens. **HOUSE PAY IS
 BYTE-IDENTICAL until that column is set** (`harness_ready_app_denominator.py` §F7 is the pin).
 
-**(6) ⚠ OPEN — THE OWNER'S, NOT GUESSED.** (i) **Ineligible port-in**: in or out? The carrier's own
-August figure for the reference rep reconciles ONLY with it out, and excluding it is what makes the
-count identical under both count units — but across 296 cells it is a near-tie (53.0% vs 52.0% exact).
-Config statement in mig `1029` (c1). (ii) **Which period the new basis starts from** — mig `1029`
-Block 2 (a) vs (b), the −$658.30 turning on it. (iii) Port-in and new BYOD are answered by (4) and need
-nothing, recorded so the questions close with evidence.
+**(6) THE BOUNDARY IS CLOSED; ONE QUESTION REMAINS.**
+
+**(i) INELIGIBLE PORT-IN — RULED IN (owner, 2026-09-28, verbatim: *"port in is activation"*).** An
+ineligible port-in **counts** in the new-activation denominator. This was the last open boundary of
+this section and it is now decided. **NOTHING SHIPPED FOR IT**, because the ruling IS the shipped
+default: `line_class.HOUSE_NEW_ACTIVATION` excludes only `swap`, so no code and no config row follows.
+What DID change is that mig `1029`'s `(c1)` — the `UPDATE … '{new_activation,exclusions}' →
+'["swap","ineligible"]'` statement — has been **DELETED from the migration**. It is a statement the
+owner has ruled against, and a ruled-out option left sitting in a file as a copy-pasteable UPDATE is
+how it gets applied by a later reader.
+
+**THE CONSEQUENCE, STATED AND NOT BURIED.** The ruling does not make the reference rep reconcile. Store
+11636, August 2026 now reads **14** (`count_unit='transaction'`) / **15** (`'event'`) against
+ElevateGo's own finalised **13** — so **a residual of 1–2 remains on that store**, and the §19.28 case
+that opened this section is explained by the ruling rather than closed by it. Two further costs are
+accepted with it: the count is **no longer basis-stable across the §6f `count_unit` flip** on that cell
+(14 vs 15, where excluding ineligible gave 13 vs 13), and `kpi_failing.derived_rate(8, 14)` = 57.1%
+rather than the carrier's published 61.54%. **What defends the ruling is the population, not that rep**:
+across the 296 comparable (rep, store, period) cells it is the better fit — **53.0% exact as ruled
+against 52.0% with ineligible port-ins excluded**, mean error +1.16 against +1.14. A single store's
+residual is the price of the definition that fits 296 cells best, and the difference report
+(`GET /dlar-vs-platform/{period}`) is where that residual is now visible per rep rather than argued.
+
+**(ii) ⚠ STILL OPEN — THE OWNER'S, NOT GUESSED: which period the new basis starts from** — mig `1029`
+Block 2 (a) vs (b), the −$658.30 turning on it. **(iii)** Port-in and new BYOD are answered by (4) and
+need nothing, recorded so the questions close with evidence.
 
 **(7) THE SWEEP'S REPORT SET IS CONFIG (owner: *"nothing is hard coded, option is platform wide"*).**
 `dlar_sweep.PORTAL_REPORTS` declares each report once (path, target table, normalizer, label) and
@@ -6553,6 +6716,152 @@ second `len(prem) + len(byod)`, is RED. Nine new negative controls, each proving
 plus the existing "the unmodified tree is GREEN" control. Proof of the rules:
 `harness_ready_app_denominator.py` (83 checks) and `harness_dlar_vs_platform.py` (48 checks), both
 stdlib and DB-free, both in `carrier-vocab-guard.yml`. 27 checks on the lock.
+
+---
+
+§19.32 **THE DAILY PORT-OUT FRAUD REPORT — a port-in that leaves before it has paid for itself
+(owner directive 2026-09-28; code shipped, the daily send held for approval).**
+
+OWNER, verbatim: *"port in is activation and port port out within 30 days is a gnale of fraud or before
+the second payment is a signal of fraud , either customer initiated or sales rep initiated as the phones
+are cheaper on new aCTIVATION WITH port in ,so it is also important to report how much acessories were
+sold with that activation , if it is below $50 then it could be a sales rep driven and that shoudl be on
+top of a daily fraud report being sent to all market managers and above via whats app and email - with a
+big red mark and open urgently"*.
+
+The same sentence also ruled on §19.31's last open boundary — *"port in is activation"* — which is
+recorded there, not here. This section is the report.
+
+**(1) THE DUPLICATE CHECK, DONE BEFORE BUILDING, AND WHAT WAS REUSED.** Four mechanisms already owned
+parts of this question and all four were extended rather than re-derived:
+
+| the question | the home it already had | what this report does |
+|---|---|---|
+| "is this line a port-in?" | `line_class.activation_class` — THE activation predicate, per-org config (§19.31) | dereferences it; `watch_classes` config says which classes are watched |
+| "did this line stay?" | `marketing/event_sales` — the retention derivation, THREE states, the unmatched line never churn and never in a denominator (§23s.5) | **`line_feed_state` was EXTRACTED from `evaluate_line` in this same change** so this report is one more caller, not a second churn derivation |
+| "what counts as an accessory?" | `router._is_accessory` / `_is_setup_fee` over `_accessory_config` — the gate behind the Sales Report's `accessory_rev` | dereferences it, so "accessories sold with that activation" is the same dollar the platform already calls accessory revenue |
+| "how do we read `raw_mi` for a set of lines?" | `marketing.router._es_mi_snapshots` — bounded, org-scoped, indexed by the commission paid gate's own `_mi_index` | reuses it (one column added: `residual_transfer_out_date`) — no second read path into the subscriber feed |
+| "who are market managers and above?" | `core/scope.roster_reach`, whose own words for scope `all` are *"market manager and above"* | `notify.router._role_scope_recipients` resolves recipients from `roles.permissions.scope` — a RESOLUTION, not a typed list |
+| "how does a report go out daily?" | `notify.subscriptions` + `POST /notify/run-due` on pg_cron | a subscription row (mig `1031` Block 2). **No new cron job, no new scheduler, no new dispatch path.** |
+
+It introduces **no table and no ingest path**, so there is no `data_lineage_registry` row and no `925`
+seed entry. It books nothing (`books_to == []`).
+
+**(2) THE ACTIVATION DATE IS OURS; THE PORT-OUT DATE IS THE CARRIER'S, AND THAT IS THE WHOLE PROBLEM.**
+The window's start is `raw_sales.trans_date` — the owner's standing ruling that *"the source of truth is
+the transaction done in thr store"* (§19.31) — so it is present on every line we rang and is never in
+doubt. Using the carrier's `mi_activation_date` instead would have thrown that away: it is carried on
+only **7,803 of 35,134** PORTED-OUT feed rows.
+
+The port-out date is frequently absent, so there are **three bases, in order, and the report says which
+one answered**: `mi_deactivation_date` (exact) → `residual_transfer_out_date` (exact, the same event
+seen from the money side) → **the SNAPSHOT TRANSITION** (bounded). `raw_mi` is a monthly snapshot
+(§23s.5's grain note), so a line active in one loaded month and PORTED-OUT in a later one ported out
+inside that window: a bound entirely inside the window flags, a bound entirely outside clears, **a bound
+that STRADDLES the boundary is undecidable**. There is no fourth basis and none is invented.
+
+**(3) ⚠ THE FEASIBILITY NUMBER IN THE BRIEF WAS MEASURED ON THE WRONG DENOMINATOR — re-measured
+2026-09-28, read-only, house org.** The figure carried into this work was *"35,134 PORTED-OUT rows, only
+770 datable = 2.2% coverage"*. Both counts are right and the ratio is not a coverage rate, because
+**`raw_mi` is a MONTHLY SNAPSHOT and those are ROWS, not lines**: a line that ported out in March
+reappears as PORTED-OUT in every later snapshot. The 35,134 rows are **2,214 DISTINCT SUBSCRIBERS** —
+roughly a 16× overcount of the population.
+
+| measured at subscriber grain, all 7 loaded snapshots (Mar–Sep 2026) | |
+|---|---|
+| distinct subscribers ever PORTED-OUT | **2,214** |
+| datable from explicit dates (deactivation **or** residual transfer-out) | 782 (35.3%) |
+| bounded by the snapshot transition | 706 (31.9%) — 681 of them to a single month |
+| **either path** | **1,096 (49.5%)** |
+| undecidable under both | 1,118 (50.5%) |
+
+`residual_transfer_out_date` was not in the brief's calculation at all and is carried on 398 rows the
+deactivation date is blank on; adding it as the second exact basis is why the explicit path reaches
+35.3% rather than 2.2%.
+
+**AND THE POPULATION THE OWNER ACTUALLY NAMED IS NARROWER AND FAR BETTER COVERED.** He asked about
+port-ins WE rang, not every port-out in the feed. Measured through the shipped endpoint, house org,
+January–September 2026:
+
+| | |
+|---|---|
+| port-in activations rung (distinct invoice × number) | **1,919** |
+| **FLAGGED** — ported out inside the 30-day window | **15** |
+| cleared — ported out, demonstrably outside it | 26 |
+| retained — looked up, has not ported out | 1,526 |
+| **UNDECIDABLE** | **352** |
+| **coverage** | **81.7%** |
+
+Undecidable breaks down as `dropped_out_of_the_feed` 295 · `absent_from_loaded_feed` 36 ·
+`port_out_date_precedes_our_sale` 2 · `window_has_not_elapsed_yet` 19. **So the report sees about four
+fifths of the population it is meant to catch, not 2%.** The brief's "the report would today see ~2% of
+the port-outs it is meant to catch" is superseded by this measurement; the honesty requirement it was
+written to enforce is not, and is implemented — see (5).
+
+**A CONCENTRATION WORTH THE OWNER'S EYE, REPORTED AND NOT INTERPRETED:** of the 15 flagged, **three sit
+at one store** (6011 Bergenline Ave) and **nine of the 15 carry under $50 of accessories**. That is what
+the data says; this report does not say why, and does not accuse anyone.
+
+**(4) TWO DEFECTS THE BUILD ITSELF FOUND — both are regressions in the harness now.**
+- **⚠ A PORT-OUT DATE BEFORE OUR SALE.** Live: a port-in whose matched feed row carries a port-out
+  **17 days BEFORE** the sale. A bare `days <= 30` test flags it as the single worst case in the report.
+  It is not fraud — it is a **recycled mobile number**, the feed row being that number's earlier life
+  with a different subscriber. A non-positive lifespan is therefore `undecidable` with its own reason
+  and is **never flagged**; the negative day count is still reported, never hidden. 2 such rows live.
+  Harness §C, with a negative control proving the naive rule would have flagged it.
+- **⚠ ASKING ONLY THE LATEST SNAPSHOT LOSES THE PORT-OUT TO AN ABSENCE.** Found by the first live smoke
+  test, not by reading. The retention report asks the LATEST month because its question is "is this line
+  still with us now". This report's question is "did it EVER port out", and over a monthly feed those
+  differ: a line that ported out in April and is gone from September reads `dropped_out_of_the_feed` —
+  **323 house lines sat in that state and the flagged count read 2 instead of 15.** The lookup is now
+  made in the month the line READS PORTED-OUT, with the latest month as the fallback. Harness §C2.
+
+**(5) THE HEADLINE CONFESSES ITS BLIND SPOT — the requirement, and where it is enforced.**
+`summary.flagged`, `summary.undecidable`, `summary.coverage_pct` and `undecidable_by_reason` travel
+together, the notify subtitle prints the undecidable count beside the red mark, and **the first sheet of
+the sent report is "What this report could not see"**, ahead of the findings. A fraud report that shows
+a flagged count while silently unable to decide part of its population converts a blind spot into a
+clean bill of health. `undecidable` reuses the **`decidable: False`** vocabulary of the
+Feed-vs-Transactions report (§19.31 (8)) and the unmatched-reason vocabulary of the retention report
+(§23s.5) verbatim — a third spelling was not invented.
+
+**(6) THE ACCESSORY FLOOR IS AN ATTRIBUTION, NOT A TRIGGER — and the measurement says why.** The owner's
+reading is that under-$50 "could be a sales rep driven". Measured before wiring it: **50.8% of ALL
+port-in invoices carry under $50 of accessories (36.0% carry none; median $47.70)**. So the floor alone
+names half the port-ins in the business, and a report triggered on it would be noise with a red mark on
+it. It is therefore a COLUMN on rows the port-out already flagged — exactly as the owner worded it
+(*"it is ALSO important to report how much accessories were sold"*) — and it never moves a row's state.
+An invoice that could not be measured reads **unknown, never $0.00**, because $0.00 is the most accusing
+value this column has and an unmeasured line has not earned it.
+
+**(7) THE SECOND TRIGGER IS DECLARED UNCONFIGURED, NOT QUIETLY ALIASED.** The owner named two triggers:
+within 30 days **or** before the second payment. On a monthly plan they nearly coincide, and that is the
+temptation — implementing one and calling it the other. **No field on the sale line or the subscriber
+row states when a line's second payment fell due**, and the installment schedule covers device
+financing, not the plan's MRC cycle. So `second_payment_days` is a named, resolvable rule that is
+UNCONFIGURED at house level, **every payload says the trigger is not evaluated**, and rows a
+second-payment rule would have caught are not in the flagged count. Absence of a business rule is
+reported, not papered over.
+
+**(8) RULE TWO.** Window, accessory floor, watched classes and the second-payment boundary are
+`accessory_config.portout_fraud_rules` (mig `1031`), per org, over house defaults that ARE the owner's
+numbers — so a NULL column changes nothing and no carrier, tenant or product name appears in a branch.
+A junk or out-of-range value falls back to house rather than emptying or flooding the report.
+
+**(9) PII.** The report is ABOUT subscriber lines, so the rule bites here: the endpoint and the sent
+export carry the mobile number, because the recipient is entitled to it through the report they are
+being sent — but **every harness fixture uses 555-prefixed non-routable numbers and invented names, and
+no live subscriber identifier appears in this index, the repo or any fixture.**
+
+**(10) WHAT IS HELD FOR THE OWNER.** Mig `1031` **Block 1** (the config column) is behaviour-neutral.
+**Block 2 SENDS MESSAGES TO PEOPLE** — a daily WhatsApp + email to every market manager and above — and
+is deliberately separated, with a query beside it for checking exactly who that resolves to before
+anyone applies it. Nothing in this change was applied to any database.
+
+**(11) THE PROOF.** `backend/harness_portout_fraud.py` — **85 checks**, stdlib-only, DB-free, no
+network, verified to pass with no site-packages, and **RUN BY `carrier-vocab-guard.yml`** (so it adds no
+entry to `harness_unrun_pending.txt` and `PINNED_MAX` stays 334). `harness_marketing_event_sales.py`
+(237 checks) is the pin that the `line_feed_state` extraction left the retention report byte-compatible.
 
 ---
 
@@ -13244,7 +13553,149 @@ change, keeps an edit.
 
 ---
 
-## 40. SERVICE ADDRESSES — an operator-typed base URL has ONE normaliser (owner 2026-09-28)
+## 40. ONE DOMAIN — the browser talks only to the customer-facing site (owner 2026-09-28)
+
+Owner: *"we are using https://metricspro-five.vercel.app/login to log in, we should use metricspro.tech/xxxxx as
+customer facing and mask all urls so nobody knows how to hack in"*.
+
+**The defect.** Fifteen frontend files each read `process.env.NEXT_PUBLIC_API_URL` and built `${API_URL}/api/v1/...`
+(`lib/client.ts`, `lib/auth-context.tsx`, `(platform)/layout.tsx`, `signup`, `onboard/[token]`, `r/[token]`, `portal`,
+`closing/_lib/SubmissionsTable`, `closing/envelope-report`, `hr/compliance`, `referral/list/[id]`, `vision/settings`),
+so the browser called the backend host directly — its name was in the network tab, the JS bundle and the CSP
+(`*.up.railway.app`) — and "where is the API" had fifteen answers. **The class:** the location of the backend and of the
+customer-facing site is a fact with ONE home, dereferenced by every caller.
+
+**Honest framing.** Hiding a hostname is not security: the API is exactly as reachable by its real name as before, and
+anyone can learn it (DNS history, a CNAME, a stack trace). What this buys is one customer-facing address, a smaller
+CSP, one place to change where the backend is, and a proxy seam. What protects the app is §40.7.
+
+### 40.1 The homes
+
+| Fact | Home | Readers |
+|---|---|---|
+| Where the backend is; which address a caller uses; the customer-facing site | `frontend/src/lib/apiBase.ts` — the ONLY reader of `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_API_DIRECT_ORIGIN`, `BACKEND_ORIGIN`, `NEXT_PUBLIC_SITE_URL` | `apiUrl(path, cls?)` (every fetch), `absoluteApiUrl(path, cls?)` (URLs that leave the page: exports, pasted webhook URLs), `siteUrl()` (`app/layout.tsx` metadataBase, `app/robots.ts`), `apiRewrites()` / `directOrigin()` / `API_ENV` (`next.config.ts`) |
+| The routing policy built from it | `frontend/site-routing.ts` — `canonicalHostRedirects(env)`, `connectSrc(directOrigin)`, `PLATFORM_HOST_RE` (the one place allowed to name the platform's hostnames) | `next.config.ts` `redirects()` / CSP |
+| Which browser origins the API allows cross-origin | `backend/app/core/cors_policy.py` `cors_policy(env, APP_PUBLIC_URL)` | `backend/app/main.py` CORSMiddleware |
+
+### 40.2 Two route classes (decided in the home, from the path — never at the call site)
+
+- **proxy** (default): the browser calls `/api/v1/...` on its own origin; `next.config.ts` `rewrites()` = `apiRewrites()`:
+
+  | source | destination |
+  |---|---|
+  | `/api/v1/:path*` | `${BACKEND_ORIGIN or NEXT_PUBLIC_API_URL or http://localhost:8000}/api/v1/:path*` |
+  | `/health/:path*` (also matches `/health`) | `${same origin}/health/:path*` |
+
+  Those are the only backend path prefixes the frontend uses (`BACKEND_PATH_PREFIXES`). The portal's "is the API up"
+  probe used to fetch the backend's `/` — same-origin that would be the app's own home page — so it now probes
+  `/health` and checks `r.ok` (a down backend answers with the proxy's 5xx, not a network error).
+- **direct**: multipart uploads (`apiUpload` → `apiUrl(path, 'direct')`; the public onboarding upload) and the synchronous
+  endpoints that can outrun the proxy (`DIRECT_ROUTES`): `POST /payables/rebuild`; `/commcalc/epay/sweep/{run-now,discover-reports,run-due}`;
+  `/commcalc/data-sources/sweep/run-due`; `/commcalc/data-sources/{sid}/{run,login/start,login/verify,live-login/*}`;
+  `/supply/vendors/{id}/catalog/read`; `/supply/orders/{id}/{open-session,capture,submit}` — every endpoint that calls
+  `require_browser_service()` (Chromium; the API proxies it to the sweeps worker with a 180 s budget). These go to
+  `NEXT_PUBLIC_API_DIRECT_ORIGIN` (intended: `https://api.metricspro.tech`, a CNAME to the backend); unset ⇒ `NEXT_PUBLIC_API_URL`
+  (the pre-change behaviour — the backend host stays visible for these calls until the subdomain exists); on a PREVIEW with
+  no direct origin ⇒ same-origin. Run Calculation is NOT direct: `POST /calculate/{period}` returns at once and the page polls.
+- **server side** (no `window`): `BACKEND_ORIGIN` (server-only, never inlined) → `NEXT_PUBLIC_API_URL` → localhost.
+
+### 40.3 The platform's limits (why the direct class exists)
+
+- **Time:** a proxied (external-rewrite) request on Vercel must produce its first byte within **120 s**, else
+  `ROUTER_EXTERNAL_TARGET_ERROR` (Vercel docs, "Limits"; changelog "CDN origin timeout increased to two minutes"). The
+  Chromium endpoints above are budgeted at 180 s by the API itself, and the payables rebuild documents "the browser 502s"
+  on a full rebuild — both would fail behind the proxy.
+- **Body size:** the documented 4.5 MB request cap belongs to Vercel **Functions**; an external rewrite is served by the
+  CDN proxy, not a Function, and no body cap for it could be confirmed from this environment (vercel.com is not reachable
+  from it). Uploads are real and large — the backend's own cap is 64 MB (`MAX_UPLOAD_MB`), sized against a 7 MB month
+  workbook, a 9.5 MB asset reload and a 28 MB synthetic sales file (`core/body_limit.py`) — so uploads are direct rather
+  than bet on an unverified limit. **Do not route uploads through the proxy until a >10 MB upload has been tested
+  through it.**
+- **No `proxy.ts` / middleware:** Next buffers a request body in a proxy (`experimental.proxyClientMaxBodySize`, default
+  10 MB, silently truncating past it). The redirect is therefore a `next.config.ts` `redirects()` rule, not middleware.
+
+### 40.4 Canonical host
+
+`redirects()` = `canonicalHostRedirects({VERCEL_ENV, NEXT_PUBLIC_SITE_URL})`: `{source: '/:path*', has: host
+(?:[a-z0-9-]+\.)*vercel\.app, destination: ${site}/:path*, permanent: true}` → **308**, same path and query
+(`/_next/*` excluded by Next). Installed ONLY when `VERCEL_ENV=production` (previews and `next dev` untouched) AND
+`NEXT_PUBLIC_SITE_URL` is set explicitly (a code default must never send every login to a host not yet serving the app)
+AND the site is not itself a platform host (loop). A tenant's custom domain and look-alike hosts are not matched.
+
+### 40.5 CORS (`app/core/cors_policy.py`)
+
+`CORS_ORIGINS` (comma list) or the defaults (the production platform alias — exact, kept for deploy ordering — apex,
+www, localhost:3000 / 127.0.0.1:3000); the app's own `APP_PUBLIC_URL` is ALWAYS allowed; `*` or any non-bare origin is
+dropped with a note; `CORS_ORIGIN_REGEX` OFF by default and refused if it admits a canary (the old default
+`https://metricspro[a-z0-9\-]*\.vercel\.app` admitted `metricspro-attacker.vercel.app` — platform hostnames are
+first-come). Same-origin proxied calls need no CORS (Starlette serves a non-preflight request whose Origin is not
+allowed; it only omits the ACAO headers). Server-side calls carry no Origin.
+
+### 40.6 Siblings checked (CLAUDE.md "find the siblings")
+
+| Path answering "where is the API / the site" | Status |
+|---|---|
+| The 12 frontend files above + `robots.ts` / `layout.tsx` (their own `NEXT_PUBLIC_SITE_URL` copies) | **Fixed** — dereference `apiBase.ts` |
+| `next.config.ts` CSP `*.up.railway.app` | **Fixed** — `connectSrc(directOrigin())` |
+| `backend/app/modules/core/auth_notify.py` carried its own copy of the platform hostname as a fallback | **Fixed** — dereferences `settings.APP_PUBLIC_URL` |
+| Backend `settings.APP_PUBLIC_URL` (default the platform alias) — links in invite / onboarding / report / payroll emails | **Config, owner step** — set it to the canonical site once that serves the app (default not changed: a wrong default would break every emailed link) |
+| Backend `settings.API_PUBLIC_URL` (default the backend host) — signed download links in notify emails, the WhatsApp webhook URL, pg_cron self-calls, the Vision push endpoint | **Excused / config** — machine-facing or emailed download links; set to `https://api.metricspro.tech` once that CNAME exists (Google / Meta registrations must be updated with it) |
+| `website/assets/config.js` (`apiBase`, `appUrl`), the marketing HTML "Sign in" links, `website/.htaccess` CSP | **Excused** — a separate static site with its own one home (`config.js`); its values change at §40.8 step 6 (after the app domain serves) |
+| `mobile/` (`EXPO_PUBLIC_API_URL`) | **Excused** — a native app: no browser origin, no CORS; point it at the API subdomain when it exists |
+| Commented pg_cron URLs in old migrations | **Excused** — documentation of already-applied SQL; server-to-server |
+
+### 40.7 What actually protects the app (not the hostname)
+
+Supabase JWT auth on every non-public route (`REQUIRE_AUTH`), membership-verified tenant resolution (`tenant_middleware`;
+`x-active-org` is a hint re-verified per request), org-scoped queries (CI `org-scope-guard`), per-IP rate limiting
+(`core/rate_limit.py`, strict tier on auth / signup / 2FA / reset), the 64 MB body cap, masked 500s + security headers,
+2FA (admin enforcement still OFF until `ADMIN_2FA_ENFORCE=1`), `MULTI_TENANT_ENFORCE` still OFF (SECURITY_DAILY_QUESTIONS
+§11–12). **Real gap noticed:** the client IP used by the rate limiter, the access log, OTP and impersonation records is the
+LEFTMOST `X-Forwarded-For` entry (`tenant_middleware._client_ip_from`, plus two private copies in `core/router.py` and
+`core/impersonation_api.py`). A caller that reaches the backend directly can put any value there, so the per-IP limit is
+bypassable and logged IPs are spoofable. The fix is to trust only the hop(s) the deployment adds (one config value, one
+helper, the two copies deleted) — not done here.
+
+### 40.8 Owner steps (dashboards) — DECIDED: the app lives at `app.metricspro.tech` (owner 2026-09-28)
+
+The apex `metricspro.tech` stays the marketing site (Bluehost document root, `website/DOCROOT-SHIM.htaccess`; `signup`
+links its `/legal/*`). The app is `https://app.metricspro.tech`; the API subdomain is `https://api.metricspro.tech`.
+Code defaults now say so (`apiBase.DEFAULT_SITE_URL`, `cors_policy.DEFAULT_ORIGINS`); the redirect still turns on ONLY
+when `NEXT_PUBLIC_SITE_URL` is set, so nothing moves until the domain serves the app. Order matters:
+1. **DNS (Bluehost zone for metricspro.tech):** `app` CNAME → the target Vercel shows when the domain is added (step 2);
+   `api` CNAME → the target Railway shows when the custom domain is added (step 3).
+2. **Vercel** → project → Domains: add `app.metricspro.tech`, wait for "Valid Configuration". Environment Variables
+   (Production): `BACKEND_ORIGIN` = the Railway URL; once step 3 is green, `NEXT_PUBLIC_API_DIRECT_ORIGIN` =
+   `https://api.metricspro.tech`; LAST, `NEXT_PUBLIC_SITE_URL` = `https://app.metricspro.tech` → Redeploy (this turns on
+   the 308 from `metricspro-five.vercel.app`).
+3. **Railway** → backend service → Settings → Networking: add custom domain `api.metricspro.tech`. Variables:
+   `APP_PUBLIC_URL` = `https://app.metricspro.tech`, `API_PUBLIC_URL` = `https://api.metricspro.tech` (and add the app
+   site to `CORS_ORIGINS` only if that variable is set at all).
+4. **Supabase** → Authentication → URL Configuration: Site URL `https://app.metricspro.tech`; add
+   `https://app.metricspro.tech/**` to Redirect URLs (keep the old one until the redirect has been live a while).
+5. **Google OAuth clients (Vision)** and the **WhatsApp/Meta webhook**: add the new redirect / webhook URLs
+   (`API_PUBLIC_URL`-based).
+6. **Marketing site:** `website/assets/config.js` `appUrl` → `https://app.metricspro.tech` (and `apiBase` →
+   `https://api.metricspro.tech`) — only AFTER step 2 works, since it rewrites every "Sign in" link.
+
+### 40.9 Locks and proofs
+
+- `backend/harness_one_domain_lock.py` (stdlib, CI `carrier-vocab-guard`): only the home reads the four env vars; no
+  `railway.app` / `vercel.app` literal under `frontend/src`; nobody builds `${origin}/api/v1`; `next.config.ts` installs
+  rewrites / redirect / connect-src from the homes; `apiUpload` is direct; every `require_browser_service()` endpoint (read
+  from the routers) matches `DIRECT_ROUTES`. A negative control for each rule.
+- `backend/harness_cors_policy.py` (stdlib, CI): §40.5 end to end + `main.py` wiring + controls.
+- `frontend/prove_one_domain.mjs` (CI job `one-domain-proof`, Node 22 + `npm ci`): loads the REAL `next.config.ts` through
+  Next's own `transpileConfig`, validates with `loadCustomRoutes`, evaluates with Next's `getPathMatch` / `matchHas` /
+  `prepareDestination` — 308 with path + query, previews / localhost / custom domains / look-alikes untouched, rewrites,
+  CSP, the home's resolver; negative controls.
+- Verified by two `next build`s: with only `NEXT_PUBLIC_API_URL` set, one static chunk still names the backend (the
+  direct-class fallback); with `BACKEND_ORIGIN` + `NEXT_PUBLIC_API_DIRECT_ORIGIN=https://api.metricspro.tech` and no
+  `NEXT_PUBLIC_API_URL`, **no** file under `.next/static` or the prerendered pages names the backend host.
+
+---
+
+## 41. SERVICE ADDRESSES — an operator-typed base URL has ONE normaliser (owner 2026-09-28)
 
 **Defect (live):** Supply → Read catalog answered `browser service unreachable: Request URL is missing an 'http://' or
 'https://' protocol`. `BROWSER_SERVICE_URL` on the API host was pasted without a scheme, and `browser_service_url()` used
@@ -13266,4 +13717,3 @@ cron registrars) and for the second, copied reader of `BROWSER_SERVICE_URL` in `
 
 Self-heal: the next boot re-registers the portal-pull cron (`ensure_data_sources_cron`, replace-by-name) with the
 normalised address — no migration, no manual step.
-

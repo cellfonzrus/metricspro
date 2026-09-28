@@ -212,25 +212,19 @@ app.add_middleware(HardeningMiddleware)
 # nothing to name the origins we actually serve, and it removes the whole class before someone
 # later adds cookie auth and turns it into a real one.
 #
-# `CORS_ORIGINS` (comma-separated) overrides the list and `CORS_ORIGIN_REGEX` the pattern, so a new
-# domain is an env change, not a deploy. The default regex deliberately covers Vercel PREVIEW
-# deployments (metricspro-<hash>.vercel.app) — those are real and would otherwise break on every
-# branch deploy, which is exactly the kind of breakage that gets "fixed" by putting `*` back.
-_cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
-CORS_ORIGINS = _cors_origins or [
-    "https://metricspro-five.vercel.app",   # the production app
-    # The marketing site on shared hosting. It is a DIFFERENT origin from the app and reads exactly
-    # one endpoint here — GET /billing/public-pricing — to render the published price list. Without
-    # these two entries the browser blocks that call and the page silently falls back to its
-    # "priced against your operation" card, which looks identical to having published nothing.
-    # NOTE: setting CORS_ORIGINS in the environment REPLACES this whole list. If you set it, the
-    # marketing origins must be in it too, or pricing stops appearing on the website.
-    "https://metricspro.tech",
-    "https://www.metricspro.tech",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
-CORS_ORIGIN_REGEX = os.environ.get("CORS_ORIGIN_REGEX", r"https://metricspro[a-z0-9\-]*\.vercel\.app")
+# One domain (owner 2026-09-28, index §40): the browser now calls the API SAME-ORIGIN through the
+# site's proxy, so CORS governs only the genuinely cross-origin callers. The policy is config and lives
+# in ONE place — app/core/cors_policy.py (proved by harness_cors_policy.py): `CORS_ORIGINS` names the
+# origins (unset ⇒ its defaults, incl. the marketing site's two origins for GET /billing/public-pricing),
+# the app's own canonical origin (APP_PUBLIC_URL) is always allowed, a `*` is never honoured, and
+# `CORS_ORIGIN_REGEX` is OFF unless set — the old default pattern matched platform hostnames anyone can
+# register, and previews no longer need it (they reach their API through their own proxy).
+from app.core.config import settings as _settings  # noqa: E402
+from app.core.cors_policy import cors_policy  # noqa: E402
+
+CORS_ORIGINS, CORS_ORIGIN_REGEX, _cors_notes = cors_policy(os.environ, _settings.APP_PUBLIC_URL)
+for _note in _cors_notes:
+    print(f"[cors] {_note}", file=sys.stderr)
 
 app.add_middleware(
     CORSMiddleware,

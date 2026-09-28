@@ -13362,7 +13362,19 @@ def _line_rules_resolve(client, org_id, ad_raw, ct_map):
             legacy_act = _ex_act.get("rules") or None
     except Exception:
         legacy_act = None
-    return _lc.resolve_rules(ad_raw, ct_map, legacy_act)
+    # THE DEVICE DIMENSION (index §6n): when the org enabled it, the device of an activation is read by THE
+    # one device classifier — the multi-month category ladder (`installment_category`: the tenant's rules
+    # ahead of the built-ins, plus the product catalog) — with the SAME inputs the multi-month engine uses.
+    # Not enabled (house) → nothing loaded, no dimension.
+    dev_rules, cat_of = None, None
+    if isinstance(ad_raw, dict) and isinstance(ad_raw.get("devices"), dict) and ad_raw["devices"].get("enabled"):
+        try:
+            from app.modules.commcalc import installment_category as _icat_dev
+            dev_rules = _icat_dev.load_category_rules(client, org_id)
+            cat_of = _icat_dev.build_catalog_category_lookup(client, org_id)
+        except Exception:
+            dev_rules, cat_of = None, None
+    return _lc.resolve_rules(ad_raw, ct_map, legacy_act, device_rules=dev_rules, catalog_cat_of=cat_of)
 
 
 def _accessory_config_uncached(client, org_id):
@@ -16783,6 +16795,160 @@ def _dlar_slice_vintage(client, org_id, period):
         return None
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE DAILY PORT-OUT FRAUD REPORT (owner directive 2026-09-28, index §19.32)
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+def _portout_rules(client, org_id):
+    """The org's fraud rules over the house defaults (RULE TWO). Read from the EXISTING per-org
+    `commcalc.accessory_config` JSON home — `portout_fraud_rules`, mig `1031` — beside
+    `activation_details_rules`, which is where this module's other per-org classification rules
+    already live. No new config table, and a NULL column resolves to the house defaults."""
+    from app.modules.commcalc import portout_fraud as _pf
+    raw = None
+    try:
+        r = (client.schema("commcalc").table("accessory_config").select("portout_fraud_rules")
+             .eq("org_id", org_id).limit(1).execute().data) or []
+        raw = (r[0].get("portout_fraud_rules") if r else None)
+    except Exception:
+        raw = None                      # mig 1031 not applied yet → house defaults, never a crash
+    return _pf.resolve_rules(raw)
+
+
+@router.get("/portout-fraud")
+def get_portout_fraud(date_from: str = "", date_to: str = "", store: str = "",
+                      authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """PORT-IN ACTIVATIONS THAT PORTED OUT AGAIN — the daily fraud report. READ-ONLY, books nothing.
+
+    OWNER 2026-09-28, verbatim: *"port in is activation and port port out within 30 days is a gnale of
+    fraud or before the second payment is a signal of fraud , either customer initiated or sales rep
+    initiated as the phones are cheaper on new aCTIVATION WITH port in ,so it is also important to
+    report how much acessories were sold with that activation , if it is below $50 then it could be a
+    sales rep driven and that shoudl be on top of a daily fraud report being sent to all market
+    managers and above via whats app and email - with a big red mark and open urgently"*.
+
+    IT COMPOSES; IT DOES NOT RE-DERIVE (the duplicate-check gate):
+      · "IS THIS A PORT-IN" is `line_class.activation_class(row, rules) == 'port'` — the ONE activation
+        predicate, per-org config (§19.31). The owner's same-day ruling that *"port in is activation"*
+        is why the class is watched here and stays IN the new-activation denominator there.
+      · "DID THIS LINE STAY" is `marketing/event_sales.line_feed_state` — the SAME three-state
+        derivation the event subscriber-retention report uses (§23s.5), extracted in this change so
+        this report is one more caller of it rather than a second churn derivation. Its third state,
+        `unmatched`-with-a-reason, is why a line we cannot look up is never reported as fraud.
+      · "HOW MUCH ACCESSORY" is `_is_accessory` / `_is_setup_fee` over `_accessory_config` — the same
+        gate the Sales Report's `accessory_rev` uses, so this column is the same dollar the rest of the
+        platform calls accessory revenue.
+      · the subscriber snapshots come from the retention report's OWN bounded, org-scoped loader
+        (`marketing.router._es_mi_snapshots`) — no second read path into `raw_mi`.
+      · the verdicts are PURE in `commcalc/portout_fraud.py` (proof `backend/harness_portout_fraud.py`).
+
+    ⚠ THE HEADLINE CONFESSES ITS BLIND SPOT. `summary.undecidable` and `coverage_pct` travel with
+    `summary.flagged` and every consumer prints them together. A fraud report that shows a flagged
+    count while silently unable to date part of the population converts a blind spot into a clean bill
+    of health, which is the defect this house keeps being caught by."""
+    require_org(org_id)
+    client = sb()
+    from app.modules.commcalc import portout_fraud as _pf
+    from app.modules.marketing.router import _es_range, _es_mi_snapshots, _es_period_labels
+    from app.modules.storeops.router import scope_keyset, in_keyset
+
+    rules = _portout_rules(client, org_id)
+    lo, hi = _es_range(date_from, date_to)
+    acfg = _accessory_config(client, org_id)
+    line_rules = _line_rules_of(acfg)
+    watch = set(rules["watch_classes"])
+
+    # ── our own transactions, ORG-SCOPED and bounded by the window ───────────────────────────────
+    sales, page, off = [], 1000, 0
+    cols = ("trans_id,trans_date,store,salesperson,mdn,serial_1,contract_type,category,"
+            "product_desc,department,ext_price,voided,period")
+    while True:
+        chunk = (client.schema("commcalc").table("raw_sales").select(cols)
+                 .eq("org_id", org_id).gte("trans_date", lo).lte("trans_date", hi)
+                 .range(off, off + page - 1).execute().data) or []
+        sales += chunk
+        if len(chunk) < page:
+            break
+        off += page
+
+    ks = scope_keyset(authorization, org_id)
+    if ks:
+        sales = [r for r in sales if in_keyset(ks, r.get("store"))]
+    picked = [s.strip() for s in (store or "").split(",") if s.strip()]
+    if picked:
+        sales = [r for r in sales if str(r.get("store") or "").strip() in picked]
+    live = [r for r in sales
+            if str(r.get("voided") or "").strip().lower() not in ("true", "yes", "1", "voided", "void")]
+
+    # ── the watched activations, one per (invoice, number) ───────────────────────────────────────
+    lines, seen = [], set()
+    for r in live:
+        cls = _lc.activation_class(r, line_rules)
+        if cls not in watch:
+            continue
+        mdn = str(r.get("mdn") or "").replace(".0", "").strip()
+        ser = str(r.get("serial_1") or "").replace(".0", "").strip()
+        tid = str(r.get("trans_id") or "").strip()
+        k = (tid, mdn or ("s:" + ser))
+        if k in seen:
+            continue
+        seen.add(k)
+        lines.append({"store": str(r.get("store") or ""), "salesperson": str(r.get("salesperson") or ""),
+                      "trans_id": tid, "trans_date": str(r.get("trans_date") or "")[:10],
+                      "mdn": mdn, "serial_1": ser, "line_class": cls,
+                      "product_desc": str(r.get("product_desc") or "")})
+
+    # ── accessory$ per invoice, through the org's OWN accessory definition ───────────────────────
+    watched_tids = {x["trans_id"] for x in lines if x["trans_id"]}
+    acc = {}
+    for r in live:
+        tid = str(r.get("trans_id") or "").strip()
+        if tid not in watched_tids:
+            continue
+        if _is_setup_fee(r.get("product_desc"), acfg):
+            continue                    # a set-up fee is not an accessory — the Sales Report's own rule
+        if _is_accessory(str(r.get("department") or "").strip(), r.get("category"),
+                         r.get("product_desc"), acfg):
+            acc[tid] = round(acc.get(tid, 0.0) + safe_float(r.get("ext_price")), 2)
+    for tid in watched_tids:
+        acc.setdefault(tid, 0.0)        # a watched invoice WAS measured; 0.0 here is a measured zero
+
+    # ── the subscriber feed, through the retention report's own loader ───────────────────────────
+    labels = _es_period_labels(lo, hi)
+    snapshots, feed_note = {}, None
+    if lines:
+        try:
+            snapshots = _es_mi_snapshots(org_id, labels, lines)
+        except Exception as e:
+            feed_note = "The subscriber feed could not be read (%s)." % str(e)[:120]
+    loaded = sorted(k for k, v in snapshots.items() if v.get("loaded"))
+    latest = loaded[-1] if loaded else None
+
+    # WHICH snapshot month each line FIRST reads PORTED-OUT in — the third dating basis. Computed here
+    # because only the caller holds every month; the rule itself stays in the pure module.
+    firsts = {}
+    for key in loaded:
+        idx = (snapshots.get(key) or {}).get("index") or {}
+        for x in lines:
+            lk = x["mdn"] or ("s:" + x["serial_1"])
+            if lk in firsts:
+                continue
+            row = (idx.get("mdn") or {}).get(x["mdn"]) or (idx.get("serial") or {}).get(x["serial_1"])
+            if row is not None and _pf.is_ported_out(row.get("subscriber_status")):
+                firsts[lk] = key
+
+    out = _pf.report(lines, snapshots, rules, latest_key=latest, as_of=_date.today().isoformat(),
+                     accessory_by_invoice=acc, first_ported_by_line=firsts)
+    out.update({
+        "window": {"from": lo, "to": hi},
+        "feed_coverage": [{"period": k, "label": labels.get(k), "loaded": v.get("loaded")}
+                          for k, v in sorted(snapshots.items())],
+        "latest_loaded_period": (labels.get(latest) if latest else None),
+        "feed_note": feed_note,
+        "books_to": [],
+    })
+    return out
+
+
 @router.get("/dlar-vs-platform/{period}")
 def get_dlar_vs_platform(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """CARRIER FEED vs THE STORE'S TRANSACTIONS — the per-metric difference, attributed. READ-ONLY.
@@ -17977,8 +18143,10 @@ def save_category_rule(body: SaveCategoryRuleIn, authorization: str = Header(def
         if body.id:
             (client.schema('commcalc').table('installment_category_rule').update(row)
              .eq('id', body.id).eq('org_id', org_id).execute())
+            _invalidate_accessory_config(org_id)    # the device dimension reads these rules (index §6n)
             return {"saved": True, "id": body.id}
         r = client.schema('commcalc').table('installment_category_rule').insert(row).execute()
+        _invalidate_accessory_config(org_id)        # the device dimension reads these rules (index §6n)
         return {"saved": True, "id": (r.data or [{}])[0].get("id")}
     except Exception as e:
         raise HTTPException(500, f"could not save the category rule (is migration 245 applied?): {e}")
@@ -17995,6 +18163,7 @@ def delete_category_rule(rid: str, authorization: str = Header(default=""), org_
          .eq('id', rid).eq('org_id', org_id).execute())
     except Exception as e:
         raise HTTPException(500, f"delete failed: {e}")
+    _invalidate_accessory_config(org_id)            # the device dimension reads these rules (index §6n)
     return {"deleted": True}
 
 
@@ -19188,9 +19357,15 @@ def product_mrc_coverage(period: str = "", org_id: str = ORG_ID):
 # CREATES config — it never touches rep_commissions and never fires a calc; pay changes only on a later
 # owner recalc. Logic lives in template_clone.py; these are the thin, commcalc-mounted endpoints.
 def _require_carrier_template_edit(authorization, org_id):
-    """Importing a carrier template CREATES money-config (carrier + schedules + product_mrc). Gate on the
-    existing per-setting 'commission_plans' permission (Commission Plans & Payout Schedules) — admin by
-    default, grantable via Roles. Structure mirrors _require_perf_review_edit / _can_edit_classification:
+    """Importing a carrier template CREATES money-config (carrier + schedules + product_mrc). Gated by THE
+    'commission_plans' setting gate below."""
+    _require_commission_plans_edit(authorization, org_id, "import a carrier payout template")
+
+
+def _require_commission_plans_edit(authorization, org_id, action="change commission plans"):
+    """THE 'Commission Plans & Payout Schedules' write gate (core SETTING_AREAS key 'commission_plans') —
+    admin by default, grantable via Roles. Used by the carrier-template importer and the single-assignment
+    remover. Structure mirrors _require_perf_review_edit / _can_edit_classification:
     the caller is resolved FOR THE ACTING ORG (`_resolve_caller(sb(), uid, org_id)` — NOT the login's
     default-org membership, so a user who is admin in org A but only a rep in the acting org B is gated by
     B's role), and ONLY the resolution path degrades on error → caller=None → allowed (RBAC off / house
@@ -19207,7 +19382,7 @@ def _require_carrier_template_edit(authorization, org_id):
         caller = None  # resolution failure (no token / rbac off) — degrade per house posture
     if caller is not None and not _can_edit_setting(caller, "commission_plans"):
         raise HTTPException(403, "You need the 'Commission Plans & Payout Schedules' setting permission to "
-                                 "import a carrier payout template.")
+                                 f"{action}.")
 
 
 @router.get("/carrier-template/sources")
@@ -20206,6 +20381,56 @@ def delete_commission_plan(plan_id: str, org_id: str = ORG_ID):
     client = sb()
     client.schema('commcalc').table('commission_plan').delete().eq('org_id', org_id).eq('id', plan_id).execute()
     return {"deleted": plan_id}
+
+
+# ── THE SINGLE-ASSIGNMENT REMOVER (owner 2026-09-28, index §6n / §17) ─────────────────────────────────────
+# Removing ONE assignment used to be possible only through the plan save, which DELETES AND RE-INSERTS every
+# rule / tier / assignment of the plan (new rule ids, and any column the editor does not round-trip is lost).
+# This is the one writer that removes exactly one row: org-scoped, plan-scoped, id-scoped, 404 for anything
+# else, and it never touches a rule, a tier or another assignment. There is no plan-change audit table (the
+# plan save writes none); the request itself is recorded in core.access_log like every request, and the
+# removed row is returned + printed to the server log. Lock: harness_exec_mtd_device_rates_lock.py (it is the
+# only single-assignment writer); proof: harness_plan_assignment_remove.py.
+_UUID_RX = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def _remove_plan_assignment(client, org_id, plan_id, assignment_id):
+    """Delete the ONE commission_plan_assignment row whose id, plan and org all match. Returns the removed row,
+    or None when no such row exists (the caller answers 404). Every filter is on the read AND the delete."""
+    pid, aid = str(plan_id or "").strip(), str(assignment_id or "").strip()
+    if not (_UUID_RX.match(pid) and _UUID_RX.match(aid)):
+        return None
+    tbl = lambda: client.schema("commcalc").table("commission_plan_assignment")  # noqa: E731
+    found = (tbl().select("id,plan_id,scope,scope_value,priority")
+             .eq("org_id", org_id).eq("plan_id", pid).eq("id", aid).limit(2).execute().data) or []
+    if len(found) != 1:
+        return None
+    tbl().delete().eq("org_id", org_id).eq("plan_id", pid).eq("id", aid).execute()
+    left = (tbl().select("id").eq("org_id", org_id).eq("plan_id", pid).eq("id", aid).execute().data) or []
+    if left:
+        raise HTTPException(500, "the assignment was not removed")
+    return found[0]
+
+
+@router.delete("/commission-plans/{plan_id}/assignments/{assignment_id}")
+def delete_commission_plan_assignment(plan_id: str, assignment_id: str,
+                                      authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Remove ONE assignment from ONE plan of THIS org. 404 unless the row belongs to that plan and that org.
+    Gated on the 'Commission Plans & Payout Schedules' setting (`_require_commission_plans_edit`). Moves no
+    money by itself: the next calculation pays by the remaining assignments."""
+    require_org(org_id)
+    _require_commission_plans_edit(authorization, org_id, "remove a plan assignment")
+    try:
+        row = _remove_plan_assignment(sb(), org_id, plan_id, assignment_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"remove assignment failed (is migration 059 applied?): {e}")
+    if row is None:
+        raise HTTPException(404, "assignment not found on this plan for this org")
+    _invalidate_accessory_config(org_id)
+    print(f"INFO commission-plan assignment removed org={org_id} plan={plan_id} row={row}")
+    return {"deleted": row, "plan_id": plan_id}
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -21238,11 +21463,10 @@ def preview_commission_plan(period: str, plan_id: str = "", org_id: str = ORG_ID
 # classifier — Boost / Cricket just relabel; the product (and therefore the architecture) is the same, so
 # one rate map per category serves all tenants. `activation` here is the PURE New count (Tablet / Home
 # Internet / Edge are broken out on their own, matching the Exec MTD row).
-_MTD_ACT_CATEGORIES = ("activation", "port", "byod", "tablet", "home_internet", "edge", "upgrade")
-_MTD_CATEGORY_LABELS = {
-    "activation": "New Activation", "port": "Port", "byod": "BYOD", "tablet": "Tablet",
-    "home_internet": "Home Internet", "edge": "Edge", "upgrade": "Upgrade",
-}
+# THE one list lives in activation_bucketing (index §6n) — these names dereference it, never copy it.
+from app.modules.commcalc import activation_bucketing as _ab_cats   # noqa: E402  (pure, stdlib)
+_MTD_ACT_CATEGORIES = _ab_cats.MTD_CATEGORIES
+_MTD_CATEGORY_LABELS = _ab_cats.MTD_CATEGORY_LABELS
 
 
 def _plan_mtd_rates(plan):
@@ -21376,6 +21600,20 @@ def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", t
             markets.append(sv)
         elif sc == "employee":
             emps_scope.append(sv)
+    # THE NAME BRIDGE REACHES THE EXEC-MTD BASIS (index §6n, found 2026-09-28). An employee-scope
+    # assignment names the ROSTER spelling ('Shweta') while Exec MTD rows carry the POS spelling
+    # ('Shweta Singh'); the rules basis already bridges the two (`_resolve_plan_by_rep` threads
+    # `_rep_canon_map`), this basis filtered on the literal and paid a bridged rep $0. Every POS alias whose
+    # canonical name is assigned joins the scope — the SAME map, never a second one. No employee-scope
+    # assignment (every exec_mtd plan live on 2026-09-28) → untouched.
+    if emps_scope:
+        try:
+            _want_canon = {str(v).strip().upper() for v in emps_scope}
+            for _alias, _canon_nm in (_rep_canon_map(client, org_id) or {}).items():
+                if str(_canon_nm or "").strip().upper() in _want_canon and _alias not in _want_canon:
+                    emps_scope.append(_alias)
+        except Exception:
+            pass
     _t = None
     if today:
         try:
@@ -21465,6 +21703,16 @@ def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", t
         "setup_fee": {"scope": _sf_src_mtd, "settings": _sf_set_mtd, "warnings": _sf_warn_mtd},
         "by_rep": rows, "totals": totals,
     }
+
+
+@router.get("/commission-mtd/categories")
+def commission_mtd_categories():
+    """THE Exec-MTD pay categories, in order, with their labels — what the rate editors render (the plan
+    editor's Executive MTD rates, the Employee Commission Structure's Option 1). One list, read from
+    `activation_bucketing.MTD_CATEGORIES`, so a category added to pay is offered in the editor with no
+    second copy (index §6n). Static config — no org data, no DB read."""
+    return {"categories": [{"key": c, "label": _MTD_CATEGORY_LABELS[c]} for c in _MTD_ACT_CATEGORIES],
+            "device_categories": list(_ab_cats.DEVICE_CATEGORIES)}
 
 
 def _load_plan_or_404(client, org_id, plan_id):
@@ -27368,6 +27616,11 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
     # definition. `_newact` below is its unit set per cell; the Ready App denominator reads the same home.
     _nau = _lc.new_activation_units(rows, line_rules, skip=_line_skip, units=_units)
     _newact_units = _nau['units']
+    # THE DEVICE each counting unit activated (owner 2026-09-28, index §6n) — `line_class.unit_devices`, the
+    # ONE device predicate over the SAME units. {} when the org configured no device words (house), so every
+    # cell below is byte-identical; the device sets only EXTEND a cell, they never move a unit out of the
+    # class sets every other surface reads.
+    _unit_dev = _lc.unit_devices(rows, _units, line_rules)
     agg = {}
     for _ri, r in enumerate(rows):
         # ── THE canonical skip rules — shared by all three (was three slightly different predicates).
@@ -27398,6 +27651,7 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
             a = agg[k] = {'store': store, 'salesperson': rep, 'trans_date': date, 'login': None,
                           '_txn': set(), '_prem': set(), '_byod': set(), '_upg': set(),
                           '_port': set(), '_swap': set(), '_newact': set(), '_billpay': set(),
+                          '_dev_tablet': set(), '_dev_watch': set(),
                           'lines': 0, 'revenue': 0.0, 'gp': 0.0, 'accessory_rev': 0.0, 'setup_fee_rev': 0.0,
                           'box_count': 0,
                           'total_phones': 0, 'bill_qty': 0, 'bill_amt': 0.0, 'activation_fee': 0.0,
@@ -27419,6 +27673,9 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
         # the same predicate says 'port'; only needed when exec_cfg is present (Exec MTD).
         _u = _units[_ri]
         _cls, _uid, _full = _u if _u else (None, None, None)
+        _dv = _unit_dev.get(_uid) if (_uid and _unit_dev) else None
+        if _dv:
+            a['_dev_' + _dv].add(_uid)
         if _cls == 'byod':
             a['_byod'].add(_uid)
         elif _cls == 'upgrade':
@@ -29784,11 +30041,12 @@ def _blank_sales_cell(store, rep, date):
     Activation Details but not in the sales feed, so its activations still show (with zero sales columns)."""
     return {"store": store, "salesperson": rep, "trans_date": date, "login": None,
             "_txn": set(), "_prem": set(), "_byod": set(), "_upg": set(), "_port": set(),
-            "_swap": set(), "_newact": set(), "_billpay": set(), "lines": 0, "revenue": 0.0, "gp": 0.0,
+            "_swap": set(), "_newact": set(), "_billpay": set(), "_dev_tablet": set(), "_dev_watch": set(),
+            "lines": 0, "revenue": 0.0, "gp": 0.0,
             "accessory_rev": 0.0, "setup_fee_rev": 0.0, "box_count": 0, "total_phones": 0,
             "bill_qty": 0, "bill_amt": 0.0, "activation_fee": 0.0, "protect": 0,
             "act_new": 0, "act_port": 0, "act_byod": 0, "act_upg": 0,
-            "act_tablet": 0, "act_home_internet": 0, "act_edge": 0,
+            "act_tablet": 0, "act_home_internet": 0, "act_edge": 0, "act_watch": 0,
             "act_new_activation": 0, "act_swap_excluded": 0, "act_cross_bucket": 0}
 
 
@@ -29810,9 +30068,29 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
         a["act_port"] = len(a["_port"])
         a["act_byod"] = len(a["_byod"])
         a["act_upg"] = len(a["_upg"])
-        # The sales feed does not distinguish tablet / home-internet / edge → 0 (they stay folded inside the
-        # feed's own `new` sense). An INACTIVE basis is therefore byte-identical to before this split.
+        # The sales feed does not distinguish home-internet / edge → 0 (they stay folded inside the feed's
+        # own `new` sense). An INACTIVE basis is therefore byte-identical to before this split.
         a["act_tablet"] = a["act_home_internet"] = a["act_edge"] = 0
+        a["act_watch"] = 0
+        # THE DEVICE SPLIT ON THE SALES BASIS (owner 2026-09-28, index §6n): a unit the org's device words name
+        # (`line_class.unit_devices`, already limited to the classes `devices.applies_to` names) is taken OUT
+        # of the class column it sat in and counted in its device column — one event, one category, one rate.
+        # `act_new` stays FOLDED (it includes the device units, exactly like the Activation-Details basis),
+        # so Total Activation is unchanged and the pure New column is `act_new - tablet - watch - ...`.
+        # No device words (house) → both sets empty → byte-identical. A plan that states the 'folded'
+        # activation basis keeps devices folded here too (it never splits).
+        _dt, _dw = (a.get("_dev_tablet") or set()), (a.get("_dev_watch") or set())
+        if (_dt or _dw) and policy != "folded":
+            _devs = _dt | _dw
+            _prem, _port, _byod, _upg = a["_prem"], a["_port"], a["_byod"], a["_upg"]
+            a["act_port"] = len(_port - _devs)
+            a["act_byod"] = len(_byod - _devs)
+            a["act_upg"] = len(_upg - _devs)
+            # folded New = the non-device new units + every device unit (each counted ONCE, whichever class
+            # set it sat in) — so pure New = act_new - act_tablet - act_watch = the non-device new units
+            a["act_new"] = len((_prem - _port) - _devs) + len(_devs)
+            a["act_tablet"] = len(_dt)
+            a["act_watch"] = len(_dw - _dt)
         # THE OWNER'S DENOMINATOR (ruling 2026-09-27) — new activations excluding upgrade and swap. On the
         # sales basis it is the EXACT unit set `_sales_cell_agg` built from `line_class.new_activation_units`
         # (per-unit exclusion, so a BYOD-Swap invoice leaves the count once, not per line). Nothing is
@@ -29855,6 +30133,7 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
     for a in cells.values():
         a["act_new"] = a["act_port"] = a["act_byod"] = a["act_upg"] = 0   # AD authoritative
         a["act_tablet"] = a["act_home_internet"] = a["act_edge"] = 0
+        a["act_watch"] = 0   # the Activation-Details report names no watch; its devices are its own buckets
         a["act_new_activation"] = a["act_swap_excluded"] = a["act_cross_bucket"] = 0
     for key, ad in ad_cells.items():
         if key not in cells:
@@ -30125,7 +30404,7 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
         # NOTE (n3): by_store dicts also gain a '_name' key (the raw display spelling) set in the loop
         # below — a metric sentinel, NOT a bucket. Any future code iterating these dicts must skip '_name'.
         return {'activation': 0, 'port': 0, 'byod': 0, 'upgrade': 0, 'total_phones': 0,
-                'tablet': 0, 'home_internet': 0, 'edge': 0,
+                'tablet': 0, 'watch': 0, 'home_internet': 0, 'edge': 0,
                 'new_activation': 0, 'swap_excluded': 0, 'cross_bucket': 0,
                 'bill_qty': 0, 'bill_amt': 0.0, 'acc_sales': 0.0, 'setup_fee': 0.0,
                 'activation_fee': 0.0, 'protect': 0}
@@ -30154,6 +30433,7 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
             d['byod'] += a['act_byod']
             d['upgrade'] += a['act_upg']
             d['tablet'] += a['act_tablet']
+            d['watch'] += a.get('act_watch', 0) or 0
             d['home_internet'] += a['act_home_internet']
             d['edge'] += a['act_edge']
             # NEW ACTIVATIONS excluding upgrade and swap (owner ruling 2026-09-27) — the SHARED basis
@@ -30196,12 +30476,12 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
         # Internet + Edge), so `ta` is unchanged; the displayed Activation column is the PURE New count and
         # Tablet / Home Internet / Edge are broken out on their own — matching b2b's Location Sales Report
         # column-for-column (owner 2026-08-27 reconciliation).
-        _tab, _hi, _edge = d['tablet'], d['home_internet'], d['edge']
-        _pure_new = d['activation'] - _tab - _hi - _edge
+        _tab, _hi, _edge, _wat = d['tablet'], d['home_internet'], d['edge'], d.get('watch', 0)
+        _pure_new = d['activation'] - _tab - _hi - _edge - _wat
         ta = d['activation'] + d['port'] + d['byod'] + (0 if _ta_excl_upgrade else d['upgrade'])
         return {label_key: name,
                 'total_activation': ta, 'activation': _pure_new, 'port': d['port'],
-                'byod': d['byod'], 'tablet': _tab, 'home_internet': _hi, 'edge': _edge,
+                'byod': d['byod'], 'tablet': _tab, 'watch': _wat, 'home_internet': _hi, 'edge': _edge,
                 'upgrade': d['upgrade'], 'total_phones': d['total_phones'],
                 # THE OWNER'S DENOMINATOR (ruling 2026-09-27), reported on the report he named it after:
                 # new activations = Total Activation less Upgrade, less the units an exclusion kind took
@@ -30246,7 +30526,7 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
 
     def _totals(rowset, label_key):
         t = {label_key: 'TOTAL'}
-        for k in ('total_activation', 'activation', 'port', 'byod', 'tablet', 'home_internet', 'edge',
+        for k in ('total_activation', 'activation', 'port', 'byod', 'tablet', 'watch', 'home_internet', 'edge',
                   'upgrade', 'total_phones',
                   'trending_box', 'bill_payment_qty', 'amount', 'acc_sales', 'trending_acc_sales',
                   'setup_fee', 'acc_plus_setup', 'trending_acc_plus_setup',

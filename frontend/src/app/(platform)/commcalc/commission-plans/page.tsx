@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
+import { useMtdCategories } from '../_lib/mtdCategories'
 import { api, fmt, apiDownload, apiFetchBase64, ORG_ID, localToday } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
@@ -56,16 +57,6 @@ const lbl: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap
 const th: React.CSSProperties = { textAlign: 'left', padding: '5px 8px', fontSize: 11, color: 'var(--text2)' }
 const td: React.CSSProperties = { padding: '4px 8px', fontSize: 12, borderTop: '1px solid var(--border)' }
 
-// EXECUTIVE MTD basis (an ADDITIONAL way to calculate — sits alongside the rules, changes nothing else).
-// The Exec MTD activation columns are the SAME for every tenant (Boost / Cricket just relabel), so one
-// per-category rate map serves all. `activation` = the pure New count; Tablet/Home Internet/Edge are broken
-// out on their own, matching the Exec MTD row. Upgrade is its own option ($0 by default).
-const MTD_CATS: { key: string; label: string }[] = [
-  { key: 'activation', label: 'New Activation' }, { key: 'port', label: 'Port' },
-  { key: 'byod', label: 'BYOD' }, { key: 'tablet', label: 'Tablet' },
-  { key: 'home_internet', label: 'Home Internet' }, { key: 'edge', label: 'Edge' },
-  { key: 'upgrade', label: 'Upgrade' },
-]
 function planFlatAndAcc(p?: Plan | null): { flat: number; acc: number } {
   let flat = 0, acc = 0
   for (const r of (p?.rules || [])) {
@@ -124,6 +115,8 @@ const UNIT_BASES: { value: string; label: string; help: string }[] = [
 const blankPlan = (): Plan => ({ name: '', carrier_id: '', base_tier_metric: 'none', is_active: true, notes: '', activation_source: 'inherit', rules: [], tiers: [], assignments: [] })
 
 export default function CommissionPlansPage() {
+  // THE Exec-MTD pay categories — the backend's one list (index §6n), never spelled here
+  const MTD_CATS = useMtdCategories()
   // Active-carrier lens: the set-up-fee reference copy names only the active carrier for a dual-carrier
   // tenant (single-carrier tenants keep the original Boost/Total reference text).
   const { activeCarrier, multi } = useActiveCarrier()
@@ -482,6 +475,17 @@ export default function CommissionPlansPage() {
   const updAssign = (i: number, patch: Partial<Assign>) => setDraft(d => d ? { ...d, assignments: (d.assignments || []).map((a, j) => j === i ? { ...a, ...patch } : a) } : d)
   const addAssign = () => setDraft(d => d ? { ...d, assignments: [...(d.assignments || []), { scope: 'default', scope_value: '', priority: 0 }] } : d)
   const delAssign = (i: number) => setDraft(d => d ? { ...d, assignments: (d.assignments || []).filter((_, j) => j !== i) } : d)
+  // Remove ONE saved assignment NOW through the single-assignment remover (index §6n / §17) — only that row;
+  // the plan's rules, tiers and other assignments are not rewritten. Other unsaved edits stay in the editor.
+  async function removeSavedAssign(a: Assign) {
+    if (!draft?.id || !a.id) return
+    if (!confirm(`Remove this ${a.scope} assignment${a.scope_value ? ` (${a.scope_value})` : ' (no value)'} now? It is removed immediately; your other unsaved edits stay in the editor.`)) return
+    try {
+      await api(`/api/v1/commcalc/commission-plans/${draft.id}/assignments/${a.id}`, { method: 'DELETE' })
+      setDraft(d => d ? { ...d, assignments: (d.assignments || []).filter(x => x.id !== a.id) } : d)
+      setMsg('✅ Assignment removed. Recalculate the period(s) concerned for pay to reflect it.'); load()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
 
   async function save() {
     if (!draft) return
@@ -504,7 +508,10 @@ export default function CommissionPlansPage() {
         // mig 298 — persist the Exec-MTD basis + the per-category rate editor values (the backend ignores
         // these keys entirely when the migration hasn't run). Always sent so a change is saved.
         commission_basis: draft.commission_basis || 'rules',
+        // Keys this editor does not show (e.g. `activation_basis`, or a category before the list loads) are
+        // carried through from the saved plan, never dropped.
         mtd_rates: {
+          ...(draft.mtd_rates && typeof draft.mtd_rates === 'object' ? draft.mtd_rates : {}),
           ...Object.fromEntries(MTD_CATS.map(c => [c.key, Number(mtdRates[c.key]) || 0])),
           accessory_pct: Number(mtdAccPct) || 0,
         },
@@ -605,7 +612,7 @@ export default function CommissionPlansPage() {
       stored && c.key in stored ? Number(stored[c.key]) || 0 : (c.key === 'upgrade' ? 0 : flat)])))
     setMtdAccPct(stored && 'accessory_pct' in stored ? Number(stored.accessory_pct) || 0 : acc)
     setMtd(null)
-  }, [draft?.id])   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [draft?.id, MTD_CATS.length])   // eslint-disable-line react-hooks/exhaustive-deps — re-seed once the category list arrives
 
   // Executive-MTD commission: reads the Exec MTD per-employee numbers over this plan's stores and applies
   // the per-category rates. Needs a SAVED plan (its assignments define the scope). Read-only; changes nothing.
@@ -1042,7 +1049,12 @@ export default function CommissionPlansPage() {
                       ) : <span style={{ fontSize: 12, color: 'var(--text3)' }}>all reps (fallback)</span>}
                     </td>
                     <td style={td}><input style={{ ...sel, width: 70 }} type="number" value={a.priority || 0} onChange={e => updAssign(i, { priority: Number(e.target.value) })} /></td>
-                    <td style={td}><button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }} onClick={() => delAssign(i)}>✕</button></td>
+                    <td style={td}>
+                      <button title="Remove from this draft (applies when you save the plan)" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }} onClick={() => delAssign(i)}>✕</button>
+                      {!!a.id && !!draft.id && (
+                        <button className="btn btn-secondary" title="Remove this saved assignment now, without re-saving the plan" style={{ fontSize: 11, padding: '2px 7px', marginLeft: 4 }} onClick={() => removeSavedAssign(a)}>Remove now</button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

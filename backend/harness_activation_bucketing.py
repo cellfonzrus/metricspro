@@ -213,8 +213,72 @@ check("F2: the resolver loads per-org rules once and passes them to every bucket
       "_activation_details_rules(client, org_id)" in _resolver_src
       and "_activation_details_bucket(ct, sp, prod, cat, _ad_rules)" in _resolver_src)
 _rules_src = _fn_src("_activation_details_rules") or ""
-check("F3: the rules loader is org-scoped and resolves through the house defaults",
-      '.eq("org_id", org_id)' in _rules_src and "resolve_rules" in _rules_src)
+
+
+def _calls_in(src):
+    """The bare function names called inside one function's source — how F3 follows delegation."""
+    try:
+        node = ast.parse(src)
+    except SyntaxError:
+        return []
+    out = []
+    for n in ast.walk(node):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+            out.append(n.func.id)
+    return out
+
+
+def _org_scoped_through(entry, depth=4, src_of=None):
+    """Does `entry` reach an org-scoped read — in its own body, or through a router function it calls?
+
+    F3 USED TO GREP THE ENTRY POINT'S OWN SOURCE for `.eq("org_id", org_id)`, and #279 broke it by doing
+    the right thing: `_activation_details_rules` stopped issuing its own query (a second read of the same
+    column was the duplicate the index forbids, §4b.1) and now delegates to `_accessory_config`, where the
+    scoping lives as `lambda q: q.eq("org_id", org_id)`. The scoping never weakened — it moved, and became
+    shared. So the guard follows the delegation instead of pinning a spelling one legitimate refactor can
+    move. What is asserted is the FACT: the rules this loader returns came from a read filtered on THIS
+    org. Remove the filter anywhere in the chain and this still goes red (see the negative control below).
+    """
+    src_of = src_of or _fn_src
+    seen, queue = set(), [(entry, 0)]
+    while queue:
+        name, d = queue.pop(0)
+        if name in seen or d > depth:
+            continue
+        seen.add(name)
+        src = src_of(name) or ""
+        if 'eq("org_id", org_id)' in src or "eq('org_id', org_id)" in src:
+            return name
+        if d < depth:
+            queue.extend((c, d + 1) for c in _calls_in(src) if c not in seen)
+    return None
+
+
+_f3_via = _org_scoped_through("_activation_details_rules")
+check("F3: the rules loader reaches ORG-SCOPED config and resolves through the house defaults",
+      bool(_f3_via) and "_accessory_config(client, org_id)" in _rules_src
+      and "resolve_rules" in _rules_src)
+check("F3b: and the scoping is reached by DELEGATION, not re-implemented in the loader  "
+      "(#279 moved it to _accessory_config; naming where it lives keeps the guard honest)",
+      _f3_via, "_accessory_config_uncached")
+
+# ARMED — the re-expression must still go RED when the scoping is genuinely GONE, not merely moved.
+# Without these three, "follow the delegation" would be indistinguishable from "stop checking".
+_FAKE_SCOPED = {
+    "_activation_details_rules": 'raw = _accessory_config(client, org_id)\nreturn resolve_rules(raw)',
+    "_accessory_config": "return _accessory_config_uncached(client, org_id)",
+    "_accessory_config_uncached": 'q.eq("org_id", org_id)',
+}
+_FAKE_UNSCOPED = dict(_FAKE_SCOPED, _accessory_config_uncached="return client.table('x').execute()")
+_FAKE_DEEPER = dict(_FAKE_SCOPED)
+_FAKE_DEEPER["_accessory_config"] = "return _layer_a(client, org_id)"
+_FAKE_DEEPER["_layer_a"] = "return _accessory_config_uncached(client, org_id)"
+check("F3 control: the SAME shape with the org filter removed → RED",
+      _org_scoped_through("_activation_details_rules", src_of=_FAKE_UNSCOPED.get), None)
+check("F3 control: the filter one delegation DEEPER is still found  ← a future refactor may move it again",
+      _org_scoped_through("_activation_details_rules", src_of=_FAKE_DEEPER.get), "_accessory_config_uncached")
+check("F3 control: a loader that calls NOTHING and scopes nothing → RED",
+      _org_scoped_through("_activation_details_rules", src_of={"_activation_details_rules": "return {}"}.get), None)
 _adex = {}
 for n in ast.walk(_tree):
     if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "_AD_EXEC_KEY" for t in n.targets):

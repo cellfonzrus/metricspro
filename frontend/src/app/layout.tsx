@@ -3,6 +3,7 @@ import { Inter } from 'next/font/google'
 import './globals.css'
 import { AuthProvider } from '@/lib/auth-context'
 import UnsafeLinkGuard from '@/components/UnsafeLinkGuard'
+import { siteUrl } from '@/lib/apiBase'
 
 // Load Inter for real (2026-08-29 design polish). The stylesheet has named 'Inter' as the UI face since
 // day one, but nothing ever LOADED it — every screen silently fell back to system-ui. next/font self-hosts
@@ -14,7 +15,9 @@ const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'sw
 // router wires them automatically — they are the same Fold mark the marketing site serves, copied
 // rather than re-drawn so the two can never diverge. metadataBase makes the og:image absolute,
 // which is what link previews require; without it Next emits a relative path and previews go blank.
-const SITE = process.env.NEXT_PUBLIC_SITE_URL || 'https://metricspro.tech'
+// The customer-facing site origin — ONE home (lib/apiBase.ts, index §40), shared with the canonical-host
+// redirect in next.config.ts so the two can never disagree.
+const SITE = siteUrl()
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE),

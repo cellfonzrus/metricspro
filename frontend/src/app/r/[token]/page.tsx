@@ -7,8 +7,8 @@
 // outside the (platform) RBAC group on purpose.
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
+import { apiUrl } from '@/lib/apiBase'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 // The six product 'bubbles', verbatim from the owner directive. The server re-validates against its own
 // allowed set (referral_core.ALLOWED_PRODUCTS), so this list is a convenience, not the source of truth.
 const PRODUCTS = ['Phone', 'Activations', 'Tablet', 'BYOD', 'Home Internet', 'Accessories']
@@ -32,7 +32,7 @@ export default function RedeemPage() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(`${API_URL}/api/v1/referral/redeem/${token}`)
+        const res = await fetch(apiUrl(`/api/v1/referral/redeem/${token}`))
         if (!res.ok) { setState('invalid'); return }
         const d = await res.json()
         setAllowed(d.allowed_products?.length ? d.allowed_products : PRODUCTS)
@@ -47,7 +47,7 @@ export default function RedeemPage() {
   async function submit() {
     setBusy(true); setErr('')
     try {
-      const res = await fetch(`${API_URL}/api/v1/referral/redeem/${token}`, {
+      const res = await fetch(apiUrl(`/api/v1/referral/redeem/${token}`), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ customer_name: name, customer_phone: phone, products }),
       })

@@ -209,6 +209,21 @@ def mixed_bucket_transactions(cells, per_rep=False):
 #
 # PURE, stdlib-only. No org, market, carrier or tenant name appears here; the policy is read from
 # per-plan config (`commission_plan.mtd_rates.activation_basis`, already JSONB — no migration).
+# ── THE EXEC-MTD PAY CATEGORIES — ONE list (owner 2026-09-28, index §6n) ──────────────────────────
+# The disjoint Executive-MTD activation categories a plan prices (`commission_plan.mtd_rates`), in display
+# order. THE home: the pay path (`router._commission_from_mtd_rows`), the Exec MTD rows, the preview's
+# `categories` and the rate editors (`GET /commcalc/commission-mtd/categories` → `_lib/mtdCategories.ts`)
+# all read THIS; `harness_exec_mtd_device_rates_lock.py` fails the build on a second copy.
+#   tablet / watch — the DEVICE categories (`line_class.pay_category`): an activation event that activated
+#   a tablet or a watch / connected device is counted — and paid — in its device category and in no other.
+MTD_CATEGORIES = ("activation", "port", "byod", "tablet", "watch", "home_internet", "edge", "upgrade")
+MTD_CATEGORY_LABELS = {
+    "activation": "New Activation", "port": "Port", "byod": "BYOD", "tablet": "Tablet",
+    "watch": "Watch / connected device", "home_internet": "Home Internet", "edge": "Edge", "upgrade": "Upgrade",
+}
+# the device categories and the Exec-MTD count field each is summed from (router._apply_activation_basis)
+DEVICE_CATEGORIES = ("tablet", "watch")
+
 BASIS_POLICIES = ("auto", "require_split", "folded")
 BASIS_POLICY_DEFAULT = "auto"
 # The categories that EXIST ONLY on the Activation-Details basis. On the sales aggregation they are not

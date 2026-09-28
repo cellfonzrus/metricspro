@@ -1415,8 +1415,11 @@ def _es_mi_snapshots(org_id: str, period_labels: dict, lines):
     sc = get_supabase().schema("commcalc")
     mdns = sorted({str(x.get("mdn") or "") for x in (lines or []) if x.get("mdn")})
     serials = sorted({str(x.get("serial_1") or "") for x in (lines or []) if x.get("serial_1")})
+    # `residual_transfer_out_date` is the residual leg's own out-date — the SAME port-out seen from the
+    # money side, and the second exact dating basis the port-out fraud report falls back to when
+    # `mi_deactivation_date` is blank (index §19.32). Additive: the retention report reads neither.
     cols = ("phone_number,subscriber_id,subscriber_status,mi_activation_date,"
-            "mi_deactivation_date,device_serial")
+            "mi_deactivation_date,residual_transfer_out_date,device_serial")
     out = {}
     for key, label in sorted(period_labels.items()):
         variants = _pvariants(label)

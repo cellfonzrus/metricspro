@@ -1,4 +1,4 @@
-"""Lock: an operator-typed service address has ONE normaliser and every caller goes through it (index §16).
+"""Lock: an operator-typed service address has ONE normaliser and every caller goes through it (index §41).
 
 Regression (live 2026-09-28): BROWSER_SERVICE_URL was pasted without "https://", so every browser endpoint proxied to
 the sweeps worker failed with "Request URL is missing an 'http://' or 'https://' protocol" (surfaced by Supply →
