@@ -914,6 +914,12 @@ def _store_day_grain(client, org_id, spec, key, records, target):
     out = {"report": key, "label": spec["label"], "grain": "day",
            "period": ", ".join(sorted({_period_of_day(d)[0] for d in by_day})),
            "days": days, "rows": saved_total, "mode": "replace_by_day"}
+    # DATA LANDED (index §6l) — the ONE post-landing hook, for every month a written day belongs to. A table the
+    # calculation does not read answers not_a_calc_input; nothing is recalculated inline here.
+    from app.modules.commcalc import auto_calc as _auto_calc
+    out["auto_calc"] = _auto_calc.landed(client, org_id, table=spec["table"],
+                                         periods=[_period_of_day(d["day"])[0] for d in days if d.get("rows")],
+                                         source="epay_sweep", filename=spec["label"], rows=saved_total)
     if skipped:
         out["skipped_guard"] = skipped
     return out
@@ -1006,8 +1012,12 @@ def _process_report(client, org_id, page, key, xlsx_path, target=None, report_id
             "filename": "epay auto-sweep", "rows_saved": saved}).execute()
     except Exception:
         pass
+    # DATA LANDED (index §6l) — the ONE post-landing hook: queues this period's Run Calculation per the org's config.
+    from app.modules.commcalc import auto_calc as _auto_calc
     return {"report": key, "label": spec["label"], "period": period, "rows": saved,
-            "mode": "replace"}
+            "mode": "replace",
+            "auto_calc": _auto_calc.landed(client, org_id, table=spec["table"], periods=[period],
+                                           source="epay_sweep", filename=spec["label"], rows=saved)}
 
 
 def _recent_months(n):

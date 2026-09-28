@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 # THE one home of "which columns must carry a value" (index §19.18 arrival/content, §19.28 completeness).
 from app.modules.commcalc import data_lineage_registry as _lineage
+from app.modules.commcalc import auto_calc as _auto_calc   # the ONE post-landing hook (index §6l)
 
 import requests
 
@@ -543,6 +544,16 @@ def run_dlar_sweep(client, org_id, user, pw, reports=None):
             client.schema("commcalc").table(tbl).insert(rows_out[i:i + 500]).execute()
         written[tbl] = len(rows_out)
 
+    # DATA LANDED (index §6l) — the ONE post-landing hook, per grain that was actually WRITTEN (a grain the
+    # partial-collapse guard refused changed nothing, so it queues nothing). Replaces the inline
+    # `_run_calculation` the router's `_do_dlar_sweep` used to make on every run; the two grains of one pull
+    # coalesce into ONE queued calculation of the period.
+    auto_calc = None
+    for tbl in ("raw_dlar_store", "raw_dlar_rep"):
+        if written.get(tbl):
+            auto_calc = _auto_calc.landed(client, org_id, table=tbl, periods=[period], source="dlar_sweep",
+                                          rows=written[tbl])
+
     # WHAT WAS WRITTEN, NOT WHAT WAS PULLED (the §19.21 class, on the one path it survived on). The old
     # summary reported `len(store_rows)` / `len(rep_rows)` — the PULL — so a run whose rep table was
     # refused by the guard still read "OK — 28 stores, 45 reps" while writing zero rep rows. That is how
@@ -559,4 +570,5 @@ def run_dlar_sweep(client, org_id, user, pw, reports=None):
             "reports_refused": [{"report": k, "reason": r} for k, r in report_refused] or None,
             # kept for compatibility with the status line: these are the PULL counts it has always shown
             "stores": len(store_rows), "reps": len(rep_rows),
-            "skipped_guard": skipped or None}
+            "skipped_guard": skipped or None,
+            "auto_calc": auto_calc or {"queued": False, "reason": "nothing_landed"}}

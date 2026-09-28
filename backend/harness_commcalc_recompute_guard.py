@@ -134,11 +134,21 @@ for root, _d, files in os.walk(os.path.join(HERE, "app")):
                 app_hits.append(f"{os.path.relpath(p, HERE)}:{t[:m.start()].count(chr(10)) + 1}")
 ck("no `await _run_calculation` / `asyncio.run(_run_calculation)` left in backend/app", not app_hits,
    ";".join(app_hits))
-ck("the DLAR sweep calls it directly (it is already a sync threadpool worker)",
-   "_cres = _run_calculation(res['period'], org_id)" in branch_src)
-ck("the EMAIL sweep (a real coroutine) sends it to the threadpool instead of blocking the loop",
-   "await _in_pool(_run_calculation, _ftp_current_period(), org_id)" in branch_src
-   and "from starlette.concurrency import run_in_threadpool as _in_pool" in branch_src)
+# SUPERSEDED 2026-09-28 (index §6l, owner: "when sept is uploaded the system should calculate automatically").
+# These two checks pinned the DLAR sweep's inline `_run_calculation(...)` and the email sweep's
+# `await _in_pool(_run_calculation, …)`. Both inline triggers are retired: every lander now calls ONE hook
+# (`auto_calc.landed`) and ONE runner starts the calculation — `auto_calc._default_runner`, a plain call made
+# from the poller's own daemon thread (never the event loop), with no guard token, so it claims its own slot.
+# `harness_auto_calc_lock.py` fails the build on any other `_run_calculation` caller; the guarantees these checks
+# existed for — off the loop, the internal caller claims for itself, a skip is reported — are pinned here:
+_AC_SRC = open(os.path.join(HERE, "app", "modules", "commcalc", "auto_calc.py"), encoding="utf-8").read()
+ck("the ONE internal caller (the landing hook's runner) calls it directly, with no token (it claims its own slot)",
+   "    return _run_calculation(period, org_id)\n" in fn_source(_AC_SRC, "_default_runner"))
+ck("…from the poller's daemon thread — never awaited, never on the event loop",
+   "threading.Thread(target=_poll_loop" in _AC_SRC and "await" not in _AC_SRC)
+ck("the retired inline triggers are gone from the router (DLAR sweep, email-sweep promotion)",
+   "_cres = _run_calculation(res['period'], org_id)" not in branch_src
+   and "await _in_pool(_run_calculation" not in branch_src)
 
 # ── LIVE NEGATIVE CONTROL — the freeze is real, and `def` removes it ─────────────────────────────
 # A REAL uvicorn server (one worker, one event loop — production's shape), not a TestClient: the point
@@ -750,8 +760,12 @@ try:
 finally:
     R._calc_guard_acquire = orig_acq
     R.sb = orig_sb
-ck("the DLAR sweep reports the skip honestly instead of claiming it recalculated",
-   "recalc skipped for" in branch_src and "_cres.get('skipped')" in branch_src)
+# SUPERSEDED 2026-09-28 (index §6l): the DLAR sweep no longer recalculates inline, so its status line reports what
+# the landing hook did (`auto_calc.phrase`: "auto-calculation queued for …", never "recalculated"), and a skipped
+# run is recorded by the hook itself as 'busy' and re-queued (proved in harness_auto_calc_on_landing.py §F6/F7).
+ck("the landing hook reports a skip honestly ('busy', re-queued) instead of claiming it recalculated",
+   'if r.get("skipped") == "already_running":' in _AC_SRC and 'return "busy"' in _AC_SRC
+   and "_auto_calc.phrase(res.get('auto_calc'))" in branch_src)
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

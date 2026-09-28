@@ -453,6 +453,25 @@ def _doc_expiry_cron_startup():
 
 
 @app.on_event("startup")
+def _auto_calc_poller_startup():
+    """Start this process's AUTO-CALCULATION poller (owner 2026-09-28: "when sept is uploaded the system should
+    calculate automatically without manual intervention"; index §6l).
+
+    Every lander calls `auto_calc.landed(...)`, which only QUEUES a request per (org, month) — the upload never
+    waits for a calculation. This daemon thread claims each request once that month's uploads have been quiet
+    for the org's debounce window and runs the standard Run Calculation. Started on EVERY boot, so a request
+    queued before a deploy/restart is picked up by the next process; the claim is one conditional UPDATE, so
+    with several workers exactly one runs it. Best-effort: a failure to start logs and never blocks boot (the
+    requests stay queued and the Run Calculation button still works). AUTO_CALC_POLLER=0 disables it."""
+    try:
+        from app.modules.commcalc.auto_calc import start_poller
+        print(f"[auto-calc-poller] {start_poller()}", flush=True)
+    except Exception as e:
+        print(f"WARN [auto-calc-poller] not started (queued auto-calculations wait for the next boot): {e}",
+              flush=True)
+
+
+@app.on_event("startup")
 async def _usage_flusher_startup():
     """Start the per-module usage flusher (owner 2026-09-05, migs 974/975).
 
