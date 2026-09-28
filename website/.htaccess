@@ -74,7 +74,7 @@
   # Content-Security-Policy. This site loads: its own CSS/JS, the Google Fonts stylesheet and font
   # files, and one JSON request to the platform API. If you change apiBase in assets/config.js,
   # change the connect-src host here to match, or the price list will be blocked.
-  Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://metricspro-production.up.railway.app; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+  Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://api.metricspro.tech; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
 </IfModule>
 
 # ── Caching ────────────────────────────────────────────────────────────────────────────────────

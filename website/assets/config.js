@@ -9,8 +9,8 @@ window.MP_CONFIG = {
   // /api/v1/billing/public-pricing — to show the prices you publish in Admin → Pricing & Free Trial.
   // Leave it blank ("") to skip the call entirely and show the built-in "priced against your
   // operation" card instead.
-  apiBase: 'https://metricspro-production.up.railway.app',
+  apiBase: 'https://api.metricspro.tech',
 
   // Where the platform itself lives — the target of every "Sign in" / "Start free trial" link.
-  appUrl: 'https://metricspro-five.vercel.app',
+  appUrl: 'https://app.metricspro.tech',
 }
