@@ -470,15 +470,19 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None,
             imp = _impersonation.session_brief(client, _impersonation.current().get("session_id"))
     except Exception:
         imp = {"active": True}
-    # WHO THIS VIEWER IS TO A PAYOUT SURFACE (index §6j): the audience the server will serve them and the
-    # manager-only pages refused to them — from THE registry (`payout_audience.MANAGER_ONLY_SURFACES`) through
-    # THE self-scope answer (`storeops.role_is_self_scoped`), so the nav hides exactly what the server refuses.
-    # Copied into a new dict (the roles row is untouched). Best-effort: a failure leaves it off (nothing hidden;
-    # the server still refuses).
+    # WHO THIS VIEWER IS TO A PAYOUT SURFACE (index §6j, §6l): the audience the server will serve them, whether they
+    # hold THE carrier permission (`payout_audience.carrier_view_allowed` — the same function the server's refusal
+    # asks, over the same role permissions) and the carrier pages refused to them — from THE registry
+    # (`payout_audience.MANAGER_ONLY_SURFACES`) through THE self-scope answer (`storeops.role_is_self_scoped`), so
+    # the nav hides exactly what the server refuses. Copied into a new dict (the roles row is untouched).
+    # Best-effort: a failure leaves it off (nothing hidden; the server still refuses).
     try:
         from app.modules.commcalc import payout_audience as _pa
         from app.modules.storeops.router import role_is_self_scoped as _self_scoped
-        perms = {**perms, "payout": _pa.viewer_payload(_self_scoped(org_id, u.get("role")))}
+        _is_self = _self_scoped(org_id, u.get("role"))
+        _carrier = _pa.carrier_view_allowed({"super_admin": u.get("super_admin"), "role": u.get("role"),
+                                             "perms": perms}, caller_is_self=_is_self)
+        perms = {**perms, "payout": _pa.viewer_payload(_is_self, _carrier)}
     except Exception:
         pass
     return {"provisioned": True, "user": u, "permissions": perms,
