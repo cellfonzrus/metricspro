@@ -658,6 +658,23 @@ jobs:
         shell: bash
         run: python3 harness_setup_documents.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
 
+  # THE BASE-URL LOCK (index §41) drives the REAL browser_service_url(), the REAL proxy handler in app.main and the REAL
+  # Settings, so it needs the backend's dependencies. It fails the build if an operator-typed service address stops going
+  # through the one normaliser (app/core/base_url.py) or a second reader of BROWSER_SERVICE_URL appears. DB-free.
+  base-url-proof:
+    name: Service address lock (DB-free, the real functions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the base-URL lock (an address pasted without https:// still works; one reader of BROWSER_SERVICE_URL; every *_URL setting normalised)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_base_url.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
+
   # THE INVENTORY-INTEGRITY PROOF (index §11b) drives the REAL engine, landing guard, status writer and /pos endpoints over
   # the in-memory client (harness_intake_fakes) with the anonymised 383-unit regression fixture — it imports the app, so it
   # runs in its own job with the backend's dependencies installed, like the customer-master proof. DB-free.

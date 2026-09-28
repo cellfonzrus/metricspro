@@ -31,6 +31,8 @@ proxies (its gate passes). The standard login+verify flow keeps its state in the
 """
 import os
 
+from app.core.base_url import base_url
+
 # One message, used by both the HTTP (503) and the plain-exception variants.
 BLOCKED_MESSAGE = (
     "Browser/portal sweeps do not run on the user-facing API service "
@@ -48,8 +50,10 @@ class BrowserWorkProxy(Exception):
 
 
 def browser_service_url() -> str:
-    """The sweeps worker's base URL for proxying browser endpoints ("" when unset)."""
-    return os.environ.get("BROWSER_SERVICE_URL", "").strip().rstrip("/")
+    """The sweeps worker's base URL for proxying browser endpoints ("" when unset). THE one reader of
+    BROWSER_SERVICE_URL (harness_base_url.py locks it) — normalised by base_url(), so an address pasted
+    without "https://" works instead of every proxied request failing."""
+    return base_url(os.environ.get("BROWSER_SERVICE_URL", ""))
 
 
 def service_role() -> str:

@@ -1,5 +1,7 @@
 from pydantic_settings import BaseSettings
 
+from app.core.base_url import base_url
+
 class Settings(BaseSettings):
     SUPABASE_URL: str = "https://etxdalernqqtwjcrtcuj.supabase.co"
     SUPABASE_KEY: str = ""
@@ -131,6 +133,15 @@ class Settings(BaseSettings):
     # unrecoverable — store it in a secrets manager and back it up.
     FIELD_ENCRYPTION_KEY: str = ""
     FIELD_ENCRYPTION_KEYS: str = ""
+
+    # Every *_URL setting is an operator-typed address: normalised in ONE place (app/core/base_url.py — scheme added
+    # when pasted without one, trailing slash dropped). By name, so a new *_URL field is covered without a list to
+    # maintain; harness_base_url.py proves it. (A pydantic hook with no pydantic import: the stdlib harnesses stub
+    # pydantic_settings and never construct Settings.)
+    def model_post_init(self, _context):
+        for name in type(self).model_fields:
+            if name.endswith("_URL"):
+                setattr(self, name, base_url(getattr(self, name)))
 
     class Config:
         env_file = ".env"
