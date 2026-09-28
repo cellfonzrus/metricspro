@@ -130,8 +130,13 @@ export function absoluteApiUrl(path: string, cls?: RouteClass): string {
 /** The rewrites next.config.ts installs: every BACKEND_PATH_PREFIXES entry → the backend origin. */
 export function apiRewrites(env: ApiEnv = API_ENV): { source: string; destination: string }[] {
   const origin = backendOrigin(env)
-  // `/:path*` is zero-or-more segments, so '/health' itself matches as well as anything under it.
-  return BACKEND_PATH_PREFIXES.map(prefix => ({
-    source: `${prefix}/:path*`, destination: `${origin}${prefix}/:path*`,
-  }))
+  // TWO rules per prefix: the bare prefix EXACTLY, then `/:path+` (one-or-more segments) for anything
+  // under it. Never `/:path*`: with zero segments the platform's edge proxy forwards `${prefix}/` with a
+  // trailing slash (live 2026-09-28: the site's /health reached the backend as /health/, which is not a
+  // public route → 401, so the portal's API probe read "server down"). Next's local matcher drops the
+  // empty segment, which is why only the live proxy showed it. Locked by prove_one_domain.mjs (E).
+  return BACKEND_PATH_PREFIXES.flatMap(prefix => [
+    { source: prefix, destination: `${origin}${prefix}` },
+    { source: `${prefix}/:path+`, destination: `${origin}${prefix}/:path+` },
+  ])
 }

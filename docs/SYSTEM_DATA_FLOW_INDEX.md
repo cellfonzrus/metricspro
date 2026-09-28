@@ -13583,8 +13583,12 @@ CSP, one place to change where the backend is, and a proxy seam. What protects t
 
   | source | destination |
   |---|---|
-  | `/api/v1/:path*` | `${BACKEND_ORIGIN or NEXT_PUBLIC_API_URL or http://localhost:8000}/api/v1/:path*` |
-  | `/health/:path*` (also matches `/health`) | `${same origin}/health/:path*` |
+  | `/api/v1` (exact) · `/api/v1/:path+` | `${BACKEND_ORIGIN or NEXT_PUBLIC_API_URL or http://localhost:8000}/api/v1` · `…/api/v1/:path+` |
+  | `/health` (exact) · `/health/:path+` | `${same origin}/health` · `…/health/:path+` |
+
+  **Never `/:path*`** (fixed 2026-09-28, live): with zero segments the platform's edge proxy forwarded `/health` as
+  `/health/` — not a public backend route → 401, so the portal's API probe read "server down". Next's own matcher drops
+  the empty segment, so only the live proxy showed it. `prove_one_domain.mjs` (E) fails on any zero-or-more parameter.
 
   Those are the only backend path prefixes the frontend uses (`BACKEND_PATH_PREFIXES`). The portal's "is the API up"
   probe used to fetch the backend's `/` — same-origin that would be the app's own home page — so it now probes
