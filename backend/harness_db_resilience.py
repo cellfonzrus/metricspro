@@ -924,7 +924,9 @@ _all_routes = _flatten_routes(real_app.routes)
 #     1689  + GET /commcalc/commission-mtd/categories (the ONE Exec-MTD category list the rate editors read, index §6n)
 #     1690  + DELETE /commcalc/commission-plans/{plan_id}/assignments/{assignment_id} (the single-assignment remover,
 #             index §6n / §17)
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1690"))
+#     1691  + GET /commcalc/portout-fraud (#317, the daily port-out fraud report — merged beside #318, whose pin
+#           was taken on a tree without it; main read 1691 against a pin of 1690 until this re-pin).
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1691"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
