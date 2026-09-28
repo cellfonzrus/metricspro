@@ -10,7 +10,9 @@ from app.core.config import settings
 from app.modules.notify.channels import email_resend, whatsapp_meta
 
 FROM_NAME = "MetricsPro"
-_APP_URL = (settings.APP_PUBLIC_URL or "https://metricspro-five.vercel.app").rstrip("/")
+# The app's customer-facing origin is ONE setting (settings.APP_PUBLIC_URL, index §40) — dereferenced,
+# never re-spelled here (this line used to carry its own copy of the platform hostname as a fallback).
+_APP_URL = (settings.APP_PUBLIC_URL or "").rstrip("/")
 
 
 def channels_status() -> dict:

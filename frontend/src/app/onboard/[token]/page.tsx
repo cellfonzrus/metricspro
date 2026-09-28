@@ -3,13 +3,13 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import OnboardSignModal from '@/components/OnboardSignModal'
 import EntityPicker, { US_STATES } from '@/components/EntityPicker'
+import { apiUrl } from '@/lib/apiBase'
 
 // PUBLIC onboarding portal — reached by scanning the QR / clicking the emailed link HR generated. NO
 // login: the opaque token in the URL + a date-of-birth / last-4-SSN gate are the only credentials, so a
 // pre-start employee can read + fill + upload their own forms before they have an account. Talks ONLY to
 // the token-guarded /hr/public/onboarding endpoints. Lives outside the (platform) RBAC group on purpose.
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 const card: React.CSSProperties = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 20, maxWidth: 560, margin: '0 auto' }
 const inp: React.CSSProperties = { padding: '10px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 15, width: '100%', boxSizing: 'border-box' }
 const btnP: React.CSSProperties = { padding: '10px 16px', borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer' }
@@ -63,7 +63,7 @@ export default function PublicOnboardPage() {
   const [routingBusy, setRoutingBusy] = useState(false)
 
   useEffect(() => {
-    fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}`)
+    fetch(apiUrl(`/api/v1/hr/public/onboarding/${token}`))
       .then(r => r.ok ? r.json() : r.json().then(j => Promise.reject(j)))
       // The response is not read: date of birth is the only identity gate (mig 909 removed the
       // last-4-SSN alternative). The call still runs because its REJECTION is what tells the
@@ -86,7 +86,7 @@ export default function PublicOnboardPage() {
     if (digits.length !== 9) return
     setRoutingBusy(true)
     try {
-      const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}/routing-lookup?routing=${digits}&value=${encodeURIComponent(value)}`)
+      const r = await fetch(apiUrl(`/api/v1/hr/public/onboarding/${token}/routing-lookup?routing=${digits}&value=${encodeURIComponent(value)}`))
       if (r.ok) {
         const d = await r.json()
         setRoutingInfo(d)
@@ -98,7 +98,7 @@ export default function PublicOnboardPage() {
   async function loadChecklist() {
     setErr(''); setBusy(true)
     try {
-      const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}`, {
+      const r = await fetch(apiUrl(`/api/v1/hr/public/onboarding/${token}`), {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value }) })
       const d = await r.json()
       if (!r.ok) throw new Error(d?.detail || 'That didn’t match. Please try again.')
@@ -109,7 +109,7 @@ export default function PublicOnboardPage() {
   async function saveState(st: string) {
     setBusy(true); setNote(''); setNoteKind('ok')
     try {
-      const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}/state`, {
+      const r = await fetch(apiUrl(`/api/v1/hr/public/onboarding/${token}/state`), {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, work_state: st }) })
       if (!r.ok) throw new Error((await r.json())?.detail || 'Could not save')
       await loadChecklist()
@@ -120,7 +120,7 @@ export default function PublicOnboardPage() {
     setBusy(true); setNote(''); setNoteKind('ok')
     try {
       const dd = ddInitials.trim() ? { dd_disclaimer_initials: ddInitials.trim() } : {}
-      const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}/intake`, {
+      const r = await fetch(apiUrl(`/api/v1/hr/public/onboarding/${token}/intake`), {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, ...vals, ...dd }) })
       const d = await r.json()
       if (!r.ok) throw new Error(typeof d?.detail === 'string' ? d.detail : 'Could not save your information')
@@ -135,7 +135,7 @@ export default function PublicOnboardPage() {
   }
   async function signOnline(payload: { form_data: Record<string, string>; signature: string; signed_name: string }) {
     if (!signing) return
-    const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}/sign`, {
+    const r = await fetch(apiUrl(`/api/v1/hr/public/onboarding/${token}/sign`), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ value, task_id: signing.id, ...payload }) })
     const d = await r.json()
@@ -150,7 +150,7 @@ export default function PublicOnboardPage() {
     setNote(''); setNoteKind('ok'); setBusy(true)
     try {
       const fd = new FormData(); fd.append('value', value); fd.append('task_id', t.id); fd.append('file', file)
-      const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}/upload`, { method: 'POST', body: fd })
+      const r = await fetch(apiUrl(`/api/v1/hr/public/onboarding/${token}/upload`, 'direct'), { method: 'POST', body: fd })
       const d = await r.json()
       if (!r.ok) throw new Error(d?.detail || 'Upload failed')
       if (d?.status === 'returned') {
@@ -166,7 +166,7 @@ export default function PublicOnboardPage() {
   // server-enforced (employee_can_delete), same rule as the logged-in portal.
   async function viewFile(t: Task, f: DocFile) {
     try {
-      const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}/task/${t.id}/document/${f.id}?value=${encodeURIComponent(value)}`)
+      const r = await fetch(apiUrl(`/api/v1/hr/public/onboarding/${token}/task/${t.id}/document/${f.id}?value=${encodeURIComponent(value)}`))
       const d = await r.json()
       if (!r.ok) throw new Error(d?.detail || 'Could not open that file')
       if (d?.url) window.open(d.url, '_blank')
@@ -176,7 +176,7 @@ export default function PublicOnboardPage() {
     if (!window.confirm(`Remove ${f.name}? This cannot be undone.`)) return
     setBusy(true)
     try {
-      const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}/task/${t.id}/document/${f.id}?value=${encodeURIComponent(value)}`, { method: 'DELETE' })
+      const r = await fetch(apiUrl(`/api/v1/hr/public/onboarding/${token}/task/${t.id}/document/${f.id}?value=${encodeURIComponent(value)}`), { method: 'DELETE' })
       const d = await r.json()
       if (!r.ok) throw new Error(d?.detail || 'Could not remove that file')
       loadChecklist()

@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import Mark from '@/components/Mark'
+import { apiUrl } from '@/lib/apiBase'
 
 // Public self-serve signup — creates a new company (tenant) + its admin login. Gated server-side on
 // SIGNUPS_OPEN; this page reads /core/signup-status and shows "closed" when off.
@@ -15,7 +16,6 @@ import Mark from '@/components/Mark'
 // NO CARD IS TAKEN HERE, on purpose. The trial is card-free and the marketing site says so in as
 // many words; the plan captured is what they intend to land on when the trial ends. Charging is a
 // separate step that belongs at conversion, not at intake.
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 type Pkg = {
   key: string; name: string; tagline?: string | null; price?: number | null
@@ -47,13 +47,13 @@ export default function SignupPage() {
   const [done, setDone] = useState(false)
 
   useEffect(() => {
-    fetch(`${API_URL}/api/v1/core/signup-status`).then(r => r.json())
+    fetch(apiUrl(`/api/v1/core/signup-status`)).then(r => r.json())
       .then(d => setOpen(!!d.open)).catch(() => setOpen(false))
   }, [])
 
   useEffect(() => {
     // Best-effort: a failure here leaves the plan step out entirely rather than blocking signup.
-    fetch(`${API_URL}/api/v1/billing/public-pricing`).then(r => r.ok ? r.json() : null)
+    fetch(apiUrl(`/api/v1/billing/public-pricing`)).then(r => r.ok ? r.json() : null)
       .then(d => {
         if (!d) return
         if (Number(d.trial_days) > 0) setTrialDays(Number(d.trial_days))
@@ -68,7 +68,7 @@ export default function SignupPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setErr(''); setBusy(true)
     try {
-      const res = await fetch(`${API_URL}/api/v1/core/signup`, {
+      const res = await fetch(apiUrl(`/api/v1/core/signup`), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...f, package_key: picked || undefined }),
       })
