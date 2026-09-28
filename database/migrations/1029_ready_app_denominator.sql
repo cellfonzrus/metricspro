@@ -157,21 +157,24 @@ NOTIFY pgrst, 'reload schema';
 --   UPDATE commcalc.payout_config SET kpi_boostapp_basis = 'exec_new_activations'
 --    WHERE org_id = '00000000-0000-0000-0000-000000000001';
 --
--- (c) THE OPEN BOUNDARY — the two questions the ruling did not settle (index §19.31). Neither is
---     applied; each changes every rep's Ready App score, and the measurement is beside each.
+-- (c) THE BOUNDARY IS CLOSED — the owner ruled on 2026-09-28 and there is NOTHING TO APPLY here.
 --
---   (c1) INELIGIBLE PORT-IN. The carrier's own August denominator for the reference rep reconciles
---        ONLY with ineligible port-ins excluded (8 premium + 11 BYOD - 5 BYOD-Swap = 14 as ruled;
---        - the ineligible port-in = 13, which is ElevateGo's own 8/13 = 61.54%) — and excluding it is
---        what makes the count identical under BOTH count units (14 vs 15 without it). Across 296
---        comparable (rep, store, period) cells, however, it is a near-tie: 53.0% exact as ruled vs
---        52.0% with it excluded. So it is a real question, not a rounding detail:
+--   (c1) INELIGIBLE PORT-IN — **RULED IN** (owner, 2026-09-28, verbatim: *"port in is activation"*).
+--        An ineligible port-in COUNTS in the new-activation denominator. That is already the shipped
+--        default (`line_class.HOUSE_NEW_ACTIVATION` excludes only `swap`), so no code and no config
+--        change follows from the ruling — which is why the statement that used to sit here, the one
+--        that would have added "ineligible" to the exclusion list, has been DELETED rather than left
+--        as an option. It is a statement the owner has ruled against; leaving it in a migration file
+--        as a copy-pasteable UPDATE is how a ruled-out option gets applied by a later reader.
 --
---   UPDATE commcalc.accessory_config
---      SET activation_details_rules = jsonb_set(
---            COALESCE(activation_details_rules, '{}'::jsonb), '{new_activation,exclusions}',
---            '["swap","ineligible"]'::jsonb, true)
---    WHERE org_id = '00000000-0000-0000-0000-000000000001';
+--        THE CONSEQUENCE, STATED RATHER THAN BURIED (index §19.31 (6)): the reference rep (store
+--        11636, August 2026) now reads 14 on count_unit='transaction' and 15 on 'event', against
+--        ElevateGo's own finalised 13. A RESIDUAL OF 1-2 REMAINS ON THAT STORE and the ruling does
+--        not make it go away. What defends the ruling is the population, not that rep: across 296
+--        comparable (rep, store, period) cells it is the better fit — 53.0% exact as ruled against
+--        52.0% with ineligible port-ins excluded. The count is also no longer identical under both
+--        count units (14 vs 15), so §6f's count_unit flip now moves this denominator by one on that
+--        cell; that is a known and accepted cost of the ruling, not a defect to chase.
 --
 --   (c2) PORT-IN and NEW BYOD, both measured and both pointing the SAME way — they ARE new
 --        activations, so the ruling as written is right and nothing needs doing. Excluding all

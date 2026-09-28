@@ -16755,6 +16755,160 @@ def _dlar_slice_vintage(client, org_id, period):
         return None
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE DAILY PORT-OUT FRAUD REPORT (owner directive 2026-09-28, index §19.32)
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+def _portout_rules(client, org_id):
+    """The org's fraud rules over the house defaults (RULE TWO). Read from the EXISTING per-org
+    `commcalc.accessory_config` JSON home — `portout_fraud_rules`, mig `1030` — beside
+    `activation_details_rules`, which is where this module's other per-org classification rules
+    already live. No new config table, and a NULL column resolves to the house defaults."""
+    from app.modules.commcalc import portout_fraud as _pf
+    raw = None
+    try:
+        r = (client.schema("commcalc").table("accessory_config").select("portout_fraud_rules")
+             .eq("org_id", org_id).limit(1).execute().data) or []
+        raw = (r[0].get("portout_fraud_rules") if r else None)
+    except Exception:
+        raw = None                      # mig 1030 not applied yet → house defaults, never a crash
+    return _pf.resolve_rules(raw)
+
+
+@router.get("/portout-fraud")
+def get_portout_fraud(date_from: str = "", date_to: str = "", store: str = "",
+                      authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """PORT-IN ACTIVATIONS THAT PORTED OUT AGAIN — the daily fraud report. READ-ONLY, books nothing.
+
+    OWNER 2026-09-28, verbatim: *"port in is activation and port port out within 30 days is a gnale of
+    fraud or before the second payment is a signal of fraud , either customer initiated or sales rep
+    initiated as the phones are cheaper on new aCTIVATION WITH port in ,so it is also important to
+    report how much acessories were sold with that activation , if it is below $50 then it could be a
+    sales rep driven and that shoudl be on top of a daily fraud report being sent to all market
+    managers and above via whats app and email - with a big red mark and open urgently"*.
+
+    IT COMPOSES; IT DOES NOT RE-DERIVE (the duplicate-check gate):
+      · "IS THIS A PORT-IN" is `line_class.activation_class(row, rules) == 'port'` — the ONE activation
+        predicate, per-org config (§19.31). The owner's same-day ruling that *"port in is activation"*
+        is why the class is watched here and stays IN the new-activation denominator there.
+      · "DID THIS LINE STAY" is `marketing/event_sales.line_feed_state` — the SAME three-state
+        derivation the event subscriber-retention report uses (§23s.5), extracted in this change so
+        this report is one more caller of it rather than a second churn derivation. Its third state,
+        `unmatched`-with-a-reason, is why a line we cannot look up is never reported as fraud.
+      · "HOW MUCH ACCESSORY" is `_is_accessory` / `_is_setup_fee` over `_accessory_config` — the same
+        gate the Sales Report's `accessory_rev` uses, so this column is the same dollar the rest of the
+        platform calls accessory revenue.
+      · the subscriber snapshots come from the retention report's OWN bounded, org-scoped loader
+        (`marketing.router._es_mi_snapshots`) — no second read path into `raw_mi`.
+      · the verdicts are PURE in `commcalc/portout_fraud.py` (proof `backend/harness_portout_fraud.py`).
+
+    ⚠ THE HEADLINE CONFESSES ITS BLIND SPOT. `summary.undecidable` and `coverage_pct` travel with
+    `summary.flagged` and every consumer prints them together. A fraud report that shows a flagged
+    count while silently unable to date part of the population converts a blind spot into a clean bill
+    of health, which is the defect this house keeps being caught by."""
+    require_org(org_id)
+    client = sb()
+    from app.modules.commcalc import portout_fraud as _pf
+    from app.modules.marketing.router import _es_range, _es_mi_snapshots, _es_period_labels
+    from app.modules.storeops.router import scope_keyset, in_keyset
+
+    rules = _portout_rules(client, org_id)
+    lo, hi = _es_range(date_from, date_to)
+    acfg = _accessory_config(client, org_id)
+    line_rules = _line_rules_of(acfg)
+    watch = set(rules["watch_classes"])
+
+    # ── our own transactions, ORG-SCOPED and bounded by the window ───────────────────────────────
+    sales, page, off = [], 1000, 0
+    cols = ("trans_id,trans_date,store,salesperson,mdn,serial_1,contract_type,category,"
+            "product_desc,department,ext_price,voided,period")
+    while True:
+        chunk = (client.schema("commcalc").table("raw_sales").select(cols)
+                 .eq("org_id", org_id).gte("trans_date", lo).lte("trans_date", hi)
+                 .range(off, off + page - 1).execute().data) or []
+        sales += chunk
+        if len(chunk) < page:
+            break
+        off += page
+
+    ks = scope_keyset(authorization, org_id)
+    if ks:
+        sales = [r for r in sales if in_keyset(ks, r.get("store"))]
+    picked = [s.strip() for s in (store or "").split(",") if s.strip()]
+    if picked:
+        sales = [r for r in sales if str(r.get("store") or "").strip() in picked]
+    live = [r for r in sales
+            if str(r.get("voided") or "").strip().lower() not in ("true", "yes", "1", "voided", "void")]
+
+    # ── the watched activations, one per (invoice, number) ───────────────────────────────────────
+    lines, seen = [], set()
+    for r in live:
+        cls = _lc.activation_class(r, line_rules)
+        if cls not in watch:
+            continue
+        mdn = str(r.get("mdn") or "").replace(".0", "").strip()
+        ser = str(r.get("serial_1") or "").replace(".0", "").strip()
+        tid = str(r.get("trans_id") or "").strip()
+        k = (tid, mdn or ("s:" + ser))
+        if k in seen:
+            continue
+        seen.add(k)
+        lines.append({"store": str(r.get("store") or ""), "salesperson": str(r.get("salesperson") or ""),
+                      "trans_id": tid, "trans_date": str(r.get("trans_date") or "")[:10],
+                      "mdn": mdn, "serial_1": ser, "line_class": cls,
+                      "product_desc": str(r.get("product_desc") or "")})
+
+    # ── accessory$ per invoice, through the org's OWN accessory definition ───────────────────────
+    watched_tids = {x["trans_id"] for x in lines if x["trans_id"]}
+    acc = {}
+    for r in live:
+        tid = str(r.get("trans_id") or "").strip()
+        if tid not in watched_tids:
+            continue
+        if _is_setup_fee(r.get("product_desc"), acfg):
+            continue                    # a set-up fee is not an accessory — the Sales Report's own rule
+        if _is_accessory(str(r.get("department") or "").strip(), r.get("category"),
+                         r.get("product_desc"), acfg):
+            acc[tid] = round(acc.get(tid, 0.0) + safe_float(r.get("ext_price")), 2)
+    for tid in watched_tids:
+        acc.setdefault(tid, 0.0)        # a watched invoice WAS measured; 0.0 here is a measured zero
+
+    # ── the subscriber feed, through the retention report's own loader ───────────────────────────
+    labels = _es_period_labels(lo, hi)
+    snapshots, feed_note = {}, None
+    if lines:
+        try:
+            snapshots = _es_mi_snapshots(org_id, labels, lines)
+        except Exception as e:
+            feed_note = "The subscriber feed could not be read (%s)." % str(e)[:120]
+    loaded = sorted(k for k, v in snapshots.items() if v.get("loaded"))
+    latest = loaded[-1] if loaded else None
+
+    # WHICH snapshot month each line FIRST reads PORTED-OUT in — the third dating basis. Computed here
+    # because only the caller holds every month; the rule itself stays in the pure module.
+    firsts = {}
+    for key in loaded:
+        idx = (snapshots.get(key) or {}).get("index") or {}
+        for x in lines:
+            lk = x["mdn"] or ("s:" + x["serial_1"])
+            if lk in firsts:
+                continue
+            row = (idx.get("mdn") or {}).get(x["mdn"]) or (idx.get("serial") or {}).get(x["serial_1"])
+            if row is not None and _pf.is_ported_out(row.get("subscriber_status")):
+                firsts[lk] = key
+
+    out = _pf.report(lines, snapshots, rules, latest_key=latest, as_of=_date.today().isoformat(),
+                     accessory_by_invoice=acc, first_ported_by_line=firsts)
+    out.update({
+        "window": {"from": lo, "to": hi},
+        "feed_coverage": [{"period": k, "label": labels.get(k), "loaded": v.get("loaded")}
+                          for k, v in sorted(snapshots.items())],
+        "latest_loaded_period": (labels.get(latest) if latest else None),
+        "feed_note": feed_note,
+        "books_to": [],
+    })
+    return out
+
+
 @router.get("/dlar-vs-platform/{period}")
 def get_dlar_vs_platform(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """CARRIER FEED vs THE STORE'S TRANSACTIONS — the per-metric difference, attributed. READ-ONLY.
