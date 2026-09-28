@@ -230,8 +230,15 @@ check("D4 the static source registry covers EVERY source the main pass can emit 
       "produced zero flags this run, which is exactly when its flags must be retired",
       _emitted <= {"payment_detail", "sales", "dlar_store", "mi_report"},
       "emits " + ",".join(sorted(_emitted)))
-check("D5 the DAILY DLAR sweep reaches this path (_do_dlar_sweep -> _run_calculation)",
-      "_cres = _run_calculation(res['period'], org_id)" in RT)
+# Since 2026-09-28 (index §6l) the DLAR sweep reaches the calculation through the ONE post-landing hook
+# (run_dlar_sweep -> auto_calc.landed -> the poller -> auto_calc._default_runner -> _run_calculation), not inline —
+# still daily, so the additive flag write this section proves is still what protects a DM's review.
+_DS = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", "modules", "commcalc", "dlar_sweep.py"),
+           encoding="utf-8").read()
+_AC = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", "modules", "commcalc", "auto_calc.py"),
+           encoding="utf-8").read()
+check("D5 the DAILY DLAR sweep reaches this path (run_dlar_sweep -> auto_calc.landed -> _run_calculation)",
+      "_auto_calc.landed(client, org_id, table=tbl" in _DS and "return _run_calculation(period, org_id)" in _AC)
 check("D6 sales_recon's per-sweep delete-by-source is additive too",
       "flag_persist.sync(" in SR)
 check("D7 the active queue defaults to OPEN, with an explicit include_resolved escape hatch",

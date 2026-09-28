@@ -33,6 +33,9 @@ Primary code homes:
 | 6h | **Multi-month offered only when configured** | "Why does a rep's pay show a multi-month option when this company has no multi-month pay — where is that decided, and what if money is there anyway?" |
 | 6i | **What an employee sees of their own commission** | "Why does the employee payout report show only the line I am paid for, and no carrier Price / GP? Which surfaces show an employee their commission, and where is 'paid line' and 'employee-visible field' decided?" |
 | 6j | **Who is looking; the sale on the paid row; one employee over several months** | "Why does a rep not see Pay Discrepancy but a manager does — where is that list? Why does a manager see every line on the Rep Incentive report and a rep only their paid ones? Where does the customer name / phone on a paid row come from? How do I export one employee's statement for several months, and is each month the same as downloading it alone?" |
+| 6l | **Auto-calculation on landing** | "I uploaded September — did the commission recalculate by itself? When, from which upload, and if not, why not (refused, off, waiting)? Which uploads / sweeps trigger it, and how is a burst of files one calculation?" |
+| 6k | **The one-rep Recalculate button** | "Why did Recalculate for one rep fail / what does it write? Does it touch other reps or the installment ledgers? Is the one-rep row the same as Run Calculation's? How is a moved-local NameError kept out of the build?" |
+| 6m | **Carrier commission is for management's eyes only** | "Why does the Rep Incentive report show no Price / GP (carrier commission) even to a manager? Who may see carrier commission, where is that role list set, and which pages show it? Why can a store manager not open Pay Discrepancy / Carrier vs Pay / the explain diagnostic?" |
 | 7 | **Carrier residual installments** | "Multi-month carrier residual pay from raw_mi. Why do named activation_types not pay?" |
 | 12 | **External credit machine + Card Settlement Recon** | "Where does the external / white-machine card figure live, what is it called for this tenant, and how does it tally with what the processor actually settled?" |
 | 7a | **Residual per Subscriber report** | "Where does the residual/subscriber trend come from per carrier? Why is a Total/MA store named, not a processor account id?" |
@@ -49,6 +52,7 @@ Primary code homes:
 | 16 | **Cross-reference: by TABLE** | table → sections/functions that read & write it. |
 | 17 | **Cross-reference: by ENDPOINT** | endpoint → handler/section. |
 | 18 | **Cross-reference: by METRIC/KPI** | metric → source table → reader function. |
+| 19.31 | **One activation count · Feed vs Transactions** | "How many new activations, and says who? What does the carrier's report claim against what the store's transactions say, and what accounts for every difference — a counting definition, a stale feed slice, or nothing?" |
 | 19 | **Known gaps & inert config** | stored-but-unwired, snapshot-only, surfaces that can disagree. |
 | 20 | **Super-admin control box** | "Is the platform working? What is red right now, what is NOT being watched at all, did the daily check actually run, and how do I hand this failure to Claude Code safely?" |
 | 21 | **Billing — usage & pricing** | "What did this tenant use, what did it cost us, what do we bill them, which modules are still unpriced, and what does their itemized statement say?" |
@@ -176,6 +180,12 @@ email), (c) **RPC/manual entry**.
 - Frontend: `frontend/src/app/(platform)/commcalc/upload/wizard/page.tsx`, `column-mapping/page.tsx`,
   `report-mappings/page.tsx`.
 
+- **Every route above and below ends in ONE post-landing hook (§6l, 2026-09-28).** A lander that writes a table the
+  Run Calculation reads (`data_lineage_registry.COMMISSION_CALC_FEEDS`) calls `auto_calc.landed(...)` after its rows are
+  written; that queues ONE debounced Run Calculation per (org, month) touched, per the org's `auto_calc_on_landing`.
+  The DLAR sweep's inline recalculation and the email sweep's plan-mode-only post-promotion recalculation are retired
+  into it. Lock `harness_auto_calc_lock.py` fails the build on a new lander that does not call it.
+
 ### Ingest route B — automated sweeps (`backend/app/modules/commcalc/*_sweep.py`)
 | Sweep | Module | Writes | Config table / endpoints |
 |-------|--------|--------|--------------------------|
@@ -211,6 +221,8 @@ supported routes until the vendor re-opens the login and one config row is flipp
 ## 3. Sales report & the shared per-(store, rep, day) aggregation
 
 > **2026-09-25 (§6f):** `_sales_cell_agg`'s `_prem` / `_byod` / `_upg` / `_port` sets are filled from `line_class.activation_units` — distinct invoices under the house `event.count_unit='transaction'` (byte-identical), activation EVENTS (one per phone line) under `'event'`.
+>
+> **2026-09-27 (§19.31, owner ruling):** the same pass also builds `_newact` — **the NEW-ACTIVATION count**, `line_class.new_activation_units` over those same units: the classes `activation + port + byod` (Total Activation less Upgrade) less any unit an exclusion kind removes (house: `swap`). `_apply_activation_basis` publishes it as the shared cell field **`act_new_activation`** and Executive MTD prints it as **`new_activation`** (+ `swap_excluded` + `cross_bucket`, so `total_activation − upgrade − swap_excluded − cross_bucket == new_activation` exactly — §19.31 (2a)). The Boost pay engine's Ready App denominator and `GET /dlar-vs-platform/{period}` read the SAME derivation — *"data source is the same for all reports"*. `_swap` is now filled by `line_class.exclusion_class` (the bare `'swap' in ctl` is gone).
 
 **Purpose.** ONE row-level pass feeds the Sales Report, Executive MTD, and Daily Targets so they can never
 disagain (owner directive 2026-07-16, 2026-07-25).
@@ -1741,6 +1753,8 @@ routes to the ruling agreeing).
 
 ### 6c. THE ONE PLAN RESOLUTION — `_resolve_plan_by_rep` (owner-reported class, 2026-09-17)
 
+> **2026-09-27 (§6k):** the one-rep recompute no longer calls this resolver itself — it runs the FULL path (`_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines`), so the resolver has ONE call site. The #244 split below left `recompute_rep` reading a moved local (`_id_map`) — a NameError on every call until §6k.
+
 **`router._resolve_plan_by_rep(client, org_id, period, only_rep=None, notices=None)`** is THE answer to
 "what does this rep's assigned plan pay them this period": `commission_engine.preview` (with the
 mig-306 `source_mode` and the POS→roster identity map) **plus** the mig-298 exec-MTD basis override.
@@ -1895,6 +1909,8 @@ spelling; five negative controls.
 ---
 
 ### 6f. ONE ACTIVATION = ONE UNIT — pay and count per activation / upgrade EVENT, never per sale line (owner 2026-09-25)
+
+> **Persisting per-event pay for ONE rep** (e.g. a month never calculated): the Recalculate button, `POST /commcalc/recompute-rep` — the full path's row for that rep, written alone (§6k).
 
 Owner, verbatim: *"commisison for teh reps need to be claculated per action and per upgrade as defined in teh
 incentive payout , the system sis calculating per line item"* — on the rep breakdown (`PlanLineBreakdown`),
@@ -2091,6 +2107,12 @@ controls); `frontend/tools/multimonth-offer-proof.mjs` (8).
 
 ### 6i. AN EMPLOYEE SEES THE LINE THEY ARE PAID FOR — and never carrier commission (owner 2026-09-26)
 
+> **Superseded in part by §6m (owner 2026-09-28):** the Rep Incentive surfaces now carry NO carrier field for ANY
+> audience (the allow-lists below apply to managers too; a manager adds only the ⛔ reasons + the unpaid lines), and
+> the "manager-only" reports below are refused to everyone without the `carrier_commission_view` permission — not
+> only to reps. `_refuse_employee_audience` is gone (→ `_require_carrier_view`); `KNOWN_CARRIER_FIELDS` is now the
+> carrier's money only (the ⛔ reason fields moved to `MANAGER_REASON_FIELDS`).
+
 Owner, verbatim: *"on the employee commission payout report we only need o show the line they are getting paid
 and other lines should be hidden and carrier commission not be displayed"*.
 
@@ -2177,6 +2199,12 @@ its audience; 8 negative controls + the green tree); `frontend/tools/plan-drilld
 
 ### 6j. WHO IS LOOKING decides the payout view; the paid row names its sale; one employee over several months (owner 2026-09-26)
 
+> **Reversed in part by §6m (owner 2026-09-28):** "a manager / admin gets the full report (every line, ⛔ reasons,
+> Price / GP)" is no longer true — a manager keeps every line and the ⛔ reasons, never Price / GP; the manager
+> statement / range CSV lost the product's Price / GP columns and the ledger buckets. The registry below now also
+> names `/discrepancy/run` and the commission-explain diagnostic's carrier view (menu-less page), and `/me` refuses
+> its pages to every viewer without the carrier permission (`viewer_payload(caller_is_self, carrier_view)`).
+
 Owner, verbatim: *"pay discrepancy should be hidden, managers can see rep incentive, on paid row show the action /
 upgrade with the details of the phone number and customer name. also need a report to export one employees report
 over a number of selected months. all these need to be platform wide"*. Four facts, one home each, every org.
@@ -2259,6 +2287,277 @@ Discrepancy / Phantom Payments through `POST /notify/send`. Both are now registe
 caller's header (a scheduled, admin-configured run still has no caller → org-wide, as before). CLASS lock:
 `harness_payout_audience_lock.py` part (h) — every notify call to a commcalc handler that takes `authorization`
 must pass it, and a builder reaching a manager-only handler must be `wants_auth` (2 negative controls; 24 checks).
+
+---
+
+### 6k. THE ONE-REP RECALCULATE runs the full path and writes one rep — and a moved local can never strand a reader again (2026-09-27)
+
+Owner: *"Fix button, then save"* — found while saving Jona Sejat's never-calculated months (org `f4f1c16e`).
+
+**The defect.** `POST /commcalc/recompute-rep` (`router.recompute_rep`) died with `NameError: name '_id_map' is not
+defined` on EVERY call, every org, every rep, since #244 (2026-09-17, cc8def39): that refactor moved
+`_id_map = _rep_canon_map(...)` into `_resolve_plan_by_rep` and the handler kept reading the name. Every one-rep
+recalculate button (Rep Incentive attach-plan / link-alias, commission-explain, the Coverage Wizard — which swallows
+the error) returned 500. Worse, it crashed AFTER running both installment engines with `persist=True`, i.e. it wrote
+the period's installment ledgers for EVERY rep of the org before failing. No harness ever called the handler.
+
+**The class, named:** *a name read in a function that nothing binds* — Python finds it only when the line runs.
+Swept with pyflakes F821 over `backend/app` (and the new stdlib lock below): **exactly one hit** —
+`commcalc/router.py` `recompute_rep` `_id_map`. Now zero.
+
+**The fix (design, not patch):**
+- **One row derivation.** The full Run Calculation's input gathering moved VERBATIM into
+  `router._calc_inputs(client, org_id, period)` (every org-scoped read + the cfg it assembles; returns the
+  inputs) and its standard calc into `router._calc_rep_rows(inp, period)` (`calc_rep_commissions` with the full run's
+  exact arguments). `_run_calculation` calls both — not one line of the calculation changed.
+  `recompute_rep` now runs `_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines` — the full path's own functions —
+  and writes only its rep's row(s) (`_rows_for_rep`: name keys ∪ the identity-map canonical, `_canon_person`
+  fallback): update in place, else insert; never delete, never another rep. So the one-rep row IS the full run's
+  row for that rep (counts, store, tier and pay), not the thinner copy it used to build. When the full calculation
+  produces no row for the rep, nothing is written (an existing row is left as it is) and the response says so.
+- **One identity map.** `_rep_canon_map` is its only home; `recompute_rep` reads it; the resolver reads it.
+- **Scope — the installment ledgers are NOT written by the one-rep button.** `_apply_new_engines(...,
+  persist_installments=False)` (default `True` = the full run, unchanged). Chosen because it changes no pay figure:
+  both engines compute `by_rep` before, and independently of, the ledger write, and neither engine has a rep
+  filter to scope the persist to one rep. The whole-period ledger write stays Run Calculation's job; the response
+  carries `installment_ledgers` saying so. (A stored row keeps columns the fresh row does not carry — e.g. the
+  ops-chargeback settlement columns written after the full run's insert — because the update only sets the
+  fresh row's keys.)
+
+**Locks:** `backend/harness_recompute_rep_e2e.py` (10, DB-free, pip job): runs the REAL handler end-to-end on an
+in-memory client that records every write, against the REAL `_run_calculation` as reference — no exception; exactly
+one `rep_commissions` write, this rep's, update-in-place (same id) or insert; no other table, no delete, the other
+rep's stored row untouched; the row == the full run's row for that rep (every column but id / timestamps); both
+installment engines asked with `persist=False` (the full run: `True`). Negative controls: the undefined name
+reintroduced → RED; a second rep's row written → RED; the ledgers persisted → RED.
+`backend/harness_undefined_names_lock.py` (7, stdlib `symtable`, `org-scope-guard.yml` job
+**No undefined names under backend/app**, triggered by any `backend/app/**/*.py` change): every scope of every
+module; a name that is read, resolves to module level and is bound nowhere (assignment, def, class, import,
+`global`) nor a builtin / module dunder fails the build; a star-importing module is reported, never passed.
+Controls: the #244 shape, a class body, a comprehension → RED; import / global / closure / builtins → GREEN.
+Verified against main's router: it reports exactly `recompute_rep _id_map`, the same as pyflakes.
+`harness_recompute_rep_parity.py` §E3 now pins ONE resolver call site (the full path the one-rep button runs) plus
+E3b (the handler runs `_calc_inputs` / `_calc_rep_rows` / `_apply_new_engines`), and is wired into CI for the first
+time. `harness_commcalc_recompute_guard.py` §B and `harness_cross_tenant_isolation.py` C1 follow the moved input
+gathering into `_calc_inputs`.
+
+**Not done here (awaits the merge):** saving Jona Sejat's 15 never-calculated months (Feb 2025 – Apr 2026) through
+the fixed button — the owner approved it; it runs after this is live.
+
+### 6l. AUTO-CALCULATION ON LANDING — "data landed for org X, period P" has ONE home (owner 2026-09-28)
+
+Owner: *"when sept is uploaded the system should calculate automatically without manual intervention"* — platform-wide.
+
+**The class, named.** "Does a landing recalculate?" had THREE answers: the DLAR sweep called `_run_calculation`
+inline on every run (even one that wrote nothing); the email sweep called it after a feed → raw_sales promotion
+(plan-mode tenants only, current month only, and "a grace re-derive NEVER triggers a recompute"); every other lander —
+the Sales / Daily Sales upload pages, the mapped upload, the onboarding intake commit, the FTP drop, the store-guard
+release, the built-in POS sync, the portal pulls, the commission import wizard, the MA manual upload — recalculated
+nothing. **Duplicate check:** those two inline triggers were the existing auto-recalcs; they were EXTENDED into the one
+hook, not left beside it (both call sites are deleted; the lock fails the build if either returns). No existing
+post-landing hook existed (`_intake_pos_rebuild_after_landing` rebuilds POS sales, not commission — reviewed below).
+
+**The design (`backend/app/modules/commcalc/auto_calc.py`).**
+- **One fact, one home.** WHICH tables the Run Calculation reads is `data_lineage_registry.COMMISSION_CALC_FEEDS`
+  (`daily_sales_feed`, `raw_sales`, `raw_payment_detail`, `raw_mi`, `raw_dlar_rep`, `raw_dlar_store`,
+  `carrier_commission`, `raw_ma_commission`, `raw_ma_daily_tx` — `_calc_inputs`, `_apply_new_engines`, the
+  sale-installment paid gate); `SALES_SIBLING_TABLES` (`raw_sales_invoice`, `raw_sales_invoice_tender`,
+  `raw_sales_product`) land beside the basis and are NOT read — their landers still call the hook, which answers
+  `not_a_calc_input`.
+- **One hook.** Every lander calls `auto_calc.landed(client, org_id, table=, periods=, source=, filename=, rows=)`
+  AFTER its rows are written. It never raises into a lander and never runs a calculation itself: it QUEUES one
+  request per (org, month) the landing touched — a file spanning August and September queues both, a late
+  correction to an older month queues that month — and returns what it did (the landers put it in their response as
+  `auto_calc`: `queued` / `off` / `not_a_calc_input` / `no_period` / `error`).
+- **One runner, the standard calculation.** A poller (one daemon thread per process, started by `main.py`
+  `_auto_calc_poller_startup` on EVERY boot, so a request queued before a restart still runs) claims each request once
+  that month's uploads have been quiet for the org's window, and runs `auto_calc._default_runner` →
+  `router._run_calculation(period, org_id)` — the very function the Run Calculation button's background task runs,
+  full period, all reps. No `force` (the unconfigured-tenant refusal R1 and the zero-wipe guard stay armed) and no
+  `guard_token` (the single-flight recompute guard claims its own slot). `_run_calculation` now RETURNS its outcome
+  (`{'status': 'done', 'save_errors', 'reps'}` / `{'status': 'error', 'error'}` / the existing `{'skipped': …}`) —
+  additive: the button's task ignores it.
+- **Debounce / coalesce / idempotent.** A request is ONE row per (org, month) on `commcalc.calc_status`:
+  `auto_calc_requested_at` (the latest landing) + `auto_calc_landings`. A burst of 30 daily files moves the timestamp
+  30 times and runs ONE calculation; a steady stream cannot starve it (due at `min(latest + window, oldest + 6 ×
+  window)`). The claim is one conditional UPDATE (`auto_calc_requested_at <= the value judged due`), so across
+  gunicorn workers and the sweeps service exactly one process runs it, and a landing during a run queues exactly one
+  follow-up. The calculation is a deterministic delete-and-rewrite from what landed, so landing the same data again
+  recalculates to the same rows. (A byte-identical file through `/upload/{file_type}` is refused by the mig-732
+  duplicate guard before it lands, so it queues nothing.)
+- **Never silent.** The outcome is stored on `calc_status.auto_calc_last` — `calculated` / `calculated_with_errors` /
+  `refused` (R1 or zero-wipe, the calculation's own words) / `failed` / `busy` (another calculation held the slot —
+  the request is RE-QUEUED) / `off` / `running` — with the landings it came from and ONE sentence; `_run_calculation`
+  still writes its own `calc_status='error'` + `save_errors` (the CommCalc dashboard's refusal banner). `GET
+  /commcalc/calc-status/{period}` serves it as `auto_calc` (`auto_calc.view`), and the **Rep Incentive page**
+  (`reports/page.tsx` → `_lib/AutoCalcNotice.tsx`) renders it: *"Auto-calculated at Sep 28, 2026 14:05 UTC from the
+  upload of Sales Transaction Details 0928.csv (Email Auto-Import) — 42 rep(s)."* / *"Auto-calculation refused at …
+  after …: REFUSED to calculate … The last good snapshot for September 2026 was kept."* / *"… landed at …
+  Auto-calculation is off for this company … — press Run Calculation."* While queued / running it re-reads once a
+  minute and refreshes the rows when the month settles. Sweep status lines say what the hook did
+  (`auto_calc.phrase`), never "recalculated" for a run that was only queued.
+- **Config, never code.** `commcalc.commission_org_config.auto_calc_on_landing` (BOOLEAN) and
+  `.auto_calc_debounce_minutes` (INTEGER, clamped 1..240) — mig `1030`. The tenant's row wins, else the HOUSE org's
+  row, else the code default. ONE reader: `auto_calc.load_config` → `resolve_config`. **House default ON** (mig 1030 sets
+  it on the house row where NULL; the code default agrees): the directive is platform-wide and the house org is the
+  owner's; every Boost tenant was already recalculated per DLAR sweep and every plan-mode tenant per email promotion —
+  those are now this hook, so OFF would switch off recalculations tenants rely on; the run is the button's own
+  calculation with every refusal guard armed and its outcome on the page. Default window 5 minutes.
+- **Org-scoped.** Every read/claim/write is `.eq('org_id', …)`; the one exception is the poller's scan of pending
+  request KEYS (`# org-guard-ok`), each then claimed and run org-scoped.
+- **NO PERIOD LOCK EXISTS** (searched: no locked / finalized / paid state for a rep-commission month; the only
+  draft→approved→paid lifecycle is Management Incentive's `mi_payout`, which the Run Calculation never writes). A late
+  correction to a paid month recalculates it — exactly as a manual Run Calculation would. Open gap §19.32; a lock, when
+  built, belongs in `auto_calc.run_one` before the runner.
+- **Before mig 1030 is applied** the hook degrades to a PROCESS-LOCAL queue (same debounce, one calculation per
+  process) and records its outcome as a `calc_notices` entry of type `auto_calc` (mig 247) — the two pre-existing
+  auto-recalcs never stop while the SQL waits.
+
+**The landers (`auto_calc.LANDERS`, each calls the hook — the lock discovers every writer):**
+
+| Lander | What lands through it |
+|---|---|
+| `router._upload_file_impl` (`POST /upload/{file_type}`, `trace_source` threaded down) | the Sales / Daily Sales / DLAR / MI / payment-detail / MA upload pages; the **Email Auto-Import** and the **FTP drop** (both call `upload_file` per attachment) |
+| `router._ingest_mapped_df` | `/upload-mapped` (sales-by-invoice, POS line sales, any carrier layout), the **onboarding intake commit** (sales / pos / invoice / MA daily tx), a custom report's dataset binding |
+| `router._promote_feed_impl` | the feed → `raw_sales` derivation: email-sweep auto-promote, month-boundary grace, `POST /sales/promote-feed`, promote-all-due |
+| `router.decide_ingest_guard_item` | withheld rows released from the cross-tenant store-guard review |
+| `router.commission_import_commit` | the commission import wizard → `carrier_commission` |
+| `router.manual_upload_ingest` | the MA manual upload → `raw_ma_*` (its `money_note` now says what the hook did) |
+| `dlar_sweep.run_dlar_sweep` | the carrier KPI sweep (per grain actually WRITTEN) — replaces `_do_dlar_sweep`'s inline recalc |
+| `epay_sweep._process_report` / `_store_day_grain` | the ePay portal sweep (month / day grain) |
+| `report_pull.ingest_report_rows` | every portal pull (VidaPay / T-CETRA / Total Access) |
+| `pos/commcalc_feed.sync_period` | the built-in POS promotion into the feed / `raw_sales` (builtin-primary tenants) |
+
+**Excused / reviewed (with the reason, in `auto_calc.EXCUSED` / `REVIEWED_NON_LANDERS`):** `_restore_rows` (puts a
+snapshot back after a failed insert — nothing new landed); `pos/sales_from_reports.rebuild` — the **"Rebuild sales
+from the landed reports"** action — writes `pos.receipt_imports` / `pos.sales`, which the calculation never reads, and
+its two reports landed through `_ingest_mapped_df`, which already fired the hook; `_ingest_custom_report`
+(`raw_custom_import`, not read); `ingest_store_guard.record` (parks withheld rows — nothing reaches a feed until
+released); `vidapay_sweep._pull_one_report` (lands through `ingest_report_rows`); `epay_ingest.ingest`
+(`raw_epay_daily_tx`, not read); `_ledger_land_rows` (`commission_ledger` books the P&L, not read by the calculation);
+the VIP invoice, Management Incentive, closing and POS own-stream writers (not feeds).
+
+**Proof:** `backend/harness_auto_calc_on_landing.py` (41, DB-free, pip job *Customer master proof*): the REAL
+`_ingest_mapped_df`, `upload_file` (Email Auto-Import) and `_promote_feed_to_raw_sales`, the REAL hook and the REAL
+`_run_calculation` on an in-memory client — September through three landers → ONE queued request → nothing inside the
+window → exactly ONE calculation for (org, September) and none elsewhere; the stored rows == a manual Run
+Calculation's over the same data (every column; Jona $25.00, Other $10.00); a second landing → identical rows; a
+30-file burst → one run; an Aug+Sep correction file → each month once; R1 and zero-wipe refusals recorded as
+`refused` with the snapshot kept; a held slot → `busy`, re-queued, then run; config off (own row / house row) → no
+run, recorded `off`; tenant ON beats house OFF; org B untouched and every claim org-filtered; pre-1030 → the
+process-local queue, still once; `GET /calc-status` serves the page sentence. Negative controls: no quiet window → 30
+runs; a refusal recorded as success; the config ignored → each RED.
+**Lock:** `backend/harness_auto_calc_lock.py` (stdlib + ast, `org-scope-guard.yml` job *One post-landing hook, one
+calculation trigger*): (A) every function under `backend/app` that writes a `COMMISSION_CALC_FEEDS` /
+`SALES_SIBLING_TABLES` table — a literal insert/upsert, a commcalc-schema insert/upsert whose table it cannot prove is
+another (module / imported / local constants are resolved), `safe_replace(`, or the POS promotion RPC — is a LANDER or
+EXCUSED; (B) every lander calls `auto_calc.landed(`; no stale entry; a reviewed non-lander that starts writing a feed is
+RED; (C) `_run_calculation` is referenced only by `calculate` (the button) and `auto_calc._default_runner`;
+`_calc_rep_rows` only by `_run_calculation` / `recompute_rep`; (D) the runner calls exactly
+`_run_calculation(period, org_id)` and `auto_calc.py` computes / writes no pay; (E) the config keys are spelled once
+and read only through `resolve_config`, never by the frontend; (F) every period-keyed `raw_*` the calculation reads is
+in the registry and the hook dereferences it (no copy); (G) index / migration / CI / boot hook / page registered. Ten
+planted negative controls. `harness_commcalc_recompute_guard.py` §A/§G re-pinned to the new single internal caller.
+
+**Migration `1030_auto_calc_on_landing.sql` — WRITTEN, NOT APPLIED, surfaced for owner approval:** `calc_status`
++`auto_calc_requested_at` / `auto_calc_landings` / `auto_calc_last` (+ a partial index on pending rows);
+`commission_org_config` +`auto_calc_on_landing` / `auto_calc_debounce_minutes`; the house row's switch set TRUE where
+NULL. Additive, idempotent, `-- REVERT:` note.
+
+---
+
+### 6m. CARRIER COMMISSION IS FOR MANAGEMENT'S EYES ONLY — the Rep Incentive report shows none, to anyone; one permission opens the carrier surfaces (owner 2026-09-28)
+
+Owner, verbatim (screenshot: the Rep Incentive "Plan incentive · Jona Sejat" drill, July 2026, viewed as a manager,
+PRICE / GP $150.00, $45.00, $155.00 … on every line): *"the incoming commission is shown on the line item as $150 and
+$5 on the first transaction and similarly for all under that, it should not show any commission received on the rep
+incentive report, that is only for the eyes of the management, gated out from all levels"*. Reverses the Price / GP
+part of §6j (#309).
+
+**The class (not the instance):** "which fields a Rep Incentive surface may show" depended on WHO was looking — the
+allow-lists of §6i applied to the employee audience only, so every non-employee (every store manager) was served the
+carrier's money; and the carrier reports were refused only to the employee audience, so any manager could open them.
+Two facts, one home each, both in `commcalc/payout_audience.py`:
+
+**1 · A Rep Incentive surface shows no carrier money, whoever is looking.** THE shapers, for EVERY audience:
+`rep_incentive_explain(explain, audience)` (the drill-down; employee: paid lines only; manager: every line + the ⛔
+reasons `MANAGER_REASON_FIELDS` = suppressed / suppressed_by / suppressed_reason / would_have_paid / excluded_by),
+`rep_incentive_row(row)` (the rep row allow-list), `rep_incentive_drill(drill, audience)` (the Boost drill — count-paid
+buckets without money; the accessories / setup % buckets keep the customer's price / margin, the rep's pay basis).
+`employee_explain` / `employee_rep_row` / `employee_drill` are these for 'employee'. `KNOWN_CARRIER_FIELDS` is now
+exactly the carrier's money — ext_price, gp, implied_cost, cost_flags, cost_flag_labels, data_quality, ma_matches,
+ma_says_paid, held_but_ma_paid, rebate_total, ma_spiff_total, mi_ref, boost_commission, boost_reimbursement,
+buckets — on no allow-list. `carrier_fields_in(payload)` finds any of them at any depth (proof + lock).
+
+| Rep Incentive surface | Now |
+|---|---|
+| `GET /commissions/{period}` (+ `/commissions-range`, the exports `commissionExport`, the emailed Incentives report) | `[rep_incentive_row(r) for r in rows]` for everyone — no `boost_commission` / `boost_reimbursement` (carrier-vs-pay reads them from the table, behind the permission). `audience=` accepted, changes no field |
+| `GET /commission-explain` (no `view`) — the plan drill `PlanLineBreakdown` + the multi-month table | `rep_incentive_explain(_res, _aud)`; the page drops the "MA says paid" column; `PlanLineBreakdown` shows Price / GP only for a payload the server stamped `carrier_view` (`servedCarrierView`) |
+| `GET /commission-drill` (the Boost drill modal) | `rep_incentive_drill(out, _aud)`; the modal shows Price / GP only where served (the % buckets) |
+| `GET /commission-statement` (single / range PDF / CSV / JSON) + `/commission-statements` batch | `_statement_doc` builds from `rep_incentive_explain(explain, aud)` with `buckets=None` — `_statement_buckets` (the commission-ledger rollup = the carrier's statement per rep) is no longer read; `_sale_line_items` carries no Price / GP; `_CSV_MANAGER_COLS` lost ext_price / gp; `build_statement` emits `buckets: []` when none is given. `source_report` accepted, unused |
+| Rep Incentive page links to the commission-explain diagnostic (🔬, "How was this calculated?", "open the full explain page") and the Commissions dashboard's "Explain a rep's pay" | shown only when `!payoutRefused(permissions, '/commcalc/commission-explain')` |
+
+**2 · ONE permission opens the carrier surfaces: `carrier_commission_view`.** `payout_audience.CARRIER_VIEW_GRANT`;
+the decision `carrier_view_allowed(caller, caller_is_self)` — its only home. **Role list = per-org config:** each
+org's Roles & Access (`storeops.roles.permissions.data.carrier_commission_view`, true / false per role — `rbac.ts`
+`DATA_GRANTS` registers the key so the Roles editor shows the checkbox) wins both ways; **unset = the house default,
+top management only**: the platform super admin and every company-wide (`scope 'all'`) role — the seeded `admin`,
+an owner / master-admin role (§14: every role above market manager is company-wide). A self-scoped rep never holds it
+(even with the box ticked). Store / market managers do not, unless the org ticks it. No migration: the roles'
+permissions JSON already carries per-role data grants; "unset" is the default.
+- Server: `router._can_view_carrier_commission(authorization, org_id)` (core `_uid_from_token` + `_resolve_caller`
+  for the acting org → `carrier_view_allowed`; FAILS CLOSED; no token → allowed only while the login master switch
+  is off, the `pay_visibility.can_see_pay` parity) and `router._require_carrier_view(authorization, org_id, key)` —
+  403 `payout_audience.refusal_message(key)`. It replaced `_refuse_employee_audience` (employee-only) in every
+  registered handler: `carrier_vs_pay_report`, `get_discrepancy_results`, `get_phantom_payments`,
+  **`run_discrepancy_check`** (`POST /discrepancy/run` — had no caller check; its response is the gap summary),
+  `list_discrepancy_appeals`, `commission_device`, and **`commission_explain` with `view=carrier`** (the diagnostic:
+  the full drill-down stamped `carrier_view: true`).
+- Registry `MANAGER_ONLY_SURFACES` (name kept) = the carrier surfaces; new entry `commission_explain_carrier`
+  (page `/commcalc/commission-explain`, `"menu": False` — it has no NAV entry; every in-app link asks `payoutRefused`,
+  the route guard refuses the URL).
+- Nav: `/me` → `viewer_payload(caller_is_self, carrier_view)` = `{audience, carrier_view, refused_pages}` —
+  `refused_pages` is every carrier page unless the viewer holds the permission (`core._me_payload` asks
+  `carrier_view_allowed` over the same role permissions). `rbac.payoutRefused` (unchanged) hides them in
+  `canSeeItem` / `canAccessPath` / `navBlockReason`.
+- Scheduled / emailed carrier reports (`notify` `_discrepancy`, `_phantom`, `wants_auth`): the caller's header
+  decides; a scheduled run with NO caller is now refused while logins are on (nothing is sent) — before, it sent
+  the carrier gap report to whoever subscribed.
+
+**Duplicate check (what was looked at, what was reused):** `storeops.pay_visibility` (`pay_visible_roles`, mig 434) —
+a different question (employee PAY rates; default market manager and up); its role-list shape was not copied.
+`carrier_residual` (`_can_view_carrier_residual`, `residual_visibility`, mig 201) — the raw_mi residual REPORTS under a
+tenant posture that is default-OPEN; reusing it would either open carrier commission to every manager or close the
+residual reports platform-wide. `whatif_carrier_income` (What-If Company Payout / Carrier Income tab) — a projection,
+default-closed. Reused: the Roles & Access data-grant mechanism (per-org roles, the Roles editor's tri-state checkbox
+whose default is "company-wide") and the §6j registry / `/me` / `payoutRefused` path. Both excused keys are named in
+the lock (`CARRIER_GRANT_KEYS_EXCUSED`); **folding them under this one permission is an open owner decision.**
+
+**Behaviour changes to know:** a store / market manager loses Carrier vs Pay, Pay Discrepancy (+ Run), Commission
+Discrepancy, the device commission story and the commission-explain diagnostic unless the org grants the permission;
+the manager Incentive Statement no longer shows the "Payout by category" ledger buckets (a carrier-statement-mode rep's
+statement — the "breakup" case in `commission_statement.build_statement` — now itemizes by plan / installment only and
+shows its payout of record; the employee's already did since §6i).
+
+**Excused:** `PATCH /discrepancy/{id}` and `PATCH /discrepancy-appeals/{id}` (status / appeal writes, no carrier figure in
+the response; unchanged); the Coverage Wizard's line $ (commission-plans editor, not the Rep Incentive report);
+`custom_report`'s per-column `carrier_residual` gate (§6i).
+
+**Proof:** `backend/harness_payout_audience.py` (99, DB-free): A — Jona Sejat July 2026 as a store manager: every line
++ ⛔ reason, NO `ext_price` / `gp` key anywhere; A6 the carrier view == the full drill-down; A8 the defect reproduced
+(the unshaped drill carries $150 / $45); D — rows and statements carry no dealer figure / ledger bucket for any
+audience (the planted `_statement_buckets` is never read); I — the permission: house default truth table, per-org grant
+/ revoke, owner / admin get Price / GP on commission-explain's carrier view and are not refused carrier-vs-pay, store /
+market manager 403 on both, no caller refused with logins on, fails closed; J — every Rep Incentive surface × employee /
+store manager / owner-with-permission carries no carrier field (plan drill, live Boost drill, rows, month range,
+statement single / range / batch / CSV, the emailed Incentives report). Lock `backend/harness_payout_audience_lock.py`
+(47; part i1–i4 + 19 new negative controls — the rows / Boost drill / statement / CSV / home shaping / "MA says paid" /
+breakdown handing a manager carrier money again, the refusal going back to employee-only, the old refusal redefined,
+`/me` hiding from reps only, an ungated link to the diagnostic, the carrier view served unrefused, a second reader of
+the grant (router / client `hasDataGrant` / a stray `carrier_view_allowed`), a second gate function / grant key, a
+carrier surface asking a second gate). Frontend: `tools/plan-drilldown-render-proof.mjs` (38 — manager: no Price / GP
+columns; carrier view: Price / GP), `tools/payout-nav-proof.mjs` (15 — a store manager without the permission sees and
+reaches none of the carrier pages incl. the diagnostic; top management does).
 
 ---
 
@@ -4124,9 +4423,11 @@ be a seaprate box in the p&l under wages"
     key `management-overview`): one tile per report — Sales Reports (`/commcalc/sales-report`),
     Executive MTD, Sales Comparison, **"Rep Incentive"** = `/commcalc/exec` with the relabel as
     tile-layout item-label DATA (layout label > NAV label; nothing hardcoded, tenant-editable),
-    **Failing KPIs** (NEW report, §10), **Cash at Hand** = a SECOND PLACEMENT of the existing
-    `/closing/store-cash-on-hand` report (same endpoint/component, no forked derivation), and
-    **Current Monetary Liabilities** (NEW report, §4).
+    **Failing KPIs** (NEW report, §10), **Feed vs Transactions** (NEW report, §19.31 — what the carrier
+    feed claims beside what the store's transactions say, every difference attributed; tile appended by
+    mig `1029` through the same `ui_label_override` `scope='tiles'` mechanism), **Cash at Hand** = a
+    SECOND PLACEMENT of the existing `/closing/store-cash-on-hand` report (same endpoint/component, no
+    forked derivation), and **Current Monetary Liabilities** (NEW report, §4).
   - **Flags & Compliance** (`/compliance` — a curated page, the /storeops hub precedent): every
     flag/exception/compliance queue under one roof. StatTile COUNTS from
     `GET /commcalc/compliance-summary` — ONE thin count pass over the existing queues' own
@@ -4411,8 +4712,14 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `commcalc.calc_status.auto_calc_requested_at` / `.auto_calc_landings` / `.auto_calc_last` (mig `1030`, NOT applied) — **a pending auto-calculation and the last one's outcome** for one (org, month) | `auto_calc.landed` (queue), `auto_calc._claim` (the poller's conditional UPDATE), `auto_calc.run_one` → `_record_last` (outcome); pre-1030 the outcome goes to `calc_notices` (type `auto_calc`) | `auto_calc.run_due` (the poller), `auto_calc.view` ← `GET /commcalc/calc-status/{period}` → `_lib/AutoCalcNotice.tsx` on the Rep Incentive page (§6l) |
+| `commcalc.commission_org_config.auto_calc_on_landing` / `.auto_calc_debounce_minutes` (mig `1030`) — house row → tenant row override | migration 1030 (house row TRUE where NULL); SQL / a future settings writer | ONE reader `auto_calc.load_config` → `resolve_config` (lock: `harness_auto_calc_lock.py` E) (§6l) |
+| `data_lineage_registry.COMMISSION_CALC_FEEDS` / `SALES_SIBLING_TABLES` (code registry) — **which tables the Run Calculation reads** | code | `auto_calc.is_calc_feed` (the hook), `harness_auto_calc_lock.py` A/F (§6l) |
 | `commcalc.raw_sales.customer` + `commcalc.raw_sales_invoice.customer` (mig 1012) — as **the customer on a paid commission line** | the sales / sales-by-invoice uploads (unchanged) | THE rule `inventory_sold_recon.sale_customer` / `invoice_customer_map` → `commission_drilldown._sale_customers` (reads `trans_id,customer` only, org-scoped) → `attach_line_identity` → every plan line's `customer` (explain, statements, the range); also `sales_detail_index` (inventory integrity §11b) (§6j) |
+| `commcalc.rep_commissions` — ONE rep's row(s) for one period | `POST /commcalc/recompute-rep` → the full path (`_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines(persist_installments=False)`), writing only `_rows_for_rep` (update in place / insert) | the same readers as the full run's rows (§6k) |
 | `commcalc.rep_commissions` + the `/commission-explain` payload — as **what an EMPLOYEE may see of their own commission** | `calc_rep_commissions` / `commission_engine.preview` (unchanged) | THE shapers `payout_audience.employee_rep_row` / `employee_explain` / `employee_drill` (allow-lists; paid lines by `is_paid_line`) → `/commissions`, `/commissions-range`, `/commission-explain`, `/commission-statement(s)`, `/commission-drill`, core `/employee-dashboard`, the notify Incentives email (§6i) |
+| `commcalc.rep_commissions` + the `/commission-explain` / `/commission-drill` payloads — as **what ANY viewer sees on the Rep Incentive report** (no carrier money) | same | THE shapers `payout_audience.rep_incentive_row` / `rep_incentive_explain` / `rep_incentive_drill` for every audience; `_statement_doc` passes `buckets=None` (the `commission_ledger` rollup `_statement_buckets` is no longer read by a statement) (§6m) |
+| `storeops.roles.permissions.data.carrier_commission_view` (per role, per org; JSON, no migration) | Roles & Access (`rbac.ts DATA_GRANTS` checkbox) | THE carrier permission — read ONLY by `payout_audience.carrier_view_allowed` (unset = company-wide roles + the platform super admin) ← `router._can_view_carrier_commission` / `_require_carrier_view` and `core._me_payload` (§6m) |
 | `commcalc.payout_schedule` / `commcalc.plan_installment_schedule` — as the answer to **"is multi-month configured for this org"** (active rows) | the schedule editors (`payout-schedules`, `plan-installments`) | THE predicate `multimonth_config.schedule_counts` → `decide` / `load` → `GET /commcalc/multimonth/status` → `_lib/multimonth.useMultimonthStatus` (the Rep Incentive card + export, commission-explain, Expected vs Earned); the R1 guard `router._has_any_pay_source`. The engines keep their own loaders (§7/§8) (§6h) |
 | `commcalc.accessory_config.activation_details_rules` **`.event`** (`keys` · `precedence` · `count_unit`; JSON key, no migration, 2026-09-25) | `PUT /commcalc/accessory-config` (extra keys of the JSON pass through the one writer) | `line_class.resolve_event` ← `resolve_rules` → `activation_events` / `activation_units` — the plan pay gate's `per_event` (always events) and every activation COUNT (`count_unit`, house `'transaction'`): `_sales_cell_agg`, the Boost calculator, `commission_drill`, closing `_b2b_counts_by_store` / `_b2b_day`, `sales_comparison.tally` (§6f) |
 | `commcalc.commission_org_config.plan_pay_gate` **`.unit_basis.auto_event_fields`** (JSON key, mig 260 column; code default `['activation_bucket']`) · `commcalc.commission_rule.unit_basis = 'per_event'` | `PUT /commcalc/commission-plans/pay-gate` · `POST /commission-plans` (save accepts `per_event`) | `plan_pay_gate.resolve_unit_basis` → `select_paying_lines` → `_select_per_event` (events injected by `commission_engine.preview`); `payout_structure.describe_frequency`; `unit-multiplication-audit` `auto_deduped` (§6f) |
@@ -4455,9 +4762,10 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.raw_payment_detail` | epay sweep, upload | `calc_gp_report`, reimbursement categorization, **Processor Daily Debits & Credits** (`processor_ledger.assemble` — `amount` sign = credit/debit to the dealer, §15) |
 | `commcalc.raw_mi` | upload / MI sweep | carrier residual gate `installment_engine.compute_installments`, sale-installment gate, MI/ATU; the `subscribers` entry of the plan-source registry `core/plan_sources.HOUSE_SOURCES` (`customer_plan` + `base_mrc`, newest period, ON by default) → `onboarding._observed_plans(…, src)` (§23n.1); `raw_sales` (`sales_lines`) and `commission_ledger` (`statement_lines`) are the registry's two line-level entries, OFF until the org confirms its words |
 | `commcalc.raw_dlar_store` | `dlar_sweep.run_dlar_sweep:209` (replace), upload | `get_dlar_store_kpis` `10279`, `_cr_resolve_kpi_metrics` `25656`, MI tmr3 `28884` |
-| `commcalc.raw_dlar_rep` | `dlar_sweep` (replace, stamping `as_of_date` — mig `1026`, §19.28), upload | rep KPI, comp trend `15238`; the PAY ENGINE's tier via `kpi_failing.rep_kpi_values` (`REP_DLAR_COLUMNS`); `router._dlar_slice_vintage` for the feed vintage |
+| `commcalc.raw_dlar_rep` | `dlar_sweep` (replace, stamping `as_of_date` — mig `1026`, §19.28; the report SET is `dlar_sweep_config.reports`, mig `1029`, §19.31), upload | rep KPI, comp trend `15238`; the PAY ENGINE's tier via `kpi_failing.rep_kpi_values` (`REP_DLAR_COLUMNS`, and `REP_DERIVED_RATES` for the Ready App numerator — §19.31); `router._dlar_slice_vintage` for the feed vintage; the FEED side of `GET /dlar-vs-platform/{period}` |
 | `commcalc.raw_catalog` | upload `/product-mrc/import` region, catalog | GP, device COGS, installment MRC |
-| `commcalc.payout_config` | `/config/{period}` `10474`, `/commission-settings` `10517` | `calc_rep_commissions` (spiffs/tiers), installment base rates |
+| `commcalc.payout_config` | `/config/{period}` `10474`, `/commission-settings` `10517` | `calc_rep_commissions` (spiffs/tiers), installment base rates; **`kpi_boostapp_basis`** (mig `1029`, §19.31 — which basis the Ready App rate is measured on, per org PER PERIOD; NULL = the pre-ruling `feed_prepaid`) via `kpi_failing.resolve_boostapp_basis` |
+| `commcalc.dlar_sweep_config` | the admin sweep page via `router._dlar_cfg` (whole row) / `_dlar_public_cfg` (no password) | `_do_dlar_sweep` → `dlar_sweep.run_dlar_sweep`; **`reports`** (mig `1029`, §19.31 — which of `dlar_sweep.PORTAL_REPORTS` this org pulls; NULL = the default pair) via `dlar_sweep.resolve_report_set`. ⚠ `portal_pass` is the carrier portal password **in plaintext** — RLS-on/service_role-only, never browser-reachable, but it belongs in a secret store (§19.31 (9)) |
 | `commcalc.commission_org_config` | `/commission-settings` (incl. **`pl_commission_source`**, mig `1013` — its own statement, validated, READ BACK, refuses naming the migration when the column is absent), migrations (`209`,`306`,`308`,`309`,`314`,`934`,`939`,`992`,`996`,**`1013`**, **`1015` WRITTEN NOT APPLIED — `ma_leg_rate_schedule` + `ma_mrc_list_divisor`, §4a.2, surfaced for owner approval; both are `ADD COLUMN IF NOT EXISTS` on this same table and coexist with mig 1013's `pl_commission_source` (different columns, either order); zero blast radius until a row is written**) | THE per-org money-policy row (RULE TWO). Readers: `ma_store_pnl.load_config` (store attribution · month-spiff source/order types · MDF tokens · line labels · rebate presentation · device-margin presentation · **P&L commission source** `feeds`\|`ledger`\|`ledger_else_feeds`, mig 1013, resolved by `ledger_pnl.resolve_source` — the row read WHOLE through `core.column_tolerant.read_row`, §4b.1: ANY subset of columns; a pre-1013 DB reads `feeds` AND reports `config_columns_missing=['pl_commission_source']`) · `ma_store_pnl.load_unbooked_reasons` (`pl_ma_unbooked_reasons`, mig 994) · `residual_subs.load_ma_pnl_config` (`pl_merchant_discount_own_line`, `pl_ma_residual_order_types`) · `residual_subs.load_residual_report_config` (`residual_report_components`, mig 994) · `billpay_pl` (`pl_billpay_presentation`/`pl_billpay_settlement`) · the installment/plan engines (`installment_mrc_basis`, `plan_pay_gate`, `sales_source`) · `setup_fee_pay.load_pay_config` → `resolve_for_scope` (`setup_fee_pay`: `default` / `by_carrier` / `by_market` / `all_markets`, §6a). EVERY reader is org-scoped and ADAPTIVE — a missing column/row degrades to the code defaults, never raises — and since 2026-09-22 (§4b.1) NO reader selects a column block: each reads the row whole (`read_row`) and reports what is absent |
 | `commcalc.rep_commissions` | `_run_calculation`/`_apply_new_engines` `9183` | `/commissions/{period}` `10222`, GP report, commission-by-store, statements, MI (indirect) |
 | `commcalc.store_kpis` | KPI ingest/snapshot | tiers, exec |
@@ -4585,10 +4893,13 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `GET /commcalc/calc-status/{period}` — now also serves `auto_calc` `{state, tone, sentence, due_at, last, enabled}`: what the landing hook did for the month (queued / calculated / refused / failed / busy / off / running). Read by the Rep Incentive page | `router.get_calc_status` → `auto_calc.view` + `auto_calc.load_config` | §6l |
+| Every landing endpoint's response now carries `auto_calc` (`queued` + periods / `off` / `not_a_calc_input` / …): `POST /upload/{file_type}`, `POST /upload-mapped`, `POST /onboarding/intake/commit`, `POST /sales/promote-feed`, `POST /ingest-guard/queue/{item_id}/decide`, the commission import wizard commit, `POST /manual-upload/ingest`, the POS sync; the DLAR sweep's status line says "auto-calculation queued for …" | `auto_calc.landed` (no new route) | §6l |
 | `GET /commcalc/commissions/{period}` · `/commissions-range` · `/commission-explain` · `/commission-statement` · `/commission-statements` · `/commission-drill` — `audience=employee|manager` (default manager, byte-identical); a self-scoped rep is ALWAYS employee and may ask only for their own rep (403 otherwise) | `router._payout_audience` → `payout_audience.resolve` + `employee_*` shapers | §6i |
-| `GET /commcalc/carrier-vs-pay` · `/discrepancy/{period}` · `/discrepancy/{period}/phantom` · `/discrepancy-appeals` · `/commission-device` — manager-only carrier reports: 403 for a self-scoped rep, each by its REGISTERED key | `router._refuse_employee_audience(authorization, org_id, key)` → `payout_audience.MANAGER_ONLY_SURFACES` | §6i / §6j |
+| `GET /commcalc/carrier-vs-pay/{period}` · `/discrepancy/{period}` · `/discrepancy/{period}/phantom` · `POST /discrepancy/run` · `GET /discrepancy-appeals` · `/commission-device` · `/commission-explain?view=carrier` — the CARRIER surfaces: 403 for every viewer without `carrier_commission_view` (reps and store managers alike), each by its REGISTERED key | `router._require_carrier_view(authorization, org_id, key)` → `_can_view_carrier_commission` → `payout_audience.carrier_view_allowed`; keys in `payout_audience.MANAGER_ONLY_SURFACES` | §6i / §6j / §6m |
+| `GET /commcalc/commission-explain` (no `view`) · `/commission-drill` · `/commissions/{period}` · `/commissions-range` · `/commission-statement(s)` — the Rep Incentive payloads: NO carrier field for ANY audience | `payout_audience.rep_incentive_explain` / `rep_incentive_drill` / `rep_incentive_row`; `_statement_doc(buckets=None)` | §6m |
 | `GET /commcalc/commission-statement?rep=&period_from=&period_to=&fmt=pdf\|csv\|json` — ONE employee over a month range (≤ 12): each month = that month's single statement, month totals + grand total. READ-ONLY; own-rep 403 for a rep | `router.commission_statement_document` → `_statement_doc` (per month) → `commission_statement.build_range` / `render_range_pdf` / `range_csv` | §6j |
-| `GET /core/me` (+ `/core/bootstrap`) — `permissions.payout = {audience, refused_pages}`: the viewer's payout audience and the manager-only pages the server refuses them (the nav hides these) | `core._me_payload` → `payout_audience.viewer_payload(storeops.role_is_self_scoped(...))` | §6j |
+| `GET /core/me` (+ `/core/bootstrap`) — `permissions.payout = {audience, carrier_view, refused_pages}`: the viewer's payout audience, whether they hold the carrier permission, and the carrier pages the server refuses them (the nav hides these) | `core._me_payload` → `payout_audience.viewer_payload(storeops.role_is_self_scoped(...), payout_audience.carrier_view_allowed(...))` | §6j / §6m |
 | `GET /commcalc/multimonth/status?periods=` — is multi-month configured for this org (`configured` / `off` / `off_with_money` + the money per period + a note). READ-ONLY | `router.get_multimonth_status` → `multimonth_config.load` | §6h |
 | `GET /commcalc/commissions-range?period_from=&period_to=` — the Rep Incentive report over a month range (≤ 12), one row per rep per month + month subtotals + total. READ-ONLY; each month IS `get_commissions(month)` | `router.get_commissions_range` → `account/_period.month_range` → `get_commissions` (per month, in-process) → `rep_incentive_range.assemble` | §6g |
 | `GET /commcalc/commission-explain` · the reports **🔍 Plan commission** drill (`PlanLineBreakdown`) — every plan line now carries `event_id / event_key / event_key_kind / event_type` when a rule pays per activation; the pay-gate report `pay_gate.unit.activation_events` (events, ambiguous invoices, config) | `commission_engine.preview(detail=True)` → `commission_drilldown.explain_rep`; frontend `planLines.toPlanLine` / `eventsOf` | §6f |
@@ -4773,7 +5084,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /account/projection` (`?months=&horizon=` — deterministic linear/seasonal-naive P&L projection + cash runway, per-org `projection_config` mig `941`; rows flagged `projected:true`; `account_trends` grant) | `account/router.py` (`financial_projection` → pure `projection_engine.project`) | §4 projection engine |
 | `GET /account/valuation` (assumption-driven ESTIMATE range: TTM multiples + asset floor + projection-fed DCF w/ sensitivity grid; per-org `valuation_config` mig `941`; own default-closed `company_valuation` grant; disclaimer always in payload) | `account/router.py` (`company_valuation` → pure `valuation.valuation`) | §4 company valuation |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
-| `POST /commcalc/recompute-rep` | `commcalc/router.py` (`recompute_rep`) → **`_resolve_plan_by_rep`** + `_apply_engine_components_to_row` | §6c — recompute + UPSERT ONE rep's `rep_commissions` row. **It carried its own shorter copy of the plan resolution until 2026-09-17 and would have written `total_payout = 0.00` over a correct figure for any rep on an `exec_mtd`-basis plan** (and a halved figure for any rep in a month with partial `raw_sales`). Both money paths now share one resolver; §E of `harness_recompute_rep_parity.py` keeps it that way |
+| `POST /commcalc/recompute-rep` | `commcalc/router.py` (`recompute_rep`) → **`_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines(persist_installments=False)`** (the full run's own functions) → `_rows_for_rep` → update-in-place / insert of THAT rep's row only | §6k — the full path's row for ONE rep, written alone; no delete, no other rep, no installment-ledger write. **Broken (NameError `_id_map`) on every call 2026-09-17 → 2026-09-27; locked by `harness_recompute_rep_e2e.py` + `harness_undefined_names_lock.py`.** §6c history — **It carried its own shorter copy of the plan resolution until 2026-09-17 and would have written `total_payout = 0.00` over a correct figure for any rep on an `exec_mtd`-basis plan** (and a halved figure for any rep in a month with partial `raw_sales`). Both money paths now share one resolver; §E of `harness_recompute_rep_parity.py` keeps it that way |
 | `GET/PUT /commcalc/setup-fee/config` | `commcalc/router.py` (`get_setup_fee_config`/`save_setup_fee_config`) | §6a — the per-org set-up-fee economics: `default` / `by_carrier` / **`by_market`** / **`all_markets`** (the owner's all-markets checkbox). MONEY-TOUCHING: it applies on the next Calculate, nothing is recalculated on save |
 | `GET /commcalc/setup-fee/candidates/{period}` | `commcalc/router.py` (`setup_fee_candidates`) → `setup_fee_pay.candidates` | §6a — PICK-DON'T-TYPE: the tenant's own product descriptions that could BE the fee, ranked by the money they carry, each flagged `mapped_now`. **Use this before editing `setup_fee_keywords`** |
 | `GET /commcalc/setup-fee/recognition-divergence/{period}` | `commcalc/router.py` → `setup_fee_pay.divergence` | §6a — the two historic matchers measured against each other (case). Empty ⇒ switching `match_mode` moves $0 |
@@ -4788,6 +5099,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`; since 2026-09-08 also **`by_dm` + `dm_summary` — THE CASH SHORT BY DM REPORT**, folded from the SAME keyset-filtered day rows on `cash_pickup.picked_up_by`, never a second read; uncounted is reported as uncounted, never as short, and `over` never nets a short away, §23p), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
 | `GET /billpay-coverage/{period}` (per store/day: bill-pay ≤ cash+card, exceptions surfaced) | `commcalc/router.py` (`billpay_coverage` → `metric_recon.reconcile_billpay_coverage`) | §4 bill-pay carve-out / §15 |
+| `GET /dlar-vs-platform/{period}` (carrier feed vs the store's transactions, per metric, attributed; composes Executive MTD's cells + `raw_dlar_*` as landed + `dlar_sweep.slice_vintage`; pure `dlar_vs_platform.py`; READ-ONLY, `books_to == []`) | `commcalc/router.py` (`get_dlar_vs_platform`, beside `/kpi-failing`; helper `_platform_side`) | §19.31 — the difference report |
 | `GET /kpi-failing/{period}` (failing-KPI overview: /coaching target resolution + in-process `/dlar-store` store rows + `rep_commissions.kpi_values`; pure `kpi_failing.py`) | `commcalc/router.py` (`get_kpi_failing`, beside `/dlar-store`) | §10 failing-KPI report |
 | `GET /compliance-summary` (per-queue open counts over the existing flag/exception surfaces; failed probe = null, never 0; pure `compliance_summary.py`) | `commcalc/router.py` (`get_compliance_summary`, beside `/kpi-failing`) | §14 mig 948 Flags & Compliance |
 | `GET /account/liabilities-due` (owed-to-distributor + due-this-week payments/payroll/payroll-tax/rents/insurance per store; mig-434 + mig-946 gates fail closed; pure `account/liabilities_due.py`; distributor side = the SAME as-of-parameterized derivation the BS books, mig `954`) | `account/router.py` (`liabilities_due_endpoint` → `_liabilities_due_impl`) | §4 Current Monetary Liabilities |
@@ -4821,10 +5133,14 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
-| **Which menu entries a rep may not see** (manager-only payout reports) and **which payout view a viewer gets** | `storeops.roles.permissions.scope` + `app_config.rbac_enabled` | ONE registry `payout_audience.MANAGER_ONLY_SURFACES`, ONE self-scope answer `storeops.role_is_self_scoped`, served on `/me` (`viewer_payload`) → `rbac.payoutRefused` in `canSeeItem` / `canAccessPath`; audience by `payout_audience.resolve` (§6j) |
+| **Is this month's stored commission up to date with what landed?** ("Auto-calculated at … from the upload of …" / refused / off / queued) | `calc_status.auto_calc_requested_at` / `auto_calc_last` (mig 1030; pre-1030 `calc_notices` type `auto_calc`) | `auto_calc.view` via `GET /calc-status/{period}`; written only by the landing hook's runner, which runs `_run_calculation` (§6l) |
+| **One rep's recalculated commission row** (the Recalculate button) | `rep_commissions` (that rep's row only) | THE full path's row: `router._calc_inputs` + `_calc_rep_rows` + `_apply_new_engines`, shared with `_run_calculation`; lock `harness_recompute_rep_e2e.py` (== the full run's row, one rep, no ledger write) (§6k) |
+| **Undefined names in the backend** (a read name nothing binds — a NameError on first run) | `backend/app/**/*.py` | `harness_undefined_names_lock.py` (stdlib `symtable`), CI job *No undefined names under backend/app* (§6k) |
+| **Which menu entries a viewer may not see** (the carrier surfaces) and **which payout view a viewer gets** | `storeops.roles.permissions.scope` / `.data.carrier_commission_view` + `app_config.rbac_enabled` | ONE registry `payout_audience.MANAGER_ONLY_SURFACES`, ONE self-scope answer `storeops.role_is_self_scoped`, ONE carrier permission `payout_audience.carrier_view_allowed`, served on `/me` (`viewer_payload`) → `rbac.payoutRefused` in `canSeeItem` / `canAccessPath`; audience by `payout_audience.resolve` (§6j, §6m) |
+| **Who may see carrier commission** (what the carrier paid the store — Price / GP, MA cross-reference, dealer figures, ledger buckets) | `storeops.roles.permissions.data.carrier_commission_view` per role, per org; unset = company-wide roles + platform super admin | `payout_audience.carrier_view_allowed` (the one home) → `router._require_carrier_view` on every registered carrier surface; the Rep Incentive report shows it to nobody (§6m) |
 | **The sale on a paid commission row** (action · phone line · customer) | engine event stamp (`event_type`, `event_key`); `raw_sales.customer` / `raw_sales_invoice.customer` | `payout_audience.event_label` (`line_class.CLASS_LABELS`) · `line_phone` (`line_class.line_event_keys`) · `inventory_sold_recon.sale_customer` via `commission_drilldown.attach_line_identity`; frontend `planLines.saleLabel` (§6j) |
 | **One employee's incentive over several months** (per month + grand total) | `rep_commissions.total_payout` per month (the statement's payout of record) | `router._statement_doc` per month (== the single statement) → `commission_statement.build_range` (sums only) (§6j) |
-| **Which commission lines / fields an employee sees** (the paid line only; no carrier Price / GP / MA rebate) | engine verdict on each plan line (`suppressed`, `qualifies`, `flat_once`, `amount`); `rep_commissions` pay columns | ONE predicate `payout_audience.is_paid_line` + ONE allow-list set `payout_audience.EMPLOYEE_*_FIELDS`, audience by `payout_audience.resolve`; frontend declaration `_lib/payoutAudience.ts`; lock `harness_payout_audience_lock.py` (§6i) |
+| **Which commission lines / fields an employee sees** (the paid line only; no carrier Price / GP / MA rebate) | engine verdict on each plan line (`suppressed`, `qualifies`, `flat_once`, `amount`); `rep_commissions` pay columns | ONE predicate `payout_audience.is_paid_line` + ONE allow-list set `payout_audience.EMPLOYEE_*_FIELDS` (since §6m the allow-lists of EVERY Rep Incentive audience; a manager adds only `MANAGER_REASON_FIELDS`), audience by `payout_audience.resolve`; frontend `_lib/payoutAudience.ts` (`servedAudience`, `servedCarrierView`); lock `harness_payout_audience_lock.py` (§6i, §6m) |
 | **Is multi-month pay offered for this org** (the rep pay card's multi-month option) | active `payout_schedule` / `plan_installment_schedule` rows; multi-month $ on `rep_commissions.residual_installment_comm` + `installment_comm_sale` | ONE predicate `multimonth_config.decide` (backend) / `multimonthOffer.multimonthRows` (frontend); lock `harness_multimonth_offer_lock.py` (§6h) |
 | **Which months a window holds** (a from-month / to-month range, any period spelling) | — (calendar) | ONE enumeration `account/_period.month_range` (canonical names, oldest first, capped by the caller) — the Rep Incentive month range (§6g) and `discrepancy_appeals.period_range_variants` dereference it |
 | **ONE activation / upgrade** — what a per-activation or per-upgrade rate pays on, and what an activation count counts (owner 2026-09-25) | the activation-type lines of one invoice (`raw_sales` / feed rows, THE predicate) keyed by the phone line they name (`mdn` / phone-shaped `serial_1`), else device, else the invoice; config `accessory_config.activation_details_rules.event` | ONE definition `line_class.activation_events` (+ `line_event_keys`, `activation_units`); pay `plan_pay_gate._select_per_event` via `commission_engine.preview`; counts `_sales_cell_agg`, `calculator.calc_rep_commissions`, `commission_drill`, closing ×2, `sales_comparison.tally` (house unit 'transaction'); lock `harness_activation_event_lock.py`, proof `harness_activation_event.py` (§6f) |
@@ -4873,7 +5189,10 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | VHI/FIOS / home-internet count | `raw_sales` product tokens / `installment_category.py:82` | `_mi_resolve_numbers` `28843`; `installment_category` (plan-mode, runtime-only) |
 | Failing-KPI classification (store/rep below target; `no_data` never fails) | `raw_dlar_store` KPI columns (store grain, `kpi_failing.STORE_KPI_COLUMNS`) + `rep_commissions.kpi_values` (rep grain) vs `payout_config.kpi_*_target` falling back to `carrier_kpi_metric.target_default` | `kpi_failing.evaluate/store_rows/rep_rows` via `GET /kpi-failing/{period}` (§10) |
 | ATU % | `raw_dlar_store.atu` / `raw_dlar_rep.atu_pct` / `store_kpis.atu_pct` | `_cr_resolve_kpi_metrics` `25656`; MI ATU RPC mig `032`; the pay engine via `kpi_failing.rep_kpi_values` (§19.28) |
-| Boost App % (`boostapp`) | `raw_dlar_rep.boost_app_pct` — **DERIVED by us**, `dlar_sweep.derived_rate(boost_ready_bounty, ga_prepaid)`; **`None` when there is no denominator, never a measured 0** (§19.28; ⚠ the carrier's own basis looks like ALL activations, not prepaid — open with the owner) | `kpi_failing.rep_kpi_values` → `kpi_failing.score`; no store-grain column exists |
+| Boost App % / Carrier App (`boostapp`) | **DERIVED by us, and the denominator is the OWNER'S RULING (2026-09-27, §19.31):** `boost_ready_bounty` over the store's own NEW ACTIVATIONS (`line_class.new_activation_units` — Executive MTD's Total Activation less Upgrade less swap), resolved at SCORE time through `kpi_failing.REP_DERIVED_RATES` + `kpi_failing.derived_rate`. The LEGACY value is `raw_dlar_rep.boost_app_pct`, which `dlar_sweep.derived_rate(boost_ready_bounty, ga_prepaid)` wrote at INGEST; it is still read for historical rows and is what a tenant on `payout_config.kpi_boostapp_basis = 'feed_prepaid'` (the default) gets. **`None` when there is no denominator, never a measured 0** (§19.28) | `kpi_failing.rep_kpi_values(..., basis=…)` → `kpi_failing.score`; the basis comes from `calculator.calc_rep_commissions`; no store-grain column exists |
+| NEW ACTIVATIONS (how many — any surface) | DERIVED from the classified sale lines: `line_class.new_activation_units` over `activation_units`, per the org's `accessory_config.activation_details_rules.new_activation` (`classes` + `exclusions`; house = the owner's ruling: activation + port + byod, less swap). **ONE home** (§19.31) | the shared cell field `act_new_activation` (`router._apply_activation_basis`) → Executive MTD's `new_activation` column, the Boost pay engine's Ready App denominator, `GET /dlar-vs-platform/{period}` |
+| WHY A UNIT DOES NOT COUNT (swap / ineligible) | `line_class.exclusion_class(row, rules)` over the org's `exclusions` words, on the SAME fields the class predicate reads. **ONE home** — it replaced bare substring tests in `_sales_cell_agg`, `ma_recon._is_activation_line` and the chargeback detector (§19.31) | `router._sales_cell_agg` (`_swap`), `ma_recon._is_activation_line`, `_run_calculation`'s chargeback detector, `line_class.new_activation_units` |
+| FEED CLAIM vs STORE TRANSACTIONS (per metric) | `raw_dlar_rep` / `raw_dlar_store` AS LANDED vs the Executive-MTD cells, with the cause of each difference (`counting_definition` exact / `feed_vintage` undecidable / `grain` / `unattributed`) | `dlar_vs_platform.compare/entity_row/summarize` via `GET /dlar-vs-platform/{period}` (§19.31) |
 | A KPI's GRAIN (any metric) | DERIVED from `kpi_failing.REP_DLAR_COLUMNS` / `STORE_KPI_COLUMNS` — never stored | `kpi_failing.grain_of(metric_key)` → `'rep'` \| `'store'` \| `None`; stamped on `GET /carrier-kpi-metrics` (+ `rep_columns`) and on `GET /kpi-failing/{period}` defs. §19.28 (2b): familyplan / tmr3 / aal are STORE-grain only — NULL in all 516 `raw_dlar_rep` rows |
 | DOES A COLUMN STILL CARRY VALUES (the completeness axis) | the rows a sweep just normalised, against `data_lineage_registry.REQUIRED_CONTENT_COLUMNS` | `data_lineage_registry.content_arrival(rows, columns)` (pure); `dlar_sweep.run_dlar_sweep` → `status_sentence`. §19.18's two questions (arriving / content moving) both read GREEN through the July 2026 break |
 | A KPI's AS-OF DATE (any metric) | `raw_dlar_rep.as_of_date` / `raw_dlar_store.as_of_date` (mig `1026`); `created_at` is an UPPER BOUND for rows written before it | `dlar_sweep.vintage / vintage_of_row / slice_vintage`; `router._dlar_slice_vintage`; served as `feed_vintage` on `GET /kpi-failing/{period}` (§19.28) |
@@ -4958,6 +5277,15 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 ---
 
 ## 19. Known gaps & inert config
+
+§19.32 **NO PERIOD LOCK FOR A REP-COMMISSION MONTH (found building §6l, 2026-09-28).** There is no locked / finalized
+/ paid state for a `rep_commissions` month anywhere in the platform (searched the index, the migrations and the
+routers; the only draft→approved→paid lifecycle is Management Incentive's `mi_payout`, which the Run Calculation never
+writes). So the landing hook (§6l) recalculates a paid month when a late correction to it lands — exactly what a
+manual Run Calculation does today. When a period lock is built it belongs in `auto_calc.run_one` before the runner
+(recorded as its own outcome), and in `POST /calculate`. Also noted: an hourly-emailed feed recalculates the open
+month about hourly (debounced), as plan-mode tenants already were; a tenant that wants fewer runs raises its
+`auto_calc_debounce_minutes`.
 
 §19.23 **ePay AND VIP — ONE REAL BREAKAGE AND ONE FALSE ALARM (owner directive 2026-09-20: "fix the
 epay and vip connectors and also retire ftp for now").**
@@ -5582,6 +5910,22 @@ workflow that runs a `harness_*.py` without that default fails the build. `deplo
 unchanged (its `printf | grep -q` pipes would misbehave under pipefail). Found by the commission agent while wiring the
 multi-period ledger upload.
 
+§19.25b **A GATE THAT CANNOT RUN IS NOT A GATE — the same class as §19.25, the other way round (2026-09-27).**
+`harness_closing_filter_contract.py` (§29.10) was run from `carrier-vocab-guard.yml`'s stdlib-only
+`carrier-vocab-guard` job, which installs nothing. Its check (b) imports the real `closing.router` to exercise
+`_resolve_market_filter` / `_resolve_store_filter` / `_resolve_employee_filter` BEHAVIOURALLY rather than by reading
+source, and that module imports `fastapi` — so the step died with `ModuleNotFoundError` before check one, and passed on
+every developer machine because a developer machine has the backend installed. The harness's own docstring claimed
+"Stdlib only", which is what invited the move; the claim is now the truth (it names the job it belongs in and why).
+Fixed as a class, not as a step: `backend/harness_ci_pipefail_lock.py` (CI `security.yml` job `ci-pipefail`, enforcing)
+now also fails the build when a job WITHOUT `pip install` runs a harness whose MODULE-LEVEL imports reach a wheel —
+followed transitively through `app.*`, since that is how this one arrived. The wheel set is READ from
+`backend/requirements.txt` (`wheel_names()`), not restated, so a dependency added tomorrow is covered. Two things are
+deliberately not violations because neither can break module load: a `try:`-guarded import, and a third-party module the
+harness STUBS into `sys.modules` itself (`harness_tenant_vertical.py` does exactly that and is correctly placed in the
+no-deps job). Proven both ways: replaying the bad step into the workflow text reproduces the violation and names
+`app/modules/closing/router.py imports fastapi`; 28 checks, 9 of them negative controls.
+
 §19.26 **A MONEY GATE CHOSE ITS COLUMN BY RESEMBLANCE — the qualifier read TWP+ while the rule is TWP ALL
 (owner defect 2026-09-25; fixed as a class).** `paramount_kpi` matched the SUBSTRING `"current twp"` against the
 door report's header row and took the FIRST column containing it. The real report carries TWO — `Current TWP+%`
@@ -5939,6 +6283,276 @@ endpoints as declaring no filters at all. **That under-reading hid a real error 
 filter block had been inserted into `closing_duplicates` instead of `closing_attempts`, where it would
 have raised NameError on live traffic.** A guard that under-reads is worse than no guard, because it
 passes.
+
+§19.31 **ONE ACTIVATION COUNT, ONE HOME — the Ready App denominator, and the report that shows the
+feed against it (owner rulings 2026-09-27; code shipped, the money held).**
+
+OWNER RULING, verbatim: *"Denominator should be the total of new activations excluding upgrade and swap
+as reported in exec mats - data source is the same for all reports"* ("exec mats" = Executive MTD).
+This settles open question (iii) of §19.28. A second ruling the same day, verbatim: *"the comparison of
+the dlar report for numbers and the ones we are reporting in thr platform , they should be the same -
+the source of truth is the transaction done in thr store so all reporting should have the same data ,
+create a report for the. Difference of thr incoming data from dlar and whatever you are using to assess
+the difference and show it it in management dashboard"*. They are one change because the second
+report's content IS the first's count.
+
+**(1) THE CLASS. "How many new activations" had NO home, and the swap vocabulary had THREE.** §19.28
+fixed the numerator's honesty (`derived_rate` → `None`, not a fabricated 0) and left the denominator a
+feed column. The wider defect is that the *count itself* was never named: Executive MTD's Total
+Activation was a local expression inside `router._row`
+(`d['activation'] + d['port'] + d['byod'] + d['upgrade']`), the pay engine built its own
+`prem_set`/`byod_set`/`upg_set`, and "a swap is not a new activation" existed as a bare substring test
+in **three** places — `router._sales_cell_agg` (`'swap' in ctl`), `ma_recon._is_activation_line`
+(`"swap" in ct.lower()`, where the MA reconciliation's sold side had ALWAYS excluded swaps, so the
+ruling is not new behaviour there, it is the same rule finally written down once) and — found by the
+new lock, not by reading — the chargeback detector in `_run_calculation` (`'ineligible' in ct`).
+
+**THE HOME: `commcalc/line_class.py`,** beside the predicate and the event it already owns.
+- `EXCLUSION_KINDS = ("swap", "ineligible")`, `HOUSE_EXCLUSIONS` (`swap` → `['swap']`,
+  `ineligible` → `['ineligible']`), `resolve_exclusions(raw)`, and `exclusion_class(row, rules)` /
+  **`exclusion_kinds(row, rules)`** — THE reason one line does not count although its class does, read
+  over the SAME configured `fields` the class predicate reads, so a tenant whose POS carries the fact in
+  the category path is served. **TWO functions, and the distinction is a latent money bug removed:**
+  `exclusion_class` answers *"what is this line, in one word"* for a person reading a report, so it needs
+  a precedence — but a caller testing MEMBERSHIP (*"is this excluded under my config"*, *"is this an
+  ineligible activation"*) must read the SET. A value spelling BOTH kinds would otherwise report only
+  `swap`, and a config excluding only `ineligible` — or the chargeback detector, which looks only for
+  `ineligible` — would silently miss it. Measured 2026-09-27: **none of the 35 distinct `contract_type`
+  values live on the platform carries two kinds**, so the two agree everywhere today and the retired
+  `'ineligible' in ct` is byte-identical — which is exactly when this is cheapest to get right. Locked:
+  axis (i) fails the build on `exclusion_class(...) == '<kind>'` outside the two excused display callers.
+- `HOUSE_NEW_ACTIVATION = {"classes": ["activation","port","byod"], "exclusions": ["swap"]}` and
+  `resolve_new_activation(raw)` — **the house default IS the ruling, exactly as worded**: Total
+  Activation less Upgrade, less swap. Config per org in the EXISTING mig-313 JSON
+  (`accessory_config.activation_details_rules.new_activation` / `.exclusions`) — no migration for the
+  rule itself. An explicitly empty `classes` list is NOT honoured (a denominator of nothing is the
+  §19.28 defect wearing a different hat); an explicitly empty exclusion word list IS.
+- `new_activation_units(rows, rules, …)` — the count, over the SAME `activation_units` the caller
+  already pays and counts on (`units=` reuses them, so no second pass and therefore no second basis).
+  The exclusion is decided **per UNIT, not per line**: a BYOD-Swap invoice leaves the count once.
+  Returns the unit set, the count, `by_class`, and `excluded` **by kind as evidence** — a report must
+  be able to say which units came out and why, or "13 not 19" is an assertion, not a reconciliation.
+- `new_activation_from_buckets(counts, excluded, …)` — the ONLY other way in, for a surface whose
+  activation numbers came from a basis that replaced the line-level ones (Activation Details). It reads
+  the same `classes` config, so the two ways cannot drift.
+
+**(2) EVERY CALLER DEREFERENCES IT.**
+| surface | what it reads |
+|---|---|
+| `router._sales_cell_agg` | `_lc.new_activation_units(rows, line_rules, units=_units)` → per-cell `_newact`; `_swap` now filled by `_lc.exclusion_class` |
+| `router._apply_activation_basis` | sets the SHARED field `act_new_activation` (+ `act_swap_excluded`) on every cell — the sales basis from the exact unit set, the Activation-Details basis via `new_activation_from_buckets` with `new_activation_exclusions_applied: False` (the AD report does not say which units were swaps, so the report says the exclusion could not be applied rather than implying it was) |
+| Executive MTD `router._row` | new columns **`new_activation`**, **`swap_excluded`** and **`cross_bucket`** — the owner's number on the report he named it after, with the subtraction COMPLETE (see (2a)) |
+| `calculator.calc_rep_commissions` | the same count per rep → `basis={'boostapp': n}` into the ONE resolver, gated on `kpi_failing.resolve_boostapp_basis(cfg['kpi_boostapp_basis'])` |
+| `ma_recon._is_activation_line` | `_lc.exclusion_class(row, line_rules) == "swap"` |
+| `_run_calculation` chargeback detector | `_lc.exclusion_class(s, _cb_rules) == 'ineligible'` |
+| `GET /dlar-vs-platform/{period}` | composes `act_new_activation` — it never classifies a line itself |
+
+**(2a) WHY THE NUMBER IS NOT LITERALLY `total_activation − upgrade − swap`, and the defect that
+surfaced.** Executive MTD's `total_activation` is the **SUM of four per-line bucket counts**, and
+`_sales_cell_agg` assigns a transaction to a bucket PER LINE — so one invoice carrying an Activation line
+AND a BYOD line joins BOTH sets and Total Activation counts it **twice**. That is the §6d /
+`harness_activation_cross_bucket.py` defect **(C)**, already measured and still the owner's call.
+`new_activation_units` returns a **SET of unit ids**, so the denominator counts such an invoice ONCE and
+is free of the defect *by construction* — which is the right answer for a rate, and also means the two
+numbers differ. Rather than leave a silent difference (house August: 1092 against 1096), the cell carries
+`act_cross_bucket` and Exec MTD prints `cross_bucket`, so the identity is exact:
+
+> `total_activation − upgrade − swap_excluded − cross_bucket == new_activation`
+
+Verified live on three months, both grains: August 1926 − 696 − 134 − 4 = **1092** · September
+1629 − 566 − 117 − 9 = **937** · June 1853 − 672 − 106 − 2 = **1073**. **And every PRE-EXISTING Exec MTD
+field is byte-identical** — the payload replayed against commit `8753513d` over June/July/August/September
+2026, both grains, with only the three new keys removed: identical to the byte (148,727 bytes) — and
+identical again across **all three live tenants** over July/August/September, both grains (213,612 bytes).
+That matters because an `exec_mtd`-basis plan pays off this report, and because the tenant with
+POS-declared classification fields (`f4f1c16e…`, `fields: ['category','product_desc']`) is the one whose
+`_swap` tally the new `exclusion_class` could have moved — it did not. Pinned by
+`harness_ready_app_denominator.py` §E5–E8 and by lock axis (g), which fails the build if the Exec MTD row
+stops printing `cross_bucket` (a missing term is how a silent difference comes back).
+
+**(3) THE DERIVED RATE MOVED FROM INGEST TO COMPUTE.** `kpi_failing.REP_DERIVED_RATES =
+{"boostapp": ("boost_ready_bounty", "new_activations")}`, `kpi_failing.derived_rate(n, d)` (the
+score-side twin of `dlar_sweep.derived_rate`, same contract: no basis → `None`), a new source
+`SOURCE_REP_DERIVED = "rep_derived"`, and `rep_kpi_values(..., basis=None)`. **A caller that offers no
+basis reads the stored `boost_app_pct` exactly as before** — that is the money pin, and it is why
+shipping this moves nothing. A basis offered and unusable (no transactions, a zero count) is `no_data`;
+the stored column does NOT stand in, because letting it would restore the fabricated denominator.
+`resolve_boostapp_basis` applies §19.26's rule — **missing beats wrong on a money gate**: absent or
+unrecognised resolves to the PRE-RULING `feed_prepaid`, never to the new basis.
+
+**(4) THE RECONCILIATION, MEASURED — and it says the owner's wording is the right one.** Read-only,
+2026-09-27, HOUSE org, nothing recomputed or written. Every candidate denominator against the carrier's
+own `raw_dlar_rep.gross_adds`, at the grain the feed publishes (rep × door × period), 296 comparable
+cells (July onward the feed's `store` column is blank — §19.28 — so those months cannot be joined at
+door grain and are compared by rep name in the report instead):
+
+| candidate | exact | mean error | within ±1 |
+|---|---|---|---|
+| Total Activation (prem + byod + upgrade) | 43 (14.5%) | +8.61 | 96 |
+| Total Activation − upgrade | 119 (40.2%) | +2.34 | 190 |
+| **the ruling: − upgrade − swap** | **157 (53.0%)** | **+1.16** | **211** |
+| the ruling − ineligible port-in | 154 (52.0%) | +1.14 | 210 |
+| the ruling − ALL port-ins | 109 (36.8%) | **−1.66** | 182 |
+| the ruling − BYOD (activation + port only) | 96 (32.4%) | **−2.35** | 181 |
+
+**So the ruling as written is the best fit, and the two boundaries it did not state are now answered
+with evidence: a PORT-IN is a new activation and NEW BYOD is a new activation** — excluding either
+makes the platform *undercount* the carrier (mean −1.66 and −2.35), which is the opposite error. The
+third boundary is genuinely open: see (6).
+
+**THE REFERENCE REP, store 11636, August 2026** (the §19.28 case), on the live rows through the new home:
+
+| | `count_unit='transaction'` | `count_unit='event'` |
+|---|---|---|
+| premium (incl. port) / BYOD / upgrade | 8 / 11 / 16 | 9 / 11 / 11 |
+| Total Activation − upgrade | 19 | 20 |
+| **− swap (the ruling as written)** | **14** | **15** |
+| − swap − ineligible port-in | **13** | **13** |
+| ElevateGo's own finalised denominator | **13** (61.54% = 8/13) | |
+
+`kpi_failing.derived_rate(8, 13)` = **61.538…%**, the carrier's published figure to the digit. It still
+FAILS the 65 target, so the ruling does not lift that rep's tier on its own. Two facts fall out of this
+table: the ruling is **basis-stable across the §6f count_unit flip only once the ineligible boundary is
+closed** (14 vs 15 without it, 13 vs 13 with it); and the rep's `upgrade_acts` of **17** is the engine's
+rep-across-stores grain (16 at 11636 + 1 at another store) against the carrier's per-door 12 — a grain
+difference, not a counting one. **September 2026, rep grain, 68 comparable reps: 19 agree EXACTLY on
+new activations and the net difference is +26 across all of them** (against +784 in August, whose slice
+is the 24-August partial) — and the reference rep is feed 22 / platform 22, exact.
+
+**(5) THE MONEY — MEASURED, APPLIED NOWHERE.** Replaying the old engine against the new over the same
+live inputs, all **322** HOUSE rep-months, only `boostapp` changing: **62 rep-months change their
+met-count; 6 change a tier, and every one goes DOWN, totalling −$658.30** (June Waleed Asghar
+−153.72 · April Radhika Sharma −145.65 · June Yesica Reyes −124.71 · June Abdullah Mohammed −119.65 ·
+April Rana Akhtar −71.02 · March Angie Ramos −43.55; all 5/7→4/7, tier 0.75→0.50). **Nothing in July,
+August or September 2026 moves** — the column stopped arriving in July, so the rate is already NULL
+there. WHY it goes down, and why that is the ruling working: in March–June `ga_prepaid` WAS arriving and
+was tiny next to the store's transactions (Radhika April: bounty 1 over `ga_prepaid` 1 = "100%" against
+24 real new activations = 4.17%), so the old rate read near-100% for a rep who had sold one Ready App.
+The switch is **per period** (`payout_config.kpi_boostapp_basis`, mig `1029`), so setting it from
+September forward leaves every closed month exactly as paid and −$658.30 never happens. **HOUSE PAY IS
+BYTE-IDENTICAL until that column is set** (`harness_ready_app_denominator.py` §F7 is the pin).
+
+**(6) ⚠ OPEN — THE OWNER'S, NOT GUESSED.** (i) **Ineligible port-in**: in or out? The carrier's own
+August figure for the reference rep reconciles ONLY with it out, and excluding it is what makes the
+count identical under both count units — but across 296 cells it is a near-tie (53.0% vs 52.0% exact).
+Config statement in mig `1029` (c1). (ii) **Which period the new basis starts from** — mig `1029`
+Block 2 (a) vs (b), the −$658.30 turning on it. (iii) Port-in and new BYOD are answered by (4) and need
+nothing, recorded so the questions close with evidence.
+
+**(7) THE SWEEP'S REPORT SET IS CONFIG (owner: *"nothing is hard coded, option is platform wide"*).**
+`dlar_sweep.PORTAL_REPORTS` declares each report once (path, target table, normalizer, label) and
+`resolve_report_set(raw)` reads `dlar_sweep_config.reports` (mig `1029`; NULL = the default pair =
+byte-identical). **`boost_ready_by_advocate` is DECLARED and NOT ENABLED, deliberately**: its
+`normalize` is `None`, `resolve_report_set` refuses a report with no normalizer **by name with the
+reason**, and the run's record carries `reports` / `reports_refused` — a config the owner would
+otherwise believe was working. **Does it supersede the derivation?** Only if it carries the RATE per
+rep; if it carries the bounty COUNT (which is what `boost_ready_bounty` on the advocate report already
+is) it supersedes nothing and the denominator argument stands either way. That cannot be known without
+ONE sample of its `/inline` JSON, and guessing which key is the rate on a KPI that tiers pay is exactly
+§19.26 ("missing beats wrong on a money gate"). Enabling it is then one config row — mig `1029` (d).
+
+**(8) THE NEW REPORT — `GET /dlar-vs-platform/{period}` → `/commcalc/dlar-vs-platform`.**
+Pure logic `commcalc/dlar_vs_platform.py`; proof `backend/harness_dlar_vs_platform.py` (48 checks).
+- **It COMPOSES.** The platform side is `_sales_cell_agg` + `_apply_activation_basis` — Executive MTD's
+  own cells, `act_new_activation` included. The feed side is `raw_dlar_rep` / `raw_dlar_store` AS
+  LANDED. The vintage is `_dlar_slice_vintage` → `dlar_sweep.slice_vintage`. Which column carries a
+  metric is `kpi_failing`'s existing map. The absence vocabulary is `carrier_vs_pay`'s verbatim
+  (`reported` / `measured_zero` / `not_reported`), not a fourth spelling. It introduces **no table and
+  no ingest path**, so no lineage-registry row; `summary.books_to == []`.
+- **THE ONE JUDGEMENT CALL, and it is the heart of the report.** Three causes can make the sides
+  disagree, and they have different owners: a **counting definition** (exact, by named unit kind, and
+  attributed FIRST), a **stale feed slice**, and **nothing** (the finding). A stale slice does **not
+  EXPLAIN** a residual — it makes the comparison **UNDECIDABLE**, and the report says so. Measured why:
+  the reference rep's stored August slice says 4 activations where the carrier's finalised August says
+  13, so a partial snapshot does **not** grow in proportion to the days it is missing (24 of 31 days,
+  but 4 of 13 activations). Any rule that scaled a partial up by its day coverage would have called
+  that residual unexplained and sent somebody hunting a counting bug that is not there; any rule that
+  let staleness swallow the residual would hide a real one. So `decidable: False`, kept OUT of the
+  "to look at" headline, waiting on a fresh pull — which is the owner's action on live data.
+- **WHAT IT FOUND ON ITS FIRST RUN.** Against a hypothetically complete feed the reference rep's
+  activations reconcile exactly through the ineligible port-in, and **UPGRADES are +5 unattributed —
+  which is §19.28 (3)'s five BYOD-Swap invoices, reproduced from the outside** by a report that shares
+  the platform's one count. Supplying the upgrade side's own swap exclusion attributes it exactly.
+- Absence on BOTH sides: `ga_prepaid`, `store` (and, new this run, `raw_dlar_store.tmr3` — see (9))
+  read `not_reported`, never a delta of 0 and never a 100% variance; a metric the transactions cannot
+  speak to (ATU, protect, tablets on the sales basis, the bounty itself) says so rather than printing a
+  zero that looks like a measurement. A rep with no transactions is not a rep with zero.
+- The feed publishes per rep per **DOOR**: a rep with several feed rows is reported and marked
+  undecidable, never compared against whichever row happened to be first.
+- Placement: the **Management Overview dashboard** tile (mig `1029`, the `ui_label_override`
+  `scope='tiles'` mechanism — tile layout is config, appended by a guarded idempotent **jsonb** UPDATE
+  with mig 1016's own post-flight check) plus the `NAV_CARRIERS`-gated nav entry.
+  **A MIGRATION BUG CAUGHT BEFORE SHIPPING, and the general fact behind it.** The first draft of that
+  block did `replace(label, '{"title":"Failing KPIs"', …)`. Measured against the LIVE row 2026-09-27: it
+  matches **0 rows**, so the guarded UPDATE would have silently not fired — a migration that reports
+  success and adds no tile. Mig `948` INSERTed COMPACT JSON, but the row has since been **re-serialised**
+  (spaces after colons, keys reordered: `… "items": [{"href": "/commcalc/kpi-failing"}], "title":
+  "Failing KPIs"}`) because the Dashboard Designer round-trips the layout through a JSON encoder.
+  **So ANY migration that string-matches into a tile layout is broken by construction** — jsonb append
+  plus an `@>` containment guard is order- and whitespace-proof. The two sibling tile migrations
+  (`1002`, `1016`) were CHECKED in the same pass and both already use jsonb, so there is no sibling
+  defect; this one was the only offender. Mig `1029` Block 1 was then **run on real PostgreSQL 16
+  against a copy of the live row**: apply (9 → 10 tiles, the `\u2696\ufe0f` icon decoding correctly, both
+  columns landing), re-run clean (the post-flight "exactly 1 tile" assertion holding), the REVERT block
+  pasted verbatim restoring 10 → 9 tiles and dropping both columns, and a clean re-apply after it. Standard filters narrow client-side over the already-span-scoped
+  payload — `/kpi-failing`'s and `/dlar-store`'s own pattern in this module, so no fourth server-side
+  filter spelling is invented. Sorted from the first commit through `useTableSort` / `SortableTh`.
+
+**(9) LIVE-DATA DEFECTS FOUND WHILE MEASURING — REPORTED, NOT CODED AROUND.**
+- **A NEW column stopped arriving, and it is one the PAY ENGINE TIERS ON: `raw_dlar_store.tmr3`.**
+  Measured per period (read-only, house org, 28 store rows each month): **July 28/28 filled · August
+  28/28 · September 0/28**, while `family_plan_pct`, `aal_conversion` and `atu` stayed 28/28 — so it is
+  that one column, not the report. The sweep's own 2026-09-27 11:01Z status already said so
+  (`⚠ PARTIAL … ⚠ COLUMN STOPPED ARRIVING: raw_dlar_store.tmr3 (0 of 28 rows), raw_dlar_rep.store
+  (0 of 45), raw_dlar_rep.ga_prepaid (0 of 45)`): the §19.28 content-arrival axis earning its keep on a
+  break nobody would otherwise have seen. **Why it matters twice over:** `tmr3` is in
+  `kpi_failing.STORE_KPI_COLUMNS`, one of the three store-grain KPIs the Boost pay engine ROLLS DOWN to
+  every rep (§19.28 (2b)), and it is the column the MI 3MR manager qualifier averages (§19.28 (vi)).
+  **And this is the §19.28 fix working in production right now:** before it, an empty `tmr3` would have
+  been a fabricated `0` failing every rep and dragging every manager's qualifier; today it resolves to
+  `None` → `no_data`, outside the met-count denominator, so September's scores are honest about it
+  instead of quietly wrong. The remedy is upstream (the carrier's report) and is the owner's, not ours.
+  `ga_prepaid` and `store` are still gone, three months on.
+- **`raw_dlar_rep` holds SEVERAL ROWS PER REP PER PERIOD and the pay engine silently keeps ONE.**
+  `calculator.dlar_rep_by_name[name] = d` — last insert wins. Measured: March 24 duplicated rep names
+  (Waleed Asghar 6 rows), April 23, May 19, June 19, July 3, August 2, September 2. So a rep who worked
+  several doors is tiered on whichever door row landed last, and `boost_ready_bounty` — the Ready App
+  NUMERATOR — is per door, so it is one door's bounty against (under the ruling) that rep's whole
+  activation count. Fixing the resolver MOVES PAY (atu / protect / byod / boostapp all read from that
+  row), so it waits for the owner. The new report makes it visible: those reps are marked undecidable
+  with the grain reason.
+- **`LAST, FIRST` is a literal placeholder rep name on the advocate report** — 13 rows July, 5 August,
+  3 September. Those rows carry KPI values attributable to nobody.
+- **`as_of_date` is populated from the 2026-09-27 sweep onward** (September rows: `as_of_date`
+  2026-09-25, `basis='as_of_date'`), so mig `1026` Block 1 IS applied and the §19.28 fix is live.
+  August and July rows remain NULL and fall back to their write date as an upper bound, never
+  back-filled. **The vintage gap is still open:** the 2026-09-27 pull carries the portal's own
+  `import_date` of 09/25 — 5 days short of September — so an open month is compared against a slice
+  two days older than the pull.
+- **`commcalc.dlar_sweep_config.portal_pass` stores the carrier portal password in PLAINTEXT** in a
+  config column. RLS-on, service_role-only and never returned by `_dlar_public_cfg`, so it is not
+  browser-reachable — but it is readable by anything holding the service key and it lands in any
+  transcript that prints the row. It belongs in the environment / a secret store with the column
+  holding only a reference, and the same is true of `vip_sweep_config`, `epay_sweep_config` and
+  `411_storeops_google_reviews_config` which follow the same pattern. Reported, not changed: rotating a
+  live credential and moving four sweeps' auth is the owner's call. **This password was printed into an
+  owner transcript on 2026-09-26 and needs rotating.**
+- **`backend/harness_activation_bucketing.py` fails on `main` (48 passed, 1 failed, check F3) and NO
+  workflow runs it.** A pre-existing red harness that no gate executes is a lock that is not locking —
+  the §19.25 class, on a different file. Not touched here; reported.
+
+**(10) THE LOCK.** `harness_activation_event_lock.py` EXTENDED (not a sibling): the home's `DEFS` gains
+`exclusion_class` / `new_activation_units` / `new_activation_count` / `new_activation_from_buckets`, and
+three axes join it — **(g)** every caller of the new-activation count dereferences the home (Exec MTD's
+cells, the basis applier, the Exec MTD row incl. `cross_bucket`, the pay engine's denominator, the
+difference report);
+**(h)** the derived rate has one home (`kpi_failing`) and one arithmetic, and a third `derived_rate`
+anywhere under `backend/app` is RED; **(i)** a bare `'swap'`/`'ineligible'` test on a sale line, a
+membership question asked of `exclusion_class` rather than `exclusion_kinds`, or a
+second `len(prem) + len(byod)`, is RED. Nine new negative controls, each proving its axis can go red,
+plus the existing "the unmodified tree is GREEN" control. Proof of the rules:
+`harness_ready_app_denominator.py` (83 checks) and `harness_dlar_vs_platform.py` (48 checks), both
+stdlib and DB-free, both in `carrier-vocab-guard.yml`. 27 checks on the lock.
 
 ---
 

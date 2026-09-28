@@ -176,11 +176,25 @@ on:
       - "backend/harness_line_class.py"
       - "backend/harness_activation_event_lock.py"
       - "backend/harness_activation_event.py"
+      - "backend/harness_ready_app_denominator.py"
+      - "backend/harness_dlar_vs_platform.py"
+      - "backend/app/modules/commcalc/dlar_vs_platform.py"
+      - "backend/app/modules/commcalc/kpi_failing.py"
+      - "backend/app/modules/commcalc/dlar_sweep.py"
       - "backend/harness_rep_incentive_range.py"
       - "backend/harness_multimonth_offer.py"
       - "backend/harness_multimonth_offer_lock.py"
       - "backend/app/modules/commcalc/multimonth_config.py"
       - "backend/harness_payout_audience.py"
+      - "backend/harness_recompute_rep_e2e.py"
+      - "backend/harness_auto_calc_on_landing.py"
+      - "backend/app/modules/commcalc/auto_calc.py"
+      - "backend/app/modules/commcalc/report_pull.py"
+      - "backend/app/modules/commcalc/epay_sweep.py"
+      - "backend/app/modules/pos/commcalc_feed.py"
+      - "backend/harness_recompute_rep_parity.py"
+      - "backend/app/modules/commcalc/installment_engine.py"
+      - "backend/app/modules/commcalc/sale_installment_engine.py"
       - "backend/harness_payout_audience_lock.py"
       - "backend/app/modules/commcalc/payout_audience.py"
       - "backend/app/modules/commcalc/commission_statement.py"
@@ -475,6 +489,12 @@ jobs:
       - name: Run the KPI registry lock (one built-in KPI set; one rep-grain AND store-grain feed map; the PAID score, the SHOWN score and the hand-entry grid read them; no fabricated zero, no fabricated denominator, each DLAR grain carries its own as-of date — index §19.27 / §19.28)
         working-directory: backend
         run: python3 harness_kpi_registry_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the Ready App denominator proof (ONE new-activation count = Exec MTD Total Activation less Upgrade less swap; the carrier reconciliation 8/13; the derived rate resolved at score time; house pay byte-identical until the basis column is set — owner 2026-09-27, index §19.31)
+        working-directory: backend
+        run: python3 harness_ready_app_denominator.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the feed-vs-transactions proof (every difference attributed to a counting definition, held undecidable behind a stale slice, or reported as the finding; absence is never zero on either side — owner 2026-09-27, index §19.31)
+        working-directory: backend
+        run: python3 harness_dlar_vs_platform.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the table-sort ratchet (a new data table cannot ship unsorted; the unsorted list only shrinks — owner 2026-08-10, index §19.29)
         working-directory: backend
         run: python3 harness_table_sort_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -528,6 +548,15 @@ jobs:
       - name: Run the payout-audience proof (employee sees the paid line with its sale, no carrier $; manager full; own-rep 403; the one-employee month range == its single statements — index §6i / §6j)
         working-directory: backend
         run: python3 harness_payout_audience.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the one-rep recompute end-to-end proof (runs the handler; writes only that rep's row == the full run's; no ledger write — index §6k)
+        working-directory: backend
+        run: python3 harness_recompute_rep_e2e.py | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the recompute-rep parity proof (one plan resolution, reached through the full path — index §6c / §6k)
+        working-directory: backend
+        run: python3 harness_recompute_rep_parity.py | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the auto-calc-on-landing proof (three real landers → ONE Run Calculation == the manual one; burst, late month, refusal recorded, config off, org-scoped, pre-1030 fallback — index §6l)
+        working-directory: backend
+        run: python3 harness_auto_calc_on_landing.py | grep -v -E '^(INFO|DEBUG|WARN) ' | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the plan-sources lock (one registry of plan-name sources; one resolver for preview and apply; one writer; the card seeds from the proposal; no vendor)
         working-directory: backend
         run: python3 harness_plan_sources_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

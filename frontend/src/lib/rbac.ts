@@ -20,14 +20,16 @@ export type Permissions = {
   scheduling_reach?: SchedulingReach  // SCHEDULING reach (whom you may schedule); default 'org'
   home?: string
   impersonate?: boolean               // "Sign in as an employee" — DEFAULT-DENY, no bypass (see below)
-  // WHO THIS VIEWER IS TO A PAYOUT SURFACE (index §6j) — stamped by the SERVER on /me
-  // (`payout_audience.viewer_payload`): the audience it will serve them and the manager-only pages it refuses
-  // them (THE registry `payout_audience.MANAGER_ONLY_SURFACES`). The client decides nothing; it hides these.
-  payout?: { audience?: 'employee' | 'manager'; refused_pages?: string[] }
+  // WHO THIS VIEWER IS TO A PAYOUT SURFACE (index §6j, §6m) — stamped by the SERVER on /me
+  // (`payout_audience.viewer_payload`): the audience it will serve them, whether they hold the carrier permission
+  // (`carrier_view`) and the carrier pages it refuses them (THE registry `payout_audience.MANAGER_ONLY_SURFACES`).
+  // The client decides nothing; it hides these.
+  payout?: { audience?: 'employee' | 'manager'; carrier_view?: boolean; refused_pages?: string[] }
 }
-// Is this path a manager-only payout page the SERVER refuses this viewer (index §6j)? The pages come from /me —
-// the same registry the server's 403 reads — so the menu never offers a report the server will refuse. No
-// bypass: a per-function grant or the admin module cannot reopen what the server refuses.
+// Is this path a carrier page the SERVER refuses this viewer (index §6j, §6m)? The pages come from /me — the same
+// registry the server's 403 reads, refused to every viewer without the carrier permission (reps and store managers
+// alike) — so the menu never offers a report the server will refuse. No bypass: a per-function grant or the admin
+// module cannot reopen what the server refuses.
 export function payoutRefused(perms: Permissions | undefined, path: string): boolean {
   for (const h of perms?.payout?.refused_pages || []) if (path === h || path.startsWith(h + '/')) return true
   return false
@@ -150,6 +152,7 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/sales-comparison', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
   ['/commcalc/kpi-failing', 'commissions'],
+  ['/commcalc/dlar-vs-platform', 'commissions'],
   ['/commcalc/zero-sales', 'commissions'],
   ['/commcalc/discrepancy', 'commissions'], ['/commcalc/sales-recon', 'commissions'],
   ['/commcalc/epay-fee-recon', 'commissions'],
@@ -191,6 +194,11 @@ export function hasReport(perms: Permissions, area: string): boolean {
 export const DATA_GRANTS: { key: string; label: string; help?: string }[] = [
   { key: 'carrier_residual', label: 'Carrier residual (raw carrier data)',
     help: 'Raw carrier/processor residual reports (raw_mi-derived). Only enforced when the tenant sets residual visibility to "permissioned".' },
+  // THE carrier-commission permission (owner 2026-09-28, index §6m). Registered here ONLY so the Roles editor can
+  // tick / untick it per role; the decision is the server's (`payout_audience.carrier_view_allowed`) and reaches
+  // the client as /me `permissions.payout` — never read it with hasDataGrant (the lock fails the build if you do).
+  { key: 'carrier_commission_view', label: 'Carrier commission (what the carrier paid)',
+    help: 'Carrier Earned vs Employee Paid, Pay Discrepancy, Commission Discrepancy, the device commission story and the Price / GP / MA cross-reference on "How was this calculated?" (backend commcalc `_require_carrier_view`). DEFAULT: top management only — company-wide roles hold it until unticked; grant it to a scoped role to open it. The Rep Incentive report never shows carrier commission to anyone, with or without this.' },
   { key: 'device_commission', label: 'Device history commission amounts',
     help: 'Per-period commission & rebate $ on the Device History Lookup (backend commcalc `_can_view_device_commission`). DEFAULT-CLOSED — admin-only until granted; the device history / prompts / tenure stay visible to everyone regardless.' },
   { key: 'statement_held', label: 'Incentive statement — held / not-yet-paid section',
@@ -457,6 +465,10 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // NEW report (2026-09-03): high-level overview of every KPI below target, store → rep drill-down.
     { href: '/commcalc/kpi-failing', label: 'Failing KPIs', icon: '🎯', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // NEW report (owner 2026-09-27): what the carrier's report claims, beside what the store's own
+    // transactions say, with every difference attributed — a counting definition, a stale feed slice,
+    // or nothing (the finding). Composes the ONE activation count Executive MTD prints.
+    { href: '/commcalc/dlar-vs-platform', label: 'Feed vs Transactions', icon: '⚖️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // NEW report (owner 2026-09-22): store-days and rep-days with no activation and no upgrade. A
     // store whose feed did not land reads "not reported", never zero — see commcalc/zero_sales.py.
     { href: '/commcalc/zero-sales', label: 'Zero Sales', icon: '🚫', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
@@ -1148,7 +1160,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/targets', 'targets'], ['/commcalc/targets/action-plan', 'targets'],
   ['/commcalc/atu-opportunity', 'targets'],
   ['/commcalc/targets/accessories', 'targets'], ['/commcalc/targets/my', 'targets'],
-  ['/commcalc/kpi', 'targets'], ['/commcalc/kpi-failing', 'targets'], ['/commcalc/productivity', 'targets'], ['/commcalc/coaching', 'targets'],
+  ['/commcalc/kpi', 'targets'], ['/commcalc/kpi-failing', 'targets'], ['/commcalc/dlar-vs-platform', 'targets'], ['/commcalc/productivity', 'targets'], ['/commcalc/coaching', 'targets'],
   // Assets & Inventory (incl. Distributors/VIP consignment)
   ['/commcalc/asset', 'assets'], ['/commcalc/asset/dashboard', 'assets'], ['/commcalc/asset/owed-weekly', 'assets'],
   ['/commcalc/asset/aging', 'assets'], ['/commcalc/asset/missing-phones', 'assets'],
@@ -1623,7 +1635,7 @@ export type NavBlockReason =
   | { gate: 'payout'; detail: string }
 export function navBlockReason(perms: Permissions, item: NavItem): NavBlockReason | null {
   if (payoutRefused(perms, item.href)) {
-    return { gate: 'payout', detail: 'a management report — the server refuses it to a rep viewing their own pay' }
+    return { gate: 'payout', detail: 'carrier commission — the server refuses it to anyone without the "Carrier commission" permission' }
   }
   if (isSuperAdmin(perms)) return null
   if (MGMT_ONLY.has(item.href)) {
@@ -1736,4 +1748,38 @@ export function safeHomeFor(perms: Permissions, vertical?: VerticalInfo | null):
     }
   }
   return '/account/password'   // canAccessPath() always allows this → guaranteed non-looping
+}
+
+
+// ── THE PAGE TITLE — derived from THIS registry, never typed a second time ────────────────────────
+// Owner 2026-09-27 ("generic page titles"). 328 pages shipped one title: every browser tab read
+// "MetricsPro — Commission Intelligence", so a user with eight tabs open could not tell them apart.
+//
+// WHY NOT `export const metadata` PER PAGE: 324 of the 328 are `'use client'`, and a client component
+// cannot export metadata in the app router. The honest options were 328 new server layouts or ONE
+// derivation — and the label is already here, beside the href, for the nav. So the title reads the
+// SAME entry the sidebar reads: rename a nav item and its tab renames itself. A second list of
+// route titles would be the duplicate this file's own invariant forbids.
+//
+// Longest-prefix match, so `/commcalc/kpi/detail` inherits "KPI Metrics" rather than falling back,
+// while an exact `/commcalc/kpi` still wins over a shorter parent.
+export function navLabelForPath(path: string): string | null {
+  const p = (path || '').split('?')[0].replace(/\/+$/, '') || '/'
+  let best: { href: string; label: string } | null = null
+  for (const g of NAV) {
+    for (const it of g.items) {
+      const h = it.href.replace(/\/+$/, '')
+      if (p === h || p.startsWith(h + '/')) {
+        if (!best || h.length > best.href.length) best = { href: h, label: it.label }
+      }
+    }
+  }
+  return best ? best.label : null
+}
+
+/** The full document title for a route. Falls back to the product name alone rather than to a
+ *  half-built string, so an unregistered route never shows "— MetricsPro" with nothing in front. */
+export function documentTitleForPath(path: string): string {
+  const label = navLabelForPath(path)
+  return label ? `${label} · MetricsPro` : 'MetricsPro'
 }

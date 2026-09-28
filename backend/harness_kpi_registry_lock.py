@@ -306,8 +306,13 @@ check("(h) THE CALCULATION RECORDS THE KPI VINTAGE IT TIERED ON — a mid-month 
       and "KPI slice this run tiered on is as of" in ROUTER
       and "DIFFERENT vintages" in ROUTER
       and "calc_notices.append(" in ROUTER)
+# The vintage block ends where the run hands its inputs to THE calculation — since index §6k that call is
+# `_calc_rep_rows(_in, period)` (the shared helper `_run_calculation` and `recompute_rep` both use). The end
+# marker must be FOUND, or the slice would run to the end of the file and read unrelated raises.
+_VINT_END = "result = _calc_rep_rows("
+_after_vint = _hl.py_code_only(ROUTER).split("slice_vintage(")[1]
 check("(h) …and it does NOT refuse the run (blocking a payroll recalculation is the owner's policy call)",
-      "raise" not in _hl.py_code_only(ROUTER).split("slice_vintage(")[1].split("result = calc_rep_commissions")[0])
+      _VINT_END in _after_vint and "raise" not in _after_vint.split(_VINT_END)[0])
 check("(h) THE GRAIN a KPI is measured at is DERIVED from the feed maps, never stored",
       "def grain_of(" in KPIF and "REP_DLAR_COLUMNS" in fn_body(KPIF, "grain_of")
       and "STORE_KPI_COLUMNS" in fn_body(KPIF, "grain_of"))

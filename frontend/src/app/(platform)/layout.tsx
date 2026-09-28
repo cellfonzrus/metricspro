@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { PeriodProvider, usePeriod } from '@/lib/period-context'
 import { HelpProvider } from '@/lib/help-context'
 import HelpToggle from '@/components/HelpToggle'
+import DocumentTitle from '@/components/DocumentTitle'
 import AskBar from '@/components/AskBar'
 import { useAuth, useActiveCarrier } from '@/lib/auth-context'
 import { setActiveOrg, api } from '@/lib/client'
@@ -768,6 +769,10 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
   return (
     <PeriodProvider>
       <HelpProvider>
+        {/* Tab title from the route's OWN nav label (owner 2026-09-27, "generic page titles").
+            Outside <Guard> so the tab is named even while the guard is deciding — a tab that reads
+            the product name until auth resolves is fine; eight identical tabs are not. */}
+        <DocumentTitle />
         <Guard>{children}</Guard>
       </HelpProvider>
     </PeriodProvider>

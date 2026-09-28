@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 # THE one home of "which columns must carry a value" (index §19.18 arrival/content, §19.28 completeness).
 from app.modules.commcalc import data_lineage_registry as _lineage
+from app.modules.commcalc import auto_calc as _auto_calc   # the ONE post-landing hook (index §6l)
 
 import requests
 
@@ -130,6 +131,58 @@ def derived_rate(numerator, denominator):
     if n is None or d is None or d <= 0:
         return None
     return n / d * 100.0
+
+
+# ── WHICH REPORTS THIS PORTAL SERVES — ONE DECLARATION, and the SET is per-org CONFIG ─────────────
+# OWNER, verbatim: *"also need to add this https://boostelevatego.com/reports/boost-ready/by-advocate to
+# poplate the kpi for boost app, which gives the data per rep … nothing is hard coded, option is platform
+# wide"*. `run_dlar_sweep` had the two report names written into its body, so adding a third was a code
+# change in the middle of the path that WIPES AND REWRITES a live commission period. The names, the table
+# each lands in, and the normalizer that shapes it are declared here ONCE, and which of them a tenant
+# pulls is `dlar_sweep_config.reports` (mig `1029`; NULL = the default pair = byte-identical).
+#
+# `boost_ready_by_advocate` IS DECLARED AND IS NOT ENABLED, deliberately: a report whose JSON nobody here
+# has ever seen cannot be given a normalizer without guessing which key carries the rate, and a guessed
+# mapping on a KPI that tiers pay is the §19.26 defect ("missing beats wrong on a money gate"). Its
+# `normalize` is None, `resolve_report_set` refuses to enable a report that has none, and the refusal says
+# what is needed: ONE sample pull. See index §19.31 for what it would supersede if it carries the rate.
+PORTAL_REPORTS = {
+    "dlar":     {"path": "dlar",     "table": "raw_dlar_store", "normalize": "normalize_store",
+                 "label": "store (DLAR)", "default": True},
+    "advocate": {"path": "advocate", "table": "raw_dlar_rep",   "normalize": "normalize_rep",
+                 "label": "rep (Advocate)", "default": True},
+    "boost_ready_by_advocate": {
+        "path": "boost-ready/by-advocate", "table": "raw_dlar_rep", "normalize": None,
+        "label": "Ready App per rep", "default": False,
+        "needs": ("no normalizer: one sample of this report's /inline JSON is needed to map which key "
+                  "carries the per-rep rate before it may write to a table that tiers pay")},
+}
+DEFAULT_REPORT_SET = tuple(k for k, v in PORTAL_REPORTS.items() if v["default"])
+
+
+def resolve_report_set(raw=None):
+    """The org's report set (`dlar_sweep_config.reports`, a JSON/text list) → (keys, refused). PURE.
+
+    Missing / junk / empty → `DEFAULT_REPORT_SET`, so every tenant to date pulls exactly the two reports
+    it always did. A declared report with no normalizer is REFUSED BY NAME with the reason, never silently
+    dropped and never pulled — an unmapped report that writes nothing is a config the owner would
+    otherwise believe was working. An unknown key is refused the same way."""
+    keys, refused = [], []
+    items = raw if isinstance(raw, (list, tuple)) else None
+    if isinstance(raw, str):
+        items = [x.strip() for x in raw.replace(",", " ").split() if x.strip()]
+    for k in items or ():
+        k = str(k or "").strip()
+        if k in keys:
+            continue
+        spec = PORTAL_REPORTS.get(k)
+        if spec is None:
+            refused.append((k, "not a report this portal declares"))
+        elif not spec.get("normalize"):
+            refused.append((k, spec.get("needs") or "no normalizer"))
+        else:
+            keys.append(k)
+    return (tuple(keys) if keys else DEFAULT_REPORT_SET), refused
 
 
 def login(session, user, pw):
@@ -429,7 +482,7 @@ def _as_of_column(client, table, org_id):
         return False
 
 
-def run_dlar_sweep(client, org_id, user, pw):
+def run_dlar_sweep(client, org_id, user, pw, reports=None):
     """Login, pull both reports, and replace the period's raw_dlar_rep / raw_dlar_store rows.
 
     A full snapshot (not incremental): the DLAR is month-to-date cumulative, so we wipe the
@@ -438,12 +491,13 @@ def run_dlar_sweep(client, org_id, user, pw):
     session.headers.update({"User-Agent": UA})
     login(session, user, pw)
 
-    store_recs, import_date = fetch_report(session, "dlar")
+    report_keys, report_refused = resolve_report_set(reports)
+    store_recs, import_date = fetch_report(session, PORTAL_REPORTS["dlar"]["path"])
     # EACH GRAIN'S OWN AS-OF DATE. The advocate report's `import_date` used to be thrown away (`rep_recs,
     # _ = …`) and the rep rows were stamped with the STORE report's period — so a rep slice could be
     # filed under a month its own report did not describe, and no column anywhere said when either
     # number was true. See `vintage()` for the live consequence.
-    rep_recs, rep_import_date = fetch_report(session, "advocate")
+    rep_recs, rep_import_date = fetch_report(session, PORTAL_REPORTS["advocate"]["path"])
     period, pm, py = _period_from_import(import_date)
     base = {"org_id": org_id, "period": period, "period_month": pm, "period_year": py}
     as_of = {"raw_dlar_store": as_of_date(import_date),
@@ -490,6 +544,16 @@ def run_dlar_sweep(client, org_id, user, pw):
             client.schema("commcalc").table(tbl).insert(rows_out[i:i + 500]).execute()
         written[tbl] = len(rows_out)
 
+    # DATA LANDED (index §6l) — the ONE post-landing hook, per grain that was actually WRITTEN (a grain the
+    # partial-collapse guard refused changed nothing, so it queues nothing). Replaces the inline
+    # `_run_calculation` the router's `_do_dlar_sweep` used to make on every run; the two grains of one pull
+    # coalesce into ONE queued calculation of the period.
+    auto_calc = None
+    for tbl in ("raw_dlar_store", "raw_dlar_rep"):
+        if written.get(tbl):
+            auto_calc = _auto_calc.landed(client, org_id, table=tbl, periods=[period], source="dlar_sweep",
+                                          rows=written[tbl])
+
     # WHAT WAS WRITTEN, NOT WHAT WAS PULLED (the §19.21 class, on the one path it survived on). The old
     # summary reported `len(store_rows)` / `len(rep_rows)` — the PULL — so a run whose rep table was
     # refused by the guard still read "OK — 28 stores, 45 reps" while writing zero rep rows. That is how
@@ -500,6 +564,11 @@ def run_dlar_sweep(client, org_id, user, pw):
             "pulled": {"raw_dlar_store": len(store_rows), "raw_dlar_rep": len(rep_rows)},
             "written": written,
             "content": content,
+            # WHICH REPORTS THIS RUN PULLED, and every report the config named that could not be —
+            # by name, with the reason. A refused report is part of the run's record, not a silence.
+            "reports": list(report_keys),
+            "reports_refused": [{"report": k, "reason": r} for k, r in report_refused] or None,
             # kept for compatibility with the status line: these are the PULL counts it has always shown
             "stores": len(store_rows), "reps": len(rep_rows),
-            "skipped_guard": skipped or None}
+            "skipped_guard": skipped or None,
+            "auto_calc": auto_calc or {"queued": False, "reason": "nothing_landed"}}

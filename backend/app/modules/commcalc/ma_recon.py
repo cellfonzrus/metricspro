@@ -99,13 +99,22 @@ def canonical_period(period):
 
 
 # ── PURE: sold side ────────────────────────────────────────────────────────────────────────────────
-def _is_activation_line(row):
+def _is_activation_line(row, line_rules=None):
     """The sold-side basis test (see module docstring): non-blank contract_type, not a swap, not
-    voided. PURE."""
+    voided. PURE.
+
+    "NOT A SWAP" IS NOT THIS MODULE'S FACT (owner ruling 2026-09-27, index §19.31). It was a bare
+    `"swap" in ct.lower()` here and a second bare copy in `router._sales_cell_agg`; the same rule the
+    owner has now ruled the Ready App denominator on. It lives once, in
+    `line_class.exclusion_class(row, rules)`, read over the org's own configured fields and words, and
+    this is a dereference. `line_rules` None → the house rules, whose swap word is the literal 'swap'
+    over `contract_type` → byte-identical to the line this replaces for every caller to date.
+    """
+    from app.modules.commcalc import line_class as _lc          # pure; lazy, to keep imports light
     ct = str((row or {}).get("contract_type") or "").strip()
     if not ct:
         return False
-    if "swap" in ct.lower():
+    if _lc.exclusion_class(row, line_rules) == "swap":
         return False
     if _is_voided((row or {}).get("voided")):
         return False
