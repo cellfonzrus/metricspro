@@ -80,7 +80,7 @@ export default function ReportsPage() {
   const { period } = usePeriod()
   const { carriers, permissions } = useAuth()
   const isBoost = carrierMode(carriers) === 'boost'   // non-Boost carriers pay via plans, not KPI tiers
-  // the commission-explain diagnostic is a CARRIER surface (index §6l): the server refuses it to anyone without the
+  // the commission-explain diagnostic is a CARRIER surface (index §6m): the server refuses it to anyone without the
   // carrier permission and /me lists it in refused_pages — so every link to it here asks payoutRefused first
   const explainOpen = !payoutRefused(permissions, EXPLAIN_PAGE)
   const [reps, setReps] = useState<Rep[]>([])
@@ -1110,7 +1110,7 @@ export default function ReportsPage() {
         const moneyBucket = drillComp === 'accessories' || drillComp === 'setup'
         // Price / GP only where the SERVER served them: the percentage-paid buckets (accessories / setup — the
         // customer's price the rep is paid a % of). A count-paid bucket carries no carrier money for ANY viewer
-        // (owner 2026-09-28, index §6l — backend payout_audience.rep_incentive_drill), so it has no such columns.
+        // (owner 2026-09-28, index §6m — backend payout_audience.rep_incentive_drill), so it has no such columns.
         const showMoneyCols = moneyBucket && !!b?.items?.some((it: any) => it?.ext_price !== undefined)
         return (
           <div onClick={() => setDrillComp(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
@@ -1318,7 +1318,7 @@ export default function ReportsPage() {
                         <div style={{ overflowX: 'auto' }}>
                           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                             <thead><tr style={{ background: 'var(--surface2)' }}>
-                              {/* no "MA says paid" column for ANY viewer (owner 2026-09-28, index §6l): it is the
+                              {/* no "MA says paid" column for ANY viewer (owner 2026-09-28, index §6m): it is the
                                   carrier's statement — the carrier diagnostic keeps it, behind the carrier permission */}
                               {['IMEI', 'Device — Rate plan', 'Category', 'Month', 'Pay period', 'Status / hold reason', 'Paid $', 'Held $', 'MRC'].map(h =>
                                 <th key={h} style={{ textAlign: ['Paid $', 'Held $', 'MRC'].includes(h) ? 'right' : 'left', padding: '5px 8px', fontSize: 10, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{h}</th>)}

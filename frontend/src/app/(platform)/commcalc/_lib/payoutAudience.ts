@@ -4,7 +4,7 @@
 // ("managers can see rep incentive"); the server states the result on the payload (`audience`), which is what the
 // shared components render from, and on /me (`permissions.payout`) for anything drawn before a payload arrives.
 //
-// CARRIER MONEY (owner 2026-09-28, index §6l): no Rep Incentive payload carries it for ANY audience. Only the
+// CARRIER MONEY (owner 2026-09-28, index §6m): no Rep Incentive payload carries it for ANY audience. Only the
 // carrier diagnostic's payload does, served to a holder of the carrier permission and stamped `carrier_view: true`
 // by the server — `servedCarrierView` reads that stamp; nothing here decides who may see it.
 // Import-free; harness_payout_audience_lock.py fails the build if a payout page forces an audience again.

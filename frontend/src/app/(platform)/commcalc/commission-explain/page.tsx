@@ -19,7 +19,7 @@ import { GoogleRatingChips, GoogleRatingDetail, useGoogleRatings } from '../_lib
 // assignment, per-rule matched sale lines) and the MULTI-MONTH component (per-device M1..N installments
 // with gate status/reason + the MA-file cross-reference). Plus a $0 explanation and an IMEI device search.
 //
-// A CARRIER SURFACE (owner 2026-09-28, index §6l): it asks the explain endpoint for `view=carrier` — the carrier's
+// A CARRIER SURFACE (owner 2026-09-28, index §6m): it asks the explain endpoint for `view=carrier` — the carrier's
 // money (Price / GP, implied cost, the MA cross-reference) — which the SERVER serves only to a holder of the carrier
 // permission (403 otherwise); the nav hides this page from everyone else (/me refused_pages → payoutRefused). The
 // Rep Incentive report reads the same endpoint without the view and is served no carrier field.

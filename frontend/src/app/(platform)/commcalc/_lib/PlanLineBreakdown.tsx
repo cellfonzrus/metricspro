@@ -32,7 +32,7 @@ import {
 // EMPLOYEE columns (owner 2026-09-26: "only show the line they are getting paid … carrier commission not be
 // displayed") vs MANAGER columns vs the CARRIER diagnostic's. The audience is the one the SERVER served
 // (payload.audience — backend payout_audience.resolve). Price / GP are the carrier's money (owner 2026-09-28, index
-// §6l: "it should not show any commission received on the rep incentive report, that is only for the eyes of the
+// §6m: "it should not show any commission received on the rep incentive report, that is only for the eyes of the
 // management") — they are columns ONLY when the payload was served in the carrier view (`carrier`, from
 // servedCarrierView — the server stamps it after checking the carrier permission); no Rep Incentive payload
 // carries them. The employee's row names the SALE (action · phone line · customer) in place of the product name

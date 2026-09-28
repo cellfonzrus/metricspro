@@ -122,7 +122,7 @@ def _sale_line_items(plan_component, include_held, employee):
     — the employee drill-down already holds only paid lines; a manager statement lists the paid lines, plus the
     unpaid ones only when the held section is granted (`include_held`, the same default-closed gate). An employee
     row carries no product name; a manager row adds the product. NO row carries a carrier figure for anyone (owner
-    2026-09-28, index §6l: the sale's Price / GP is the carrier's money — "only for the eyes of the management")."""
+    2026-09-28, index §6m: the sale's Price / GP is the carrier's money — "only for the eyes of the management")."""
     rows = []
     for rule in (plan_component or {}).get("rules") or []:
         what = display_label(rule.get("label")) or describe_condition(rule)
@@ -276,7 +276,7 @@ def build_statement(explain, buckets=None, tenant_name="", rep_name="", period="
             "installments_paid": int(_f((mm.get("totals") or {}).get("paid"))),
             "installments_held": int(_f((mm.get("totals") or {}).get("withheld"))),
             # the five rows only when a ledger rollup was GIVEN (the router gives none since 2026-09-28 — the ledger
-            # buckets are the carrier's statement per rep, index §6l); [] otherwise, never five $0.00 placeholders
+            # buckets are the carrier's statement per rep, index §6m); [] otherwise, never five $0.00 placeholders
             "buckets": bucket_rows if buckets is not None else [],
             "bucket_total": money(bucket_total),
             "has_buckets": has_buckets,
@@ -661,7 +661,7 @@ def render_range_pdf(rng):
 
 
 _CSV_EMPLOYEE_COLS = ("month", "section", "item", "date", "invoice", "action", "phone", "customer", "amount")
-# no carrier figure in either (owner 2026-09-28, index §6l) — the manager adds the product and the ⛔ status only
+# no carrier figure in either (owner 2026-09-28, index §6m) — the manager adds the product and the ⛔ status only
 _CSV_MANAGER_COLS = ("month", "section", "item", "date", "invoice", "action", "phone", "customer", "product",
                      "status", "amount")
 
@@ -669,7 +669,7 @@ _CSV_MANAGER_COLS = ("month", "section", "item", "date", "invoice", "action", "p
 def range_csv(rng):
     """The range document as CSV text: per month its sale lines, its earned items and its total, then the grand
     total. The employee's columns carry no product and no carrier figure (the sale lines are already shaped);
-    a manager's add product and status — never the carrier's Price / GP (index §6l). PURE."""
+    a manager's add product and status — never the carrier's Price / GP (index §6m). PURE."""
     import csv
     import io
     rng = rng or {}

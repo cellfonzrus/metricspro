@@ -3,7 +3,7 @@
 // report directory, a hub or by URL (owner 2026-09-26: "pay discrepancy should be hidden"). The pages come from
 // /me (`permissions.payout.refused_pages`, built by backend payout_audience.viewer_payload from THE registry
 // MANAGER_ONLY_SURFACES) and are read by lib/rbac.ts `payoutRefused` inside canSeeItem / canAccessPath — the two
-// gates every NAV consumer already goes through. Since 2026-09-28 (index §6l) they are refused to every viewer
+// gates every NAV consumer already goes through. Since 2026-09-28 (index §6m) they are refused to every viewer
 // WITHOUT the carrier permission (a store manager as much as a rep). Backend half + lock:
 // backend/harness_payout_audience*.py.
 //
@@ -42,7 +42,7 @@ ok('the registry names the commission-explain carrier diagnostic as a menu-less 
 
 const base = { modules: { commissions: true }, reports: { comm: true, commissions: true } }
 const rep = { ...base, scope: 'self', payout: { audience: 'employee', carrier_view: false, refused_pages: REFUSED } }
-// OWNER DECISION 2026-09-28 (index §6l): carrier commission is "only for the eyes of the management, gated out from
+// OWNER DECISION 2026-09-28 (index §6m): carrier commission is "only for the eyes of the management, gated out from
 // all levels" — a store manager WITHOUT the carrier permission is refused the same pages as a rep; top management
 // (the permission's house default) is refused nothing. (Before: "a manager still sees Pay Discrepancy".)
 const sm = { ...base, scope: 'store', payout: { audience: 'manager', carrier_view: false, refused_pages: REFUSED } }

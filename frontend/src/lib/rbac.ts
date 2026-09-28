@@ -20,13 +20,13 @@ export type Permissions = {
   scheduling_reach?: SchedulingReach  // SCHEDULING reach (whom you may schedule); default 'org'
   home?: string
   impersonate?: boolean               // "Sign in as an employee" — DEFAULT-DENY, no bypass (see below)
-  // WHO THIS VIEWER IS TO A PAYOUT SURFACE (index §6j, §6l) — stamped by the SERVER on /me
+  // WHO THIS VIEWER IS TO A PAYOUT SURFACE (index §6j, §6m) — stamped by the SERVER on /me
   // (`payout_audience.viewer_payload`): the audience it will serve them, whether they hold the carrier permission
   // (`carrier_view`) and the carrier pages it refuses them (THE registry `payout_audience.MANAGER_ONLY_SURFACES`).
   // The client decides nothing; it hides these.
   payout?: { audience?: 'employee' | 'manager'; carrier_view?: boolean; refused_pages?: string[] }
 }
-// Is this path a carrier page the SERVER refuses this viewer (index §6j, §6l)? The pages come from /me — the same
+// Is this path a carrier page the SERVER refuses this viewer (index §6j, §6m)? The pages come from /me — the same
 // registry the server's 403 reads, refused to every viewer without the carrier permission (reps and store managers
 // alike) — so the menu never offers a report the server will refuse. No bypass: a per-function grant or the admin
 // module cannot reopen what the server refuses.
@@ -194,7 +194,7 @@ export function hasReport(perms: Permissions, area: string): boolean {
 export const DATA_GRANTS: { key: string; label: string; help?: string }[] = [
   { key: 'carrier_residual', label: 'Carrier residual (raw carrier data)',
     help: 'Raw carrier/processor residual reports (raw_mi-derived). Only enforced when the tenant sets residual visibility to "permissioned".' },
-  // THE carrier-commission permission (owner 2026-09-28, index §6l). Registered here ONLY so the Roles editor can
+  // THE carrier-commission permission (owner 2026-09-28, index §6m). Registered here ONLY so the Roles editor can
   // tick / untick it per role; the decision is the server's (`payout_audience.carrier_view_allowed`) and reaches
   // the client as /me `permissions.payout` — never read it with hasDataGrant (the lock fails the build if you do).
   { key: 'carrier_commission_view', label: 'Carrier commission (what the carrier paid)',

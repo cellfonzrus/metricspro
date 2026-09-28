@@ -12,7 +12,7 @@ Z1321IN10551 only its invoice header — so both halves of the sale-customer rul
     879 of 882 phone lines live carry it as exactly that pair).
 
   A. MANAGER on the Rep Incentive report: every matched line with its ⛔ reason — and, since the owner's decision of
-     2026-09-28 (index §6l: "it should not show any commission received on the rep incentive report, that is only
+     2026-09-28 (index §6m: "it should not show any commission received on the rep incentive report, that is only
      for the eyes of the management, gated out from all levels"), NO Price / GP / carrier field (Jona Sejat, July
      2026: no ext_price or gp key anywhere). The CARRIER view (`view=carrier`, the diagnostic) is the drill-down
      itself, for a holder of the carrier permission only.
@@ -21,21 +21,21 @@ Z1321IN10551 only its invoice header — so both halves of the sale-customer rul
   C. A SELF-scoped caller is ALWAYS served the employee form (asking for 'manager' changes nothing) and may not
      read another rep (403).
   D. The rep rows (`/commissions/{period}`) and the Incentive Statement: no dealer figure and no commission-ledger
-     bucket for ANY audience (§6l); the manager statement keeps the ⛔ held lines (grant held).
+     bucket for ANY audience (§6m); the manager statement keeps the ⛔ held lines (grant held).
   E. `is_paid_line` reads the engine's verdict: suppressed / non-qualifying / $0 lines are not paid; a flat
      bonus and a negative line are.
   F. (index §6j) the paid row names its SALE — the action, the phone line, the customer (THE sale-customer rule;
      only `trans_id,customer` read, org-scoped); the manager row carries them too; the statement lists them.
-  G. (§6j/§6l) WHO: /me's viewer payload hides every registered carrier page from anyone without the carrier
+  G. (§6j/§6m) WHO: /me's viewer payload hides every registered carrier page from anyone without the carrier
      permission; each refusal names its registered label; the self-scope answer is one function; a manager viewing
      the Rep Incentive page (no audience sent) gets the manager report — reasons, no carrier money.
   H. (§6j) ONE employee over a MONTH RANGE: each month IS that month's single statement (to the cent), month
      totals + the grand total are sums of them; CSV / PDF; a rep may run it only for themselves; the 12-month cap.
-  I. (§6l) THE CARRIER PERMISSION — one home (`payout_audience.carrier_view_allowed`), per-org role config with the
+  I. (§6m) THE CARRIER PERMISSION — one home (`payout_audience.carrier_view_allowed`), per-org role config with the
      top-management default: an owner / admin gets Price / GP on commission-explain's carrier view and is not
      refused carrier-vs-pay; a store manager / market manager / rep is refused 403 on both; an org can grant it to
      a store manager or take it from a company-wide role; no caller is refused while logins are on.
-  J. (§6l) EVERY Rep Incentive surface × EVERY audience (employee, store manager, owner WITH the permission): the
+  J. (§6m) EVERY Rep Incentive surface × EVERY audience (employee, store manager, owner WITH the permission): the
      plan drill, the Boost drill, the rows, the month range, the statement (single / range JSON + CSV / batch) and
      the emailed Incentives report carry NO carrier field.
 
@@ -203,7 +203,7 @@ _SELF = {"keys": None}
 R._caller_rep_keys = lambda authorization, org_id: _SELF["keys"]
 R._can_view_statement_held = lambda authorization, org_id: True      # the manager holds the grant
 
-# WHO IS SIGNED IN (the carrier permission, index §6l): the REAL `_can_view_carrier_commission` resolves the caller
+# WHO IS SIGNED IN (the carrier permission, index §6m): the REAL `_can_view_carrier_commission` resolves the caller
 # through core's `_uid_from_token` + `_resolve_caller` — stubbed here to a token → caller table (roles as each org's
 # Roles & Access would hold them), and the login master switch ON (the live posture).
 from app.modules.core import router as _CORE          # noqa: E402
@@ -255,7 +255,7 @@ def act_lines(res, tid):
 
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════════
-# OWNER DECISION 2026-09-28 (index §6l) — reverses the part of §6j (#309) that gave a manager Price / GP on the Rep
+# OWNER DECISION 2026-09-28 (index §6m) — reverses the part of §6j (#309) that gave a manager Price / GP on the Rep
 # Incentive report: "the incoming commission is shown on the line item as $150 and $5 on the first transaction ...
 # it should not show any commission received on the rep incentive report, that is only for the eyes of the
 # management, gated out from all levels". A1–A6 used to assert the manager drill carried the carrier $; they now
@@ -340,7 +340,7 @@ _SELF["keys"] = None
 section("D. rep rows and the Incentive Statement — no carrier money for ANY audience (owner 2026-09-28)")
 rm = asyncio.run(R.get_commissions(PERIOD, authorization="", org_id=ORG))
 re_ = asyncio.run(R.get_commissions(PERIOD, authorization="", org_id=ORG, audience="employee"))
-# was "manager rows unchanged (the dealer figures stay for the manager)" — reversed by the owner's decision (§6l)
+# was "manager rows unchanged (the dealer figures stay for the manager)" — reversed by the owner's decision (§6m)
 check("D1 manager rows carry NO dealer figure (boost_commission / boost_reimbursement) — the shape asks nobody who is looking",
       "boost_commission" not in rm[0] and "boost_reimbursement" not in rm[0] and PA.carrier_fields_in(rm) == [], rm[0])
 check("D2 the employee rows == the manager rows: one allow-list, every pay field kept",
@@ -362,7 +362,7 @@ smm = R.commission_statement_document(REP, PERIOD, fmt="json", audience="manager
 se = R.commission_statement_document(REP, PERIOD, fmt="json", audience="employee", authorization="", org_id=ORG)
 check("D3 the manager statement is byte-identical (audience absent == manager)",
       json.dumps(sm0, sort_keys=True, default=str) == json.dumps(smm, sort_keys=True, default=str))
-# was "the manager statement still shows the ledger buckets" — reversed by the owner's decision (§6l)
+# was "the manager statement still shows the ledger buckets" — reversed by the owner's decision (§6m)
 check("D4 the manager statement: NO ledger buckets (never even read) — the ⛔ held lines stay (grant held)",
       (sm0.get("summary") or {}).get("has_buckets") is False and (sm0.get("summary") or {}).get("buckets") == []
       and _BUCKETS_READ == [] and bool(sm0.get("held")) and PA.carrier_fields_in(sm0) == [],
@@ -515,7 +515,7 @@ check("F8 the employee statement lists its sales that paid: 2 rows, action · ph
       len(se_lines) == 2 and all(r["status"] == "Paid" and r.get("customer") and r.get("phone") for r in se_lines)
       and not any(k in r for r in se_lines for k in ("product", "ext_price", "gp")), se_lines)
 sm_lines = sm0.get("sale_lines") or []
-# was "... the product, Price / GP, the ⛔ reasons" — Price / GP reversed by the owner's decision of 2026-09-28 (§6l)
+# was "... the product, Price / GP, the ⛔ reasons" — Price / GP reversed by the owner's decision of 2026-09-28 (§6m)
 check("F9 the manager statement (held grant) lists every matched line — the product and the ⛔ reasons, NO Price / GP",
       len(sm_lines) > len(se_lines) and any(r.get("product") for r in sm_lines)
       and any(r["status"] != "Paid" for r in sm_lines) and not any("ext_price" in r or "gp" in r for r in sm_lines))
@@ -523,13 +523,13 @@ check("F10 Σ statement sale-line $ == Σ drill-down line $ (the lines restate t
       round(sum(r["amount_raw"] for r in se_lines), 2) == PA.rule_line_total(e) == 20.0)
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════════
-section("G. WHO is looking — /me's viewer payload, the registry, the self scope (index §6j, §6l)")
+section("G. WHO is looking — /me's viewer payload, the registry, the self scope (index §6j, §6m)")
 vp_rep, vp_sm, vp_top = PA.viewer_payload(True, True), PA.viewer_payload(False, False), PA.viewer_payload(False, True)
 check("G1 a rep is told: audience employee, every carrier page refused (Pay Discrepancy among them) — even if a role "
       "row claims the permission",
       vp_rep["audience"] == "employee" and vp_rep["carrier_view"] is False and "/commcalc/discrepancy" in vp_rep["refused_pages"]
       and set(vp_rep["refused_pages"]) == set(PA.MANAGER_ONLY_PAGES))
-# was "a manager is told: nothing refused" — since 2026-09-28 only a holder of the carrier permission is (§6l)
+# was "a manager is told: nothing refused" — since 2026-09-28 only a holder of the carrier permission is (§6m)
 check("G2 a manager WITHOUT the carrier permission is told: audience manager, every carrier page refused "
       "(the commission-explain diagnostic among them); top management WITH it: nothing refused",
       vp_sm == {"audience": "manager", "carrier_view": False, "refused_pages": list(PA.MANAGER_ONLY_PAGES)}
@@ -560,7 +560,7 @@ _SO._rbac_enabled, _SO._role_scope = _orig
 check("G5 ONE self-scope answer (the nav's and the server's): rep yes, DM / owner no, RBAC off never",
       g5 == (True, False, False) and g5off is False, (g5, g5off))
 mgr_page = explain("", "tok:owner")         # the Rep Incentive page sends no audience (and no view)
-# was "... gets the FULL report: ⛔ lines, Price / GP" — Price / GP reversed by the owner's decision of 2026-09-28 (§6l)
+# was "... gets the FULL report: ⛔ lines, Price / GP" — Price / GP reversed by the owner's decision of 2026-09-28 (§6m)
 check("G6 a manager — even an owner with the carrier permission — on the Rep Incentive page (no audience, no view) "
       "gets the manager report: ⛔ lines with reasons, NO Price / GP",
       mgr_page.get("audience") == "manager" and any(l.get("suppressed") for l in act_lines(mgr_page, "Z1321IN11092"))
@@ -602,7 +602,7 @@ hdr_e, hdr_m = csv_e.splitlines()[0], csv_m.splitlines()[0]
 check("H4 employee CSV: action / phone / customer, no product / Price / GP column; month totals + the grand total",
       "customer" in hdr_e and "product" not in hdr_e and "ext_price" not in hdr_e and "gp" not in hdr_e.split(",")
       and CUST1 in csv_e and "month total" in csv_e and "grand total" in csv_e and ",30.0" in csv_e, hdr_e)
-# was "manager CSV: adds product, status, Price and GP" — Price / GP reversed by the owner's decision of 2026-09-28 (§6l)
+# was "manager CSV: adds product, status, Price and GP" — Price / GP reversed by the owner's decision of 2026-09-28 (§6m)
 check("H5 manager CSV: adds product and status — NO Price / GP column",
       all(k in hdr_m.split(",") for k in ("product", "status"))
       and not any(k in hdr_m.split(",") for k in ("ext_price", "gp")), hdr_m)
@@ -627,7 +627,7 @@ except R.HTTPException as ex:
     check("H10 more than 12 months is refused 400 (the Rep Incentive range cap)", ex.status_code == 400)
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════════
-section("I. THE CARRIER PERMISSION — one home, per-org roles, top management by default (owner 2026-09-28, §6l)")
+section("I. THE CARRIER PERMISSION — one home, per-org roles, top management by default (owner 2026-09-28, §6m)")
 _truth = {k: PA.carrier_view_allowed(c, caller_is_self=(k == "rep")) for k, c in CALLERS.items()}
 check("I1 house default: owner / admin (company-wide) and the platform super admin YES; store manager / market "
       "manager NO; a rep NO even when its role row says granted",
@@ -678,7 +678,7 @@ except KeyError:
     check("I12 a refusal naming an UNREGISTERED carrier surface raises before deciding anything", True)
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════════
-section("J. EVERY Rep Incentive surface × EVERY audience carries NO carrier field (owner 2026-09-28, §6l)")
+section("J. EVERY Rep Incentive surface × EVERY audience carries NO carrier field (owner 2026-09-28, §6m)")
 VIEWERS = (("employee (a rep)", "tok:rep", {REP.upper()}), ("store manager", "tok:sm", None),
            ("owner WITH the carrier permission", "tok:owner", None))
 try:

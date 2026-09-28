@@ -35,7 +35,7 @@ FAILS THE BUILD WHEN:
       stamping `viewer_payload`, or the self-scope answer is re-derived instead of `role_is_self_scoped`;
   (g) the paid row's sale identity or the month range un-wires: a second customer rule, the drill-down producer not
       stamping line identity, a statement (single / batch / range) not built by `_statement_doc`;
-  (i) CARRIER COMMISSION IS FOR MANAGEMENT'S EYES ONLY (owner 2026-09-28, index §6l: "it should not show any
+  (i) CARRIER COMMISSION IS FOR MANAGEMENT'S EYES ONLY (owner 2026-09-28, index §6m: "it should not show any
       commission received on the rep incentive report, that is only for the eyes of the management, gated out from
       all levels"):
         i1 any Rep Incentive surface (the rows, the plan drill, the Boost drill, the statement single / batch / range
@@ -117,7 +117,7 @@ CARRIER_GRANT_KEYS_EXCUSED = {
                         "residual REPORTS, not carrier commission per rep on a commission report",
     "whatif_carrier_income": "the What-If simulator's Company Payout / Carrier Income tab (whatif_gates) — a PROJECTION "
                              "of company income, not the carrier's recorded commission per rep; default-closed like "
-                             "this one. Folding it under carrier_commission_view is an owner decision (index §6l)",
+                             "this one. Folding it under carrier_commission_view is an owner decision (index §6m)",
 }
 # gate functions whose NAME mentions the carrier but answer another question
 SECOND_GATE_EXCUSED = {
@@ -405,7 +405,7 @@ def scan(be, fe, rbac=None, fe_all=None):
 
 
 def carrier_violations(be, fe, rbac, fe_all=None):
-    """(i) carrier commission is for management's eyes only (owner 2026-09-28, index §6l). See the module header."""
+    """(i) carrier commission is for management's eyes only (owner 2026-09-28, index §6m). See the module header."""
     v = []
     fe_all = FE_ALL if fe_all is None else fe_all
     home_src = be.get(HOME, "")

@@ -37,7 +37,7 @@ export one employees report over a number of selected months. all these need to 
   · A plan line names its sale: `phone` (`line_phone`, THE phone rule) and `customer` (the sale-customer rule,
     `inventory_sold_recon.sale_customer`) — both on the employee allow-list on purpose.
 
-CARRIER COMMISSION IS FOR MANAGEMENT'S EYES ONLY (owner 2026-09-28, index §6l — reverses the Price / GP part of §6j):
+CARRIER COMMISSION IS FOR MANAGEMENT'S EYES ONLY (owner 2026-09-28, index §6m — reverses the Price / GP part of §6j):
 *"the incoming commission is shown on the line item as $150 and $5 on the first transaction and similarly for all
 under that, it should not show any commission received on the rep incentive report, that is only for the eyes of
 the management, gated out from all levels"*.
@@ -109,7 +109,7 @@ EMPLOYEE_DRILL_ITEM_FIELDS = ("trans_id", "date", "product", "contract_type", "t
 DRILL_PCT_BASIS_BUCKETS = ("accessories", "setup")
 DRILL_BASIS_FIELDS = ("ext_price", "gp")
 
-# THE CARRIER'S MONEY (owner 2026-09-28, index §6l): what the carrier paid the store — the sale line's Price / GP (on
+# THE CARRIER'S MONEY (owner 2026-09-28, index §6m): what the carrier paid the store — the sale line's Price / GP (on
 # a rebate / spiff line those ARE the carrier's payment), the cost implied from them and its flags, the MA cross-
 # reference and "MA says paid", the carrier MI refs, the dealer figures, the commission-ledger buckets. On NO Rep
 # Incentive surface for ANY viewer; only on a carrier surface, to a holder of CARRIER_VIEW_GRANT. The lock asserts
@@ -122,7 +122,7 @@ KNOWN_CARRIER_FIELDS = ("ext_price", "gp", "implied_cost", "cost_flags", "cost_f
 # money: a MANAGER reads them on the Rep Incentive drill; an employee (paid lines only) never needs them.
 MANAGER_REASON_FIELDS = ("suppressed", "suppressed_by", "suppressed_reason", "would_have_paid", "excluded_by")
 
-# ── THE CARRIER SURFACES — THE one registry (index §6j, §6l) ────────────────────────────────────────
+# ── THE CARRIER SURFACES — THE one registry (index §6j, §6m) ────────────────────────────────────────
 # The management surfaces that show carrier commission (what the carrier paid the store, per rep). Since 2026-09-28
 # each is refused to every viewer WITHOUT the carrier permission (`carrier_view_allowed` — reps and store managers
 # alike), not only to the employee audience. The server's refusal names its key here
@@ -165,7 +165,7 @@ def refusal_message(key):
             f"'{CARRIER_VIEW_GRANT}' permission, set per role in Roles & Access).")
 
 
-# ── THE CARRIER PERMISSION — its one home (owner 2026-09-28, index §6l) ─────────────────────────────
+# ── THE CARRIER PERMISSION — its one home (owner 2026-09-28, index §6m) ─────────────────────────────
 # ONE permission answers "may this viewer see carrier commission?". It is a Roles & Access data grant (rbac.ts
 # DATA_GRANTS registers the key so the Roles editor can tick / untick it per role): the org's own setting on the
 # role wins in BOTH directions; unset = the house default, top management only. RULE TWO: no role NAME decides
@@ -253,7 +253,7 @@ def rep_incentive_line(line, audience):
 
 
 def rep_incentive_row(row):
-    """A rep_commissions row as EVERY Rep Incentive viewer reads it (owner 2026-09-28, index §6l): the rep's pay and
+    """A rep_commissions row as EVERY Rep Incentive viewer reads it (owner 2026-09-28, index §6m): the rep's pay and
     the counts / KPIs it was paid on — the carrier-paid dealer figures (`boost_commission` / `boost_reimbursement`)
     are on no audience's row. (carrier-vs-pay reads them from the table itself, behind the carrier permission.)"""
     return _keep(row, "rep_row")
@@ -271,7 +271,7 @@ def employee_explain(explain):
 
 def rep_incentive_explain(explain, audience):
     """THE Rep Incentive drill-down (`commission_drilldown.explain_rep` + the router's additions) as `audience` reads
-    it (owner 2026-09-26 / 2026-09-28, index §6i / §6l): every level through its allow-list, FOR EVERY AUDIENCE — no
+    it (owner 2026-09-26 / 2026-09-28, index §6i / §6m): every level through its allow-list, FOR EVERY AUDIENCE — no
     carrier field reaches anyone. 'employee' keeps only the PAID lines (`is_paid_line`); a manager keeps every
     matched line with its ⛔ reason. The rep's pay figures are untouched. Returns a new dict stamped `audience`."""
     aud = "employee" if audience == "employee" else "manager"
@@ -311,7 +311,7 @@ def employee_drill(drill):
 
 
 def rep_incentive_drill(drill, audience):
-    """The Boost component drill (`/commission-drill`) as EVERY Rep Incentive viewer reads it (index §6i / §6l):
+    """The Boost component drill (`/commission-drill`) as EVERY Rep Incentive viewer reads it (index §6i / §6m):
     count-paid buckets carry each transaction without its money; percentage-paid buckets keep the sale's price /
     margin (the customer's accessory / setup price — the rep's pay basis, not the carrier's money). The same shape
     for every audience; only the `audience` stamp differs."""

@@ -177,7 +177,7 @@ const mhtml = renderToStaticMarkup(React.createElement(PlanLineBreakdown, { rows
 const mtext = mhtml.replace(/title="[^"]*"/g, '').replace(/<[^>]+>/g, ' ').replace(/<!-- -->/g, '')
 ok('manager: the product stays and the phone + customer show under it',
   /DPA New Act iPhone/.test(mtext) && /9297458084 · CHEORGE CHEISHVILI INC/.test(mtext))
-// OWNER DECISION 2026-09-28 (index §6l) — reverses "manager: Price and GP columns stay" (#309 §6j): "it should not
+// OWNER DECISION 2026-09-28 (index §6m) — reverses "manager: Price and GP columns stay" (#309 §6j): "it should not
 // show any commission received on the rep incentive report, that is only for the eyes of the management, gated out
 // from all levels". Price / GP are columns ONLY in the carrier view the server stamps (servedCarrierView).
 ok('manager (Rep Incentive): NO Price / GP columns — even if a row still carried the figures',

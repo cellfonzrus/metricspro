@@ -297,7 +297,7 @@ async def _flags(org_id, f, authorization=""):
 async def _commissions(org_id, f, authorization=""):
     period = _resolve_period(f)
     # the Incentives report IS the employee payout report (index §6i): the employee allow-list, whoever sends it —
-    # and since §6l the rows carry no carrier money for any audience anyway (`payout_audience.rep_incentive_row`)
+    # and since §6m the rows carry no carrier money for any audience anyway (`payout_audience.rep_incentive_row`)
     rows = await C.get_commissions(period=period, org_id=org_id, authorization=authorization, audience="employee")
     return {"title": "Incentives", "subtitle": period, "filename": f"commissions-{period.replace(' ', '-')}",
             "sheets": [{"name": "Rep Payouts", "rows": rows or [], "columns": [
@@ -338,7 +338,7 @@ async def _gp(org_id, f, authorization=""):
 
 async def _discrepancy(org_id, f, authorization=""):
     period = _resolve_period(f)
-    # a carrier surface (index §6i/§6j/§6l): the CALLER's header decides — only a holder of the carrier permission
+    # a carrier surface (index §6i/§6j/§6m): the CALLER's header decides — only a holder of the carrier permission
     # may send it; a rep or store manager cannot email it to themselves, and a scheduled run with no caller is
     # refused while logins are on (nothing is sent rather than carrier money going to whoever subscribed)
     data = await C.get_discrepancy_results(period=period, org_id=org_id, authorization=authorization)

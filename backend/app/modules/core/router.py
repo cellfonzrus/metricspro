@@ -470,7 +470,7 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None,
             imp = _impersonation.session_brief(client, _impersonation.current().get("session_id"))
     except Exception:
         imp = {"active": True}
-    # WHO THIS VIEWER IS TO A PAYOUT SURFACE (index §6j, §6l): the audience the server will serve them, whether they
+    # WHO THIS VIEWER IS TO A PAYOUT SURFACE (index §6j, §6m): the audience the server will serve them, whether they
     # hold THE carrier permission (`payout_audience.carrier_view_allowed` — the same function the server's refusal
     # asks, over the same role permissions) and the carrier pages refused to them — from THE registry
     # (`payout_audience.MANAGER_ONLY_SURFACES`) through THE self-scope answer (`storeops.role_is_self_scoped`), so

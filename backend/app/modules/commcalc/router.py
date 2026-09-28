@@ -16637,7 +16637,7 @@ def settle_ops_chargebacks(period: str, org_id: str = ORG_ID):
 @router.get("/commissions/{period}")
 async def get_commissions(period: str, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001",
                           audience: str = ""):
-    # THE REP INCENTIVE ROWS carry no carrier money for ANY viewer (owner 2026-09-28, index §6l — "only for the eyes
+    # THE REP INCENTIVE ROWS carry no carrier money for ANY viewer (owner 2026-09-28, index §6m — "only for the eyes
     # of the management, gated out from all levels"): the one rep-row allow-list for every audience, so the
     # carrier-paid dealer figures (`boost_commission` / `boost_reimbursement`) reach nobody through this report or
     # anything it drives (the exports, the month range, the emailed Incentives report). Which ROWS a caller sees is
@@ -19811,7 +19811,7 @@ def payout_structure_document(fmt: str = "pdf", plan_id: str = "", org_id: str =
 # and — until 2026-09-28 — the five canonical commission_ledger buckets. See commission_statement.py's header.
 def _statement_buckets(client, org_id, period, rep, source_report="ma_daily_tx"):
     """The five canonical commission_ledger buckets for ONE rep + period, or None. READ-ONLY, org-scoped.
-    NO STATEMENT READS IT since 2026-09-28 (index §6l): the ledger buckets are the carrier's statement per rep —
+    NO STATEMENT READS IT since 2026-09-28 (index §6m): the ledger buckets are the carrier's statement per rep —
     carrier money, on no Rep Incentive surface for any viewer (the lock fails a `_statement_doc` that calls it). Kept
     for its landing-conflict refusal, which `harness_ledger_identity_lock` pins.
     Mirrors the /commission-ledger/by-rep rollup but keeps only the requested rep (canon-matched).
@@ -19877,7 +19877,7 @@ def _statement_doc(client, org_id, rep, period, aud, ctx):
     # SINGLE SOURCE OF TRUTH for this rep's earnings (plan component + multi-month ledger + the
     # rep_commissions reconciliation). This read is what makes the statement read-only.
     explain = _dd.explain_rep(client, org_id, period, rep, carrier_mode=ctx["mode"])
-    # NO CARRIER MONEY ON A STATEMENT, FOR ANY VIEWER (owner 2026-09-28, index §6l): the statement is a Rep Incentive
+    # NO CARRIER MONEY ON A STATEMENT, FOR ANY VIEWER (owner 2026-09-28, index §6m): the statement is a Rep Incentive
     # surface, so it is built from THE Rep Incentive shaping (`rep_incentive_explain` — the employee: paid lines; a
     # manager: every line with its ⛔ reason; nobody: Price / GP / the MA cross-reference) and carries NO
     # commission-ledger buckets (the carrier's statement, per rep — `_statement_buckets` is not read here).
@@ -19907,7 +19907,7 @@ def commission_statement_document(rep: str, period: str = "", fmt: str = "pdf",
     nor the JSON unless the caller holds the 'statement_held' grant (`_can_view_statement_held`).
     AUDIENCE (index §6i/§6j): decided by who is looking — a self-scoped caller gets the employee statement, for
     their own rep only (403 otherwise); anyone else the manager one (or the audience they ask for). NO statement
-    carries carrier money for any audience (index §6l): no Price / GP, no ledger buckets — `source_report` (which
+    carries carrier money for any audience (index §6m): no Price / GP, no ledger buckets — `source_report` (which
     ledger the buckets were read from) is accepted for old callers and no longer read.
     """
     require_org(org_id)
@@ -25138,7 +25138,7 @@ def commission_drill(period: str, rep: str = "", audience: str = "", authorizati
     upgrade/ACIMA are DISTINCT transactions (matching the pay counts); accessories/setup are line items.
 
     AUDIENCE (index §6i): a self-scoped caller may drill only their OWN rep. THE SHAPE is the same for every
-    audience (owner 2026-09-28, index §6l — the Boost drill modal of the Rep Incentive report shows no carrier money
+    audience (owner 2026-09-28, index §6m — the Boost drill modal of the Rep Incentive report shows no carrier money
     to anyone): `payout_audience.rep_incentive_drill` — count-paid buckets carry each transaction without its
     money; the percentage-paid buckets keep the sale's price / margin, the basis of that pay."""
     _aud = _payout_audience(authorization, org_id, audience, rep=rep or "")
@@ -25240,7 +25240,7 @@ def commission_explain(period: str, rep: str = "", audience: str = "", view: str
     and a reconciliation against the last calc's rep_commissions row. Writes nothing; changes no payout
     number; never touches the live /calculate path. See commission_drilldown.
 
-    TWO SHAPES, decided on the server (owner 2026-09-26 / 2026-09-28, index §6i / §6l):
+    TWO SHAPES, decided on the server (owner 2026-09-26 / 2026-09-28, index §6i / §6m):
       · DEFAULT — the Rep Incentive drill: `payout_audience.rep_incentive_explain`, carrier-free for EVERY viewer.
         A SELF-scoped caller gets the employee form (paid lines only) and only for their OWN rep (403 otherwise);
         anyone else the manager form (every line with its ⛔ reason — never Price / GP / the MA cross-reference).
@@ -25291,7 +25291,7 @@ def commission_explain(period: str, rep: str = "", audience: str = "", view: str
 
 
 def _can_view_carrier_commission(authorization, org_id):
-    """May THIS caller see carrier commission? (owner 2026-09-28, index §6l — "only for the eyes of the management,
+    """May THIS caller see carrier commission? (owner 2026-09-28, index §6m — "only for the eyes of the management,
     gated out from all levels".) The caller is resolved exactly as every data grant is (core `_uid_from_token` +
     `_resolve_caller`, the acting org as the hint); the DECISION is `payout_audience.carrier_view_allowed` — THE one
     home of the permission and of its per-org role list. A self-scoped caller (a rep) never holds it.
@@ -25316,7 +25316,7 @@ def _can_view_carrier_commission(authorization, org_id):
 def _require_carrier_view(authorization, org_id, key):
     """A CARRIER SURFACE (what the carrier paid the store, per rep) is refused to every viewer without THE carrier
     permission (`_can_view_carrier_commission`) — reps AND store managers, not only the employee audience (owner
-    2026-09-28, index §6l; before it, §6i/§6j refused the employee only). `key` names the surface in THE registry
+    2026-09-28, index §6m; before it, §6i/§6j refused the employee only). `key` names the surface in THE registry
     `payout_audience.MANAGER_ONLY_SURFACES` — the same list `/me` hands the nav, so a refused surface is never
     offered in the menu either. An unregistered key raises (KeyError) before anything is decided."""
     from app.modules.commcalc import payout_audience as _pa
@@ -25494,7 +25494,7 @@ async def sales_recon_sync_flags(period: str = "", notify: bool = False,
 def run_discrepancy_check(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Trigger discrepancy detection. Send: { "period": "2026-04" }.
 
-    A CARRIER SURFACE (index §6l): the Pay Discrepancy page's Run button, whose response is that report's gap
+    A CARRIER SURFACE (index §6m): the Pay Discrepancy page's Run button, whose response is that report's gap
     summary (expected vs what the carrier paid) — refused, like the report itself, to anyone without the carrier
     permission (`_require_carrier_view`, registered `pay_discrepancy`). Before 2026-09-28 it had no caller check.
 
