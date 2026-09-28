@@ -183,7 +183,7 @@ def misplaced(files, read_source, wheels):
 
 # ── THE THIRD RULE — a harness no workflow runs is a file, not a gate ─────────────────────────────
 PENDING_FILE = os.path.join(HERE, "harness_unrun_pending.txt")
-PINNED_MAX = 334          # must equal the number of entries in harness_unrun_pending.txt
+PINNED_MAX = 333          # must equal the number of entries in harness_unrun_pending.txt
 
 
 def read_pending(text):

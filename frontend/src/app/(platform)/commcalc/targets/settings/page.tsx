@@ -85,7 +85,7 @@ export default function TargetSettingsPage() {
         accessories_monthly: Number(row.accessories_monthly) || 0,
         byod_pct: row.byod_pct === null || row.byod_pct === undefined || (row.byod_pct as any) === '' ? null : Number(row.byod_pct),
         notes: row.notes || null,
-        updated_by: 'web',
+        // no updated_by: the server stamps the signed-in user (or NULL) — never the sentinel 'web' (index §19.34)
       }),
     })
   }
@@ -99,7 +99,6 @@ export default function TargetSettingsPage() {
       body: JSON.stringify({
         store_code: row.store_code,
         target_units: Number(row.financing_units) || 0,
-        updated_by: 'web',
       }),
     })
   }

@@ -6,6 +6,7 @@ import pandas as pd
 import io
 import re
 import functools as _functools
+import uuid as _uuid_mod   # _caller_uid: an actor id is a UUID or None, never a sentinel (index §19.34)
 from app.core.database import get_supabase
 from app.core.service_role import (require_browser_service,   # SERVICE_ROLE=api → clean 503 on browser endpoints
                                     browser_allowed as _browser_allowed,
@@ -9495,12 +9496,9 @@ def delete_commission_bucket(key: str, authorization: str = Header(default=""), 
 
 
 def _mpc_who(authorization: str):
-    """Best-effort acting-user id for confirmed_by (never blocks — None when unresolved)."""
-    try:
-        from app.modules.core.router import _uid_from_token
-        return _uid_from_token(authorization) or None
-    except Exception:
-        return None
+    """Best-effort acting-user id for confirmed_by (never blocks — None when unresolved). Dereferences the ONE
+    actor helper `_caller_uid` (index §19.34) — never a second copy of the token lookup."""
+    return _caller_uid(authorization)
 
 
 def _mpc_source(client, org_id, source_report):
@@ -17645,12 +17643,27 @@ def get_pl_commission_source(org_id: str = ORG_ID):
 
 # ── installment-schedule EDIT helpers (mig 210): shared create/update writer + audit trail ──────────
 def _caller_uid(authorization):
-    """The signed-in auth uid (for updated_by / audit changed_by), or 'web' when unresolved. Never raises."""
+    """WHO DID THIS — the ONE home for the actor stamped on a write (updated_by / changed_by / appealed_by /
+    recorded_by / confirmed_by). Returns the signed-in auth uid as a canonical UUID string, or None when no
+    signed-in user resolves (RBAC off, automation, agents, the auto-calc poller, a bad token). Never raises.
+
+    NEVER a sentinel string. It used to return 'web', and installment_category_rule.updated_by is a UUID column
+    (mig 245): every token-less save 500'd with `invalid input syntax for type uuid: "web"` and saved nothing
+    (found live 2026-09-28, index §19.34). The database's own "unknown" is NULL — a reader that wants a word
+    shows "system" for it. A resolved id that is not a UUID is also None, so this can never put a non-UUID
+    into a UUID column. Locked by backend/harness_actor_uid_lock.py; every other "who is acting" wrapper in
+    this module dereferences this one."""
     try:
         from app.modules.core.router import _uid_from_token
-        return _uid_from_token(authorization) or 'web'
+        uid = _uid_from_token(authorization)
     except Exception:
-        return 'web'
+        return None
+    if not uid:
+        return None
+    try:
+        return str(_uuid_mod.UUID(str(uid).strip()))
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 def _installment_snapshot(client, org_id, sid):
@@ -17677,7 +17690,7 @@ def _installment_audit(client, org_id, sid, action, before, after, changed_by):
     try:
         client.schema('commcalc').table('plan_installment_schedule_audit').insert({
             'org_id': org_id, 'schedule_id': sid, 'action': action,
-            'changed_by': changed_by or 'web', 'before_json': before, 'after_json': after,
+            'changed_by': changed_by or None, 'before_json': before, 'after_json': after,
         }).execute()
     except Exception:
         pass
@@ -18465,11 +18478,8 @@ def _xc_can_promote(authorization, org_id):
 
 
 def _xc_who(authorization):
-    try:
-        from app.modules.core.router import _uid_from_token
-        return _uid_from_token(authorization) or None
-    except Exception:
-        return None
+    """Acting-user id (or None). Dereferences the ONE actor helper `_caller_uid` (index §19.34)."""
+    return _caller_uid(authorization)
 
 
 def _xc_rows(client, org_id, period):
@@ -22459,7 +22469,7 @@ def put_ingest_guard_config(body: PutIngestGuardConfigIn, authorization: str = H
         "block_min_rows": max(0, int(safe_float(body.block_min_rows) or 0)),
         "allow_creates_alias": bool(body.allow_creates_alias),
         "notify_on_flag": bool(body.notify_on_flag),
-        "updated_by": (body.updated_by or "web"),
+        "updated_by": (body.updated_by or _caller_uid(authorization)),   # never a sentinel (§19.34)
     }
     try:
         sb().schema("commcalc").table("ingest_store_guard").upsert(row, on_conflict="org_id").execute()
@@ -22565,7 +22575,7 @@ def decide_ingest_guard_item(item_id: str, body: Optional[DecideIngestGuardItemI
         client.schema("commcalc").table("ingest_store_quarantine").update({
             "status": ("released" if released else ("allowed" if decision == "allow" else "rejected")),
             "decided_at": _datetime.now(timezone.utc).isoformat(),
-            "decided_by": (body.decided_by or "web"),
+            "decided_by": (body.decided_by or _caller_uid(authorization)),   # never a sentinel (§19.34)
             "decision_note": (body.note or None),
         }).eq("org_id", org_id).eq("id", item_id).execute()
     except Exception as e:
@@ -28493,7 +28503,7 @@ async def save_target(period: str, body: SaveTargetIn, authorization: str = Head
                      if str(body.byod_pct if body.byod_pct is not None else '').strip() != ''
                      else None),
         'notes': body.notes,
-        'updated_by': body.updated_by or 'web',
+        'updated_by': body.updated_by or _caller_uid(authorization),   # never a sentinel (§19.34)
     }
     r = (client.schema('commcalc').table('targets')
          .upsert(row, on_conflict='org_id,store_code,period').execute())
@@ -39532,12 +39542,9 @@ from app.modules.commcalc import agency as _agency
 
 
 def _agency_who(authorization: str, org_id: str):
-    """Best-effort acting-user id for created_by/confirmed_by (never blocks — returns None if unresolved)."""
-    try:
-        from app.modules.core.router import _uid_from_token
-        return _uid_from_token(authorization) or None
-    except Exception:
-        return None
+    """Best-effort acting-user id for created_by/confirmed_by (never blocks — returns None if unresolved).
+    Dereferences the ONE actor helper `_caller_uid` (index §19.34)."""
+    return _caller_uid(authorization)
 
 
 def _can_edit_agency(authorization: str, org_id: str) -> bool:
@@ -42172,7 +42179,7 @@ async def save_financing_target(period: str, body: SaveFinancingTargetIn, author
            'target_units': safe_float(body.target_units),
            'target_amount': (safe_float(amt) if str(amt if amt is not None else '').strip() != '' else None),
            'notes': body.notes,
-           'updated_by': body.updated_by or 'web',
+           'updated_by': body.updated_by or _caller_uid(authorization),   # never a sentinel (§19.34)
            'updated_at': datetime.now(timezone.utc).isoformat()}
     try:
         r = (client.schema('commcalc').table(_finreg.TARGET_TABLE)

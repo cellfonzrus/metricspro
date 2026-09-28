@@ -28,6 +28,12 @@ on:
       # the unique-numbers lock — every migration file and every index section number
       - "database/migrations/**"
       - "backend/harness_unique_numbers_lock.py"
+      # the actor-uid lock (index §19.34) — every writer under backend/app, the migrations' column types,
+      # the proofs that could stub the helper, and the frontend that could send a sentinel actor
+      - "backend/harness_actor_uid_lock.py"
+      - "backend/scratchpad/**"
+      - "backend/harness_*.py"
+      - "frontend/src/**"
   push:
     branches: [main]
     paths:
@@ -37,6 +43,8 @@ on:
       - "backend/app/**/*.py"
       - "database/migrations/**"
       - "docs/SYSTEM_DATA_FLOW_INDEX.md"
+      - "backend/harness_actor_uid_lock.py"
+      - "frontend/src/**"
   workflow_dispatch:
 
 permissions:
@@ -109,3 +117,23 @@ jobs:
       - name: Run the unique-numbers lock
         working-directory: backend
         run: python3 harness_unique_numbers_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  actor-uid-lock:
+    # WHO DID THIS IS A UUID OR NULL (2026-09-28, index §19.34): `_caller_uid` returned 'web' for a token-less caller, and
+    # installment_category_rule.updated_by is UUID (mig 245) — every automation/agent/poller save 500'd. Stdlib + ast, no
+    # pip install: the real `_caller_uid` is exec'd and must return a UUID or None; it is the ONE home (no second copy);
+    # every actor-column write under backend/app is traced to its literals and checked against the column types READ from
+    # the migrations; the retired 'web' is written nowhere; the real save_category_rule is proven against a client that
+    # enforces the declared types (the pre-fix helper reproduces the live 500). Planted controls inside.
+    name: Actor columns get a UUID or NULL, never a sentinel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the actor-uid lock
+        working-directory: backend
+        run: python3 harness_actor_uid_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the discrepancy-appeal proof (apply_appeal stamps appealed_by — a UUID or NULL)
+        working-directory: backend
+        run: python3 harness_discrepancy_appeals.py | tee -a "$GITHUB_STEP_SUMMARY"

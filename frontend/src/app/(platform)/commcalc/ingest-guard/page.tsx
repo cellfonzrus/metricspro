@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { api, getActiveOrg } from '@/lib/client'
+import { actorLabel } from '@/lib/actor'
 
 /**
  * CROSS-TENANT INGEST GUARD — admin UI (owner-approved 2026-08-06).
@@ -250,7 +251,7 @@ export default function IngestGuardPage() {
                   </td>
                   <td style={td}>
                     <span style={{ textTransform: 'capitalize' }}>{it.status}</span>
-                    {it.decided_by && <div style={{ fontSize: 11, color: 'var(--text3)' }}>by {it.decided_by}</div>}
+                    {it.decided_by && <div style={{ fontSize: 11, color: 'var(--text3)' }}>by {actorLabel(it.decided_by)}</div>}
                   </td>
                   <td style={td}>
                     {it.status === 'pending' ? (

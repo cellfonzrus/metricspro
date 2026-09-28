@@ -24,6 +24,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { actorLabel } from '@/lib/actor'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, matchesStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import { ExportButtons, ExportPayload } from '@/lib/export'
@@ -314,7 +315,7 @@ export default function CommissionDiscrepancyHub() {
                       <span style={{ color: APPEAL_COLOR[ap || 'none'], fontWeight: 600 }}>
                         {ap ? APPEAL_LABEL[ap] : '—'}
                       </span>
-                      {r.appealed_at && <div style={{ fontSize: 10.5, color: 'var(--text3)' }} title={`by ${r.appealed_by || '?'}${r.appeal_note ? ` — ${r.appeal_note}` : ''}`}>
+                      {r.appealed_at && <div style={{ fontSize: 10.5, color: 'var(--text3)' }} title={`by ${actorLabel(r.appealed_by)}${r.appeal_note ? ` — ${r.appeal_note}` : ''}`}>
                         {String(r.appealed_at).slice(0, 10)}{r.appeal_note ? ' · 📝' : ''}</div>}
                     </td>
                     <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>

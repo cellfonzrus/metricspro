@@ -85,7 +85,9 @@ def apply_appeal(current, new, note, actor, now_iso):
     if nxt == "":
         return {"appeal_status": None, "appeal_note": None, "appealed_by": None, "appealed_at": None}
     note_s = str(note or "").strip()[:MAX_NOTE_LEN] or None
-    actor_s = str(actor or "").strip()[:200] or "web"
+    # WHO: the router's `_caller_uid` (a UUID or None). None stays None — the database's own "unknown";
+    # never a sentinel string (index §19.34). The hub shows "system" for it.
+    actor_s = str(actor or "").strip()[:200] or None
     return {"appeal_status": nxt, "appeal_note": note_s,
             "appealed_by": actor_s, "appealed_at": str(now_iso)}
 

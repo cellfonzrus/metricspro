@@ -5,6 +5,7 @@ import { usePeriod } from '@/lib/period-context'
 import { PlanOptions, MatchValuePicker, MatchEvidence, FALLBACK_VOCAB, countMatches, OptionsSourceNote } from '../_lib/planMatch'
 import EntityPicker from '@/components/EntityPicker'
 import RunCommissionButton from '../_lib/RunCommissionButton'
+import { actorLabel } from '@/lib/actor'
 
 // SALE-TRIGGERED multi-month rep pay (commission-0 doctrine, mig 201; edit + m1-gate mig 210). A schedule
 // attaches to a Commission Plan and is triggered by the SALE LINE (M1..N relative to trans_date). Months are
@@ -950,7 +951,7 @@ export default function PlanInstallmentsPage() {
                         {openAudit.rows.length === 0 && <span style={{ color: 'var(--text3)' }}> — none (run migration 210 to record edits)</span>}
                         {openAudit.rows.map((a, i) => (
                           <div key={i} style={{ padding: '3px 0', color: 'var(--text2)' }}>
-                            {a.action} · {(a.changed_at || '').slice(0, 19).replace('T', ' ')} · by {a.changed_by || 'web'}
+                            {a.action} · {(a.changed_at || '').slice(0, 19).replace('T', ' ')} · by {actorLabel(a.changed_by)}
                           </div>
                         ))}
                       </td>
