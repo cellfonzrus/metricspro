@@ -6,7 +6,7 @@ import { SendReportButton } from '@/lib/send-report'
 import { ExportButtons, type ExportPayload } from '@/lib/export'
 import { buildCommissionExport, payloadToCsv, repLabel, type CommissionExportInput, type CommissionTab } from '../_lib/commissionExport'
 import { useAuth } from '@/lib/auth-context'
-import { carrierMode } from '@/lib/rbac'
+import { carrierMode, payoutRefused } from '@/lib/rbac'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, isStandardFilterActive, type StandardFilterValue } from '@/lib/standard-filters'
 import PlanLineBreakdown from '../_lib/PlanLineBreakdown'
@@ -60,6 +60,9 @@ const TABS = [
   { id: 'range', label: '📅 Month range' },
 ]
 
+// the carrier diagnostic this report links to (registered in backend payout_audience.MANAGER_ONLY_SURFACES)
+const EXPLAIN_PAGE = '/commcalc/commission-explain'
+
 // ── PLAN-MODE (non-Boost) drill labels — mirrored from commission-explain/page.tsx so the same
 // installment status/basis reads identically on both surfaces. Display only.
 const PLAN_BASIS: Record<string, string> = {
@@ -75,8 +78,11 @@ const INST_REASON_LABEL: Record<string, string> = {
 
 export default function ReportsPage() {
   const { period } = usePeriod()
-  const { carriers } = useAuth()
+  const { carriers, permissions } = useAuth()
   const isBoost = carrierMode(carriers) === 'boost'   // non-Boost carriers pay via plans, not KPI tiers
+  // the commission-explain diagnostic is a CARRIER surface (index §6l): the server refuses it to anyone without the
+  // carrier permission and /me lists it in refused_pages — so every link to it here asks payoutRefused first
+  const explainOpen = !payoutRefused(permissions, EXPLAIN_PAGE)
   const [reps, setReps] = useState<Rep[]>([])
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState('breakdown')
@@ -472,7 +478,7 @@ export default function ReportsPage() {
         device_category: i.device_category || d.device_category, month_index: i.month_index,
         pay_period: i.pay_period, status_label: INST_REASON_LABEL[i.hold_reason] || i.status,
         hold_detail: i.hold_detail, amount: i.amount, withheld_amount: i.withheld_amount,
-        mrc_at_pay: i.mrc_at_pay, ma_says_paid: d.ma_says_paid, paid: i.status === 'paid' })
+        mrc_at_pay: i.mrc_at_pay, paid: i.status === 'paid' })
     return out
   }, [explainMm])
 
@@ -590,9 +596,9 @@ export default function ReportsPage() {
                         {r.storeops_name || r.epay_salesperson}
                       </button>
                       {' '}
-                      <a href={`/commcalc/commission-explain?rep=${encodeURIComponent(r.storeops_name || r.epay_salesperson)}`}
+                      {explainOpen && <a href={`${EXPLAIN_PAGE}?rep=${encodeURIComponent(r.storeops_name || r.epay_salesperson)}`}
                         title={`How was this incentive calculated? (plan${multimonthOffered(mmStatus) ? ' + multi-month' : ''} drill-down)`}
-                        style={{ fontSize: 11, textDecoration: 'none' }}>🔬</a>
+                        style={{ fontSize: 11, textDecoration: 'none' }}>🔬</a>}
                     </td>
                     <td style={{ color: 'var(--text3)', fontSize: 12 }}>{r.store?.substring(0, 25)}</td>
                     <td><TierBadge tier={r.tier} /></td>
@@ -637,9 +643,9 @@ export default function ReportsPage() {
               <option value="">Select rep...</option>
               {repList.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
-            {currentRep && (
+            {currentRep && explainOpen && (
               <a className="btn btn-secondary" style={{ textDecoration: 'none' }}
-                href={`/commcalc/commission-explain?rep=${encodeURIComponent(currentRep.storeops_name || currentRep.epay_salesperson)}`}
+                href={`${EXPLAIN_PAGE}?rep=${encodeURIComponent(currentRep.storeops_name || currentRep.epay_salesperson)}`}
                 title={multimonthOffered(mmStatus) ? 'Plan + multi-month drill-down: which assignment, per-rule lines, installment gates & MA cross-reference' : 'Plan drill-down: which assignment and the per-rule lines'}>
                 🔬 How was this calculated?
               </a>
@@ -734,10 +740,11 @@ export default function ReportsPage() {
                   {showResidRow && (
                     <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 8 }}>
                       Residual (raw‑mi) installments are paid off carrier residual rows, not off sale lines, so
-                      the sale‑triggered breakdown can’t itemize them —{' '}
-                      <a href={`/commcalc/commission-explain?rep=${encodeURIComponent(drillRep)}`} style={{ color: 'var(--accent)' }}>
+                      the sale‑triggered breakdown can’t itemize them
+                      {explainOpen ? <>{' — '}
+                      <a href={`${EXPLAIN_PAGE}?rep=${encodeURIComponent(drillRep)}`} style={{ color: 'var(--accent)' }}>
                         open the full explain page
-                      </a>{' '}for their per‑device detail.
+                      </a>{' '}for their per‑device detail.</> : '.'}
                     </div>
                   )}
                   {!currentRep.plan_name && (
@@ -1101,8 +1108,10 @@ export default function ReportsPage() {
       {drillComp && (() => {
         const b = drillOk ? drillOk[drillComp] : null   // drillOk = drillData, gated on rep+period (INFO-4)
         const moneyBucket = drillComp === 'accessories' || drillComp === 'setup'
-        // the employee form (served by the backend, index §6i) carries no Price / GP on a count-paid bucket
-        const showMoneyCols = moneyBucket || servedAudience(drillFresh) !== 'employee'
+        // Price / GP only where the SERVER served them: the percentage-paid buckets (accessories / setup — the
+        // customer's price the rep is paid a % of). A count-paid bucket carries no carrier money for ANY viewer
+        // (owner 2026-09-28, index §6l — backend payout_audience.rep_incentive_drill), so it has no such columns.
+        const showMoneyCols = moneyBucket && !!b?.items?.some((it: any) => it?.ext_price !== undefined)
         return (
           <div onClick={() => setDrillComp(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
             <div onClick={e => e.stopPropagation()} style={{ background: 'var(--surface)', borderRadius: 12, padding: 20, width: 'min(900px,97vw)', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}>
@@ -1309,7 +1318,9 @@ export default function ReportsPage() {
                         <div style={{ overflowX: 'auto' }}>
                           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                             <thead><tr style={{ background: 'var(--surface2)' }}>
-                              {['IMEI', 'Device — Rate plan', 'Category', 'Month', 'Pay period', 'Status / hold reason', ...(servedAudience(explainOk) === 'employee' ? [] : ['MA says paid']), 'Paid $', 'Held $', 'MRC'].map(h =>
+                              {/* no "MA says paid" column for ANY viewer (owner 2026-09-28, index §6l): it is the
+                                  carrier's statement — the carrier diagnostic keeps it, behind the carrier permission */}
+                              {['IMEI', 'Device — Rate plan', 'Category', 'Month', 'Pay period', 'Status / hold reason', 'Paid $', 'Held $', 'MRC'].map(h =>
                                 <th key={h} style={{ textAlign: ['Paid $', 'Held $', 'MRC'].includes(h) ? 'right' : 'left', padding: '5px 8px', fontSize: 10, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{h}</th>)}
                             </tr></thead>
                             <tbody>
@@ -1323,7 +1334,6 @@ export default function ReportsPage() {
                                   <td style={{ padding: '5px 8px', color: r.paid ? 'var(--green)' : 'var(--red)' }}>
                                     {r.status_label}{r.hold_detail ? ` · ${r.hold_detail}` : ''}
                                   </td>
-                                  {servedAudience(explainOk) !== 'employee' && <td style={{ padding: '5px 8px' }}>{r.ma_says_paid ? 'yes' : 'no'}</td>}
                                   <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 600 }}>{fmt(r.amount)}</td>
                                   <td style={{ padding: '5px 8px', textAlign: 'right' }}>{r.withheld_amount == null ? '—' : fmt(r.withheld_amount)}</td>
                                   <td style={{ padding: '5px 8px', textAlign: 'right' }}>{r.mrc_at_pay == null ? '—' : fmt(r.mrc_at_pay)}</td>
@@ -1366,11 +1376,13 @@ export default function ReportsPage() {
                         from the current configuration. Run Calculate after the config is in place to store it.
                       </div>
                     )}
+                    {explainOpen && (
                     <div style={{ marginTop: 6 }}>
-                      <a href={`/commcalc/commission-explain?rep=${encodeURIComponent(rep)}`} style={{ color: 'var(--accent)' }}>
+                      <a href={`${EXPLAIN_PAGE}?rep=${encodeURIComponent(rep)}`} style={{ color: 'var(--accent)' }}>
                         🔬 Open the full explain page (assignment trace, MA cross-reference, Excel/PDF export) →
                       </a>
                     </div>
+                    )}
                   </div>
                 </div>
               )}

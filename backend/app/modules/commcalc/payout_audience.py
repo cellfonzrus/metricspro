@@ -28,13 +28,33 @@ THE THREE FACTS, ONE HOME EACH:
 FOLLOW-UPS (owner 2026-09-26, index §6j): *"pay discrepancy should be hidden, managers can see rep incentive, on
 paid row show the action / upgrade with the details of the phone number and customer name. also need a report to
 export one employees report over a number of selected months. all these need to be platform wide"*
-  · WHO, for the screen too — `viewer_payload(caller_is_self)` is what `/me` hands the client: the viewer's
-    audience and the pages refused to it. Pages come from ONE registry, `MANAGER_ONLY_SURFACES` — the server's
-    refusals (`router._refuse_employee_audience(key)`) and the nav's visibility (`rbac.payoutRefused`) both read it.
-  · Pages no longer declare an audience: the server resolves it from who is looking (a manager gets the full
-    report, a rep the employee one).
+  · WHO, for the screen too — `viewer_payload(caller_is_self, carrier_view)` is what `/me` hands the client: the
+    viewer's audience and the pages refused to it. Pages come from ONE registry, `MANAGER_ONLY_SURFACES` — the
+    server's refusals (`router._require_carrier_view(key)`, employee-only `_refuse_employee_audience` until
+    2026-09-28) and the nav's visibility (`rbac.payoutRefused`) both read it.
+  · Pages no longer declare an audience: the server resolves it from who is looking (a manager gets the manager
+    report — every line and its ⛔ reason, never carrier money since 2026-09-28 — a rep the employee one).
   · A plan line names its sale: `phone` (`line_phone`, THE phone rule) and `customer` (the sale-customer rule,
     `inventory_sold_recon.sale_customer`) — both on the employee allow-list on purpose.
+
+CARRIER COMMISSION IS FOR MANAGEMENT'S EYES ONLY (owner 2026-09-28, index §6l — reverses the Price / GP part of §6j):
+*"the incoming commission is shown on the line item as $150 and $5 on the first transaction and similarly for all
+under that, it should not show any commission received on the rep incentive report, that is only for the eyes of
+the management, gated out from all levels"*.
+  · THE CLASS: "which fields a Rep Incentive surface may show" depended on WHO was looking, so the one audience that
+    was not an employee (every manager) was served the carrier's money. Now the money does not depend on the viewer
+    at all: every Rep Incentive surface (the rows, the plan drill, the Boost drill, the multi-month table, exports,
+    the statements, the emailed Incentives report) goes through the SAME allow-lists for every audience —
+    `rep_incentive_explain` / `rep_incentive_row` / `rep_incentive_drill`. `KNOWN_CARRIER_FIELDS` (the carrier's
+    money) is on none of them. A manager adds only `MANAGER_REASON_FIELDS` (the ⛔ reasons) and the lines that did
+    not pay; an employee keeps paid lines only.
+  · Carrier money is shown ONLY on the carrier surfaces (`MANAGER_ONLY_SURFACES`, now incl. the commission-explain
+    diagnostic's carrier view) and ONLY to a viewer holding THE one permission `CARRIER_VIEW_GRANT`
+    (`carrier_commission_view`) — `carrier_view_allowed(caller, caller_is_self)` is its one home. Its role list is
+    per-org config: each org's Roles & Access (`storeops.roles.permissions.data.carrier_commission_view`, true or
+    false per role) wins; unset = the house default, top management only (the platform super admin and the
+    company-wide scope-'all' roles — admin / owner / master admin). The server refuses a carrier surface to anyone
+    else (`router._require_carrier_view`); `/me` hands the nav the same answer (`viewer_payload`).
 
 PURE; no I/O; no tenant, carrier or product name (RULE TWO). Lock: `harness_payout_audience_lock.py`.
 """
@@ -89,45 +109,97 @@ EMPLOYEE_DRILL_ITEM_FIELDS = ("trans_id", "date", "product", "contract_type", "t
 DRILL_PCT_BASIS_BUCKETS = ("accessories", "setup")
 DRILL_BASIS_FIELDS = ("ext_price", "gp")
 
-# the fields that ARE carrier commission (or derive from it) — the lock asserts none is ever allowed
-KNOWN_CARRIER_FIELDS = ("ext_price", "gp", "implied_cost", "cost_flags", "data_quality", "ma_matches",
-                        "ma_says_paid", "held_but_ma_paid", "rebate_total", "ma_spiff_total", "mi_ref",
-                        "boost_commission", "boost_reimbursement", "would_have_paid", "suppressed",
-                        "suppressed_reason", "buckets")
+# THE CARRIER'S MONEY (owner 2026-09-28, index §6l): what the carrier paid the store — the sale line's Price / GP (on
+# a rebate / spiff line those ARE the carrier's payment), the cost implied from them and its flags, the MA cross-
+# reference and "MA says paid", the carrier MI refs, the dealer figures, the commission-ledger buckets. On NO Rep
+# Incentive surface for ANY viewer; only on a carrier surface, to a holder of CARRIER_VIEW_GRANT. The lock asserts
+# none is on any allow-list below (the one excused place: DRILL_BASIS_FIELDS in the percentage-paid Boost buckets,
+# where the "price" is the customer's accessory / setup price the rep is paid a % of — the rep's own pay basis).
+KNOWN_CARRIER_FIELDS = ("ext_price", "gp", "implied_cost", "cost_flags", "cost_flag_labels", "data_quality",
+                        "ma_matches", "ma_says_paid", "held_but_ma_paid", "rebate_total", "ma_spiff_total", "mi_ref",
+                        "boost_commission", "boost_reimbursement", "buckets")
+# THE ⛔ REASONS — why a matched line paid nothing (the pay gate's verdict and the would-be REP pay). Not carrier
+# money: a MANAGER reads them on the Rep Incentive drill; an employee (paid lines only) never needs them.
+MANAGER_REASON_FIELDS = ("suppressed", "suppressed_by", "suppressed_reason", "would_have_paid", "excluded_by")
 
-# ── MANAGER-ONLY SURFACES — THE one registry (index §6j) ────────────────────────────────────────────
-# A carrier-commission report (what the carrier paid the store, per rep) is refused to the employee audience. The
-# server's refusal names its key here (`router._refuse_employee_audience(authorization, org_id, key)`), and the
-# nav hides every `pages` entry from a viewer whose audience is 'employee' (`viewer_payload` → `/me` →
-# `rbac.payoutRefused`). One list; a surface refused on the server is never offered in the menu.
+# ── THE CARRIER SURFACES — THE one registry (index §6j, §6l) ────────────────────────────────────────
+# The management surfaces that show carrier commission (what the carrier paid the store, per rep). Since 2026-09-28
+# each is refused to every viewer WITHOUT the carrier permission (`carrier_view_allowed` — reps and store managers
+# alike), not only to the employee audience. The server's refusal names its key here
+# (`router._require_carrier_view(authorization, org_id, key)`), and the nav hides every `pages` entry from such a
+# viewer (`viewer_payload` → `/me` → `rbac.payoutRefused`). One list; a surface refused on the server is never offered
+# in the menu. `"menu": False` = a page reached only through in-app links (no NAV entry) — every such link asks
+# `payoutRefused` itself (the lock checks it); the route guard (`canAccessPath`) refuses its URL either way.
 MANAGER_ONLY_SURFACES = (
     {"key": "carrier_vs_pay", "label": "Carrier Earned vs Employee Paid",
-     "endpoints": ("/carrier-vs-pay",), "pages": ("/commcalc/carrier-vs-pay",)},
+     "endpoints": ("/carrier-vs-pay/{period}",), "pages": ("/commcalc/carrier-vs-pay",)},
     {"key": "pay_discrepancy", "label": "Pay Discrepancy",
-     "endpoints": ("/discrepancy/{period}", "/discrepancy/{period}/phantom"), "pages": ("/commcalc/discrepancy",)},
+     "endpoints": ("/discrepancy/{period}", "/discrepancy/{period}/phantom", "/discrepancy/run"),
+     "pages": ("/commcalc/discrepancy",)},
     {"key": "commission_discrepancy", "label": "Commission Discrepancy",
      "endpoints": ("/discrepancy-appeals",), "pages": ("/commcalc/commission-discrepancy",)},
     # a drill inside other pages (no page of its own) — refused on the server, nothing to hide in the nav
     {"key": "commission_device", "label": "Device commission story",
      "endpoints": ("/commission-device",), "pages": ()},
+    # the "How was this calculated?" diagnostic's CARRIER view (Price / GP, implied cost, the MA cross-reference).
+    # The Rep Incentive drill reads the same endpoint WITHOUT `view=carrier` and is served the carrier-free shape.
+    {"key": "commission_explain_carrier", "label": "Commission explain (carrier diagnostic)",
+     "endpoints": ("/commission-explain?view=carrier",), "pages": ("/commcalc/commission-explain",), "menu": False},
 )
 MANAGER_ONLY_PAGES = tuple(p for s_ in MANAGER_ONLY_SURFACES for p in s_["pages"])
 
 
 def manager_only_label(key):
-    """The registered label of a manager-only surface — KeyError for an unregistered key (a refusal must be
-    registered, or the nav could not hide it)."""
+    """The registered label of a carrier surface — KeyError for an unregistered key (a refusal must be registered,
+    or the nav could not hide it)."""
     for s_ in MANAGER_ONLY_SURFACES:
         if s_["key"] == key:
             return s_["label"]
-    raise KeyError(f"manager-only surface {key!r} is not registered in payout_audience.MANAGER_ONLY_SURFACES")
+    raise KeyError(f"carrier surface {key!r} is not registered in payout_audience.MANAGER_ONLY_SURFACES")
 
 
-def viewer_payload(caller_is_self):
+def refusal_message(key):
+    """The 403 a carrier surface answers a viewer without the permission — names the registered surface and THE
+    permission, never a role (which roles hold it is each org's config)."""
+    return (f"{manager_only_label(key)} shows carrier commission — it is for management only (the "
+            f"'{CARRIER_VIEW_GRANT}' permission, set per role in Roles & Access).")
+
+
+# ── THE CARRIER PERMISSION — its one home (owner 2026-09-28, index §6l) ─────────────────────────────
+# ONE permission answers "may this viewer see carrier commission?". It is a Roles & Access data grant (rbac.ts
+# DATA_GRANTS registers the key so the Roles editor can tick / untick it per role): the org's own setting on the
+# role wins in BOTH directions; unset = the house default, top management only. RULE TWO: no role NAME decides
+# here — "top management" is the company-wide scope the platform already defines (index §14: every role above
+# market manager is scope 'all'; the seeded 'admin' role is scope 'all'), plus the platform super admin.
+CARRIER_VIEW_GRANT = "carrier_commission_view"
+CARRIER_VIEW_DEFAULT_SCOPES = ("all",)
+
+
+def carrier_view_allowed(caller, caller_is_self=False):
+    """THE answer. PURE over core's resolved caller ({super_admin, role, perms}):
+      · no caller, or a SELF-scoped caller (a rep — always the employee audience)        → False
+      · the platform super admin                                                          → True
+      · the org set `perms.data.carrier_commission_view` on this role (true / false)      → that value
+      · unset → the house default: a company-wide ('all') scope role                       → True, else False
+    (the Roles & Access checkbox shows exactly this default: ticked for a company-wide role until unticked)."""
+    if not caller or caller_is_self:
+        return False
+    if caller.get("super_admin"):
+        return True
+    perms = caller.get("perms") or {}
+    data = perms.get("data") or {}
+    if isinstance(data, dict) and CARRIER_VIEW_GRANT in data:
+        return bool(data.get(CARRIER_VIEW_GRANT))
+    return str(perms.get("scope") or "").strip().lower() in CARRIER_VIEW_DEFAULT_SCOPES
+
+
+def viewer_payload(caller_is_self, carrier_view=False):
     """What `/me` tells the client about THIS viewer: the audience the server will serve them (`resolve` with no
-    page request) and the pages refused to them. The client decides nothing — it hides what it is told."""
+    page request), whether they hold the carrier permission, and the carrier pages refused to them (every one,
+    unless they hold it). The client decides nothing — it hides what it is told."""
     aud = resolve("", caller_is_self)
-    return {"audience": aud, "refused_pages": list(MANAGER_ONLY_PAGES) if aud == "employee" else []}
+    allowed = bool(carrier_view) and aud != "employee"
+    return {"audience": aud, "carrier_view": allowed, "refused_pages": [] if allowed else list(MANAGER_ONLY_PAGES)}
 
 
 _ALLOW = {"line": EMPLOYEE_LINE_FIELDS, "rule": EMPLOYEE_RULE_FIELDS, "plan": EMPLOYEE_PLAN_FIELDS,
@@ -173,15 +245,36 @@ def employee_line(line):
     return _keep(line, "line")
 
 
-def employee_rep_row(row):
-    """A rep_commissions row as an employee may read it (the allow-list)."""
+def rep_incentive_line(line, audience):
+    """One plan line as a Rep Incentive surface shows it: the line allow-list for every audience; a manager adds
+    the ⛔ reasons (`MANAGER_REASON_FIELDS`). Never a carrier field."""
+    allow = EMPLOYEE_LINE_FIELDS + (() if audience == "employee" else MANAGER_REASON_FIELDS)
+    return {k: v for k, v in (line or {}).items() if k in allow}
+
+
+def rep_incentive_row(row):
+    """A rep_commissions row as EVERY Rep Incentive viewer reads it (owner 2026-09-28, index §6l): the rep's pay and
+    the counts / KPIs it was paid on — the carrier-paid dealer figures (`boost_commission` / `boost_reimbursement`)
+    are on no audience's row. (carrier-vs-pay reads them from the table itself, behind the carrier permission.)"""
     return _keep(row, "rep_row")
 
 
+def employee_rep_row(row):
+    """A rep_commissions row as an employee may read it — the same allow-list every audience gets (`rep_incentive_row`)."""
+    return rep_incentive_row(row)
+
+
 def employee_explain(explain):
-    """The drill-down (`commission_drilldown.explain_rep` + the router's additions) as the EMPLOYEE reads it:
-    every level through its allow-list; each rule keeps only its PAID lines (`is_paid_line`). The rep's pay
-    figures are untouched. Returns a new dict."""
+    """The drill-down as the EMPLOYEE reads it — `rep_incentive_explain(explain, 'employee')`."""
+    return rep_incentive_explain(explain, "employee")
+
+
+def rep_incentive_explain(explain, audience):
+    """THE Rep Incentive drill-down (`commission_drilldown.explain_rep` + the router's additions) as `audience` reads
+    it (owner 2026-09-26 / 2026-09-28, index §6i / §6l): every level through its allow-list, FOR EVERY AUDIENCE — no
+    carrier field reaches anyone. 'employee' keeps only the PAID lines (`is_paid_line`); a manager keeps every
+    matched line with its ⛔ reason. The rep's pay figures are untouched. Returns a new dict stamped `audience`."""
+    aud = "employee" if audience == "employee" else "manager"
     src = copy.deepcopy(explain or {})
     out = _keep(src, "explain")
     pc = src.get("plan_component")
@@ -191,7 +284,8 @@ def employee_explain(explain):
         for rb in pc.get("rules") or []:
             r = _keep(rb, "rule")
             if isinstance(rb.get("lines"), list):
-                r["lines"] = [employee_line(ln) for ln in rb["lines"] if is_paid_line(ln)]
+                r["lines"] = [rep_incentive_line(ln, aud) for ln in rb["lines"]
+                              if aud != "employee" or is_paid_line(ln)]
             rules.append(r)
         if "rules" in pc:
             p["rules"] = rules
@@ -207,13 +301,20 @@ def employee_explain(explain):
                 devs.append(dd)
             m["devices"] = devs
         out["multimonth_component"] = m
-    out["audience"] = "employee"
+    out["audience"] = aud
     return out
 
 
 def employee_drill(drill):
-    """The Boost component drill (`/commission-drill`) as the employee reads it: count-paid buckets carry each
-    transaction without its money; percentage-paid buckets keep the sale's price / margin (the rep's pay basis)."""
+    """The Boost component drill as the employee reads it — `rep_incentive_drill(drill, 'employee')`."""
+    return rep_incentive_drill(drill, "employee")
+
+
+def rep_incentive_drill(drill, audience):
+    """The Boost component drill (`/commission-drill`) as EVERY Rep Incentive viewer reads it (index §6i / §6l):
+    count-paid buckets carry each transaction without its money; percentage-paid buckets keep the sale's price /
+    margin (the customer's accessory / setup price — the rep's pay basis, not the carrier's money). The same shape
+    for every audience; only the `audience` stamp differs."""
     out = copy.deepcopy(drill or {})
     for key, b in list(out.items()):
         if not (isinstance(b, dict) and isinstance(b.get("items"), list)):
@@ -224,8 +325,26 @@ def employee_drill(drill):
         if not basis:
             b.pop("sales", None)
             b.pop("gp", None)
-    out["audience"] = "employee"
+    out["audience"] = "employee" if audience == "employee" else "manager"
     return out
+
+
+def carrier_fields_in(payload, path=""):
+    """Every KNOWN_CARRIER_FIELDS key anywhere in a payload (dicts and lists, any depth) — [] for a clean one. The
+    proof and the lock run every Rep Incentive surface's output through it, for every audience. (The Boost drill's
+    percentage-paid buckets are checked with `disallowed_fields(kind='drill')` instead — their basis is excused.)
+    A key that carries nothing (None / empty list or dict) is not money and is not reported; a 0.0 is."""
+    hits = []
+    if isinstance(payload, dict):
+        for k, v in payload.items():
+            p = f"{path}.{k}"
+            if k in KNOWN_CARRIER_FIELDS and not (v is None or (isinstance(v, (list, tuple, dict)) and not v)):
+                hits.append(p)
+            hits += carrier_fields_in(v, p)
+    elif isinstance(payload, (list, tuple)):
+        for i, v in enumerate(payload):
+            hits += carrier_fields_in(v, f"{path}[{i}]")
+    return hits
 
 
 def disallowed_fields(payload, kind="explain", path=""):

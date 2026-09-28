@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
-import { carrierMode } from '@/lib/rbac'
+import { carrierMode, payoutRefused } from '@/lib/rbac'
 import StatTile from '@/components/StatTile'
 import { GoogleRatingChips, useGoogleRatings } from './_lib/googleRatings'
 
@@ -22,7 +22,7 @@ interface RepRow {
 
 export default function CommCalcDashboard() {
   const { period } = usePeriod()
-  const { carriers } = useAuth()
+  const { carriers, permissions } = useAuth()
   const isBoost = carrierMode(carriers) === 'boost'   // non-Boost carriers pay via plans, not KPI tiers
   const [reps, setReps] = useState<RepRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -197,7 +197,10 @@ export default function CommCalcDashboard() {
           <div style={{ marginTop: 10, display: 'flex', gap: 12, alignItems: 'center' }}>
             <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)', fontSize: 13 }}>Review Incentive Plans →</a>
             <a href="/commcalc/plan-installments" style={{ color: 'var(--accent)', fontSize: 13 }}>Multi-month schedules →</a>
-            <a href="/commcalc/commission-explain" style={{ color: 'var(--accent)', fontSize: 13 }}>Explain a rep's pay →</a>
+            {/* a carrier surface (index §6l) — offered only to a viewer the server serves it to */}
+            {!payoutRefused(permissions, '/commcalc/commission-explain') && (
+              <a href="/commcalc/commission-explain" style={{ color: 'var(--accent)', fontSize: 13 }}>Explain a rep's pay →</a>
+            )}
             <a href="/commcalc/accessory-cost-audit" style={{ color: 'var(--accent)', fontSize: 13 }}>Accessory cost audit →</a>
           </div>
         </div>
