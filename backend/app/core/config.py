@@ -1,4 +1,3 @@
-from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 from app.core.base_url import base_url
@@ -136,12 +135,13 @@ class Settings(BaseSettings):
     FIELD_ENCRYPTION_KEYS: str = ""
 
     # Every *_URL setting is an operator-typed address: normalised in ONE place (app/core/base_url.py — scheme added
-    # when pasted without one, trailing slash dropped). harness_base_url.py fails the build if a *_URL field is added
-    # outside this list.
-    @field_validator("SUPABASE_URL", "APP_PUBLIC_URL", "API_PUBLIC_URL", mode="before")
-    @classmethod
-    def _base_urls(cls, v):
-        return base_url(v)
+    # when pasted without one, trailing slash dropped). By name, so a new *_URL field is covered without a list to
+    # maintain; harness_base_url.py proves it. (A pydantic hook with no pydantic import: the stdlib harnesses stub
+    # pydantic_settings and never construct Settings.)
+    def model_post_init(self, _context):
+        for name in type(self).model_fields:
+            if name.endswith("_URL"):
+                setattr(self, name, base_url(getattr(self, name)))
 
     class Config:
         env_file = ".env"

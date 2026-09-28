@@ -6,7 +6,7 @@ Read catalog). The fix is the mechanism, not the one variable:
 
   A. base_url() — scheme added (https, or http for a private host), trailing slash dropped, unset stays unset.
   B. The REAL browser_service_url() and the REAL proxy handler: a schemeless address now reaches the worker.
-  C. Settings: every *_URL field is normalised by the validator (a new *_URL field outside it fails here).
+  C. Settings: every *_URL field is normalised (config.model_post_init, by name).
   D. Source lock: nothing in app/ reads BROWSER_SERVICE_URL from the environment except service_role.py.
 
 Run: `python3 harness_base_url.py` from the backend dir. DB-free.
@@ -142,7 +142,8 @@ sr = (HERE / "app/core/service_role.py").read_text()
 check("service_role.browser_service_url() returns base_url(...)",
       re.search(r"def browser_service_url\(\)[\s\S]{0,400}?return base_url\(", sr) is not None)
 cfg = (HERE / "app/core/config.py").read_text()
-check("config.py normalises through base_url()", "return base_url(v)" in cfg)
+check("config.py normalises every *_URL field through base_url()",
+      re.search(r'endswith\("_URL"\)[\s\S]{0,160}base_url\(', cfg) is not None)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
