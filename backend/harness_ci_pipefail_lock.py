@@ -28,6 +28,19 @@ violations, since neither can break module load: an import guarded by `try:`, an
 module the harness STUBS into `sys.modules` itself (`harness_tenant_vertical.py` does exactly that,
 on purpose, and is correctly placed in the no-deps job).
 
+THE THIRD DEFECT, SAME CLASS (found 2026-09-27, owner-directed fix). `harness_activation_bucketing.py`
+had been RED on `main` for three weeks — PR #279 refactored `_activation_details_rules` to stop issuing
+its own org-scoped query (the §4b.1 "ONE READ" duplicate), the guard still grepped that function's own
+source for `.eq("org_id", org_id)`, and nothing noticed because **no workflow runs that harness**. The
+guard was stale AND unexecuted; only the second fact let it rot silently.
+
+Measured across the repo: **400 harnesses on disk, 65 run by a workflow, 335 run by nothing.** So the
+third rule is a RATCHET, not a hard gate — wiring 335 harnesses into CI in one change would multiply
+the build, and that is the owner's call, not a lock's. `backend/harness_unrun_pending.txt` is the debt
+list: a NEW harness must be run by some workflow, the list may only SHRINK, and PINNED_MAX below must
+equal its length. Same shape as `frontend/table_sort_pending.txt`, which the owner approved for the
+sort rollout.
+
 Stdlib only (the job that runs this installs nothing): run `python backend/harness_ci_pipefail_lock.py`.
 """
 import ast
@@ -168,6 +181,49 @@ def misplaced(files, read_source, wheels):
     return out
 
 
+# ── THE THIRD RULE — a harness no workflow runs is a file, not a gate ─────────────────────────────
+PENDING_FILE = os.path.join(HERE, "harness_unrun_pending.txt")
+PINNED_MAX = 334          # must equal the number of entries in harness_unrun_pending.txt
+
+
+def read_pending(text):
+    """The debt file's text → the set of harness filenames on it. `#` lines are the rationale."""
+    return {ln.strip() for ln in (text or "").splitlines()
+            if ln.strip() and not ln.lstrip().startswith("#")}
+
+
+def harnesses_run_by(files):
+    """{workflow: yaml} → every harness_*.py filename any workflow mentions."""
+    out = set()
+    for text in files.values():
+        out |= set(re.findall(r"\b(harness_\w+\.py)", text))
+    return out
+
+
+def unrun(on_disk, files, pending):
+    """→ [plain sentences]; [] = nobody added an unexecuted harness and the debt did not grow."""
+    out = []
+    ran = harnesses_run_by(files)
+    orphans = sorted(set(on_disk) - ran - pending)
+    for name in orphans:
+        out.append("backend/%s is run by no workflow — a harness nothing executes is not a gate, it is "
+                   "a file, and it will rot unnoticed (that is exactly how harness_activation_bucketing "
+                   "sat red on main for three weeks). Add a step for it, or, if that is genuinely for "
+                   "later, add it to backend/harness_unrun_pending.txt and raise PINNED_MAX." % name)
+    if len(pending) > PINNED_MAX:
+        out.append("harness_unrun_pending.txt has %d entries but PINNED_MAX is %d — the debt list may "
+                   "only SHRINK. Wire the harness up instead of registering it."
+                   % (len(pending), PINNED_MAX))
+    # A name on the list that IS now run, or no longer exists, is stale: it must be deleted so the
+    # count keeps meaning something.
+    stale = sorted((pending & ran) | (pending - set(on_disk)))
+    for name in stale:
+        out.append("%s is on harness_unrun_pending.txt but is now run by a workflow (or no longer "
+                   "exists) — delete the line and lower PINNED_MAX; a debt list that does not shrink "
+                   "when the debt is paid stops measuring anything." % name)
+    return out
+
+
 def _reader(root):
     def read(rel):
         path = os.path.join(root, rel)
@@ -277,10 +333,44 @@ def main():
     check("stdlib only → green",
           misplaced({"x.yml": nodeps}, fake({"harness_z.py": "import os, re, sys, json\n"}), W) == [])
 
+    # ── THE THIRD RULE ────────────────────────────────────────────────────────────────────────────
+    on_disk = sorted(f for f in os.listdir(HERE)
+                     if f.startswith("harness_") and f.endswith(".py"))
+    pending = read_pending(read("harness_unrun_pending.txt") or "")
+    if len(pending) != PINNED_MAX:
+        print("  ✗ harness_unrun_pending.txt has %d entries, PINNED_MAX is %d"
+              % (len(pending), PINNED_MAX))
+    check("the debt list parsed and is pinned exactly", len(pending) == PINNED_MAX)
+    orphaned = unrun(on_disk, files, pending)
+    for v in orphaned:
+        print("  ✗ " + v)
+    ran_now = harnesses_run_by(files)
+    check("no harness is unexecuted and unregistered (the list may only shrink)", orphaned == [])
+    check("the harness fixed in this change is now RUN, not merely registered",
+          "harness_activation_bucketing.py" in ran_now
+          and "harness_activation_bucketing.py" not in pending)
+    print("  ·  %d harnesses on disk, %d run by a workflow, %d registered as debt"
+          % (len(on_disk), len(on_disk) - len(pending), len(pending)))
+
+    # negative controls
+    wf = {"x.yml": "jobs:\n  g:\n    steps:\n      - run: python3 harness_a.py\n"}
+    check("a NEW harness nobody runs → RED", bool(unrun(["harness_a.py", "harness_new.py"], wf, set())))
+    check("the same harness once registered as debt → green",
+          unrun(["harness_a.py", "harness_new.py"], wf, {"harness_new.py"}) == [])
+    check("a registered harness that IS now run must be de-registered → RED",
+          bool(unrun(["harness_a.py"], wf, {"harness_a.py"})))
+    check("a registered harness that no longer exists must be de-registered → RED",
+          bool(unrun(["harness_a.py"], wf, {"harness_gone.py"})))
+    check("a harness run by ANY workflow, not just this one, counts → green",
+          unrun(["harness_a.py", "harness_b.py"],
+                dict(wf, **{"y.yml": "  - run: python3 harness_b.py\n"}), set()) == [])
+    check("comment lines in the debt file are not entries",
+          read_pending("# why this file exists\nharness_a.py\n") == {"harness_a.py"})
+
     print(f"\n{passed} passed, {failed} failed")
     if failed:
         sys.exit(1)
-    print("OK — every harness CI runs can import in its job, and a failing one fails CI.")
+    print("OK — a harness runs, can import where it runs, and fails the build when it fails.")
 
 
 if __name__ == "__main__":

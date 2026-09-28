@@ -5672,6 +5672,33 @@ harness STUBS into `sys.modules` itself (`harness_tenant_vertical.py` does exact
 no-deps job). Proven both ways: replaying the bad step into the workflow text reproduces the violation and names
 `app/modules/closing/router.py imports fastapi`; 28 checks, 9 of them negative controls.
 
+§19.25c **A GUARD WENT STALE AND NOTHING NOTICED, BECAUSE NOTHING RAN IT (owner-directed, 2026-09-27).**
+`harness_activation_bucketing.py` check **F3** had been RED on `main` for ~3 weeks. It grepped the SOURCE TEXT of
+`router._activation_details_rules` for the literal `.eq("org_id", org_id)`. PR #279 did the right thing and removed
+that query — a second read of the same column was the §4b.1 "ONE READ" duplicate — so the loader now delegates to
+`_accessory_config(client, org_id)` and the scoping lives, shared, in `_accessory_config_uncached` as
+`lambda q: q.eq("org_id", org_id)`. **Org-scoping never weakened; it moved and became shared.** The refactor that
+improved the code broke the guard: the §24 pattern of a guard that has become a proxy for the thing it guards.
+
+Fixed the way §19.28 fixed `harness_team_snapshot_perf` — **re-expressed, never loosened.** F3 now FOLLOWS THE
+DELEGATION (`_org_scoped_through`, a bounded walk over the router functions the loader calls) and asserts the FACT:
+the rules returned came from a read filtered on this org, wherever in the chain that filter now lives. F3b names
+where it lives so the guard stays honest about the indirection. **Three armed negative controls**, without which
+"follow the delegation" would be indistinguishable from "stop checking": the same shape with the filter removed goes
+RED, a filter one delegation deeper is still found, and a loader that calls nothing and scopes nothing goes RED. 53
+checks, was 49.
+
+**THE SERIOUS HALF WAS THE SECOND FACT, and it is much larger than one file.** Measured: **400 harnesses on disk, 65
+run by a workflow, 335 run by nothing.** A harness no workflow runs is not a gate, it is a file — the §19.25 class in
+its third direction, beside *a failing harness must fail CI* (§19.25) and *a harness CI runs must be able to import in
+its job* (§19.25b). All three now live in `backend/harness_ci_pipefail_lock.py`. The third is a **RATCHET**, not a hard
+gate, because wiring 335 harnesses into CI in one change would multiply the build and is the owner's call, not a
+lock's: `backend/harness_unrun_pending.txt` is the debt list, a NEW harness must be run by some workflow, the list may
+only SHRINK, and a name that becomes run (or stops existing) must be de-registered or the build fails — a debt list
+that does not shrink when the debt is paid stops measuring anything. Same shape as `frontend/table_sort_pending.txt`.
+Pinned at **334**: this change wires `harness_activation_bucketing.py` into `carrier-vocab-guard.yml` (stdlib job —
+its placement checked by the §19.25b rule), so the list shrinks by one on the very change that introduces it.
+
 §19.26 **A MONEY GATE CHOSE ITS COLUMN BY RESEMBLANCE — the qualifier read TWP+ while the rule is TWP ALL
 (owner defect 2026-09-25; fixed as a class).** `paramount_kpi` matched the SUBSTRING `"current twp"` against the
 door report's header row and took the FIRST column containing it. The real report carries TWO — `Current TWP+%`
