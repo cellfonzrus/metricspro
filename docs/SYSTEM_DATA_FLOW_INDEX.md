@@ -196,7 +196,7 @@ email), (c) **RPC/manual entry**.
 | FTP drop | `ftp_sweep.py` | per report-pull-map | `/ftp-sweep/*` `router.py:22175-22237` (mig `046`); freshness stamp via `_sweep_run_stamp` — see the Email inbox row |
 | Email inbox | `email_sweep.py` | routes attachments to report ingest | `/email-sweep/*` `router.py:22973-23407` (mig `049`,`075`); scheduler: pg_cron → `/email-sweep/run-due` (mig `921`,`922` — backend self-registers on boot; handler advances `next_run_at` up front and sweeps on a dedicated thread so the tick answers pg_net inside its 5 s timeout; per-mailbox in-progress lock `sweeping_since` (mig `932`) stops overlapping sweeps; non-terminal files stop re-fetching after `SWEEP_MAX_NONTERMINAL_ATTEMPTS` — surfaced in `last_status`, never silent). **FRESHNESS STAMP (2026-09-20): `router._sweep_run_stamp(success)` is the ONE place a mailbox/FTP sweep decides which timestamp it may write** — only a run that actually ingested (`ok > 0`) advances `last_run_at`; a rejected login, a mailbox with no filename rules, a connect error or a crash records `last_attempt_at` instead (mig `241` column, the contract the portal sweeps already followed via `_sweep_set_status`). Scheduling is untouched — `/run-due` keys off `next_run_at`. Proof: `harness_sweep_freshness.py` (28 checks) |
 | Vidapay | `vidapay_sweep.py` | payment feed | (mig `083` total processor sources) |
-| Generic data-source portal login | `live_login.py` | any report | `/data-sources/*` `router.py:23760-24979`, `/data-sources/sweep/run-due` `24409` (cron path advances each due source's `next_run_at` up front and pulls on a dedicated thread — the email-sweep incident pattern; the secret-less org-scoped call still pulls inline; interactive login/2FA/live-login endpoints on the API service proxy transparently to the sweeps worker when `BROWSER_SERVICE_URL` is set — `service_role.BrowserWorkProxy` + handler in `main.py`) |
+| Generic data-source portal login | `live_login.py` | any report | `/data-sources/*` `router.py:23760-24979`, `/data-sources/sweep/run-due` `24409` (cron path advances each due source's `next_run_at` up front and pulls on a dedicated thread — the email-sweep incident pattern; the secret-less org-scoped call still pulls inline; interactive login/2FA/live-login endpoints on the API service proxy transparently to the sweeps worker when `BROWSER_SERVICE_URL` is set — `service_role.BrowserWorkProxy` + handler in `main.py`; the address is read ONLY by `service_role.browser_service_url()` through `core.base_url.base_url`, §40) |
 
 Connector/schedule model: mig `039_connector_model.sql`, `063`, `290_report_schedule_and_grain.sql`;
 endpoints `/connectors*` `router.py:6666-6989`, `/connector-health` `23378`. Sweep store-guard
@@ -13241,3 +13241,29 @@ job runs via `_SWEEP_SPECS`); §D gate + reminders (one per cycle, never before 
 validation + gates; §F wiring (feed registration in import_health's row shape, the sweep writer's job_run, the hourly tick, feed ownership, no portal
 word in code, the pure frontend gate, the alert scope listed); §G this section. Tested on local PG16: runs, re-runs without
 change, keeps an edit.
+
+---
+
+## 40. SERVICE ADDRESSES — an operator-typed base URL has ONE normaliser (owner 2026-09-28)
+
+**Defect (live):** Supply → Read catalog answered `browser service unreachable: Request URL is missing an 'http://' or
+'https://' protocol`. `BROWSER_SERVICE_URL` on the API host was pasted without a scheme, and `browser_service_url()` used
+it verbatim — so EVERY browser endpoint proxied to the sweeps worker (portal Log in / 2FA verify / live login, the supply
+catalog reader, the sweep tick) failed the same way, and the boot-time portal-pull cron registered the same schemeless
+address with pg_net.
+
+**Class, not instance:** "a service address typed by a human into the host's settings is used as typed". The same held for
+every `*_URL` setting (`SUPABASE_URL`, `APP_PUBLIC_URL`, `API_PUBLIC_URL` — links in emails, the WhatsApp webhook URL, the
+cron registrars) and for the second, copied reader of `BROWSER_SERVICE_URL` in `commcalc/router._ensure_data_sources_cron`.
+
+| Piece | Where |
+|---|---|
+| **THE normaliser** `base_url(raw)` — trims, adds `https://` (or `http://` for a private host: `*.internal`, localhost, private IPs, a bare single-label name), drops the trailing slash; unset stays `""` | `backend/app/core/base_url.py` (stdlib) |
+| Settings — every `*_URL` field normalised by one `field_validator` | `backend/app/core/config.py` |
+| THE one reader of `BROWSER_SERVICE_URL` | `service_role.browser_service_url()` → `base_url(...)`; `_ensure_data_sources_cron` now dereferences it (the copy removed) |
+| Proxy failure names the address it tried (a URL, never a secret) | `main._proxy_browser_work` |
+| **Lock** — reproduces the live 502 without the fix; fails the build on a second env reader of `BROWSER_SERVICE_URL`, a `*_URL` setting outside the validator, or `browser_service_url()` not returning `base_url(...)` | `backend/harness_base_url.py`, CI job `base-url-proof` |
+
+Self-heal: the next boot re-registers the portal-pull cron (`ensure_data_sources_cron`, replace-by-name) with the
+normalised address — no migration, no manual step.
+

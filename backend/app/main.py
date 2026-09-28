@@ -189,8 +189,9 @@ async def _proxy_browser_work(request, exc):
         async with httpx.AsyncClient(timeout=180.0) as cx:
             r = await cx.request(request.method, url, headers=fwd, content=body)
     except httpx.HTTPError as e:
-        return _Resp(content=('{"detail":"browser service unreachable: %s"}'
-                              % str(e).replace('"', "'")[:160]).encode(),
+        # Name the worker address tried (a URL, never a secret) so a mistyped BROWSER_SERVICE_URL reads as one.
+        return _Resp(content=('{"detail":"browser service unreachable at %s: %s"}'
+                              % (base.replace('"', "'")[:120], str(e).replace('"', "'")[:160])).encode(),
                      status_code=502, media_type="application/json")
     return _Resp(content=r.content, status_code=r.status_code,
                  media_type=r.headers.get("content-type"))

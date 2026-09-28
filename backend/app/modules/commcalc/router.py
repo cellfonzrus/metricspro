@@ -37542,9 +37542,7 @@ def _ensure_data_sources_cron():
     not applied yet), or pg_cron/pg_net absent just means auto-scheduling is skipped — boot still
     succeeds and the manual "Pull now" button still works."""
     try:
-        import os as _os
-        url = ((_os.environ.get("BROWSER_SERVICE_URL", "") or "").strip().rstrip("/")
-               or (getattr(settings, "API_PUBLIC_URL", "") or "").strip())
+        url = _browser_service_url() or (getattr(settings, "API_PUBLIC_URL", "") or "").strip()
         secret = (getattr(settings, "NOTIFY_RUN_SECRET", "") or "").strip()
         if not url or not secret:
             return "skipped: BROWSER_SERVICE_URL/API_PUBLIC_URL or NOTIFY_RUN_SECRET not set"

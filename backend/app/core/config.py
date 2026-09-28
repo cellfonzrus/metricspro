@@ -1,4 +1,7 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
+
+from app.core.base_url import base_url
 
 class Settings(BaseSettings):
     SUPABASE_URL: str = "https://etxdalernqqtwjcrtcuj.supabase.co"
@@ -131,6 +134,14 @@ class Settings(BaseSettings):
     # unrecoverable — store it in a secrets manager and back it up.
     FIELD_ENCRYPTION_KEY: str = ""
     FIELD_ENCRYPTION_KEYS: str = ""
+
+    # Every *_URL setting is an operator-typed address: normalised in ONE place (app/core/base_url.py — scheme added
+    # when pasted without one, trailing slash dropped). harness_base_url.py fails the build if a *_URL field is added
+    # outside this list.
+    @field_validator("SUPABASE_URL", "APP_PUBLIC_URL", "API_PUBLIC_URL", mode="before")
+    @classmethod
+    def _base_urls(cls, v):
+        return base_url(v)
 
     class Config:
         env_file = ".env"
