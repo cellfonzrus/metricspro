@@ -36,6 +36,7 @@ Primary code homes:
 | 6l | **Auto-calculation on landing** | "I uploaded September — did the commission recalculate by itself? When, from which upload, and if not, why not (refused, off, waiting)? Which uploads / sweeps trigger it, and how is a burst of files one calculation?" |
 | 6k | **The one-rep Recalculate button** | "Why did Recalculate for one rep fail / what does it write? Does it touch other reps or the installment ledgers? Is the one-rep row the same as Run Calculation's? How is a moved-local NameError kept out of the build?" |
 | 6m | **Carrier commission is for management's eyes only** | "Why does the Rep Incentive report show no Price / GP (carrier commission) even to a manager? Who may see carrier commission, where is that role list set, and which pages show it? Why can a store manager not open Pay Discrepancy / Carrier vs Pay / the explain diagnostic?" |
+| 6n | **Tablet and watch activations at their own Exec-MTD rate** | "How do tablets and watches pay differently from a phone? Where is 'what device did this activation activate' decided? Why does a tablet show in the Tablet column with no Activation Details file? Which categories can a plan price, and where is that list?" |
 | 7 | **Carrier residual installments** | "Multi-month carrier residual pay from raw_mi. Why do named activation_types not pay?" |
 | 12 | **External credit machine + Card Settlement Recon** | "Where does the external / white-machine card figure live, what is it called for this tenant, and how does it tally with what the processor actually settled?" |
 | 7a | **Residual per Subscriber report** | "Where does the residual/subscriber trend come from per carrier? Why is a Total/MA store named, not a processor account id?" |
@@ -2561,6 +2562,104 @@ reaches none of the carrier pages incl. the diagnostic; top management does).
 
 ---
 
+### 6n. TABLET AND WATCH ACTIVATIONS PAY AT THEIR OWN EXEC-MTD RATE — one device classifier, one category list (owner 2026-09-28)
+
+Owner, verbatim: *"need to add tablets and watches as a fix and a different commission for those, tablet pay at $5
+and watch at $2, gizmo at $2, add those and map and recalculate"*; Gizmo: *"treat all as watch ($2)"*. The rate
+card for org `f4f1c16e` (applied in PART 3, after this merges): new phone $10 (port / BYOD $10), phone upgrade $5,
+tablet $5 (new or upgrade), watch / connected device $2 (new or upgrade).
+
+**The class.** An activation's CLASS (new / port / BYOD / upgrade — `line_class`) was known; the DEVICE it activated
+was not part of the pay decision, so a tablet or a watch paid exactly like a phone on every surface; and Exec MTD
+split Tablet out ONLY on the Activation-Details basis (§6d-i), so an org with no AD file (f4f1c16e: 0 AD rows,
+Feb 2025 – Aug 2026) could never price one.
+
+**ONE device classifier — the existing one.** "What device did this activation activate" already had a home: the
+multi-month category ladder `installment_category` (mig 245: `installment_category_rule` tenant rows ahead of the
+built-in ladder, the product catalog, the serial's shape, strongest signal across an activation's lines). It is NOT
+re-implemented. `watch` joins its vocabulary (`CATEGORY_KEYS`, label "Watches / connected devices",
+`DEFAULT_QUALIFICATION.watch = True`) with **no built-in rule** — a tenant that adds none classifies exactly as
+before, multi-month included; a chain a tenant newly names a watch keeps qualifying.
+
+**The device dimension on the EVENT — `line_class`** (the per-org switch + the pay decision, beside the class and
+the event): `activation_details_rules.devices` = `{enabled, applies_to}` (house: `enabled: False` → no dimension;
+`applies_to` default = every activation-type class, so a tablet UPGRADE pays the tablet rate; drop `'upgrade'` to
+pay device upgrades at the upgrade rate). `resolve_devices(raw, device_rules, catalog_cat_of)` — the rules and the
+catalog lookup are injected by THE loader `router._line_rules_resolve` (`installment_category.load_category_rules`
++ `build_catalog_category_lookup`, the multi-month engine's own inputs) only when enabled.
+`_device_of_lines` = `installment_category.resolve_chain_category` over the lines, kept when it names `tablet` /
+`watch`; `device_of(row)`, `unit_devices(rows, units)` (per counting unit, all of its lines),
+`pay_category(cls, device)` — one event, one category, one rate. `activation_events` stamps `device` +
+`pay_category` on an event only when enabled (house event dicts byte-identical). The too-broad guard
+(`token_shares` / `refused_tokens`, §30.12) now also measures the TENANT's device rule rows under `device:<name>`.
+A category-rule write (`POST` / `DELETE /plan-installments/category-rules`) drops the config memo
+(`_invalidate_accessory_config`).
+
+**Exec MTD — the sales basis splits devices.** `_sales_cell_agg` asks `_lc.unit_devices` once and adds each device
+unit to `_dev_tablet` / `_dev_watch` (the class sets every other surface reads are untouched). The sales branch of
+`_apply_activation_basis` moves a device unit OUT of the port / BYOD / upgrade columns into its device column
+(`act_tablet`, new `act_watch`); `act_new` stays FOLDED (non-device new + every device unit once), so **Total
+Activation is unchanged** and pure New = `act_new − tablet − watch`. A plan stating `activation_basis: 'folded'`
+keeps devices folded. The AD basis is unchanged (its own `Tablet` bucket; `act_watch = 0`). The Exec MTD rows /
+totals gain `watch` (page column "Watch").
+
+**ONE category list.** `activation_bucketing.MTD_CATEGORIES` (`activation, port, byod, tablet, watch,
+home_internet, edge, upgrade`) + `MTD_CATEGORY_LABELS` + `DEVICE_CATEGORIES`; `router._MTD_ACT_CATEGORIES` aliases
+it; **`GET /commcalc/commission-mtd/categories`** serves it; the rate editors (`commission-plans/page.tsx`,
+`commission-structure/page.tsx`) read it through `_lib/mtdCategories.useMtdCategories` (their literal `MTD_CATS`
+copies are gone). The plan save now carries the saved `mtd_rates` keys the editor does not show (e.g.
+`activation_basis`, previously dropped on every save) and re-seeds when the list arrives.
+
+**THE NAME BRIDGE reaches the Exec-MTD basis (sibling found 2026-09-28).** `_commission_mtd_result` filtered
+employee-scope assignments on the literal name, so a rep assigned under the ROSTER spelling ('Shweta', 'ss',
+'Mailk') was paid **$0** in exec_mtd mode while the rules basis bridged them. Now every POS alias whose canonical
+(`_rep_canon_map`, the same map) is assigned joins the scope. Live 2026-09-28: the only exec_mtd plan anywhere
+(854f6d7b "NY / Luxelink Comp") is market-scoped → **$0 moves today**.
+
+**Compatibility pin.** No device dimension enabled → every count and every payout byte-identical: proved on the
+house rules and on f4f1c16e's CURRENT config, plus an A/B of `_commission_mtd_result` against the base branch's
+router (git-available runs).
+
+**f4f1c16e — the PART-3 config (measured read-only, NOT written):** `activation_details_rules.devices =
+{"enabled": true}`; tablets by the built-in ladder (product word `tablet` / `tab` / `ipad`, category `tablet`);
+watches by three tenant rules in `installment_category_rule` (`watch`, priority 25: product_desc contains
+`connected device`, category contains `wearables`, product_desc word `watch`). Feb 2025 – Aug 2026 it catches
+**351 tablet events** (329 new + 22 upgrade) and **61 watch events** (55 + 6); every device rule under 0.7% of
+lines (none refused). The rate card over those events: **$28,572** vs $30,685 today (stored $30,615 + Anum's
+$70 now fixed).
+
+**Siblings, stated.** Excused by name in the lock (different facts, pre-existing): `discrepancy_engine._plan_category`
+(the CARRIER rate card's plan-name category), `asset` inventory buckets, `pos.catalog_suggest`, the top-sellers
+display heuristic. **Remaining sibling to unify (reported, not done):** `activation_bucketing
+.activation_details_bucket` classifies the carrier's Activation-Details rows into `Tablet` by its own words —
+folding it into the ladder moves AD-basis counts (LuxeLink), an owner call.
+
+**Proof:** `backend/harness_exec_mtd_device_rates.py` (26, DB-free — the real `_commission_mtd_result` → `_exec_mtd`
+over fixture sales: the 10 / 5 / 5 / 2 card per event ($84 = 40+10+10+5+15+4), precedence by the ladder's priority,
+`applies_to` without upgrade, the mixed invoice, the hardware-only line, the sales-basis split with Total Activation
+unchanged, `folded`, the compatibility pin incl. the base-router A/B, the name bridge). Lock
+`backend/harness_exec_mtd_device_rates_lock.py` (18, stdlib, CI guard job: one device classifier + named excuses, one
+category list served to the editors, every consumer wired, RULE TWO, the single-assignment remover; 12 negative
+controls).
+
+**THE SINGLE-ASSIGNMENT REMOVER (owner 2026-09-28).** `DELETE /commcalc/commission-plans/{plan_id}/assignments/
+{assignment_id}` (`router.delete_commission_plan_assignment` → `_remove_plan_assignment`) removes exactly ONE
+`commission_plan_assignment` row — filtered on `org_id` + `plan_id` + `id` on the read AND the delete; anything else
+(another org's row, another plan's row, an unknown or malformed id, a row already gone) is **404 with zero writes**. It
+never touches a rule, a tier or another assignment — unlike the plan save (`POST /commission-plans`), which deletes and
+re-inserts every child of the plan. Gated by THE `'commission_plans'` setting gate `_require_commission_plans_edit`
+(factored out of the carrier-template importer, which now calls it; the only `_can_edit_setting(…, "commission_plans")`
+decision). Drops the config memo. There is no plan-change audit table (the plan save writes none); the request is in
+`core.access_log` like every request, and the removed row is returned and printed to the server log. The Commission
+Plans editor shows **Remove now** on a saved assignment (the ✕ still only edits the draft). **Gap, reported:** the plan
+save, plan delete and bulk-assign carry NO in-handler permission gate (only the tenant middleware's auth + org
+rewrite); wiring them to `_require_commission_plans_edit` narrows who may write today and is an owner call. Proof
+`backend/harness_plan_assignment_remove.py` (43, DB-free, the real handler over a recording client); the lock's (f)
+section fails the build if another function deletes `commission_plan_assignment` rows outside the three named writers
+(plan save, bulk-assign, this remover).
+
+---
+
 ## 7. Carrier residual installments (raw_mi path)
 
 **Purpose.** Multi-month carrier residual pay: each qualifying subscriber pays a FLAT or %-of-MRC amount
@@ -4564,7 +4663,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | **B2B ↔ MA activation recon (Pay Discrepancy, MA source)** | `discrepancy_results` (`source='ma'`), `ma_payment_rule` — mig `312_ma_payment_rules_and_discrepancy_attribution` | `ma_recon.py` (pure: `build_sold_index`/`build_paid_index`/`match_rules`/`reconcile_ma_activations`; reuses mig-308 `_gate_met_ma_tx` + the two-hop link); ran by `POST /discrepancy/run` `router.py:19056` for plan-mode orgs; rules CRUD `/ma-payment-rules*` `19200-19270`; proof `harness_ma_recon.py`. Sold-but-unpaid → status `open` + literal `'no business rule configured'`, or rule-attributed `info`/`lagged` |
 | **Commission Discrepancy hub + APPEALS (owner directive 2026-09-03)** | appeal columns ON `discrepancy_results` (`appeal_status/appeal_note/appealed_by/appealed_at`) — mig `947_commission_discrepancy_hub` (NO new table: rows stay the two engines' output, the hub only ANNOTATES; the mig-098 denied-appeal claw-back pipeline `/recovery/*` is a DIFFERENT lifecycle, linked not re-derived). Mig 947 also seeds the HOUSE Incentives tile layout (§14 D1) + the `nav_default` label preset | pure state machine `discrepancy_appeals.py` (`validate_transition`/`apply_appeal`/`period_range_variants`/`summarize_appeals`; states `appeal_filed→appeal_won\|appeal_denied\|written_off`, NULL = none, clear = full reset); `GET /discrepancy-appeals` (period-RANGE query, spelling-agnostic; filters source/status/appeal_status/store/activation-date; degrades `appeals_ready=false` pre-947) + `PATCH /discrepancy-appeals/{row_id}` (org-scoped read-validate-update, who/when via `_caller_uid`) beside the discrepancy block; page `commcalc/commission-discrepancy` (StandardFilterBar + appeal buttons + `/recovery/claims` chase list); proof `harness_discrepancy_appeals.py` |
 | **Carrier statement commission** | mig `065_carrier_commission.sql` → `rep_commissions.carrier_statement_comm` | `/carrier-comm-file/extract` `6216`, `/commission-received-breakout` `15488` |
-| **Commission plans (rule engine)** | mig `059_commission_plans.sql`, `066`,`067`,`232`,`260`,`262`; **`commission_basis` + `mtd_rates` mig `298`** (`'rules'` default \| `'exec_mtd'` — THE two ways, §6e) | `commission_engine.py`; `/commission-plans*` `12557-14246` (coverage, pay-gate, exclusions, bulk-assign); `commission_basis` READ by `commission-structure/page.tsx` + `commission-plans/page.tsx` through `_lib/commissionWays.wayForBasis` (written only by the plan editor's save) |
+| **Commission plans (rule engine)** | mig `059_commission_plans.sql`, `066`,`067`,`232`,`260`,`262`; **`commission_basis` + `mtd_rates` mig `298`** (`'rules'` default \| `'exec_mtd'` — THE two ways, §6e) | `commission_engine.py`; `/commission-plans*` `12557-14246` (coverage, pay-gate, exclusions, bulk-assign; the single-assignment remover `DELETE /commission-plans/{plan_id}/assignments/{assignment_id}`, §6n); `commission_basis` READ by `commission-structure/page.tsx` + `commission-plans/page.tsx` through `_lib/commissionWays.wayForBasis` (written only by the plan editor's save) |
 | **Commission ledger (income tracking)** | mig `071_commission_ledger.sql`; provenance mig `251`; leg mig `274`; **sign convention mig `1006` (on `commcalc.column_mapping.sign_convention`, §25.12)**; **THE BUCKET REGISTRY mig `1009_commission_bucket_registry.sql` (`commcalc.commission_bucket`, §30.7 — NOT applied)** | `/commission-ledger/*` `3997-4602`. Engine `commcalc/commission_ledger.py` — `load_rules_meta` (rules + `rules_source` `tenant`\|`builtin_default`\|`none`; **the built-in MA defaults belong to `DEFAULT_RULES_BY_TEMPLATE` and no longer leak into a tenant-created rule-set**), `convention_from_mapping` → `direction` → `classify_line` → `booked_amount` (WHICH SIGN IS MONEY EARNED, declared on the amount column's mapping row; a reversal books NEGATIVE into the bucket it reverses, never `abs()`), `build_row`, `summarize`, `leg_of`, `list_templates` (also lists a template the tenant's own ledger rows name, so a brand-new carrier's first rule can be written in the UI). Footer/total rows dropped through the EXISTING `column_mapping.drop_footer_rows` + `identity_fields` (mig 1004 rule, reported as `footer_rows_dropped`). Proof `harness_commission_ledger_sign.py` (85 checks, armed negative controls). **THE BUCKETS ARE CONFIG (§30.7, owner 2026-09-20):** `load_buckets_meta` (house rows + this org's rows merged PER KEY, `merge_buckets`; pre-1009 → `builtin_buckets()` = `HOUSE_BUCKETS`, the seed's mirror, DISPLAY only), `bucket_keys` / `bucket_labels` / `deduction_keys` / `bucket_kind`; every bucket has a KIND — `earned` books +|amt| (a netted reversal −|amt|), `deduction` books the canonical SIGNED amount either way (`_booking_for`, never abs()). The five mig-071 keys stay COLUMN-BACKED (`COLUMN_BACKED`); every other bucket is read by (`category`, `payout_total`) — no column per bucket. `summarize` reports one entry per registry bucket + `earned_total` / `deductions_total` / `net_total` / `unlisted` (a key the registry no longer lists is summed, never dropped); `payout_total` = the NET the statement pays. `unbookable_categories` + `router._ledger_bucket_guard` REFUSE a landing to a column-less bucket while 1009 is absent, naming it. Registry endpoints `GET/POST/DELETE /commcalc/commission-buckets`; settings panel on the Category → Bucket Map page. Proof: `harness_commission_ledger_sign.py` §I–K (125 checks) · **BOOKS THE P&L when the org's `pl_commission_source` is the ledger (mig `1013`, §4b): `ledger_pnl.load_ledger_rows` (org-scoped, both period spellings) → `ledger_bookings` → `coa.build_inputs`** · **ONE STATEMENT IDENTITY, ONE PERIOD SPELLING, ONE LANDER, ONE GUARD (§30.15, owner 2026-09-22):** `ledger_identity` / `ledger_source_report` / `source_report_family` / `identity_key` / `template_key` (a statement's ledger key derived ONCE — `<base>__<statement slug>`, the intake's form; a bare key READS as that base's default statement type; every reader filters the FAMILY), `canonical_period` / `ledger_period_keys` / `is_orphan_period` (dereference `account/_period` — the month-NAME form is stored, every spelling read), `landings_for` / `landing_conflicts` / `landing_sentence` / `landing_detail` / `replaced_sentence` (a LANDING = one (origin, stored key, stored period spelling) tuple; N landings of one statement × period are REFUSED by every summing reader: `router._ledger_guarded_summary`, by-rep, observed-types, `_statement_buckets`, `ledger_pnl.ledger_bookings`). Every route lands through `router._ledger_land_rows` (the older wizard, the intake's 3.9, the MA refresh — origin-scoped), which stamps the derived key + canonical period on every row and wipes the family × every period spelling through `_ledger_delete_scoped` (measured first — the trace says "replaced 973 rows landed on 2026-09-20 under the older key"). Every ledger read in the router goes through `_ledger_query`. `GET /commission-ledger/landings`, `POST /commission-ledger/landings/retire` (counted, confirmed, by id). Proof `harness_ledger_statement_identity.py` (92 checks); lock `harness_ledger_identity_lock.py` (CI) |
 | **VIP / PayGo** | mig `008`,`011`,`014` | `vip_sweep.py`; `/vip/*` `2421-3078`, `/vip/paygo/*` `8336-8365` |
 | `commcalc.vip_invoice_lines` (distributor invoice LINE items; `location` is a STORE ADDRESS in the distributor's own spelling) | `vip_sweep.py` (portal scrape, mig `008`) | **Device Purchases report** (`account/device_purchases.compute` → `GET /account/device-purchases`, §23y — the money grain); `device_cost_recon` (source ② evidence); `asset/invoice_due` (per-invoice device list) |
@@ -4715,6 +4814,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.calc_status.auto_calc_requested_at` / `.auto_calc_landings` / `.auto_calc_last` (mig `1030`, NOT applied) — **a pending auto-calculation and the last one's outcome** for one (org, month) | `auto_calc.landed` (queue), `auto_calc._claim` (the poller's conditional UPDATE), `auto_calc.run_one` → `_record_last` (outcome); pre-1030 the outcome goes to `calc_notices` (type `auto_calc`) | `auto_calc.run_due` (the poller), `auto_calc.view` ← `GET /commcalc/calc-status/{period}` → `_lib/AutoCalcNotice.tsx` on the Rep Incentive page (§6l) |
 | `commcalc.commission_org_config.auto_calc_on_landing` / `.auto_calc_debounce_minutes` (mig `1030`) — house row → tenant row override | migration 1030 (house row TRUE where NULL); SQL / a future settings writer | ONE reader `auto_calc.load_config` → `resolve_config` (lock: `harness_auto_calc_lock.py` E) (§6l) |
 | `data_lineage_registry.COMMISSION_CALC_FEEDS` / `SALES_SIBLING_TABLES` (code registry) — **which tables the Run Calculation reads** | code | `auto_calc.is_calc_feed` (the hook), `harness_auto_calc_lock.py` A/F (§6l) |
+| `commcalc.installment_category_rule` (mig 245) — now also **the device an Exec-MTD activation event activated** (`tablet` / new `watch`) · `accessory_config.activation_details_rules.devices` (`{enabled, applies_to}`, no migration) | `POST/DELETE /plan-installments/category-rules` (drop the config memo) · `PUT /accessory-config` | `router._line_rules_resolve` → `line_class.resolve_devices` → `_device_of_lines` (= `installment_category.resolve_chain_category`) → `unit_devices` → `_sales_cell_agg` `_dev_tablet`/`_dev_watch` → `_apply_activation_basis` `act_tablet`/`act_watch` → Exec MTD → `_commission_from_mtd_rows` (§6n) |
 | `commcalc.raw_sales.customer` + `commcalc.raw_sales_invoice.customer` (mig 1012) — as **the customer on a paid commission line** | the sales / sales-by-invoice uploads (unchanged) | THE rule `inventory_sold_recon.sale_customer` / `invoice_customer_map` → `commission_drilldown._sale_customers` (reads `trans_id,customer` only, org-scoped) → `attach_line_identity` → every plan line's `customer` (explain, statements, the range); also `sales_detail_index` (inventory integrity §11b) (§6j) |
 | `commcalc.rep_commissions` — ONE rep's row(s) for one period | `POST /commcalc/recompute-rep` → the full path (`_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines(persist_installments=False)`), writing only `_rows_for_rep` (update in place / insert) | the same readers as the full run's rows (§6k) |
 | `commcalc.rep_commissions` + the `/commission-explain` payload — as **what an EMPLOYEE may see of their own commission** | `calc_rep_commissions` / `commission_engine.preview` (unchanged) | THE shapers `payout_audience.employee_rep_row` / `employee_explain` / `employee_drill` (allow-lists; paid lines by `is_paid_line`) → `/commissions`, `/commissions-range`, `/commission-explain`, `/commission-statement(s)`, `/commission-drill`, core `/employee-dashboard`, the notify Incentives email (§6i) |
@@ -4913,6 +5013,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /commcalc/pl-commission-source` (mig `1013`, §4b — READ-ONLY: `value`, `ready` + `not_ready_note`, `config_columns_missing` / `config_migrations_missing` (§4b.1 — the same reader the P&L uses), `options` in layman words, `suggestion` = `ledger_pnl.suggest_source` over `evidence` = `ledger_pnl.load_source_evidence` (which feed tables hold rows, ledger lines per period), `pl_link` (the P&L lines the buckets book to), `shows_in`) | `router.get_pl_commission_source` → `ledger_pnl.load_source_meta` / `load_source_evidence` / `suggest_source`, `router._ledger_pl_link`, `landing_identity.shows_in(…, pl_link)` | `components/PlCommissionSourcePanel.tsx` (on `/commcalc/commission-ledger` and the intake 3.9 card); the ONE writer is `PUT /commcalc/commission-settings {pl_commission_source}` |
 | `PUT /commcalc/commission-settings` **`pl_commission_source`** (mig `1013`) — 💰 which source books the P&L commission lines: validated against `ma_store_pnl.COMMISSION_SOURCES`, written in its own statement, READ BACK through `ledger_pnl.load_source_meta`; an unknown word → 400, a missing column → 400 naming `1013_pl_commission_source.sql` (never a silent non-save) | `router.put_commission_settings`; `_commission_org_config` returns it | takes effect on the next `/account/compute`; the P&L line's `commission_source` shows both sources' figures |
 | `GET /gp/{period}` — **the month-of-life COLUMNS** (owner report 2026-09-21): every store row carries `comm_ladder` `{rung: $}` plus flat `comm_month_<n>` / `comm_month_unlabelled` companions, `totals.comm_ladder` is summed rung by rung, and `commission_legs` carries `ladder_months` / `ladder_month_labels` / `ladder_columns` / `ladder_unknown_key` — the COLUMN LIST from the data, never a hardcoded 6 or 12 | `router._compute_gp` → `gp_report.calc_gp_report` → `commission_legs.months_present` / `ladder_to_public` (the one home) | §4a.2 — rendered by the GP page's 📅 Months toggle and its 'Commission by month-of-life' card (EARNED sheet above RECEIVED cash, booked basis marked); both exports follow the visible columns (WYSIWYG) and a 'Commission by month-of-life' sheet always ships. Locked by `harness_ma_month_columns.py` + CHECK 2c |
+| `DELETE /commcalc/commission-plans/{plan_id}/assignments/{assignment_id}` — THE single-assignment remover: ONE `commission_plan_assignment` row of that plan and org, 404 otherwise; gated `'commission_plans'`; drops the config memo | `router.delete_commission_plan_assignment` → `_remove_plan_assignment` (`_require_commission_plans_edit`) | §6n |
+| `GET /commcalc/commission-mtd/categories` — THE Exec-MTD pay categories + labels (incl. `tablet`, `watch`) the rate editors render; static | `router.commission_mtd_categories` → `activation_bucketing.MTD_CATEGORIES` | §6n |
 | `GET /commcalc/commission-mtd/{period}` (`?plan_id=&rates=<cat:$,…>&acc_pct=`) — Option 1's READ-ONLY preview: each rep's flat $ per activation type + accessory % over the Exec MTD numbers for the plan's stores (`_commission_mtd_result`); `POST …/save` records it (plan editor only), `GET …/saved` reads the record | `router.commission_mtd` `19739` / `19778` / `19816` → `_commission_mtd_result` `19603` → `_exec_mtd` | §6e — the Employee Commission Structure page's **Option 1** card (top; formerly the bottom card, unchanged call) and the plan editor's "Calculate from Executive MTD" box |
 | **`/commcalc/commission-structure`** — Employee Commission Structure (the front door, `tileOnly`): "There are 2 ways to calculate employee commission" → Option 1 (Exec MTD flat) → Option 2 (custom steps 1–6) → Apply | reads `GET /commission-plans`, `/accessory-config`, `/accessory-definition`, `/commission-plans/preview`, `/commission-mtd/{period}`, `/report-kinds`; writes ONLY `POST /commission-plans` (activation_source) + `PUT /accessory-config` — as before | §6e; header + order from `_lib/commissionWays.ts` via `_lib/CommissionWaysHeader.tsx` (also mounted on `/commcalc/commission-plans`). Proof `frontend/prove_commission_structure_order.mjs` |
 | `POST /commcalc/report-kinds/detect` (multipart file) — "This looks like your <kind> — right?": header names only, nothing stored; `mode` confirm\|ask\|none + candidates with confidence and evidence | `router.report_kinds_detect` → `_read_upload_grids` → `onboarding_intake.stitch_sheets` → `report_kinds.detect_report_kind` over `visible_kinds` + the confirmed signatures → `decide` | §30.9; the intake's `KindDetectZone`. Proof `harness_report_kinds.py` §E/§G |
@@ -5134,6 +5236,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
 | **Is this month's stored commission up to date with what landed?** ("Auto-calculated at … from the upload of …" / refused / off / queued) | `calc_status.auto_calc_requested_at` / `auto_calc_last` (mig 1030; pre-1030 `calc_notices` type `auto_calc`) | `auto_calc.view` via `GET /calc-status/{period}`; written only by the landing hook's runner, which runs `_run_calculation` (§6l) |
+| **What device an activation activated** (tablet / watch) and **its Exec-MTD pay category** | sale lines of the event (`product_desc`, `category`, `department`, `sku`, serial, catalog) | ONE classifier `installment_category.resolve_chain_category` (tenant rules + built-in ladder), dereferenced by `line_class._device_of_lines` / `unit_devices`; `line_class.pay_category` (one event, one category); categories `activation_bucketing.MTD_CATEGORIES` (§6n) |
 | **One rep's recalculated commission row** (the Recalculate button) | `rep_commissions` (that rep's row only) | THE full path's row: `router._calc_inputs` + `_calc_rep_rows` + `_apply_new_engines`, shared with `_run_calculation`; lock `harness_recompute_rep_e2e.py` (== the full run's row, one rep, no ledger write) (§6k) |
 | **Undefined names in the backend** (a read name nothing binds — a NameError on first run) | `backend/app/**/*.py` | `harness_undefined_names_lock.py` (stdlib `symtable`), CI job *No undefined names under backend/app* (§6k) |
 | **Which menu entries a viewer may not see** (the carrier surfaces) and **which payout view a viewer gets** | `storeops.roles.permissions.scope` / `.data.carrier_commission_view` + `app_config.rbac_enabled` | ONE registry `payout_audience.MANAGER_ONLY_SURFACES`, ONE self-scope answer `storeops.role_is_self_scoped`, ONE carrier permission `payout_audience.carrier_view_allowed`, served on `/me` (`viewer_payload`) → `rbac.payoutRefused` in `canSeeItem` / `canAccessPath`; audience by `payout_audience.resolve` (§6j, §6m) |

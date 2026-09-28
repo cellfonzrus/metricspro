@@ -920,9 +920,11 @@ _all_routes = _flatten_routes(real_app.routes)
 #             — measured on the merged tree
 #     1687  + 7 setup-documents routes (index §39: GET/PUT/gate setup-documents, GET/PUT/POST report-kinds/house, reopen)
 #     1688  + GET /commcalc/dlar-vs-platform/{period}, which main gained in #314 (b5e45fc6, §19.31) without re-pinning —
-#             measured on origin/main 2026-09-28 by wip/auto-calc-on-upload (index §6l), which itself adds NO route:
-#             the landing hook is in-process (auto_calc.landed + the poller) and GET /calc-status gained a field only
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1688"))
+#             measured on origin/main 2026-09-28; the auto-calc hook (§6l) adds NO route
+#     1689  + GET /commcalc/commission-mtd/categories (the ONE Exec-MTD category list the rate editors read, index §6n)
+#     1690  + DELETE /commcalc/commission-plans/{plan_id}/assignments/{assignment_id} (the single-assignment remover,
+#             index §6n / §17)
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1690"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

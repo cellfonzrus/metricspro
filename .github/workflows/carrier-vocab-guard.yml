@@ -192,6 +192,13 @@ on:
       - "backend/app/modules/commcalc/report_pull.py"
       - "backend/app/modules/commcalc/epay_sweep.py"
       - "backend/app/modules/pos/commcalc_feed.py"
+      - "backend/harness_exec_mtd_device_rates.py"
+      - "backend/harness_exec_mtd_device_rates_lock.py"
+      - "backend/harness_plan_assignment_remove.py"
+      - "backend/app/modules/commcalc/installment_category.py"
+      - "frontend/src/app/(platform)/commcalc/_lib/mtdCategories.ts"
+      - "frontend/src/app/(platform)/commcalc/commission-plans/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/commission-structure/page.tsx"
       - "backend/harness_recompute_rep_parity.py"
       - "backend/app/modules/commcalc/installment_engine.py"
       - "backend/app/modules/commcalc/sale_installment_engine.py"
@@ -425,6 +432,9 @@ jobs:
       - name: Run the payout-audience lock (one paid-line predicate, one employee allow-list, one manager-only registry the nav reads; no employee surface carries carrier commission — index §6i / §6j)
         working-directory: backend
         run: python3 harness_payout_audience_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the Exec-MTD device-rate lock (one device classifier, one category list, every consumer wired — index §6n)
+        working-directory: backend
+        run: python3 harness_exec_mtd_device_rates_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the tender-vocab lock (one tender vocabulary; every classifier dereferences it)
         working-directory: backend
         run: python3 harness_tender_vocab_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -551,6 +561,12 @@ jobs:
       - name: Run the one-rep recompute end-to-end proof (runs the handler; writes only that rep's row == the full run's; no ledger write — index §6k)
         working-directory: backend
         run: python3 harness_recompute_rep_e2e.py | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the Exec-MTD device-rate proof (tablet / watch per event at their own rate; no device config = byte-identical — index §6n)
+        working-directory: backend
+        run: python3 harness_exec_mtd_device_rates.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the single-assignment remover proof (one row of one plan of one org; cross-org / cross-plan 404 with zero writes — index §6n)
+        working-directory: backend
+        run: python3 harness_plan_assignment_remove.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the recompute-rep parity proof (one plan resolution, reached through the full path — index §6c / §6k)
         working-directory: backend
         run: python3 harness_recompute_rep_parity.py | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"

@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useMtdCategories } from '../_lib/mtdCategories'
 import Link from 'next/link'
 import { api, fmt } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
@@ -52,14 +53,6 @@ const ACT_SRC_LABEL: Record<string, string> = {
   inherit: 'Inherit (default)', raw_sales: 'POS sales', activation_details: 'Activation Details report',
 }
 
-// The Exec MTD activation categories — the SAME columns for every tenant (Boost / Cricket just relabel);
-// each is its own payout option so Upgrade / BYOD / Tablet / Home Internet can pay different rates.
-const MTD_CATS: { key: string; label: string }[] = [
-  { key: 'activation', label: 'New Activation' }, { key: 'port', label: 'Port' },
-  { key: 'byod', label: 'BYOD' }, { key: 'tablet', label: 'Tablet' },
-  { key: 'home_internet', label: 'Home Internet' }, { key: 'edge', label: 'Edge' },
-  { key: 'upgrade', label: 'Upgrade' },
-]
 
 // The plan's simple defaults: the flat $/unit of its activation rule + its accessory %. Used to seed the
 // per-category rate editor (flat rate on every category except Upgrade, which starts at $0).
@@ -153,6 +146,8 @@ function PlanPicker({ plans, value, onChange, disabled }: {
 }
 
 export default function CommissionStructurePage() {
+  // THE Exec-MTD pay categories — the backend's one list (index §6n), never spelled here
+  const MTD_CATS = useMtdCategories()
   const { period, setPeriod, periods } = usePeriod()
   const [plans, setPlans] = useState<Plan[]>([])
   const [planReady, setPlanReady] = useState(true)
@@ -218,7 +213,7 @@ export default function CommissionStructurePage() {
     setMtdRates(Object.fromEntries(MTD_CATS.map(c => [c.key, c.key === 'upgrade' ? 0 : flat])))
     setMtdAccPct(acc)
     setMtd(null)
-  }, [selId, selected])
+  }, [selId, selected, MTD_CATS.length])   // re-seed once the category list arrives
 
   // ── STEP 3: save the per-plan activation source. Re-POSTs the FULL loaded plan (rules/tiers/assignments
   // included, byte-for-byte as GET returned them) with only activation_source changed — exactly what the

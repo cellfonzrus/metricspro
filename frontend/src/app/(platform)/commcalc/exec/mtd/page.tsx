@@ -180,6 +180,8 @@ export default function ExecMtdPage() {
     { header: colLabel('port', 'Port'), field: 'port', type: 'number', get: (r) => r.port },
     { header: colLabel('byod', 'BYOD'), field: 'byod', type: 'number', get: (r) => r.byod },
     { header: colLabel('tablet', 'Tablet'), field: 'tablet', type: 'number', get: (r) => r.tablet },
+    // the WATCH / connected-device category (index §6n) — 0 for every org with no device words configured
+    { header: colLabel('watch', 'Watch'), field: 'watch', type: 'number', get: (r) => r.watch ?? 0 },
     { header: colLabel('home_internet', 'Home Internet'), field: 'home_internet', type: 'number', get: (r) => r.home_internet },
     { header: colLabel('edge', 'Edge'), field: 'edge', type: 'number', get: (r) => r.edge },
     { header: colLabel('upgrade', 'Upgrade'), field: 'upgrade', type: 'number', get: (r) => r.upgrade },

@@ -125,7 +125,7 @@ BROAD_RATIO = 0.8
 # the keys this module owns inside accessory_config.activation_details_rules (the Activation-Details
 # basis keys — edge_* / upgrade_hidden_* — live beside them and are never touched by a save here)
 OWNED_KEYS = ("fields", "tokens", "exact", "auto_activation_tokens", "hints", "metric_hints", "broad_attested",
-              "event", "exclusions", "new_activation")
+              "event", "exclusions", "new_activation", "devices")
 
 # ── THE ACTIVATION EVENT (owner 2026-09-25) — what ONE activation / upgrade IS ─────────────────────
 # Owner, verbatim: *"commisison for teh reps need to be claculated per action and per upgrade as defined
@@ -187,6 +187,112 @@ HOUSE_EXCLUSIONS = {"swap": ["swap"], "ineligible": ["ineligible"]}
 HOUSE_NEW_ACTIVATION = {"classes": ["activation", "port", "byod"], "exclusions": ["swap"]}
 NEW_ACTIVATION_SENTENCE = ("new activations = the Executive MTD Total Activation less Upgrade "
                            "(activation + port + BYOD), less any unit excluded by kind")
+
+
+# ── THE DEVICE DIMENSION (owner 2026-09-28, index §6n) — WHAT an activation event activated ───────
+# Owner, verbatim: *"need to add tablets and watches as a fix and a different commission for those, tablet
+# pay at $5 and watch at $2, gizmo at $2"* — and "treat all [Gizmo] as watch". The CLASS above says what
+# KIND of activation a line is (new / port / BYOD / upgrade); what DEVICE it activated already had ONE
+# home — the multi-month device-category classifier, `installment_category` (mig 245: the tenant's own
+# `installment_category_rule` rows ahead of the built-in ladder, the product catalog, the serial's shape,
+# strongest signal across an activation's lines). This module does NOT classify devices a second time: an
+# event's device IS `installment_category.resolve_chain_category` over the event's lines, kept only when
+# that category is a device the pay path prices on its own (`DEVICE_CLASSES`).
+# What lives HERE is the per-org switch and the pay decision, in the same JSON (`activation_details_rules
+# .devices`): `enabled` (house: False — no device dimension, every count and every payout byte-identical,
+# the pin in `harness_exec_mtd_device_rates.py`) and `applies_to` (the event classes a device takes over
+# for pay; house: every activation-type class, so a tablet UPGRADE pays the tablet rate — the owner's
+# "tablet pay at $5"; drop 'upgrade' to pay device upgrades at the upgrade rate instead). One event, one
+# category, one rate: `pay_category(cls, device)`.
+DEVICE_CLASSES = ("tablet", "watch")
+DEVICE_LABELS = {"tablet": "Tablet", "watch": "Watch / connected device"}
+HOUSE_DEVICES = {"enabled": False, "applies_to": list(ACTIVATION_TYPE_CLASSES)}
+
+
+def resolve_devices(raw=None, device_rules=None, catalog_cat_of=None):
+    """The org's DEVICE config (`activation_details_rules.devices`) → {enabled, applies_to, rules,
+    catalog_cat_of, configured, source}. PURE (the rules and the catalog lookup are injected by the loader —
+    `installment_category.load_category_rules` / `build_catalog_category_lookup`, the SAME inputs the
+    multi-month engine classifies with).
+      enabled     — the per-org switch; missing → False (house: no dimension).
+      applies_to  — the event classes a device takes over for pay; missing / junk → every activation-type
+                    class. An explicit [] means a device never re-prices anything (counted, never paid).
+    `configured` is True only when enabled AND the classifier's rules were supplied."""
+    raw = raw if isinstance(raw, dict) else {}
+    if isinstance(raw.get("applies_to"), (list, tuple)):
+        applies = []
+        for c in raw["applies_to"]:
+            v = _s(c)
+            if v in ACTIVATION_TYPE_CLASSES and v not in applies:
+                applies.append(v)
+    else:
+        applies = list(HOUSE_DEVICES["applies_to"])
+    enabled = bool(raw.get("enabled"))
+    rules = list(device_rules) if (enabled and device_rules) else []
+    return {"enabled": enabled, "applies_to": applies, "rules": rules, "catalog_cat_of": catalog_cat_of if enabled else None,
+            "configured": bool(enabled and rules), "source": "tenant" if raw else "house"}
+
+
+def devices_configured(rules=None):
+    return bool(((rules or HOUSE_RULES).get("devices") or {}).get("configured"))
+
+
+def _device_of_lines(lines, dv):
+    """THE device of a set of sale lines (one activation): `installment_category.resolve_chain_category`
+    — the ONE device classifier — kept only when it names a device in DEVICE_CLASSES. PURE."""
+    from app.modules.commcalc import installment_category as _icat     # pure; lazy keeps this module light
+    cat, _ev = _icat.resolve_chain_category(lines, dv.get("rules") or [], dv.get("catalog_cat_of"))
+    return cat if cat in DEVICE_CLASSES else None
+
+
+def device_of(row, rules=None):
+    """'tablet' | 'watch' | None for ONE sale line, through the ONE device classifier. None for every line
+    when the org has not enabled the device dimension (the house default). PURE, never raises."""
+    dv = (rules or HOUSE_RULES).get("devices") or {}
+    if not dv.get("configured"):
+        return None
+    try:
+        return _device_of_lines([row or {}], dv)
+    except Exception:
+        return None
+
+
+def pay_category(cls, device=None, rules=None):
+    """THE one answer to "which rate pays this activation event": the DEVICE when the event activated one
+    and the org's `devices.applies_to` names the event's class, else the class itself ('activation' |
+    'port' | 'byod' | 'upgrade'). One event, one category. PURE."""
+    if device in DEVICE_CLASSES:
+        dv = (rules or HOUSE_RULES).get("devices") or {}
+        if cls in (dv.get("applies_to") or ()):
+            return device
+    return cls
+
+
+def unit_devices(rows, units, rules=None):
+    """{unit id: device} for the counting units of `rows` (parallel `units` from `activation_units`) — the
+    device the ONE classifier reads off ALL of the unit's lines (the strongest signal wins, exactly as a
+    multi-month chain is classified), kept only when the unit's class is one the device takes over
+    (`pay_category`). PURE. Device dimension not enabled → {} (the pin)."""
+    r = rules or HOUSE_RULES
+    dv = r.get("devices") or {}
+    if not dv.get("configured"):
+        return {}
+    lines_of, cls_of = {}, {}
+    for row, u in zip(rows or [], units or []):
+        if not u:
+            continue
+        _b, uid, cls = u
+        cls_of[uid] = cls
+        lines_of.setdefault(uid, []).append(row or {})
+    out = {}
+    for uid, lns in lines_of.items():
+        try:
+            d = _device_of_lines(lns, dv)
+        except Exception:
+            d = None
+        if d and pay_category(cls_of.get(uid), d, r) == d:
+            out[uid] = d
+    return out
 
 
 def resolve_exclusions(raw=None):
@@ -310,7 +416,7 @@ def resolve_event(raw=None):
             "source": "tenant" if any(k in raw for k in ("keys", "precedence", "count_unit")) else "house"}
 
 
-def resolve_rules(raw=None, ct_map=None, legacy_activation=None):
+def resolve_rules(raw=None, ct_map=None, legacy_activation=None, device_rules=None, catalog_cat_of=None):
     """The full rules dict for one org. PURE.
 
     `raw`               = accessory_config.activation_details_rules (dict / None / junk).
@@ -343,7 +449,8 @@ def resolve_rules(raw=None, ct_map=None, legacy_activation=None):
     hints_raw = raw.get("hints") if isinstance(raw.get("hints"), dict) else {}
     mhints_raw = raw.get("metric_hints") if isinstance(raw.get("metric_hints"), dict) else {}
     declared = {"fields": isinstance(raw.get("fields"), (list, tuple)) and bool(raw.get("fields")),
-                "tokens": bool(tokens_raw), "exact": bool(exact)}
+                "tokens": bool(tokens_raw), "exact": bool(exact),
+                "devices": bool(isinstance(raw.get("devices"), dict) and raw["devices"].get("enabled"))}
     return {
         "fields": fields,
         "tokens": tokens,
@@ -358,6 +465,8 @@ def resolve_rules(raw=None, ct_map=None, legacy_activation=None):
         # recognises an excluded unit, and which classes / exclusions make the count.
         "exclusions": resolve_exclusions(raw.get("exclusions")),
         "new_activation": resolve_new_activation(raw.get("new_activation")),
+        # THE DEVICE DIMENSION (owner 2026-09-28) — house: no words, no dimension (the pin).
+        "devices": resolve_devices(raw.get("devices"), device_rules, catalog_cat_of),
         "declared": declared,
         "house_fill": house_fill,
         "source": "tenant" if (declared["fields"] or declared["tokens"] or declared["exact"]) else "house",
@@ -463,6 +572,7 @@ def activation_events(rows, rules=None, classes=None, skip=None, txn_field="tran
     `id` = '<trans_id>|<kind>:<value>' (or '<trans_id>|invoice'); a line with no trans id is its own
     invoice ('#row<i>'), so two sales are never merged by a missing id."""
     r = rules or HOUSE_RULES
+    rows = rows if isinstance(rows, list) else list(rows or [])
     ecfg = r.get("event") or resolve_event(None)
     keys = list(ecfg.get("keys") or [])
     prec = list(ecfg.get("precedence") or HOUSE_EVENT["precedence"])
@@ -520,9 +630,20 @@ def activation_events(rows, rules=None, classes=None, skip=None, txn_field="tran
                                   "classes": dict(counts), "cls": cls,
                                   "detail": (f"one activation's lines carry {', '.join(sorted(counts))} — "
                                              f"counted once, as {cls} (event precedence)")})
-            events.append({"id": eid, "trans_id": tid, "key": v or None, "key_kind": k,
-                           "cls": cls, "bucket": BUCKET_OF.get(cls), "classes": counts,
-                           "lines": [i for i, _c in members]})
+            ev_row = {"id": eid, "trans_id": tid, "key": v or None, "key_kind": k,
+                      "cls": cls, "bucket": BUCKET_OF.get(cls), "classes": counts,
+                      "lines": [i for i, _c in members]}
+            # THE DEVICE the event activated (owner 2026-09-28) — stamped only when the org configured device
+            # words, so every house event dict is byte-identical.
+            if (r.get("devices") or {}).get("configured"):
+                try:
+                    _d = _device_of_lines([rows[i] for i, _c in members], r["devices"])
+                except Exception:
+                    _d = None
+                if _d:
+                    ev_row["device"] = _d
+                    ev_row["pay_category"] = pay_category(cls, _d, r)
+            events.append(ev_row)
             for i, _c in members:
                 row_event[i] = eid
     # the same phone line / device as an event on SEVERAL invoices — each invoice is its own sale, so each
@@ -782,6 +903,14 @@ def token_shares(rows, rules=None, skip=None):
     field, and that share of the scanned lines. ([{class, token, lines, ratio}], scanned). PURE."""
     r = rules or HOUSE_RULES
     toks = [(cls, t) for cls in CLASSES for t in r["tokens"][cls]]
+    # the TENANT's device rules (owner 2026-09-28) are measured by the SAME guard, under `device:<name>` — a
+    # rule that names nearly every line (a department word) would make every event a tablet. The built-in
+    # ladder is the pin and is not measured, exactly like the house class tokens.
+    _dv = r.get("devices") or {}
+    drules = [x for x in (_dv.get("rules") or []) if _dv.get("configured") and x.get("source") == "tenant"
+              and x.get("category_key") in DEVICE_CLASSES]
+    toks = toks + [("device:" + x["category_key"], str(x.get("match_value") or "").lower()) for x in drules]
+    dtoks = drules
     hits = [0] * len(toks)
     scanned = 0
     for row in rows or []:
@@ -791,11 +920,15 @@ def token_shares(rows, rules=None, skip=None):
         if not toks:
             continue
         texts = [x for x in _texts(row, r) if x]
-        if not texts:
-            continue
+        nclass = len(toks) - len(dtoks)
         for i, (_cls, t) in enumerate(toks):
-            if any(t in x for x in texts):
-                hits[i] += 1
+            if i < nclass:
+                if texts and any(t in x for x in texts):
+                    hits[i] += 1
+            else:
+                from app.modules.commcalc import installment_category as _icat
+                if _icat._rule_hits(row or {}, dtoks[i - nclass]):
+                    hits[i] += 1
     return ([{"class": cls, "token": t, "lines": hits[i],
               "ratio": round(hits[i] / scanned, 3) if scanned else 0.0}
              for i, (cls, t) in enumerate(toks)], scanned)
@@ -816,9 +949,11 @@ def refused_tokens(rows, rules=None, skip=None, broad_ratio=BROAD_RATIO):
     """The broad tokens nobody attested — what a save is REFUSED for and what a saved rule is refused
     over at re-validation. Only tenant-declared tokens are measured (house defaults are the pin)."""
     r = rules or HOUSE_RULES
-    if not r["declared"]["tokens"]:
+    dec = r["declared"]
+    if not dec["tokens"] and not dec.get("devices"):
         return []
-    return [b for b in broad_tokens(rows, r, skip, broad_ratio) if not b["attested"]]
+    return [b for b in broad_tokens(rows, r, skip, broad_ratio) if not b["attested"]
+            and (dec.get("devices") if b["class"].startswith("device:") else dec["tokens"])]
 
 
 def rules_refused(counts):
