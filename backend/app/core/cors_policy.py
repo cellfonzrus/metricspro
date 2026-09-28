@@ -38,6 +38,9 @@ DEFAULT_ORIGINS = (
     # hosts can deploy in either order: until the frontend's canonical-host redirect is live, users on
     # this alias still make direct-class calls from it. Remove once that redirect has been live a while.
     "https://metricspro-five.vercel.app",
+    # The app's customer-facing site (owner 2026-09-28: app.metricspro.tech; the apex stays the marketing site).
+    # APP_PUBLIC_URL adds it anyway once set — listed so the direct-class calls work in either deploy order.
+    "https://app.metricspro.tech",
     "https://metricspro.tech",
     "https://www.metricspro.tech",
     "http://localhost:3000",

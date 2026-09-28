@@ -48,8 +48,9 @@ export const API_ENV: ApiEnv = {
   BACKEND_ORIGIN: process.env.BACKEND_ORIGIN,
 }
 
-/** The customer-facing site when nothing is configured (robots, metadata, the canonical host). */
-export const DEFAULT_SITE_URL = 'https://metricspro.tech'
+/** The customer-facing app site when nothing is configured (robots, metadata) — app.metricspro.tech, owner
+ *  2026-09-28 (the apex serves the marketing site). The canonical-host redirect never uses this default. */
+export const DEFAULT_SITE_URL = 'https://app.metricspro.tech'
 /** Local development backend when nothing is configured. */
 export const LOCAL_BACKEND = 'http://localhost:8000'
 

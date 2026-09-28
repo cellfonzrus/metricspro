@@ -13639,7 +13639,7 @@ allowed; it only omits the ACAO headers). Server-side calls carry no Origin.
 | `backend/app/modules/core/auth_notify.py` carried its own copy of the platform hostname as a fallback | **Fixed** — dereferences `settings.APP_PUBLIC_URL` |
 | Backend `settings.APP_PUBLIC_URL` (default the platform alias) — links in invite / onboarding / report / payroll emails | **Config, owner step** — set it to the canonical site once that serves the app (default not changed: a wrong default would break every emailed link) |
 | Backend `settings.API_PUBLIC_URL` (default the backend host) — signed download links in notify emails, the WhatsApp webhook URL, pg_cron self-calls, the Vision push endpoint | **Excused / config** — machine-facing or emailed download links; set to `https://api.metricspro.tech` once that CNAME exists (Google / Meta registrations must be updated with it) |
-| `website/assets/config.js` (`apiBase`, `appUrl`), the marketing HTML "Sign in" links, `website/.htaccess` CSP | **Excused** — a separate static site with its own one home (`config.js`); which host serves the app is the open DNS question in §40.8, so its values change with that decision |
+| `website/assets/config.js` (`apiBase`, `appUrl`), the marketing HTML "Sign in" links, `website/.htaccess` CSP | **Excused** — a separate static site with its own one home (`config.js`); its values change at §40.8 step 6 (after the app domain serves) |
 | `mobile/` (`EXPO_PUBLIC_API_URL`) | **Excused** — a native app: no browser origin, no CORS; point it at the API subdomain when it exists |
 | Commented pg_cron URLs in old migrations | **Excused** — documentation of already-applied SQL; server-to-server |
 
@@ -13655,15 +13655,27 @@ LEFTMOST `X-Forwarded-For` entry (`tenant_middleware._client_ip_from`, plus two 
 bypassable and logged IPs are spoofable. The fix is to trust only the hop(s) the deployment adds (one config value, one
 helper, the two copies deleted) — not done here.
 
-### 40.8 Owner steps (dashboards) — and the open question
+### 40.8 Owner steps (dashboards) — DECIDED: the app lives at `app.metricspro.tech` (owner 2026-09-28)
 
-**Open question first:** `website/DOCROOT-SHIM.htaccess` shows `metricspro.tech` has a Bluehost document root serving the
-marketing site (and `b2b/`), and `signup` links to `https://metricspro.tech/legal/terms.html`. The app can live on the apex
-only if the apex points at Vercel; otherwise use e.g. `app.metricspro.tech` — every value is config, nothing is code.
-Steps: Vercel — attach the domain, set `NEXT_PUBLIC_SITE_URL` (Production), optionally `BACKEND_ORIGIN`, and
-`NEXT_PUBLIC_API_DIRECT_ORIGIN` once the API subdomain works; DNS — `api` CNAME to the Railway-provided target; Railway —
-add the custom domain, set `APP_PUBLIC_URL`, `API_PUBLIC_URL`, and `CORS_ORIGINS` if it is set; Supabase Auth — Site URL
-and redirect URLs; Google OAuth clients (Vision) — add the new redirect URIs.
+The apex `metricspro.tech` stays the marketing site (Bluehost document root, `website/DOCROOT-SHIM.htaccess`; `signup`
+links its `/legal/*`). The app is `https://app.metricspro.tech`; the API subdomain is `https://api.metricspro.tech`.
+Code defaults now say so (`apiBase.DEFAULT_SITE_URL`, `cors_policy.DEFAULT_ORIGINS`); the redirect still turns on ONLY
+when `NEXT_PUBLIC_SITE_URL` is set, so nothing moves until the domain serves the app. Order matters:
+1. **DNS (Bluehost zone for metricspro.tech):** `app` CNAME → the target Vercel shows when the domain is added (step 2);
+   `api` CNAME → the target Railway shows when the custom domain is added (step 3).
+2. **Vercel** → project → Domains: add `app.metricspro.tech`, wait for "Valid Configuration". Environment Variables
+   (Production): `BACKEND_ORIGIN` = the Railway URL; once step 3 is green, `NEXT_PUBLIC_API_DIRECT_ORIGIN` =
+   `https://api.metricspro.tech`; LAST, `NEXT_PUBLIC_SITE_URL` = `https://app.metricspro.tech` → Redeploy (this turns on
+   the 308 from `metricspro-five.vercel.app`).
+3. **Railway** → backend service → Settings → Networking: add custom domain `api.metricspro.tech`. Variables:
+   `APP_PUBLIC_URL` = `https://app.metricspro.tech`, `API_PUBLIC_URL` = `https://api.metricspro.tech` (and add the app
+   site to `CORS_ORIGINS` only if that variable is set at all).
+4. **Supabase** → Authentication → URL Configuration: Site URL `https://app.metricspro.tech`; add
+   `https://app.metricspro.tech/**` to Redirect URLs (keep the old one until the redirect has been live a while).
+5. **Google OAuth clients (Vision)** and the **WhatsApp/Meta webhook**: add the new redirect / webhook URLs
+   (`API_PUBLIC_URL`-based).
+6. **Marketing site:** `website/assets/config.js` `appUrl` → `https://app.metricspro.tech` (and `apiBase` →
+   `https://api.metricspro.tech`) — only AFTER step 2 works, since it rewrites every "Sign in" link.
 
 ### 40.9 Locks and proofs
 

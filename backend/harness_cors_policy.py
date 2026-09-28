@@ -41,11 +41,12 @@ C = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(C)
 cors_policy = C.cors_policy
 
-CANON = "https://metricspro.tech"
+CANON = "https://app.metricspro.tech"
 OLD_DEFAULT_REGEX = r"https://metricspro[a-z0-9\-]*\.vercel\.app"
 
 print("A. defaults")
 o, rx, notes = cors_policy({}, "https://metricspro-five.vercel.app")
+check("the app site (app.metricspro.tech) allowed by default", "https://app.metricspro.tech" in o, o)
 check("marketing apex allowed", "https://metricspro.tech" in o, o)
 check("marketing www allowed", "https://www.metricspro.tech" in o, o)
 check("local dev allowed", "http://localhost:3000" in o and "http://127.0.0.1:3000" in o, o)

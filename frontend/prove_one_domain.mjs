@@ -107,30 +107,30 @@ const cspOf = headers => (headers[0].headers.find(h => h.key === 'Content-Securi
 
 // ── A. canonical host ─────────────────────────────────────────────────────────────────────────────
 console.log('A. canonical host (production)')
-const prod = await loadConfig({ VERCEL_ENV: 'production', NEXT_PUBLIC_SITE_URL: 'https://metricspro.tech',
+const prod = await loadConfig({ VERCEL_ENV: 'production', NEXT_PUBLIC_SITE_URL: 'https://app.metricspro.tech',
                                 NEXT_PUBLIC_API_URL: RAILWAY })
 const R = prod.routes.redirects
 let r = redirectFor(R, `https://${PROD_ALIAS}/login?next=%2Fcommcalc&x=1`)
 check('production alias /login?… -> 308', r && r.status === 308, r)
-check('… to https://metricspro.tech/login with the same query', r && r.location === 'https://metricspro.tech/login?next=%2Fcommcalc&x=1', r)
+check('… to https://app.metricspro.tech/login with the same query', r && r.location === 'https://app.metricspro.tech/login?next=%2Fcommcalc&x=1', r)
 r = redirectFor(R, `https://${PROD_ALIAS}/`)
 // An empty path serialises as the bare origin; a browser requests that as `/` (URL spec).
-check('production alias / (the bare root) -> https://metricspro.tech/', r && r.status === 308 && new URL(r.location).href === 'https://metricspro.tech/', r)
+check('production alias / (the bare root) -> https://app.metricspro.tech/', r && r.status === 308 && new URL(r.location).href === 'https://app.metricspro.tech/', r)
 check('/_next assets on the alias are not redirected (Next excludes them)', redirectFor(R, `https://${PROD_ALIAS}/_next/static/x.js`) === null)
 r = redirectFor(R, `https://${PROD_ALIAS}/commcalc/upload/wizard`)
-check('deep path keeps its path', r && r.location === 'https://metricspro.tech/commcalc/upload/wizard', r)
+check('deep path keeps its path', r && r.location === 'https://app.metricspro.tech/commcalc/upload/wizard', r)
 r = redirectFor(R, `https://${PROD_ALIAS}:443/portal`)
-check('host with a port still matches', r && r.location === 'https://metricspro.tech/portal', r)
+check('host with a port still matches', r && r.location === 'https://app.metricspro.tech/portal', r)
 r = redirectFor(R, 'https://metricspro-abc123-cellfonzrus.vercel.app/login')
-check('a production deployment URL is also sent to the canonical site', r && r.location === 'https://metricspro.tech/login', r)
-check('the canonical host itself is NOT redirected (no loop)', redirectFor(R, 'https://metricspro.tech/login') === null)
+check('a production deployment URL is also sent to the canonical site', r && r.location === 'https://app.metricspro.tech/login', r)
+check('the canonical host itself is NOT redirected (no loop)', redirectFor(R, 'https://app.metricspro.tech/login') === null)
 check("a tenant's custom domain is NOT redirected", redirectFor(R, 'https://reports.some-tenant.com/login') === null)
 check('a look-alike host is NOT redirected (anchored match)', redirectFor(R, `https://${PROD_ALIAS}.evil.example/login`) === null)
 
 // ── B. previews ───────────────────────────────────────────────────────────────────────────────────
 console.log('B. preview deployments')
 const prev = await loadConfig({ VERCEL_ENV: 'preview', NEXT_PUBLIC_VERCEL_ENV: 'preview',
-                                NEXT_PUBLIC_SITE_URL: 'https://metricspro.tech', NEXT_PUBLIC_API_URL: RAILWAY })
+                                NEXT_PUBLIC_SITE_URL: 'https://app.metricspro.tech', NEXT_PUBLIC_API_URL: RAILWAY })
 check('VERCEL_ENV=preview installs no redirect', prev.routes.redirects.filter(x => !x.internal).length === 0, prev.routes.redirects)
 check('a PR preview host keeps its URL', redirectFor(prev.routes.redirects, 'https://metricspro-git-feature-x-cellfonzrus.vercel.app/login') === null)
 
@@ -163,7 +163,7 @@ check('nothing configured -> localhost:8000', rewriteFor(local.routes.rewrites, 
 
 // ── F. CSP connect-src ────────────────────────────────────────────────────────────────────────────
 console.log('F. CSP connect-src')
-const withApi = await loadConfig({ VERCEL_ENV: 'production', NEXT_PUBLIC_SITE_URL: 'https://metricspro.tech',
+const withApi = await loadConfig({ VERCEL_ENV: 'production', NEXT_PUBLIC_SITE_URL: 'https://app.metricspro.tech',
                                    NEXT_PUBLIC_API_URL: RAILWAY, NEXT_PUBLIC_API_DIRECT_ORIGIN: 'https://api.metricspro.tech' })
 check('direct origin configured -> connect-src names it', cspOf(withApi.headers).includes("connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.metricspro.tech"), cspOf(withApi.headers))
 check('direct origin configured -> no backend host in the CSP', !/railway/.test(cspOf(withApi.headers)))
@@ -187,7 +187,7 @@ check('no direct origin yet -> direct calls fall back to NEXT_PUBLIC_API_URL (pr
 check('preview with no direct origin -> direct calls stay same-origin',
       A.resolveApiUrl('/api/v1/x', { NEXT_PUBLIC_API_URL: RAILWAY, NEXT_PUBLIC_VERCEL_ENV: 'preview' }, true, 'direct') === '/api/v1/x')
 check('trailing slashes in an origin are tolerated', A.backendOrigin({ BACKEND_ORIGIN: 'https://b.example//' }) === 'https://b.example')
-check('siteUrl defaults to https://metricspro.tech', A.siteUrl({}) === 'https://metricspro.tech')
+check('siteUrl defaults to https://app.metricspro.tech (owner 2026-09-28)', A.siteUrl({}) === 'https://app.metricspro.tech')
 check('BACKEND_PATH_PREFIXES are exactly /api/v1 and /health', JSON.stringify(A.BACKEND_PATH_PREFIXES) === '["/api/v1","/health"]')
 check('absoluteApiUrl during SSR never renders the backend origin (site stands in)',
       A.absoluteApiUrl('/api/v1/closing/envelope-view/x') === `${A.siteUrl()}/api/v1/closing/envelope-view/x`)
