@@ -177,7 +177,17 @@ const mhtml = renderToStaticMarkup(React.createElement(PlanLineBreakdown, { rows
 const mtext = mhtml.replace(/title="[^"]*"/g, '').replace(/<[^>]+>/g, ' ').replace(/<!-- -->/g, '')
 ok('manager: the product stays and the phone + customer show under it',
   /DPA New Act iPhone/.test(mtext) && /9297458084 · CHEORGE CHEISHVILI INC/.test(mtext))
-ok('manager: Price and GP columns stay', />Price</.test(mhtml) && />GP</.test(mhtml))
+// OWNER DECISION 2026-09-28 (index §6m) — reverses "manager: Price and GP columns stay" (#309 §6j): "it should not
+// show any commission received on the rep incentive report, that is only for the eyes of the management, gated out
+// from all levels". Price / GP are columns ONLY in the carrier view the server stamps (servedCarrierView).
+ok('manager (Rep Incentive): NO Price / GP columns — even if a row still carried the figures',
+  !/>Price</.test(mhtml) && !/>GP</.test(mhtml) && !mhtml.includes('$100.00') && !mhtml.includes('$40.00'))
+const chtml = renderToStaticMarkup(React.createElement(PlanLineBreakdown, { rows: sale, compact: true, carrier: true }))
+ok('carrier view (served carrier_view — the permission holder\'s diagnostic): Price and GP columns, with the figures',
+  />Price</.test(chtml) && />GP</.test(chtml) && chtml.includes('$100.00') && chtml.includes('$40.00'))
+const ecarrier = renderToStaticMarkup(React.createElement(PlanLineBreakdown, { rows: sale, compact: true, audience: 'employee', carrier: true }))
+ok('an employee-served payload never renders Price / GP, whatever the carrier flag says',
+  !/>Price</.test(ecarrier) && !/>GP</.test(ecarrier))
 
 console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILURES'} — ${pass} passed, ${fail} failed`)
 // react-dom's scheduler keeps a MessageChannel alive, so exit explicitly rather than hanging

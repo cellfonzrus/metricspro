@@ -10,7 +10,7 @@ import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterVa
 import PlanLineBreakdown from '../_lib/PlanLineBreakdown'
 import { toPlanLine } from '../_lib/planLines'
 import { multimonthOffered, useMultimonthStatus } from '../_lib/multimonth'
-import { servedAudience } from '../_lib/payoutAudience'
+import { servedAudience, servedCarrierView } from '../_lib/payoutAudience'
 import WhyZeroPanel from '../_lib/WhyZeroPanel'
 import { GoogleRatingChips, GoogleRatingDetail, useGoogleRatings } from '../_lib/googleRatings'
 
@@ -18,6 +18,11 @@ import { GoogleRatingChips, GoogleRatingDetail, useGoogleRatings } from '../_lib
 // pay a non-Boost (Total/Luxelink) rep: the Commission PLAN component (which plan attached, via which
 // assignment, per-rule matched sale lines) and the MULTI-MONTH component (per-device M1..N installments
 // with gate status/reason + the MA-file cross-reference). Plus a $0 explanation and an IMEI device search.
+//
+// A CARRIER SURFACE (owner 2026-09-28, index §6m): it asks the explain endpoint for `view=carrier` — the carrier's
+// money (Price / GP, implied cost, the MA cross-reference) — which the SERVER serves only to a holder of the carrier
+// permission (403 otherwise); the nav hides this page from everyone else (/me refused_pages → payoutRefused). The
+// Rep Incentive report reads the same endpoint without the view and is served no carrier field.
 
 interface RepRow { epay_salesperson: string; storeops_name?: string; store?: string; market?: string; total_payout?: number }
 
@@ -125,7 +130,7 @@ export default function CommissionExplainPage() {
   useEffect(() => {
     if (!rep) { setData(null); return }
     setBusy(true); setData(null)
-    api(`/api/v1/commcalc/commission-explain?org_id=${ORG_ID}&period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}`)
+    api(`/api/v1/commcalc/commission-explain?org_id=${ORG_ID}&view=carrier&period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}`)
       .then(setData).catch(e => setData({ error: String(e?.message || e) })).finally(() => setBusy(false))
   }, [rep, period, reload])
 
@@ -342,7 +347,7 @@ export default function CommissionExplainPage() {
                   underneath and is fed the SAME rows in the SAME order with the SAME category
                   filter applied — what you see is what exports. */}
               {planRows.length > 0 ? (
-                <PlanLineBreakdown rows={planRows} audience={servedAudience(data)}>
+                <PlanLineBreakdown rows={planRows} audience={servedAudience(data)} carrier={servedCarrierView(data)}>
                   {(visible) => (
                     <ReportShell title={`Plan line detail — ${data.rep}`} subtitle={`${period} · ${pc?.plan_name || ''}`}
                       filename={`plan-detail-${data.rep}-${period}`.replace(/\s+/g, '-')} columns={PLAN_COLS} rows={visible} totals compact />

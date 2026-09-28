@@ -121,8 +121,8 @@ def _sale_line_items(plan_component, include_held, employee):
     Which lines: whatever the drill-down carries, through THE paid-line predicate (`payout_audience.is_paid_line`)
     — the employee drill-down already holds only paid lines; a manager statement lists the paid lines, plus the
     unpaid ones only when the held section is granted (`include_held`, the same default-closed gate). An employee
-    row carries no product name and no carrier figure; a manager row adds the product and, when present, the
-    sale's price / GP."""
+    row carries no product name; a manager row adds the product. NO row carries a carrier figure for anyone (owner
+    2026-09-28, index §6m: the sale's Price / GP is the carrier's money — "only for the eyes of the management")."""
     rows = []
     for rule in (plan_component or {}).get("rules") or []:
         what = display_label(rule.get("label")) or describe_condition(rule)
@@ -137,9 +137,6 @@ def _sale_line_items(plan_component, include_held, employee):
                    "status": "Paid" if paid else (_s(ln.get("suppressed_reason")) or "Not paid")}
             if not employee:
                 row["product"] = _s(ln.get("product")) or None
-                for k in ("ext_price", "gp"):
-                    if ln.get(k) is not None:
-                        row[k] = round(_f(ln.get(k)), 2)
             rows.append(row)
     return rows
 
@@ -278,7 +275,9 @@ def build_statement(explain, buckets=None, tenant_name="", rep_name="", period="
             "installment_subtotal": money(inst_subtotal),
             "installments_paid": int(_f((mm.get("totals") or {}).get("paid"))),
             "installments_held": int(_f((mm.get("totals") or {}).get("withheld"))),
-            "buckets": bucket_rows,
+            # the five rows only when a ledger rollup was GIVEN (the router gives none since 2026-09-28 — the ledger
+            # buckets are the carrier's statement per rep, index §6m); [] otherwise, never five $0.00 placeholders
+            "buckets": bucket_rows if buckets is not None else [],
             "bucket_total": money(bucket_total),
             "has_buckets": has_buckets,
         },
@@ -662,14 +661,15 @@ def render_range_pdf(rng):
 
 
 _CSV_EMPLOYEE_COLS = ("month", "section", "item", "date", "invoice", "action", "phone", "customer", "amount")
+# no carrier figure in either (owner 2026-09-28, index §6m) — the manager adds the product and the ⛔ status only
 _CSV_MANAGER_COLS = ("month", "section", "item", "date", "invoice", "action", "phone", "customer", "product",
-                     "status", "ext_price", "gp", "amount")
+                     "status", "amount")
 
 
 def range_csv(rng):
     """The range document as CSV text: per month its sale lines, its earned items and its total, then the grand
     total. The employee's columns carry no product and no carrier figure (the sale lines are already shaped);
-    a manager's add product, status, price and GP. PURE."""
+    a manager's add product and status — never the carrier's Price / GP (index §6m). PURE."""
     import csv
     import io
     rng = rng or {}
@@ -684,7 +684,7 @@ def range_csv(rng):
             w.writerow({"month": per, "section": "sale", "item": ln.get("rule"), "date": ln.get("date"),
                         "invoice": ln.get("invoice"), "action": ln.get("action"), "phone": ln.get("phone"),
                         "customer": ln.get("customer"), "product": ln.get("product"), "status": ln.get("status"),
-                        "ext_price": ln.get("ext_price"), "gp": ln.get("gp"), "amount": ln.get("amount_raw")})
+                        "amount": ln.get("amount_raw")})
         for it in d.get("earned") or []:
             w.writerow({"month": per, "section": "earned", "item": it.get("what"),
                         "amount": it.get("amount")})

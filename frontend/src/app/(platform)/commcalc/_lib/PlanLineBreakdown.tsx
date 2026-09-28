@@ -29,26 +29,33 @@ import {
   isFlatOnce, isUnit, planCategories, planLineMembership, planLineTotals, type PlanLine,
 } from './planLines'
 
-// MANAGER columns (the diagnostic) vs EMPLOYEE columns (owner 2026-09-26: "only show the line they are getting
-// paid … carrier commission not be displayed"). The audience is the one the SERVER served (payload.audience —
-// backend payout_audience.resolve); in the employee payload Price / GP do not exist, so they are not columns.
-// The employee's row names the SALE (action · phone line · customer) in place of the product name (owner
-// 2026-09-26, index §6j); the manager's keeps the product and shows the same sale label under it.
-const MANAGER_COLS = ['Rule', 'Date', 'Trans ID', 'Product', 'Contract', 'Basis', 'Price', 'GP', 'Line $']
+// EMPLOYEE columns (owner 2026-09-26: "only show the line they are getting paid … carrier commission not be
+// displayed") vs MANAGER columns vs the CARRIER diagnostic's. The audience is the one the SERVER served
+// (payload.audience — backend payout_audience.resolve). Price / GP are the carrier's money (owner 2026-09-28, index
+// §6m: "it should not show any commission received on the rep incentive report, that is only for the eyes of the
+// management") — they are columns ONLY when the payload was served in the carrier view (`carrier`, from
+// servedCarrierView — the server stamps it after checking the carrier permission); no Rep Incentive payload
+// carries them. The employee's row names the SALE (action · phone line · customer) in place of the product name
+// (index §6j); the manager's keeps the product and shows the same sale label under it.
+const CARRIER_COLS = ['Rule', 'Date', 'Trans ID', 'Product', 'Contract', 'Basis', 'Price', 'GP', 'Line $']
+const MANAGER_COLS = ['Rule', 'Date', 'Trans ID', 'Product', 'Contract', 'Basis', 'Line $']
 const EMPLOYEE_COLS = ['Rule', 'Date', 'Trans ID', 'Sale', 'Contract', 'Basis', 'Line $']
 const RIGHT = new Set(['Price', 'GP', 'Line $'])
 
-export default function PlanLineBreakdown({ rows, compact, children, audience }: {
+export default function PlanLineBreakdown({ rows, compact, children, audience, carrier }: {
   rows: PlanLine[]
-  /** the audience the payload was served for (servedAudience(payload)); default 'manager' = today's table */
+  /** the audience the payload was served for (servedAudience(payload)); default 'manager' */
   audience?: PayoutAudience
+  /** the payload was served in the CARRIER view (servedCarrierView(payload)) — the only case with Price / GP */
+  carrier?: boolean
   /** modal density (the reports drill-down) vs page density (commission-explain). */
   compact?: boolean
   /** optional render-prop for a page-level flat table / export, fed the SAME visible rows (WYSIWYG). */
   children?: (visible: PlanLine[]) => React.ReactNode
 }) {
   const employee = audience === 'employee'
-  const COLS = employee ? EMPLOYEE_COLS : MANAGER_COLS
+  const showCarrier = carrier === true && !employee
+  const COLS = employee ? EMPLOYEE_COLS : showCarrier ? CARRIER_COLS : MANAGER_COLS
   const [sel, setSel] = useState<string[]>([])          // empty = ALL categories (the default)
   const [showExtra, setShowExtra] = useState(false)
 
@@ -239,8 +246,8 @@ export default function PlanLineBreakdown({ rows, compact, children, audience }:
                         </td>}
                     <td style={td}>{l.contract_type || '—'}</td>
                     <td style={{ ...td, color: 'var(--text3)' }}>{l.basis || '—'}</td>
-                    {!employee && <td style={{ ...td, textAlign: 'right' }}>{fmt(l.ext_price)}</td>}
-                    {!employee && <td style={{ ...td, textAlign: 'right' }}>{fmt(l.gp)}</td>}
+                    {showCarrier && <td style={{ ...td, textAlign: 'right' }}>{fmt(l.ext_price)}</td>}
+                    {showCarrier && <td style={{ ...td, textAlign: 'right' }}>{fmt(l.gp)}</td>}
                     <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>
                       {isFlatOnce(l) ? 'flat (once)' : fmt(l.amount as number)}
                       {l.suppressed && (
