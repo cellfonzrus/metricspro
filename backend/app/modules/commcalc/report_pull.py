@@ -239,6 +239,12 @@ def ingest_report_rows(client, org_id, target_table, mapped, *, source_id=None,
         chunk = mapped[i:i + batch]
         client.schema("commcalc").table(target_table).insert(chunk).execute()
         n += len(chunk)
+    # DATA LANDED (index §6l) — the ONE post-landing hook, for every month a pulled row belongs to (every portal
+    # pull lands here). It never raises; a table the calculation does not read answers not_a_calc_input.
+    from app.modules.commcalc import auto_calc as _auto_calc
+    _auto_calc.landed(client, org_id, table=target_table,
+                      periods=sorted({r.get("period") for r in mapped if r.get("period")}),
+                      source="portal_pull", rows=n)
     return n
 
 

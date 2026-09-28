@@ -66,6 +66,7 @@ from app.modules.commcalc import sales_derive
 from app.modules.commcalc import ingest_store_guard as _isg
 from app.modules.commcalc import ingest_slice as _ingest_slice   # pure slice-scoped replace rules (2026-09-02)
 from app.modules.commcalc import landing_identity as _landing    # 2026-09-20 — which KIND wrote a row; who reads it (ONE home)
+from app.modules.commcalc import auto_calc as _auto_calc        # 2026-09-28 — "data landed for org X, period P" (ONE home, index §6l)
 from app.modules.commcalc import comp_trend
 from app.modules.commcalc import carrier_map
 from app.modules.commcalc import column_mapping
@@ -1191,7 +1192,7 @@ async def upload_file(
             _res = _import_batches.duplicate_response(file_type, _batch)
             return _res
 
-        _res = await _upload_file_impl(file_type, file, period, force, close_date, org_id)
+        _res = await _upload_file_impl(file_type, file, period, force, close_date, org_id, trace_source)
         # Return a clean copy WITHOUT the internal `_trace` payload; `_write_upload_trace` (finally) still
         # sees the rich `_trace` because it reads `_res`, not the returned copy.
         return {k: v for k, v in _res.items() if k != "_trace"} if isinstance(_res, dict) else _res
@@ -1243,9 +1244,13 @@ async def _upload_file_impl(
     period: str = "",
     force: bool = False,
     close_date: str = "",
-    org_id: str = "00000000-0000-0000-0000-000000000001"
+    org_id: str = "00000000-0000-0000-0000-000000000001",
+    trace_source: str = "manual",
 ):
     """Upload a data file (sales, payment_detail, mi, dlar_rep, dlar_store, catalog).
+
+    `trace_source` is who delivered the file ('manual' = the upload pages, 'email_sweep', 'ftp_sweep') — the
+    landing hook records it so the Rep Incentive page can say WHICH upload a calculation came from.
 
     For comp_report, the selected `period` is checked against the month the file's rows actually
     belong to (their Begin Date); a mismatch is rejected (pass force=true to override) so a file
@@ -2194,6 +2199,13 @@ async def _upload_file_impl(
             _tr_dates[str(_d)] = _tr_dates.get(str(_d), 0) + 1
     out["_trace"] = {"rows_in": len(rows), "target_table": table,
                      "periods": _tr_periods, "date_counts": _tr_dates}
+    # DATA LANDED (index §6l) — the ONE post-landing hook: queues one standard Run Calculation per month this
+    # file touched (a daily file spanning a month-end queues both), per the org's config, never blocking this
+    # request. The upload pages, the Email Auto-Import and the FTP drop all arrive here.
+    if saved:
+        out["auto_calc"] = _auto_calc.landed(client, org_id, table=table,
+                                             periods=list(_tr_periods) or [period], source=trace_source,
+                                             filename=getattr(file, "filename", None), rows=saved)
     return out
 
 
@@ -4513,7 +4525,14 @@ def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrie
             + (f"; ⚠️ {undated_rows} row(s) carry no parseable date and were left unstamped — "
                f"they are NOT booked to a guessed month" if undated_rows else ""))
     _trace("partial" if (dropped_columns or undated_rows) else "ok", saved, note)
+    # DATA LANDED (index §6l) — the ONE post-landing hook, for every caller of this core: /upload-mapped, the
+    # onboarding intake commit, a custom report's dataset binding. Each row's OWN month is queued (a history
+    # file spanning months queues each of them); a table the calculation does not read answers not_a_calc_input.
+    auto_calc = (_auto_calc.landed(client, org_id, table=table,
+                                   periods=sorted({m.get("period") for m in mapped if m.get("period")}) or [period],
+                                   source=trace_source, filename=fname, rows=saved) if saved else None)
     return {"saved": saved, "report_key": report_key, "target_table": table, "period": period,
+            "auto_calc": auto_calc,
             "rules_used": len(rules), "used_defaults": used_defaults, "mapped": len(mapped),
             "footer_rows_skipped": footer_rows, "undated_rows": undated_rows,
             "dropped_columns": dropped_columns, "source_scoped": bool(source_aware and period),
@@ -10963,8 +10982,15 @@ async def commission_import_commit(
                         upload_type=report_key, period=period,
                         result={"saved": saved, "note": f"{len(mapped)} row(s) mapped",
                                 "_trace": {"rows_in": len(mapped), "target_table": table}})
+    # DATA LANDED (index §6l) — carrier_commission is read by the calculation's statement block: the ONE
+    # post-landing hook queues the period's Run Calculation per the org's config.
+    auto_calc = (_auto_calc.landed(client, org_id, table=table,
+                                   periods=sorted({m.get("period") for m in mapped if m.get("period")}) or [period],
+                                   source="import-wizard", filename=getattr(file, "filename", None), rows=saved)
+                 if saved else None)
     return {"saved": saved, "report_key": report_key, "target_table": table, "period": period,
-            "mapped": len(mapped), "new_categories": created, "template_rows": persisted}
+            "mapped": len(mapped), "new_categories": created, "template_rows": persisted,
+            "auto_calc": auto_calc}
 
 
 @router.post("/carrier-comm-file/extract")
@@ -14423,21 +14449,13 @@ def _do_dlar_sweep(org_id):
         # — the §19.21 class on the one sweep nobody had looked at. It now names the WRITE per table,
         # each grain's own as-of date, and says plainly when a slice does not reach the period's last day.
         detail = dlar_sweep.status_sentence(res)
-        # Auto-recompute commissions for the just-imported period so the KPI Metrics page
-        # and Targets employee KPIs — which read the rep_commissions snapshot, NOT live DLAR
-        # — stay current with the freshly-imported DLAR. This runs on every sweep (the daily
-        # cron AND manual 'Import DLAR now'). A recalc failure must NOT fail the sweep, so it
-        # is isolated and only noted in last_detail. (Both this sweep and _run_calculation are plain
-        # sync functions running in threadpool threads, so this is a direct call — no loop involved.)
-        try:
-            _cres = _run_calculation(res['period'], org_id)
-            if isinstance(_cres, dict) and _cres.get('skipped'):
-                detail += (f" · recalc skipped for {res['period']} — a calculation was already running"
-                           f" (since {_cres.get('running_since')})")
-            else:
-                detail += f" · recalculated commissions for {res['period']}"
-        except Exception as _ce:
-            detail += f" · ⚠ auto-recalc failed: {_ce}"
+        # THE RECALCULATION IS THE LANDING HOOK'S NOW (owner 2026-09-28, index §6l). This used to call
+        # `_run_calculation` inline on EVERY sweep (even one that wrote nothing) so the KPI Metrics page and
+        # the Targets employee KPIs — which read the rep_commissions snapshot, not live DLAR — stayed current.
+        # `run_dlar_sweep` now calls the ONE post-landing hook for the grains it actually WROTE, which queues a
+        # debounced Run Calculation of that period in the background (the outcome shows on the Rep Incentive
+        # page). The status line says what the hook did — never "recalculated" for a run that was only queued.
+        detail += " · " + _auto_calc.phrase(res.get('auto_calc'))
         _dlar_set_status(client, org_id, 'ok', detail, mark_run=True)
     except dlar_sweep.DlarLoginError as e:
         _dlar_set_status(client, org_id, 'error', str(e), mark_run=True)
@@ -15857,9 +15875,11 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
     keeps the identical work on a worker thread instead. Not one line of the calculation below changed.
 
     `guard_token` is the single-flight claim from _calc_guard_acquire. POST /calculate claims the slot
-    itself (so it can answer 409 synchronously) and hands the token down; an internal caller (the DLAR
-    sweep, the email sweep) passes nothing and this function claims it. A refusal returns a
-    {'skipped': ...} dict WITHOUT touching rep_commissions — it never raises into a sweep."""
+    itself (so it can answer 409 synchronously) and hands the token down; the ONE internal caller — the
+    landing hook's runner `auto_calc._default_runner` (index §6l), which replaced the DLAR / email-sweep
+    inline recalcs — passes nothing and this function claims it. A refusal returns a
+    {'skipped': ...} dict WITHOUT touching rep_commissions — it never raises into a sweep. Otherwise it
+    returns {'status': 'done', 'save_errors', 'reps'} or {'status': 'error', 'error'}."""
     client = sb()
     if not guard_token:
         _ok, _tok, _holder = _calc_guard_acquire(client, org_id, period)
@@ -16231,6 +16251,10 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
         # waiting out the TTL. Pure in-memory dict work, spelling-tolerant, and _team_snap_invalidate
         # swallows its own errors — it can neither change nor fail a recompute.
         _team_snap_invalidate(org_id, period)
+        # WHAT HAPPENED, RETURNED (index §6l). The Run Calculation button's background task ignores it — so the
+        # button is unchanged — and the landing hook (`auto_calc.run_one`) reads it to record calculated /
+        # refused / failed on the Rep Incentive page instead of guessing from the status row.
+        return {'status': 'done', 'save_errors': save_errors or None, 'reps': len(comms)}
 
     except Exception as e:
         try:
@@ -16240,6 +16264,7 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
                 'save_errors': [str(e)],
             }, on_conflict='org_id,period').execute()
         except: pass
+        return {'status': 'error', 'error': str(e)}
 
 
 # ── Report endpoints ──────────────────────────────────────────
@@ -22250,7 +22275,7 @@ def decide_ingest_guard_item(item_id: str, body: Optional[DecideIngestGuardItemI
     if str(item.get("status")) != "pending":
         return {"ok": True, "already": item.get("status"), "item_id": item_id}
 
-    released, alias = 0, None
+    released, alias, auto_calc = 0, None, None
     if decision == "allow":
         cfg = _isg.get_config(client, org_id)
         code = str(body.store_code or "").strip()
@@ -22275,6 +22300,11 @@ def decide_ingest_guard_item(item_id: str, body: Optional[DecideIngestGuardItemI
                 for i in range(0, len(held), 500):
                     client.schema("commcalc").table(tbl).insert(held[i:i + 500]).execute()
                 released = len(held)
+                # DATA LANDED (index §6l): the released rows are now in the pay basis — the ONE post-landing
+                # hook queues each of their months' Run Calculation per the org's config.
+                auto_calc = _auto_calc.landed(client, org_id, table=tbl,
+                                              periods=sorted({r.get("period") for r in held if r.get("period")}),
+                                              source="ingest_guard_release", rows=released)
 
     try:
         client.schema("commcalc").table("ingest_store_quarantine").update({
@@ -22296,7 +22326,7 @@ def decide_ingest_guard_item(item_id: str, body: Optional[DecideIngestGuardItemI
     except Exception:
         pass
     return {"ok": True, "item_id": item_id, "decision": decision,
-            "rows_released": released, "alias_created": alias}
+            "rows_released": released, "alias_created": alias, "auto_calc": auto_calc}
 
 
 @router.get("/store-unmatched")
@@ -23854,7 +23884,15 @@ async def update_chargeback(item_id: str, body: UpdateChargebackIn, org_id: str 
 def get_calc_status(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     r = client.schema('commcalc').table('calc_status').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(1).execute()
-    return r.data[0] if r.data else {'calc_status': 'not_run'}
+    out = dict(r.data[0]) if r.data else {'calc_status': 'not_run'}
+    # WHAT THE LANDING HOOK DID FOR THIS MONTH (index §6l) — queued / calculated / refused / failed / off, as ONE
+    # sentence the Rep Incentive page renders ("Auto-calculated at … from the upload of …"). Built by the hook's
+    # own `view` from the row it wrote; best-effort, so this status read can never fail on it.
+    try:
+        out['auto_calc'] = _auto_calc.view(out, cfg=_auto_calc.load_config(client, org_id))
+    except Exception as e:
+        out['auto_calc'] = {'state': None, 'error': str(e)}
+    return out
 
 
 # ─────────────────────────────────────────────
@@ -34078,37 +34116,28 @@ async def _run_email_sweep(org_id, account='default', since_days_override=None):
         # the promote reads the (unchanged) feed, so it is a no-op on unchanged data either way.
         if (any(r.get('upload_type') == 'daily_sales' and r.get('status') != 'error' for r in results)
                 and _registry_auto_map(client, org_id).get('sales', True)):
-            _pr = _promote_feed_to_raw_sales(client, org_id, _ftp_current_period())
+            _promote_feed_to_raw_sales(client, org_id, _ftp_current_period())
             # MONTH-BOUNDARY GRACE (2026-08-01). The feed keeps FINALIZING the old month after midnight
             # (luxelink's July feed grew 283→313→317 across the 00:09–04:05 runs of August 1) while this
             # line, which asks the wall clock, had already moved on to the new month — leaving 45 July
             # transactions in the feed and out of the paid basis. Re-derive the prior month too while the
-            # tenant's window is open. Deliberately AFTER the current-month promote and deliberately
-            # OUTSIDE the recompute block below: a grace re-derive NEVER triggers a recompute — money
-            # moves attended, so the owner runs Calculate for the closed month. Best-effort: a failure
-            # here can no more break the sweep than the current-month promote can.
+            # tenant's window is open. A grace re-derive that WRITES the closing month is a landing like any
+            # other: since 2026-09-28 (owner: "when sept is uploaded the system should calculate
+            # automatically") the promotion's own hook queues that month's calculation too, per the org's
+            # `auto_calc_on_landing` config — the old "closed months recompute attended only" rule is now that
+            # config's `false`. Best-effort: a failure here can no more break the sweep than the
+            # current-month promote can.
             for _gp, _g, _gret in _sales_derive_plan(client, org_id)[1:]:
                 try:
                     _promote_feed_to_raw_sales(client, org_id, _gp, grace=_g, retain=_gret)
                 except Exception as _ge:
                     print(f"WARN month-boundary grace re-derive of {_gp} failed: {_ge}")
-            # Plan-mode tenants have no other automatic recompute (the DLAR auto-recalc is Boost-only),
-            # so a promotion that actually wrote rows recalculates the period — sales flow to pay every
-            # sweep with nobody pressing Run Calculation. Best-effort; the zero-wipe guard protects the
-            # snapshot, and Boost orgs are excluded (their recompute cadence stays the daily DLAR sweep).
-            try:
-                if (_pr or {}).get('written'):
-                    _carriers = (client.schema('commcalc').table('carrier').select('*')
-                                 .eq('org_id', org_id).execute().data) or []
-                    if _resolve_carrier_mode(_carriers) != 'boost':
-                        # _run_calculation is a plain `def` now (it has zero awaits and takes minutes).
-                        # _run_email_sweep IS a real coroutine, so calling it inline would block the one
-                        # event loop for the whole recompute — exactly the freeze this package removes.
-                        # run_in_threadpool is what Starlette itself does with a sync BackgroundTask.
-                        from starlette.concurrency import run_in_threadpool as _in_pool
-                        await _in_pool(_run_calculation, _ftp_current_period(), org_id)
-            except Exception as e2:
-                print(f"WARN auto-recalc after promote failed: {e2}")
+            # THE RECALCULATION IS NOT HERE ANY MORE (owner 2026-09-28, index §6l). This block used to run
+            # `_run_calculation` inline after a promotion that wrote rows — plan-mode tenants only, current month
+            # only — one of three different answers to "does a landing recalculate?". Every lander (this
+            # sweep's upload_file calls, and the promotions above) now calls the ONE post-landing hook
+            # (`auto_calc.landed`), which queues one debounced Run Calculation per (org, month) touched, for
+            # every carrier mode, per the org's `auto_calc_on_landing` config.
     except Exception as e:
         print(f"WARN auto-promote feed->raw_sales failed: {e}")
     return {"ok": True, "account": account, "ingested": ok, "files": results,
@@ -34342,6 +34371,12 @@ def _promote_feed_impl(client, org_id, pv, canon, dry_run, force, retain, grace=
     _heal_note = (f"healed {dupes_dropped} duplicate monthly-only line(s) via content-dedupe"
                   if dupes_dropped else None)
     _trace_promo(len(new_rows), note=_heal_note)
+    # DATA LANDED (index §6l): the derived monthly basis for `canon` was rewritten — the ONE post-landing hook
+    # queues its Run Calculation. This REPLACES the email sweep's inline plan-mode-only recalc (and applies to a
+    # month-boundary grace re-derive of the closing month too: a late correction to an older month is calculated,
+    # owner 2026-09-28). The hourly promote-all-due and POST /sales/promote-feed arrive here as well.
+    summary["auto_calc"] = _auto_calc.landed(client, org_id, table="raw_sales", periods=[canon],
+                                             source="promotion", rows=len(new_rows))
     return summary
 
 
@@ -36689,6 +36724,12 @@ async def manual_upload_ingest(
 
     periods = ma_upload.period_counts(to_insert)
     dcounts = ma_upload.date_counts(to_insert, date_col)
+    # DATA LANDED (index §6l) — the MA feeds are read by the sale-installment paid gate: the ONE post-landing
+    # hook queues each touched month's Run Calculation per the org's config (this ingest used to promise
+    # "no payout recomputed"; the money_note below now says what the hook actually did).
+    auto_calc = (_auto_calc.landed(client, org_id, table=table, periods=sorted(periods or {}),
+                                   source="ma_manual", filename=getattr(file, "filename", None), rows=saved_n)
+                 if saved_n else None)
     note = (f"manual {mode}: {saved_n} row(s) saved, {dupes_dropped} duplicate(s) skipped"
             + (f"; replaced months {', '.join(replaced_periods)}" if replaced_periods else "")
             + (f"; span {win_start}..{win_end}" if win_start else ""))
@@ -36698,7 +36739,10 @@ async def manual_upload_ingest(
         "periods": periods, "date_span": [win_start, win_end],
         "dupes_dropped": dupes_dropped, "replaced_periods": replaced_periods,
         "linkage": linkage, "note": note,
-        "money_note": "Ingest only — no payout recomputed. Review the loaded numbers before any recalc.",
+        "money_note": ("Ingest only — nothing was recalculated." if not (auto_calc or {}).get("queued")
+                       else "Loaded; " + _auto_calc.phrase(auto_calc)
+                       + " — the result (or a refusal) shows on the Rep Incentive page."),
+        "auto_calc": auto_calc,
         "_trace": {"rows_in": len(rows), "target_table": table,
                    "periods": periods, "date_counts": dcounts},
     }

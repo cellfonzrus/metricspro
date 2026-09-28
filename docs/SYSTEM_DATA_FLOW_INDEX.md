@@ -33,6 +33,7 @@ Primary code homes:
 | 6h | **Multi-month offered only when configured** | "Why does a rep's pay show a multi-month option when this company has no multi-month pay — where is that decided, and what if money is there anyway?" |
 | 6i | **What an employee sees of their own commission** | "Why does the employee payout report show only the line I am paid for, and no carrier Price / GP? Which surfaces show an employee their commission, and where is 'paid line' and 'employee-visible field' decided?" |
 | 6j | **Who is looking; the sale on the paid row; one employee over several months** | "Why does a rep not see Pay Discrepancy but a manager does — where is that list? Why does a manager see every line on the Rep Incentive report and a rep only their paid ones? Where does the customer name / phone on a paid row come from? How do I export one employee's statement for several months, and is each month the same as downloading it alone?" |
+| 6l | **Auto-calculation on landing** | "I uploaded September — did the commission recalculate by itself? When, from which upload, and if not, why not (refused, off, waiting)? Which uploads / sweeps trigger it, and how is a burst of files one calculation?" |
 | 6k | **The one-rep Recalculate button** | "Why did Recalculate for one rep fail / what does it write? Does it touch other reps or the installment ledgers? Is the one-rep row the same as Run Calculation's? How is a moved-local NameError kept out of the build?" |
 | 7 | **Carrier residual installments** | "Multi-month carrier residual pay from raw_mi. Why do named activation_types not pay?" |
 | 12 | **External credit machine + Card Settlement Recon** | "Where does the external / white-machine card figure live, what is it called for this tenant, and how does it tally with what the processor actually settled?" |
@@ -177,6 +178,12 @@ email), (c) **RPC/manual entry**.
 - Upload history/trace: `/upload/history` `router.py:2168`, `/upload-trace` `router.py:16256` (mig `202`,`241`).
 - Frontend: `frontend/src/app/(platform)/commcalc/upload/wizard/page.tsx`, `column-mapping/page.tsx`,
   `report-mappings/page.tsx`.
+
+- **Every route above and below ends in ONE post-landing hook (§6l, 2026-09-28).** A lander that writes a table the
+  Run Calculation reads (`data_lineage_registry.COMMISSION_CALC_FEEDS`) calls `auto_calc.landed(...)` after its rows are
+  written; that queues ONE debounced Run Calculation per (org, month) touched, per the org's `auto_calc_on_landing`.
+  The DLAR sweep's inline recalculation and the email sweep's plan-mode-only post-promotion recalculation are retired
+  into it. Lock `harness_auto_calc_lock.py` fails the build on a new lander that does not call it.
 
 ### Ingest route B — automated sweeps (`backend/app/modules/commcalc/*_sweep.py`)
 | Sweep | Module | Writes | Config table / endpoints |
@@ -2323,6 +2330,126 @@ gathering into `_calc_inputs`.
 
 **Not done here (awaits the merge):** saving Jona Sejat's 15 never-calculated months (Feb 2025 – Apr 2026) through
 the fixed button — the owner approved it; it runs after this is live.
+
+### 6l. AUTO-CALCULATION ON LANDING — "data landed for org X, period P" has ONE home (owner 2026-09-28)
+
+Owner: *"when sept is uploaded the system should calculate automatically without manual intervention"* — platform-wide.
+
+**The class, named.** "Does a landing recalculate?" had THREE answers: the DLAR sweep called `_run_calculation`
+inline on every run (even one that wrote nothing); the email sweep called it after a feed → raw_sales promotion
+(plan-mode tenants only, current month only, and "a grace re-derive NEVER triggers a recompute"); every other lander —
+the Sales / Daily Sales upload pages, the mapped upload, the onboarding intake commit, the FTP drop, the store-guard
+release, the built-in POS sync, the portal pulls, the commission import wizard, the MA manual upload — recalculated
+nothing. **Duplicate check:** those two inline triggers were the existing auto-recalcs; they were EXTENDED into the one
+hook, not left beside it (both call sites are deleted; the lock fails the build if either returns). No existing
+post-landing hook existed (`_intake_pos_rebuild_after_landing` rebuilds POS sales, not commission — reviewed below).
+
+**The design (`backend/app/modules/commcalc/auto_calc.py`).**
+- **One fact, one home.** WHICH tables the Run Calculation reads is `data_lineage_registry.COMMISSION_CALC_FEEDS`
+  (`daily_sales_feed`, `raw_sales`, `raw_payment_detail`, `raw_mi`, `raw_dlar_rep`, `raw_dlar_store`,
+  `carrier_commission`, `raw_ma_commission`, `raw_ma_daily_tx` — `_calc_inputs`, `_apply_new_engines`, the
+  sale-installment paid gate); `SALES_SIBLING_TABLES` (`raw_sales_invoice`, `raw_sales_invoice_tender`,
+  `raw_sales_product`) land beside the basis and are NOT read — their landers still call the hook, which answers
+  `not_a_calc_input`.
+- **One hook.** Every lander calls `auto_calc.landed(client, org_id, table=, periods=, source=, filename=, rows=)`
+  AFTER its rows are written. It never raises into a lander and never runs a calculation itself: it QUEUES one
+  request per (org, month) the landing touched — a file spanning August and September queues both, a late
+  correction to an older month queues that month — and returns what it did (the landers put it in their response as
+  `auto_calc`: `queued` / `off` / `not_a_calc_input` / `no_period` / `error`).
+- **One runner, the standard calculation.** A poller (one daemon thread per process, started by `main.py`
+  `_auto_calc_poller_startup` on EVERY boot, so a request queued before a restart still runs) claims each request once
+  that month's uploads have been quiet for the org's window, and runs `auto_calc._default_runner` →
+  `router._run_calculation(period, org_id)` — the very function the Run Calculation button's background task runs,
+  full period, all reps. No `force` (the unconfigured-tenant refusal R1 and the zero-wipe guard stay armed) and no
+  `guard_token` (the single-flight recompute guard claims its own slot). `_run_calculation` now RETURNS its outcome
+  (`{'status': 'done', 'save_errors', 'reps'}` / `{'status': 'error', 'error'}` / the existing `{'skipped': …}`) —
+  additive: the button's task ignores it.
+- **Debounce / coalesce / idempotent.** A request is ONE row per (org, month) on `commcalc.calc_status`:
+  `auto_calc_requested_at` (the latest landing) + `auto_calc_landings`. A burst of 30 daily files moves the timestamp
+  30 times and runs ONE calculation; a steady stream cannot starve it (due at `min(latest + window, oldest + 6 ×
+  window)`). The claim is one conditional UPDATE (`auto_calc_requested_at <= the value judged due`), so across
+  gunicorn workers and the sweeps service exactly one process runs it, and a landing during a run queues exactly one
+  follow-up. The calculation is a deterministic delete-and-rewrite from what landed, so landing the same data again
+  recalculates to the same rows. (A byte-identical file through `/upload/{file_type}` is refused by the mig-732
+  duplicate guard before it lands, so it queues nothing.)
+- **Never silent.** The outcome is stored on `calc_status.auto_calc_last` — `calculated` / `calculated_with_errors` /
+  `refused` (R1 or zero-wipe, the calculation's own words) / `failed` / `busy` (another calculation held the slot —
+  the request is RE-QUEUED) / `off` / `running` — with the landings it came from and ONE sentence; `_run_calculation`
+  still writes its own `calc_status='error'` + `save_errors` (the CommCalc dashboard's refusal banner). `GET
+  /commcalc/calc-status/{period}` serves it as `auto_calc` (`auto_calc.view`), and the **Rep Incentive page**
+  (`reports/page.tsx` → `_lib/AutoCalcNotice.tsx`) renders it: *"Auto-calculated at Sep 28, 2026 14:05 UTC from the
+  upload of Sales Transaction Details 0928.csv (Email Auto-Import) — 42 rep(s)."* / *"Auto-calculation refused at …
+  after …: REFUSED to calculate … The last good snapshot for September 2026 was kept."* / *"… landed at …
+  Auto-calculation is off for this company … — press Run Calculation."* While queued / running it re-reads once a
+  minute and refreshes the rows when the month settles. Sweep status lines say what the hook did
+  (`auto_calc.phrase`), never "recalculated" for a run that was only queued.
+- **Config, never code.** `commcalc.commission_org_config.auto_calc_on_landing` (BOOLEAN) and
+  `.auto_calc_debounce_minutes` (INTEGER, clamped 1..240) — mig `1030`. The tenant's row wins, else the HOUSE org's
+  row, else the code default. ONE reader: `auto_calc.load_config` → `resolve_config`. **House default ON** (mig 1030 sets
+  it on the house row where NULL; the code default agrees): the directive is platform-wide and the house org is the
+  owner's; every Boost tenant was already recalculated per DLAR sweep and every plan-mode tenant per email promotion —
+  those are now this hook, so OFF would switch off recalculations tenants rely on; the run is the button's own
+  calculation with every refusal guard armed and its outcome on the page. Default window 5 minutes.
+- **Org-scoped.** Every read/claim/write is `.eq('org_id', …)`; the one exception is the poller's scan of pending
+  request KEYS (`# org-guard-ok`), each then claimed and run org-scoped.
+- **NO PERIOD LOCK EXISTS** (searched: no locked / finalized / paid state for a rep-commission month; the only
+  draft→approved→paid lifecycle is Management Incentive's `mi_payout`, which the Run Calculation never writes). A late
+  correction to a paid month recalculates it — exactly as a manual Run Calculation would. Open gap §19.32; a lock, when
+  built, belongs in `auto_calc.run_one` before the runner.
+- **Before mig 1030 is applied** the hook degrades to a PROCESS-LOCAL queue (same debounce, one calculation per
+  process) and records its outcome as a `calc_notices` entry of type `auto_calc` (mig 247) — the two pre-existing
+  auto-recalcs never stop while the SQL waits.
+
+**The landers (`auto_calc.LANDERS`, each calls the hook — the lock discovers every writer):**
+
+| Lander | What lands through it |
+|---|---|
+| `router._upload_file_impl` (`POST /upload/{file_type}`, `trace_source` threaded down) | the Sales / Daily Sales / DLAR / MI / payment-detail / MA upload pages; the **Email Auto-Import** and the **FTP drop** (both call `upload_file` per attachment) |
+| `router._ingest_mapped_df` | `/upload-mapped` (sales-by-invoice, POS line sales, any carrier layout), the **onboarding intake commit** (sales / pos / invoice / MA daily tx), a custom report's dataset binding |
+| `router._promote_feed_impl` | the feed → `raw_sales` derivation: email-sweep auto-promote, month-boundary grace, `POST /sales/promote-feed`, promote-all-due |
+| `router.decide_ingest_guard_item` | withheld rows released from the cross-tenant store-guard review |
+| `router.commission_import_commit` | the commission import wizard → `carrier_commission` |
+| `router.manual_upload_ingest` | the MA manual upload → `raw_ma_*` (its `money_note` now says what the hook did) |
+| `dlar_sweep.run_dlar_sweep` | the carrier KPI sweep (per grain actually WRITTEN) — replaces `_do_dlar_sweep`'s inline recalc |
+| `epay_sweep._process_report` / `_store_day_grain` | the ePay portal sweep (month / day grain) |
+| `report_pull.ingest_report_rows` | every portal pull (VidaPay / T-CETRA / Total Access) |
+| `pos/commcalc_feed.sync_period` | the built-in POS promotion into the feed / `raw_sales` (builtin-primary tenants) |
+
+**Excused / reviewed (with the reason, in `auto_calc.EXCUSED` / `REVIEWED_NON_LANDERS`):** `_restore_rows` (puts a
+snapshot back after a failed insert — nothing new landed); `pos/sales_from_reports.rebuild` — the **"Rebuild sales
+from the landed reports"** action — writes `pos.receipt_imports` / `pos.sales`, which the calculation never reads, and
+its two reports landed through `_ingest_mapped_df`, which already fired the hook; `_ingest_custom_report`
+(`raw_custom_import`, not read); `ingest_store_guard.record` (parks withheld rows — nothing reaches a feed until
+released); `vidapay_sweep._pull_one_report` (lands through `ingest_report_rows`); `epay_ingest.ingest`
+(`raw_epay_daily_tx`, not read); `_ledger_land_rows` (`commission_ledger` books the P&L, not read by the calculation);
+the VIP invoice, Management Incentive, closing and POS own-stream writers (not feeds).
+
+**Proof:** `backend/harness_auto_calc_on_landing.py` (41, DB-free, pip job *Customer master proof*): the REAL
+`_ingest_mapped_df`, `upload_file` (Email Auto-Import) and `_promote_feed_to_raw_sales`, the REAL hook and the REAL
+`_run_calculation` on an in-memory client — September through three landers → ONE queued request → nothing inside the
+window → exactly ONE calculation for (org, September) and none elsewhere; the stored rows == a manual Run
+Calculation's over the same data (every column; Jona $25.00, Other $10.00); a second landing → identical rows; a
+30-file burst → one run; an Aug+Sep correction file → each month once; R1 and zero-wipe refusals recorded as
+`refused` with the snapshot kept; a held slot → `busy`, re-queued, then run; config off (own row / house row) → no
+run, recorded `off`; tenant ON beats house OFF; org B untouched and every claim org-filtered; pre-1030 → the
+process-local queue, still once; `GET /calc-status` serves the page sentence. Negative controls: no quiet window → 30
+runs; a refusal recorded as success; the config ignored → each RED.
+**Lock:** `backend/harness_auto_calc_lock.py` (stdlib + ast, `org-scope-guard.yml` job *One post-landing hook, one
+calculation trigger*): (A) every function under `backend/app` that writes a `COMMISSION_CALC_FEEDS` /
+`SALES_SIBLING_TABLES` table — a literal insert/upsert, a commcalc-schema insert/upsert whose table it cannot prove is
+another (module / imported / local constants are resolved), `safe_replace(`, or the POS promotion RPC — is a LANDER or
+EXCUSED; (B) every lander calls `auto_calc.landed(`; no stale entry; a reviewed non-lander that starts writing a feed is
+RED; (C) `_run_calculation` is referenced only by `calculate` (the button) and `auto_calc._default_runner`;
+`_calc_rep_rows` only by `_run_calculation` / `recompute_rep`; (D) the runner calls exactly
+`_run_calculation(period, org_id)` and `auto_calc.py` computes / writes no pay; (E) the config keys are spelled once
+and read only through `resolve_config`, never by the frontend; (F) every period-keyed `raw_*` the calculation reads is
+in the registry and the hook dereferences it (no copy); (G) index / migration / CI / boot hook / page registered. Ten
+planted negative controls. `harness_commcalc_recompute_guard.py` §A/§G re-pinned to the new single internal caller.
+
+**Migration `1030_auto_calc_on_landing.sql` — WRITTEN, NOT APPLIED, surfaced for owner approval:** `calc_status`
++`auto_calc_requested_at` / `auto_calc_landings` / `auto_calc_last` (+ a partial index on pending rows);
+`commission_org_config` +`auto_calc_on_landing` / `auto_calc_debounce_minutes`; the house row's switch set TRUE where
+NULL. Additive, idempotent, `-- REVERT:` note.
 
 ---
 
@@ -4477,6 +4604,9 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `commcalc.calc_status.auto_calc_requested_at` / `.auto_calc_landings` / `.auto_calc_last` (mig `1030`, NOT applied) — **a pending auto-calculation and the last one's outcome** for one (org, month) | `auto_calc.landed` (queue), `auto_calc._claim` (the poller's conditional UPDATE), `auto_calc.run_one` → `_record_last` (outcome); pre-1030 the outcome goes to `calc_notices` (type `auto_calc`) | `auto_calc.run_due` (the poller), `auto_calc.view` ← `GET /commcalc/calc-status/{period}` → `_lib/AutoCalcNotice.tsx` on the Rep Incentive page (§6l) |
+| `commcalc.commission_org_config.auto_calc_on_landing` / `.auto_calc_debounce_minutes` (mig `1030`) — house row → tenant row override | migration 1030 (house row TRUE where NULL); SQL / a future settings writer | ONE reader `auto_calc.load_config` → `resolve_config` (lock: `harness_auto_calc_lock.py` E) (§6l) |
+| `data_lineage_registry.COMMISSION_CALC_FEEDS` / `SALES_SIBLING_TABLES` (code registry) — **which tables the Run Calculation reads** | code | `auto_calc.is_calc_feed` (the hook), `harness_auto_calc_lock.py` A/F (§6l) |
 | `commcalc.raw_sales.customer` + `commcalc.raw_sales_invoice.customer` (mig 1012) — as **the customer on a paid commission line** | the sales / sales-by-invoice uploads (unchanged) | THE rule `inventory_sold_recon.sale_customer` / `invoice_customer_map` → `commission_drilldown._sale_customers` (reads `trans_id,customer` only, org-scoped) → `attach_line_identity` → every plan line's `customer` (explain, statements, the range); also `sales_detail_index` (inventory integrity §11b) (§6j) |
 | `commcalc.rep_commissions` — ONE rep's row(s) for one period | `POST /commcalc/recompute-rep` → the full path (`_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines(persist_installments=False)`), writing only `_rows_for_rep` (update in place / insert) | the same readers as the full run's rows (§6k) |
 | `commcalc.rep_commissions` + the `/commission-explain` payload — as **what an EMPLOYEE may see of their own commission** | `calc_rep_commissions` / `commission_engine.preview` (unchanged) | THE shapers `payout_audience.employee_rep_row` / `employee_explain` / `employee_drill` (allow-lists; paid lines by `is_paid_line`) → `/commissions`, `/commissions-range`, `/commission-explain`, `/commission-statement(s)`, `/commission-drill`, core `/employee-dashboard`, the notify Incentives email (§6i) |
@@ -4653,6 +4783,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| `GET /commcalc/calc-status/{period}` — now also serves `auto_calc` `{state, tone, sentence, due_at, last, enabled}`: what the landing hook did for the month (queued / calculated / refused / failed / busy / off / running). Read by the Rep Incentive page | `router.get_calc_status` → `auto_calc.view` + `auto_calc.load_config` | §6l |
+| Every landing endpoint's response now carries `auto_calc` (`queued` + periods / `off` / `not_a_calc_input` / …): `POST /upload/{file_type}`, `POST /upload-mapped`, `POST /onboarding/intake/commit`, `POST /sales/promote-feed`, `POST /ingest-guard/queue/{item_id}/decide`, the commission import wizard commit, `POST /manual-upload/ingest`, the POS sync; the DLAR sweep's status line says "auto-calculation queued for …" | `auto_calc.landed` (no new route) | §6l |
 | `GET /commcalc/commissions/{period}` · `/commissions-range` · `/commission-explain` · `/commission-statement` · `/commission-statements` · `/commission-drill` — `audience=employee|manager` (default manager, byte-identical); a self-scoped rep is ALWAYS employee and may ask only for their own rep (403 otherwise) | `router._payout_audience` → `payout_audience.resolve` + `employee_*` shapers | §6i |
 | `GET /commcalc/carrier-vs-pay` · `/discrepancy/{period}` · `/discrepancy/{period}/phantom` · `/discrepancy-appeals` · `/commission-device` — manager-only carrier reports: 403 for a self-scoped rep, each by its REGISTERED key | `router._refuse_employee_audience(authorization, org_id, key)` → `payout_audience.MANAGER_ONLY_SURFACES` | §6i / §6j |
 | `GET /commcalc/commission-statement?rep=&period_from=&period_to=&fmt=pdf\|csv\|json` — ONE employee over a month range (≤ 12): each month = that month's single statement, month totals + grand total. READ-ONLY; own-rep 403 for a rep | `router.commission_statement_document` → `_statement_doc` (per month) → `commission_statement.build_range` / `render_range_pdf` / `range_csv` | §6j |
@@ -4890,6 +5022,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Is this month's stored commission up to date with what landed?** ("Auto-calculated at … from the upload of …" / refused / off / queued) | `calc_status.auto_calc_requested_at` / `auto_calc_last` (mig 1030; pre-1030 `calc_notices` type `auto_calc`) | `auto_calc.view` via `GET /calc-status/{period}`; written only by the landing hook's runner, which runs `_run_calculation` (§6l) |
 | **One rep's recalculated commission row** (the Recalculate button) | `rep_commissions` (that rep's row only) | THE full path's row: `router._calc_inputs` + `_calc_rep_rows` + `_apply_new_engines`, shared with `_run_calculation`; lock `harness_recompute_rep_e2e.py` (== the full run's row, one rep, no ledger write) (§6k) |
 | **Undefined names in the backend** (a read name nothing binds — a NameError on first run) | `backend/app/**/*.py` | `harness_undefined_names_lock.py` (stdlib `symtable`), CI job *No undefined names under backend/app* (§6k) |
 | **Which menu entries a rep may not see** (manager-only payout reports) and **which payout view a viewer gets** | `storeops.roles.permissions.scope` + `app_config.rbac_enabled` | ONE registry `payout_audience.MANAGER_ONLY_SURFACES`, ONE self-scope answer `storeops.role_is_self_scoped`, served on `/me` (`viewer_payload`) → `rbac.payoutRefused` in `canSeeItem` / `canAccessPath`; audience by `payout_audience.resolve` (§6j) |
@@ -5032,6 +5165,15 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 ---
 
 ## 19. Known gaps & inert config
+
+§19.32 **NO PERIOD LOCK FOR A REP-COMMISSION MONTH (found building §6l, 2026-09-28).** There is no locked / finalized
+/ paid state for a `rep_commissions` month anywhere in the platform (searched the index, the migrations and the
+routers; the only draft→approved→paid lifecycle is Management Incentive's `mi_payout`, which the Run Calculation never
+writes). So the landing hook (§6l) recalculates a paid month when a late correction to it lands — exactly what a
+manual Run Calculation does today. When a period lock is built it belongs in `auto_calc.run_one` before the runner
+(recorded as its own outcome), and in `POST /calculate`. Also noted: an hourly-emailed feed recalculates the open
+month about hourly (debounced), as plan-mode tenants already were; a tenant that wants fewer runs raises its
+`auto_calc_debounce_minutes`.
 
 §19.23 **ePay AND VIP — ONE REAL BREAKAGE AND ONE FALSE ALARM (owner directive 2026-09-20: "fix the
 epay and vip connectors and also retire ftp for now").**

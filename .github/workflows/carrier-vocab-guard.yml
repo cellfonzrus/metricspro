@@ -187,6 +187,11 @@ on:
       - "backend/app/modules/commcalc/multimonth_config.py"
       - "backend/harness_payout_audience.py"
       - "backend/harness_recompute_rep_e2e.py"
+      - "backend/harness_auto_calc_on_landing.py"
+      - "backend/app/modules/commcalc/auto_calc.py"
+      - "backend/app/modules/commcalc/report_pull.py"
+      - "backend/app/modules/commcalc/epay_sweep.py"
+      - "backend/app/modules/pos/commcalc_feed.py"
       - "backend/harness_recompute_rep_parity.py"
       - "backend/app/modules/commcalc/installment_engine.py"
       - "backend/app/modules/commcalc/sale_installment_engine.py"
@@ -549,6 +554,9 @@ jobs:
       - name: Run the recompute-rep parity proof (one plan resolution, reached through the full path — index §6c / §6k)
         working-directory: backend
         run: python3 harness_recompute_rep_parity.py | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the auto-calc-on-landing proof (three real landers → ONE Run Calculation == the manual one; burst, late month, refusal recorded, config off, org-scoped, pre-1030 fallback — index §6l)
+        working-directory: backend
+        run: python3 harness_auto_calc_on_landing.py | grep -v -E '^(INFO|DEBUG|WARN) ' | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the plan-sources lock (one registry of plan-name sources; one resolver for preview and apply; one writer; the card seeds from the proposal; no vendor)
         working-directory: backend
         run: python3 harness_plan_sources_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

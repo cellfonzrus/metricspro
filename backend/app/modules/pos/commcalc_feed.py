@@ -378,7 +378,18 @@ def sync_period(org_id: str, mode: str, period=None):
 
     _ensure_registrations(org_id)
 
-    result = {"saved": len(payloads), "period": period_label, "mode": mode,
+    # DATA LANDED (index §6l) — the promotion wrote this tenant's pay basis (daily_sales_feed / raw_sales) for
+    # the period: the ONE post-landing hook queues its Run Calculation per the org's config. The OWN stream
+    # (pos_builtin_*) is not calculation input, so a secondary / unpromoted sync queues nothing.
+    auto_calc = None
+    if promoted:
+        from app.modules.commcalc import auto_calc as _auto_calc
+        auto_calc = _auto_calc.landed(sb(), org_id, table=promo_table, periods=[period_label],
+                                      source="pos_module",
+                                      filename=f"pos-builtin-{mode}-{period_label.replace(' ', '-')}",
+                                      rows=len(payloads))
+
+    result = {"saved": len(payloads), "period": period_label, "mode": mode, "auto_calc": auto_calc,
               "stream_table": own_table, "builtin_role": role, "promoted": promoted,
               "promoted_table": promo_table if promoted else None,
               "voided_rows": sum(1 for r in rows if r["voided"] == "Yes")}

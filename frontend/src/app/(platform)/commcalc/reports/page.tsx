@@ -15,6 +15,7 @@ import { monthBlocks, monthInput, RANGE_MAX_MONTHS, spanMonths, type RangeRow } 
 import { multimonthOffered, multimonthRows, useMultimonthStatus } from '../_lib/multimonth'
 import { servedAudience } from '../_lib/payoutAudience'
 import WhyZeroPanel from '../_lib/WhyZeroPanel'
+import AutoCalcNotice from '../_lib/AutoCalcNotice'
 import { GoogleRatingChips, GoogleRatingDetail, ratingsText, useGoogleRatings } from '../_lib/googleRatings'
 
 interface Rep {
@@ -514,6 +515,13 @@ export default function ReportsPage() {
           <SendReportButton exportPayload={buildPayload} title={exportTitle} compact />
         </div>
       </div>
+      {/* WHAT THE LANDING HOOK DID FOR THIS MONTH (index §6l): "Auto-calculated at … from the upload of …", or
+          "Auto-calculation refused: …" — the backend's one sentence from GET /calc-status → auto_calc. When a
+          queued run finishes, the rows below re-read on their own. */}
+      <AutoCalcNotice period={period} onSettled={() => {
+        api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
+          .then(setReps).catch(console.error)
+      }} />
       {tab === 'individual' && (
         <div style={{ fontSize: 12, color: 'var(--text2)', margin: '-10px 0 14px' }}>
           🔒 Exports on this tab contain <b>only {currentRep ? repLabel(currentRep) : 'the selected rep'}</b>.

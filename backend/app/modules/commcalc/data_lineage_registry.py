@@ -84,6 +84,25 @@ LIVE_VS_MONTHLY_PAIRS = {
     "pos_builtin": ("pos_builtin_daily_sales", "pos_builtin_sales"),
 }
 
+# ── WHAT THE COMMISSION RUN CALCULATION READS — the tables whose landing re-runs it (owner 2026-09-28) ─
+# Owner: "when sept is uploaded the system should calculate automatically without manual intervention".
+# ONE fact, ONE home: the period-keyed feed tables `router._run_calculation` reads — `_calc_inputs` (the sales
+# basis via `_fetch_sales_unified`, payment detail, MI, the two DLAR grains), `_apply_new_engines` (the
+# carrier statement) and `sale_installment_engine`'s paid-gate (the two MA feeds). A landing into one of these
+# for org X, period P is what `auto_calc.landed` turns into ONE standard Run Calculation of (X, P). Index §6l.
+# `harness_auto_calc_lock.py` fails the build if `_calc_inputs` starts reading a period-keyed table that is
+# not listed here (the calculation would then read data whose arrival re-runs nothing).
+COMMISSION_CALC_FEEDS = (
+    LIVE_SALES_FEED, MONTHLY_SALES,
+    "raw_payment_detail", "raw_mi", "raw_dlar_rep", "raw_dlar_store",
+    "carrier_commission",
+    "raw_ma_commission", MA_DAILY_TX,
+)
+# Sales tables that land BESIDE the pay basis but that the calculation does not read (index §30.13 / §32).
+# Their landers call the same hook, which answers `not_a_calc_input` — so the day the calculation starts
+# reading one of them, moving it into COMMISSION_CALC_FEEDS is the whole change; no lander is touched.
+SALES_SIBLING_TABLES = ("raw_sales_invoice", "raw_sales_invoice_tender", "raw_sales_product")
+
 # ── EXTERNAL-FEED INGEST TABLES, BY OWNING MODULE ─────────────────────────────────────────────────
 # Every table here must have an `ingest` edge in 925_data_lineage_seed.sql (the guard enforces it), so a
 # new feed cannot land undocumented. Extended one module at a time (owner 2026-08-30).

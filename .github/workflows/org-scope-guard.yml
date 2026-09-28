@@ -20,6 +20,11 @@ on:
       # the undefined-name lock (index §6k) judges EVERY module under backend/app
       - "backend/app/**/*.py"
       - "backend/harness_undefined_names_lock.py"
+      # the auto-calc-on-landing lock (index §6l) — every lander under backend/app, the index, the page, the CI
+      - "backend/harness_auto_calc_lock.py"
+      - "docs/SYSTEM_DATA_FLOW_INDEX.md"
+      - "database/migrations/1030_auto_calc_on_landing.sql"
+      - "frontend/src/app/(platform)/commcalc/**"
   push:
     branches: [main]
     paths:
@@ -68,3 +73,19 @@ jobs:
       - name: Run the undefined-name lock
         working-directory: backend
         run: python3 harness_undefined_names_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  auto-calc-lock:
+    # AUTO-CALCULATION ON LANDING (owner 2026-09-28, index §6l): "data landed for org X, period P" has ONE home
+    # (commcalc/auto_calc.py). Stdlib + ast, no pip install: every function under backend/app that writes a table
+    # the Run Calculation reads must call auto_calc.landed(...) or be excused with a reason; nothing but the Run
+    # Calculation button and the hook's runner may start _run_calculation; the runner keeps every guard armed;
+    # the config has one reader; the registry covers what the calculation reads. Planted controls inside.
+    name: One post-landing hook, one calculation trigger
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the auto-calc-on-landing lock
+        working-directory: backend
+        run: python3 harness_auto_calc_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
