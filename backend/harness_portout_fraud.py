@@ -23,6 +23,8 @@ Sections:
 """
 import sys
 import os
+import io
+import re
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -308,6 +310,35 @@ check("the basis note states the accessory column is not a trigger",
 check("the basis note refuses to read as a verdict about a person",
       "accuses no person" in b["not_a_verdict"])
 check("the basis note names the derivation it reuses", "line_feed_state" in b["reuses"])
+
+# ── THE RECIPIENT RESOLVER READS THE SCHEMA THE TABLES ARE ACTUALLY IN ───────────────────────────
+# THE DEFECT (owner found it 2026-09-28, before the daily send was ever switched on). The first draft
+# of `notify.router._role_scope_recipients` read `roles` and `app_users` through `sb()`, which is
+# `.schema("notify")`. Those tables live in `storeops` (mig 003 / 015 — the PostgREST-EXPOSED schema;
+# `core` deliberately is not). So every call raised, the blanket `except` swallowed it, and the
+# function returned NO RECIPIENTS with no error. Applying the daily send would have created a job
+# that mailed nobody, for ever, silently, on the one report whose whole point is urgency.
+#
+# A source check, not a behavioural one, on purpose: reproducing it behaviourally needs a live
+# PostgREST that knows which schemas exist, which is the one thing a DB-free harness cannot have —
+# and that is exactly why CI could not catch it. What IS checkable without a database is that the
+# resolver names the right schema and does not go back through the notify-scoped helper.
+_NR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                   "app", "modules", "notify", "router.py")
+_nr_src = io.open(_NR, encoding="utf-8").read() if os.path.isfile(_NR) else ""
+_fn = ""
+_m = re.search(r"def _role_scope_recipients\(.*?(?=\ndef |\Z)", _nr_src, re.S)
+if _m:
+    _fn = _m.group(0)
+check("the recipient resolver exists", bool(_fn))
+check("it reads roles/app_users from the storeops schema", 'schema("storeops")' in _fn)
+check("it does NOT read them through sb(), which is the notify schema  <- the defect",
+      'sb().table("roles")' not in _fn and 'sb().table("app_users")' not in _fn)
+check("a resolution failure is LOGGED, never swallowed in silence",
+      "_log.exception(" in _fn or "_log.warning(" in _fn)
+check("resolving to nobody is itself reported", "resolves to nobody" in _fn)
+check("it still never raises (an urgent report with explicit recipients must not be silenced)",
+      "except Exception:" in _fn and "return [], []" in _fn)
 
 print("\n" + "=" * 98)
 print("RESULT: %d passed, %d failed" % (len(PASS), len(FAIL)))

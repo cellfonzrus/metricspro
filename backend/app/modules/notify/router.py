@@ -14,6 +14,9 @@ from fastapi import APIRouter, HTTPException, Header, Response
 from starlette.concurrency import run_in_threadpool
 
 from app.core.database import get_supabase
+import logging
+
+_log = logging.getLogger(__name__)
 from app.core.config import settings
 from app.core.schemas import LaxModel
 from app.core.run_secret import verify_notify_secret
@@ -377,21 +380,41 @@ def _role_scope_recipients(org_id, scopes) -> tuple[list, list]:
     want = {str(x).strip().lower() for x in (scopes or []) if str(x).strip()}
     if not want:
         return [], []
+    # THE SCHEMA IS `storeops`, NOT `notify` (defect found 2026-09-28, before the daily send was ever
+    # switched on). `sb()` returns .schema("notify"), and the first draft of this function used it for
+    # BOTH reads — but `roles` and `app_users` live in `storeops` (migration 003 / 015: that schema is
+    # the PostgREST-exposed one; `core` is deliberately not exposed). `notify.roles` does not exist, so
+    # every call raised, the blanket `except` below swallowed it, and the function returned NO
+    # RECIPIENTS with no error at all. Applying the daily send would have created a job that mailed
+    # nobody, for ever, silently — on a report whose whole purpose is to be urgent. 80 other call sites
+    # in this backend already read `schema("storeops").table("app_users")`; this one was the outlier.
+    _db = get_supabase().schema("storeops")
     try:
-        roles = (sb().table("roles").select("name,permissions").eq("org_id", org_id)
+        roles = (_db.table("roles").select("name,permissions").eq("org_id", org_id)
                  .execute().data) or []
         names = {(r.get("name") or "") for r in roles
                  if str(((r.get("permissions") or {}).get("scope") or "")).strip().lower() in want}
         if not names:
+            _log.warning("notify: no role in org %s carries scope %s — the report resolves to nobody",
+                        org_id, sorted(want))
             return [], []
-        users = (sb().table("app_users").select("email,phone,role").eq("org_id", org_id)
+        users = (_db.table("app_users").select("email,phone,role").eq("org_id", org_id)
                  .execute().data) or []
         em = sorted({(u.get("email") or "").strip() for u in users
                      if (u.get("role") or "") in names and (u.get("email") or "").strip()})
         ph = sorted({(u.get("phone") or "").strip() for u in users
                      if (u.get("role") or "") in names and (u.get("phone") or "").strip()})
+        if not em and not ph:
+            _log.warning("notify: roles %s matched scope %s in org %s but no user holds one with an "
+                        "email or phone — the report resolves to nobody",
+                        sorted(names), sorted(want), org_id)
         return em, ph
     except Exception:
+        # Still never raises — an urgent report with explicit recipients must not be silenced by a
+        # resolution failure. But it is LOGGED now: swallowing this silently is exactly what let the
+        # wrong schema survive code review and CI.
+        _log.exception("notify: role-scope recipient resolution failed for org %s (scopes %s); "
+                      "falling back to the explicitly configured recipients only", org_id, sorted(want))
         return [], []
 
 
