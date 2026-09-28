@@ -155,6 +155,18 @@ const W = prod.routes.rewrites
 check('/api/v1/core/me -> backend (NEXT_PUBLIC_API_URL fallback)', rewriteFor(W, '/api/v1/core/me?org_id=1') === `${RAILWAY}/api/v1/core/me`, rewriteFor(W, '/api/v1/core/me'))
 check('/api/v1/commcalc/calculate/July%202026 keeps its path', rewriteFor(W, '/api/v1/commcalc/calculate/July%202026') === `${RAILWAY}/api/v1/commcalc/calculate/July%202026`, rewriteFor(W, '/api/v1/commcalc/calculate/July%202026'))
 check('/health -> backend /health', rewriteFor(W, '/health') === `${RAILWAY}/health`, rewriteFor(W, '/health'))
+// The live edge proxy (not Next's matcher, which drops an empty segment) forwarded a zero-segment `:path*`
+// as `/health/` — a non-public backend route (401), so the portal probe read "server down" (2026-09-28).
+// So the bare prefix must be its OWN exact rule, and no rule may carry a zero-or-more parameter.
+const userRw = [...W.beforeFiles, ...W.afterFiles, ...W.fallback].filter(x => !x.internal)
+check('the bare /health is an EXACT rule to backend /health (no parameter to expand)',
+      userRw.some(x => x.source === '/health' && x.destination === `${RAILWAY}/health`), userRw.map(x => x.source))
+check('the bare /api/v1 is an EXACT rule too', userRw.some(x => x.source === '/api/v1' && x.destination === `${RAILWAY}/api/v1`))
+check('no rewrite uses a zero-or-more parameter (`:x*`) — an empty match becomes a trailing slash at the edge',
+      userRw.every(x => !/:[A-Za-z_]+\*/.test(x.source) && !/:[A-Za-z_]+\*/.test(x.destination)), userRw)
+check('/health/x still reaches backend /health/x', rewriteFor(W, '/health/db') === `${RAILWAY}/health/db`, rewriteFor(W, '/health/db'))
+check('control: the old `/:path*` form WOULD fail the no-zero-or-more rule',
+      [{ source: '/health/:path*', destination: `${RAILWAY}/health/:path*` }].every(x => !/:[A-Za-z_]+\*/.test(x.source)) === false)
 check('a page path (/login) is not proxied', rewriteFor(W, '/login') === null)
 check('/api/v2/x is not proxied (only the paths the backend serves)', rewriteFor(W, '/api/v2/x') === null)
 const own = await loadConfig({ BACKEND_ORIGIN: 'https://backend.internal.example', NEXT_PUBLIC_API_URL: RAILWAY })
