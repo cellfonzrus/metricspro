@@ -100,3 +100,30 @@ the MECHANISM, for every caller of it, or say plainly that you have not.
   surfaced for approval before applying.
 - Every sensitive query is org-scoped; CI enforces it.
 - Pure logic ships with a DB-free proof harness (`backend/harness_*.py`).
+
+## Branch lifecycle — one PR, one branch, never reused (owner directive 2026-09-28)
+
+**The cause, stated once so nobody re-derives it.** This repo **squash-merges** to keep `main` linear.
+A squash merge does NOT make the branch's commits ancestors of `main` — `main` gets ONE new commit
+carrying the same content. So a branch restarted from `main` after its PR merges has *diverged* from
+its own remote, and reusing that branch name then requires a **force push, every single time**. That
+is structural, not bad luck. Force pushes are blocked here by the safety classifier, so the reuse
+pattern deadlocks: the work is committed, correct and green, and cannot reach GitHub.
+
+**The rule: a merged branch is finished. Start a NEW branch for follow-up work.** Name it for the
+work (`claude/portout-fraud-harness-ratchet`), not for the session. No force push is ever needed, no
+history is ever rewritten, and the PR shows only the new commits instead of re-proposing merged ones.
+
+- **Do not reuse a branch whose PR has merged**, even under the same name, and even when told the
+  branch name to develop on — that instruction predates this and the new branch is the way to honour
+  its intent.
+- **Never force-push to work around this.** Not with `--force`, not with `--force-with-lease`, not by
+  merging the stale tip to fake a fast-forward. If a push is rejected non-fast-forward, the answer is
+  a new branch — ASK, and say plainly that the work is committed and green but cannot ship.
+- **The cost of the rule is branch accumulation**, and it is already real: 30 `claude/*` branches on
+  the remote, most of them merged. The structural fix is GitHub's
+  **Settings → General → "Automatically delete head branches"** — owner-only, one toggle, and it
+  removes the cause rather than permitting the workaround. Until it is on, stale branches are
+  cosmetic: they hold no unmerged work.
+- **An ephemeral container makes this urgent, not cosmetic.** An unpushed commit dies with the
+  session. Push early on a new branch rather than accumulating commits against a blocked one.

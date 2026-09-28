@@ -53,6 +53,7 @@ Primary code homes:
 | 17 | **Cross-reference: by ENDPOINT** | endpoint → handler/section. |
 | 18 | **Cross-reference: by METRIC/KPI** | metric → source table → reader function. |
 | 19.31 | **One activation count · Feed vs Transactions** | "How many new activations, and says who? What does the carrier's report claim against what the store's transactions say, and what accounts for every difference — a counting definition, a stale feed slice, or nothing?" |
+| 19.32 | **Daily port-out fraud report** | "Which port-in activations ported out again before they paid for themselves, how much was sold alongside them, and — said in the same breath — how many could we not decide about at all?" |
 | 19 | **Known gaps & inert config** | stored-but-unwired, snapshot-only, surfaces that can disagree. |
 | 20 | **Super-admin control box** | "Is the platform working? What is red right now, what is NOT being watched at all, did the daily check actually run, and how do I hand this failure to Claude Code safely?" |
 | 21 | **Billing — usage & pricing** | "What did this tenant use, what did it cost us, what do we bill them, which modules are still unpriced, and what does their itemized statement say?" |
@@ -4427,7 +4428,10 @@ be a seaprate box in the p&l under wages"
     feed claims beside what the store's transactions say, every difference attributed; tile appended by
     mig `1029` through the same `ui_label_override` `scope='tiles'` mechanism), **Cash at Hand** = a
     SECOND PLACEMENT of the existing `/closing/store-cash-on-hand` report (same endpoint/component, no
-    forked derivation), and **Current Monetary Liabilities** (NEW report, §4).
+    forked derivation), **Current Monetary Liabilities** (NEW report, §4), and **Daily Port-Out
+    Fraud** (NEW report, §19.32 — port-in activations that ported out inside the configured window,
+    with the accessory sold alongside each one and, in the same headline, how many port-ins the
+    report could NOT decide about; sent daily to market managers and above).
   - **Flags & Compliance** (`/compliance` — a curated page, the /storeops hub precedent): every
     flag/exception/compliance queue under one roof. StatTile COUNTS from
     `GET /commcalc/compliance-summary` — ONE thin count pass over the existing queues' own
@@ -4760,7 +4764,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.merchant_settlement_day` | `merchant_portal_sweep.store_settlement` (daily portal scrape) | `closing/external_credit_recon` (declared-vs-settled card tally, §12a), resolved via `report_pull_map.merchant_settlement` |
 | `commcalc.merchant_settlement_batch` | `merchant_portal_sweep.store_batches` | cash/deposit recon (§12); NEVER summed into the closing card tally (different grain) |
 | `commcalc.raw_payment_detail` | epay sweep, upload | `calc_gp_report`, reimbursement categorization, **Processor Daily Debits & Credits** (`processor_ledger.assemble` — `amount` sign = credit/debit to the dealer, §15) |
-| `commcalc.raw_mi` | upload / MI sweep | carrier residual gate `installment_engine.compute_installments`, sale-installment gate, MI/ATU; the `subscribers` entry of the plan-source registry `core/plan_sources.HOUSE_SOURCES` (`customer_plan` + `base_mrc`, newest period, ON by default) → `onboarding._observed_plans(…, src)` (§23n.1); `raw_sales` (`sales_lines`) and `commission_ledger` (`statement_lines`) are the registry's two line-level entries, OFF until the org confirms its words |
+| `commcalc.raw_mi` | upload / MI sweep | carrier residual gate `installment_engine.compute_installments`, sale-installment gate, MI/ATU; **the PORT-OUT side of the daily fraud report** (`subscriber_status` `'PORTED-OUT'`, dated from `mi_deactivation_date` → `residual_transfer_out_date` → the monthly snapshot transition — §19.32), read through the retention report's own bounded loader `marketing.router._es_mi_snapshots`, never a second read path; the `subscribers` entry of the plan-source registry `core/plan_sources.HOUSE_SOURCES` (`customer_plan` + `base_mrc`, newest period, ON by default) → `onboarding._observed_plans(…, src)` (§23n.1); `raw_sales` (`sales_lines`) and `commission_ledger` (`statement_lines`) are the registry's two line-level entries, OFF until the org confirms its words |
 | `commcalc.raw_dlar_store` | `dlar_sweep.run_dlar_sweep:209` (replace), upload | `get_dlar_store_kpis` `10279`, `_cr_resolve_kpi_metrics` `25656`, MI tmr3 `28884` |
 | `commcalc.raw_dlar_rep` | `dlar_sweep` (replace, stamping `as_of_date` — mig `1026`, §19.28; the report SET is `dlar_sweep_config.reports`, mig `1029`, §19.31), upload | rep KPI, comp trend `15238`; the PAY ENGINE's tier via `kpi_failing.rep_kpi_values` (`REP_DLAR_COLUMNS`, and `REP_DERIVED_RATES` for the Ready App numerator — §19.31); `router._dlar_slice_vintage` for the feed vintage; the FEED side of `GET /dlar-vs-platform/{period}` |
 | `commcalc.raw_catalog` | upload `/product-mrc/import` region, catalog | GP, device COGS, installment MRC |
@@ -4835,7 +4839,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.management_incentive_*` | `/management-incentive/plans` `28534`, `/compute` `28613` | MI engine, payouts, resolve |
 | `commcalc.discrepancy_results` | Boost engine `discrepancy_engine.run_discrepancy` (`source='boost'`/NULL) + MA recon `ma_recon.run_ma_discrepancy` (`source='ma'`, `comp_type='MA_ACTIVATION'`) — each delete-then-inserts ONLY its own `(org, period, source)` slice; canonical DDL + attribution columns (`rule_id/rule_key/rule_reason/evidence/source/order_number`) in mig `312` (table pre-dates migrations, console-created); APPEAL columns (`appeal_status/appeal_note/appealed_by/appealed_at`) mig `947` — written ONLY by `PATCH /discrepancy-appeals/{row_id}` (pure state machine `discrepancy_appeals.py`), never by the engines | `GET /discrepancy/{period}` `router.py:19099` (selects `*`, optional `source` filter), Pay Discrepancy page; `GET /discrepancy-appeals` (period-range + filters) → Commission Discrepancy hub page (§15) |
 | `commcalc.ma_payment_rule` | `/ma-payment-rules` POST/PATCH/DELETE `router.py:19214-19270` (upsert by `org_id,rule_key`; mig `312`) | `ma_recon.load_rules` → `match_rules` (first match by ascending priority; case/trim-insensitive; `effective_from/to` windows; bad regex skipped) |
-| `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`) | `PUT /accessory-config` (Sales Report → Classification settings; since 2026-09-21 also `activation_details_rules` — the line_class keys `fields` / `tokens` / `exact` normalised through `line_class.merge_into_raw`, every other key passed through — and the intake's `PUT /onboarding/intake/line-class` writes THROUGH it) | `_accessory_config(_uncached)` (ONE whole-row read since 2026-09-22 — §4b.1 — instead of nine single-column reads of the same row; accessory/billpay/blank-ct classification for `_sales_cell_agg`; **`line_rules`** = `line_class.resolve_rules(activation_details_rules, contract_type_map, tenant exec 'activation' row)` — THE activation-type rules every classifier dereferences, §3 / §15); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, since 2026-09-22 dereferencing the ONE cached `_accessory_config` read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, its own whole-row `read_row`, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`); **`setup_fee_keywords` (mig `217`) is THE set-up/activation-fee recognition for BOTH the reports and the PAY path** (`_is_setup_fee` → `setup_fee_rev`; `setup_fee_pay.load_keywords`, §6a) — editing it moves Executive MTD, the accessory-TARGET basis AND somebody's commission in the same edit |
+| `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`, **`1030` `portout_fraud_rules`** — the daily fraud report's window / accessory floor / watched classes / second-payment boundary, resolved by `portout_fraud.resolve_rules` over house defaults that ARE the owner's numbers, so NULL changes nothing, §19.32) | `PUT /accessory-config` (Sales Report → Classification settings; since 2026-09-21 also `activation_details_rules` — the line_class keys `fields` / `tokens` / `exact` normalised through `line_class.merge_into_raw`, every other key passed through — and the intake's `PUT /onboarding/intake/line-class` writes THROUGH it) | `_accessory_config(_uncached)` (ONE whole-row read since 2026-09-22 — §4b.1 — instead of nine single-column reads of the same row; accessory/billpay/blank-ct classification for `_sales_cell_agg`; **`line_rules`** = `line_class.resolve_rules(activation_details_rules, contract_type_map, tenant exec 'activation' row)` — THE activation-type rules every classifier dereferences, §3 / §15); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, since 2026-09-22 dereferencing the ONE cached `_accessory_config` read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, its own whole-row `read_row`, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`); **`setup_fee_keywords` (mig `217`) is THE set-up/activation-fee recognition for BOTH the reports and the PAY path** (`_is_setup_fee` → `setup_fee_rev`; `setup_fee_pay.load_keywords`, §6a) — editing it moves Executive MTD, the accessory-TARGET basis AND somebody's commission in the same edit |
 | `commcalc.report_pull_map` (mig `207` — report_key → `target_table` + `column_map` + `param_spec`, org row over the house row) | `POST /commcalc/report-mappings` (`/commcalc/report-mappings`); mig `955` seeds `merchant_settlement` / `merchant_funding` | `report_pull` portal ingest; **card-settlement recon feed resolution** (`closing/router._settlement_feed_spec` → `external_credit_recon.SETTLEMENT_REPORT_KEY`, §12 — this is HOW the tally finds the scraped table without hardcoding it) |
 | `commcalc.metric_source_of_truth` (per-metric basis-of-truth config, mig `923`; columns added by `944` `processor_order_types`/`processor_product_tokens` — the bill-payment row filter for the daily-TX processor feed) | `PUT /metric-source-config` | `_metric_source` (consumed by Exec MTD activation override, `/metric-recon`, `/billpay-coverage`, `_pos_billpay_for_days`/`_billpay_processor_by_store(_day)` — §12 3-way Leg C; NULL columns = `metric_recon` house defaults) |
 | `commcalc.exec_metric_config` (per-org Exec-MTD metric DEFINITIONS, mig `204`; **`carrier` preset column mig `962`, `applicable` flag mig `963`**; seed fn `seed_exec_metric_config`) | `GET/PUT /exec-metric-config` `router.py` (upsert by `org_id,bucket`); 2026-09-02: LuxeLink `bill_payment` rules gained `product_desc_contains:["wallet funding"]`; **mig `962`** corrects the HOUSE `bill_payment` rules + seeds the boost carrier PRESET | `_exec_metric_config` → **`exec_metric_defs.resolve`** (tenant row > house carrier preset > built-in default) → `_sales_cell_agg` exec metrics via `exec_metric_defs.line_match` (since 2026-09-21 also `category_contains` / `department_contains`, additive — the intake's 2.5a step writes them through `PUT /exec-metric-config` for a bucket that matched nothing; the `activation` bucket's byod/upgrade/port tokens are RETIRED as a home — read only as a legacy layer by `line_class.resolve_rules` for a tenant-authored row; the Metric-definitions panel no longer offers it) |
@@ -5100,6 +5104,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
 | `GET /billpay-coverage/{period}` (per store/day: bill-pay ≤ cash+card, exceptions surfaced) | `commcalc/router.py` (`billpay_coverage` → `metric_recon.reconcile_billpay_coverage`) | §4 bill-pay carve-out / §15 |
 | `GET /dlar-vs-platform/{period}` (carrier feed vs the store's transactions, per metric, attributed; composes Executive MTD's cells + `raw_dlar_*` as landed + `dlar_sweep.slice_vintage`; pure `dlar_vs_platform.py`; READ-ONLY, `books_to == []`) | `commcalc/router.py` (`get_dlar_vs_platform`, beside `/kpi-failing`; helper `_platform_side`) | §19.31 — the difference report |
+| `GET /portout-fraud` (THE DAILY FRAUD REPORT: port-in activations that ported OUT again inside the configured window, with the accessory sold alongside each one; composes `line_class.activation_class` (is it a port-in), `event_sales.line_feed_state` (did it stay — the retention report's own derivation), `_is_accessory`/`_is_setup_fee` (the Sales Report's own accessory dollar) and the retention report's own bounded `raw_mi` loader; pure `portout_fraud.py`; READ-ONLY, `books_to == []`; the headline carries `undecidable` + `coverage_pct` beside `flagged`) | `commcalc/router.py` (`get_portout_fraud`, beside `/dlar-vs-platform`; rules via `_portout_rules`) | §19.32 — the daily fraud report |
 | `GET /kpi-failing/{period}` (failing-KPI overview: /coaching target resolution + in-process `/dlar-store` store rows + `rep_commissions.kpi_values`; pure `kpi_failing.py`) | `commcalc/router.py` (`get_kpi_failing`, beside `/dlar-store`) | §10 failing-KPI report |
 | `GET /compliance-summary` (per-queue open counts over the existing flag/exception surfaces; failed probe = null, never 0; pure `compliance_summary.py`) | `commcalc/router.py` (`get_compliance_summary`, beside `/kpi-failing`) | §14 mig 948 Flags & Compliance |
 | `GET /account/liabilities-due` (owed-to-distributor + due-this-week payments/payroll/payroll-tax/rents/insurance per store; mig-434 + mig-946 gates fail closed; pure `account/liabilities_due.py`; distributor side = the SAME as-of-parameterized derivation the BS books, mig `954`) | `account/router.py` (`liabilities_due_endpoint` → `_liabilities_due_impl`) | §4 Current Monetary Liabilities |
@@ -5192,6 +5197,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | Boost App % / Carrier App (`boostapp`) | **DERIVED by us, and the denominator is the OWNER'S RULING (2026-09-27, §19.31):** `boost_ready_bounty` over the store's own NEW ACTIVATIONS (`line_class.new_activation_units` — Executive MTD's Total Activation less Upgrade less swap), resolved at SCORE time through `kpi_failing.REP_DERIVED_RATES` + `kpi_failing.derived_rate`. The LEGACY value is `raw_dlar_rep.boost_app_pct`, which `dlar_sweep.derived_rate(boost_ready_bounty, ga_prepaid)` wrote at INGEST; it is still read for historical rows and is what a tenant on `payout_config.kpi_boostapp_basis = 'feed_prepaid'` (the default) gets. **`None` when there is no denominator, never a measured 0** (§19.28) | `kpi_failing.rep_kpi_values(..., basis=…)` → `kpi_failing.score`; the basis comes from `calculator.calc_rep_commissions`; no store-grain column exists |
 | NEW ACTIVATIONS (how many — any surface) | DERIVED from the classified sale lines: `line_class.new_activation_units` over `activation_units`, per the org's `accessory_config.activation_details_rules.new_activation` (`classes` + `exclusions`; house = the owner's ruling: activation + port + byod, less swap). **ONE home** (§19.31) | the shared cell field `act_new_activation` (`router._apply_activation_basis`) → Executive MTD's `new_activation` column, the Boost pay engine's Ready App denominator, `GET /dlar-vs-platform/{period}` |
 | WHY A UNIT DOES NOT COUNT (swap / ineligible) | `line_class.exclusion_class(row, rules)` over the org's `exclusions` words, on the SAME fields the class predicate reads. **ONE home** — it replaced bare substring tests in `_sales_cell_agg`, `ma_recon._is_activation_line` and the chargeback detector (§19.31) | `router._sales_cell_agg` (`_swap`), `ma_recon._is_activation_line`, `_run_calculation`'s chargeback detector, `line_class.new_activation_units` |
+| PORT-IN THAT PORTED OUT AGAIN (the fraud signal) | OUR transaction supplies the activation date (`raw_sales.trans_date` on a line whose `line_class.activation_class == 'port'`); the CARRIER supplies the port-out (`raw_mi.subscriber_status == 'PORTED-OUT'`, dated by `mi_deactivation_date` → `residual_transfer_out_date` → the monthly snapshot transition). FOUR states — `flagged` / `cleared` / `retained` / `undecidable`-with-a-reason; a port-out we cannot DATE is undecidable, and a port-out date BEFORE our sale is a recycled number, never the report's worst case | `portout_fraud.evaluate` / `.report` via `GET /portout-fraud` (§19.32); the lookup is `event_sales.line_feed_state`, shared with §23s.5 |
+| ACCESSORY SOLD WITH AN ACTIVATION (per invoice) | `raw_sales.ext_price` over the lines of that invoice the org's OWN accessory definition accepts — `router._is_accessory` / `_is_setup_fee` over `_accessory_config`, the SAME gate that produces the Sales Report's `accessory_rev`, so it is the same dollar. An invoice that was not measured reads UNKNOWN, never $0.00 (the most accusing value the column has) | `router.get_portout_fraud` → `portout_fraud.attribution` against the per-org `accessory_floor` (§19.32) |
 | FEED CLAIM vs STORE TRANSACTIONS (per metric) | `raw_dlar_rep` / `raw_dlar_store` AS LANDED vs the Executive-MTD cells, with the cause of each difference (`counting_definition` exact / `feed_vintage` undecidable / `grain` / `unattributed`) | `dlar_vs_platform.compare/entity_row/summarize` via `GET /dlar-vs-platform/{period}` (§19.31) |
 | A KPI's GRAIN (any metric) | DERIVED from `kpi_failing.REP_DLAR_COLUMNS` / `STORE_KPI_COLUMNS` — never stored | `kpi_failing.grain_of(metric_key)` → `'rep'` \| `'store'` \| `None`; stamped on `GET /carrier-kpi-metrics` (+ `rep_columns`) and on `GET /kpi-failing/{period}` defs. §19.28 (2b): familyplan / tmr3 / aal are STORE-grain only — NULL in all 516 `raw_dlar_rep` rows |
 | DOES A COLUMN STILL CARRY VALUES (the completeness axis) | the rows a sweep just normalised, against `data_lineage_registry.REQUIRED_CONTENT_COLUMNS` | `data_lineage_registry.content_arrival(rows, columns)` (pure); `dlar_sweep.run_dlar_sweep` → `status_sentence`. §19.18's two questions (arriving / content moving) both read GREEN through the July 2026 break |
@@ -5926,6 +5933,33 @@ harness STUBS into `sys.modules` itself (`harness_tenant_vertical.py` does exact
 no-deps job). Proven both ways: replaying the bad step into the workflow text reproduces the violation and names
 `app/modules/closing/router.py imports fastapi`; 28 checks, 9 of them negative controls.
 
+§19.25c **A GUARD WENT STALE AND NOTHING NOTICED, BECAUSE NOTHING RAN IT (owner-directed, 2026-09-27).**
+`harness_activation_bucketing.py` check **F3** had been RED on `main` for ~3 weeks. It grepped the SOURCE TEXT of
+`router._activation_details_rules` for the literal `.eq("org_id", org_id)`. PR #279 did the right thing and removed
+that query — a second read of the same column was the §4b.1 "ONE READ" duplicate — so the loader now delegates to
+`_accessory_config(client, org_id)` and the scoping lives, shared, in `_accessory_config_uncached` as
+`lambda q: q.eq("org_id", org_id)`. **Org-scoping never weakened; it moved and became shared.** The refactor that
+improved the code broke the guard: the §24 pattern of a guard that has become a proxy for the thing it guards.
+
+Fixed the way §19.28 fixed `harness_team_snapshot_perf` — **re-expressed, never loosened.** F3 now FOLLOWS THE
+DELEGATION (`_org_scoped_through`, a bounded walk over the router functions the loader calls) and asserts the FACT:
+the rules returned came from a read filtered on this org, wherever in the chain that filter now lives. F3b names
+where it lives so the guard stays honest about the indirection. **Three armed negative controls**, without which
+"follow the delegation" would be indistinguishable from "stop checking": the same shape with the filter removed goes
+RED, a filter one delegation deeper is still found, and a loader that calls nothing and scopes nothing goes RED. 53
+checks, was 49.
+
+**THE SERIOUS HALF WAS THE SECOND FACT, and it is much larger than one file.** Measured: **400 harnesses on disk, 65
+run by a workflow, 335 run by nothing.** A harness no workflow runs is not a gate, it is a file — the §19.25 class in
+its third direction, beside *a failing harness must fail CI* (§19.25) and *a harness CI runs must be able to import in
+its job* (§19.25b). All three now live in `backend/harness_ci_pipefail_lock.py`. The third is a **RATCHET**, not a hard
+gate, because wiring 335 harnesses into CI in one change would multiply the build and is the owner's call, not a
+lock's: `backend/harness_unrun_pending.txt` is the debt list, a NEW harness must be run by some workflow, the list may
+only SHRINK, and a name that becomes run (or stops existing) must be de-registered or the build fails — a debt list
+that does not shrink when the debt is paid stops measuring anything. Same shape as `frontend/table_sort_pending.txt`.
+Pinned at **334**: this change wires `harness_activation_bucketing.py` into `carrier-vocab-guard.yml` (stdlib job —
+its placement checked by the §19.25b rule), so the list shrinks by one on the very change that introduces it.
+
 §19.26 **A MONEY GATE CHOSE ITS COLUMN BY RESEMBLANCE — the qualifier read TWP+ while the rule is TWP ALL
 (owner defect 2026-09-25; fixed as a class).** `paramount_kpi` matched the SUBSTRING `"current twp"` against the
 door report's header row and took the FIRST column containing it. The real report carries TWO — `Current TWP+%`
@@ -6432,12 +6466,32 @@ The switch is **per period** (`payout_config.kpi_boostapp_basis`, mig `1029`), s
 September forward leaves every closed month exactly as paid and −$658.30 never happens. **HOUSE PAY IS
 BYTE-IDENTICAL until that column is set** (`harness_ready_app_denominator.py` §F7 is the pin).
 
-**(6) ⚠ OPEN — THE OWNER'S, NOT GUESSED.** (i) **Ineligible port-in**: in or out? The carrier's own
-August figure for the reference rep reconciles ONLY with it out, and excluding it is what makes the
-count identical under both count units — but across 296 cells it is a near-tie (53.0% vs 52.0% exact).
-Config statement in mig `1029` (c1). (ii) **Which period the new basis starts from** — mig `1029`
-Block 2 (a) vs (b), the −$658.30 turning on it. (iii) Port-in and new BYOD are answered by (4) and need
-nothing, recorded so the questions close with evidence.
+**(6) THE BOUNDARY IS CLOSED; ONE QUESTION REMAINS.**
+
+**(i) INELIGIBLE PORT-IN — RULED IN (owner, 2026-09-28, verbatim: *"port in is activation"*).** An
+ineligible port-in **counts** in the new-activation denominator. This was the last open boundary of
+this section and it is now decided. **NOTHING SHIPPED FOR IT**, because the ruling IS the shipped
+default: `line_class.HOUSE_NEW_ACTIVATION` excludes only `swap`, so no code and no config row follows.
+What DID change is that mig `1029`'s `(c1)` — the `UPDATE … '{new_activation,exclusions}' →
+'["swap","ineligible"]'` statement — has been **DELETED from the migration**. It is a statement the
+owner has ruled against, and a ruled-out option left sitting in a file as a copy-pasteable UPDATE is
+how it gets applied by a later reader.
+
+**THE CONSEQUENCE, STATED AND NOT BURIED.** The ruling does not make the reference rep reconcile. Store
+11636, August 2026 now reads **14** (`count_unit='transaction'`) / **15** (`'event'`) against
+ElevateGo's own finalised **13** — so **a residual of 1–2 remains on that store**, and the §19.28 case
+that opened this section is explained by the ruling rather than closed by it. Two further costs are
+accepted with it: the count is **no longer basis-stable across the §6f `count_unit` flip** on that cell
+(14 vs 15, where excluding ineligible gave 13 vs 13), and `kpi_failing.derived_rate(8, 14)` = 57.1%
+rather than the carrier's published 61.54%. **What defends the ruling is the population, not that rep**:
+across the 296 comparable (rep, store, period) cells it is the better fit — **53.0% exact as ruled
+against 52.0% with ineligible port-ins excluded**, mean error +1.16 against +1.14. A single store's
+residual is the price of the definition that fits 296 cells best, and the difference report
+(`GET /dlar-vs-platform/{period}`) is where that residual is now visible per rep rather than argued.
+
+**(ii) ⚠ STILL OPEN — THE OWNER'S, NOT GUESSED: which period the new basis starts from** — mig `1029`
+Block 2 (a) vs (b), the −$658.30 turning on it. **(iii)** Port-in and new BYOD are answered by (4) and
+need nothing, recorded so the questions close with evidence.
 
 **(7) THE SWEEP'S REPORT SET IS CONFIG (owner: *"nothing is hard coded, option is platform wide"*).**
 `dlar_sweep.PORTAL_REPORTS` declares each report once (path, target table, normalizer, label) and
@@ -6553,6 +6607,152 @@ second `len(prem) + len(byod)`, is RED. Nine new negative controls, each proving
 plus the existing "the unmodified tree is GREEN" control. Proof of the rules:
 `harness_ready_app_denominator.py` (83 checks) and `harness_dlar_vs_platform.py` (48 checks), both
 stdlib and DB-free, both in `carrier-vocab-guard.yml`. 27 checks on the lock.
+
+---
+
+§19.32 **THE DAILY PORT-OUT FRAUD REPORT — a port-in that leaves before it has paid for itself
+(owner directive 2026-09-28; code shipped, the daily send held for approval).**
+
+OWNER, verbatim: *"port in is activation and port port out within 30 days is a gnale of fraud or before
+the second payment is a signal of fraud , either customer initiated or sales rep initiated as the phones
+are cheaper on new aCTIVATION WITH port in ,so it is also important to report how much acessories were
+sold with that activation , if it is below $50 then it could be a sales rep driven and that shoudl be on
+top of a daily fraud report being sent to all market managers and above via whats app and email - with a
+big red mark and open urgently"*.
+
+The same sentence also ruled on §19.31's last open boundary — *"port in is activation"* — which is
+recorded there, not here. This section is the report.
+
+**(1) THE DUPLICATE CHECK, DONE BEFORE BUILDING, AND WHAT WAS REUSED.** Four mechanisms already owned
+parts of this question and all four were extended rather than re-derived:
+
+| the question | the home it already had | what this report does |
+|---|---|---|
+| "is this line a port-in?" | `line_class.activation_class` — THE activation predicate, per-org config (§19.31) | dereferences it; `watch_classes` config says which classes are watched |
+| "did this line stay?" | `marketing/event_sales` — the retention derivation, THREE states, the unmatched line never churn and never in a denominator (§23s.5) | **`line_feed_state` was EXTRACTED from `evaluate_line` in this same change** so this report is one more caller, not a second churn derivation |
+| "what counts as an accessory?" | `router._is_accessory` / `_is_setup_fee` over `_accessory_config` — the gate behind the Sales Report's `accessory_rev` | dereferences it, so "accessories sold with that activation" is the same dollar the platform already calls accessory revenue |
+| "how do we read `raw_mi` for a set of lines?" | `marketing.router._es_mi_snapshots` — bounded, org-scoped, indexed by the commission paid gate's own `_mi_index` | reuses it (one column added: `residual_transfer_out_date`) — no second read path into the subscriber feed |
+| "who are market managers and above?" | `core/scope.roster_reach`, whose own words for scope `all` are *"market manager and above"* | `notify.router._role_scope_recipients` resolves recipients from `roles.permissions.scope` — a RESOLUTION, not a typed list |
+| "how does a report go out daily?" | `notify.subscriptions` + `POST /notify/run-due` on pg_cron | a subscription row (mig `1030` Block 2). **No new cron job, no new scheduler, no new dispatch path.** |
+
+It introduces **no table and no ingest path**, so there is no `data_lineage_registry` row and no `925`
+seed entry. It books nothing (`books_to == []`).
+
+**(2) THE ACTIVATION DATE IS OURS; THE PORT-OUT DATE IS THE CARRIER'S, AND THAT IS THE WHOLE PROBLEM.**
+The window's start is `raw_sales.trans_date` — the owner's standing ruling that *"the source of truth is
+the transaction done in thr store"* (§19.31) — so it is present on every line we rang and is never in
+doubt. Using the carrier's `mi_activation_date` instead would have thrown that away: it is carried on
+only **7,803 of 35,134** PORTED-OUT feed rows.
+
+The port-out date is frequently absent, so there are **three bases, in order, and the report says which
+one answered**: `mi_deactivation_date` (exact) → `residual_transfer_out_date` (exact, the same event
+seen from the money side) → **the SNAPSHOT TRANSITION** (bounded). `raw_mi` is a monthly snapshot
+(§23s.5's grain note), so a line active in one loaded month and PORTED-OUT in a later one ported out
+inside that window: a bound entirely inside the window flags, a bound entirely outside clears, **a bound
+that STRADDLES the boundary is undecidable**. There is no fourth basis and none is invented.
+
+**(3) ⚠ THE FEASIBILITY NUMBER IN THE BRIEF WAS MEASURED ON THE WRONG DENOMINATOR — re-measured
+2026-09-28, read-only, house org.** The figure carried into this work was *"35,134 PORTED-OUT rows, only
+770 datable = 2.2% coverage"*. Both counts are right and the ratio is not a coverage rate, because
+**`raw_mi` is a MONTHLY SNAPSHOT and those are ROWS, not lines**: a line that ported out in March
+reappears as PORTED-OUT in every later snapshot. The 35,134 rows are **2,214 DISTINCT SUBSCRIBERS** —
+roughly a 16× overcount of the population.
+
+| measured at subscriber grain, all 7 loaded snapshots (Mar–Sep 2026) | |
+|---|---|
+| distinct subscribers ever PORTED-OUT | **2,214** |
+| datable from explicit dates (deactivation **or** residual transfer-out) | 782 (35.3%) |
+| bounded by the snapshot transition | 706 (31.9%) — 681 of them to a single month |
+| **either path** | **1,096 (49.5%)** |
+| undecidable under both | 1,118 (50.5%) |
+
+`residual_transfer_out_date` was not in the brief's calculation at all and is carried on 398 rows the
+deactivation date is blank on; adding it as the second exact basis is why the explicit path reaches
+35.3% rather than 2.2%.
+
+**AND THE POPULATION THE OWNER ACTUALLY NAMED IS NARROWER AND FAR BETTER COVERED.** He asked about
+port-ins WE rang, not every port-out in the feed. Measured through the shipped endpoint, house org,
+January–September 2026:
+
+| | |
+|---|---|
+| port-in activations rung (distinct invoice × number) | **1,919** |
+| **FLAGGED** — ported out inside the 30-day window | **15** |
+| cleared — ported out, demonstrably outside it | 26 |
+| retained — looked up, has not ported out | 1,526 |
+| **UNDECIDABLE** | **352** |
+| **coverage** | **81.7%** |
+
+Undecidable breaks down as `dropped_out_of_the_feed` 295 · `absent_from_loaded_feed` 36 ·
+`port_out_date_precedes_our_sale` 2 · `window_has_not_elapsed_yet` 19. **So the report sees about four
+fifths of the population it is meant to catch, not 2%.** The brief's "the report would today see ~2% of
+the port-outs it is meant to catch" is superseded by this measurement; the honesty requirement it was
+written to enforce is not, and is implemented — see (5).
+
+**A CONCENTRATION WORTH THE OWNER'S EYE, REPORTED AND NOT INTERPRETED:** of the 15 flagged, **three sit
+at one store** (6011 Bergenline Ave) and **nine of the 15 carry under $50 of accessories**. That is what
+the data says; this report does not say why, and does not accuse anyone.
+
+**(4) TWO DEFECTS THE BUILD ITSELF FOUND — both are regressions in the harness now.**
+- **⚠ A PORT-OUT DATE BEFORE OUR SALE.** Live: a port-in whose matched feed row carries a port-out
+  **17 days BEFORE** the sale. A bare `days <= 30` test flags it as the single worst case in the report.
+  It is not fraud — it is a **recycled mobile number**, the feed row being that number's earlier life
+  with a different subscriber. A non-positive lifespan is therefore `undecidable` with its own reason
+  and is **never flagged**; the negative day count is still reported, never hidden. 2 such rows live.
+  Harness §C, with a negative control proving the naive rule would have flagged it.
+- **⚠ ASKING ONLY THE LATEST SNAPSHOT LOSES THE PORT-OUT TO AN ABSENCE.** Found by the first live smoke
+  test, not by reading. The retention report asks the LATEST month because its question is "is this line
+  still with us now". This report's question is "did it EVER port out", and over a monthly feed those
+  differ: a line that ported out in April and is gone from September reads `dropped_out_of_the_feed` —
+  **323 house lines sat in that state and the flagged count read 2 instead of 15.** The lookup is now
+  made in the month the line READS PORTED-OUT, with the latest month as the fallback. Harness §C2.
+
+**(5) THE HEADLINE CONFESSES ITS BLIND SPOT — the requirement, and where it is enforced.**
+`summary.flagged`, `summary.undecidable`, `summary.coverage_pct` and `undecidable_by_reason` travel
+together, the notify subtitle prints the undecidable count beside the red mark, and **the first sheet of
+the sent report is "What this report could not see"**, ahead of the findings. A fraud report that shows
+a flagged count while silently unable to decide part of its population converts a blind spot into a
+clean bill of health. `undecidable` reuses the **`decidable: False`** vocabulary of the
+Feed-vs-Transactions report (§19.31 (8)) and the unmatched-reason vocabulary of the retention report
+(§23s.5) verbatim — a third spelling was not invented.
+
+**(6) THE ACCESSORY FLOOR IS AN ATTRIBUTION, NOT A TRIGGER — and the measurement says why.** The owner's
+reading is that under-$50 "could be a sales rep driven". Measured before wiring it: **50.8% of ALL
+port-in invoices carry under $50 of accessories (36.0% carry none; median $47.70)**. So the floor alone
+names half the port-ins in the business, and a report triggered on it would be noise with a red mark on
+it. It is therefore a COLUMN on rows the port-out already flagged — exactly as the owner worded it
+(*"it is ALSO important to report how much accessories were sold"*) — and it never moves a row's state.
+An invoice that could not be measured reads **unknown, never $0.00**, because $0.00 is the most accusing
+value this column has and an unmeasured line has not earned it.
+
+**(7) THE SECOND TRIGGER IS DECLARED UNCONFIGURED, NOT QUIETLY ALIASED.** The owner named two triggers:
+within 30 days **or** before the second payment. On a monthly plan they nearly coincide, and that is the
+temptation — implementing one and calling it the other. **No field on the sale line or the subscriber
+row states when a line's second payment fell due**, and the installment schedule covers device
+financing, not the plan's MRC cycle. So `second_payment_days` is a named, resolvable rule that is
+UNCONFIGURED at house level, **every payload says the trigger is not evaluated**, and rows a
+second-payment rule would have caught are not in the flagged count. Absence of a business rule is
+reported, not papered over.
+
+**(8) RULE TWO.** Window, accessory floor, watched classes and the second-payment boundary are
+`accessory_config.portout_fraud_rules` (mig `1030`), per org, over house defaults that ARE the owner's
+numbers — so a NULL column changes nothing and no carrier, tenant or product name appears in a branch.
+A junk or out-of-range value falls back to house rather than emptying or flooding the report.
+
+**(9) PII.** The report is ABOUT subscriber lines, so the rule bites here: the endpoint and the sent
+export carry the mobile number, because the recipient is entitled to it through the report they are
+being sent — but **every harness fixture uses 555-prefixed non-routable numbers and invented names, and
+no live subscriber identifier appears in this index, the repo or any fixture.**
+
+**(10) WHAT IS HELD FOR THE OWNER.** Mig `1030` **Block 1** (the config column) is behaviour-neutral.
+**Block 2 SENDS MESSAGES TO PEOPLE** — a daily WhatsApp + email to every market manager and above — and
+is deliberately separated, with a query beside it for checking exactly who that resolves to before
+anyone applies it. Nothing in this change was applied to any database.
+
+**(11) THE PROOF.** `backend/harness_portout_fraud.py` — **85 checks**, stdlib-only, DB-free, no
+network, verified to pass with no site-packages, and **RUN BY `carrier-vocab-guard.yml`** (so it adds no
+entry to `harness_unrun_pending.txt` and `PINNED_MAX` stays 334). `harness_marketing_event_sales.py`
+(237 checks) is the pin that the `line_feed_state` extraction left the retention report byte-compatible.
 
 ---
 

@@ -652,7 +652,69 @@ async def _processor_ledger(org_id, f):
 
 
 # ── registry ──────────────────────────────────────────────────────────────────
+async def _portout_fraud(org_id, f, authorization=""):
+    """THE DAILY FRAUD REPORT (owner directive 2026-09-28, index §19.32).
+
+    ⚠ THE HEADLINE CARRIES THE BLIND SPOT. The subtitle prints what the report COULD NOT DECIDE beside
+    what it flagged, and the first sheet is the coverage statement, not the findings. A red-marked
+    message showing "15 urgent" while silently unable to date part of the population is the defect this
+    house keeps being caught by; here the recipient sees both numbers or neither.
+
+    The rows carry the subscriber's own number because the recipient — a market manager or above — is
+    entitled to it through the endpoint they are being sent an export of. It is never written to the
+    repo, a fixture or the index.
+    """
+    rows = C.get_portout_fraud(date_from=(f or {}).get("date_from") or "",
+                               date_to=(f or {}).get("date_to") or "",
+                               store=(f or {}).get("store") or "",
+                               org_id=org_id, authorization=authorization)
+    s_ = rows.get("summary") or {}
+    n, un = s_.get("flagged") or 0, s_.get("undecidable") or 0
+    cov = s_.get("coverage_pct")
+    # The "big red mark and open urgently" the owner asked for, and the confession beside it.
+    mark = ("\U0001F534 OPEN URGENTLY — %d port-in%s ported out within %s days"
+            % (n, "" if n == 1 else "s", (rows.get("rules") or {}).get("window_days"))) if n else \
+           "No port-in ported out inside the window"
+    subtitle = ("%s · %d of %d port-in activations could NOT be decided (coverage %s%%)"
+                % (mark, un, s_.get("port_in_activations") or 0,
+                   "—" if cov is None else cov))
+    reasons = [{"reason": k, "lines": v, "what_it_means": (rows.get("undecidable_reasons") or {}).get(k, "")}
+               for k, v in sorted((s_.get("undecidable_by_reason") or {}).items(), key=lambda kv: -kv[1])]
+    return {"title": "Daily Port-Out Fraud Report", "subtitle": subtitle,
+            "filename": "portout-fraud-%s" % date.today().isoformat(),
+            "urgent": bool(s_.get("urgent")),
+            "sheets": [
+                {"name": "What this report could not see", "rows": reasons, "columns": [
+                    {"header": "Could not decide", "key": "reason"},
+                    {"header": "Lines", "key": "lines", "align": "right"},
+                    {"header": "What it means", "key": "what_it_means"}]},
+                {"name": "Flagged", "rows": rows.get("flagged") or [], "columns": [
+                    {"header": "Store", "key": "store"},
+                    {"header": "Rep", "key": "salesperson"},
+                    {"header": "Sold", "key": "sold_on"},
+                    {"header": "Ported out", "key": "ported_on"},
+                    {"header": "Days", "key": "days", "align": "right"},
+                    {"header": "Dated by", "key": "basis"},
+                    {"header": "Accessories", "key": "accessory_total", "money": True},
+                    {"header": "Leans", "key": "attribution"},
+                    {"header": "Mobile number", "key": "mdn"},
+                    {"header": "Invoice", "key": "trans_id"}]},
+            ]}
+
+
 REPORTS = {
+    "portout_fraud": {
+        # Owner 2026-09-28: "a daily fraud report being sent to all market managers and above via
+        # whats app and email - with a big red mark and open urgently". `role_scopes` is what makes
+        # "market managers and above" a RESOLUTION rather than a typed recipient list — see
+        # router._role_scope_recipients, which reads the SAME `roles.permissions.scope` vocabulary
+        # core/scope.roster_reach already calls "market manager and above".
+        "label": "Daily Port-Out Fraud Report",
+        "filters": ["date_from", "date_to", "store", "market"],
+        "live_path": lambda f: "/commcalc/portout-fraud" + _qs(f, ["date_from", "date_to", "store"]),
+        "build": _portout_fraud, "wants_auth": True,
+        "urgent": True,
+        "role_scopes": ["market", "region", "regional", "all"]},
     "processor_ledger": {
         "label": "Processor Daily Debits & Credits",
         "filters": ["date_from", "date_to", "store", "type", "market"],

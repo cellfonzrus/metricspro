@@ -514,10 +514,40 @@ def evaluate_line(line, window_days, snapshots, period_labels, latest_key=None, 
             return {"state": STATE_UNMATCHED, "reason": REASON_FEED_NOT_LOADED, "status": None,
                     "target_date": tgt, "period": period_label_for(tgt, period_labels)}
 
+    v = line_feed_state(line, snapshots, key, earlier_keys=earlier_keys)
+    per = period_label_for(tgt or (key or ""), period_labels)
+    out = {"state": v["state"], "reason": v["reason"], "status": v["status"],
+           "target_date": tgt, "period": per}
+    if v["row"] is not None:
+        out["mi_activation_date"] = v["row"].get("mi_activation_date")
+        out["mi_deactivation_date"] = v["row"].get("mi_deactivation_date")
+    return out
+
+
+# ── THE SHARED "DID THIS LINE STAY?" DERIVATION ───────────────────────────────────────────────────
+# Extracted from `evaluate_line` 2026-09-28 so that a SECOND question about the same fact — the daily
+# port-out fraud report (index §19.32) — is ONE MORE CALLER of this derivation rather than a sibling
+# copy of it. CLAUDE.md, "A fix is a DESIGN fix": one fact, one home, dereferenced, never copied.
+# `evaluate_line` still owns the WINDOW (which snapshot month a 30/60/90-day question lands in) and
+# this owns the LOOKUP and the three states; splitting them that way is what lets the fraud report ask
+# the same question of a different window without re-implementing either half.
+def line_feed_state(line, snapshots, key, earlier_keys=()):
+    """Look ONE line up in ONE loaded snapshot → `{state, reason, status, row}`. PURE.
+
+    THE RULE THAT MATTERS, and it is the reason this is shared rather than re-written: a line that
+    cannot be looked up is `unmatched` WITH A REASON. It is never `churned`, it never enters a
+    denominator, and an absence is never rendered as a loss. Every caller inherits that by calling
+    this; a caller that re-implemented the lookup would be free to get it wrong, and the retention
+    report's own measured history (43 of 122 lines unmatched, §23s.5) says how often it would matter.
+
+    `row` is the matched subscriber row itself, so a caller needing a field this function does not
+    interpret (a transfer-out date, a plan) reads it from the feed row rather than growing this
+    return shape per caller.
+    """
     snap = (snapshots or {}).get(key or "")
     if not snap or not snap.get("loaded"):
         return {"state": STATE_UNMATCHED, "reason": REASON_FEED_NOT_LOADED, "status": None,
-                "target_date": tgt, "period": period_label_for(tgt or (key or ""), period_labels)}
+                "row": None}
 
     row = _match(line, snap.get("index") or {})
     if row is None:
@@ -529,15 +559,11 @@ def evaluate_line(line, window_days, snapshots, period_labels, latest_key=None, 
             if s.get("loaded") and _match(line, s.get("index") or {}) is not None:
                 reason = REASON_DROPPED
                 break
-        return {"state": STATE_UNMATCHED, "reason": reason, "status": None,
-                "target_date": tgt, "period": period_label_for(tgt or (key or ""), period_labels)}
+        return {"state": STATE_UNMATCHED, "reason": reason, "status": None, "row": None}
 
     status = str(row.get("subscriber_status") or "").strip()
     return {"state": (STATE_ACTIVE if is_active_status(status) else STATE_CHURNED),
-            "reason": None, "status": status or None, "target_date": tgt,
-            "period": period_label_for(tgt or (key or ""), period_labels),
-            "mi_activation_date": row.get("mi_activation_date"),
-            "mi_deactivation_date": row.get("mi_deactivation_date")}
+            "reason": None, "status": status or None, "row": row}
 
 
 def _match(line, index):

@@ -175,9 +175,13 @@ on:
       - "backend/harness_line_class_lock.py"
       - "backend/harness_line_class.py"
       - "backend/harness_activation_event_lock.py"
+      - "backend/harness_activation_bucketing.py"
       - "backend/harness_activation_event.py"
       - "backend/harness_ready_app_denominator.py"
       - "backend/harness_dlar_vs_platform.py"
+      - "backend/harness_portout_fraud.py"
+      - "backend/app/modules/commcalc/portout_fraud.py"
+      - "backend/app/modules/marketing/event_sales.py"
       - "backend/app/modules/commcalc/dlar_vs_platform.py"
       - "backend/app/modules/commcalc/kpi_failing.py"
       - "backend/app/modules/commcalc/dlar_sweep.py"
@@ -419,6 +423,9 @@ jobs:
       - name: Run the activation-event lock (one definition of an activation / upgrade; every pay and count surface dereferences it — index §6f)
         working-directory: backend
         run: python3 harness_activation_event_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the activation-bucketing proof (the Activation-Details classifier and its org-scoped rules loader — index §19.25c)
+        working-directory: backend
+        run: python3 harness_activation_bucketing.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the multi-month offer lock (multi-month is offered only through the one predicate; money is never hidden — index §6h)
         working-directory: backend
         run: python3 harness_multimonth_offer_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -495,6 +502,9 @@ jobs:
       - name: Run the feed-vs-transactions proof (every difference attributed to a counting definition, held undecidable behind a stale slice, or reported as the finding; absence is never zero on either side — owner 2026-09-27, index §19.31)
         working-directory: backend
         run: python3 harness_dlar_vs_platform.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the port-out fraud proof (a port-in that ports out inside the window; the three dating bases; a port-out BEFORE our sale is a recycled number and is never flagged; a port-out in an earlier month is not lost to the latest snapshot; the headline prints what it could not decide; the accessory floor is an attribution, not a trigger; the lookup is the retention report's own derivation — owner 2026-09-28, index §19.32)
+        working-directory: backend
+        run: python3 harness_portout_fraud.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the table-sort ratchet (a new data table cannot ship unsorted; the unsorted list only shrinks — owner 2026-08-10, index §19.29)
         working-directory: backend
         run: python3 harness_table_sort_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

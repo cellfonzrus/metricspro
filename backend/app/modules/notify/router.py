@@ -338,6 +338,13 @@ async def send_to_designated(body: SendToDesignatedIn, org_id: str = ORG_ID, aut
         "recipient_ids": cfg.get("recipient_ids") or [],
         "emails": cfg.get("ad_hoc_emails") or [],
         "phones": cfg.get("ad_hoc_phones") or []})
+    # ROLE-RESOLVED RECIPIENTS, on top of the saved list. A report declaring `role_scopes` goes to
+    # WHOEVER HOLDS THAT SCOPE TODAY — the owner asked for "all market managers and above", which is a
+    # question about roles, not a list of names somebody must remember to update when a manager is
+    # hired. Additive: a report with no `role_scopes` resolves exactly as before.
+    r_em, r_ph = _role_scope_recipients(org_id, (report_registry.REPORTS[report_key] or {}).get("role_scopes"))
+    emails = sorted(set(emails) | set(r_em))
+    phones = sorted(set(phones) | set(r_ph))
     if not emails and not phones:
         return {"sent": 0, "failed": 0, "skipped": "designated recipients have no contact info"}
     channels = cfg.get("channels") or (["email"] if emails else []) + (["whatsapp"] if phones else [])
@@ -350,6 +357,42 @@ async def send_to_designated(body: SendToDesignatedIn, org_id: str = ORG_ID, aut
                                triggered_by="designated", authorization=authorization)
     except (KeyError, ValueError) as e:
         raise HTTPException(400, str(e))
+
+
+# ── role-resolved recipients ─────────────────────────────────────────────────
+def _role_scope_recipients(org_id, scopes) -> tuple[list, list]:
+    """"All market managers and above" → (emails, phones), resolved from ROLES, never from a list.
+
+    OWNER 2026-09-28: the daily fraud report goes to *"all market managers and above"*. That is a
+    RESOLUTION question and it already has a home: `app.core.scope.roster_reach` reads
+    `roles.permissions.scope` and documents scope 'all' in those very words — *"market manager and
+    above see everybody"* — with 'market'/'region'/'regional' the district grain below it. So this
+    reads the SAME vocabulary rather than introducing a second idea of seniority, and a report naming
+    a scope inherits every future role that carries it.
+
+    Best-effort by design: a role table that cannot be read returns ([], []) and the saved recipient
+    list still sends. It NEVER raises — a resolution failure must not silence an urgent report that
+    has explicit recipients configured as well.
+    """
+    want = {str(x).strip().lower() for x in (scopes or []) if str(x).strip()}
+    if not want:
+        return [], []
+    try:
+        roles = (sb().table("roles").select("name,permissions").eq("org_id", org_id)
+                 .execute().data) or []
+        names = {(r.get("name") or "") for r in roles
+                 if str(((r.get("permissions") or {}).get("scope") or "")).strip().lower() in want}
+        if not names:
+            return [], []
+        users = (sb().table("app_users").select("email,phone,role").eq("org_id", org_id)
+                 .execute().data) or []
+        em = sorted({(u.get("email") or "").strip() for u in users
+                     if (u.get("role") or "") in names and (u.get("email") or "").strip()})
+        ph = sorted({(u.get("phone") or "").strip() for u in users
+                     if (u.get("role") or "") in names and (u.get("phone") or "").strip()})
+        return em, ph
+    except Exception:
+        return [], []
 
 
 # ── dispatch core (shared by on-demand send + scheduled run-due) ──────────────
