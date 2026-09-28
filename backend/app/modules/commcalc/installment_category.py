@@ -35,17 +35,26 @@ already exists; nothing new is asked of the POS):
      warned about, so the operator maps it instead of discovering a silent zero months later.
 
 PURE: every resolver here takes its config as an argument (no DB), so the whole thing is unit-testable.
+
+THE ONE DEVICE CLASSIFIER (2026-09-28, index §6n). "What device did this activation activate" has exactly
+one answer, and it is this module's ladder. Executive-MTD pay reads it too — `line_class` stamps an
+activation EVENT's device as `resolve_chain_category` over the event's lines, and prices a TABLET / WATCH event
+at its own `mtd_rates` rate (owner: "tablet pay at $5 and watch at $2, gizmo at $2" — Gizmo is a watch).
+`watch` (a watch / connected device / wearable) joins the vocabulary with NO built-in rule: a tenant that
+adds none classifies exactly as before (multi-month and Exec MTD alike), and it QUALIFIES by default so a
+chain a tenant newly names a watch keeps paying multi-month as it did while it was a phone.
 """
 import re
 
 # The categories the owner named. `unknown` is not a device category — it is the honest "we could not
 # tell" bucket, and it is a first-class switch so a tenant can decide whether an unclassifiable
 # activation pays (default: yes + warn) or waits for a mapping.
-CATEGORY_KEYS = ("phone", "tablet", "home_internet", "sim", "accessory", "unknown")
+CATEGORY_KEYS = ("phone", "tablet", "watch", "home_internet", "sim", "accessory", "unknown")
 
 CATEGORY_LABELS = {
     "phone": "Phones",
     "tablet": "Tablets",
+    "watch": "Watches / connected devices",
     "home_internet": "Home internet",
     "sim": "SIM / SIM kits",
     "accessory": "Accessories",
@@ -58,6 +67,7 @@ CATEGORY_LABELS = {
 DEFAULT_QUALIFICATION = {
     "phone": True,
     "tablet": False,
+    "watch": True,           # no built-in rule names a watch: a chain becomes one only by a tenant's rule
     "home_internet": True,
     "sim": False,
     "accessory": True,
