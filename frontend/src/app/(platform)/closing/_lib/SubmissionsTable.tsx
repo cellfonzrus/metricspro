@@ -7,6 +7,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import type { EntityOption } from '@/components/EntityPicker'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { useReportLabels } from '@/lib/report-labels'
+import { absoluteApiUrl } from '@/lib/apiBase'
 
 // EVERY submitted daily-closing column, one row per rep-submission (OWNER DIRECTIVE 2026-07-27).
 // RULE FIVE (§3d): the standard date-range/store/market/rep filter bar drives BOTH the table and every
@@ -29,9 +30,8 @@ import { useReportLabels } from '@/lib/report-labels'
 // options) for any other embedding.
 export const monthStart = () => localToday().slice(0, 8) + '01'
 
-// Base for the exported envelope-photo links (GET /closing/envelope-view signs + redirects on
-// click) — same source of truth as lib/client.ts's own API_URL.
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+// Exported envelope-photo links (GET /closing/envelope-view signs + redirects on click) leave the
+// page inside a spreadsheet, so they are ABSOLUTE — built by the one home (lib/apiBase.ts, index §40).
 
 const GATE_LABEL: Record<string, string> = {
   ok: '✅ OK', flagged: '⚠️ Flagged', blocked: '⛔ Blocked',
@@ -217,7 +217,7 @@ export default function SubmissionsTable({
     // The raw storage path stays a reference; `Envelope photo` is the CLICKABLE org-scoped API
     // link (signs the private-bucket photo on demand and redirects), so an exported date range
     // carries a working picture link that never embeds a 1-hour signed URL.
-    { header: 'Envelope photo', field: 'envelope_view_url', get: r => r.envelope_view_url ? `${API_URL}${r.envelope_view_url}` : '' },
+    { header: 'Envelope photo', field: 'envelope_view_url', get: r => r.envelope_view_url ? absoluteApiUrl(r.envelope_view_url) : '' },
     { header: 'Envelope photo ref', field: 'envelope_picture', get: r => r.envelope_picture || '' },
     { header: 'Remarks', field: 'remarks', get: r => r.remarks },
     { header: 'Submitted at', field: 'submitted_at', type: 'date', get: r => r.submitted_at ? new Date(r.submitted_at).toLocaleString() : '' },

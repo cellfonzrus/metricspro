@@ -4,6 +4,7 @@ import { api, supabase, activeOrgHeader } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
+import { apiUrl } from '@/lib/apiBase'
 
 // HR · Compliance Document Repository (item 5). A VIEW + bulk export over the SAME onboarding-docs
 // bucket and employee_onboarding rows the Documents board (mig 082) already tracks — not a second
@@ -31,7 +32,6 @@ import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
 // (Gate-1 N7) — it's the date the WHOLE onboarding packet was requested, not a per-document event;
 // see the backend docstring for why no such per-document event exists to filter on instead.
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 const inp: React.CSSProperties = { padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const btn: React.CSSProperties = { padding: '6px 11px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, cursor: 'pointer', background: 'var(--surface)' }
 const btnP: React.CSSProperties = { ...btn, background: 'var(--accent,#2563eb)', color: '#fff', border: 'none', fontWeight: 600 }
@@ -54,7 +54,7 @@ type Doc = {
 async function authedFetch(path: string) {
   const { data } = await supabase.auth.getSession().catch(() => ({ data: { session: null } } as any))
   const tok = data?.session?.access_token
-  return fetch(`${API_URL}${path}`, { headers: { ...(tok ? { Authorization: `Bearer ${tok}` } : {}), ...activeOrgHeader() } })
+  return fetch(apiUrl(path), { headers: { ...(tok ? { Authorization: `Bearer ${tok}` } : {}), ...activeOrgHeader() } })
 }
 
 async function downloadZip(path: string, filename: string, setMsg: (m: string) => void) {

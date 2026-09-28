@@ -25,6 +25,9 @@ on:
       - "docs/SYSTEM_DATA_FLOW_INDEX.md"
       - "database/migrations/1030_auto_calc_on_landing.sql"
       - "frontend/src/app/(platform)/commcalc/**"
+      # the unique-numbers lock — every migration file and every index section number
+      - "database/migrations/**"
+      - "backend/harness_unique_numbers_lock.py"
   push:
     branches: [main]
     paths:
@@ -32,6 +35,8 @@ on:
       - "backend/app/modules/pos/inventory_integrity_router.py"
       - "backend/app/modules/supply/**"
       - "backend/app/**/*.py"
+      - "database/migrations/**"
+      - "docs/SYSTEM_DATA_FLOW_INDEX.md"
   workflow_dispatch:
 
 permissions:
@@ -89,3 +94,18 @@ jobs:
       - name: Run the auto-calc-on-landing lock
         working-directory: backend
         run: python3 harness_auto_calc_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  unique-numbers:
+    # A NUMBER NAMES ONE THING (2026-09-28): #315 and #317 were merged the same day and both took migration 1030 and
+    # index §19.32 — each branch was green against a main that lacked the other. Runs on the merged tree too (push to
+    # main). Stdlib, no pip install: two migrations or two index sections on one number fail the build; the collisions
+    # that predate this lock (already applied) are listed by exact name and may only shrink. Planted controls inside.
+    name: Migration and index numbers are claimed once
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the unique-numbers lock
+        working-directory: backend
+        run: python3 harness_unique_numbers_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

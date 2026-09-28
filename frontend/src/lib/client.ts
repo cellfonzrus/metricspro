@@ -1,8 +1,8 @@
 import { createClient } from '@supabase/supabase-js'
+import { apiUrl } from './apiBase'
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SUPABASE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON)
 
@@ -428,7 +428,7 @@ function geoHeader(): Record<string, string> {
 
 export async function api(path: string, opts: RequestInit = {}) {
   const authHeader = await bearer()
-  const res = await fetch(`${API_URL}${withOrgScope(path)}`, {
+  const res = await fetch(apiUrl(withOrgScope(path)), {
     ...opts,
     headers: { 'Content-Type': 'application/json', ...authHeader, ...activeOrgHeader(), ...twofaHeader(),
                ...impersonationHeader(path), ...geoHeader(), ...opts.headers },
@@ -458,7 +458,9 @@ export async function api(path: string, opts: RequestInit = {}) {
 // token too (needed once enforcement is on).
 export async function apiUpload(path: string, form: FormData) {
   const authHeader = await bearer()
-  const res = await fetch(`${API_URL}${withOrgScope(path)}`, { method: 'POST', body: form,
+  // Multipart bodies are DIRECT-class (lib/apiBase.ts): a workbook can be tens of MB, which must not
+  // ride the platform proxy.
+  const res = await fetch(apiUrl(withOrgScope(path), 'direct'), { method: 'POST', body: form,
     headers: { ...authHeader, ...activeOrgHeader(), ...twofaHeader(), ...impersonationHeader(path), ...geoHeader() } })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
@@ -476,7 +478,7 @@ export async function apiUpload(path: string, form: FormData) {
 // apiFetchBase64 so the two never drift.
 async function authedFileGet(path: string): Promise<Response> {
   const authHeader = await bearer()
-  const res = await fetch(`${API_URL}${withOrgScope(path)}`, {
+  const res = await fetch(apiUrl(withOrgScope(path)), {
     headers: { ...authHeader, ...activeOrgHeader(), ...twofaHeader(), ...impersonationHeader(path) },
   })
   if (!res.ok) {

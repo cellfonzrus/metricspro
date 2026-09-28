@@ -19,8 +19,8 @@ import AdminAttention from '@/components/AdminAttention'
 import ChatEnvelope from '@/components/ChatEnvelope'
 import PlatformBanners from '@/components/PlatformBanners'
 import FlowReturnBar from '@/components/FlowReturnBar'
+import { apiUrl } from '@/lib/apiBase'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 // Reports-directory category names ('Reports · Sales', …). tileOnly filtering (below) never applies
 // inside these groups: applyNavLayout duplicates the SAME NavItem objects into them, and the owner's
@@ -683,7 +683,7 @@ function Guard({ children }: { children: React.ReactNode }) {
     // nothing regresses. Explicit /api/v1 path — bare paths 404 silently in the UI.
     if (rbacEnabled !== null) return
     let on = true
-    fetch(`${API_URL}/api/v1/core/auth-config`)
+    fetch(apiUrl(`/api/v1/core/auth-config`))
       .then(r => r.json()).then(d => { if (on) setFetchedEnforce(!!d.rbac_enabled) })
       .catch(() => { if (on) setFetchedEnforce(false) })
     return () => { on = false }

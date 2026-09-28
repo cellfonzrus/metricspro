@@ -1,4 +1,8 @@
 import type { NextConfig } from "next";
+// ONE HOME for where the backend is (src/lib/apiBase.ts) and the site routing policy (site-routing.ts),
+// owner 2026-09-28, index §40. Locked by backend/harness_one_domain_lock.py.
+import { API_ENV, apiRewrites, directOrigin } from "./src/lib/apiBase";
+import { canonicalHostRedirects, connectSrc } from "./site-routing";
 
 // Frontend security headers (Security Controls Spec §4, item 11).
 //
@@ -20,7 +24,8 @@ const CSP_REPORT_ONLY = [
   "font-src 'self' data:",
   "style-src 'self' 'unsafe-inline'",
   "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-  "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.up.railway.app",
+  // API calls are same-origin now; the only other API origin is the DIRECT-class one, when there is one.
+  connectSrc(directOrigin()),
   "form-action 'self'",
 ].join("; ");
 
@@ -34,6 +39,20 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
+  // The browser only ever talks to this site's own host: /api/v1/* and /health are proxied to the
+  // backend server-side. The origin is BACKEND_ORIGIN (server-only), falling back to
+  // NEXT_PUBLIC_API_URL so an existing deploy keeps working with no dashboard change.
+  async rewrites() {
+    return apiRewrites();
+  },
+  // A PRODUCTION request on the platform's own hostname is sent (308) to the canonical site, same path
+  // and query. Previews and localhost are untouched. Off until NEXT_PUBLIC_SITE_URL is set explicitly.
+  async redirects() {
+    return canonicalHostRedirects({
+      VERCEL_ENV: process.env.VERCEL_ENV,
+      NEXT_PUBLIC_SITE_URL: API_ENV.NEXT_PUBLIC_SITE_URL,
+    });
+  },
   async headers() {
     return [
       {

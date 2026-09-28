@@ -136,6 +136,14 @@ name: carrier-vocab-guard
 on:
   pull_request:
     paths:
+      - "frontend/next.config.ts"
+      - "frontend/site-routing.ts"
+      - "frontend/prove_one_domain.mjs"
+      - "frontend/package-lock.json"
+      - "backend/harness_one_domain_lock.py"
+      - "backend/harness_cors_policy.py"
+      - "backend/app/core/cors_policy.py"
+      - "backend/app/modules/payables/router.py"
       - "backend/app/modules/account/royalty.py"
       - "backend/app/modules/account/royalty_router.py"
       - "backend/app/modules/account/centers.py"
@@ -524,6 +532,12 @@ jobs:
       - name: Run the browser-work lock (the declared browser sweeps + every module outside commcalc that launches a browser equal what the code does; browser endpoints require the browser service — index §19.23a / §36)
         working-directory: backend
         run: python3 harness_browser_sweep_kinds.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the one-domain lock (only src/lib/apiBase.ts reads where the backend / site is; no platform hostname in the app source; next.config installs the proxy rewrites, the canonical-host redirect and the derived connect-src from the homes; every browser-launching endpoint is DIRECT — index §40)
+        working-directory: backend
+        run: python3 harness_one_domain_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the CORS policy proof (config not code; the app's own origin always allowed; no wildcard; an allow-regex that admits a registrable host is refused — index §40)
+        working-directory: backend
+        run: python3 harness_cors_policy.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the franchise royalty proof (synthetic report from text + HTML; the rounding remainder; flags kept, never corrected; P&L mapping; recon; centers; the vertical axis — index §37)
         working-directory: backend
         shell: bash
@@ -532,6 +546,25 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_royalty_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE ONE-DOMAIN PROOF (index §40) loads the REAL next.config.ts through Next's own config loader, validates the
+  # routes with Next's own loadCustomRoutes and evaluates requests with Next's own matchers: a production request on the
+  # platform host is 308'd to the canonical site with its path and query; previews and localhost are untouched; the
+  # /api/v1 and /health rewrites point at the backend; the CSP carries no backend host. It needs Next itself, so it
+  # runs in its own job with the frontend's dependencies (Node 22 strips the TypeScript of the two homes natively).
+  one-domain-proof:
+    name: One-domain proof (the real next.config.ts through Next's own loader and matchers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Install the frontend's dependencies
+        working-directory: frontend
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run the one-domain proof (canonical host 308; previews / localhost untouched; rewrites; CSP; the one home; negative controls)
+        working-directory: frontend
+        run: node prove_one_domain.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CUSTOMER-MASTER PROOF (index §30.16) drives the REAL matcher, rebuild, line writer and /pos endpoints over the
   # in-memory client (harness_intake_fakes) — it imports the app, so it runs in its own job with the backend's

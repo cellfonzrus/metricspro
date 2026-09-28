@@ -11,8 +11,8 @@ import {
   panel, input, label, btn, btnPrimary, fmtMoney, fmtPhone, fmtDate, fmtDateTime,
   referrerName, customerName, STATUS_COLOR, STATUS_LABEL, type Referral, type ReferralAudit,
 } from '@/lib/referral'
+import { apiUrl } from '@/lib/apiBase'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export default function ReferralDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -42,7 +42,7 @@ export default function ReferralDetailPage() {
       try {
         const { data } = await supabase.auth.getSession().catch(() => ({ data: { session: null } } as any))
         const tok = data?.session?.access_token
-        const res = await fetch(`${API_URL}/api/v1/referral/referrals/${id}/qr.png`,
+        const res = await fetch(apiUrl(`/api/v1/referral/referrals/${id}/qr.png`),
           { headers: { ...(tok ? { Authorization: `Bearer ${tok}` } : {}), ...activeOrgHeader() } })
         if (res.ok) { const b = await res.blob(); setQrImg(URL.createObjectURL(b)) }
         const u = await api(`/api/v1/referral/referrals/${id}/redeem-url`).catch(() => null)

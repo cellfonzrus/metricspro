@@ -94,15 +94,18 @@ session requires the actor's 2FA.
 
 ### 15. ⬜ Gate Vercel preview deployments (Deployment Protection)
 Vercel **preview** URLs (`metricspro-git-…vercel.app` + `…` hash inspector URLs) are public by default.
-The backend's `CORS_ORIGIN_REGEX` intentionally allows any `metricspro*.vercel.app` to call the prod
-API, so a reachable preview can talk to the real backend (with a login). Production is
-`metricspro-five.vercel.app` (public by design, login-gated).
+A preview reaches whatever API its own environment names, through its own `/api/v1` proxy (since
+2026-09-28, index §40 — the browser calls the API same-origin). The backend's `CORS_ORIGIN_REGEX` is
+now OFF by default (the old default `metricspro*.vercel.app` matched hostnames anyone can register, and
+`app/core/cors_policy.py` refuses such a pattern), so CORS is no longer what lets a preview in — its
+proxy is. Production is the canonical site (`NEXT_PUBLIC_SITE_URL`; the platform alias 308s to it once
+that is set), public by design, login-gated.
 - **Do:** Vercel → Project → Settings → **Deployment Protection** → enable **Vercel Authentication
   (Standard Protection)** so previews require Vercel SSO. Optionally Password Protection / Trusted IPs.
 - **Verify:** the **Preview** environment's `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_API_URL` point at
   **staging**, not prod data.
-- **Optional (trade-off):** narrow the backend `CORS_ORIGIN_REGEX` so previews can't call the prod API
-  (breaks preview→prod-API testing — only if previews use staging).
+- **To keep previews off prod data:** set the **Preview** environment's `BACKEND_ORIGIN` /
+  `NEXT_PUBLIC_API_URL` to staging — that, not CORS, decides which API a preview's proxy reaches.
 
 ### 13. ⬜ Promote CI security gates from report-only → blocking
 `.github/workflows/security.yml` runs bandit, semgrep, pip-audit, npm audit, trufflehog — all

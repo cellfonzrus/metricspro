@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import { absoluteApiUrl } from '@/lib/apiBase'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { panel, btn, btnPrimary, cell, th, cameraName, fmtDateTime, type Camera, type VisionConfig, visionError,
   idsBlocker, authorizeBlocker, oauthReturn, syncMessage, storeOptions, withCurrent, type EdgeAgent,
@@ -15,9 +16,11 @@ import { panel, btn, btnPrimary, cell, th, cameraName, fmtDateTime, type Camera,
 // the value sent when redeeming the code must match byte for byte, or Google rejects the exchange.
 // One helper, used by both, so they cannot drift.
 const REDIRECT_PATH = '/vision/settings'
-// The analyzer needs the API base, and an operator should not have to work out what to paste.
+// The analyzer and the Pub/Sub push subscription need the API's public address, and an operator
+// should not have to work out what to paste. Machine-to-machine, so it is the DIRECT-class origin from
+// the one home (lib/apiBase.ts, index §40) — never a literal, never the env read here.
 function apiBase(): string {
-  return process.env.NEXT_PUBLIC_API_URL || '<api url>'
+  return absoluteApiUrl('', 'direct').replace(/\/+$/, '')
 }
 function redirectUri(): string {
   return typeof window === 'undefined' ? '' : `${window.location.origin}${REDIRECT_PATH}`

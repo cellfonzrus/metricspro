@@ -7,6 +7,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import type { EntityOption } from '@/components/EntityPicker'
 import type { StandardFilterValue } from '@/lib/standard-filters'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
+import { apiUrl, absoluteApiUrl } from '@/lib/apiBase'
 
 // Envelope Report — OWNER DIRECTIVE 2026-09-02, verbatim: "a new report when all the envelopes can
 // be filtered by using the standard filters... user can put their comments after counting the
@@ -21,7 +22,6 @@ import { SortableTh, useTableSort } from '@/components/SortableTh'
 // EXISTING ops_chargeback machinery (reason 'envelope_short'); post/waive decisions ride
 // POST /closing/envelope-chargeback/decide (management-gated, same as missed-DM-verify).
 const NO_MARKET = '(no market)'
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 const csv = (a: string[]) => (a.length ? a.join(',') : undefined)
 const STATUS_BADGE: Record<string, string> = {
   short: '🔻 Short', over: '🔺 Over', match: '✅ Match', uncounted: '— Uncounted',
@@ -187,7 +187,7 @@ export default function EnvelopeReportPage() {
     { header: 'Chargeback', field: 'chargeback_status', get: (r: any) => r.chargeback_status || '' },
     { header: 'Chargeback $', field: 'chargeback_amount', money: true, get: (r: any) => r.chargeback_amount },
     { header: 'DM verified', field: 'dm_verified', get: (r: any) => r.dm_verified ? 'Yes' : 'No' },
-    { header: 'Envelope photo', field: 'envelope_view_url', get: (r: any) => r.envelope_view_url ? `${API_URL}${r.envelope_view_url}` : '' },
+    { header: 'Envelope photo', field: 'envelope_view_url', get: (r: any) => r.envelope_view_url ? absoluteApiUrl(r.envelope_view_url) : '' },
   ], [])
 
   const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
@@ -346,7 +346,7 @@ export default function EnvelopeReportPage() {
                     <td style={{ padding: '6px 10px', textAlign: 'right' }}>{fmt(r.declared_cash)}</td>
                     <td style={{ padding: '6px 10px' }}>
                       {r.envelope_view_url
-                        ? <a href={`${API_URL}${r.envelope_view_url}`} target="_blank" rel="noreferrer">📷</a>
+                        ? <a href={apiUrl(r.envelope_view_url)} target="_blank" rel="noreferrer">📷</a>
                         : <span style={{ color: 'var(--text3)' }}>—</span>}
                     </td>
                     <td style={{ padding: '6px 10px' }}>

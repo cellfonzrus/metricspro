@@ -77,6 +77,7 @@ Primary code homes:
 | 37 | **Franchise royalty, cost & profit centers** | "Where does the franchisor's monthly royalty report land, how is it checked (the fee rounding rule), what does each line book to on the P&L and what books nothing (and why), how does it reconcile against the daily report, and how do I see the P&L per profit center or per cost center? Why did a sale line no classifier knows book nothing, and where is that reported now? How do I upload many months of royalty reports at once, and which months are on file (§37.10)?" |
 | 38 | **Super Admin Toolbox** | "As the platform super admin, where is every screen only I need — companies, business types, billing, operators, platform health, support, platform defaults — on one tiled page? Why does a tenant admin never see it, and how do I re-arrange its tiles?" |
 | 39 | **Setup documents (per-carrier required uploads · setup wizard first · automation offer · reminders)** | "Which documents must a new company upload for its carrier, where does it download each one, why is its admin sent to the Upload Wizard first, when is it offered automatic updates (and when not), and how is it reminded on the schedule it picked?" |
+| 40 | **One domain — where the backend is, and the customer-facing site** | "Why does the browser only ever talk to metricspro.tech, where is the one place that says where the backend is, which calls are proxied and which go direct (uploads, long portal logins) and why, when does the platform hostname redirect to the canonical site, and which origins may the API be called from?" |
 
 ---
 
@@ -2409,7 +2410,7 @@ post-landing hook existed (`_intake_pos_rebuild_after_landing` rebuilds POS sale
   request KEYS (`# org-guard-ok`), each then claimed and run org-scoped.
 - **NO PERIOD LOCK EXISTS** (searched: no locked / finalized / paid state for a rep-commission month; the only
   draft→approved→paid lifecycle is Management Incentive's `mi_payout`, which the Run Calculation never writes). A late
-  correction to a paid month recalculates it — exactly as a manual Run Calculation would. Open gap §19.32; a lock, when
+  correction to a paid month recalculates it — exactly as a manual Run Calculation would. Open gap §19.33; a lock, when
   built, belongs in `auto_calc.run_one` before the runner.
 - **Before mig 1030 is applied** the hook degrades to a PROCESS-LOCAL queue (same debounce, one calculation per
   process) and records its outcome as a `calc_notices` entry of type `auto_calc` (mig 247) — the two pre-existing
@@ -4819,6 +4820,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.commission_org_config.auto_calc_on_landing` / `.auto_calc_debounce_minutes` (mig `1030`) — house row → tenant row override | migration 1030 (house row TRUE where NULL); SQL / a future settings writer | ONE reader `auto_calc.load_config` → `resolve_config` (lock: `harness_auto_calc_lock.py` E) (§6l) |
 | `data_lineage_registry.COMMISSION_CALC_FEEDS` / `SALES_SIBLING_TABLES` (code registry) — **which tables the Run Calculation reads** | code | `auto_calc.is_calc_feed` (the hook), `harness_auto_calc_lock.py` A/F (§6l) |
 | `commcalc.installment_category_rule` (mig 245) — now also **the device an Exec-MTD activation event activated** (`tablet` / new `watch`) · `accessory_config.activation_details_rules.devices` (`{enabled, applies_to}`, no migration) | `POST/DELETE /plan-installments/category-rules` (drop the config memo) · `PUT /accessory-config` | `router._line_rules_resolve` → `line_class.resolve_devices` → `_device_of_lines` (= `installment_category.resolve_chain_category`) → `unit_devices` → `_sales_cell_agg` `_dev_tablet`/`_dev_watch` → `_apply_activation_basis` `act_tablet`/`act_watch` → Exec MTD → `_commission_from_mtd_rows` (§6n) |
+| *(none — §40 One domain creates no table and touches no database; its facts are deploy config, see §18)* | — | — |
 | `commcalc.raw_sales.customer` + `commcalc.raw_sales_invoice.customer` (mig 1012) — as **the customer on a paid commission line** | the sales / sales-by-invoice uploads (unchanged) | THE rule `inventory_sold_recon.sale_customer` / `invoice_customer_map` → `commission_drilldown._sale_customers` (reads `trans_id,customer` only, org-scoped) → `attach_line_identity` → every plan line's `customer` (explain, statements, the range); also `sales_detail_index` (inventory integrity §11b) (§6j) |
 | `commcalc.rep_commissions` — ONE rep's row(s) for one period | `POST /commcalc/recompute-rep` → the full path (`_calc_inputs` → `_calc_rep_rows` → `_apply_new_engines(persist_installments=False)`), writing only `_rows_for_rep` (update in place / insert) | the same readers as the full run's rows (§6k) |
 | `commcalc.rep_commissions` + the `/commission-explain` payload — as **what an EMPLOYEE may see of their own commission** | `calc_rep_commissions` / `commission_engine.preview` (unchanged) | THE shapers `payout_audience.employee_rep_row` / `employee_explain` / `employee_drill` (allow-lists; paid lines by `is_paid_line`) → `/commissions`, `/commissions-range`, `/commission-explain`, `/commission-statement(s)`, `/commission-drill`, core `/employee-dashboard`, the notify Incentives email (§6i) |
@@ -4939,7 +4941,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.management_incentive_*` | `/management-incentive/plans` `28534`, `/compute` `28613` | MI engine, payouts, resolve |
 | `commcalc.discrepancy_results` | Boost engine `discrepancy_engine.run_discrepancy` (`source='boost'`/NULL) + MA recon `ma_recon.run_ma_discrepancy` (`source='ma'`, `comp_type='MA_ACTIVATION'`) — each delete-then-inserts ONLY its own `(org, period, source)` slice; canonical DDL + attribution columns (`rule_id/rule_key/rule_reason/evidence/source/order_number`) in mig `312` (table pre-dates migrations, console-created); APPEAL columns (`appeal_status/appeal_note/appealed_by/appealed_at`) mig `947` — written ONLY by `PATCH /discrepancy-appeals/{row_id}` (pure state machine `discrepancy_appeals.py`), never by the engines | `GET /discrepancy/{period}` `router.py:19099` (selects `*`, optional `source` filter), Pay Discrepancy page; `GET /discrepancy-appeals` (period-range + filters) → Commission Discrepancy hub page (§15) |
 | `commcalc.ma_payment_rule` | `/ma-payment-rules` POST/PATCH/DELETE `router.py:19214-19270` (upsert by `org_id,rule_key`; mig `312`) | `ma_recon.load_rules` → `match_rules` (first match by ascending priority; case/trim-insensitive; `effective_from/to` windows; bad regex skipped) |
-| `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`, **`1030` `portout_fraud_rules`** — the daily fraud report's window / accessory floor / watched classes / second-payment boundary, resolved by `portout_fraud.resolve_rules` over house defaults that ARE the owner's numbers, so NULL changes nothing, §19.32) | `PUT /accessory-config` (Sales Report → Classification settings; since 2026-09-21 also `activation_details_rules` — the line_class keys `fields` / `tokens` / `exact` normalised through `line_class.merge_into_raw`, every other key passed through — and the intake's `PUT /onboarding/intake/line-class` writes THROUGH it) | `_accessory_config(_uncached)` (ONE whole-row read since 2026-09-22 — §4b.1 — instead of nine single-column reads of the same row; accessory/billpay/blank-ct classification for `_sales_cell_agg`; **`line_rules`** = `line_class.resolve_rules(activation_details_rules, contract_type_map, tenant exec 'activation' row)` — THE activation-type rules every classifier dereferences, §3 / §15); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, since 2026-09-22 dereferencing the ONE cached `_accessory_config` read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, its own whole-row `read_row`, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`); **`setup_fee_keywords` (mig `217`) is THE set-up/activation-fee recognition for BOTH the reports and the PAY path** (`_is_setup_fee` → `setup_fee_rev`; `setup_fee_pay.load_keywords`, §6a) — editing it moves Executive MTD, the accessory-TARGET basis AND somebody's commission in the same edit |
+| `commcalc.accessory_config` (per-org classification config, mig `208`; columns added by `214` `billpay_products`, `313` `activation_details_rules`, `944` `billpay_card_tenders`/`billpay_cash_tenders`, **`1031` `portout_fraud_rules`** — the daily fraud report's window / accessory floor / watched classes / second-payment boundary, resolved by `portout_fraud.resolve_rules` over house defaults that ARE the owner's numbers, so NULL changes nothing, §19.32) | `PUT /accessory-config` (Sales Report → Classification settings; since 2026-09-21 also `activation_details_rules` — the line_class keys `fields` / `tokens` / `exact` normalised through `line_class.merge_into_raw`, every other key passed through — and the intake's `PUT /onboarding/intake/line-class` writes THROUGH it) | `_accessory_config(_uncached)` (ONE whole-row read since 2026-09-22 — §4b.1 — instead of nine single-column reads of the same row; accessory/billpay/blank-ct classification for `_sales_cell_agg`; **`line_rules`** = `line_class.resolve_rules(activation_details_rules, contract_type_map, tenant exec 'activation' row)` — THE activation-type rules every classifier dereferences, §3 / §15); `_activation_details_rules` (mig 313 — Activation-Details bucket token rules, since 2026-09-22 dereferencing the ONE cached `_accessory_config` read, house defaults via `activation_bucketing.resolve_rules`); `_billpay_tender_tokens` (mig 944 — bill-pay tender vocabulary for the §12 3-way split, its own whole-row `read_row`, defaults `metric_recon.DEFAULT_CARD/CASH_TENDERS`); **`setup_fee_keywords` (mig `217`) is THE set-up/activation-fee recognition for BOTH the reports and the PAY path** (`_is_setup_fee` → `setup_fee_rev`; `setup_fee_pay.load_keywords`, §6a) — editing it moves Executive MTD, the accessory-TARGET basis AND somebody's commission in the same edit |
 | `commcalc.report_pull_map` (mig `207` — report_key → `target_table` + `column_map` + `param_spec`, org row over the house row) | `POST /commcalc/report-mappings` (`/commcalc/report-mappings`); mig `955` seeds `merchant_settlement` / `merchant_funding` | `report_pull` portal ingest; **card-settlement recon feed resolution** (`closing/router._settlement_feed_spec` → `external_credit_recon.SETTLEMENT_REPORT_KEY`, §12 — this is HOW the tally finds the scraped table without hardcoding it) |
 | `commcalc.metric_source_of_truth` (per-metric basis-of-truth config, mig `923`; columns added by `944` `processor_order_types`/`processor_product_tokens` — the bill-payment row filter for the daily-TX processor feed) | `PUT /metric-source-config` | `_metric_source` (consumed by Exec MTD activation override, `/metric-recon`, `/billpay-coverage`, `_pos_billpay_for_days`/`_billpay_processor_by_store(_day)` — §12 3-way Leg C; NULL columns = `metric_recon` house defaults) |
 | `commcalc.exec_metric_config` (per-org Exec-MTD metric DEFINITIONS, mig `204`; **`carrier` preset column mig `962`, `applicable` flag mig `963`**; seed fn `seed_exec_metric_config`) | `GET/PUT /exec-metric-config` `router.py` (upsert by `org_id,bucket`); 2026-09-02: LuxeLink `bill_payment` rules gained `product_desc_contains:["wallet funding"]`; **mig `962`** corrects the HOUSE `bill_payment` rules + seeds the boost carrier PRESET | `_exec_metric_config` → **`exec_metric_defs.resolve`** (tenant row > house carrier preset > built-in default) → `_sales_cell_agg` exec metrics via `exec_metric_defs.line_match` (since 2026-09-21 also `category_contains` / `department_contains`, additive — the intake's 2.5a step writes them through `PUT /exec-metric-config` for a bucket that matched nothing; the `activation` bucket's byod/upgrade/port tokens are RETIRED as a home — read only as a legacy layer by `line_class.resolve_rules` for a tenant-authored row; the Metric-definitions panel no longer offers it) |
@@ -4999,6 +5001,8 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 |----------|-------------|---------|
 | `GET /commcalc/calc-status/{period}` — now also serves `auto_calc` `{state, tone, sentence, due_at, last, enabled}`: what the landing hook did for the month (queued / calculated / refused / failed / busy / off / running). Read by the Rep Incentive page | `router.get_calc_status` → `auto_calc.view` + `auto_calc.load_config` | §6l |
 | Every landing endpoint's response now carries `auto_calc` (`queued` + periods / `off` / `not_a_calc_input` / …): `POST /upload/{file_type}`, `POST /upload-mapped`, `POST /onboarding/intake/commit`, `POST /sales/promote-feed`, `POST /ingest-guard/queue/{item_id}/decide`, the commission import wizard commit, `POST /manual-upload/ingest`, the POS sync; the DLAR sweep's status line says "auto-calculation queued for …" | `auto_calc.landed` (no new route) | §6l |
+| **Every backend path, as the BROWSER reaches it** — `/api/v1/*` and `/health` on the site's own origin, proxied server-side (`next.config.ts` `rewrites()` = `apiRewrites()`); uploads + the `require_browser_service()` endpoints + `POST /payables/rebuild` go DIRECT (`DIRECT_ROUTES`) | `frontend/src/lib/apiBase.ts` `apiUrl` / `routeClass`; lock `harness_one_domain_lock.py`, proof `frontend/prove_one_domain.mjs` | §40 |
+| **Any path on the platform hostname in production** → 308 to `NEXT_PUBLIC_SITE_URL`, same path + query (only when that is set; previews / localhost untouched) | `frontend/site-routing.ts` `canonicalHostRedirects` via `next.config.ts` `redirects()` | §40.4 |
 | `GET /commcalc/commissions/{period}` · `/commissions-range` · `/commission-explain` · `/commission-statement` · `/commission-statements` · `/commission-drill` — `audience=employee|manager` (default manager, byte-identical); a self-scoped rep is ALWAYS employee and may ask only for their own rep (403 otherwise) | `router._payout_audience` → `payout_audience.resolve` + `employee_*` shapers | §6i |
 | `GET /commcalc/carrier-vs-pay/{period}` · `/discrepancy/{period}` · `/discrepancy/{period}/phantom` · `POST /discrepancy/run` · `GET /discrepancy-appeals` · `/commission-device` · `/commission-explain?view=carrier` — the CARRIER surfaces: 403 for every viewer without `carrier_commission_view` (reps and store managers alike), each by its REGISTERED key | `router._require_carrier_view(authorization, org_id, key)` → `_can_view_carrier_commission` → `payout_audience.carrier_view_allowed`; keys in `payout_audience.MANAGER_ONLY_SURFACES` | §6i / §6j / §6m |
 | `GET /commcalc/commission-explain` (no `view`) · `/commission-drill` · `/commissions/{period}` · `/commissions-range` · `/commission-statement(s)` — the Rep Incentive payloads: NO carrier field for ANY audience | `payout_audience.rep_incentive_explain` / `rep_incentive_drill` / `rep_incentive_row`; `_statement_doc(buckets=None)` | §6m |
@@ -5242,8 +5246,10 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 |--------|--------------------|-----------------|
 | **Is this month's stored commission up to date with what landed?** ("Auto-calculated at … from the upload of …" / refused / off / queued) | `calc_status.auto_calc_requested_at` / `auto_calc_last` (mig 1030; pre-1030 `calc_notices` type `auto_calc`) | `auto_calc.view` via `GET /calc-status/{period}`; written only by the landing hook's runner, which runs `_run_calculation` (§6l) |
 | **What device an activation activated** (tablet / watch) and **its Exec-MTD pay category** | sale lines of the event (`product_desc`, `category`, `department`, `sku`, serial, catalog) | ONE classifier `installment_category.resolve_chain_category` (tenant rules + built-in ladder), dereferenced by `line_class._device_of_lines` / `unit_devices`; `line_class.pay_category` (one event, one category); categories `activation_bucketing.MTD_CATEGORIES` (§6n) |
+| **Where the backend is / the customer-facing site / which browser origins may call the API** (deploy config, not a metric) | env `BACKEND_ORIGIN`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_API_DIRECT_ORIGIN`, `NEXT_PUBLIC_SITE_URL` (frontend); `APP_PUBLIC_URL`, `CORS_ORIGINS`, `CORS_ORIGIN_REGEX` (backend) | ONE home each: `frontend/src/lib/apiBase.ts`; `backend/app/core/cors_policy.cors_policy` (§40) |
 | **One rep's recalculated commission row** (the Recalculate button) | `rep_commissions` (that rep's row only) | THE full path's row: `router._calc_inputs` + `_calc_rep_rows` + `_apply_new_engines`, shared with `_run_calculation`; lock `harness_recompute_rep_e2e.py` (== the full run's row, one rep, no ledger write) (§6k) |
 | **Undefined names in the backend** (a read name nothing binds — a NameError on first run) | `backend/app/**/*.py` | `harness_undefined_names_lock.py` (stdlib `symtable`), CI job *No undefined names under backend/app* (§6k) |
+| **Is a migration number / an index section number claimed once?** (#315 and #317 both took mig `1030` and §19.32 on 2026-09-28 — each branch green against a main without the other; the port-out file became `1031`, the auto-calc gap §19.33) | `database/migrations/*.sql` file names; `docs/SYSTEM_DATA_FLOW_INDEX.md` headings, `§N.M **` paragraphs, TOC rows | `harness_unique_numbers_lock.py` (stdlib), CI job *Migration and index numbers are claimed once* (org-scope-guard, also on push to main — the merged tree); the collisions that predate it (applied migrations 223 / 420 / 724 / 864–867; §23s, §23s.8, TOC 12) are listed by exact name and may only shrink |
 | **Which menu entries a viewer may not see** (the carrier surfaces) and **which payout view a viewer gets** | `storeops.roles.permissions.scope` / `.data.carrier_commission_view` + `app_config.rbac_enabled` | ONE registry `payout_audience.MANAGER_ONLY_SURFACES`, ONE self-scope answer `storeops.role_is_self_scoped`, ONE carrier permission `payout_audience.carrier_view_allowed`, served on `/me` (`viewer_payload`) → `rbac.payoutRefused` in `canSeeItem` / `canAccessPath`; audience by `payout_audience.resolve` (§6j, §6m) |
 | **Who may see carrier commission** (what the carrier paid the store — Price / GP, MA cross-reference, dealer figures, ledger buckets) | `storeops.roles.permissions.data.carrier_commission_view` per role, per org; unset = company-wide roles + platform super admin | `payout_audience.carrier_view_allowed` (the one home) → `router._require_carrier_view` on every registered carrier surface; the Rep Incentive report shows it to nobody (§6m) |
 | **The sale on a paid commission row** (action · phone line · customer) | engine event stamp (`event_type`, `event_key`); `raw_sales.customer` / `raw_sales_invoice.customer` | `payout_audience.event_label` (`line_class.CLASS_LABELS`) · `line_phone` (`line_class.line_event_keys`) · `inventory_sold_recon.sale_customer` via `commission_drilldown.attach_line_identity`; frontend `planLines.saleLabel` (§6j) |
@@ -5388,7 +5394,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 ## 19. Known gaps & inert config
 
-§19.32 **NO PERIOD LOCK FOR A REP-COMMISSION MONTH (found building §6l, 2026-09-28).** There is no locked / finalized
+§19.33 **NO PERIOD LOCK FOR A REP-COMMISSION MONTH (found building §6l, 2026-09-28).** There is no locked / finalized
 / paid state for a `rep_commissions` month anywhere in the platform (searched the index, the migrations and the
 routers; the only draft→approved→paid lifecycle is Management Incentive's `mi_payout`, which the Run Calculation never
 writes). So the landing hook (§6l) recalculates a paid month when a late correction to it lands — exactly what a
@@ -6736,7 +6742,7 @@ parts of this question and all four were extended rather than re-derived:
 | "what counts as an accessory?" | `router._is_accessory` / `_is_setup_fee` over `_accessory_config` — the gate behind the Sales Report's `accessory_rev` | dereferences it, so "accessories sold with that activation" is the same dollar the platform already calls accessory revenue |
 | "how do we read `raw_mi` for a set of lines?" | `marketing.router._es_mi_snapshots` — bounded, org-scoped, indexed by the commission paid gate's own `_mi_index` | reuses it (one column added: `residual_transfer_out_date`) — no second read path into the subscriber feed |
 | "who are market managers and above?" | `core/scope.roster_reach`, whose own words for scope `all` are *"market manager and above"* | `notify.router._role_scope_recipients` resolves recipients from `roles.permissions.scope` — a RESOLUTION, not a typed list |
-| "how does a report go out daily?" | `notify.subscriptions` + `POST /notify/run-due` on pg_cron | a subscription row (mig `1030` Block 2). **No new cron job, no new scheduler, no new dispatch path.** |
+| "how does a report go out daily?" | `notify.subscriptions` + `POST /notify/run-due` on pg_cron | a subscription row (mig `1031` Block 2). **No new cron job, no new scheduler, no new dispatch path.** |
 
 It introduces **no table and no ingest path**, so there is no `data_lineage_registry` row and no `925`
 seed entry. It books nothing (`books_to == []`).
@@ -6838,7 +6844,7 @@ second-payment rule would have caught are not in the flagged count. Absence of a
 reported, not papered over.
 
 **(8) RULE TWO.** Window, accessory floor, watched classes and the second-payment boundary are
-`accessory_config.portout_fraud_rules` (mig `1030`), per org, over house defaults that ARE the owner's
+`accessory_config.portout_fraud_rules` (mig `1031`), per org, over house defaults that ARE the owner's
 numbers — so a NULL column changes nothing and no carrier, tenant or product name appears in a branch.
 A junk or out-of-range value falls back to house rather than emptying or flooding the report.
 
@@ -6847,7 +6853,7 @@ export carry the mobile number, because the recipient is entitled to it through 
 being sent — but **every harness fixture uses 555-prefixed non-routable numbers and invented names, and
 no live subscriber identifier appears in this index, the repo or any fixture.**
 
-**(10) WHAT IS HELD FOR THE OWNER.** Mig `1030` **Block 1** (the config column) is behaviour-neutral.
+**(10) WHAT IS HELD FOR THE OWNER.** Mig `1031` **Block 1** (the config column) is behaviour-neutral.
 **Block 2 SENDS MESSAGES TO PEOPLE** — a daily WhatsApp + email to every market manager and above — and
 is deliberately separated, with a query beside it for checking exactly who that resolves to before
 anyone applies it. Nothing in this change was applied to any database.
@@ -13544,3 +13550,145 @@ job runs via `_SWEEP_SPECS`); §D gate + reminders (one per cycle, never before 
 validation + gates; §F wiring (feed registration in import_health's row shape, the sweep writer's job_run, the hourly tick, feed ownership, no portal
 word in code, the pure frontend gate, the alert scope listed); §G this section. Tested on local PG16: runs, re-runs without
 change, keeps an edit.
+
+---
+
+## 40. ONE DOMAIN — the browser talks only to the customer-facing site (owner 2026-09-28)
+
+Owner: *"we are using https://metricspro-five.vercel.app/login to log in, we should use metricspro.tech/xxxxx as
+customer facing and mask all urls so nobody knows how to hack in"*.
+
+**The defect.** Fifteen frontend files each read `process.env.NEXT_PUBLIC_API_URL` and built `${API_URL}/api/v1/...`
+(`lib/client.ts`, `lib/auth-context.tsx`, `(platform)/layout.tsx`, `signup`, `onboard/[token]`, `r/[token]`, `portal`,
+`closing/_lib/SubmissionsTable`, `closing/envelope-report`, `hr/compliance`, `referral/list/[id]`, `vision/settings`),
+so the browser called the backend host directly — its name was in the network tab, the JS bundle and the CSP
+(`*.up.railway.app`) — and "where is the API" had fifteen answers. **The class:** the location of the backend and of the
+customer-facing site is a fact with ONE home, dereferenced by every caller.
+
+**Honest framing.** Hiding a hostname is not security: the API is exactly as reachable by its real name as before, and
+anyone can learn it (DNS history, a CNAME, a stack trace). What this buys is one customer-facing address, a smaller
+CSP, one place to change where the backend is, and a proxy seam. What protects the app is §40.7.
+
+### 40.1 The homes
+
+| Fact | Home | Readers |
+|---|---|---|
+| Where the backend is; which address a caller uses; the customer-facing site | `frontend/src/lib/apiBase.ts` — the ONLY reader of `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_API_DIRECT_ORIGIN`, `BACKEND_ORIGIN`, `NEXT_PUBLIC_SITE_URL` | `apiUrl(path, cls?)` (every fetch), `absoluteApiUrl(path, cls?)` (URLs that leave the page: exports, pasted webhook URLs), `siteUrl()` (`app/layout.tsx` metadataBase, `app/robots.ts`), `apiRewrites()` / `directOrigin()` / `API_ENV` (`next.config.ts`) |
+| The routing policy built from it | `frontend/site-routing.ts` — `canonicalHostRedirects(env)`, `connectSrc(directOrigin)`, `PLATFORM_HOST_RE` (the one place allowed to name the platform's hostnames) | `next.config.ts` `redirects()` / CSP |
+| Which browser origins the API allows cross-origin | `backend/app/core/cors_policy.py` `cors_policy(env, APP_PUBLIC_URL)` | `backend/app/main.py` CORSMiddleware |
+
+### 40.2 Two route classes (decided in the home, from the path — never at the call site)
+
+- **proxy** (default): the browser calls `/api/v1/...` on its own origin; `next.config.ts` `rewrites()` = `apiRewrites()`:
+
+  | source | destination |
+  |---|---|
+  | `/api/v1/:path*` | `${BACKEND_ORIGIN or NEXT_PUBLIC_API_URL or http://localhost:8000}/api/v1/:path*` |
+  | `/health/:path*` (also matches `/health`) | `${same origin}/health/:path*` |
+
+  Those are the only backend path prefixes the frontend uses (`BACKEND_PATH_PREFIXES`). The portal's "is the API up"
+  probe used to fetch the backend's `/` — same-origin that would be the app's own home page — so it now probes
+  `/health` and checks `r.ok` (a down backend answers with the proxy's 5xx, not a network error).
+- **direct**: multipart uploads (`apiUpload` → `apiUrl(path, 'direct')`; the public onboarding upload) and the synchronous
+  endpoints that can outrun the proxy (`DIRECT_ROUTES`): `POST /payables/rebuild`; `/commcalc/epay/sweep/{run-now,discover-reports,run-due}`;
+  `/commcalc/data-sources/sweep/run-due`; `/commcalc/data-sources/{sid}/{run,login/start,login/verify,live-login/*}`;
+  `/supply/vendors/{id}/catalog/read`; `/supply/orders/{id}/{open-session,capture,submit}` — every endpoint that calls
+  `require_browser_service()` (Chromium; the API proxies it to the sweeps worker with a 180 s budget). These go to
+  `NEXT_PUBLIC_API_DIRECT_ORIGIN` (intended: `https://api.metricspro.tech`, a CNAME to the backend); unset ⇒ `NEXT_PUBLIC_API_URL`
+  (the pre-change behaviour — the backend host stays visible for these calls until the subdomain exists); on a PREVIEW with
+  no direct origin ⇒ same-origin. Run Calculation is NOT direct: `POST /calculate/{period}` returns at once and the page polls.
+- **server side** (no `window`): `BACKEND_ORIGIN` (server-only, never inlined) → `NEXT_PUBLIC_API_URL` → localhost.
+
+### 40.3 The platform's limits (why the direct class exists)
+
+- **Time:** a proxied (external-rewrite) request on Vercel must produce its first byte within **120 s**, else
+  `ROUTER_EXTERNAL_TARGET_ERROR` (Vercel docs, "Limits"; changelog "CDN origin timeout increased to two minutes"). The
+  Chromium endpoints above are budgeted at 180 s by the API itself, and the payables rebuild documents "the browser 502s"
+  on a full rebuild — both would fail behind the proxy.
+- **Body size:** the documented 4.5 MB request cap belongs to Vercel **Functions**; an external rewrite is served by the
+  CDN proxy, not a Function, and no body cap for it could be confirmed from this environment (vercel.com is not reachable
+  from it). Uploads are real and large — the backend's own cap is 64 MB (`MAX_UPLOAD_MB`), sized against a 7 MB month
+  workbook, a 9.5 MB asset reload and a 28 MB synthetic sales file (`core/body_limit.py`) — so uploads are direct rather
+  than bet on an unverified limit. **Do not route uploads through the proxy until a >10 MB upload has been tested
+  through it.**
+- **No `proxy.ts` / middleware:** Next buffers a request body in a proxy (`experimental.proxyClientMaxBodySize`, default
+  10 MB, silently truncating past it). The redirect is therefore a `next.config.ts` `redirects()` rule, not middleware.
+
+### 40.4 Canonical host
+
+`redirects()` = `canonicalHostRedirects({VERCEL_ENV, NEXT_PUBLIC_SITE_URL})`: `{source: '/:path*', has: host
+(?:[a-z0-9-]+\.)*vercel\.app, destination: ${site}/:path*, permanent: true}` → **308**, same path and query
+(`/_next/*` excluded by Next). Installed ONLY when `VERCEL_ENV=production` (previews and `next dev` untouched) AND
+`NEXT_PUBLIC_SITE_URL` is set explicitly (a code default must never send every login to a host not yet serving the app)
+AND the site is not itself a platform host (loop). A tenant's custom domain and look-alike hosts are not matched.
+
+### 40.5 CORS (`app/core/cors_policy.py`)
+
+`CORS_ORIGINS` (comma list) or the defaults (the production platform alias — exact, kept for deploy ordering — apex,
+www, localhost:3000 / 127.0.0.1:3000); the app's own `APP_PUBLIC_URL` is ALWAYS allowed; `*` or any non-bare origin is
+dropped with a note; `CORS_ORIGIN_REGEX` OFF by default and refused if it admits a canary (the old default
+`https://metricspro[a-z0-9\-]*\.vercel\.app` admitted `metricspro-attacker.vercel.app` — platform hostnames are
+first-come). Same-origin proxied calls need no CORS (Starlette serves a non-preflight request whose Origin is not
+allowed; it only omits the ACAO headers). Server-side calls carry no Origin.
+
+### 40.6 Siblings checked (CLAUDE.md "find the siblings")
+
+| Path answering "where is the API / the site" | Status |
+|---|---|
+| The 12 frontend files above + `robots.ts` / `layout.tsx` (their own `NEXT_PUBLIC_SITE_URL` copies) | **Fixed** — dereference `apiBase.ts` |
+| `next.config.ts` CSP `*.up.railway.app` | **Fixed** — `connectSrc(directOrigin())` |
+| `backend/app/modules/core/auth_notify.py` carried its own copy of the platform hostname as a fallback | **Fixed** — dereferences `settings.APP_PUBLIC_URL` |
+| Backend `settings.APP_PUBLIC_URL` (default the platform alias) — links in invite / onboarding / report / payroll emails | **Config, owner step** — set it to the canonical site once that serves the app (default not changed: a wrong default would break every emailed link) |
+| Backend `settings.API_PUBLIC_URL` (default the backend host) — signed download links in notify emails, the WhatsApp webhook URL, pg_cron self-calls, the Vision push endpoint | **Excused / config** — machine-facing or emailed download links; set to `https://api.metricspro.tech` once that CNAME exists (Google / Meta registrations must be updated with it) |
+| `website/assets/config.js` (`apiBase`, `appUrl`), the marketing HTML "Sign in" links, `website/.htaccess` CSP | **Excused** — a separate static site with its own one home (`config.js`); its values change at §40.8 step 6 (after the app domain serves) |
+| `mobile/` (`EXPO_PUBLIC_API_URL`) | **Excused** — a native app: no browser origin, no CORS; point it at the API subdomain when it exists |
+| Commented pg_cron URLs in old migrations | **Excused** — documentation of already-applied SQL; server-to-server |
+
+### 40.7 What actually protects the app (not the hostname)
+
+Supabase JWT auth on every non-public route (`REQUIRE_AUTH`), membership-verified tenant resolution (`tenant_middleware`;
+`x-active-org` is a hint re-verified per request), org-scoped queries (CI `org-scope-guard`), per-IP rate limiting
+(`core/rate_limit.py`, strict tier on auth / signup / 2FA / reset), the 64 MB body cap, masked 500s + security headers,
+2FA (admin enforcement still OFF until `ADMIN_2FA_ENFORCE=1`), `MULTI_TENANT_ENFORCE` still OFF (SECURITY_DAILY_QUESTIONS
+§11–12). **Real gap noticed:** the client IP used by the rate limiter, the access log, OTP and impersonation records is the
+LEFTMOST `X-Forwarded-For` entry (`tenant_middleware._client_ip_from`, plus two private copies in `core/router.py` and
+`core/impersonation_api.py`). A caller that reaches the backend directly can put any value there, so the per-IP limit is
+bypassable and logged IPs are spoofable. The fix is to trust only the hop(s) the deployment adds (one config value, one
+helper, the two copies deleted) — not done here.
+
+### 40.8 Owner steps (dashboards) — DECIDED: the app lives at `app.metricspro.tech` (owner 2026-09-28)
+
+The apex `metricspro.tech` stays the marketing site (Bluehost document root, `website/DOCROOT-SHIM.htaccess`; `signup`
+links its `/legal/*`). The app is `https://app.metricspro.tech`; the API subdomain is `https://api.metricspro.tech`.
+Code defaults now say so (`apiBase.DEFAULT_SITE_URL`, `cors_policy.DEFAULT_ORIGINS`); the redirect still turns on ONLY
+when `NEXT_PUBLIC_SITE_URL` is set, so nothing moves until the domain serves the app. Order matters:
+1. **DNS (Bluehost zone for metricspro.tech):** `app` CNAME → the target Vercel shows when the domain is added (step 2);
+   `api` CNAME → the target Railway shows when the custom domain is added (step 3).
+2. **Vercel** → project → Domains: add `app.metricspro.tech`, wait for "Valid Configuration". Environment Variables
+   (Production): `BACKEND_ORIGIN` = the Railway URL; once step 3 is green, `NEXT_PUBLIC_API_DIRECT_ORIGIN` =
+   `https://api.metricspro.tech`; LAST, `NEXT_PUBLIC_SITE_URL` = `https://app.metricspro.tech` → Redeploy (this turns on
+   the 308 from `metricspro-five.vercel.app`).
+3. **Railway** → backend service → Settings → Networking: add custom domain `api.metricspro.tech`. Variables:
+   `APP_PUBLIC_URL` = `https://app.metricspro.tech`, `API_PUBLIC_URL` = `https://api.metricspro.tech` (and add the app
+   site to `CORS_ORIGINS` only if that variable is set at all).
+4. **Supabase** → Authentication → URL Configuration: Site URL `https://app.metricspro.tech`; add
+   `https://app.metricspro.tech/**` to Redirect URLs (keep the old one until the redirect has been live a while).
+5. **Google OAuth clients (Vision)** and the **WhatsApp/Meta webhook**: add the new redirect / webhook URLs
+   (`API_PUBLIC_URL`-based).
+6. **Marketing site:** `website/assets/config.js` `appUrl` → `https://app.metricspro.tech` (and `apiBase` →
+   `https://api.metricspro.tech`) — only AFTER step 2 works, since it rewrites every "Sign in" link.
+
+### 40.9 Locks and proofs
+
+- `backend/harness_one_domain_lock.py` (stdlib, CI `carrier-vocab-guard`): only the home reads the four env vars; no
+  `railway.app` / `vercel.app` literal under `frontend/src`; nobody builds `${origin}/api/v1`; `next.config.ts` installs
+  rewrites / redirect / connect-src from the homes; `apiUpload` is direct; every `require_browser_service()` endpoint (read
+  from the routers) matches `DIRECT_ROUTES`. A negative control for each rule.
+- `backend/harness_cors_policy.py` (stdlib, CI): §40.5 end to end + `main.py` wiring + controls.
+- `frontend/prove_one_domain.mjs` (CI job `one-domain-proof`, Node 22 + `npm ci`): loads the REAL `next.config.ts` through
+  Next's own `transpileConfig`, validates with `loadCustomRoutes`, evaluates with Next's `getPathMatch` / `matchHas` /
+  `prepareDestination` — 308 with path + query, previews / localhost / custom domains / look-alikes untouched, rewrites,
+  CSP, the home's resolver; negative controls.
+- Verified by two `next build`s: with only `NEXT_PUBLIC_API_URL` set, one static chunk still names the backend (the
+  direct-class fallback); with `BACKEND_ORIGIN` + `NEXT_PUBLIC_API_DIRECT_ORIGIN=https://api.metricspro.tech` and no
+  `NEXT_PUBLIC_API_URL`, **no** file under `.next/static` or the prerendered pages names the backend host.

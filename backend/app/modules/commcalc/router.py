@@ -16800,7 +16800,7 @@ def _dlar_slice_vintage(client, org_id, period):
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 def _portout_rules(client, org_id):
     """The org's fraud rules over the house defaults (RULE TWO). Read from the EXISTING per-org
-    `commcalc.accessory_config` JSON home — `portout_fraud_rules`, mig `1030` — beside
+    `commcalc.accessory_config` JSON home — `portout_fraud_rules`, mig `1031` — beside
     `activation_details_rules`, which is where this module's other per-org classification rules
     already live. No new config table, and a NULL column resolves to the house defaults."""
     from app.modules.commcalc import portout_fraud as _pf
@@ -16810,7 +16810,7 @@ def _portout_rules(client, org_id):
              .eq("org_id", org_id).limit(1).execute().data) or []
         raw = (r[0].get("portout_fraud_rules") if r else None)
     except Exception:
-        raw = None                      # mig 1030 not applied yet → house defaults, never a crash
+        raw = None                      # mig 1031 not applied yet → house defaults, never a crash
     return _pf.resolve_rules(raw)
 
 

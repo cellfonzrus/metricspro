@@ -1,5 +1,9 @@
--- 1030_portout_fraud_report.sql — the daily port-out fraud report: its per-org rules, its designated
+-- 1031_portout_fraud_report.sql — the daily port-out fraud report: its per-org rules, its designated
 -- recipients, and its daily send.
+--
+-- RENUMBERED 1030 → 1031 on 2026-09-28, before anyone applied it: #315 (auto-calculation,
+-- 1030_auto_calc_on_landing.sql) and #317 (this file) were merged the same day and both took 1030. The
+-- earlier merge keeps the number. A migration number is claimed once — backend/harness_unique_numbers_lock.py.
 --
 -- Run this in the Supabase SQL editor. Claude does not run SQL and has applied NOTHING of this file.
 -- Additive, idempotent, safe to re-run. Numbered, higher number = later ALTER wins.

@@ -1,4 +1,5 @@
 import type { MetadataRoute } from 'next'
+import { siteUrl } from '@/lib/apiBase'
 
 // WHAT A SEARCH ENGINE MAY LOOK AT. Owner 2026-09-27 ("no sitemap.xml" on a production checklist).
 //
@@ -15,7 +16,9 @@ import type { MetadataRoute } from 'next'
 // `/hr/public/onboarding/*` is unauthenticated but token-gated and carries personal data — disallowed
 // explicitly. robots.txt is a request, not a control: the real protection is the token check on the
 // endpoint. This just stops a well-behaved crawler from putting a token in an index.
-const SITE = process.env.NEXT_PUBLIC_SITE_URL || 'https://metricspro.tech'
+// The customer-facing site origin — ONE home (lib/apiBase.ts, index §40), shared with the canonical-host
+// redirect in next.config.ts so the two can never disagree.
+const SITE = siteUrl()
 
 export default function robots(): MetadataRoute.Robots {
   return {

@@ -77,6 +77,11 @@ Open: http://localhost:3000
 NEXT_PUBLIC_SUPABASE_URL=https://[project].supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 NEXT_PUBLIC_API_URL=https://your-api.railway.app
+# Optional (index §40 — one domain). The browser calls the API same-origin through the site's own
+# /api/v1 proxy; these are read ONLY by frontend/src/lib/apiBase.ts.
+BACKEND_ORIGIN=https://your-api.railway.app          # server-only proxy target (falls back to NEXT_PUBLIC_API_URL)
+NEXT_PUBLIC_API_DIRECT_ORIGIN=https://api.example.com # uploads + long calls (falls back to NEXT_PUBLIC_API_URL)
+NEXT_PUBLIC_SITE_URL=https://example.com              # canonical host; setting it turns on the 308 from *.vercel.app
 ```
 
 **Backend (.env):**
