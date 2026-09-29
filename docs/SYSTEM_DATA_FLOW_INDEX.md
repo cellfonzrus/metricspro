@@ -4904,7 +4904,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview` (company scopes cross-checked against `coa.org_companies` via `coa.filter_org_scopes` — §13b), `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet`/**`account_pl_range`**; **the P&L month range (§4c, 2026-09-26)** — `router.pl_single_month` (THE single-month read, `get_pl` returns it) looped by `router.get_pl_range` over `_period.month_range`; **the Account hub's Expenses column + per-scope drill-down (2026-09-21)** — `analysis.pl_totals` is the ONE home for the headline figures incl. `expenses` (Σ `analysis.EXPENSE_SECTIONS`), read by `/account/overview` and by the drill-down through `GET /account/pl/{period}?scope=` |
 | `commcalc.companies` | `POST/PATCH /account/companies` (org_id in payload/filter; mig `952` removed the two 2026-06-27 wrong-org LuxeLink rows) | ONLY `coa.org_companies` (§13b canonical fail-closed enumeration; CI-pinned by `harness_org_scope_guard.py`) → `list_companies`/`list_stores`/journal echo/`overview`/`analysis`/`finance_attention`/`store_company_map`⇒`company_assignment`; billing `per_entity` org-scoped count probe |
 | `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`/`938`/`941`/`954`) | `PUT /account/config` (incl. the mig-954 tenant mapping `distributor_payable_basis`/`distributor_payable_line`/`asset_ledger_open_statuses`); mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate; mig-941 columns (`projection_config`, `valuation_config` JSONB — display-only assumptions, org seeds gated) | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933/938 knobs, adaptive), `projection_engine.load_projection_config`, `valuation.load_valuation_config` (mig-941, adaptive); **mig-954 distributor-payable mapping** via `balance_sheet.load_bs_config` → `resolve_payable_basis`/`resolve_payable_line` (org column > carrier preset > declared mig-933 family > off) |
-| `commcalc.asset_ledger` (consignment / asset-lending ledger; wipe-and-reinsert CURRENT snapshot) | mod-asset upload `process_asset_ledger_bytes`, `vip_sweep.run_asset_ledger_sweep` | asset dashboard `GET /asset/summary` ("Open Balance Owed" = Σ `owed_to_vip` where `status='Open'`), `account/device_cogs` (consignment COGS), `coa.build_inputs` (`vip_reimb`/`vip_fees`, and the legacy `owed_vip`/`inventory` `status='on inventory'` predicate that matches NOTHING on the live feed), **BS distributor payable under `distributor_payable_basis='asset_ledger'`** (`balance_sheet.asset_ledger_open_bookings` via `statement_engine._fetch_asset_ledger_open`, mig `954`; money column `owed_to_vip` ONLY; as-of = `period_as_of`) and the SAME derivation behind `GET /account/liabilities-due`; statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`) ; **Device Payable as at a date** (`account/device_payable`, §23z — the PAID-ON side: `payg_date` is the ONLY per-unit PAYMENT DATE in the platform and the only thing that can backdate a payable, licensed by agreeing to within 2.7% with the settled payment batches; `owed_to_vip` the money; `acquired_date` drives the DERIVED coverage window, because this snapshot has been PRUNED — 72 rows in 2023 and 1,391 in 2024 against 1,504 and 16,195 units actually invoiced, so a payable for a 2024 date returns "not measured" rather than a small confident wrong number) |
+| `commcalc.asset_ledger` (consignment / asset-lending ledger; wipe-and-reinsert CURRENT snapshot) | mod-asset upload `process_asset_ledger_bytes`, `vip_sweep.run_asset_ledger_sweep` | asset dashboard `GET /asset/summary` ("Open Balance Owed" = Σ `owed_to_vip` where `status='Open'`), `account/device_cogs` (consignment COGS), `coa.build_inputs` (`vip_reimb`/`vip_fees`, and the legacy `owed_vip`/`inventory` `status='on inventory'` predicate that matches NOTHING on the live feed), **BS distributor payable under `distributor_payable_basis='asset_ledger'`** (`balance_sheet.asset_ledger_open_bookings` via `statement_engine._fetch_asset_ledger_open`, mig `954`; money column `owed_to_vip` ONLY; as-of = `period_as_of`) and the SAME derivation behind `GET /account/liabilities-due`; statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`) ; **the inventory→COGS transition §42** (`device_cogs._vip_sold_cost` recognises `owed_to_vip` at `date_sold`; the UNSOLD side of the same ledger is booked by nothing — `coa`'s `status=='on inventory'` inventory predicate matches 0 of 35,346 live rows) ; **Device Payable as at a date** (`account/device_payable`, §23z — the PAID-ON side: `payg_date` is the ONLY per-unit PAYMENT DATE in the platform and the only thing that can backdate a payable, licensed by agreeing to within 2.7% with the settled payment batches; `owed_to_vip` the money; `acquired_date` drives the DERIVED coverage window, because this snapshot has been PRUNED — 72 rows in 2023 and 1,391 in 2024 against 1,504 and 16,195 units actually invoiced, so a payable for a 2024 date returns "not measured" rather than a small confident wrong number) |
 | `core.system_check` (mig `970`; per-tenant OVERRIDES over the code-derived check registry — retune / disable / DECLARE a check) | `PUT`-less by design today: rows are written by SQL/console; the board never writes them | `control_box_api.effective_registry` (code defaults < HOUSE rows < org rows) → `GET /core/control-box` |
 | `core.system_check_run` (mig `970`; daily-run history — the PROOF the check ran + the baseline escalation compares against) | `control_box_api._persist_run` (from `POST /core/control-box/run` and `/run-due`) | `GET /core/control-box/history`; `_previous_results` → `control_box.escalations` (notify-once) |
 | `core.system_check_state` (mig `970`; per-org `enabled`/`cadence_hours`/`last_run_at`/`next_run_at`) | `control_box_api._persist_run` upsert | `control_box.due_orgs` (which tenants are due) + `control_box.selfcheck_row` (the board's row about ITSELF) |
@@ -5376,6 +5376,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | **Device purchases from the distributor** (what we were BILLED in a period, by company × store) | `commcalc.vip_invoice_lines.total` on lines whose `btrim(name)` is a `btrim(product_name)` in `commcalc.vip_invoice_devices` (i.e. the product actually arrived SERIALISED — no product-name matching, RULE TWO). Recognised on the INVOICE date. Invoice-level shipping/other/tax excluded (already `vip_fees`). Tablets INCLUDED and shown at product grain | `account/device_purchases.aggregate` (pure) → `GET /account/device-purchases` → `/accounts/device-purchases`. Store = `coa.store_resolver` (§13/§13a) **unchanged**, company = `coa.build_company_matcher` **unchanged** (called with `default_id=None` so "unassigned" stays distinguishable from "the default"); a codeless `store_mapping` row (a distributor master/dealer ACCOUNT) is not a store; unresolved rows keep their money in `(store not mapped)` / `(company not mapped)`. Proof `harness_device_purchases.py` (67), incl. §B2/§B3 pinning `coa.py` byte-identical. **Deliberately will NOT tie to `account/device_cogs`** — that is cost of units SOLD, IMEI-deduped, recognised at sale |
 | Distributor open balance — consignment side (BS liability, mig `954`) | `asset_ledger.owed_to_vip` on rows whose `status` is in `asset_ledger_open_statuses` (default `["Open"]`) with `acquired_date ≤ as-of`; live house org 2026-09-04 = $358,221.13 (past-due $29,839.62 / not-yet-due $328,381.51) | `balance_sheet.asset_ledger_open_bookings` via `statement_engine.build_inputs_full` → the resolved target line (default `owed_vip`); store grain = the ledger's own `store` through `coa.store_resolver`; as-of = `period_as_of` (open period ⇒ today, closed ⇒ period end) |
 | Handset payable (BS liability, mig `933`) | `raw_ma_daily_tx.retail_cost` on the org's `handset_payable_order_types` families, `tx_date ≤ as-of < due_date` (the vendor's own terms) | `balance_sheet.handset_payable_bookings` via `statement_engine.build_inputs_full` → BS `handset_payable` line; store grain = the mig-314 account→store index |
+| **Device COGS — the inventory→COGS transition** (§42) | `asset_ledger.owed_to_vip` recognised in the month of **`date_sold`**, IMEI-deduped, fee categories excluded — so an unsold unit is in no month's COGS and the same unit is in exactly one. Gated by `account_config.device_cogs_mode` (mig `621`, default `'off'`; house `'off'`, LuxeLink `'auto'` as at 2026-09-29) | `device_cogs.resolve` → `coa.build_inputs` `device_cost`. **The ASSET half is NOT booked from this ledger** — `coa`'s `status=='on inventory'` predicate matches 0 of 35,346 live rows and the BS `inventory` line comes from `inventory_value`/`inventory_aging_device` instead (§42.3). **`vip_device_pay` (PayGo cash) already expenses the same handsets with no gate between them** (§42.1). Proof `harness_device_inventory_cogs.py` (41) |
 | Unsold-phone inventory (BS asset, mig `933`) | `inventory_aging_device.unit_cost` where `on_hand` at the store's latest `as_of_date` (basis `'devices'`); `inventory_value.swept_value` (basis `'report'`, default); `manual_value` always wins | `balance_sheet.device_inventory_cells`/`apply_inventory_basis`; tie-out `GET /account/inventory-recon` |
 | Cash-deposit variance | `daily_closing.t_cash` − `bank_deposit.amount` | `deposit_recon` `:147/:179`; MI gate `28895` |
 | Bill-pay cash pending remittance (per store) | `daily_closing.epay_on_cash` (DM `dm_epay_cash` winning) − `billpay_pickup.amount` (picked_up) | `_billpay_position_core` → `billpay_pickup.billpay_position` (`GET /closing/billpay-pickups` by_store; mig `942`) |
@@ -13847,3 +13848,117 @@ cron registrars) and for the second, copied reader of `BROWSER_SERVICE_URL` in `
 
 Self-heal: the next boot re-registers the portal-pull cron (`ensure_data_sources_cron`, replace-by-name) with the
 normalised address — no migration, no manual step.
+
+## 42. DEVICE COST — the phone sits in inventory until it sells, then moves to COGS (owner report 2026-09-29)
+
+Owner, verbatim: *"📈 Profit & Loss - device purchase cost is not coming in boost this should come
+from teh assest landing , teh asset landing report for everyweel charges for teh phones due , cogs
+will be those phones which are activated and sold , the rest of the phones will become a part of the
+inventory till they are sold and automatically move to cogs and out of the inventory cost"*
+
+**Duplicate check, stated (build gate).** Everything this touches already exists and is REUSED, not
+rebuilt: `account/device_cogs.resolve` (§13/§13a, the invoice-first sale-time recogniser),
+`account/device_purchases` (§23y, what was BILLED — deliberately not COGS),
+`account/device_payable` (§23z, the backdated payable),
+`balance_sheet.asset_ledger_open_bookings` (§23n/mig `954`, the liability side),
+`balance_sheet.device_inventory_cells` / `apply_inventory_basis` (mig `933`, the asset side),
+`coa.build_inputs` (the one booking home). **No new endpoint, no new table, no new feed** — this
+change adds a proof harness and this record. The one thing that does NOT exist is named in §42.3.
+
+### 42.1 What is actually true (house org `00000000-…-0001`, measured 2026-09-29)
+
+| The owner's claim | What the data says |
+|---|---|
+| "device purchase cost is not coming in boost" | **Half true, and the false half matters.** `device_cost` is NOT absent — the consolidated P&L books it every month (**$75,172.69** Aug 2026, **$80,413.50** Sep 2026), from the POS as `ext − gp`. What is absent is the DISTRIBUTOR's per-unit charge: `account_config.device_cogs_mode = 'off'` for this org (LuxeLink `'auto'`, Vzone `'off'`) |
+| "it should come from the asset landing" | The asset ledger is ALREADY the wired consignment-COGS source (`device_cogs._vip_sold_cost`) and ALREADY this org's `distributor_payable_basis`. Nothing new to source |
+| "sold ⇒ COGS, the rest sit in inventory and move automatically" | **The COGS half is built and correct. The inventory half is not built from this ledger.** See §42.3 |
+
+**And the thing nobody asked about.** The house P&L **already expenses these handsets**, on a CASH
+basis, on a different line: `coa` books `vip_device_pay` ("Distributor device payments (PayGo,
+paid)") from `vip_paygo_payments` approved batches, **unconditionally, with no gate on whether
+`device_cogs` is active**. August 2026 house consolidated: `vip_device_pay` **$398,355.01** against
+an asset-ledger sale-time cost of **$424,668.36** for the same month — the same phones, two
+readings. **Switching `device_cogs_mode` to `'auto'` without suppressing the cash line books BOTH**,
+roughly doubling device cost. That is why this is not a one-row config flip.
+
+### 42.2 The COGS half IS the owner's rule, and it works
+
+`device_cogs._vip_sold_cost` recognises `asset_ledger.owed_to_vip` in the month of **`date_sold`**,
+IMEI-deduped, fee categories (`PROCESSING FEE` / `SHIPPING` / `SIM KIT`, already `vip_fees`)
+excluded. So an unsold unit reaches no month's COGS, and the same unit reaches exactly one month's
+COGS — the month it sold — with no upload, no flag and no manual step. Measured on the live house
+ledger (35,346 rows, 33,497 distinct IMEIs): **zero** IMEIs carry a `date_sold` in more than one
+month, so the cross-period double-count the rule must avoid does not occur in the live data either.
+
+### 42.3 THE GAP: the asset side is not booked from the same ledger
+
+Nothing books the unsold units of THAT ledger as an asset.
+
+- `coa.build_inputs` books the BS `inventory` line from `asset_ledger` only where **`status`** reads
+  `'on inventory'`. That column carries `'Open'` / `'Paid In Full'` / NULL — **0 of 35,346 live rows
+  match**. `'On Inventory'` is a **category** value. (Same dead predicate §23n records for `owed_vip`;
+  the payable side was repaired by mig `954`, the inventory side was not.)
+- The BS `inventory` line therefore comes from a **different feed entirely** — the emailed b2bsoft
+  report (`inventory_value.swept_value`, basis `'report'`, house default) or the device ledger
+  (`inventory_aging_device`, basis `'devices'`). House, 2026-09-29: **$493,558.22 over 1,317 on-hand
+  devices**, both bases agreeing to the cent. The asset ledger's own unsold, non-fee units are
+  **3,406 rows / $376,854.21** — a different population at a different cost basis.
+- So the asset ledger's unsold units appear on the balance sheet as a **liability**
+  (`owed_vip`, $325,134.37 open at the snapshot) with **no matching asset from the same ledger**,
+  while the asset that is shown comes from a feed that knows nothing about `owed_to_vip`.
+
+**"Out of the inventory cost at the same moment" is therefore not guaranteed by anything.** Two
+unrelated feeds measure the two halves. That is the gap worth building, and it is buildable with no
+new feed: the ledger already carries `acquired_date` (billed), `date_sold` (relieved) and
+`owed_to_vip` (the money). `backend/harness_device_inventory_cogs.py` §C is the specification —
+an as-of unsold derivation over those three columns with the periodic-inventory identity
+`inventory(open) + purchases − COGS == inventory(close)` proved to close to the cent. Note the
+as-of discipline §23z already taught: the asset side must compare `date_sold` to the as-of DATE, not
+to "is it null today", because the ledger is a wipe-and-reinsert CURRENT snapshot and a status can
+never be backdated. The same snapshot pruning (72 rows in 2023, 1,391 in 2024) means a sale-time
+recognition over closed prior years is a **snapshot-basis estimate**, and must say so.
+
+### 42.4 What enabling `device_cogs_mode='auto'` would do to the house P&L (measured, per month)
+
+Σ `owed_to_vip`, non-fee categories, IMEI-deduped, by month of `date_sold`, house org, 2026:
+
+| Month | NEW `device_cost` (asset ledger, sale-time) | Current `device_cost` (POS) | `vip_device_pay` already in COGS (PayGo cash) |
+|---|---|---|---|
+| Jan 2026 | $392,319.19 | — | $562,538.32 |
+| Feb 2026 | $610,025.02 | — | $522,484.59 |
+| Mar 2026 | $646,943.34 | — | $705,731.98 |
+| Apr 2026 | $476,297.27 | — | $525,539.03 |
+| May 2026 | $433,927.88 | $87,936.50 | $533,505.50 |
+| Jun 2026 | $486,656.87 | $38,706.04 | $430,541.91 |
+| Jul 2026 | $521,815.94 | $68,625.70 | $647,777.49 |
+| Aug 2026 | $424,668.36 | $75,172.69 | $398,355.01 |
+| Sep 2026 | $274,482.69 | $80,413.50 | $291,644.12 (3 batches, partial) |
+| **2026 YTD** | **$4,267,136.56** | — | — |
+
+Lines that move: `device_cost` (COGS) replaces the POS figure with the ledger figure; gross profit
+falls by the difference; `vip_device_pay` is UNCHANGED unless it is suppressed, which is the
+decision §42.1 forces. August alone: `device_cost` +$349,495.67, gross profit −$349,495.67, and
+device money in COGS becomes $823,023.37 against $398,355.01 of actual settled distributor payments.
+⚠ **MONEY-TOUCHING.** The config change is a proposal with these numbers attached, never an applied
+change, and it is not correct on its own — see §42.5.
+
+### 42.5 What has to be decided before any switch is flipped
+
+1. **One basis for device cost, not two.** Either `vip_device_pay` (cash paid to the distributor) or
+   `device_cost` from the asset ledger (accrual, at sale) — never both. That is a per-org config
+   decision of the same shape as `distributor_payable_basis` (mig `954`), and it belongs in the same
+   place, resolved by the same precedence, so no second mechanism appears.
+2. **The asset side must land in the same change**, from the same ledger, or turning on accrual COGS
+   relieves an inventory nothing ever booked.
+3. **Recompute scope.** Every period recomputed after the change restates; the snapshot-pruning
+   caveat above bounds how far back the restatement can honestly reach.
+
+### 42.6 Files
+
+`backend/app/modules/account/device_cogs.py` (`resolve` / `_vip_sold_cost` — unchanged) ·
+`backend/app/modules/account/coa.py` (`device_cost` settlement, `vip_device_pay`, the dead
+`status=='on inventory'` inventory predicate) ·
+`backend/app/modules/account/balance_sheet.py` (`device_inventory_cells`, `apply_inventory_basis`,
+`asset_ledger_open_bookings`) · `backend/harness_device_inventory_cogs.py` (**41 checks**, stdlib,
+DB-free, synthetic IMEIs; run by `.github/workflows/carrier-vocab-guard.yml` job
+`finance-royalty-proof`).
