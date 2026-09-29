@@ -733,3 +733,11 @@ jobs:
       - name: Run the P&L month-range proof (every month column == that month's P&L to the cent; Total == Σ months; absence blank; org-isolated; the scheduled report and the xlsx renderer)
         working-directory: backend
         run: python3 harness_pl_range.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §42 — the owner's 2026-09-29 device-cost report. Drives the REAL device_cogs.resolve over an
+      # in-memory consignment ledger: the config row is the whole of "not coming in boost"; an unsold unit is in no
+      # month's COGS and the same unit lands in the month it sells, exactly once; the periodic-inventory identity
+      # closes over the ledger's own columns; the cash-basis line would double-count. It imports the app, so it
+      # runs here with the backend's dependencies.
+      - name: Run the device inventory→COGS proof (unsold sits, sold moves, once; the identity closes; the cash line double-counts — index §42)
+        working-directory: backend
+        run: python3 harness_device_inventory_cogs.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
