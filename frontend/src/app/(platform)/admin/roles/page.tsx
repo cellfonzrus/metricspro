@@ -1,7 +1,10 @@
 'use client'
-import { useState, useEffect, Fragment } from 'react'
+import { useState, useEffect, useRef, Fragment } from 'react'
 import { apiCached, CONFIG, LOOKUP } from '@/lib/cache'
 import { api } from '@/lib/client'
+import { planRowSave, runRowSave, commitSaved, rowSaveMessage, dirtySlices, pendingRowCount, rebaseRows } from '@/lib/rowSave'
+import { ROLES_EMPLOYEE_ROW_SLICES } from '@/lib/employeeRowSlices'
+import { useUnsavedGuard } from '@/lib/useUnsavedGuard'
 import { REPORT_AREAS, DATA_GRANTS, TENANT_NAV, reportAreaForPath, canSeeItem, navBlockReason,
          schedulingReach, canImpersonate, MASTER_ADMIN_ROLE, MASTER_ADMIN_DISPLAY,
          type Permissions } from '@/lib/rbac'
@@ -211,6 +214,16 @@ export default function RolesAdminPage() {
   // Per-call error isolation is preserved exactly: `markets` and `setting-areas` were individually
   // best-effort before and still are (each Promise carries its own .catch), and a failure of the
   // three primary reads still lands in the same outer catch with the same message.
+  // Last-saved snapshot of each person's EMPLOYEE record (index §19.35 — see "ONE ROW, ONE SAVE" below).
+  // A reload after any write re-seats through `rebaseRows`, so typed-but-unsaved edits survive it.
+  const [empSnaps, setEmpSnaps] = useState<Record<string, Emp>>({})
+  const empSnapsRef = useRef<Record<string, Emp>>({})
+  function seatEmps(fresh: Emp[]) {
+    const prev = empSnapsRef.current
+    setEmps(cur => rebaseRows(cur, (r: Emp) => prev[String(r.id)], fresh, (r: Emp) => String(r.id), ROLES_EMPLOYEE_ROW_SLICES))
+    empSnapsRef.current = Object.fromEntries(fresh.map(f => [String(f.id), f]))
+    setEmpSnaps(empSnapsRef.current)
+  }
   async function loadAll(cache = false) {
     setLoading(true)
     const rd = (p: string, opts = CONFIG) => (cache ? apiCached(p, opts) : api(p))
@@ -224,7 +237,7 @@ export default function RolesAdminPage() {
       ])
       setEnforce(!!cfg.rbac_enabled)
       setRoles(r.roles || [])
-      setEmps(e.employees || [])
+      seatEmps(e.employees || [])
       setWithEmail(e.with_email || 0)
       if (gu) {
         // GRANT universe — deliberately GET /core/markets and NOT GET /storeops/stores.
@@ -367,6 +380,30 @@ export default function RolesAdminPage() {
   }
 
   // ---- people editing ----
+  // ── ONE ROW, ONE SAVE for the employee RECORD (index §19.35, same class as the 2026-09-29 Vzone
+  // HR defect). Pay $/hr lives in the ✏️ Edit panel ("💾 Save details") while the row's own "Save"
+  // wrote only the email + the role assignment — so a rate typed in the panel and followed by the row
+  // Save was reported "Saved …" and never sent. Both buttons now plan EVERY edited employee-record
+  // slice (details incl. pay, email) from `lib/employeeRowSlices.ts` via `planRowSave`; the row Save
+  // then also applies the role assignment, exactly as before. Unsaved rows are guarded on leave.
+  // `empSnaps` (state) is what the render compares against; `empSnapsRef` mirrors it for async paths.
+  const empSnapOf = (e: Emp) => empSnaps[String(e.id)]
+  const pendingEmpRows = pendingRowCount(emps, empSnapOf, ROLES_EMPLOYEE_ROW_SLICES)
+  useUnsavedGuard(pendingEmpRows)
+  /** Send every edited employee-record slice of this row; returns the result (never throws). */
+  async function flushEmployeeRecord(e: Emp) {
+    const snap = empSnapsRef.current[String(e.id)]
+    const writes = planRowSave(e, snap, ROLES_EMPLOYEE_ROW_SLICES, undefined)
+    const result = await runRowSave(writes, w => api(w.path, { method: w.method, body: JSON.stringify(w.body) }))
+    if (result.saved.length) {
+      const committed = commitSaved(e, snap || e, ROLES_EMPLOYEE_ROW_SLICES, result)
+      empSnapsRef.current = { ...empSnapsRef.current, [String(e.id)]: committed.snap }
+      setEmpSnaps(empSnapsRef.current)
+      setEmps(es => es.map(x => x.id === e.id ? { ...x, ...committed.back } : x))
+    }
+    return result
+  }
+
   function setEmp(id: number, patch: Partial<Emp>) {
     setEmps(es => es.map(e => e.id === id ? { ...e, ...patch } : e))
   }
@@ -389,12 +426,11 @@ export default function RolesAdminPage() {
     if (!opts.skipRoleConfirm && !confirmNoRole(e, 'save')) return
     setMsg('')
     try {
-      // Persist an inline email edit to the StoreOps roster. Real employees only
-      // (id < 0 = a manually-added app_user with no employee row to update).
-      if (e.id > 0) {
-        await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH',
-          body: JSON.stringify({ email: (e.email || '').trim() || null }) })
-      }
+      // Persist every edited employee-record slice first — the inline email AND anything typed in the
+      // ✏️ Edit panel (pay included). Real employees only (id <= 0 = a manually-added app_user with no
+      // employee row; the slices build nothing for it). A failed slice stops the save and says which.
+      const rec = await flushEmployeeRecord(e)
+      if (rec.failed.length) { setMsg(rowSaveMessage(e.name, rec)); return }
       if (!e.email) {
         // A role assignment IS a login row (app_users keyed on email) — so an email is required.
         // Make that explicit instead of a near-silent "Saved" that looks like the role stuck.
@@ -459,22 +495,11 @@ export default function RolesAdminPage() {
   // ---- edit employee details + remove (delete / deactivate) ----
   async function saveDetails(e: Emp) {
     setMsg('')
-    try {
-      // Pay visibility (mig 434, owner directive 2026-09-10): the server DELETES pay_rate from this
-      // grid for a caller who may not see pay. This form posts the whole row back, so sending the
-      // key regardless would post `pay_rate: null` and WIPE a rate the user was never shown. Send it
-      // only when the key is actually present. (The server refuses the blind write either way — this
-      // just keeps an ordinary name/phone save from looking like a rejected pay edit.)
-      const body: Record<string, unknown> = {
-        name: e.name, home_store: e.home_store, role: e.role,
-        phone: e.phone || null, is_active: !!e.is_active,
-      }
-      if (Object.prototype.hasOwnProperty.call(e, 'pay_rate')) {
-        body.pay_rate = e.pay_rate == null || (e.pay_rate as any) === '' ? null : Number(e.pay_rate)
-      }
-      await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH', body: JSON.stringify(body) })
-      setMsg(`Saved ${e.name}`)
-    } catch (err: any) { setMsg('Save failed: ' + (err?.message || err)) }
+    // The details body (and its pay-visibility rule: pay_rate is sent only when the roster read carried
+    // it — mig 434) now lives in lib/employeeRowSlices.ts::EMP_DETAILS_SLICE. This button saves every
+    // edited employee-record slice of the row (details AND a pending inline email), never a subset.
+    const rec = await flushEmployeeRecord(e)
+    setMsg(rowSaveMessage(e.name, rec))
   }
 
   async function removeEmp(e: Emp, mode: 'delete' | 'deactivate') {
@@ -1086,6 +1111,9 @@ export default function RolesAdminPage() {
                       </td>
                       <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
                         <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => assign(e)}>Save</button>{' '}
+                        {(() => { const p = dirtySlices(e, empSnapOf(e), ROLES_EMPLOYEE_ROW_SLICES); return p.length
+                          ? <span style={{ fontSize: 11, color: '#b45309', marginRight: 6 }} title="Save (or 💾 Save details) sends these">● unsaved: {p.map(x => x.label).join(', ')}</span>
+                          : null })()}
                         {e.email && <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => createLogin(e)}>
                           {e.has_login ? 'Reset pw' : 'Create login'}</button>}{' '}
                         {e.email && e.login_status === 'invited' && (

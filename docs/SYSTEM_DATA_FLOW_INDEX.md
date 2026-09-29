@@ -4035,6 +4035,14 @@ as a market-grant keyset member; ambiguity fails closed):
     route's REAL shipped source, AST-extracted and exec'd against the real gate — both halves: the
     per-employee keys are gone, the store aggregates are still there — plus §K12, the reported defect
     reproduced by deleting the gate statements from the same AST and then shown fixed).
+- **Employee-record editors — ONE ROW, ONE SAVE (§19.35, owner report 2026-09-29).** Every browser write of
+  an employee row (`PATCH /storeops/employees/{id}`, `PUT …/lunch-config`, `PUT …/face-config`) from HR →
+  Employees & Pay and Roles & Access is BUILT in `frontend/src/lib/employeeRowSlices.ts` and PLANNED by
+  `frontend/src/lib/rowSave.ts::planRowSave` — the row's one Save sends every edited slice (pay, lunch, face /
+  details, email), reports per slice, keeps typed edits across a reload, and `lib/useUnsavedGuard.ts` asks before
+  they are dropped. The pre-fix HR row had one 💾 per slice; pressing Lunch left typed rates unsent. Lock
+  `backend/harness_row_save_lock.py`, proof `frontend/prove_row_save.mjs`; the StoreOps setup grids are the ratchet
+  `frontend/row_save_pending.txt`.
 - **Phase W2 — tiled Payroll & Workforce dashboards + period alignment (owner directive 2026-09-01,
   frontend-only, no new endpoints):**
   - **Two tile hubs** (landings, deliberately NOT in `REPORT_TREES`/`REPORT_DIRECTORY` as new
@@ -4961,7 +4969,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `storeops.employees` / `stores` / `org_units` (+ RPC `org_span_for_manager`) | storeops roster + org tree | **OVERHEAD ALLOCATION** `storeops/overhead_allocation.gather` → `classify_employee` (structural: active + salaried + blank `home_store`) / `covered_stores` (span RPC → org-unit subtree → org-wide) / `build_overhead` → the P&L `overhead_wages` + `overhead_comm` lines (§14t, mig `997`, house default OFF). Reads the roster only; derives NO pay — the conversion is `coa.monthly_salary_equivalent`, the commission is `management_incentive_payout` (§9) |
 | `commcalc.account_config.overhead_config` (JSONB, mig `997`) | Settings / owner SQL | §14t — `mode` / `basis` (`equal_stores` \| `equal_market_then_store` \| `weighted`) / `span_fallback` / `roles[]` / labels / `commission_source` / `manual_expense_names[]`. Read ONLY via `coa._account_config` → `overhead_allocation.resolve_config`. NULL = house default = nothing booked |
 | `storeops.employees.epay_salesperson` / `epay_login` (the POS/b2b IDENTITY columns — the reason `commcalc.name_map` is not needed) | Employee Setup / HR editors (`POST`/`PATCH /storeops/employees`, `EMP_FIELDS`); **mig `1001`** seeds them VERBATIM from the b2b feed for the PA-market roster (§14u — owner-run, not applied) | `commission_engine` seller match (`epay_salesperson || name`, `:554,613,1141`) and its remediation text (`:1195`); `GET /commcalc/rep-employee-map` aliases; `GET /commcalc/commission-plans/roster` assignment VALUE; `hr/router` + `hr/letters` chargeback/commission keying. Setting them to the feed's exact bytes is what makes a `name_map` row unnecessary (§14u) |
-| `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, manager-gated on `_PAY_GATED_FIELDS`; every edit logged to `storeops.payroll_change_log`) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
+| `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, manager-gated on `_PAY_GATED_FIELDS`; every edit logged to `storeops.payroll_change_log`; the HR + Roles browser writes are built ONLY in `frontend/src/lib/employeeRowSlices.ts` and planned per row by `lib/rowSave.ts::planRowSave` — §19.35) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
 | `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs), store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
@@ -5144,6 +5152,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /hr/compensation` (pay-gated: `pay_rate`/`base_salary`/`total_comp`/`annualized` stripped; commission stays — commcalc's own gate domain) | `hr/router.py:334` | §14 |
 | `GET /hr/employee-database` (pay-gated forward guard: pay-classified keys stripped from field registry + rows) | `hr/router.py:1384` | §14 |
 | `GET /storeops/employees` (roster; pay-gated 2026-09-10 — a `select("*")` that shipped every `pay_rate`/`pay_amount`; `pay_basis` kept) | `storeops/router.py:201` | §14 DM sweep |
+| `PATCH /storeops/employees/{id}`, `PUT /storeops/employees/{id}/lunch-config`, `PUT /storeops/employees/{id}/face-config` — browser callers from a row editor build the request ONLY in `frontend/src/lib/employeeRowSlices.ts` and send it through `lib/rowSave.ts::planRowSave` (one Save per row, every edited slice; no endpoint changed) | `storeops/router.py::update_employee` / `set_employee_lunch_config` / `set_employee_face_config` | §19.35 |
 | `GET /storeops/employees?all_company=true` (**ROSTER REACH** 2026-09-13 — resolves `core.scope.roster_keyset`, not the reporting span; never returns an empty roster) | `storeops/router.py:201` → `_roster_keyset_for:7744` | §29 |
 | `GET /storeops/employees/visible` (dashboard picker; store/market resolution converged onto the SAME `roster_keyset` 2026-09-13 — reach ladder unchanged) | `storeops/router.py:8087` | §29 |
 | `GET /core/grant-universe` → `scheduling.roster_reach`/`roster_stores`/`roster_why` (why THIS login's employee picker is bounded) | `core/router.py` (`_grant_universe`) | §29 |
@@ -5251,6 +5260,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **Is what the person typed on an employee row saved?** (pay rate, pay basis, lunch, face, details, email) — pending = any field differing from the last-saved snapshot | the row in page state vs its snapshot (`GET /storeops/employees`, `GET /core/employees`) | `frontend/src/lib/rowSave.ts` (`fieldsDirty` / `planRowSave` / `pendingRowCount`) over `lib/employeeRowSlices.ts`; leave guard `lib/useUnsavedGuard.ts`; lock `harness_row_save_lock.py` + proof `prove_row_save.mjs`, CI job *One row, one save* (§19.35) |
 | **Who did this** (the actor on a config save / audit row / appeal / payout record) — a uid or NULL ("system"), never a sentinel string | the §16 actor columns (types READ from the migrations by the lock) | writer: ONE helper `router._caller_uid`; display: `frontend/src/lib/actor.ts::actorLabel`; lock `harness_actor_uid_lock.py`, CI job *Actor columns get a UUID or NULL, never a sentinel* (§19.34) |
 | **Is this month's stored commission up to date with what landed?** ("Auto-calculated at … from the upload of …" / refused / off / queued) | `calc_status.auto_calc_requested_at` / `auto_calc_last` (mig 1030; pre-1030 `calc_notices` type `auto_calc`) | `auto_calc.view` via `GET /calc-status/{period}`; written only by the landing hook's runner, which runs `_run_calculation` (§6l) |
 | **What device an activation activated** (tablet / watch) and **its Exec-MTD pay category** | sale lines of the event (`product_desc`, `category`, `department`, `sku`, serial, catalog) | ONE classifier `installment_category.resolve_chain_category` (tenant rules + built-in ladder), dereferenced by `line_class._device_of_lines` / `unit_devices`; `line_class.pay_category` (one event, one category); categories `activation_bucketing.MTD_CATEGORIES` (§6n) |
@@ -5401,6 +5411,51 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 ---
 
 ## 19. Known gaps & inert config
+
+§19.35 **ONE ROW, ONE SAVE — A TYPED PAY RATE THAT NEVER LEFT THE BROWSER (owner report 2026-09-29, Vzone).** Owner:
+*"i just saved hourly salary in vzone but it did not save when i came back"*. **Evidence (live, read-only):**
+`core.access_log` for org `f4f1c16e…` on 2026-09-29 holds exactly four `PUT /api/v1/storeops/employees/{238,278,279,240}/
+lunch-config` at 17:49:50–51 UTC (all 200) and **no** `PATCH /api/v1/storeops/employees/{id}` that day;
+`storeops.payroll_change_log` has the four `lunch_deduction_enabled` rows (by the Vzone admin) and no `pay_rate` row;
+E278 / E279 / E240 still carry `pay_rate = 0`. The proxy / one-domain change (#320/#321), the actor change (#322) and
+the pay-visibility gate were each checked and are NOT involved: PATCHes on the same route through the same proxy
+returned 200 on 2026-09-28, the lunch writes resolved the admin in Vzone, and `can_see_pay` resolves that login to
+`admin` / scope `all` → visible. **Root cause:** HR → Employees & Pay gave every row THREE independent 💾 buttons —
+pay (the LAST column, past Email and Phone, off the right edge of a 13-column table), one beside Lunch and one beside
+Face — each saving only its own slice. The admin typed rates, set Lunch to On, pressed the 💾 on screen (Lunch), got
+✅, and left; the rates lived only in page state and the next roster read replaced them. **The class:** a row whose
+edits persist through more than one save action, so a success shown for one reads as "the row is saved" while other
+slices' edits are silently discarded. **Sibling, fixed:** Roles & Access — the row "Save" wrote email + role while
+Pay $/hr sat in the ✏️ Edit panel behind "💾 Save details" (a rate typed there + the row Save = "Saved …", rate
+unsent). **The design fix (one home, dereferenced):** `frontend/src/lib/employeeRowSlices.ts` is the ONLY place a row
+editor builds an employee-record write (`EMP_PAY_SLICE` / `EMP_LUNCH_SLICE` / `EMP_FACE_SLICE` →
+`HR_EMPLOYEE_ROW_SLICES`; `EMP_DETAILS_SLICE` / `EMP_EMAIL_SLICE` → `ROLES_EMPLOYEE_ROW_SLICES`; bodies unchanged from
+the old handlers, plus the §14 DM-sweep rule that a withheld `pay_rate` is never sent); `frontend/src/lib/rowSave.ts`
+plans a request for EVERY edited slice (`planRowSave`), runs them independently (`runRowSave` — a lunch-config failure
+can never cost a pay save), commits only what saved (`commitSaved`), says exactly what saved and what did not
+(`rowSaveMessage`), keeps typed edits across a reload (`rebaseRows`) and counts unsaved rows (`pendingRowCount`);
+`frontend/src/lib/useUnsavedGuard.ts` asks before a reload / in-app link / tab switch drops them. "Is this field
+edited" is `rowSave.fieldsDirty`, which the StoreOps setup grids' `isDirty` now call (their two private copies are
+gone). HR's row has ONE Save beside the name + a "● unsaved: pay, lunch" marker + a "Save all" banner. **Backend
+unchanged** (the write path was sound: `harness_payroll_salary_router_integration.py` drives the real
+`update_employee`). **Excused / pending:** `commcalc/_lib/coverageDiagnosis.tsx` (a one-click link action, nothing can
+be pending); the three StoreOps grids (`storeops/admin`, `storeops/employees`, `storeops/setup/employees`) already
+have one save per row covering every field, a dirty marker and bulk save, and edit no pay — they are the ratchet
+`frontend/row_save_pending.txt` (may only shrink). **Lock:** `backend/harness_row_save_lock.py` (stdlib; CI job
+*One row, one save* in `org-scope-guard.yml`) — no employee-record PATCH/PUT outside the home (ratchet + excuse
+list), slice users plan with `planRowSave` and install the guard, `planRowSave` only ever takes a registered
+`*_ROW_SLICES` set (a subset is the defect coming back), one dirty comparison, PATCH slice fields ⊆ `EMP_FIELDS`
+parsed from `storeops/router.py`, and the node proof is run by CI; planted controls inside. Run against `main` it
+fails naming `hr/page.tsx` lines 87/112/135 (the three per-slice writes) and `admin/roles/page.tsx`. **Proof:**
+`frontend/prove_row_save.mjs` (49 checks, the real modules): the owner's exact E278 edit — the pre-fix Lunch button
+plans only the PUT and leaves pay unsent; the row Save plans both. **Data to correct (owner, not written here):** the
+Vzone hourly rates the admin typed never reached the database — E278 mehribon gulyamova, E279 Nikolas cherashniy,
+E240 ss (and E277 Anum Khokhar, whose lunch was not touched) still read `pay_rate = 0`; they must be re-entered and
+saved once this ships. **Owner decisions:** (1) UI change under merge policy Option B — the HR Employees & Pay row
+layout (Save beside the name, per-field edited borders, the unsaved banner) needs the owner's eyeball. (2) Whether the
+three StoreOps grids move onto the engine now (their Active toggle auto-saves beside a row Save). (3) Side
+observation, other class, reported not fixed: no `core.access_log` row has EVER carried `actor_email` (0 non-null,
+checked 2026-09-29) while `actor_role` resolves — the access log records a role but not WHO.
 
 §19.34 **"WHO DID THIS" IS A UUID OR NULL — NEVER A SENTINEL STRING (found live 2026-09-28, saving tenant device
 rules).** `commcalc/router.py::_caller_uid(authorization)` returned the literal `'web'` when no signed-in user resolved.

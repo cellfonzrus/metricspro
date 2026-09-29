@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api } from '@/lib/client'
+import { fieldsDirty } from '@/lib/rowSave'
 
 const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderBottom: '1px solid var(--border)' }
@@ -26,10 +27,8 @@ const STORE_TZ_OPTS: { v: string; label: string }[] = [
   { v: 'America/Anchorage', label: 'Alaska (AKT)' },
   { v: 'Pacific/Honolulu', label: 'Hawaii (HST)' },
 ]
-function isDirty(row: any, orig: any, fields: string[]) {
-  if (!orig) return false
-  return fields.some(f => String(row[f] ?? '') !== String(orig[f] ?? ''))
-}
+// "Is this row edited?" has ONE home — lib/rowSave.ts::fieldsDirty (index §19.35).
+const isDirty = fieldsDirty
 
 // RULE THREE (pick-don't-type, 2026-07-28 owner directive): market is a dropdown over the org's
 // existing markets (sourced from BOTH storeops.stores.market and commcalc.store_mapping.market —
