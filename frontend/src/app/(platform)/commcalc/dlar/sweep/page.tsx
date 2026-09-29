@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { usePosTerm } from '@/lib/report-labels'
 import { scopeState, connectorNotApplicableCopy, type ConnectorScope } from '@/lib/connectors'
+import { SetupNotice } from '@/lib/setupNotice'
 
 
 type Cfg = {
@@ -74,7 +75,7 @@ export default function DlarSweepAdmin() {
   }
 
   if (loading) return <div style={{ padding: 60, textAlign: 'center', color: 'var(--text3)' }}>Loading…</div>
-  if (!cfg) return <div style={{ padding: 60, textAlign: 'center', color: 'var(--text3)' }}>Could not load config. Did you run 012_dlar_sweep.sql?</div>
+  if (!cfg) return <div style={{ padding: 60, textAlign: 'center', color: 'var(--text3)' }}><SetupNotice lead="Could not load this connector's settings." detail="012_dlar_sweep.sql" /></div>
   // CONNECTOR SCOPE (mig 1014, owner 2026-09-21): this page drives ONE connector. When the registry says
   // it does not apply to the tenant's declared POS / carrier, the ONE not-applicable sentence replaces the
   // form, its status and its stored error — the connector is not this tenant's to fix.

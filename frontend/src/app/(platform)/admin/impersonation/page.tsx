@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import ScreenLink from '@/components/ScreenLink'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // ── "Sign in as an employee" — audit log + policy (owner directive 2026-08-06) ───────────────────
 // Requirement 4 of the impersonation build: the trail must be VIEWABLE, not just written. Every
@@ -103,7 +104,7 @@ export default function ImpersonationAuditPage() {
 
       {!ready && (
         <div className="card" style={{ padding: 14, marginBottom: 16, background: '#fffbeb', borderLeft: '5px solid #f59e0b' }}>
-          <b>Not set up yet.</b> The audit tables have not been created in the database (migration 730).
+          <b>Not set up yet.</b> <SetupNotice detail="730 (impersonation audit tables)" />
           Until they are, nobody can sign in as an employee at all — the feature refuses to start rather
           than run without a record.
         </div>

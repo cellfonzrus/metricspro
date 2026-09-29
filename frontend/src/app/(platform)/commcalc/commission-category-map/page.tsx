@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '@/lib/client'
 import { useActiveCarrier } from '@/lib/auth-context'
 import { carrierDisplayName } from '@/lib/carrier-scope'
+import { SetupNotice, setupFailed } from '@/lib/setupNotice'
 
 // Commission Category Map (SAP-style) — the per-template rules that classify a carrier's commission labels
 // into the five canonical buckets. Rules match on product_name OR order_type (contains/equals), in ascending
@@ -93,7 +94,7 @@ export default function CommissionCategoryMapPage() {
     try {
       await api('/api/v1/commcalc/commission-category-map', { method: 'POST', body: JSON.stringify({ ...rule, source_report: src }) })
       flash('Saved'); loadMap(src); loadObserved(src)
-    } catch (e: any) { flash(e?.message || 'Save failed — is migration 071 applied?') }
+    } catch (e: any) { flash(e?.message || setupFailed('Save failed')) }
   }
   async function addRule() {
     if (!nr.pattern.trim()) { flash('Pattern is required'); return }
@@ -101,7 +102,7 @@ export default function CommissionCategoryMapPage() {
     setNr({ ...nr, pattern: '', priority: 100 })
   }
   async function del(rule: Rule) {
-    if (!rule.id) { flash('Built-in default — edit the rules after migration 071 to override'); return }
+    if (!rule.id) { flash('Built-in default — it cannot be removed until editing rules is switched on for your company'); return }
     try { await api('/api/v1/commcalc/commission-category-map/' + rule.id, { method: 'DELETE' }); flash('Removed'); loadMap(src); loadObserved(src) }
     catch (e: any) { flash(e?.message || 'Delete failed') }
   }
@@ -147,7 +148,7 @@ export default function CommissionCategoryMapPage() {
       </p>
       {!ready && (
         <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
-          Run migration <code>071_commission_ledger.sql</code> to edit + persist rules. Until then the classifier uses the built-in defaults (shown below, read-only).
+          <SetupNotice lead="Editing rules is not available yet — the classifier uses the built-in defaults (shown below, read-only)." detail="071_commission_ledger.sql" />
         </div>
       )}
       {usingDefaults && ready && <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>No saved rules for this template yet — showing built-in defaults. Save one to start a custom set.</div>}
@@ -353,7 +354,7 @@ function BucketsPanel({ onChanged }: { onChanged: () => void }) {
             <tr key={b.key} style={{ borderTop: '1px solid var(--border)', opacity: r.is_active ? 1 : 0.55 }}>
               <td style={{ padding: '3px 6px' }}><input type="number" value={r.sort_order} onChange={e => setEdit(x => ({ ...x, [b.key]: { ...x[b.key], sort_order: Number(e.target.value) } }))} style={{ ...inp, width: 60, padding: '3px 6px' }} disabled={!d.ready} /></td>
               <td style={{ padding: '3px 6px' }}><input value={r.label} onChange={e => setEdit(x => ({ ...x, [b.key]: { ...x[b.key], label: e.target.value } }))} style={{ ...inp, width: 170, padding: '3px 6px' }} disabled={!d.ready} /></td>
-              <td style={{ padding: '3px 6px', fontFamily: 'monospace', color: 'var(--text2)' }}>{b.key}{b.column_backed && <span title="one of the five column-backed buckets (migration 071): its key cannot change" style={{ fontSize: 10, marginLeft: 4 }}>▣</span>}</td>
+              <td style={{ padding: '3px 6px', fontFamily: 'monospace', color: 'var(--text2)' }}>{b.key}{b.column_backed && <span title="one of the five built-in buckets: its key cannot change" style={{ fontSize: 10, marginLeft: 4 }}>▣</span>}</td>
               <td style={{ padding: '3px 6px' }}>
                 <select value={r.kind} onChange={e => setEdit(x => ({ ...x, [b.key]: { ...x[b.key], kind: e.target.value } }))} style={{ ...inp, padding: '3px 6px' }} disabled={!d.ready} title={d.kinds.find(k => k.value === r.kind)?.label}>
                   {d.kinds.map(k => <option key={k.value} value={k.value}>{k.value}</option>)}

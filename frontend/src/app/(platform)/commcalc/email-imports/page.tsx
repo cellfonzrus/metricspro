@@ -11,6 +11,7 @@ import ShowsIn from '@/components/ShowsIn'
 import { useReportLabels } from '@/lib/report-labels'
 import { posSquash } from '@/lib/carrier-scope'
 import { useConnectors } from '@/lib/connectors'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // Generic email (IMAP) inbox sweep — sibling of the FTP sweep. Configure a mailbox (host/creds) and
 // attachment-filename → upload-type patterns; the backend polls the inbox on a schedule and routes
@@ -777,7 +778,7 @@ export default function EmailImportsPage() {
               <option value="off">keep every email</option>
               <option value="delete">delete once imported</option>
             </select>
-            <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2 }}>“delete once imported” removes a report email after its data is captured, so the mailbox doesn’t fill up. Only ingested report emails are removed. Needs migration 928.</div>
+            <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2 }}>“delete once imported” removes a report email after its data is captured, so the mailbox doesn’t fill up. Only ingested report emails are removed.</div>
           </div>
         </div>
         {cfg.has_password && /auth/i.test(String(cfg.last_status || '')) && (
@@ -794,7 +795,7 @@ export default function EmailImportsPage() {
         <div style={{ fontSize: 11, color: 'var(--text3)', margin: '2px 0 4px' }}>
           {!kinds.loaded ? 'Reading which report kinds this company may upload…'
             : kinds.error ? `⚠️ The report-kind registry could not be read (${kinds.error}) — no upload types are offered rather than guessed.`
-            : <>Routes offered for {kinds.declaration?.pos?.length ? <>POS <b>{kinds.declaration.pos.join(' / ')}</b></> : 'no declared POS'} · {kinds.declaration?.carriers?.length ? <>carrier <b>{kinds.declaration.carriers.join(' / ')}</b></> : 'no declared carrier'}{!kinds.ready && <> · registry table not applied yet — house defaults</>}{kinds.withheld && <> · {kinds.withheld}</>}</>}
+            : <>Routes offered for {kinds.declaration?.pos?.length ? <>POS <b>{kinds.declaration.pos.join(' / ')}</b></> : 'no declared POS'} · {kinds.declaration?.carriers?.length ? <>carrier <b>{kinds.declaration.carriers.join(' / ')}</b></> : 'no declared carrier'}{!kinds.ready && <> · house defaults (<SetupNotice detail={kinds.payload?.migration} />)</>}{kinds.withheld && <> · {kinds.withheld}</>}</>}
         </div>
         <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 4 }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>{['Filename pattern (glob)', 'Routes to', 'Note', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
@@ -833,7 +834,7 @@ export default function EmailImportsPage() {
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>🧩 Custom import sheets</div>
         <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 10px' }}>
           Add your own report (e.g. a <b>Sales Trend</b> export) with no code. Name it here, then add a filename pattern above
-          that routes to its key — every matching attachment is captured as-is and viewable below. Needs migration <b>099_custom_import.sql</b>.
+          that routes to its key — every matching attachment is captured as-is and viewable below.
         </p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
           <input style={{ ...sel, minWidth: 240 }} placeholder="New sheet name, e.g. Sales Trend" value={newSheet}
@@ -998,7 +999,7 @@ export default function EmailImportsPage() {
           Until a processor&apos;s portal scraper is wired, its reports still import automatically via the mailbox rules
           above or the Data Imports page.
         </p>
-        {!srcReady && <div style={{ padding: 10, marginBottom: 10, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 13 }}>⚠️ Run migration <b>083_total_processor_sources.sql</b> in Supabase to enable this registry.</div>}
+        {!srcReady && <div style={{ padding: 10, marginBottom: 10, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 13 }}>⚠️ <SetupNotice detail="083_total_processor_sources.sql" /></div>}
         {srcMsg && <div style={{ fontSize: 13, marginBottom: 8 }}>{srcMsg}</div>}
 
         {sources.length > 0 && (

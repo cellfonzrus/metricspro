@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { SetupNotice } from '@/lib/setupNotice'
 
 type Pay = {
   vip_payment_id: number; batch_type: string; dealer: string | null
@@ -80,7 +81,7 @@ export default function PaygoPage() {
         <div className="card" style={{ padding: 24, color: 'var(--text2)', fontSize: 14 }}>
           <strong>Asset-lending data not loaded yet.</strong>
           <div style={{ marginTop: 8 }}>
-            Run migration <code>014_vip_paygo.sql</code> in Supabase, then on the{' '}
+            <SetupNotice detail="014_vip_paygo.sql" /> Once it is, on the{' '}
             <a href="/commcalc/vip/sweep">Distributor Auto-sweep</a> page tick <strong>Asset lending (PayGo)</strong>, Save, and Run now.
           </div>
           {data?.detail && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text3)' }}>({data.detail})</div>}

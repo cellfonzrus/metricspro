@@ -17,6 +17,7 @@ import RunCommissionButton from '../_lib/RunCommissionButton'
 import CommissionWaysHeader from '../_lib/CommissionWaysHeader'
 import CoverageWizard from '../_lib/CoverageWizard'
 import { useActiveCarrier } from '@/lib/auth-context'
+import { SETUP_NOTICE, SetupNotice } from '@/lib/setupNotice'
 
 // Configurable commission PLAN engine (migration 059). A PLAN is a set of RULES the user creates — each
 // rule matches sale lines on any sales-transaction field (contract_type/tender_type/department/category/
@@ -296,7 +297,7 @@ export default function CommissionPlansPage() {
         apiCached('/api/v1/storeops/stores', LOOKUP).catch(() => []),
       ])
       setPlans(r.plans || []); setReady(r.ready !== false)
-      if (r.ready === false) setMsg(r.note || 'Run migration 059 to enable.')
+      if (r.ready === false) setMsg(r.note || SETUP_NOTICE)
       setCarriers(carr)
       setEmployees(emps)
       setStores(sts)
@@ -708,7 +709,7 @@ export default function CommissionPlansPage() {
           note="Saving a plan, rule, tier or assignment does not change anyone's pay by itself. Recalculate the period to write the new numbers into the Rep Incentive report." />
       </div>
 
-      {!ready && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {msg || 'Run migration 059_commission_plans.sql in Supabase to enable.'}</div>}
+      {!ready && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {msg || <SetupNotice detail="059_commission_plans.sql" />}</div>}
 
       {/* PAYOUT STRUCTURE (owner directive) — the employee-facing "how commission is earned" document.
           Built from this tenant's real plan config; hand it to staff BEFORE they start selling. Download
@@ -1082,7 +1083,7 @@ export default function CommissionPlansPage() {
           {preview?.by_rep?.length > 0 && <><ExportButtons payload={previewPayload} /><SendReportButton exportPayload={previewPayload} compact /></>}
         </div>
         {preview && (
-          preview.ready === false ? <div style={{ fontSize: 13, color: '#b45309' }}>{preview.note || 'Migration 059 not applied.'}</div>
+          preview.ready === false ? <div style={{ fontSize: 13, color: '#b45309' }}>{preview.note || SETUP_NOTICE}</div>
           : preview.by_rep?.length === 0 ? <div style={{ fontSize: 13, color: 'var(--text3)' }}>{preview.note || 'No payout for this period (no matching sales / no plan resolved).'}</div>
           : (
             <>
@@ -1770,7 +1771,7 @@ export default function CommissionPlansPage() {
           {bulkResult?.error && <div className="card" style={{ padding: 12, marginBottom: 12, background: '#fef2f2', border: '1px solid #fecaca', fontSize: 13 }}>❌ {bulkResult.error}</div>}
 
           {/* people table */}
-          {!roster.ready && <div className="card" style={{ padding: 14, marginBottom: 12, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ Run migration 059 to enable plan assignments.</div>}
+          {!roster.ready && <div className="card" style={{ padding: 14, marginBottom: 12, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ <SetupNotice lead="Plan assignments are not available yet." detail="059_commission_plans.sql" /></div>}
           <div className="card" style={{ padding: 0 }}>
             <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--text2)' }}>
               {filteredPeople.length} of {roster.people.length} people{fMarkets.length || fRoles.length || nameQuery ? ' (filtered)' : ''}

@@ -29,6 +29,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, matchesStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { usePosTerm } from '@/lib/report-labels'
+import { SetupNotice } from '@/lib/setupNotice'
 
 type Row = {
   id: number; period: string; imei: string; mdn: string; store: string; rep_username: string
@@ -220,8 +221,7 @@ export default function CommissionDiscrepancyHub() {
       {msg && <div style={{ background: '#f0fdf4', color: '#166534', padding: 10, borderRadius: 8, margin: '12px 0', fontSize: 13 }}>{msg}</div>}
       {data && !data.appeals_ready && (
         <div style={{ background: '#fffbeb', color: '#92400e', padding: 12, borderRadius: 8, margin: '12px 0', fontSize: 13 }}>
-          Appeal tracking is not enabled on this database yet — run migration
-          {' '}<code>947_commission_discrepancy_hub.sql</code>. The not-received report still works below.
+          <SetupNotice lead="Appeal tracking is not available yet. The not-received report still works below." detail="947_commission_discrepancy_hub.sql" />
         </div>
       )}
 

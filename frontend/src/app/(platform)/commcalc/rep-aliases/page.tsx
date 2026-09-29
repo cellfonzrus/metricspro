@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
+import { SETUP_NOTICE } from '@/lib/setupNotice'
 
 // Merge rep name-variants (e.g. "Abdul K" + "Abdul Kakar") into one canonical name so commissions,
 // KPIs and chargebacks roll up to a single person. Backed by commcalc.rep_aliases (migration 016).
@@ -19,7 +20,7 @@ export default function RepAliasesPage() {
   const load = useCallback(() => {
     api('/api/v1/commcalc/rep-aliases').then((r: any) => {
       setAliases(r.aliases || []); setNames(r.names || []); setConfigured(r.configured !== false)
-      if (r.configured === false) setMsg('Run migration 016_rep_aliases.sql to save merges.')
+      if (r.configured === false) setMsg('Saving merges is not available yet. ' + SETUP_NOTICE)
     }).catch((e: any) => setMsg('Load failed: ' + (e?.message || e)))
   }, [])
   useEffect(() => { load() }, [load])

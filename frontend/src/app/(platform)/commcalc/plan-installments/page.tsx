@@ -6,6 +6,7 @@ import { PlanOptions, MatchValuePicker, MatchEvidence, FALLBACK_VOCAB, countMatc
 import EntityPicker from '@/components/EntityPicker'
 import RunCommissionButton from '../_lib/RunCommissionButton'
 import { actorLabel } from '@/lib/actor'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // SALE-TRIGGERED multi-month rep pay (commission-0 doctrine, mig 201; edit + m1-gate mig 210). A schedule
 // attaches to a Commission Plan and is triggered by the SALE LINE (M1..N relative to trans_date). Months are
@@ -428,7 +429,7 @@ export default function PlanInstallmentsPage() {
 
       {msg && <div className="card" style={{ marginBottom: 16, borderLeft: '4px solid var(--accent)', fontSize: 13 }}>{msg}</div>}
       {!ready && <div className="card" style={{ marginBottom: 16, borderLeft: '4px solid var(--amber)', fontSize: 13 }}>
-        Migration 201 not applied yet — schedules save once it runs (endpoints degrade to a code default meanwhile).
+        <SetupNotice lead="Schedules cannot be saved yet — the built-in default is in force meanwhile." detail="201_commission_sale_installments.sql" />
       </div>}
 
       {/* ── Pay settings (R1 override + residual visibility) ────────────────────────────── */}
@@ -545,7 +546,7 @@ export default function PlanInstallmentsPage() {
           <b> $0</b> rather than paying a percentage of a device price, and the
           <a href="#preview" style={{ color: 'var(--accent)' }}> preview</a> lists every such activation.
           {planLineOpts.is_default ? ' Currently using the seeded default.' : ' Currently using a tenant override.'}
-          {!planLineOpts.ready && <b> Migration 233 is not applied yet — the engine uses the default and saves will fail until it runs.</b>}
+          {!planLineOpts.ready && <b> Saving is not available yet — the engine uses the default. <SetupNotice detail="233" /></b>}
         </p>
         {planLine && (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 12 }}>
@@ -723,7 +724,7 @@ export default function PlanInstallmentsPage() {
           </p>
           {catCfg && !catCfg.rules_ready && (
             <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--text3)' }}>
-              (Rule table not created yet — run migration 245. The built-in rules below are in force.)
+              (The built-in rules below are in force; saving your own is not available yet. <SetupNotice detail="245" />)
             </div>
           )}
           {(catCfg?.rules || []).length > 0 && (
@@ -948,7 +949,7 @@ export default function PlanInstallmentsPage() {
                     <tr>
                       <td colSpan={8} style={{ background: 'var(--surface2)', fontSize: 12 }}>
                         <b>Edit history</b> ({openAudit.rows.length})
-                        {openAudit.rows.length === 0 && <span style={{ color: 'var(--text3)' }}> — none (run migration 210 to record edits)</span>}
+                        {openAudit.rows.length === 0 && <span style={{ color: 'var(--text3)' }}> — none recorded</span>}
                         {openAudit.rows.map((a, i) => (
                           <div key={i} style={{ padding: '3px 0', color: 'var(--text2)' }}>
                             {a.action} · {(a.changed_at || '').slice(0, 19).replace('T', ' ')} · by {actorLabel(a.changed_by)}

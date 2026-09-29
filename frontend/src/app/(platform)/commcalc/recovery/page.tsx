@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, Fragment } from 'react'
 import { api } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import { setupFailed } from '@/lib/setupNotice'
 
 // Denied-Appeal Commission Recovery. A denied appeal is RECOVERABLE when the line paid/activated after
 // the denial → claim the commission back from the carrier (within the claw-back window). Rebuild the
@@ -50,7 +51,7 @@ export default function RecoveryPage() {
       if (kind === 'rebuild') setMsg(`Rebuilt: ${r.summary?.recoverable || 0} recoverable (${money(r.summary?.recoverable_amount)}), ${r.summary?.expired || 0} expired, ${r.summary?.needs_data || 0} need data.`)
       else setMsg(r.claim ? `Claim created: ${r.claim.device_count} devices, ${money(r.claim.total_amount)}.` : (r.message || 'No new recoverable devices.'))
       load(status)
-    } catch (e: any) { setMsg('Failed: ' + (e?.message || e) + ' — has migration 098 been run?') }
+    } catch (e: any) { setMsg(setupFailed('Failed: ' + (e?.message || e))) }
     finally { setBusy('') }
   }
 

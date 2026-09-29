@@ -17,6 +17,7 @@ import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/expo
 import { SendReportButton } from '@/lib/send-report'
 import ReportShell from '@/components/ReportShell'
 import PoNav from './_shared/PoNav'
+import { SETUP_NOTICE } from '@/lib/setupNotice'
 
 type RecRow = {
   store: string; market: string | null; device_model: string
@@ -92,7 +93,7 @@ export default function PurchaseOrdersHubPage() {
     try {
       const d = await api('/api/v1/asset/po')
       setPos(d.rows || [])
-      if (d.migrated === false) setMsg(d.note || 'Purchase Orders migration pending.')
+      if (d.migrated === false) setMsg(d.note || SETUP_NOTICE)
     } catch (e: any) { setMsg('Could not load purchase orders: ' + (e?.message || e)) }
     setPosLoading(false)
   }, [])

@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { SETUP_NOTICE } from '@/lib/setupNotice'
 
 interface TargetRow {
   store_code: string
@@ -308,7 +309,7 @@ export default function TargetSettingsPage() {
                   <td style={{ ...td, color: 'var(--text2)' }}>{byodCount(r)} acts</td>
                   <td style={td}>
                     {r._financingReady === false ? (
-                      <span style={{ fontSize: 11, color: 'var(--text3)' }} title="Migration 272 has not been run yet">—</span>
+                      <span style={{ fontSize: 11, color: 'var(--text3)' }} title={SETUP_NOTICE}>—</span>
                     ) : (
                       <input className="input" type="number" min="0" style={{ width: 90 }}
                         value={r.financing_units ?? 0}

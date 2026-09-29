@@ -128,7 +128,7 @@ export default function FleetFailureTriage() {
         <ReportExportBar title="Fleet Failures" filename="fleet_failures" columns={exportCols} rows={rows} />
       </div>
       {msg && <div style={{ fontSize: 12.5, marginBottom: 8 }}>{msg}</div>}
-      {err && <div className="card" style={{ padding: 14, color: '#dc2626' }}>{err}{err.includes('716') && ' — run migration 716 in Supabase.'}</div>}
+      {err && <div className="card" style={{ padding: 14, color: '#dc2626' }}>{err}</div>}
 
       {loading ? <div className="card" style={{ padding: 16 }}>Loading…</div> : groups.length === 0 ? (
         <div className="card" style={{ padding: 16, color: 'var(--text3)' }}>No {reviewedFilter === 'false' ? 'unreviewed ' : ''}failures across the fleet for this filter. 🎉</div>

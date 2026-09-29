@@ -4821,6 +4821,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Table | Written by | Read by |
 |-------|-----------|---------|
+| `commcalc.ui_label_override` (mig `068`) — **Admin → Display Labels no longer names its migration** (§19.35): the static "Needs migration 068_…" note is gone, a failed save says `setupFailed('Save failed')`, the report-kind registry line renders `<SetupNotice detail={kinds.payload?.migration} />` (the file name for the platform super admin only) | `POST /commcalc/nav-labels` (unchanged) | `GET /commcalc/nav-config` (unchanged); page `admin/labels/page.tsx` via `lib/setupNotice.tsx` |
 | Actor columns stamped by `router._caller_uid` — `installment_category_rule.updated_by` (**UUID**, mig 245), `plan_installment_schedule.updated_by` + `plan_installment_schedule_audit.changed_by` (mig 210), `commission_org_config.updated_by` (mig 201), `discrepancy_results.appealed_by` (mig 947), `commission_payout_ledger.recorded_by` (mig 267), `ingest_store_guard.updated_by` / `ingest_store_quarantine.decided_by` (mig 280), `targets.updated_by` (mig 006), `financing_target.updated_by` (mig 272) — **who did this: a uid or NULL, never a sentinel** (§19.34) | the plan-installment / category / matcher / payout-config / expected-commission editors, `PATCH /discrepancy-appeals/{row_id}`, `POST /payout/record`, the ingest-guard + targets + financing-target saves — all via ONE helper `_caller_uid` (`_mpc_who` / `_xc_who` / `_agency_who` dereference it) | the UI through ONE display rule `frontend/src/lib/actor.ts::actorLabel` (NULL / legacy `'web'` → "system"); lock `harness_actor_uid_lock.py` |
 | `commcalc.calc_status.auto_calc_requested_at` / `.auto_calc_landings` / `.auto_calc_last` (mig `1030`, NOT applied) — **a pending auto-calculation and the last one's outcome** for one (org, month) | `auto_calc.landed` (queue), `auto_calc._claim` (the poller's conditional UPDATE), `auto_calc.run_one` → `_record_last` (outcome); pre-1030 the outcome goes to `calc_notices` (type `auto_calc`) | `auto_calc.run_due` (the poller), `auto_calc.view` ← `GET /commcalc/calc-status/{period}` → `_lib/AutoCalcNotice.tsx` on the Rep Incentive page (§6l) |
 | `commcalc.commission_org_config.auto_calc_on_landing` / `.auto_calc_debounce_minutes` (mig `1030`) — house row → tenant row override | migration 1030 (house row TRUE where NULL); SQL / a future settings writer | ONE reader `auto_calc.load_config` → `resolve_config` (lock: `harness_auto_calc_lock.py` E) (§6l) |
@@ -5005,6 +5006,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
+| **Every JSON response** (no route added) — a string carrying a setup-internal fact (migration file / number, "apply mig", SQL editor, table-not-applied, PostgREST not-applied error) reaches a caller who is not the platform super admin as `SETUP_NOTICE`, per sentence; the original goes to the server log; the super admin sees it unchanged | `core/setup_notice.SetupNoticeMiddleware` (registered innermost in `main.py`); super admin = `core.router._require_super_admin` | §19.35 |
 | `POST /commcalc/plan-installments/category-rules` — now saves for a token-less caller (automation, agents, the auto-calc poller, RBAC off) with `updated_by = NULL` instead of 500-ing on `'web'` into a UUID column; the same actor stamp (uid or NULL) on `POST`/`PUT`/`DELETE /plan-installments[/{sid}]`, `PUT /plan-installments/{activation-matcher,plan-line-matcher,category-qualification,category-payout}`, `PUT /expected-commission/config`, `PATCH /discrepancy-appeals/{row_id}`, `POST /payout/record`, `PUT /ingest-guard/config`, `POST /ingest-guard/queue/{item_id}/decide`, `PUT /targets/{period}`, `PUT /financing/targets/{period}` | `router.save_category_rule` → `_caller_uid` (the one home) | §19.34, §8 |
 | `GET /commcalc/calc-status/{period}` — now also serves `auto_calc` `{state, tone, sentence, due_at, last, enabled}`: what the landing hook did for the month (queued / calculated / refused / failed / busy / off / running). Read by the Rep Incentive page | `router.get_calc_status` → `auto_calc.view` + `auto_calc.load_config` | §6l |
 | Every landing endpoint's response now carries `auto_calc` (`queued` + periods / `off` / `not_a_calc_input` / …): `POST /upload/{file_type}`, `POST /upload-mapped`, `POST /onboarding/intake/commit`, `POST /sales/promote-feed`, `POST /ingest-guard/queue/{item_id}/decide`, the commission import wizard commit, `POST /manual-upload/ingest`, the POS sync; the DLAR sweep's status line says "auto-calculation queued for …" | `auto_calc.landed` (no new route) | §6l |
@@ -5251,6 +5253,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Metric | Source table.column | Reader function |
 |--------|--------------------|-----------------|
+| **What a customer is told when a feature's setup is not finished** ("This feature isn't switched on for your company yet. Contact support to enable it.") — never a migration, table or SQL-editor instruction; the technical detail for the platform super admin only | the pages' existing `ready` / `state_ready` / `registry_ready` flags (unchanged) | backend `core/setup_notice.py` (`SETUP_NOTICE`, `SETUP_INTERNAL`, `neutralize`, `SetupNoticeMiddleware`; `report_registry.build_payload`); frontend `lib/setupNotice.tsx` (`<SetupNotice/>`, `setupFailed`); lock `harness_carrier_vocab_guard.py` §SETUP, CI `carrier-vocab-guard.yml` (§19.35) |
 | **Who did this** (the actor on a config save / audit row / appeal / payout record) — a uid or NULL ("system"), never a sentinel string | the §16 actor columns (types READ from the migrations by the lock) | writer: ONE helper `router._caller_uid`; display: `frontend/src/lib/actor.ts::actorLabel`; lock `harness_actor_uid_lock.py`, CI job *Actor columns get a UUID or NULL, never a sentinel* (§19.34) |
 | **Is this month's stored commission up to date with what landed?** ("Auto-calculated at … from the upload of …" / refused / off / queued) | `calc_status.auto_calc_requested_at` / `auto_calc_last` (mig 1030; pre-1030 `calc_notices` type `auto_calc`) | `auto_calc.view` via `GET /calc-status/{period}`; written only by the landing hook's runner, which runs `_run_calculation` (§6l) |
 | **What device an activation activated** (tablet / watch) and **its Exec-MTD pay category** | sale lines of the event (`product_desc`, `category`, `department`, `sku`, serial, catalog) | ONE classifier `installment_category.resolve_chain_category` (tenant rules + built-in ladder), dereferenced by `line_class._device_of_lines` / `unit_devices`; `line_class.pay_category` (one event, one category); categories `activation_bucketing.MTD_CATEGORIES` (§6n) |
@@ -5401,6 +5404,72 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 ---
 
 ## 19. Known gaps & inert config
+
+§19.35 **A MIGRATION NAME IN CUSTOMER-FACING COPY — "setup isn't finished" has ONE home (owner 2026-09-29; fixed).**
+Owner, on Admin → Display Labels (*"Needs migration 068_ui_label_override.sql. Edits show on the next sidebar load."*):
+*"this migration should not be mentioned in customer facing"*.
+**The class, not the instance:** an internal build/setup fact — a migration file (`068_….sql`) or number ("apply mig
+1030", "is migration 071 applied?"), "run it in the Supabase SQL editor", a table in a "not applied" hint, PostgREST's
+own not-applied errors (`PGRST205`, `42P01`, "relation … does not exist", "schema cache") — reached rendered copy and
+API responses. Measured on `991daa7d`: **132 rendered frontend sites in 72 files** (page text, toasts, `title=`
+tooltips, `e.message || '…is migration N applied?'` fallbacks, pages printing a payload's `migration` field) and
+**474 backend string expressions in 68 modules** (HTTPException `detail`s, payload `note` / `message` / `hint` /
+`migration` fields) — every one of them reachable by a tenant.
+**Checked first and reused (duplicate gate):** `core/column_tolerant.py` answers *which columns exist* and returns
+`missing` "so a panel can say apply migration X" — it stays the home of THAT fact; the words a panel says are this
+home. `HardeningMiddleware` (`main.py`) already masks 500s so no internals reach a client — the same posture, but it is
+a `BaseHTTPMiddleware` OUTER of GZip (it sees compressed bytes), so the boundary is a pure-ASGI sibling registered
+innermost rather than a rewrite of it. The super-admin answer is **THE one gate** `core.router._require_super_admin`
+(the rungs `_platform_admin_rungs`, the same fact `/me` serves as `user.super_admin`); the frontend reads it through
+`rbac.isPlatformAdmin` — no new role check on either side. The `state_ready` / `ready` / `registry_ready` flags the
+pages already branch on are untouched: they still decide WHEN the notice shows; only the words changed.
+**The design (one fact, one home, dereferenced):**
+
+| Side | Home | What it does |
+|---|---|---|
+| backend | `app/core/setup_notice.py` — `SETUP_NOTICE`, `SETUP_INTERNAL` (the ONE detector: file / number / run-apply-needs-pending-migration / "not applied"-"not run" / table-not-applied / SQL editor / `Supabase` (proper noun) / PostgREST not-applied errors — **precise on purpose**: the bare word "migration" is carrier DATA, a port or plan migration, and is never touched), `neutralize_text` (per SENTENCE), `neutralize` (a JSON payload's string values) | the words |
+| backend | `SetupNoticeMiddleware` (same module), registered in `main.py` **innermost** (before GZip; inner of TenantScope) | every `application/json` response — an HTTPException `detail` included — is neutralized for a caller who is not the platform super admin; the super admin sees it unchanged; the original goes to the server log (`[setup-notice] METHOD path: …`); a body with no marker passes after ~10 byte searches, nothing parsed; a gate fault HIDES (fail closed); a non-JSON body / `/openapi.json` / `/docs` / `/redoc` / `/health` pass verbatim |
+| backend | `notify/report_registry.build_payload` → `setup_notice.neutralize` | the one outbound report builder (scheduled / on-demand email + WhatsApp): a report never crosses the HTTP boundary, so it dereferences the same function |
+| frontend | `frontend/src/lib/setupNotice.tsx` — `SETUP_NOTICE` (locked equal to the backend's), `<SetupNotice lead? detail? />`, `setupFailed(action)`, `useSetupDetailVisible()` | every page: the sentence for everyone, `detail` (the migration / table) rendered ONLY for `isPlatformAdmin(user)` |
+
+The customer sentence: *"This feature isn't switched on for your company yet. Contact support to enable it."*
+**Siblings fixed (132 frontend sites / 72 files; 474 backend strings via the boundary):** Display Labels (the owner's
+three: the static note, the save-failure fallback, the report-kind registry line) and every tenant page the lock
+found — accounts (2), liabilities-due, admin impersonation / import-health / kpi-metrics / support failures + fix
+requests, closing cash-recon-management / management / tender-recon, commcalc `_lib` (upload trace, coverage
+diagnosis, plan match), accessory-definition, oninv-3way-recon, the five purchase-order pages, atu-opportunity,
+commission category-map / discrepancy / ledger (+ setup) / legs / plans, comp-trend, connectors, custom-report,
+distributors, the three sweep pages (dlar / epay / vip) + vip paygo, email-imports, gp-category-map, ingest-guard,
+item-mapping, ma-class-wiring / ma-overview-recon / ma-product-class, management-incentive, payout-schedules,
+plan-installments, recovery, rep-aliases, report-mappings, settings, target-fields, targets rep-map / settings,
+upload + upload wizard, failures, hr compliance / onboarding (+ employee) / payroll-expenses (also dropped
+"RESEND_API_KEY … set in Railway" and "the Supabase login"), notify, onboarding intake (page, stage 2, shared save
+indicator), pos onboarding, storeops accountability / attendance / payroll-tax / salary-advances / timeclock, vision
+(+ settings). Backend strings are NOT rewritten one by one — they are all neutralized at the boundary, and the lock
+proves none is phrased so the detector would miss it (a rewrite of 474 literals would be the patchwork; the 475th
+would be written next week).
+**Excused by name (super-admin only — the lock VERIFIES each is platform-only at every NAV occurrence, and FAILS a
+stale entry):** `/admin/billing`, `/admin/pricing`, `/admin/access-log`, `/admin/control-box`, `/admin/fix-requests`,
+`/admin/business-types` (§38.6 platform-only pages; the route guard `platformPathOK` bounces anyone else, their
+endpoints sit behind `_require_super_admin`), and the operator console route group `app/(operator)/` (its layout
+fails closed on `GET /core/operator/me`). Not copy, so not touched: code comments, docstrings, log / print lines,
+harnesses, the developer surfaces (`/openapi.json`, `/docs`).
+**Lock** `harness_carrier_vocab_guard.py` §SETUP (the EXISTING rendered-copy scanner, extended — same display-segment
+extractor, same CI job `carrier-vocab-guard.yml`, whose paths now include `backend/app/**/*.py`): (1) no
+`NNN_name.sql` in non-comment frontend code and no migration / `mig N` / SQL-editor / `Supabase` / detector wording
+in a display segment outside the home and the excusals (a `detail=` prop / `detail:` argument is the one sanctioned
+carrier of a migration name); (2) every backend string expression (implicit concatenation joined, placeholders read
+as an id) that names a migration is one `SETUP_INTERNAL` recognises; (3) the wires: middleware registered and
+innermost, `build_payload` dereferences `neutralize`, the gate is `_require_super_admin` (no re-derived rung), the two
+sentences equal, the frontend detail behind `isPlatformAdmin`; (4) the boundary's behaviour DB-free on a hand-driven
+ASGI app (B1–B11: the Display Labels detail neutralized + content-length + logged, the super admin unchanged, gate
+fault hides, carrier data "Port-in Migration" byte-identical, CSV untouched, chunked body, `/openapi.json` verbatim,
+per-sentence notes, the byte prefilter admits all 474 detected strings); 16 negative controls (N1 = the owner's line
+put back → RED).
+**Not covered, for an owner decision:** other INTERNAL setup facts outside the migration class — environment-variable
+names and hosting vendors in rendered copy (one instance fixed on HR onboarding; not locked), and raw table names in
+some tooltips (`→ raw_comp_report` on the ePay sweep checkboxes). Widening the lock to them needs a vocabulary
+decision (an env-var-shaped token is also how some carrier codes look).
 
 §19.34 **"WHO DID THIS" IS A UUID OR NULL — NEVER A SENTINEL STRING (found live 2026-09-28, saving tenant device
 rules).** `commcalc/router.py::_caller_uid(authorization)` returned the literal `'web'` when no signed-in user resolved.

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, ORG_ID } from '@/lib/client'
+import { SetupNotice } from '@/lib/setupNotice'
 
 const inp: React.CSSProperties = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
@@ -58,7 +59,7 @@ export default function RepMapPage() {
 
       {!loading && data.configured === false && (
         <div className="card" style={{ padding: 16, marginBottom: 16, background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', fontSize: 13 }}>
-          ⚠️ Run migration <strong>016_rep_aliases.sql</strong> in Supabase to enable saving merges.
+          ⚠️ <SetupNotice lead="Saving merges is not available yet." detail="016_rep_aliases.sql" />
         </div>
       )}
 

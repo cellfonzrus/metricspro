@@ -6,6 +6,7 @@ import EntityPicker from '@/components/EntityPicker'
 import { optionsFromRows } from '@/lib/standard-filters'
 import PlCommissionSourcePanel from '@/components/PlCommissionSourcePanel'
 import LedgerBatchUpload from '@/components/LedgerBatchUpload'
+import { SETUP_NOTICE, setupFailed, useSetupDetailVisible } from '@/lib/setupNotice'
 
 // Canonical Commission Ledger (SAP-style) — normalise ANY carrier's commission/tx file into FIVE canonical
 // buckets: Commission / Spiff / Equipment rebate / Residual-monthly / Auto Pay residual. A payout paid over
@@ -109,6 +110,7 @@ export default function CommissionLedgerPage() {
   // ── MA-data refresh (owner directive 2026-07-30) + provenance honesty ──────────────────────────
   const [syncReady, setSyncReady] = useState(true)      // migration 251 applied?
   const [syncMig, setSyncMig] = useState('')
+  const showSetupDetail = useSetupDetailVisible()
   const [prev, setPrev] = useState<SyncPrev | null>(null)   // the preview of a refresh (writes nothing)
   const [prov, setProv] = useState<Prov | null>(null)
   const [origin, setOrigin] = useState('')             // '' = every source (unchanged behaviour)
@@ -197,7 +199,7 @@ export default function CommissionLedgerPage() {
       const r = await apiUpload('/api/v1/commcalc/commission-ledger/import', fd)
       flash(`Imported ${r?.saved} lines — payouts ${money(r?.summary?.payout_total)}${r?.summary?.other_count ? `, ${r.summary.other_count} unmapped` : ''}`)
       loadSummary()
-    } catch (e: any) { flash(e?.message || 'Import failed — is migration 071 applied?') }
+    } catch (e: any) { flash(e?.message || setupFailed('Import failed')) }
     setBusy(false)
   }
   async function openDrill(cat: string) {
@@ -312,7 +314,7 @@ export default function CommissionLedgerPage() {
         {tmpl?.ma_syncable && (
           <button onClick={previewSync} disabled={busy || !syncReady}
             title={syncReady ? `Derive this period's ledger from ${(tmpl.ma_sources || []).join(' + ')} — preview first, nothing is written`
-              : `Needs migration ${syncMig} — the ledger's provenance column`}
+              : (showSetupDetail ? `${SETUP_NOTICE} [setup: ${syncMig}]` : SETUP_NOTICE)}
             style={{ ...inp, cursor: syncReady ? 'pointer' : 'not-allowed', fontWeight: 600,
               opacity: syncReady ? 1 : 0.55 }}>
             🔄 Refresh from MA data

@@ -247,8 +247,8 @@ export default function CashReconManagementPage() {
                   <SortableTh field="epay_cash_declared" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>Bill-pay on cash</SortableTh>
                   <SortableTh field="epay_credit_declared" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>Bill-pay on credit</SortableTh>
                   <SortableTh field="cash_pickup" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="The pickup the DM confirmed — the declared envelope figure">DM verified cash</SortableTh>
-                  <SortableTh field="cash_picked_actual" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="What the DM recorded actually taking out of the envelope (mig 949). Blank = not recorded.">DM actually took</SortableTh>
-                  <SortableTh field="mgmt_counted" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="Management's own count of the envelope, from the envelope report (envelope_count, mig 936). Blank = not counted yet.">Management counted</SortableTh>
+                  <SortableTh field="cash_picked_actual" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="What the DM recorded actually taking out of the envelope. Blank = not recorded.">DM actually took</SortableTh>
+                  <SortableTh field="mgmt_counted" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="Management's own count of the envelope, from the envelope report. Blank = not counted yet.">Management counted</SortableTh>
                   <SortableTh field="mgmt_variance" sort={sortState.sort} onSort={sortState.toggle} style={thTop} title="Management counted minus cash declared. Negative = short.">Mgmt short / over</SortableTh>
                   <SortableTh field="billpay_pickup" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>{`DM verified ${procName}`}</SortableTh>
                   <SortableTh field="pos_cash" sort={sortState.sort} onSort={sortState.toggle} style={thTop}>POS cash</SortableTh>

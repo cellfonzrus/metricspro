@@ -39,6 +39,7 @@ import ShowsIn from '@/components/ShowsIn'
 import PlCommissionSourcePanel from '@/components/PlCommissionSourcePanel'
 import type { ShowsIn as ShowsInPayload } from '@/lib/report-kinds'
 import { STATEMENT_TYPE_DEFAULT, statementTypeToken } from '@/lib/statement-type'
+import { SETUP_NOTICE, SetupNotice } from '@/lib/setupNotice'
 
 // ── stage-3 payload types (mirror onboarding_intake.py) ─────────────────────────────────────────
 type SignRow = { label: string; sub_label: string; store: string; amount: number }
@@ -246,7 +247,7 @@ export default function OnboardingIntakePage() {
     if (!instanceKey) return { saved: false, reason: 'pick the carrier first' }
     const d: StateResp = await api(`${BASE}/state`, { method: 'PUT', body: JSON.stringify({ instance_key: instanceKey, step, payload: patch, by: who }), keepalive })
     setState(prev => prev ? { ...prev, rail: d.rail, state_ready: d.state_ready, save: d.save } : d)
-    if (d.state_ready === false) return { saved: false, reason: `run migration ${d.migration}` }
+    if (d.state_ready === false) return { saved: false, reason: SETUP_NOTICE }
     return d.save || { saved: true }
   }, [instanceKey, step, who])
   const { schedule, saveNow, status: saveStatus } = useAutoSave(persistNow)
@@ -500,7 +501,7 @@ export default function OnboardingIntakePage() {
         ))}
         {state && !state.state_ready && (
           <div style={{ ...note, fontSize: 11, marginTop: 10, color: '#b45309' }}>
-            Your place is not being saved: migration {state.migration} is not applied yet. The flow still works.
+            <SetupNotice lead="Your place is not being saved. The flow still works." detail={state.migration} />
           </div>
         )}
         {stateErr && <div style={{ ...note, fontSize: 11, marginTop: 10, color: '#ef4444' }}>{stateErr}</div>}
@@ -723,7 +724,7 @@ export default function OnboardingIntakePage() {
             </p>
             {step === '3.6' && bucketMeta && bucketMeta.ready === false && (
               <div style={{ ...card, padding: '8px 12px', fontSize: 13, marginBottom: 10, borderColor: '#f59e0b', background: 'rgba(245,158,11,.08)' }}>
-                The bucket registry (migration {bucketMeta.migration}) is not applied yet: the buckets shown are the built-in defaults. A label can be placed in a deduction bucket here, but the confirm step will refuse until the migration runs.
+                The buckets shown are the built-in defaults. A label can be placed in a deduction bucket here, but the confirm step will refuse until custom buckets are switched on. <SetupNotice detail={bucketMeta.migration} />
               </div>
             )}
             {step === '3.6' && a.blank_label && (

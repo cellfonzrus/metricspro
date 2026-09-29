@@ -29,6 +29,7 @@ import {
 import { useReportKinds } from '@/lib/report-kinds'
 import type { ReportKindRow } from '@/lib/carrier-scope'
 import ShowsIn from '@/components/ShowsIn'
+import { SETUP_NOTICE, SetupNotice } from '@/lib/setupNotice'
 import { LineClassStep, type LineClassBlock } from './line-class-step'   // 2.5a — what counts as an activation (owner 2026-09-21)
 import { TenderColumnsStep, type TenderColumnsBlock, type TenderDecision, type TenderTie, type TenderNumbers } from './tender-columns-step'   // 2.5b — the invoice export's tender columns + the tender basis (owner 2026-09-21)
 
@@ -197,7 +198,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
   const persistNow = useCallback(async (patch: Record<string, unknown>, keepalive = false): Promise<SaveResult> => {
     if (!instanceKey) return { saved: false, reason: 'add the export on the checklist first' }
     const d: StateResp = await api(`${BASE}/state`, { method: 'PUT', body: JSON.stringify({ instance_key: instanceKey, step, payload: patch, by: who }), keepalive })
-    if (d.state_ready === false) return { saved: false, reason: `run migration ${d.migration}` }
+    if (d.state_ready === false) return { saved: false, reason: SETUP_NOTICE }
     return d.save || { saved: true }
   }, [instanceKey, step, who])
   const { schedule, saveNow, status: saveStatus } = useAutoSave(persistNow)
@@ -434,7 +435,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
         <div style={{ ...note, marginBottom: 10, fontSize: 12 }}>
           {!registry.loaded ? 'Reading which report kinds this company may upload…'
             : registry.error ? <span style={{ color: '#ef4444' }}>⚠️ The report-kind registry could not be read ({registry.error}) — the cards are withheld rather than guessed.</span>
-            : <>Offered for {registry.declaration?.pos?.length ? <>POS <b>{registry.declaration.pos.join(' / ')}</b></> : 'no declared POS'} · {registry.declaration?.carriers?.length ? <>carrier <b>{registry.declaration.carriers.join(' / ')}</b></> : 'no declared carrier'}{!registry.ready && <> · registry table not applied yet — house defaults ({registry.payload?.migration})</>}{registry.withheld && <> · {registry.withheld}</>}</>}
+            : <>Offered for {registry.declaration?.pos?.length ? <>POS <b>{registry.declaration.pos.join(' / ')}</b></> : 'no declared POS'} · {registry.declaration?.carriers?.length ? <>carrier <b>{registry.declaration.carriers.join(' / ')}</b></> : 'no declared carrier'}{!registry.ready && <> · house defaults (<SetupNotice detail={registry.payload?.migration} />)</>}{registry.withheld && <> · {registry.withheld}</>}</>}
         </div>
         <KindDetectZone visible={intakeCards} onPick={pickDetected} fallbackKey={intakeCards.find(c => c.landing === 'other')?.key} />
         <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>

@@ -5,6 +5,7 @@ import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // Accountability lens: per-employee attendance patterns, flagged against policy, with POSITIVE coaching
 // recommendations + the DATES/TIMES of each late (or left-early) incident so a manager can coach on the
@@ -257,7 +258,7 @@ function LatenessAlertConfig() {
             <button className="btn" style={{ fontSize: 12 }} disabled={!!busy} onClick={() => preview(true)}>{busy === 'send' ? '…' : '📤 Send now'}</button>
           </div>
           {cfg.last_run && <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 8 }}>Last run: {cfg.last_detail || cfg.last_run}</div>}
-          {!cfg.available && <div style={{ fontSize: 11.5, color: '#b45309', marginTop: 8 }}>⚠️ Migration 433 isn&apos;t applied yet — saving is disabled until it runs.</div>}
+          {!cfg.available && <div style={{ fontSize: 11.5, color: '#b45309', marginTop: 8 }}>⚠️ <SetupNotice lead="Saving is disabled for now." detail="433" /></div>}
           {msg && <div style={{ fontSize: 12.5, marginTop: 8 }}>{msg}</div>}
         </div>
       )}

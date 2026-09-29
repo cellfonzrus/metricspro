@@ -11,6 +11,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api, getActiveOrg } from '@/lib/client'
 import { PERIOD_ROUTES } from './uploadRoutes'
+import { SetupNotice } from '@/lib/setupNotice'
 
 const tones: Record<string, { bg: string; fg: string; label: string }> = {
   ok:      { bg: '#dcfce7', fg: '#166534', label: 'ok' },
@@ -63,7 +64,7 @@ export function UploadTracePanel({ period, uploadType, onClose }:
         </div>
         {data && data.ok === false && (
           <div className="card" style={{ padding: 12, background: '#fef3c7', color: '#92400e', fontSize: 13, marginBottom: 10 }}>
-            {data.hint || 'Upload trace not available yet — run migration 202.'}
+            {data.hint || <SetupNotice lead="Upload trace is not available yet." detail="202" />}
           </div>
         )}
         {busy ? (

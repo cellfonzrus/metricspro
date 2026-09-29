@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // KPI DEFINITIONS — the platform-wide registry (owner 2026-09-25: "create a KPI dashboard, which
 // will be used platform wide, move the KPI from Boost in that right now and when other KPIs are
@@ -185,10 +186,8 @@ export default function KpiMetricsAdminPage() {
 
       {!loading && !ready && (
         <div style={{ ...card, marginTop: 16, borderColor: '#fed7aa', background: '#fff7ed', color: '#9a3412', fontSize: 13 }}>
-          <strong>The registry table is not present on this database.</strong> Migration
-          {' '}<code>060_carrier_kpi_metrics.sql</code> has not been applied, so nothing can be saved
-          here yet &mdash; this is not an organisation with no KPIs, it is a store that cannot answer.
-          Apply the migration and reload.
+          <strong>Nothing can be saved here yet</strong> &mdash; this is not an organisation with no KPIs,
+          it is a setting that is not switched on. <SetupNotice detail="060_carrier_kpi_metrics.sql" />
         </div>
       )}
 

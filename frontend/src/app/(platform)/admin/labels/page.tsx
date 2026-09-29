@@ -5,11 +5,14 @@ import { invalidateApiCache } from '@/lib/cache'
 import { TENANT_NAV, NAV_CARRIERS, hrefHiddenByVertical } from '@/lib/rbac'
 import { useReportKinds } from '@/lib/report-kinds'
 import { useAuth } from '@/lib/auth-context'
+import { SetupNotice, setupFailed } from '@/lib/setupNotice'
 
 // Display Labels — per-tenant nicknames for the sidebar. Rename what you SEE ("Distributors"→"Suppliers",
 // "Payment Processor"→"VidaPay") without touching code or DB column names. Display-only: changing a label
 // here never renames a route, table, column, report_key or any data path. Backed by commcalc.ui_label_override
 // (migration 068). Blank = revert to the built-in label. Edits apply on the next page load of the sidebar.
+// The page never names the migration to a customer (owner 2026-09-29, index §19.35): a failed save says so in
+// plain words (lib/setupNotice.tsx); the server's own detail reaches the platform super admin only.
 
 const inp: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', width: 240 }
 
@@ -62,7 +65,7 @@ export default function DisplayLabelsPage() {
       setOver(p => { const n = { ...p }; if (label) n[key] = label; else delete n[key]; return n })
       setMsg(label ? `Saved "${label}"` : 'Reverted to default')
     } catch (e: unknown) {
-      setMsg((e instanceof Error && e.message) || 'Save failed — is migration 068_ui_label_override.sql applied?')
+      setMsg((e instanceof Error && e.message) || setupFailed('Save failed'))
       setDraft(p => ({ ...p, [key]: over[key] || '' }))   // roll back the field
     }
     setTimeout(() => setMsg(''), 3500)
@@ -84,7 +87,7 @@ export default function DisplayLabelsPage() {
         This changes display text only — never a route, table, or data path.
       </p>
       <p style={{ color: 'var(--text3)', fontSize: 12, marginBottom: 18 }}>
-        Needs migration <code>068_ui_label_override.sql</code>. Edits show on the next sidebar load.
+        Edits show on the next sidebar load.
       </p>
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 14 }}>{msg}</div>}
 
@@ -151,7 +154,7 @@ export default function DisplayLabelsPage() {
             Report kinds that apply to a specific POS or carrier (the report-kind registry). Auto follows what this company
             declared{kinds.declaration ? <> — POS <b>{kinds.declaration.pos.join(' / ') || 'none'}</b>, carrier <b>{kinds.declaration.carriers.join(' / ') || 'none'}</b></> : null}.
             {!isSuper && ' Turning one back on is reserved for the platform team — you can still hide it or reset it.'}
-            {kinds.loaded && !kinds.ready && ' The registry table is not applied yet — these are the house defaults.'}
+            {kinds.loaded && !kinds.ready && <> <SetupNotice lead="Showing the house defaults." detail={kinds.payload?.migration} /></>}
           </div>
           {gatedKinds.map(k => {
             const cur = caps['kind:' + k.key]

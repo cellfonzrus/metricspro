@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
 import EntityPicker from '@/components/EntityPicker'
+import { SETUP_NOTICE } from '@/lib/setupNotice'
 
 // The "SU sheet": each sales item (SKU / description) → type (accessory|phone|other|unclassified),
 // a phone model, and (mig 210) TWO configurable categories: a MASTER/sales category and a KPI category.
@@ -58,7 +59,7 @@ export default function ItemMappingPage() {
     const qs = store ? `?store=${encodeURIComponent(store)}` : ''
     api(`/api/v1/commcalc/item-mapping${qs}`).then((r: any) => {
       setItems(r.items || []); setCounts(r.counts || {}); setReady(r.ready !== false)
-      if (r.ready === false) setMsg('Run migration 041 to enable item mapping.')
+      if (r.ready === false) setMsg(SETUP_NOTICE)
     }).catch((e: any) => setMsg('Load failed: ' + (e?.message || e))).finally(() => setLoading(false))
   }, [storeF])
   useEffect(() => { load(); loadModels(); loadCats() }, [load, loadModels, loadCats])
@@ -287,7 +288,7 @@ export default function ItemMappingPage() {
                 </tr>
               )
             })}
-            {filtered.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>{loading ? 'Loading…' : ready ? 'No items. Upload a Product Catalog and seed, or load the Accessory Flags report to auto-populate.' : 'Run migration 041 first.'}</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>{loading ? 'Loading…' : ready ? 'No items. Upload a Product Catalog and seed, or load the Accessory Flags report to auto-populate.' : SETUP_NOTICE}</td></tr>}
           </tbody>
         </table>
       </div>

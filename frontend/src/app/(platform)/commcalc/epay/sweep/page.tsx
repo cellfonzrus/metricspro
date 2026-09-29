@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { usePosTerm } from '@/lib/report-labels'
 import { scopeState, connectorNotApplicableCopy, type ConnectorScope } from '@/lib/connectors'
+import { SetupNotice } from '@/lib/setupNotice'
 
 
 type Cfg = {
@@ -76,7 +77,7 @@ export default function EpaySweepAdmin() {
   }
 
   if (loading) return <div style={{ padding: 60, textAlign: 'center', color: 'var(--text3)' }}>Loading…</div>
-  if (!cfg) return <div style={{ padding: 60, textAlign: 'center', color: 'var(--text3)' }}>Could not load config. Did you run 020_epay_sweep.sql?</div>
+  if (!cfg) return <div style={{ padding: 60, textAlign: 'center', color: 'var(--text3)' }}><SetupNotice lead="Could not load this connector's settings." detail="020_epay_sweep.sql" /></div>
   // CONNECTOR SCOPE (mig 1014, owner 2026-09-21): this page drives ONE connector. When the registry says
   // it does not apply to the tenant's declared POS / carrier, the ONE not-applicable sentence replaces the
   // form, its status and its stored error — the connector is not this tenant's to fix.
@@ -171,10 +172,10 @@ export default function EpaySweepAdmin() {
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Monthly Incentive & ATU Subscriber Details (#102817) → raw_mi">
               <input type="checkbox" checked={cfg.sweep_mi !== false} onChange={e => set('sweep_mi', e.target.checked)} /> MI / ATU
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Comprehensive Compensation Report (#100614) → raw_comp_report (needs migration 025)">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Comprehensive Compensation Report (#100614) → raw_comp_report">
               <input type="checkbox" checked={!!cfg.sweep_comp} onChange={e => set('sweep_comp', e.target.checked)} /> Comprehensive Comp
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Commission Payment Detail (#50273) → raw_payment_detail (needs migration 025)">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Commission Payment Detail (#50273) → raw_payment_detail">
               <input type="checkbox" checked={!!cfg.sweep_payment} onChange={e => set('sweep_payment', e.target.checked)} /> Payment Detail
             </label>
           </div>

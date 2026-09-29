@@ -6,6 +6,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // Time Clock admin (Part B / B1): review punches (clock-in/out, hours, selfie, GPS, face-match) and
 // add manual-hours adjustments. The employee-facing clock-in lives in the mobile /portal.
@@ -340,7 +341,7 @@ export default function TimeClockAdminPage() {
                 </tr>
               )
             })}
-            {!loading && visibleRows.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', padding: 36, color: 'var(--text3)' }}>No punches in range. (Run migration 045 if this errors.)</td></tr>}
+            {!loading && visibleRows.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', padding: 36, color: 'var(--text3)' }}>No punches in range.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -632,9 +633,9 @@ function LunchSettingsPanel({ cfg, onSaved, onClose }: { cfg: any; onSaved: (c: 
       </div>
       {cfg && !cfg.available && (
         <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>
-          ℹ️ Migration 418 hasn&apos;t run on this tenant yet — the default shown below (30 min, 6h
-          threshold) is the OWNER&apos;S STATED DEFAULT for reference; nothing is actually deducted from
-          any hours or pay figure until the migration runs.
+          ℹ️ The default shown below (30 min, 6h threshold) is the OWNER&apos;S STATED DEFAULT for
+          reference; nothing is actually deducted from any hours or pay figure until this is switched on.
+          <SetupNotice detail="418" />
         </div>
       )}
       <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 10px' }}>

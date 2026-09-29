@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { usePosTerm } from '@/lib/report-labels'
 import { scopeState, connectorNotApplicableCopy, type ConnectorScope } from '@/lib/connectors'
+import { SetupNotice } from '@/lib/setupNotice'
 
 
 type Cfg = {
@@ -79,7 +80,7 @@ export default function VipSweepAdmin() {
   }
 
   if (loading) return <div style={{ padding: 60, textAlign: 'center', color: 'var(--text3)' }}>Loading…</div>
-  if (!cfg) return <div style={{ padding: 60, textAlign: 'center', color: 'var(--text3)' }}>Could not load config. Did you run 011_vip_sweep.sql?</div>
+  if (!cfg) return <div style={{ padding: 60, textAlign: 'center', color: 'var(--text3)' }}><SetupNotice lead="Could not load this connector's settings." detail="011_vip_sweep.sql" /></div>
   // CONNECTOR SCOPE (mig 1014, owner 2026-09-21): this page drives ONE connector. When the registry says
   // it does not apply to the tenant's declared POS / carrier, the ONE not-applicable sentence replaces the
   // form, its status and its stored error — the connector is not this tenant's to fix.
@@ -190,16 +191,16 @@ export default function VipSweepAdmin() {
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
             <input type="checkbox" checked={cfg.sweep_invoices} onChange={e => set('sweep_invoices', e.target.checked)} /> Invoices
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Pull the PayGo / asset-lending weekly billing ledger (needs migration 014)">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Pull the PayGo / asset-lending weekly billing ledger">
             <input type="checkbox" checked={cfg.sweep_asset} onChange={e => set('sweep_asset', e.target.checked)} /> Asset lending (PayGo)
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Pull Distributor 'Weekly Incentive Credit' memos for the Account Module reconciliation (needs migration 022)">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Pull Distributor 'Weekly Incentive Credit' memos for the Account Module reconciliation">
             <input type="checkbox" checked={cfg.sweep_creditmemo} onChange={e => set('sweep_creditmemo', e.target.checked)} /> Credit memos (recon)
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Download Asset_Lending.xlsx and refresh the Asset Ledger (needs migration 035)">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Download Asset_Lending.xlsx and refresh the Asset Ledger">
             <input type="checkbox" checked={cfg.sweep_asset_ledger !== false} onChange={e => set('sweep_asset_ledger', e.target.checked)} /> Asset ledger (devices)
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Download the Distributor chargebacks export into the Chargebacks & Fraud bucket (needs migration 036)">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Download the Distributor chargebacks export into the Chargebacks & Fraud bucket">
             <input type="checkbox" checked={cfg.sweep_chargebacks !== false} onChange={e => set('sweep_chargebacks', e.target.checked)} /> Chargebacks
           </label>
         </div>

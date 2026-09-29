@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
 import { WorkflowNext } from '@/components/WorkflowNext'
 import { useConnectors } from '@/lib/connectors'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // Unified connector registry (SaaS framework Phase 2): every vendor portal + the reports it provides
 // + live sweep status, with a generic run-now. The single source of truth for the data pipeline.
@@ -108,7 +109,7 @@ export default function ConnectorsPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : conns.length === 0 ? (
-        <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>No connectors — run migration 039.</div>
+        <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>No connectors yet. <SetupNotice detail="039" /></div>
       ) : conns.map((c: any) => {
         const tf = TWOFA[c.twofa_status] || TWOFA.ok
         const st = c.status || {}

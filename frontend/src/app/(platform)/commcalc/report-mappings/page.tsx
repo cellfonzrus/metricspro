@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // ── Report-pull mapping admin (mig 207, RULE TWO) ────────────────────────────────────────────────
 // The automated VidaPay / T-CETRA report pull is DRIVEN by this config, not hard-coded. Each report's
@@ -97,9 +98,9 @@ export default function ReportMappingsPage() {
       </div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-        <button className="btn btn-secondary" onClick={reseed} title="Insert any missing house-default report rows (idempotent mirror of migration 207's seed)">↻ Reseed defaults</button>
+        <button className="btn btn-secondary" onClick={reseed} title="Insert any missing house-default report rows (safe to repeat)">↻ Reseed defaults</button>
         <button className="btn btn-secondary" onClick={load}>Refresh</button>
-        {!ready && <span style={{ fontSize: 12, color: '#b45309' }}>⚠️ migration 207 not applied — showing built-in defaults (read-only until it runs)</span>}
+        {!ready && <span style={{ fontSize: 12, color: '#b45309' }}>⚠️ <SetupNotice lead="Showing built-in defaults (read-only)." detail="207" /></span>}
         {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
       </div>
 
@@ -183,7 +184,7 @@ export default function ReportMappingsPage() {
           </div>
         )
       })}
-      {reports.length === 0 && <div className="card" style={{ padding: 16, fontSize: 13, color: 'var(--text3)' }}>No report mappings — click <b>↻ Reseed defaults</b> (or run migration 207).</div>}
+      {reports.length === 0 && <div className="card" style={{ padding: 16, fontSize: 13, color: 'var(--text3)' }}>No report mappings — click <b>↻ Reseed defaults</b>.</div>}
     </div>
   )
 }

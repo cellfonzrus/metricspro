@@ -11,6 +11,7 @@ import { emptyStandardFilter, matchesStandardFilter, type StandardFilterValue } 
 import ReportShell from '@/components/ReportShell'
 import { type ExportColumn } from '@/lib/export'
 import PoNav from '../_shared/PoNav'
+import { SETUP_NOTICE } from '@/lib/setupNotice'
 
 type TallyRow = {
   po_id: string; po_number: string; po_line_id: string; sku: string | null; device_model: string
@@ -46,7 +47,7 @@ export default function SoldTallyPage() {
       const d = await api('/api/v1/asset/po/tally')
       setRows(d.rows || [])
       setSummary(d.summary || {})
-      if (d.migrated === false) setMsg(d.note || 'Purchase Orders migration pending.')
+      if (d.migrated === false) setMsg(d.note || SETUP_NOTICE)
     } catch (e: any) { setMsg('Could not load sold tally: ' + (e?.message || e)) }
     setLoading(false)
   }, [])

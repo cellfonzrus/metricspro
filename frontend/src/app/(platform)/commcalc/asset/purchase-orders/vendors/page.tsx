@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import PoNav from '../_shared/PoNav'
+import { SETUP_NOTICE } from '@/lib/setupNotice'
 
 type Vendor = {
   id: string; name: string; contact_name: string | null; email: string | null
@@ -34,7 +35,7 @@ export default function ManageVendorsPage() {
     try {
       const d = await api('/api/v1/asset/po/vendors?active_only=false')
       setVendors(d.rows || [])
-      if (d.migrated === false) setMsg(d.note || 'Purchase Orders migration pending.')
+      if (d.migrated === false) setMsg(d.note || SETUP_NOTICE)
     } catch (e: any) { setMsg('Could not load vendors: ' + (e?.message || e)) }
     setLoading(false)
   }, [])

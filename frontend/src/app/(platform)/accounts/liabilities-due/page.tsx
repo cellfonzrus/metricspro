@@ -238,7 +238,7 @@ export default function LiabilitiesDuePage() {
           </Section>
 
           <Section title="🏢 Rents due this week"
-            note="Per the store’s lease setup (mig 946): the store’s own rent-due rule, else your org default, else the house default (first week of the month) — the rent amount follows the explicit schedule, else the annual escalation, else current rent.">
+            note="Per the store’s lease setup: the store’s own rent-due rule, else your org default, else the house default (first week of the month) — the rent amount follows the explicit schedule, else the annual escalation, else current rent.">
             {!rents.allowed ? <Restricted what="Lease / rent data" /> : (
               <>
                 {rents.note && <div style={{ fontSize: 12.5, color: 'crimson', marginBottom: 8 }}>{rents.note}</div>}

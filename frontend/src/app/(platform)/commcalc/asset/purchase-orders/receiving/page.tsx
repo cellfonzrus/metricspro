@@ -10,6 +10,7 @@ import { emptyStandardFilter, matchesStandardFilter, type StandardFilterValue } 
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import PoNav from '../_shared/PoNav'
+import { SETUP_NOTICE } from '@/lib/setupNotice'
 
 type OpenLine = {
   po_id: string; po_number: string; status: string; ship_to_store: string | null; market: string | null
@@ -42,7 +43,7 @@ export default function ReceivingPage() {
     try {
       const d = await api('/api/v1/asset/po/open')
       setRows(d.rows || [])
-      if (d.migrated === false) setMsg(d.note || 'Purchase Orders migration pending.')
+      if (d.migrated === false) setMsg(d.note || SETUP_NOTICE)
     } catch (e: any) { setMsg('Could not load open purchase orders: ' + (e?.message || e)) }
     setLoading(false)
   }, [])

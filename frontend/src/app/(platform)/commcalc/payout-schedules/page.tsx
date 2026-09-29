@@ -6,6 +6,7 @@ import EntityPicker from '@/components/EntityPicker'
 import RunCommissionButton from '../_lib/RunCommissionButton'
 import { useActiveCarrier } from '@/lib/auth-context'
 import { carrierRowIds } from '@/lib/carrier-scope'
+import { SETUP_NOTICE, SetupNotice } from '@/lib/setupNotice'
 
 // Multi-month payout schedules (migration 057). A schedule spreads one activation's commission over
 // N months (flat or %MRC); months 2..N pay only if the bill was paid + residual received that month.
@@ -59,7 +60,7 @@ export default function PayoutSchedulesPage() {
       ])
       setCarriers(carr)
       setScheds(r.schedules || []); setReady(r.ready !== false)
-      if (r.ready === false) setMsg(r.note || 'Run migration 057 to enable.')
+      if (r.ready === false) setMsg(r.note || SETUP_NOTICE)
     } catch (e: any) { setMsg('Load failed: ' + (e?.message || e)) }
   }
   async function loadMrc() {
@@ -188,7 +189,7 @@ export default function PayoutSchedulesPage() {
           single-month payout (unchanged). <strong>Preview</strong> is read-only — it does not change live payouts.
         </p>
       </div>
-      {!ready && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {msg || 'Run migration 057_multi_month_payout.sql in Supabase to enable this feature.'}</div>}
+      {!ready && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {msg || <SetupNotice detail="057_multi_month_payout.sql" />}</div>}
 
       {/* import carrier template — clone another org's shareable payout config into this tenant */}
       {sources.length > 0 && (
@@ -344,7 +345,7 @@ export default function PayoutSchedulesPage() {
           a fallback whenever the carrier statement reports $0 MRC — so residual installments
           compute real amounts instead of $0.{!multi && ' Some carrier statements report $0 MRC; those that report a real MRC are unaffected.'}
         </p>
-        {!mrcReady && <div style={{ padding: 12, marginBottom: 12, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 13 }}>⚠️ Run migration 074_product_mrc.sql in Supabase to enable this catalog.</div>}
+        {!mrcReady && <div style={{ padding: 12, marginBottom: 12, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 13 }}>⚠️ <SetupNotice lead="This catalog is not available yet." detail="074_product_mrc.sql" /></div>}
 
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 12 }}>
           <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Plan name<br />
