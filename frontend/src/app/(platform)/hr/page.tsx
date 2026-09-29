@@ -3,7 +3,7 @@
 // is span-scoped server-side (a manager sees only their area) and the underlying data still lives in
 // StoreOps / CommCalc — this is the single place to see total compensation. Editing pay stays on
 // StoreOps Admin. Gated by the `hr` module permission (default OFF for managers).
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { api, ORG_ID, fmt } from '@/lib/client'
 import { apiCached, LOOKUP, CONFIG, invalidateApiCache } from '@/lib/cache'
 import { usePeriod } from '@/lib/period-context'
@@ -11,6 +11,9 @@ import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import StatTile from '@/components/StatTile'
 import { PAY_BASES, PAY_BASIS_LABEL, periodPayPreviewLabel, type PayBasis } from '../storeops/lib/pay-basis'
+import { planRowSave, runRowSave, commitSaved, rowSaveMessage, rowDirty, dirtySlices, pendingRowCount, rebaseRows, fieldChanged } from '@/lib/rowSave'
+import { HR_EMPLOYEE_ROW_SLICES } from '@/lib/employeeRowSlices'
+import { useUnsavedGuard } from '@/lib/useUnsavedGuard'
 
 const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
 function periodToMonth(p: string): string {
@@ -43,16 +46,29 @@ export default function HRPage() {
   // AUTHORITATIVE per-period figure always comes from the backend (GET /payroll, GET /compensation).
   const [ppType, setPpType] = useState<string | null>(null)
 
+  // Last-saved snapshot per employee row (index §19.35) — see "ONE ROW, ONE SAVE" below.
+  const [snaps, setSnaps] = useState<Record<string, any>>({})
+  const snapsRef = useRef<Record<string, any>>({})
+  // A fresh roster read (tab open, period change, bulk upload) never drops typed edits: dirty rows keep
+  // them on top of the fresh values and stay marked unsaved.
+  const seatRoster = useCallback((fresh: any[]) => {
+    const prevSnaps = snapsRef.current
+    setEmps(prev => rebaseRows(prev, (r: any) => prevSnaps[String(r.id)], fresh, (r: any) => String(r.id), HR_EMPLOYEE_ROW_SLICES))
+    const next = Object.fromEntries(fresh.map((f: any) => [String(f.id), f]))
+    snapsRef.current = next
+    setSnaps(next)
+  }, [])
+
   const load = useCallback(async () => {
     setLoading(true); setErr('')
     try {
       if (tab === 'comp') setComp(await api(`/api/v1/hr/compensation?org_id=${ORG_ID}&period=${encodeURIComponent(period)}`))
-      else if (tab === 'employees') setEmps(await apiCached('/api/v1/storeops/employees', LOOKUP) || [])
+      else if (tab === 'employees') seatRoster(await apiCached('/api/v1/storeops/employees', LOOKUP) || [])
       else if (tab === 'payroll') setPayroll(await api(`/api/v1/storeops/payroll?month=${periodToMonth(period)}`) || [])
       else if (tab === 'timeoff') setTimeoff(await api('/api/v1/storeops/time-off') || [])
     } catch (e: any) { setErr(e?.message || 'Failed to load') }
     setLoading(false)
-  }, [tab, period])
+  }, [tab, period, seatRoster])
   useEffect(() => { load() }, [load])
   useEffect(() => {
     apiCached('/api/v1/core/tenant-settings', CONFIG).then((r: any) => setPpType(r?.settings?.pay_period_type || null)).catch(() => {})
@@ -65,79 +81,58 @@ export default function HRPage() {
   // 500 from a PATCH body that includes a not-yet-existing field).
   const salaryFieldsAvailable = emps.some(e => Object.prototype.hasOwnProperty.call(e, 'pay_basis'))
 
-  // ---- lunch-break auto-deduction, per-employee override (owner directive 2026-07-27, Deliverable 3)
-  // ---- SAME permission posture as pay_rate on this same tab (org-scoped only, no extra gate); a
-  // DEDICATED endpoint (PUT /employees/{id}/lunch-config), never folded into the generic pay PATCH, so
-  // a tenant that hasn't run migration 418 yet can never have an unrelated pay-rate save fail because
-  // of it. 'Default' = inherit the tenant-wide setting (⚙ Lunch Break Settings on the Time Clock page).
-  const [lunchEdit, setLunchEdit] = useState<Record<number, { mode: 'default' | 'on' | 'off'; minutes: string; busy?: boolean; msg?: string }>>({})
-  function lunchStateFor(e: any) {
-    return lunchEdit[e.id] || {
-      mode: e.lunch_deduction_enabled === true ? 'on' : e.lunch_deduction_enabled === false ? 'off' : 'default',
-      minutes: e.lunch_deduction_minutes != null ? String(e.lunch_deduction_minutes) : '',
-    }
-  }
-  async function saveLunch(e: any) {
-    const st = lunchStateFor(e)
-    setLunchEdit(s => ({ ...s, [e.id]: { ...st, busy: true, msg: '' } }))
-    try {
-      // 'off'/'default' never send a stale minutes value from a previous 'on' edit — enabled=false/null
-      // already wins (harmless either way), but only 'on' has any business sending a minutes override.
-      const body = { enabled: st.mode === 'default' ? null : st.mode === 'on', minutes: st.mode === 'on' && st.minutes.trim() !== '' ? Number(st.minutes) : null }
-      await api(`/api/v1/storeops/employees/${e.id}/lunch-config`, { method: 'PUT', body: JSON.stringify(body) })
-      invalidateApiCache('/api/v1/storeops/employees')   // cached roster read must self-heal after an edit
-      setLunchEdit(s => ({ ...s, [e.id]: { ...st, busy: false, msg: '✅' } }))
-    } catch (err: any) {
-      setLunchEdit(s => ({ ...s, [e.id]: { ...st, busy: false, msg: '❌ ' + (err?.message || err) } }))
-    }
-  }
+  // ---- ONE ROW, ONE SAVE (owner report 2026-09-29, index §19.35) --------------------------------
+  // Owner: "i just saved hourly salary in vzone but it did not save when i came back". This tab used
+  // to give every row THREE independent 💾 buttons — pay (in the LAST column, past Email and Phone,
+  // off the right edge of the table), Lunch and Face — each saving only its own slice. The owner typed
+  // hourly rates, set Lunch to On and pressed the 💾 beside Lunch; the access log shows four
+  // `PUT …/lunch-config` and NO pay PATCH: the rates never left the browser. Now every edit lives on
+  // the row itself, `lib/employeeRowSlices.ts` says which request persists which field, and the row's
+  // ONE Save (first column, beside the name) plans a request for EVERY edited slice via
+  // `lib/rowSave.ts::planRowSave`. The result message names what was saved and what was not; a row
+  // with unsaved edits is marked, counted, and guarded against leaving (`useUnsavedGuard`).
+  // Lunch and face keep their DEDICATED endpoints (a tenant without migration 418/420 must never have
+  // a pay save fail because of them) — runRowSave runs each slice independently for the same reason.
+  // Permission posture unchanged: pay is manager- and pay-visibility-gated server-side.
+  // `snaps` (state) is what the render compares against; `snapsRef` mirrors it for the async paths
+  // (the roster loader is a memoised callback, a save resolves after later renders).
+  const snapOf = (e: any) => snaps[String(e.id)]
+  const pendingRows = tab === 'employees' ? pendingRowCount(emps, snapOf, HR_EMPLOYEE_ROW_SLICES) : 0
+  const { confirmDiscard } = useUnsavedGuard(pendingRows)
+  const setEmpField = (id: number, patch: any) => setEmps(es => es.map(e => e.id === id ? { ...e, ...patch } : e))
+  const setPay = (id: number, v: string) => setEmpField(id, { pay_rate: v })
+  const [rowMsg, setRowMsg] = useState<Record<string, { ok: boolean; text: string }>>({})
 
-  // ---- face recognition, per-employee assignment + consent (owner directive 2026-08-09, mig 420) ----
-  // "it should be assigned per employee". Same shape and permission posture as the lunch override
-  // right next to it, and the same isolation reason for a DEDICATED endpoint
-  // (PUT /employees/{id}/face-config): a tenant without migration 420 must never have an unrelated
-  // pay-rate save fail. 'Default' = follow the tenant master switch's default; 'Off' excludes this
-  // person even while the feature is on; a 'declined' consent excludes them regardless of assignment.
-  const [faceEdit, setFaceEdit] = useState<Record<number, { mode: 'default' | 'on' | 'off'; consent: '' | 'signed' | 'declined'; busy?: boolean; msg?: string }>>({})
+  async function saveRow(e: any) {
+    const snap = snapsRef.current[String(e.id)]
+    const writes = planRowSave(e, snap, HR_EMPLOYEE_ROW_SLICES, { salaryFieldsAvailable })
+    if (!writes.length) return
+    setRowBusy(e.id); setMsg(''); setErr('')
+    const result = await runRowSave(writes, w => api(w.path, { method: w.method, body: JSON.stringify(w.body) }))
+    if (result.saved.length) invalidateApiCache('/api/v1/storeops/employees')   // cached roster read must self-heal after an edit
+    const committed = commitSaved(e, snap || e, HR_EMPLOYEE_ROW_SLICES, result)
+    snapsRef.current = { ...snapsRef.current, [String(e.id)]: committed.snap }
+    setSnaps(snapsRef.current)
+    setEmps(es => es.map(x => x.id === e.id ? { ...x, ...committed.back } : x))
+    const text = rowSaveMessage(e.name, result)
+    setRowMsg(m => ({ ...m, [String(e.id)]: { ok: !result.failed.length, text } }))
+    if (result.failed.length) setErr(text); else setMsg(text)
+    setRowBusy('')
+  }
+  async function saveAllRows() {
+    for (const e of emps) if (rowDirty(e, snapOf(e), HR_EMPLOYEE_ROW_SLICES)) await saveRow(e)
+  }
+  function switchTab(t: Tab) {
+    if (t !== tab && tab === 'employees' && !confirmDiscard()) return
+    setTab(t)
+  }
+  // Lunch / face controls edit the ROW (no separate buttons). Mode 'default' = inherit the tenant
+  // setting (null); minutes accompany only an explicit 'on'.
+  const lunchModeOf = (e: any) => e.lunch_deduction_enabled === true ? 'on' : e.lunch_deduction_enabled === false ? 'off' : 'default'
   const faceModeOf = (e: any) => e.face_recognition_enabled === true ? 'on' : e.face_recognition_enabled === false ? 'off' : 'default'
   const faceConsentOf = (e: any) => (e.face_consent_status === 'signed' || e.face_consent_status === 'declined') ? e.face_consent_status : ''
-  function faceStateFor(e: any) {
-    return faceEdit[e.id] || { mode: faceModeOf(e) as 'default' | 'on' | 'off', consent: faceConsentOf(e) as '' | 'signed' | 'declined' }
-  }
-  async function saveFace(e: any) {
-    const st = faceStateFor(e)
-    setFaceEdit(s => ({ ...s, [e.id]: { ...st, busy: true, msg: '' } }))
-    try {
-      const body = { enabled: st.mode === 'default' ? null : st.mode === 'on', consent: st.consent === '' ? null : st.consent }
-      const r = await api(`/api/v1/storeops/employees/${e.id}/face-config`, { method: 'PUT', body: JSON.stringify(body) })
-      invalidateApiCache('/api/v1/storeops/employees')   // cached roster read must self-heal after an edit
-      // Re-seat the row from the SAVED values so the dirty check clears (the consent timestamp/source
-      // are server-generated — echoing the request back would leave the row looking permanently dirty).
-      setEmps(es => es.map(x => x.id === e.id ? { ...x, face_recognition_enabled: r.face_recognition_enabled, face_consent_status: r.face_consent_status, face_consent_at: r.face_consent_at, face_consent_source: r.face_consent_source } : x))
-      setFaceEdit(s => { const n = { ...s }; delete n[e.id]; return n })
-    } catch (err: any) {
-      setFaceEdit(s => ({ ...s, [e.id]: { ...st, busy: false, msg: '❌ ' + (err?.message || err) } }))
-    }
-  }
+  const modeValue = (m: string) => m === 'on' ? true : m === 'off' ? false : null
 
-  // ---- pay editing (HR owns pay rates; StoreOps no longer shows them) ----
-  const setEmpField = (id: number, patch: any) => setEmps(es => es.map(e => e.id === id ? { ...e, ...patch, _dirty: true } : e))
-  const setPay = (id: number, v: string) => setEmpField(id, { pay_rate: v })
-  async function savePay(e: any) {
-    setRowBusy(e.id); setMsg(''); setErr('')
-    const body: any = { pay_rate: Number(e.pay_rate) || 0 }
-    if (salaryFieldsAvailable && Object.prototype.hasOwnProperty.call(e, 'pay_basis')) {
-      body.pay_basis = e.pay_basis || 'hourly'
-      body.pay_amount = e.pay_basis && e.pay_basis !== 'hourly' ? (e.pay_amount === '' || e.pay_amount == null ? null : Number(e.pay_amount)) : null
-      body.termination_date = e.termination_date || null
-    }
-    try {
-      await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH', body: JSON.stringify(body) })
-      invalidateApiCache('/api/v1/storeops/employees')   // cached roster read must self-heal after an edit
-      setEmps(es => es.map(x => x.id === e.id ? { ...x, _dirty: false } : x))
-      setMsg(`Saved pay for ${e.name}`)
-    } catch (err: any) { setErr('Save failed: ' + (err?.message || err)) } finally { setRowBusy('') }
-  }
   async function downloadPayTemplate() {
     const XLSX = await import('xlsx')
     const aoa = [['employee_id', 'name', 'pay_rate'], ...emps.map((e: any) => [e.employee_id || '', e.name, e.pay_rate ?? ''])]
@@ -202,7 +197,7 @@ export default function HRPage() {
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
         {TABS.map(t => (
-          <button key={t.k} onClick={() => setTab(t.k)} style={{ padding: '7px 16px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: tab === t.k ? 'var(--accent)' : 'var(--surface)', color: tab === t.k ? '#fff' : 'var(--text2)' }}>{t.label}</button>
+          <button key={t.k} onClick={() => switchTab(t.k)} style={{ padding: '7px 16px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: tab === t.k ? 'var(--accent)' : 'var(--surface)', color: tab === t.k ? '#fff' : 'var(--text2)' }}>{t.label}</button>
         ))}
         {msg && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{msg}</span>}
         <span style={{ flex: 1 }} />
@@ -270,32 +265,54 @@ export default function HRPage() {
                     onChange={e => { const f = e.target.files?.[0]; if (f) uploadPayscale(f); e.currentTarget.value = '' }} />
                 </label>
               </div>
+              {pendingRows > 0 && (
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 10, padding: '8px 12px', borderRadius: 8, border: '1px solid #f59e0b', background: 'rgba(245,158,11,0.08)' }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: '#b45309' }}>● {pendingRows} row{pendingRows === 1 ? '' : 's'} with unsaved changes</span>
+                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>Nothing is saved until you press Save — leaving this page asks first.</span>
+                  <div style={{ flex: 1 }} />
+                  <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 12px' }} disabled={rowBusy !== ''} onClick={saveAllRows}>💾 Save all</button>
+                </div>
+              )}
               <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
                   <thead><tr style={{ background: 'var(--surface2)' }}>
                     {['Name', 'Emp ID', 'Home store', 'Role', 'Pay basis',
                       ...(salaryFieldsAvailable ? ['Salary amount', 'Pay $/hr', 'Terminated'] : ['Pay $/hr']),
-                      'Lunch (auto-deduct)', 'Face recognition', 'Email', 'Phone', ''].map(h => <th key={h} style={th}>{h}</th>)}
+                      'Lunch (auto-deduct)', 'Face recognition', 'Email', 'Phone'].map(h => <th key={h} style={th}>{h}</th>)}
                   </tr></thead>
                   <tbody>
                     {emps.map((e: any) => {
                       const basis: PayBasis = (salaryFieldsAvailable ? (e.pay_basis || 'hourly') : 'hourly') as PayBasis
                       const isSalaried = salaryFieldsAvailable && basis !== 'hourly'
                       const hasBasisField = salaryFieldsAvailable && Object.prototype.hasOwnProperty.call(e, 'pay_basis')
-                      const ls = lunchStateFor(e)
-                      const lunchDirty = ls.mode !== (e.lunch_deduction_enabled === true ? 'on' : e.lunch_deduction_enabled === false ? 'off' : 'default')
-                        || ls.minutes !== (e.lunch_deduction_minutes != null ? String(e.lunch_deduction_minutes) : '')
-                      const fs = faceStateFor(e)
-                      const faceDirty = fs.mode !== faceModeOf(e) || fs.consent !== faceConsentOf(e)
+                      const snap = snapOf(e)
+                      const edited = (f: string) => fieldChanged(e, snap, f)
+                      const bd = (f: string) => `1px solid ${edited(f) ? 'var(--accent)' : 'var(--border)'}`
+                      const pending = dirtySlices(e, snap, HR_EMPLOYEE_ROW_SLICES)
+                      const lunchMode = lunchModeOf(e)
+                      const rm = rowMsg[String(e.id)]
                       return (
                       <tr key={e.id}>
-                        <td style={{ ...td, fontWeight: 600 }}>{e.name}</td>
+                        {/* THE row's one Save lives HERE, beside the name — never off the right edge. */}
+                        <td style={{ ...td, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                          {e.name}
+                          {pending.length > 0 && (
+                            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4, fontWeight: 400 }}>
+                              <button className="btn btn-primary" style={{ fontSize: 12, padding: '3px 10px' }} disabled={rowBusy === e.id}
+                                title={`Saves every edited field on this row: ${pending.map(p => p.label).join(', ')}`}
+                                onClick={() => saveRow(e)}>{rowBusy === e.id ? '…' : '💾 Save'}</button>
+                              <span style={{ fontSize: 11, color: '#b45309' }}>● unsaved: {pending.map(p => p.label).join(', ')}</span>
+                            </div>
+                          )}
+                          {rm && pending.length === 0 && <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, color: rm.ok ? '#15803d' : '#b42318' }}>{rm.ok ? '✅ ' : '❌ '}{rm.text}</div>}
+                          {rm && !rm.ok && pending.length > 0 && <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, color: '#b42318' }}>❌ {rm.text}</div>}
+                        </td>
                         <td style={td}>{e.employee_id || '—'}</td>
                         <td style={td}>{e.home_store || '—'}</td>
                         <td style={td}>{e.role || '—'}</td>
                         <td style={td}>
                           {hasBasisField ? (
-                            <select value={basis} style={{ padding: '4px 6px', borderRadius: 6, border: `1px solid ${e._dirty ? 'var(--accent)' : 'var(--border)'}`, fontSize: 13, background: 'var(--surface)' }}
+                            <select value={basis} style={{ padding: '4px 6px', borderRadius: 6, border: bd('pay_basis'), fontSize: 13, background: 'var(--surface)' }}
                               onChange={ev => setEmpField(e.id, { pay_basis: ev.target.value })}>
                               {PAY_BASES.map(b => <option key={b} value={b}>{PAY_BASIS_LABEL[b]}</option>)}
                             </select>
@@ -307,7 +324,7 @@ export default function HRPage() {
                               <div>
                                 <input type="number" step="0.01" placeholder="amount" value={e.pay_amount ?? ''}
                                   onChange={ev => setEmpField(e.id, { pay_amount: ev.target.value })}
-                                  style={{ width: 90, padding: '4px 6px', borderRadius: 6, border: `1px solid ${e._dirty ? 'var(--accent)' : 'var(--border)'}`, fontSize: 13, background: 'var(--surface)' }} />
+                                  style={{ width: 90, padding: '4px 6px', borderRadius: 6, border: bd('pay_amount'), fontSize: 13, background: 'var(--surface)' }} />
                                 <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
                                   {periodPayPreviewLabel(basis, e.pay_amount === '' || e.pay_amount == null ? null : Number(e.pay_amount), ppType) || '—'}
                                 </div>
@@ -319,55 +336,50 @@ export default function HRPage() {
                           <input type="number" step="0.01" value={e.pay_rate ?? ''} disabled={isSalaried}
                             title={isSalaried ? 'Pay is derived from the salary amount, not this rate' : undefined}
                             onChange={ev => setPay(e.id, ev.target.value)}
-                            style={{ width: 90, padding: '4px 6px', borderRadius: 6, border: `1px solid ${e._dirty ? 'var(--accent)' : 'var(--border)'}`, fontSize: 13, background: isSalaried ? 'var(--surface2)' : 'var(--surface)', opacity: isSalaried ? 0.6 : 1 }} />
+                            style={{ width: 90, padding: '4px 6px', borderRadius: 6, border: bd('pay_rate'), fontSize: 13, background: isSalaried ? 'var(--surface2)' : 'var(--surface)', opacity: isSalaried ? 0.6 : 1 }} />
                         </td>
                         {salaryFieldsAvailable && (
                           <td style={td}>
                             <input type="date" value={e.termination_date || ''}
                               onChange={ev => setEmpField(e.id, { termination_date: ev.target.value })}
-                              style={{ padding: '4px 6px', borderRadius: 6, border: `1px solid ${e._dirty ? 'var(--accent)' : 'var(--border)'}`, fontSize: 12, background: 'var(--surface)' }} />
+                              style={{ padding: '4px 6px', borderRadius: 6, border: bd('termination_date'), fontSize: 12, background: 'var(--surface)' }} />
                           </td>
                         )}
                         <td style={td}>
                           <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                            <select value={ls.mode} onChange={ev => setLunchEdit(s => ({ ...s, [e.id]: { ...ls, mode: ev.target.value as any, msg: '' } }))}
-                              style={{ padding: '4px 6px', borderRadius: 6, border: `1px solid ${lunchDirty ? 'var(--accent)' : 'var(--border)'}`, fontSize: 12, background: 'var(--surface)' }}>
+                            <select value={lunchMode} onChange={ev => setEmpField(e.id, { lunch_deduction_enabled: modeValue(ev.target.value), ...(ev.target.value === 'on' ? {} : { lunch_deduction_minutes: null }) })}
+                              style={{ padding: '4px 6px', borderRadius: 6, border: bd('lunch_deduction_enabled'), fontSize: 12, background: 'var(--surface)' }}>
                               <option value="default">Default (tenant)</option>
                               <option value="on">On</option>
                               <option value="off">Off</option>
                             </select>
-                            {ls.mode === 'on' && (
-                              <input type="number" min={0} placeholder="min" value={ls.minutes}
-                                onChange={ev => setLunchEdit(s => ({ ...s, [e.id]: { ...ls, minutes: ev.target.value, msg: '' } }))}
-                                style={{ width: 56, padding: '4px 6px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }} />
+                            {lunchMode === 'on' && (
+                              <input type="number" min={0} placeholder="min" value={e.lunch_deduction_minutes ?? ''}
+                                onChange={ev => setEmpField(e.id, { lunch_deduction_minutes: ev.target.value })}
+                                style={{ width: 56, padding: '4px 6px', borderRadius: 6, border: bd('lunch_deduction_minutes'), fontSize: 12, background: 'var(--surface)' }} />
                             )}
-                            {lunchDirty && <button className="btn btn-primary" style={{ fontSize: 11, padding: '3px 8px' }} disabled={ls.busy} onClick={() => saveLunch(e)}>{ls.busy ? '…' : '💾'}</button>}
-                            {ls.msg && <span style={{ fontSize: 11 }}>{ls.msg}</span>}
                           </div>
                         </td>
                         <td style={td}>
                           <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                            <select value={fs.mode} onChange={ev => setFaceEdit(s => ({ ...s, [e.id]: { ...fs, mode: ev.target.value as any, msg: '' } }))}
+                            <select value={faceModeOf(e)} onChange={ev => setEmpField(e.id, { face_recognition_enabled: modeValue(ev.target.value) })}
                               title="Whether the kiosk verifies this person by face. Only has any effect while the tenant master switch (Time Clock → ⚙ Face Recognition) is on."
-                              style={{ padding: '4px 6px', borderRadius: 6, border: `1px solid ${faceDirty ? 'var(--accent)' : 'var(--border)'}`, fontSize: 12, background: 'var(--surface)' }}>
+                              style={{ padding: '4px 6px', borderRadius: 6, border: bd('face_recognition_enabled'), fontSize: 12, background: 'var(--surface)' }}>
                               <option value="default">Default (tenant)</option>
                               <option value="on">On</option>
                               <option value="off">Off</option>
                             </select>
-                            <select value={fs.consent} onChange={ev => setFaceEdit(s => ({ ...s, [e.id]: { ...fs, consent: ev.target.value as any, msg: '' } }))}
+                            <select value={faceConsentOf(e)} onChange={ev => setEmpField(e.id, { face_consent_status: ev.target.value || null })}
                               title={e.face_consent_at ? `Consent ${e.face_consent_status} on ${String(e.face_consent_at).slice(0, 10)} (${e.face_consent_source || 'source not recorded'})` : 'No biometric consent recorded for this person'}
-                              style={{ padding: '4px 6px', borderRadius: 6, border: `1px solid ${faceDirty ? 'var(--accent)' : 'var(--border)'}`, fontSize: 12, background: 'var(--surface)' }}>
+                              style={{ padding: '4px 6px', borderRadius: 6, border: bd('face_consent_status'), fontSize: 12, background: 'var(--surface)' }}>
                               <option value="">Consent: none</option>
                               <option value="signed">Consent: signed</option>
                               <option value="declined">Consent: declined</option>
                             </select>
-                            {faceDirty && <button className="btn btn-primary" style={{ fontSize: 11, padding: '3px 8px' }} disabled={fs.busy} onClick={() => saveFace(e)}>{fs.busy ? '…' : '💾'}</button>}
-                            {fs.msg && <span style={{ fontSize: 11 }}>{fs.msg}</span>}
                           </div>
                         </td>
                         <td style={td}>{e.email || '—'}</td>
                         <td style={td}>{e.phone || '—'}</td>
-                        <td style={td}>{e._dirty && <button className="btn btn-primary" style={{ fontSize: 12, padding: '3px 10px' }} disabled={rowBusy === e.id} onClick={() => savePay(e)}>{rowBusy === e.id ? '…' : '💾'}</button>}</td>
                       </tr>
                       )
                     })}
@@ -375,8 +387,10 @@ export default function HRPage() {
                         the lunch-deduction column (parallel branch, same day) both bumped the header
                         count independently — colSpan must match the UNION header row above, not
                         either side's original count alone. */}
-                    {/* +1 again 2026-08-09 for the face-recognition column (migration 420). */}
-                    {emps.length === 0 && <tr><td style={td} colSpan={salaryFieldsAvailable ? 13 : 11}><span style={{ color: 'var(--text3)' }}>No employees in your area.</span></td></tr>}
+                    {/* +1 again 2026-08-09 for the face-recognition column (migration 420); −1 on
+                        2026-09-29 (§19.35): the trailing save column is gone — the row's one Save
+                        sits in the Name cell. */}
+                    {emps.length === 0 && <tr><td style={td} colSpan={salaryFieldsAvailable ? 12 : 10}><span style={{ color: 'var(--text3)' }}>No employees in your area.</span></td></tr>}
                   </tbody>
                 </table>
               </div>

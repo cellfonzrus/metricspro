@@ -1,0 +1,18 @@
+# EMPLOYEE-RECORD EDITORS NOT YET ON THE ONE-ROW-SAVE ENGINE — the ratchet, and it may only SHRINK.
+#
+# Owner report 2026-09-29 (index §19.35): "i just saved hourly salary in vzone but it did not save when
+# i came back". HR → Employees & Pay had one save button PER SLICE of a row; the owner pressed the Lunch
+# one, the pay PATCH was never sent. The fix moved every employee-record write of the two PAY editors
+# (HR → Employees & Pay, Roles & Access) onto lib/rowSave.ts + lib/employeeRowSlices.ts.
+#
+# The grids below still write PATCH /storeops/employees/{id} themselves. Each already has ONE save per
+# row that sends EVERY editable field of that row, a "● unsaved" marker from a last-saved snapshot
+# (lib/rowSave.ts::fieldsDirty, via isDirty) and a bulk save — and none of them edits pay. So they do not
+# carry the defect, but they are not on the engine either (no leave guard, no rebase on reload, an
+# Active toggle that auto-saves beside the row Save). Moving one onto the engine = delete its line.
+# Adding a line is a build failure: a NEW editor must plan its writes from lib/employeeRowSlices.ts.
+#
+# Enforced by backend/harness_row_save_lock.py; PINNED_MAX there must equal the number of entries below.
+src/app/(platform)/storeops/admin/page.tsx
+src/app/(platform)/storeops/employees/page.tsx
+src/app/(platform)/storeops/setup/employees/page.tsx

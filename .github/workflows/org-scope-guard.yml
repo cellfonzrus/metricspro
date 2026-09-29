@@ -34,6 +34,9 @@ on:
       - "backend/scratchpad/**"
       - "backend/harness_*.py"
       - "frontend/src/**"
+      # the row-save lock (index §19.35) — its proof and ratchet live beside frontend/src
+      - "frontend/prove_row_save.mjs"
+      - "frontend/row_save_pending.txt"
   push:
     branches: [main]
     paths:
@@ -45,6 +48,9 @@ on:
       - "docs/SYSTEM_DATA_FLOW_INDEX.md"
       - "backend/harness_actor_uid_lock.py"
       - "frontend/src/**"
+      - "frontend/prove_row_save.mjs"
+      - "frontend/row_save_pending.txt"
+      - "backend/harness_row_save_lock.py"
   workflow_dispatch:
 
 permissions:
@@ -137,3 +143,26 @@ jobs:
       - name: Run the discrepancy-appeal proof (apply_appeal stamps appealed_by — a UUID or NULL)
         working-directory: backend
         run: python3 harness_discrepancy_appeals.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  row-save-lock:
+    # ONE ROW, ONE SAVE (2026-09-29, index §19.35): HR → Employees & Pay had one save button PER SLICE of a row; the Vzone
+    # admin typed hourly rates, pressed the Lunch button, and the pay PATCH was never sent (access log: 4x PUT lunch-config,
+    # 0x PATCH). The lock (stdlib): every employee-record write in the frontend is built in lib/employeeRowSlices.ts and
+    # planned by lib/rowSave.ts::planRowSave from a registered *_ROW_SLICES set (never a subset); users of the slices
+    # install the leave guard; one copy of the dirty comparison; the slices name only fields the backend reads; the
+    # StoreOps grids not yet migrated are a ratchet that may only shrink. The proof (Node 22 strips the real modules'
+    # TypeScript; no npm install): the reported defect reproduced, bodies unchanged, honest per-slice results.
+    name: One row, one save (employee-record editors)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Run the row-save lock
+        working-directory: backend
+        run: python3 harness_row_save_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the row-save proof (the real rowSave.ts + employeeRowSlices.ts)
+        working-directory: frontend
+        run: node prove_row_save.mjs | tee -a "$GITHUB_STEP_SUMMARY"
