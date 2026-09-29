@@ -574,7 +574,7 @@ def pos_guard():
     return ok
 
 
-# ══ SETUP INTERNALS — no migration / SQL-editor wording in customer-facing copy (owner 2026-09-29, §19.35) ══
+# ══ SETUP INTERNALS — no migration / SQL-editor wording in customer-facing copy (owner 2026-09-29, §19.36) ══
 # Owner: Display Labels said "Needs migration 068_ui_label_override.sql" — "this migration should not be
 # mentioned in customer facing". THE CLASS: an internal build/setup fact (a migration file or number, "apply
 # mig", "run it in the Supabase SQL editor", a table in a "not applied" hint, PostgREST's own not-applied
@@ -801,7 +801,7 @@ def setup_guard():
     """THE SETUP-INTERNALS LOCK. Returns True when green; prints its own report."""
     import io
     import contextlib
-    print("\n— setup internals in customer-facing copy (one home: core/setup_notice.py + lib/setupNotice.tsx; §19.35) —")
+    print("\n— setup internals in customer-facing copy (one home: core/setup_notice.py + lib/setupNotice.tsx; §19.36) —")
     from app.core import setup_notice as sn
     det = sn.SETUP_INTERNAL
     ok = True

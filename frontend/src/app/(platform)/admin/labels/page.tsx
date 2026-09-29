@@ -11,7 +11,7 @@ import { SetupNotice, setupFailed } from '@/lib/setupNotice'
 // "Payment Processor"→"VidaPay") without touching code or DB column names. Display-only: changing a label
 // here never renames a route, table, column, report_key or any data path. Backed by commcalc.ui_label_override
 // (migration 068). Blank = revert to the built-in label. Edits apply on the next page load of the sidebar.
-// The page never names the migration to a customer (owner 2026-09-29, index §19.35): a failed save says so in
+// The page never names the migration to a customer (owner 2026-09-29, index §19.36): a failed save says so in
 // plain words (lib/setupNotice.tsx); the server's own detail reaches the platform super admin only.
 
 const inp: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', width: 240 }

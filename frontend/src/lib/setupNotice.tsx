@@ -1,6 +1,6 @@
 'use client'
 // SETUP NOTICE — the ONE home for "this feature's setup isn't finished" on every page (owner 2026-09-29,
-// index §19.35). Owner: Display Labels said "Needs migration 068_ui_label_override.sql" — "this migration
+// index §19.36). Owner: Display Labels said "Needs migration 068_ui_label_override.sql" — "this migration
 // should not be mentioned in customer facing".
 //
 // A customer sees ONE plain sentence (SETUP_NOTICE). The technical detail — which migration, which table —

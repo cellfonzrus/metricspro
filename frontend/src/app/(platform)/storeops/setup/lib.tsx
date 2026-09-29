@@ -5,6 +5,7 @@
 // future maintenance) need lives here ONCE — styles, dirty-tracking, phone normalization, the
 // RULE-THREE MarketField picker and the store time-zone options — so the three surfaces cannot drift.
 import { useState } from 'react'
+import { fieldsDirty } from '@/lib/rowSave'
 
 export const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 export const cell: React.CSSProperties = { padding: '6px 8px', borderBottom: '1px solid var(--border)' }
@@ -27,9 +28,10 @@ export const STORE_TZ_OPTS: { v: string; label: string }[] = [
   { v: 'Pacific/Honolulu', label: 'Hawaii (HST)' },
 ]
 
+// "Is this row edited?" has ONE home — lib/rowSave.ts::fieldsDirty (index §19.35); this name is kept
+// for the three StoreOps setup grids that call it.
 export function isDirty(row: any, orig: any, fields: string[]) {
-  if (!orig) return false
-  return fields.some(f => String(row[f] ?? '') !== String(orig[f] ?? ''))
+  return fieldsDirty(row, orig, fields)
 }
 
 export const PHONE_EG = 'Enter a 10-digit number or include country code — e.g. 2125550123 or +1 212 555 0123'

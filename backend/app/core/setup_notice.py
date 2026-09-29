@@ -1,4 +1,4 @@
-"""SETUP NOTICE — the ONE home for "this feature's setup isn't finished" (owner 2026-09-29, index §19.35).
+"""SETUP NOTICE — the ONE home for "this feature's setup isn't finished" (owner 2026-09-29, index §19.36).
 
 THE OWNER'S WORDS. Admin → Display Labels said *"Needs migration 068_ui_label_override.sql"*: "this
 migration should not be mentioned in customer facing".
