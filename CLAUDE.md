@@ -127,3 +127,10 @@ history is ever rewritten, and the PR shows only the new commits instead of re-p
   cosmetic: they hold no unmerged work.
 - **An ephemeral container makes this urgent, not cosmetic.** An unpushed commit dies with the
   session. Push early on a new branch rather than accumulating commits against a blocked one.
+- **To ask whether a branch carries foreign work, compare TREES, not ancestry — and never with three
+  dots.** `git diff main...<branch>` resolves to the MERGE BASE, and because a squashed commit is not
+  an ancestor of `main` that base lands *before* its own squash, so already-merged content renders as
+  new. Two agents were misled by this on 2026-09-29; one nearly shipped a "foreign" file that was
+  byte-identical to `main`. Use the two-dot `git diff main <branch>` (empty when the trees agree), or
+  compare blob hashes with `git rev-parse main:<path> <branch>:<path>`. Same trap as the ancestry rule
+  above, in the command you reach for to check it.
