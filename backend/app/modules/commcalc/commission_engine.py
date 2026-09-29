@@ -2319,7 +2319,7 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                       "activation; Upgrade/Other/Returns excluded) ONLY for reps whose effective plan is "
                       "activation_details; those reps' raw_sales activations are suppressed so nothing is "
                       "counted twice. Every other rep (inherit/raw_sales plan) is unchanged. Accessories "
-                      "and every non-activation rule still read raw_sales. Per-plan opt-in, mig 296+297."),
+                      "and every non-activation rule still read raw_sales. Per-plan opt-in."),
         }
     if _acc_stamp is not None and (detail or coverage):
         # DIAGNOSTICS ONLY — attached for the drill-down / coverage callers, never on the money path,

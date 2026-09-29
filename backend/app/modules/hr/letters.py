@@ -980,7 +980,7 @@ async def _run_metrics_miss_for_org(org_id, tenant) -> dict:
     prior_period = _shift_period(period, -1)
     template = _get_template(org_id, "metrics_miss_2consec")
     if not template:
-        return {"skipped": "template missing — is migration 408 applied?"}
+        return {"skipped": "template missing"}
     emps = (_so().table("employees").select("employee_id,name,email,home_store,epay_salesperson")
             .eq("org_id", org_id).eq("is_active", True).execute().data) or []
     fired = 0

@@ -5014,7 +5014,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 
 | Endpoint | Handler line | Section |
 |----------|-------------|---------|
-| **Every JSON response** (no route added) — a string carrying a setup-internal fact (migration file / number, "apply mig", SQL editor, table-not-applied, PostgREST not-applied error) reaches a caller who is not the platform super admin as `SETUP_NOTICE`, per sentence; the original goes to the server log; the super admin sees it unchanged | `core/setup_notice.SetupNoticeMiddleware` (registered innermost in `main.py`); super admin = `core.router._require_super_admin` | §19.36 |
+| **Every JSON response** (no route added) — a MESSAGE-key value (`detail`, `note`, `hint`, `error`, … — `setup_notice.MESSAGE_KEYS`, never a data row / list) carrying a setup-internal fact (migration file / number, "apply mig", SQL editor, table-not-applied, PostgREST not-applied error) reaches a caller who is not the platform super admin as `SETUP_NOTICE`, per sentence; data cells are never read; the original goes to the server log; the super admin sees it unchanged | `core/setup_notice.SetupNoticeMiddleware` (registered innermost in `main.py`); super admin = `core.router._require_super_admin` | §19.36 |
 | `POST /commcalc/plan-installments/category-rules` — now saves for a token-less caller (automation, agents, the auto-calc poller, RBAC off) with `updated_by = NULL` instead of 500-ing on `'web'` into a UUID column; the same actor stamp (uid or NULL) on `POST`/`PUT`/`DELETE /plan-installments[/{sid}]`, `PUT /plan-installments/{activation-matcher,plan-line-matcher,category-qualification,category-payout}`, `PUT /expected-commission/config`, `PATCH /discrepancy-appeals/{row_id}`, `POST /payout/record`, `PUT /ingest-guard/config`, `POST /ingest-guard/queue/{item_id}/decide`, `PUT /targets/{period}`, `PUT /financing/targets/{period}` | `router.save_category_rule` → `_caller_uid` (the one home) | §19.34, §8 |
 | `GET /commcalc/calc-status/{period}` — now also serves `auto_calc` `{state, tone, sentence, due_at, last, enabled}`: what the landing hook did for the month (queued / calculated / refused / failed / busy / off / running). Read by the Rep Incentive page | `router.get_calc_status` → `auto_calc.view` + `auto_calc.load_config` | §6l |
 | Every landing endpoint's response now carries `auto_calc` (`queued` + periods / `off` / `not_a_calc_input` / …): `POST /upload/{file_type}`, `POST /upload-mapped`, `POST /onboarding/intake/commit`, `POST /sales/promote-feed`, `POST /ingest-guard/queue/{item_id}/decide`, the commission import wizard commit, `POST /manual-upload/ingest`, the POS sync; the DLAR sweep's status line says "auto-calculation queued for …" | `auto_calc.landed` (no new route) | §6l |
@@ -5437,8 +5437,9 @@ pages already branch on are untouched: they still decide WHEN the notice shows; 
 
 | Side | Home | What it does |
 |---|---|---|
-| backend | `app/core/setup_notice.py` — `SETUP_NOTICE`, `SETUP_INTERNAL` (the ONE detector: file / number / run-apply-needs-pending-migration / "not applied"-"not run" / table-not-applied / SQL editor / `Supabase` (proper noun) / PostgREST not-applied errors — **precise on purpose**: the bare word "migration" is carrier DATA, a port or plan migration, and is never touched), `neutralize_text` (per SENTENCE), `neutralize` (a JSON payload's string values) | the words |
-| backend | `SetupNoticeMiddleware` (same module), registered in `main.py` **innermost** (before GZip; inner of TenantScope) | every `application/json` response — an HTTPException `detail` included — is neutralized for a caller who is not the platform super admin; the super admin sees it unchanged; the original goes to the server log (`[setup-notice] METHOD path: …`); a body with no marker passes after ~10 byte searches, nothing parsed; a gate fault HIDES (fail closed); a non-JSON body / `/openapi.json` / `/docs` / `/redoc` / `/health` pass verbatim |
+| backend | `app/core/setup_notice.py` — `SETUP_NOTICE`; `SETUP_INTERNAL` (the ONE detector, by SHAPE: a `.sql` file / "(mig 111)" / run·apply·needs·is·has … migration / migration … not applied·not run·pending / table-not-applied / SQL editor / "in Supabase" / PostgREST not-applied errors — never the bare word: "Port-in Migration", "Pending Migration", "Migration 100", "migration 1017 customers" are carrier DATA and are not matched); `neutralize_text` (per SENTENCE) | the words |
+| backend | `MESSAGE_KEYS` + `is_message_key` (same module) — **WHERE**: `detail`, `note`, `error`, `hint`, `message`, `reason`, `setup_note`, `not_ready_note`, `ledger_note`, `save_errors`, `warnings`, `remediation`, `subtitle`, `words`, and any key naming a migration id (`migration`, `sync_migration`, `config_migrations_missing` …). MEASURED from the backend's own setup-hint strings (the lock re-measures every build: `detail`×241, `note`×53, `migration`×24, `error`×23, `hint`×19, …) and deliberately excluding keys a customer's own record carries (`notes`, `label`, `status`, `description` — their hint literals were reworded). `neutralize` reads ONLY those keys' values, on the top-level object and its nested DICTS — **a list outside a message key is data and is never entered**, a bare list / scalar body is never touched, and an untouched payload comes back as the SAME object | where it may be rewritten (coordinator review 2026-09-29: the first cut rewrote every string value — data cells included) |
+| backend | `SetupNoticeMiddleware` (same module), registered in `main.py` **innermost** (before GZip; inner of TenantScope) | a JSON body is parsed ONLY when a message key's value (first 4 KB) carries a marker (`may_carry_hint`: one regex pass over the keys + bounded window checks; >256 message-named keys = rows with e.g. a `note` column → parse, the walk still skips the rows). Measured in the lock (P-series): a 5.6 MB body of 40,000 rows saying "Port-in Migration" / "Miguel" is never `json.loads`'d and returned as the SAME bytes object (~30 ms, about half the endpoint's own JSON encoding of it); the worst case (a `note` column in every row) parses once and returns the same bytes. A rewritten body goes to a non-super-admin; the super admin (`core.router._require_super_admin`) sees it unchanged; the original goes to the server log; a gate fault HIDES; non-JSON / `/openapi.json` / `/docs` / `/redoc` / `/health` pass verbatim |
 | backend | `notify/report_registry.build_payload` → `setup_notice.neutralize` | the one outbound report builder (scheduled / on-demand email + WhatsApp): a report never crosses the HTTP boundary, so it dereferences the same function |
 | frontend | `frontend/src/lib/setupNotice.tsx` — `SETUP_NOTICE` (locked equal to the backend's), `<SetupNotice lead? detail? />`, `setupFailed(action)`, `useSetupDetailVisible()` | every page: the sentence for everyone, `detail` (the migration / table) rendered ONLY for `isPlatformAdmin(user)` |
 
@@ -5455,9 +5456,16 @@ plan-installments, recovery, rep-aliases, report-mappings, settings, target-fiel
 upload + upload wizard, failures, hr compliance / onboarding (+ employee) / payroll-expenses (also dropped
 "RESEND_API_KEY … set in Railway" and "the Supabase login"), notify, onboarding intake (page, stage 2, shared save
 indicator), pos onboarding, storeops accountability / attendance / payroll-tax / salary-advances / timeclock, vision
-(+ settings). Backend strings are NOT rewritten one by one — they are all neutralized at the boundary, and the lock
-proves none is phrased so the detector would miss it (a rewrite of 474 literals would be the patchwork; the 475th
-would be written next week).
+(+ settings). Backend strings are NOT rewritten one by one — the message-keyed ones are neutralized at the
+boundary, and the lock proves none is phrased so the detector would miss it and none is emitted under a key the
+boundary does not read. The ones that WERE emitted under non-message keys, or whose migration mention was incidental
+(so the boundary would have replaced a permission denial with the setup sentence), were reworded at source: commcalc
+router rollup `notes` (274 aggregate ×2, mig 314), the DCR `degraded` lines (mig 083 / 216), `earnings_columns_source`,
+the bill-pay `reader` / `feed_reader`, the bill-pay refusal, the upload-trace hint (keeps "run migration 202" for the
+super admin), accessory-definition `catalog`, commission-engine `basis`, P&L `device_rebate`, closing expenses note,
+HR letters / payroll-approval `skipped`, the pending clock-in `notes`, the two pay-visibility denials (storeops +
+workforce reports: the 403 no longer mentions migration 434), the asset attention texts, and the failure-category
+`layman_fix` / `escalate_when` / `code_hint` of `asset_upload_degraded_mode`.
 **Excused by name (super-admin only — the lock VERIFIES each is platform-only at every NAV occurrence, and FAILS a
 stale entry):** `/admin/billing`, `/admin/pricing`, `/admin/access-log`, `/admin/control-box`, `/admin/fix-requests`,
 `/admin/business-types` (§38.6 platform-only pages; the route guard `platformPathOK` bounces anyone else, their
@@ -5471,15 +5479,24 @@ in a display segment outside the home and the excusals (a `detail=` prop / `deta
 carrier of a migration name); (2) every backend string expression (implicit concatenation joined, placeholders read
 as an id) that names a migration is one `SETUP_INTERNAL` recognises; (3) the wires: middleware registered and
 innermost, `build_payload` dereferences `neutralize`, the gate is `_require_super_admin` (no re-derived rung), the two
-sentences equal, the frontend detail behind `isPlatformAdmin`; (4) the boundary's behaviour DB-free on a hand-driven
-ASGI app (B1–B11: the Display Labels detail neutralized + content-length + logged, the super admin unchanged, gate
-fault hides, carrier data "Port-in Migration" byte-identical, CSV untouched, chunked body, `/openapi.json` verbatim,
-per-sentence notes, the byte prefilter admits all 474 detected strings); 16 negative controls (N1 = the owner's line
-put back → RED).
+sentences equal, the frontend detail behind `isPlatformAdmin`; (4) WHERE (an AST pass): every setup hint emitted
+under a constant key — dict entry, `x["k"] =`, keyword, or one hop through a constant / an appended local list — is
+under a MESSAGE key or `detail` (HTTPException / raised error), else it FAILS (reviewed ledger: `landing_identity`'s
+table→migration lookup); K1 fails a message key no hint is emitted under (a wider list reads more customer data);
+(5) the boundary's behaviour DB-free on a hand-driven ASGI app (B1–B12), DATA NEVER TOUCHED (D1–D6: rows whose
+`note` / `detail` / `message` / `status` cells say "Pending Migration", "Port-in Migration", "Migration 100",
+"migration 1017 customers", "run migration 071", "Supabase SQL editor"; the same nested in a data dict; a bare list
+body; a customer record's top-level `notes` / `status` / `label` / `description`; a customer `note` about a carrier
+migration; a mailed report's rows — each byte-identical and the SAME object), PERFORMANCE (P1–P3, measured each
+build); 21 negative controls (N1 = the owner's line put back → RED; N17/N19 = a hint returned under a non-message
+key, direct or one hop → RED).
 **Not covered, for an owner decision:** other INTERNAL setup facts outside the migration class — environment-variable
 names and hosting vendors in rendered copy (one instance fixed on HR onboarding; not locked), and raw table names in
 some tooltips (`→ raw_comp_report` on the ePay sweep checkboxes). Widening the lock to them needs a vocabulary
-decision (an env-var-shaped token is also how some carrier codes look).
+decision (an env-var-shaped token is also how some carrier codes look). Also: the mig-1014 connector seed's `notes`
+("closed by mig 998", "carry in mig 1010") are DB data mirrored in code (mirror == seed is locked) — rewording them
+is a data migration; and a hint inside a list of message records (an attention item's `detail`) is not rewritten by
+the boundary by design (it never enters lists) — the attention texts that carried one were reworded at source.
 
 §19.35 **ONE ROW, ONE SAVE — A TYPED PAY RATE THAT NEVER LEFT THE BROWSER (owner report 2026-09-29, Vzone).** Owner:
 *"i just saved hourly salary in vzone but it did not save when i came back"*. **Evidence (live, read-only):**

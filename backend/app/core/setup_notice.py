@@ -5,38 +5,37 @@ migration should not be mentioned in customer facing".
 
 THE CLASS, NOT THE INSTANCE. An internal build/setup fact — a migration file name, "apply mig 1030",
 "run migration …", a schema.table in a "not applied" hint, "run it in the Supabase SQL editor", a raw
-PostgREST "relation … does not exist" — reached CUSTOMER-FACING copy. On 2026-09-29 the backend carried
-464 such string literals across 68 modules (HTTPException details, payload `note` / `message` / `hint`
-fields, `migration` keys a page printed), and the frontend ~130 rendered sites across ~60 pages. Fixing
-them one at a time is the patchwork the house rules forbid: the 465th is written next week.
+PostgREST "relation … does not exist" — reached CUSTOMER-FACING copy: HTTPException details and payload
+`note` / `hint` / `error` / `migration` fields on the backend, ~130 rendered sites on the frontend. Fixing
+them one at a time is the patchwork the house rules forbid: the next one is written next week.
 
 THE DESIGN — one fact, one home, applied at the boundary every caller already crosses:
-  • `SETUP_NOTICE` — the one sentence a customer sees. Neutral, no internals, says what to do.
-    The frontend's copy (`frontend/src/lib/setupNotice.tsx`) is LOCKED equal to this one.
-  • `SETUP_INTERNAL` — the one detector of setup-internal text. Precise on purpose: the bare word
-    "migration" is carrier DATA in wireless retail (a plan / port migration), so a hint is recognised by
-    its SHAPE — a `NNN_name.sql` file, "migration 1017" / "mig 944", run / apply / needs / pending … a
-    migration, "is not applied / has not been run", "SQL editor", "Supabase", and PostgREST's own
-    not-applied errors (PGRST2xx, 42P01 / 42703, "relation … does not exist", "schema cache").
-  • `neutralize_text` / `neutralize` — replace every SENTENCE that carries a hint with `SETUP_NOTICE`
-    (collapsed once), walking a JSON payload's string values. A short message becomes the notice; a long
-    document keeps every other sentence.
-  • `SetupNoticeMiddleware` — THE boundary. Every JSON response of the API passes through it (an
-    HTTPException's `detail` included: Starlette's ExceptionMiddleware is inner of all user middleware).
-    A body carrying a hint is neutralized unless the caller is a platform super-admin — resolved by THE
-    one gate, `core.router._require_super_admin` (never a second rung) — and the original is written to
-    the server log. A super-admin sees the technical detail unchanged. A body with no hint (every normal
-    response) is passed through after a handful of byte searches; nothing is parsed.
-  • `report_registry.build_payload` — the one outbound report builder (scheduled / on-demand email and
-    WhatsApp sends) — calls `neutralize` too: a report mailed to a tenant never goes through the HTTP
-    boundary, and its recipients are never super-admins by construction.
+  • `SETUP_NOTICE` — the one sentence a customer sees. The frontend's copy
+    (`frontend/src/lib/setupNotice.tsx`) is LOCKED equal to this one.
+  • `SETUP_INTERNAL` — the one detector of a setup hint. It recognises a hint by its SHAPE (a `NNN_x.sql`
+    file; "(mig 111)"; run / apply / is / has / needs … migration; migration … not applied / has not been
+    run / pending; a table "not applied"; "SQL editor"; "in Supabase"; PostgREST's not-applied errors) —
+    never the bare word "migration", which is carrier DATA ("Port-in Migration", "Pending Migration").
+  • `MESSAGE_KEYS` — WHERE a hint may be rewritten. THE BOUNDARY NEVER TOUCHES DATA (coordinator review
+    2026-09-29): only the value of a message-shaped key is read — `detail` (an HTTPException's), and the
+    keys the backend's own setup-hint strings are emitted under (measured over every backend string the
+    detector matches; the lock re-measures on every build and FAILS a hint emitted under any other key).
+    The walk descends dicts only: a LIST outside a message key is data (report rows, records) and is never
+    entered, and a bare list / scalar body is never touched. Under a message key everything is message
+    (a list of warning strings, a `detail` dict).
+  • `neutralize_text` (per SENTENCE) / `neutralize` (the keyed walk, copy-on-write: an untouched payload
+    is returned as the SAME object).
+  • `SetupNoticeMiddleware` — THE boundary (registered innermost in main.py). A JSON body is parsed ONLY
+    when a message key's value window carries a marker (`may_carry_hint`, a byte scan — a multi-MB report
+    whose rows say "Migration" or "Miguel" is returned as the same bytes object, never json.loads'd). A
+    rewritten body goes to a caller who is not the platform super admin (THE one gate,
+    `core.router._require_super_admin`); the super admin sees it unchanged; the original goes to the log.
+  • `report_registry.build_payload` — the one outbound report builder (mail / WhatsApp) — calls
+    `neutralize` too, under the same key rules.
 
-WHAT IS NOT HERE. Code comments, docstrings, log lines and harnesses keep their migration numbers — that
-is where they belong. `/openapi.json`, `/docs`, `/redoc` (developer surfaces, route docstrings) are left
-verbatim. The lock is `harness_carrier_vocab_guard.py` §SETUP (CI `carrier-vocab-guard.yml`): no hint in
-rendered frontend copy outside this home + named super-admin pages; every backend string literal that
-names a migration is caught by `SETUP_INTERNAL` (so none can slip past the boundary); the middleware is
-registered innermost; `build_payload` dereferences `neutralize`; the two sentences are equal.
+WHAT IS NOT HERE. Code comments, docstrings, log lines and harnesses keep their migration numbers.
+`/openapi.json`, `/docs`, `/redoc`, `/health` pass verbatim. The lock is `harness_carrier_vocab_guard.py`
+§SETUP (CI `carrier-vocab-guard.yml`).
 
 PURE except `SetupNoticeMiddleware._is_super_admin` (lazy import of the one gate, run in a thread).
 """
@@ -47,33 +46,48 @@ import sys
 
 SETUP_NOTICE = "This feature isn't switched on for your company yet. Contact support to enable it."
 
-# ── THE ONE DETECTOR ────────────────────────────────────────────────────────────────────────────────
+# ── WHERE: the message-shaped keys (the ONLY values the boundary reads) ─────────────────────────────────
+# Measured 2026-09-29 over every backend string SETUP_INTERNAL matches (the lock re-measures each build):
+# `detail` (243 — HTTPException + raised errors), `note` (54), `error` (23), `hint` (19), `message`, `reason`,
+# `setup_note`, `not_ready_note`, `ledger_note`, `save_errors`, `warnings`, `remediation`, `subtitle` (a
+# report's), `words`. Deliberately NOT here: `notes`, `label`, `status`, `name`, `description` — keys a
+# customer's own record carries (their hint literals were reworded instead). A key that names a migration
+# identifier (`migration`, `sync_migration`, `config_migrations_missing`, …) is internal by construction.
+MESSAGE_KEYS = frozenset({
+    "detail", "message", "error", "hint", "note", "reason", "setup_note", "not_ready_note", "ledger_note",
+    "save_errors", "warnings", "remediation", "subtitle", "words",
+})
+_MIGRATION_KEY = re.compile(r"(?:^|_)migrations?(?:_missing)?$")
+
+
+def is_message_key(key) -> bool:
+    return isinstance(key, str) and (key in MESSAGE_KEYS or _MIGRATION_KEY.search(key) is not None)
+
+
+# ── WHAT: the one detector ──────────────────────────────────────────────────────────────────────────────
 # A migration NUMBER is 000–1999 (optionally a letter: 268b) — years (2025) are never read as one.
-_MIG_NO = r"(?:\d{3}|1\d{3})[a-z]?\b"
+_NO = r"(?:\d{3}|1\d{3})[a-z]?\b"
+_MIG = r"mig(?:ration)?s?"
 SETUP_INTERNAL = re.compile("|".join([
-    r"\b\d{3,4}[a-z]?_[a-z0-9_]+\.sql\b",                                        # 068_ui_label_override.sql
-    r"(?<![\w-])mig(?:ration)?s?\s*[#(]?\s*" + _MIG_NO,                        # migration 1017 / mig 944 / (migration 071)
-    r"\b(?:run|running|re-?run|apply|applying|applied|ran)\s+(?:the\s+|a\s+|this\s+|any\s+)?(?:[\w-]+\s+){0,2}migrations?\b",
-    r"\b(?:needs?|requires?|until|once|after|pending|awaiting)\s+(?:the\s+|a\s+|its\s+)?(?:[\w-]+\s+){0,2}migrations?\b",
-    r"\bmigrations?\b[^.;\n]{0,60}?(?:\bnot\s+(?:yet\s+)?(?:been\s+)?(?:applied|run)\b|\bpending\b|\bun-?run\b"
-    r"|\bapplied\s*\?|\brun\s*\?|\bhas(?:n['’]t|\s+not)\s+(?:been\s+)?(?:applied|run)\b|\bis(?:n['’]t|\s+not)\s+applied\b"
-    r"|\bmust\s+(?:also\s+)?be\s+applied\b|\bmay\s+not\s+be\s+applied\b)",
-    r"\b(?:has|have|is|was)\s+(?:the\s+)?(?:[\w-]+\s+){0,2}migrations?\b[^.;\n]{0,30}?\b(?:run|applied)\b",
-    r"\b(?:table|column|schema)s?\b[^.;\n]{0,40}?\bnot\s+(?:yet\s+)?(?:been\s+)?(?:applied|created)\b",  # "registry table not applied yet"
+    r"\b\d{3,4}[a-z]?_[a-z0-9_]+\.sql\b",                                                  # 068_ui_label_override.sql
+    r"\([^()]{0,80}?\b" + _MIG + r"\s*#?\s*" + _NO,                                        # (mig 111) / (closing_…, mig 1012)
+    r"\b(?:run|running|re-?run|apply|applying|applied|ran|needs?|requires?|until|once|after|awaiting"
+    r"|pending\s+(?:a|the))\s+(?:the\s+|a\s+|this\s+|any\s+|its\s+|database\s+)?(?:\w+\s+){0,2}?"
+    r"(?-i:mig(?:ration)?s?)\b",                                                             # run the migration (lower-case)
+    r"\b(?:is|has|have|was)\s+(?:the\s+)?(?:database\s+)?" + _MIG + r"\s*#?\s*" + _NO,       # is migration 071 applied
+    r"\b" + _MIG + r"\b(?:\s+#?" + _NO + r")?[^.;\n]{0,60}?(?:\bnot\s+(?:yet\s+)?(?:been\s+)?(?:applied|run)\b"
+    r"|\bun-?run\b|\bunapplied\b|\bapplied\s*\?|\brun\s*\?|\bhas(?:n['’]t|\s+not)\s+(?:been\s+)?(?:applied|run)\b"
+    r"|\bhasn['’]t\s+run\b|\bis(?:n['’]t|\s+not)\s+applied\b|\bmust\s+(?:also\s+)?be\s+applied\b|\bmay\s+not\s+be"
+    r"\s+applied\b|\bhas\s+(?:been\s+)?run\b|\bpending\b|\bfirst\b)",                      # migration 431 not applied
+    r"\b(?:table|column|schema)s?\b[^.;\n]{0,40}?\bnot\s+(?:yet\s+)?(?:been\s+)?(?:applied|created)\b",
     r"\bSQL\s+editor\b",
-    r"(?-i:\bSupabase\b)",                                                         # the proper noun, never `supabase.auth`
+    r"(?-i:\bin\s+(?:the\s+)?Supabase\b|\bSupabase\s+SQL\b)",
     r"\bPGRST\d{3}\b|\b42P01\b|\b42703\b",
     r"\brelation\s+\\?\"?[\w.]+\\?\"?\s+does\s+not\s+exist\b",
     r"\bcolumn\s+\\?\"?[\w.]+\\?\"?\s+(?:of\s+relation\s+\\?\"?[\w.]+\\?\"?\s+)?does\s+not\s+exist\b",
     r"\bCould\s+not\s+find\s+the\s+(?:table|function|column)\b",
     r"\bschema\s+cache\b",
 ]), re.I)
-# Cheap byte prefilter for the boundary, over the LOWER-CASED body: a body containing none of these cannot
-# match SETUP_INTERNAL, so ~all normal responses are never parsed. Every alternative of the detector has
-# an anchor here (every migration phrase contains "mig"); the lock proves each alternative's sample trips it.
-_BYTE_MARKERS = (b".sql", b"mig", b"sql editor", b"supabase", b"pgrst", b"42p01", b"42703",
-                 b"does not exist", b"could not find the", b"schema cache", b"not applied", b"not yet applied",
-                 b"not been applied", b"not created", b"not yet created", b"not been created")
 
 
 def is_setup_internal(text) -> bool:
@@ -102,28 +116,101 @@ def neutralize_text(text):
     return " ".join(out)
 
 
-def neutralize(payload, _hits=None):
-    """A JSON-shaped payload with every string VALUE passed through `neutralize_text`. Keys are kept.
-    Returns (new_payload, originals) — `originals` lists each replaced string for the server log."""
-    hits = [] if _hits is None else _hits
-    if isinstance(payload, str):
-        new = neutralize_text(payload)
-        if new is not payload:
-            hits.append(payload)
-        return new, hits
-    if isinstance(payload, dict):
-        return {k: neutralize(v, hits)[0] for k, v in payload.items()}, hits
-    if isinstance(payload, list):
-        return [neutralize(v, hits)[0] for v in payload], hits
-    if isinstance(payload, tuple):
-        return tuple(neutralize(v, hits)[0] for v in payload), hits
-    return payload, hits
+def _message(v, hits):
+    """A message key's value: every string in it (a list of warnings, a `detail` dict) is message."""
+    if isinstance(v, str):
+        n = neutralize_text(v)
+        if n is not v:
+            hits.append(v)
+        return n
+    if isinstance(v, list):
+        new = [_message(x, hits) for x in v]
+        return v if all(a is b for a, b in zip(new, v)) else new
+    if isinstance(v, dict):
+        new = {k: _message(x, hits) for k, x in v.items()}
+        return v if all(new[k] is v[k] for k in v) else new
+    return v
 
 
-def body_may_carry_hint(body: bytes) -> bool:
-    """The boundary's prefilter — a few substring searches, no parse."""
-    low = body.lower()
-    return any(m in low for m in _BYTE_MARKERS)
+def _record(d, hits):
+    """A dict: message keys are read; a nested dict is walked; a LIST is data and never entered."""
+    changed = {}
+    for k, v in d.items():
+        if is_message_key(k):
+            n = _message(v, hits)
+        elif isinstance(v, dict):
+            n = _record(v, hits)
+        else:
+            continue
+        if n is not v:
+            changed[k] = n
+    if not changed:
+        return d
+    return {k: changed.get(k, v) for k, v in d.items()}
+
+
+def neutralize(payload):
+    """(payload', originals). Only message-key values of the top-level object and its nested dicts are
+    read — never a list outside a message key, never a bare list / scalar body. Copy-on-write: a payload
+    with nothing to rewrite comes back as the SAME object and `originals == []`."""
+    hits = []
+    if not isinstance(payload, dict):
+        return payload, hits
+    return _record(payload, hits), hits
+
+
+# ── the byte prefilter: parse ONLY when a message key's value carries a marker ──────────────────────────
+# Measured on a 5.6 MB report body of 40,000 rows saying "Port-in Migration" / "Miguel" (the lock's P-series
+# re-measures every build): no message key → one regex pass (~30 ms here, about half of what the endpoint's own
+# json encoding of that body costs), no parse, the SAME bytes object returned.
+_MARKERS = (b".sql", b"mig", b"sql editor", b"supabase", b"pgrst", b"42p01", b"42703", b"does not exist",
+            b"could not find the", b"schema cache", b"not applied", b"not yet applied", b"not been applied",
+            b"not created", b"not yet created", b"not been created")
+_KEY_AT = re.compile(rb'"(?:' + b"|".join(re.escape(k.encode()) for k in sorted(MESSAGE_KEYS)) + rb')"')
+_MIGKEY_TOKENS = (b'migration"', b'migrations"', b'migrations_missing"')
+_MIGKEY_PREFIX = re.compile(rb"[a-z_]*")
+_WS = (b" ", b"\t", b"\n", b"\r")
+_WINDOW = 4096          # the bytes read after a message key — a setup hint is a sentence, not a report
+_KEY_CAP = 256          # more message-named keys than this = rows carrying e.g. a `note` column: just parse
+
+
+def _colon_after(body, j):
+    while body[j:j + 1] in _WS:
+        j += 1
+    return j + 1 if body[j:j + 1] == b":" else -1
+
+
+def _message_value_starts(body):
+    """Byte offsets where a MESSAGE key's value starts, or None when there are more than _KEY_CAP."""
+    ends, probes = [], 0
+    for m in _KEY_AT.finditer(body):                 # one C-speed pass for the fixed keys
+        e = _colon_after(body, m.end())
+        if e != -1:
+            ends.append(e)
+            if len(ends) > _KEY_CAP:
+                return None
+    for tok in _MIGKEY_TOKENS:                       # `migration`, `sync_migration`, `config_migrations_missing` …
+        i = body.find(tok)
+        while i != -1:
+            probes += 1
+            if probes > _KEY_CAP * 4:
+                return None
+            e = _colon_after(body, i + len(tok))
+            if e != -1:
+                q = body.rfind(b'"', max(0, i - 64), i)
+                if q != -1 and _MIGKEY_PREFIX.fullmatch(body, q + 1, i):
+                    ends.append(e)
+            i = body.find(tok, i + 1)
+    return ends
+
+
+def may_carry_hint(body: bytes) -> bool:
+    """True only when some MESSAGE key's value (its first _WINDOW bytes) carries a marker. A body whose rows
+    say "Port-in Migration" / "Miguel" but which has no message key carrying a marker is never parsed."""
+    starts = _message_value_starts(body)
+    if starts is None:
+        return True
+    return any(any(m in body[e:e + _WINDOW].lower() for m in _MARKERS) for e in starts)
 
 
 def log_neutralized(where, originals):
@@ -137,6 +224,7 @@ def log_neutralized(where, originals):
 
 # ── THE BOUNDARY ────────────────────────────────────────────────────────────────────────────────────
 _SKIP_PATHS = ("/openapi.json", "/docs", "/redoc", "/health")
+_loads = json.loads      # a seam: the lock counts parses to prove a data-only body is never parsed
 
 
 class SetupNoticeMiddleware:
@@ -180,7 +268,8 @@ class SetupNoticeMiddleware:
                 state["chunks"].append(msg.get("body", b""))
                 if msg.get("more_body"):
                     return None
-                body = b"".join(state["chunks"])
+                chunks = state["chunks"]
+                body = chunks[0] if len(chunks) == 1 else b"".join(chunks)
                 new = await self._rewrite(scope, body)
                 start = state["start"]
                 if new is not body:                   # only a REWRITTEN body changes the headers
@@ -195,10 +284,9 @@ class SetupNoticeMiddleware:
 
     async def _rewrite(self, scope, body):
         try:
-            if not body or not body_may_carry_hint(body):
+            if not body or not may_carry_hint(body):
                 return body
-            data = json.loads(body)
-            new, originals = neutralize(data)
+            new, originals = neutralize(_loads(body))
             if not originals:
                 return body
             headers = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}

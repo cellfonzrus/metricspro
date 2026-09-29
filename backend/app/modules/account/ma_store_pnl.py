@@ -921,7 +921,7 @@ GP_INCOME_FALLBACK_COLUMN = "unmapped"
 # P&L; this is the same ruling reaching the second report, not a new rule.
 GP_NOT_REVENUE_REASONS = {
     "device_rebate": ("device-purchase rebate — nets against Device cost inside COGS, never "
-                      "commission (owner 2026-09-08, mig 992)"),
+                      "commission (owner 2026-09-08)"),
     "distributor_clearing": ("wallet funding — an entity-level settlement that books to the balance "
                              "sheet, not revenue (owner ruling 2026-08-10)"),
 }

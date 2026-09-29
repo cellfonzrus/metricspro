@@ -610,9 +610,33 @@ SETUP_SUPER_ADMIN_PAGES = {
 # renders nothing but an explanation for a non-operator. Verified below.
 SETUP_OPERATOR_TREE = "app/(operator)/"
 SETUP_OPERATOR_LAYOUT = "app/(operator)/operator/layout.tsx"
-# Backend literals that name a migration in a shape the detector does not catch AND are not setup hints.
-# (file relative to backend/app, a signature substring) -> reason. Stale FAILS. Empty on 2026-09-29.
-SETUP_BACKEND_ALLOW = {}
+# Backend strings that name a migration in a shape the detector does not catch — each reviewed: not a setup
+# hint a TENANT reads. (file relative to backend/app, a signature substring) -> reason. Stale FAILS.
+SETUP_BACKEND_ALLOW = {
+    ("modules/billing/platform_costs.py", "Supabase (database)"):
+        "a vendor NAME in the platform's own cost list (served to /admin/billing, super-admin only), not a setup hint",
+    ("modules/commcalc/connector_registry.py", "its pull route is closed by mig 998"):
+        "the mig-1014 connector seed mirrored in code (harness_connector_scope_lock pins mirror == seed); the live "
+        "text is DB data — rewording it is a data migration, surfaced for the owner (§19.36)",
+    ("modules/commcalc/connector_registry.py", "report kinds carry in mig 1010"):
+        "the mig-1014 connector seed mirror (two rows) — same reason as above",
+    ("modules/core/control_box_api.py", " / mig 9"):
+        "the System Control Box's index references (§20) — served by a _require_super_admin endpoint only",
+    ("modules/core/control_box_api.py", "the failure mig 950 found by accident"):
+        "a Control Box check's note — super-admin only (§20)",
+    ("modules/core/operator.py", "keep the migration 984 rollback SQL to hand"):
+        "the operator console's policy warning — the operator console only (§22)",
+}
+# WHERE a setup-hint string may be emitted. The boundary reads ONLY setup_notice.MESSAGE_KEYS (never data);
+# a hint emitted under any other constant key reaches the customer verbatim, so it FAILS unless reviewed here:
+# (file relative to backend/app, key) -> reason. Stale FAILS.
+SETUP_KEY_LEDGER = {
+    ("modules/commcalc/landing_identity.py", "raw_sales_product"):
+        "TABLE_MIGRATION — a lookup (landing table -> the migration that creates it); its value reaches a client "
+        "only inside a refusal `detail`, which the boundary reads",
+    ("modules/commcalc/landing_identity.py", "raw_sales_invoice"): "TABLE_MIGRATION lookup — as above",
+    ("modules/commcalc/landing_identity.py", "raw_sales_invoice_tender"): "TABLE_MIGRATION lookup — as above",
+}
 
 _SANCTIONED = re.compile(r"""\bdetail\s*=\s*\{[^{}]*\}|\bdetail\s*[=:]\s*(?:'[^']*'|"[^"]*"|`[^`$]*`)""")
 _INLINE_CMT = re.compile(r"\{/\*.*?\*/\}|/\*.*?\*/")
@@ -738,6 +762,125 @@ def setup_scan_backend(sources, detector, allow=SETUP_BACKEND_ALLOW):
     return fails, [k for k in allow if k not in seen]
 
 
+_EMIT_PH = re.compile(r"\{[^{}]*\}|%[sdr]")
+
+
+def _str_text(node):
+    import ast
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(v.value if isinstance(v, ast.Constant) else "000" for v in node.values)
+    return None
+
+
+def setup_emissions(src, detector):
+    """[(line, text, key)] — every setup-hint string (the detector's verdict) emitted DIRECTLY under a constant
+    KEY: a dict entry `{"k": …}`, a subscript assignment `x["k"] = …`, a keyword argument `k=…`, or — one hop —
+    a `NAME = …` / `NAME.append(…)` whose NAME is then used so (a module constant anywhere in the module, a local
+    within its function). An HTTPException argument or a raised error's message is `detail`. A helper's
+    positional argument or a return value is not a key and is not judged — the runtime reads message keys only."""
+    import ast
+    import collections
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []
+    par = {}
+    for n in ast.walk(tree):
+        for c in ast.iter_child_nodes(n):
+            par[c] = n
+
+    def scope_of(node):
+        a = par.get(node)
+        while a is not None and not isinstance(a, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+            a = par.get(a)
+        return a if a is not None else tree
+
+    loads = collections.defaultdict(list)
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
+            loads[(id(scope_of(n)), n.id)].append(n)
+            loads[("module", n.id)].append(n)
+
+    def uses(tg):
+        sc = scope_of(tg)
+        return loads.get(("module", tg.id), []) if isinstance(sc, ast.Module) else loads.get((id(sc), tg.id), [])
+
+    build = (ast.BinOp, ast.BoolOp, ast.IfExp, ast.FormattedValue, ast.JoinedStr)
+
+    def up(node):
+        cur, p = node, par.get(node)
+        while isinstance(p, build) or (isinstance(p, ast.Attribute) and p.attr == "format") \
+                or (isinstance(p, ast.Call) and isinstance(p.func, ast.Attribute) and p.func.attr == "format"
+                    and cur is p.func):
+            cur, p = p, par.get(p)
+        return cur, p
+
+    def exc_call(call):
+        fn = getattr(call, "func", None)
+        nm = getattr(fn, "id", None) or getattr(fn, "attr", None) or ""
+        return nm == "HTTPException" or nm.endswith(("Error", "Exception"))
+
+    def keys_at(node, hop):
+        cur, p = up(node)
+        if isinstance(p, ast.Dict):
+            i = next((i for i, v in enumerate(p.values) if v is cur), None)
+            if i is not None and isinstance(p.keys[i], ast.Constant):
+                return [str(p.keys[i].value)]
+            return []
+        if isinstance(p, ast.keyword) and p.arg:
+            return ["detail"] if exc_call(par.get(p)) else [p.arg]
+        if isinstance(p, ast.Call) and exc_call(p) and cur in p.args:
+            return ["detail"]
+        if isinstance(p, (ast.Assign, ast.AnnAssign)):
+            out = []
+            for tg in (p.targets if isinstance(p, ast.Assign) else [p.target]):
+                if isinstance(tg, ast.Subscript) and isinstance(tg.slice, ast.Constant):
+                    out.append(str(tg.slice.value))
+                elif isinstance(tg, ast.Name) and hop < 1:
+                    for u in uses(tg):
+                        out += keys_at(u, hop + 1)
+            return out
+        if isinstance(p, ast.Call) and isinstance(p.func, ast.Attribute) and p.func.attr == "append" and hop < 1:
+            t = p.func.value
+            if isinstance(t, ast.Name):
+                out = []
+                for u in uses(t):
+                    out += keys_at(u, hop + 1)
+                return out
+            if isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant):
+                return [str(t.slice.value)]
+        return []
+
+    out = []
+    for n in ast.walk(tree):
+        t = _str_text(n)
+        if t is None or isinstance(par.get(n), ast.JoinedStr):
+            continue
+        if not detector.search(_EMIT_PH.sub("000", t)):
+            continue
+        for k in sorted(set(keys_at(n, 0))):
+            out.append((n.lineno, t, k))
+    return out
+
+
+def setup_scan_keys(sources, detector, is_message_key, ledger=SETUP_KEY_LEDGER):
+    """Every setup hint the backend emits under a constant key must be under a MESSAGE key (the only values
+    the boundary reads) or be reviewed in `ledger`. Returns (fails, stale, measured_keys)."""
+    fails, seen, measured = [], set(), {}
+    for rel, src in sorted(sources.items()):
+        for ln, text, key in setup_emissions(src, detector):
+            measured[key] = measured.get(key, 0) + 1
+            if is_message_key(key):
+                continue
+            if (rel, key) in ledger:
+                seen.add((rel, key))
+                continue
+            fails.append((f"{rel}:{ln}", key, text[:100]))
+    return fails, [k for k in ledger if k not in seen], measured
+
+
 def _be_app_sources():
     out = {}
     for dp, _d, fs in os.walk(BE_APP):
@@ -842,6 +985,23 @@ def setup_guard():
     if bstale:
         ok = False
         print(f"  FAIL  stale backend allow entr(ies): {bstale}")
+    kfails, kstale, measured = setup_scan_keys(bsrc, det, sn.is_message_key)
+    if kfails:
+        ok = False
+        print(f"  FAIL  {len(kfails)} setup hint(s) emitted under a key the boundary does NOT read (it reads only MESSAGE_KEYS, never data):")
+        for where, key, text in kfails:
+            print(f"        {where}  [{key}]  {text!r}")
+        print("        Fix: drop the internals from the text, or emit it under a message key (detail / note / hint / …).")
+    else:
+        mk = sorted(k for k in measured if sn.is_message_key(k))
+        print(f"  OK    every setup hint the backend emits under a key is under a message key — measured: "
+              + ", ".join(f"{k}×{measured[k]}" for k in sorted(mk, key=lambda k: -measured[k])))
+    if kstale:
+        ok = False
+        print(f"  FAIL  stale key-ledger entr(ies): {kstale}")
+    unused = sorted(k for k in sn.MESSAGE_KEYS if k not in measured and k not in ("detail", "warnings"))
+    ok &= _ctl("K1 MESSAGE_KEYS holds no key the backend never emits a hint under (a wider list reads more customer data)"
+               + (f" — unused: {unused}" if unused else ""), not unused)
     rd = lambda p: open(p, encoding="utf-8").read() if os.path.exists(p) else ""
     main_src, rep_src, home_src = rd(SETUP_MAIN), rd(SETUP_REPORTS), rd(SETUP_BE_HOME)
     fe_home = "\n".join(fe.get(SETUP_FE_HOME, []))
@@ -882,7 +1042,7 @@ def setup_guard():
     ok &= _ctl("B5 a gate fault hides the detail (fail closed)", json.loads(b) == {"detail": sn.SETUP_NOTICE})
     plain = json.dumps({"rows": [{"plan": "Port-in Migration", "n": 3}], "note": "All caught up."}).encode()
     _, b = _asgi_run(NotSuper, [plain])
-    ok &= _ctl("B6 a response with no hint is byte-identical (carrier data 'Port-in Migration' untouched)", b == plain)
+    ok &= _ctl("B6 a response with no hint is returned as the SAME bytes object", b is plain)
     _, b = _asgi_run(NotSuper, [b"run migration 071"], ctype=b"text/csv")
     ok &= _ctl("B7 a non-JSON body (a CSV / file download) streams through untouched", b == b"run migration 071")
     with contextlib.redirect_stderr(io.StringIO()):
@@ -897,8 +1057,72 @@ def setup_guard():
                new["note"] == "Totals are in. " + sn.SETUP_NOTICE + " Other text stays."
                and new["hint"] == sn.SETUP_NOTICE and len(orig) == 2)
     corpus = [t for src in bsrc.values() for _, t in _py_joined_literals(src) if det.search(t)]
-    ok &= _ctl(f"B11 the byte prefilter admits every detected backend string ({len(corpus)}) — no hint skips the parse",
-               bool(corpus) and all(sn.body_may_carry_hint(json.dumps(t).encode()) for t in corpus))
+    ok &= _ctl(f"B11 the byte prefilter admits every detected backend string ({len(corpus)}) under every message key",
+               bool(corpus) and all(sn.may_carry_hint(json.dumps({k: t}).encode()) for t in corpus for k in ("detail", "note")))
+    nested = {"ready": False, "config": {"note": "Run migration 245 first."}, "warnings": ["Migration 274 not applied yet."]}
+    new, orig = sn.neutralize(nested)
+    ok &= _ctl("B12 a nested config dict's note and a warnings list of strings are read",
+               new["config"]["note"] == sn.SETUP_NOTICE and new["warnings"] == [sn.SETUP_NOTICE] and len(orig) == 2)
+
+    # ── DATA IS NEVER TOUCHED (coordinator review 2026-09-29) ─────────────────────────────────────────────────
+    print("  — data is never touched —")
+    data_cells = ["Pending Migration", "Port-in Migration", "Migration 100", "migration 1017 customers",
+                  "Run migration 071 first", "fixed in the Supabase SQL editor", "relation \"x\" does not exist"]
+    rows = [{"plan": c, "status": c, "note": c, "notes": c, "detail": c, "message": c, "rep": "Miguel"} for c in data_cells]
+    for label, payload in [
+        ("D1 report rows whose cells (incl. note / detail / message columns) say 'Pending Migration', 'Port-in Migration', "
+         "'Migration 100', 'migration 1017 customers', 'run migration 071', 'Supabase SQL editor'", {"rows": rows, "count": 7}),
+        ("D2 the same rows nested in a data dict ({by_store: {S1: {rows: […]}}})", {"by_store": {"S1": {"rows": rows}}}),
+        ("D3 a bare JSON list body", rows),
+        ("D4 a customer's own record keys (notes / status / label / description) at the top level",
+         {"id": 7, "notes": "moved to the Supabase SQL editor", "status": "Pending Migration", "label": "Migration 100",
+          "description": "run migration 071 at the store"}),
+        ("D5 a customer note under `note` that merely mentions a carrier migration", {"note": "Customer asked about Port-in Migration pricing."}),
+    ]:
+        body = json.dumps(payload).encode()
+        with contextlib.redirect_stderr(io.StringIO()):
+            _, b = _asgi_run(NotSuper, [body])
+        new, orig = sn.neutralize(payload)
+        ok &= _ctl(label + " → byte-identical, SAME object", b is body and new is payload and orig == [])
+    rep_payload = {"title": "Hours Approval", "subtitle": "Pay period 1–15", "sheets": [{"rows": rows}]}
+    new, orig = sn.neutralize(rep_payload)
+    ok &= _ctl("D6 a mailed report's sheets / rows are never read (only its subtitle is)", new is rep_payload and orig == [])
+
+    # ── PERFORMANCE: a multi-MB data body is never parsed ────────────────────────────────────────────────────
+    print("  — performance —")
+    import time
+    big_rows = [{"rep": "Miguel Migration", "plan": "Port-in Migration", "status": "Pending Migration", "i": i,
+                 "mrc": 45.0, "store": "Migration Ave"} for i in range(40000)]
+    big = json.dumps({"rows": big_rows, "total": 40000}).encode()
+    calls = {"n": 0}
+    real_loads = sn._loads
+
+    def counting(b):
+        calls["n"] += 1
+        return real_loads(b)
+
+    sn._loads = counting
+    try:
+        t0 = time.perf_counter()
+        _, b = _asgi_run(NotSuper, [big])
+        dt = time.perf_counter() - t0
+        ok &= _ctl(f"P1 a {len(big) / 1e6:.1f} MB report body full of 'Migration' / 'Miguel' cells: never json.loads'd "
+                   f"(parses: {calls['n']}), returned as the SAME bytes object — {dt * 1000:.0f} ms through the middleware",
+                   b is big and calls["n"] == 0)
+        noted = json.dumps({"rows": [dict(r, note="Pending Migration") for r in big_rows[:20000]]}).encode()
+        calls["n"] = 0
+        t0 = time.perf_counter()
+        _, b = _asgi_run(NotSuper, [noted])
+        dt2 = time.perf_counter() - t0
+        ok &= _ctl(f"P2 worst case — rows carry a `note` column saying 'Pending Migration' ({len(noted) / 1e6:.1f} MB): "
+                   f"parsed once ({calls['n']}), walked without entering the rows, SAME bytes object — {dt2 * 1000:.0f} ms",
+                   b is noted and calls["n"] == 1)
+        t0 = time.perf_counter()
+        hit = sn.may_carry_hint(big)
+        dt3 = time.perf_counter() - t0
+        ok &= _ctl(f"P3 the key-aware prefilter on the {len(big) / 1e6:.1f} MB body: {dt3 * 1000:.1f} ms, verdict no-parse", not hit)
+    finally:
+        sn._loads = real_loads
 
     # ── negative controls — a lock that cannot go red proves nothing ────────────────────────────────────────────
     print("  — negative controls —")
@@ -944,6 +1168,22 @@ def setup_guard():
     ok &= _ctl("N15 a re-derived super-admin rung in the home → RED", not w[next(k for k in w if k.startswith("W3"))])
     w = dict(setup_wiring(main_src, rep_src, home_src, fe_home.replace("Contact support", "Call us")))
     ok &= _ctl("N16 the frontend sentence drifts from the backend's → RED", not w[next(k for k in w if k.startswith("W4"))])
+    k17, _, _ = setup_scan_keys({"commcalc/x.py": 'def f():\n    return {"banner": "Run migration 071 first."}\n'}, det, sn.is_message_key)
+    ok &= _ctl("N17 a setup hint returned under a non-message key (`banner`) → RED", bool(k17))
+    k18, _, _ = setup_scan_keys({"commcalc/x.py":
+        'MSG = "run migration 071 first"\n'
+        'def f(e):\n    if e:\n        raise HTTPException(500, f"could not save — is migration {MIG} applied? {e}")\n'
+        '    warn = []\n    warn.append("Migration 274 not applied yet.")\n'
+        '    return {"note": "Needs migration 621.", "hint": MSG, "warnings": warn, "rows": []}\n'}, det, sn.is_message_key)
+    ok &= _ctl("N18 hints under detail / note / hint / a warnings list (direct, one-hop constant, appended local) → GREEN", not k18)
+    k19, _, _ = setup_scan_keys({"commcalc/x.py": 'MSG = "run migration 071 first"\ndef f():\n    return {"label": MSG}\n'},
+                                det, sn.is_message_key)
+    ok &= _ctl("N19 a hint constant used one hop away under a non-message key (`label`) → RED", bool(k19))
+    _, s20, _ = setup_scan_keys({}, det, sn.is_message_key, {("commcalc/x.py", "banner"): "stale on purpose"})
+    ok &= _ctl("N20 a stale key-ledger entry → RED", bool(s20))
+    new, _ = sn.neutralize({"rows": [{"note": "Run migration 071 first."}]})
+    ok &= _ctl("N21 a hint INSIDE a list outside a message key is left alone (data is never entered) — by design",
+               new["rows"][0]["note"] == "Run migration 071 first.")
     print("  " + ("OK — the setup-internals lock holds." if ok else "FAIL — the setup-internals lock is open."))
     return ok
 

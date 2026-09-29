@@ -2757,8 +2757,8 @@ def upload_last_by_report(types: str = "", limit: int = 1200, org_id: str = ORG_
                 if c:
                     cands.append(c)
         except Exception as e:
-            mig = 'migration 202' if tbl == 'upload_trace' else '007_upload_log.sql'
-            hints.append(f'{tbl} unavailable (run {mig}): {str(e)[:160]}')
+            mig = '202' if tbl == 'upload_trace' else '007_upload_log.sql'
+            hints.append(f'{tbl} unavailable (run migration {mig}): {str(e)[:160]}')
 
     # 2. targeted lookup for asked-about keys the window didn't reach. Two queries at most per key:
     #    the newest row, then — only if that one saved nothing — the newest row that DID land rows.
@@ -6490,7 +6490,7 @@ def _intake_prepare_stage2(client, org_id, contents, filename, kind, column_map_
                          "where no recon reads it. Pick that layout, or change the processor under metric source of truth.")
         if vn["billpay_rows"] == 0:
             extra.append("Not one row in this file is a bill payment by this org's own rule (order type / product tokens, "
-                         "mig 944 metric source of truth; product list mig 214) — the file would land but the coverage recon "
+                         "metric source of truth; product list) — the file would land but the coverage recon "
                          "would read $0.00 from it. Check the order-type / product columns, or the rule.")
     elif kind == "invoice":
         # ── 2.5b — WHICH COLUMNS ARE TENDER TYPES, AND WHAT KIND OF PAYMENT IS EACH (owner 2026-09-21:
@@ -8250,7 +8250,7 @@ def _intake_commit_stage2(client, org_id, ctx, att, typed_total, who, fname):
         rows, feed, processor = _intake_reread_billpay(client, org_id, ctx["layout"], accounts, span["from"], span["to"])
         vn = {"rows": len(rows), "sum_all_rows": _intake.money(sum(_intake._sf(r.get(kf["amount"])) for r in rows)),
               "feed_read": {"processor": processor, "per_store_day": [{"store": k[0], "date": k[1], "amount": v} for k, v in sorted(feed.items())],
-                            "sum_amount": _intake.money(sum(feed.values())), "reader": "_billpay_processor_by_store_day (mig 939)"},
+                            "sum_amount": _intake.money(sum(feed.values())), "reader": "_billpay_processor_by_store_day"},
               "sum_amount": _intake.money(sum(feed.values())), "billpay_rows": vn0["billpay_rows"], "count": vn0["count"],
               "date_span": span, "processor": processor, "layout": ctx["layout"]}
         our = vn["sum_amount"]
@@ -23554,8 +23554,8 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
         degraded = True
         print(f'WARN commission_leg_label_rollup RPC unavailable ({e}) — per-month fallback')
         cap = min(len(labels), 3)
-        notes.append(f'Migration 274 not applied yet — the aggregate is being computed month by month, '
-                     f'so only the most recent {cap} month(s) are shown. Run 274 for the full window.')
+        notes.append(f'The full-window aggregate is not switched on for this company yet — it is computed month by '
+                     f'month, so only the most recent {cap} month(s) are shown.')
         try:
             cat_map = {str(r['description']).strip(): r['category']
                        for r in (sc.table('payment_categories').select('description,category')
@@ -23633,7 +23633,7 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
         # account column, so there is nothing per-store to filter on here yet. The surfaces that DO
         # attribute it per store are named, so the answer is one click away instead of denied.
         notes.append('VidaPay/master-agent commission IS store-attributable (processor account -> '
-                     'store, mig 314) but this month-over-month rollup aggregates it per period '
+                     'store) but this month-over-month rollup aggregates it per period '
                      'without the account, so it is EXCLUDED while a store or market filter is '
                      'active. For MA commission per store see the Gross Profit report, the P&L, or '
                      'MA Commission -> by store.')
@@ -23990,8 +23990,8 @@ def commission_received_breakout(period: str = "", months: int = 12, market: str
         degraded = True
         print(f'WARN commission_leg_label_rollup RPC unavailable ({e}) — bounded fallback')
         cap = min(len(labels), 3)
-        notes.append(f'Migration 274 not applied yet — the ePay rows are being summed month by month, '
-                     f'so only the most recent {cap} month(s) carry them. Run 274 for the full window.')
+        notes.append(f'The full-window aggregate is not switched on for this company yet — the ePay rows are summed '
+                     f'month by month, so only the most recent {cap} month(s) carry them.')
         try:
             cat_map = {str(r['description']).strip(): r['category']
                        for r in (sc.table('payment_categories').select('description,category')
@@ -25907,7 +25907,7 @@ def carrier_vs_pay_report(period: str, org_id: str = ORG_ID, authorization: str 
     out["meta"]["sold_without_serial"] = sold_without_serial
     out["meta"]["statement_rows"] = {"ma_commission": len(ma_rows), "ma_daily_tx": len(tx_rows)}
     out["meta"]["earnings_columns_source"] = ("org commission_catalog" if configured
-                                              else "house default (mig 308 column set)")
+                                              else "house default column set")
     out["meta"]["writes"] = ("none — this endpoint reads ma_recon, the mig-308 money index and "
                              "rep_commissions, and persists nothing")
     return out
@@ -31573,7 +31573,7 @@ def billpay_extract_report(period: str, org_id: str = ORG_ID, store: str = "", l
         "basis": {"sales_rows": len(rows), "sales_meta": meta, "rows_scanned": ex["rows_scanned"],
                   "rows_skipped": ex["rows_skipped"], "rows_unmatched": ex["rows_unmatched"],
                   "feed_processor": processor or None, "feed_present": cmp_["feed_present"],
-                  "feed_reader": "_billpay_processor_by_store_day (mig 939 — the coverage recon's reader)"},
+                  "feed_reader": "_billpay_processor_by_store_day (the coverage recon's reader)"},
         "totals": {"lines": roll["count"], "sum": roll["sum"], "sum_feed": cmp_["sum_feed"],
                    "difference": cmp_["difference"], "days_compared": cmp_["days_compared"],
                    "days_sales_only": cmp_["days_sales_only"], "days_feed_only": cmp_["days_feed_only"]},
@@ -41202,7 +41202,7 @@ def device_cost_recon_endpoint(period: str = "", window_months: int = 1, group_b
         lambda q: q.eq("org_id", org_id).gte("date_ordered", date_from).lte("date_ordered", date_to),
         _DCR_MA_CAP, "raw_ma_fulfillment")
     if not ma_ok:
-        degraded.append("① the marketplace fulfillment feed could not be read (is mig 083 run and the "
+        degraded.append("① the marketplace fulfillment feed could not be read (is the "
                         "MA Handset Ordering report imported for this tenant?).")
     order_imeis, oi_ok, oi_capped = _dcr_order_imeis(
         client, org_id, [r.get("order_number") for r in ma_rows])
@@ -41273,7 +41273,7 @@ def device_cost_recon_endpoint(period: str = "", window_months: int = 1, group_b
     # the flag existed — a pre-294 row must not silently vanish from the valuation.
     inv_rows = [r for r in inv_rows if r.get("on_hand") is not False]
     if not inv_ok:
-        degraded.append("④ the per-device inventory snapshot could not be read (is mig 216 run and the "
+        degraded.append("④ the per-device inventory snapshot could not be read (is the "
                         "Inventory Aging report imported?).")
     if inv_trunc:
         degraded.append(f"④ the inventory snapshot read hit its {_DCR_INV_CAP:,}-row cap — the "

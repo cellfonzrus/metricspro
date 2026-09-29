@@ -4686,7 +4686,7 @@ def _activate_pending_clockins_for_shift(org_id, shift):
                      "employee_name": p.get("employee_name") or shift.get("employee_name"),
                      "store_code": p.get("store_code"), "clock_in": p.get("requested_at"),
                      "work_date": wd, "device": "auto-activated (manager scheduled)",
-                     "notes": "auto clock-in on manager schedule approval (held unscheduled tap, migration 915)"}
+                     "notes": "auto clock-in on manager schedule approval (held unscheduled tap)"}
             if p.get("client_request_id"):
                 punch["client_request_id"] = p["client_request_id"]
             try:
@@ -7622,8 +7622,8 @@ def payroll_raw_route(start: str, end: str, authorization: str = Header(default=
     grant), same denial semantics."""
     if not _payvis.can_see_pay(authorization or "", org_id, client=get_supabase()):
         raise HTTPException(403, "This feed is payroll money (pay rate + W-4 per employee; "
-                            "market-manager-and-up per your org's pay-visibility config, migration "
-                            "434). An admin can widen storeops.tenants.pay_visibility / "
+                            "market-manager-and-up per your org's pay-visibility config). "
+                            "An admin can widen storeops.tenants.pay_visibility / "
                             "pay_visible_roles, or grant the 'employee_pay_rates' data permission.")
     return payroll_raw(start=start, end=end, authorization=(authorization or ""), org_id=org_id)
 
