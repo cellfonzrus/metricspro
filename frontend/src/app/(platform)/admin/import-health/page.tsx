@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { api } from '@/lib/client'
 import { safeHref } from '@/lib/safe-url'   // H6: deep_link is tenant-editable on this very page
 import ScreenLink from '@/components/ScreenLink'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // IMPORT HEALTH (owner directive 2026-07-25, mig 717) — the universal registry of every import this
 // tenant expects, its EXPECTED CADENCE, when it last actually delivered, and the page an admin fixes it
@@ -128,7 +129,7 @@ export default function ImportHealthPage() {
       {msg && <div className="card" style={{ background: '#f0fdf4', color: '#166534', padding: 12, marginBottom: 12, fontSize: 13 }}>{msg}</div>}
       {health && health.ready === false && (
         <div className="card" style={{ background: '#fffbeb', color: '#92400e', padding: 12, marginBottom: 12, fontSize: 13 }}>
-          {health.hint || 'Import health is not set up yet — run migration 717.'}
+          {health.hint || <SetupNotice lead="Import health is not set up yet." detail="717" />}
         </div>
       )}
 

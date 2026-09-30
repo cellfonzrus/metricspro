@@ -634,7 +634,7 @@ export default function SettingsPage() {
             When the {pos} daily-sales file spells a store differently than its mapping above
             (e.g. <em>“3 Palisade Ave Yonkers”</em> vs <em>“3 Palisade Ave”</em>), its Daily-Targets sales
             won’t attach and the store reads 0 achieved. Map that exact sales-file spelling to the store’s
-            code here. <strong>Needs migration 023_store_aliases.sql.</strong>
+            code here.
           </div>
           <table style={{ width: '100%' }}>
             <thead>

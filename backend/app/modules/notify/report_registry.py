@@ -839,4 +839,11 @@ async def build_payload(report_key: str, org_id: str, filters: dict, *,
     # A builder that RESOLVED relative filters hands back `live_filters` so the live-report link
     # points at exactly what was sent; everyone else links off the filters as given.
     payload["live_path"] = spec["live_path"](payload.pop("live_filters", None) or filters or {})
+    # A report goes to tenant recipients by email / WhatsApp, never through the API's response boundary,
+    # so the ONE setup-notice home is applied here too (index §19.36): a builder's "(run migration 431)"
+    # subtitle reaches the recipient as the neutral sentence, and the detail goes to the server log.
+    from app.core import setup_notice as _sn
+    payload, _originals = _sn.neutralize(payload)
+    if _originals:
+        _sn.log_neutralized("report " + report_key, _originals)
     return payload

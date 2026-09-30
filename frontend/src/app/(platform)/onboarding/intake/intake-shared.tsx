@@ -1,6 +1,7 @@
 'use client'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiUpload } from '@/lib/client'
+import { SetupNotice } from '@/lib/setupNotice'
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 // TENANT ONBOARDING — what every stage of the intake shares (design 2026-09-20, §0 "one shape for
 // every data stage"): the payload types that mirror onboarding_intake.py, the styles, the lamps and
@@ -221,7 +222,7 @@ export function useAutoSave(persistNow: (patch: Record<string, unknown>, keepali
 
 export function SaveIndicator({ status, stateReady, migration }: { status: SaveStatus; stateReady: boolean; migration?: string }) {
   const hhmm = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '')
-  if (!stateReady) return <span style={{ ...note, fontSize: 12, color: '#ef4444' }}>Not saved: run migration {migration || '1007_onboarding_intake_state.sql'}</span>
+  if (!stateReady) return <span style={{ ...note, fontSize: 12, color: '#ef4444' }}><SetupNotice lead="Not saved." detail={migration || '1007_onboarding_intake_state.sql'} /></span>
   if (status.state === 'saving') return <span style={{ ...note, fontSize: 12 }}>Saving…</span>
   if (status.state === 'error') return <span style={{ ...note, fontSize: 12, color: '#ef4444' }}>Not saved — {status.reason}</span>
   if (status.state === 'saved') return <span style={{ ...note, fontSize: 12, color: '#15803d' }}>Saved ✓ {hhmm(status.at)}{status.pending ? ' · changes pending…' : ''}</span>
@@ -495,7 +496,7 @@ export function KindDetectZone({ visible, onPick, fallbackKey }: {
               <div style={{ marginTop: 8 }}><button style={ghost} onClick={() => onPick(null, fname)}>Record it as something else</button></div>
             </div>
           )}
-          {!res.registry_ready && <div style={{ ...note, marginTop: 6 }}>Detection is running on the shipped defaults — confirmed layouts are not remembered until the registry migration is applied.</div>}
+          {!res.registry_ready && <div style={{ ...note, marginTop: 6 }}>Detection is running on the shipped defaults — confirmed layouts are not remembered yet.</div>}
         </div>
       )}
     </div>

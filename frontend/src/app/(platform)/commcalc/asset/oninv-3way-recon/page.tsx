@@ -5,6 +5,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // On-Inventory 3-Way Rebate Recon (OWNER DIRECTIVE 2026-07-28): the on-inventory report cross-checked
 // against (2) the IMEI rebate data already on each ledger row (asset_ledger.reimbursement/date — the
@@ -220,7 +221,7 @@ export default function OninvThreeWayReconPage() {
         <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>Loading…</div>
       ) : !data?.migrated ? (
         <div className="card" style={{ padding: 24, textAlign: 'center', color: '#b91c1c' }}>
-          {data?.message || 'This report is not available yet — ask the operator to run migration 310.'}
+          {data?.message || <SetupNotice lead="This report is not available yet." detail="310_asset_oninv_3way_recon_rpc.sql" />}
         </div>
       ) : !data.rows.length ? (
         <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>No on-inventory devices for this filter.</div>

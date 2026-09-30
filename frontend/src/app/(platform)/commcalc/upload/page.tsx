@@ -14,6 +14,7 @@ import { useConnectors } from '@/lib/connectors'
 import ShowsIn from '@/components/ShowsIn'
 import { LinkedText } from '@/components/ScreenLink'
 import type { ReportKindRow } from '@/lib/carrier-scope'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // ── WHAT THIS PAGE OFFERS IS COMPUTED, NEVER LISTED (owner directives 2026-09-20; design §7) ──────
 // Owner: "it is very important that we don't have extra file upload paths for a new tenant who does
@@ -374,7 +375,7 @@ export default function UploadPage() {
       ) : (
         <div style={{ color: 'var(--text3)', fontSize: 12, margin: '0 0 12px' }}>
           Offered for {kinds.declaration?.pos?.length ? <>POS <b>{kinds.declaration.pos.join(' / ')}</b></> : 'no declared POS'} · {kinds.declaration?.carriers?.length ? <>carrier <b>{kinds.declaration.carriers.join(' / ')}</b></> : 'no declared carrier'}
-          {!kinds.ready && <> · registry table not applied yet — showing the house defaults ({kinds.payload?.migration})</>}
+          {!kinds.ready && <> · showing the house defaults (<SetupNotice detail={kinds.payload?.migration} />)</>}
           {kinds.withheld && <> · {kinds.withheld}</>}
         </div>
       )}

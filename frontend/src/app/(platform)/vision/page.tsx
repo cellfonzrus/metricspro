@@ -15,6 +15,7 @@ import { api } from '@/lib/client'
 import { panel, btn, btnPrimary, cameraName, fmtDateTime, buildSha, type Camera, type VisionConfig, visionError,
 } from '@/lib/vision'
 import { LinkedText } from '@/components/ScreenLink'
+import { SETUP_NOTICE } from '@/lib/setupNotice'
 
 export default function VisionLiveWall() {
   const [cameras, setCameras] = useState<Camera[]>([])
@@ -37,7 +38,7 @@ export default function VisionLiveWall() {
 
   if (config && !config.available) return <Notice
     title="Camera analytics is not installed yet"
-    body="Migration 900 has not been run on this database. Once it is, an administrator can turn the module on in Vision → Settings." />
+    body={SETUP_NOTICE + ' Once it is, an administrator can turn the module on in Vision → Settings.'} />
 
   if (config && !config.enabled) return <Notice
     title="Camera analytics is turned off"

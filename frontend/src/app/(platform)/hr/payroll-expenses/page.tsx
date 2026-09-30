@@ -316,7 +316,7 @@ export default function PayrollExpensesPage() {
                   </td>
                 </tr>
               ))}
-              {items.length === 0 && <tr><td style={td} colSpan={7}><span style={{ color: 'var(--text3)' }}>No items yet — Unemployment Insurance / Workers Comp appear once migration 404 has run.</span></td></tr>}
+              {items.length === 0 && <tr><td style={td} colSpan={7}><span style={{ color: 'var(--text3)' }}>No items yet — Unemployment Insurance / Workers Comp appear once this is switched on for your company.</span></td></tr>}
 
               {/* add-new row */}
               <tr>

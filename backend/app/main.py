@@ -130,6 +130,15 @@ class HardeningMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# SETUP NOTICE (owner 2026-09-29, index §19.36) — INNERMOST, so it reads the uncompressed JSON body and
+# runs inner of TenantScope. A response carrying an internal setup fact ("run migration 068_….sql",
+# "SQL editor", PostgREST's "relation … does not exist") reaches a non-super-admin as ONE neutral sentence
+# (`setup_notice.SETUP_NOTICE`); the platform super-admin (THE one gate, core.router._require_super_admin)
+# sees the detail, and the server log keeps it. Every other response passes through after a byte search.
+# Lock: harness_carrier_vocab_guard.py §SETUP (this line must stay registered BEFORE the GZip line).
+from app.core.setup_notice import SetupNoticeMiddleware  # noqa: E402
+app.add_middleware(SetupNoticeMiddleware)
+
 # gzip every response over ~1KB — JSON compresses ~10x, so big payloads (e.g. the 5MB flags list)
 # transfer far faster. System-wide latency win, zero behavior change.
 app.add_middleware(GZipMiddleware, minimum_size=1024)

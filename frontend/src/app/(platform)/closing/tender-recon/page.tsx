@@ -7,6 +7,7 @@ import { SendReportButton } from '@/lib/send-report'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // X-Tender Recon — the POS "X report" tenders (commcalc.pos_tender_summary) vs the daily closing sheet
 // employees submit (commcalc.daily_closing), per store, cash vs card. Reads GET /commcalc/x-tender-recon.
@@ -163,7 +164,7 @@ export default function XTenderReconPage() {
       ) : data?.error ? (
         <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {data.error}</div>
       ) : data?.ready === false ? (
-        <div className="card" style={{ padding: 16, color: 'var(--text2)' }}>{data.note || 'Run migration 062 + import an X report.'}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--text2)' }}>{data.note || <SetupNotice lead="Import an X report once this is switched on." detail="062_pos_tender_summary.sql" />}</div>
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>

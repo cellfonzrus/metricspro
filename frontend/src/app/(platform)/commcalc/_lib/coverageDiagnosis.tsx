@@ -4,6 +4,7 @@ import { api, fmt } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import EntityPicker from '@/components/EntityPicker'
+import { SetupNotice } from '@/lib/setupNotice'
 
 /**
  * Plan-coverage DIAGNOSIS surfaces (mod-commission 2026-07-28).
@@ -521,7 +522,7 @@ export function ExcludedSellers({ cov, onChange, busy }: { cov: any; onChange: (
           ))}
           {cov?.excluded_config?.ready === false && (
             <div style={{ fontSize: 11.5, color: '#b45309', marginTop: 4 }}>
-              ⚠️ Migration 248 has not been run — this list cannot be saved yet.
+              ⚠️ <SetupNotice lead="This list cannot be saved yet." detail="248_commission_coverage_excluded_sellers.sql" />
             </div>
           )}
         </div>

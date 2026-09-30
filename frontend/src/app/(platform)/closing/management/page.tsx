@@ -8,6 +8,7 @@ import { marketsFromStores, type StoreOpt } from '@/lib/market-store-cascade'
 import { api, fmt, localToday } from '@/lib/client'
 import { usePosTerm } from '@/lib/report-labels'
 import ScreenLink from '@/components/ScreenLink'
+import { setupFailed } from '@/lib/setupNotice'
 
 // Management Review (permission-gated: super-admin / company-wide scope / explicit /closing/management
 // grant — DMs excluded). Shows the 3-try close-attempt log: every value a rep entered before a close
@@ -62,7 +63,7 @@ export default function ClosingManagementPage() {
   // this exact row. Every release is audited (released_by/at) on the row itself.
   async function toggleRelease(g: any, released: boolean) {
     const key = `${g.close_date}|${g.store_code}|${g.employee_name}`
-    if (!g.row_id) { setRelMsg(m => ({ ...m, [key]: '❌ no matching daily_closing row (run migration 502?)' })); return }
+    if (!g.row_id) { setRelMsg(m => ({ ...m, [key]: '❌ ' + setupFailed('No matching closing record for this row') })); return }
     setRelBusy(b => ({ ...b, [key]: true })); setRelMsg(m => ({ ...m, [key]: '' }))
     try {
       await api(`/api/v1/closing/row/${g.row_id}/release`, { method: 'POST', body: JSON.stringify({ released }) })
@@ -151,7 +152,7 @@ export default function ClosingManagementPage() {
                     <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 8px' }}
                       disabled={!g.row_id || relBusy[key]}
                       onClick={e => { e.stopPropagation(); toggleRelease(g, !g.released_at) }}
-                      title={g.row_id ? undefined : 'No matching daily_closing row found (run migration 502?)'}>
+                      title={g.row_id ? undefined : setupFailed('No matching closing record for this row')}>
                       {relBusy[key] ? '⏳' : g.released_at ? '🔒 Re-lock' : '🔓 Release for correction'}
                     </button>
                     <span style={{ fontSize: 12, color: 'var(--text3)' }}>{isOpen ? '▲ hide tries' : '▼ show tries'}</span>

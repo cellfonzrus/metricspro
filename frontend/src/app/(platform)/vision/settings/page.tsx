@@ -11,6 +11,7 @@ import { panel, btn, btnPrimary, cell, th, cameraName, fmtDateTime, type Camera,
   idsBlocker, authorizeBlocker, oauthReturn, syncMessage, storeOptions, withCurrent, type EdgeAgent,
   type GoogleLinkState, type StoreOption,
 } from '@/lib/vision'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // The redirect URI is part of the OAuth signature: the value sent when building the consent URL and
 // the value sent when redeeming the code must match byte for byte, or Google rejects the exchange.
@@ -140,8 +141,7 @@ export default function VisionSettingsPage() {
       {!cfg.available && (
         <Section title="Not installed">
           <div style={{ fontSize: 13.5, color: 'var(--text2)' }}>
-            Migration <code>900_vision_camera_analytics.sql</code> has not been run on this database.
-            Until it is, this module stores nothing and every switch below is inert.
+            <SetupNotice lead="Until it is, this module stores nothing and every switch below is inert." detail="900_vision_camera_analytics.sql" />
           </div>
         </Section>
       )}

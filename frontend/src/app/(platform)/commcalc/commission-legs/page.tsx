@@ -7,6 +7,7 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import { TrendChart } from '@/components/TrendChart'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import { useActiveCarrier } from '@/lib/auth-context'
+import { SetupNotice, setupFailed } from '@/lib/setupNotice'
 
 // COMMISSION LEGS — what we made, by month-of-life (owner directives 2026-08-04 + 2026-08-05)
 //
@@ -131,7 +132,7 @@ export default function CommissionLegsPage() {
       })
       flash(bucket ? `“${label}” → ${LEG_LABEL[bucket]}` : `“${label}” back to automatic`)
       load()
-    } catch (e: any) { flash(e?.message || 'Save failed — is migration 274 applied?') }
+    } catch (e: any) { flash(e?.message || setupFailed('Save failed')) }
   }
 
   const shown = rows.filter(r =>
@@ -411,9 +412,9 @@ export default function CommissionLegsPage() {
 
           {(!ready || !mapReady) && (
             <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
-              Run migration <code>274_commission_leg_split.sql</code> to see the full history and to save
-              overrides. Until then the page shows the most recent month only and the split falls back to the
-              built-in rules (which already handle every label that names its own month).
+              The full history and saved overrides are not available yet: the page shows the most recent month only
+              and the split falls back to the built-in rules (which already handle every label that names its own
+              month). <SetupNotice detail="274_commission_leg_split.sql" />
             </div>
           )}
 

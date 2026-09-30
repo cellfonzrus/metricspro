@@ -336,7 +336,7 @@ function AccountConfigCard() {
               <option value="pos">Point of sale only (explicit)</option>
             </select>
             <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6 }}>
-              Money-touching — <strong>recompute</strong> each period after saving. Needs migration 621.
+              Money-touching — <strong>recompute</strong> each period after saving.
             </div>
           </div>
 
@@ -379,7 +379,7 @@ function AccountConfigCard() {
               {cfg.distributor_payable?.resolved_line && <> on <strong>{cfg.distributor_payable.resolved_line}</strong></>}
               {cfg.distributor_payable?.source && <> — from {cfg.distributor_payable.source}</>}.
               Different companies assign this to different cost centres, so the line is yours to choose.
-              Money-touching — <strong>recompute</strong> each period after saving. Needs migration 954.
+              Money-touching — <strong>recompute</strong> each period after saving.
             </div>
           </div>
         </div>

@@ -4,6 +4,7 @@ import { api, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
 import { MultiSelect } from '@/lib/multiselect'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // Super-admin org-resolution mitigation (same as the Sales Report): these reads carry NO org_id in the
 // URL, so a super-admin (whom the tenant middleware does NOT rewrite) would default to the HOUSE org.
@@ -245,7 +246,7 @@ export default function CustomReportPage() {
             })}
             {registry.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Loading datasets…</span>}
           </div>
-          {regSource === 'code-default' && <div style={{ fontSize: 11, color: '#b45309', marginBottom: 8 }}>Registry: code defaults (run migration 211 to make datasets editable per tenant).</div>}
+          {regSource === 'code-default' && <div style={{ fontSize: 11, color: '#b45309', marginBottom: 8 }}><SetupNotice lead="Datasets: the built-in defaults (editing them for your company is not available yet)." detail="211" /></div>}
 
           {/* Per-dataset column pickers */}
           {selDatasets.map(k => {

@@ -212,7 +212,7 @@ function WhatsAppDelivery({ health }: { health: Health | null }) {
       <Row good={!!h.whatsapp_window_tracking} label="24-hour window tracking"
         detail={h.whatsapp_window_tracking
           ? `on — the real file is attached to anyone who messaged us in the last ${h.whatsapp_window_hours ?? 23}h`
-          : 'off (migration 723 not run) — every report goes out as an approved template link, which always arrives'} />
+          : 'off (not switched on for your company) — every report goes out as an approved template link, which always arrives'} />
       <Row good={!!h.whatsapp_doc_header} label="Document-header template approved"
         detail={h.whatsapp_doc_header
           ? 'the real file attaches even to a cold recipient'

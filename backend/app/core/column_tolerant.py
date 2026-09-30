@@ -16,7 +16,8 @@ THE RULE (every reader, no exceptions — `harness_any_columns_lock.py` fails th
     is PROBED INDIVIDUALLY (`select(col).limit(1)`, org-scoped) before the one real select —
     `present_columns` + `select_list`; never a block that can fail on an unrelated column;
   • what is missing is RETURNED (`missing`), so a panel or a statement can say "apply migration X"
-    instead of silently reading a default.
+    instead of silently reading a default. (WHO reads those words is `core/setup_notice.py`'s job, index
+    §19.36: a tenant gets the one neutral sentence at the API boundary, the platform super admin the detail.)
 
 Byte-identical when every column exists: `read_row` hands back the same row the block select would
 have, and `select_list` spells the same column list the widest block did. NEVER raises — a missing

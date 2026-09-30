@@ -6,6 +6,7 @@ import { ReportShell } from '@/components/ReportShell'
 import type { ExportColumn } from '@/lib/export'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // WHAT COUNTS AS AN ACCESSORY — the per-tenant definition.
 //
@@ -355,8 +356,8 @@ export default function AccessoryDefinitionPage() {
             </p>
             {data?.pay_switch_ready === false && (
               <div style={{ fontSize: 12, color: 'var(--amber)', marginBottom: 8 }}>
-                Migration <code>276_commission_accessory_definition_pay.sql</code> hasn’t been run yet, so
-                this switch can’t be saved. Nothing is broken — pay simply keeps using the old list.
+                This switch can’t be saved yet. Nothing is broken — pay simply keeps using the old list.{' '}
+                <SetupNotice detail="276_commission_accessory_definition_pay.sql" />
               </div>
             )}
             <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>

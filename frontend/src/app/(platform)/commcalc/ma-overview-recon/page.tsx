@@ -474,7 +474,7 @@ export default function MaOverviewReconPage() {
           tile mapping: <b>{d.config_source === 'org_config' ? 'this tenant’s saved rows' : 'code defaults'}</b>
           {' · '}aggregates: {Object.entries(d.cube_source || {}).map(([k, v]) => `${k}=${v}`).join(', ') || '—'}
           {Object.values(d.cube_source || {}).includes('python_fallback') &&
-            ' — migration 268 has not been run yet, so the totals came from a paged scan (slower, same numbers).'}
+            ' — the totals came from a paged scan (slower, same numbers).'}
         </div>
       )}
 

@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api, getActiveOrg } from '@/lib/client'
 import { actorLabel } from '@/lib/actor'
+import { SetupNotice } from '@/lib/setupNotice'
 
 /**
  * CROSS-TENANT INGEST GUARD — admin UI (owner-approved 2026-08-06).
@@ -141,7 +142,7 @@ export default function IngestGuardPage() {
 
       {cfg.ready === false && (
         <div style={{ background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 10, padding: '10px 16px', marginBottom: 16, fontSize: 13, color: '#92400e' }}>
-          ⚠️ Not switched on yet — an administrator still needs to run the database update (migration 280).
+          ⚠️ <SetupNotice detail="280" />
           Imports are working normally in the meantime; nothing is being held back.
           {cfg.hint ? <div style={{ marginTop: 4, fontSize: 11, opacity: .8 }}>{cfg.hint}</div> : null}
         </div>

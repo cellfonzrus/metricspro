@@ -101,7 +101,7 @@ export default function FixRequestsPage() {
         <span style={{ flex: 1 }} />
         <ReportExportBar title="Fix Requests" filename="fix_requests" columns={exportCols} rows={rows} />
       </div>
-      {err && <div className="card" style={{ padding: 14, color: '#dc2626' }}>{err}{err.includes('716') && ' — run migration 716 in Supabase.'}</div>}
+      {err && <div className="card" style={{ padding: 14, color: '#dc2626' }}>{err}</div>}
 
       {loading ? <div className="card" style={{ padding: 16 }}>Loading…</div> : rows.length === 0 ? (
         <div className="card" style={{ padding: 16, color: 'var(--text3)' }}>No fix requests yet. Club a group of failures on the Fleet Triage page to create one.</div>

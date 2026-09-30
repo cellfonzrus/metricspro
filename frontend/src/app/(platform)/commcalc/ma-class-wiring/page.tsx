@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
 import { ReportShell } from '@/components/ReportShell'
 import type { ExportColumn } from '@/lib/export'
+import { setupFailed } from '@/lib/setupNotice'
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // MA PRODUCT CLASS → MONEY  (mig 265).  The control room for the owner-gated wiring.
@@ -90,7 +91,7 @@ export default function MaClassWiringPage() {
     try {
       const r = await api('/api/v1/commcalc/ma-class-wiring/mode', { method: 'PUT', body: JSON.stringify({ consumer, mode, source_report: src }) })
       flash(r?.effect || 'Saved'); await loadAll()
-    } catch (e: any) { flash(e?.message || 'Could not save — is migration 265 applied, and are you an administrator?') }
+    } catch (e: any) { flash(e?.message || setupFailed('Could not save (an administrator login is required)')) }
     finally { setBusy(false) }
   }
   async function setLeg(product_class: string, income_leg: string) {

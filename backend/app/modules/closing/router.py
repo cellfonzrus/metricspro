@@ -9286,7 +9286,7 @@ def payout_due(store_code: str = "", as_of: str = "", org_id: str = ORG_ID,
             exp_rows = rows
             exp_due = round(sum(_f(r.get("amount")) for r in rows), 2)
         except Exception as e:
-            notes.append(f"expenses: could not read closing_expense (run migration 506?): {e}")
+            notes.append(f"expenses: the expense lines could not be read: {e}")
 
     total = round(commission_due + salary_due + exp_due, 2)
     return {"as_of": d, "store_code": store_code or None, "config": cfg,

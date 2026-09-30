@@ -186,16 +186,15 @@ def _p_asset_market_gap(client, org_id, ctx):
 # this dict only upgrades the KNOWN categories with a friendlier, non-engineer instruction.
 _PIPELINE_CATEGORY_HINTS = {
     "asset_upload_degraded_mode": (
-        "The last upload used the older, non-atomic save path because a required database change "
-        "hasn't been applied yet. Ask an engineer to run "
-        "database/migrations/300_asset_ledger_staging_swap.sql."),
+        "The last upload used the older, non-atomic save path because the safer atomic upload isn't "
+        "switched on for your company yet. Contact support to enable it."),
     "asset_market_backfill_failed": (
         "The store→market backfill did not finish on the last upload, so some rows may have "
         "the wrong (or no) market. Re-run the upload; if it keeps failing, ask an engineer to check "
         "Store Mapping for this account."),
     "asset_selling_price_backfill_failed": (
-        "Selling prices weren't refreshed from Sales on the last upload. Ask an engineer to confirm "
-        "database/migrations/009_asset_selling_price.sql has been applied."),
+        "Selling prices weren't refreshed from Sales on the last upload. If it keeps happening, the "
+        "selling-price refresh may not be switched on for your company yet — contact support."),
     "asset_appeal_flag_sync_failed": (
         "Appeals & Denied Payments flags weren't refreshed on the last upload. Try the "
         "“Re-sync appeal flags” action on the Asset Ledger page; if it keeps failing, ask "

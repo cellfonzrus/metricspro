@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { api, apiUpload } from '@/lib/client'
 import EntityPicker, { US_STATES } from '@/components/EntityPicker'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import { SetupNotice, setupFailed } from '@/lib/setupNotice'
 
 // HR · Onboarding Checklist (admin) — the CONFIGURABLE template every new hire is onboarded against.
 // Items group under collapsible CATEGORIES; each item has an OWNER role (Employee / HR / DM / Market
@@ -74,7 +75,7 @@ export default function OnboardingAdminPage() {
     const body: any = { ...fedit }
     if (typeof body.options === 'string') body.options = String(body.options).split(',').map((s: string) => s.trim()).filter(Boolean)
     try { await api(path, { method: isNew ? 'POST' : 'PATCH', body: JSON.stringify(body) }); setFedit(null); load() }
-    catch (e: any) { flash(e?.message || 'Save failed — is migration 077 applied?') }
+    catch (e: any) { flash(e?.message || setupFailed('Save failed')) }
   }
   async function deleteField(f: IField) {
     if (!window.confirm(`Delete field "${f.label}"?`)) return
@@ -87,7 +88,7 @@ export default function OnboardingAdminPage() {
     const label = window.prompt('New category name (e.g. "Benefits Enrollment")')?.trim()
     if (!label) return
     try { await api('/api/v1/hr/onboarding/categories', { method: 'POST', body: JSON.stringify({ label, sort_order: (cats.length + 1) * 10 }) }); load() }
-    catch (e: any) { flash(e?.message || 'Save failed — is migration 073 applied?') }
+    catch (e: any) { flash(e?.message || setupFailed('Save failed')) }
   }
 
   // Settings-audit (2026-07-26): the "onboarding invite stuck" admin-attention alert threshold —
@@ -124,7 +125,7 @@ export default function OnboardingAdminPage() {
     try {
       await api(path, { method: isNew ? 'POST' : 'PATCH', body: JSON.stringify(body) })
       setEditing(null); load()
-    } catch (e: any) { flash(e?.message || 'Save failed — is migration 073 applied?') }
+    } catch (e: any) { flash(e?.message || setupFailed('Save failed')) }
   }
   async function deleteTask(t: Task) {
     if (!window.confirm(`Delete "${t.label}"?`)) return
@@ -134,7 +135,7 @@ export default function OnboardingAdminPage() {
   async function uploadTemplate(t: Task, file: File) {
     const fd = new FormData(); fd.append('file', file)
     try { const r = await apiUpload(`/api/v1/hr/onboarding/tasks/${t.id}/template`, fd); flash(`📎 Template "${r.template_name}" attached to "${t.label}"`); load() }
-    catch (e: any) { flash(e?.message || 'Upload failed — is migration 080 applied?') }
+    catch (e: any) { flash(e?.message || setupFailed('Upload failed')) }
   }
   async function downloadTemplate(t: Task) {
     try { const r = await api(`/api/v1/hr/onboarding/tasks/${t.id}/template`); if (r?.url) window.open(r.url, '_blank') }
@@ -149,7 +150,7 @@ export default function OnboardingAdminPage() {
   async function uploadSample(t: Task, file: File) {
     const fd = new FormData(); fd.append('file', file)
     try { const r = await apiUpload(`/api/v1/hr/onboarding/tasks/${t.id}/sample`, fd); flash(`👁 Sample "${r.sample_name}" attached to "${t.label}"`); load() }
-    catch (e: any) { flash(e?.message || 'Upload failed — is migration 401 applied?') }
+    catch (e: any) { flash(e?.message || setupFailed('Upload failed')) }
   }
   async function downloadSample(t: Task) {
     try { const r = await api(`/api/v1/hr/onboarding/tasks/${t.id}/sample`); if (r?.url) window.open(r.url, '_blank') }
@@ -173,7 +174,7 @@ export default function OnboardingAdminPage() {
       </p>
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>{msg}</div>}
       {!ready && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 14 }}>
-        Run migration <b>073_hr_onboarding.sql</b> in Supabase to activate the checklist. Until then this page is empty.
+        <SetupNotice lead="The onboarding checklist is not switched on yet, so this page is empty." detail="073_hr_onboarding.sql" />
       </div>}
 
       {/* tabs: the operational Documents board vs the checklist/intake template setup */}
@@ -286,7 +287,7 @@ export default function OnboardingAdminPage() {
           The structured fields a new hire fills in the portal. Values sync into their employee record automatically
           (map a field to a record column with <b>Propagate to</b>). Mark bank details <b>private</b> so they&apos;re never shown back. Tailor these to your own HR intake form.
         </p>
-        {ifields.length === 0 && <div style={{ fontSize: 13, color: 'var(--text3)', padding: '8px 0' }}>No fields yet{ready ? '' : ' — run migration 077 first'}.</div>}
+        {ifields.length === 0 && <div style={{ fontSize: 13, color: 'var(--text3)', padding: '8px 0' }}>No fields yet.{ready ? '' : <> <SetupNotice detail="077" /></>}</div>}
         {SECTIONS.filter(sec => ifields.some(f => (f.section || 'personal') === sec)).map(sec => (
           <div key={sec} style={{ border: '1px solid var(--border)', borderRadius: 10, marginBottom: 10, overflow: 'hidden' }}>
             <div style={{ padding: '8px 14px', background: 'var(--surface)', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)' }}>{sec.replace('_', ' ')}</div>
@@ -456,7 +457,7 @@ function DocumentsBoard() {
         with the missing fields listed.
       </p>
       {msg && <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>{msg}</div>}
-      {!ready && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>Run migration <b>073</b> (and <b>082</b> for the send/return tracking) to activate this board.</div>}
+      {!ready && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}><SetupNotice lead="This board is not switched on yet." detail="073 + 082" /></div>}
       {res && <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
         Sent to {res.sent}/{res.total} · {res.emailed} emailed
         {(res.results || []).filter((r: any) => !r.ok).map((r: any, i: number) => <div key={i} style={{ color: '#991b1b' }}>✕ {r.name || r.employee_id}: {r.error}</div>)}
@@ -592,9 +593,9 @@ function CompletedDocuments() {
         fully customizable below.
       </p>
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>{msg}</div>}
-      {!ready && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>Run migration <b>073</b> (+ <b>082</b>) to activate onboarding tracking.</div>}
-      {cfg.ready === false && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>Run migration <b>100_hr_accounting_forward.sql</b> to save the accounting destination + track forwards.</div>}
-      {cfg.ready !== false && cfg.email_configured === false && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>Email delivery isn&apos;t configured (RESEND_API_KEY + NOTIFY_FROM_EMAIL) — forwarding will fail until it&apos;s set in Railway.</div>}
+      {!ready && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}><SetupNotice lead="Onboarding tracking is not switched on yet." detail="073 + 082" /></div>}
+      {cfg.ready === false && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}><SetupNotice lead="Saving the accounting destination and tracking forwards is not available yet." detail="100_hr_accounting_forward.sql" /></div>}
+      {cfg.ready !== false && cfg.email_configured === false && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>Email delivery isn&apos;t configured for your company yet — forwarding will fail until it is. Contact support to enable it.</div>}
 
       {/* Customizable forward destination */}
       <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 14, background: 'var(--surface)' }}>

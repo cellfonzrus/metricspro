@@ -841,7 +841,9 @@ check("with NO migration 274 the trend still returns real numbers (per-month fal
       eq2(out_deg["company"][-1]["m1"], 100.0) and eq2(out_deg["company"][-1]["m2_12"], 20.0),
       out_deg["company"][-1])
 check("...and SAYS it is degraded + which months it could cover",
-      out_deg["degraded"] is True and any("274" in n for n in out_deg["notes"]), out_deg["notes"])
+      # §19.36: the note no longer names migration 274 to a customer — it says the window is partial
+      out_deg["degraded"] is True and any("month by month" in n and "3 month" in n for n in out_deg["notes"]),
+      out_deg["notes"])
 check("...and the config falls back to the seeded code defaults, not an error",
       out_deg["config"]["resolved_from"] == "code_default")
 

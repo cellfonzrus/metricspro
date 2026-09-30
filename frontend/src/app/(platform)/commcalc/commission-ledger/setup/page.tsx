@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api, apiUpload } from '@/lib/client'
 import { useReportKinds } from '@/lib/report-kinds'
 import { STATEMENT_TYPE_DEFAULT } from '@/lib/statement-type'
+import { setupFailed } from '@/lib/setupNotice'
 
 // Guided SETUP WIZARD for the Commission Ledger. Walks a non-technical user through: pick a carrier
 // template → upload a commission file → confirm the columns we detected + preview how each line buckets
@@ -102,7 +103,7 @@ export default function CommissionLedgerSetupPage() {
       if (carrierId) fd.append('carrier_id', carrierId)
       const r = await apiUpload('/api/v1/commcalc/commission-ledger/import', fd)
       setResult(r); setStep(3)
-    } catch (e) { flash((e as Error)?.message || 'Import failed — is migration 071 applied?') }
+    } catch (e) { flash((e as Error)?.message || setupFailed('Import failed')) }
     setBusy(false)
   }
 

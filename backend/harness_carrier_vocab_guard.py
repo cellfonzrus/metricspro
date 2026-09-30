@@ -476,6 +476,8 @@ def main():
         print("OK — no hardcoded cross-side carrier vocabulary in rendered frontend copy.")
     if not pos_guard():
         bad = True
+    if not setup_guard():
+        bad = True
     sys.exit(1 if bad else 0)
 
 
@@ -569,6 +571,620 @@ def pos_guard():
     _, s9 = pos_scan_backend(be, rx, {**POS_BACKEND_ALLOW, ("commcalc/sales_recon.py", "nowhere"): "stale on purpose"})
     ok &= _ctl("a stale backend allow entry → RED", ("commcalc/sales_recon.py", "nowhere") in s9)
     print("  " + ("OK — the POS vocabulary lock holds." if ok else "FAIL — the POS vocabulary lock is open."))
+    return ok
+
+
+# ══ SETUP INTERNALS — no migration / SQL-editor wording in customer-facing copy (owner 2026-09-29, §19.36) ══
+# Owner: Display Labels said "Needs migration 068_ui_label_override.sql" — "this migration should not be
+# mentioned in customer facing". THE CLASS: an internal build/setup fact (a migration file or number, "apply
+# mig", "run it in the Supabase SQL editor", a table in a "not applied" hint, PostgREST's own not-applied
+# errors) reaching rendered copy or an API response. ONE HOME per side, dereferenced:
+#   · backend  app/core/setup_notice.py — SETUP_NOTICE, the detector SETUP_INTERNAL, `neutralize`, and the
+#     SetupNoticeMiddleware boundary every JSON response crosses (+ report_registry.build_payload for mail);
+#   · frontend lib/setupNotice.tsx — SETUP_NOTICE (locked equal), <SetupNotice detail=…/> (the detail shown to
+#     the platform super admin only), setupFailed().
+# This lock fails the build when: rendered frontend copy carries the wording outside the home and the named
+# super-admin pages below; a backend string literal names a migration in a shape the boundary's detector
+# would NOT catch (so nothing can slip past it); the middleware is unregistered or not innermost; the report
+# builder stops dereferencing `neutralize`; the gate is re-derived; the two sentences drift. The boundary's
+# behaviour is proved here too, DB-free on a hand-driven ASGI app. Negative controls prove each rule goes red.
+SETUP_FE_HOME = "lib/setupNotice.tsx"
+SETUP_BE_HOME = os.path.join(ROOT, "backend", "app", "core", "setup_notice.py")
+SETUP_MAIN = os.path.join(ROOT, "backend", "app", "main.py")
+SETUP_REPORTS = os.path.join(ROOT, "backend", "app", "modules", "notify", "report_registry.py")
+BE_APP = os.path.join(ROOT, "backend", "app")
+SETUP_FE_WORDS = re.compile(r"\bmigrations?\b|(?<![\w-])mig\s*#?\d|\bSQL\s+editor\b|(?-i:\bSupabase\b)", re.I)
+SETUP_SQL_NAME = re.compile(r"\b\d{3,4}[a-z]?_[a-z0-9_]+\.sql\b", re.I)
+# A page the platform super admin ALONE can open may keep technical detail. Each entry is VERIFIED below: its
+# href must be platform-only at every NAV occurrence (rbac.PLATFORM_ONLY_HREFS — the route guard bounces anyone
+# else — and its endpoints sit behind core.router._require_super_admin). A stale entry FAILS.
+SETUP_SUPER_ADMIN_PAGES = {
+    "app/(platform)/admin/billing/page.tsx": "/admin/billing — tenant billing plans + platform costs (vendor names are the data)",
+    "app/(platform)/admin/pricing/page.tsx": "/admin/pricing — platform price list + free trial",
+    "app/(platform)/admin/access-log/page.tsx": "/admin/access-log — the platform's system access log",
+    "app/(platform)/admin/control-box/page.tsx": "/admin/control-box — the platform red/green board (§20); cron migrations are its subject",
+    "app/(platform)/admin/fix-requests/page.tsx": "/admin/fix-requests — the auto-fix pipeline; SQL / migrations are its work product",
+    "app/(platform)/admin/business-types/page.tsx": "/admin/business-types — the platform's vertical registry editor (§35)",
+}
+# The operator console route group: its layout asks the SERVER (`loadOperatorMe` → GET /core/operator/me) and
+# renders nothing but an explanation for a non-operator. Verified below.
+SETUP_OPERATOR_TREE = "app/(operator)/"
+SETUP_OPERATOR_LAYOUT = "app/(operator)/operator/layout.tsx"
+# Backend strings that name a migration in a shape the detector does not catch — each reviewed: not a setup
+# hint a TENANT reads. (file relative to backend/app, a signature substring) -> reason. Stale FAILS.
+SETUP_BACKEND_ALLOW = {
+    ("modules/billing/platform_costs.py", "Supabase (database)"):
+        "a vendor NAME in the platform's own cost list (served to /admin/billing, super-admin only), not a setup hint",
+    ("modules/commcalc/connector_registry.py", "its pull route is closed by mig 998"):
+        "the mig-1014 connector seed mirrored in code (harness_connector_scope_lock pins mirror == seed); the live "
+        "text is DB data — rewording it is a data migration, surfaced for the owner (§19.36)",
+    ("modules/commcalc/connector_registry.py", "report kinds carry in mig 1010"):
+        "the mig-1014 connector seed mirror (two rows) — same reason as above",
+    ("modules/core/control_box_api.py", " / mig 9"):
+        "the System Control Box's index references (§20) — served by a _require_super_admin endpoint only",
+    ("modules/core/control_box_api.py", "the failure mig 950 found by accident"):
+        "a Control Box check's note — super-admin only (§20)",
+    ("modules/core/operator.py", "keep the migration 984 rollback SQL to hand"):
+        "the operator console's policy warning — the operator console only (§22)",
+}
+# WHERE a setup-hint string may be emitted. The boundary reads ONLY setup_notice.MESSAGE_KEYS (never data);
+# a hint emitted under any other constant key reaches the customer verbatim, so it FAILS unless reviewed here:
+# (file relative to backend/app, key) -> reason. Stale FAILS.
+SETUP_KEY_LEDGER = {
+    ("modules/commcalc/landing_identity.py", "raw_sales_product"):
+        "TABLE_MIGRATION — a lookup (landing table -> the migration that creates it); its value reaches a client "
+        "only inside a refusal `detail`, which the boundary reads",
+    ("modules/commcalc/landing_identity.py", "raw_sales_invoice"): "TABLE_MIGRATION lookup — as above",
+    ("modules/commcalc/landing_identity.py", "raw_sales_invoice_tender"): "TABLE_MIGRATION lookup — as above",
+}
+
+_SANCTIONED = re.compile(r"""\bdetail\s*=\s*\{[^{}]*\}|\bdetail\s*[=:]\s*(?:'[^']*'|"[^"]*"|`[^`$]*`)""")
+_INLINE_CMT = re.compile(r"\{/\*.*?\*/\}|/\*.*?\*/")
+_TRAIL_CMT = re.compile(r"(^|\s)//.*$")
+
+
+def _setup_code(ln):
+    """A code line with its inline / trailing comments removed and the sanctioned `detail=` carrier blanked."""
+    ln = _TRAIL_CMT.sub(r"\1", _INLINE_CMT.sub("", ln))
+    return _SANCTIONED.sub('detail=""', ln)
+
+
+def platform_only_hrefs():
+    """The hrefs every NAV occurrence of which is platform-only — rbac.PLATFORM_ONLY_HREFS, read statically."""
+    src = open(RBAC, encoding="utf-8").read()
+    body = src[src.index("export const NAV: NavGroup[] = ["):]
+    body = body[:body.index("\n]\n")]
+    heads = list(re.finditer(r"^  \{ group: '([^']+)'([^\n]*)$", body, re.M))
+    occ = {}
+    for n, m in enumerate(heads):
+        chunk = body[m.end():heads[n + 1].start() if n + 1 < len(heads) else len(body)]
+        for it in re.findall(r"^\s*(\{ href: '[^\n]*\}),?\s*$", chunk, re.M):
+            h = re.search(r"href: '([^']*)'", it).group(1)
+            occ.setdefault(h, []).append("platformOnly: true" in m.group(2) or "platformOnly: true" in it)
+    return {h for h, v in occ.items() if v and all(v)}
+
+
+def setup_scan_frontend(files, detector, excused=SETUP_SUPER_ADMIN_PAGES):
+    """files: {rel: [lines]}. Returns (fails, seen_excused). A `NNN_name.sql` anywhere in non-comment code, or
+    migration / SQL-editor wording (or anything the backend detector recognises) in a DISPLAY segment, FAILS
+    outside the home, the operator tree and the excused super-admin pages."""
+    fails, seen = [], set()
+    for rel, lines in sorted(files.items()):
+        if rel == SETUP_FE_HOME:
+            continue
+        for i, (ln, is_cmt) in enumerate(comment_lines(lines), 1):
+            if is_cmt:
+                continue
+            code = _setup_code(ln)
+            hit = None
+            m = SETUP_SQL_NAME.search(code)
+            if m:
+                hit = (m.group(0), code.strip()[:110])
+            else:
+                for seg in display_segments(code) + jsx_prose_line(rel, code):
+                    m = detector.search(seg) or SETUP_FE_WORDS.search(seg)
+                    if m:
+                        hit = (m.group(0), seg[:110])
+                        break
+            if not hit:
+                continue
+            if rel in excused or rel.startswith(SETUP_OPERATOR_TREE):
+                seen.add(rel)
+                continue
+            fails.append((rel, i, hit[0], hit[1]))
+    return fails, seen
+
+
+_PLACEHOLDER = re.compile(r"\{[^{}]*\}|%[sdr]")
+
+
+def _py_joined_literals(src):
+    """(line, text) per STRING EXPRESSION of a Python source: implicitly concatenated literals JOINED (the text
+    the client receives), docstrings and print()/log lines skipped, every {placeholder} / %s read as '000' (the
+    value interpolated after "migration" is a migration id or file)."""
+    import io
+    import tokenize
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
+    except (tokenize.TokenError, SyntaxError):
+        return []
+    lines = src.split("\n")
+    out, run, state = [], [], {"line": None}
+
+    def flush():
+        if run:
+            out.append((state["line"], "".join(run)))
+        run.clear()
+
+    prev_sig = None
+    for t in toks:
+        if t.type in (tokenize.NL, tokenize.COMMENT):
+            continue
+        if t.type == tokenize.STRING:
+            body = t.string.lstrip("rRbBuUfF")
+            docstring = prev_sig is None and not run and body[:3] in ('"""', "'''")
+            text = body[3:-3] if body[:3] in ('"""', "'''") else body[1:-1]
+            if "f" in t.string[:2].lower():
+                text = _strip_braces(text)
+            ln = lines[t.start[0] - 1] if t.start[0] - 1 < len(lines) else ""
+            if docstring or _LOG_LINE.search(ln):
+                prev_sig = t
+                continue
+            if not run:
+                state["line"] = t.start[0]
+            run.append(_PLACEHOLDER.sub("000", text))
+            prev_sig = t
+            continue
+        flush()
+        prev_sig = None if t.type in (tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT) else t
+    flush()
+    return out
+
+
+def setup_scan_backend(sources, detector, allow=SETUP_BACKEND_ALLOW):
+    """sources: {rel: src}. Every string expression that names a migration (the frontend words, or a .sql file)
+    must be one the boundary's detector recognises — otherwise it would reach a customer verbatim. A bare
+    one-word literal ('migration' as a dict KEY) is not copy. Returns (fails, stale)."""
+    fails, seen = [], set()
+    for rel, src in sorted(sources.items()):
+        for ln, text in _py_joined_literals(src):
+            if " " not in text.strip() and not SETUP_SQL_NAME.search(text):
+                continue
+            if not (SETUP_FE_WORDS.search(text) or SETUP_SQL_NAME.search(text)):
+                continue
+            if detector.search(text):
+                continue
+            key = next((k for k in allow if k[0] == rel and k[1] in text), None)
+            if key:
+                seen.add(key)
+                continue
+            fails.append((rel + ":" + str(ln), text[:120]))
+    return fails, [k for k in allow if k not in seen]
+
+
+_EMIT_PH = re.compile(r"\{[^{}]*\}|%[sdr]")
+
+
+def _str_text(node):
+    import ast
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(v.value if isinstance(v, ast.Constant) else "000" for v in node.values)
+    return None
+
+
+def setup_emissions(src, detector):
+    """[(line, text, key)] — every setup-hint string (the detector's verdict) emitted DIRECTLY under a constant
+    KEY: a dict entry `{"k": …}`, a subscript assignment `x["k"] = …`, a keyword argument `k=…`, or — one hop —
+    a `NAME = …` / `NAME.append(…)` whose NAME is then used so (a module constant anywhere in the module, a local
+    within its function). An HTTPException argument or a raised error's message is `detail`. A helper's
+    positional argument or a return value is not a key and is not judged — the runtime reads message keys only."""
+    import ast
+    import collections
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []
+    par = {}
+    for n in ast.walk(tree):
+        for c in ast.iter_child_nodes(n):
+            par[c] = n
+
+    def scope_of(node):
+        a = par.get(node)
+        while a is not None and not isinstance(a, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+            a = par.get(a)
+        return a if a is not None else tree
+
+    loads = collections.defaultdict(list)
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
+            loads[(id(scope_of(n)), n.id)].append(n)
+            loads[("module", n.id)].append(n)
+
+    def uses(tg):
+        sc = scope_of(tg)
+        return loads.get(("module", tg.id), []) if isinstance(sc, ast.Module) else loads.get((id(sc), tg.id), [])
+
+    build = (ast.BinOp, ast.BoolOp, ast.IfExp, ast.FormattedValue, ast.JoinedStr)
+
+    def up(node):
+        cur, p = node, par.get(node)
+        while isinstance(p, build) or (isinstance(p, ast.Attribute) and p.attr == "format") \
+                or (isinstance(p, ast.Call) and isinstance(p.func, ast.Attribute) and p.func.attr == "format"
+                    and cur is p.func):
+            cur, p = p, par.get(p)
+        return cur, p
+
+    def exc_call(call):
+        fn = getattr(call, "func", None)
+        nm = getattr(fn, "id", None) or getattr(fn, "attr", None) or ""
+        return nm == "HTTPException" or nm.endswith(("Error", "Exception"))
+
+    def keys_at(node, hop):
+        cur, p = up(node)
+        if isinstance(p, ast.Dict):
+            i = next((i for i, v in enumerate(p.values) if v is cur), None)
+            if i is not None and isinstance(p.keys[i], ast.Constant):
+                return [str(p.keys[i].value)]
+            return []
+        if isinstance(p, ast.keyword) and p.arg:
+            return ["detail"] if exc_call(par.get(p)) else [p.arg]
+        if isinstance(p, ast.Call) and exc_call(p) and cur in p.args:
+            return ["detail"]
+        if isinstance(p, (ast.Assign, ast.AnnAssign)):
+            out = []
+            for tg in (p.targets if isinstance(p, ast.Assign) else [p.target]):
+                if isinstance(tg, ast.Subscript) and isinstance(tg.slice, ast.Constant):
+                    out.append(str(tg.slice.value))
+                elif isinstance(tg, ast.Name) and hop < 1:
+                    for u in uses(tg):
+                        out += keys_at(u, hop + 1)
+            return out
+        if isinstance(p, ast.Call) and isinstance(p.func, ast.Attribute) and p.func.attr == "append" and hop < 1:
+            t = p.func.value
+            if isinstance(t, ast.Name):
+                out = []
+                for u in uses(t):
+                    out += keys_at(u, hop + 1)
+                return out
+            if isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant):
+                return [str(t.slice.value)]
+        return []
+
+    out = []
+    for n in ast.walk(tree):
+        t = _str_text(n)
+        if t is None or isinstance(par.get(n), ast.JoinedStr):
+            continue
+        if not detector.search(_EMIT_PH.sub("000", t)):
+            continue
+        for k in sorted(set(keys_at(n, 0))):
+            out.append((n.lineno, t, k))
+    return out
+
+
+def setup_scan_keys(sources, detector, is_message_key, ledger=SETUP_KEY_LEDGER):
+    """Every setup hint the backend emits under a constant key must be under a MESSAGE key (the only values
+    the boundary reads) or be reviewed in `ledger`. Returns (fails, stale, measured_keys)."""
+    fails, seen, measured = [], set(), {}
+    for rel, src in sorted(sources.items()):
+        for ln, text, key in setup_emissions(src, detector):
+            measured[key] = measured.get(key, 0) + 1
+            if is_message_key(key):
+                continue
+            if (rel, key) in ledger:
+                seen.add((rel, key))
+                continue
+            fails.append((f"{rel}:{ln}", key, text[:100]))
+    return fails, [k for k in ledger if k not in seen], measured
+
+
+def _be_app_sources():
+    out = {}
+    for dp, _d, fs in os.walk(BE_APP):
+        for f in fs:
+            if f.endswith(".py"):
+                p = os.path.join(dp, f)
+                if os.path.abspath(p) == os.path.abspath(SETUP_BE_HOME):
+                    continue                          # the home's own detector patterns
+                out[os.path.relpath(p, BE_APP).replace(os.sep, "/")] = open(p, encoding="utf-8").read()
+    return out
+
+
+def setup_wiring(main_src, reports_src, home_src, fe_home_src):
+    """The wires that keep the design from un-wiring. Returns [(label, ok)]."""
+    out = []
+    i_mw = main_src.find("app.add_middleware(SetupNoticeMiddleware)")
+    i_gz = main_src.find("app.add_middleware(GZipMiddleware")
+    out.append(("W1 the boundary is registered in main.py, INNERMOST (before GZip — it reads the plain JSON body)",
+                i_mw != -1 and i_gz != -1 and i_mw < i_gz))
+    m = re.search(r"async def build_payload\(.*?(?=\n(?:async )?def |\Z)", reports_src, re.S)
+    out.append(("W2 the outbound report builder (report_registry.build_payload) dereferences setup_notice.neutralize",
+                bool(m and re.search(r"\bneutralize\(", _py_code(m.group(0))))))
+    code = _py_code(home_src)
+    out.append(("W3 the super-admin answer is THE one gate (core.router._require_super_admin), not a re-derived rung",
+                "import _require_super_admin" in code and "_platform_admin_rungs" not in code
+                and not re.search(r"""\[\s*["']super_admin["']\s*\]|\.get\(\s*["']super_admin""", code)))
+    be = re.search(r'^SETUP_NOTICE\s*=\s*"([^"]+)"', home_src, re.M)
+    fe = re.search(r'export const SETUP_NOTICE\s*=\s*"([^"]+)"', fe_home_src)
+    out.append(("W4 the customer sentence has one wording (frontend SETUP_NOTICE == backend SETUP_NOTICE)",
+                bool(be and fe and be.group(1) == fe.group(1))))
+    out.append(("W5 the frontend detail is gated by rbac.isPlatformAdmin (the one super-admin predicate)",
+                "isPlatformAdmin(" in fe_home_src and "from './rbac'" in fe_home_src))
+    return out
+
+
+def _asgi_run(mw_cls, body_msgs, ctype=b"application/json", path="/api/v1/x", headers=()):
+    """Drive a pure-ASGI middleware around a stub app that sends `body_msgs`; return (start, body)."""
+    import asyncio
+    sent = []
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 400,
+                    "headers": [(b"content-type", ctype), (b"content-length", str(sum(len(b) for b in body_msgs)).encode())]})
+        for n, b in enumerate(body_msgs):
+            await send({"type": "http.response.body", "body": b, "more_body": n < len(body_msgs) - 1})
+
+    async def receive():
+        return {"type": "http.request", "body": b""}
+
+    async def send(msg):
+        sent.append(msg)
+
+    scope = {"type": "http", "path": path, "method": "POST", "headers": list(headers)}
+    asyncio.run(mw_cls(app)(scope, receive, send))
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+    return start, body
+
+
+def setup_guard():
+    """THE SETUP-INTERNALS LOCK. Returns True when green; prints its own report."""
+    import io
+    import contextlib
+    print("\n— setup internals in customer-facing copy (one home: core/setup_notice.py + lib/setupNotice.tsx; §19.36) —")
+    from app.core import setup_notice as sn
+    det = sn.SETUP_INTERNAL
+    ok = True
+    fe = _fe_files()
+    fails, seen = setup_scan_frontend(fe, det)
+    if fails:
+        ok = False
+        print(f"  FAIL  {len(fails)} migration / SQL-editor mention(s) in rendered frontend copy:")
+        for rel, i, term, seg in fails:
+            print(f"        {rel}:{i}  [{term}]  {seg}")
+        print("        Fix: <SetupNotice detail=\"…\" /> or setupFailed(…) from lib/setupNotice.tsx — the detail reaches the platform super admin only.")
+    else:
+        print(f"  OK    no setup internals in rendered frontend copy ({len(fe)} files; super-admin pages excused: {len(SETUP_SUPER_ADMIN_PAGES)} + the operator console)")
+    po = platform_only_hrefs()
+    for rel, why in SETUP_SUPER_ADMIN_PAGES.items():
+        m = _page_re.search(rel)
+        href = m.group(1) if m else None
+        if href not in po:
+            ok = False
+            print(f"  FAIL  excused page {rel} is NOT platform-only in NAV ({href}) — a tenant can open it; fix its copy instead")
+        if rel not in seen:
+            ok = False
+            print(f"  FAIL  stale super-admin excusal (no technical wording left — remove it): {rel}")
+    lay = "\n".join(fe.get(SETUP_OPERATOR_LAYOUT, []))
+    if not ("loadOperatorMe(" in lay and "if (!me)" in lay):
+        ok = False
+        print("  FAIL  the operator console layout no longer fails closed on the server's operator answer — its pages are not excusable")
+    bsrc = _be_app_sources()
+    bfails, bstale = setup_scan_backend(bsrc, det)
+    if bfails:
+        ok = False
+        print(f"  FAIL  {len(bfails)} backend string(s) name a migration in a shape the boundary would NOT catch:")
+        for where, text in bfails:
+            print(f"        {where}  {text!r}")
+        print("        Fix: say it in a shape SETUP_INTERNAL recognises (\"run migration 071\", \"migration 071 is not applied\"), or drop the internals.")
+    else:
+        print(f"  OK    every backend string that names a migration is caught by the boundary ({len(bsrc)} modules)")
+    if bstale:
+        ok = False
+        print(f"  FAIL  stale backend allow entr(ies): {bstale}")
+    kfails, kstale, measured = setup_scan_keys(bsrc, det, sn.is_message_key)
+    if kfails:
+        ok = False
+        print(f"  FAIL  {len(kfails)} setup hint(s) emitted under a key the boundary does NOT read (it reads only MESSAGE_KEYS, never data):")
+        for where, key, text in kfails:
+            print(f"        {where}  [{key}]  {text!r}")
+        print("        Fix: drop the internals from the text, or emit it under a message key (detail / note / hint / …).")
+    else:
+        mk = sorted(k for k in measured if sn.is_message_key(k))
+        print(f"  OK    every setup hint the backend emits under a key is under a message key — measured: "
+              + ", ".join(f"{k}×{measured[k]}" for k in sorted(mk, key=lambda k: -measured[k])))
+    if kstale:
+        ok = False
+        print(f"  FAIL  stale key-ledger entr(ies): {kstale}")
+    unused = sorted(k for k in sn.MESSAGE_KEYS if k not in measured and k not in ("detail", "warnings"))
+    ok &= _ctl("K1 MESSAGE_KEYS holds no key the backend never emits a hint under (a wider list reads more customer data)"
+               + (f" — unused: {unused}" if unused else ""), not unused)
+    rd = lambda p: open(p, encoding="utf-8").read() if os.path.exists(p) else ""
+    main_src, rep_src, home_src = rd(SETUP_MAIN), rd(SETUP_REPORTS), rd(SETUP_BE_HOME)
+    fe_home = "\n".join(fe.get(SETUP_FE_HOME, []))
+    for label, good in setup_wiring(main_src, rep_src, home_src, fe_home):
+        ok &= _ctl(label, good)
+
+    # ── the boundary's behaviour, DB-free (a hand-driven ASGI app; the gate stubbed) ──────────────────────────
+    print("  — the boundary (SetupNoticeMiddleware) —")
+
+    class NotSuper(sn.SetupNoticeMiddleware):
+        @staticmethod
+        def _is_super_admin(headers):
+            return False
+
+    class Super(sn.SetupNoticeMiddleware):
+        @staticmethod
+        def _is_super_admin(headers):
+            return True
+
+    class GateFault(sn.SetupNoticeMiddleware):
+        @staticmethod
+        def _is_super_admin(headers):
+            raise RuntimeError("gate down")
+
+    leak = json.dumps({"detail": "Save failed — is migration 068_ui_label_override.sql applied?"}).encode()
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        st, b = _asgi_run(NotSuper, [leak])
+    got = json.loads(b)
+    ok &= _ctl("B1 a tenant gets the ONE sentence for a migration-naming detail (the Display Labels defect)",
+               got == {"detail": sn.SETUP_NOTICE})
+    ok &= _ctl("B2 …the content-length is recomputed", dict(st["headers"]).get(b"content-length") == str(len(b)).encode())
+    ok &= _ctl("B3 …and the technical detail is written to the server log", "068_ui_label_override.sql" in err.getvalue())
+    _, b = _asgi_run(Super, [leak])
+    ok &= _ctl("B4 the platform super admin sees the detail unchanged", b == leak)
+    with contextlib.redirect_stderr(io.StringIO()):
+        _, b = _asgi_run(GateFault, [leak])
+    ok &= _ctl("B5 a gate fault hides the detail (fail closed)", json.loads(b) == {"detail": sn.SETUP_NOTICE})
+    plain = json.dumps({"rows": [{"plan": "Port-in Migration", "n": 3}], "note": "All caught up."}).encode()
+    _, b = _asgi_run(NotSuper, [plain])
+    ok &= _ctl("B6 a response with no hint is returned as the SAME bytes object", b is plain)
+    _, b = _asgi_run(NotSuper, [b"run migration 071"], ctype=b"text/csv")
+    ok &= _ctl("B7 a non-JSON body (a CSV / file download) streams through untouched", b == b"run migration 071")
+    with contextlib.redirect_stderr(io.StringIO()):
+        _, b = _asgi_run(NotSuper, [leak[:20], leak[20:]])
+    ok &= _ctl("B8 a JSON body sent in chunks is still read whole", json.loads(b) == {"detail": sn.SETUP_NOTICE})
+    _, b = _asgi_run(NotSuper, [leak], path="/openapi.json")
+    ok &= _ctl("B9 the developer surfaces (/openapi.json, /docs) are left verbatim", b == leak)
+    mixed = {"note": "Totals are in. The ledger needs migration 251 to refresh. Other text stays.",
+             "hint": "{'code': 'PGRST205', 'message': \"Could not find the table 'hr.x' in the schema cache\"}"}
+    new, orig = sn.neutralize(mixed)
+    ok &= _ctl("B10 a longer note keeps its other sentences; a raw PostgREST not-applied error is neutralized",
+               new["note"] == "Totals are in. " + sn.SETUP_NOTICE + " Other text stays."
+               and new["hint"] == sn.SETUP_NOTICE and len(orig) == 2)
+    corpus = [t for src in bsrc.values() for _, t in _py_joined_literals(src) if det.search(t)]
+    ok &= _ctl(f"B11 the byte prefilter admits every detected backend string ({len(corpus)}) under every message key",
+               bool(corpus) and all(sn.may_carry_hint(json.dumps({k: t}).encode()) for t in corpus for k in ("detail", "note")))
+    nested = {"ready": False, "config": {"note": "Run migration 245 first."}, "warnings": ["Migration 274 not applied yet."]}
+    new, orig = sn.neutralize(nested)
+    ok &= _ctl("B12 a nested config dict's note and a warnings list of strings are read",
+               new["config"]["note"] == sn.SETUP_NOTICE and new["warnings"] == [sn.SETUP_NOTICE] and len(orig) == 2)
+
+    # ── DATA IS NEVER TOUCHED (coordinator review 2026-09-29) ─────────────────────────────────────────────────
+    print("  — data is never touched —")
+    data_cells = ["Pending Migration", "Port-in Migration", "Migration 100", "migration 1017 customers",
+                  "Run migration 071 first", "fixed in the Supabase SQL editor", "relation \"x\" does not exist"]
+    rows = [{"plan": c, "status": c, "note": c, "notes": c, "detail": c, "message": c, "rep": "Miguel"} for c in data_cells]
+    for label, payload in [
+        ("D1 report rows whose cells (incl. note / detail / message columns) say 'Pending Migration', 'Port-in Migration', "
+         "'Migration 100', 'migration 1017 customers', 'run migration 071', 'Supabase SQL editor'", {"rows": rows, "count": 7}),
+        ("D2 the same rows nested in a data dict ({by_store: {S1: {rows: […]}}})", {"by_store": {"S1": {"rows": rows}}}),
+        ("D3 a bare JSON list body", rows),
+        ("D4 a customer's own record keys (notes / status / label / description) at the top level",
+         {"id": 7, "notes": "moved to the Supabase SQL editor", "status": "Pending Migration", "label": "Migration 100",
+          "description": "run migration 071 at the store"}),
+        ("D5 a customer note under `note` that merely mentions a carrier migration", {"note": "Customer asked about Port-in Migration pricing."}),
+    ]:
+        body = json.dumps(payload).encode()
+        with contextlib.redirect_stderr(io.StringIO()):
+            _, b = _asgi_run(NotSuper, [body])
+        new, orig = sn.neutralize(payload)
+        ok &= _ctl(label + " → byte-identical, SAME object", b is body and new is payload and orig == [])
+    rep_payload = {"title": "Hours Approval", "subtitle": "Pay period 1–15", "sheets": [{"rows": rows}]}
+    new, orig = sn.neutralize(rep_payload)
+    ok &= _ctl("D6 a mailed report's sheets / rows are never read (only its subtitle is)", new is rep_payload and orig == [])
+
+    # ── PERFORMANCE: a multi-MB data body is never parsed ────────────────────────────────────────────────────
+    print("  — performance —")
+    import time
+    big_rows = [{"rep": "Miguel Migration", "plan": "Port-in Migration", "status": "Pending Migration", "i": i,
+                 "mrc": 45.0, "store": "Migration Ave"} for i in range(40000)]
+    big = json.dumps({"rows": big_rows, "total": 40000}).encode()
+    calls = {"n": 0}
+    real_loads = sn._loads
+
+    def counting(b):
+        calls["n"] += 1
+        return real_loads(b)
+
+    sn._loads = counting
+    try:
+        t0 = time.perf_counter()
+        _, b = _asgi_run(NotSuper, [big])
+        dt = time.perf_counter() - t0
+        ok &= _ctl(f"P1 a {len(big) / 1e6:.1f} MB report body full of 'Migration' / 'Miguel' cells: never json.loads'd "
+                   f"(parses: {calls['n']}), returned as the SAME bytes object — {dt * 1000:.0f} ms through the middleware",
+                   b is big and calls["n"] == 0)
+        noted = json.dumps({"rows": [dict(r, note="Pending Migration") for r in big_rows[:20000]]}).encode()
+        calls["n"] = 0
+        t0 = time.perf_counter()
+        _, b = _asgi_run(NotSuper, [noted])
+        dt2 = time.perf_counter() - t0
+        ok &= _ctl(f"P2 worst case — rows carry a `note` column saying 'Pending Migration' ({len(noted) / 1e6:.1f} MB): "
+                   f"parsed once ({calls['n']}), walked without entering the rows, SAME bytes object — {dt2 * 1000:.0f} ms",
+                   b is noted and calls["n"] == 1)
+        t0 = time.perf_counter()
+        hit = sn.may_carry_hint(big)
+        dt3 = time.perf_counter() - t0
+        ok &= _ctl(f"P3 the key-aware prefilter on the {len(big) / 1e6:.1f} MB body: {dt3 * 1000:.1f} ms, verdict no-parse", not hit)
+    finally:
+        sn._loads = real_loads
+
+    # ── negative controls — a lock that cannot go red proves nothing ────────────────────────────────────────────
+    print("  — negative controls —")
+    page = "app/(platform)/admin/labels/page.tsx"
+    base = fe.get(page, [])
+    f0, _ = setup_scan_frontend({page: base}, det)
+    f1, _ = setup_scan_frontend({page: base + ["        Needs migration <code>068_ui_label_override.sql</code>. Edits show on the next sidebar load."]}, det)
+    ok &= _ctl("N1 the owner's Display Labels line put back → RED (the defect reproduced)", len(f1) > len(f0))
+    f2, _ = setup_scan_frontend({page: base + ["      setMsg((e instanceof Error && e.message) || 'Save failed — is migration 071 applied?')"]}, det)
+    ok &= _ctl("N2 a toast fallback naming a migration → RED", len(f2) > len(f0))
+    f3, _ = setup_scan_frontend({page: base + ["        <SetupNotice detail=\"068_ui_label_override.sql\" />",
+                                              "        <SetupNotice detail={'mig 071'} lead=\"Showing the defaults.\" />"]}, det)
+    ok &= _ctl("N3 the migration name as <SetupNotice detail=…/> (super-admin only) → GREEN", len(f3) == len(f0))
+    f4, _ = setup_scan_frontend({page: base + ["  // run migration 068_ui_label_override.sql first (a comment is prose)",
+                                              "  const x = useState<string[]>([])   // mig 247 — trailing comment"]}, det)
+    ok &= _ctl("N4 a migration in a comment / trailing comment → GREEN", len(f4) == len(f0))
+    f5, _ = setup_scan_frontend({page: base + ["        <b>1007_onboarding_intake_state.sql</b>"]}, det)
+    ok &= _ctl("N5 a bare .sql file name in JSX (no spaces) → RED", len(f5) > len(f0))
+    f6, _ = setup_scan_frontend({page: base + ["        Run it in the Supabase SQL editor, then reload."]}, det)
+    ok &= _ctl("N6 'Supabase SQL editor' prose → RED", len(f6) > len(f0))
+    exc = {**SETUP_SUPER_ADMIN_PAGES, page: "not platform-only on purpose"}
+    ok &= _ctl("N7 an excusal of a tenant page is refused (admin/labels is not platform-only in NAV)", "/admin/labels" not in po)
+    _, s8 = setup_scan_frontend({page: ["  const a = 1", "  return <div>Display labels</div>"]}, det, exc)
+    ok &= _ctl("N8 an excusal whose page carries no technical wording is stale → RED", page not in s8)
+    bb = {"commcalc/x.py": 'raise HTTPException(500, "The ledger migration is still outstanding: " + str(e))\n'}
+    b9, _ = setup_scan_backend(bb, det)
+    ok &= _ctl("N9 a backend message naming a migration in a shape the boundary misses → RED", bool(b9))
+    bb = {"commcalc/x.py": 'raise HTTPException(500, "could not save (is migration "\n    f"{MIG} applied?): {e}")\n'
+                           'print("run migration 071 — operator log")\nX = {"migration": MIG}\n'}
+    b10, _ = setup_scan_backend(bb, det)
+    ok &= _ctl("N10 a split / f-string hint the boundary catches, a log line, a dict key → GREEN", not b10)
+    _, s11 = setup_scan_backend({}, det, {("commcalc/x.py", "nowhere"): "stale on purpose"})
+    ok &= _ctl("N11 a stale backend allow entry → RED", bool(s11))
+    w1 = lambda w: w[next(k for k in w if k.startswith("W1"))]
+    w = dict(setup_wiring(main_src.replace("app.add_middleware(SetupNoticeMiddleware)", ""), rep_src, home_src, fe_home))
+    ok &= _ctl("N12 the boundary unregistered → RED", not w1(w))
+    moved = main_src.replace("app.add_middleware(SetupNoticeMiddleware)", "") + "\napp.add_middleware(SetupNoticeMiddleware)\n"
+    ok &= _ctl("N13 the boundary registered OUTER of GZip (it would read compressed bytes) → RED",
+               not w1(dict(setup_wiring(moved, rep_src, home_src, fe_home))))
+    w = dict(setup_wiring(main_src, rep_src.replace("_sn.neutralize(payload)", "(payload, [])"), home_src, fe_home))
+    ok &= _ctl("N14 the report builder stops dereferencing neutralize → RED", not w[next(k for k in w if k.startswith("W2"))])
+    w = dict(setup_wiring(main_src, rep_src, home_src + '\ndef _x(r):\n    return r.get("super_admin")\n', fe_home))
+    ok &= _ctl("N15 a re-derived super-admin rung in the home → RED", not w[next(k for k in w if k.startswith("W3"))])
+    w = dict(setup_wiring(main_src, rep_src, home_src, fe_home.replace("Contact support", "Call us")))
+    ok &= _ctl("N16 the frontend sentence drifts from the backend's → RED", not w[next(k for k in w if k.startswith("W4"))])
+    k17, _, _ = setup_scan_keys({"commcalc/x.py": 'def f():\n    return {"banner": "Run migration 071 first."}\n'}, det, sn.is_message_key)
+    ok &= _ctl("N17 a setup hint returned under a non-message key (`banner`) → RED", bool(k17))
+    k18, _, _ = setup_scan_keys({"commcalc/x.py":
+        'MSG = "run migration 071 first"\n'
+        'def f(e):\n    if e:\n        raise HTTPException(500, f"could not save — is migration {MIG} applied? {e}")\n'
+        '    warn = []\n    warn.append("Migration 274 not applied yet.")\n'
+        '    return {"note": "Needs migration 621.", "hint": MSG, "warnings": warn, "rows": []}\n'}, det, sn.is_message_key)
+    ok &= _ctl("N18 hints under detail / note / hint / a warnings list (direct, one-hop constant, appended local) → GREEN", not k18)
+    k19, _, _ = setup_scan_keys({"commcalc/x.py": 'MSG = "run migration 071 first"\ndef f():\n    return {"label": MSG}\n'},
+                                det, sn.is_message_key)
+    ok &= _ctl("N19 a hint constant used one hop away under a non-message key (`label`) → RED", bool(k19))
+    _, s20, _ = setup_scan_keys({}, det, sn.is_message_key, {("commcalc/x.py", "banner"): "stale on purpose"})
+    ok &= _ctl("N20 a stale key-ledger entry → RED", bool(s20))
+    new, _ = sn.neutralize({"rows": [{"note": "Run migration 071 first."}]})
+    ok &= _ctl("N21 a hint INSIDE a list outside a message key is left alone (data is never entered) — by design",
+               new["rows"][0]["note"] == "Run migration 071 first.")
+    print("  " + ("OK — the setup-internals lock holds." if ok else "FAIL — the setup-internals lock is open."))
     return ok
 
 

@@ -140,7 +140,7 @@ SURFACES = ("legacy", "catalog", "combined", "installment", "analyzer", "gp_map"
             "definition_confirmed", "definition_proposed")
 SURFACE_LABELS = {
     "legacy": "Accessory settings (department / category / product keywords)",
-    "catalog": "Product catalog category (migs 230/231)",
+    "catalog": "Product catalog category",
     "combined": "PAY BASIS — settings OR catalog (what commission rules read)",
     "installment": "Installment classifier (sale_installment_engine.classify_line)",
     "analyzer": "Sales Analyzer ('ondigo' or 'accessor' in department/category)",

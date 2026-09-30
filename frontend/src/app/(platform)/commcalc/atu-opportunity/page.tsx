@@ -15,6 +15,7 @@ import { atuActiveCarry } from '@/lib/carrier-scope'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
 import { MultiSelect } from '@/lib/multiselect'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // Same super-admin org-resolution mitigation the Sales and Custom reports carry: these reads send no
 // org_id, so a super-admin (whom the tenant middleware does not rewrite) would fall back to the HOUSE
@@ -150,7 +151,7 @@ export default function AtuOpportunityPage() {
           </div>
           {data && !data.table_present && (
             <div style={{ fontSize: 12, color: '#b45309', marginTop: 8 }}>
-              ⚠️ Showing built-in defaults — run migration <code>295_atu_opportunity_config.sql</code> to save your own.
+              ⚠️ <SetupNotice lead="Showing built-in defaults; saving your own is not available yet." detail="295_atu_opportunity_config.sql" />
             </div>
           )}
         </div>

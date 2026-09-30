@@ -5,6 +5,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // Attendance Exceptions (owner directive 2026-08-06, verbatim): "time clock should show who were
 // scheduled and didn't clock in and also if somebody else clocked in instead of the scheduled."
@@ -183,10 +184,9 @@ export default function AttendanceExceptionsPage() {
 
       {!available && (
         <div className="card" style={{ marginBottom: 12, padding: '8px 12px', fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)' }}>
-          ℹ️ Migration 421 hasn&apos;t run on this tenant yet — the thresholds below are the code
-          defaults (10 min late / 10 min early / 30 min no-show grace / 15 min coverage overlap /
-          label excused) and the report already works correctly on them; only the Save button on
-          Attendance Settings needs the migration.
+          ℹ️ The thresholds below are the built-in defaults (10 min late / 10 min early / 30 min no-show
+          grace / 15 min coverage overlap / label excused) and the report already works correctly on them;
+          only saving your own Attendance Settings is not available yet. <SetupNotice detail="421" />
         </div>
       )}
 

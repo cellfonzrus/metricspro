@@ -1640,10 +1640,10 @@ FAILURE_KIND_META = {
         "layman_meaning": ("An asset ledger upload worked, but used an older import method because a database "
                            "upgrade has not been applied. If an upload were interrupted midway it could leave "
                            "a partial ledger."),
-        "layman_fix": ("Run migration 300 (asset ledger staging-swap) in the Supabase SQL editor to enable "
-                       "the safer atomic upload. Until then, uploads still work but are not interruption-safe."),
-        "escalate_when": "Migration 300 has been run but this warning still appears on every upload.",
-        "code_hint": "asset/router _stage_and_swap_ledger; migration 300_asset_ledger_staging_swap.sql",
+        "layman_fix": ("The safer atomic upload is not switched on for this company yet — contact support to "
+                       "enable it. Until then, uploads still work but are not interruption-safe."),
+        "escalate_when": "The atomic upload has been switched on but this warning still appears on every upload.",
+        "code_hint": "asset/router _stage_and_swap_ledger (the staging-swap RPC)",
     },
     "other": {
         "label": "Other", "module": "admin", "severity": "warning",

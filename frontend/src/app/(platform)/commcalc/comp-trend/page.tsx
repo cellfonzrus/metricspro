@@ -246,7 +246,7 @@ export default function CompTrendPage() {
               <thead><tr style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Month</th>
                 <th style={{ textAlign: 'right', padding: '8px 12px' }}>Total Comp</th>
-                <th style={{ textAlign: 'right', padding: '8px 12px' }} title="From carrier_category_map (migration 038)">Commission</th>
+                <th style={{ textAlign: 'right', padding: '8px 12px' }} title="From the carrier category map">Commission</th>
                 <th style={{ textAlign: 'right', padding: '8px 12px' }}>SPIFF</th>
                 <th style={{ textAlign: 'right', padding: '8px 12px' }}>Reimb</th>
                 <th style={{ textAlign: 'right', padding: '8px 12px' }}>Residual (MI+ATU)</th>

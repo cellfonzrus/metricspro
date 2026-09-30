@@ -126,7 +126,7 @@ export default function ManagementIncentivePage() {
                 <div style={{ fontSize: 11, color: 'var(--text3)' }}>{p.level || '—'} · {(p.components || []).length} comp · {(p.bonuses || []).length} bonus</div>
               </div>
             ))}
-            {visiblePlans.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)' }}>No plans yet (has migration 852 run?).</div>}
+            {visiblePlans.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)' }}>No plans yet.</div>}
           </div>
 
           {!plan ? <div style={{ color: 'var(--text3)', fontSize: 13, paddingTop: 8 }}>Pick a plan to edit, or start a new one.</div> : (

@@ -1194,7 +1194,7 @@ async def run_weekly_notice(x_notify_secret: str = Header(default=""), eval_date
             results.append({"org_id": oid, "error": str(ex)[:200]})
             continue
         if not listing.get("ready"):
-            results.append({"org_id": oid, "skipped": "migration 431 not applied"})
+            results.append({"org_id": oid, "skipped": "hours approval is not switched on for this company"})
             continue
         pending = [r for r in listing["rows"] if r["dm_status"] == "pending"]
         if not pending:

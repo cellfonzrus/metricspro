@@ -9,6 +9,7 @@ import ShowsIn from '@/components/ShowsIn'
 import { useReportKinds } from '@/lib/report-kinds'
 import { useConnectors } from '@/lib/connectors'
 import type { ReportKindRow } from '@/lib/carrier-scope'
+import { SetupNotice } from '@/lib/setupNotice'
 
 const enc = encodeURIComponent
 
@@ -206,7 +207,7 @@ export default function UploadWizardPage() {
           ) : (
             <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
               Offered for {kinds.declaration?.pos?.length ? <>POS <b>{kinds.declaration.pos.join(' / ')}</b></> : 'no declared POS'} · {kinds.declaration?.carriers?.length ? <>carrier <b>{kinds.declaration.carriers.join(' / ')}</b></> : 'no declared carrier'}
-              {!kinds.ready && <> · registry table not applied yet — house defaults ({kinds.payload?.migration})</>}
+              {!kinds.ready && <> · house defaults (<SetupNotice detail={kinds.payload?.migration} />)</>}
               {kinds.withheld && <> · {kinds.withheld}</>}
             </div>
           )}

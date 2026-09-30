@@ -204,7 +204,7 @@ export default function FailureLogsPage() {
         <ReportExportBar title="Failure Logs" filename="failure_logs" columns={exportCols} rows={rows} />
       </div>
 
-      {err && <div className="card" style={{ padding: 14, color: '#dc2626' }}>{err}{(err.includes('112') || err.includes('716')) && ' — run migration 112 + 716 in Supabase.'}</div>}
+      {err && <div className="card" style={{ padding: 14, color: '#dc2626' }}>{err}</div>}
       {loading ? <div className="card" style={{ padding: 16 }}>Loading…</div> : groups.length === 0 ? (
         <div className="card" style={{ padding: 16, color: 'var(--text3)' }}>No {reviewedFilter === 'false' ? 'unreviewed ' : ''}failures. 🎉</div>
       ) : (

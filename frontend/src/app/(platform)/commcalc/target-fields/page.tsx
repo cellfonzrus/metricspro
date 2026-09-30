@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
+import { SetupNotice, setupFailed } from '@/lib/setupNotice'
 
 // Custom Target Fields (C-Phase2) — define the canonical fields a report's columns map onto, for ANY
 // report type. The built-in Boost reports (sales, comp_report, mi_report, payment_detail,
@@ -60,7 +61,7 @@ export default function TargetFieldsPage() {
       flash(`Added "${label}"`)
       setNf({ label: '', transform: 'text', required: false, default_source: '', aliases: '', sort_order: '100' })
       loadFields(reportKey)
-    } catch (e: any) { flash(e?.message || 'Save failed — is migration 070 applied?') }
+    } catch (e: any) { flash(e?.message || setupFailed('Save failed')) }
   }
   async function removeField(tf: string) {
     try {
@@ -88,8 +89,8 @@ export default function TargetFieldsPage() {
       </p>
       {!ready && (
         <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
-          Run migration <code>070_target_field_registry.sql</code> to save custom fields. Until then the
-          mapper uses the built-in defaults only.
+          Saving custom fields is not available yet — the mapper uses the built-in defaults only.{' '}
+          <SetupNotice detail="070_target_field_registry.sql" />
         </div>
       )}
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>{msg}</div>}

@@ -7,6 +7,7 @@ import { computePay, TAX_RATES, W4 } from '@/lib/payroll-tax'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
+import { setupFailed } from '@/lib/setupNotice'
 
 // Payroll with tax withholding (Part B / B3). Pulls raw inputs (clocked + manual hours, rate, W-4)
 // and computes FICA + federal + state withholding + net client-side. W-4 editable per employee; each
@@ -58,7 +59,7 @@ export default function PayrollTaxPage() {
   const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
 
   const load = useCallback(() => {
-    api(`/api/v1/storeops/payroll-raw?start=${start}&end=${end}`).then((r: any) => setRows(r?.rows || [])).catch((e: any) => setMsg('Load failed (run migration 045?): ' + (e?.message || e)))
+    api(`/api/v1/storeops/payroll-raw?start=${start}&end=${end}`).then((r: any) => setRows(r?.rows || [])).catch((e: any) => setMsg(setupFailed('Load failed: ' + (e?.message || e))))
   }, [start, end])
   // Wait for the pay-period default to resolve before the first fetch, so the page doesn't load the
   // rolling week and immediately reload the real period.

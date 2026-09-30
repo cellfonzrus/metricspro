@@ -23,6 +23,7 @@ import {
   buildConfigBody, changedKeys, csv, planLine, refusalOf, seedFromPreview,
   type PlanPreview, type Refused, type Seed, type SourceEdit,
 } from './plan-sources-logic'
+import { SetupNotice } from '@/lib/setupNotice'
 
 type Evidence = { state: string; count: number | null; reason: string }
 type Task = {
@@ -123,8 +124,8 @@ export default function PosOnboardingPage() {
       {status?.registry_source === 'shipped' && (
         <div style={{ background: '#f8fafc', border: '1px solid var(--border)', color: 'var(--text2)',
           borderRadius: 10, padding: '9px 14px', marginBottom: 14, fontSize: 12.5 }}>
-          Showing the standard checklist. Per-tenant customisation of these steps becomes available
-          once migration 733 is applied.
+          Showing the standard checklist. Customising these steps for your company is not available yet.
+          <SetupNotice detail="733" />
         </div>
       )}
 

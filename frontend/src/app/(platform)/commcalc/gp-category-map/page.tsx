@@ -1,6 +1,7 @@
 'use client'
 import { Fragment, useEffect, useState } from 'react'
 import { api } from '@/lib/client'
+import { SetupNotice, setupFailed } from '@/lib/setupNotice'
 
 // GP Category Map — assign each POS department to a Gross-Profit category so GP/P&L compute for ANY POS
 // taxonomy (not just Boost's). Defaults (when unmapped): device = Android/IPHONE/TABLET-XP (counted at
@@ -69,7 +70,7 @@ export default function GpCategoryMapPage() {
       setMsg(category ? `"${department || '(blank)'}" → ${category}` : `"${department || '(blank)'}" reverted to default`)
       load()  // re-pull so the computed default shows after a revert
     } catch (e: any) {
-      setMsg(e?.message || 'Save failed — is migration 069_gp_category_map.sql applied?')
+      setMsg(e?.message || setupFailed('Save failed'))
     }
     setTimeout(() => setMsg(''), 3500)
   }
@@ -104,7 +105,7 @@ export default function GpCategoryMapPage() {
       const r = await api('/api/v1/commcalc/gp-department-items?department=' + encodeURIComponent(dept))
       setItems(p => ({ ...p, [dept]: r?.items || [] }))
     } catch (e: any) {
-      setMsg(e?.message || 'Save failed — is migration 992_gp_item_category.sql applied?')
+      setMsg(e?.message || setupFailed('Save failed'))
     }
     setTimeout(() => setMsg(''), 3500)
   }
@@ -143,7 +144,7 @@ export default function GpCategoryMapPage() {
       </p>
       {!ready && (
         <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
-          Run migration <code>069_gp_category_map.sql</code> to save overrides. Until then the report uses the built-in defaults.
+          <SetupNotice lead="Saving overrides is not available yet — the report uses the built-in defaults." detail="069_gp_category_map.sql" />
         </div>
       )}
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>{msg}</div>}

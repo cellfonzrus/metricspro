@@ -5,6 +5,7 @@ import { ReportShell } from '@/components/ReportShell'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { useActiveCarrier } from '@/lib/auth-context'
+import { SetupNotice, setupFailed } from '@/lib/setupNotice'
 
 // MA Daily Tx — Product Name Classification.
 //
@@ -140,7 +141,7 @@ export default function MaProductClassPage() {
       })
       flash(`"${it.product_name}" → ${cls} (proposed — confirm it to make it count)`)
       loadNames(); if (tab === 'preview') loadPreview()
-    } catch (e: any) { flash(e?.message || 'Save failed — is migration 254 applied?') }
+    } catch (e: any) { flash(e?.message || setupFailed('Save failed')) }
   }
 
   async function confirm(items: Item[]) {
@@ -161,14 +162,14 @@ export default function MaProductClassPage() {
       flash(`Confirmed ${d?.confirmed_count ?? 0} name(s)${made ? ` (${made} newly saved)` : ''}`
         + (missed ? ` · ${missed} could not be confirmed — assign a class first: ${(d.not_found || []).slice(0, 3).join(', ')}` : ''))
       loadNames(); if (tab === 'preview') loadPreview()
-    } catch (e: any) { flash(e?.message || 'Confirm failed — is migration 254 applied?') }
+    } catch (e: any) { flash(e?.message || setupFailed('Confirm failed')) }
   }
 
   async function seed() {
     try {
       const d = await api('/api/v1/commcalc/ma-product-class/seed-proposals', { method: 'POST', body: JSON.stringify({}) })
       flash(`Seeded ${d?.inserted ?? 0} proposal(s) for this tenant.`); loadNames()
-    } catch (e: any) { flash(e?.message || 'Seed failed — is migration 254 applied?') }
+    } catch (e: any) { flash(e?.message || setupFailed('Seed failed')) }
   }
 
   // client-side narrowing (the server already applied period/store/rep)
@@ -285,8 +286,8 @@ export default function MaProductClassPage() {
 
       {!ready && (
         <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
-          Run migration <code>254_commission_ma_product_class.sql</code> to save, confirm and edit
-          classifications. Until then the page shows the built-in proposals read-only — nothing else breaks.
+          Saving, confirming and editing classifications is not available yet — the page shows the built-in
+          proposals read-only, and nothing else breaks. <SetupNotice detail="254_commission_ma_product_class.sql" />
         </div>
       )}
       {ready && builtin && (

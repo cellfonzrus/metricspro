@@ -19,6 +19,7 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { currentPeriodFromSettingsResponse, monthRange, rangeLabel, type PayPeriodSettings } from '../lib/pay-period'
+import { SetupNotice, setupFailed } from '@/lib/setupNotice'
 
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '8px', borderTop: '1px solid var(--border)', fontSize: 13, whiteSpace: 'nowrap' }
@@ -91,7 +92,7 @@ export default function SalaryAdvancesPage() {
     setLoading(true)
     api(`/api/v1/storeops/salary-owed?start=${filt.period}&end=${filt.periodTo}`)
       .then((r: any) => setOwed(Array.isArray(r?.employees) ? r.employees : []))
-      .catch((e: any) => { setOwed([]); setMsg('Load failed (run migration 419?): ' + (e?.message || e)) })
+      .catch((e: any) => { setOwed([]); setMsg(setupFailed('Load failed: ' + (e?.message || e))) })
       .finally(() => setLoading(false))
     api(`/api/v1/storeops/salary-advance/history?start=${filt.period}&end=${filt.periodTo}`)
       .then((r: any) => { setHistory(r?.items || []); setHistoryAvailable(r?.available !== false) })
@@ -269,8 +270,8 @@ export default function SalaryAdvancesPage() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : visibleOwed.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>
-          No clocked activity or salaried employees for {periodName}. (If this is unexpected, confirm
-          migration 419 has run — see the Salary Advances handoff.)
+          No clocked activity or salaried employees for {periodName}. (If this is unexpected, contact
+          support.)
         </div>
       ) : (
         <div className="card" style={{ overflowX: 'auto', marginBottom: 18 }}>
@@ -346,7 +347,7 @@ export default function SalaryAdvancesPage() {
           advances have outrun what they've actually earned.
         </p>
         {!addl?.available ? (
-          <div style={{ fontSize: 12, color: 'var(--text3)' }}>Not available yet (migration 419 pending).</div>
+          <div style={{ fontSize: 12, color: 'var(--text3)' }}><SetupNotice detail="419" /></div>
         ) : addl.cells.length === 0 ? (
           <div style={{ fontSize: 12, color: 'var(--text3)' }}>$0 — no employee's cash paid exceeds what they've earned.</div>
         ) : (

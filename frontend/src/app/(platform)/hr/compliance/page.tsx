@@ -5,6 +5,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
 import { apiUrl } from '@/lib/apiBase'
+import { SetupNotice } from '@/lib/setupNotice'
 
 // HR · Compliance Document Repository (item 5). A VIEW + bulk export over the SAME onboarding-docs
 // bucket and employee_onboarding rows the Documents board (mig 082) already tracks — not a second
@@ -206,7 +207,7 @@ export default function CompliancePage() {
       </p>
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>{msg}</div>}
       {!ready && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 14 }}>
-        {fetchError || 'Run migration 073_hr_onboarding.sql to activate onboarding before this repository has anything to show.'}
+        {fetchError || <SetupNotice lead="Onboarding is not switched on yet, so this repository has nothing to show." detail="073_hr_onboarding.sql" />}
       </div>}
 
       {/* Filter row — employee multi-select (pick, don't type) + the two independent date ranges.

@@ -536,7 +536,7 @@ export function OptionsSourceNote({ opts }: { opts: PlanOptions | null }) {
     <span style={{ fontSize: 11, color: 'var(--text3)' }}>
       Value suggestions come from this tenant’s own {src} ({w}
       {opts.facets?.combos_total ? ` · ${num(opts.facets.combos_total)} distinct line signatures` : ''}
-      {opts.bounded ? ' · partial scan — run migration 240 for the full set' : ''}).
+      {opts.bounded ? ' · partial scan' : ''}).
     </span>
   )
 }

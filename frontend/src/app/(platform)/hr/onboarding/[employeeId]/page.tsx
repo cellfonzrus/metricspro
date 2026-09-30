@@ -6,6 +6,7 @@ import { api, apiUpload } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import EntityPicker, { US_STATES } from '@/components/EntityPicker'
 import GoogleReviewsCard from '@/components/GoogleReviewsCard'
+import { SetupNotice, setupFailed } from '@/lib/setupNotice'
 
 // HR · Employee Onboarding — one new hire's checklist. HR verifies items, views/uploads documents, sets
 // the work state (so the right state tax form appears), and generates the credential-less QR a pre-start
@@ -85,7 +86,7 @@ export default function EmployeeOnboardingPage() {
   async function checkOrphans() {
     setOrphanBusy(true)
     try { const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/orphaned-files`); setOrphans(r?.orphaned || []) }
-    catch (e: any) { flash(e?.message || 'Could not check — is migration 402 applied?') }
+    catch (e: any) { flash(e?.message || setupFailed('Could not check')) }
     setOrphanBusy(false)
   }
   async function reattachOrphan(path: string, taskId: string) {
@@ -177,7 +178,7 @@ export default function EmployeeOnboardingPage() {
       const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/task/${t.id}/return`, { method: 'POST',
         body: JSON.stringify({ missing_fields: missing.split(',').map(s => s.trim()).filter(Boolean), reason, actor: user?.full_name || user?.email || 'HR' }) })
       flash(r.emailed ? '↩ Returned to the employee + emailed the list ✓' : '↩ Returned (no email on file — tell them to check the portal)'); load()
-    } catch (e: any) { flash(e?.message || 'Return failed — is migration 082 applied?') }
+    } catch (e: any) { flash(e?.message || setupFailed('Return failed')) }
   }
   async function viewSignature(t: Task) {
     try { const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/task/${t.id}/signature`); if (r?.url) window.open(r.url, '_blank') }
@@ -206,7 +207,7 @@ export default function EmployeeOnboardingPage() {
       const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/token`, { method: 'POST',
         body: JSON.stringify({ verify_kind: gen.kind, verify_value: gen.value, expires_days: gen.expires_days || undefined }) })
       setQr({ url: `${origin}${r.portal_path}`, expires: r.token_expires_at }); load()
-    } catch (e: any) { flash(e?.message || 'Could not generate — is migration 073 applied?') }
+    } catch (e: any) { flash(e?.message || setupFailed('Could not generate')) }
   }
   async function revokeToken() {
     try { await api(`/api/v1/hr/onboarding/employee/${employeeId}/token`, { method: 'DELETE' }); setQr(null); flash('Access link revoked'); load() }
@@ -227,7 +228,7 @@ export default function EmployeeOnboardingPage() {
       <GoogleReviewsCard employeeId={String(employeeId)} compact compactTitle="⭐ Google Reviews" />
 
       {d && !d.ready && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '10px 14px', fontSize: 13, margin: '10px 0' }}>
-        Run migration <b>073_hr_onboarding.sql</b> to activate onboarding.
+        <SetupNotice lead="Onboarding is not switched on yet." detail="073_hr_onboarding.sql" />
       </div>}
 
       {d?.ready && <>
@@ -294,7 +295,7 @@ export default function EmployeeOnboardingPage() {
                 <button style={{ ...btnP, background: '#059669' }} onClick={doProvision}>Provision & email credentials</button>
                 <button style={btn} onClick={() => setProv(null)}>Cancel</button>
               </div>
-              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>Creates the Supabase login, assigns the role, emails a temp password, and marks the hire Provisioned.</div>
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>Creates the login, assigns the role, emails a temp password, and marks the hire Provisioned.</div>
             </div>
           )}
           {inviteRes?.temp_password && <div style={{ marginTop: 10, fontSize: 12, background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46', borderRadius: 8, padding: '8px 10px' }}>
