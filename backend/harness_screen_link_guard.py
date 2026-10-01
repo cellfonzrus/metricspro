@@ -322,8 +322,31 @@ check("I7 …while hide and auto stay available to everyone (narrowing is a tena
       _LAB.count('<option value="hide">') >= 2 and _LAB.count('<option value="auto"') >= 2)
 check("I8 …and a non-super admin is told why, not left guessing",
       "reserved for the platform team" in _LAB)
-check("I9 POS-gated surfaces are listed from the SHARED registry, not a second copy",
-      "POS_GATED_SURFACES" in _LAB and "@/lib/carrier-scope" in _LAB)
+# I9 — RE-EXPRESSED 2026-10-01 (index §45). This used to assert that /admin/labels imported
+# `POS_GATED_SURFACES` from lib/carrier-scope and listed it, so a POS-gated SURFACE could not exist
+# without being re-grantable. It had been RED since the 2026-09-20 move to per-kind gating: the
+# surface list was never rendered (only an orphaned comment survived), and the registry's single
+# entry was a "legacy surface key" whose own `why` said it was superseded. The dead `posOK` /
+# `POS_GATED_SURFACES` pair was removed rather than given a UI, because its comment PROMISED that a
+# stored `pos:<surface>` override "still resolves through posOK unchanged" while nothing read it —
+# a lie in the registry is worse than a missing screen. (Zero `cap`-scope ui_label_override rows
+# exist in any org, so no stored override was relied on.)
+#
+# The OWNER'S RULE is unchanged and is what gets pinned now: a POS gate must come with a re-grant
+# path. Stated as the invariant rather than as one implementation of it, so it holds at whatever
+# level the gating lives — and goes RED the moment a surface-level gate comes back without a UI.
+_CS = read(os.path.join(FRONT, "lib", "carrier-scope.ts"))
+_cs_code = re.sub(r"(?m)^\s*(//|\*|/\*).*$", "", _CS)          # comments stripped: prose may NAME the removed pair
+check("I9 no POS gate exists at the SURFACE level — the one that had no re-grant UI",
+      "posOK(" not in _cs_code and "POS_GATED_SURFACES" not in _cs_code)
+check("I9b …and no page calls one (a new surface gate must bring its own re-grant screen)",
+      not any("posOK(" in read(os.path.join(dp, f))
+              for dp, _dn, fns in os.walk(FRONT) for f in fns
+              if f.endswith((".ts", ".tsx")) and f != "carrier-scope.ts"))
+check("I9c the LIVE POS gate (per report-kind row) IS re-grantable on the admin screen",
+      "gatedKinds" in _LAB and "applies_to_pos" in _LAB and "'kind'" in _LAB)
+check("I9d …listing every gated row from the SHARED registry hook, not a second copy",
+      "useReportKinds" in _LAB and "all_keys" in _LAB)
 check("I10 the override reuses the existing store and endpoint — no second mechanism",
       "/api/v1/commcalc/nav-labels" in _LAB and "scope: 'cap'" in _LAB)
 
