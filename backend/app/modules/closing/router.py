@@ -1144,18 +1144,14 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
     # -> a sharper, more actionable honest-empty message on the money_recon note below.
     x_report_ever = any(v == "x_report" for v in _leg_by_store.values())
     if not x_report_ever:
-        # ORG-LEVEL ("has this tenant EVER had an X-report"), so it rides org_ctx — one probe per
-        # request, not one per date (owner 2026-10-01). `x_report_any` absent from an older-shaped ctx
-        # falls back to the probe here, byte-identical.
-        if "x_report_any" in org_ctx:
-            x_report_ever = bool(org_ctx.get("x_report_any"))
-        else:
-            try:
-                x_report_ever = bool((client.schema("commcalc").table("pos_tender_summary")
-                                      .select("close_date").eq("org_id", org_id)
-                                      .limit(1).execute().data) or [])
-            except Exception:
-                x_report_ever = False
+        # ORG-LEVEL ("has this tenant EVER had an X-report"), so it rides org_ctx — ONE presence probe
+        # per request, not one per date (owner 2026-10-01). No local fallback on purpose: org_ctx is
+        # ALWAYS built by _closing_summary_org_ctx — either passed by closing_summary or built inline
+        # above when omitted — so the key is always present, and a second reader here would be a
+        # SECOND reader of pos_tender_summary. harness_tender_vocab_lock names exactly one non-split
+        # reader of that table per function, and that name is now the org context (it moved with the
+        # probe, it was not added beside it).
+        x_report_ever = bool(org_ctx.get("x_report_any"))
 
     # Verifications for that day.
     vers = (client.schema("commcalc").table("daily_closing_verification").select("*")
