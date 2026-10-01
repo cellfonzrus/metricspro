@@ -125,6 +125,11 @@ def default_config():
     All switches OFF ⇒ byte-identical to the pre-314 books for every tenant."""
     return {
         "store_attribution": False,
+        # mig 1033 — the raw_mi residual's STORE GRAIN (owner 2026-10-01). False (here and on any
+        # pre-1033 DB) reproduces the pre-1033 books byte-identically: every MI/ATU residual dollar
+        # books company-wide, as it has since the first statement. See
+        # `residual_subs.mi_pnl_bookings`.
+        "mi_store_attribution": False,
         "month_spiff_source": "commission_sheet",
         "spiff_order_types": list(_SPIFF_ORDER_TYPES_DEFAULT),
         "mdf_product_tokens": [],
@@ -153,6 +158,7 @@ PL_CONFIG_COLUMNS = (
     ("pl_rebate_presentation", "934_pl_rebate_presentation.sql"),
     ("pl_device_margin_presentation", "996_pl_device_margin_presentation.sql"),
     ("pl_commission_source", "1013_pl_commission_source.sql"),
+    ("pl_mi_store_attribution", "1033_pl_mi_store_attribution.sql"),
 )
 PL_CONFIG_MIGRATION = dict(PL_CONFIG_COLUMNS)
 
@@ -212,6 +218,10 @@ def load_config(client, org_id):
             cs = str(r.get("pl_commission_source") or "").strip().lower()
             if cs in COMMISSION_SOURCES:
                 cfg["commission_source"] = cs
+            # mig 1033 — the raw_mi residual's store grain. A non-boolean keeps the default (OFF),
+            # so a typo can never silently re-grain a booked statement.
+            if isinstance(r.get("pl_mi_store_attribution"), bool):
+                cfg["mi_store_attribution"] = r["pl_mi_store_attribution"]
     except Exception:
         pass
     return cfg

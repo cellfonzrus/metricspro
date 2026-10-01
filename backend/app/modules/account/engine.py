@@ -293,8 +293,13 @@ def _journal_for_scope(journal, scope_key, stores_in_scope):
 def _notes(scope_key, include_cw):
     n = []
     if not include_cw:
-        n.append("Company-wide income (MI/ATU residual, carrier incentives without a matching store) "
-                 "is shown only in the Consolidated view.")
+        # Mig 1033 (owner 2026-10-01): this note used to NAME "MI/ATU residual" as company-wide by
+        # nature. It never was — raw_mi carries the dealer door on every row; coa simply did not
+        # read it. The note is now generic over WHATEVER a scope could not place, so it stays true
+        # whether or not an org has turned residual store attribution on.
+        n.append("Income whose source carries no store we can place (carrier incentives without a "
+                 "matching store, an unmapped dealer door, unattributed manual entries) is shown "
+                 "only in the Consolidated view.")
     n.append("Cash, fixtures and owner capital are MANUAL — enter them in the Journal. Wages = "
              "StoreOps payroll (shifts × pay rate); rep commissions, sales, VIP, reimbursements, "
              "store expenses and wages are automatic.")
