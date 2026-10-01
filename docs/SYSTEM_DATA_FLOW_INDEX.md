@@ -5400,7 +5400,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /commcalc/setup-fee/impact/{period}` | `commcalc/router.py` (`setup_fee_impact`) → `commission_engine.preview` twice | §6a — per-rep dollars at a hypothetical percentage. READ-ONLY; no default percentage, so it can never quote a rate nobody entered |
 | `GET /report-labels` (resolved carrier-aware report column labels + banner on/off + VOCABULARY TERMS per carrier: tenant override > house carrier preset (migs 945/953) > built-in/neutral; **the `pos_system` term is the POS name every page prints — `usePosTerm()` / `pickPosTerm` (§26.10)**; consumed by Exec MTD + Activations headers/exports, the `unrecognized_ct_recon` banner gate, and the closing surfaces' processor/financing labels), `PUT /report-labels` (tenant overrides only, registry-validated keys incl. `terms`, ''=revert-to-inheritance; `classification` settings gate) | `commcalc/router.py` (`get_report_labels`/`put_report_labels` → `report_labels.py`, beside `/accessory-config`) | §3 carrier column labels + vocabulary terms |
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
-| `GET /closing/envelope-report`, `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`); `notify/closing_reports.py` | §12 Envelope report |
+| `GET /closing/envelope-report` (**Management Envelope Receipt**; `basis=` picks the cash — see §47), `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`, `_carrier_term`); pure: `closing/envelope_report.py` (`normalize_envelope_basis`, `expected_cash`, `basis_label`, `basis_options`); names: `core/actors.py`; `notify/closing_reports.py` | §12 Envelope report, §47 |
 | `GET /closing/external-credit-recon` (CARD SETTLEMENT RECON — declared closing card figures, incl. the external credit machine, vs each processor's scraped daily settlement; RULE FIVE filters + `role`/`status`; GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403, plus the manager keyset); W3 report key `closing_external_credit_recon` | `closing/router.py` (`external_credit_recon`; feed resolution `_settlement_feed_spec`/`_settlement_rows_for_days` through mig-207 `report_pull_map`, tolerance `_settlement_tolerance` through mig-923 `metric_source_of_truth`); pure `closing/external_credit_recon.py`; `notify/closing_reports.py` | §12 external credit machine + card settlement recon |
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
 | `GET /closing/billpay-pickups` (envelopes carry `credit` = declared bill-pay-on-card + `total_credit`, mig `944`; POS comparison base = declared cash+credit; `market=` resolves via the shared `_resolve_market_filter` — comma-joined multi-market grants match per-component, 2026-09-02 DM-envelopes fix, same as `GET /closing/pickups`), `POST /closing/billpay-pickup` (+`/undo`, `/deposit`), `GET/PUT /closing/billpay-pickup-config` (mig `942` — the cash-pickup machinery, parameterized, on the sibling `billpay_pickup` table) | `closing/router.py` (`billpay_pickups`/`billpay_confirm_pickup`/`billpay_undo_pickup`/`billpay_record_deposit`; core `_billpay_position_core`, pure `closing/billpay_pickup.py`) | §12 Bill Payment Pickup / §12 3-way recon / §12 multi-market-grant filter |
@@ -14546,3 +14546,185 @@ Fails the build when: the cap drops below a full calendar month; it drifts from 
 `org_ctx` stops supplying `pos_term` / `x_report_any`; the per-date function calls `_pos_term` anywhere
 but the ctx fallback; **an org-level (non-date-scoped) query appears in the per-date loop**; or the
 genuinely date-scoped reads are lost (the hoist going too far). Each rule carries an armed control.
+
+## 47. MANAGEMENT ENVELOPE RECEIPT — which cash, and who counted (owner 2026-10-01)
+
+Two owner asks, same day: *"Management Envelope Receipt should have both reports epay and store cash,
+use a radio button or select box to choose"* and *"yes include countedby"*.
+
+### 47.1 The basis selector — dereferenced, not a new formula
+
+"The cash figure a basis reconciles against" already had **one home**, `deposit_recon.cash_for_basis`.
+`envelope_report.expected_cash` now **dereferences** it instead of keeping its own `t_cash or
+store_cash` rule, so the receipt and the deposit recon can never disagree about what a basis means.
+
+| basis | formula | what it answers |
+|---|---|---|
+| `total_cash` *(default)* | `t_cash` | the whole drawer — **byte-identical to the pre-selector report** |
+| `store_cash` | `max(t_cash − epay_on_cash, 0)` | register cash, bill payments excluded |
+| `bill_payment_cash` | `epay_on_cash` | the ePay cash only |
+
+`manual` is deliberately **not** offered: it has no formula and `cash_for_basis` returns `0.0` for it.
+For the same reason `normalize_envelope_basis` folds an unrecognised basis to the **default**, not to
+deposit_recon's `manual` — which would render an entire receipt as zeros and read like a store that took
+no cash.
+
+**On the owner's own rows.** B-559 2026-09-06 (`t_cash` 100, `epay_on_cash` 100) → **100 / 0 / 100**:
+the answer to *"store cash 100 and epay 100, so is it 200?"* is that it was never 200, and store-cash-net
+is 0. B-559 2026-09-07 (`t_cash` 1002, `epay_on_cash` 230) → store_cash **772**, which is exactly the
+equip/acc figure the DM collected, and the three bases reconcile (`store + billpay == total`).
+
+| fact | home | callers |
+|---|---|---|
+| the basis formulas | `deposit_recon.cash_for_basis` | `envelope_report.expected_cash` |
+| which bases the receipt offers, and their wording | `envelope_report.ENVELOPE_BASES` / `ENVELOPE_BASIS_LABELS` (the bill-payment label carries a `{processor}` slot, **never a carrier brand** — see §47.6) | `envelope_report.basis_options()` builds the list; the endpoint serves it; **the screen spells no basis key and no basis label** |
+| the short/over math | `envelope_report.count_fields` (unchanged) | follows whatever basis set `declared_cash` |
+
+Every line also reports `declared_total_cash` and `declared_billpay_cash` beside the figure, so *"why is
+this 0?"* is answerable on screen.
+
+### 47.2 counted_by — the real actor, shown as a person
+
+`counted_by` was the literal string `"management"`: the row recorded **that** management counted and
+never **who**, while the pickup side named the person. It now carries the signed-in actor from the one
+home `_caller_uid` (§19.34) — a canonical UUID, or **NULL** when none resolves (RBAC off, automation, an
+agent). Never a sentinel. A prior count's actor survives a save that cannot resolve one, so an
+automation re-count does not erase the person who counted first. `_caller_uid` is **imported**, not
+re-implemented: `harness_actor_uid_lock` fails a second copy, and calling `_uid_from_token` directly *is*
+the re-implementation it names. (That home arguably belongs in `app/core/` rather than the commcalc
+router — noted, not moved.)
+
+**THE GAP §19.34 LEFT, now closed.** §19.34 made actor storage correct but gave nobody a way to
+**display** it: every surface renders the raw value through `frontend/src/lib/actor.ts::actorLabel`,
+which maps NULL/`web` to "system" and otherwise returns the string unchanged — so actor columns show a
+**raw UUID** (`/commcalc/daily-commission` "Recorded by", `plan-installments` "by …", `ingest-guard`,
+`commission-discrepancy`). The mapping was never missing from the data; `storeops.app_users` carries
+`auth_id`/`full_name`/`email` and was simply never joined.
+
+| fact | home | callers |
+|---|---|---|
+| uid → person | **`app/core/actors.py`** `actor_names(uids, org_id)` / `name_for` — one batched, **org-scoped**, name-only, best-effort read | the receipt endpoint (`counted_by_name`); available to every other actor surface still showing a UUID |
+
+Posture: a failed read returns `{}` and the screen falls back to what it showed before — a display
+helper never breaks a money report. An unresolved uid is **absent** from the map, never a guess.
+
+### 47.3 Lock
+
+`backend/harness_envelope_receipt_basis.py` — **52 checks**, stdlib, DB-free, run by
+`carrier-vocab-guard`. Fails the build on: a second basis formula; a basis key or label spelled on the
+screen or in the router; the default drifting off the historical figure; an unknown basis folding to
+`manual`; the legacy `store_cash` fallback being lost; the count math leaving `count_fields`;
+`counted_by` carrying a sentinel again or not using the one home; a second uid→name resolver;
+`core.actors` reading a column it has no business reading, dropping its org scope, or raising. Each rule
+carries an armed control.
+
+Two of its rules had to learn **code from prose** — this change's own comments legitimately name the
+retired sentinel and the basis keys while explaining them, so the "must not appear" rules strip comments
+first (the same posture as `harness_screen_link_guard`'s `_CC`). A third caught a real bug in the
+harness: bounding a function body at the first blank line lands *inside the docstring* and truncated the
+very call the rule existed to find.
+
+### 47.4 Still open — the cash-pickup false shortage (reported, NOT fixed here)
+
+The owner's worked example, same day: 559 Broadway / Radhika, declared cash **$1,002.00**, equip/acc
+**$772.00**, DM opened the envelope and recorded **772**, and the row read **−$230.00 short** — *"but
+really it is not short as the rest of the cash is decalred in epay pick up"*.
+
+**Proven against the live row** (B-559 2026-09-07: `t_cash` 1002, `epay_on_cash` 230): the DM's
+`actual_picked_amount` is compared in `pickup_actual.row_variance` against the pickup's `amount`
+snapshot — **the whole drawer** — while the DM only ever collects the equip/acc portion, because bill-pay
+cash is collected on the ePay pickup. So the shortage equals **exactly −`epay_on_cash`**, and against the
+`store_cash` basis the variance is **0.00**. Every store that takes bill-pay cash shows a false shortage
+equal to its ePay cash.
+
+Not fixed in this change because the remedy is a **money-affecting** choice that is the owner's:
+`cash_pickup_config.pickup_nets_pos_billpay_cash` (currently **false** for the house org) is the designed
+knob for exactly this split-envelope operating model, and turning it on would net bill-pay out of the
+envelope so the variance reads 0. But it must not be flipped alone — see §47.5.
+
+### 47.5 Still open — the POS bill-pay figure is fetched and discarded
+
+`closing/router.py` fetches the POS bill-pay figure with an explicit comment that it is needed
+*"whether or not NETTING is on, because the equipment/accessory column below needs it either way …
+the split should come from the POS, not the employee's declaration"* — and then gates its **use** on
+`_net_on`:
+
+```python
+_pos_bp = None
+if _net_on and _bp_cash:        # ← gated on the netting knob
+```
+
+With the knob off (the house org), the POS figure is fetched at full cost and **thrown away**, so the
+equipment/accessory split silently falls back to the rep's own declaration — the one thing that comment
+says it must not use. A second path in the same lines: when POS reports bill-pay **0** for a store-day,
+`billpay_used` becomes 0 and equip/acc jumps to the full drawer — a genuine double-count — because
+*POS-says-zero* is not distinguished from *POS-has-no-figure*. That second one needs the knob on, so it
+is not biting yet, which is precisely why §47.4's knob must not be flipped before this is fixed.
+
+### 47.6 The basis label names the tenant's OWN processor — resolved, never spelled (2026-10-01)
+
+The first cut of the basis selector wrote the brand straight into the label —
+`"Bill payments (ePay) cash only"` — in **two** places: the pure module's
+`ENVELOPE_BASIS_LABELS` (served to every tenant over the API) and two sentences of page copy. That is
+the cross-side vocabulary defect `harness_carrier_vocab_guard.py` exists to stop: a Total-side reader
+would have been told their drawer held *"Bill payments (ePay)"*.
+
+**One home, dereferenced.** "What this tenant calls its bill-payment processor" is the report_labels
+`processor` term (mig 953 — Boost preset `ePay`, Total preset `VidaPay`, registry neutral noun
+*"payment processor"*). The label now carries a `{processor}` **slot**:
+
+| where | what it holds |
+|---|---|
+| `closing/envelope_report.py` · `ENVELOPE_BASIS_LABELS` | `"Bill payments ({processor}) cash only"` — a slot, no brand |
+| `closing/envelope_report.py` · `ENVELOPE_BASIS_TERM_KEY` | `"processor"` — the registry's own key, not a new one |
+| `closing/envelope_report.py` · `basis_label(basis, processor_term="")` | PURE: fills the slot; **empty → the parenthetical is removed**, never a raw `{processor}` and never a guessed brand |
+| `closing/envelope_report.py` · `basis_options(processor_term="")` | PURE: the `[{key,label}]` the selector renders, so the screen spells no key and no label |
+| `closing/router.py` · `_carrier_term(client, org_id, key)` | the I/O wrapper — sibling of `_pos_term`, delegates to `report_labels.carrier_term`, degrades to the NEUTRAL noun and never to another carrier's word |
+
+**Lock:** `harness_envelope_receipt_basis.py` — now **67** checks. The brand list is *derived from the
+mig-953 seed rows*, not hardcoded, and the rules fail the build if any seeded brand appears in the
+pure module's labels or on the page, if the slot survives unfilled, if the endpoint goes back to
+indexing the label dict, or if `_carrier_term` stops dereferencing `report_labels.carrier_term`. Each
+is armed with the shipped defect as its control.
+
+### 47.7 Why the guard did not catch it — emphasis was being read as code (2026-10-01)
+
+One of the two brand sentences had already shipped to `main` through a green
+`harness_carrier_vocab_guard.py`. The scanner's fault, not a gap in the rules:
+
+- `jsx_prose_line` **discarded** any line containing `< > = ; ' " \``. That is right for code and wrong
+  for the commonest shape of real paragraph copy — a sentence that bolds or italicises one word. The
+  shipped line held `<i>inside</i>`, so it was thrown away unread.
+- `display_segments`' `>text<` pattern then matched only the word *inside* the tag.
+- And the **cross-side carrier scan called `display_segments` alone** — it never looked at JSX prose at
+  all, so the one scan whose whole job is brands had the weakest reading of "display copy" of the three.
+
+**The class fixed, not the instance.** `display_copy(rel, line)` is now THE one answer to *"is this
+display copy?"* and all three scans (carrier, POS, setup-internals) dereference it — E8 fails the build
+if the count of callers drops. `jsx_prose_line` **strips inline emphasis tags and HTML entities and then
+applies the prose test**, so the line is read instead of discarded; E4 keeps genuine code out.
+
+**What the widened reading surfaced:** 1,262 previously-invisible prose lines across 519 frontend files
+— **0** new carrier hits, **0** new POS hits, and **11 real pre-existing §19.36 defects**: tenant-facing
+sentences naming a migration (*"ℹ️ Migration 421 hasnt run on this tenant yet"*) in
+`admin/carrier-documents`, `admin/training`, `admin/whats-new`, `commcalc/accessory-definition`,
+`commcalc/commission-category-map`, `commcalc/commission-ledger`, `commcalc/commission-plans`,
+`commcalc/ma-class-wiring`, `storeops/attendance` and `storeops/timeclock` (×2).
+
+Those 11 are **debt, not an excusal** — `SETUP_PROSE_DEBT` pins them by exact count per file and prints
+them as `DEBT` on every run. `SETUP_SUPER_ADMIN_PAGES` means *"only a platform admin can read this, so
+the detail is allowed"*; these are **tenant** pages, so that list would have been the wrong home and
+using it would have been hiding the defect. The pin is a ratchet: a new one anywhere fails the build,
+and **fixing one also fails the build until the pin is lowered**, so the list can only ever shrink to
+`{}`. The remedy for each is the one the N3 control already proves green — render the tenant sentence
+through `lib/setupNotice.tsx` and let the super-admin detail ride `<SetupNotice detail=…/>`.
+
+**The backend twin of this hole is open, and is NOT fixed here.** `harness_carrier_vocab_guard.py`
+scans backend sources for **POS vendor** names only — the cross-side **carrier** scan is frontend-only.
+An AST pass over `backend/app/modules` finds **81 string literals** (docstrings excluded, sentence-like
+text only) spelling `ePay` or `VidaPay`, a mix of log lines and genuine reader-facing labels:
+`'ePay service charge (fee income)'` (`account/coa.py`), `'Commission received (ePay Payment Detail)'`
+(`commcalc/gp_report.py`), `'No marketplace orders yet — run the VidaPay report pull…'`
+(`asset/router.py`). Some are chart-of-accounts names that may be deliberate house data and some are
+copy that should resolve through `report_labels.carrier_term`; separating the two is a judgement call per
+site, not a sweep, so it is **reported, not touched**. Deciding it needs the owner.

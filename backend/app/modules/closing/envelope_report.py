@@ -63,12 +63,91 @@ def _f(v):
         return 0.0
 
 
-def expected_cash(closing_row):
-    """The cash this envelope SHOULD hold: the row's declared cash — `t_cash` (canonical tender
-    column) falling back to legacy `store_cash`, the SAME rule _cash_position_core applies."""
+# ── WHICH CASH THIS RECEIPT IS COUNTING (owner 2026-10-01) ────────────────────────────────────────
+# Owner: "Management Envelope Receipt should have both reports epay and store cash, use a radio button
+# or select box to choose."
+#
+# THE VOCABULARY IS NOT NEW AND IS NOT COPIED. "The cash figure a basis reconciles against" already has
+# ONE home — `deposit_recon.cash_for_basis` — with exactly these three formulas (plus 'manual', which
+# has no formula and is not offered here):
+#     total_cash        = t_cash                      the whole drawer  (TODAY'S behaviour, the default)
+#     store_cash        = max(t_cash - epay_on_cash, 0)   register cash, bill-pay excluded
+#     bill_payment_cash = epay_on_cash                the bill-payment (ePay) cash only
+# `expected_cash` now DEREFERENCES that function instead of keeping its own rule, so the receipt and the
+# deposit recon can never disagree about what a basis means.
+ENVELOPE_BASES = ("total_cash", "store_cash", "bill_payment_cash")
+ENVELOPE_BASIS_DEFAULT = "total_cash"
+
+# THE PROCESSOR'S NAME IS NOT SPELLED HERE (harness_carrier_vocab_guard, owner directive 2026-09-04).
+# "What this tenant calls its bill-payment processor" already has ONE home — the report_labels
+# `processor` term (mig 953: Boost preset 'ePay', Total preset 'VidaPay', registry neutral noun
+# "payment processor"). The first cut of this selector wrote 'ePay' straight into the label, which is
+# the cross-side vocabulary defect the guard exists to catch: a Total-side reader would have been told
+# their drawer held "Bill payments (ePay)". So the label carries a {processor} SLOT and
+# `basis_options()` fills it from the resolved term — and when nothing resolves, the slot is dropped
+# rather than guessed, because a missing word is honest and another carrier's brand is not.
+ENVELOPE_BASIS_TERM_KEY = "processor"
+# Human labels for the selector — the ONE place they are worded, so the API and the screen agree.
+ENVELOPE_BASIS_LABELS = {
+    "total_cash": "Total cash (whole drawer, incl. bill payments)",
+    "store_cash": "Store cash (bill payments excluded)",
+    "bill_payment_cash": "Bill payments ({processor}) cash only",
+}
+
+
+def basis_label(basis, processor_term=""):
+    """PURE: the label for one basis, with the tenant's own word for the bill-payment processor.
+
+    `processor_term` is `report_labels.carrier_term(client, org_id, ENVELOPE_BASIS_TERM_KEY)`. Empty or
+    blank -> the parenthetical is REMOVED, never filled with a brand or left as a raw '{processor}'.
+    """
+    tpl = ENVELOPE_BASIS_LABELS[normalize_envelope_basis(basis)]
+    if "{processor}" not in tpl:
+        return tpl
+    t = str(processor_term or "").strip()
+    return tpl.replace("{processor}", t) if t else tpl.replace(" ({processor})", "")
+
+
+def basis_options(processor_term=""):
+    """PURE: the [{key, label}] list the selector renders, in ENVELOPE_BASES order.
+
+    Built here rather than in the endpoint so the screen spells no basis key and no basis label, and
+    so there is exactly one place that turns a basis into words.
+    """
+    return [{"key": b, "label": basis_label(b, processor_term)} for b in ENVELOPE_BASES]
+
+
+def normalize_envelope_basis(b):
+    """One of ENVELOPE_BASES, defaulting to total_cash.
+
+    Deliberately NOT deposit_recon._normalize_basis: that one folds an unknown word to 'manual', whose
+    cash_for_basis value is 0.0 — so a typo'd basis would render an entire receipt as zeros and look
+    like a store that took no cash. Here an unrecognised basis falls back to the DEFAULT (what the
+    report showed before a selector existed), which is the honest degrade.
+    """
+    b = str(b or "").strip().lower()
+    return b if b in ENVELOPE_BASES else ENVELOPE_BASIS_DEFAULT
+
+
+def declared_total_cash(closing_row):
+    """The row's whole declared drawer: `t_cash` (canonical tender column) falling back to legacy
+    `store_cash`, the SAME rule _cash_position_core applies. Kept as its own function because the
+    legacy fallback is a property of the ROW, not of any basis."""
     r = closing_row or {}
     v = _f(r.get("t_cash"))
     return v if v else _f(r.get("store_cash"))
+
+
+def expected_cash(closing_row, basis=ENVELOPE_BASIS_DEFAULT):
+    """The cash this envelope SHOULD hold on `basis` — via deposit_recon.cash_for_basis, the one home.
+
+    basis='total_cash' (the default) is BYTE-IDENTICAL to this function before the selector existed, so
+    every existing caller and every stored count keeps its meaning.
+    """
+    from . import deposit_recon          # function-level: keeps this module's import list empty
+    r = closing_row or {}
+    return deposit_recon.cash_for_basis(declared_total_cash(r), _f(r.get("epay_on_cash")),
+                                        normalize_envelope_basis(basis))
 
 
 def count_fields(expected, counted, tolerance=0.0):
@@ -117,9 +196,15 @@ def chargeback_parent_row(org_id, closing_row, employee_id, employee_name, amoun
     }
 
 
-def report_row(closing_row, count_row, chargeback, ver_row, market):
+def report_row(closing_row, count_row, chargeback, ver_row, market,
+               basis=ENVELOPE_BASIS_DEFAULT):
     """PURE: one envelope-report line — the closing row's identity + declared money + envelope
-    photo ref, the management count (when one exists), and the linked chargeback status."""
+    photo ref, the management count (when one exists), and the linked chargeback status.
+
+    `basis` (owner 2026-10-01) picks WHICH cash the line is about — see ENVELOPE_BASES. It changes
+    `declared_cash` only; the two components are always reported beside it so a counter can see why
+    the figure is what it is, and the short/over math stays in `count_fields` (one place).
+    """
     r = closing_row or {}
     c = count_row or {}
     cb = chargeback or {}
@@ -132,7 +217,11 @@ def report_row(closing_row, count_row, chargeback, ver_row, market):
         "store_address": r.get("store_address") or r.get("store_name") or r.get("store_code"),
         "market": market or "(no market)",
         "employee_name": r.get("employee_name"),
-        "declared_cash": expected_cash(r),
+        "declared_cash": expected_cash(r, basis),
+        # The two components, always, whatever the basis — so "why is this 0?" is answerable on screen.
+        "basis": normalize_envelope_basis(basis),
+        "declared_total_cash": declared_total_cash(r),
+        "declared_billpay_cash": _f(r.get("epay_on_cash")),
         "envelope_picture": r.get("envelope_picture"),
         "remarks": r.get("remarks"),
         "dm_verified": bool(v.get("verified")),

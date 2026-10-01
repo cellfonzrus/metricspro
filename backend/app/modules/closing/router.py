@@ -4514,7 +4514,8 @@ def decide_missed_dm_verify(payload: DecideMissedDmVerifyIn, authorization: str 
 @router.get("/envelope-report")
 def envelope_report(date_from: str = None, date_to: str = None,
                     market: str = None, markets: str = None, stores: str = None, reps: str = None,
-                    status: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+                    status: str = "", basis: str = "",
+                    authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Every envelope (= daily_closing row) in [date_from, date_to] (defaults to the current
     month), with the management count / over-short / comment / chargeback state joined on. RULE
     FIVE standard filters (date range + markets/stores/reps, bucket-aware market matching) +
@@ -4599,16 +4600,35 @@ def envelope_report(date_from: str = None, date_to: str = None,
         except Exception:
             vers = {}
 
+    # WHICH CASH this receipt is counting (owner 2026-10-01). Normalized ONCE here through the pure
+    # module, so every row and the totals share one answer, and an unrecognised value degrades to the
+    # historical default rather than to deposit_recon's 'manual' (which would render the whole report
+    # as zeros — see normalize_envelope_basis).
+    _basis = envelope_report_mod.normalize_envelope_basis(basis)
     out = []
     for r in rows:
         c = counts_by_row.get(r.get("id"))
         cb = cb_by_id.get((c or {}).get("chargeback_id"))
         v = vers.get((r.get("store_code"), str(r.get("close_date") or "")[:10]))
-        line = envelope_report_mod.report_row(r, c, cb, v, market_by_code.get(r.get("store_code")))
+        line = envelope_report_mod.report_row(r, c, cb, v, market_by_code.get(r.get("store_code")),
+                                             basis=_basis)
         line["envelope_view_url"] = (f"/api/v1/closing/envelope-view?row_id={r.get('id')}&org_id={org_id}"
                                      if r.get("envelope_picture") else None)
         out.append(line)
     out = envelope_report_mod.status_filter(out, status)
+    # WHO COUNTED, as a NAME (owner 2026-10-01: "with dates and by who"). `counted_by` stores the actor
+    # UUID (§19.34 — never a sentinel), and until now every surface rendered that raw through
+    # actorLabel, i.e. showed a UUID. core.actors is the ONE join that turns it into a person; it is
+    # best-effort, so a failed read leaves `counted_by_name` absent and the screen falls back to what it
+    # showed before. Resolved in ONE batched read for the whole page, not per row.
+    try:
+        from app.core import actors as _actors
+        _names = _actors.actor_names([l.get("counted_by") for l in out], org_id, client=client)
+        for l in out:
+            if l.get("counted_by"):
+                l["counted_by_name"] = _actors.name_for(l.get("counted_by"), _names)
+    except Exception as _ae:
+        print(f"WARN envelope receipt counted-by names unavailable: {_ae}")
     # `by_employee` is the SAME rows rolled up per person (owner 2026-09-26, "report by user") — the
     # accountability view over a date range, where `rows` answers one store-day at a time. Computed
     # AFTER status_filter so the rollup describes exactly what the screen is showing, and derived by
@@ -4616,6 +4636,14 @@ def envelope_report(date_from: str = None, date_to: str = None,
     return {"rows": out, "totals": envelope_report_mod.totals(out),
             "by_employee": envelope_report_mod.by_employee(out),
             "date_from": date_from, "date_to": date_to,
+            # The selector's own vocabulary, served from the pure module so the screen never hardcodes
+            # a basis word or a label (owner 2026-10-01).
+            "basis": _basis,
+            # The bill-payment basis names the tenant's OWN processor ('ePay' on the Boost side,
+            # 'VidaPay' on the Total side, the neutral noun when neither is declared) — resolved from
+            # the report_labels `processor` term, never spelled in code or in page copy.
+            "basis_options": envelope_report_mod.basis_options(
+                _carrier_term(client, org_id, envelope_report_mod.ENVELOPE_BASIS_TERM_KEY)),
             "market_filter_skipped": market_filter_skipped,
             "can_decide": _can_mgmt_review(_caller_perms(client, authorization))}
 
@@ -4630,7 +4658,8 @@ class EnvelopeCountIn(LaxModel):
 
 
 @router.post("/envelope-count")
-def save_envelope_count(payload: EnvelopeCountIn, org_id: str = ORG_ID):
+def save_envelope_count(payload: EnvelopeCountIn, org_id: str = ORG_ID,
+                        authorization: str = Header(default="")):
     """Record the management count for ONE envelope: counted cash → variance + short/over/match,
     comment, and (short + assign_chargeback=true) a PENDING chargeback against the sales rep on
     the EXISTING ops_chargeback machinery (reason 'envelope_short', applied_to 'commission',
@@ -4638,6 +4667,12 @@ def save_envelope_count(payload: EnvelopeCountIn, org_id: str = ORG_ID):
     while it is still pending — a posted/waived decision is money history and stays."""
     require_org(org_id)
     client = sb()
+    # THE one home for "who is acting" (§19.34) currently lives in the commcalc router. Imported here
+    # rather than re-implemented: harness_actor_uid_lock explicitly fails a second copy, and calling
+    # `_uid_from_token` directly IS the re-implementation it names. Function-level, the same shape as
+    # this module's other cross-router uses (storeops.scope_keyset), so no import cycle at module load.
+    # (The home arguably belongs in app/core/ — noted in the index, not moved here.)
+    from app.modules.commcalc.router import _caller_uid
     row_id = (str(payload.closing_row_id or "")).strip()
     if not row_id:
         raise HTTPException(400, "closing_row_id required")
@@ -4712,7 +4747,15 @@ def save_envelope_count(payload: EnvelopeCountIn, org_id: str = ORG_ID):
         "employee_name": crow.get("employee_name"),
         **cf,
         "comment": (str(payload.comment).strip() if payload.comment is not None else prior.get("comment")),
-        "counted_by": (payload.counted_by or prior.get("counted_by") or "management"),
+        # WHO COUNTED (owner 2026-10-01: "with dates and by who"; §19.34). This used to land the
+        # literal string "management" on every save — the row recorded THAT management counted and
+        # never WHO, while the pickup side named the person. The actor is now the signed-in uid from
+        # THE one home, `_caller_uid` (a canonical UUID, or None when no signed-in user resolves —
+        # RBAC off, automation, an agent). Never a sentinel: §19.34's whole point is that the
+        # database's own "unknown" is NULL, and a reader words it as "system".
+        # A prior count's actor is preserved when this save cannot resolve one, so re-counting from
+        # an automation does not erase the person who counted first.
+        "counted_by": (_caller_uid(authorization) or prior.get("counted_by") or None),
         "counted_at": _now(), "chargeback_id": chargeback_id, "updated_at": _now(),
     }
     saved = (client.schema("commcalc").table("envelope_count")
@@ -8588,6 +8631,17 @@ def _pos_term(client, org_id):
     """The tenant's POS name for copy (report_labels.pos_term — the one home; never a vendor spelled here)."""
     from app.modules.commcalc import report_labels as _report_labels
     return _report_labels.pos_term(client, org_id)
+
+
+def _carrier_term(client, org_id, key):
+    """The tenant's own word for a vocabulary key in COPY (report_labels.carrier_term — the one home).
+
+    Sibling of `_pos_term` for the keys that are not the POS ('processor', 'distributor', 'financing').
+    Degrades to the registry's NEUTRAL noun, never to another carrier's brand, so no closing payload
+    ever has to spell one (harness_carrier_vocab_guard).
+    """
+    from app.modules.commcalc import report_labels as _report_labels
+    return _report_labels.carrier_term(client, org_id, key)[0]
 
 
 def _money_issues(declared_cash, declared_credit, b2b_cash, b2b_card, tol=1.0, pos="POS") -> list:

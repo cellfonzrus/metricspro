@@ -60,6 +60,12 @@ export default function EnvelopeReportPage() {
   const today = localToday()
   const [filt, setFilt] = useState<StandardFilterValue>({ period: today.slice(0, 8) + '01', periodTo: today, stores: [], markets: [], reps: [] })
   const [status, setStatus] = useState('')
+  // WHICH CASH this receipt is counting (owner 2026-10-01: "should have both reports epay and store
+  // cash, use a radio button or select box to choose"). '' = the server's default (total_cash), which is
+  // exactly what this page showed before a selector existed, so a first load is unchanged. The option
+  // list and its wording come from the SERVER (data.basis_options <- envelope_report.basis_options(), brand resolved from the `processor` term)
+  // so no basis word is spelled on this screen.
+  const [basis, setBasis] = useState('')
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
@@ -96,11 +102,12 @@ export default function EnvelopeReportPage() {
     const m = csv(filt.markets); if (m) qs.set('markets', m)
     const r = csv(filt.reps); if (r) qs.set('reps', r)
     if (status) qs.set('status', status)
+    if (basis) qs.set('basis', basis)
     api(`/api/v1/closing/envelope-report?${qs.toString()}`)
       .then(d => { if (reqRef.current === myReq) setData(d) })
       .catch(e => { if (reqRef.current === myReq) { setErr(e?.message || String(e)); setData(null) } })
       .finally(() => { if (reqRef.current === myReq) setLoading(false) })
-  }, [filt, status])
+  }, [filt, status, basis])
   useEffect(() => { load() }, [load])
 
   const rows: any[] = data?.rows || []
@@ -186,7 +193,10 @@ export default function EnvelopeReportPage() {
     { header: 'Variance $', field: 'variance', money: true, get: (r: any) => r.variance },
     { header: 'Status', field: 'status', get: (r: any) => r.status },
     { header: 'Comment', field: 'comment', get: (r: any) => r.comment || '' },
-    { header: 'Counted by', field: 'counted_by', get: (r: any) => r.counted_by || '' },
+    // The PERSON when the server resolved one (core.actors), else the raw actor id — never blank when
+    // somebody counted (owner 2026-10-01 "by who"; the stored value is a UUID per §19.34).
+    { header: 'Counted by', field: 'counted_by', get: (r: any) => r.counted_by_name || r.counted_by || '' },
+    { header: 'Counted at', field: 'counted_at', get: (r: any) => (r.counted_at || '').slice(0, 19).replace('T', ' ') },
     { header: 'Chargeback', field: 'chargeback_status', get: (r: any) => r.chargeback_status || '' },
     { header: 'Chargeback $', field: 'chargeback_amount', money: true, get: (r: any) => r.chargeback_amount },
     { header: 'DM verified', field: 'dm_verified', get: (r: any) => r.dm_verified ? 'Yes' : 'No' },
@@ -212,7 +222,7 @@ export default function EnvelopeReportPage() {
           </p>
           <p style={{ color: 'var(--text3)', fontSize: 12.5, margin: '6px 0 0', maxWidth: 760 }}>
             <b>Which cash:</b> the <b>whole drawer</b> — the rep&apos;s full declared cash, <b>including</b> any
-            bill-payment (ePay) cash taken that day. Bill-payment cash is a breakdown <i>inside</i> that figure,
+            bill-payment cash taken that day. Bill-payment cash is a breakdown <i>inside</i> that figure,
             not a separate envelope, so do <b>not</b> subtract it before counting. Three different people record
             three different numbers for one envelope: the <b>rep declares</b> it on the daily closing, the
             <b> DM counts</b> it at pickup (Cash Pickup → actual collected), and <b>management counts</b> it
@@ -239,6 +249,17 @@ export default function EnvelopeReportPage() {
         storeOptions={storeOptions} marketOptions={marketOptions} repOptions={repOptions}
         storeLabel="Stores…" marketLabel="Markets…" repLabel="Employees…"
         right={(
+          <>
+          <select style={sel} value={basis} onChange={e => setBasis(e.target.value)}
+            title="Which cash this receipt counts. Bill-payment cash is part of the whole drawer, so the three add up — they are not separate envelopes.">
+            {(data?.basis_options || []).map((b: any) => (
+              <option key={b.key} value={b.key}>{b.label}</option>
+            ))}
+            {/* No placeholder wording: the basis vocabulary lives in the pure module and is served
+                by the API, so this screen spells no basis key and no basis label. Before the first
+                response there is simply nothing to choose yet. */}
+            {!data?.basis_options?.length && <option value="">…</option>}
+          </select>
           <select style={sel} value={status} onChange={e => setStatus(e.target.value)}>
             <option value="">All envelopes</option>
             <option value="discrepancy">Discrepancies (short + over)</option>
@@ -249,6 +270,7 @@ export default function EnvelopeReportPage() {
             <option value="commented">With comments</option>
             <option value="chargeback">With chargebacks</option>
           </select>
+          </>
         )}
       />
 
@@ -374,7 +396,21 @@ export default function EnvelopeReportPage() {
                     <td style={{ padding: '6px 10px', textAlign: 'right', color: (r.variance ?? 0) < 0 ? '#c0392b' : undefined }}>
                       {r.variance != null ? fmt(r.variance) : '—'}
                     </td>
-                    <td style={{ padding: '6px 10px', whiteSpace: 'nowrap' }}>{STATUS_BADGE[r.status] || r.status}</td>
+                    <td style={{ padding: '6px 10px', whiteSpace: 'nowrap' }}>
+                      {STATUS_BADGE[r.status] || r.status}
+                      {/* WHO counted and WHEN (owner 2026-10-01). counted_by stores the actor uid
+                          (§19.34); counted_by_name is the server-resolved person. Before this, the
+                          column existed only in the export and every row read the literal
+                          "management" — the row recorded THAT management counted, never who. */}
+                      {r.counted_at && (
+                        <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2 }}>
+                          {(r.counted_by_name || r.counted_by)
+                            ? <>by {r.counted_by_name || r.counted_by}</>
+                            : <>by system</>}
+                          {' · '}{String(r.counted_at).slice(0, 10)}
+                        </div>
+                      )}
+                    </td>
                     <td style={{ padding: '6px 10px' }}>
                       <input value={d.comment} placeholder="comment…"
                         onChange={e => setDraft(r.closing_row_id, { counted: d.counted, comment: e.target.value, chargeback: d.chargeback })}
