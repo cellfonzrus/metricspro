@@ -337,6 +337,9 @@ on:
       - "backend/harness_tenant_vertical.py"
       - "backend/harness_super_admin_toolbox.py"
       - "backend/harness_screen_link_guard.py"
+      - "backend/harness_envelope_receipt_basis.py"
+      - "backend/app/core/actors.py"
+      - "backend/app/modules/closing/envelope_report.py"
       - "frontend/src/lib/carrier-scope.ts"
       - "frontend/src/app/(platform)/admin/labels/page.tsx"
       - "backend/harness_roles_module_catalog.py"
@@ -530,6 +533,9 @@ jobs:
       - name: Run the screen-link guard (every screen a link promises exists; a carrier/POS gate comes with a super-admin re-grant path — index §45)
         working-directory: backend
         run: python3 harness_screen_link_guard.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the envelope-receipt basis + counted-by lock (one basis vocabulary dereferenced from deposit_recon; the counter is the real actor shown as a person — index §47)
+        working-directory: backend
+        run: python3 harness_envelope_receipt_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the closing closer-pick lock (the closing is submitted under the signed-in person; DM and above may pick; the server refuses otherwise; screen mirror = server rule — index §29.7)
         working-directory: backend
         run: python3 harness_closing_closer_pick.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"

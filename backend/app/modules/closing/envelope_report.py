@@ -63,12 +63,59 @@ def _f(v):
         return 0.0
 
 
-def expected_cash(closing_row):
-    """The cash this envelope SHOULD hold: the row's declared cash — `t_cash` (canonical tender
-    column) falling back to legacy `store_cash`, the SAME rule _cash_position_core applies."""
+# ── WHICH CASH THIS RECEIPT IS COUNTING (owner 2026-10-01) ────────────────────────────────────────
+# Owner: "Management Envelope Receipt should have both reports epay and store cash, use a radio button
+# or select box to choose."
+#
+# THE VOCABULARY IS NOT NEW AND IS NOT COPIED. "The cash figure a basis reconciles against" already has
+# ONE home — `deposit_recon.cash_for_basis` — with exactly these three formulas (plus 'manual', which
+# has no formula and is not offered here):
+#     total_cash        = t_cash                      the whole drawer  (TODAY'S behaviour, the default)
+#     store_cash        = max(t_cash - epay_on_cash, 0)   register cash, bill-pay excluded
+#     bill_payment_cash = epay_on_cash                the ePay/bill-payment cash only
+# `expected_cash` now DEREFERENCES that function instead of keeping its own rule, so the receipt and the
+# deposit recon can never disagree about what a basis means.
+ENVELOPE_BASES = ("total_cash", "store_cash", "bill_payment_cash")
+ENVELOPE_BASIS_DEFAULT = "total_cash"
+# Human labels for the selector — the ONE place they are worded, so the API and the screen agree.
+ENVELOPE_BASIS_LABELS = {
+    "total_cash": "Total cash (whole drawer, incl. bill payments)",
+    "store_cash": "Store cash (bill payments excluded)",
+    "bill_payment_cash": "Bill payments (ePay) cash only",
+}
+
+
+def normalize_envelope_basis(b):
+    """One of ENVELOPE_BASES, defaulting to total_cash.
+
+    Deliberately NOT deposit_recon._normalize_basis: that one folds an unknown word to 'manual', whose
+    cash_for_basis value is 0.0 — so a typo'd basis would render an entire receipt as zeros and look
+    like a store that took no cash. Here an unrecognised basis falls back to the DEFAULT (what the
+    report showed before a selector existed), which is the honest degrade.
+    """
+    b = str(b or "").strip().lower()
+    return b if b in ENVELOPE_BASES else ENVELOPE_BASIS_DEFAULT
+
+
+def declared_total_cash(closing_row):
+    """The row's whole declared drawer: `t_cash` (canonical tender column) falling back to legacy
+    `store_cash`, the SAME rule _cash_position_core applies. Kept as its own function because the
+    legacy fallback is a property of the ROW, not of any basis."""
     r = closing_row or {}
     v = _f(r.get("t_cash"))
     return v if v else _f(r.get("store_cash"))
+
+
+def expected_cash(closing_row, basis=ENVELOPE_BASIS_DEFAULT):
+    """The cash this envelope SHOULD hold on `basis` — via deposit_recon.cash_for_basis, the one home.
+
+    basis='total_cash' (the default) is BYTE-IDENTICAL to this function before the selector existed, so
+    every existing caller and every stored count keeps its meaning.
+    """
+    from . import deposit_recon          # function-level: keeps this module's import list empty
+    r = closing_row or {}
+    return deposit_recon.cash_for_basis(declared_total_cash(r), _f(r.get("epay_on_cash")),
+                                        normalize_envelope_basis(basis))
 
 
 def count_fields(expected, counted, tolerance=0.0):
@@ -117,9 +164,15 @@ def chargeback_parent_row(org_id, closing_row, employee_id, employee_name, amoun
     }
 
 
-def report_row(closing_row, count_row, chargeback, ver_row, market):
+def report_row(closing_row, count_row, chargeback, ver_row, market,
+               basis=ENVELOPE_BASIS_DEFAULT):
     """PURE: one envelope-report line — the closing row's identity + declared money + envelope
-    photo ref, the management count (when one exists), and the linked chargeback status."""
+    photo ref, the management count (when one exists), and the linked chargeback status.
+
+    `basis` (owner 2026-10-01) picks WHICH cash the line is about — see ENVELOPE_BASES. It changes
+    `declared_cash` only; the two components are always reported beside it so a counter can see why
+    the figure is what it is, and the short/over math stays in `count_fields` (one place).
+    """
     r = closing_row or {}
     c = count_row or {}
     cb = chargeback or {}
@@ -132,7 +185,11 @@ def report_row(closing_row, count_row, chargeback, ver_row, market):
         "store_address": r.get("store_address") or r.get("store_name") or r.get("store_code"),
         "market": market or "(no market)",
         "employee_name": r.get("employee_name"),
-        "declared_cash": expected_cash(r),
+        "declared_cash": expected_cash(r, basis),
+        # The two components, always, whatever the basis — so "why is this 0?" is answerable on screen.
+        "basis": normalize_envelope_basis(basis),
+        "declared_total_cash": declared_total_cash(r),
+        "declared_billpay_cash": _f(r.get("epay_on_cash")),
         "envelope_picture": r.get("envelope_picture"),
         "remarks": r.get("remarks"),
         "dm_verified": bool(v.get("verified")),

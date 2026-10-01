@@ -14389,3 +14389,120 @@ hide, null-is-auto, cross-key and cross-namespace isolation, and *off means off*
 **`harness_screen_link_guard.py` is now RUN by `carrier-vocab-guard`** (76 checks, stdlib) and
 **de-registered from `harness_unrun_pending.txt`** — the ratchet shrank 333 → 332 and
 `harness_ci_pipefail_lock.PINNED_MAX` followed it down. A green harness nobody runs is still debt.
+
+
+---
+
+## 47. MANAGEMENT ENVELOPE RECEIPT — which cash, and who counted (owner 2026-10-01)
+
+Two owner asks, same day: *"Management Envelope Receipt should have both reports epay and store cash,
+use a radio button or select box to choose"* and *"yes include countedby"*.
+
+### 47.1 The basis selector — dereferenced, not a new formula
+
+"The cash figure a basis reconciles against" already had **one home**, `deposit_recon.cash_for_basis`.
+`envelope_report.expected_cash` now **dereferences** it instead of keeping its own `t_cash or
+store_cash` rule, so the receipt and the deposit recon can never disagree about what a basis means.
+
+| basis | formula | what it answers |
+|---|---|---|
+| `total_cash` *(default)* | `t_cash` | the whole drawer — **byte-identical to the pre-selector report** |
+| `store_cash` | `max(t_cash − epay_on_cash, 0)` | register cash, bill payments excluded |
+| `bill_payment_cash` | `epay_on_cash` | the ePay cash only |
+
+`manual` is deliberately **not** offered: it has no formula and `cash_for_basis` returns `0.0` for it.
+For the same reason `normalize_envelope_basis` folds an unrecognised basis to the **default**, not to
+deposit_recon's `manual` — which would render an entire receipt as zeros and read like a store that took
+no cash.
+
+**On the owner's own rows.** B-559 2026-09-06 (`t_cash` 100, `epay_on_cash` 100) → **100 / 0 / 100**:
+the answer to *"store cash 100 and epay 100, so is it 200?"* is that it was never 200, and store-cash-net
+is 0. B-559 2026-09-07 (`t_cash` 1002, `epay_on_cash` 230) → store_cash **772**, which is exactly the
+equip/acc figure the DM collected, and the three bases reconcile (`store + billpay == total`).
+
+| fact | home | callers |
+|---|---|---|
+| the basis formulas | `deposit_recon.cash_for_basis` | `envelope_report.expected_cash` |
+| which bases the receipt offers, and their wording | `envelope_report.ENVELOPE_BASES` / `ENVELOPE_BASIS_LABELS` | the endpoint serves them as `basis_options`; **the screen spells no basis key and no basis label** |
+| the short/over math | `envelope_report.count_fields` (unchanged) | follows whatever basis set `declared_cash` |
+
+Every line also reports `declared_total_cash` and `declared_billpay_cash` beside the figure, so *"why is
+this 0?"* is answerable on screen.
+
+### 47.2 counted_by — the real actor, shown as a person
+
+`counted_by` was the literal string `"management"`: the row recorded **that** management counted and
+never **who**, while the pickup side named the person. It now carries the signed-in actor from the one
+home `_caller_uid` (§19.34) — a canonical UUID, or **NULL** when none resolves (RBAC off, automation, an
+agent). Never a sentinel. A prior count's actor survives a save that cannot resolve one, so an
+automation re-count does not erase the person who counted first. `_caller_uid` is **imported**, not
+re-implemented: `harness_actor_uid_lock` fails a second copy, and calling `_uid_from_token` directly *is*
+the re-implementation it names. (That home arguably belongs in `app/core/` rather than the commcalc
+router — noted, not moved.)
+
+**THE GAP §19.34 LEFT, now closed.** §19.34 made actor storage correct but gave nobody a way to
+**display** it: every surface renders the raw value through `frontend/src/lib/actor.ts::actorLabel`,
+which maps NULL/`web` to "system" and otherwise returns the string unchanged — so actor columns show a
+**raw UUID** (`/commcalc/daily-commission` "Recorded by", `plan-installments` "by …", `ingest-guard`,
+`commission-discrepancy`). The mapping was never missing from the data; `storeops.app_users` carries
+`auth_id`/`full_name`/`email` and was simply never joined.
+
+| fact | home | callers |
+|---|---|---|
+| uid → person | **`app/core/actors.py`** `actor_names(uids, org_id)` / `name_for` — one batched, **org-scoped**, name-only, best-effort read | the receipt endpoint (`counted_by_name`); available to every other actor surface still showing a UUID |
+
+Posture: a failed read returns `{}` and the screen falls back to what it showed before — a display
+helper never breaks a money report. An unresolved uid is **absent** from the map, never a guess.
+
+### 47.3 Lock
+
+`backend/harness_envelope_receipt_basis.py` — **52 checks**, stdlib, DB-free, run by
+`carrier-vocab-guard`. Fails the build on: a second basis formula; a basis key or label spelled on the
+screen or in the router; the default drifting off the historical figure; an unknown basis folding to
+`manual`; the legacy `store_cash` fallback being lost; the count math leaving `count_fields`;
+`counted_by` carrying a sentinel again or not using the one home; a second uid→name resolver;
+`core.actors` reading a column it has no business reading, dropping its org scope, or raising. Each rule
+carries an armed control.
+
+Two of its rules had to learn **code from prose** — this change's own comments legitimately name the
+retired sentinel and the basis keys while explaining them, so the "must not appear" rules strip comments
+first (the same posture as `harness_screen_link_guard`'s `_CC`). A third caught a real bug in the
+harness: bounding a function body at the first blank line lands *inside the docstring* and truncated the
+very call the rule existed to find.
+
+### 47.4 Still open — the cash-pickup false shortage (reported, NOT fixed here)
+
+The owner's worked example, same day: 559 Broadway / Radhika, declared cash **$1,002.00**, equip/acc
+**$772.00**, DM opened the envelope and recorded **772**, and the row read **−$230.00 short** — *"but
+really it is not short as the rest of the cash is decalred in epay pick up"*.
+
+**Proven against the live row** (B-559 2026-09-07: `t_cash` 1002, `epay_on_cash` 230): the DM's
+`actual_picked_amount` is compared in `pickup_actual.row_variance` against the pickup's `amount`
+snapshot — **the whole drawer** — while the DM only ever collects the equip/acc portion, because bill-pay
+cash is collected on the ePay pickup. So the shortage equals **exactly −`epay_on_cash`**, and against the
+`store_cash` basis the variance is **0.00**. Every store that takes bill-pay cash shows a false shortage
+equal to its ePay cash.
+
+Not fixed in this change because the remedy is a **money-affecting** choice that is the owner's:
+`cash_pickup_config.pickup_nets_pos_billpay_cash` (currently **false** for the house org) is the designed
+knob for exactly this split-envelope operating model, and turning it on would net bill-pay out of the
+envelope so the variance reads 0. But it must not be flipped alone — see §47.5.
+
+### 47.5 Still open — the POS bill-pay figure is fetched and discarded
+
+`closing/router.py` fetches the POS bill-pay figure with an explicit comment that it is needed
+*"whether or not NETTING is on, because the equipment/accessory column below needs it either way …
+the split should come from the POS, not the employee's declaration"* — and then gates its **use** on
+`_net_on`:
+
+```python
+_pos_bp = None
+if _net_on and _bp_cash:        # ← gated on the netting knob
+```
+
+With the knob off (the house org), the POS figure is fetched at full cost and **thrown away**, so the
+equipment/accessory split silently falls back to the rep's own declaration — the one thing that comment
+says it must not use. A second path in the same lines: when POS reports bill-pay **0** for a store-day,
+`billpay_used` becomes 0 and equip/acc jumps to the full drawer — a genuine double-count — because
+*POS-says-zero* is not distinguished from *POS-has-no-figure*. That second one needs the knob on, so it
+is not biting yet, which is precisely why §47.4's knob must not be flipped before this is fixed.
