@@ -41,6 +41,7 @@ Primary code homes:
 | 7 | **Carrier residual installments** | "Multi-month carrier residual pay from raw_mi. Why do named activation_types not pay?" |
 | 12 | **External credit machine + Card Settlement Recon** | "Where does the external / white-machine card figure live, what is it called for this tenant, and how does it tally with what the processor actually settled?" |
 | 7a | **Residual per Subscriber report** | "Where does the residual/subscriber trend come from per carrier? Why is a Total/MA store named, not a processor account id?" |
+| 7b | **The residual's STORE GRAIN** | "Why did the P&L show MI/ATU residual only in the Consolidated view and $0 for every store, company and market? Which store owns a raw_mi row, and who may answer that? Does turning the grain on move the consolidated total?" |
 | 8 | **Plan-mode sale installments** | "Sale-triggered multi-month pay (Total Wireless). Device categories, gates, ledger." |
 | 9 | **Management Incentive (DM/manager)** | "How is a district/market manager paid? Components, qualifiers, bonuses, auto-resolved numbers." |
 | 10 | **KPI system (DLAR / store_kpis / carrier_kpi_metric)** | "Where do ATU / protect / TMR3 / conversion come from? Store vs rep KPIs?" |
@@ -2806,6 +2807,104 @@ and a non-`atu` basis carries `residual_basis_note`. Proof:
 
 ---
 
+### 7b. THE RESIDUAL'S STORE GRAIN — raw_mi books per store, through ONE door→store home (owner 2026-10-01, mig 1033)
+
+Owner, verbatim: *"there is no dta for september residual for boost for individual stores since the
+begininig it only shows the consilidated mi and atu residual, need to assign the residual at the store
+level in the p&l and all reports"*.
+
+**THE CLASS.** A P&L line's GRAIN was a CONSTANT in the spec instead of a FACT about the feed.
+`coa.PL_SPEC` declared `mi_income` / `atu_income` `"company"`, and `coa.build_inputs` honoured it by
+selecting only the two money columns and booking them with `store=None`. `engine._scoped` adds a line's
+`company_wide` bucket for the **CONSOLIDATED scope only** (`engine.compute_and_store` /
+`statement_engine._scopes` build every company / store / profit-center scope with
+`include_company_wide=False`), so every non-consolidated view read **$0 residual by construction, from
+the first statement onward** — and `statement_filter.py`'s docstring had recorded that as "the documented
+convention". The MA/VidaPay half of those SAME two lines was given its store grain by mig `314`
+(`ma_store_pnl.canonical_store_index`); the raw_mi half was not — one feed fixed, the other left.
+
+**THE DATA WAS NEVER MISSING** (measured read-only on HOUSE `00000000-…-0001`, 2026-10-01):
+`commcalc.raw_mi` holds **38,562 / 42,138 / 46,047** rows for 2026-07 / -08 / -09, newest period
+`(2026, 9, 'September - 2026')`, and **every** row carries its dealer door — 0 blank `salesforce_id` in a
+60,000-row sample across 26 distinct doors. The key was not absent; it was not read.
+
+**THE ONE HOME.** "Which store owns this raw_mi row" is answered once, in
+`account/residual_subs.py`, and dereferenced — the twin of the MA side's index, feed shape for feed shape:
+
+| fact | raw_mi (Boost/ePay) | raw_ma_daily_tx (VidaPay/MA, mig 314) |
+|---|---|---|
+| store key on the row | `salesforce_id` (the dealer door) | `account_id` / `merchant_account_id` (processor account) |
+| pure map | `residual_subs.salesforce_store_map(mapping_rows, resolve)` | `ma_store_pnl.account_store_index(ful, ovr)` |
+| I/O, canonical | `residual_subs.canonical_salesforce_store_index` (`store_mapping.salesforce_id` ∘ `coa.store_resolver`) | `ma_store_pnl.canonical_store_index` |
+| pure bookings | `residual_subs.mi_pnl_bookings(rows, cfg)` → `[(line, sfid\|None, amt)]` | `ma_store_pnl.ma_tx_bookings` / `residual_subs.ma_tx_pnl_bookings` |
+| per-org switch | `commission_org_config.pl_mi_store_attribution` (mig `1033`) | `pl_ma_store_attribution` (mig `314`) |
+| unplaceable key | books COMPANY-WIDE (report: `"(Unassigned)"`) | books COMPANY-WIDE (report: `"(Unassigned)"`) |
+
+`salesforce_store_map` **REFUSES an ambiguous door** — one `salesforce_id` mapped to two stores is dropped
+and books company-wide, the same refusal `account_store_index` makes for an ambiguous tspid and
+`store_resolver` makes for an ambiguous street number. The private first-wins map that `residual_subs.compute`
+used to build inline silently kept whichever store the scan reached first; it is gone, and the §7a report
+now dereferences the shared map (store CODE + MARKET still come from the org's own vocabulary).
+
+**CONFIG, NEVER CODE.** `commission_org_config.pl_mi_store_attribution`, read by `ma_store_pnl.load_config`
+(ADAPTIVE — a pre-1033 DB reads `false` and REPORTS the column on `config_columns_missing`). The code
+default is **OFF**, so merging the code is byte-identical for every tenant; **applying mig `1033` is what
+turns it on**, which is why that file is surfaced for owner approval rather than applied.
+
+**WHAT MOVES, WHAT DOES NOT.** The **CONSOLIDATED P&L and Balance Sheet are UNCHANGED** — `_scoped` sums
+`by_store ∪ company_wide` there, so re-graining cannot move that total (pinned to the cent, including a
+hostile-float control, by harness §C/§D). The **company / store / market / profit-center views GAIN** the
+residual they were reporting as $0 — they stop understating; no figure that was ever right changes.
+Statements are per-period SNAPSHOTS (`commcalc.account_statements`), so a closed month moves only when
+that period is deliberately RECOMPUTED.
+
+**SIBLINGS — fixed vs excused** (the 2026-09-20 rule: every path answering the same question, in the same PR):
+- **FIXED** — `account/coa.build_inputs` (the defect: the P&L / BS / quarterly P&L / P&L range / profit
+  centers / cost centers / royalty base all read its `inputs`, so one fix re-grains every one of them);
+  `account/residual_subs.compute` (§7a now dereferences the shared map instead of its own first-wins copy);
+  `commcalc/comp_trend` (`/comp/residual-trend` — `residual_mi_atu` was ALWAYS the whole company's even
+  under a store filter, sitting beside store-filtered comp totals on a different basis; it now resolves
+  doors through the same home and reads the SAME per-store aggregation the §7a report reads, under the SAME
+  switch, and states `residual_mi_atu_basis` `company` \| `store_filtered` on every response).
+- **ALREADY CORRECT** — `commcalc/gp_report` (MI/ATU per store via the inverse street-number join);
+  `commcalc/commission_received.add_mi_rows` (per `salesforce_id` via mig `274`'s `commission_leg_mi_rollup`
+  + `passes_sfid`); `account/statement_filter` (linear over whatever per-store amounts the snapshots carry —
+  it picks the residual up for free; only its docstring was wrong).
+- **EXCUSED, by name, with reasons** (inventoried in the harness's CHECK F, which fails the build if a NEW
+  copy appears): `commcalc/router._leg_store_index` (a FILTER for the Commission-Received breakout, not a
+  booking — rewiring it changes which rows a filter admits on a second report, so it is a named follow-up);
+  `commcalc/vip_sweep` and `commcalc/flag_store_resolver` (door → store_CODE, not a P&L bucket);
+  `closing/router._store_resolver` (closing-sheet rows); `core/identity.py` + `core/identity_backfill.py`
+  (`identity.py` is deliberately DORMANT — "WIRED INTO NOTHING" — and turning it on inside a money change
+  is exactly how a dormant module becomes load-bearing by accident; `identity_backfill` SEEDS aliases, it
+  attributes no dollar).
+
+**DUPLICATE CHECK (build gate).** Searched §7 / §7a (the residual engines and report), §4 / §4a / §4b (the
+P&L sources, `ma_store_pnl`, the mig-314 store-attribution pattern), §16 (`raw_mi`, `store_mapping`,
+`commission_org_config`), §17 (`/account/residual-per-sub`, `/comp/residual-trend`), §18 ("Residual per
+subscriber", "MA residual", "MDF"), §905 (the journal GRAIN rule), §1278 (who may total the MA money).
+**REUSED, not re-derived:** mig `101`'s RPC `commcalc.residual_per_sub_by_store` (its own header calls it the
+per-store form of mig `032`'s company-wide `mi_atu_by_period`, whose only caller was `comp_trend` — the trend
+now reads the per-store one, so that duplicate derivation is retired, not doubled); `coa.store_resolver`;
+`coa.add` / `add_comm` and `engine._assemble` / `_scoped`; `ma_store_pnl.load_config` +
+`PL_CONFIG_COLUMNS` / `config_migrations_missing` (no second config reader); `residual_subs.residual_components`
+and `MA_UNASSIGNED`; the mig-`314` switch shape. **CREATED:** one config column, one pure map, one pure
+booking function, one bounded aggregation helper, one harness.
+
+**LOCKS:** `backend/harness_mi_residual_store_grain.py` (70 checks, DB-free stdlib; the scoping half runs the
+REAL `engine._assemble` over the REAL `coa.PL_SPEC`, not a re-implementation). §C6 is the REGRESSION — a store
+scope reading $0 residual, the owner's report. ARMED NEGATIVE CONTROLS, verified RED with the defect patched
+back in: the shipped `add_comm("mi_income", None, …)` hardcode (fails §F3) and the first-wins ambiguous-door
+map (fails §A4 / §A10 / §C7 / §D4). CHECK F is the anti-unwiring half: it fails the build if `coa` stops
+dereferencing either home, if the residual books through the plain `add`, or if a new
+`select("…salesforce_id…store_address…")` join appears outside the home. Wired into CI in
+`carrier-vocab-guard.yml`. `harness_pl_commission_source_lock.py` §(d) was updated in the same change: the
+two literal `add_comm("mi_income"` / `add_comm("atu_income"` sites are gone on purpose (the lines are no
+longer spelled in `coa`), and the rule now pins the new spelling — what it protects ("a commission-feed
+dollar reaches the ledger-aware adder, never the plain one") is unchanged.
+
+---
+
 ## 8. Plan-mode sale installments (sale-triggered path)
 
 **Purpose.** A qualifying SOLD line in month S schedules a payout for `month_index = (P−S)+1` that lands in
@@ -4951,13 +5050,13 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.merchant_settlement_day` | `merchant_portal_sweep.store_settlement` (daily portal scrape) | `closing/external_credit_recon` (declared-vs-settled card tally, §12a), resolved via `report_pull_map.merchant_settlement` |
 | `commcalc.merchant_settlement_batch` | `merchant_portal_sweep.store_batches` | cash/deposit recon (§12); NEVER summed into the closing card tally (different grain) |
 | `commcalc.raw_payment_detail` | epay sweep, upload | `calc_gp_report`, reimbursement categorization, **Processor Daily Debits & Credits** (`processor_ledger.assemble` — `amount` sign = credit/debit to the dealer, §15) |
-| `commcalc.raw_mi` | upload / MI sweep | carrier residual gate `installment_engine.compute_installments`, sale-installment gate, MI/ATU; **the PORT-OUT side of the daily fraud report** (`subscriber_status` `'PORTED-OUT'`, dated from `mi_deactivation_date` → `residual_transfer_out_date` → the monthly snapshot transition — §19.32), read through the retention report's own bounded loader `marketing.router._es_mi_snapshots`, never a second read path; the `subscribers` entry of the plan-source registry `core/plan_sources.HOUSE_SOURCES` (`customer_plan` + `base_mrc`, newest period, ON by default) → `onboarding._observed_plans(…, src)` (§23n.1); `raw_sales` (`sales_lines`) and `commission_ledger` (`statement_lines`) are the registry's two line-level entries, OFF until the org confirms its words |
+| `commcalc.raw_mi` | upload / MI sweep | carrier residual gate `installment_engine.compute_installments`, sale-installment gate, MI/ATU; **the P&L's MI/ATU residual, PER STORE since mig `1033` (§7b)** — `coa.build_inputs` reads `residual_subs.MI_PNL_COLUMNS` (`salesforce_id` + the two payout columns) and books through `residual_subs.mi_pnl_bookings`, the door resolved by `residual_subs.canonical_salesforce_store_index`; nothing else turns these two columns into a P&L line; **the PORT-OUT side of the daily fraud report** (`subscriber_status` `'PORTED-OUT'`, dated from `mi_deactivation_date` → `residual_transfer_out_date` → the monthly snapshot transition — §19.32), read through the retention report's own bounded loader `marketing.router._es_mi_snapshots`, never a second read path; the `subscribers` entry of the plan-source registry `core/plan_sources.HOUSE_SOURCES` (`customer_plan` + `base_mrc`, newest period, ON by default) → `onboarding._observed_plans(…, src)` (§23n.1); `raw_sales` (`sales_lines`) and `commission_ledger` (`statement_lines`) are the registry's two line-level entries, OFF until the org confirms its words |
 | `commcalc.raw_dlar_store` | `dlar_sweep.run_dlar_sweep:209` (replace), upload | `get_dlar_store_kpis` `10279`, `_cr_resolve_kpi_metrics` `25656`, MI tmr3 `28884` |
 | `commcalc.raw_dlar_rep` | `dlar_sweep` (replace, stamping `as_of_date` — mig `1026`, §19.28; the report SET is `dlar_sweep_config.reports`, mig `1029`, §19.31), upload | rep KPI, comp trend `15238`; the PAY ENGINE's tier via `kpi_failing.rep_kpi_values` (`REP_DLAR_COLUMNS`, and `REP_DERIVED_RATES` for the Ready App numerator — §19.31); `router._dlar_slice_vintage` for the feed vintage; the FEED side of `GET /dlar-vs-platform/{period}` |
 | `commcalc.raw_catalog` | upload `/product-mrc/import` region, catalog | GP, device COGS, installment MRC |
 | `commcalc.payout_config` | `/config/{period}` `10474`, `/commission-settings` `10517` | `calc_rep_commissions` (spiffs/tiers), installment base rates; **`kpi_boostapp_basis`** (mig `1029`, §19.31 — which basis the Ready App rate is measured on, per org PER PERIOD; NULL = the pre-ruling `feed_prepaid`) via `kpi_failing.resolve_boostapp_basis` |
 | `commcalc.dlar_sweep_config` | the admin sweep page via `router._dlar_cfg` (whole row) / `_dlar_public_cfg` (no password) | `_do_dlar_sweep` → `dlar_sweep.run_dlar_sweep`; **`reports`** (mig `1029`, §19.31 — which of `dlar_sweep.PORTAL_REPORTS` this org pulls; NULL = the default pair) via `dlar_sweep.resolve_report_set`. ⚠ `portal_pass` is the carrier portal password **in plaintext** — RLS-on/service_role-only, never browser-reachable, but it belongs in a secret store (§19.31 (9)) |
-| `commcalc.commission_org_config` | `/commission-settings` (incl. **`pl_commission_source`**, mig `1013` — its own statement, validated, READ BACK, refuses naming the migration when the column is absent), migrations (`209`,`306`,`308`,`309`,`314`,`934`,`939`,`992`,`996`,**`1013`**, **`1015` WRITTEN NOT APPLIED — `ma_leg_rate_schedule` + `ma_mrc_list_divisor`, §4a.2, surfaced for owner approval; both are `ADD COLUMN IF NOT EXISTS` on this same table and coexist with mig 1013's `pl_commission_source` (different columns, either order); zero blast radius until a row is written**) | THE per-org money-policy row (RULE TWO). Readers: `ma_store_pnl.load_config` (store attribution · month-spiff source/order types · MDF tokens · line labels · rebate presentation · device-margin presentation · **P&L commission source** `feeds`\|`ledger`\|`ledger_else_feeds`, mig 1013, resolved by `ledger_pnl.resolve_source` — the row read WHOLE through `core.column_tolerant.read_row`, §4b.1: ANY subset of columns; a pre-1013 DB reads `feeds` AND reports `config_columns_missing=['pl_commission_source']`) · `ma_store_pnl.load_unbooked_reasons` (`pl_ma_unbooked_reasons`, mig 994) · `residual_subs.load_ma_pnl_config` (`pl_merchant_discount_own_line`, `pl_ma_residual_order_types`) · `residual_subs.load_residual_report_config` (`residual_report_components`, mig 994) · `billpay_pl` (`pl_billpay_presentation`/`pl_billpay_settlement`) · the installment/plan engines (`installment_mrc_basis`, `plan_pay_gate`, `sales_source`) · `setup_fee_pay.load_pay_config` → `resolve_for_scope` (`setup_fee_pay`: `default` / `by_carrier` / `by_market` / `all_markets`, §6a). EVERY reader is org-scoped and ADAPTIVE — a missing column/row degrades to the code defaults, never raises — and since 2026-09-22 (§4b.1) NO reader selects a column block: each reads the row whole (`read_row`) and reports what is absent |
+| `commcalc.commission_org_config` | `/commission-settings` (incl. **`pl_commission_source`**, mig `1013` — its own statement, validated, READ BACK, refuses naming the migration when the column is absent), migrations (`209`,`306`,`308`,`309`,`314`,`934`,`939`,`992`,`996`,**`1013`**, **`1033` WRITTEN NOT APPLIED — `pl_mi_store_attribution`, the raw_mi residual's store grain, §7b; `ADD COLUMN IF NOT EXISTS` on this same table, coexists with 1013/1015 in any order**, **`1015` WRITTEN NOT APPLIED — `ma_leg_rate_schedule` + `ma_mrc_list_divisor`, §4a.2, surfaced for owner approval; both are `ADD COLUMN IF NOT EXISTS` on this same table and coexist with mig 1013's `pl_commission_source` (different columns, either order); zero blast radius until a row is written**) | THE per-org money-policy row (RULE TWO). Readers: `ma_store_pnl.load_config` (store attribution · month-spiff source/order types · MDF tokens · line labels · rebate presentation · device-margin presentation · **raw_mi residual store grain** `pl_mi_store_attribution`, mig 1033 — §7b, the twin of `pl_ma_store_attribution`; · **P&L commission source** `feeds`\|`ledger`\|`ledger_else_feeds`, mig 1013, resolved by `ledger_pnl.resolve_source` — the row read WHOLE through `core.column_tolerant.read_row`, §4b.1: ANY subset of columns; a pre-1013 DB reads `feeds` AND reports `config_columns_missing=['pl_commission_source']`) · `ma_store_pnl.load_unbooked_reasons` (`pl_ma_unbooked_reasons`, mig 994) · `residual_subs.load_ma_pnl_config` (`pl_merchant_discount_own_line`, `pl_ma_residual_order_types`) · `residual_subs.load_residual_report_config` (`residual_report_components`, mig 994) · `billpay_pl` (`pl_billpay_presentation`/`pl_billpay_settlement`) · the installment/plan engines (`installment_mrc_basis`, `plan_pay_gate`, `sales_source`) · `setup_fee_pay.load_pay_config` → `resolve_for_scope` (`setup_fee_pay`: `default` / `by_carrier` / `by_market` / `all_markets`, §6a). EVERY reader is org-scoped and ADAPTIVE — a missing column/row degrades to the code defaults, never raises — and since 2026-09-22 (§4b.1) NO reader selects a column block: each reads the row whole (`read_row`) and reports what is absent |
 | `commcalc.rep_commissions` | `_run_calculation`/`_apply_new_engines` `9183` | `/commissions/{period}` `10222`, GP report, commission-by-store, statements, MI (indirect) |
 | `commcalc.store_kpis` | KPI ingest/snapshot | tiers, exec |
 | `commcalc.carrier_kpi_metric` | `/carrier-kpi-metrics` POST `19773` | KPI/tier config resolution |
@@ -5042,7 +5141,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `storeops.employees.epay_salesperson` / `epay_login` (the POS/b2b IDENTITY columns — the reason `commcalc.name_map` is not needed) | Employee Setup / HR editors (`POST`/`PATCH /storeops/employees`, `EMP_FIELDS`); **mig `1001`** seeds them VERBATIM from the b2b feed for the PA-market roster (§14u — owner-run, not applied) | `commission_engine` seller match (`epay_salesperson || name`, `:554,613,1141`) and its remediation text (`:1195`); `GET /commcalc/rep-employee-map` aliases; `GET /commcalc/commission-plans/roster` assignment VALUE; `hr/router` + `hr/letters` chargeback/commission keying. Setting them to the feed's exact bytes is what makes a `name_map` row unnecessary (§14u) |
 | `storeops.employees.pay_rate` / `pay_amount` (the per-employee PAY columns) | Employee Setup / HR "Employees & Pay" / Roles & Access grid (`PATCH /storeops/employees/{id}`, manager-gated on `_PAY_GATED_FIELDS`; every edit logged to `storeops.payroll_change_log`; the HR + Roles browser writes are built ONLY in `frontend/src/lib/employeeRowSlices.ts` and planned per row by `lib/rowSave.ts::planRowSave` — §19.35) | **EVERY read path that emits them is gated by `storeops/pay_visibility.can_see_pay` + `strip_pay`** — the six original money surfaces + `/storeops/payroll-raw` (fail-closed 403), and since 2026-09-10 the DM sweep: `/storeops/employees`, `/storeops/payroll-change-log` (the logged VALUES), the `PATCH` echo, `/storeops/pto-accrual/{period}`, `/storeops/salary-advance/additional-payroll/{period}` + `/history`, `/core/employees` (+ `/hr/employees`), `/core/employee-dashboard` (others' bundles), `/marketing/event-sales/roi`, `POST /hr/employees`. Store-level aggregates derived from these columns (`coa.derive_wage_cells`, `overhead_allocation`, `labour_coverage`, per-store payroll expenses) are deliberately NOT gated — §14 DM sweep |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution; **market column: one of the TWO market vocabularies — store→market resolution reads it ONLY through `core.scope.market_index`/`store_market_resolver`/`market_by_code` (§13a, CI guard `harness_market_resolution_guard.py`); market OPTION lists compose ONLY through `canonical_markets`+`merge_market_options`/`org_market_options` (§13c, CI guard `harness_market_enumeration_guard.py`)** |
-| `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs), store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards** |
+| `commcalc.store_mapping` / `store_aliases` | Store-Matching UI, store setup sync | attribution joins (salesforce_id / street-number: GP, residual-subs, carrier legs) — **the salesforce_id→store answer has ONE home since mig `1033`: `residual_subs.salesforce_store_map` / `canonical_salesforce_store_index`, ambiguity REFUSED; the remaining private joins are inventoried + excused in `harness_mi_residual_store_grain.py` CHECK F, which fails the build on a new one (§7b)**, store-string→code resolution (§13), **market vocabulary #2 — same §13a canonical-resolution + §13c canonical-enumeration rules + CI guards** |
 | `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
 | `storeops.payroll_gross_ledger` (mig `405`; provenance columns `measured_hours`/`scheduled_hours`/`hours_state`/`booked`/`raw_store_codes` mig `435`) | `POST /storeops/payroll-expenses/run/{period}` — delete-by-(org,period) then insert, one row per store INCLUDING the WITHHELD ones (`booked=false`) | the audit trail for the `payroll_gross` system line, and the ONLY place the three-state truth lives (`commcalc.store_expenses` cannot say "unknown" — its receiver drops zero-amount cells). §14s |
 | `storeops.salary_expense_config` (mig `435` — RULE TWO: `line_label`, `expense_type`, `book_scheduled_fallback`, `book_no_data_as_zero`) | one row per org, house defaults seeded; absent row == house defaults | `storeops.router._salary_expense_config` → `salary_expense.resolve_config`. §14s |
@@ -5203,7 +5302,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `GET /exec-overview/{period}` | `20103` | §10 |
 | `GET /device-history` | `17015` | §11 |
 | `GET /device-cost-recon` | `27338` | §11 |
-| `GET /account/residual-per-sub` | `account/router.py:~1042` → `account/residual_subs.compute` | §7a Residual per Subscriber — per-tenant residual source (Boost `raw_mi` / MA `raw_ma_daily_tx` mig-309 union); MA stores via the mig-314 account→store index; §13c `market_options`; grant `residual_per_sub` OR `account_trends` |
+| `GET /account/residual-per-sub` | `account/router.py:~1042` → `account/residual_subs.compute` | §7a Residual per Subscriber; Boost stores via `residual_subs.canonical_salesforce_store_index` — THE same door→store home the P&L's residual books through (§7b), so this report and `mi_income` cannot place one door on two stores — per-tenant residual source (Boost `raw_mi` / MA `raw_ma_daily_tx` mig-309 union); MA stores via the mig-314 account→store index; §13c `market_options`; grant `residual_per_sub` OR `account_trends` |
 | `GET /payables/forecast` | `payables/router.py` `forecast` | §15 (module 095) |
 | `GET /payables/payables` | `payables/router.py` `list_payables` | §15 (module 095) |
 | `GET /payables/filter-options` | `payables/router.py` `payables_filter_options` (canonical §13c) | §15 (module 095) |
@@ -5431,6 +5530,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | MA-TX month-n paid evidence | `raw_ma_daily_tx.retail_cost` net of the `'MONTH n'`-worded rows (`product_name` via `commission_ledger.parse_payment_month`) | `sale_installment_engine.ma_tx_month_evidence` / `_gate_met_ma_tx` — UNION with `raw_ma_commission.spiff_m{n}` (n ≤ 6); direction `ma_payout_sign`, floor `ma_min_amount`, horizon `ma_max_month` ≤ 16 (mig `308`) |
 | MA merchant discount (P&L "Merchant discount") | `raw_ma_daily_tx.merchant_discount` (+, dealer income) | `account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings` (mig `309`); per-org toggle `commission_org_config.pl_merchant_discount_own_line` — `false` = legacy `atu_income` fold, byte-identical dollars |
 | MA residual (P&L "MI residual income") | `raw_ma_daily_tx.retail_cost` sign-flipped (negative = paid to dealer) on rows in the `'%residual%'` product family ∪ `pl_ma_residual_order_types` order types (default `Postpaid Residual Order`) | `residual_subs.ma_residual_row_matcher` → `coa.build_inputs` (mig `309`; union dedup — each row books once) |
+| **MI/ATU residual on the P&L, PER STORE** (`mi_income` "MI residual income" + `atu_income`) | `raw_mi.actual_mi_payout` / `actual_atu_payout`, each row attributed to the store its `salesforce_id` resolves to; an ambiguous, unmapped or blank door books COMPANY-WIDE (never dropped, never guessed). Per-org switch `commission_org_config.pl_mi_store_attribution` (mig `1033`, code default OFF) | `residual_subs.mi_pnl_bookings` + `residual_subs.canonical_salesforce_store_index` → `coa.build_inputs` → `engine._assemble`. The CONSOLIDATED total is identical either way; the per-store / per-company / market-filtered views gain what they read as $0 before. §7b; pinned `harness_mi_residual_store_grain.py` |
 | Residual per subscriber (per store, per month) | **Components are per SOURCE, config, since 2026-09-08** (`residual_subs.residual_components`, override `commission_org_config.residual_report_components`, mig `992`). Boost `boost_mi_atu`: `raw_mi.actual_mi_payout + actual_atu_payout` (two halves of ONE booked `mi_income` line) ÷ distinct paid `phone_number`. MA/VidaPay `vidapay_ma`: −`retail_cost` on the SAME mig-309 residual union as the row above ONLY ÷ `raw_ma_commission` activated lines — the `merchant_discount` airtime margin is reported BESIDE it (`atu` in every series entry) and is NOT residual (it has had its own P&L line since mig 309 and recurs per transaction, not per subscriber) | `residual_subs.compute` → `GET /account/residual-per-sub` (§7a); store names via `ma_store_pnl.canonical_store_index`; pinned `harness_residual_per_sub.py` + `harness_commission_backoffice_recon.py` §A/§B |
 | MA month-spiff commission M1..M12+ (P&L `carrier_comm`, cash basis) | `raw_ma_daily_tx.retail_cost` sign-flipped on `order_type ∈ pl_ma_spiff_order_types` rows (default `PostPaid Additional Spiff`); month detail `M<n>` from `product_name` via `commission_ledger.parse_payment_month` (no token → 'Spiff (other)') | `ma_store_pnl.ma_tx_bookings` → `coa.build_inputs` (mig `314`; only when `pl_ma_month_spiff_source='daily_tx'`, which also suppresses the `raw_ma_commission.spiff_m1..m6` activation-month booking — never both) |
 | MDF / market spiff (P&L `mdf_income`) | `raw_ma_daily_tx.retail_cost` sign-flipped on rows whose `product_name` contains a `pl_mdf_product_tokens` token (luxelink: `premium store spiff`, $1,000/store) | `ma_store_pnl.ma_tx_bookings` → `coa.build_inputs` (mig `314`; `auto_opt` line, per store; retail_cost precedence residual → MDF → month-spiff) |

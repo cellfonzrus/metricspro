@@ -634,6 +634,182 @@ def resolve_ma_account_store(account_id, store_by_account, meta_by_address, unas
             "resolved": True}
 
 
+# ── THE raw_mi RESIDUAL'S STORE GRAIN (owner report 2026-10-01) ───────────────────────────────────
+# Owner, verbatim: *"there is no dta for september residual for boost for individual stores since
+# the begininig it only shows the consilidated mi and atu residual, need to assign the residual at
+# the store level in the p&l and all reports"*.
+#
+# THE CLASS, NOT THE INSTANCE. The instance was "Boost September MI/ATU shows only consolidated".
+# The class is: **a P&L line's GRAIN was a constant in the spec instead of a fact about the feed.**
+# `coa.PL_SPEC` declared `mi_income` / `atu_income` "company", and `coa.build_inputs` honoured that
+# by selecting only the two money columns and booking them with `store=None` — the feed's own store
+# key (`raw_mi.salesforce_id`, present on every row) was never read, so `engine._scoped` put every
+# residual dollar in `company_wide`, which only the CONSOLIDATED scope includes. Every company,
+# store, market, profit-center and filtered view therefore read $0 residual, by construction — and
+# `statement_filter.py` had written that down as "the documented convention" rather than a defect.
+#
+# The MA/VidaPay side of the SAME two lines was given its store grain by mig 314
+# (`ma_store_pnl.canonical_store_index`); the raw_mi side was not. That is the patchwork the
+# 2026-09-20 directive names: one tenant's feed fixed, the other left, same defect wearing a hat.
+#
+# ONE FACT, ONE HOME. "Which store owns this raw_mi row" is answered HERE, once, and dereferenced —
+# it is NOT a sixth private copy. The copies that existed when this landed are inventoried in
+# `harness_mi_residual_store_grain.py` CHECK F, which fails the build if a new one appears.
+MI_UNASSIGNED = MA_UNASSIGNED           # one placement word for both feeds' unplaceable keys
+
+# The columns the P&L's raw_mi sweep reads. `salesforce_id` is the STORE KEY (never money); the two
+# payout columns are the only money. Named here so the reader and the proof harness cannot drift.
+MI_STORE_KEY_COLUMN = "salesforce_id"
+MI_PNL_MONEY_COLUMNS = ("actual_mi_payout", "actual_atu_payout")
+MI_PNL_COLUMNS = (MI_STORE_KEY_COLUMN,) + MI_PNL_MONEY_COLUMNS
+
+# raw_mi payout column → the P&L line it books. The labels of record live in `coa.PL_SPEC`; this is
+# only the routing, kept beside the MA routing above so "which line does residual money book to" has
+# one home per feed shape and neither is spelled inside `coa.build_inputs`.
+MI_PNL_LINES = (("mi_income", "actual_mi_payout"), ("atu_income", "actual_atu_payout"))
+
+
+def salesforce_store_map(mapping_rows, resolve=None):
+    """PURE: {salesforce_id -> store_address} from `commcalc.store_mapping` rows.
+
+    `resolve` (optional) is `coa.store_resolver` — applied so a dealer door lands on the org's
+    CANONICAL store spelling, exactly as `ma_store_pnl.canonical_store_index` does for a processor
+    account. Without it the raw mapping address is returned.
+
+    A salesforce_id mapped to TWO different stores is AMBIGUOUS and is DROPPED (the row then books
+    company-wide / renders "(Unassigned)") — honest beats mis-attributed, the same refusal
+    `ma_store_pnl.account_store_index` makes for an ambiguous tspid and `coa.store_resolver` makes
+    for an ambiguous street number. A door with no store, or a store with no address, contributes
+    nothing. Case and surrounding whitespace never split one door across two keys."""
+    derived, ambiguous = {}, set()
+    for r in mapping_rows or []:
+        r = r or {}
+        sf = str(r.get("salesforce_id") or "").strip()
+        addr = str(r.get("store_address") or "").strip()
+        if not sf or not addr:
+            continue
+        canon = (resolve(addr) if resolve else None) or addr
+        prev = derived.get(sf)
+        if prev is None:
+            derived[sf] = canon
+        elif prev.strip().lower() != canon.strip().lower():
+            ambiguous.add(sf)
+    for sf in ambiguous:
+        derived.pop(sf, None)
+    return derived
+
+
+def canonical_salesforce_store_index(client, org_id):
+    """I/O: {salesforce_id -> CANONICAL store_address} for one org — THE answer to "which store owns
+    this raw_mi residual row", composed from `commcalc.store_mapping` and `coa.store_resolver`.
+
+    The twin of `ma_store_pnl.canonical_store_index` (processor account → canonical store) for the
+    other residual feed shape, so both of the P&L's residual sources resolve their store key through
+    one function each and the §7a report and the books read the SAME map. NEVER raises: an
+    unreadable mapping or resolver degrades to {} — which reproduces the pre-change company-wide
+    grain exactly, never a guessed store."""
+    rows = []
+    try:
+        rows = (client.schema("commcalc").table("store_mapping")
+                .select("store_address,salesforce_id")
+                .eq("org_id", org_id).limit(20000).execute().data) or []
+    except Exception as e:                          # pragma: no cover - I/O guard
+        print(f"WARN residual_subs salesforce store index read failed: {e}")
+        return {}
+    if not rows:
+        return {}
+    resolve = None
+    try:
+        from app.modules.account import coa as _coa
+        resolve = _coa.store_resolver(client, org_id)
+    except Exception as e:                          # pragma: no cover - I/O guard
+        print(f"WARN residual_subs salesforce store index store_resolver failed: {e}")
+    try:
+        return salesforce_store_map(rows, resolve)
+    except Exception:
+        return {}
+
+
+def mi_atu_by_period_store(client, org_id, periods):
+    """I/O: [{period, salesforce_id, mi, atu}] over `periods` — the raw_mi residual WITH its store
+    key, from the mig-101 RPC `commcalc.residual_per_sub_by_store`.
+
+    DUPLICATE CHECK (2026-10-01): mig 101's own header says it is the per-STORE form of mig 032's
+    company-wide `mi_atu_by_period`, which `commcalc/comp_trend` was the only caller of. So the
+    residual trend now reads THIS — the same aggregation the §7a report reads — instead of a second
+    RPC that can only answer company-wide. One aggregation, three surfaces (the §7a report, the
+    trend, the P&L grain proof), so a tenant's residual can never differ between them.
+
+    Bounded Python fallback when the RPC is absent (a pre-101 DB), paginated and org-scoped. NEVER
+    raises: [] ⇒ the caller keeps whatever company-wide figure it had, never a wrong per-store one."""
+    periods = [p for p in (periods or []) if str(p or "").strip()]
+    if not periods:
+        return []
+    try:
+        rows = client.schema("commcalc").rpc(
+            "residual_per_sub_by_store",
+            {"p_org_id": org_id, "p_periods": periods}).execute().data or []
+        if rows:
+            return [{"period": str(r.get("period") or "").strip(),
+                     "salesforce_id": str(r.get("salesforce_id") or "").strip(),
+                     "mi": safe_float(r.get("sum_mi")), "atu": safe_float(r.get("sum_atu"))}
+                    for r in rows if str(r.get("period") or "").strip() in set(periods)]
+    except Exception as e:                          # pragma: no cover - I/O guard
+        print(f"WARN residual_subs mi_atu_by_period_store RPC unavailable: {e}")
+    agg, start, page = {}, 0, 1000
+    try:
+        while start < 400000:
+            chunk = (client.schema("commcalc").table("raw_mi")
+                     .select(",".join(("period",) + MI_PNL_COLUMNS))
+                     .eq("org_id", org_id).in_("period", periods)
+                     .range(start, start + page - 1).execute().data) or []
+            for r in chunk:
+                k = (str(r.get("period") or "").strip(),
+                     str(r.get(MI_STORE_KEY_COLUMN) or "").strip())
+                if not k[0]:
+                    continue
+                a = agg.setdefault(k, [0.0, 0.0])
+                a[0] += safe_float(r.get("actual_mi_payout"))
+                a[1] += safe_float(r.get("actual_atu_payout"))
+            if len(chunk) < page:
+                break
+            start += page
+    except Exception as e:                          # pragma: no cover - I/O guard
+        print(f"WARN residual_subs mi_atu_by_period_store fallback failed: {e}")
+        return []
+    return [{"period": k[0], "salesforce_id": k[1], "mi": v[0], "atu": v[1]}
+            for k, v in agg.items()]
+
+
+def mi_pnl_bookings(rows, cfg=None):
+    """PURE: raw_mi rows + the resolved P&L config → ordered per-row bookings
+    [(line_key, salesforce_id_or_None, amount), ...] for coa's `add_comm()`.
+
+    The twin of `ma_store_pnl.ma_tx_bookings` for the raw_mi feed shape. Per row, in order:
+      • actual_mi_payout  → `mi_income`  ("MI residual income")
+      • actual_atu_payout → `atu_income` ("ATU income")
+    — the two halves of ONE recurring per-subscriber residual (see the components note above), each
+    emitted per row so coa's incremental 2-dp rounding is unchanged.
+
+    STORE GRAIN IS CONFIG (RULE TWO), `pl_mi_store_attribution` via `ma_store_pnl.load_config`:
+      • False (the code default, and any pre-migration DB) → the store key is None on every booking,
+        so every dollar books company-wide and the statement is BYTE-IDENTICAL to before this
+        function existed. Merging the code moves no money.
+      • True  → the row's own `salesforce_id` rides along; the caller resolves it through
+        `canonical_salesforce_store_index`. A row with a BLANK salesforce_id, or a door the index
+        cannot place, still books — company-wide — so the company total is complete either way and
+        no dollar is ever dropped or guessed onto a plausible store.
+    Only `MI_PNL_MONEY_COLUMNS` are read as money; the store key is never summed."""
+    attribute = bool((cfg or {}).get("mi_store_attribution"))
+    out = []
+    for r in rows or []:
+        r = r or {}
+        sf = (str(r.get(MI_STORE_KEY_COLUMN) or "").strip() or None) if attribute else None
+        for line, col in MI_PNL_LINES:
+            out.append((line, sf, safe_float(r.get(col))))
+    return out
+
+
 def compute(client, org_id, months=6):
     """Return the residual-per-subscriber trend: per-store monthly series + an exact company total.
     Filtering by store/market is done client-side (like the GP report), so this returns every store.
@@ -674,11 +850,27 @@ def compute(client, org_id, months=6):
             # a mig-314-resolved MA account into a NAMED store row; same rows, same resolver, one
             # read — no second store vocabulary.
             by_addr[addr.lower()] = {"store_code": code, "market": market}
-        sf = (s.get("salesforce_id") or "").strip()
-        if not sf:
-            continue
-        by_sfid[sf] = {"store": addr, "market": market, "store_code": code,
-                       "num": _street_num(s.get("store_address"))}
+
+    # salesforce_id → store is THE one home's answer (`salesforce_store_map` above), composed with
+    # the SAME canonical resolver the books use — so this report and the P&L's residual line can
+    # never place one dealer door on two different stores, and an AMBIGUOUS door (mapped to two
+    # stores) renders "(Unassigned)" here exactly as it books company-wide there. Previously this
+    # loop built its own private {sfid: row} map, took the first spelling it saw, and silently kept
+    # a door mapped twice on whichever store the scan happened to reach first. CODE + MARKET still
+    # come from the org's own vocabulary (`by_addr`), exactly as the MA path resolves them.
+    _rs_resolve_store = None
+    try:
+        from app.modules.account import coa as _coa_sr
+        _rs_resolve_store = _coa_sr.store_resolver(client, org_id)
+    except Exception as e:                          # pragma: no cover - I/O guard
+        print(f"WARN residual_subs store_resolver unavailable — mapping spelling kept: {e}")
+    for sf, sf_addr in (salesforce_store_map(sm_rows, _rs_resolve_store) or {}).items():
+        _m = by_addr.get(sf_addr.lower()) or {}
+        by_sfid[sf] = {"store": sf_addr,
+                       "market": (str(_m.get("market") or "").strip()
+                                  or _rs_resolve_market(sf_addr) or ""),
+                       "store_code": str(_m.get("store_code") or "").strip(),
+                       "num": _street_num(sf_addr)}
 
     # mig-314 account→store index — built ONCE, only for the MA/VidaPay source (the Boost path
     # joins on salesforce_id and never touches it).

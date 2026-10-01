@@ -290,6 +290,13 @@ on:
       - "database/migrations/1018_pos_inventory_integrity.sql"
       - "backend/harness_ma_income_one_home_guard.py"
       - "backend/harness_ma_month_columns.py"
+      - "backend/harness_mi_residual_store_grain.py"
+      - "backend/app/modules/account/coa.py"
+      - "backend/app/modules/account/residual_subs.py"
+      - "backend/app/modules/account/engine.py"
+      - "backend/app/modules/account/statement_filter.py"
+      - "backend/app/modules/commcalc/comp_trend.py"
+      - "database/migrations/1033_pl_mi_store_attribution.sql"
       - "backend/app/modules/commcalc/commission_legs.py"
       - "backend/app/modules/commcalc/commission_ledger.py"
       - "backend/app/modules/commcalc/gp_report.py"
@@ -488,6 +495,13 @@ jobs:
       - name: Run the month-of-life column proof (data-driven rungs; August 2026 split pinned)
         working-directory: backend
         run: python3 harness_ma_month_columns.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      # index §7b — the raw_mi residual's STORE GRAIN (owner 2026-10-01). Proves the re-grain conserves
+      # the money to the cent against the REAL engine._assemble, reproduces the reported $0-per-store
+      # defect as a regression, and FAILS THE BUILD if coa stops dereferencing the one door→store home
+      # or a new private salesforce_id→store join appears. Stdlib only, DB-free.
+      - name: Run the residual store-grain proof (one door→store home; consolidated total unmoved; the $0-per-store regression)
+        working-directory: backend
+        run: python3 harness_mi_residual_store_grain.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the any-subset-columns lock (no column-block ladder anywhere; one reading rule; every named reader on it; credential rows projected)
         working-directory: backend
         run: python3 harness_any_columns_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

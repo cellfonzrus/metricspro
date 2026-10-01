@@ -47,7 +47,7 @@ def _acct_key(r):
                             ("business_address", "business_name", "terminal_id")))
 
 
-def _mi_atu_by_period(client, org_id, periods):
+def _mi_atu_by_period(client, org_id, periods, store_q=""):
     """TRUE RESIDUAL per period = Σ(actual_mi_payout + actual_atu_payout) from raw_mi.
 
     The Comprehensive Comp report this module trends is ~95% one-time promo/bounty COMPENSATION, not
@@ -56,16 +56,60 @@ def _mi_atu_by_period(client, org_id, periods):
 
     Aggregated in Postgres via the `mi_atu_by_period` RPC — raw_mi is ~38k rows/MONTH, so summing in
     Python (paginated) made this endpoint take 30s. Returns {} if the RPC isn't present yet (the page
-    stays fast; residual_mi_atu shows 0 until commcalc.mi_atu_by_period is created — see migration)."""
+    stays fast; residual_mi_atu shows 0 until commcalc.mi_atu_by_period is created — see migration).
+
+    Returns ({period: residual}, basis) where `basis` is 'company' or 'store_filtered' — stated,
+    never implied, so the screen can say which it is reading."""
     if not periods:
-        return {}
+        return {}, "company"
+    store_q = str(store_q or "").strip().lower()
+    if store_q:
+        per_store, basis = _mi_atu_store_filtered(client, org_id, periods, store_q)
+        if per_store is not None:
+            return per_store, basis
     try:
         rows = client.schema("commcalc").rpc(
             "mi_atu_by_period", {"p_org_id": org_id, "p_periods": periods}).execute().data or []
         return {r["period"]: safe_float(r.get("residual_mi_atu"))
-                for r in rows if r.get("period")}
+                for r in rows if r.get("period")}, "company"
     except Exception:
-        return {}  # RPC not created yet — keep the trend fast, residual lights up once it exists
+        return {}, "company"  # RPC not created yet — trend stays fast; residual lights up after it
+
+
+def _mi_atu_store_filtered(client, org_id, periods, store_q):
+    """The MI/ATU residual of the stores matching `store_q` — or (None, _) to fall back to the
+    company figure, which is what happens whenever the org has NOT turned residual store attribution
+    on (`commission_org_config.pl_mi_store_attribution`, mig 1033) or the door index is unreadable.
+    Falling back is deliberate: a HALF-attributed per-store figure would understate a store's
+    residual silently, where the company figure at least states what it is. NEVER raises.
+
+    Both facts come from their one home — the door→store index and the per-store aggregation both
+    live in `account.residual_subs`; nothing about raw_mi is re-derived here. The store test is the
+    SAME case-insensitive substring this function's caller applies to the comp rows' address, so one
+    filter string means one thing on both columns of the response."""
+    try:
+        from app.modules.account import ma_store_pnl as _msp
+        from app.modules.account import residual_subs as _rs
+        if not bool((_msp.load_config(client, org_id) or {}).get("mi_store_attribution")):
+            return None, "company"
+        index = _rs.canonical_salesforce_store_index(client, org_id) or {}
+        if not index:
+            return None, "company"
+        rows = _rs.mi_atu_by_period_store(client, org_id, list(periods)) or []
+        if not rows:
+            return None, "company"
+        out = {p: 0.0 for p in periods}
+        for r in rows:
+            addr = index.get(str(r.get("salesforce_id") or "").strip())
+            if not addr or store_q not in addr.lower():
+                continue
+            p = str(r.get("period") or "").strip()
+            if p in out:
+                out[p] += safe_float(r.get("mi")) + safe_float(r.get("atu"))
+        return out, "store_filtered"
+    except Exception as e:                          # pragma: no cover - I/O guard
+        print(f"WARN comp_trend store-filtered residual unavailable: {e}")
+        return None, "company"
 
 
 def compute_rep_pay_trend(client, org_id, months=6, store=""):
@@ -178,7 +222,15 @@ def compute_residual_trend(client, org_id, months=6, store="", market="",
     ordered = sorted(totals.keys(), key=_pkey)
     kept = ordered[-months:] if months and months > 0 else ordered
     kept_set = set(kept)
-    mi_atu = _mi_atu_by_period(client, org_id, kept)  # true residual (MI+ATU) per period
+    # TRUE residual (MI+ATU) per period. SIBLING FIX, mig 1033 (owner 2026-10-01 "assign the
+    # residual at the store level in the p&l and all reports"): this figure was ALWAYS the whole
+    # company's, even with a store filter applied — so the column sat beside store-filtered comp
+    # totals on a different basis, the same "residual has no store" defect the P&L had. It now
+    # resolves each dealer door through THE one home (`residual_subs.canonical_salesforce_store_index`)
+    # and the SAME per-store aggregation the §7a report reads, under the SAME per-org config switch
+    # (`pl_mi_store_attribution`) — so with the switch off, or with no filter applied, the figure is
+    # byte-identical to before. `residual_mi_atu_basis` states which it is, on every response.
+    mi_atu, mi_atu_basis = _mi_atu_by_period(client, org_id, kept, store_q)
 
     totals_by_month = []
     prev_total = None
@@ -196,6 +248,7 @@ def compute_residual_trend(client, org_id, months=6, store="", market="",
             "residual": comp_total,
             "total_comp": comp_total,
             "residual_mi_atu": round(mi_atu.get(p, 0.0), 2),
+            "residual_mi_atu_basis": mi_atu_basis,
             "accounts": len(t["accounts"]),
             "qty": round(t["qty"], 1),
             "delta_vs_prev": delta,

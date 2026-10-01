@@ -6,7 +6,7 @@ broken out by store where the source carries a store key so the P&L / Balance
 Sheet can be scoped consolidated / per-company / per-store.
 
 Sources (columns verified against the live backend):
-  • raw_mi              actual_mi_payout, actual_atu_payout            (company-wide)
+  • raw_mi              actual_mi_payout, actual_atu_payout, salesforce_id (per store, mig 1033)
   • raw_comp_report     business_address, compensation_type, payment_amount
   • raw_sales           department, ext_price, gp, voided, store
   • asset_ledger        owed_to_vip, reimbursement, reimbursement_date, selling_price,
@@ -19,9 +19,16 @@ Sources (columns verified against the live backend):
   • journal_entries     MANUAL P&L + Balance-Sheet lines
   • store_companies     store_address → company_id (Default Company otherwise)
 
-Lines whose source has no usable store key (MI/ATU residual, carrier comp w/o a
-matching store) are "company-wide": they appear in the CONSOLIDATED view only and
-read 0 (with a note) under a company/store filter — honest beats mis-attributed.
+Lines whose source has no usable store key (carrier comp w/o a matching store, PayGo,
+an unattributed journal entry) are "company-wide": they appear in the CONSOLIDATED view
+only and read 0 (with a note) under a company/store filter — honest beats mis-attributed.
+
+The MI/ATU RESIDUAL used to sit in that sentence, wrongly: `raw_mi` names the dealer door
+on every row (`salesforce_id`), so "no usable store key" was never true of it — the key was
+simply not read. Mig 1033 (owner 2026-10-01) reads it, through the ONE home
+`residual_subs.canonical_salesforce_store_index`. A door the org's mapping cannot place
+still books company-wide, so the company total stays complete; only a genuinely unplaceable
+dollar is company-wide now.
 """
 import logging
 
@@ -75,8 +82,13 @@ ACCESSORY_COGS_PCT = 0.20
 #       "manual" (entered via journal_entries), "computed" (derived from other lines)
 PL_SPEC = [
     ("carrier_comm",  "Carrier commissions & incentives",            "revenue", "auto",  "company"),
-    ("mi_income",     "MI residual income",                          "revenue", "auto",  "company"),
-    ("atu_income",    "ATU income",                                  "revenue", "auto",  "company"),
+    # GRAIN (mig 1033, owner 2026-10-01): "store" — BOTH residual feeds name the door on every row
+    # (raw_mi.salesforce_id; raw_ma_daily_tx.account_id), so neither of these lines is company-wide
+    # by nature. A row whose door the org's mapping cannot place still books company-wide, which is
+    # why the note below says "where the source carries a store key". Gated per org by
+    # `pl_mi_store_attribution` / `pl_ma_store_attribution` until the owner turns it on.
+    ("mi_income",     "MI residual income",                          "revenue", "auto",  "store"),
+    ("atu_income",    "ATU income",                                  "revenue", "auto",  "store"),
     # Owner spec 2026-09-01 (Phase B, mig 309): "Merchant discount for each line item goes into the
     # P&L as merchant discount, residual under residual." The MA TX airtime margin
     # (raw_ma_daily_tx.merchant_discount) gets its OWN revenue line instead of being folded into
@@ -996,13 +1008,60 @@ def build_inputs(client, org_id, period):
     # never by tenant name. BOOST BYTE-IDENTICAL: a Boost org always has raw_mi for the period, so the
     # MA fallback never fires (and MA tables are empty for a Boost org regardless). Each MA source is
     # read exactly once → no double-count. See the MONEY-TOUCHING note in the finance handoff.
+    # ── mig 1033 (owner report 2026-10-01): the residual's STORE GRAIN ─────────────────────
+    # Owner, verbatim: "there is no dta for september residual for boost for individual stores since
+    # the begininig it only shows the consilidated mi and atu residual, need to assign the residual
+    # at the store level in the p&l and all reports".
+    #
+    # THE CLASS: a P&L line's GRAIN was a CONSTANT in the spec, not a fact about the feed. This loop
+    # selected only the two money columns and booked them with `store=None`, so every residual dollar
+    # landed in `company_wide` — which `engine._scoped` includes for the CONSOLIDATED scope ALONE.
+    # Every company / store / market / profit-center view therefore read $0 residual by construction,
+    # since the first statement, even though `raw_mi.salesforce_id` names the dealer door on every
+    # single row. The MA/VidaPay half of these SAME two lines was given its store grain by mig 314;
+    # this half was not (see `residual_subs.mi_pnl_bookings` for the full class note).
+    #
+    # WHICH STORE owns a raw_mi row is ONE home's answer —
+    # `residual_subs.canonical_salesforce_store_index` (store_mapping.salesforce_id ∘
+    # coa.store_resolver), the twin of `ma_store_pnl.canonical_store_index` — and WHICH LINE each
+    # payout column books is `residual_subs.mi_pnl_bookings` (PURE, provable without a DB:
+    # harness_mi_residual_store_grain.py). Neither fact is spelled here.
+    #
+    # CONFIG, NEVER CODE (RULE TWO): `commission_org_config.pl_mi_store_attribution`. OFF — the code
+    # default and any pre-1033 DB — yields `store=None` on every booking, so the books are
+    # BYTE-IDENTICAL to before this change for every tenant; merging the code moves no money. ON, the
+    # CONSOLIDATED statement is unchanged too (`_scoped` sums by_store ∪ company_wide there) and the
+    # per-store / per-company / market-filtered views gain the residual they were reporting as $0.
+    # An unplaceable or blank door still books — company-wide — so the company total stays complete.
     had_raw_mi = False
+    _mi_sf_index = {}
     try:
-        for r in _fetch_all(client, "raw_mi", "actual_mi_payout,actual_atu_payout",
-                            {"org_id": org_id, "period": period_keys}):
-            had_raw_mi = True
-            add_comm("mi_income", None, r.get("actual_mi_payout"))
-            add_comm("atu_income", None, r.get("actual_atu_payout"))
+        if (_ma314_cfg or {}).get("mi_store_attribution"):
+            from app.modules.account import residual_subs as _rs_mi_idx
+            _mi_sf_index = _rs_mi_idx.canonical_salesforce_store_index(client, org_id) or {}
+            if not _mi_sf_index:
+                _warn("raw_mi store attribution is ON but no salesforce_id→store mapping resolved "
+                      "— residual stays company-wide",
+                      ValueError("empty salesforce store index"))
+    except Exception as e:
+        _mi_sf_index = {}
+        _warn("raw_mi salesforce→store index unavailable — company-wide grain kept", e)
+    try:
+        from app.modules.account import residual_subs as _rs_mi
+        try:
+            _mi_rows = _fetch_all(client, "raw_mi", ",".join(_rs_mi.MI_PNL_COLUMNS),
+                                  {"org_id": org_id, "period": period_keys})
+        except Exception as e:
+            # The store key is a column like any other: if this DB cannot serve it, the RESIDUAL
+            # still books (company-wide, exactly as before mig 1033) instead of vanishing from the
+            # P&L. Silently losing MI income would be far worse than losing its grain.
+            _warn("raw_mi store key unreadable — residual books company-wide", e)
+            _mi_sf_index = {}
+            _mi_rows = _fetch_all(client, "raw_mi", ",".join(_rs_mi.MI_PNL_MONEY_COLUMNS),
+                                  {"org_id": org_id, "period": period_keys})
+        had_raw_mi = bool(_mi_rows)
+        for _line, _sf, _amt in _rs_mi.mi_pnl_bookings(_mi_rows, _ma314_cfg):
+            add_comm(_line, (_mi_sf_index.get(_sf) if _sf else None), _amt)
     except Exception:
         had_raw_mi = False
     if not had_raw_mi:
