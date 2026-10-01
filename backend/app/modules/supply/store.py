@@ -19,6 +19,10 @@ from app.modules.supply import ordering_logic as L
 SCHEMA = "commcalc"
 VENDOR_TABLE = "po_vendor"
 CATALOG_TABLE = "vendor_catalog_price"          # mig 1021 — THE snapshot table
+ORDER_RULE_COLS = ("min_order_qty", "order_multiple")   # mig 1032 — the vendor's order rules per item
+FAVORITE_TABLE = "supply_favorite"              # mig 1032 — starred items (vendor + item_key)
+FAVORITE_MIGRATION_MSG = ("Favourites need migration 1032_supply_favorites_min_order.sql — apply it in the "
+                          "Supabase SQL editor.")
 PO_TABLE = "purchase_order"
 PO_LINE_TABLE = "purchase_order_line"
 LOGIN_TABLE = "data_source"
@@ -132,7 +136,13 @@ def land_catalog(client, org_id, vendor_id, rows, source, run_id=None):
     clean, rejects = L.normalize_catalog_rows(rows)
     run_id = run_id or str(uuid.uuid4())
     seen = _now()
-    recs = [{**r, "org_id": org_id, "vendor_id": vendor_id, "run_id": run_id, "source": source, "seen_at": seen}
+    # mig 1032's order-rule columns are PROBED per column (core.column_tolerant, §4b.1): before the migration
+    # the prices still land, without the minimum-order facts.
+    from app.core.column_tolerant import present_columns
+    have = present_columns(lambda: t(client, CATALOG_TABLE), lambda q: q.eq("org_id", org_id), ORDER_RULE_COLS)
+    drop = [c for c in ORDER_RULE_COLS if c not in have]
+    recs = [{**{k: v for k, v in r.items() if k not in drop}, "org_id": org_id, "vendor_id": vendor_id,
+             "run_id": run_id, "source": source, "seen_at": seen}
             for r in clean]
     for i in range(0, len(recs), 500):
         t(client, CATALOG_TABLE).insert(recs[i:i + 500]).execute()
@@ -248,3 +258,67 @@ def record_confirmation(client, org_id, po_id, evidence, who=None):
         patch["submitted_by"] = who
     t(client, PO_TABLE).update(patch).eq("org_id", org_id).eq("id", po_id).execute()
     return patch
+
+
+# ── delete a vendor (owner 2026-10-01: "give an option to delete vendor") ─────────────────────────────
+def vendor_order_count(client, org_id, vendor_id):
+    rows = (t(client, PO_TABLE).select("id").eq("org_id", org_id).eq("vendor_id", vendor_id).limit(1)
+            .execute().data) or []
+    return len(rows)
+
+
+def remove_vendor(client, org_id, vendor, mode):
+    """Carry out ordering_logic.vendor_delete_plan: favourites and the saved login always go; the vendor row is
+    deleted (its prices with it), or ARCHIVED (inactive, unlinked, hidden) when purchase orders still name it."""
+    vid = vendor["id"]
+    # Prices are never written here (land_catalog is their one writer): a deleted vendor's rows go with it
+    # (vendor_catalog_price.vendor_id ON DELETE CASCADE); an archived vendor's stay as hidden history.
+    try:
+        t(client, FAVORITE_TABLE).delete().eq("org_id", org_id).eq("vendor_id", vid).execute()
+    except Exception as e:
+        if not missing_schema(e):
+            raise
+    sid = vendor.get("data_source_id")
+    if sid:
+        t(client, VENDOR_TABLE).update({"data_source_id": None, "updated_at": _now()}) \
+            .eq("org_id", org_id).eq("id", vid).execute()
+        try:
+            t(client, "data_source").delete().eq("org_id", org_id).eq("id", sid).execute()
+        except Exception:
+            # Another record still points at the login row: switch it off and forget the secrets instead.
+            t(client, "data_source").update({"enabled": False, "password": None, "session_state": None,
+                                             "pending_state": None}).eq("org_id", org_id).eq("id", sid).execute()
+    if mode == "archive":
+        t(client, VENDOR_TABLE).update({"is_active": False, "is_price_source": False, "updated_at": _now()}) \
+            .eq("org_id", org_id).eq("id", vid).execute()
+    else:
+        t(client, VENDOR_TABLE).delete().eq("org_id", org_id).eq("id", vid).execute()
+
+
+# ── favourites (mig 1032) ──────────────────────────────────────────────────────────────────────────────
+def load_favorites(client, org_id):
+    return (t(client, FAVORITE_TABLE).select("id,vendor_id,item_key,label,reorder_qty,created_at")
+            .eq("org_id", org_id).order("created_at").execute().data) or []
+
+
+def add_favorites(client, org_id, recs, who=None):
+    rows = [{"org_id": org_id, "vendor_id": r["vendor_id"], "item_key": r["item_key"], "label": r.get("label"),
+             "reorder_qty": r.get("reorder_qty"), "created_by": who} for r in recs]
+    if rows:
+        t(client, FAVORITE_TABLE).upsert(rows, on_conflict="org_id,vendor_id,item_key").execute()
+    return len(rows)
+
+
+def remove_favorites(client, org_id, keys):
+    n = 0
+    for k in keys:
+        t(client, FAVORITE_TABLE).delete().eq("org_id", org_id).eq("vendor_id", k["vendor_id"]) \
+            .eq("item_key", k["item_key"]).execute()
+        n += 1
+    return n
+
+
+def set_favorite_qty(client, org_id, keys, qty):
+    for k in keys:
+        t(client, FAVORITE_TABLE).update({"reorder_qty": qty}).eq("org_id", org_id) \
+            .eq("vendor_id", k["vendor_id"]).eq("item_key", k["item_key"]).execute()

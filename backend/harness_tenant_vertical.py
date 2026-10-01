@@ -95,6 +95,15 @@ def parse_closing(sql):
 
 
 seed_rows, seed_mods = parse_seed(read(MIG))
+# Later migrations re-scope modules with the same statement; fold them in, in migration order, so the mirror is
+# checked against what the database holds after EVERY applied migration (mig 1032 opened supply_ordering).
+_mig_dir = os.path.join(ROOT, "database", "migrations")
+for _fn in sorted((f for f in os.listdir(_mig_dir) if re.match(r"^\d+_.*\.sql$", f) and int(f.split("_", 1)[0]) > 1020),
+                  key=lambda f: int(f.split("_", 1)[0])):
+    for _m in re.finditer(r"SET applies_to_vertical = '\{([^}]*)\}'\s*WHERE key = '([a-z_]+)'",
+                          re.sub(r"(?m)^\s*--.*$", "", read(f"database/migrations/{_fn}"))):   # statements only
+        seed_mods[_m.group(2)] = [x for x in _m.group(1).split(",") if x]
+seed_mods = {k: v for k, v in seed_mods.items() if v}      # '{}' = any vertical = absent from the mirror
 _closing = parse_closing(read(MIG_CLOSING))
 for _r in seed_rows:
     _r["closing_hidden"] = _closing.get(_r["key"], [])
@@ -117,7 +126,7 @@ u = V.resolve_vertical("nonsense", vocab)
 check("B3 unknown → default, reported", u["key"] == WL and u["source"] == "unknown_value" and u["declared"] == "nonsense")
 check("B4 '{}' = any", V.module_applies([], UPS) and V.module_applies(None, WL))
 check("B5 scoped", V.module_applies([UPS], UPS) and not V.module_applies([UPS], WL))
-check("B6 hidden modules (wireless)", V.hidden_modules(V.HOUSE_MODULE_VERTICALS, WL) == ["franchise_ops", "royalty", "supply_ordering"])
+check("B6 hidden modules (wireless)", V.hidden_modules(V.HOUSE_MODULE_VERTICALS, WL) == ["franchise_ops", "royalty"])
 check("B7 hidden modules (franchise)", V.hidden_modules(V.HOUSE_MODULE_VERTICALS, UPS) == ["vip"])
 nh = ["/commcalc$", "/commcalc/asset$", "/closing/epay-recon", "/employee"]
 check("B8 exact '$' hides only itself", V.href_hidden("/commcalc", nh) and not V.href_hidden("/commcalc/upload", nh))
@@ -202,7 +211,9 @@ c = Client(db)
 from app.modules.core import entitlements as E  # noqa: E402
 check("D1 existing tenant: every module it had stays enabled",
       all(E.module_enabled(A, k, c) for k in ("commissions", "closing", "vip", "marketing")))
-check("D2 existing tenant: franchise modules off", not any(E.module_enabled(A, k, c) for k in ("franchise_ops", "supply_ordering", "royalty")))
+check("D2 existing tenant: franchise modules off", not any(E.module_enabled(A, k, c) for k in ("franchise_ops", "royalty")))
+check("D2b supply ordering is open to every business type (mig 1032)", E.module_enabled(A, "supply_ordering", c)
+      and E.module_enabled(B, "supply_ordering", c))
 check("D3 franchise tenant: its modules on, vip off",
       all(E.module_enabled(B, k, c) for k in ("franchise_ops", "supply_ordering", "royalty")) and not E.module_enabled(B, "vip", c))
 db2 = dict(db, _broken={("storeops", "tenant_modules")})
@@ -236,7 +247,7 @@ check("D9 1020 applied, 1024 not: registry read, closing_hidden from the mirror"
 mp = V.me_payload(c, B)
 check("D7 me_payload", mp["key"] == UPS and mp["uses_carriers"] is False and "vip" in mp["hidden_modules"] and mp["registry_ready"])
 check("D8 me_payload existing tenant hides only new modules",
-      V.me_payload(c, A)["hidden_modules"] == ["franchise_ops", "royalty", "supply_ordering"] and V.me_payload(c, A)["nav_hidden"] == [])
+      V.me_payload(c, A)["hidden_modules"] == ["franchise_ops", "royalty"] and V.me_payload(c, A)["nav_hidden"] == [])
 
 # ── §E wiring lock ──────────────────────────────────────────────────────────────────────────────────────
 print("§E wiring lock")

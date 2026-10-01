@@ -36060,7 +36060,8 @@ def _source_stamp(client, sid, org_id, patch, *, success=False):
     Before this split, opening the login screen was enough to make the pull feed look FRESH, so a
     processor that had never delivered a row showed green and no admin was ever notified. org-scoped on
     the UPDATE; best-effort so a status write can never break a login or a pull."""
-    upd = dict(patch or {})
+    from app.modules.commcalc.source_status import with_fresh_message
+    upd = with_fresh_message(patch)        # a green state never keeps the last failure's sentence (§41a)
     stamp = upd.pop('last_run_at', None) or datetime.now(timezone.utc).isoformat()
     upd['last_run_at' if success else 'last_attempt_at'] = stamp
     try:

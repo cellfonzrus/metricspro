@@ -926,7 +926,7 @@ _all_routes = _flatten_routes(real_app.routes)
 #             index §6n / §17)
 #     1691  + GET /commcalc/portout-fraud (#317, the daily port-out fraud report — merged beside #318, whose pin
 #           was taken on a tree without it; main read 1691 against a pin of 1690 until this re-pin).
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1691"))
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1695"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

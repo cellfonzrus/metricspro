@@ -282,11 +282,21 @@ def normalize_catalog_row(r):
     pack = _int(r.get("pack_qty"))
     if not pack or pack <= 1:
         pack = core.parse_pack(f"{name} {desc}")
+    pack, per_unit_step = core.effective_pack({"pack_qty": pack, "name": name, "description": desc,
+                                               "order_multiple": _int(r.get("order_multiple"))})
+    mn, mult = _int(r.get("min_order_qty")), _int(r.get("order_multiple"))
+    if not (mn and mn > 1) or not (mult and mult > 1):
+        p_mn, p_mult = core.parse_min_order(f"{name} {desc} {r.get('stock_text') or ''}")
+        mn = mn if mn and mn > 1 else p_mn
+        mult = mult if mult and mult > 1 else p_mult
+    if not (mult and mult > 1) and per_unit_step:
+        mult = per_unit_step
     row = {"name": name, "sku": str(r.get("sku") or "").strip()[:80] or None, "price": round(price, 4),
            "list_price": None if list_price is None else round(list_price, 4), "pack_qty": pack,
            "availability": avail, "stock_qty": stock_qty,
            "stock_text": str(r.get("stock_text") or "")[:200] or None,
-           "url": str(r.get("url") or "").strip()[:1000] or None, "description": desc or None}
+           "url": str(r.get("url") or "").strip()[:1000] or None, "description": desc or None,
+           "min_order_qty": mn if mn and mn > 1 else None, "order_multiple": mult if mult and mult > 1 else None}
     row["item_key"] = item_key(row)
     return row, ""
 
@@ -355,22 +365,48 @@ def map_kit_vendor(kit_key, vendors):
 
 
 def offer_from_row(row):
-    """A snapshot row → the product dict pricing_core compares (vendor = the po_vendor id)."""
+    """A snapshot row → the product dict pricing_core compares (vendor = the po_vendor id). Pack / step read
+    through pricing_core.effective_pack, so rows landed before the per-each rule read right too."""
+    _eff = core.effective_pack({"pack_qty": _int(row.get("pack_qty")), "order_multiple": _int(row.get("order_multiple")),
+                                "name": row.get("name"), "description": row.get("description")})
     return {"vendor": row.get("vendor_id"), "row_id": row.get("id"), "name": row.get("name") or "",
             "sku": row.get("sku") or "", "price": _num(row.get("price")), "list_price": _num(row.get("list_price")),
-            "pack_qty": _int(row.get("pack_qty")), "availability": row.get("availability") or "unknown",
+            "pack_qty": _eff[0], "availability": row.get("availability") or "unknown",
+            "min_order_qty": _int(row.get("min_order_qty")), "order_multiple": _eff[1],
+            "item_key": row.get("item_key"),
             "stock_qty": _int(row.get("stock_qty")), "url": row.get("url") or "",
             "description": row.get("description") or "", "seen_at": row.get("seen_at")}
 
 
 # ══ CART OPTIMIZER ═══════════════════════════════════════════════════════════════════════════════════
-def order_packs(qty, pack_qty, basis):
-    """How many of the vendor's sellable packs to order. basis 'units': the wanted qty is units and each
-    pack holds pack_qty (round UP — you cannot order part of a bundle). basis 'packs': qty is already packs."""
+def order_packs(qty, pack_qty, basis, min_qty=None, multiple=None):
+    """How many of the vendor's sellable packs to order — THE one quantity rule (cart plan, POs, the vendor
+    cart all read its answer). basis 'units': the wanted qty is units and each pack holds pack_qty (round UP —
+    you cannot order part of a bundle). basis 'packs': qty is already packs. Then the vendor's own rules from
+    its product page: at least `min_qty`, in steps of `multiple` (owner 2026-10-01: "some items have min order
+    qty"). Nothing wanted → nothing ordered (a minimum never conjures a line)."""
     q = max(0, int(qty or 0))
     if basis == "units" and pack_qty and pack_qty > 1:
-        return int(math.ceil(q / float(pack_qty)))
+        q = int(math.ceil(q / float(pack_qty)))
+    if q <= 0:
+        return 0
+    if min_qty and min_qty > 1 and q < min_qty:
+        q = int(min_qty)
+    if multiple and multiple > 1 and q % multiple:
+        q = int(math.ceil(q / float(multiple)) * multiple)
     return q
+
+
+def moq_note(wanted_packs, packs, min_qty, multiple):
+    """The sentence a line carries when the vendor's rules changed the quantity (None when they did not)."""
+    if not wanted_packs or packs <= wanted_packs:
+        return None
+    why = []
+    if min_qty and min_qty > 1 and wanted_packs < min_qty:
+        why.append(f"the vendor's minimum order is {min_qty}")
+    if multiple and multiple > 1:
+        why.append(f"it is sold in steps of {multiple}")
+    return f"raised from {wanted_packs} to {packs}: " + " and ".join(why or ["the vendor's order rules"])
 
 
 def _vendor_terms(v):
@@ -479,8 +515,13 @@ def optimize_cart(items, vendors, max_delivery_days=None, allow_backorder=False,
             o["price"] = _num(o.get("price"))
             o["pack_qty"] = _int(o.get("pack_qty"))
             o["stock_qty"] = _int(o.get("stock_qty"))
-            packs = order_packs(qty, o["pack_qty"], basis)
+            o["min_order_qty"], o["order_multiple"] = _int(o.get("min_order_qty")), _int(o.get("order_multiple"))
+            wanted = order_packs(qty, o["pack_qty"], basis)
+            packs = order_packs(qty, o["pack_qty"], basis, o["min_order_qty"], o["order_multiple"])
             ok, why, flags = _eligible(o, packs, vendors_t.get(o.get("vendor")), opts)
+            note = moq_note(wanted, packs, o["min_order_qty"], o["order_multiple"])
+            if note:
+                flags = list(flags) + [note]
             vname = (vendors_t.get(o.get("vendor")) or {}).get("name") or str(o.get("vendor"))
             if not ok:
                 excluded.append({"vendor": o.get("vendor"), "vendor_name": vname, "reason": why})
@@ -928,3 +969,64 @@ def summary_tiles(orders, attention_by_vendor, now=None):
                      if any(r.get("severity") == "warn" for r in reasons or []))
     return {"open_orders": open_n, "spend_mtd": round(spend, 2), "savings_mtd": round(savings, 2),
             "vendors_needing_attention": len(needing), "vendor_ids_needing_attention": needing}
+
+
+
+# ══ VENDOR DELETE · FAVOURITES · COMPARE FILTERS (owner 2026-10-01) ══════════════════════════════════
+def vendor_delete_plan(order_count):
+    """What deleting a vendor does. Its favourites and saved login always go. The vendor row is DELETED (its
+    prices with it) — unless purchase orders still name it, then it is ARCHIVED (inactive, hidden from Supply and
+    price compare, unlinked) so the order history keeps its vendor (purchase_order.vendor_id references it)."""
+    if int(order_count or 0) > 0:
+        return {"mode": "archive",
+                "text": "This vendor has purchase orders, so it is archived: hidden from Supply and price compare, "
+                        "its favourites and saved login removed, its past orders kept."}
+    return {"mode": "delete", "text": "The vendor, its prices, favourites and saved login are deleted."}
+
+
+def favorite_key(vendor_id, item_key):
+    return f"{vendor_id}|{item_key}"
+
+
+def row_favorite_keys(offers):
+    """The favourite identities a compare row carries: one per vendor offer (vendor + item_key)."""
+    out = []
+    for vid, o in (offers or {}).items():
+        if o and o.get("item_key"):
+            out.append({"vendor_id": vid, "item_key": o["item_key"]})
+    return out
+
+
+def mark_favorites(rows, favorites):
+    """Each compare row gets `favorite` (any of its offers is starred) and `reorder_qty` (the saved quantity).
+    A favourite matches by vendor + item_key, so it survives every new price read."""
+    fav = {favorite_key(f.get("vendor_id"), f.get("item_key")): f for f in favorites or []}
+    for r in rows:
+        hits = [fav[k] for k in (favorite_key(x["vendor_id"], x["item_key"]) for x in row_favorite_keys(r.get("offers")))
+                if k in fav]
+        r["favorite"] = bool(hits)
+        r["reorder_qty"] = next((h.get("reorder_qty") for h in hits if h.get("reorder_qty")), None)
+    return rows
+
+
+def filter_compare_rows(rows, vendor=None, favorites_only=False):
+    """The Price compare filters: one vendor (rows that vendor sells) and/or starred items only."""
+    out = rows
+    if vendor:
+        out = [r for r in out if (r.get("offers") or {}).get(vendor)]
+    if favorites_only:
+        out = [r for r in out if r.get("favorite")]
+    return out
+
+
+def clean_favorite_keys(keys):
+    """Validated [{vendor_id, item_key}] from a request body (anything malformed is dropped)."""
+    out, seen = [], set()
+    for k in keys or []:
+        if not isinstance(k, dict):
+            continue
+        vid, ik = str(k.get("vendor_id") or "").strip(), str(k.get("item_key") or "").strip()
+        if vid and ik and len(ik) <= 300 and (vid, ik) not in seen:
+            seen.add((vid, ik))
+            out.append({"vendor_id": vid, "item_key": ik})
+    return out

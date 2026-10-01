@@ -67,6 +67,54 @@ def parse_pack(text):
     return None
 
 
+# ── Minimum order / order multiple ───────────────────────────────────────────────────────────────
+# What a vendor's product page says about HOW MANY you must order: "Min: 10", "Minimum order qty 25", "MOQ 50"
+# and the step: "Units: 5" (Zen Cart's order-in-multiples), "sold in multiples of 6". "Units in stock" is stock,
+# never a step; "minimum 2 days" is a lead time, never a quantity. 1 means no rule (None).
+_MIN_ORDER = re.compile(r"\b(?:min(?:imum)?\.?(?:\s*order)?(?:\s*(?:qty|quantity))?|moq)\s*[:\-=]?\s*(\d{1,6})\b"
+                        r"(?!\s*(?:days?|hours?|hrs?|mins?|minutes?|lbs?|%|x\b))", re.I)
+_MULTIPLE = re.compile(r"\bunits\s*:\s*(\d{1,6})\b|\b(?:in\s*)?(?:multiples|increments)\s*of\s*(\d{1,6})\b", re.I)
+
+
+def parse_min_order(text):
+    """(min_order_qty, order_multiple) stated on the page, each None when the page does not say (or says 1)."""
+    t = str(text or "")
+    mn = mult = None
+    m = _MIN_ORDER.search(t)
+    if m:
+        n = int(m.group(1))
+        mn = n if 1 < n <= 100000 else None
+    m = _MULTIPLE.search(t)
+    if m:
+        n = int(m.group(1) or m.group(2))
+        mult = n if 1 < n <= 100000 else None
+    return mn, mult
+
+
+# ── Price per unit vs per pack ────────────────────────────────────────────────────────────────────
+# "$5.4000 per EA ... (10/BDL)" — the price is for ONE box and the bundle is how it is SOLD, not what the price
+# buys. Read as a pack, $5.40 became $0.54 each (live 2026-10-01, every such row of one vendor). A price stated
+# per each/unit/piece keeps pack 1 and the bundle becomes the order step.
+_PER_UNIT = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?\s*(?:/|per)\s*(?:ea|each|unit|pc|pcs|piece)\b", re.I)
+
+
+def price_is_per_unit(text):
+    """True when the text states the price PER EACH ("$3.59 per EA", "$1.20/ea")."""
+    return bool(_PER_UNIT.search(str(text or "")))
+
+
+def effective_pack(row):
+    """(pack_qty, order_multiple) as the PRICE means them — THE one rule, applied where rows land
+    (ordering_logic.normalize_catalog_row) and where they are read (ordering_logic.offer_from_row, so rows
+    landed before this rule read right too). A per-each price → no pack, the bundle becomes the step."""
+    pack = row.get("pack_qty")
+    mult = row.get("order_multiple")
+    text = " ".join(str(row.get(k) or "") for k in ("name", "description"))
+    if pack and pack > 1 and price_is_per_unit(text):
+        return None, (mult if mult and mult > 1 else pack)
+    return pack, mult
+
+
 # ── Availability ──────────────────────────────────────────────────────────────────────────────────
 _OUT = re.compile(r"out\s*of\s*stock|sold\s*out|unavailable|not\s*available|discontinued|no\s*longer\s*available|temporarily\s*out", re.I)
 _BACK = re.compile(r"back[\s-]?order|pre[\s-]?order|ships?\s+in\s+\d|special\s*order|call\s*for\s*availability", re.I)
@@ -122,7 +170,18 @@ def dimensions(text):
     return tuple(sorted(parts))
 
 
-_UNIT_WORDS = {"yds": "yd", "yard": "yd", "yards": "yd", "ft": "ft", "feet": "ft", "foot": "ft",
+# Box strength: "200lb", "200 lb", "200#", "200K", "32 ECT", "275#BC" → the number. Same size at a different
+# strength is a DIFFERENT box (a 275# double wall is not a 200# single wall).
+_STRENGTH = re.compile(r"\b(\d{2,3})\s*(?:#|lbs?\b|k\b|ect\b)", re.I)
+
+
+def strength(text):
+    """The board strength number stated in the text ('200lb' → '200'), or None."""
+    m = _STRENGTH.search(str(text or ""))
+    return m.group(1) if m else None
+
+
+_UNIT_WORDS = {"ctn": "box", "carton": "box", "cartons": "box", "rsc": "box", "yds": "yd", "yard": "yd", "yards": "yd", "ft": "ft", "feet": "ft", "foot": "ft",
                "inch": "in", "inches": "in", "lbs": "lb", "pound": "lb", "pounds": "lb", "rolls": "roll"}
 
 
@@ -163,6 +222,7 @@ def product_features(p):
         "sku": normalize_sku(p.get("sku")),
         "mfr": normalize_sku(p.get("mfr_part")),
         "dims": dimensions(text),
+        "strength": strength(text),
         "tokens": set(toks),
         "numbers": numbers(text) - ({str(p["pack_qty"])} if p.get("pack_qty") else set()),
         "pack": p.get("pack_qty"),
@@ -177,6 +237,10 @@ def match_score(fa, fb):
             return 1.0, "same part number" if k == "mfr" else "same item number"
     if fa["dims"] and fb["dims"] and fa["dims"] != fb["dims"]:
         return 0.0, "different size"
+    if fa["dims"] and fa["dims"] == fb["dims"] and fa.get("strength") and fb.get("strength"):
+        if fa["strength"] != fb["strength"]:
+            return 0.0, "different strength"
+        return 0.85, "same size + strength"
     ta, tb = fa["tokens"], fb["tokens"]
     if not ta or not tb:
         return 0.0, "no name"

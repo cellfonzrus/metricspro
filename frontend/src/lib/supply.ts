@@ -25,11 +25,28 @@ export interface Vendor {
 export interface Offer {
   row_id: string; name: string; sku?: string; price: number | null; list_price?: number | null
   pack_qty?: number | null; availability: string; stock_qty?: number | null; url?: string; unit_price?: number | null
+  // The vendor's order rules from its product page (mig 1032): order at least min_order_qty, in steps of order_multiple.
+  item_key?: string; min_order_qty?: number | null; order_multiple?: number | null
 }
 export interface CompareRow {
   product: string; match: string; match_method: string; basis: string
   best_vendor: string | null; best_price: number | null; next_price: number | null
   savings: number | null; savings_pct: number | null; note: string; offers: Record<string, Offer>
+  // Starred (any vendor offer of this row is a favourite) and the quantity saved for reordering.
+  favorite?: boolean; reorder_qty?: number | null
+}
+
+// The favourite identities of a compare row: one per vendor offer (vendor + item_key, stable across price reads).
+export function favoriteKeys(r: CompareRow): { vendor_id: string; item_key: string }[] {
+  return Object.entries(r.offers).filter(([, o]) => o && o.item_key).map(([vid, o]) => ({ vendor_id: vid, item_key: o.item_key as string }))
+}
+
+// "Min 10 · steps of 5" — the vendor's order rules for one offer, or '' when the page states none.
+export function orderRules(o: Offer): string {
+  const parts: string[] = []
+  if ((o.min_order_qty || 0) > 1) parts.push(`min ${o.min_order_qty}`)
+  if ((o.order_multiple || 0) > 1) parts.push(`in steps of ${o.order_multiple}`)
+  return parts.join(' · ')
 }
 
 // ── the cart (per viewer, in this browser — a convenience, never the record; the record is the PO) ──

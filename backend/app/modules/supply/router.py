@@ -196,6 +196,25 @@ class VendorLoginIn(LaxModel):
     hour: Any = None
 
 
+@router.delete("/vendors/{vendor_id}")
+def delete_vendor(vendor_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Delete a supply vendor (owner 2026-10-01). Same admin gate as editing the roster. ordering_logic
+    .vendor_delete_plan decides delete vs archive (purchase orders keep their vendor)."""
+    _require_vendor_admin(authorization, org_id)
+    client = sb()
+    try:
+        v = store.vendor_by_id(client, org_id, vendor_id)
+        if not v:
+            raise HTTPException(404, "Vendor not found.")
+        plan = L.vendor_delete_plan(store.vendor_order_count(client, org_id, vendor_id))
+        store.remove_vendor(client, org_id, v, plan["mode"])
+        return {"ok": True, "mode": plan["mode"], "message": plan["text"], "vendor": v.get("name")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        _migration_guard(e)
+
+
 @router.put("/vendors/{vendor_id}/login")
 def save_vendor_login(vendor_id: str, body: VendorLoginIn, authorization: str = Header(default=""),
                       org_id: str = ORG_ID):
@@ -309,7 +328,8 @@ async def catalog_upload(file: UploadFile = File(...), vendor_id: str = Form(def
 
 # ══ COMPARE ══════════════════════════════════════════════════════════════════════════════════════════
 @router.get("/compare")
-def compare(q: str = "", only_compared: bool = False, limit: int = 1000, org_id: str = ORG_ID):
+def compare(q: str = "", only_compared: bool = False, limit: int = 1000, vendor: str = "", favorites: bool = False,
+            org_id: str = ORG_ID):
     """The newest catalog snapshot of every active vendor, grouped into "the same product" across vendors
     (pricing_core.group_products) and compared (pricing_core.comparison_rows: per-unit when every member
     states its pack, out of stock never wins, a cheaper out-of-stock option is SAID)."""
@@ -333,7 +353,8 @@ def compare(q: str = "", only_compared: bool = False, limit: int = 1000, org_id:
         if not p:
             return None
         return {k: p.get(k) for k in ("row_id", "name", "sku", "price", "list_price", "pack_qty", "availability",
-                                      "stock_qty", "url")} | {"unit_price": core.unit_price(p)}
+                                      "stock_qty", "url", "item_key", "min_order_qty", "order_multiple")} \
+            | {"unit_price": core.unit_price(p)}
 
     out = []
     for r in compared:
@@ -347,9 +368,73 @@ def compare(q: str = "", only_compared: bool = False, limit: int = 1000, org_id:
                         "best_vendor": p["vendor"] if p.get("availability") != "out_of_stock" else None,
                         "best_price": p.get("price"), "next_price": None, "savings": None, "savings_pct": None,
                         "note": "", "offers": {p["vendor"]: _offer(p)}})
+    # Favourites (mig 1032) and the page filters — the favourites list IS this comparison, filtered.
+    try:
+        favs, fav_ready = store.load_favorites(client, org_id), True
+    except Exception as e:
+        if not store.missing_schema(e):
+            raise HTTPException(500, str(e)[:400])
+        favs, fav_ready = [], False
+    L.mark_favorites(out, favs)
+    out = L.filter_compare_rows(out, vendor=vendor or None, favorites_only=favorites)
     return {"migrated": True, "vendors": [{"id": v["id"], "name": names[v["id"]], "catalog_seen_at": seen.get(v["id"])}
                                           for v in vendors],
+            "favorites_ready": fav_ready, "favorites_note": None if fav_ready else store.FAVORITE_MIGRATION_MSG,
+            "favorite_count": len(favs),
             "total": len(out), "compared": len(compared), "rows": out[:max(1, min(limit, 5000))]}
+
+
+# ══ FAVOURITES (mig 1032) ════════════════════════════════════════════════════════════════════════════
+class FavoriteIn(LaxModel):
+    keys: Any = None              # [{vendor_id, item_key}] — every vendor offer of the compare row
+    label: Any = None
+    reorder_qty: Any = None
+
+
+def _fav_guard(e):
+    if store.missing_schema(e):
+        raise HTTPException(409, store.FAVORITE_MIGRATION_MSG)
+    raise HTTPException(500, str(e)[:400])
+
+
+@router.post("/favorites")
+def add_favorite(body: FavoriteIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    keys = L.clean_favorite_keys(body.keys)
+    if not keys:
+        raise HTTPException(400, "Nothing to star — pick an item from Price compare.")
+    qty = L._int(body.reorder_qty)
+    try:
+        n = store.add_favorites(sb(), org_id,
+                                [{**k, "label": str(body.label or "")[:300] or None,
+                                  "reorder_qty": qty if qty and qty > 0 else None} for k in keys], _who(authorization))
+    except HTTPException:
+        raise
+    except Exception as e:
+        _fav_guard(e)
+    return {"ok": True, "starred": n}
+
+
+@router.post("/favorites/remove")
+def remove_favorite(body: FavoriteIn, org_id: str = ORG_ID):
+    keys = L.clean_favorite_keys(body.keys)
+    try:
+        n = store.remove_favorites(sb(), org_id, keys)
+    except Exception as e:
+        _fav_guard(e)
+    return {"ok": True, "removed": n}
+
+
+@router.post("/favorites/qty")
+def favorite_qty(body: FavoriteIn, org_id: str = ORG_ID):
+    keys = L.clean_favorite_keys(body.keys)
+    qty = L._int(body.reorder_qty)
+    if not keys or not qty or qty < 1:
+        raise HTTPException(400, "Send the item and a reorder quantity of at least 1.")
+    try:
+        store.set_favorite_qty(sb(), org_id, keys, qty)
+    except Exception as e:
+        _fav_guard(e)
+    return {"ok": True}
 
 
 # ══ CART ═════════════════════════════════════════════════════════════════════════════════════════════
