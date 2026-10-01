@@ -945,10 +945,20 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
 # figures only populate for a `_can_mgmt_review` caller (company-wide/super-admin/explicit grant);
 # a DM/store-scope viewer sees the same coarse status with an empty reasons list, same as
 # /closing/submissions and /closing/management already do.
-_SUMMARY_MAX_RANGE_DATES = 14   # bounded like closing_stale_stores' "at most 14" pattern — this
-                                # endpoint does much heavier per-day work (schedules, timelog, B2B
-                                # money+counts, X-report, verification, + now the gate replay) than
-                                # closing_submissions' single _b2b_day call.
+_SUMMARY_MAX_RANGE_DATES = 45   # OWNER 2026-10-01: "we need atleast 30 days of data" — 14 silently
+                                # narrowed every month-long DM-Verify range to its last fortnight.
+                                # Raised to 45, the SAME value and rationale as _RECON_MAX_DATES below,
+                                # which is the evidence this is safe: that sibling endpoint already
+                                # replays the SAME heavy per-day `_b2b_day` for up to 45 dates, so a
+                                # calendar month of it is a shape this codebase already runs.
+                                # NOT a bare number change: the two ORG-LEVEL lookups still inside the
+                                # per-date loop (pos_term — 2 uncached reads, called TWICE per date —
+                                # and the x_report_ever existence probe) are hoisted into
+                                # _closing_summary_org_ctx in the same change, removing ~5 reads per
+                                # date. A 45-date range now costs FEWER per-date round trips than a
+                                # 14-date range did before it, so this cannot reopen the 2026-07-29
+                                # "DM verify locks out for over 3-4 minutes" report (whose fix hoisted
+                                # five other org-level queries and missed these two).
 _GATE_RANK = {"blocked": 4, "flagged": 3, "recon_pending": 2, "not_computed": 1, "ok": 0}
 
 _RECON_MAX_DATES = 45   # closing-hardening (2026-07-30): bounds the number of distinct close_dates
@@ -1025,11 +1035,30 @@ def _closing_summary_org_ctx(client, org_id) -> dict:
     roster_names = [(e.get("name") or "").strip() for e in emp_rows if (e.get("name") or "").strip()]
     roster_ids = [str(e.get("employee_id") or "").strip() for e in emp_rows
                   if str(e.get("employee_id") or "").strip()]
+    # OWNER 2026-10-01 ("we need atleast 30 days of data"). The 2026-07-29 hoist moved FIVE org-level
+    # queries out of the per-date loop but MISSED these two, which are just as date-independent:
+    #   · pos_term  — report_labels.pos_term, and `load_report_labels` behind it does TWO uncached
+    #     org-scoped reads. `_closing_summary_for_date` calls it TWICE per date, so a 14-date range
+    #     paid 56 redundant reads and a 31-date range would have paid 124.
+    #   · x_report_ever — a `pos_tender_summary LIMIT 1` existence probe. "Has this tenant EVER had an
+    #     X-report" cannot depend on which day is being summarized.
+    # Hoisting them is what makes a full month affordable, instead of raising the cap and walking back
+    # into the 3-4 minute lockout the 2026-07-29 report was about.
+    try:
+        _pos_ctx = _pos_term(client, org_id)
+    except Exception:
+        _pos_ctx = None
+    try:
+        _xre = bool((client.schema("commcalc").table("pos_tender_summary").select("close_date")
+                     .eq("org_id", org_id).limit(1).execute().data) or [])
+    except Exception:
+        _xre = False
     return {"ckeys": _ckeys, "clabels": _clabels, "crclass": _crclass, "tlabels": tlabels,
             "store_meta": store_meta, "closing_mode": closing_mode, "closer_by_store": closer_by_store,
             "tender_basis": tender_basis_ctx,
             "closer_row_by_store": closer_row_by_store,
             "roster_names": roster_names, "roster_ids": roster_ids,
+            "pos_term": _pos_ctx, "x_report_any": _xre,
             "roster_ok": _roster_ok}
 
 
@@ -1042,12 +1071,15 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
     _closing_summary_org_ctx) lets a multi-date range caller compute the date-independent lookups
     ONCE instead of once per date; omitted (any other/future caller) computes it inline exactly as
     before — byte-identical either way."""
-    _pos = _pos_term(client, org_id)   # the tenant's POS name in copy (report_labels.pos_term)
     rows = (client.schema("commcalc").table("daily_closing").select("*")
             .eq("org_id", org_id).eq("close_date", date).execute().data) or []
 
     if org_ctx is None:
         org_ctx = _closing_summary_org_ctx(client, org_id)
+    # The tenant's POS name in copy (report_labels.pos_term) — ORG-LEVEL, so it rides org_ctx and is
+    # fetched once per REQUEST rather than twice per DATE (owner 2026-10-01; see org_ctx). A ctx built
+    # before this key existed, or a failed label read, falls back to the direct call — byte-identical.
+    _pos = org_ctx.get("pos_term") or _pos_term(client, org_id)
     from . import count_config   # still used directly below (row_value/STD_FIELD_KEYS), not just via org_ctx
     _ckeys, _clabels, _crclass = org_ctx["ckeys"], org_ctx["clabels"], org_ctx["crclass"]
     tlabels = org_ctx["tlabels"]
@@ -1112,11 +1144,14 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
     # -> a sharper, more actionable honest-empty message on the money_recon note below.
     x_report_ever = any(v == "x_report" for v in _leg_by_store.values())
     if not x_report_ever:
-        try:
-            x_report_ever = bool((client.schema("commcalc").table("pos_tender_summary").select("close_date")
-                                  .eq("org_id", org_id).limit(1).execute().data) or [])
-        except Exception:
-            x_report_ever = False
+        # ORG-LEVEL ("has this tenant EVER had an X-report"), so it rides org_ctx — ONE presence probe
+        # per request, not one per date (owner 2026-10-01). No local fallback on purpose: org_ctx is
+        # ALWAYS built by _closing_summary_org_ctx — either passed by closing_summary or built inline
+        # above when omitted — so the key is always present, and a second reader here would be a
+        # SECOND reader of pos_tender_summary. harness_tender_vocab_lock names exactly one non-split
+        # reader of that table per function, and that name is now the org context (it moved with the
+        # probe, it was not added beside it).
+        x_report_ever = bool(org_ctx.get("x_report_any"))
 
     # Verifications for that day.
     vers = (client.schema("commcalc").table("daily_closing_verification").select("*")
@@ -1419,7 +1454,7 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
                     money_recon["note"] = ("This tenant has NEVER had a POS X-report imported (and the sales "
                                            "feed has no Tender Type), so cash & credit can't be reconciled — "
                                            "check (1) the mailbox has an *X-Report* -> x_report rule and "
-                                           f"(2) {_pos_term(client, org_id)} is actually scheduled to email an X-Report for this "
+                                           f"(2) {_pos} is actually scheduled to email an X-Report for this "
                                            "tenant. Shown as pending, not flagged.")
             money_recon["any_flag"] = any(money_recon[k].get("flag") for k in ("accessory", "cash", "credit"))
 

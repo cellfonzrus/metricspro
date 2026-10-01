@@ -154,13 +154,21 @@ def rule_suppression_derived(be):
     return len(derived) == 1 and literal == [] and other == [], f"assigns={assigns}"
 
 
+# Mig 1033 (owner 2026-10-01) re-grained the raw_mi residual. The two literal sites
+# `add_comm("mi_income"` / `add_comm("atu_income"` are GONE from build_inputs on purpose: the lines are
+# no longer spelled there at all, they come from `residual_subs.mi_pnl_bookings` (the one home), and the
+# row's door rides with them. What this rule actually protects — "a commission-FEED dollar reaches the
+# ledger-aware adder, never the plain one" — is unchanged and still checked, on the new spelling.
 GUARDED_SITES = (
-    'add_comm("mi_income"', 'add_comm("atu_income"', "add_comm(_line, _ma_store(_acct), _amt, detail_label=_dlabel)",
+    "add_comm(_line, (_mi_sf_index.get(_sf) if _sf else None), _amt)",
+    "add_comm(_line, _ma_store(_acct), _amt, detail_label=_dlabel)",
     "add_comm(_line, None, _amt)", 'add_comm("carrier_comm", _norm_store(r.get("business_address"))',
     'add_comm("carrier_comm", st, safe_float(r.get("commission_amount"))', "add_comm(_reb_line, st, _reb_sign",
 )
 UNGUARDED_SPELLINGS = (
-    'add("mi_income"', 'add("atu_income"', "add(_line, _ma_store(", "add(_line, None, _amt)",
+    # the residual lines must never book through the plain adder, however they are spelled
+    'add("mi_income"', 'add("atu_income"', "add(_line, (_mi_sf_index",
+    "add(_line, _ma_store(", "add(_line, None, _amt)",
     'add("carrier_comm"', "add(_reb_line",
 )
 

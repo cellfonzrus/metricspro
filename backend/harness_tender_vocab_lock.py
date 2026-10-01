@@ -91,7 +91,7 @@ assert all(v for v in ALLOW.values()), "every allow entry carries a reason"
 BASIS_READERS_ALLOW = {
     (HOME, "_xreport_rows_by_store"): "THE X-report leg of the resolver",
     (HOME, "_invoice_tenders_by_store"): "THE invoice leg of the resolver",
-    (HOME, "_closing_summary_for_date"): "x_report_ever: 'has this tenant EVER had an X-report' (a presence probe, not a split; §23h)",
+    (HOME, "_closing_summary_org_ctx"): "x_report_ever: 'has this tenant EVER had an X-report' (a presence probe, not a split; §23h). MOVED here from _closing_summary_for_date 2026-10-01 (§46): the probe is org-level, so it was hoisted into the once-per-request org context to make a 45-date range affordable. The name moved WITH it — there is still exactly one non-split reader, not a new one beside the old.",
     (HOME, "_tender_recon_3way_day"): "the 3-WAY recon's own X-report LEG per tender key (mig 111 axis; a per-tender leg beside the closing and sales legs, by design — the basis switch is the closing recons', not the 3-way's; a seam, index §30.13)",
     (HOME, "detect_tenders"): "the tender-config wizard lists the distinct raw X-report labels to map (no amounts)",
     ("modules/commcalc/router.py", "_intake_reread_invoice_tenders"): "the intake's own re-read of the slice it just landed (the save guarantee), not a recon read",

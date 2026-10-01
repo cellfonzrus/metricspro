@@ -13,10 +13,17 @@ and every quantity on a statement (line amounts, subtotals, gross profit, net in
 equity totals, imbalance) is a LINEAR function of the per-store line amounts. Summing a subset of the
 store snapshots therefore yields the statement attributable to exactly those stores.
 
-COMPANY-WIDE lines (MI/ATU residual, carrier comp without a store, unattributed journal entries) carry
-no store, so they are absent from every per-store snapshot's store attribution — in the filtered view
-they read $0. That is the documented convention: "company-wide lines are booked company-wide, not to a
-store, and read $0 under a store/market filter" (mirrors the existing per-scope note in engine._notes).
+COMPANY-WIDE lines carry no store, so they are absent from every per-store snapshot's store
+attribution — in the filtered view they read $0. That is the convention for a line whose source
+genuinely names no store: "booked company-wide, not to a store, and read $0 under a store/market
+filter" (mirrors the per-scope note in engine._notes).
+
+MIG 1033 (owner 2026-10-01) — "MI/ATU residual" used to head that list, and this docstring recorded a
+DEFECT as a convention. `raw_mi` names the dealer door on every row (`salesforce_id`); `coa` did not
+read it, so the whole Boost residual sat in `company_wide` and every store/market/company view read
+$0 residual from the first statement onward. Nothing in THIS module was wrong — it is linear over
+whatever per-store amounts the snapshots carry, so the residual appears here automatically once `coa`
+attributes it. What belongs on this list is only a line whose FEED states no store.
 
 NOTHING here changes a booking rule, a rate, or an existing computed number. With NO filter active the
 read endpoint never calls this module and returns the stored snapshot byte-for-byte (see router.get_pl/
