@@ -14389,3 +14389,49 @@ hide, null-is-auto, cross-key and cross-namespace isolation, and *off means off*
 **`harness_screen_link_guard.py` is now RUN by `carrier-vocab-guard`** (76 checks, stdlib) and
 **de-registered from `harness_unrun_pending.txt`** — the ratchet shrank 333 → 332 and
 `harness_ci_pipefail_lock.PINNED_MAX` followed it down. A green harness nobody runs is still debt.
+
+
+---
+
+## 46. DM VERIFY OVER A MONTH — the cap, and what made it safe to raise (owner 2026-10-01)
+
+> Owner: *"⚠️ This range has more days than can be loaded at once — narrowed to the 14 most recent of 30
+> requested … we need atleast 30 days of data"*
+
+`GET /closing/summary` capped a range at **`_SUMMARY_MAX_RANGE_DATES = 14`** and reported the narrowing
+honestly in a banner (`dates_requested` / `dates_computed` / `range_capped` →
+`components/DailyClosingVerify.tsx`). So a month-long ask returned its **last fortnight** and told the
+reader to narrow further.
+
+### 46.1 Why 14 existed — and why raising it alone would have been a regression
+
+The cap is a performance bound with real history: **owner bug report 2026-07-29, "DM verify locks out for
+over 3-4 minutes."** That fix hoisted **five** org-scoped queries out of the per-date loop into
+`_closing_summary_org_ctx`. It **missed two** that are just as date-independent:
+
+| hoisted now | cost it was paying |
+|---|---|
+| `_pos_term(client, org_id)` — `report_labels.load_report_labels` does **two uncached** org-scoped reads | called **twice per date** → 56 redundant reads at 14 dates, **124** at 31 |
+| the `x_report_ever` probe (`pos_tender_summary LIMIT 1`) | "has this tenant EVER had an X-report" cannot depend on the day |
+
+Both now ride `org_ctx` (`pos_term`, `x_report_any`), removing **~5 reads per date**. A ctx built without
+the keys, or a failed label read, falls back to the direct call — byte-identical for any other caller.
+
+### 46.2 The cap
+
+**`_SUMMARY_MAX_RANGE_DATES` 14 → 45**, the same value and rationale as its sibling `_RECON_MAX_DATES`.
+That sibling is the evidence: it already replays the **same heavy `_b2b_day`** for up to 45 dates, so a
+calendar month of it is a shape this codebase already runs. With the hoist, a **45-date range now costs
+fewer per-date round trips than a 14-date range did before**, so the raise cannot reopen the 2026-07-29
+lockout. The banner is unchanged and still tells the truth when a genuinely oversized span is narrowed.
+
+**What remains per date, correctly:** that day's `daily_closing`, `shifts`,
+`daily_closing_verification`, `closing_expense`, the epay `per_store_day`, and `_b2b_day`.
+
+### 46.3 Lock
+
+`backend/harness_dm_verify_range_cost.py` — **20 checks**, stdlib, DB-free, run by `carrier-vocab-guard`.
+Fails the build when: the cap drops below a full calendar month; it drifts from `_RECON_MAX_DATES`;
+`org_ctx` stops supplying `pos_term` / `x_report_any`; the per-date function calls `_pos_term` anywhere
+but the ctx fallback; **an org-level (non-date-scoped) query appears in the per-date loop**; or the
+genuinely date-scoped reads are lost (the hoist going too far). Each rule carries an armed control.
