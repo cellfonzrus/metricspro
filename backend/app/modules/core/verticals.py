@@ -54,10 +54,10 @@ HOUSE_VERTICALS = [
      "closing_hidden": ["acc_sale", "bill_payments", "activation_counts", "tender:acima"]},
 ]
 
-# Module → verticals it belongs to (mirror of the mig-1020 module_catalog rows; '{}'/absent = any).
+# Module → verticals it belongs to (mirror of the module_catalog rows: mig 1020's seed, then every later
+# migration's `SET applies_to_vertical` in order — mig 1032 opened supply_ordering to any; '{}'/absent = any).
 HOUSE_MODULE_VERTICALS = {
     "franchise_ops": ["ups_store"],
-    "supply_ordering": ["ups_store"],
     "royalty": ["ups_store"],
     "vip": ["wireless_retail"],
 }

@@ -160,6 +160,7 @@ def _to_product(vendor_key, raw):
     if SAFE_SKIP.search(url):          # never hand back a cart / order link as "the product link"
         url = raw.get("page_url") or ""
     status, qty = core.classify_availability(raw.get("stock_text") or "")
+    min_qty, multiple = core.parse_min_order(f"{text} {raw.get('stock_text') or ''}")
     return {
         "vendor": vendor_key,
         "name": raw.get("name", "").strip(),
@@ -168,6 +169,8 @@ def _to_product(vendor_key, raw):
         "price": price,
         "list_price": list_price,
         "pack_qty": core.parse_pack(text),
+        "min_order_qty": min_qty,
+        "order_multiple": multiple,
         "availability": status,
         "stock_qty": qty,
         "stock_text": raw.get("stock_text") or "",

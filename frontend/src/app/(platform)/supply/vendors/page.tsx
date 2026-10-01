@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, apiUpload } from '@/lib/client'
 import LiveVendorWindow from '@/components/supply/LiveVendorWindow'
-import { panel, input, label, btn, btnPrimary, th, cell, fmtMoney, fmtDate, type Vendor } from '@/lib/supply'
+import { panel, input, label, btn, btnPrimary, btnDanger, th, cell, fmtMoney, fmtDate, type Vendor } from '@/lib/supply'
 
 const BLANK = {
   id: '', name: '', contact_name: '', email: '', phone: '', terms: '', notes: '', is_price_source: true,
@@ -37,7 +37,7 @@ export default function SupplyVendorsPage() {
   const [uploadMsg, setUploadMsg] = useState('')
 
   // A promise chain (not async/await) so every setState visibly runs in a callback, after the fetch.
-  const load = useCallback(() => api('/api/v1/supply/vendors')
+  const load = useCallback(() => api('/api/v1/supply/vendors?active_only=true')
     .then((r: { rows?: Vendor[]; migrated?: boolean; note?: string }) => { setRows(r.rows || []); setNote(r.migrated === false ? r.note ?? '' : '') })
     .catch(e => { setNote(e?.message || String(e)) }), [])
   useEffect(() => { load() }, [load])
@@ -105,6 +105,20 @@ export default function SupplyVendorsPage() {
     }
   }
 
+  // Delete (owner 2026-10-01). The server decides delete vs archive: a vendor that purchase orders still name is
+  // archived (hidden, prices / favourites / saved login removed, past orders kept) — its reply says which.
+  async function removeVendor(v: Vendor) {
+    if (!confirm(`Delete ${v.name}?\n\nIts prices, favourites and saved login are removed. If it has purchase orders it is archived instead (hidden), so the order history keeps its vendor.`)) return
+    setBusy(true); setMsg('')
+    try {
+      const r: { message?: string } = await api(`/api/v1/supply/vendors/${v.id}`, { method: 'DELETE' })
+      setMsg(`✅ ${v.name}: ${r.message || 'deleted.'}`)
+      if (form.id === v.id) setForm(BLANK)
+      load()
+    } catch (e) { setMsg('❌ ' + ((e as ApiError)?.message || e)) }
+    setBusy(false)
+  }
+
   async function upload(ev: React.ChangeEvent<HTMLInputElement>) {
     const f = ev.target.files?.[0]
     if (!f) return
@@ -155,7 +169,12 @@ export default function SupplyVendorsPage() {
                 <td style={{ ...cell, fontSize: 11 }}>
                   {(v.attention || []).filter(a => a.severity === 'warn').map(a => <div key={a.code} style={{ color: '#b45309' }}>• {a.text}</div>)}
                 </td>
-                <td style={cell}>{v.is_price_source && v.data_source_id && <button style={btn} onClick={() => readCatalog(v)}>Read prices now</button>}</td>
+                <td style={cell}>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {v.is_price_source && v.data_source_id && <button style={btn} onClick={() => readCatalog(v)}>Read prices now</button>}
+                    <button style={btnDanger} disabled={busy} onClick={() => removeVendor(v)}>Delete</button>
+                  </div>
+                </td>
               </tr>
             ))}
             {!rows.length && <tr><td style={{ ...cell, color: 'var(--text2)' }} colSpan={9}>No vendors yet — add the first one below.</td></tr>}
