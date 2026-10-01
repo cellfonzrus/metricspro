@@ -52,7 +52,7 @@ async def _envelope_report(org_id, f, authorization=""):
            f"{t.get('short', 0)} short (${t.get('short_total', 0):,.2f}) · "
            f"{t.get('over', 0)} over (${t.get('over_total', 0):,.2f}) · "
            f"{t.get('chargebacks', 0)} chargeback(s) ${t.get('chargeback_total', 0):,.2f}")
-    return {"title": "Envelope Report", "subtitle": sub,
+    return {"title": "Management Envelope Receipt", "subtitle": sub,
             "filename": f"envelope-report_{data.get('date_from')}_{data.get('date_to')}",
             "sheets": [{"name": "Envelopes", "rows": rows, "columns": _ENV_COLS}]}
 
@@ -148,7 +148,7 @@ async def _external_credit_recon_report(org_id, f, authorization=""):
 
 CLOSING_REPORTS = {
     "closing_envelope_report": {
-        "label": "Envelope Report (Daily Closing)",
+        "label": "Management Envelope Receipt (Daily Closing)",
         "filters": ["date_from", "date_to", "stores", "markets", "reps", "status"],
         "live_path": lambda f: "/closing/envelope-report",
         "build": _envelope_report,

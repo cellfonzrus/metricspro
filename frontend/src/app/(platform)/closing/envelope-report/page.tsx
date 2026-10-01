@@ -9,7 +9,10 @@ import type { StandardFilterValue } from '@/lib/standard-filters'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
 import { apiUrl, absoluteApiUrl } from '@/lib/apiBase'
 
-// Envelope Report — OWNER DIRECTIVE 2026-09-02, verbatim: "a new report when all the envelopes can
+// Management Envelope Receipt (owner rename 2026-10-01; was 'Envelope Report' — DISPLAY only: the route
+// /closing/envelope-report, the report_key closing_envelope_report and the envelope_count table are
+// unchanged, per the Display Labels doctrine that a rename never renames a data path).
+// OWNER DIRECTIVE 2026-09-02, verbatim: "a new report when all the envelopes can
 // be filtered by using the standard filters... user can put their comments after counting the
 // actual cash marking it short or over and if it is short then checkmark for assigning it to the
 // sales rep as a chargeback if the cash is coming back as short - all comments chargebacks or any
@@ -197,7 +200,7 @@ export default function EnvelopeReportPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>✉️ Envelope Report</h1>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>✉️ Management Envelope Receipt</h1>
           {/* WHO / WHICH CASH, stated on the screen (owner question 2026-10-01: "what is the purpose of
               the envelope report and who is expected to fill that, which cash are we entering"). Deliberately
               a plain <p>, NOT a `.pg-note` — the help-text gate hides those from everyone but a Master admin
@@ -218,7 +221,7 @@ export default function EnvelopeReportPage() {
         </div>
         {!loading && rows.length > 0 && (
           <ReportExportBar
-            title="Envelope Report"
+            title="Management Envelope Receipt"
             subtitle={`${filt.period} → ${filt.periodTo || filt.period}${status ? ` · ${status}` : ''}`}
             filename={`envelope-report_${filt.period}_${filt.periodTo || filt.period}`}
             sheets={[

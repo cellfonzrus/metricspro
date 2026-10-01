@@ -3205,6 +3205,13 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   envelope link) and the dashboard export (`closing/_lib/SubmissionsTable.tsx` — DM columns +
   clickable envelope link) show original and modified side by side.
 
+- **RENAMED → "Management Envelope Receipt" (owner 2026-10-01).** DISPLAY ONLY — the nav label,
+  page heading, export title, the emailed report's title and the scheduled-report picker label. The route
+  `/closing/envelope-report`, the notify `report_key` `closing_envelope_report`, the `commcalc.envelope_count`
+  table and `closing/envelope_report.py` are all UNCHANGED, per the Display Labels doctrine that a rename
+  never renames a route, table, column or report_key. The name states who owns the step, which is the same
+  thing the paragraph below spells out.
+
 - **WHO FILLS THE ENVELOPE REPORT, AND WHICH CASH (owner question 2026-10-01):** **MANAGEMENT**,
   after the DM has collected the envelope — not the rep, not the DM. ONE envelope carries **three**
   numbers from three people, deliberately separate so a discrepancy has a direction and an owner:
