@@ -3205,6 +3205,33 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   envelope link) and the dashboard export (`closing/_lib/SubmissionsTable.tsx` — DM columns +
   clickable envelope link) show original and modified side by side.
 
+- **RENAMED → "Management Envelope Receipt" (owner 2026-10-01).** DISPLAY ONLY — the nav label,
+  page heading, export title, the emailed report's title and the scheduled-report picker label. The route
+  `/closing/envelope-report`, the notify `report_key` `closing_envelope_report`, the `commcalc.envelope_count`
+  table and `closing/envelope_report.py` are all UNCHANGED, per the Display Labels doctrine that a rename
+  never renames a route, table, column or report_key. The name states who owns the step, which is the same
+  thing the paragraph below spells out.
+
+- **WHO FILLS THE ENVELOPE REPORT, AND WHICH CASH (owner question 2026-10-01):** **MANAGEMENT**,
+  after the DM has collected the envelope — not the rep, not the DM. ONE envelope carries **three**
+  numbers from three people, deliberately separate so a discrepancy has a direction and an owner:
+  (1) the **rep declares** `daily_closing.t_cash` on the closing form; (2) the **DM counts** at pickup
+  (`cash_pickup.actual_picked_amount`, mig `949`); (3) **management counts** here
+  (`envelope_count.counted_amount`, mig `936`). **WHICH CASH = the WHOLE DRAWER:**
+  `envelope_report.expected_cash` is `t_cash` (fallback `store_cash`), which **INCLUDES** the
+  bill-payment cash — `epay_on_cash` is a breakdown *inside* that figure, not a second envelope (owner
+  verbatim "Total cash in store including Bill Payments"). The counter must **not** net bill-pay cash
+  out before counting; `deposit_recon.cash_for_basis`'s `store_cash = t_cash − epay_on_cash` is the NET
+  figure OTHER reports use and this one deliberately does not. Live example B-559 2026-09-06: t_cash 100
+  of which epay_on_cash 100 → expected 100, counted 100, variance 0, `match`. Stated on the page itself
+  (a plain `<p>`, not a help-gated `.pg-note`) + `closing/envelope_report.py` module docstring.
+  **TWO KNOWN GAPS, reported not fixed:** (a) `counted_by` defaults to the literal string
+  `"management"` (`save_envelope_count`), so a count records THAT management counted and never WHO —
+  while the pickup side names the person (`picked_up_by`); naming the counter needs the signed-in
+  identity threaded into that handler. (b) the report carries **no pickup state** — whether the
+  envelope was collected, by whom, when — although `cash_pickup` holds it at the same
+  (store_code, employee_name, close_date) grain the report already keys on (owner ask 2026-10-01).
+
 - **Envelope report + envelope-short chargebacks (owner directive 2026-09-02, mig `936`) — a
   REPORT:** one line per envelope (= one `daily_closing` rep-day row): declared cash, the
   management COUNT (`commcalc.envelope_count`, mig `936` — counted amount, variance,

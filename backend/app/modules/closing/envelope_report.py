@@ -6,6 +6,30 @@ or over and if it is short then checkmark for assigning it to the sales rep as a
 the cash is coming back as short - all comments chargebacks or any discrepancy over or short must
 be filterable with the date range with all our filters."
 
+WHO FILLS IT, AND WHICH CASH (owner question 2026-10-01: "what is the purpose of the envelope
+report and who is expected to fill that, which cash are we entering"). Stated here because the
+answer was only inferable from `expected_cash` below, and the same screen is read by three roles:
+
+  · WHO — **MANAGEMENT**, after the DM has collected the envelope. Not the rep, not the DM. ONE
+    envelope carries THREE numbers recorded by three different people, and they are deliberately
+    separate so a discrepancy has a direction and an owner:
+        1. the REP DECLARES    -> `daily_closing.t_cash`            (the daily closing form)
+        2. the DM COUNTS       -> `cash_pickup.actual_picked_amount` (mig 949, at pickup)
+        3. MANAGEMENT COUNTS   -> `envelope_count.counted_amount`    (mig 936, THIS report)
+    KNOWN GAP: `counted_by` defaults to the literal string "management" (router
+    `save_envelope_count`), so the row records THAT management counted and never WHO — while the
+    pickup side does name the person (`picked_up_by`). Naming the counter needs the signed-in
+    identity threaded into that handler; until then the report cannot answer "counted by whom".
+
+  · WHICH CASH — the WHOLE DRAWER. `expected_cash` is `t_cash` (fallback `store_cash`), which
+    INCLUDES the bill-payment (ePay) cash: `epay_on_cash` is a breakdown INSIDE that figure, not a
+    second envelope (owner verbatim 2026-09-02, "Total cash in store including Bill Payments";
+    `deposit_recon.cash_for_basis` defines store_cash = t_cash - epay_on_cash BY DEFINITION, which
+    is the NET figure other reports use — this one deliberately does NOT net it). So the counter
+    must NOT subtract bill-payment cash before counting, and an envelope whose whole drawer is
+    bill-pay cash still expects that full amount here. Example (B-559, 2026-09-06): t_cash 100 of
+    which epay_on_cash 100 -> expected 100, counted 100, variance 0, status "match".
+
 WHAT AN "ENVELOPE" IS HERE: one `commcalc.daily_closing` row (one rep, one store, one day — the
 grain the envelope photo + declared cash already live at). The management count lands in
 `commcalc.envelope_count` (mig 936, one row per closing row): counted amount, over/short status,

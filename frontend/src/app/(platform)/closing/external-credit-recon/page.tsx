@@ -50,7 +50,7 @@ export default function CardSettlementReconPage() {
   const reqRef = useRef(0)
 
   // Store options: the canonical org-scoped roster (pick-don't-type) — the same source DM Verify
-  // and the Envelope Report use, never a second roster read.
+  // and the Management Envelope Receipt use, never a second roster read.
   const [pStores, setPStores] = useState<any[]>([])
   useEffect(() => {
     apiCached('/api/v1/closing/stores', LOOKUP).then((s: any) => setPStores(Array.isArray(s) ? s : [])).catch(() => {})
