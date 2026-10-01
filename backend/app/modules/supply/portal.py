@@ -105,18 +105,47 @@ def catalog_pull_on_page(client, org_id, src_row, page, should_stop=None):
     return res
 
 
+def sign_in(page, cfg, src, classify, scraper_cls):
+    """(ok, how_or_why) — get a supply vendor's portal page signed in. ONE login routine for supply vendors:
+    the catalog reader's own VendorScraper.login (shared with the price-compare kit), which follows the
+    vendor's login recipe in its portal config — the login page, the "Log in" link to click when the
+    password box is not on that page, the field selectors. The scheduled read used a second, generic
+    driver that knew none of it, so a vendor whose login sits behind a link never signed in (live
+    2026-09-30: "it shows 'unknown'"). harness_supply_sweep_login.py locks this to the one routine.
+
+    `classify` (vidapay_sweep._classify) only answers "is the restored session already in?"."""
+    state = classify(page)
+    if state == "authenticated":
+        return True, "saved session"
+    user = (src.get("username") or src.get("account_id") or "").strip()
+    if not (user and src.get("password")):
+        return False, f"no saved login (the portal shows '{state}')"
+    s = scraper_cls(page, cfg, user, src.get("password"), None, log=lambda *_a, **_k: None, interactive=False)
+    if s.login():
+        return True, "signed in"
+    return False, "; ".join(n.replace("automatic login: ", "") for n in s.notes) or f"the portal shows '{state}'"
+
+
 def run_catalog_sweep(client, org_id, src_row):
     """SCHEDULED catalog read (the `_SOURCE_SCRAPERS` handler for SUPPLY_PROCESSOR). Restores the saved
-    session when there is one, else signs in with the stored login through the SHARED typed-login driver.
-    Raises vidapay_sweep.VidaPayAuthError when the portal will not let us in, which run_data_source turns
-    into the needs-login prompt on the login row (a human then uses the live login once)."""
+    session when there is one, else signs in with the stored login through sign_in() — the vendor's own
+    login recipe. Raises vidapay_sweep.VidaPayAuthError when the portal will not let us in, which
+    run_data_source turns into the needs-login prompt on the login row (a human then uses the live login
+    once)."""
     vp = _vp()
     src = dict(src_row or {})
     if not (src.get("portal_url") or "").strip():
         raise vp.VidaPayAuthError("This supply login has no portal address.")
+    vendor = store.vendor_for_source(client, org_id, src.get("id"))
+    if not vendor:
+        raise vp.VidaPayAuthError("This login is not linked to a supply vendor (Supply → Vendors → Login).")
     assert_browser_allowed()
     from playwright.sync_api import sync_playwright
     url = vp._norm_url(src.get("portal_url"), src.get("portal_url"))    # SSRF guard, use-time
+    cfg = L.vendor_scrape_config(vendor)
+    login = dict(cfg.get("login") or {})
+    login["url"] = vp._norm_url(login.get("url") or url, url)            # the recipe's page, same guard
+    cfg["login"] = login
     with sync_playwright() as p:
         browser = vp._launch(p)
         try:
@@ -125,21 +154,16 @@ def run_catalog_sweep(client, org_id, src_row):
             page = ctx.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
             vp._wait_settle(page)
-            state = vp._classify(page)
-            if state == "login" and src.get("password") and (src.get("username") or src.get("account_id")):
-                fr, pw = vp._password_frame(page)
-                if pw:
-                    vp.drive_typed_login(page, fr, pw, src.get("account_id"), src.get("username"), src.get("password"))
-                    try:
-                        page.wait_for_load_state("networkidle", timeout=25000)
-                    except Exception:
-                        pass
-                    vp._wait_settle(page)
-                    state = vp._classify(page)
-            if state != "authenticated":
+            ok, why = sign_in(page, cfg, src, vp._classify, _scraper().VendorScraper)
+            if not ok:
+                where = ""
+                try:
+                    where = f" (ended on '{(page.title() or '').strip()[:80]}')"
+                except Exception:
+                    pass
                 raise vp.VidaPayAuthError(
-                    "The vendor portal did not accept the saved login (it shows '%s'). Open the live login "
-                    "once from Supply → Vendors to sign in by hand." % state)
+                    f"The vendor portal did not accept the saved login: {why}{where}. Open the live login once "
+                    "from Supply → Vendors (Read catalog) to sign in by hand, or check the vendor's login settings.")
             res = catalog_pull_on_page(client, org_id, src, page)
             try:
                 res["storage_state"] = vp.capture_session_state(page, ctx)

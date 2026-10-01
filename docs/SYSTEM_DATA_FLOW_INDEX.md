@@ -13264,6 +13264,8 @@ PRICES (two routes, ONE lander supply/store.land_catalog → commcalc.vendor_cat
    (b) portal read — LIVE: POST /supply/vendors/{id}/catalog/read → commcalc live_login_start → _live_pull →
        supply.portal.catalog_pull_on_page;  SCHEDULED: /commcalc/data-sources/sweep/run-due →
        _SOURCE_SCRAPERS[SUPPLY_PROCESSOR] → supply.portal.run_catalog_sweep (assert_browser_allowed)
+       — signs in through supply.portal.sign_in → THE one supply login (catalog_scrape.VendorScraper.login,
+         the vendor's login recipe: login page, "Log in" link text, field selectors); lock harness_supply_sweep_login.py
        both walk the catalog with THE one reader (supply/catalog_scrape.VendorScraper.crawl — the kit's own code)
 COMPARE  GET /supply/compare — newest run per vendor → pricing_core.group_products → comparison_rows
 CART     POST /supply/cart/optimize — ordering_logic.optimize_cart (thresholds, fee, lead time, stock, packs)
@@ -13298,7 +13300,8 @@ CONFIRM  POST …/capture — reads the page: detect_confirmation (configured ur
   `create_order` (asset `_next_po_number`), `list_orders`, `order_detail`, `save_cart_evidence`, `set_status` /
   `record_confirmation` (asset `_validate_status_transition`).
 - **Browser:** `supply/portal.py` — `SUPPLY_PROCESSOR`, `is_supply_source`, `catalog_pull_on_page`,
-  `run_catalog_sweep`, `run_step`, `build_cart`, `capture_confirmation`, `order_session`, `cart_persist`,
+  `run_catalog_sweep` (signs in via **`sign_in`** → `VendorScraper.login`, the vendor's recipe — 2026-10-01: the
+  scheduled read used a generic driver that ignored the recipe, so a login behind a link never signed in), `run_step`, `build_cart`, `capture_confirmation`, `order_session`, `cart_persist`,
   `register_order_session` / `order_state` (in-process, the same single-worker caveat as `live_login`).
 - **HTTP:** `supply/router.py` (prefix `/supply`, registered in `main.py` beside marketing). Billing route map:
   `module_usage.DEFAULT_ROUTE_MODULE["supply"] = "supply_ordering"`.
