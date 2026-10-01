@@ -10,7 +10,7 @@
 //   • Interactive table / clickable list        → keep your table, add <ReportExportBar columns rows/>.
 //   • Dashboard tiles (non-tabular)             → pass `sheets` = a one-sheet [{Metric, Value}] summary
 //                                                  (optionally + a detail sheet). See the audit doctrine.
-import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
+import { ExportButtons, type ExportColumn, type ExportPayload, type ExportSheet } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 
 export type { ExportColumn } from '@/lib/export'
@@ -23,7 +23,7 @@ export function ReportExportBar({
   filename?: string
   columns?: ExportColumn[]
   rows?: any[]                                                       // the CURRENTLY-FILTERED/VISIBLE rows
-  sheets?: { name: string; columns: ExportColumn[]; rows: any[] }[]  // multi-sheet (e.g. tiles + a detail list)
+  sheets?: ExportSheet[]                                             // multi-sheet (e.g. tiles + a detail list)
   compact?: boolean
   right?: React.ReactNode
   style?: React.CSSProperties
@@ -33,7 +33,7 @@ export function ReportExportBar({
     title, subtitle,
     filename: filename || title.replace(/[^\w]+/g, '_').toLowerCase(),
     sheets: sheets && sheets.length
-      ? sheets.map(s => ({ name: s.name.slice(0, 28), columns: s.columns.filter(Boolean), rows: s.rows }))
+      ? sheets.map(s => ({ ...s, name: s.name.slice(0, 28), columns: s.columns.filter(Boolean) }))   // keeps heading / pageBreakBefore
       : [{ name: 'Report', columns: (columns || []).filter(Boolean), rows: rows || [] }],
   })
   return (

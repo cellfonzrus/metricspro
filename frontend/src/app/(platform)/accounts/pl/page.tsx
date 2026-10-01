@@ -14,8 +14,8 @@ import { StalenessBanner } from '../_components/StalenessBanner'
 import ScreenLink from '@/components/ScreenLink'
 import { statementInfoSheet, statementSubtitle, type StatementMeta } from '../_components/statementExport'
 import PLRangeExport from '../_components/PLRangeExport'
-
-const SECTION_TITLE: Record<string, string> = { revenue: 'Revenue', cogs: 'Cost of Goods Sold', opex: 'Operating Expenses', other: 'Other' }
+import PLPerStorePrint from '../_components/PLPerStorePrint'
+import { PL_COLUMNS, PL_SECTION_TITLE as SECTION_TITLE, plQuery, plStatementRows } from '../_components/plStatement'
 
 function PLInner() {
   const { period, periods } = usePeriod()
@@ -33,7 +33,6 @@ function PLInner() {
   // byte-identical to before (the stored snapshot for the chosen company scope).
   const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
   const [fopts, setFopts] = useState<{ stores?: any[]; markets?: string[] }>({})
-  const filterActive = filt.stores.length > 0 || filt.markets.length > 0
   const filtKey = `${filt.stores.join('|')}|${filt.markets.join('|')}`
 
   useEffect(() => {
@@ -47,9 +46,8 @@ function PLInner() {
 
   useEffect(() => {
     setLoading(true)
-    const q = `scope=${encodeURIComponent(scope)}&org_id=${ORG_ID}`
-      + (filterActive ? `&stores=${encodeURIComponent(filt.stores.join('|'))}&markets=${encodeURIComponent(filt.markets.join('|'))}` : '')
-    api(`/api/v1/account/pl/${encodeURIComponent(period)}?${q}`)
+    // THE single-month read's query (plStatement.plQuery) — the same builder "Print each store" uses.
+    api(plQuery(period, scope, filt.stores, filt.markets, ORG_ID))
       .then(setData).catch(console.error).finally(() => setLoading(false))
   }, [period, scope, reloadKey, filtKey])   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -79,21 +77,9 @@ function PLInner() {
     }
   }
   function plSheets(): ExportSheet[] {
-    const rows: any[] = []
-    ;(st?.sections || []).forEach((s: any) => {
-      s.lines.forEach((l: any) => rows.push({ section: SECTION_TITLE[s.type] || s.type, line: l.label, amount: l.amount }))
-      rows.push({ section: SECTION_TITLE[s.type] || s.type, line: `  Subtotal — ${SECTION_TITLE[s.type] || s.type}`, amount: s.subtotal })
-    })
-    rows.push({ section: 'Totals', line: 'Gross Profit', amount: st?.gross_profit })
-    rows.push({ section: 'Totals', line: 'Net Operating Income', amount: st?.net_operating_income })
-    rows.push({ section: 'Totals', line: 'Net Income', amount: st?.net_income })
     const sheets: ExportSheet[] = [
       statementInfoSheet(plMeta()),                                   // self-describing cover (Excel too)
-      { name: 'P&L', rows, columns: [
-        { header: 'Section', get: (r: any) => r.section },
-        { header: 'Line', get: (r: any) => r.line },
-        { header: 'Amount', get: (r: any) => r.amount, money: true },
-      ] },
+      { name: 'P&L', rows: plStatementRows(st), columns: PL_COLUMNS },  // the shared P&L layout (plStatement)
     ]
     // Multi-sheet: a company-wide company/store breakdown for the SAME period — every computed scope
     // the dropdown offers — so one export answers "which store drove it". Numbers are the stored
@@ -134,6 +120,11 @@ function PLInner() {
               one column per month + a Total, every month the single-month P&L read above. */}
           <PLRangeExport period={period} periods={periods} scope={scope} scopeLabel={st?.scope_label || scope}
             stores={filt.stores} markets={filt.markets} />
+          {/* PRINT EACH STORE (owner 2026-10-01, index §4d): one printed page per store — the stores picked
+              in the Store filter, else every store the filter / company covers — each page that store alone. */}
+          <PLPerStorePrint period={period} scope={scope}
+            companyLabel={(scopes.find((s: any) => s.scope_key === scope)?.scope_label) || scope}
+            stores={filt.stores} markets={filt.markets} allStores={storeOpts.map(o => o.id)} storeMarket={storeMarket} />
         </div>
       </div>
 

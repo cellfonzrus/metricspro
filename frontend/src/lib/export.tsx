@@ -63,7 +63,16 @@ export type ExportColumn = {
   render?: (row: any) => ReactNode                 // custom cell rendering (e.g. per-column number format)
   tip?: string                                     // header tooltip
 }
-export type ExportSheet = { name: string; columns: ExportColumn[]; rows: any[] }
+export type ExportSheet = {
+  name: string; columns: ExportColumn[]; rows: any[]
+  // Optional, opt-in (2026-10-01, index §4d — "print each store's P&L individually"): a sheet that is
+  // its OWN printed document. `heading` / `subheading` replace the small sheet caption with a full
+  // page header in the PDF + Print, and `pageBreakBefore` starts the sheet on a NEW page there (the
+  // first sheet never breaks). Excel keeps one tab per sheet as always. Absent = byte-identical output.
+  heading?: string
+  subheading?: string
+  pageBreakBefore?: boolean
+}
 export type ExportPayload = {
   title: string
   subtitle?: string
@@ -113,6 +122,7 @@ function hasRows(p: ExportPayload) {
 async function buildWorkbook(p: ExportPayload) {
   const XLSX = await import('xlsx')
   const wb = XLSX.utils.book_new()
+  const usedNames = new Set<string>()
   for (const sheet of p.sheets) {
     const aoa: (string | number)[][] = [sheet.columns.map(c => c.header)]
     for (const row of sheet.rows) aoa.push(sheet.columns.map(c => rawCell(c, row)))
@@ -132,7 +142,12 @@ async function buildWorkbook(p: ExportPayload) {
         if (cell && typeof cell.v === 'number') cell.z = '$#,##0.00'
       }
     }
-    const safe = sheet.name.replace(/[\\/?*[\]:]/g, ' ').slice(0, 31) || 'Sheet'
+    // Tab names must be unique (SheetJS throws on a duplicate); two long names can collide once cut to
+    // 31 characters (e.g. one tab per store address), so a repeat gets a " (2)", " (3)" suffix.
+    const base = sheet.name.replace(/[\\/?*[\]:]/g, ' ').slice(0, 31) || 'Sheet'
+    let safe = base
+    for (let k = 2; usedNames.has(safe.toLowerCase()); k++) safe = `${base.slice(0, 31 - ` (${k})`.length)} (${k})`
+    usedNames.add(safe.toLowerCase())
     XLSX.utils.book_append_sheet(wb, ws, safe)
   }
   return { XLSX, wb }
@@ -215,8 +230,19 @@ async function buildPdfDoc(p: ExportPayload) {
       }
     } catch { /* chart is best-effort; table still exports */ }
   }
-  for (const sheet of p.sheets) {
-    if (p.sheets.length > 1) {
+  p.sheets.forEach((sheet, si) => {
+    if (sheet.pageBreakBefore && si > 0) { doc.addPage(); startY = 50 }
+    if (sheet.heading) {
+      doc.setFontSize(13); doc.setTextColor(15, 23, 42)
+      doc.text(sheet.heading, 40, startY)
+      startY += 14
+      if (sheet.subheading) {
+        doc.setFontSize(9); doc.setTextColor(100, 116, 139)
+        doc.text(sheet.subheading, 40, startY)
+        startY += 12
+      }
+      startY += 4
+    } else if (p.sheets.length > 1) {
       doc.setFontSize(11); doc.setTextColor(30, 58, 95)
       doc.text(sheet.name, 40, startY)
       startY += 10
@@ -236,7 +262,7 @@ async function buildPdfDoc(p: ExportPayload) {
       margin: { left: 40, right: 40 },
     })
     startY = (doc as any).lastAutoTable.finalY + 26
-  }
+  })
   return doc
 }
 export async function renderPdfBase64(p: ExportPayload) {
@@ -263,8 +289,11 @@ export async function printReport(p: ExportPayload) {
   if (!w) { alert('Pop-up blocked — allow pop-ups to print.'); return }
   const audit = await auditExport(p, 'print')
   if (audit.blocked) { try { w.close() } catch { /* noop */ } alert(capMessage(audit.max)); return }
-  const tables = p.sheets.map(sheet => `
-    ${p.sheets.length > 1 ? `<h2>${esc(sheet.name)}</h2>` : ''}
+  const tables = p.sheets.map((sheet, si) => `
+    ${sheet.pageBreakBefore && si > 0 ? '<div class="pb"></div>' : ''}
+    ${sheet.heading
+      ? `<h1>${esc(sheet.heading)}</h1>${sheet.subheading ? `<p class="sub">${esc(sheet.subheading)}</p>` : ''}`
+      : p.sheets.length > 1 ? `<h2>${esc(sheet.name)}</h2>` : ''}
     <table>
       <thead><tr>${sheet.columns.map(c => `<th class="${c.money || c.align === 'right' ? 'r' : ''}">${esc(c.header)}</th>`).join('')}</tr></thead>
       <tbody>${sheet.rows.map(row => `<tr>${sheet.columns.map(c =>
@@ -281,6 +310,8 @@ export async function printReport(p: ExportPayload) {
       tr:nth-child(even) td{background:#f1f5f9}
       .r{text-align:right} img.chart{max-width:100%;height:auto;margin:0 0 18px;border:1px solid #e2e8f0;border-radius:8px}
       .wm{margin-top:18px;padding-top:8px;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:10px}
+      .pb{break-before:page;page-break-before:always;height:0}
+      tr{break-inside:avoid}
       @media print{body{margin:10mm}}
     </style></head><body>
     <h1>${esc(p.title)}</h1>${p.subtitle ? `<p class="sub">${esc(p.subtitle)}</p>` : ''}
