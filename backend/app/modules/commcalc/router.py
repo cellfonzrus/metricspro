@@ -12917,6 +12917,17 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
     dispatch = _sweep_registry()
+    # CLOSE OUT WHAT THE LAST TICK'S DEAD RUNS LEFT BEHIND, BEFORE DISPATCHING THIS ONE.
+    # A parse killed mid-flight (request timeout, OOM, deploy, worker restart) cannot write its own
+    # status — its `finally` never runs — so the batch sits in `core.import_batches.status='parsing'`
+    # for ever. That is not only invisible: the duplicate guard's unique index is partial on
+    # `status <> 'failed'`, so the stranded row BLOCKS THE RE-IMPORT OF ITS OWN FILE, and the sweep
+    # below would refuse the same attachment as a duplicate. Reaping first is what lets this very tick
+    # land the file the last one died on. Best-effort and never raises (owner directive 2026-09-30).
+    try:
+        _reaped = _import_batches.reap_stale()
+    except Exception as _re:                      # pragma: no cover - belt and braces; reap_stale eats its own
+        _reaped = {"reaped": 0, "error": str(_re)[:200]}
     conns = (client.schema('commcalc').table('connector_instances').select('*')
              .eq('enabled', True).execute().data) or []
     triggered, checked, blocked = [], 0, []
@@ -12992,7 +13003,10 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
         triggered.append(c.get('vendor_name'))
     return {"triggered": triggered, "checked": checked,
             # Never silent: a connector this service could not launch is named, with why.
-            **({"blocked": blocked} if blocked else {})}
+            **({"blocked": blocked} if blocked else {}),
+            # Nor is a dead run's wreckage: if the last tick's parse was killed, say how many batches
+            # this tick closed out, so the reaping is on the record rather than only in the log.
+            **({"reaped_batches": _reaped} if (_reaped or {}).get("reaped") else {})}
 
 
 # ── Chargeback review bucket (VIP file + fraud) → assign to the rep → employee chargeback ────
@@ -35592,7 +35606,24 @@ def _scan_connector_health(client):
                     "ref_key": f"connector:{table}:{r.get('id')}:unmonitored",
                 })
                 continue
-            failed = ("error" in status) or ("fail" in status) or ("403" in status)
+            # A PARTIAL DELIVERY IS A FAILURE, NOT A SUCCESS (owner directive 2026-09-30).
+            # Measured live that day: `vip_sweep_config` last ran 2026-09-25 with status 'partial' and
+            # this scan said NOTHING about it, 118 hours later. Not a bug in the stale arm — VIP is
+            # WEEKLY, so its own window is 336h (`_connector_stale_window`) and it would not be called
+            # late until 09 October, a fortnight after the last run that actually delivered everything.
+            # That is the asset-ledger feed behind device COGS and the balance-sheet inventory.
+            #
+            # `partial` means the sweep fetched SOME of what it came for. Treating it as success made
+            # the freshness clock restart on an incomplete pull, so a feed could degrade for two weeks
+            # with every lamp green. It now reads as a failure the moment it happens, which is also
+            # what makes the episode key (`last_run_at`) honest: one alert per episode, cleared by the
+            # next COMPLETE run rather than by the next partial one.
+            #
+            # Deliberately NOT included: 'skipped'. A skipped run did not try (a lock held, a mailbox
+            # with nothing new) and has its own meaning; calling that a failure would re-create exactly
+            # the alert noise this scan spent §19.17 removing.
+            failed = (("error" in status) or ("fail" in status) or ("403" in status)
+                      or ("partial" in status))
             # LATE FOR THIS CONNECTOR, not late by one global number (see _connector_stale_window).
             hrs, _freq = _connector_stale_window(
                 r, stale_hours.get(str(r.get("org_id") or ORG_ID), _CONNECTOR_STALE_HOURS))

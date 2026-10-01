@@ -191,6 +191,8 @@ on:
       - "backend/harness_line_class.py"
       - "backend/harness_activation_event_lock.py"
       - "backend/harness_activation_bucketing.py"
+      - "backend/harness_sweep_failures_visible.py"
+      - "backend/app/core/import_batches.py"
       - "backend/harness_activation_event.py"
       - "backend/harness_ready_app_denominator.py"
       - "backend/harness_dlar_vs_platform.py"
@@ -449,6 +451,9 @@ jobs:
       - name: Run the activation-bucketing proof (the Activation-Details classifier and its org-scoped rules loader — index §19.25c)
         working-directory: backend
         run: python3 harness_activation_bucketing.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the sweep-failure visibility proof (a dead parse is reaped, a partial delivery is a failure — index §43)
+        working-directory: backend
+        run: python3 harness_sweep_failures_visible.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the multi-month offer lock (multi-month is offered only through the one predicate; money is never hidden — index §6h)
         working-directory: backend
         run: python3 harness_multimonth_offer_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

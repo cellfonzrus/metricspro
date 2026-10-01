@@ -14048,3 +14048,74 @@ change, and it is not correct on its own — see §42.5.
 `asset_ledger_open_bookings`) · `backend/harness_device_inventory_cogs.py` (**41 checks**, stdlib,
 DB-free, synthetic IMEIs; run by `.github/workflows/carrier-vocab-guard.yml` job
 `finance-royalty-proof`).
+
+---
+
+## §43 A SWEEP FAILURE IS NEVER SILENT — a dead parse is reaped, a partial delivery is a failure
+
+**Owner directive 2026-09-30:** *"Why do we have so many errors in sweeping data - this is the lifeline
+of our system - need to make it foolproof it"*.
+
+### 43.1 The diagnosis inverted the question
+
+**MEASURED FIRST.** September 2026: **9,835 import batches, 9,789 `loaded`, 2 `failed` — 99.55%
+success.** The pipeline is not fragile. Two things are wrong and they point in opposite directions:
+
+- **The alerts fire for failures that already fixed themselves.** B2B Soft reported
+  `connect error: command: FETCH => Server shutting down` at 06:04 on 09-30 and ingested **11/11
+  attachments at 12:07**, untouched. The sweeps run hourly; a blip pages the owner and the next run
+  repairs it. That is the noise he was reacting to.
+- **The failures that matter were silent.** 44 batches died mid-parse in September with no
+  `completed_at`, no `row_count`, no `error_detail` — an eternal `parsing`. And `vip_sweep_config`
+  last ran 2026-09-25 with status `partial`, and the health scan said nothing 118 hours later.
+
+### 43.2 A batch left in `parsing` is a run that DIED, and no in-process guard can close it
+
+The one claim site (`commcalc/router._upload_file`) **already** closes batches out in a `finally`, on
+both the error and the success path. **A `finally` does not run when the process is killed** — a hung
+parse reaped by a request timeout, an OOM, a deploy mid-run, a worker restart. So no context manager
+or try/except can fix this: the code that would write the status is gone. The only mechanism that
+survives process death is an out-of-band sweep.
+
+**It is not cosmetic.** The duplicate guard's unique index is partial on `status <> 'failed'`, so a
+batch stranded in `parsing` **blocks the re-import of its own file for ever**. Reaping it is what
+releases the hash and lets the next sweep land that attachment — which is why the reaper runs BEFORE
+dispatch on the tick, not after.
+
+| fact | home | callers |
+|---|---|---|
+| which batches a dead run left behind | `core/import_batches.stale_parsing` (pure; `REAP_AFTER_HOURS_DEFAULT = 6`) | `import_batches.reap_stale` |
+| closing them out | `import_batches.reap_stale` → the existing `fail()` (never `complete()`) | `commcalc/router.connectors_run_due`, before dispatch; count returned as `reaped_batches` |
+
+Conservative by construction: a parse inside the window is left strictly alone (the window is HOURS so
+a slow parse is never killed by its own bookkeeping), and **an unreadable `created_at` is reported with
+`reason=None` and never reaped on a guess** — §19.26's *missing beats wrong*, applied to a write.
+
+### 43.3 A partial delivery is a failure, a skipped run is not
+
+`_scan_connector_health`'s failure predicate gained `partial`. **Why it mattered:** VIP is WEEKLY, so
+its own stale window is 336h (`_connector_stale_window`) — a `partial` run restarted the freshness
+clock, so the feed could degrade for a fortnight with every lamp green. That is the asset-ledger feed
+behind device COGS and the balance-sheet inventory (§42). Treating `partial` as a failure also makes
+the episode key honest: `last_run_at` is the last COMPLETE run, so one alert per episode is cleared by
+a full delivery rather than by another partial one.
+
+`skipped` is deliberately **not** a failure — a skipped run did not try (a lock held, nothing new), and
+calling it one would re-create exactly the alert noise §19.17 removed.
+
+### 43.4 Reported, not fixed here
+
+- **69 of the 73 stranded batches are two sources: `inventory_aging` (38) and `daily_sales` (31)**, the
+  newest at 2026-09-30T15:08. That concentration is a PARSER defect to diagnose on its own evidence,
+  not something this change papers over. §43 makes the death visible and the retry possible; it does
+  not stop parses dying.
+- **In-run retry/backoff for transient remote errors is NOT in this change.** It needs transport
+  changes in the IMAP and portal paths, and next to the silent failures above the transient noise is
+  cosmetic — the next hourly run already repairs it. Stated so nobody reads §43 as having delivered it.
+
+**Proof** `backend/harness_sweep_failures_visible.py` (**50 checks**, stdlib, DB-free; run by
+`.github/workflows/carrier-vocab-guard.yml`). Each rule verified to go RED when the fix is removed:
+`partial` back to healthy, the reaper un-wired from the tick, and the reaper guessing on an unreadable
+timestamp. Existing cover kept and not duplicated: `harness_sweep_honesty.py` (honest-zero outcomes)
+and `harness_sweep_freshness.py` (a sweep that delivered nothing may not stamp `last_run_at`) own the
+sweep-journal layer; §43 is the BATCH layer and the health predicate.
