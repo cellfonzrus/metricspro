@@ -365,6 +365,7 @@ on:
       - "frontend/src/components/ClosingSubmitForm.tsx"
       - "backend/app/modules/supply/**"
       - "backend/harness_supply_ordering.py"
+      - "backend/harness_supply_sweep_login.py"
       - "backend/harness_paramount_kpi_lock.py"
       - "backend/app/modules/commcalc/paramount_kpi.py"
       - "backend/harness_kpi_registry_lock.py"
@@ -501,6 +502,9 @@ jobs:
       - name: Run the vendor price-compare proof (price / pack / stock reading, cross-vendor matching, cheapest in stock; no vendor or password in code; the crawler refuses cart / order links — index §34)
         working-directory: backend
         run: python3 harness_vendor_price_compare.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the supply sweep login lock (the scheduled catalog read signs in through the vendor's own login recipe — the one VendorScraper.login — never a second generic driver; index §36)
+        working-directory: backend
+        run: python3 harness_supply_sweep_login.py | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the tenant-vertical lock (one business-type declaration; every module / page / route / carrier gate asks it; mirror = seed; no vertical spelled in code — index §35)
         working-directory: backend
         run: python3 harness_tenant_vertical.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
