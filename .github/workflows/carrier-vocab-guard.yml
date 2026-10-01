@@ -451,9 +451,6 @@ jobs:
       - name: Run the activation-bucketing proof (the Activation-Details classifier and its org-scoped rules loader — index §19.25c)
         working-directory: backend
         run: python3 harness_activation_bucketing.py | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the sweep-failure visibility proof (a dead parse is reaped, a partial delivery is a failure — index §43)
-        working-directory: backend
-        run: python3 harness_sweep_failures_visible.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the multi-month offer lock (multi-month is offered only through the one predicate; money is never hidden — index §6h)
         working-directory: backend
         run: python3 harness_multimonth_offer_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -721,6 +718,26 @@ jobs:
       - name: Run the multi-month ledger upload proof (batch == N single imports; refusals; replace rule; per-file isolation)
         working-directory: backend
         run: python3 harness_ledger_batch.py | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE SWEEP-FAILURE VISIBILITY PROOF (index §43) drives the REAL app/core/import_batches reaper decision and
+  # reads the connector-health predicate out of the commcalc router: a batch a dead run stranded in `parsing` is
+  # reaped (a `finally` cannot do it — the process was killed), reaping releases the partial unique index so the
+  # same file can be re-imported, and a `partial` sweep status counts as a failure while `skipped` does not.
+  # It imports app.core.import_batches, which imports the Supabase client, so it runs in its own job with the
+  # backend's dependencies — NOT in carrier-vocab-guard, which installs nothing
+  # (harness_ci_pipefail_lock.py fails the build if this step moves back).
+  sweep-failure-visibility-proof:
+    name: Sweep-failure visibility proof (DB-free, the real reaper)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the sweep-failure visibility proof (a dead parse is reaped, reaping releases the retry, a partial delivery is a failure — index §43)
+        working-directory: backend
+        run: python3 harness_sweep_failures_visible.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE FRANCHISE ROYALTY P&L PROOF (index §37) drives the REAL coa.build_inputs / engine._assemble / statement_engine /
   # statement_filter / royalty router over an in-memory client: the house org's P&L is byte-identical to the frozen
