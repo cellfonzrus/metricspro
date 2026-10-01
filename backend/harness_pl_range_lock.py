@@ -22,6 +22,8 @@ FAILS THE BUILD WHEN:
   L7  the frontend range export stops reading `/api/v1/account/pl-range`, calls the single-month endpoint
       itself, or adds up a number; a NEW frontend file calls the single-month endpoint (the place a per-month
       loop would hide) outside the allow-list below;
+  L7c Print each store (index §4d): the P&L page or the per-store print stops reading through THE one query builder
+      `plStatement.plQuery`, the per-store print reads stores together / enumerates months / adds a number;
   L8  negative controls — each planted violation turns the matching check RED.
 
     python3 backend/harness_pl_range_lock.py
@@ -40,9 +42,12 @@ NOTIFY = os.path.join(APP, "modules", "notify", "finance_reports.py")
 FE_HELPER = "app/(platform)/accounts/_components/plRangeExport.ts"
 FE_COMPONENT = "app/(platform)/accounts/_components/PLRangeExport.tsx"
 FE_PAGE = "app/(platform)/accounts/pl/page.tsx"
+FE_PL_QUERY = "app/(platform)/accounts/_components/plStatement.ts"          # THE single-month query builder (§4d)
+FE_PER_STORE = "app/(platform)/accounts/_components/PLPerStorePrint.tsx"    # "Print each store" (§4d)
 # frontend files that read the SINGLE-month endpoint — each reads ONE month, with WHY it is not a range path
 FE_SINGLE_ALLOWED = {
-    FE_PAGE: "the P&L page itself — one month, the section period switcher",
+    FE_PL_QUERY: "THE single-month P&L query builder (plQuery) — one month, one scope / filter; read by the P&L "
+                 "page (the section period switcher) and by Print each store (the page's month, one store per call)",
     "app/(platform)/accounts/_components/scopeFinancials.ts": "the Account hub's per-scope drill-down — one month",
 }
 FORBIDDEN_IN_RANGE = ("_read(", "_filtered_read(", "filtered_statement(", "statement_engine.", "_assemble(",
@@ -239,6 +244,29 @@ def l7_frontend(fe_files):
     return not problems, problems
 
 
+def l7c_per_store(fe_files):
+    """Print each store (index §4d): the page and the per-store print both read the ONE single-month query builder;
+    the per-store print reads the page's ONE month, one store per call, never months, and adds nothing."""
+    problems = []
+    page = ts_code(fe_files.get(FE_PAGE, ""))
+    comp = ts_code(fe_files.get(FE_PER_STORE, ""))
+    helper = ts_code(fe_files.get(FE_PL_QUERY, ""))
+    if "api(plQuery(period, scope, filt.stores, filt.markets, ORG_ID))" not in page:
+        problems.append("the P&L page no longer reads its month through plQuery")
+    if "<PLPerStorePrint" not in page:
+        problems.append("the P&L page no longer renders Print each store")
+    if "plQuery(period, scope, [list[i]], [], ORG_ID)" not in comp:
+        problems.append("Print each store no longer reads each store ALONE through plQuery for the page's month")
+    if re.search(r"\bperiods\b|month_range|pl-range", comp):
+        problems.append("Print each store enumerates months (it prints ONE month — the page's)")
+    for label, code in (("per-store print", comp), ("query builder", helper)):
+        if re.search(r"\.reduce\(|\+=|-=|Math\.round|toFixed\(", code):
+            problems.append(f"the {label} adds up / rounds a number")
+    if "export function plQuery(" not in helper or "export function plStatementRows(" not in helper:
+        problems.append("plStatement.ts no longer owns plQuery / plStatementRows")
+    return not problems, problems
+
+
 def walk(root, exts):
     out = {}
     for dp, dirs, fs in os.walk(root):
@@ -267,6 +295,9 @@ check("L6 the scheduled report account_pl_range reads get_pl_range and ships its
 ok, d = l7_frontend(fe_files)
 check("L7 the frontend range export reads /account/pl-range, adds nothing; no new single-month reader", ok, d)
 excuses_true = all(("/api/v1/account/pl/" in ts_code(fe_files.get(rel, ""))) for rel in FE_SINGLE_ALLOWED)
+ok, d = l7c_per_store(fe_files)
+check("L7c Print each store: page + per-store print read THE one query builder; one month, one store per call, "
+      "adds nothing", ok, d)
 check("L7b every allow-listed single-month reader still exists and still reads it (no stale excuse)", excuses_true)
 
 print("\n── L8: negative controls (each plant must turn its check RED) ────────────────────────────────")
@@ -308,6 +339,21 @@ check("L8k a new page looping the single-month endpoint → L7 RED", not l7_fron
 fe_bad = dict(fe_files)
 fe_bad[FE_HELPER] = fe_bad[FE_HELPER] + "\nexport const t = (xs: number[]) => xs.reduce((a, b) => a + b, 0)\n"
 check("L8l the frontend helper adding up a Total → L7 RED", not l7_frontend(fe_bad)[0])
+fe_bad = dict(fe_files)
+fe_bad[FE_PER_STORE] = fe_bad[FE_PER_STORE] + "\nexport const tot = (xs: number[]) => xs.reduce((a, b) => a + b, 0)\n"
+check("L8m Print each store adding up a number → L7c RED", not l7c_per_store(fe_bad)[0])
+fe_bad = dict(fe_files)
+fe_bad[FE_PER_STORE] = fe_bad[FE_PER_STORE].replace("plQuery(period, scope, [list[i]], [], ORG_ID)",
+                                                    "plQuery(period, scope, list, [], ORG_ID)")
+check("L8n Print each store reading the stores TOGETHER (not each alone) → L7c RED",
+      fe_bad[FE_PER_STORE] != fe_files.get(FE_PER_STORE) and not l7c_per_store(fe_bad)[0])
+fe_bad = dict(fe_files)
+fe_bad[FE_PER_STORE] = fe_bad[FE_PER_STORE] + "\nexport const ms = (periods: string[]) => periods\n"
+check("L8o Print each store enumerating months → L7c RED", not l7c_per_store(fe_bad)[0])
+fe_bad = dict(fe_files)
+fe_bad["app/(platform)/accounts/_components/StorePrint2.tsx"] = (
+    "export const q = (p: string, s: string) => `/api/v1/account/pl/${p}?stores=${s}`")
+check("L8p a sibling per-store reader spelling the endpoint itself → L7 RED", not l7_frontend(fe_bad)[0])
 
 print("\n%d passed, %d failed" % (P, F))
 sys.exit(1 if F else 0)
