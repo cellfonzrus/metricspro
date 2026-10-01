@@ -82,13 +82,19 @@ ACCESSORY_COGS_PCT = 0.20
 #       "manual" (entered via journal_entries), "computed" (derived from other lines)
 PL_SPEC = [
     ("carrier_comm",  "Carrier commissions & incentives",            "revenue", "auto",  "company"),
-    # GRAIN (mig 1033, owner 2026-10-01): "store" — BOTH residual feeds name the door on every row
-    # (raw_mi.salesforce_id; raw_ma_daily_tx.account_id), so neither of these lines is company-wide
-    # by nature. A row whose door the org's mapping cannot place still books company-wide, which is
-    # why the note below says "where the source carries a store key". Gated per org by
-    # `pl_mi_store_attribution` / `pl_ma_store_attribution` until the owner turns it on.
-    ("mi_income",     "MI residual income",                          "revenue", "auto",  "store"),
-    ("atu_income",    "ATU income",                                  "revenue", "auto",  "store"),
+    # GRAIN, read this before believing the word "company" below (mig 1033, owner 2026-10-01).
+    # These two lines are NOT company-wide by nature: BOTH residual feeds name the door on every row
+    # (`raw_mi.salesforce_id`; `raw_ma_daily_tx.account_id`), and since mig 1033 / mig 314 each books
+    # to the STORE that door resolves to, per org (`pl_mi_store_attribution` / `pl_ma_store_attribution`).
+    # Only a row whose door the org's mapping cannot place books company-wide.
+    # The 5th element still SAYS "company" for one reason: it is documentation — `engine._assemble` is
+    # its only reader and discards it (`_grain`) — while `harness_royalty_pl.py` §D freezes this chart
+    # against a pre-change ORACLE ("no existing line moved or changed"). Editing a string no code reads,
+    # at the cost of weakening that lock, is a bad trade; the truth lives here, in
+    # `residual_subs.mi_pnl_bookings`, and in index §7b. If that oracle is ever refreshed, set both to
+    # "store" in the same change.
+    ("mi_income",     "MI residual income",                          "revenue", "auto",  "company"),
+    ("atu_income",    "ATU income",                                  "revenue", "auto",  "company"),
     # Owner spec 2026-09-01 (Phase B, mig 309): "Merchant discount for each line item goes into the
     # P&L as merchant discount, residual under residual." The MA TX airtime margin
     # (raw_ma_daily_tx.merchant_discount) gets its OWN revenue line instead of being folded into

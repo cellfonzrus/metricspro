@@ -2846,6 +2846,17 @@ and books company-wide, the same refusal `account_store_index` makes for an ambi
 used to build inline silently kept whichever store the scan reached first; it is gone, and the §7a report
 now dereferences the shared map (store CODE + MARKET still come from the org's own vocabulary).
 
+**A KNOWN, DELIBERATE INACCURACY — `PL_SPEC`'s grain word.** The 5th element of the `mi_income` /
+`atu_income` entries still reads `"company"`, which is now false. It stays because that element is pure
+DOCUMENTATION — `engine._assemble` is its only reader and discards it (`_grain`) — while
+`harness_royalty_pl.py` §D freezes the whole chart against a pre-change ORACLE
+(`harness_royalty_pl_oracle.json`, "no existing line moved or changed"). Editing a string no code reads,
+at the cost of weakening that lock, is a bad trade; the real grain is stated in the comment directly above
+the entries, in `residual_subs.mi_pnl_bookings`, and here. `harness_mi_residual_store_grain.py` §F10/F10a/F10b
+pins exactly that: the word is the frozen one, **no production module reads the element** (so the stale word
+cannot mislead a caller), `_assemble` discards it, and the explanatory note is present. If that oracle is
+ever refreshed, set both to `"store"` in the same change.
+
 **CONFIG, NEVER CODE.** `commission_org_config.pl_mi_store_attribution`, read by `ma_store_pnl.load_config`
 (ADAPTIVE — a pre-1033 DB reads `false` and REPORTS the column on `config_columns_missing`). The code
 default is **OFF**, so merging the code is byte-identical for every tenant; **applying mig `1033` is what

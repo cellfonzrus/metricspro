@@ -413,10 +413,32 @@ ck("F8  the excused sites are still the ones excused (an excuse is not a blank c
    sorted(f for f in EXCUSED if read(f)), sorted(EXCUSED))
 ck_true("F9  every excusal states a reason", all(len(v) > 40 for v in EXCUSED.values()))
 
-# F10 — the grain is documented as a FACT about the feed, not a constant.
+# F10 — PL_SPEC's 5th element is DOCUMENTATION, and it must not be able to mislead a caller.
+# It still reads "company" for the two residual lines because `harness_royalty_pl.py` §D freezes this
+# chart against a pre-change oracle, and weakening that lock to edit a string no code reads would be a
+# bad trade. So the invariant this check defends is the one that matters: (a) NO production module
+# reads the element, so nothing can act on the stale word, and (b) the entry carries the note that
+# states the real grain. If a reader ever appears, this FAILS and the string must be corrected.
 grain = {k: g for k, _l, _s, _kind, g in coa.PL_SPEC}
-ck("F10 PL_SPEC no longer calls the residual lines company-grained",
-   (grain["mi_income"], grain["atu_income"]), ("store", "store"))
+ck("F10 the residual lines' grain word is still the frozen one (royalty_pl §D pins the chart)",
+   (grain["mi_income"], grain["atu_income"]), ("company", "company"))
+_grain_readers = []
+for dirpath, _dirs, files in os.walk(os.path.join(ROOT, "app")):
+    for fn in sorted(files):
+        if not fn.endswith(".py"):
+            continue
+        full = os.path.join(dirpath, fn)
+        body = open(full).read()
+        for ln in body.splitlines():
+            # unpacking all five AND binding the 5th to a name it then uses, or indexing [4]
+            if re.search(r"in\s+(?:coa\.)?PL_SPEC\b.*\[4\]|PL_SPEC\[[^\]]*\]\[4\]", ln):
+                _grain_readers.append(os.path.relpath(full, ROOT).replace(os.sep, "/"))
+ck("F10a no production module reads PL_SPEC's grain element, so the frozen word cannot mislead",
+   sorted(set(_grain_readers)), [])
+ck_true("F10b `engine._assemble` discards it (binds it to `_grain` and never uses it)",
+        "for key, label, section, kind, _grain in spec:" in read("app/modules/account/engine.py"))
+ck_true("F10c the PL_SPEC entry carries the note that states the REAL grain",
+        "mig 1033" in coa_src.split('("mi_income"')[0].rsplit("PL_SPEC = [", 1)[-1])
 ck("F11 the MA residual twin still books to the same line (one residual line, two feeds)",
    RS._MA_PNL_RESIDUAL_LINE, "mi_income")
 
