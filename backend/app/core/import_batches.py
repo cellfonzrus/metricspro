@@ -169,6 +169,112 @@ def fail(batch_id: Optional[str], *, error: Optional[str] = None) -> None:
         log.warning("import_batches: could not mark batch %s failed: %s", batch_id, e)
 
 
+# ── A BATCH LEFT IN 'parsing' IS A RUN THAT DIED (owner directive 2026-09-30) ─────────────────────
+# Owner: *"Why do we have so many errors in sweeping data - this is the lifeline of our system - need
+# to make it foolproof"*.
+#
+# MEASURED FIRST. September 2026: 9,835 batches, 9,789 `loaded`, 2 `failed` — 99.55% success. The
+# pipeline is not fragile. What is wrong is that the 44 failures it DID have were SILENT: no
+# `completed_at`, no `row_count`, no `error_detail`, just an eternal `parsing`. The alerts fire for
+# transient connector blips that the next hourly run fixes, and stay quiet for these.
+#
+# WHY A `finally` CANNOT FIX IT, and this is the whole reason this reaper exists. The one claim site
+# (`commcalc/router._upload_file`) ALREADY closes the batch out in a `finally`, on both the error and
+# the success path. A `finally` does not run when the process is killed — a hung parse reaped by a
+# request timeout, an OOM, a deploy mid-run, a worker restart. So no in-process guard, context manager
+# or try/except can close these out: the code that would write the status is gone. The only mechanism
+# that survives process death is an out-of-band sweep of rows left behind.
+#
+# AND IT IS NOT MERELY COSMETIC. The duplicate guard's unique index is partial on `status <> 'failed'`,
+# so a batch stranded in `parsing` BLOCKS THE RE-IMPORT OF ITS OWN FILE for ever. Reaping it is what
+# releases the hash and lets the next sweep land the same attachment.
+#
+# WHAT THIS DOES NOT DO, stated so nobody reads more into it: it does not stop parses dying. Live
+# concentration says that is two specific sources — `inventory_aging` (38 of 73) and `daily_sales`
+# (31 of 73) — which is a parser defect to diagnose on its own evidence, not something to paper over
+# here. This makes the death VISIBLE and the retry POSSIBLE. That is all it claims.
+REAP_AFTER_HOURS_DEFAULT = 6
+
+
+def stale_parsing(rows, *, now, hours=REAP_AFTER_HOURS_DEFAULT):
+    """PURE. [batch row] → [{id, age_hours, reason}] for the rows a dead run left behind.
+
+    A row qualifies only when it is still `parsing` AND older than `hours`. The window exists so a
+    parse that is genuinely still running is never killed by its own bookkeeping: `hours` must be
+    comfortably longer than the slowest legitimate parse, which is why the default is 6 and not 1.
+
+    `created_at` is the only clock available (a `parsing` row has no `completed_at` by definition).
+    A row whose timestamp cannot be read is LEFT ALONE and reported, never reaped on a guess — the
+    §19.26 rule that missing beats wrong, applied to a destructive-ish write.
+    """
+    out = []
+    for r in (rows or []):
+        if (r or {}).get("status") != "parsing":
+            continue
+        raw = (r or {}).get("created_at")
+        age = _age_hours(raw, now)
+        if age is None:
+            out.append({"id": r.get("id"), "age_hours": None, "skipped": "unreadable created_at",
+                        "reason": None})
+            continue
+        if age <= hours:
+            continue
+        out.append({
+            "id": r.get("id"),
+            "age_hours": round(age, 2),
+            "reason": (
+                "the run that claimed this batch never finished: still 'parsing' %.1fh after it was "
+                "claimed (source=%s, file=%s). A killed process cannot write its own status, so this "
+                "was reaped out of band. The file was NOT imported, and the hash is now released so "
+                "the next run can retry it." % (age, r.get("source") or "?", r.get("file_name") or "?")
+            ),
+        })
+    return out
+
+
+def _age_hours(raw, now):
+    """Hours between `raw` (ISO) and `now`, or None when the stamp is unreadable."""
+    if not raw:
+        return None
+    try:
+        t = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return (now - t).total_seconds() / 3600.0
+    except Exception:
+        return None
+
+
+def reap_stale(*, hours=REAP_AFTER_HOURS_DEFAULT, limit=500, client=None):
+    """Mark every batch a dead run left in `parsing` as `failed`, with the reason on the row.
+
+    Returns {'reaped': n, 'skipped': n, 'ids': [...], 'unavailable': bool}. Never raises: this runs on
+    a scheduler tick and a bookkeeping failure must not take the tick down. Degrades open exactly as
+    the rest of this module does — an unreadable table means nothing was reaped, not a crash.
+    """
+    res = {"reaped": 0, "skipped": 0, "ids": [], "unavailable": False}
+    try:
+        tbl = (client or get_supabase()).schema(_SCHEMA).table(_TABLE)
+        rows = (tbl.select("id,status,created_at,source,file_name")
+                .eq("status", "parsing").limit(limit).execute().data) or []
+    except Exception as e:
+        log.warning("import_batches: could not read stale batches: %s", e)
+        res["unavailable"] = True
+        return res
+    for item in stale_parsing(rows, now=datetime.now(timezone.utc), hours=hours):
+        if item.get("skipped"):
+            res["skipped"] += 1
+            log.warning("import_batches: batch %s left alone — %s", item.get("id"), item["skipped"])
+            continue
+        fail(item["id"], error=item["reason"])
+        res["reaped"] += 1
+        res["ids"].append(item["id"])
+    if res["reaped"]:
+        log.warning("import_batches: reaped %d batch(es) stranded in 'parsing' beyond %sh",
+                    res["reaped"], hours)
+    return res
+
+
 def duplicate_response(file_type: str, claim_result: Dict[str, Any]) -> Dict[str, Any]:
     """The upload result for a refused duplicate.
 

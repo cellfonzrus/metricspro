@@ -80,7 +80,37 @@ IMPORT_NAME = {
 # Listed because a harness can import THEM without requirements.txt ever naming them.
 TRANSITIVE = ("pydantic", "starlette", "postgrest", "gotrue", "storage3", "realtime", "supafunc",
               "numpy", "anyio", "h11", "certifi", "urllib3", "charset_normalizer", "soupsieve")
-STUBBED = re.compile(r"""sys\.modules\[\s*['"]([A-Za-z0-9_.]+)['"]\s*\]\s*=""")
+def _stubbed_modules(src):
+    """Every module name a harness INSTALLS INTO `sys.modules` itself, by any spelling.
+
+    Was a regex for `sys.modules["x"] = `, which missed the two forms actually in use:
+    `sys.modules.setdefault(name, ...)`, and a `for name in ("app.core", "app.core.database"):` loop
+    whose body does the setdefault with a VARIABLE. `harness_tenant_vertical.py` uses exactly that, so
+    the regex read it as un-stubbed the moment the import walk below grew deep enough to reach the DB
+    client — a false positive on a correct harness.
+
+    So: a file that never mentions `sys.modules` stubs nothing and costs one substring test. A file
+    that DOES contributes every dotted-looking string literal in it. Deliberately generous, and that is
+    the safe direction — over-reading a stub lets a real misplacement through, which the job's own CI
+    run then catches loudly, while under-reading one reports a working harness as broken, and that is
+    the failure that gets a lock switched off. Single parse, no per-node source slicing: the segment
+    form of this made the lock take minutes across 400+ harnesses.
+    """
+    if not src or "sys.modules" not in src:
+        return set()
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return set()
+    out = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            v = node.value.strip()
+            if v and " " not in v and re.match(r"^[A-Za-z_][A-Za-z0-9_.]*$", v):
+                out.add(v)
+    return out
+
+
 JOB_KEY = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$", re.M)
 
 
@@ -110,7 +140,16 @@ def _module_level_imports(src):
         if isinstance(node, ast.Import):
             found.extend(a.name for a in node.names)
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            # BOTH the package AND each name under it. `from app.core import import_batches` carries
+            # its real target in `names`, not in `module`: yielding only `app.core` dead-ends the walk
+            # on an EMPTY `app/core/__init__.py` and never reaches `import_batches.py`, so the wheel it
+            # pulls in (supabase, via app.core.database) was invisible. That hole let
+            # harness_sweep_failures_visible.py into the stdlib-only job on 2026-10-01 — this lock said
+            # green and CI said ModuleNotFoundError, which is the one thing a lock must never do.
+            # A name that is a plain symbol rather than a submodule simply resolves to no file and is
+            # skipped by `_first_party`, so adding them costs nothing and misses nothing.
             found.append(node.module)
+            found.extend("%s.%s" % (node.module, a.name) for a in node.names)
 
     def walk(body):
         for node in body:
@@ -140,7 +179,7 @@ def unrunnable(harness_name, read_source, wheels):
     head_src = read_source(harness_name)
     if head_src is None:
         return None
-    stubs = set(STUBBED.findall(head_src))
+    stubs = _stubbed_modules(head_src)
     seen, queue = set(), [(harness_name, head_src)]
     while queue:
         where, src = queue.pop(0)
@@ -150,6 +189,12 @@ def unrunnable(harness_name, read_source, wheels):
                 if head in stubs or module in stubs:
                     continue                                   # the harness supplies its own stub
                 return "%s imports %s" % (where, module)
+            if head == "app" and module in stubs:
+                # The harness replaced this first-party module in `sys.modules`, so the REAL file is
+                # never imported and whatever it pulls in is never needed. Descending into it anyway is
+                # what made harness_tenant_vertical read as broken: it stubs `app.core.database`
+                # precisely so the DB client (and supabase) stays out of a stdlib-only run.
+                continue
             if head == "app" and module not in seen:
                 seen.add(module)
                 nxt = _first_party(module, read_source)
@@ -324,6 +369,14 @@ def main():
     check("an import under `if` still runs on load → RED",
           bool(misplaced({"x.yml": nodeps}, fake({
               "harness_z.py": "import os\nif os.environ.get('X'):\n    import pandas\n"}), W)))
+    check("`from pkg import submodule` is followed to the SUBMODULE  <- the hole this lock had",
+          bool(misplaced({"x.yml": nodeps}, fake({
+              "harness_z.py": "from app.core import import_batches\n",
+              "app/core/__init__.py": "",
+              "app/core/import_batches.py": "from app.core.database import get_supabase\n",
+              "app/core/database.py": "from pandas import DataFrame\n"}), W)))
+    check("...and the real harness that exposed it is now correctly identified",
+          unrunnable("harness_sweep_failures_visible.py", read, wheels) is not None)
     check("a package __init__ is followed too",
           bool(misplaced({"x.yml": nodeps}, fake({
               "harness_z.py": "from app.pkg import thing\n",
