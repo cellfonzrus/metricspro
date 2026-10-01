@@ -7,6 +7,7 @@ import { ROLES_EMPLOYEE_ROW_SLICES } from '@/lib/employeeRowSlices'
 import { useUnsavedGuard } from '@/lib/useUnsavedGuard'
 import { REPORT_AREAS, DATA_GRANTS, TENANT_NAV, reportAreaForPath, canSeeItem, navBlockReason,
          schedulingReach, canImpersonate, MASTER_ADMIN_ROLE, MASTER_ADMIN_DISPLAY,
+         grantableModules, missingReportAreasForModule, reportGrantedByConfig,
          type Permissions } from '@/lib/rbac'
 import { ExportButtons } from '@/lib/export'
 import { useAuth } from '@/lib/auth-context'
@@ -23,20 +24,11 @@ const ROLE_TEMPLATES: { name: string; display: string; permissions: any }[] = [
     scope: 'all', home: '/hr/people' } },
 ]
 
-const MODULES: { key: string; label: string }[] = [
-  { key: 'commissions', label: 'Commissions' },
-  { key: 'targets', label: 'Targets' },
-  { key: 'asset', label: 'Asset' },
-  { key: 'vip', label: 'Distributors' },
-  { key: 'accounts', label: 'Accounts' },
-  { key: 'storeops', label: 'StoreOps' },
-  { key: 'pos', label: 'Point of Sale' },
-  { key: 'hr', label: 'HR (salary + comp)' },
-  { key: 'notify', label: 'Notify' },
-  { key: 'helpdesk', label: 'Helpdesk' },
-  { key: 'support', label: 'Tech Support (cross-tenant console)' },
-  { key: 'admin', label: 'Admin (role mgmt)' },
-]
+// DERIVED from NAV via rbac.grantableModules() — this page used to retype its own list of 12 keys
+// while NAV gated on 20, so 8 modules (70 pages, incl. the Finance group's 4 royalty pages) had no
+// checkbox and could not be granted here at all (owner report 2026-10-01). Labels live in
+// rbac.MODULE_LABELS; harness_roles_module_catalog.py fails the build if the two ever diverge again.
+const MODULES: { key: string; label: string }[] = grantableModules()
 
 // ── Master admin (owner 2026-08-29) — the one-click all-access role, WITHIN ONE TENANT ────────────
 // Owner ruling: a SUPER admin controls all tenants; a MASTER admin has full control of their OWN tenant.
@@ -323,10 +315,12 @@ export default function RolesAdminPage() {
   }
   // Effective report access for a role+area: explicit `reports` config wins; else default by scope
   // (company-wide 'all' keeps reports, market/store/self get none) — mirrors hasReport() in rbac.ts.
+  // DEREFERENCED, not re-implemented (§44.1). This was a hand-copy of rbac.hasReport minus its
+  // super-admin bypass; the bypass is deliberately NOT wanted here (the box must show what is
+  // CONFIGURED on the role, not what the admin role gets for free), so it reads the shared
+  // non-bypass half directly. Behaviour is byte-identical to the copy it replaces.
   function reportChecked(p: any, key: string): boolean {
-    const r = p.reports
-    if (r && Object.keys(r).length) return !!r[key]
-    return (p.scope || 'all') === 'all'
+    return reportGrantedByConfig(p as Permissions, key)
   }
   // Effective visibility of a single nav function for a role. This used to be a hand-copied version
   // of canSeeItem that had DRIFTED — it ignored the item's `scopes` tier and the super-admin bypass,
@@ -758,13 +752,32 @@ export default function RolesAdminPage() {
                   <div>
                     <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>Modules</div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 18px' }}>
-                      {MODULES.map(m => (
-                        <label key={m.key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-                          <input type="checkbox" checked={!!mods[m.key]}
-                            onChange={ev => setPerm(r.id, pp => ({ ...pp, modules: { ...(pp.modules || {}), [m.key]: ev.target.checked } }))} />
-                          {m.label}
-                        </label>
-                      ))}
+                      {MODULES.map(m => {
+                        // THE SECOND GATE, SAID OUT LOUD (owner report 2026-10-01). Ticking a module is not
+                        // enough for its REPORT pages: canSeeItem also needs the per-area `reports` grant, and a
+                        // role carrying any explicit reports entry is judged only by that map. Granting
+                        // `accounts` to a market manager whose reports are {closing:true} therefore opened the
+                        // Finance link onto an EMPTY dashboard, with nothing on screen naming the closed gate.
+                        // The missing areas are DERIVED (rbac.missingReportAreasForModule → reportAreaForPath,
+                        // the same function canSeeItem calls), never re-listed here.
+                        const needs = missingReportAreasForModule(p as Permissions, m.key)
+                        const label = (k: string) => REPORT_AREAS.find(a => a.key === k)?.label || k
+                        return (
+                          <Fragment key={m.key}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                              <input type="checkbox" checked={!!mods[m.key]}
+                                onChange={ev => setPerm(r.id, pp => ({ ...pp, modules: { ...(pp.modules || {}), [m.key]: ev.target.checked } }))} />
+                              {m.label}
+                            </label>
+                            {needs.length > 0 && (
+                              <div style={{ gridColumn: '1 / -1', fontSize: 11, color: 'var(--warn, #b45309)', margin: '-2px 0 4px 22px' }}>
+                                ⚠ “{m.label}” is on, but its report pages stay hidden until you also tick{' '}
+                                <b>{needs.map(label).join(' + ')}</b> under <b>Reports</b> →
+                              </div>
+                            )}
+                          </Fragment>
+                        )
+                      })}
                     </div>
                   </div>
                   <div>
