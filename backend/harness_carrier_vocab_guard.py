@@ -241,13 +241,41 @@ _bare_lit_res = [re.compile(r"'((?:[^'\\]|\\.)*)'"), re.compile(r'"((?:[^"\\]|\\
 _prose_bad = re.compile(r"[<>=;'\"`]")
 
 
+# EMPHASIS IS NOT CODE (defect found 2026-10-01, repaired as a class).
+# `_prose_bad` rejects a line holding any of `< > = ; ' " \``, which is right for CODE and wrong for the
+# commonest shape of real paragraph copy: a sentence that bolds or italicises one word. This line was on
+# `main`, rendered to every reader, and the guard scored it GREEN:
+#     bill-payment (ePay) cash taken that day. Bill-payment cash is a breakdown <i>inside</i> that figure,
+# `<i>` tripped the reject, `display_segments`' `>text<` pattern only saw the word INSIDE the tag, and a
+# cross-side carrier brand shipped. So inline emphasis and HTML entities are STRIPPED and the prose test
+# applied to what remains — the line is read, not discarded. 1262 lines across the frontend became visible
+# this way; they carry 0 new carrier and 0 new POS hits, and 11 pre-existing setup-internals hits that are
+# registered as debt in SETUP_PROSE_DEBT rather than excused.
+_INLINE_EMPHASIS = re.compile(r"</?(?:b|i|u|em|strong|small|br|code|span)\s*/?>")
+_HTML_ENTITY = re.compile(r"&(?:apos|quot|amp|nbsp|mdash|ndash|rsquo|lsquo|hellip|#\d+);")
+
+
 def jsx_prose_line(rel, ln):
-    """A .tsx line that is pure JSX TEXT continuing a paragraph — no tag, no operator, no quote — is
-    display copy the string/tag extractor cannot see ('No daily B2B feed loaded for {period} yet.')."""
+    """A .tsx line that is JSX TEXT continuing a paragraph — no operator, no quote, only emphasis tags —
+    is display copy the string/tag extractor cannot see ('No daily B2B feed loaded for {period} yet.')."""
     s = ln.strip()
-    if not rel.endswith(".tsx") or " " not in s or _prose_bad.search(s) or s.startswith(("//", "*", "/*", "{/*")):
+    if not rel.endswith(".tsx") or s.startswith(("//", "*", "/*", "{/*")):
+        return []
+    s = _HTML_ENTITY.sub("", _INLINE_EMPHASIS.sub(" ", s))
+    if " " not in s or _prose_bad.search(s):
         return []
     return [s]
+
+
+def display_copy(rel, line):
+    """THE one answer to "is this display copy?" — every scan in this file dereferences it.
+
+    Three scans used to ask it three different ways: the POS and setup scans read string literals, tags
+    AND prose; the cross-side CARRIER scan read only literals and tags, so a brand in a paragraph was
+    invisible to the scan whose whole job is brands. One home, three callers (owner directive 2026-09-20:
+    one fact, one home, dereferenced — never copied).
+    """
+    return display_segments(line) + jsx_prose_line(rel, line)
 
 
 def pos_scan_frontend(files, rx, allow):
@@ -261,7 +289,7 @@ def pos_scan_frontend(files, rx, allow):
             if is_cmt:
                 continue
             hit = None
-            for seg in display_segments(ln) + jsx_prose_line(rel, ln):
+            for seg in display_copy(rel, ln):
                 m = rx.search(seg)
                 if m:
                     hit = (m.group(0), seg[:110])
@@ -435,6 +463,62 @@ def display_segments(line):
     return out
 
 
+def extractor_controls():
+    """ARMED CONTROLS for display_copy — the one answer to "is this display copy?" (added 2026-10-01).
+
+    Every rule here failed before the extractor was unified and widened, which is the only reason to
+    believe the widening is real. E1 is the line that actually shipped a cross-side brand to production.
+    """
+    print("\n— the display-copy extractor (one home: display_copy; §19.36 siblings) —")
+    ok = True
+    page = "app/(platform)/closing/envelope-report/page.tsx"
+    # The line as it stood on main, rendered to every reader, scored GREEN by the old extractor:
+    shipped = "            bill-payment (ePay) cash taken that day. Bill-payment cash is a breakdown <i>inside</i> that figure,"
+    fixed = "            bill-payment cash taken that day. Bill-payment cash is a breakdown <i>inside</i> that figure,"
+    hit = lambda ln: any(BOOST_TERMS.search(seg) or TOTAL_TERMS.search(seg) for seg in display_copy(page, ln))
+    ok &= _ctl("E1 the brand in an <i>-bearing paragraph is SEEN → RED (the shipped defect reproduced)", hit(shipped))
+    ok &= _ctl("E2 …the same sentence with the brand removed → GREEN", not hit(fixed))
+    ok &= _ctl("E3 a brand behind <b>…</b> and an &apos; entity is SEEN → RED",
+               hit("            the rep&apos;s <b>VidaPay</b> drawer total for that day,"))
+    # Widening must not start reading CODE as copy — these are the reasons _prose_bad exists.
+    ok &= _ctl("E4 a code line is still not prose (an operator / a quote / a tag with attributes)",
+               not display_copy(page, "  const label = cfg.wide ? 'a' : 'b'")
+               and not display_copy(page, '  <div className="row" onClick={go}>'))
+    ok &= _ctl("E5 a comment is still prose, not copy → GREEN",
+               not jsx_prose_line(page, "            // the ePay drawer is the whole drawer"))
+    ok &= _ctl("E6 a .ts (non-JSX) file contributes no prose lines",
+               not jsx_prose_line("lib/report-labels.ts", "            the ePay drawer is the whole drawer"))
+    # The wiring itself: a scan that stops dereferencing display_copy un-does all of the above.
+    # THIS function's own text is cut out first — it quotes the very strings it is looking for, and a
+    # rule that matches its own source is a rule that cannot fail (the self-reference trap that already
+    # bit harness_envelope_receipt_basis and harness_screen_link_guard).
+    raw = open(os.path.abspath(__file__), encoding="utf-8").read()
+    # Anchored to the START of a line: the quoted copies of these very def lines inside this function are
+    # INDENTED, so an unanchored .index() finds one of them and cuts in the wrong place (it did, first try).
+    _at = lambda name: re.search(r"^def %s\(\):" % name, raw, re.M).start()
+    src = raw[:_at("extractor_controls")] + raw[_at("main"):]
+    body = src[re.search(r"^def main\(\):", src, re.M).start():]
+    ok &= _ctl("E7 the cross-side carrier scan dereferences display_copy (not display_segments alone)",
+               "for seg in display_copy(rel, ln):" in body and "for seg in display_segments(ln):" not in src)
+    ok &= _ctl("E8 all three scans dereference it — one home, three callers",
+               src.count("for seg in display_copy(") == 3)
+    ok &= _ctl("E8b …and the cut-out is honest (this function's own text really was excluded)",
+               "def extractor_controls():" not in src and len(src) < len(raw))
+    # The debt ledger is a RATCHET: over the pin is a new defect, under the pin must be paid down.
+    mk = lambda rel, n: [(rel, i, "Migration", "Migration 1 hasnt run") for i in range(n)]
+    one = {"a.tsx": 1}
+    ok &= _ctl("E9 a file over its pin → RED (a NEW tenant-facing migration sentence)",
+               len(split_setup_debt(mk("a.tsx", 2), one)[0]) == 1)
+    ok &= _ctl("E10 a file at its pin → carried as debt, not as a pass",
+               split_setup_debt(mk("a.tsx", 1), one)[0] == [] and len(split_setup_debt(mk("a.tsx", 1), one)[1]) == 1)
+    ok &= _ctl("E11 a file UNDER its pin → RED (lower the pin; this is what forces the list to shrink)",
+               split_setup_debt(mk("a.tsx", 0), one)[2] == [("a.tsx", 1, 0)])
+    ok &= _ctl("E12 an unpinned file's hit is a real fail, never silent debt",
+               len(split_setup_debt(mk("b.tsx", 1), one)[0]) == 1)
+    print("  OK — the display-copy extractor holds." if ok else "  FAIL — the display-copy extractor is not sound.")
+    return ok
+
+
 def main():
     nav = nav_carriers()
     fails = []
@@ -452,7 +536,9 @@ def main():
             for i, (ln, is_cmt) in enumerate(comment_lines(lines), 1):
                 if is_cmt:
                     continue
-                for seg in display_segments(ln):
+                # display_copy, not display_segments: a brand in a <b>-bearing paragraph was invisible
+                # to this scan until 2026-10-01 (see jsx_prose_line).
+                for seg in display_copy(rel, ln):
                     for side, rx in (("total", TOTAL_TERMS), ("boost", BOOST_TERMS)):
                         mm = rx.search(seg)
                         if not mm:
@@ -474,6 +560,8 @@ def main():
               "neutrally, or carrier-gate the page in NAV_CARRIERS — see this file's docstring.")
     else:
         print("OK — no hardcoded cross-side carrier vocabulary in rendered frontend copy.")
+    if not extractor_controls():
+        bad = True
     if not pos_guard():
         bad = True
     if not setup_guard():
@@ -664,6 +752,57 @@ def platform_only_hrefs():
     return {h for h, v in occ.items() if v and all(v)}
 
 
+# ── REAL, PRE-EXISTING SETUP-INTERNALS COPY — DEBT, NOT AN EXCUSAL (measured 2026-10-01) ──────────
+# When display_copy started reading <b>-bearing paragraphs (see jsx_prose_line), 11 sentences that had
+# always been rendered to TENANTS became visible — each one telling a customer to run a migration:
+#   "ℹ️ Migration 421 hasnt run on this tenant yet — Save will fail until it does."
+# These are the §19.36 defect the owner reported ("Display Labels"), in pages nobody had converted to
+# <SetupNotice>. They are NOT excused: SETUP_SUPER_ADMIN_PAGES means "a platform admin is the only
+# reader, so the detail is allowed", and these are tenant pages. They are PINNED instead, by exact
+# count per file, so that:
+#   · a NEW one anywhere fails the build (the count goes up → FAIL);
+#   · fixing one fails the build until the pin is lowered (the count goes down → FAIL, "lower the pin"),
+#     which is what makes this a ratchet and not a permanent excusal;
+#   · the list can only ever shrink to {}.
+# Remedy for each, when it is taken on: render the tenant sentence through lib/setupNotice.tsx and let
+# the super-admin detail ride `<SetupNotice detail=…/>`, exactly as N3 proves GREEN.
+SETUP_PROSE_DEBT = {
+    "app/(platform)/admin/carrier-documents/page.tsx": 1,
+    "app/(platform)/admin/training/page.tsx": 1,
+    "app/(platform)/admin/whats-new/page.tsx": 1,
+    "app/(platform)/commcalc/accessory-definition/page.tsx": 1,
+    "app/(platform)/commcalc/commission-category-map/page.tsx": 1,
+    "app/(platform)/commcalc/commission-ledger/page.tsx": 1,
+    "app/(platform)/commcalc/commission-plans/page.tsx": 1,
+    "app/(platform)/commcalc/ma-class-wiring/page.tsx": 1,
+    "app/(platform)/storeops/attendance/page.tsx": 1,
+    "app/(platform)/storeops/timeclock/page.tsx": 2,
+}
+
+
+def split_setup_debt(fails, debt=None):
+    """(fails, debt) → (real_fails, debt_hits, ledger_problems) against the pinned per-file counts.
+
+    A file over its pin contributes the EXCESS to real_fails (a new defect). A file under its pin, or a
+    pinned file with no hits at all, is a ledger problem — the pin must be lowered, which is how the
+    list is forced to shrink as the pages are converted.
+    """
+    debt = SETUP_PROSE_DEBT if debt is None else debt
+    per = {}
+    for f in fails:
+        per.setdefault(f[0], []).append(f)
+    real, taken, problems = [], [], []
+    for rel, hits in sorted(per.items()):
+        pin = debt.get(rel, 0)
+        taken.extend(hits[:pin])
+        real.extend(hits[pin:])
+    for rel, pin in sorted(debt.items()):
+        got = len(per.get(rel, []))
+        if got < pin:
+            problems.append((rel, pin, got))
+    return real, taken, problems
+
+
 def setup_scan_frontend(files, detector, excused=SETUP_SUPER_ADMIN_PAGES):
     """files: {rel: [lines]}. Returns (fails, seen_excused). A `NNN_name.sql` anywhere in non-comment code, or
     migration / SQL-editor wording (or anything the backend detector recognises) in a DISPLAY segment, FAILS
@@ -681,7 +820,7 @@ def setup_scan_frontend(files, detector, excused=SETUP_SUPER_ADMIN_PAGES):
             if m:
                 hit = (m.group(0), code.strip()[:110])
             else:
-                for seg in display_segments(code) + jsx_prose_line(rel, code):
+                for seg in display_copy(rel, code):
                     m = detector.search(seg) or SETUP_FE_WORDS.search(seg)
                     if m:
                         hit = (m.group(0), seg[:110])
@@ -949,7 +1088,8 @@ def setup_guard():
     det = sn.SETUP_INTERNAL
     ok = True
     fe = _fe_files()
-    fails, seen = setup_scan_frontend(fe, det)
+    all_fails, seen = setup_scan_frontend(fe, det)
+    fails, debt_hits, debt_problems = split_setup_debt(all_fails)
     if fails:
         ok = False
         print(f"  FAIL  {len(fails)} migration / SQL-editor mention(s) in rendered frontend copy:")
@@ -957,7 +1097,16 @@ def setup_guard():
             print(f"        {rel}:{i}  [{term}]  {seg}")
         print("        Fix: <SetupNotice detail=\"…\" /> or setupFailed(…) from lib/setupNotice.tsx — the detail reaches the platform super admin only.")
     else:
-        print(f"  OK    no setup internals in rendered frontend copy ({len(fe)} files; super-admin pages excused: {len(SETUP_SUPER_ADMIN_PAGES)} + the operator console)")
+        print(f"  OK    no NEW setup internals in rendered frontend copy ({len(fe)} files; super-admin pages excused: {len(SETUP_SUPER_ADMIN_PAGES)} + the operator console)")
+    if debt_hits:
+        # Printed every run, as a defect being carried — not as a pass. See SETUP_PROSE_DEBT.
+        print(f"  DEBT  {len(debt_hits)} tenant-facing sentence(s) still name a migration, pinned in SETUP_PROSE_DEBT:")
+        for rel, i, term, seg in debt_hits:
+            print(f"        {rel}:{i}  [{term}]  {seg}")
+        print("        These are REAL §19.36 defects awaiting conversion to <SetupNotice>; the pin may only shrink.")
+    for rel, pin, got in debt_problems:
+        ok = False
+        print(f"  FAIL  SETUP_PROSE_DEBT pins {pin} for {rel} but {got} remain — lower the pin to {got} (the ratchet).")
     po = platform_only_hrefs()
     for rel, why in SETUP_SUPER_ADMIN_PAGES.items():
         m = _page_re.search(rel)

@@ -4604,8 +4604,11 @@ def envelope_report(date_from: str = None, date_to: str = None,
             # The selector's own vocabulary, served from the pure module so the screen never hardcodes
             # a basis word or a label (owner 2026-10-01).
             "basis": _basis,
-            "basis_options": [{"key": b, "label": envelope_report_mod.ENVELOPE_BASIS_LABELS[b]}
-                              for b in envelope_report_mod.ENVELOPE_BASES],
+            # The bill-payment basis names the tenant's OWN processor ('ePay' on the Boost side,
+            # 'VidaPay' on the Total side, the neutral noun when neither is declared) — resolved from
+            # the report_labels `processor` term, never spelled in code or in page copy.
+            "basis_options": envelope_report_mod.basis_options(
+                _carrier_term(client, org_id, envelope_report_mod.ENVELOPE_BASIS_TERM_KEY)),
             "market_filter_skipped": market_filter_skipped,
             "can_decide": _can_mgmt_review(_caller_perms(client, authorization))}
 
@@ -8593,6 +8596,17 @@ def _pos_term(client, org_id):
     """The tenant's POS name for copy (report_labels.pos_term — the one home; never a vendor spelled here)."""
     from app.modules.commcalc import report_labels as _report_labels
     return _report_labels.pos_term(client, org_id)
+
+
+def _carrier_term(client, org_id, key):
+    """The tenant's own word for a vocabulary key in COPY (report_labels.carrier_term — the one home).
+
+    Sibling of `_pos_term` for the keys that are not the POS ('processor', 'distributor', 'financing').
+    Degrades to the registry's NEUTRAL noun, never to another carrier's brand, so no closing payload
+    ever has to spell one (harness_carrier_vocab_guard).
+    """
+    from app.modules.commcalc import report_labels as _report_labels
+    return _report_labels.carrier_term(client, org_id, key)[0]
 
 
 def _money_issues(declared_cash, declared_credit, b2b_cash, b2b_card, tol=1.0, pos="POS") -> list:

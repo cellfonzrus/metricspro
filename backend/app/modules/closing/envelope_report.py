@@ -72,17 +72,49 @@ def _f(v):
 # has no formula and is not offered here):
 #     total_cash        = t_cash                      the whole drawer  (TODAY'S behaviour, the default)
 #     store_cash        = max(t_cash - epay_on_cash, 0)   register cash, bill-pay excluded
-#     bill_payment_cash = epay_on_cash                the ePay/bill-payment cash only
+#     bill_payment_cash = epay_on_cash                the bill-payment (ePay) cash only
 # `expected_cash` now DEREFERENCES that function instead of keeping its own rule, so the receipt and the
 # deposit recon can never disagree about what a basis means.
 ENVELOPE_BASES = ("total_cash", "store_cash", "bill_payment_cash")
 ENVELOPE_BASIS_DEFAULT = "total_cash"
+
+# THE PROCESSOR'S NAME IS NOT SPELLED HERE (harness_carrier_vocab_guard, owner directive 2026-09-04).
+# "What this tenant calls its bill-payment processor" already has ONE home — the report_labels
+# `processor` term (mig 953: Boost preset 'ePay', Total preset 'VidaPay', registry neutral noun
+# "payment processor"). The first cut of this selector wrote 'ePay' straight into the label, which is
+# the cross-side vocabulary defect the guard exists to catch: a Total-side reader would have been told
+# their drawer held "Bill payments (ePay)". So the label carries a {processor} SLOT and
+# `basis_options()` fills it from the resolved term — and when nothing resolves, the slot is dropped
+# rather than guessed, because a missing word is honest and another carrier's brand is not.
+ENVELOPE_BASIS_TERM_KEY = "processor"
 # Human labels for the selector — the ONE place they are worded, so the API and the screen agree.
 ENVELOPE_BASIS_LABELS = {
     "total_cash": "Total cash (whole drawer, incl. bill payments)",
     "store_cash": "Store cash (bill payments excluded)",
-    "bill_payment_cash": "Bill payments (ePay) cash only",
+    "bill_payment_cash": "Bill payments ({processor}) cash only",
 }
+
+
+def basis_label(basis, processor_term=""):
+    """PURE: the label for one basis, with the tenant's own word for the bill-payment processor.
+
+    `processor_term` is `report_labels.carrier_term(client, org_id, ENVELOPE_BASIS_TERM_KEY)`. Empty or
+    blank -> the parenthetical is REMOVED, never filled with a brand or left as a raw '{processor}'.
+    """
+    tpl = ENVELOPE_BASIS_LABELS[normalize_envelope_basis(basis)]
+    if "{processor}" not in tpl:
+        return tpl
+    t = str(processor_term or "").strip()
+    return tpl.replace("{processor}", t) if t else tpl.replace(" ({processor})", "")
+
+
+def basis_options(processor_term=""):
+    """PURE: the [{key, label}] list the selector renders, in ENVELOPE_BASES order.
+
+    Built here rather than in the endpoint so the screen spells no basis key and no basis label, and
+    so there is exactly one place that turns a basis into words.
+    """
+    return [{"key": b, "label": basis_label(b, processor_term)} for b in ENVELOPE_BASES]
 
 
 def normalize_envelope_basis(b):

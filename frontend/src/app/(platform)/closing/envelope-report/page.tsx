@@ -63,7 +63,7 @@ export default function EnvelopeReportPage() {
   // WHICH CASH this receipt is counting (owner 2026-10-01: "should have both reports epay and store
   // cash, use a radio button or select box to choose"). '' = the server's default (total_cash), which is
   // exactly what this page showed before a selector existed, so a first load is unchanged. The option
-  // list and its wording come from the SERVER (data.basis_options <- envelope_report.ENVELOPE_BASIS_LABELS)
+  // list and its wording come from the SERVER (data.basis_options <- envelope_report.basis_options(), brand resolved from the `processor` term)
   // so no basis word is spelled on this screen.
   const [basis, setBasis] = useState('')
   const [data, setData] = useState<any>(null)
@@ -222,7 +222,7 @@ export default function EnvelopeReportPage() {
           </p>
           <p style={{ color: 'var(--text3)', fontSize: 12.5, margin: '6px 0 0', maxWidth: 760 }}>
             <b>Which cash:</b> the <b>whole drawer</b> — the rep&apos;s full declared cash, <b>including</b> any
-            bill-payment (ePay) cash taken that day. Bill-payment cash is a breakdown <i>inside</i> that figure,
+            bill-payment cash taken that day. Bill-payment cash is a breakdown <i>inside</i> that figure,
             not a separate envelope, so do <b>not</b> subtract it before counting. Three different people record
             three different numbers for one envelope: the <b>rep declares</b> it on the daily closing, the
             <b> DM counts</b> it at pickup (Cash Pickup → actual collected), and <b>management counts</b> it
@@ -251,7 +251,7 @@ export default function EnvelopeReportPage() {
         right={(
           <>
           <select style={sel} value={basis} onChange={e => setBasis(e.target.value)}
-            title="Which cash this receipt counts. Bill-payment (ePay) cash is part of the whole drawer, so the three add up — they are not separate envelopes.">
+            title="Which cash this receipt counts. Bill-payment cash is part of the whole drawer, so the three add up — they are not separate envelopes.">
             {(data?.basis_options || []).map((b: any) => (
               <option key={b.key} value={b.key}>{b.label}</option>
             ))}

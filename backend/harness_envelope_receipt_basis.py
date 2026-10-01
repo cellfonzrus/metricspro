@@ -165,8 +165,44 @@ def main():
     print("\nE. no basis word or label is spelled outside the pure module")
     check("the endpoint normalizes through the pure module",
           "envelope_report_mod.normalize_envelope_basis(basis)" in rsrc)
-    check("the endpoint serves the option list from the pure module's labels",
-          "ENVELOPE_BASIS_LABELS" in rsrc and "basis_options" in rsrc)
+    check("the endpoint serves the option list from the pure module, built there",
+          "envelope_report_mod.basis_options(" in rsrc)
+    check("...and never indexes the label dict itself (the wording stays in ONE place)",
+          "ENVELOPE_BASIS_LABELS[" not in rsrc)
+
+    # ── THE PROCESSOR'S NAME IS RESOLVED, NEVER SPELLED (harness_carrier_vocab_guard's class) ────
+    # The first cut of this selector wrote 'ePay' into the label, so a Total-side reader would have been
+    # told their drawer held "Bill payments (ePay)". The brand has ONE home — the report_labels
+    # `processor` term (mig 953) — and these rules keep it there.
+    brands = set()
+    for mg in sorted(os.listdir(os.path.join(os.path.dirname(HERE), "database", "migrations"))):
+        if "_carrier_vocab" in mg or mg.startswith("953"):
+            txt = open(os.path.join(os.path.dirname(HERE), "database", "migrations", mg),
+                       encoding="utf-8").read()
+            brands |= {m.group(1) for m in re.finditer(r"'report_term:\w+',\s*'\w+',\s*'([^']+)'", txt)}
+    check("the mig-953 brand list was actually derived (not an empty set that can never fail)",
+          len(brands) >= 3 and any(b for b in brands))
+    lbl_src = " ".join(ER.ENVELOPE_BASIS_LABELS.values())
+    check("no carrier brand is spelled in the pure module's basis labels",
+          [b for b in sorted(brands) if b.lower() in lbl_src.lower()], [])
+    check("the bill-payment label carries the {processor} SLOT instead", "{processor}" in lbl_src)
+    check("the term key is the registry's own, not a new one", ER.ENVELOPE_BASIS_TERM_KEY, "processor")
+    check("a resolved term fills the slot",
+          ER.basis_label("bill_payment_cash", "ePay"), "Bill payments (ePay) cash only")
+    check("...an unresolved term DROPS the parenthetical, never leaving a raw slot",
+          ER.basis_label("bill_payment_cash", ""), "Bill payments cash only")
+    check("...and never guesses a brand",
+          [b for b in sorted(brands) if b.lower() in ER.basis_label("bill_payment_cash", "").lower()], [])
+    check("basis_options covers every basis, in order",
+          [o["key"] for o in ER.basis_options("ePay")], list(ER.ENVELOPE_BASES))
+    check("the endpoint resolves the term through the ONE home",
+          "_carrier_term(client, org_id, envelope_report_mod.ENVELOPE_BASIS_TERM_KEY)" in rsrc)
+    ct = rsrc[rsrc.index("def _carrier_term("):]
+    ct = ct[:ct.index("\n\n\n")] if "\n\n\n" in ct else ct[:600]
+    check("..._carrier_term dereferences report_labels.carrier_term, not a hand-rolled lookup",
+          "report_labels.carrier_term(client, org_id, key)" in ct.replace("_report_labels.", "report_labels."))
+    check("the screen spells no carrier brand at all",
+          [b for b in sorted(brands) if b.lower() in pcode.lower()], [])
     for word in ("total_cash", "store_cash", "bill_payment_cash"):
         check("the screen does not hardcode the basis key %r" % word, word not in pcode)
     check("the screen renders the SERVER's option list", "data?.basis_options" in page)
@@ -242,6 +278,15 @@ def main():
           DR.cash_for_basis(1002.0, 230.0, DR._normalize_basis("typo")), 0.0)
     check("CONTROL: a resolver that ignored org_id would leak another org's person",
           [r for r in rows if r["auth_id"] == U3][0]["full_name"], "Other Org")
+    # The brand rules, armed: the label as it SHIPPED (and as the vocab guard caught it) must trip them.
+    shipped = "Bill payments (ePay) cash only"
+    check("CONTROL: the brand written into the label → RED",
+          [b for b in sorted(brands) if b.lower() in shipped.lower()] != [])
+    check("CONTROL: a label that kept the slot unfilled → RED (a raw {processor} reaches the reader)",
+          "{processor}" in ER.ENVELOPE_BASIS_LABELS["bill_payment_cash"].replace("{processor}", "{processor}")
+          and "{processor}" not in ER.basis_label("bill_payment_cash", "ePay"))
+    check("CONTROL: the endpoint going back to indexing the label dict → RED",
+          "ENVELOPE_BASIS_LABELS[" in 'x = envelope_report_mod.ENVELOPE_BASIS_LABELS[b]')
 
     print("\n" + "=" * 96)
     print("RESULT: %d passed, %d failed" % (_p, _f))
