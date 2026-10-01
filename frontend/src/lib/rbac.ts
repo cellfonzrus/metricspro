@@ -174,13 +174,22 @@ export function reportAreaForPath(path: string): string | null {
 // May this user see report area `area`? Explicit `reports` config wins; otherwise default by scope —
 // company-wide ('all') leadership keeps reports, everyone else (market/store/self) gets none. So a
 // market manager has NO default report access, while admins/execs keep theirs, with no re-seeding.
-export function hasReport(perms: Permissions, area: string): boolean {
-  if (isSuperAdmin(perms)) return true
+//
+// Split in two on 2026-10-01. `reportGrantedByConfig` is the CONFIGURED answer, WITHOUT the super-admin bypass: an explicit `reports` map wins; otherwise
+// company-wide ('all') leadership keeps reports and everyone else gets none. ONE home for that default
+// rule — `hasReport` adds the bypass on top of it, and the Roles & Access screen reads THIS so its
+// checkbox cannot drift from the gate. It was a hand-copy in admin/roles/page.tsx until 2026-10-01
+// (same second-copy class as the module list, §44.1), which is why it is exported rather than inlined.
+export function reportGrantedByConfig(perms: Permissions, area: string): boolean {
   const r = perms.reports
   if (r && Object.keys(r).length) {
     return area === '*' ? Object.values(r).some(Boolean) : !!r[area]
   }
   return (perms.scope || 'all') === 'all'
+}
+export function hasReport(perms: Permissions, area: string): boolean {
+  if (isSuperAdmin(perms)) return true
+  return reportGrantedByConfig(perms, area)
 }
 
 // ── Sensitive-data grants (separate from module/report access) ────────────────────────────────────
@@ -1598,6 +1607,86 @@ export const MODULE_ALIASES: Record<string, string> = { accounts: 'account', acc
 export function moduleGranted(mods: Record<string, boolean> | undefined, key: string): boolean {
   if (!mods) return false
   return !!(mods[key] || mods[MODULE_ALIASES[key]])
+}
+
+// ── The operational modules an admin may GRANT a role — ONE home (owner report 2026-10-01) ────────
+// "im trying to add finance module to market manager but not happening". Two mechanisms were wrong,
+// and the second is the one that made the first invisible.
+//
+// (1) THE LIST WAS RETYPED. `/admin/roles` carried its own literal of 12 module keys while NAV gates
+// on 20, so 8 modules covering 70 pages had NO checkbox and were UNGRANTABLE from the Roles UI at
+// all: closing (31 pages), crm (10), vision (9), referral (6), marketing (5), royalty (4),
+// supply_ordering (4), franchise_ops (1). Four of those royalty pages are IN the Finance group, so
+// "add Finance" could never be completed from that screen whatever the admin ticked. The keys are now
+// DERIVED from NAV — the same literal the sidebar gates on — so a newly-shipped module gets its
+// checkbox with no edit here and the two can never drift again.
+//
+// Only the human LABEL is declared, because it is the one fact NAV does not carry. Declaration ORDER
+// is the render order (the first 12 keep the order the Roles page has always shown).
+// `harness_roles_module_catalog.py` fails the build when a module NAV gates on has no label here, or
+// a label names a module NAV does not gate.
+export const MODULE_LABELS: Record<string, string> = {
+  commissions: 'Commissions',
+  targets: 'Targets',
+  asset: 'Asset',
+  vip: 'Distributors',
+  accounts: 'Accounts',
+  storeops: 'StoreOps',
+  pos: 'Point of Sale',
+  hr: 'HR (salary + comp)',
+  notify: 'Notify',
+  helpdesk: 'Helpdesk',
+  support: 'Tech Support (cross-tenant console)',
+  admin: 'Admin (role mgmt)',
+  // Previously ungrantable — NAV gated on these with no checkbox anywhere (owner report 2026-10-01).
+  closing: 'Daily Closing',
+  crm: 'CRM',
+  marketing: 'Marketing',
+  referral: 'Referral',
+  royalty: 'Royalty & Profit Centers',
+  franchise_ops: 'Store Operations',
+  supply_ordering: 'Supply Ordering',
+  vision: 'Vision',
+}
+
+// Every module NAV actually gates on, in MODULE_LABELS order. THE source for the Roles UI's module
+// checkboxes — nothing re-lists module keys anywhere else.
+export function grantableModules(): { key: string; label: string }[] {
+  const gated = new Set<string>()
+  for (const g of NAV) for (const it of g.items) gated.add(it.module)
+  const out: { key: string; label: string }[] = []
+  for (const key of Object.keys(MODULE_LABELS)) {
+    if (gated.has(key)) out.push({ key, label: MODULE_LABELS[key] })
+  }
+  return out
+}
+
+// (2) THE SECOND GATE WAS SILENT. A module tick is NOT sufficient for a report page: canSeeItem also
+// requires the per-AREA `reports` grant (hasReport), and a role with ANY explicit reports entry is
+// judged ONLY by that map — so a market manager with `reports: {closing: true}` who is granted the
+// `accounts` module sees the Finance link open onto an EMPTY dashboard (1 of 21 items), with nothing
+// on screen saying which gate closed. That is the same defect the 2026-08-03 "KPI Metrics is allowed
+// for the DM role but doesn't show" report named; the fix then covered only the SCOPE gate.
+//
+// DERIVED, never declared: the report areas that additionally gate a module's pages are read off NAV
+// through reportAreaForPath — the same function canSeeItem itself calls. A page re-homed into another
+// report area therefore moves this answer with it, and no second copy can disagree.
+export function reportAreasForModule(key: string): string[] {
+  const out = new Set<string>()
+  for (const g of NAV) for (const it of g.items) {
+    if (it.module !== key) continue
+    const area = reportAreaForPath(it.href)
+    if (area && area !== '*') out.add(area)
+  }
+  return [...out].sort()
+}
+
+// The report areas a role has been granted the module for but NOT the reports of — i.e. exactly the
+// ticks still missing before the module's report pages appear. Empty when nothing is missing, so the
+// Roles UI can show the requirement instead of leaving the admin to guess.
+export function missingReportAreasForModule(perms: Permissions, key: string): string[] {
+  if (!moduleGranted(perms.modules, key)) return []
+  return reportAreasForModule(key).filter(a => !hasReport(perms, a))
 }
 
 export function canSeeItem(perms: Permissions, item: NavItem): boolean {

@@ -4883,6 +4883,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | `commcalc.rep_commissions` + the `/commission-explain` payload — as **what an EMPLOYEE may see of their own commission** | `calc_rep_commissions` / `commission_engine.preview` (unchanged) | THE shapers `payout_audience.employee_rep_row` / `employee_explain` / `employee_drill` (allow-lists; paid lines by `is_paid_line`) → `/commissions`, `/commissions-range`, `/commission-explain`, `/commission-statement(s)`, `/commission-drill`, core `/employee-dashboard`, the notify Incentives email (§6i) |
 | `commcalc.rep_commissions` + the `/commission-explain` / `/commission-drill` payloads — as **what ANY viewer sees on the Rep Incentive report** (no carrier money) | same | THE shapers `payout_audience.rep_incentive_row` / `rep_incentive_explain` / `rep_incentive_drill` for every audience; `_statement_doc` passes `buckets=None` (the `commission_ledger` rollup `_statement_buckets` is no longer read by a statement) (§6m) |
 | `storeops.roles.permissions.data.carrier_commission_view` (per role, per org; JSON, no migration) | Roles & Access (`rbac.ts DATA_GRANTS` checkbox) | THE carrier permission — read ONLY by `payout_audience.carrier_view_allowed` (unset = company-wide roles + the platform super admin) ← `router._can_view_carrier_commission` / `_require_carrier_view` and `core._me_payload` (§6m) |
+| `storeops.roles.permissions.modules` / `.reports` (per role, per org; JSON, no migration) | Roles & Access — module checkboxes **DERIVED** from `NAV` (`rbac.grantableModules`, labels in `rbac.MODULE_LABELS`); report-area checkboxes from `REPORT_AREAS` | BOTH are required for a report page: `rbac.canSeeItem` asks `moduleGranted` **and** `hasReport(reportAreaForPath(href))`. The ticks still missing are derived by `rbac.missingReportAreasForModule` and named on screen. Lock `harness_roles_module_catalog.py` (§44) |
 | `commcalc.payout_schedule` / `commcalc.plan_installment_schedule` — as the answer to **"is multi-month configured for this org"** (active rows) | the schedule editors (`payout-schedules`, `plan-installments`) | THE predicate `multimonth_config.schedule_counts` → `decide` / `load` → `GET /commcalc/multimonth/status` → `_lib/multimonth.useMultimonthStatus` (the Rep Incentive card + export, commission-explain, Expected vs Earned); the R1 guard `router._has_any_pay_source`. The engines keep their own loaders (§7/§8) (§6h) |
 | `commcalc.accessory_config.activation_details_rules` **`.event`** (`keys` · `precedence` · `count_unit`; JSON key, no migration, 2026-09-25) | `PUT /commcalc/accessory-config` (extra keys of the JSON pass through the one writer) | `line_class.resolve_event` ← `resolve_rules` → `activation_events` / `activation_units` — the plan pay gate's `per_event` (always events) and every activation COUNT (`count_unit`, house `'transaction'`): `_sales_cell_agg`, the Boost calculator, `commission_drill`, closing `_b2b_counts_by_store` / `_b2b_day`, `sales_comparison.tally` (§6f) |
 | `commcalc.commission_org_config.plan_pay_gate` **`.unit_basis.auto_event_fields`** (JSON key, mig 260 column; code default `['activation_bucket']`) · `commcalc.commission_rule.unit_basis = 'per_event'` | `PUT /commcalc/commission-plans/pay-gate` · `POST /commission-plans` (save accepts `per_event`) | `plan_pay_gate.resolve_unit_basis` → `select_paying_lines` → `_select_per_event` (events injected by `commission_engine.preview`); `payout_structure.describe_frequency`; `unit-multiplication-audit` `auto_deduped` (§6f) |
@@ -5317,6 +5318,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | **Undefined names in the backend** (a read name nothing binds — a NameError on first run) | `backend/app/**/*.py` | `harness_undefined_names_lock.py` (stdlib `symtable`), CI job *No undefined names under backend/app* (§6k) |
 | **Is a migration number / an index section number claimed once?** (#315 and #317 both took mig `1030` and §19.32 on 2026-09-28 — each branch green against a main without the other; the port-out file became `1031`, the auto-calc gap §19.33) | `database/migrations/*.sql` file names; `docs/SYSTEM_DATA_FLOW_INDEX.md` headings, `§N.M **` paragraphs, TOC rows | `harness_unique_numbers_lock.py` (stdlib), CI job *Migration and index numbers are claimed once* (org-scope-guard, also on push to main — the merged tree); the collisions that predate it (applied migrations 223 / 420 / 724 / 864–867; §23s, §23s.8, TOC 12) are listed by exact name and may only shrink |
 | **Which menu entries a viewer may not see** (the carrier surfaces) and **which payout view a viewer gets** | `storeops.roles.permissions.scope` / `.data.carrier_commission_view` + `app_config.rbac_enabled` | ONE registry `payout_audience.MANAGER_ONLY_SURFACES`, ONE self-scope answer `storeops.role_is_self_scoped`, ONE carrier permission `payout_audience.carrier_view_allowed`, served on `/me` (`viewer_payload`) → `rbac.payoutRefused` in `canSeeItem` / `canAccessPath`; audience by `payout_audience.resolve` (§6j, §6m) |
+| **"why can this role not see module X?"** | `storeops.roles.permissions` (`modules` / `reports` / `pages` / `scope`) | ONE answer `rbac.navBlockReason` (gate = `module` \| `report` \| `scope` \| per-function), plus `rbac.missingReportAreasForModule` for the module-level case. The grantable module list is DERIVED from `NAV`, never retyped (§44) |
 | **Who may see carrier commission** (what the carrier paid the store — Price / GP, MA cross-reference, dealer figures, ledger buckets) | `storeops.roles.permissions.data.carrier_commission_view` per role, per org; unset = company-wide roles + platform super admin | `payout_audience.carrier_view_allowed` (the one home) → `router._require_carrier_view` on every registered carrier surface; the Rep Incentive report shows it to nobody (§6m) |
 | **The sale on a paid commission row** (action · phone line · customer) | engine event stamp (`event_type`, `event_key`); `raw_sales.customer` / `raw_sales_invoice.customer` | `payout_audience.event_label` (`line_class.CLASS_LABELS`) · `line_phone` (`line_class.line_event_keys`) · `inventory_sold_recon.sale_customer` via `commission_drilldown.attach_line_identity`; frontend `planLines.saleLabel` (§6j) |
 | **One employee's incentive over several months** (per month + grand total) | `rep_commissions.total_payout` per month (the statement's payout of record) | `router._statement_doc` per month (== the single statement) → `commission_statement.build_range` (sums only) (§6j) |
@@ -14209,3 +14211,82 @@ authenticated write (live login, unattended re-login, 2FA verify) already carrie
 **Lock:** `harness_supply_favorites_moq.py` §F/§G7 (AST: no `auth_status='authenticated'` dict without `auth_message`
 outside a `_source_stamp(...)` call, across `backend/app/modules/commcalc`).
 
+
+---
+
+## 44. ROLE MODULE GRANTS — one module list, derived from NAV; no gate is silent (owner report 2026-10-01)
+
+> Owner: *"im trying to add finance module to market manager but not happening"*
+
+Two mechanisms were wrong. The second is what made the first invisible, so the screen showed nothing
+and the admin was left to guess.
+
+### 44.1 The list was RETYPED, so eight modules had no checkbox at all
+
+`frontend/src/app/(platform)/admin/roles/page.tsx` carried its own literal of **12** module keys while
+`rbac.ts` `NAV` gates on **20**. The eight it never listed covered **70 nav pages** and were therefore
+**ungrantable from the Roles UI**, whatever the admin ticked:
+
+| module | nav pages | where they live |
+|---|---|---|
+| `closing` | 31 | Daily Closing, Management Overview, Flags & Compliance |
+| `crm` | 10 | CRM |
+| `vision` | 9 | Vision |
+| `referral` | 6 | Referral |
+| `marketing` | 5 | Marketing |
+| `royalty` | 4 | **Finance** (Royalty Report, Royalty vs Daily Sales, Profit Centers, Cost Centers) |
+| `supply_ordering` | 4 | Supply Ordering |
+| `franchise_ops` | 1 | Store Operations |
+
+Four of those are **inside the Finance group**, so "add Finance to this role" could not be finished from
+that screen at all.
+
+| fact | home | callers |
+|---|---|---|
+| which modules may be granted | **DERIVED** — `rbac.grantableModules()` walks `NAV` and orders by `MODULE_LABELS` | the Roles UI's `MODULES` (assigned, never re-listed) |
+| the human label for a module | `rbac.MODULE_LABELS` — the one fact `NAV` does not carry | `grantableModules()` |
+
+A newly-shipped module now gets its checkbox with **no edit** to the Roles page.
+
+### 44.2 The report-area gate was SILENT
+
+`canSeeItem` needs a module grant **and**, for a report page, the separate per-area `reports` grant, and
+`hasReport` judges a role carrying *any* explicit `reports` entry by that map alone. So granting
+`accounts` to a role whose reports are `{closing: true}` opened the Finance link onto an **empty
+dashboard** — measured against the real `rbac.ts` with the live Boost `market_manager` row:
+
+| ticks | Finance items visible |
+|---|---|
+| neither | **0 / 21** |
+| `Accounts` **module** only | **1 / 21** — the hub link, onto an empty page |
+| `Accounting reports (P&L / BS)` **report area** only | **0 / 21** |
+| **both** | **12 / 21** |
+| both + `Commissions` module & reports | 15 / 21 |
+| …+ `royalty` (newly grantable, §44.1) | **19 / 21** |
+
+The last two (`/accounts/journal`, `/accounts/companies`) are `scopes: ['all']` by design — an exact
+per-function tick lifts them, which `canSeeItem` has honoured since 2026-08-03.
+
+| fact | home | callers |
+|---|---|---|
+| which report areas also gate a module's pages | **DERIVED** — `rbac.reportAreasForModule` walks `NAV` and asks `reportAreaForPath`, *the same function `canSeeItem` calls* | `missingReportAreasForModule` |
+| what the admin still has to tick | `rbac.missingReportAreasForModule(perms, key)` — granted-module minus `hasReport` | the Roles UI's inline ⚠ under each module |
+
+**Same class as the 2026-08-03 report** (*"KPI Metrics is allowed for the DM role but doesn't show"*),
+whose fix covered only the **scope** gate. The report gate was the same defect wearing a hat.
+
+### 44.3 Lock
+
+`backend/harness_roles_module_catalog.py` — **31 checks**, stdlib, DB-free, run by
+`carrier-vocab-guard`. Fails the build when: a module `NAV` gates on has no label (no checkbox); a
+label names a module `NAV` does not gate (a dead checkbox); the Roles page re-lists a module key as a
+`{key,label}` pair; the page stops naming the missing report areas; or the module→area answer is
+*declared* anywhere instead of derived through `reportAreaForPath`. Each rule carries an armed control
+that goes RED with the defect patched back in.
+
+### 44.4 Not fixed here, reported
+
+- `harness_screen_link_guard` **I9** (*"POS-gated surfaces are listed from the SHARED registry, not a
+  second copy"*) is **red on `main` already** — the same second-copy class as §44.1, in the POS gate.
+  It is on the `harness_unrun_pending.txt` debt list, so CI does not run it. Diagnosing it needs the
+  POS surface registry on its own evidence and is not widened into this change.
