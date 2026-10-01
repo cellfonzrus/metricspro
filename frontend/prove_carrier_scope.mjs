@@ -37,11 +37,11 @@ const cs = await loadModule('src/lib/carrier-scope.ts')
 
 const { defaultActiveCarrier, carrierOKActive, carrierCode, NAV_CARRIERS } = rbac
 const { financingVendorLabel, atuActiveCarry, textCarrier, presetVisibleForCarrier, vendorServesCarrier,
-        posSquash, posVisible, posOK, POS_GATED_SURFACES } = cs
+        posSquash, posVisible, reportKindsVisible, KIND_PROVENANCE } = cs
 for (const [n, f] of Object.entries({ defaultActiveCarrier, carrierOKActive, carrierCode }))
   must(typeof f === 'function', `${n} did not export a function from rbac.ts`)
 for (const [n, f] of Object.entries({ financingVendorLabel, atuActiveCarry, presetVisibleForCarrier, vendorServesCarrier,
-                                      posSquash, posVisible, posOK }))
+                                      posSquash, posVisible, reportKindsVisible }))
   must(typeof f === 'function', `${n} did not export a function from carrier-scope.ts`)
 
 // Fixtures.
@@ -149,38 +149,51 @@ ck('both unknown ⇒ shown (never a blank page)', posVisible('', '') === true)
 ck("the neutral noun 'POS' is not treated as a POS that matches b2bsoft",
    posVisible('b2bsoft', 'POS') === false)
 
-// ── THE OVERRIDE — a gate with no way out is a support ticket (owner directive 2026-09-13) ───────
+// ── THE RE-GRANT — a gate with no way out is a support ticket (owner directive 2026-09-13) ───────
 // "if they need them then the super admin should have a full role permission exclusiveluy for super
 // admin to assign to the new or existing tenants which have been gated out due to carrier or pos
-// settings." posOK mirrors rbac.carrierOK clause for clause: two gates whose override ladders
-// differed would be two things for an administrator to learn, and one would be learned wrong.
-console.log('\n— POS override (owner 2026-09-13) —')
-const SFC = 'upload_email_reports'
+// settings."
+//
+// The requirement is unchanged; the LEVEL it is met at moved. It used to be a POS *surface* gate
+// (`posOK` + `POS_GATED_SURFACES` over `pos:<surface>` caps). Since 2026-09-20 a tenant's POS gates
+// individual report-kind ROWS instead, and on 2026-10-01 the surface-level pair was removed once it
+// had no caller left — a dead override ladder is worse than none, because its own comment claimed a
+// stored `pos:` row was still honoured when nothing read it (index §45).
+//
+// So the re-grant is proven HERE, on the live mechanism: the `kind:<key>` cap through
+// reportKindsVisible, same ui_label_override store, same endpoint, same /admin/labels screen.
+console.log('\n— the re-grant, at the kind level (owner 2026-09-13) —')
 {
-  must(Array.isArray(POS_GATED_SURFACES) && POS_GATED_SURFACES.length > 0,
-       'POS_GATED_SURFACES must list the surfaces a super-admin can re-grant')
-  ck('every gated surface is listed, so one can never be gated without being overridable',
-     POS_GATED_SURFACES.every(s => s && s.key && s.label && s.why))
-  ck('the gated block is the one in the registry', POS_GATED_SURFACES[0].key === SFC)
+  const K = 'x_report'
+  const rows = [{ key: K, is_active: true, applies_to_pos: ['b2bsoft'], applies_to_carrier: [] }]
+  const FOREIGN = { pos: ['RQ'], carriers: [] }      // a tenant whose POS the row does not serve
+  const OWN     = { pos: ['B2B Soft'], carriers: [] } // …and one whose POS it does (spelled loosely)
+  const keys = (out) => out.map(r => r.key)
 
-  // No override ⇒ the gate decides, exactly as before.
-  ck('no override ⇒ the POS gate still hides a foreign POS block',
-     posOK(SFC, 'b2bsoft', 'RQ', {}) === false)
-  ck('no override ⇒ the POS gate still shows its own', posOK(SFC, 'b2bsoft', 'b2bsoft', {}) === true)
-  ck('an undefined caps map is tolerated', posOK(SFC, 'b2bsoft', 'b2bsoft', undefined) === true)
+  // No override ⇒ the gate decides, exactly as the surface gate used to.
+  ck('no override ⇒ the POS gate still hides a row the tenant does not run',
+     keys(reportKindsVisible(rows, FOREIGN, {})).length === 0)
+  ck('no override ⇒ the gate still shows a row the tenant does run',
+     keys(reportKindsVisible(rows, OWN, {}))[0] === K)
+  ck('an undefined caps map is tolerated',
+     keys(reportKindsVisible(rows, OWN, undefined))[0] === K)
 
   // THE RE-GRANT: the owner's actual ask.
-  ck('THE RE-GRANT: an override of show re-opens a block the POS gate had hidden',
-     posOK(SFC, 'b2bsoft', 'RQ', { ['pos:' + SFC]: true }) === true)
-  ck('an override of hide closes one the gate would have shown',
-     posOK(SFC, 'b2bsoft', 'b2bsoft', { ['pos:' + SFC]: false }) === false)
+  ck('THE RE-GRANT: an override of show re-opens a row the POS gate had hidden',
+     keys(reportKindsVisible(rows, FOREIGN, { ['kind:' + K]: true }))[0] === K)
+  ck('…and it is RECORDED as widened, so nobody mistakes it for the tenant\'s own setting',
+     reportKindsVisible(rows, FOREIGN, { ['kind:' + K]: true })[0].provenance === KIND_PROVENANCE.widened)
+  ck('an override of hide closes a row the gate would have shown',
+     keys(reportKindsVisible(rows, OWN, { ['kind:' + K]: false })).length === 0)
   ck('a null override means AUTO — fall through to the gate, not hide',
-     posOK(SFC, 'b2bsoft', 'RQ', { ['pos:' + SFC]: null }) === false
-     && posOK(SFC, 'b2bsoft', 'b2bsoft', { ['pos:' + SFC]: null }) === true)
-  ck('an override for a DIFFERENT surface does not leak across',
-     posOK(SFC, 'b2bsoft', 'RQ', { 'pos:something_else': true }) === false)
+     keys(reportKindsVisible(rows, FOREIGN, { ['kind:' + K]: null })).length === 0
+     && keys(reportKindsVisible(rows, OWN, { ['kind:' + K]: null }))[0] === K)
+  ck('an override for a DIFFERENT kind does not leak across',
+     keys(reportKindsVisible(rows, FOREIGN, { 'kind:something_else': true })).length === 0)
   ck('a carrier override never reaches the POS gate (separate namespaces)',
-     posOK(SFC, 'b2bsoft', 'RQ', { 'carrier:/commcalc/upload': true }) === false)
+     keys(reportKindsVisible(rows, FOREIGN, { 'carrier:/commcalc/upload': true })).length === 0)
+  ck('an inactive row is never re-granted by an override — off means off',
+     keys(reportKindsVisible([{ ...rows[0], is_active: false }], OWN, { ['kind:' + K]: true })).length === 0)
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`)

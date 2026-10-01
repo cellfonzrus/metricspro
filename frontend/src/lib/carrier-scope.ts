@@ -140,50 +140,31 @@ export function posVisible(tilePos: string | undefined | null, currentPos: strin
   return want === have
 }
 
-// ── THE OVERRIDE (owner directive 2026-09-13) ─────────────────────────────────────────────────────
+// ── THE POS GATE'S OVERRIDE LIVES AT THE *KIND* LEVEL (owner directive 2026-09-13; index §45) ────
 // Owner: "if they need them then the super admin should have a full role permission exclusiveluy for
 // super admin to assign to the new or existing tenants which have been gated out due to carrier or
-// pos settings."
+// pos settings." That requirement stands, and it is met — one level down from where it started.
 //
-// A gate with no way out is a support ticket waiting to happen, and this one is new, so it gets the
-// escape hatch the carrier gate has always had — THE SAME ONE. `caps['carrier:<href>']` (rbac.carrierOK)
-// is per-tenant `ui_label_override` scope 'cap', written by POST /commcalc/nav-labels and edited at
-// /admin/labels. `pos:<surface>` is ONE MORE KEY NAMESPACE in that existing mechanism: no second
-// store, no second endpoint, no second admin screen.
+// THERE IS NO POS *SURFACE* GATE ANY MORE. When this was written, a whole surface (the Upload page's
+// email-report tiles) was hidden by the tenant's POS, so it needed a surface-level escape hatch:
+// a `POS_GATED_SURFACES` registry plus a `posOK(surfaceKey, …)` override ladder over the
+// `pos:<surface>` cap namespace. Since 2026-09-20 that gating is per REGISTRY ROW instead
+// (`reportKindsVisible` below, `kind:<key>` caps), and the surface-level pair lost its last caller.
 //
-// WHO MAY WIDEN is enforced SERVER-SIDE, in that endpoint, not here: hiding a surface or resetting it
-// to follow the tenant's own settings stays open to any menu-layout admin, while turning a gated-out
-// surface back ON is refused for anyone but a platform super-admin. The asymmetry is the safety
-// property — the override can never take away something a tenant already had, only decline to hand
-// out something new.
-
-/** The POS-gated surfaces that can be re-granted, for the admin screen to list. Same posture as
- *  rbac.NAV_CARRIERS: a small registry, so a surface cannot be gated without being overridable. */
-export const POS_GATED_SURFACES: { key: string; label: string; why: string }[] = [
-  // Since 2026-09-20 the Upload page's email-report tiles are registry rows gated per kind
-  // (`kind:<key>` caps, reportKindsVisible below); this surface-level key stays as the documented
-  // legacy namespace so an existing 'pos:' override row still resolves through posOK unchanged.
-  { key: 'upload_email_reports', label: 'Email-report upload tiles (Upload page) — legacy surface key',
-    why: 'Superseded by the per-kind overrides in the report-kind registry (Admin → Labels → report kinds).' },
-]
-
-/**
- * Is a POS-gated surface shown — override first, gate second?
- *
- * Mirrors `rbac.carrierOK` clause for clause, deliberately: two gates whose override ladders differed
- * would be two things for an administrator to learn, and one of them would be learned wrong.
- */
-export function posOK(
-  surfaceKey: string,
-  tilePos: string | undefined | null,
-  currentPos: string | undefined | null,
-  caps: Record<string, boolean | null> | undefined,
-): boolean {
-  const ov = (caps || {})['pos:' + surfaceKey]
-  if (ov === true) return true
-  if (ov === false) return false
-  return posVisible(tilePos, currentPos)
-}
+// It was removed on 2026-10-01 rather than left in place, because a dead override ladder is WORSE
+// than none: its own comment promised that "an existing 'pos:' override row still resolves through
+// posOK unchanged", and with no caller that promise was false — a `pos:` row would have been read by
+// nothing while the registry claimed it was honoured. (Verified before removing: zero `cap`-scope
+// rows exist in `commcalc.ui_label_override` in any org, so no stored override was relied upon.)
+//
+// WHERE THE ESCAPE HATCH IS NOW: the per-kind `kind:<key>` cap, same `ui_label_override` store, same
+// POST /commcalc/nav-labels endpoint, same /admin/labels screen (its "POS- and carrier-gated report
+// kinds" section lists every gated row), and the same asymmetry enforced server-side — anyone may
+// hide or reset, only a platform super-admin may turn a gated-out row back ON.
+//
+// `posVisible` above stays: it is the pure POS-matching clause, and `posSquash` is what
+// `reportKindsVisible` matches a declaration with. `harness_screen_link_guard.py` §I fails the build
+// if a POS gate is re-introduced at the surface level without a re-grant path to go with it.
 
 // ── REPORT KINDS — the visibility family, extended (owner directives 2026-09-20; design §7) ──────
 // Owner: "it is very important that we don't have extra file upload paths for a new tenant who does

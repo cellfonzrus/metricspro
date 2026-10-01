@@ -336,6 +336,9 @@ on:
       - "backend/harness_vendor_price_compare.py"
       - "backend/harness_tenant_vertical.py"
       - "backend/harness_super_admin_toolbox.py"
+      - "backend/harness_screen_link_guard.py"
+      - "frontend/src/lib/carrier-scope.ts"
+      - "frontend/src/app/(platform)/admin/labels/page.tsx"
       - "backend/harness_roles_module_catalog.py"
       - "frontend/src/app/(platform)/admin/roles/page.tsx"
       - "backend/harness_closing_closer_pick.py"
@@ -524,6 +527,9 @@ jobs:
       - name: Run the roles module-catalog lock (the Roles UI's module checkboxes are DERIVED from NAV — no second list; the report-area gate is named on screen, never silent — index §44)
         working-directory: backend
         run: python3 harness_roles_module_catalog.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the screen-link guard (every screen a link promises exists; a carrier/POS gate comes with a super-admin re-grant path — index §45)
+        working-directory: backend
+        run: python3 harness_screen_link_guard.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the closing closer-pick lock (the closing is submitted under the signed-in person; DM and above may pick; the server refuses otherwise; screen mirror = server rule — index §29.7)
         working-directory: backend
         run: python3 harness_closing_closer_pick.py | tail -25 | tee -a "$GITHUB_STEP_SUMMARY"

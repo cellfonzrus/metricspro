@@ -91,12 +91,13 @@ export default function DisplayLabelsPage() {
       </p>
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 14 }}>{msg}</div>}
 
-      {/* POS-GATED SURFACES (owner directive 2026-09-13) — "the super admin should have a full role
-          permission exclusiveluy for super admin to assign to the new or existing tenants which have
-          been gated out due to carrier or pos settings". These are surfaces hidden by the tenant's own
-          POS setting rather than by a carrier. Same override store, same endpoint, one more key
-          namespace — and the same asymmetry: anyone here may HIDE or reset, only a platform
-          super-admin may turn one back ON. */}
+      {/* The POS gate's re-grant path is the "POS- and carrier-gated report kinds" section below
+          (owner directive 2026-09-13 — "the super admin should have a full role permission
+          exclusiveluy for super admin to assign to the new or existing tenants which have been gated
+          out due to carrier or pos settings"). It is per REGISTRY ROW (`kind:<key>` caps), not per
+          surface: the surface-level pair was removed on 2026-10-01 once it had no caller left
+          (lib/carrier-scope.ts, index §45). Same override store, same endpoint, and the same
+          asymmetry — anyone here may HIDE or reset, only a platform super-admin may turn one back ON. */}
       {/* BUSINESS-TYPE OVERRIDES (index §35) — this company's exceptions to what its business type hides: a page
           (cap 'vertical:<href>') or a daily-closing input (cap 'closing:<input>'). Auto follows the business type
           (edited by the platform on Business Types); re-showing is the platform's call, hiding more is yours. */}

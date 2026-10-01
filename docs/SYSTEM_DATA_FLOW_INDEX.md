@@ -5319,6 +5319,7 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 | **Is a migration number / an index section number claimed once?** (#315 and #317 both took mig `1030` and §19.32 on 2026-09-28 — each branch green against a main without the other; the port-out file became `1031`, the auto-calc gap §19.33) | `database/migrations/*.sql` file names; `docs/SYSTEM_DATA_FLOW_INDEX.md` headings, `§N.M **` paragraphs, TOC rows | `harness_unique_numbers_lock.py` (stdlib), CI job *Migration and index numbers are claimed once* (org-scope-guard, also on push to main — the merged tree); the collisions that predate it (applied migrations 223 / 420 / 724 / 864–867; §23s, §23s.8, TOC 12) are listed by exact name and may only shrink |
 | **Which menu entries a viewer may not see** (the carrier surfaces) and **which payout view a viewer gets** | `storeops.roles.permissions.scope` / `.data.carrier_commission_view` + `app_config.rbac_enabled` | ONE registry `payout_audience.MANAGER_ONLY_SURFACES`, ONE self-scope answer `storeops.role_is_self_scoped`, ONE carrier permission `payout_audience.carrier_view_allowed`, served on `/me` (`viewer_payload`) → `rbac.payoutRefused` in `canSeeItem` / `canAccessPath`; audience by `payout_audience.resolve` (§6j, §6m) |
 | **"why can this role not see module X?"** | `storeops.roles.permissions` (`modules` / `reports` / `pages` / `scope`) | ONE answer `rbac.navBlockReason` (gate = `module` \| `report` \| `scope` \| per-function), plus `rbac.missingReportAreasForModule` for the module-level case. The grantable module list is DERIVED from `NAV`, never retyped (§44) |
+| **"why is this upload / report kind hidden for this tenant?"** | the tenant's declared POS + carrier (`pos_system` term, registered carriers) and `commcalc.ui_label_override` scope `cap`, key `kind:<key>` | ONE answer `carrier-scope.reportKindsVisible` (cap override first, then `kindApplies`), re-granted by a super admin at `/admin/labels`, widening RECORDED as `KIND_PROVENANCE.widened`. No POS gate exists at the surface level any more (§45) |
 | **Who may see carrier commission** (what the carrier paid the store — Price / GP, MA cross-reference, dealer figures, ledger buckets) | `storeops.roles.permissions.data.carrier_commission_view` per role, per org; unset = company-wide roles + platform super admin | `payout_audience.carrier_view_allowed` (the one home) → `router._require_carrier_view` on every registered carrier surface; the Rep Incentive report shows it to nobody (§6m) |
 | **The sale on a paid commission row** (action · phone line · customer) | engine event stamp (`event_type`, `event_key`); `raw_sales.customer` / `raw_sales_invoice.customer` | `payout_audience.event_label` (`line_class.CLASS_LABELS`) · `line_phone` (`line_class.line_event_keys`) · `inventory_sold_recon.sale_customer` via `commission_drilldown.attach_line_identity`; frontend `planLines.saleLabel` (§6j) |
 | **One employee's incentive over several months** (per month + grand total) | `rep_commissions.total_payout` per month (the statement's payout of record) | `router._statement_doc` per month (== the single statement) → `commission_statement.build_range` (sums only) (§6j) |
@@ -14290,3 +14291,74 @@ that goes RED with the defect patched back in.
   second copy"*) is **red on `main` already** — the same second-copy class as §44.1, in the POS gate.
   It is on the `harness_unrun_pending.txt` debt list, so CI does not run it. Diagnosing it needs the
   POS surface registry on its own evidence and is not widened into this change.
+
+---
+
+## 45. THE POS GATE'S RE-GRANT PATH — one level down, and the vestige removed (owner 2026-10-01)
+
+> Owner: *"fix pos too"* — the `harness_screen_link_guard` **I9** failure reported with §44.
+
+### 45.1 What was wrong
+
+I9 asserted that `/admin/labels` imported `POS_GATED_SURFACES` from `lib/carrier-scope.ts` and listed
+it, so that a POS-gated **surface** could never exist without being re-grantable (owner directive
+2026-09-13: *"the super admin should have a full role permission exclusiveluy for super admin to assign
+to the new or existing tenants which have been gated out due to carrier or pos settings"*).
+
+It had been **red on `main`**, and the harness sits on `harness_unrun_pending.txt`, so **CI never ran
+it** — the two failures compounded: a stale assertion nobody was told about.
+
+The gating had moved. Since 2026-09-20 a tenant's POS gates **individual report-kind rows**
+(`reportKindsVisible`, `kind:<key>` caps), not whole surfaces. What survived at the surface level was:
+
+- `POS_GATED_SURFACES` — one entry, self-described as a *"legacy surface key"* whose `why` said it was
+  *"Superseded by the per-kind overrides"*;
+- `posOK(surfaceKey, …)` — **zero callers** anywhere in the repo;
+- an **orphaned comment** on `/admin/labels` describing a section that was never rendered.
+
+### 45.2 Why it was removed rather than given a UI
+
+The registry's own comment claimed the key *"stays as the documented legacy namespace so an existing
+`pos:` override row still resolves through posOK unchanged"*. With no caller, **that was false** — a
+stored `pos:<surface>` row would have been read by nothing while the registry asserted it was honoured.
+A lie in a registry is worse than a missing screen, and §19.18's rule is that a fact with no caller is
+not a fix. Rendering a UI for a key nothing reads would have been theatre.
+
+**Verified before removing:** `commcalc.ui_label_override` holds **zero `cap`-scope rows in any org**
+(no `pos:`, `carrier:`, `kind:`, `vertical:` or `closing:` override exists), so no stored override was
+relied upon and the removal changes nothing live.
+
+### 45.3 Where the escape hatch is now
+
+| fact | home | callers |
+|---|---|---|
+| is a POS-gated report kind shown? | `carrier-scope.reportKindsVisible` (`kind:<key>` cap first, then `kindApplies`) | every upload surface, through `lib/report-kinds.ts` |
+| a widened row is **recorded as such** | `KIND_PROVENANCE.widened` — *"widened by super-admin"* | the row's `provenance` / `provenance_text` |
+| which gated rows an admin may re-grant | `/admin/labels` → *"POS- and carrier-gated report kinds"*, from `useReportKinds().all_keys` | the admin screen only |
+
+Same `ui_label_override` store, same `POST /commcalc/nav-labels` endpoint, same admin screen, same
+asymmetry enforced server-side — anyone may **hide or reset**, only a platform super-admin may turn a
+gated-out row back **ON**. `posVisible` / `posSquash` stay: they are the pure POS-matching clause that
+`reportKindsVisible` matches a declaration with.
+
+### 45.4 Lock
+
+**I9 is re-expressed as the invariant rather than as one implementation of it**, so it holds at whatever
+level the gating lives:
+
+- **I9** no POS gate exists at the surface level (`posOK` / `POS_GATED_SURFACES` absent from code —
+  comments stripped first, since the prose above legitimately names them);
+- **I9b** no page calls one (walks every `.ts`/`.tsx` under `frontend/src`);
+- **I9c** the live per-kind gate **is** re-grantable on the admin screen;
+- **I9d** …listing every gated row from the shared registry hook, not a second copy.
+
+Both new rules carry **armed controls**, verified by patching the defect back in: re-adding
+`posOK`/`POS_GATED_SURFACES` → I9 RED; adding a page that calls `posOK` → I9b RED.
+
+The re-grant proof moved with the mechanism: `frontend/prove_carrier_scope.mjs` now proves the owner's
+ask on the **live** `kind:<key>` ladder (10 cases — no-override gate, the re-grant, widened provenance,
+hide, null-is-auto, cross-key and cross-namespace isolation, and *off means off* for an inactive row).
+
+**`harness_screen_link_guard.py` is now RUN by `carrier-vocab-guard`** (76 checks, stdlib) and
+**de-registered from `harness_unrun_pending.txt`** — the ratchet shrank 333 → 332 and
+`harness_ci_pipefail_lock.PINNED_MAX` followed it down. A green harness nobody runs is still debt.

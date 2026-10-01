@@ -277,7 +277,6 @@ harness_sales_comparison_periods.py
 harness_sales_leak_placement.py
 harness_scan_truncation.py
 harness_schedule_hours.py
-harness_screen_link_guard.py
 harness_self_keyset_home_store.py
 harness_service_role.py
 harness_settings_audit.py
