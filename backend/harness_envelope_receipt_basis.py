@@ -107,6 +107,8 @@ def main():
     # ── A. the basis is DEREFERENCED, never a second formula ─────────────────────────────────────
     print("\nA. the basis vocabulary has one home and the receipt dereferences it")
     esrc = read(os.path.join(HERE, "app", "modules", "closing", "envelope_report.py"))
+    mig = read(os.path.join(os.path.dirname(HERE), "database", "migrations",
+                            "1036_envelope_count_basis.sql"))
     # Bound the body at the NEXT top-level def — not at the first blank line, which falls inside the
     # docstring and truncated the very call this rule exists to find (caught by this harness's own
     # run, 2026-10-01).
@@ -348,7 +350,10 @@ def main():
     callers = [n for n in ast.walk(rtree)
                if isinstance(n, ast.FunctionDef)
                and any(isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
-                       and c.func.attr in ("report_row", "expected_cash", "declared_components")
+                       # `count_row_fields` (mig 1036) is how the save handler now dereferences the
+                       # basis math — the rename must not make that handler invisible to this lock.
+                       and c.func.attr in ("report_row", "expected_cash", "declared_components",
+                                           "count_row_fields")
                        and isinstance(c.func.value, ast.Name)
                        and c.func.value.id == "envelope_report_mod"
                        for c in ast.walk(n))]
@@ -375,10 +380,11 @@ def main():
     # and a shortage can become a CHARGEBACK against the rep. The basis has to reach the handler.
     check("EnvelopeCountIn accepts a basis",
           re.search(r"class EnvelopeCountIn\(LaxModel\):(.|\n)*?\n\n", rsrc).group(0).count("basis") >= 1, True)
-    check("the save handler normalizes the incoming basis through the pure module",
-          "normalize_envelope_basis(payload.basis)" in hbody)
-    check("...and passes it to expected_cash instead of taking the bare default",
-          "expected_cash(crow, _basis)" in hbody)
+    check("the save handler hands the basis to the pure module, never scoring it itself",
+          "count_row_fields(crow, payload.counted_amount, payload.tolerance,\n" in hbody
+          and "payload.basis)" in hbody, True)
+    check("...and no longer composes expected_cash + count_fields on its own (one call, mig 1036)",
+          [x for x in ("expected_cash(", "count_fields(") if x in hbody], [])
     check("an absent basis still means the historical default (every stored count keeps its meaning)",
           ER.expected_cash(row0907, None), ER.expected_cash(row0907, "total_cash"))
     check("the screen sends the basis it is showing",
@@ -527,6 +533,112 @@ def main():
            if c not in read(os.path.join(HERE, "app", "modules", "closing", "envelope_report.py"))], [])
 
     # ── I. armed negative controls ──────────────────────────────────────────────────────────────
+    # ── A STORED COUNT SAYS WHICH CASH IT COUNTED (owner 2026-10-02, mig 1036, index §47.10) ──
+    # The item #348 reported open rather than fixed. H2 above fixed the SCORING; the row itself
+    # stayed silent about its basis, so two rows reading "short $230" could be shortages in two
+    # different cashes — each self-consistent, both indistinguishable on a report.
+    #
+    # THE CLASS: a row recorded an AMOUNT without the QUESTION it answered. The fix is not a field
+    # added at the call site — it is that the amounts and the basis come from ONE call, so a stored
+    # amount CANNOT be written without its basis. And the absent basis of a pre-migration row is
+    # resolved in ONE place that says it was never recorded, instead of being backfilled into a
+    # claim nobody made.
+    print("\nK1. the amounts and the basis are written by ONE call")
+    k_row = {"t_cash": 1002.0, "epay_on_cash": 230.0}
+    kf = ER.count_row_fields(k_row, 772.0, 0.0, "store_cash")
+    check("count_row_fields scores on the basis given",
+          (kf["expected_amount"], kf["variance"], kf["status"]), (772.0, 0.0, "match"))
+    check("...and records WHICH basis, under the column's own name",
+          kf[ER.COUNT_BASIS_COLUMN], "store_cash")
+    check("the amounts are still count_fields' own verdict, not a second truth table",
+          {k: v for k, v in kf.items() if k != ER.COUNT_BASIS_COLUMN},
+          ER.count_fields(ER.expected_cash(k_row, "store_cash"), 772.0))
+    check("the SAME count on the whole drawer is a $230 shortage — the two questions differ",
+          ER.count_row_fields(k_row, 772.0, 0.0, "total_cash")["variance"], -230.0)
+    check("...and each row now says which of them it was",
+          (ER.count_row_fields(k_row, 772.0, 0.0, "total_cash")[ER.COUNT_BASIS_COLUMN],
+           ER.count_row_fields(k_row, 772.0, 0.0, "store_cash")[ER.COUNT_BASIS_COLUMN]),
+          ("total_cash", "store_cash"))
+    check("an absent basis still means the historical default — stored meanings are unchanged",
+          ER.count_row_fields(k_row, 772.0)[ER.COUNT_BASIS_COLUMN], ER.ENVELOPE_BASIS_DEFAULT)
+    check("an unrecognised basis degrades to the default, never to a formula-less word",
+          ER.count_row_fields(k_row, 772.0, 0.0, "manual")[ER.COUNT_BASIS_COLUMN],
+          ER.ENVELOPE_BASIS_DEFAULT)
+    check("count_fields itself is UNCHANGED — the shared truth table carries no basis key",
+          "basis" in ER.count_fields(100.0, 100.0), False)
+    check("...which is why the credit-recon and pickup_actual callers are unaffected",
+          sorted(ER.count_fields(100.0, 90.0)),
+          ["counted_amount", "expected_amount", "status", "variance"])
+
+    print("\nK2. a NULL basis is resolved in one place, and never backfilled into a claim")
+    check("a recorded basis reads back as recorded",
+          ER.counted_basis({"basis": "bill_payment_cash"}),
+          {"basis": "bill_payment_cash", "recorded": True, "label": "bill_payment_cash"})
+    check("a pre-migration row resolves to the historical default and says it was NOT recorded",
+          ER.counted_basis({"counted_amount": 500.0}),
+          {"basis": ER.ENVELOPE_BASIS_DEFAULT, "recorded": False,
+           "label": ER.ENVELOPE_BASIS_DEFAULT})
+    check("a SQL NULL reads the same as a missing key (both are 'nobody recorded this')",
+          ER.counted_basis({"basis": None}), ER.counted_basis({}))
+    check("an unknown word is not passed through as though it were a basis",
+          ER.counted_basis({"basis": "whatever"})["recorded"], False)
+    check("the resolver never invents a basis the math has no formula for",
+          ER.counted_basis({"basis": "whatever"})["basis"] in ER.ENVELOPE_BASES, True)
+    check("the migration does NOT backfill the column (absence is never a guess)",
+          [w for w in ("UPDATE commcalc.envelope_count", "SET basis") if w in mig], [])
+    check("...and the column is nullable, so a row may honestly record nothing",
+          "ADD COLUMN IF NOT EXISTS basis TEXT" in mig and "NOT NULL" not in mig.split("ADD COLUMN")[1].split("\n")[0],
+          True)
+
+    print("\nK3. the database cannot hold a basis the math cannot compute")
+    check("the migration constrains the column to the bases that have formulas",
+          sorted(re.findall(r"'(total_cash|store_cash|bill_payment_cash)'", mig)) ==
+          sorted(ER.ENVELOPE_BASES), True)
+    check("...and the CHECK admits NULL, which is how 'not recorded' is spelled",
+          "basis IS NULL OR basis IN" in mig)
+    check("the CHECK and ENVELOPE_BASES cannot drift apart (this rule is the tie)",
+          {b for b in re.findall(r"basis IN \(([^)]*)\)", mig)[0].replace("'", "").split(", ")},
+          set(ER.ENVELOPE_BASES))
+    check("the migration is additive and idempotent, as the house requires",
+          ("IF NOT EXISTS" in mig and "-- REVERT:" in mig
+           and "DROP TABLE" not in mig.split("-- REVERT:")[0]), True)
+
+    print("\nK4. the receipt shows which basis a count used — and when it is worth saying")
+    rrk = ER.report_row({"id": "r", **k_row},
+                        {"counted_amount": 772.0, "expected_amount": 772.0, "variance": 0.0,
+                         "status": "match", "basis": "store_cash"},
+                        None, None, "NJ", basis="total_cash")
+    check("a counted row carries the STORED count's basis",
+          rrk.get("counted_basis"), {"basis": "store_cash", "recorded": True, "label": "store_cash"})
+    check("...distinct from the basis the LINE is being viewed on (they differ here)",
+          (rrk["basis"], (rrk.get("counted_basis") or {}).get("basis")), ("total_cash", "store_cash"))
+    check("an UNCOUNTED row carries no basis at all — never a default pretending to be one",
+          ER.report_row({"id": "r", **k_row}, None, None, None, "NJ").get("counted_basis") is None
+          # ...and the key EXISTS, so a reader cannot mistake "uncounted" for "this build
+          # stopped carrying the basis" — the two are different facts.
+          and "counted_basis" in ER.report_row({"id": "r", **k_row}, None, None, None, "NJ"))
+    check("a counted row with no stored basis says so on the row",
+          (ER.report_row({"id": "r", **k_row}, {"counted_amount": 1.0}, None, None, "NJ")
+           .get("counted_basis") or {}).get("recorded"), False)
+    check("the screen reads the stored basis off the row, not out of its own head",
+          "r.counted_basis" in pcode)
+    check("...and words it with the SERVER's label for that key, spelling no basis word",
+          "basisCols.find(b => b.key === key)" in pcode)
+    check("it is shown exactly when it differs from the view, or was never recorded",
+          "!r.counted_basis.recorded || r.counted_basis.basis !== basis" in pcode)
+    check("the export carries the basis AND whether it was recorded, as separate columns",
+          "'Counted on'" in pcode and "'Counted on — recorded'" in pcode, True)
+
+    print("\nK5. an unapplied migration degrades loudly, never silently")
+    check("the save retries without the basis rather than failing a working screen",
+          "COUNT_BASIS_COLUMN not in str(e)" in hbody and "raise" in hbody, True)
+    check("...and only for THAT error — any other upsert failure still raises",
+          hbody.count("raise\n") >= 1, True)
+    check("the reply SAYS whether the basis was stored (never a silent omission)",
+          '"basis_stored": basis_stored' in hbody)
+    check("the warning names the migration to run",
+          "run migration 1036" in hbody)
+
     print("\nJ. CONTROLS — each rule goes RED with the defect patched back in")
     check("CONTROL: the pre-fix handler's sentinel would be caught",
           '"management"' in '"counted_by": (payload.counted_by or prior or "management"),')
@@ -593,6 +705,33 @@ def main():
           ER.expected_cash(_broken, "bill_payment_cash"), 0.0)
     check("CONTROL: ...while the DEFAULT basis stays right, which is why it shipped unnoticed",
           ER.expected_cash(_broken, "total_cash"), 1002.0)
+
+    # K's controls — the shipped-silent row, and each way the fix could un-wire.
+    check("CONTROL: the handler composing the pair itself again → RED",
+          [x for x in ("expected_cash(", "count_fields(")
+           if x in '_b = normalize_envelope_basis(payload.basis)\n'
+                   'expected = envelope_report_mod.expected_cash(crow, _b)\n'
+                   'cf = envelope_report_mod.count_fields(expected, payload.counted_amount)'] != [])
+    check("CONTROL: a stored row that records no basis is NOT reported as a recorded one",
+          ER.counted_basis({"counted_amount": 500.0})["recorded"], False)
+    check("CONTROL: the shipped row was silent — the column it needs did not exist on it",
+          ER.COUNT_BASIS_COLUMN in {"expected_amount", "counted_amount", "variance", "status"}, False)
+    check("CONTROL: a backfill statement in the migration → RED",
+          [w for w in ("UPDATE commcalc.envelope_count", "SET basis")
+           if w in "UPDATE commcalc.envelope_count SET basis = 'total_cash' WHERE basis IS NULL;"] != [])
+    check("CONTROL: the CHECK drifting off ENVELOPE_BASES → RED",
+          {b for b in re.findall(r"basis IN \(([^)]*)\)",
+                                 "CHECK (basis IS NULL OR basis IN ('total_cash', 'manual'))")[0]
+           .replace("'", "").split(", ")} == set(ER.ENVELOPE_BASES), False)
+    check("CONTROL: a bare `except Exception: pass` around the upsert → RED (a silent omission)",
+          "COUNT_BASIS_COLUMN not in str(e)" in
+          "try:\n    saved = _ec.upsert(body).execute()\nexcept Exception:\n    pass", False)
+    check("CONTROL: the screen spelling a basis word instead of asking the server → RED",
+          [w for w in ER.ENVELOPE_BASES
+           if w in "{r.counted_basis.basis === 'store_cash' ? 'Store cash' : 'Total cash'}"] != [])
+    check("CONTROL: showing the basis on EVERY row (noise) is not what the rule accepts",
+          "!r.counted_basis.recorded || r.counted_basis.basis !== basis" in
+          "{r.counted_basis && <div>counted on {basisShort(r.counted_basis.basis)}</div>}", False)
 
     print("\n" + "=" * 96)
     print("RESULT: %d passed, %d failed" % (_p, _f))
